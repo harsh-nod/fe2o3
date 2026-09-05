@@ -229,6 +229,24 @@ class R26RunnerContractTests(unittest.TestCase):
             self.hsa_source,
         )
 
+    def test_hsa_comparator_binds_the_full_topology_by_unique_id(self) -> None:
+        self.assertNotIn("ROCR_VISIBLE_DEVICES", self.source)
+        self.assertIn(
+            '"${hsa_binary}" "${hsaco}" "${gpu_index}" "${unique_id}"',
+            self.source,
+        )
+        self.assertIn("PHYSICAL_GPU_INDEX", self.hsa_source)
+        self.assertNotIn("VISIBLE_GPU_INDEX", self.hsa_source)
+        self.assertIn(
+            "std::strcmp(candidate_uuid, expected_uuid) != 0", self.hsa_source
+        )
+        self.assertIn("matching_gpu_count != 1", self.hsa_source)
+        self.assertIn("gpu = candidate", self.hsa_source)
+        self.assertIn('HIP_VISIBLE_DEVICES="${gpu_index}"', self.source)
+        self.assertIn(
+            '"${hip_binary}" "${hsaco}" 0 "${unique_id}"', self.source
+        )
+
     def test_rocm_smi_and_persistence_tools_use_fixed_environments(self) -> None:
         rocm_invocations = [
             line

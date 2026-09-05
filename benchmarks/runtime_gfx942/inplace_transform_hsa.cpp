@@ -304,7 +304,7 @@ int main(int argc, char **argv) {
   static_assert(sizeof(void *) == sizeof(std::uint64_t));
   if (argc != 4) {
     std::fprintf(stderr,
-                 "usage: %s EXACT_HSACO VISIBLE_GPU_INDEX "
+                 "usage: %s EXACT_HSACO PHYSICAL_GPU_INDEX "
                  "EXPECTED_UNIQUE_ID\n",
                  argv[0]);
     return 2;
@@ -335,11 +335,33 @@ int main(int argc, char **argv) {
 
   Agents agents;
   HSA_CHECK(hsa_iterate_agents(collect_agent, &agents));
-  if (agents.cpus.empty() || gpu_index >= agents.gpus.size()) {
+  if (agents.cpus.empty() || agents.gpus.empty() ||
+      gpu_index >= agents.gpus.size()) {
     std::fputs("requested HSA CPU/GPU agent is unavailable\n", stderr);
     return 2;
   }
-  const hsa_agent_t gpu = agents.gpus[gpu_index];
+  char expected_uuid[21] = {};
+  std::snprintf(expected_uuid, sizeof(expected_uuid), "GPU-%016llx",
+                static_cast<unsigned long long>(expected_unique_id));
+  hsa_agent_t gpu{};
+  char target[64] = {};
+  std::size_t matching_gpu_count = 0;
+  for (hsa_agent_t candidate : agents.gpus) {
+    char candidate_uuid[21] = {};
+    HSA_CHECK(hsa_agent_get_info(
+        candidate, static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_UUID),
+        candidate_uuid));
+    if (std::strcmp(candidate_uuid, expected_uuid) != 0)
+      continue;
+    ++matching_gpu_count;
+    gpu = candidate;
+    HSA_CHECK(hsa_agent_get_info(candidate, HSA_AGENT_INFO_NAME, target));
+  }
+  if (matching_gpu_count != 1 || std::strncmp(target, "gfx942", 6) != 0 ||
+      (target[6] != '\0' && target[6] != ':')) {
+    std::fputs("HSA GPU UUID, unique ID, or target mismatch\n", stderr);
+    return 2;
+  }
   hsa_agent_t cpu{};
   HSA_CHECK(hsa_agent_get_info(
       gpu, static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_NEAREST_CPU),
@@ -367,21 +389,6 @@ int main(int argc, char **argv) {
         stderr);
     return 2;
   }
-  char uuid[21] = {};
-  char expected_uuid[21] = {};
-  char target[64] = {};
-  HSA_CHECK(hsa_agent_get_info(
-      gpu, static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_UUID), uuid));
-  HSA_CHECK(hsa_agent_get_info(gpu, HSA_AGENT_INFO_NAME, target));
-  std::snprintf(expected_uuid, sizeof(expected_uuid), "GPU-%016llx",
-                static_cast<unsigned long long>(expected_unique_id));
-  if (std::strcmp(uuid, expected_uuid) != 0 ||
-      std::strncmp(target, "gfx942", 6) != 0 ||
-      (target[6] != '\0' && target[6] != ':')) {
-    std::fputs("HSA GPU UUID, unique ID, or target mismatch\n", stderr);
-    return 2;
-  }
-
   const std::vector<char> code_object = read_binary(argv[1]);
   const Kernel kernel = load_kernel(code_object, gpu);
 

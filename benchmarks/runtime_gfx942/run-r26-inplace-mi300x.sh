@@ -580,13 +580,15 @@ run_backend() {
         "${phase_timeout}s" "${kfd_binary}" "${unique_id}")
       ;;
     hsa)
+      # Keep the CPU and GPU topology intact; the comparator binds the exact
+      # selected physical GPU by its authenticated HSA UUID.
       command=("${qualification_env[@]}"
-        HSA_XNACK=0 ROCR_VISIBLE_DEVICES="${gpu_index}"
+        HSA_XNACK=0
         /usr/bin/taskset --cpu-list "${measurement_cpu_list}"
         /usr/bin/numactl --physcpubind="${measurement_cpu_list}"
         --membind="${topology_numa_node}"
         /usr/bin/timeout --foreground --signal=TERM --kill-after=5s "${phase_timeout}s"
-        "${hsa_binary}" "${hsaco}" 0 "${unique_id}")
+        "${hsa_binary}" "${hsaco}" "${gpu_index}" "${unique_id}")
       ;;
     hip)
       command=("${qualification_env[@]}"
