@@ -25,7 +25,7 @@ constexpr std::size_t kValidatedIterations =
 constexpr std::size_t kPatternAIterations = kValidatedIterations / 2;
 constexpr std::size_t kPatternBIterations = kValidatedIterations / 2;
 
-constexpr char kSchema[] = "fe2o3.r26-inplace-benchmark.v2";
+constexpr char kSchema[] = "fe2o3.r26-inplace-benchmark.v3";
 constexpr char kKernel[] = "inplace_transform";
 constexpr char kKernelDescriptor[] = "inplace_transform.kd";
 constexpr std::uint32_t kHsaKernargAlignment = 16;
@@ -188,7 +188,7 @@ inline void report(const char *backend, const char *promotion,
       "validation=every-element-every-iteration validated_iterations=%zu "
       "pattern_a_iterations=%zu pattern_b_iterations=%zu timing=host-monotonic "
       "interphase_control=e2e-h2d-compute-d2h promotion=%s data_path=%s "
-      "user_data_materializations=%s "
+      "control_path=n/a user_data_materializations=%s "
       "input_a_sha256=%s output_a_sha256=%s input_b_sha256=%s "
       "output_b_sha256=%s",
       backend, kSchema, device_index,

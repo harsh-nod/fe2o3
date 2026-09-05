@@ -24,6 +24,12 @@ class R26RunnerContractTests(unittest.TestCase):
     def test_shell_is_syntactically_valid(self) -> None:
         subprocess.run(["/usr/bin/bash", "-n", str(RUNNER)], check=True)
 
+    def test_runner_uses_the_v3_persistent_control_evidence_contract(self) -> None:
+        self.assertIn("fe2o3.r26-inplace-benchmark.v3", self.source)
+        self.assertNotIn("fe2o3.r26-inplace-benchmark.v2", self.source)
+        self.assertIn("fe2o3.r26-inplace-benchmark.v3", self.common_source)
+        self.assertIn("control_path=n/a", self.common_source)
+
     def test_repository_components_are_staged_and_reverified(self) -> None:
         required = (
             "inplace_transform.hsaco",

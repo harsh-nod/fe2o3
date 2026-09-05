@@ -358,7 +358,10 @@ comparators retain one device allocation but report promotion as unavailable.
 Setup, final validation, and release occur outside the enclosing E2E interval
 for every backend.
 
-The V2 KFD row also retains host-monotonic launch timings. `preparation` is an
+The V3 KFD row records `control_path=persistent-control-replayed` only after
+every measured launch confirms reuse of the retained dispatch control. It also
+retains host-monotonic launch timings; the HSA and HIP comparators report the
+KFD-specific control path as `n/a`. `preparation` is an
 inclusive interval that encloses the `bound_snapshot` and `authority`
 subintervals; their sum must not exceed it. The remaining persistent-launch
 critical path is exclusive: `native_binding` stops before `publication`, which

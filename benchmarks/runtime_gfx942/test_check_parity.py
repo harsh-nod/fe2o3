@@ -471,6 +471,7 @@ def valid_log(
                 {
                     "promotion": "full-h2d-to-compute-ready",
                     "data_path": "persistent-device-reused",
+                    "control_path": "persistent-control-replayed",
                     "user_data_materializations": "0",
                 }
             )
@@ -484,6 +485,7 @@ def valid_log(
                 {
                     "promotion": "n/a",
                     "data_path": "host-staged-one-buffer",
+                    "control_path": "n/a",
                     "user_data_materializations": "n/a",
                     "promotion_samples_ns": "n/a",
                     "promotion_min_ns": "n/a",
@@ -608,30 +610,30 @@ class R26CheckerTests(unittest.TestCase):
         self.assertEqual(len(output), 18)
         self.assertEqual(
             output[0],
-            "schema=fe2o3.r26-inplace-benchmark.v2 "
+            "schema=fe2o3.r26-inplace-benchmark.v3 "
             "comparison=kfd-over-reference reference=hsa phase=h2d statistic=p50_ns "
             "kfd_over_reference_p50_ratio=1.000000 lower_is_better=true "
             "evidence_only=true",
         )
         self.assertEqual(
             output[8],
-            "schema=fe2o3.r26-inplace-benchmark.v2 "
+            "schema=fe2o3.r26-inplace-benchmark.v3 "
             "comparison=promotion-authentication-share phase=promotion-over-h2d "
             "statistic=p50_ns promotion_over_h2d_p50_ratio=0.506903 "
             "lower_is_better=true evidence_only=true",
         )
         self.assertEqual(
             output[-2],
-            "schema=fe2o3.r26-inplace-benchmark.v2 "
+            "schema=fe2o3.r26-inplace-benchmark.v3 "
             "comparison=kfd-host-launch-timing phase=recycle statistic=p50_ns "
             "value=114 evidence_only=true",
         )
 
-    def test_rejects_v1_r26_schema_instead_of_mixing_row_contracts(self) -> None:
+    def test_rejects_v2_r26_schema_instead_of_mixing_row_contracts(self) -> None:
         lines = valid_log()
         lines[0] = lines[0].replace(
+            "schema=fe2o3.r26-inplace-benchmark.v3",
             "schema=fe2o3.r26-inplace-benchmark.v2",
-            "schema=fe2o3.r26-inplace-benchmark.v1",
         )
         with self.assertRaisesRegex(CHECKER.CheckError, "unexpected R26 context line"):
             self.check(lines)
@@ -944,6 +946,18 @@ class R26CheckerTests(unittest.TestCase):
             "user_data_materializations=0", "user_data_materializations=1"
         )
         with self.assertRaisesRegex(CHECKER.CheckError, "user_data_materializations"):
+            self.check(lines)
+
+    def test_rejects_kfd_without_persistent_control_replay(self) -> None:
+        lines = valid_log()
+        kfd_index = next(
+            i for i, line in enumerate(lines) if line.startswith("backend=kfd")
+        )
+        lines[kfd_index] = lines[kfd_index].replace(
+            "control_path=persistent-control-replayed",
+            "control_path=persistent-control-prepared",
+        )
+        with self.assertRaisesRegex(CHECKER.CheckError, "control_path"):
             self.check(lines)
 
     def test_rejects_e2e_sample_below_synchronized_phase_sum(self) -> None:
@@ -1296,7 +1310,7 @@ class R26CheckerTests(unittest.TestCase):
             output,
             expected_performance
             + [
-                "schema=fe2o3.r26-inplace-benchmark.v2 "
+                "schema=fe2o3.r26-inplace-benchmark.v3 "
                 "counterbalance_design=cyclic-latin-square-3 "
                 "counterbalance_slots=3 "
                 f"counterbalance_set_id={'a' * 64} "

@@ -434,7 +434,10 @@ mod enabled {
             Ok((elapsed, submission))
         }
 
-        fn observe_launch_timing_v1(&mut self) -> BenchmarkResult<LaunchTimingV1> {
+        fn observe_launch_timing_v1(
+            &mut self,
+            require_persistent_control_reuse: bool,
+        ) -> BenchmarkResult<LaunchTimingV1> {
             let performance = self
                 .context
                 .backend()
@@ -444,6 +447,11 @@ mod enabled {
                 || performance.user_data_materializations() != 0
             {
                 return Err("R26 launch did not reuse persistent HBM exactly".into());
+            }
+            if require_persistent_control_reuse && !performance.persistent_control_reused() {
+                return Err(
+                    "R26 measured launch did not replay persistent dispatch control".into(),
+                );
             }
             let promotion = performance
                 .ready_promotion()
@@ -480,7 +488,11 @@ mod enabled {
             })
         }
 
-        fn iteration(&mut self, global_iteration: u64) -> BenchmarkResult<IterationTimingV1> {
+        fn iteration(
+            &mut self,
+            global_iteration: u64,
+            require_persistent_control_reuse: bool,
+        ) -> BenchmarkResult<IterationTimingV1> {
             let input =
                 Gfx942InplaceTransformQualificationInputV1::for_global_iteration(global_iteration);
             let input_bytes = match input {
@@ -505,7 +517,7 @@ mod enabled {
                 region(self.download, RuntimeAccessV1::Write),
             )?;
             let e2e = e2e_started.elapsed().as_nanos();
-            let launch = self.observe_launch_timing_v1()?;
+            let launch = self.observe_launch_timing_v1(require_persistent_control_reuse)?;
             validate_launch_timing_v1(compute, launch.phases)?;
             self.context
                 .read_allocation(self.download, 0, &mut self.observed)
@@ -622,7 +634,7 @@ mod enabled {
         let measurement = (|| -> BenchmarkResult<_> {
             let mut global_iteration = 0_u64;
             for _ in 0..WARMUPS {
-                run.iteration(global_iteration)?;
+                run.iteration(global_iteration, false)?;
                 global_iteration = global_iteration
                     .checked_add(1)
                     .ok_or("R26 iteration overflow")?;
@@ -638,7 +650,7 @@ mod enabled {
             for _ in 0..SAMPLES {
                 let mut sample = SampleAccumulatorV1::default();
                 for _ in 0..ITERATIONS_PER_SAMPLE {
-                    sample.add(run.iteration(global_iteration)?)?;
+                    sample.add(run.iteration(global_iteration, true)?)?;
                     global_iteration = global_iteration
                         .checked_add(1)
                         .ok_or("R26 iteration overflow")?;
@@ -674,7 +686,7 @@ mod enabled {
         let pattern_a_iterations = validated_iterations.div_ceil(2);
         let pattern_b_iterations = validated_iterations / 2;
         let mut row = format!(
-            "backend=kfd schema=fe2o3.r26-inplace-benchmark.v2 device_index=0 unique_id={unique_id:016x} uuid=GPU-{unique_id:016x} target=gfx942:xnack- xnack=disabled kernel={GFX942_INPLACE_TRANSFORM_QUALIFICATION_KERNEL_V1} bytes={GFX942_INPLACE_TRANSFORM_QUALIFICATION_BUFFER_BYTES_V1} elements={GFX942_INPLACE_TRANSFORM_QUALIFICATION_ELEMENTS_V1} workgroup=256 warmups={WARMUPS} samples={SAMPLES} iterations_per_sample={ITERATIONS_PER_SAMPLE} sample_value=integer-average-ns-over-10-iterations trimming=none input_pattern=alternating-full-a-b pattern_start=a validation=every-element-every-iteration validated_iterations={validated_iterations} pattern_a_iterations={pattern_a_iterations} pattern_b_iterations={pattern_b_iterations} timing=host-monotonic interphase_control=e2e-h2d-compute-d2h promotion=full-h2d-to-compute-ready data_path=persistent-device-reused user_data_materializations=0 input_a_sha256={} output_a_sha256={} input_b_sha256={} output_b_sha256={}",
+            "backend=kfd schema=fe2o3.r26-inplace-benchmark.v3 device_index=0 unique_id={unique_id:016x} uuid=GPU-{unique_id:016x} target=gfx942:xnack- xnack=disabled kernel={GFX942_INPLACE_TRANSFORM_QUALIFICATION_KERNEL_V1} bytes={GFX942_INPLACE_TRANSFORM_QUALIFICATION_BUFFER_BYTES_V1} elements={GFX942_INPLACE_TRANSFORM_QUALIFICATION_ELEMENTS_V1} workgroup=256 warmups={WARMUPS} samples={SAMPLES} iterations_per_sample={ITERATIONS_PER_SAMPLE} sample_value=integer-average-ns-over-10-iterations trimming=none input_pattern=alternating-full-a-b pattern_start=a validation=every-element-every-iteration validated_iterations={validated_iterations} pattern_a_iterations={pattern_a_iterations} pattern_b_iterations={pattern_b_iterations} timing=host-monotonic interphase_control=e2e-h2d-compute-d2h promotion=full-h2d-to-compute-ready data_path=persistent-device-reused control_path=persistent-control-replayed user_data_materializations=0 input_a_sha256={} output_a_sha256={} input_b_sha256={} output_b_sha256={}",
             hex(GFX942_INPLACE_TRANSFORM_INPUT_A_SHA256_V1),
             hex(GFX942_INPLACE_TRANSFORM_OUTPUT_A_SHA256_V1),
             hex(GFX942_INPLACE_TRANSFORM_INPUT_B_SHA256_V1),

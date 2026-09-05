@@ -48,7 +48,7 @@ SCHEMA_METRICS = {
     ),
 }
 
-R26_INPLACE_SCHEMA = "fe2o3.r26-inplace-benchmark.v2"
+R26_INPLACE_SCHEMA = "fe2o3.r26-inplace-benchmark.v3"
 R26_SYSTEM_IDENTITY_SCHEMA = "fe2o3.r26-system-identity.v1"
 R26_MANIFEST_SCHEMA = "fe2o3.r26-evidence-manifest.v1"
 R26_TOPOLOGY_SCHEMA = "fe2o3.r26-host-topology.v1"
@@ -153,6 +153,7 @@ R26_ROW_FIELDS = (
     "interphase_control",
     "promotion",
     "data_path",
+    "control_path",
     "user_data_materializations",
     "input_a_sha256",
     "output_a_sha256",
@@ -1697,12 +1698,14 @@ def _check_r26_inplace_rows(
             expected_backend = {
                 "promotion": "full-h2d-to-compute-ready",
                 "data_path": "persistent-device-reused",
+                "control_path": "persistent-control-replayed",
                 "user_data_materializations": "0",
             }
         else:
             expected_backend = {
                 "promotion": "n/a",
                 "data_path": "host-staged-one-buffer",
+                "control_path": "n/a",
                 "user_data_materializations": "n/a",
             }
         for field, expected in expected_backend.items():
