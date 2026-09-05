@@ -34,6 +34,7 @@ r28_persistent_hot_currentness_scope_proof="$script_dir/r28_persistent_hot_curre
 r30_bound_host_content_certificate_proof="$script_dir/r30_bound_host_content_certificate_v1.rs"
 r31_single_packet_window_refinement_proof="$script_dir/r31_single_packet_window_refinement_v1.rs"
 r32_directional_sdma_currentness_handoff_proof="$script_dir/r32_directional_sdma_currentness_handoff_v1.rs"
+r33_fused_synchronous_directional_sdma_proof="$script_dir/r33_fused_synchronous_directional_sdma_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -344,6 +345,10 @@ negative_r31_promotion_early_retirement="$script_dir/negative/r31_single_packet_
 negative_r32_prepare_close_elision="$script_dir/negative/r32_directional_sdma_currentness_handoff_v1_prepare_close_elision.rs"
 negative_r32_shared_failure_retry="$script_dir/negative/r32_directional_sdma_currentness_handoff_v1_shared_failure_retry.rs"
 negative_r32_intervening_native="$script_dir/negative/r32_directional_sdma_currentness_handoff_v1_intervening_native.rs"
+negative_r33_middle_elision_without_premise="$script_dir/negative/r33_fused_synchronous_directional_sdma_v1_middle_elision_without_premise.rs"
+negative_r33_timeout_release="$script_dir/negative/r33_fused_synchronous_directional_sdma_v1_timeout_release.rs"
+negative_r33_early_retirement="$script_dir/negative/r33_fused_synchronous_directional_sdma_v1_early_retirement.rs"
+negative_r33_completion_restoration_release="$script_dir/negative/r33_fused_synchronous_directional_sdma_v1_completion_restoration_release.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -399,6 +404,7 @@ expected_r28_persistent_hot_currentness_scope=$(read_pin "$pin_dir/R28_PERSISTEN
 expected_r30_bound_host_content_certificate=$(read_pin "$pin_dir/R30_BOUND_HOST_CONTENT_CERTIFICATE_SHA256")
 expected_r31_single_packet_window_refinement=$(read_pin "$pin_dir/R31_SINGLE_PACKET_WINDOW_REFINEMENT_SHA256")
 expected_r32_directional_sdma_currentness_handoff=$(read_pin "$pin_dir/R32_DIRECTIONAL_SDMA_CURRENTNESS_HANDOFF_SHA256")
+expected_r33_fused_synchronous_directional_sdma=$(read_pin "$pin_dir/R33_FUSED_SYNCHRONOUS_DIRECTIONAL_SDMA_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -709,6 +715,10 @@ expected_negative_r31_promotion_early_retirement=$(read_pin "$pin_dir/NEGATIVE_R
 expected_negative_r32_prepare_close_elision=$(read_pin "$pin_dir/NEGATIVE_R32_PREPARE_CLOSE_ELISION_SHA256")
 expected_negative_r32_shared_failure_retry=$(read_pin "$pin_dir/NEGATIVE_R32_SHARED_FAILURE_RETRY_SHA256")
 expected_negative_r32_intervening_native=$(read_pin "$pin_dir/NEGATIVE_R32_INTERVENING_NATIVE_SHA256")
+expected_negative_r33_middle_elision_without_premise=$(read_pin "$pin_dir/NEGATIVE_R33_MIDDLE_ELISION_WITHOUT_PREMISE_SHA256")
+expected_negative_r33_timeout_release=$(read_pin "$pin_dir/NEGATIVE_R33_TIMEOUT_RELEASE_SHA256")
+expected_negative_r33_early_retirement=$(read_pin "$pin_dir/NEGATIVE_R33_EARLY_RETIREMENT_SHA256")
+expected_negative_r33_completion_restoration_release=$(read_pin "$pin_dir/NEGATIVE_R33_COMPLETION_RESTORATION_RELEASE_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -767,6 +777,7 @@ check_sources() {
     check_digest "$expected_r30_bound_host_content_certificate" "$r30_bound_host_content_certificate_proof"
     check_digest "$expected_r31_single_packet_window_refinement" "$r31_single_packet_window_refinement_proof"
     check_digest "$expected_r32_directional_sdma_currentness_handoff" "$r32_directional_sdma_currentness_handoff_proof"
+    check_digest "$expected_r33_fused_synchronous_directional_sdma" "$r33_fused_synchronous_directional_sdma_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -1077,6 +1088,10 @@ check_sources() {
     check_digest "$expected_negative_r32_prepare_close_elision" "$negative_r32_prepare_close_elision"
     check_digest "$expected_negative_r32_shared_failure_retry" "$negative_r32_shared_failure_retry"
     check_digest "$expected_negative_r32_intervening_native" "$negative_r32_intervening_native"
+    check_digest "$expected_negative_r33_middle_elision_without_premise" "$negative_r33_middle_elision_without_premise"
+    check_digest "$expected_negative_r33_timeout_release" "$negative_r33_timeout_release"
+    check_digest "$expected_negative_r33_early_retirement" "$negative_r33_early_retirement"
+    check_digest "$expected_negative_r33_completion_restoration_release" "$negative_r33_completion_restoration_release"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -1116,6 +1131,7 @@ check_sources
     "$r30_bound_host_content_certificate_proof" \
     "$r31_single_packet_window_refinement_proof" \
     "$r32_directional_sdma_currentness_handoff_proof" \
+    "$r33_fused_synchronous_directional_sdma_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -1422,7 +1438,11 @@ check_sources
     "$negative_r31_promotion_early_retirement" \
     "$negative_r32_prepare_close_elision" \
     "$negative_r32_shared_failure_retry" \
-    "$negative_r32_intervening_native"
+    "$negative_r32_intervening_native" \
+    "$negative_r33_middle_elision_without_premise" \
+    "$negative_r33_timeout_release" \
+    "$negative_r33_early_retirement" \
+    "$negative_r33_completion_restoration_release"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -1552,6 +1572,7 @@ check_positive "$r28_persistent_hot_currentness_scope_proof" 'verification resul
 check_positive "$r30_bound_host_content_certificate_proof" 'verification results:: 38 verified, 0 errors' r30-bound-host-content-certificate
 check_positive "$r31_single_packet_window_refinement_proof" 'verification results:: 41 verified, 0 errors' r31-single-packet-window-refinement
 check_positive "$r32_directional_sdma_currentness_handoff_proof" 'verification results:: 34 verified, 0 errors' r32-directional-sdma-currentness-handoff
+check_positive "$r33_fused_synchronous_directional_sdma_proof" 'verification results:: 45 verified, 0 errors' r33-fused-synchronous-directional-sdma
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -1862,13 +1883,17 @@ check_negative "$negative_r31_promotion_early_retirement" mutated_closing_ambigu
 check_negative "$negative_r32_prepare_close_elision" mutated_prepare_failure_retains_old_close_v1 r32-prepare-close-elision
 check_negative "$negative_r32_shared_failure_retry" mutated_shared_failure_is_terminal_prepared_v1 r32-shared-failure-retry
 check_negative "$negative_r32_intervening_native" mutated_successful_handoff_publishes_immediately_v1 r32-intervening-native
+check_negative "$negative_r33_middle_elision_without_premise" mutated_middle_elision_preserves_external_semantics_v1 r33-middle-elision-without-premise
+check_negative "$negative_r33_timeout_release" mutated_timeout_retains_exact_published_custody_v1 r33-timeout-release
+check_negative "$negative_r33_early_retirement" mutated_retirement_follows_successful_final_currentness_v1 r33-early-retirement
+check_negative "$negative_r33_completion_restoration_release" mutated_failed_restoration_retains_completed_unrestored_v1 r33-completion-restoration-release
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 mutations=310'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 mutations=314'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

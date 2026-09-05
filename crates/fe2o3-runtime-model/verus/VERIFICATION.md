@@ -10,9 +10,9 @@ chunking, R21 runtime scripted-failure-seam, R22 batched directional
 persistent-SDMA-window, R23 same-device D2D persistent-SDMA-window, R24
 portable-progress, R25 persistent-compute storage-bridge, R27 persistent
 dispatch-control, R28 persistent-hot-currentness-scope, R30 bound
-host-content-certificate, R31 single-packet/window-refinement, and R32
-directional-currentness-handoff models. The
-authenticated runner proves 696 obligations and rejects 310
+host-content-certificate, R31 single-packet/window-refinement, R32
+directional-currentness-handoff, and R33 fused-synchronous-directional-SDMA
+models. The authenticated runner proves 741 obligations and rejects 314
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -1442,6 +1442,100 @@ coherence, DMA visibility, progress, liveness, parity, or performance.
 | Executable handoff model | **Checked** | Sixteen focused Rust transition/structure tests plus one compile-fail non-`Clone` doctest; no Rust-to-Verus correspondence theorem. |
 | Coupled boundary countermodels | **Rejected** | Three pinned mutated transition bodies fail their named close-retention, terminal-prepared-custody, and immediate-publication postconditions. |
 | Rust privacy/move semantics, allocation/loan behavior, currentness truth, executable Rust refinement, KFD/HSA/HIP, driver, firmware, hardware, coherence, progress, liveness, parity, or performance | **Not established** | Explicitly outside the R32 proof boundary. |
+
+## R33 fused synchronous directional SDMA
+
+`r33_fused_synchronous_directional_sdma_v1.rs` proves 45 obligations for an
+independent finite comparison between the former R32 submit-then-wait
+composition and the R33 fused synchronous composition. The reference machine
+records five successful operational-currentness observations: submit opening,
+prepublication, submit close, wait opening, and final currentness. The fused
+machine records three: opening, prepublication, and final currentness. It also
+records four versus two abstract owner/model-foundation loan events. One shared
+opening-loan result and separate former submit, former submit-close, former
+wait, and fused-execution loan results make every fallible loan boundary
+explicit. These are mathematical event counts and contracted results, not
+measurements or proofs of Rust allocation, borrowing, syscalls, or hardware
+cost.
+
+The equivalence theorem has three explicit premises. The sticky/aligned-
+currentness premise gives the removed successful submit close and wait opening
+the same contracted value as the retained prepublication observation. A
+path-sensitive retained-loan premise relates the former submit loan and fused
+execution loan only where their different retake points can change custody. A
+path-sensitive removed-loan premise requires former submit-close and wait loan
+success only where failure would distinguish the results. For example, a
+retained publication already has terminal prepared-queue-retained custody, and
+an unrestorable completed record already has terminal completed-unrestored
+custody, so irrelevant removed-loan failures are not assumed away. Under these
+premises, both machines return the same request binding, planned and returned
+ticket values, host-certificate state, external outcome, exact custody class,
+publication and wait classification, and lower-record retirement decision. A
+countermodel demonstrates that eliding the middle observations is unsound
+without the currentness premise.
+
+The fused successful path moves the queue, queue generation, native queue,
+direction, offsets, length, sequence, ticket generation, and certificate state
+through a mathematical handoff directly into publication. Publication is the
+next modeled event with zero intervening fallible or native actions. The wait
+remains in that publication loan. The prepared persistent use and detached
+request exist before the fused loan opens, so loan-open failure has terminal
+prepared custody and an admitted D2H request has already invalidated its host
+certificate. A lower completion record is exposed and removed only after the
+final-currentness event succeeds. Final-currentness loss retains terminal
+published custody and leaves the lower queue record unretired. After successful
+final currentness the lower completed record is removed before host/device
+ownership restoration. Failed `restore_directional_completed_sdma_copy_v1`, or
+failure to retake the enclosing loan after that removal, retains exact terminal
+completed-unrestored custody; only successful restoration returns completed
+custody.
+
+The transition set covers opening and loan-open failure, retryable and poisoned
+preparation failure, prepublication currentness loss, recoverable and retained
+publication, returned-ticket mismatch, timeout, lower wait failure,
+final-currentness loss, completion restoration success/failure, and every
+distinct loan open/retake failure. A confirmed
+publication with a returned ticket different from the planned ticket is
+terminal published, records both ticket values, performs its final currentness
+observation, and never enters wait. Retained publication is instead terminal
+prepared-queue-retained custody and preserves the lower returned ticket without
+claiming it is the planned ticket. Timeout retains the exact confirmed
+published ticket. Lower wait failure retains terminal published custody.
+Retake failure after preparation rejection or recoverable publication is
+terminal prepared; after timeout it is terminal published; and after a
+successfully checked and removed completion record it is terminal
+completed-unrestored.
+H2D preserves the host certificate. D2H invalidates it after admission and
+request construction, including before a fused-loan-open failure, while opening
+failure preserves the prior certificate. Same-device D2D identity is an
+unchanged projection.
+
+The executable R33 model has 23 focused Rust tests. A structural test confirms
+that its private prepared-handoff carrier has no `Clone` derive or
+implementation, and a compile-fail doctest rejects cloning the public owning
+model. Verus mathematical values remain copyable, so the proof does not
+establish Rust privacy, move-only ownership, loan mechanics, or borrow
+exclusivity. Four pinned transition-coupled mutations respectively elide the
+middle close/open observations without the alignment premise, release published
+custody on timeout, and retire a completed record before failed final
+currentness, and release a completed record after failed restoration. Each
+fails at its named postcondition and imports no positive proof source.
+
+Currentness values, lower outcomes, identities, certificates, and loan results
+are contracted mathematical inputs. There is no Rust-to-Verus correspondence
+theorem and no proof that production Rust refines either finite machine. The
+model does not establish native/KFD/HSA/HIP behavior, driver or firmware
+correctness, hardware completion or coherence, progress, liveness, parity, or
+performance.
+
+## R33 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Premised submit/wait-to-fused external equivalence, exact 5-to-3 observation and 4-to-2 abstract-loan counts, path-sensitive removed-loan requirements, immediate handoff/publication, same-loan wait, final-currentness-before-retirement, exact completed-restoration custody, planned/returned ticket binding and mismatch handling, certificate behavior, and same-device identity | **Proved** | Forty-five obligations in `r33_fused_synchronous_directional_sdma_v1.rs`; finite mathematical values and contracted observations only. |
+| Executable fused-composition model | **Checked** | Twenty-three focused Rust transition/structure tests plus one compile-fail non-`Clone` doctest; no Rust-to-Verus correspondence theorem. |
+| Coupled boundary countermodels | **Rejected** | Four pinned mutated transition bodies fail their named alignment, timeout-custody, retirement-order, and completion-restoration-custody postconditions. |
+| Rust privacy/move semantics, concrete loans or allocation, currentness/completion truth, executable Rust refinement, runtime/KFD/HSA/HIP, driver, firmware, hardware, coherence, progress, liveness, parity, or performance | **Not established** | Explicitly outside the R33 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
