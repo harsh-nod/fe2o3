@@ -48,18 +48,29 @@ SCHEMA_METRICS = {
     ),
 }
 
-R26_INPLACE_SCHEMA = "fe2o3.r26-inplace-benchmark.v1"
+R26_INPLACE_SCHEMA = "fe2o3.r26-inplace-benchmark.v2"
 R26_SYSTEM_IDENTITY_SCHEMA = "fe2o3.r26-system-identity.v1"
 R26_MANIFEST_SCHEMA = "fe2o3.r26-evidence-manifest.v1"
 R26_TOPOLOGY_SCHEMA = "fe2o3.r26-host-topology.v1"
 R26_MONITOR_SCHEMA = "fe2o3.r26-kfd-queue-monitor.v2"
 R26_EXECUTION_ENVIRONMENT = "env-i-lang-c-lc-all-c-path-usr-sbin-usr-bin-sbin-bin-v1"
 R26_PHASES = ("h2d", "compute", "d2h", "e2e")
+R26_LAUNCH_TIMING_PHASES = (
+    "preparation",
+    "bound_snapshot",
+    "authority",
+    "native_binding",
+    "publication",
+    "publish_to_completion",
+    "completed_readback",
+    "recycle",
+)
 R26_SUMMARIES = ("min", "mean", "max", "p50", "p95")
 R26_COUNTERBALANCE_DESIGN = "cyclic-latin-square-3"
 R26_MAX_LDD_BYTES = 1 << 20
 R26_MAX_LOADER_DEPENDENCIES = 4096
 R26_MAX_LOADER_EVIDENCE_BYTES = 4 << 20
+R26_MAX_NANOSECONDS = (1 << 128) - 1
 R26_COUNTERBALANCE_ORDERS = {
     0: ("kfd", "hsa", "hip"),
     1: ("hsa", "hip", "kfd"),
@@ -98,6 +109,7 @@ R26_CONTEXT_FIELDS = (
     "hsa_source_sha256",
     "hip_source_sha256",
     "binary_reader_sha256",
+    "hsa_pool_policy_sha256",
     "common_header_sha256",
     "checker_sha256",
     "runner_sha256",
@@ -202,7 +214,7 @@ R26_FIXED_ROW = {
 }
 R26_SAMPLE_FIELDS = tuple(
     field
-    for phase in R26_PHASES + ("promotion",)
+    for phase in R26_PHASES + ("promotion",) + R26_LAUNCH_TIMING_PHASES
     for field in (f"{phase}_samples_ns",)
     + tuple(f"{phase}_{summary}_ns" for summary in R26_SUMMARIES)
 )
@@ -597,7 +609,9 @@ def admitted_kfd_profile(profile: str) -> bool:
     } or (STRIPED_KFD_PROFILE.fullmatch(profile) is not None)
 
 
-def r26_raw_samples(row: dict[str, str], phase: str) -> list[int]:
+def r26_raw_samples(
+    row: dict[str, str], phase: str, *, allow_zero: bool = False
+) -> list[int]:
     field = f"{phase}_samples_ns"
     try:
         values = row[field].split(",")
@@ -605,28 +619,66 @@ def r26_raw_samples(row: dict[str, str], phase: str) -> list[int]:
         raise CheckError(
             f"backend {row.get('backend', '?')} is missing required field {field}"
         ) from error
-    if len(values) != 30 or any(
-        re.fullmatch(r"[1-9][0-9]*", value) is None for value in values
-    ):
+    pattern = r"(?:0|[1-9][0-9]*)" if allow_zero else r"[1-9][0-9]*"
+    if len(values) != 30 or any(re.fullmatch(pattern, value) is None for value in values):
+        qualifier = "nonnegative" if allow_zero else "positive"
         raise CheckError(
-            f"field {field} must contain exactly 30 positive integer samples"
+            f"field {field} must contain exactly 30 canonical ASCII {qualifier} "
+            "integer samples"
         )
+    if any(
+        len(value) > len(str(R26_MAX_NANOSECONDS))
+        or (len(value) == len(str(R26_MAX_NANOSECONDS))
+            and value > str(R26_MAX_NANOSECONDS))
+        for value in values
+    ):
+        raise CheckError(f"field {field} contains a sample above the R26 u128 bound")
     return [int(value) for value in values]
 
 
-def r26_validate_summaries(row: dict[str, str], phase: str, values: list[int]) -> None:
+def r26_summary_integer(
+    row: dict[str, str], field: str, *, allow_zero: bool = False
+) -> int:
+    try:
+        value = row[field]
+    except KeyError as error:
+        raise CheckError(f"missing required field {field}") from error
+    pattern = r"(?:0|[1-9][0-9]*)" if allow_zero else r"[1-9][0-9]*"
+    qualifier = "nonnegative" if allow_zero else "positive"
+    if re.fullmatch(pattern, value) is None:
+        raise CheckError(
+            f"field {field} must be a canonical ASCII {qualifier} integer"
+        )
+    maximum = str(R26_MAX_NANOSECONDS)
+    if len(value) > len(maximum) or (len(value) == len(maximum) and value > maximum):
+        raise CheckError(f"field {field} exceeds the R26 u128 bound")
+    return int(value)
+
+
+def r26_validate_summaries(
+    row: dict[str, str], phase: str, values: list[int], *, allow_zero: bool = False
+) -> None:
     sorted_values = sorted(values)
     expected = {
         "min": sorted_values[0],
-        "mean": sum(values) // len(values),
+        "mean": r26_checked_sum(values, f"{phase} summary") // len(values),
         "max": sorted_values[-1],
         "p50": sorted_values[(len(values) * 50 + 99) // 100 - 1],
         "p95": sorted_values[(len(values) * 95 + 99) // 100 - 1],
     }
     for summary, expected_value in expected.items():
         field = f"{phase}_{summary}_ns"
-        if positive_integer(row, field) != expected_value:
+        if r26_summary_integer(row, field, allow_zero=allow_zero) != expected_value:
             raise CheckError(f"field {field} is inconsistent with raw samples")
+
+
+def r26_checked_sum(values: Iterable[int], description: str) -> int:
+    total = 0
+    for value in values:
+        if value > R26_MAX_NANOSECONDS - total:
+            raise CheckError(f"R26 {description} timing overflow")
+        total += value
+    return total
 
 
 def r26_p50(values: list[int]) -> int:
@@ -677,6 +729,7 @@ def r26_validate_context(context: dict[str, str]) -> tuple[str, str]:
         "hsa_source_sha256",
         "hip_source_sha256",
         "binary_reader_sha256",
+        "hsa_pool_policy_sha256",
         "common_header_sha256",
         "checker_sha256",
         "runner_sha256",
@@ -1676,9 +1729,59 @@ def _check_r26_inplace_rows(
                     raise CheckError(
                         f"backend kfd promotion sample {index} exceeds inclusive H2D"
                     )
+            launch_samples: dict[str, list[int]] = {}
+            for phase in R26_LAUNCH_TIMING_PHASES:
+                completed_readback = phase == "completed_readback"
+                values = r26_raw_samples(row, phase, allow_zero=completed_readback)
+                launch_samples[phase] = values
+                r26_validate_summaries(
+                    row, phase, values, allow_zero=completed_readback
+                )
+                if completed_readback and any(values):
+                    raise CheckError(
+                        "backend kfd completed_readback must be exactly zero "
+                        "for persistent device execution"
+                    )
+                for index, value in enumerate(values):
+                    if value > phase_samples["compute"][index]:
+                        raise CheckError(
+                            f"backend kfd {phase} sample {index} exceeds inclusive compute"
+                        )
+            for index in range(30):
+                nested_preparation = r26_checked_sum(
+                    (
+                        launch_samples["bound_snapshot"][index],
+                        launch_samples["authority"][index],
+                    ),
+                    "nested preparation",
+                )
+                if nested_preparation > launch_samples["preparation"][index]:
+                    raise CheckError(
+                        f"backend kfd nested preparation sample {index} exceeds "
+                        "inclusive preparation"
+                    )
+                critical_path = r26_checked_sum(
+                    (
+                        launch_samples["preparation"][index],
+                        launch_samples["native_binding"][index],
+                        launch_samples["publication"][index],
+                        launch_samples["publish_to_completion"][index],
+                        launch_samples["recycle"][index],
+                    ),
+                    "launch critical-path",
+                )
+                if critical_path > phase_samples["compute"][index]:
+                    raise CheckError(
+                        f"backend kfd launch critical-path sample {index} exceeds "
+                        "inclusive compute"
+                    )
         else:
-            for field in ("promotion_samples_ns",) + tuple(
-                f"promotion_{summary}_ns" for summary in R26_SUMMARIES
+            unavailable_phases = ("promotion",) + R26_LAUNCH_TIMING_PHASES
+            for field in tuple(
+                field
+                for phase in unavailable_phases
+                for field in (f"{phase}_samples_ns",)
+                + tuple(f"{phase}_{summary}_ns" for summary in R26_SUMMARIES)
             ):
                 if row.get(field) != "n/a":
                     raise CheckError(f"backend {backend} field {field} must be n/a")
@@ -1739,6 +1842,22 @@ def _check_r26_inplace_rows(
             )
         )
     )
+    for phase in R26_LAUNCH_TIMING_PHASES:
+        values = r26_raw_samples(
+            rows["kfd"], phase, allow_zero=phase == "completed_readback"
+        )
+        output.append(
+            " ".join(
+                (
+                    f"schema={R26_INPLACE_SCHEMA}",
+                    "comparison=kfd-host-launch-timing",
+                    f"phase={phase}",
+                    "statistic=p50_ns",
+                    f"value={r26_p50(values)}",
+                    "evidence_only=true",
+                )
+            )
+        )
     output.append("validation_status=pass")
     return output, context, identity_lines_by_edge, topology_identity
 

@@ -168,6 +168,10 @@ impl std::error::Error for KfdRuntimeBackendErrorV1 {}
 
 /// Host-side phase durations for the most recently completed direct-KFD launch.
 ///
+/// `preparation` encloses `bound_snapshot` and `authority`. `native_binding`,
+/// `publication`, `publish_to_completion`, and `recycle` are mutually exclusive
+/// portions of the successful persistent-launch critical path.
+///
 /// `publish_to_completion` begins after the doorbell publication call returns
 /// and ends when completion is first observed. It is the nearest available KFD
 /// counterpart to a synchronized launch/wait interval; it is not a device clock.
@@ -235,22 +239,27 @@ pub enum KfdRuntimeLaunchDataPathV1 {
 }
 
 impl KfdRuntimeLaunchPerformanceV1 {
+    /// Returns inclusive launch preparation, including snapshot and authority.
     pub const fn preparation(self) -> Duration {
         self.preparation
     }
 
+    /// Returns the nested bound-allocation snapshot interval.
     pub const fn bound_snapshot(self) -> Duration {
         self.bound_snapshot
     }
 
+    /// Returns the nested launch-authority interval.
     pub const fn authority(self) -> Duration {
         self.authority
     }
 
+    /// Returns only native dispatch binding, stopping before publication starts.
     pub const fn native_binding(self) -> Duration {
         self.native_binding
     }
 
+    /// Returns native publication time, excluding native binding.
     pub const fn publication(self) -> Duration {
         self.publication
     }
@@ -5986,12 +5995,18 @@ impl KfdRuntimeBackendV1 {
                 };
             }
         };
+        let native_binding = native_binding_started.elapsed();
         let publication_started = Instant::now();
         let publication = self
             .queue
             .as_mut()
             .expect("persistent-compute binding retains its queue")
             .submit_directional_persistent_fixed_dispatch_v1(binding);
+        record_initial_persistent_timing_v1(
+            &mut performance,
+            native_binding,
+            publication_started.elapsed(),
+        );
         let dispatch = match publication {
             Ok(dispatch) => dispatch,
             Err(failure) => {
@@ -6002,8 +6017,6 @@ impl KfdRuntimeBackendV1 {
                         "KFD persistent-compute publication became indeterminate: {detail}"
                     )));
                 };
-                performance.native_binding = native_binding_started.elapsed();
-                performance.publication = publication_started.elapsed();
                 performance.data_path = KfdRuntimeLaunchDataPathV1::PersistentDeviceReused;
                 performance.user_data_materializations = 0;
                 self.retain_primary_compute_lane_v1();
@@ -6029,8 +6042,6 @@ impl KfdRuntimeBackendV1 {
                 return Ok(());
             }
         };
-        performance.native_binding = native_binding_started.elapsed();
-        performance.publication = publication_started.elapsed();
         performance.data_path = KfdRuntimeLaunchDataPathV1::PersistentDeviceReused;
         performance.user_data_materializations = 0;
         let published_at = Instant::now();
@@ -7763,6 +7774,15 @@ fn profile_host_timing_v1(performance: KfdRuntimeLaunchPerformanceV1) -> KfdProf
         completed_readback_ns: duration_nanoseconds_v1(performance.completed_readback),
         recycle_ns: duration_nanoseconds_v1(performance.recycle),
     }
+}
+
+fn record_initial_persistent_timing_v1(
+    performance: &mut KfdRuntimeLaunchPerformanceV1,
+    native_binding: Duration,
+    publication: Duration,
+) {
+    performance.native_binding = native_binding;
+    performance.publication = publication;
 }
 
 fn duration_nanoseconds_v1(duration: Duration) -> u64 {
@@ -14533,6 +14553,35 @@ mod tests {
     use super::*;
 
     mod synthetic_cov6;
+
+    #[test]
+    fn initial_persistent_timing_keeps_binding_exclusive_from_publication() {
+        let mut performance = KfdRuntimeLaunchPerformanceV1 {
+            native_binding: Duration::from_nanos(101),
+            publication: Duration::from_nanos(103),
+            ..KfdRuntimeLaunchPerformanceV1::default()
+        };
+        record_initial_persistent_timing_v1(
+            &mut performance,
+            Duration::from_nanos(7),
+            Duration::from_nanos(11),
+        );
+        assert_eq!(performance.native_binding(), Duration::from_nanos(7));
+        assert_eq!(performance.publication(), Duration::from_nanos(11));
+    }
+
+    #[test]
+    fn retained_persistent_retry_accumulates_only_publication() {
+        let mut performance = KfdRuntimeLaunchPerformanceV1::default();
+        record_initial_persistent_timing_v1(
+            &mut performance,
+            Duration::from_nanos(7),
+            Duration::from_nanos(11),
+        );
+        performance.publication += Duration::from_nanos(13);
+        assert_eq!(performance.native_binding(), Duration::from_nanos(7));
+        assert_eq!(performance.publication(), Duration::from_nanos(24));
+    }
 
     fn scripted_submit_step_v1(
         direction: Gfx942PersistentSdmaDirectionV1,

@@ -35,6 +35,17 @@ def summary_fields(phase: str, values: list[int]) -> dict[str, str]:
     }
 
 
+def valid_launch_timing_values(phase: str) -> list[int]:
+    if phase == "completed_readback":
+        return [0] * 30
+    base = {
+        "preparation": 250,
+        "bound_snapshot": 40,
+        "authority": 50,
+    }.get(phase, 100)
+    return [base + index for index in range(30)]
+
+
 def render(prefix: str, fields: dict[str, str]) -> str:
     return prefix + " " + " ".join(f"{key}={value}" for key, value in fields.items())
 
@@ -416,6 +427,15 @@ def backend_index(lines: list[str], backend: str | None = None) -> int:
     )
 
 
+def update_backend_phase(
+    lines: list[str], backend: str, phase: str, values: list[int]
+) -> None:
+    index = backend_index(lines, backend)
+    fields = CHECKER.parse_fields(lines[index], index + 1)
+    fields.update(summary_fields(phase, values))
+    lines[index] = render("", fields).strip()
+
+
 def update_context(lines: list[str], **updates: str) -> None:
     fields = CHECKER.parse_fields(lines[0], 1)
     fields.update(updates)
@@ -457,6 +477,8 @@ def valid_log(
             row.update(
                 summary_fields("promotion", [500 + index for index in range(30)])
             )
+            for phase in CHECKER.R26_LAUNCH_TIMING_PHASES:
+                row.update(summary_fields(phase, valid_launch_timing_values(phase)))
         else:
             row.update(
                 {
@@ -471,6 +493,10 @@ def valid_log(
                     "promotion_p95_ns": "n/a",
                 }
             )
+            for phase in CHECKER.R26_LAUNCH_TIMING_PHASES:
+                row[f"{phase}_samples_ns"] = "n/a"
+                for summary in CHECKER.R26_SUMMARIES:
+                    row[f"{phase}_{summary}_ns"] = "n/a"
         rows[backend] = render("", row).strip()
 
     _, topology_sha256 = valid_topology(slot, order[0], "start")
@@ -508,6 +534,7 @@ def valid_log(
         "hsa_source_sha256": "5" * 64,
         "hip_source_sha256": "6" * 64,
         "binary_reader_sha256": "b" * 64,
+        "hsa_pool_policy_sha256": "c" * 64,
         "common_header_sha256": "7" * 64,
         "checker_sha256": "8" * 64,
         "runner_sha256": "9" * 64,
@@ -578,21 +605,36 @@ class R26CheckerTests(unittest.TestCase):
         output = self.check(valid_log())
         self.assertEqual(output[-1], "validation_status=pass")
         self.assertNotIn("parity", " ".join(output))
-        self.assertEqual(len(output), 10)
+        self.assertEqual(len(output), 18)
         self.assertEqual(
             output[0],
-            "schema=fe2o3.r26-inplace-benchmark.v1 "
+            "schema=fe2o3.r26-inplace-benchmark.v2 "
             "comparison=kfd-over-reference reference=hsa phase=h2d statistic=p50_ns "
             "kfd_over_reference_p50_ratio=1.000000 lower_is_better=true "
             "evidence_only=true",
         )
         self.assertEqual(
-            output[-2],
-            "schema=fe2o3.r26-inplace-benchmark.v1 "
+            output[8],
+            "schema=fe2o3.r26-inplace-benchmark.v2 "
             "comparison=promotion-authentication-share phase=promotion-over-h2d "
             "statistic=p50_ns promotion_over_h2d_p50_ratio=0.506903 "
             "lower_is_better=true evidence_only=true",
         )
+        self.assertEqual(
+            output[-2],
+            "schema=fe2o3.r26-inplace-benchmark.v2 "
+            "comparison=kfd-host-launch-timing phase=recycle statistic=p50_ns "
+            "value=114 evidence_only=true",
+        )
+
+    def test_rejects_v1_r26_schema_instead_of_mixing_row_contracts(self) -> None:
+        lines = valid_log()
+        lines[0] = lines[0].replace(
+            "schema=fe2o3.r26-inplace-benchmark.v2",
+            "schema=fe2o3.r26-inplace-benchmark.v1",
+        )
+        with self.assertRaisesRegex(CHECKER.CheckError, "unexpected R26 context line"):
+            self.check(lines)
 
     def test_loader_evidence_revalidates_without_measurement_host_paths(self) -> None:
         with mock.patch.object(
@@ -941,6 +983,91 @@ class R26CheckerTests(unittest.TestCase):
         with self.assertRaisesRegex(CHECKER.CheckError, "exceeds inclusive H2D"):
             self.check(lines)
 
+    def test_rejects_invalid_kfd_launch_timing_series(self) -> None:
+        lines = valid_log()
+        kfd_index = backend_index(lines, "kfd")
+        lines[kfd_index] = lines[kfd_index].replace(
+            "preparation_samples_ns=250", "preparation_samples_ns=0", 1
+        )
+        with self.assertRaisesRegex(
+            CHECKER.CheckError, "30 canonical ASCII positive integer samples"
+        ):
+            self.check(lines)
+
+        for phase, values, expected in (
+            (
+                "completed_readback",
+                [1] + [0] * 29,
+                "completed_readback must be exactly zero",
+            ),
+            ("native_binding", [3000] * 30, "exceeds inclusive compute"),
+        ):
+            with self.subTest(phase=phase):
+                lines = valid_log()
+                update_backend_phase(lines, "kfd", phase, values)
+                with self.assertRaisesRegex(CHECKER.CheckError, expected):
+                    self.check(lines)
+
+    def test_rejects_noncanonical_kfd_launch_timing_summary(self) -> None:
+        for replacement in ("0250", "\u0662\u0665\u0660"):
+            with self.subTest(replacement=replacement):
+                lines = valid_log()
+                kfd_index = backend_index(lines, "kfd")
+                lines[kfd_index] = lines[kfd_index].replace(
+                    "preparation_min_ns=250",
+                    f"preparation_min_ns={replacement}",
+                )
+                with self.assertRaisesRegex(
+                    CHECKER.CheckError, "canonical ASCII positive integer"
+                ):
+                    self.check(lines)
+
+    def test_rejects_r26_summary_accumulator_overflow(self) -> None:
+        lines = valid_log()
+        update_backend_phase(
+            lines, "kfd", "preparation", [CHECKER.R26_MAX_NANOSECONDS] * 30
+        )
+        with self.assertRaisesRegex(
+            CHECKER.CheckError, "preparation summary timing overflow"
+        ):
+            self.check(lines)
+
+    def test_rejects_inconsistent_launch_timing_relationships(self) -> None:
+        lines = valid_log()
+        update_backend_phase(lines, "kfd", "preparation", [100] * 30)
+        update_backend_phase(lines, "kfd", "bound_snapshot", [60] * 30)
+        update_backend_phase(lines, "kfd", "authority", [50] * 30)
+        with self.assertRaisesRegex(
+            CHECKER.CheckError, "nested preparation sample 0 exceeds"
+        ):
+            self.check(lines)
+
+        lines = valid_log()
+        update_backend_phase(lines, "kfd", "preparation", [500] * 30)
+        update_backend_phase(lines, "kfd", "bound_snapshot", [200] * 30)
+        update_backend_phase(lines, "kfd", "authority", [200] * 30)
+        for phase in (
+            "native_binding",
+            "publication",
+            "publish_to_completion",
+            "recycle",
+        ):
+            update_backend_phase(lines, "kfd", phase, [400] * 30)
+        with self.assertRaisesRegex(
+            CHECKER.CheckError, "launch critical-path sample 0 exceeds"
+        ):
+            self.check(lines)
+
+    def test_rejects_reference_kfd_launch_timing_measurement(self) -> None:
+        lines = valid_log()
+        hsa_index = backend_index(lines, "hsa")
+        lines[hsa_index] = lines[hsa_index].replace(
+            "preparation_samples_ns=n/a",
+            "preparation_samples_ns=" + ",".join(["1"] * 30),
+        )
+        with self.assertRaisesRegex(CHECKER.CheckError, "must be n/a"):
+            self.check(lines)
+
     def test_rejects_telemetry_without_clock_evidence(self) -> None:
         lines = valid_log()
         phase_index = next(i for i, line in enumerate(lines) if "phase=kfd" in line)
@@ -1144,23 +1271,32 @@ class R26CheckerTests(unittest.TestCase):
                         "kfd_over_reference_p50_ratio=1.000000 "
                         "lower_is_better=true evidence_only=true"
                     )
-            expected_performance.extend(
-                (
+            expected_performance.append(
+                f"schema={CHECKER.R26_INPLACE_SCHEMA} "
+                f"counterbalance_slot={slot} "
+                "comparison=promotion-authentication-share "
+                "phase=promotion-over-h2d statistic=p50_ns "
+                "promotion_over_h2d_p50_ratio=0.506903 "
+                "lower_is_better=true evidence_only=true"
+            )
+            for phase in CHECKER.R26_LAUNCH_TIMING_PHASES:
+                value = CHECKER.r26_p50(valid_launch_timing_values(phase))
+                expected_performance.append(
                     f"schema={CHECKER.R26_INPLACE_SCHEMA} "
                     f"counterbalance_slot={slot} "
-                    "comparison=promotion-authentication-share "
-                    "phase=promotion-over-h2d statistic=p50_ns "
-                    "promotion_over_h2d_p50_ratio=0.506903 "
-                    "lower_is_better=true evidence_only=true",
-                    f"schema={CHECKER.R26_INPLACE_SCHEMA} "
-                    f"counterbalance_slot={slot} slot_validation_status=pass",
+                    "comparison=kfd-host-launch-timing "
+                    f"phase={phase} statistic=p50_ns value={value} "
+                    "evidence_only=true"
                 )
+            expected_performance.append(
+                f"schema={CHECKER.R26_INPLACE_SCHEMA} "
+                f"counterbalance_slot={slot} slot_validation_status=pass"
             )
         self.assertEqual(
             output,
             expected_performance
             + [
-                "schema=fe2o3.r26-inplace-benchmark.v1 "
+                "schema=fe2o3.r26-inplace-benchmark.v2 "
                 "counterbalance_design=cyclic-latin-square-3 "
                 "counterbalance_slots=3 "
                 f"counterbalance_set_id={'a' * 64} "

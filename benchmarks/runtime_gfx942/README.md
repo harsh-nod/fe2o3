@@ -358,12 +358,23 @@ comparators retain one device allocation but report promotion as unavailable.
 Setup, final validation, and release occur outside the enclosing E2E interval
 for every backend.
 
+The V2 KFD row also retains host-monotonic launch timings. `preparation` is an
+inclusive interval that encloses the `bound_snapshot` and `authority`
+subintervals; their sum must not exceed it. The remaining persistent-launch
+critical path is exclusive: `native_binding` stops before `publication`, which
+is followed by `publish_to_completion` and `recycle`. The checker requires the
+sum of `preparation` and those four exclusive intervals to fit inside the
+inclusive compute sample. `completed_readback` is exactly zero because this
+persistent device path does no completed host readback. These observations are
+host timings for diagnosis, not device-clock kernel durations.
+
 One run contains three separate cyclic Latin-square slots. Each slot retains
 30 samples per backend without cross-slot aggregation. The set checker emits
-slot-qualified KFD/HSA and KFD/HIP p50 ratios for every phase plus the KFD
-promotion share, followed by a manifest over all three exact slot hashes. These
-are descriptive, non-gating comparisons; R26 rejects parity thresholds and
-makes no runtime-wide parity or speedup claim.
+slot-qualified KFD/HSA and KFD/HIP p50 ratios for every phase, the KFD promotion
+share, and `kfd-host-launch-timing` p50 observations, followed by a manifest
+over all three exact slot hashes. These are descriptive, non-gating
+comparisons; R26 rejects parity thresholds and makes no runtime-wide parity or
+speedup claim.
 
 Qualification runs in a minimal declared environment, builds Rust from a
 private snapshot of the exact Git commit, seals its fixture, helpers, sources,

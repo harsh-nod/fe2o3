@@ -11,6 +11,7 @@
 
 #include "bounded_binary_file_reader.hpp"
 #include "inplace_benchmark_common.hpp"
+#include "r26_hsa_pool_policy.hpp"
 
 #define HSA_CHECK(call)                                                        \
   do {                                                                         \
@@ -27,6 +28,12 @@
 namespace {
 
 constexpr std::streamoff kMaximumHsacoBytes = 64 * 1024 * 1024;
+static_assert(fe2o3::r26::kHsaPoolFlagKernargInit ==
+              HSA_AMD_MEMORY_POOL_GLOBAL_FLAG_KERNARG_INIT);
+static_assert(fe2o3::r26::kHsaPoolFlagFineGrained ==
+              HSA_AMD_MEMORY_POOL_GLOBAL_FLAG_FINE_GRAINED);
+static_assert(fe2o3::r26::kHsaPoolFlagCoarseGrained ==
+              HSA_AMD_MEMORY_POOL_GLOBAL_FLAG_COARSE_GRAINED);
 
 struct Agents {
   std::vector<hsa_agent_t> cpus;
@@ -47,20 +54,33 @@ hsa_status_t collect_agent(hsa_agent_t agent, void *data) {
   return HSA_STATUS_SUCCESS;
 }
 
-enum class PoolKind { Host, Device, Kernarg };
-
-struct PoolSelection {
-  PoolKind kind;
-  bool found = false;
+struct CollectedPool {
   hsa_amd_memory_pool_t pool{};
+  fe2o3::r26::HsaPoolCandidate facts;
 };
 
-hsa_status_t choose_pool(hsa_amd_memory_pool_t pool, void *data) {
-  auto *selection = static_cast<PoolSelection *>(data);
+struct PoolCollector {
+  fe2o3::r26::HsaPoolOwner owner;
+  hsa_agent_t nearest_cpu{};
+  hsa_agent_t selected_gpu{};
+  std::vector<CollectedPool> *pools = nullptr;
+};
+
+fe2o3::r26::HsaPoolLocation
+pool_location(hsa_amd_memory_pool_location_t location) {
+  if (location == HSA_AMD_MEMORY_POOL_LOCATION_CPU)
+    return fe2o3::r26::HsaPoolLocation::Cpu;
+  if (location == HSA_AMD_MEMORY_POOL_LOCATION_GPU)
+    return fe2o3::r26::HsaPoolLocation::Gpu;
+  return fe2o3::r26::HsaPoolLocation::Other;
+}
+
+hsa_status_t collect_pool(hsa_amd_memory_pool_t pool, void *data) {
+  auto *collector = static_cast<PoolCollector *>(data);
   hsa_amd_segment_t segment{};
   bool allowed = false;
   hsa_amd_memory_pool_location_t location{};
-  uint32_t flags = 0;
+  std::uint32_t flags = 0;
   hsa_status_t status = hsa_amd_memory_pool_get_info(
       pool, HSA_AMD_MEMORY_POOL_INFO_SEGMENT, &segment);
   if (status != HSA_STATUS_SUCCESS)
@@ -69,43 +89,76 @@ hsa_status_t choose_pool(hsa_amd_memory_pool_t pool, void *data) {
       pool, HSA_AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_ALLOWED, &allowed);
   if (status != HSA_STATUS_SUCCESS)
     return status;
-  if (segment != HSA_AMD_SEGMENT_GLOBAL || !allowed)
-    return HSA_STATUS_SUCCESS;
   status = hsa_amd_memory_pool_get_info(pool, HSA_AMD_MEMORY_POOL_INFO_LOCATION,
                                         &location);
   if (status != HSA_STATUS_SUCCESS)
     return status;
-  status = hsa_amd_memory_pool_get_info(
-      pool, HSA_AMD_MEMORY_POOL_INFO_GLOBAL_FLAGS, &flags);
+  if (segment == HSA_AMD_SEGMENT_GLOBAL) {
+    status = hsa_amd_memory_pool_get_info(
+        pool, HSA_AMD_MEMORY_POOL_INFO_GLOBAL_FLAGS, &flags);
+    if (status != HSA_STATUS_SUCCESS)
+      return status;
+  }
+
+  std::size_t maximum_single_allocation = 0;
+  std::size_t allocation_granule = 0;
+  std::size_t allocation_alignment = 0;
+  if (allowed) {
+    status = hsa_amd_memory_pool_get_info(
+        pool, HSA_AMD_MEMORY_POOL_INFO_ALLOC_MAX_SIZE,
+        &maximum_single_allocation);
+    if (status != HSA_STATUS_SUCCESS)
+      return status;
+    status = hsa_amd_memory_pool_get_info(
+        pool, HSA_AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_GRANULE,
+        &allocation_granule);
+    if (status != HSA_STATUS_SUCCESS)
+      return status;
+    status = hsa_amd_memory_pool_get_info(
+        pool, HSA_AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_ALIGNMENT,
+        &allocation_alignment);
+    if (status != HSA_STATUS_SUCCESS)
+      return status;
+  }
+
+  hsa_amd_memory_pool_access_t nearest_cpu_access{};
+  hsa_amd_memory_pool_access_t selected_gpu_access{};
+  status = hsa_amd_agent_memory_pool_get_info(
+      collector->nearest_cpu, pool, HSA_AMD_AGENT_MEMORY_POOL_INFO_ACCESS,
+      &nearest_cpu_access);
+  if (status != HSA_STATUS_SUCCESS)
+    return status;
+  status = hsa_amd_agent_memory_pool_get_info(
+      collector->selected_gpu, pool, HSA_AMD_AGENT_MEMORY_POOL_INFO_ACCESS,
+      &selected_gpu_access);
   if (status != HSA_STATUS_SUCCESS)
     return status;
 
-  const bool matches =
-      (selection->kind == PoolKind::Device &&
-       location == HSA_AMD_MEMORY_POOL_LOCATION_GPU &&
-       (flags & HSA_AMD_MEMORY_POOL_GLOBAL_FLAG_COARSE_GRAINED) != 0) ||
-      (selection->kind == PoolKind::Host &&
-       location == HSA_AMD_MEMORY_POOL_LOCATION_CPU &&
-       (flags & HSA_AMD_MEMORY_POOL_GLOBAL_FLAG_FINE_GRAINED) != 0) ||
-      (selection->kind == PoolKind::Kernarg &&
-       location == HSA_AMD_MEMORY_POOL_LOCATION_CPU &&
-       (flags & HSA_AMD_MEMORY_POOL_GLOBAL_FLAG_KERNARG_INIT) != 0);
-  if (!matches)
-    return HSA_STATUS_SUCCESS;
-  selection->pool = pool;
-  selection->found = true;
-  return HSA_STATUS_INFO_BREAK;
+  collector->pools->push_back(CollectedPool{
+      pool,
+      fe2o3::r26::HsaPoolCandidate{
+          pool.handle,
+          collector->owner,
+          pool_location(location),
+          segment == HSA_AMD_SEGMENT_GLOBAL,
+          allowed,
+          flags,
+          maximum_single_allocation,
+          allocation_granule,
+          allocation_alignment,
+          nearest_cpu_access != HSA_AMD_MEMORY_POOL_ACCESS_NEVER_ALLOWED,
+          selected_gpu_access != HSA_AMD_MEMORY_POOL_ACCESS_NEVER_ALLOWED,
+      },
+  });
+  return HSA_STATUS_SUCCESS;
 }
 
-void select_pool(hsa_agent_t agent, PoolSelection *selection) {
-  const hsa_status_t status =
-      hsa_amd_agent_iterate_memory_pools(agent, choose_pool, selection);
-  if (status != HSA_STATUS_INFO_BREAK)
-    HSA_CHECK(status);
-  if (!selection->found) {
-    std::fputs("required HSA memory pool was not found\n", stderr);
-    std::exit(2);
-  }
+void collect_pools(hsa_agent_t owner_agent, fe2o3::r26::HsaPoolOwner owner,
+                   hsa_agent_t nearest_cpu, hsa_agent_t selected_gpu,
+                   std::vector<CollectedPool> *pools) {
+  PoolCollector collector{owner, nearest_cpu, selected_gpu, pools};
+  HSA_CHECK(hsa_amd_agent_iterate_memory_pools(owner_agent, collect_pool,
+                                               &collector));
 }
 
 void queue_error(hsa_status_t status, hsa_queue_t *, void *) {
@@ -291,13 +344,27 @@ int main(int argc, char **argv) {
   HSA_CHECK(hsa_agent_get_info(
       gpu, static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_NEAREST_CPU),
       &cpu));
-  const bool cpu_is_enumerated =
-      std::any_of(agents.cpus.begin(), agents.cpus.end(), [&](hsa_agent_t agent) {
-        return agent.handle == cpu.handle;
-      });
-  if (cpu.handle == 0 || !cpu_is_enumerated) {
-    std::fputs("HSA GPU did not report an enumerated nearest CPU agent\n",
-               stderr);
+  if (cpu.handle == 0) {
+    std::fputs("HSA GPU reported a zero nearest CPU agent\n", stderr);
+    return 2;
+  }
+  hsa_device_type_t nearest_cpu_type{};
+  HSA_CHECK(hsa_agent_get_info(cpu, HSA_AGENT_INFO_DEVICE, &nearest_cpu_type));
+  std::vector<std::uint64_t> enumerated_cpu_handles;
+  enumerated_cpu_handles.reserve(agents.cpus.size());
+  for (hsa_agent_t agent : agents.cpus)
+    enumerated_cpu_handles.push_back(agent.handle);
+  const auto normalized_cpu_type =
+      nearest_cpu_type == HSA_DEVICE_TYPE_CPU
+          ? fe2o3::r26::HsaAgentType::Cpu
+          : (nearest_cpu_type == HSA_DEVICE_TYPE_GPU
+                 ? fe2o3::r26::HsaAgentType::Gpu
+                 : fe2o3::r26::HsaAgentType::Other);
+  if (!fe2o3::r26::unique_enumerated_nearest_cpu(
+          cpu.handle, normalized_cpu_type, enumerated_cpu_handles)) {
+    std::fputs(
+        "HSA GPU did not report one uniquely enumerated nearest CPU agent\n",
+        stderr);
     return 2;
   }
   char uuid[21] = {};
@@ -315,15 +382,41 @@ int main(int argc, char **argv) {
     return 2;
   }
 
-  PoolSelection host_pool{PoolKind::Host};
-  PoolSelection device_pool{PoolKind::Device};
-  PoolSelection kernarg_pool{PoolKind::Kernarg};
-  select_pool(cpu, &host_pool);
-  select_pool(gpu, &device_pool);
-  select_pool(cpu, &kernarg_pool);
-
   const std::vector<char> code_object = read_binary(argv[1]);
   const Kernel kernel = load_kernel(code_object, gpu);
+
+  std::vector<CollectedPool> collected_pools;
+  collect_pools(cpu, fe2o3::r26::HsaPoolOwner::NearestCpu, cpu, gpu,
+                &collected_pools);
+  collect_pools(gpu, fe2o3::r26::HsaPoolOwner::SelectedGpu, cpu, gpu,
+                &collected_pools);
+  std::vector<fe2o3::r26::HsaPoolCandidate> pool_facts;
+  pool_facts.reserve(collected_pools.size());
+  for (const CollectedPool &pool : collected_pools)
+    pool_facts.push_back(pool.facts);
+  fe2o3::r26::HsaPoolRoles pool_roles;
+  if (fe2o3::r26::select_hsa_pool_roles(
+          pool_facts, fe2o3::r26::kBytes, kernel.kernarg_size,
+          kernel.kernarg_alignment,
+          &pool_roles) != fe2o3::r26::HsaPoolPolicyStatus::Accepted) {
+    std::fputs("HSA memory pools do not satisfy the exact R26 policy\n",
+               stderr);
+    return 2;
+  }
+  const hsa_amd_memory_pool_t host_pool = collected_pools[pool_roles.host].pool;
+  const hsa_amd_memory_pool_t device_pool =
+      collected_pools[pool_roles.device].pool;
+  const hsa_amd_memory_pool_t kernarg_pool =
+      collected_pools[pool_roles.kernarg].pool;
+  std::size_t kernarg_pool_alignment = 0;
+  HSA_CHECK(hsa_amd_memory_pool_get_info(
+      kernarg_pool, HSA_AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_ALIGNMENT,
+      &kernarg_pool_alignment));
+  if (kernarg_pool_alignment < kernel.kernarg_alignment) {
+    std::fputs("HSA kernarg pool cannot satisfy the kernel alignment\n",
+               stderr);
+    return 2;
+  }
   std::uint32_t queue_max_size = 0;
   HSA_CHECK(
       hsa_agent_get_info(gpu, HSA_AGENT_INFO_QUEUE_MAX_SIZE, &queue_max_size));
@@ -342,18 +435,22 @@ int main(int argc, char **argv) {
   std::uint32_t *download = nullptr;
   std::uint32_t *device = nullptr;
   void *kernarg = nullptr;
-  HSA_CHECK(hsa_amd_memory_pool_allocate(host_pool.pool, fe2o3::r26::kBytes, 0,
+  HSA_CHECK(hsa_amd_memory_pool_allocate(host_pool, fe2o3::r26::kBytes, 0,
                                          reinterpret_cast<void **>(&upload)));
-  HSA_CHECK(hsa_amd_memory_pool_allocate(host_pool.pool, fe2o3::r26::kBytes, 0,
+  HSA_CHECK(hsa_amd_memory_pool_allocate(host_pool, fe2o3::r26::kBytes, 0,
                                          reinterpret_cast<void **>(&download)));
-  HSA_CHECK(hsa_amd_memory_pool_allocate(device_pool.pool, fe2o3::r26::kBytes,
-                                         0,
+  HSA_CHECK(hsa_amd_memory_pool_allocate(device_pool, fe2o3::r26::kBytes, 0,
                                          reinterpret_cast<void **>(&device)));
-  HSA_CHECK(hsa_amd_memory_pool_allocate(kernarg_pool.pool, kernel.kernarg_size,
-                                         0, &kernarg));
+  HSA_CHECK(hsa_amd_memory_pool_allocate(kernarg_pool, kernel.kernarg_size, 0,
+                                         &kernarg));
+  if (reinterpret_cast<std::uintptr_t>(kernarg) % kernel.kernarg_alignment !=
+      0) {
+    std::fputs("HSA kernarg allocation is misaligned\n", stderr);
+    return 2;
+  }
   HSA_CHECK(hsa_amd_agents_allow_access(1, &gpu, nullptr, upload));
   HSA_CHECK(hsa_amd_agents_allow_access(1, &gpu, nullptr, download));
-  HSA_CHECK(hsa_amd_agents_allow_access(1, &gpu, nullptr, device));
+  HSA_CHECK(hsa_amd_agents_allow_access(1, &cpu, nullptr, device));
   HSA_CHECK(hsa_amd_agents_allow_access(1, &gpu, nullptr, kernarg));
   std::memcpy(static_cast<std::byte *>(kernarg), &device, sizeof(device));
   const std::uint64_t length = fe2o3::r26::kElements;

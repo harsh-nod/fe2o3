@@ -30,6 +30,7 @@ class R26RunnerContractTests(unittest.TestCase):
             "inplace_transform_hsa.cpp",
             "inplace_transform_hip.cpp",
             "bounded_binary_file_reader.hpp",
+            "r26_hsa_pool_policy.hpp",
             "inplace_benchmark_common.hpp",
             "check-parity.py",
             "r26-host-guard.py",
@@ -106,6 +107,11 @@ class R26RunnerContractTests(unittest.TestCase):
             '"${system_identity_collector}")"',
             self.source,
         )
+        self.assertIn(
+            'hsa_pool_policy_sha256="$(sha256_file "${hsa_pool_policy}")"',
+            self.source,
+        )
+        self.assertIn("hsa_pool_policy_sha256=%s", self.source)
 
     def test_context_requires_the_v2_process_tree_monitor(self) -> None:
         self.assertIn(
@@ -168,6 +174,52 @@ class R26RunnerContractTests(unittest.TestCase):
         )
         self.assertNotIn(
             "kernel.executable, fe2o3::r26::kKernel, &gpu, &symbol",
+            self.hsa_source,
+        )
+
+    def test_hsa_comparator_validates_kernarg_allocation_alignment(self) -> None:
+        kernel_load = self.hsa_source.index(
+            "const Kernel kernel = load_kernel(code_object, gpu)"
+        )
+        pool_query = self.hsa_source.index(
+            "kernarg_pool, HSA_AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_ALIGNMENT"
+        )
+        self.assertIn(
+            "kernarg_pool_alignment < kernel.kernarg_alignment",
+            self.hsa_source,
+        )
+        allocation = self.hsa_source.index("hsa_amd_memory_pool_allocate(kernarg_pool")
+        pointer_check = self.hsa_source.index(
+            "reinterpret_cast<std::uintptr_t>(kernarg) % kernel.kernarg_alignment"
+        )
+        first_kernarg_write = self.hsa_source.index(
+            "std::memcpy(static_cast<std::byte *>(kernarg)"
+        )
+        dispatch = self.hsa_source.index(
+            "publish_dispatch(queue, kernel, kernarg, dispatch_signal)"
+        )
+        self.assertLess(kernel_load, pool_query)
+        self.assertLess(pool_query, allocation)
+        self.assertLess(allocation, pointer_check)
+        self.assertLess(pointer_check, first_kernarg_write)
+        self.assertLess(pointer_check, dispatch)
+
+    def test_hsa_comparator_enforces_exact_pool_and_access_policy(self) -> None:
+        self.assertIn('#include "r26_hsa_pool_policy.hpp"', self.hsa_source)
+        self.assertEqual(self.hsa_source.count("collect_pools("), 3)
+        self.assertIn("select_hsa_pool_roles", self.hsa_source)
+        self.assertNotIn("HSA_STATUS_INFO_BREAK", self.hsa_source)
+        self.assertIn("HSA_AGENT_INFO_DEVICE, &nearest_cpu_type", self.hsa_source)
+        self.assertIn("unique_enumerated_nearest_cpu", self.hsa_source)
+        self.assertEqual(
+            self.hsa_source.count("HSA_AMD_AGENT_MEMORY_POOL_INFO_ACCESS"), 2
+        )
+        self.assertIn(
+            "hsa_amd_agents_allow_access(1, &cpu, nullptr, device)",
+            self.hsa_source,
+        )
+        self.assertNotIn(
+            "hsa_amd_agents_allow_access(1, &gpu, nullptr, device)",
             self.hsa_source,
         )
 

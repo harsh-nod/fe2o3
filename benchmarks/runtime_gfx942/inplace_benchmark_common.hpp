@@ -25,7 +25,7 @@ constexpr std::size_t kValidatedIterations =
 constexpr std::size_t kPatternAIterations = kValidatedIterations / 2;
 constexpr std::size_t kPatternBIterations = kValidatedIterations / 2;
 
-constexpr char kSchema[] = "fe2o3.r26-inplace-benchmark.v1";
+constexpr char kSchema[] = "fe2o3.r26-inplace-benchmark.v2";
 constexpr char kKernel[] = "inplace_transform";
 constexpr char kKernelDescriptor[] = "inplace_transform.kd";
 constexpr std::uint32_t kHsaKernargAlignment = 16;
@@ -167,6 +167,13 @@ inline void print_summary(const char *phase,
               static_cast<unsigned long long>(sorted[p95_rank - 1]));
 }
 
+inline void print_unavailable_phase(const char *phase) {
+  std::printf(
+      " %s_samples_ns=n/a %s_min_ns=n/a %s_mean_ns=n/a %s_max_ns=n/a "
+      "%s_p50_ns=n/a %s_p95_ns=n/a",
+      phase, phase, phase, phase, phase, phase);
+}
+
 inline void report(const char *backend, const char *promotion,
                    const char *data_path, const char *materializations,
                    std::size_t device_index, std::uint64_t unique_id,
@@ -202,6 +209,13 @@ inline void report(const char *backend, const char *promotion,
   std::printf(
       " promotion_samples_ns=n/a promotion_min_ns=n/a promotion_mean_ns=n/a "
       "promotion_max_ns=n/a promotion_p50_ns=n/a promotion_p95_ns=n/a");
+  constexpr const char *kKfdLaunchTimingPhases[] = {
+      "preparation",          "bound_snapshot", "authority",
+      "native_binding",       "publication",    "publish_to_completion",
+      "completed_readback",   "recycle",
+  };
+  for (const char *phase : kKfdLaunchTimingPhases)
+    print_unavailable_phase(phase);
   std::putchar('\n');
 }
 

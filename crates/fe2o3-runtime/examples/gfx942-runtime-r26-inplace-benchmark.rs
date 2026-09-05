@@ -36,6 +36,16 @@ mod enabled {
     const COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
     const COMPLETION_WAIT_SLICE: Duration = Duration::from_micros(50);
     const DEVICE_ALIGNMENT: u64 = 4096;
+    const LAUNCH_TIMING_PHASES: [&str; 8] = [
+        "preparation",
+        "bound_snapshot",
+        "authority",
+        "native_binding",
+        "publication",
+        "publish_to_completion",
+        "completed_readback",
+        "recycle",
+    ];
 
     type BenchmarkResult<T> = Result<T, Box<dyn Error>>;
 
@@ -150,12 +160,70 @@ mod enabled {
     }
 
     #[derive(Clone, Copy, Debug)]
+    struct LaunchTimingV1 {
+        phases: [u128; LAUNCH_TIMING_PHASES.len()],
+        promotion: u128,
+    }
+
+    fn validate_launch_timing_v1(
+        compute: u128,
+        phases: [u128; LAUNCH_TIMING_PHASES.len()],
+    ) -> Result<(), &'static str> {
+        let [
+            preparation,
+            bound_snapshot,
+            authority,
+            native_binding,
+            publication,
+            publish_to_completion,
+            completed_readback,
+            recycle,
+        ] = phases;
+        if completed_readback != 0 {
+            return Err("R26 persistent launch performed a completed readback");
+        }
+        if [
+            preparation,
+            bound_snapshot,
+            authority,
+            native_binding,
+            publication,
+            publish_to_completion,
+            recycle,
+        ]
+        .contains(&0)
+        {
+            return Err("R26 launch timing contains an unexpected zero duration");
+        }
+        let nested_preparation = bound_snapshot
+            .checked_add(authority)
+            .ok_or("R26 nested preparation timing overflow")?;
+        if nested_preparation > preparation {
+            return Err("R26 nested preparation timing exceeds inclusive preparation");
+        }
+        let critical_path = [
+            preparation,
+            native_binding,
+            publication,
+            publish_to_completion,
+            recycle,
+        ]
+        .into_iter()
+        .try_fold(0_u128, u128::checked_add)
+        .ok_or("R26 launch critical-path timing overflow")?;
+        if critical_path > compute {
+            return Err("R26 launch critical-path timing exceeds inclusive compute duration");
+        }
+        Ok(())
+    }
+
+    #[derive(Clone, Copy, Debug)]
     struct IterationTimingV1 {
         h2d: u128,
         compute: u128,
         d2h: u128,
         e2e: u128,
-        promotion: u128,
+        launch: LaunchTimingV1,
     }
 
     #[derive(Clone, Copy, Debug, Default)]
@@ -165,6 +233,7 @@ mod enabled {
         d2h: u128,
         e2e: u128,
         promotion: u128,
+        launch_phases: [u128; LAUNCH_TIMING_PHASES.len()],
     }
 
     impl SampleAccumulatorV1 {
@@ -187,26 +256,33 @@ mod enabled {
                 .ok_or("E2E timing overflow")?;
             self.promotion = self
                 .promotion
-                .checked_add(timing.promotion)
+                .checked_add(timing.launch.promotion)
                 .ok_or("promotion timing overflow")?;
+            for (total, value) in self.launch_phases.iter_mut().zip(timing.launch.phases) {
+                *total = total.checked_add(value).ok_or("launch timing overflow")?;
+            }
             Ok(())
         }
 
         fn average(self) -> BenchmarkResult<IterationTimingV1> {
             let divisor = ITERATIONS_PER_SAMPLE as u128;
+            let launch_phases = self.launch_phases.map(|value| value / divisor);
             let timing = IterationTimingV1 {
                 h2d: self.h2d / divisor,
                 compute: self.compute / divisor,
                 d2h: self.d2h / divisor,
                 e2e: self.e2e / divisor,
-                promotion: self.promotion / divisor,
+                launch: LaunchTimingV1 {
+                    phases: launch_phases,
+                    promotion: self.promotion / divisor,
+                },
             };
             if [
                 timing.h2d,
                 timing.compute,
                 timing.d2h,
                 timing.e2e,
-                timing.promotion,
+                timing.launch.promotion,
             ]
             .contains(&0)
             {
@@ -358,7 +434,7 @@ mod enabled {
             Ok((elapsed, submission))
         }
 
-        fn observe_promotion_v1(&mut self) -> BenchmarkResult<u128> {
+        fn observe_launch_timing_v1(&mut self) -> BenchmarkResult<LaunchTimingV1> {
             let performance = self
                 .context
                 .backend()
@@ -388,7 +464,20 @@ mod enabled {
             if authentication == 0 {
                 return Err("R26 promotion duration was zero".into());
             }
-            Ok(authentication)
+            let phases = [
+                performance.preparation().as_nanos(),
+                performance.bound_snapshot().as_nanos(),
+                performance.authority().as_nanos(),
+                performance.native_binding().as_nanos(),
+                performance.publication().as_nanos(),
+                performance.publish_to_completion().as_nanos(),
+                performance.completed_readback().as_nanos(),
+                performance.recycle().as_nanos(),
+            ];
+            Ok(LaunchTimingV1 {
+                phases,
+                promotion: authentication,
+            })
         }
 
         fn iteration(&mut self, global_iteration: u64) -> BenchmarkResult<IterationTimingV1> {
@@ -416,7 +505,8 @@ mod enabled {
                 region(self.download, RuntimeAccessV1::Write),
             )?;
             let e2e = e2e_started.elapsed().as_nanos();
-            let promotion = self.observe_promotion_v1()?;
+            let launch = self.observe_launch_timing_v1()?;
+            validate_launch_timing_v1(compute, launch.phases)?;
             self.context
                 .read_allocation(self.download, 0, &mut self.observed)
                 .map_err(facade_error)?;
@@ -438,7 +528,7 @@ mod enabled {
                 compute,
                 d2h,
                 e2e,
-                promotion,
+                launch,
             })
         }
 
@@ -456,9 +546,9 @@ mod enabled {
         p95: u128,
     }
 
-    fn summarize(values: &[u128]) -> BenchmarkResult<SummaryV1> {
-        if values.len() != SAMPLES || values.contains(&0) {
-            return Err("R26 series is incomplete or contains zero".into());
+    fn summarize(values: &[u128], allow_zero: bool) -> BenchmarkResult<SummaryV1> {
+        if values.len() != SAMPLES || (!allow_zero && values.contains(&0)) {
+            return Err("R26 series is incomplete or contains an inadmissible zero".into());
         }
         let mut ordered = values.to_vec();
         ordered.sort_unstable();
@@ -492,8 +582,13 @@ mod enabled {
             .join(",")
     }
 
-    fn append_phase(row: &mut String, phase: &str, values: &[u128]) -> BenchmarkResult<()> {
-        let summary = summarize(values)?;
+    fn append_phase(
+        row: &mut String,
+        phase: &str,
+        values: &[u128],
+        allow_zero: bool,
+    ) -> BenchmarkResult<()> {
+        let summary = summarize(values, allow_zero)?;
         write!(
             row,
             " {phase}_samples_ns={} {phase}_min_ns={} {phase}_mean_ns={} {phase}_max_ns={} {phase}_p50_ns={} {phase}_p95_ns={}",
@@ -538,6 +633,8 @@ mod enabled {
             let mut d2h = Vec::with_capacity(SAMPLES);
             let mut e2e = Vec::with_capacity(SAMPLES);
             let mut promotion = Vec::with_capacity(SAMPLES);
+            let mut launch_phases: [Vec<u128>; LAUNCH_TIMING_PHASES.len()] =
+                std::array::from_fn(|_| Vec::with_capacity(SAMPLES));
             for _ in 0..SAMPLES {
                 let mut sample = SampleAccumulatorV1::default();
                 for _ in 0..ITERATIONS_PER_SAMPLE {
@@ -551,12 +648,15 @@ mod enabled {
                 compute.push(sample.compute);
                 d2h.push(sample.d2h);
                 e2e.push(sample.e2e);
-                promotion.push(sample.promotion);
+                promotion.push(sample.launch.promotion);
+                for (series, value) in launch_phases.iter_mut().zip(sample.launch.phases) {
+                    series.push(value);
+                }
             }
-            Ok((h2d, compute, d2h, e2e, promotion))
+            Ok((h2d, compute, d2h, e2e, promotion, launch_phases))
         })();
         let cleanup = run.shutdown();
-        let (h2d, compute, d2h, e2e, promotion) = match measurement {
+        let (h2d, compute, d2h, e2e, promotion, launch_phases) = match measurement {
             Ok(series) => {
                 cleanup?;
                 series
@@ -574,19 +674,62 @@ mod enabled {
         let pattern_a_iterations = validated_iterations.div_ceil(2);
         let pattern_b_iterations = validated_iterations / 2;
         let mut row = format!(
-            "backend=kfd schema=fe2o3.r26-inplace-benchmark.v1 device_index=0 unique_id={unique_id:016x} uuid=GPU-{unique_id:016x} target=gfx942:xnack- xnack=disabled kernel={GFX942_INPLACE_TRANSFORM_QUALIFICATION_KERNEL_V1} bytes={GFX942_INPLACE_TRANSFORM_QUALIFICATION_BUFFER_BYTES_V1} elements={GFX942_INPLACE_TRANSFORM_QUALIFICATION_ELEMENTS_V1} workgroup=256 warmups={WARMUPS} samples={SAMPLES} iterations_per_sample={ITERATIONS_PER_SAMPLE} sample_value=integer-average-ns-over-10-iterations trimming=none input_pattern=alternating-full-a-b pattern_start=a validation=every-element-every-iteration validated_iterations={validated_iterations} pattern_a_iterations={pattern_a_iterations} pattern_b_iterations={pattern_b_iterations} timing=host-monotonic interphase_control=e2e-h2d-compute-d2h promotion=full-h2d-to-compute-ready data_path=persistent-device-reused user_data_materializations=0 input_a_sha256={} output_a_sha256={} input_b_sha256={} output_b_sha256={}",
+            "backend=kfd schema=fe2o3.r26-inplace-benchmark.v2 device_index=0 unique_id={unique_id:016x} uuid=GPU-{unique_id:016x} target=gfx942:xnack- xnack=disabled kernel={GFX942_INPLACE_TRANSFORM_QUALIFICATION_KERNEL_V1} bytes={GFX942_INPLACE_TRANSFORM_QUALIFICATION_BUFFER_BYTES_V1} elements={GFX942_INPLACE_TRANSFORM_QUALIFICATION_ELEMENTS_V1} workgroup=256 warmups={WARMUPS} samples={SAMPLES} iterations_per_sample={ITERATIONS_PER_SAMPLE} sample_value=integer-average-ns-over-10-iterations trimming=none input_pattern=alternating-full-a-b pattern_start=a validation=every-element-every-iteration validated_iterations={validated_iterations} pattern_a_iterations={pattern_a_iterations} pattern_b_iterations={pattern_b_iterations} timing=host-monotonic interphase_control=e2e-h2d-compute-d2h promotion=full-h2d-to-compute-ready data_path=persistent-device-reused user_data_materializations=0 input_a_sha256={} output_a_sha256={} input_b_sha256={} output_b_sha256={}",
             hex(GFX942_INPLACE_TRANSFORM_INPUT_A_SHA256_V1),
             hex(GFX942_INPLACE_TRANSFORM_OUTPUT_A_SHA256_V1),
             hex(GFX942_INPLACE_TRANSFORM_INPUT_B_SHA256_V1),
             hex(GFX942_INPLACE_TRANSFORM_OUTPUT_B_SHA256_V1),
         );
-        append_phase(&mut row, "h2d", &h2d)?;
-        append_phase(&mut row, "compute", &compute)?;
-        append_phase(&mut row, "d2h", &d2h)?;
-        append_phase(&mut row, "e2e", &e2e)?;
-        append_phase(&mut row, "promotion", &promotion)?;
+        append_phase(&mut row, "h2d", &h2d, false)?;
+        append_phase(&mut row, "compute", &compute, false)?;
+        append_phase(&mut row, "d2h", &d2h, false)?;
+        append_phase(&mut row, "e2e", &e2e, false)?;
+        append_phase(&mut row, "promotion", &promotion, false)?;
+        for ((phase, values), allow_zero) in LAUNCH_TIMING_PHASES
+            .iter()
+            .zip(&launch_phases)
+            .zip([false, false, false, false, false, false, true, false])
+        {
+            append_phase(&mut row, phase, values, allow_zero)?;
+        }
         println!("{row}");
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        const CONSISTENT_PHASES: [u128; LAUNCH_TIMING_PHASES.len()] =
+            [100, 40, 50, 20, 10, 30, 0, 5];
+
+        #[test]
+        fn accepts_exact_nested_and_exclusive_launch_timing() {
+            assert_eq!(validate_launch_timing_v1(165, CONSISTENT_PHASES), Ok(()));
+        }
+
+        #[test]
+        fn rejects_inconsistent_nested_preparation() {
+            let mut phases = CONSISTENT_PHASES;
+            phases[1] = 60;
+            assert_eq!(
+                validate_launch_timing_v1(175, phases),
+                Err("R26 nested preparation timing exceeds inclusive preparation")
+            );
+        }
+
+        #[test]
+        fn rejects_inconsistent_or_overflowing_critical_path() {
+            assert_eq!(
+                validate_launch_timing_v1(164, CONSISTENT_PHASES),
+                Err("R26 launch critical-path timing exceeds inclusive compute duration")
+            );
+            let phases = [u128::MAX, 1, 1, 1, 1, 1, 0, 1];
+            assert_eq!(
+                validate_launch_timing_v1(u128::MAX, phases),
+                Err("R26 launch critical-path timing overflow")
+            );
+        }
     }
 }
 
