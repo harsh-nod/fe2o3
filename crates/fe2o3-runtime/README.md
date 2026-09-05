@@ -156,13 +156,14 @@ then the background engine emits the canonical flush request, and only then may
 the child report completion. Separate cases verify response-deadline,
 decoded-terminal, and EOF sealing. These tests validate host transport and
 runtime state propagation only; they are not native KFD or liveness evidence.
-An ignored hardware qualification compiles an exact copy-only KFD Worker V5
+An opt-in hardware qualification compiles an exact copy-only KFD Worker V5
 child and drives a 256 MiB same-device D2D operation as a 63-packet window plus
 a two-packet continuation through the paired future, with no caller
 `flush_stream`. It validates an absolute-offset payload after completion. The
 source and destination are both read back outside the progress interval. The
-test has not yet run on the R24 commit and therefore supplies no hardware,
-liveness, parity, or performance result.
+ignored test passed on one idle MI300X device at R24 commit `0631c5be`; this is
+one exact native liveness and correctness result, not fairness, parity,
+bandwidth, latency, or performance evidence.
 
 Same-device `copy_async` uses the native directional SDMA queues and splits
 logical ranges larger than one linear packet into sequential packets. Live

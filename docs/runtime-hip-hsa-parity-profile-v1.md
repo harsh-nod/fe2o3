@@ -377,8 +377,9 @@ own the Send-capable Worker adapter in the progress engine without moving a KFD
 object across threads. An ignored gfx942 test submits a 256 MiB same-device D2D
 copy, asserts the exact 65-packet `63 + 2` plan and 2,048-byte tail, performs no
 caller `flush_stream`, and validates a boundary-sensitive absolute-offset
-payload in both physical allocations after completion. It is compile-qualified
-but has not run on MI300X for this commit.
+payload in both physical allocations after completion. The ignored test passed
+on one idle MI300X device at exact R24 commit `0631c5be`; the retained record is
+[`mi300x-worker-v5-portable-progress-2026-09-04.md`](evidence/mi300x-worker-v5-portable-progress-2026-09-04.md).
 
 The independent executable R24 model has 16 focused tests. Its abstract Verus
 artifact adds 34 obligations and 19 rejected mutations for pinned totals of 494
@@ -390,8 +391,9 @@ flush visits, poll-gated continuation, retryable-poll custody with observation
 retirement, retryable-flush membership, terminal progress retirement,
 abandonment, and stop without final progress. Executable visit-counter overflow
 is preflighted before phase or cursor mutation. No theorem connects it to
-executable Rust, Worker transport, KFD, firmware, or hardware. R24 has no MI300X
-result and makes no parity, fairness, liveness, bandwidth, latency, or speedup
+executable Rust, Worker transport, KFD, firmware, or hardware. The separate
+MI300X result establishes one exact native completion and data-correctness run;
+it makes no parity, fairness, general liveness, bandwidth, latency, or speedup
 claim. Unified persistent compute/XGMI storage, production atomic/collective
 authority, broad Rust device language, hardware refinement, and the remaining
 qualification gates stay open.
@@ -437,9 +439,10 @@ its independent budget. Ordinary async-engine construction remains
 observation-only. Direct in-process KFD is thread-affine and therefore still
 requires caller-driven flush. A dedicated Worker V5 child can retain KFD on its
 main thread while exposing a Send-capable address-free adapter to the progress
-engine. The R24 native test for that composition is ignored until an exclusive
-gfx942 qualification run is available. Host tests establish transition
-behavior, not native liveness or scheduling parity.
+engine. The R24 ignored native test passed once on an idle gfx942 device at
+commit `0631c5be`, covering its exact 63+2 completion and data result. Host
+tests and that bounded hardware result do not establish general native
+liveness, fairness, scheduling parity, or performance.
 
 ### G3: memory and copies
 
