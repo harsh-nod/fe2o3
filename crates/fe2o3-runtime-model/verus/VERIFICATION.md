@@ -8,8 +8,8 @@ persistent-native-allocation, R18 persistent-local-SDMA-adapter, R19
 directional-persistent-local-SDMA-adapter, R20 runtime-facade directional
 chunking, R21 runtime scripted-failure-seam, R22 batched directional
 persistent-SDMA-window, R23 same-device D2D persistent-SDMA-window, R24
-portable-progress, and R25 persistent-compute storage-bridge models. The
-authenticated runner proves 532 obligations and rejects 293
+portable-progress, R25 persistent-compute storage-bridge, and R27 persistent
+dispatch-control models. The authenticated runner proves 552 obligations and rejects 299
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -1180,6 +1180,44 @@ metadata truthfully describes its reads or writes.
 | Independent executable persistent-compute bridge model | **Checked** | Seventeen focused Rust tests; no Rust-to-Verus correspondence theorem. |
 | Boundary countermodels | **Rejected** | Eighteen pinned standalone expected-negative witnesses fail only at their named postconditions and do not import the positive R25 model. |
 | Rust ownership, executable-model refinement, runtime/KFD/HSA/HIP, firmware, hardware truth, liveness, parity, or performance | **Not established** | Explicitly outside the R25 proof boundary. |
+
+## R27 persistent dispatch control
+
+`r27_persistent_dispatch_control_v1.rs` proves 20 obligations for an independent
+finite prepare-once/replay-many control model. The model distinguishes
+`Ordinary`, `Attached`, and `DataDetached` control phases. An attached control
+owns exactly one abstract data authority. Recycle-detach transfers that
+authority to the external owner exactly once while retaining the identity,
+premise, code, kernarg, packet, and exact detached generation. Replay is
+admitted only from `DataDetached`, for the exact retained identity and exact
+recycled predecessor, and advances the generation by one while transferring
+the sole authority back to the attached control.
+
+Publication requires an attached authority, the exact retained identity, and
+the exact active generation. Identity or generation substitution is an atomic
+no-effect transition. A dedicated control-only eviction is admitted only from
+`DataDetached` with zero queue authorities, one external authority, one
+premise, and the exact detached generation. Eviction consumes the retained
+control resources without changing that detached-generation ledger or the
+authority event balance.
+
+Six pinned standalone expected-negative witnesses cover predecessor
+substitution, replay from the wrong phase, authority duplication, generation
+reuse, identity-substituted publication, and loss of detached generation on
+control eviction. They do not import the positive R27 proof source.
+
+R27 identities, generations, and authority counters are finite mathematical
+inputs. The proof has no Rust-to-Verus correspondence theorem and does not
+refine executable ownership, runtime/KFD behavior, HSA, HIP, firmware,
+hardware execution, completion truth, liveness, parity, or performance.
+
+## R27 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Exact recycled predecessor and detached-phase replay, single-authority transfer, strict generation advance, identity-gated publication, and detached-ledger-preserving control eviction | **Proved** | Twenty obligations in `r27_persistent_dispatch_control_v1.rs`; finite mathematical values only. |
+| Boundary countermodels | **Rejected** | Six pinned standalone expected-negative witnesses fail only at their named postconditions and do not import the positive R27 model. |
+| Rust ownership, executable runtime/KFD/HSA/HIP, firmware, hardware truth, liveness, parity, or performance refinement | **Not established** | Explicitly outside the R27 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
