@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import os
 import pathlib
+import signal
 import subprocess
 import sys
 import tempfile
@@ -275,6 +276,112 @@ class QueueCensusTests(unittest.TestCase):
         with self.assertRaisesRegex(GUARD.GuardError, "did not advance"):
             nonmonotonic.observe(1)
 
+    def test_absolute_deadline_wait_does_not_reset_when_overdue(self) -> None:
+        now_ns = 1_000_000
+        sleeps: list[float] = []
+
+        def clock() -> int:
+            return now_ns
+
+        def sleeper(seconds: float) -> None:
+            nonlocal now_ns
+            sleeps.append(seconds)
+            now_ns += int(seconds * 1_000_000_000)
+
+        GUARD._sleep_until_observation_deadline(
+            deadline_ns=3_000_000, clock=clock, sleeper=sleeper
+        )
+        self.assertEqual(now_ns, 3_000_000)
+        self.assertEqual(sleeps, [0.002])
+
+        now_ns = 7_000_000
+        GUARD._sleep_until_observation_deadline(
+            deadline_ns=5_000_000, clock=clock, sleeper=sleeper
+        )
+        self.assertEqual(now_ns, 7_000_000)
+        self.assertEqual(sleeps, [0.002])
+
+    def test_cleanup_signals_group_even_after_leader_was_reaped(self) -> None:
+        class ReapedProcess:
+            pid = 100
+
+            @staticmethod
+            def poll() -> int:
+                return 0
+
+        process = ReapedProcess()
+        with (
+            mock.patch.object(GUARD.os, "killpg") as killpg,
+            mock.patch.object(GUARD, "_process_group_exists", return_value=True),
+            mock.patch.object(
+                GUARD, "_wait_for_process_group_absence", return_value=True
+            ) as wait_for_absence,
+        ):
+            GUARD._terminate_process_group(process)
+        killpg.assert_called_once_with(100, signal.SIGTERM)
+        wait_for_absence.assert_called_once_with(
+            process, GUARD.PROCESS_GROUP_GRACE_SECONDS
+        )
+
+    def test_cleanup_escalates_and_rejects_a_surviving_process_group(self) -> None:
+        class ReapedProcess:
+            pid = 100
+
+            @staticmethod
+            def poll() -> int:
+                return 0
+
+        process = ReapedProcess()
+        with (
+            mock.patch.object(GUARD.os, "killpg") as killpg,
+            mock.patch.object(GUARD, "_process_group_exists", return_value=True),
+            mock.patch.object(
+                GUARD,
+                "_wait_for_process_group_absence",
+                side_effect=[False, False],
+            ),
+            self.assertRaisesRegex(GUARD.GuardError, "survived SIGKILL"),
+        ):
+            GUARD._terminate_process_group(process)
+        self.assertEqual(
+            killpg.call_args_list,
+            [mock.call(100, signal.SIGTERM), mock.call(100, signal.SIGKILL)],
+        )
+
+    def test_cleanup_removes_same_group_child_after_leader_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            child_pid_path = pathlib.Path(temporary) / "child.pid"
+            program = """
+import os
+import pathlib
+import signal
+import sys
+import time
+
+child = os.fork()
+if child == 0:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    time.sleep(30)
+    os._exit(0)
+pathlib.Path(sys.argv[1]).write_text(str(child), encoding="ascii")
+time.sleep(0.05)
+os._exit(0)
+"""
+            process = subprocess.Popen(
+                [sys.executable, "-c", program, str(child_pid_path)],
+                start_new_session=True,
+            )
+            try:
+                process.wait(timeout=2)
+                self.assertTrue(child_pid_path.exists())
+                self.assertTrue(GUARD._process_group_exists(process.pid))
+                with mock.patch.object(GUARD, "PROCESS_GROUP_GRACE_SECONDS", 0.05):
+                    GUARD._terminate_process_group(process)
+                self.assertFalse(GUARD._process_group_exists(process.pid))
+            finally:
+                if GUARD._process_group_exists(process.pid):
+                    os.killpg(process.pid, signal.SIGKILL)
+
 
 class MonitorCommandTests(unittest.TestCase):
     def monitor_argv(
@@ -334,6 +441,7 @@ spec = importlib.util.spec_from_file_location("fe2o3_r26_guard_child", sys.argv[
 guard = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = guard
 spec.loader.exec_module(guard)
+guard.PROCESS_GROUP_GRACE_SECONDS = 0.1
 now_ns = 0
 
 def clock():
@@ -342,7 +450,7 @@ def clock():
     return now_ns
 
 try:
-    for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+    for signum in guard.MANAGED_SIGNALS:
         signal.signal(signum, guard._raise_signal_error)
     print(guard.monitor_target(
         selected_gpu_id=28851,
@@ -425,7 +533,14 @@ except guard.GuardError as error:
             retained_output = target_output.read_text(encoding="ascii")
         prefix, observed = fields(result)
         self.assertEqual(prefix, "monitor")
+        self.assertEqual(observed["schema"], "fe2o3.r26-kfd-queue-monitor.v2")
         self.assertEqual(observed["status"], "clean")
+        self.assertEqual(observed["monitor"], "selected-kfd-gpu-process-tree-census-v2")
+        self.assertEqual(observed["schedule"], "absolute-monotonic-raw-deadline-v1")
+        self.assertEqual(observed["process_group"], observed["root_pid"])
+        self.assertEqual(observed["target_reaped"], "1")
+        self.assertEqual(observed["process_group_absent"], "1")
+        self.assertEqual(observed["terminal_selected_queues"], "0")
         self.assertEqual(observed["foreign_selected_queues"], "0")
         self.assertGreater(int(observed["target_selected_queue_observations"]), 0)
         self.assertGreaterEqual(int(observed["observations"]), 2)
@@ -473,6 +588,42 @@ except guard.GuardError as error:
                 )
         self.assertEqual(order, ["set-affinity", "get-affinity", "initial-census"])
 
+    def test_preopen_race_does_not_delete_unowned_target_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            output = root / "target.out"
+            observer_cpu = min(os.sched_getaffinity(0))
+
+            def initial_census(
+                _root: pathlib.Path, _gpu_id: int
+            ) -> list[tuple[int, int]]:
+                output.write_text("unowned\n", encoding="ascii")
+                return []
+
+            with (
+                mock.patch.object(GUARD.os, "sched_setaffinity"),
+                mock.patch.object(
+                    GUARD.os, "sched_getaffinity", return_value={observer_cpu}
+                ),
+                mock.patch.object(
+                    GUARD, "selected_gpu_queue_owners", side_effect=initial_census
+                ),
+                self.assertRaisesRegex(
+                    GUARD.GuardError, "cannot create private target stdout"
+                ),
+            ):
+                GUARD.monitor_target(
+                    selected_gpu_id=28851,
+                    observer_cpu=observer_cpu,
+                    target_output=output,
+                    command=["fixed-target"],
+                    kfd_proc_root=kfd_root,
+                    proc_root=root / "proc",
+                )
+            self.assertEqual(output.read_text(encoding="ascii"), "unowned\n")
+
     def test_launch_delay_remains_part_of_the_census_gap(self) -> None:
         class FakeProcess:
             pid = 100
@@ -519,10 +670,337 @@ except guard.GuardError as error:
                 mock.patch.object(
                     GUARD.os, "sched_getaffinity", return_value={observer_cpu}
                 ),
+                mock.patch.object(GUARD, "_terminate_process_group"),
                 self.assertRaisesRegex(
                     GUARD.GuardError,
                     r"observation 2 gap exceeded: observed_ns=10000001 maximum_ns=10000000",
                 ),
+            ):
+                GUARD.monitor_target(
+                    selected_gpu_id=28851,
+                    observer_cpu=observer_cpu,
+                    target_output=output,
+                    command=["fixed-target"],
+                    kfd_proc_root=kfd_root,
+                    proc_root=root / "proc",
+                    clock=lambda: now_ns,
+                    sleeper=lambda _seconds: None,
+                )
+            self.assertFalse(output.exists())
+
+    def test_target_process_group_must_match_its_root_pid(self) -> None:
+        class FakeProcess:
+            pid = 100
+
+            @staticmethod
+            def poll() -> int | None:
+                return None
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            output = root / "target.out"
+            observer_cpu = min(os.sched_getaffinity(0))
+
+            def launch(
+                _command: list[str],
+                *,
+                stdout: object,
+                start_new_session: bool,
+            ) -> FakeProcess:
+                self.assertTrue(start_new_session)
+                stdout.write(b"backend=kfd\n")
+                stdout.flush()
+                return FakeProcess()
+
+            with (
+                mock.patch.object(GUARD.subprocess, "Popen", side_effect=launch),
+                mock.patch.object(
+                    GUARD,
+                    "_read_process",
+                    return_value=GUARD.ProcessObservation(1, 99, 1000),
+                ),
+                mock.patch.object(GUARD.os, "sched_setaffinity"),
+                mock.patch.object(
+                    GUARD.os, "sched_getaffinity", return_value={observer_cpu}
+                ),
+                mock.patch.object(GUARD, "_terminate_process_group"),
+                self.assertRaisesRegex(
+                    GUARD.GuardError, "did not establish its dedicated process group"
+                ),
+            ):
+                GUARD.monitor_target(
+                    selected_gpu_id=28851,
+                    observer_cpu=observer_cpu,
+                    target_output=output,
+                    command=["fixed-target"],
+                    kfd_proc_root=kfd_root,
+                    proc_root=root / "proc",
+                )
+            self.assertFalse(output.exists())
+
+    def test_live_censuses_follow_absolute_deadlines_after_launch_probe(self) -> None:
+        class FakeProcess:
+            pid = 100
+
+            def __init__(self) -> None:
+                self.polls = 0
+
+            def poll(self) -> int | None:
+                self.polls += 1
+                return None if self.polls < 3 else 0
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            output = root / "target.out"
+            observer_cpu = min(os.sched_getaffinity(0))
+            now_ns = 0
+            owner_calls = 0
+            sleeps: list[int] = []
+
+            def launch(
+                _command: list[str],
+                *,
+                stdout: object,
+                start_new_session: bool,
+            ) -> FakeProcess:
+                self.assertTrue(start_new_session)
+                stdout.write(b"backend=kfd\n")
+                stdout.flush()
+                return FakeProcess()
+
+            def classify(
+                **_arguments: object,
+            ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+                nonlocal now_ns
+                now_ns += 100_000
+                return [(100, 0)], []
+
+            def owners(_root: pathlib.Path, _gpu_id: int) -> list[tuple[int, int]]:
+                nonlocal now_ns, owner_calls
+                owner_calls += 1
+                if owner_calls == 2:
+                    now_ns += 100_000
+                return []
+
+            def sleeper(seconds: float) -> None:
+                nonlocal now_ns
+                duration_ns = int(seconds * 1_000_000_000)
+                sleeps.append(duration_ns)
+                now_ns += duration_ns
+
+            with (
+                mock.patch.object(GUARD.subprocess, "Popen", side_effect=launch),
+                mock.patch.object(
+                    GUARD,
+                    "_read_process",
+                    return_value=GUARD.ProcessObservation(1, 100, 1000),
+                ),
+                mock.patch.object(
+                    GUARD, "classify_selected_gpu_queues", side_effect=classify
+                ),
+                mock.patch.object(
+                    GUARD, "selected_gpu_queue_owners", side_effect=owners
+                ),
+                mock.patch.object(GUARD, "_process_group_exists", return_value=False),
+                mock.patch.object(GUARD.os, "sched_setaffinity"),
+                mock.patch.object(
+                    GUARD.os, "sched_getaffinity", return_value={observer_cpu}
+                ),
+            ):
+                GUARD.monitor_target(
+                    selected_gpu_id=28851,
+                    observer_cpu=observer_cpu,
+                    target_output=output,
+                    command=["fixed-target"],
+                    kfd_proc_root=kfd_root,
+                    proc_root=root / "proc",
+                    clock=lambda: now_ns,
+                    sleeper=sleeper,
+                )
+        self.assertEqual(sleeps, [1_900_000, 1_900_000])
+
+    def test_terminal_selected_gpu_queue_rejects_success(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            output = root / "target.out"
+            observer_cpu = min(os.sched_getaffinity(0))
+            now_ns = 0
+
+            def clock() -> int:
+                nonlocal now_ns
+                now_ns += GUARD.POLL_INTERVAL_NS
+                return now_ns
+
+            with (
+                mock.patch.object(GUARD.os, "sched_setaffinity"),
+                mock.patch.object(
+                    GUARD.os, "sched_getaffinity", return_value={observer_cpu}
+                ),
+                mock.patch.object(
+                    GUARD,
+                    "classify_selected_gpu_queues",
+                    return_value=([(123, 0)], []),
+                ),
+                mock.patch.object(
+                    GUARD,
+                    "selected_gpu_queue_owners",
+                    side_effect=[[], [(999, 7)]],
+                ),
+                self.assertRaisesRegex(
+                    GUARD.GuardError, "selected-GPU queue remains after target exit"
+                ),
+            ):
+                GUARD.monitor_target(
+                    selected_gpu_id=28851,
+                    observer_cpu=observer_cpu,
+                    target_output=output,
+                    command=[
+                        sys.executable,
+                        "-c",
+                        "import time; time.sleep(0.02); print('backend=kfd')",
+                    ],
+                    kfd_proc_root=kfd_root,
+                    proc_root=pathlib.Path("/proc"),
+                    clock=clock,
+                    sleeper=lambda _seconds: None,
+                )
+            self.assertFalse(output.exists())
+
+    def test_surviving_process_group_rejects_success_and_is_cleaned(self) -> None:
+        class FakeProcess:
+            pid = 100
+
+            @staticmethod
+            def poll() -> int:
+                return 0
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            output = root / "target.out"
+            observer_cpu = min(os.sched_getaffinity(0))
+            now_ns = 0
+
+            def launch(
+                _command: list[str],
+                *,
+                stdout: object,
+                start_new_session: bool,
+            ) -> FakeProcess:
+                self.assertTrue(start_new_session)
+                stdout.write(b"backend=kfd\n")
+                stdout.flush()
+                return FakeProcess()
+
+            def classify(
+                **_arguments: object,
+            ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+                nonlocal now_ns
+                now_ns += GUARD.POLL_INTERVAL_NS
+                return [(100, 0)], []
+
+            with (
+                mock.patch.object(GUARD.subprocess, "Popen", side_effect=launch),
+                mock.patch.object(
+                    GUARD,
+                    "_read_process",
+                    return_value=GUARD.ProcessObservation(1, 100, 1000),
+                ),
+                mock.patch.object(
+                    GUARD, "classify_selected_gpu_queues", side_effect=classify
+                ),
+                mock.patch.object(GUARD, "_process_group_exists", return_value=True),
+                mock.patch.object(GUARD, "_terminate_process_group") as cleanup,
+                mock.patch.object(GUARD.os, "sched_setaffinity"),
+                mock.patch.object(
+                    GUARD.os, "sched_getaffinity", return_value={observer_cpu}
+                ),
+                self.assertRaisesRegex(
+                    GUARD.GuardError, "target process group remains after leader exit"
+                ),
+            ):
+                GUARD.monitor_target(
+                    selected_gpu_id=28851,
+                    observer_cpu=observer_cpu,
+                    target_output=output,
+                    command=["fixed-target"],
+                    kfd_proc_root=kfd_root,
+                    proc_root=root / "proc",
+                    clock=lambda: now_ns,
+                    sleeper=lambda _seconds: None,
+                )
+            cleanup.assert_called_once()
+            self.assertFalse(output.exists())
+
+    def test_terminal_queue_census_duration_participates_in_cadence(self) -> None:
+        class FakeProcess:
+            pid = 100
+
+            @staticmethod
+            def poll() -> int:
+                return 0
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            output = root / "target.out"
+            observer_cpu = min(os.sched_getaffinity(0))
+            now_ns = 0
+            owner_calls = 0
+
+            def launch(
+                _command: list[str],
+                *,
+                stdout: object,
+                start_new_session: bool,
+            ) -> FakeProcess:
+                self.assertTrue(start_new_session)
+                stdout.write(b"backend=kfd\n")
+                stdout.flush()
+                return FakeProcess()
+
+            def classify(
+                **_arguments: object,
+            ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+                nonlocal now_ns
+                now_ns += GUARD.POLL_INTERVAL_NS
+                return [(100, 0)], []
+
+            def owners(_root: pathlib.Path, _gpu_id: int) -> list[tuple[int, int]]:
+                nonlocal now_ns, owner_calls
+                owner_calls += 1
+                if owner_calls == 2:
+                    now_ns += GUARD.MAX_OBSERVATION_GAP_NS + 1
+                return []
+
+            with (
+                mock.patch.object(GUARD.subprocess, "Popen", side_effect=launch),
+                mock.patch.object(
+                    GUARD,
+                    "_read_process",
+                    return_value=GUARD.ProcessObservation(1, 100, 1000),
+                ),
+                mock.patch.object(
+                    GUARD, "classify_selected_gpu_queues", side_effect=classify
+                ),
+                mock.patch.object(
+                    GUARD, "selected_gpu_queue_owners", side_effect=owners
+                ),
+                mock.patch.object(GUARD, "_process_group_exists", return_value=False),
+                mock.patch.object(GUARD, "_terminate_process_group"),
+                mock.patch.object(GUARD.os, "sched_setaffinity"),
+                mock.patch.object(
+                    GUARD.os, "sched_getaffinity", return_value={observer_cpu}
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "gap exceeded"),
             ):
                 GUARD.monitor_target(
                     selected_gpu_id=28851,
@@ -601,6 +1079,12 @@ except guard.GuardError as error:
                 mock.patch.object(
                     GUARD.os, "sched_getaffinity", return_value={observer_cpu}
                 ),
+                mock.patch.object(
+                    GUARD,
+                    "selected_gpu_queue_owners",
+                    side_effect=[[], [(101, 0)], [(101, 0)], []],
+                ),
+                mock.patch.object(GUARD, "_process_group_exists", return_value=False),
             ):
                 record = GUARD.monitor_target(
                     selected_gpu_id=28851,
@@ -658,6 +1142,10 @@ except guard.GuardError as error:
                 )
                 return [(100, 0)], []
 
+            def sleep_until_deadline(seconds: float) -> None:
+                nonlocal now_ns
+                now_ns += int(seconds * 1_000_000_000)
+
             observer_cpu = min(os.sched_getaffinity(0))
             with (
                 mock.patch.object(GUARD.subprocess, "Popen", side_effect=launch),
@@ -673,6 +1161,7 @@ except guard.GuardError as error:
                 mock.patch.object(
                     GUARD.os, "sched_getaffinity", return_value={observer_cpu}
                 ),
+                mock.patch.object(GUARD, "_terminate_process_group"),
                 self.assertRaisesRegex(GUARD.GuardError, "gap exceeded"),
             ):
                 GUARD.monitor_target(
@@ -683,7 +1172,7 @@ except guard.GuardError as error:
                     kfd_proc_root=kfd_root,
                     proc_root=root / "proc",
                     clock=lambda: now_ns,
-                    sleeper=lambda _seconds: None,
+                    sleeper=sleep_until_deadline,
                 )
             self.assertEqual(census, 2)
             self.assertFalse(output.exists())
@@ -728,8 +1217,9 @@ except guard.GuardError as error:
                 sys.executable,
                 "-c",
                 (
-                    "import os,pathlib,time; "
+                    "import os,pathlib,signal,time; "
                     f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid())); "
+                    "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
                     "time.sleep(10)"
                 ),
             ]
@@ -746,6 +1236,8 @@ except guard.GuardError as error:
                 time.sleep(0.005)
             self.assertTrue(pid_file.exists())
             target_pid = int(pid_file.read_text(encoding="ascii"))
+            monitor.terminate()
+            time.sleep(0.02)
             monitor.terminate()
             stdout, stderr = monitor.communicate(timeout=7)
             target_exists = pathlib.Path(f"/proc/{target_pid}").exists()

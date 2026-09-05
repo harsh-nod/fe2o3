@@ -102,6 +102,42 @@ class R26RunnerContractTests(unittest.TestCase):
             self.source,
         )
 
+    def test_context_requires_the_v2_process_tree_monitor(self) -> None:
+        self.assertIn(
+            "interference_monitor=selected-kfd-gpu-process-tree-census-v2",
+            self.source,
+        )
+        self.assertIn("monitor schema=fe2o3.r26-kfd-queue-monitor.v2 ", self.source)
+        self.assertNotIn(
+            "interference_monitor=selected-kfd-gpu-process-tree-census-v1",
+            self.source,
+        )
+        self.assertNotIn("monitor schema=fe2o3.r26-kfd-queue-monitor.v1 ", self.source)
+
+    def test_runner_tracks_and_forwards_signals_to_the_monitor(self) -> None:
+        self.assertIn('active_monitor_pid=""', self.source)
+        self.assertIn("active_monitor_pid=$!", self.source)
+        self.assertIn('kill -s "${signal_name}" "${active_monitor_pid}"', self.source)
+        self.assertGreaterEqual(
+            self.source.count('wait "${active_monitor_pid}"'),
+            2,
+        )
+        for signal_name, exit_code in (
+            ("HUP", "129"),
+            ("INT", "130"),
+            ("QUIT", "131"),
+            ("TERM", "143"),
+        ):
+            self.assertIn(
+                f"trap 'forward_signal {signal_name} {exit_code}' {signal_name}",
+                self.source,
+            )
+        self.assertIn('} >"${slot_log}"', self.source)
+        self.assertNotIn(
+            '} | "${qualification_env[@]}" /usr/bin/tee "${slot_log}"',
+            self.source,
+        )
+
     def test_rocm_smi_and_persistence_tools_use_fixed_environments(self) -> None:
         rocm_invocations = [
             line

@@ -32,6 +32,7 @@ readonly snapshot_manifest="${build_dir}/input-sha256.txt"
 readonly source_archive="${build_dir}/source.tar"
 readonly source_tree="${build_dir}/source"
 persist_staging=""
+active_monitor_pid=""
 
 cleanup() {
   [[ ! -e "${source_tree}" ]] || \
@@ -41,10 +42,24 @@ cleanup() {
   [[ -z "${persist_staging}" || ! -e "${persist_staging}" ]] || \
     "${qualification_env[@]}" /usr/bin/find "${persist_staging}" -depth -delete
 }
+
+forward_signal() {
+  local signal_name="$1"
+  local exit_code="$2"
+  trap - HUP INT QUIT TERM
+  if [[ "${active_monitor_pid}" =~ ^[1-9][0-9]*$ ]]; then
+    kill -s "${signal_name}" "${active_monitor_pid}" 2>/dev/null || true
+    wait "${active_monitor_pid}" 2>/dev/null || true
+    active_monitor_pid=""
+  fi
+  exit "${exit_code}"
+}
+
 trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'forward_signal HUP 129' HUP
+trap 'forward_signal INT 130' INT
+trap 'forward_signal QUIT 131' QUIT
+trap 'forward_signal TERM 143' TERM
 
 sanitize_version() {
   "${qualification_env[@]}" /usr/bin/tr '[:space:]' '_'
@@ -510,7 +525,7 @@ readonly system_identity_collector_sha256
 print_context() {
   local slot="$1"
   local backend_order="$2"
-  printf 'context schema=fe2o3.r26-inplace-benchmark.v1 git_commit=%s target=gfx942:xnack- gpu_index=%s unique_id=%s uuid=%s bytes=%s elements=%s workgroup=%s warmups=%s samples=%s iterations_per_sample=%s kernel=inplace_transform max_busy_percent=%s phase_timeout_seconds=%s rocm_version=%s rustc=%s cargo=%s hipcc=%s cxx=%s hsaco_sha256=%s kernel_source_sha256=%s kernel_policy_sha256=%s fixture_recipe_sha256=%s fixture_producer_clang=AMD_clang_version_22.0.0git_(https://github.com/RadeonOpenCompute/llvm-project_roc-7.2.0_26014_7b800a19466229b8479a78de19143dc33c3ab9b5) fixture_rebuild=not-run-on-measurement-host kfd_binary_sha256=%s hsa_binary_sha256=%s hip_binary_sha256=%s hsa_source_sha256=%s hip_source_sha256=%s common_header_sha256=%s checker_sha256=%s runner_sha256=%s host_guard_sha256=%s system_identity_collector_sha256=%s build_environment=%s execution_environment=%s telemetry_command=rocm-smi-showuse-showclocks-showpower placement=taskset-cpulist-then-numactl-physcpubind-membind-v1 interference_monitor=selected-kfd-gpu-process-tree-census-v1 monitor_interval_us=%s monitor_maximum_gap_us=%s topology_sha256=%s counterbalance_design=%s counterbalance_slots=3 counterbalance_slot=%s counterbalance_set_id=%s backend_order=%s\n' \
+  printf 'context schema=fe2o3.r26-inplace-benchmark.v1 git_commit=%s target=gfx942:xnack- gpu_index=%s unique_id=%s uuid=%s bytes=%s elements=%s workgroup=%s warmups=%s samples=%s iterations_per_sample=%s kernel=inplace_transform max_busy_percent=%s phase_timeout_seconds=%s rocm_version=%s rustc=%s cargo=%s hipcc=%s cxx=%s hsaco_sha256=%s kernel_source_sha256=%s kernel_policy_sha256=%s fixture_recipe_sha256=%s fixture_producer_clang=AMD_clang_version_22.0.0git_(https://github.com/RadeonOpenCompute/llvm-project_roc-7.2.0_26014_7b800a19466229b8479a78de19143dc33c3ab9b5) fixture_rebuild=not-run-on-measurement-host kfd_binary_sha256=%s hsa_binary_sha256=%s hip_binary_sha256=%s hsa_source_sha256=%s hip_source_sha256=%s common_header_sha256=%s checker_sha256=%s runner_sha256=%s host_guard_sha256=%s system_identity_collector_sha256=%s build_environment=%s execution_environment=%s telemetry_command=rocm-smi-showuse-showclocks-showpower placement=taskset-cpulist-then-numactl-physcpubind-membind-v1 interference_monitor=selected-kfd-gpu-process-tree-census-v2 monitor_interval_us=%s monitor_maximum_gap_us=%s topology_sha256=%s counterbalance_design=%s counterbalance_slots=3 counterbalance_slot=%s counterbalance_set_id=%s backend_order=%s\n' \
     "${git_commit}" "${gpu_index}" "${unique_id}" "${uuid}" \
     "${bytes}" "${elements}" "${workgroup}" "${warmups}" "${samples}" \
     "${iterations_per_sample}" "${max_busy}" "${phase_timeout}" \
@@ -535,6 +550,8 @@ run_backend() {
   local start_topology
   local start_telemetry
   local monitor_record
+  local monitor_record_output="${build_dir}/monitor-slot-${slot}-${backend}.out"
+  local monitor_status
   local end_telemetry
   local end_topology
   local target_output="${build_dir}/target-slot-${slot}-${backend}.out"
@@ -574,12 +591,23 @@ run_backend() {
       exit 2
       ;;
   esac
-  monitor_record="$("${qualification_env[@]}" /usr/bin/python3 "${host_guard}" monitor \
+  "${qualification_env[@]}" /usr/bin/python3 "${host_guard}" monitor \
     --gpu-id "${kfd_gpu_id}" \
     --observer-cpu "${observer_cpu}" \
     --target-output "${target_output}" \
-    -- "${command[@]}")"
-  [[ "${monitor_record}" == 'monitor schema=fe2o3.r26-kfd-queue-monitor.v1 '* && \
+    -- "${command[@]}" >"${monitor_record_output}" &
+  active_monitor_pid=$!
+  if wait "${active_monitor_pid}"; then
+    monitor_status=0
+  else
+    monitor_status=$?
+  fi
+  active_monitor_pid=""
+  ((monitor_status == 0)) || return "${monitor_status}"
+  monitor_record="$(
+    "${qualification_env[@]}" /usr/bin/cat -- "${monitor_record_output}"
+  )"
+  [[ "${monitor_record}" == 'monitor schema=fe2o3.r26-kfd-queue-monitor.v2 '* && \
     "${monitor_record}" != *$'\n'* ]] || {
     printf 'R26 host guard emitted a malformed monitor record\n' >&2
     exit 2
@@ -613,7 +641,8 @@ for slot in 0 1 2; do
     for backend in "${backend_order[@]}"; do
       run_backend "${slot}" "${backend}"
     done
-  } | "${qualification_env[@]}" /usr/bin/tee "${slot_log}"
+  } >"${slot_log}"
+  "${qualification_env[@]}" /usr/bin/cat -- "${slot_log}"
 done
 readonly -a slot_logs
 

@@ -82,11 +82,13 @@ def valid_topology(slot: int, backend: str, edge: str) -> tuple[str, str]:
 def valid_monitor(slot: int, backend: str, row: str) -> str:
     target = (row + "\n").encode()
     inner = {
-        "schema": CHECKER.R26_MONITOR_SCHEMA,
+        "schema": "fe2o3.r26-kfd-queue-monitor.v2",
         "status": "clean",
-        "monitor": "selected-kfd-gpu-process-tree-census-v1",
+        "monitor": "selected-kfd-gpu-process-tree-census-v2",
+        "schedule": "absolute-monotonic-raw-deadline-v1",
         "kfd_gpu_id": "28851",
         "root_pid": str(1000 + slot * 10 + ("kfd", "hsa", "hip").index(backend)),
+        "process_group": str(1000 + slot * 10 + ("kfd", "hsa", "hip").index(backend)),
         "observer_cpu": "48",
         "interval_us": "2000",
         "maximum_gap_us": "10000",
@@ -94,7 +96,10 @@ def valid_monitor(slot: int, backend: str, row: str) -> str:
         "observations": "100",
         "target_selected_queue_observations": "99",
         "foreign_selected_queues": "0",
+        "terminal_selected_queues": "0",
         "target_exit_code": "0",
+        "target_reaped": "1",
+        "process_group_absent": "1",
         "target_output_bytes": str(len(target)),
         "target_output_sha256": hashlib.sha256(target).hexdigest(),
     }
@@ -510,7 +515,7 @@ def valid_log(
         "execution_environment": CHECKER.R26_EXECUTION_ENVIRONMENT,
         "telemetry_command": "rocm-smi-showuse-showclocks-showpower",
         "placement": CHECKER.R26_FIXED_CONTEXT["placement"],
-        "interference_monitor": "selected-kfd-gpu-process-tree-census-v1",
+        "interference_monitor": "selected-kfd-gpu-process-tree-census-v2",
         "monitor_interval_us": "2000",
         "monitor_maximum_gap_us": "10000",
         "topology_sha256": topology_sha256,
@@ -1086,6 +1091,35 @@ class R26CheckerTests(unittest.TestCase):
         lines[row_index - 1], lines[row_index] = lines[row_index], lines[row_index - 1]
         with self.assertRaisesRegex(CHECKER.CheckError, "guarded row release"):
             self.check(lines)
+
+    def test_rejects_monitor_v2_schedule_or_terminal_state(self) -> None:
+        for field, value, error in (
+            ("schema", "fe2o3.r26-kfd-queue-monitor.v1", "monitor schema"),
+            (
+                "monitor",
+                "selected-kfd-gpu-process-tree-census-v1",
+                "monitor monitor",
+            ),
+            ("schedule", "relative-sleep-v1", "monitor schedule"),
+            ("process_group", "9999", "process_group does not match root_pid"),
+            ("target_reaped", "0", "monitor target_reaped"),
+            ("process_group_absent", "0", "monitor process_group_absent"),
+            ("terminal_selected_queues", "1", "monitor terminal_selected_queues"),
+            ("observations", "2", "at least three queue observations"),
+            ("observed_maximum_gap_us", "0", "must be a positive integer"),
+        ):
+            with self.subTest(field=field):
+                lines = valid_log()
+                monitor_index = next(
+                    index
+                    for index, line in enumerate(lines)
+                    if line.startswith("monitor ")
+                )
+                lines[monitor_index] = rewrite_guard_record(
+                    lines[monitor_index], "monitor", **{field: value}
+                )
+                with self.assertRaisesRegex(CHECKER.CheckError, error):
+                    self.check(lines)
 
     def test_accepts_exact_three_slot_counterbalance_without_aggregation(self) -> None:
         logs = {slot: valid_log(slot) for slot in (0, 1, 2)}

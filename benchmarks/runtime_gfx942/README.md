@@ -370,11 +370,14 @@ private snapshot of the exact Git commit, seals its fixture, helpers, sources,
 and binaries, and records start/end kernel, driver, ROCm, loader, GPU, PCI, KFD,
 and NUMA identities. Each child first restores the topology-approved GPU-local
 CPU mask with `taskset`, then `numactl` binds that same mask and the GPU-local
-memory node. A separate CPU samples `/sys/class/kfd/kfd/proc` every 2 ms,
-rejects foreign selected-GPU
-queues or a gap above 10 ms, and must observe a target-owned queue before a row
-can be released. This is bounded sampled interference detection, not proof that
-no queue existed between censuses.
+memory node. A separate CPU takes an immediate post-launch census, then samples
+`/sys/class/kfd/kfd/proc` on absolute `CLOCK_MONOTONIC_RAW` deadlines every 2
+ms. It rejects foreign selected-GPU queues or a gap above 10 ms and must observe
+a target-owned queue before a row can be released. After the target is reaped,
+its process group must be empty and a terminal census must find zero
+selected-GPU queues. This is bounded sampled interference detection, not proof
+that no queue existed between censuses or that a process cannot escape the
+monitored process group.
 
 The runner writes nothing durable on an incomplete or failed run. On success it
 revalidates staged copies of all three logs, byte-compares the regenerated set

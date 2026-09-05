@@ -18,9 +18,11 @@ from typing import Callable, Sequence
 
 
 TOPOLOGY_SCHEMA = "fe2o3.r26-host-topology.v1"
-MONITOR_SCHEMA = "fe2o3.r26-kfd-queue-monitor.v1"
+MONITOR_SCHEMA = "fe2o3.r26-kfd-queue-monitor.v2"
 POLL_INTERVAL_NS = 2_000_000
 MAX_OBSERVATION_GAP_NS = 10_000_000
+PROCESS_GROUP_GRACE_SECONDS = 5.0
+PROCESS_GROUP_POLL_SECONDS = 0.01
 MAX_TEXT_BYTES = 4096
 MAX_TOPOLOGY_NODES = 256
 MAX_KFD_PROCESSES = 65_536
@@ -30,6 +32,7 @@ MAX_ID_SET_CARDINALITY = 65_536
 MAX_TARGET_OUTPUT_BYTES = 1 << 20
 EXPECTED_AMD_VENDOR = 0x1002
 EXPECTED_GFX_TARGET_VERSION = 90_402
+MANAGED_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT, signal.SIGTERM)
 
 BDF_PATTERN = re.compile(
     r"(?P<domain>[0-9a-f]{4}):(?P<bus>[0-9a-f]{2}):"
@@ -450,26 +453,77 @@ def _raw_monotonic_ns() -> int:
     return time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)
 
 
+def _process_group_exists(process_group: int) -> bool:
+    try:
+        os.killpg(process_group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError as error:
+        raise GuardError(
+            f"cannot inspect target process group {process_group}: {error}"
+        ) from error
+    return True
+
+
+def _wait_for_process_group_absence(
+    process: subprocess.Popen[bytes], timeout_seconds: float
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        leader_exit_code = process.poll()
+        if leader_exit_code is not None and not _process_group_exists(process.pid):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(PROCESS_GROUP_POLL_SECONDS, remaining))
+
+
 def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
+    process.poll()
+    if _process_group_exists(process.pid):
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except PermissionError as error:
+            raise GuardError(
+                f"cannot terminate target process group: {error}"
+            ) from error
+    elif process.poll() is None:
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+    if _wait_for_process_group_absence(process, PROCESS_GROUP_GRACE_SECONDS):
         return
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    try:
-        process.wait(timeout=5)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired as error:
-        raise GuardError("target process group survived SIGKILL") from error
+    if _process_group_exists(process.pid):
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError as error:
+            raise GuardError(f"cannot kill target process group: {error}") from error
+    if process.poll() is None:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+    if not _wait_for_process_group_absence(process, PROCESS_GROUP_GRACE_SECONDS):
+        raise GuardError("target process group survived SIGKILL")
+
+
+def _sleep_until_observation_deadline(
+    *,
+    deadline_ns: int,
+    clock: Callable[[], int],
+    sleeper: Callable[[float], None],
+) -> None:
+    while True:
+        remaining_ns = deadline_ns - clock()
+        if remaining_ns <= 0:
+            return
+        sleeper(remaining_ns / 1_000_000_000)
 
 
 def _hash_file(path: pathlib.Path) -> tuple[int, str]:
@@ -510,6 +564,8 @@ def monitor_target(
         raise GuardError("target stdout path already exists")
 
     process: subprocess.Popen[bytes] | None = None
+    process_group_absence_verified = False
+    target_output_created = False
     try:
         try:
             os.sched_setaffinity(0, {observer_cpu})
@@ -520,7 +576,9 @@ def monitor_target(
 
         cadence = ObservationCadence(MAX_OBSERVATION_GAP_NS)
         existing = selected_gpu_queue_owners(kfd_proc_root, selected_gpu_id)
-        cadence.observe(clock())
+        schedule_anchor_ns = clock()
+        cadence.observe(schedule_anchor_ns)
+        next_observation_deadline_ns = schedule_anchor_ns + POLL_INTERVAL_NS
         if existing:
             pid, queue = existing[0]
             raise GuardError(
@@ -533,6 +591,7 @@ def monitor_target(
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
                 0o600,
             )
+            target_output_created = True
         except OSError as error:
             raise GuardError(f"cannot create private target stdout: {error}") from error
         with os.fdopen(output_fd, "wb") as output:
@@ -548,6 +607,11 @@ def monitor_target(
             root = _read_process(proc_root, process.pid)
             if root is None:
                 raise GuardError("target exited before queue monitoring began")
+            if root.process_group != process.pid:
+                raise GuardError(
+                    "target did not establish its dedicated process group: "
+                    f"pid={process.pid} process_group={root.process_group}"
+                )
             target_selected_queue_observations = 0
             while True:
                 target, foreign = classify_selected_gpu_queues(
@@ -567,7 +631,12 @@ def monitor_target(
                 exit_code = process.poll()
                 if exit_code is not None:
                     break
-                sleeper(POLL_INTERVAL_NS / 1_000_000_000)
+                _sleep_until_observation_deadline(
+                    deadline_ns=next_observation_deadline_ns,
+                    clock=clock,
+                    sleeper=sleeper,
+                )
+                next_observation_deadline_ns += POLL_INTERVAL_NS
 
             if cadence.observations < 2:
                 raise GuardError("target completed before two queue censuses")
@@ -575,14 +644,30 @@ def monitor_target(
                 raise GuardError("no target-owned selected-GPU queue was observed")
             if exit_code != 0:
                 raise GuardError(f"target command exited with status {exit_code}")
+            if _process_group_exists(process.pid):
+                raise GuardError(
+                    "target process group remains after leader exit: "
+                    f"process_group={process.pid}"
+                )
+            process_group_absence_verified = True
+            terminal_queues = selected_gpu_queue_owners(kfd_proc_root, selected_gpu_id)
+            cadence.observe(clock())
+            if terminal_queues:
+                pid, queue = terminal_queues[0]
+                raise GuardError(
+                    "selected-GPU queue remains after target exit: "
+                    f"pid={pid} queue={queue}"
+                )
 
         output_bytes, output_sha256 = _hash_file(target_output)
         fields = {
             "schema": MONITOR_SCHEMA,
             "status": "clean",
-            "monitor": "selected-kfd-gpu-process-tree-census-v1",
+            "monitor": "selected-kfd-gpu-process-tree-census-v2",
+            "schedule": "absolute-monotonic-raw-deadline-v1",
             "kfd_gpu_id": str(selected_gpu_id),
             "root_pid": str(process.pid),
+            "process_group": str(process.pid),
             "observer_cpu": str(observer_cpu),
             "interval_us": str(POLL_INTERVAL_NS // 1000),
             "maximum_gap_us": str(MAX_OBSERVATION_GAP_NS // 1000),
@@ -594,20 +679,36 @@ def monitor_target(
                 target_selected_queue_observations
             ),
             "foreign_selected_queues": "0",
+            "terminal_selected_queues": "0",
             "target_exit_code": "0",
+            "target_reaped": "1",
+            "process_group_absent": "1",
             "target_output_bytes": str(output_bytes),
             "target_output_sha256": output_sha256,
         }
         return _sealed_record("monitor", fields, "monitor_sha256")
-    except BaseException:
-        if process is not None:
-            _terminate_process_group(process)
+    except BaseException as original_error:
+        cleanup_error: BaseException | None = None
         try:
-            target_output.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
+            if process is not None and not process_group_absence_verified:
+                _terminate_process_group(process)
+        except BaseException as error:
+            cleanup_error = error
+        finally:
+            if target_output_created:
+                try:
+                    target_output.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError as error:
+                    if cleanup_error is None:
+                        cleanup_error = GuardError(
+                            f"cannot delete rejected target output: {error}"
+                        )
+        if cleanup_error is not None:
+            raise GuardError(
+                f"target cleanup failed after {original_error}: {cleanup_error}"
+            ) from cleanup_error
         raise
 
 
@@ -671,12 +772,14 @@ def _run(arguments: argparse.Namespace) -> str:
 
 
 def _raise_signal_error(signum: int, _frame: object) -> None:
+    for managed_signal in MANAGED_SIGNALS:
+        signal.signal(managed_signal, signal.SIG_IGN)
     raise GuardError(f"monitor interrupted by signal {signum}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     try:
-        for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+        for signum in MANAGED_SIGNALS:
             signal.signal(signum, _raise_signal_error)
         arguments = _build_parser().parse_args(argv)
         print(_run(arguments))

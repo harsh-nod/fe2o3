@@ -52,7 +52,7 @@ R26_INPLACE_SCHEMA = "fe2o3.r26-inplace-benchmark.v1"
 R26_SYSTEM_IDENTITY_SCHEMA = "fe2o3.r26-system-identity.v1"
 R26_MANIFEST_SCHEMA = "fe2o3.r26-evidence-manifest.v1"
 R26_TOPOLOGY_SCHEMA = "fe2o3.r26-host-topology.v1"
-R26_MONITOR_SCHEMA = "fe2o3.r26-kfd-queue-monitor.v1"
+R26_MONITOR_SCHEMA = "fe2o3.r26-kfd-queue-monitor.v2"
 R26_EXECUTION_ENVIRONMENT = "env-i-lang-c-lc-all-c-path-usr-sbin-usr-bin-sbin-bin-v1"
 R26_PHASES = ("h2d", "compute", "d2h", "e2e")
 R26_SUMMARIES = ("min", "mean", "max", "p50", "p95")
@@ -167,7 +167,7 @@ R26_FIXED_CONTEXT = {
     "execution_environment": R26_EXECUTION_ENVIRONMENT,
     "telemetry_command": "rocm-smi-showuse-showclocks-showpower",
     "placement": "taskset-cpulist-then-numactl-physcpubind-membind-v1",
-    "interference_monitor": "selected-kfd-gpu-process-tree-census-v1",
+    "interference_monitor": "selected-kfd-gpu-process-tree-census-v2",
     "monitor_interval_us": "2000",
     "monitor_maximum_gap_us": "10000",
     "counterbalance_design": R26_COUNTERBALANCE_DESIGN,
@@ -361,8 +361,10 @@ R26_MONITOR_SEALED_FIELDS = (
     "schema",
     "status",
     "monitor",
+    "schedule",
     "kfd_gpu_id",
     "root_pid",
+    "process_group",
     "observer_cpu",
     "interval_us",
     "maximum_gap_us",
@@ -370,7 +372,10 @@ R26_MONITOR_SEALED_FIELDS = (
     "observations",
     "target_selected_queue_observations",
     "foreign_selected_queues",
+    "terminal_selected_queues",
     "target_exit_code",
+    "target_reaped",
+    "process_group_absent",
     "target_output_bytes",
     "target_output_sha256",
 )
@@ -1437,24 +1442,29 @@ def r26_validate_monitor_evidence(
             "schema": R26_MONITOR_SCHEMA,
             "status": "clean",
             "monitor": context["interference_monitor"],
+            "schedule": "absolute-monotonic-raw-deadline-v1",
             "kfd_gpu_id": topology["kfd_gpu_id"],
             "observer_cpu": topology["observer_cpu"],
             "interval_us": context["monitor_interval_us"],
             "maximum_gap_us": context["monitor_maximum_gap_us"],
             "foreign_selected_queues": "0",
+            "terminal_selected_queues": "0",
             "target_exit_code": "0",
+            "target_reaped": "1",
+            "process_group_absent": "1",
         }
         for field, expected_value in fixed.items():
             if monitor[field] != expected_value:
                 raise CheckError(f"line {line_number}: invalid R26 monitor {field}")
-        positive_integer(monitor, "root_pid")
+        root_pid = positive_integer(monitor, "root_pid")
+        process_group = positive_integer(monitor, "process_group")
+        if process_group != root_pid:
+            raise CheckError("R26 monitor process_group does not match root_pid")
         observations = positive_integer(monitor, "observations")
-        if observations < 2:
-            raise CheckError("R26 monitor requires at least two queue observations")
+        if observations < 3:
+            raise CheckError("R26 monitor requires at least three queue observations")
         positive_integer(monitor, "target_selected_queue_observations")
-        observed_gap = positive_integer(
-            monitor, "observed_maximum_gap_us", allow_zero=True
-        )
+        observed_gap = positive_integer(monitor, "observed_maximum_gap_us")
         maximum_gap = positive_integer(monitor, "maximum_gap_us")
         if observed_gap > maximum_gap:
             raise CheckError("R26 monitor observation gap exceeds its maximum")
