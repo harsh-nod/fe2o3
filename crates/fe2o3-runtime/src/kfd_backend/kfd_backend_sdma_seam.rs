@@ -16,11 +16,15 @@ use fe2o3_kfd::{
     ComputeAqlQueueSessionErrorV1, ComputeAqlQueueSessionV1,
     GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1,
     GFX942_SAME_DEVICE_PERSISTENT_SDMA_MAX_WINDOW_PACKETS_V1, GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1,
+    Gfx942DirectionalPersistentSdmaCompletedV1, Gfx942DirectionalPersistentSdmaCopyPollV1,
     Gfx942DirectionalPersistentSdmaDemotionCustodyV1,
     Gfx942DirectionalPersistentSdmaDemotionTerminalCustodyV1,
+    Gfx942DirectionalPersistentSdmaExecutionCustodyV1,
     Gfx942DirectionalPersistentSdmaFrontierRetirementFailureV1,
     Gfx942DirectionalPersistentSdmaPromotionCustodyV1,
     Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1,
+    Gfx942DirectionalPersistentSdmaSubmissionCustodyV1,
+    Gfx942DirectionalPersistentSdmaSubmissionV1, Gfx942DirectionalPersistentSdmaTerminalCustodyV1,
     Gfx942DirectionalPersistentSdmaWindowCompletedV1,
     Gfx942DirectionalPersistentSdmaWindowCopyPollV1,
     Gfx942DirectionalPersistentSdmaWindowExecutionCustodyV1,
@@ -46,6 +50,25 @@ pub(super) struct DirectionalSdmaCopyRequestV1 {
     pub(super) host_offset: u64,
     pub(super) device_offset: u64,
     pub(super) copy_bytes: u32,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(super) enum DirectionalSdmaRequestPlanV1 {
+    Single(DirectionalSdmaCopyRequestV1),
+    Window(Box<[DirectionalSdmaCopyRequestV1]>),
+}
+
+impl DirectionalSdmaRequestPlanV1 {
+    fn as_slice(&self) -> &[DirectionalSdmaCopyRequestV1] {
+        match self {
+            Self::Single(request) => core::slice::from_ref(request),
+            Self::Window(requests) => requests,
+        }
+    }
+
+    fn packet_count(&self) -> usize {
+        self.as_slice().len()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -184,7 +207,12 @@ pub(super) struct SameDeviceSdmaPairOwnerV1 {
 
 #[derive(Debug)]
 pub(super) enum DirectionalSdmaSubmissionOwnerV1 {
-    Native {
+    NativeSingle {
+        submission: Gfx942DirectionalPersistentSdmaSubmissionV1,
+        host_offset: u64,
+        device_offset: u64,
+    },
+    NativeWindow {
         submission: Gfx942DirectionalPersistentSdmaWindowSubmissionV1,
     },
     #[cfg(test)]
@@ -192,7 +220,12 @@ pub(super) enum DirectionalSdmaSubmissionOwnerV1 {
 }
 
 pub(super) enum DirectionalSdmaCompletedOwnerV1 {
-    Native {
+    NativeSingle {
+        completed: Gfx942DirectionalPersistentSdmaCompletedV1,
+        host_offset: u64,
+        device_offset: u64,
+    },
+    NativeWindow {
         completed: Gfx942DirectionalPersistentSdmaWindowCompletedV1,
     },
     #[cfg(test)]
@@ -296,7 +329,8 @@ impl core::fmt::Debug for DirectionalSdmaCompletedOwnerV1 {
 impl DirectionalSdmaCompletedOwnerV1 {
     pub(super) fn direction(&self) -> Gfx942PersistentSdmaDirectionV1 {
         match self {
-            Self::Native { completed, .. } => completed.direction(),
+            Self::NativeSingle { completed, .. } => completed.direction(),
+            Self::NativeWindow { completed } => completed.direction(),
             #[cfg(test)]
             Self::Scripted(completed) => completed.direction,
         }
@@ -304,7 +338,8 @@ impl DirectionalSdmaCompletedOwnerV1 {
 
     pub(super) fn copy_bytes(&self) -> u32 {
         match self {
-            Self::Native { completed, .. } => completed.copy_bytes(),
+            Self::NativeSingle { completed, .. } => completed.copy_bytes(),
+            Self::NativeWindow { completed } => completed.copy_bytes(),
             #[cfg(test)]
             Self::Scripted(completed) => completed.copy_bytes,
         }
@@ -312,7 +347,8 @@ impl DirectionalSdmaCompletedOwnerV1 {
 
     pub(super) fn host_offset(&self) -> u64 {
         match self {
-            Self::Native { completed } => completed.host_offset(),
+            Self::NativeSingle { host_offset, .. } => *host_offset,
+            Self::NativeWindow { completed } => completed.host_offset(),
             #[cfg(test)]
             Self::Scripted(completed) => completed.host_offset,
         }
@@ -320,7 +356,8 @@ impl DirectionalSdmaCompletedOwnerV1 {
 
     pub(super) fn device_offset(&self) -> u64 {
         match self {
-            Self::Native { completed } => completed.device_offset(),
+            Self::NativeSingle { device_offset, .. } => *device_offset,
+            Self::NativeWindow { completed } => completed.device_offset(),
             #[cfg(test)]
             Self::Scripted(completed) => completed.device_offset,
         }
@@ -328,7 +365,8 @@ impl DirectionalSdmaCompletedOwnerV1 {
 
     pub(super) fn packet_count(&self) -> usize {
         match self {
-            Self::Native { completed, .. } => completed.packet_count(),
+            Self::NativeSingle { .. } => 1,
+            Self::NativeWindow { completed } => completed.packet_count(),
             #[cfg(test)]
             Self::Scripted(completed) => completed.packet_count,
         }
@@ -401,8 +439,9 @@ impl SameDeviceSdmaCompletedOwnerV1 {
 pub(super) enum NativeDirectionalSdmaTerminalCustodyV1 {
     Promotion(Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1),
     Demotion(Gfx942DirectionalPersistentSdmaDemotionTerminalCustodyV1),
-    Submission(Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1),
-    PublishedWindow(DirectionalSdmaSubmissionOwnerV1),
+    SingleSubmission(Gfx942DirectionalPersistentSdmaTerminalCustodyV1),
+    WindowSubmission(Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1),
+    Published(DirectionalSdmaSubmissionOwnerV1),
     Retirement {
         failure: Gfx942DirectionalPersistentSdmaFrontierRetirementFailureV1,
         host: Gfx942SdmaBufferV1,
@@ -486,6 +525,85 @@ pub(super) enum DirectionalSdmaOpsV1<'a> {
     Native(&'a mut ComputeAqlQueueSessionV1),
     #[cfg(test)]
     Scripted(&'a mut ScriptedSdmaDriverV1),
+}
+
+fn retire_native_directional_completed_v1(
+    (device, host, frontier): fe2o3_kfd::Gfx942PersistentComputeReadyPartsV1,
+) -> Result<DirectionalSdmaPairOwnerV1, SdmaTransitionFailureV1<DirectionalSdmaCompletedOwnerV1>> {
+    match device.retire_settled_frontier_v1(frontier) {
+        Ok(device) => Ok(DirectionalSdmaPairOwnerV1 {
+            device: DirectionalSdmaDeviceOwnerV1::Native(device),
+            host: SdmaBufferOwnerV1::Native(host),
+        }),
+        Err(failure) => Err(SdmaTransitionFailureV1::ProcessTeardown {
+            detail: "frontier retirement failed".to_owned(),
+            custody: SdmaTerminalCustodyV1::Native(
+                NativeDirectionalSdmaTerminalCustodyV1::Retirement { failure, host },
+            ),
+        }),
+    }
+}
+
+fn map_native_ready_promotion_v1(
+    promotion: Result<
+        (
+            fe2o3_kfd::Gfx942PersistentComputeReadyV1,
+            Gfx942SdmaBufferV1,
+        ),
+        fe2o3_kfd::Gfx942PersistentComputeReadyFailureV1,
+    >,
+) -> Result<
+    (PersistentComputeReadyOwnerV1, SdmaBufferOwnerV1),
+    PersistentComputeReadyTransitionFailureV1,
+> {
+    match promotion {
+        Ok((ready, host)) => Ok((
+            PersistentComputeReadyOwnerV1::Native(ready),
+            SdmaBufferOwnerV1::Native(host),
+        )),
+        Err(failure) => {
+            let (error, custody) = failure.into_parts();
+            let terminal_receiver = matches!(
+                error,
+                ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                    Gfx942DispatchBindingErrorV1::Poisoned
+                )
+            );
+            let detail = error.to_string();
+            let (device, host, frontier) = match custody {
+                Gfx942PersistentComputeReadyFailureCustodyV1::Retryable(parts) => parts,
+                Gfx942PersistentComputeReadyFailureCustodyV1::ForeignQueue(completed) => {
+                    return Err(PersistentComputeReadyTransitionFailureV1::ForeignQueue {
+                        detail,
+                        terminal_receiver,
+                        completed: DirectionalSdmaCompletedOwnerV1::NativeWindow { completed },
+                    });
+                }
+                Gfx942PersistentComputeReadyFailureCustodyV1::ProcessTeardown(custody) => {
+                    return Err(PersistentComputeReadyTransitionFailureV1::ProcessTeardown {
+                        detail,
+                        custody: Some(SdmaTerminalCustodyV1::Native(
+                            NativeDirectionalSdmaTerminalCustodyV1::ReadyPromotion(custody),
+                        )),
+                    });
+                }
+            };
+            match device.retire_settled_frontier_v1(frontier) {
+                Ok(device) => Err(PersistentComputeReadyTransitionFailureV1::Recovered {
+                    pair: DirectionalSdmaPairOwnerV1 {
+                        device: DirectionalSdmaDeviceOwnerV1::Native(device),
+                        host: SdmaBufferOwnerV1::Native(host),
+                    },
+                }),
+                Err(failure) => Err(PersistentComputeReadyTransitionFailureV1::ProcessTeardown {
+                    detail,
+                    custody: Some(SdmaTerminalCustodyV1::Native(
+                        NativeDirectionalSdmaTerminalCustodyV1::Retirement { failure, host },
+                    )),
+                }),
+            }
+        }
+    }
 }
 
 impl<'a> DirectionalSdmaOpsV1<'a> {
@@ -664,74 +782,150 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
         &mut self,
         pair: DirectionalSdmaPairOwnerV1,
         direction: Gfx942PersistentSdmaDirectionV1,
-        requests: Box<[DirectionalSdmaCopyRequestV1]>,
+        requests: DirectionalSdmaRequestPlanV1,
     ) -> Result<DirectionalSdmaSubmissionOwnerV1, SdmaTransitionFailureV1<DirectionalSdmaPairOwnerV1>>
     {
-        let (host_offset, device_offset, copy_bytes) = match validate_window_requests_v1(&requests)
+        let request_slice = requests.as_slice();
+        let (host_offset, device_offset, copy_bytes) =
+            match validate_window_requests_v1(request_slice) {
+                Ok(window) => window,
+                Err(detail) => {
+                    return Err(SdmaTransitionFailureV1::Retryable {
+                        detail,
+                        custody: pair,
+                    });
+                }
+            };
+        if matches!(&requests, DirectionalSdmaRequestPlanV1::Window(requests) if requests.len() == 1)
         {
-            Ok(window) => window,
-            Err(detail) => {
-                return Err(SdmaTransitionFailureV1::Retryable {
-                    detail,
-                    custody: pair,
-                });
-            }
-        };
+            return Err(SdmaTransitionFailureV1::Retryable {
+                detail: "one directional SDMA packet must use single-request custody".to_owned(),
+                custody: pair,
+            });
+        }
+        let packet_count = requests.packet_count();
         match (self, pair.device, pair.host) {
             (
                 Self::Native(queue),
                 DirectionalSdmaDeviceOwnerV1::Native(device),
                 SdmaBufferOwnerV1::Native(host),
-            ) => match queue.submit_directional_persistent_sdma_window_v1(
-                device,
-                direction,
-                host,
-                host_offset,
-                device_offset,
-                copy_bytes,
-            ) {
-                Ok(submission)
-                    if submission.direction() == direction
-                        && submission.host_offset() == host_offset
-                        && submission.device_offset() == device_offset
-                        && submission.copy_bytes() == copy_bytes
-                        && submission.packet_count() == requests.len() =>
-                {
-                    Ok(DirectionalSdmaSubmissionOwnerV1::Native { submission })
-                }
-                Ok(submission) => Err(SdmaTransitionFailureV1::ProcessTeardown {
-                    detail: "directional SDMA published-window metadata changed unexpectedly"
-                        .to_owned(),
-                    custody: SdmaTerminalCustodyV1::Native(
-                        NativeDirectionalSdmaTerminalCustodyV1::PublishedWindow(
-                            DirectionalSdmaSubmissionOwnerV1::Native { submission },
-                        ),
-                    ),
-                }),
-                Err(failure) => {
-                    let (error, custody) = failure.into_parts();
-                    Err(match custody {
-                        Gfx942DirectionalPersistentSdmaWindowSubmissionCustodyV1::Retryable {
-                            allocation,
-                            host,
-                        } => SdmaTransitionFailureV1::Retryable {
-                            detail: error.to_string(),
-                            custody: DirectionalSdmaPairOwnerV1 {
-                                device: DirectionalSdmaDeviceOwnerV1::Native(allocation),
-                                host: SdmaBufferOwnerV1::Native(host),
-                            },
-                        },
-                        Gfx942DirectionalPersistentSdmaWindowSubmissionCustodyV1::ProcessTeardown(
-                            custody,
-                        ) => SdmaTransitionFailureV1::ProcessTeardown {
-                            detail: error.to_string(),
+            ) => {
+                match requests {
+                    DirectionalSdmaRequestPlanV1::Single(_) => {
+                        match queue.submit_directional_persistent_sdma_copy_v1(
+                        device,
+                        direction,
+                        host,
+                        host_offset,
+                        device_offset,
+                        copy_bytes,
+                    ) {
+                        Ok(submission)
+                            if submission.direction() == direction
+                                && submission.copy_bytes() == copy_bytes =>
+                        {
+                            Ok(DirectionalSdmaSubmissionOwnerV1::NativeSingle {
+                                submission,
+                                host_offset,
+                                device_offset,
+                            })
+                        }
+                        Ok(submission) => Err(SdmaTransitionFailureV1::ProcessTeardown {
+                            detail: "directional SDMA published-single metadata changed unexpectedly"
+                                .to_owned(),
                             custody: SdmaTerminalCustodyV1::Native(
-                                NativeDirectionalSdmaTerminalCustodyV1::Submission(custody),
+                                NativeDirectionalSdmaTerminalCustodyV1::Published(
+                                    DirectionalSdmaSubmissionOwnerV1::NativeSingle {
+                                        submission,
+                                        host_offset,
+                                        device_offset,
+                                    },
+                                ),
                             ),
-                        },
-                    })
+                        }),
+                        Err(failure) => {
+                            let (error, custody) = failure.into_parts();
+                            Err(match custody {
+                                Gfx942DirectionalPersistentSdmaSubmissionCustodyV1::Retryable {
+                                    allocation,
+                                    host,
+                                } => SdmaTransitionFailureV1::Retryable {
+                                    detail: error.to_string(),
+                                    custody: DirectionalSdmaPairOwnerV1 {
+                                        device: DirectionalSdmaDeviceOwnerV1::Native(allocation),
+                                        host: SdmaBufferOwnerV1::Native(host),
+                                    },
+                                },
+                                Gfx942DirectionalPersistentSdmaSubmissionCustodyV1::ProcessTeardown(
+                                    custody,
+                                ) => SdmaTransitionFailureV1::ProcessTeardown {
+                                    detail: error.to_string(),
+                                    custody: SdmaTerminalCustodyV1::Native(
+                                        NativeDirectionalSdmaTerminalCustodyV1::SingleSubmission(
+                                            custody,
+                                        ),
+                                    ),
+                                },
+                            })
+                        }
+                    }
+                    }
+                    DirectionalSdmaRequestPlanV1::Window(_) => {
+                        match queue.submit_directional_persistent_sdma_window_v1(
+                        device,
+                        direction,
+                        host,
+                        host_offset,
+                        device_offset,
+                        copy_bytes,
+                    ) {
+                        Ok(submission)
+                            if submission.direction() == direction
+                                && submission.host_offset() == host_offset
+                                && submission.device_offset() == device_offset
+                                && submission.copy_bytes() == copy_bytes
+                                && submission.packet_count() == packet_count =>
+                        {
+                            Ok(DirectionalSdmaSubmissionOwnerV1::NativeWindow { submission })
+                        }
+                        Ok(submission) => Err(SdmaTransitionFailureV1::ProcessTeardown {
+                            detail: "directional SDMA published-window metadata changed unexpectedly"
+                                .to_owned(),
+                            custody: SdmaTerminalCustodyV1::Native(
+                                NativeDirectionalSdmaTerminalCustodyV1::Published(
+                                    DirectionalSdmaSubmissionOwnerV1::NativeWindow { submission },
+                                ),
+                            ),
+                        }),
+                        Err(failure) => {
+                            let (error, custody) = failure.into_parts();
+                            Err(match custody {
+                                Gfx942DirectionalPersistentSdmaWindowSubmissionCustodyV1::Retryable {
+                                    allocation,
+                                    host,
+                                } => SdmaTransitionFailureV1::Retryable {
+                                    detail: error.to_string(),
+                                    custody: DirectionalSdmaPairOwnerV1 {
+                                        device: DirectionalSdmaDeviceOwnerV1::Native(allocation),
+                                        host: SdmaBufferOwnerV1::Native(host),
+                                    },
+                                },
+                                Gfx942DirectionalPersistentSdmaWindowSubmissionCustodyV1::ProcessTeardown(
+                                    custody,
+                                ) => SdmaTransitionFailureV1::ProcessTeardown {
+                                    detail: error.to_string(),
+                                    custody: SdmaTerminalCustodyV1::Native(
+                                        NativeDirectionalSdmaTerminalCustodyV1::WindowSubmission(
+                                            custody,
+                                        ),
+                                    ),
+                                },
+                            })
+                        }
+                    }
+                    }
                 }
-            },
+            }
             #[cfg(test)]
             (
                 Self::Scripted(driver),
@@ -751,7 +945,103 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
         submission: DirectionalSdmaSubmissionOwnerV1,
     ) -> Result<DirectionalSdmaPollV1, DirectionalSdmaExecutionFailureV1> {
         match (self, submission) {
-            (Self::Native(queue), DirectionalSdmaSubmissionOwnerV1::Native { submission }) => {
+            (
+                Self::Native(queue),
+                DirectionalSdmaSubmissionOwnerV1::NativeSingle {
+                    submission,
+                    host_offset,
+                    device_offset,
+                },
+            ) => {
+                let expected_direction = submission.direction();
+                let expected_copy_bytes = submission.copy_bytes();
+                match queue.poll_directional_persistent_sdma_copy_v1(submission) {
+                    Ok(Gfx942DirectionalPersistentSdmaCopyPollV1::Pending(submission))
+                        if submission.direction() == expected_direction
+                            && submission.copy_bytes() == expected_copy_bytes =>
+                    {
+                        Ok(DirectionalSdmaPollV1::Pending(
+                            DirectionalSdmaSubmissionOwnerV1::NativeSingle {
+                                submission,
+                                host_offset,
+                                device_offset,
+                            },
+                        ))
+                    }
+                    Ok(Gfx942DirectionalPersistentSdmaCopyPollV1::Pending(submission)) => {
+                        Err(DirectionalSdmaExecutionFailureV1::ProcessTeardown {
+                            detail: "directional SDMA pending-single metadata changed unexpectedly"
+                                .to_owned(),
+                            custody: SdmaTerminalCustodyV1::Native(
+                                NativeDirectionalSdmaTerminalCustodyV1::Published(
+                                    DirectionalSdmaSubmissionOwnerV1::NativeSingle {
+                                        submission,
+                                        host_offset,
+                                        device_offset,
+                                    },
+                                ),
+                            ),
+                        })
+                    }
+                    Ok(Gfx942DirectionalPersistentSdmaCopyPollV1::Completed(completed)) => {
+                        Ok(DirectionalSdmaPollV1::Completed(
+                            DirectionalSdmaCompletedOwnerV1::NativeSingle {
+                                completed,
+                                host_offset,
+                                device_offset,
+                            },
+                        ))
+                    }
+                    Err(failure) => {
+                        let (error, custody) = failure.into_parts();
+                        Err(match custody {
+                            Gfx942DirectionalPersistentSdmaExecutionCustodyV1::Pending(submission)
+                                if submission.direction() == expected_direction
+                                    && submission.copy_bytes() == expected_copy_bytes =>
+                            {
+                                DirectionalSdmaExecutionFailureV1::Retryable {
+                                    detail: error.to_string(),
+                                    submission: DirectionalSdmaSubmissionOwnerV1::NativeSingle {
+                                        submission,
+                                        host_offset,
+                                        device_offset,
+                                    },
+                                }
+                            }
+                            Gfx942DirectionalPersistentSdmaExecutionCustodyV1::Pending(
+                                submission,
+                            ) => DirectionalSdmaExecutionFailureV1::ProcessTeardown {
+                                detail:
+                                    "directional SDMA retryable-single metadata changed unexpectedly"
+                                        .to_owned(),
+                                custody: SdmaTerminalCustodyV1::Native(
+                                    NativeDirectionalSdmaTerminalCustodyV1::Published(
+                                        DirectionalSdmaSubmissionOwnerV1::NativeSingle {
+                                            submission,
+                                            host_offset,
+                                            device_offset,
+                                        },
+                                    ),
+                                ),
+                            },
+                            Gfx942DirectionalPersistentSdmaExecutionCustodyV1::ProcessTeardown(
+                                custody,
+                            ) => DirectionalSdmaExecutionFailureV1::ProcessTeardown {
+                                detail: error.to_string(),
+                                custody: SdmaTerminalCustodyV1::Native(
+                                    NativeDirectionalSdmaTerminalCustodyV1::SingleSubmission(
+                                        custody,
+                                    ),
+                                ),
+                            },
+                        })
+                    }
+                }
+            }
+            (
+                Self::Native(queue),
+                DirectionalSdmaSubmissionOwnerV1::NativeWindow { submission },
+            ) => {
                 let expected_direction = submission.direction();
                 let expected_host_offset = submission.host_offset();
                 let expected_device_offset = submission.device_offset();
@@ -767,7 +1057,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                                 && submission.packet_count() == expected_packet_count =>
                         {
                             DirectionalSdmaPollV1::Pending(
-                                DirectionalSdmaSubmissionOwnerV1::Native { submission },
+                                DirectionalSdmaSubmissionOwnerV1::NativeWindow { submission },
                             )
                         }
                         Gfx942DirectionalPersistentSdmaWindowCopyPollV1::Pending(submission) => {
@@ -776,15 +1066,17 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                                     "directional SDMA pending-window metadata changed unexpectedly"
                                         .to_owned(),
                                 custody: SdmaTerminalCustodyV1::Native(
-                                    NativeDirectionalSdmaTerminalCustodyV1::PublishedWindow(
-                                        DirectionalSdmaSubmissionOwnerV1::Native { submission },
+                                    NativeDirectionalSdmaTerminalCustodyV1::Published(
+                                        DirectionalSdmaSubmissionOwnerV1::NativeWindow {
+                                            submission,
+                                        },
                                     ),
                                 ),
                             });
                         }
                         Gfx942DirectionalPersistentSdmaWindowCopyPollV1::Completed(completed) => {
                             DirectionalSdmaPollV1::Completed(
-                                DirectionalSdmaCompletedOwnerV1::Native { completed },
+                                DirectionalSdmaCompletedOwnerV1::NativeWindow { completed },
                             )
                         }
                     }),
@@ -800,7 +1092,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                             && submission.packet_count() == expected_packet_count => {
                             DirectionalSdmaExecutionFailureV1::Retryable {
                                 detail: error.to_string(),
-                                submission: DirectionalSdmaSubmissionOwnerV1::Native { submission },
+                                submission: DirectionalSdmaSubmissionOwnerV1::NativeWindow { submission },
                             }
                         }
                         Gfx942DirectionalPersistentSdmaWindowExecutionCustodyV1::Pending(
@@ -809,8 +1101,8 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                             detail: "directional SDMA retryable-window metadata changed unexpectedly"
                                 .to_owned(),
                             custody: SdmaTerminalCustodyV1::Native(
-                                NativeDirectionalSdmaTerminalCustodyV1::PublishedWindow(
-                                    DirectionalSdmaSubmissionOwnerV1::Native { submission },
+                                NativeDirectionalSdmaTerminalCustodyV1::Published(
+                                    DirectionalSdmaSubmissionOwnerV1::NativeWindow { submission },
                                 ),
                             ),
                         },
@@ -819,7 +1111,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                         ) => DirectionalSdmaExecutionFailureV1::ProcessTeardown {
                             detail: error.to_string(),
                             custody: SdmaTerminalCustodyV1::Native(
-                                NativeDirectionalSdmaTerminalCustodyV1::Submission(custody),
+                                NativeDirectionalSdmaTerminalCustodyV1::WindowSubmission(custody),
                             ),
                         },
                     })
@@ -844,14 +1136,81 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
         timeout: Duration,
     ) -> Result<DirectionalSdmaCompletedOwnerV1, DirectionalSdmaExecutionFailureV1> {
         match (self, submission) {
-            (Self::Native(queue), DirectionalSdmaSubmissionOwnerV1::Native { submission }) => {
+            (
+                Self::Native(queue),
+                DirectionalSdmaSubmissionOwnerV1::NativeSingle {
+                    submission,
+                    host_offset,
+                    device_offset,
+                },
+            ) => {
+                let expected_direction = submission.direction();
+                let expected_copy_bytes = submission.copy_bytes();
+                match queue.wait_directional_persistent_sdma_copy_for_v1(submission, timeout) {
+                    Ok(completed) => Ok(DirectionalSdmaCompletedOwnerV1::NativeSingle {
+                        completed,
+                        host_offset,
+                        device_offset,
+                    }),
+                    Err(failure) => {
+                        let (error, custody) = failure.into_parts();
+                        Err(match custody {
+                            Gfx942DirectionalPersistentSdmaExecutionCustodyV1::Pending(submission)
+                                if submission.direction() == expected_direction
+                                    && submission.copy_bytes() == expected_copy_bytes =>
+                            {
+                                DirectionalSdmaExecutionFailureV1::Retryable {
+                                    detail: error.to_string(),
+                                    submission: DirectionalSdmaSubmissionOwnerV1::NativeSingle {
+                                        submission,
+                                        host_offset,
+                                        device_offset,
+                                    },
+                                }
+                            }
+                            Gfx942DirectionalPersistentSdmaExecutionCustodyV1::Pending(
+                                submission,
+                            ) => DirectionalSdmaExecutionFailureV1::ProcessTeardown {
+                                detail:
+                                    "directional SDMA retryable-single metadata changed unexpectedly"
+                                        .to_owned(),
+                                custody: SdmaTerminalCustodyV1::Native(
+                                    NativeDirectionalSdmaTerminalCustodyV1::Published(
+                                        DirectionalSdmaSubmissionOwnerV1::NativeSingle {
+                                            submission,
+                                            host_offset,
+                                            device_offset,
+                                        },
+                                    ),
+                                ),
+                            },
+                            Gfx942DirectionalPersistentSdmaExecutionCustodyV1::ProcessTeardown(
+                                custody,
+                            ) => DirectionalSdmaExecutionFailureV1::ProcessTeardown {
+                                detail: error.to_string(),
+                                custody: SdmaTerminalCustodyV1::Native(
+                                    NativeDirectionalSdmaTerminalCustodyV1::SingleSubmission(
+                                        custody,
+                                    ),
+                                ),
+                            },
+                        })
+                    }
+                }
+            }
+            (
+                Self::Native(queue),
+                DirectionalSdmaSubmissionOwnerV1::NativeWindow { submission },
+            ) => {
                 let expected_direction = submission.direction();
                 let expected_host_offset = submission.host_offset();
                 let expected_device_offset = submission.device_offset();
                 let expected_copy_bytes = submission.copy_bytes();
                 let expected_packet_count = submission.packet_count();
                 match queue.wait_directional_persistent_sdma_window_for_v1(submission, timeout) {
-                    Ok(completed) => Ok(DirectionalSdmaCompletedOwnerV1::Native { completed }),
+                    Ok(completed) => {
+                        Ok(DirectionalSdmaCompletedOwnerV1::NativeWindow { completed })
+                    }
                     Err(failure) => {
                         let (error, custody) = failure.into_parts();
                         Err(match custody {
@@ -864,7 +1223,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                                 && submission.packet_count() == expected_packet_count => {
                                 DirectionalSdmaExecutionFailureV1::Retryable {
                                     detail: error.to_string(),
-                                    submission: DirectionalSdmaSubmissionOwnerV1::Native {
+                                    submission: DirectionalSdmaSubmissionOwnerV1::NativeWindow {
                                         submission,
                                     },
                                 }
@@ -876,8 +1235,10 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                                     "directional SDMA retryable-window metadata changed unexpectedly"
                                         .to_owned(),
                                 custody: SdmaTerminalCustodyV1::Native(
-                                    NativeDirectionalSdmaTerminalCustodyV1::PublishedWindow(
-                                        DirectionalSdmaSubmissionOwnerV1::Native { submission },
+                                    NativeDirectionalSdmaTerminalCustodyV1::Published(
+                                        DirectionalSdmaSubmissionOwnerV1::NativeWindow {
+                                            submission,
+                                        },
                                     ),
                                 ),
                             },
@@ -886,7 +1247,7 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                             ) => DirectionalSdmaExecutionFailureV1::ProcessTeardown {
                                 detail: error.to_string(),
                                 custody: SdmaTerminalCustodyV1::Native(
-                                    NativeDirectionalSdmaTerminalCustodyV1::Submission(custody),
+                                    NativeDirectionalSdmaTerminalCustodyV1::WindowSubmission(custody),
                                 ),
                             },
                         })
@@ -911,20 +1272,11 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
     ) -> Result<DirectionalSdmaPairOwnerV1, SdmaTransitionFailureV1<DirectionalSdmaCompletedOwnerV1>>
     {
         match (self, completed) {
-            (Self::Native(_), DirectionalSdmaCompletedOwnerV1::Native { completed }) => {
-                let (device, host, frontier) = completed.into_parts();
-                match device.retire_settled_frontier_v1(frontier) {
-                    Ok(device) => Ok(DirectionalSdmaPairOwnerV1 {
-                        device: DirectionalSdmaDeviceOwnerV1::Native(device),
-                        host: SdmaBufferOwnerV1::Native(host),
-                    }),
-                    Err(failure) => Err(SdmaTransitionFailureV1::ProcessTeardown {
-                        detail: "frontier retirement failed".to_owned(),
-                        custody: SdmaTerminalCustodyV1::Native(
-                            NativeDirectionalSdmaTerminalCustodyV1::Retirement { failure, host },
-                        ),
-                    }),
-                }
+            (Self::Native(_), DirectionalSdmaCompletedOwnerV1::NativeSingle { completed, .. }) => {
+                retire_native_directional_completed_v1(completed.into_parts())
+            }
+            (Self::Native(_), DirectionalSdmaCompletedOwnerV1::NativeWindow { completed }) => {
+                retire_native_directional_completed_v1(completed.into_parts())
             }
             #[cfg(test)]
             (Self::Scripted(driver), DirectionalSdmaCompletedOwnerV1::Scripted(completed)) => {
@@ -947,74 +1299,16 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
         PersistentComputeReadyTransitionFailureV1,
     > {
         match (self, completed) {
-            (Self::Native(queue), DirectionalSdmaCompletedOwnerV1::Native { completed }) => {
-                match queue.promote_full_h2d_to_persistent_compute_ready_v1(completed, content) {
-                    Ok((ready, host)) => Ok((
-                        PersistentComputeReadyOwnerV1::Native(ready),
-                        SdmaBufferOwnerV1::Native(host),
-                    )),
-                    Err(failure) => {
-                        let (error, custody) = failure.into_parts();
-                        let terminal_receiver = matches!(
-                            error,
-                            ComputeAqlQueueSessionErrorV1::DispatchBinding(
-                                Gfx942DispatchBindingErrorV1::Poisoned
-                            )
-                        );
-                        let detail = error.to_string();
-                        let (device, host, frontier) = match custody {
-                            Gfx942PersistentComputeReadyFailureCustodyV1::Retryable(parts) => parts,
-                            Gfx942PersistentComputeReadyFailureCustodyV1::ForeignQueue(
-                                completed,
-                            ) => {
-                                return Err(
-                                    PersistentComputeReadyTransitionFailureV1::ForeignQueue {
-                                        detail,
-                                        terminal_receiver,
-                                        completed: DirectionalSdmaCompletedOwnerV1::Native {
-                                            completed,
-                                        },
-                                    },
-                                );
-                            }
-                            Gfx942PersistentComputeReadyFailureCustodyV1::ProcessTeardown(
-                                custody,
-                            ) => {
-                                return Err(
-                                    PersistentComputeReadyTransitionFailureV1::ProcessTeardown {
-                                        detail,
-                                        custody: Some(SdmaTerminalCustodyV1::Native(
-                                            NativeDirectionalSdmaTerminalCustodyV1::ReadyPromotion(
-                                                custody,
-                                            ),
-                                        )),
-                                    },
-                                );
-                            }
-                        };
-                        match device.retire_settled_frontier_v1(frontier) {
-                            Ok(device) => {
-                                Err(PersistentComputeReadyTransitionFailureV1::Recovered {
-                                    pair: DirectionalSdmaPairOwnerV1 {
-                                        device: DirectionalSdmaDeviceOwnerV1::Native(device),
-                                        host: SdmaBufferOwnerV1::Native(host),
-                                    },
-                                })
-                            }
-                            Err(failure) => {
-                                Err(PersistentComputeReadyTransitionFailureV1::ProcessTeardown {
-                                    detail,
-                                    custody: Some(SdmaTerminalCustodyV1::Native(
-                                        NativeDirectionalSdmaTerminalCustodyV1::Retirement {
-                                            failure,
-                                            host,
-                                        },
-                                    )),
-                                })
-                            }
-                        }
-                    }
-                }
+            (
+                Self::Native(queue),
+                DirectionalSdmaCompletedOwnerV1::NativeSingle { completed, .. },
+            ) => map_native_ready_promotion_v1(
+                queue.promote_full_single_h2d_to_persistent_compute_ready_v1(completed, content),
+            ),
+            (Self::Native(queue), DirectionalSdmaCompletedOwnerV1::NativeWindow { completed }) => {
+                map_native_ready_promotion_v1(
+                    queue.promote_full_h2d_to_persistent_compute_ready_v1(completed, content),
+                )
             }
             #[cfg(test)]
             (Self::Scripted(driver), DirectionalSdmaCompletedOwnerV1::Scripted(completed)) => {
@@ -1565,7 +1859,7 @@ mod scripted {
     pub(crate) struct ScriptedSubmissionOwnerV1 {
         pair: DirectionalSdmaPairOwnerV1,
         direction: Gfx942PersistentSdmaDirectionV1,
-        requests: Box<[DirectionalSdmaCopyRequestV1]>,
+        requests: DirectionalSdmaRequestPlanV1,
         copy_bytes: u32,
     }
 
@@ -1984,7 +2278,7 @@ mod scripted {
             device: ScriptedDeviceOwnerV1,
             mut host: ScriptedBufferOwnerV1,
             direction: Gfx942PersistentSdmaDirectionV1,
-            requests: Box<[DirectionalSdmaCopyRequestV1]>,
+            requests: DirectionalSdmaRequestPlanV1,
         ) -> Result<
             DirectionalSdmaSubmissionOwnerV1,
             SdmaTransitionFailureV1<DirectionalSdmaPairOwnerV1>,
@@ -2002,41 +2296,46 @@ mod scripted {
                     "submission owners belong to another driver".to_owned(),
                 ));
             }
-            let copy_bytes = match validate_window_requests_v1(&requests) {
+            let copy_bytes = match validate_window_requests_v1(requests.as_slice()) {
                 Ok((_, _, copy_bytes)) => copy_bytes,
                 Err(detail) => return Err(scripted_pair_mismatch(pair, detail)),
             };
-            let outcome = match self.pop() {
-                Ok(ScriptedSdmaStepV1::Submit {
-                    direction: expected_direction,
-                    host_offset: expected_host_offset,
-                    device_offset: expected_device_offset,
-                    copy_bytes: expected_copy_bytes,
-                    outcome,
-                }) if expected_direction == direction
-                    && requests.len() == 1
-                    && expected_host_offset == requests[0].host_offset
-                    && expected_device_offset == requests[0].device_offset
-                    && expected_copy_bytes == requests[0].copy_bytes =>
+            let outcome = match (self.pop(), &requests) {
+                (
+                    Ok(ScriptedSdmaStepV1::Submit {
+                        direction: expected_direction,
+                        host_offset: expected_host_offset,
+                        device_offset: expected_device_offset,
+                        copy_bytes: expected_copy_bytes,
+                        outcome,
+                    }),
+                    DirectionalSdmaRequestPlanV1::Single(request),
+                ) if expected_direction == direction
+                    && expected_host_offset == request.host_offset
+                    && expected_device_offset == request.device_offset
+                    && expected_copy_bytes == request.copy_bytes =>
                 {
                     outcome
                 }
-                Ok(ScriptedSdmaStepV1::SubmitWindow {
-                    direction: expected_direction,
-                    requests: expected_requests,
-                    outcome,
-                }) if expected_direction == direction
+                (
+                    Ok(ScriptedSdmaStepV1::SubmitWindow {
+                        direction: expected_direction,
+                        requests: expected_requests,
+                        outcome,
+                    }),
+                    DirectionalSdmaRequestPlanV1::Window(requests),
+                ) if expected_direction == direction
                     && expected_requests.as_slice() == requests.as_ref() =>
                 {
                     outcome
                 }
-                Ok(step) => {
+                (Ok(step), _) => {
                     return Err(scripted_pair_mismatch(
                         pair,
                         format!("submission mismatch: {step:?}"),
                     ));
                 }
-                Err(detail) => return Err(scripted_pair_mismatch(pair, detail)),
+                (Err(detail), _) => return Err(scripted_pair_mismatch(pair, detail)),
             };
             match outcome {
                 ScriptedFailureModeV1::Success => Ok(DirectionalSdmaSubmissionOwnerV1::Scripted(
@@ -2510,7 +2809,7 @@ mod scripted {
         copy_bytes: Option<u32>,
         reported_requests: Option<Vec<DirectionalSdmaCopyRequestV1>>,
     ) -> Result<DirectionalSdmaPollV1, DirectionalSdmaExecutionFailureV1> {
-        for request in submission.requests.iter() {
+        for request in submission.requests.as_slice() {
             let len = usize::try_from(request.copy_bytes).expect("u32 fits usize");
             let host_start = usize::try_from(request.host_offset)
                 .expect("admitted scripted host offset fits usize");
@@ -2532,11 +2831,12 @@ mod scripted {
                     .copy_from_slice(&device.bytes[device_start..device_start + len]),
             }
         }
-        let requests = reported_requests
-            .map(Vec::into_boxed_slice)
-            .unwrap_or(submission.requests);
-        let packet_count = requests.len();
-        let (host_offset, device_offset) = requests
+        let packet_count = reported_requests
+            .as_ref()
+            .map_or_else(|| submission.requests.packet_count(), Vec::len);
+        let (host_offset, device_offset) = reported_requests
+            .as_deref()
+            .unwrap_or_else(|| submission.requests.as_slice())
             .first()
             .map(|request| (request.host_offset, request.device_offset))
             .unwrap_or((0, 0));
@@ -2836,9 +3136,12 @@ mod scripted {
                 device_offset: 0,
                 copy_bytes: 8,
             };
-            let Err(SdmaTransitionFailureV1::Retryable { custody: pair, .. }) =
-                driver.submit(device, host, direction, vec![request].into_boxed_slice())
-            else {
+            let Err(SdmaTransitionFailureV1::Retryable { custody: pair, .. }) = driver.submit(
+                device,
+                host,
+                direction,
+                DirectionalSdmaRequestPlanV1::Single(request),
+            ) else {
                 panic!("scripted request must return recoverable prepublication custody")
             };
             let SdmaBufferOwnerV1::Scripted(host) = pair.host else {
@@ -3003,6 +3306,57 @@ mod window_tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn one_packet_window_rejection_returns_the_exact_pair_without_consuming_publication() {
+        let request = DirectionalSdmaCopyRequestV1 {
+            host_offset: 0,
+            device_offset: 0,
+            copy_bytes: 8,
+        };
+        let direction = Gfx942PersistentSdmaDirectionV1::HostToDevice;
+        let mut driver = ScriptedSdmaDriverV1::new([
+            ScriptedSdmaStepV1::Submit {
+                direction,
+                host_offset: 0,
+                device_offset: 0,
+                copy_bytes: 8,
+                outcome: ScriptedFailureModeV1::Retryable,
+            },
+            ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success),
+            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
+            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
+        ]);
+        let pair = DirectionalSdmaPairOwnerV1 {
+            device: driver.test_device_owner(8),
+            host: driver.test_host_owner(8),
+        };
+        let mut ops = DirectionalSdmaOpsV1::Scripted(&mut driver);
+        let pair = match ops.submit(
+            pair,
+            direction,
+            DirectionalSdmaRequestPlanV1::Window(vec![request].into_boxed_slice()),
+        ) {
+            Err(SdmaTransitionFailureV1::Retryable { custody, .. }) => custody,
+            _ => panic!("one packet must reject window custody before publication"),
+        };
+        let pair = match ops.submit(
+            pair,
+            direction,
+            DirectionalSdmaRequestPlanV1::Single(request),
+        ) {
+            Err(SdmaTransitionFailureV1::Retryable { custody, .. }) => custody,
+            _ => panic!("the restored pair must reach the still-pending single publication"),
+        };
+        let Ok(device) = ops.demote(pair.device) else {
+            panic!("restored device custody must demote")
+        };
+        assert!(ops.recycle(device).is_ok());
+        assert!(ops.recycle(pair.host).is_ok());
+        assert!(driver.is_exhausted());
+        assert_eq!(driver.live_owner_count(), 0);
+        assert_eq!(driver.unexpected_drops(), 0);
     }
 
     #[test]

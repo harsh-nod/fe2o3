@@ -4104,6 +4104,25 @@ impl ComputeAqlQueueSessionV1 {
         ))
     }
 
+    /// Authenticates one exact full-allocation, single-packet H2D copy and
+    /// retires its settled frontier into an initialized persistent-compute
+    /// receipt. The consumed completion is normalized to the same sealed
+    /// one-packet window representation used by the common ready transition.
+    #[allow(clippy::result_large_err)]
+    pub fn promote_full_single_h2d_to_persistent_compute_ready_v1(
+        &mut self,
+        completed: Gfx942DirectionalPersistentSdmaCompletedV1,
+        content: Gfx942DeviceContentDescriptorV1,
+    ) -> Result<
+        (Gfx942PersistentComputeReadyV1, Gfx942SdmaBufferV1),
+        Gfx942PersistentComputeReadyFailureV1,
+    > {
+        self.promote_full_h2d_to_persistent_compute_ready_v1(
+            completed.into_single_packet_window_v1(),
+            content,
+        )
+    }
+
     /// Maximum number of independently publishable compute queues retained by
     /// one checked process-VM session in the reviewed runtime profile.
     pub const MAX_COMPUTE_LANES_V1: usize = 2;

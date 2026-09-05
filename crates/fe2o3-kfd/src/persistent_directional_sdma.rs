@@ -515,6 +515,8 @@ pub struct Gfx942DirectionalPersistentSdmaCompletedV1 {
     host: Gfx942SdmaBufferV1,
     frontier: Gfx942PersistentDependencyFrontierV1,
     direction: Gfx942PersistentSdmaDirectionV1,
+    host_offset: u64,
+    device_offset: u64,
     copy_bytes: u32,
 }
 
@@ -525,6 +527,21 @@ impl Gfx942DirectionalPersistentSdmaCompletedV1 {
 
     pub const fn copy_bytes(&self) -> u32 {
         self.copy_bytes
+    }
+
+    pub(crate) fn into_single_packet_window_v1(
+        self,
+    ) -> Gfx942DirectionalPersistentSdmaWindowCompletedV1 {
+        Gfx942DirectionalPersistentSdmaWindowCompletedV1 {
+            allocation: self.allocation,
+            host: self.host,
+            frontier: self.frontier,
+            direction: self.direction,
+            host_offset: self.host_offset,
+            device_offset: self.device_offset,
+            copy_bytes: self.copy_bytes,
+            packet_count: 1,
+        }
     }
 
     pub fn into_parts(
@@ -1216,6 +1233,8 @@ pub(crate) fn transition_directional_persistent_sdma_completion_v1(
                             host,
                             frontier,
                             direction,
+                            host_offset,
+                            device_offset,
                             copy_bytes,
                         },
                     )
@@ -2933,9 +2952,29 @@ mod tests {
                 .count(),
             3
         );
+        assert_eq!(
+            submission
+                .matches("check_queue_operational_currentness")
+                .count(),
+            1
+        );
         assert!(!submission.contains("self.check_currentness()"));
         assert!(submission.contains("prepare_single_recoverable"));
         assert!(!submission.contains("vec![request]"));
+
+        let lower = include_str!("sdma.rs")
+            .split("pub(crate) fn poll(")
+            .nth(1)
+            .unwrap()
+            .split("pub(crate) fn wait_for(")
+            .next()
+            .unwrap();
+        assert_eq!(
+            lower.matches("check_queue_operational_currentness").count(),
+            3
+        );
+        assert!(lower.contains("if observed == 0"));
+        assert!(lower.contains("return Ok(Gfx942SdmaCopyPollV1::Pending)"));
 
         let pair = admit_persistent_directional_sdma_pair_v1(pair_observation(17, 23)).unwrap();
         assert_eq!(
@@ -3143,6 +3182,11 @@ mod tests {
             completed.direction(),
             Gfx942PersistentSdmaDirectionV1::DeviceToHost
         );
+        assert_eq!(completed.copy_bytes(), 32);
+        let completed = completed.into_single_packet_window_v1();
+        assert_eq!(completed.packet_count(), 1);
+        assert_eq!(completed.host_offset(), 8);
+        assert_eq!(completed.device_offset(), 16);
         assert_eq!(completed.copy_bytes(), 32);
     }
 
