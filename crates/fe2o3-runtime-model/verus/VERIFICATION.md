@@ -11,9 +11,9 @@ persistent-SDMA-window, R23 same-device D2D persistent-SDMA-window, R24
 portable-progress, R25 persistent-compute storage-bridge, R27 persistent
 dispatch-control, R28 persistent-hot-currentness-scope, R30 bound
 host-content-certificate, R31 single-packet/window-refinement, R32
-directional-currentness-handoff, R33 fused-synchronous-directional-SDMA, and
-R34 fused-asynchronous-directional-SDMA models. The authenticated runner proves
-795 obligations and rejects 318
+directional-currentness-handoff, R33 fused-synchronous-directional-SDMA, R34
+fused-asynchronous-directional-SDMA, and R35 fused-retained-control-replay
+models. The authenticated runner proves 808 obligations and rejects 322
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -1618,6 +1618,83 @@ parity, or performance.
 | Executable fused-composition model | **Checked** | Twenty-five focused Rust tests, including exhaustive finite observation enumeration, plus one compile-fail non-`Clone` doctest; no Rust-to-Verus correspondence theorem. |
 | Boundary countermodels | **Rejected** | Four pinned mutations fail their named omitted-retake, retry-after-detach, intervening-fallible-work, and ticket-substitution postconditions. |
 | Rust privacy/move semantics, concrete loans or allocation, currentness truth, executable or production Rust refinement, runtime/KFD/HSA/HIP, driver, firmware, hardware, coherence, progress, liveness, parity, or performance | **Not established** | Explicitly outside the R34 proof boundary. |
+
+## R35 fused retained-control replay
+
+`r35_fused_retained_control_replay_v1.rs` proves 13 obligations for an
+independent finite comparison of the former and fused retained-dispatch-control
+replay bind paths reviewed at production commit
+`4b324bbd53e4c6e767c5c5f2f18817c133edbe03`. The model is limited to the
+retained-control branch; it makes no claim about initial dispatch-control
+construction. Admission and use request/reserve/prepare happen before every
+modeled foundation loan. The former composition has one loan for mapped facts,
+then detach and authenticated data construction, then a second loan for replay
+retention, followed by the operational-currentness and complete-authority-set
+audit. The fused composition has one loan spanning mapped facts, detach,
+authenticated construction, replay retention, and that final audit. On success
+the abstract foundation-loan attempts are exactly two and one, while both paths
+retain the same modeled admission-currentness and final operational-currentness
+observations. These are finite event counts, not syscall or latency evidence.
+
+The projected custody-and-commit equivalence theorem requires an explicit
+input-only, path-sensitive loan premise. It invokes neither runner and compares
+no result states. The premise relates the former first loan to the fused loan before
+detach, accounts for the former first retake occurring before detach while the
+fused retake occurs after the pipeline, aligns a former second-loan open failure
+with fused retention failure, and requires the relevant final retakes only when
+they can distinguish success from terminal custody. A bounded exhaustive Rust
+test independently enumerates all 196,608 finite observation combinations and
+checks all 186,288 premise-admitted cases. This is executable-model testing,
+not a Rust-to-Verus correspondence theorem.
+
+Before detach, failure returns retryable input only when the complete loan
+round trip, prepared-use cancellation, and session-health observation all
+succeed. Cancellation failure installs terminal Attached custody. After detach,
+authenticated construction failure retains exact Storage custody, replay
+retention failure retains Data custody, final-audit failure retains Attached
+custody, and no such outcome is retryable. Ready followed by failed fused
+retake is also terminal Attached. Every installed terminal attachment binds the
+exact queue occurrence, attachment generation, storage identity, effect,
+predecessor generation, retained dispatch control, and next attachment
+generation. Success additionally clears the recycled predecessor roster.
+
+R35 corrects one internal authority label rather than claiming exact internal
+state equivalence with the former path. If quarantine succeeds, terminal
+prepared authority is `Quarantined`; if quarantine itself fails, the fused path
+preserves the returned live `Prepared` authority. The projected relation
+compares custody and exact commit coordinates, but it intentionally excludes
+production/public error identity, the model terminal failure stage, the
+internal authority label, every event index, foundation-loan counts, and
+currentness counts. The successful-path loan and currentness counts are checked
+by separate theorems and tests; they are not part of the equivalence relation.
+The executable model has 14 focused Rust tests,
+including the exhaustive premise check. Private Storage/Data/Attached carriers
+have structural non-`Clone` checks, and a compile-fail doctest rejects cloning
+the public owning model. Verus mathematical values remain copyable and prove no
+Rust ownership or borrow property.
+
+Four pinned, standalone expected-negative mutations respectively commit Ready
+after failed retake, return retryable input after detach, substitute Data for
+Storage custody at construction failure, and discard Prepared authority after
+failed quarantine. Each imports no positive proof source and fails its named
+postcondition.
+
+All admission, native-operation, currentness, cancellation, quarantine, and
+loan outcomes are contracted mathematical inputs. There is no Rust-to-Verus
+correspondence theorem and no proof that the executable model or production
+Rust refines the Verus machine. Nothing here establishes runtime, KFD, HSA, or
+HIP behavior; allocation or concrete loan mechanics; driver or firmware
+correctness; hardware completion or coherence; progress; liveness; parity; or
+performance.
+
+## R35 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Premised former/fused projected custody-and-commit equivalence, exact successful 2-to-1 foundation-loan reduction with preserved currentness observations, admission/preparation order, pre-detach retry gate, post-detach Storage/Data/Attached custody, Ready-retake terminalization, failed-quarantine Prepared retention, and exact commit coordinates | **Proved** | Thirteen obligations in `r35_fused_retained_control_replay_v1.rs`; finite mathematical values and contracted observations only. The projection excludes production/public error identity, model terminal failure stage, internal authority label, event indices, foundation-loan counts, and currentness counts; successful-path counts are separate theorems. |
+| Executable fused replay model | **Checked** | Fourteen focused Rust tests, including 196,608-case exhaustive enumeration, explicit projection-boundary coverage, and move-only checks, plus one compile-fail non-`Clone` doctest; no Rust-to-Verus correspondence theorem. |
+| Boundary countermodels | **Rejected** | Four pinned mutations fail their named omitted-retake, retry-after-detach, custody-substitution, and failed-quarantine-authority postconditions. |
+| Rust privacy/move semantics, concrete loans or allocation, currentness truth, executable or production Rust refinement, runtime/KFD/HSA/HIP, driver, firmware, hardware, coherence, progress, liveness, parity, or performance | **Not established** | Explicitly outside the R35 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust

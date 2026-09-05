@@ -36,6 +36,7 @@ r31_single_packet_window_refinement_proof="$script_dir/r31_single_packet_window_
 r32_directional_sdma_currentness_handoff_proof="$script_dir/r32_directional_sdma_currentness_handoff_v1.rs"
 r33_fused_synchronous_directional_sdma_proof="$script_dir/r33_fused_synchronous_directional_sdma_v1.rs"
 r34_fused_asynchronous_directional_sdma_proof="$script_dir/r34_fused_asynchronous_directional_sdma_v1.rs"
+r35_fused_retained_control_replay_proof="$script_dir/r35_fused_retained_control_replay_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -354,6 +355,10 @@ negative_r34_omitted_retake="$script_dir/negative/r34_fused_asynchronous_directi
 negative_r34_retry_after_detach="$script_dir/negative/r34_fused_asynchronous_directional_sdma_v1_retry_after_detach.rs"
 negative_r34_intervening_fallible_work="$script_dir/negative/r34_fused_asynchronous_directional_sdma_v1_intervening_fallible_work.rs"
 negative_r34_ticket_substitution="$script_dir/negative/r34_fused_asynchronous_directional_sdma_v1_ticket_substitution.rs"
+negative_r35_omitted_retake="$script_dir/negative/r35_fused_retained_control_replay_v1_omitted_retake.rs"
+negative_r35_retry_after_detach="$script_dir/negative/r35_fused_retained_control_replay_v1_retry_after_detach.rs"
+negative_r35_custody_substitution="$script_dir/negative/r35_fused_retained_control_replay_v1_custody_substitution.rs"
+negative_r35_failed_quarantine_authority_loss="$script_dir/negative/r35_fused_retained_control_replay_v1_failed_quarantine_authority_loss.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -411,6 +416,7 @@ expected_r31_single_packet_window_refinement=$(read_pin "$pin_dir/R31_SINGLE_PAC
 expected_r32_directional_sdma_currentness_handoff=$(read_pin "$pin_dir/R32_DIRECTIONAL_SDMA_CURRENTNESS_HANDOFF_SHA256")
 expected_r33_fused_synchronous_directional_sdma=$(read_pin "$pin_dir/R33_FUSED_SYNCHRONOUS_DIRECTIONAL_SDMA_SHA256")
 expected_r34_fused_asynchronous_directional_sdma=$(read_pin "$pin_dir/R34_FUSED_ASYNCHRONOUS_DIRECTIONAL_SDMA_SHA256")
+expected_r35_fused_retained_control_replay=$(read_pin "$pin_dir/R35_FUSED_RETAINED_CONTROL_REPLAY_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -729,6 +735,10 @@ expected_negative_r34_omitted_retake=$(read_pin "$pin_dir/NEGATIVE_R34_OMITTED_R
 expected_negative_r34_retry_after_detach=$(read_pin "$pin_dir/NEGATIVE_R34_RETRY_AFTER_DETACH_SHA256")
 expected_negative_r34_intervening_fallible_work=$(read_pin "$pin_dir/NEGATIVE_R34_INTERVENING_FALLIBLE_WORK_SHA256")
 expected_negative_r34_ticket_substitution=$(read_pin "$pin_dir/NEGATIVE_R34_TICKET_SUBSTITUTION_SHA256")
+expected_negative_r35_omitted_retake=$(read_pin "$pin_dir/NEGATIVE_R35_OMITTED_RETAKE_SHA256")
+expected_negative_r35_retry_after_detach=$(read_pin "$pin_dir/NEGATIVE_R35_RETRY_AFTER_DETACH_SHA256")
+expected_negative_r35_custody_substitution=$(read_pin "$pin_dir/NEGATIVE_R35_CUSTODY_SUBSTITUTION_SHA256")
+expected_negative_r35_failed_quarantine_authority_loss=$(read_pin "$pin_dir/NEGATIVE_R35_FAILED_QUARANTINE_AUTHORITY_LOSS_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -789,6 +799,7 @@ check_sources() {
     check_digest "$expected_r32_directional_sdma_currentness_handoff" "$r32_directional_sdma_currentness_handoff_proof"
     check_digest "$expected_r33_fused_synchronous_directional_sdma" "$r33_fused_synchronous_directional_sdma_proof"
     check_digest "$expected_r34_fused_asynchronous_directional_sdma" "$r34_fused_asynchronous_directional_sdma_proof"
+    check_digest "$expected_r35_fused_retained_control_replay" "$r35_fused_retained_control_replay_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -1107,6 +1118,10 @@ check_sources() {
     check_digest "$expected_negative_r34_retry_after_detach" "$negative_r34_retry_after_detach"
     check_digest "$expected_negative_r34_intervening_fallible_work" "$negative_r34_intervening_fallible_work"
     check_digest "$expected_negative_r34_ticket_substitution" "$negative_r34_ticket_substitution"
+    check_digest "$expected_negative_r35_omitted_retake" "$negative_r35_omitted_retake"
+    check_digest "$expected_negative_r35_retry_after_detach" "$negative_r35_retry_after_detach"
+    check_digest "$expected_negative_r35_custody_substitution" "$negative_r35_custody_substitution"
+    check_digest "$expected_negative_r35_failed_quarantine_authority_loss" "$negative_r35_failed_quarantine_authority_loss"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -1148,6 +1163,7 @@ check_sources
     "$r32_directional_sdma_currentness_handoff_proof" \
     "$r33_fused_synchronous_directional_sdma_proof" \
     "$r34_fused_asynchronous_directional_sdma_proof" \
+    "$r35_fused_retained_control_replay_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -1462,7 +1478,11 @@ check_sources
     "$negative_r34_omitted_retake" \
     "$negative_r34_retry_after_detach" \
     "$negative_r34_intervening_fallible_work" \
-    "$negative_r34_ticket_substitution"
+    "$negative_r34_ticket_substitution" \
+    "$negative_r35_omitted_retake" \
+    "$negative_r35_retry_after_detach" \
+    "$negative_r35_custody_substitution" \
+    "$negative_r35_failed_quarantine_authority_loss"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -1594,6 +1614,7 @@ check_positive "$r31_single_packet_window_refinement_proof" 'verification result
 check_positive "$r32_directional_sdma_currentness_handoff_proof" 'verification results:: 34 verified, 0 errors' r32-directional-sdma-currentness-handoff
 check_positive "$r33_fused_synchronous_directional_sdma_proof" 'verification results:: 45 verified, 0 errors' r33-fused-synchronous-directional-sdma
 check_positive "$r34_fused_asynchronous_directional_sdma_proof" 'verification results:: 54 verified, 0 errors' r34-fused-asynchronous-directional-sdma
+check_positive "$r35_fused_retained_control_replay_proof" 'verification results:: 13 verified, 0 errors' r35-fused-retained-control-replay
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -1912,13 +1933,17 @@ check_negative "$negative_r34_omitted_retake" mutated_omitted_retake_retains_ter
 check_negative "$negative_r34_retry_after_detach" mutated_retry_after_detach_is_terminal_prepared_v1 r34-retry-after-detach
 check_negative "$negative_r34_intervening_fallible_work" mutated_handoff_publishes_immediately_v1 r34-intervening-fallible-work
 check_negative "$negative_r34_ticket_substitution" mutated_ticket_substitution_is_terminal_v1 r34-ticket-substitution
+check_negative "$negative_r35_omitted_retake" mutated_omitted_retake_is_terminal_attached_v1 r35-omitted-retake
+check_negative "$negative_r35_retry_after_detach" mutated_retry_after_detach_is_terminal_storage_v1 r35-retry-after-detach
+check_negative "$negative_r35_custody_substitution" mutated_construction_failure_retains_storage_v1 r35-custody-substitution
+check_negative "$negative_r35_failed_quarantine_authority_loss" mutated_failed_quarantine_preserves_prepared_v1 r35-failed-quarantine-authority-loss
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 mutations=318'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 mutations=322'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2
