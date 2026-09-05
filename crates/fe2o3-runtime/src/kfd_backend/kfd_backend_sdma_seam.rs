@@ -41,7 +41,7 @@ use fe2o3_kfd::{
     Gfx942SameDevicePersistentSdmaWindowExecutionCustodyV1,
     Gfx942SameDevicePersistentSdmaWindowSubmissionCustodyV1,
     Gfx942SameDevicePersistentSdmaWindowSubmissionV1,
-    Gfx942SameDevicePersistentSdmaWindowTerminalCustodyV1, Gfx942SdmaBufferV1,
+    Gfx942SameDevicePersistentSdmaWindowTerminalCustodyV1, Gfx942SdmaBufferV1, Gfx942SdmaErrorV1,
 };
 #[cfg(test)]
 use sha2::{Digest, Sha256};
@@ -538,6 +538,23 @@ pub(super) enum SameDeviceSdmaPollV1 {
     Completed(SameDeviceSdmaCompletedOwnerV1),
 }
 
+pub(super) enum DirectionalSdmaWaitV1 {
+    Timeout(DirectionalSdmaSubmissionOwnerV1),
+    Completed(DirectionalSdmaCompletedOwnerV1),
+}
+
+pub(super) enum SameDeviceSdmaWaitV1 {
+    Timeout(SameDeviceSdmaSubmissionOwnerV1),
+    Completed(SameDeviceSdmaCompletedOwnerV1),
+}
+
+fn is_exact_sdma_timeout_v1(error: &ComputeAqlQueueSessionErrorV1) -> bool {
+    matches!(
+        error,
+        ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Timeout)
+    )
+}
+
 pub(super) enum DirectionalSdmaOpsV1<'a> {
     Native(&'a mut ComputeAqlQueueSessionV1),
     #[cfg(test)]
@@ -1020,10 +1037,12 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                     failure,
                 )) => {
                     let (error, custody) = failure.into_parts();
+                    let is_timeout = is_exact_sdma_timeout_v1(&error);
                     Err(match custody {
                         Gfx942DirectionalPersistentSdmaExecutionCustodyV1::Pending(submission)
                             if submission.direction() == direction
-                                && submission.copy_bytes() == request.copy_bytes =>
+                                && submission.copy_bytes() == request.copy_bytes
+                                && is_timeout =>
                         {
                             DirectionalSdmaSynchronousExecutionFailureV1::RetryableTimeout {
                                 detail: error.to_string(),
@@ -1034,9 +1053,28 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                                 },
                             }
                         }
+                        Gfx942DirectionalPersistentSdmaExecutionCustodyV1::Pending(submission)
+                            if submission.direction() == direction
+                                && submission.copy_bytes() == request.copy_bytes =>
+                        {
+                            DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
+                                detail: format!(
+                                    "directional SDMA synchronous wait returned non-timeout retryable custody: {error}"
+                                ),
+                                custody: SdmaTerminalCustodyV1::Native(
+                                    NativeDirectionalSdmaTerminalCustodyV1::Published(
+                                        DirectionalSdmaSubmissionOwnerV1::NativeSingle {
+                                            submission,
+                                            host_offset: request.host_offset,
+                                            device_offset: request.device_offset,
+                                        },
+                                    ),
+                                ),
+                            }
+                        }
                         Gfx942DirectionalPersistentSdmaExecutionCustodyV1::Pending(submission) => {
                             DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
-                                detail: "directional SDMA synchronous timeout metadata changed unexpectedly"
+                                detail: "directional SDMA synchronous wait metadata changed unexpectedly"
                                     .to_owned(),
                                 custody: SdmaTerminalCustodyV1::Native(
                                     NativeDirectionalSdmaTerminalCustodyV1::Published(
@@ -1092,12 +1130,23 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                     }
                 };
                 match driver.wait(submission) {
-                    Ok(completed) => Ok(completed),
+                    Ok(DirectionalSdmaWaitV1::Completed(completed)) => Ok(completed),
+                    Ok(DirectionalSdmaWaitV1::Timeout(submission)) => Err(
+                        DirectionalSdmaSynchronousExecutionFailureV1::RetryableTimeout {
+                            detail: "scripted wait timed out".to_owned(),
+                            submission,
+                        },
+                    ),
                     Err(DirectionalSdmaExecutionFailureV1::Retryable { detail, submission }) => {
                         Err(
-                            DirectionalSdmaSynchronousExecutionFailureV1::RetryableTimeout {
-                                detail,
-                                submission,
+                            DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
+                                detail: format!(
+                                    "directional SDMA synchronous wait returned non-timeout retryable custody: {detail}"
+                                ),
+                                custody: scripted_mismatch_submission(
+                                    submission,
+                                    "synchronous non-timeout retryable wait",
+                                ),
                             },
                         )
                     }
@@ -1312,12 +1361,11 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
         }
     }
 
-    #[allow(dead_code)]
     pub(super) fn wait(
         &mut self,
         submission: DirectionalSdmaSubmissionOwnerV1,
         timeout: Duration,
-    ) -> Result<DirectionalSdmaCompletedOwnerV1, DirectionalSdmaExecutionFailureV1> {
+    ) -> Result<DirectionalSdmaWaitV1, DirectionalSdmaExecutionFailureV1> {
         match (self, submission) {
             (
                 Self::Native(queue),
@@ -1330,30 +1378,38 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                 let expected_direction = submission.direction();
                 let expected_copy_bytes = submission.copy_bytes();
                 match queue.wait_directional_persistent_sdma_copy_for_v1(submission, timeout) {
-                    Ok(completed) => Ok(DirectionalSdmaCompletedOwnerV1::NativeSingle {
-                        completed,
-                        host_offset,
-                        device_offset,
-                    }),
+                    Ok(completed) => Ok(DirectionalSdmaWaitV1::Completed(
+                        DirectionalSdmaCompletedOwnerV1::NativeSingle {
+                            completed,
+                            host_offset,
+                            device_offset,
+                        },
+                    )),
                     Err(failure) => {
                         let (error, custody) = failure.into_parts();
-                        Err(match custody {
+                        let is_timeout = is_exact_sdma_timeout_v1(&error);
+                        match custody {
                             Gfx942DirectionalPersistentSdmaExecutionCustodyV1::Pending(submission)
                                 if submission.direction() == expected_direction
                                     && submission.copy_bytes() == expected_copy_bytes =>
                             {
-                                DirectionalSdmaExecutionFailureV1::Retryable {
-                                    detail: error.to_string(),
-                                    submission: DirectionalSdmaSubmissionOwnerV1::NativeSingle {
+                                let submission = DirectionalSdmaSubmissionOwnerV1::NativeSingle {
+                                    submission,
+                                    host_offset,
+                                    device_offset,
+                                };
+                                if is_timeout {
+                                    Ok(DirectionalSdmaWaitV1::Timeout(submission))
+                                } else {
+                                    Err(DirectionalSdmaExecutionFailureV1::Retryable {
+                                        detail: error.to_string(),
                                         submission,
-                                        host_offset,
-                                        device_offset,
-                                    },
+                                    })
                                 }
                             }
                             Gfx942DirectionalPersistentSdmaExecutionCustodyV1::Pending(
                                 submission,
-                            ) => DirectionalSdmaExecutionFailureV1::ProcessTeardown {
+                            ) => Err(DirectionalSdmaExecutionFailureV1::ProcessTeardown {
                                 detail:
                                     "directional SDMA retryable-single metadata changed unexpectedly"
                                         .to_owned(),
@@ -1366,18 +1422,18 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                                         },
                                     ),
                                 ),
-                            },
+                            }),
                             Gfx942DirectionalPersistentSdmaExecutionCustodyV1::ProcessTeardown(
                                 custody,
-                            ) => DirectionalSdmaExecutionFailureV1::ProcessTeardown {
+                            ) => Err(DirectionalSdmaExecutionFailureV1::ProcessTeardown {
                                 detail: error.to_string(),
                                 custody: SdmaTerminalCustodyV1::Native(
                                     NativeDirectionalSdmaTerminalCustodyV1::SingleSubmission(
                                         custody,
                                     ),
                                 ),
-                            },
-                        })
+                            }),
+                        }
                     }
                 }
             }
@@ -1391,12 +1447,13 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                 let expected_copy_bytes = submission.copy_bytes();
                 let expected_packet_count = submission.packet_count();
                 match queue.wait_directional_persistent_sdma_window_for_v1(submission, timeout) {
-                    Ok(completed) => {
-                        Ok(DirectionalSdmaCompletedOwnerV1::NativeWindow { completed })
-                    }
+                    Ok(completed) => Ok(DirectionalSdmaWaitV1::Completed(
+                        DirectionalSdmaCompletedOwnerV1::NativeWindow { completed },
+                    )),
                     Err(failure) => {
                         let (error, custody) = failure.into_parts();
-                        Err(match custody {
+                        let is_timeout = is_exact_sdma_timeout_v1(&error);
+                        match custody {
                             Gfx942DirectionalPersistentSdmaWindowExecutionCustodyV1::Pending(
                                 submission,
                             ) if submission.direction() == expected_direction
@@ -1404,16 +1461,21 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                                 && submission.device_offset() == expected_device_offset
                                 && submission.copy_bytes() == expected_copy_bytes
                                 && submission.packet_count() == expected_packet_count => {
-                                DirectionalSdmaExecutionFailureV1::Retryable {
-                                    detail: error.to_string(),
-                                    submission: DirectionalSdmaSubmissionOwnerV1::NativeWindow {
+                                let submission = DirectionalSdmaSubmissionOwnerV1::NativeWindow {
+                                    submission,
+                                };
+                                if is_timeout {
+                                    Ok(DirectionalSdmaWaitV1::Timeout(submission))
+                                } else {
+                                    Err(DirectionalSdmaExecutionFailureV1::Retryable {
+                                        detail: error.to_string(),
                                         submission,
-                                    },
+                                    })
                                 }
                             }
                             Gfx942DirectionalPersistentSdmaWindowExecutionCustodyV1::Pending(
                                 submission,
-                            ) => DirectionalSdmaExecutionFailureV1::ProcessTeardown {
+                            ) => Err(DirectionalSdmaExecutionFailureV1::ProcessTeardown {
                                 detail:
                                     "directional SDMA retryable-window metadata changed unexpectedly"
                                         .to_owned(),
@@ -1424,16 +1486,16 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                                         },
                                     ),
                                 ),
-                            },
+                            }),
                             Gfx942DirectionalPersistentSdmaWindowExecutionCustodyV1::ProcessTeardown(
                                 custody,
-                            ) => DirectionalSdmaExecutionFailureV1::ProcessTeardown {
+                            ) => Err(DirectionalSdmaExecutionFailureV1::ProcessTeardown {
                                 detail: error.to_string(),
                                 custody: SdmaTerminalCustodyV1::Native(
                                     NativeDirectionalSdmaTerminalCustodyV1::WindowSubmission(custody),
                                 ),
-                            },
-                        })
+                            }),
+                        }
                     }
                 }
             }
@@ -1722,22 +1784,24 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
         }
     }
 
-    #[allow(dead_code)]
     pub(super) fn wait_same_device(
         &mut self,
         submission: SameDeviceSdmaSubmissionOwnerV1,
         timeout: Duration,
-    ) -> Result<SameDeviceSdmaCompletedOwnerV1, SameDeviceSdmaExecutionFailureV1> {
+    ) -> Result<SameDeviceSdmaWaitV1, SameDeviceSdmaExecutionFailureV1> {
         match (self, submission) {
             (Self::Native(queue), SameDeviceSdmaSubmissionOwnerV1::Native { submission }) => {
                 let expected_source_request = submission.source_request();
                 let expected_destination_request = submission.destination_request();
                 let expected_descriptor = submission.descriptor();
                 match queue.wait_same_device_persistent_sdma_window_for_v1(submission, timeout) {
-                    Ok(completed) => Ok(SameDeviceSdmaCompletedOwnerV1::Native { completed }),
+                    Ok(completed) => Ok(SameDeviceSdmaWaitV1::Completed(
+                        SameDeviceSdmaCompletedOwnerV1::Native { completed },
+                    )),
                     Err(failure) => {
                         let (error, custody) = failure.into_parts();
-                        Err(match custody {
+                        let is_timeout = is_exact_sdma_timeout_v1(&error);
+                        match custody {
                             Gfx942SameDevicePersistentSdmaWindowExecutionCustodyV1::Pending(
                                 submission,
                             ) if submission.source_request() == expected_source_request
@@ -1745,16 +1809,21 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                                     == expected_destination_request
                                 && submission.descriptor() == expected_descriptor =>
                             {
-                                SameDeviceSdmaExecutionFailureV1::Retryable {
-                                    detail: error.to_string(),
-                                    submission: SameDeviceSdmaSubmissionOwnerV1::Native {
+                                let submission = SameDeviceSdmaSubmissionOwnerV1::Native {
+                                    submission,
+                                };
+                                if is_timeout {
+                                    Ok(SameDeviceSdmaWaitV1::Timeout(submission))
+                                } else {
+                                    Err(SameDeviceSdmaExecutionFailureV1::Retryable {
+                                        detail: error.to_string(),
                                         submission,
-                                    },
+                                    })
                                 }
                             }
                             Gfx942SameDevicePersistentSdmaWindowExecutionCustodyV1::Pending(
                                 submission,
-                            ) => SameDeviceSdmaExecutionFailureV1::ProcessTeardown {
+                            ) => Err(SameDeviceSdmaExecutionFailureV1::ProcessTeardown {
                                 detail:
                                     "same-device SDMA retryable-window identity changed unexpectedly"
                                         .to_owned(),
@@ -1763,16 +1832,16 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                                         SameDeviceSdmaSubmissionOwnerV1::Native { submission },
                                     ),
                                 ),
-                            },
+                            }),
                             Gfx942SameDevicePersistentSdmaWindowExecutionCustodyV1::ProcessTeardown(
                                 custody,
-                            ) => SameDeviceSdmaExecutionFailureV1::ProcessTeardown {
+                            ) => Err(SameDeviceSdmaExecutionFailureV1::ProcessTeardown {
                                 detail: error.to_string(),
                                 custody: SdmaTerminalCustodyV1::NativeSameDevice(
                                     NativeSameDeviceSdmaTerminalCustodyV1::Submission(custody),
                                 ),
-                            },
-                        })
+                            }),
+                        }
                     }
                 }
             }
@@ -2669,7 +2738,7 @@ mod scripted {
         pub(super) fn wait(
             &mut self,
             submission: ScriptedSubmissionOwnerV1,
-        ) -> Result<DirectionalSdmaCompletedOwnerV1, DirectionalSdmaExecutionFailureV1> {
+        ) -> Result<DirectionalSdmaWaitV1, DirectionalSdmaExecutionFailureV1> {
             if !self.owns_submission(&submission) {
                 return Err(scripted_submission_mismatch(
                     submission,
@@ -2687,12 +2756,11 @@ mod scripted {
                 Err(detail) => return Err(scripted_submission_mismatch(submission, detail)),
             };
             match execute_outcome(submission, outcome, "wait")? {
-                DirectionalSdmaPollV1::Completed(completed) => Ok(completed),
+                DirectionalSdmaPollV1::Completed(completed) => {
+                    Ok(DirectionalSdmaWaitV1::Completed(completed))
+                }
                 DirectionalSdmaPollV1::Pending(submission) => {
-                    Err(DirectionalSdmaExecutionFailureV1::Retryable {
-                        detail: "scripted wait timed out".to_owned(),
-                        submission,
-                    })
+                    Ok(DirectionalSdmaWaitV1::Timeout(submission))
                 }
             }
         }
@@ -2700,7 +2768,7 @@ mod scripted {
         pub(super) fn wait_same_device(
             &mut self,
             submission: ScriptedSameDeviceSubmissionOwnerV1,
-        ) -> Result<SameDeviceSdmaCompletedOwnerV1, SameDeviceSdmaExecutionFailureV1> {
+        ) -> Result<SameDeviceSdmaWaitV1, SameDeviceSdmaExecutionFailureV1> {
             if !self.owns_same_device_submission(&submission) {
                 return Err(scripted_same_device_submission_mismatch(
                     submission,
@@ -2720,12 +2788,11 @@ mod scripted {
                 }
             };
             match execute_same_device_outcome(submission, outcome, "wait")? {
-                SameDeviceSdmaPollV1::Completed(completed) => Ok(completed),
+                SameDeviceSdmaPollV1::Completed(completed) => {
+                    Ok(SameDeviceSdmaWaitV1::Completed(completed))
+                }
                 SameDeviceSdmaPollV1::Pending(submission) => {
-                    Err(SameDeviceSdmaExecutionFailureV1::Retryable {
-                        detail: "scripted same-device wait timed out".to_owned(),
-                        submission,
-                    })
+                    Ok(SameDeviceSdmaWaitV1::Timeout(submission))
                 }
             }
         }
@@ -3548,9 +3615,10 @@ mod window_tests {
                 }) => submission,
                 _ => panic!("scripted timeout must return the exact published submission"),
             };
-            let completed = timeout_ops
-                .wait(submission, Duration::from_millis(1))
-                .unwrap_or_else(|_| panic!("returned timeout submission must remain waitable"));
+            let completed = match timeout_ops.wait(submission, Duration::from_millis(1)) {
+                Ok(DirectionalSdmaWaitV1::Completed(completed)) => completed,
+                _ => panic!("returned timeout submission must remain waitable"),
+            };
             let pair = match timeout_ops.retire(completed) {
                 Ok(pair) => pair,
                 Err(_) => panic!("completed retry must retire"),
@@ -3560,6 +3628,117 @@ mod window_tests {
         assert!(timeout_driver.is_exhausted());
         assert_eq!(timeout_driver.live_owner_count(), 0);
         assert_eq!(timeout_driver.unexpected_drops(), 0);
+    }
+
+    #[test]
+    fn wait_timeout_classification_uses_only_the_typed_lower_variant() {
+        assert!(is_exact_sdma_timeout_v1(
+            &ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Timeout)
+        ));
+        assert!(!is_exact_sdma_timeout_v1(
+            &ComputeAqlQueueSessionErrorV1::Contract("Timeout")
+        ));
+        assert!(!is_exact_sdma_timeout_v1(
+            &ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Contract("Timeout"))
+        ));
+
+        let direction = Gfx942PersistentSdmaDirectionV1::HostToDevice;
+        let request = DirectionalSdmaCopyRequestV1 {
+            host_offset: 0,
+            device_offset: 0,
+            copy_bytes: 8,
+        };
+        let mut driver = ScriptedSdmaDriverV1::new([
+            ScriptedSdmaStepV1::Submit {
+                direction,
+                host_offset: 0,
+                device_offset: 0,
+                copy_bytes: 8,
+                outcome: ScriptedFailureModeV1::Success,
+            },
+            ScriptedSdmaStepV1::Wait(ScriptedExecutionOutcomeV1::Retryable),
+            ScriptedSdmaStepV1::Wait(ScriptedExecutionOutcomeV1::Completed {
+                direction: None,
+                copy_bytes: None,
+            }),
+            ScriptedSdmaStepV1::Retire(ScriptedFailureModeV1::Success),
+            ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success),
+            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
+            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
+        ]);
+        let pair = DirectionalSdmaPairOwnerV1 {
+            device: driver.test_device_owner(8),
+            host: driver.test_host_owner(8),
+        };
+        let mut ops = DirectionalSdmaOpsV1::Scripted(&mut driver);
+        let submission = ops
+            .submit(
+                pair,
+                direction,
+                DirectionalSdmaRequestPlanV1::Single(request),
+            )
+            .unwrap_or_else(|_| panic!("scripted publication must succeed"));
+        let submission = match ops.wait(submission, Duration::ZERO) {
+            Err(DirectionalSdmaExecutionFailureV1::Retryable { submission, .. }) => submission,
+            _ => panic!("a non-timeout retryable result must not become typed timeout"),
+        };
+        let completed = match ops.wait(submission, Duration::ZERO) {
+            Ok(DirectionalSdmaWaitV1::Completed(completed)) => completed,
+            _ => panic!("retryable wait custody must remain waitable"),
+        };
+        let pair = ops
+            .retire(completed)
+            .unwrap_or_else(|_| panic!("completed retry must retire"));
+        release_scripted_directional_pair(&mut ops, pair);
+        assert!(driver.is_exhausted());
+        assert_eq!(driver.live_owner_count(), 0);
+        assert_eq!(driver.unexpected_drops(), 0);
+
+        let mut synchronous_driver = ScriptedSdmaDriverV1::new([
+            ScriptedSdmaStepV1::Submit {
+                direction,
+                host_offset: 0,
+                device_offset: 0,
+                copy_bytes: 8,
+                outcome: ScriptedFailureModeV1::Success,
+            },
+            ScriptedSdmaStepV1::Wait(ScriptedExecutionOutcomeV1::Retryable),
+            ScriptedSdmaStepV1::Wait(ScriptedExecutionOutcomeV1::Completed {
+                direction: None,
+                copy_bytes: None,
+            }),
+            ScriptedSdmaStepV1::Retire(ScriptedFailureModeV1::Success),
+            ScriptedSdmaStepV1::Demote(ScriptedFailureModeV1::Success),
+            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
+            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
+        ]);
+        let pair = DirectionalSdmaPairOwnerV1 {
+            device: synchronous_driver.test_device_owner(8),
+            host: synchronous_driver.test_host_owner(8),
+        };
+        let mut ops = DirectionalSdmaOpsV1::Scripted(&mut synchronous_driver);
+        let submission =
+            match ops.execute_synchronous_single(pair, direction, request, Duration::ZERO) {
+                Err(DirectionalSdmaSynchronousExecutionFailureV1::ProcessTeardown {
+                    detail,
+                    custody:
+                        SdmaTerminalCustodyV1::Scripted(ScriptedTerminalCustodyV1::Submission(
+                            submission,
+                        )),
+                }) if detail.contains("non-timeout retryable custody") => submission,
+                _ => panic!("synchronous non-timeout retryable custody must not become timeout"),
+            };
+        let completed = match ops.wait(submission, Duration::ZERO) {
+            Ok(DirectionalSdmaWaitV1::Completed(completed)) => completed,
+            _ => panic!("synchronous non-timeout custody must remain recoverable at the seam"),
+        };
+        let pair = ops
+            .retire(completed)
+            .unwrap_or_else(|_| panic!("completed synchronous retry must retire"));
+        release_scripted_directional_pair(&mut ops, pair);
+        assert!(synchronous_driver.is_exhausted());
+        assert_eq!(synchronous_driver.live_owner_count(), 0);
+        assert_eq!(synchronous_driver.unexpected_drops(), 0);
     }
 
     #[test]
@@ -3721,11 +3900,12 @@ mod window_tests {
             panic!("scripted same-device publication must succeed");
         };
         let submission = match ops.wait_same_device(submission, Duration::ZERO) {
-            Err(SameDeviceSdmaExecutionFailureV1::Retryable { submission, .. }) => submission,
+            Ok(SameDeviceSdmaWaitV1::Timeout(submission)) => submission,
             _ => panic!("scripted same-device timeout must return exact pending custody"),
         };
-        let Ok(completed) = ops.wait_same_device(submission, Duration::from_millis(1)) else {
-            panic!("second scripted same-device wait must complete");
+        let completed = match ops.wait_same_device(submission, Duration::from_millis(1)) {
+            Ok(SameDeviceSdmaWaitV1::Completed(completed)) => completed,
+            _ => panic!("second scripted same-device wait must complete"),
         };
         let Ok(pair) = ops.retire_same_device(completed) else {
             panic!("scripted paired retirement must succeed");
