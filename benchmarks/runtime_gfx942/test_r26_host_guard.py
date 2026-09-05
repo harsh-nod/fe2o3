@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import importlib.util
 import os
@@ -118,6 +119,11 @@ def write_queue(kfd_root: pathlib.Path, pid: int, queue: int, gpu_id: int) -> No
     directory = kfd_root / str(pid) / "queues" / str(queue)
     directory.mkdir(parents=True)
     (directory / "gpuid").write_text(f"{gpu_id}\n", encoding="ascii")
+
+
+def raise_guard_os_error(error_number: int, description: str) -> None:
+    error = OSError(error_number, os.strerror(error_number))
+    raise GUARD.GuardError(f"cannot {description}: {error}") from error
 
 
 class TopologyTests(unittest.TestCase):
@@ -335,16 +341,23 @@ class QueueCensusTests(unittest.TestCase):
                 process_path, "KFD process directory"
             )
             self.assertIsNotNone(process_path_identity)
-            with mock.patch.object(
-                pathlib.Path,
-                "read_text",
-                side_effect=ProcessLookupError("target exited"),
+            process_binding = GUARD._open_directory_binding(
+                process_path, "KFD process directory"
+            )
+            self.assertIsNotNone(process_binding)
+            assert process_binding is not None
+            with (
+                process_binding,
+                mock.patch.object(
+                    pathlib.Path,
+                    "read_text",
+                    side_effect=ProcessLookupError("target exited"),
+                ),
             ):
                 GUARD._confirm_departed_target(
                     proc_root=root / "proc",
                     pid=100,
-                    process_path=process_path,
-                    process_path_identity=process_path_identity,
+                    process_binding=process_binding,
                 )
 
     def test_kfd_esrch_is_not_typed_as_tolerable_disappearance(self) -> None:
@@ -548,6 +561,20 @@ class QueueCensusTests(unittest.TestCase):
             kfd_root = root / "kfd-proc"
             kfd_root.mkdir()
             write_queue(kfd_root, 100, 0, 28851)
+            process_path = kfd_root / "100"
+            old_process_path = kfd_root / "100-old"
+            gpu_id_path = process_path / "queues" / "0" / "gpuid"
+            original = GUARD._read_text
+
+            def replace_process_path(
+                path: pathlib.Path, description: str
+            ) -> str:
+                value = original(path, description)
+                if path == gpu_id_path:
+                    process_path.rename(old_process_path)
+                    (process_path / "queues").mkdir(parents=True)
+                return value
+
             with (
                 mock.patch.object(
                     GUARD,
@@ -555,11 +582,9 @@ class QueueCensusTests(unittest.TestCase):
                     side_effect=[root_observation, None, None, None],
                 ),
                 mock.patch.object(
-                    GUARD,
-                    "_directory_identity",
-                    side_effect=[(1, 10, 0o40755), (1, 11, 0o40755)],
+                    GUARD, "_read_text", side_effect=replace_process_path
                 ),
-                self.assertRaisesRegex(GUARD.GuardError, "KFD process identity changed"),
+                self.assertRaisesRegex(GUARD.GuardError, "process directory.*identity changed"),
             ):
                 GUARD.classify_selected_gpu_queues(
                     kfd_proc_root=kfd_root,
@@ -674,6 +699,844 @@ class QueueCensusTests(unittest.TestCase):
                 )
         self.assertEqual(target, [])
         self.assertEqual(foreign, [])
+
+    def test_live_classifier_tolerates_target_gpuid_enodev_after_queue_exit(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_queue(kfd_root, 100, 0, 28851)
+            queue_path = kfd_root / "100" / "queues" / "0"
+            gpu_id_path = queue_path / "gpuid"
+            original = GUARD._read_text
+
+            def enodev_after_queue_exit(
+                path: pathlib.Path, description: str
+            ) -> str:
+                if path == gpu_id_path:
+                    gpu_id_path.unlink()
+                    queue_path.rmdir()
+                    raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
+                return original(path, description)
+
+            with mock.patch.object(
+                GUARD, "_read_text", side_effect=enodev_after_queue_exit
+            ):
+                target, foreign = GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                )
+        self.assertEqual(target, [])
+        self.assertEqual(foreign, [])
+
+    def test_live_classifier_waits_for_deactivated_target_queue_unlink(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_queue(kfd_root, 100, 0, 28851)
+            queue_path = kfd_root / "100" / "queues" / "0"
+            gpu_id_path = queue_path / "gpuid"
+            now_ns = 0
+            sleeps: list[int] = []
+
+            def deactivated_gpuid(
+                path: pathlib.Path, _description: str
+            ) -> str:
+                if path == gpu_id_path:
+                    raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
+                raise AssertionError(f"unexpected read: {path}")
+
+            def unlink_during_sleep(seconds: float) -> None:
+                nonlocal now_ns
+                duration_ns = int(seconds * 1_000_000_000)
+                sleeps.append(duration_ns)
+                now_ns += duration_ns
+                gpu_id_path.unlink()
+                queue_path.rmdir()
+
+            with mock.patch.object(
+                GUARD, "_read_text", side_effect=deactivated_gpuid
+            ):
+                target, foreign = GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                    clock=lambda: now_ns,
+                    sleeper=unlink_during_sleep,
+                )
+        self.assertEqual(target, [])
+        self.assertEqual(foreign, [])
+        self.assertEqual(sleeps, [GUARD.QUEUE_ENODEV_DISAPPEAR_POLL_NS])
+
+    def test_live_classifier_accepts_sticky_departure_during_enodev_unlink(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_queue(kfd_root, 100, 0, 28851)
+            queue_path = kfd_root / "100" / "queues" / "0"
+            gpu_id_path = queue_path / "gpuid"
+            process_stat_path = proc_root / "100" / "stat"
+            now_ns = 0
+            departed = False
+
+            def depart_on_enodev(
+                path: pathlib.Path, _description: str
+            ) -> str:
+                nonlocal departed
+                if path == gpu_id_path:
+                    if not departed:
+                        process_stat_path.unlink()
+                        departed = True
+                    raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
+                raise AssertionError(f"unexpected read: {path}")
+
+            def unlink_during_sleep(seconds: float) -> None:
+                nonlocal now_ns
+                now_ns += int(seconds * 1_000_000_000)
+                gpu_id_path.unlink()
+                queue_path.rmdir()
+
+            with mock.patch.object(
+                GUARD, "_read_text", side_effect=depart_on_enodev
+            ):
+                target, foreign = GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                    clock=lambda: now_ns,
+                    sleeper=unlink_during_sleep,
+                )
+        self.assertTrue(departed)
+        self.assertEqual(target, [])
+        self.assertEqual(foreign, [])
+
+    def test_enodev_helper_departure_rejects_exact_identity_aba(self) -> None:
+        target_identity = GUARD.ProcessObservation(1, 100, 1000)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_queue(kfd_root, 100, 0, 28851)
+            queue_path = kfd_root / "100" / "queues" / "0"
+            gpu_id_path = queue_path / "gpuid"
+            now_ns = 0
+
+            def deactivated_gpuid(
+                path: pathlib.Path, _description: str
+            ) -> str:
+                if path == gpu_id_path:
+                    raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
+                raise AssertionError(f"unexpected read: {path}")
+
+            def unlink_during_sleep(seconds: float) -> None:
+                nonlocal now_ns
+                now_ns += int(seconds * 1_000_000_000)
+                gpu_id_path.unlink()
+                queue_path.rmdir()
+
+            process_observations = [
+                target_identity,
+                target_identity,
+                target_identity,
+                target_identity,
+                None,
+                None,
+                None,
+                None,
+                target_identity,
+                target_identity,
+            ]
+            with (
+                mock.patch.object(
+                    GUARD, "_read_process", side_effect=process_observations
+                ) as read_process,
+                mock.patch.object(
+                    GUARD, "_read_text", side_effect=deactivated_gpuid
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "identity changed"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=root / "proc",
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                    clock=lambda: now_ns,
+                    sleeper=unlink_during_sleep,
+                )
+            self.assertEqual(read_process.call_count, len(process_observations))
+
+    def test_enodev_departure_remains_sticky_across_multiple_queues(self) -> None:
+        target_identity = GUARD.ProcessObservation(1, 100, 1000)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_queue(kfd_root, 100, 0, 28851)
+            write_queue(kfd_root, 100, 1, 28851)
+            first_queue = kfd_root / "100" / "queues" / "0"
+            gpu_id_paths = {
+                first_queue / "gpuid",
+                kfd_root / "100" / "queues" / "1" / "gpuid",
+            }
+            now_ns = 0
+
+            def deactivated_gpuid(
+                path: pathlib.Path, _description: str
+            ) -> str:
+                if path in gpu_id_paths:
+                    raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
+                raise AssertionError(f"unexpected read: {path}")
+
+            def unlink_first_during_sleep(seconds: float) -> None:
+                nonlocal now_ns
+                now_ns += int(seconds * 1_000_000_000)
+                (first_queue / "gpuid").unlink()
+                first_queue.rmdir()
+
+            process_observations = [
+                target_identity,
+                target_identity,
+                target_identity,
+                target_identity,
+                None,
+                None,
+                None,
+                None,
+                target_identity,
+                target_identity,
+            ]
+            with (
+                mock.patch.object(
+                    GUARD, "_read_process", side_effect=process_observations
+                ) as read_process,
+                mock.patch.object(
+                    GUARD, "_read_text", side_effect=deactivated_gpuid
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "identity changed"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=root / "proc",
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                    clock=lambda: now_ns,
+                    sleeper=unlink_first_during_sleep,
+                )
+            self.assertEqual(read_process.call_count, len(process_observations))
+
+    def test_live_classifier_rejects_target_gpuid_enodev_while_queue_exists(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_queue(kfd_root, 100, 0, 28851)
+            gpu_id_path = kfd_root / "100" / "queues" / "0" / "gpuid"
+            original = GUARD._read_text
+            now_ns = 0
+            sleeps: list[int] = []
+
+            def enodev_while_present(
+                path: pathlib.Path, description: str
+            ) -> str:
+                if path == gpu_id_path:
+                    raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
+                return original(path, description)
+
+            def advance_clock(seconds: float) -> None:
+                nonlocal now_ns
+                duration_ns = int(seconds * 1_000_000_000)
+                sleeps.append(duration_ns)
+                now_ns += duration_ns
+
+            with (
+                mock.patch.object(
+                    GUARD, "_read_text", side_effect=enodev_while_present
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "remained present"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                    clock=lambda: now_ns,
+                    sleeper=advance_clock,
+                )
+            self.assertTrue(gpu_id_path.parent.is_dir())
+            self.assertEqual(
+                sum(sleeps), GUARD.QUEUE_ENODEV_DISAPPEAR_TIMEOUT_NS
+            )
+            self.assertLess(
+                GUARD.QUEUE_ENODEV_DISAPPEAR_TIMEOUT_NS,
+                GUARD.MAX_OBSERVATION_GAP_NS,
+            )
+            self.assertTrue(
+                all(
+                    duration <= GUARD.QUEUE_ENODEV_DISAPPEAR_POLL_NS
+                    for duration in sleeps
+                )
+            )
+
+    def test_enodev_nonadvancing_clock_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_queue(kfd_root, 100, 0, 28851)
+            gpu_id_path = kfd_root / "100" / "queues" / "0" / "gpuid"
+
+            def deactivated_gpuid(
+                path: pathlib.Path, _description: str
+            ) -> str:
+                if path == gpu_id_path:
+                    raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
+                raise AssertionError(f"unexpected read: {path}")
+
+            with (
+                mock.patch.object(
+                    GUARD, "_read_text", side_effect=deactivated_gpuid
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "clock did not advance"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                    clock=lambda: 0,
+                    sleeper=lambda _seconds: None,
+                )
+
+    def test_enodev_sleep_overshoot_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_queue(kfd_root, 100, 0, 28851)
+            gpu_id_path = kfd_root / "100" / "queues" / "0" / "gpuid"
+            now_ns = 0
+
+            def deactivated_gpuid(
+                path: pathlib.Path, _description: str
+            ) -> str:
+                if path == gpu_id_path:
+                    raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
+                raise AssertionError(f"unexpected read: {path}")
+
+            def oversleep(_seconds: float) -> None:
+                nonlocal now_ns
+                now_ns += GUARD.QUEUE_ENODEV_DISAPPEAR_TIMEOUT_NS + 1
+
+            with (
+                mock.patch.object(
+                    GUARD, "_read_text", side_effect=deactivated_gpuid
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "remained present"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                    clock=lambda: now_ns,
+                    sleeper=oversleep,
+                )
+
+    def test_enodev_disappearance_at_deadline_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_queue(kfd_root, 100, 0, 28851)
+            queue_path = kfd_root / "100" / "queues" / "0"
+            gpu_id_path = queue_path / "gpuid"
+            now_ns = 0
+
+            def deactivated_gpuid(
+                path: pathlib.Path, _description: str
+            ) -> str:
+                if path == gpu_id_path:
+                    raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
+                raise AssertionError(f"unexpected read: {path}")
+
+            def unlink_at_deadline(_seconds: float) -> None:
+                nonlocal now_ns
+                now_ns = GUARD.QUEUE_ENODEV_DISAPPEAR_TIMEOUT_NS
+                gpu_id_path.unlink()
+                queue_path.rmdir()
+
+            with (
+                mock.patch.object(
+                    GUARD, "_read_text", side_effect=deactivated_gpuid
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "remained present"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                    clock=lambda: now_ns,
+                    sleeper=unlink_at_deadline,
+                )
+            self.assertFalse(queue_path.exists())
+
+    def test_directory_bindings_reach_final_authentication_and_close(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_queue(kfd_root, 100, 0, 28851)
+            opened_fds: list[int] = []
+            original_open = GUARD._open_directory_binding
+            original_authenticate = GUARD._target_process_identity
+
+            def capture_binding(
+                path: pathlib.Path, description: str
+            ) -> object:
+                binding = original_open(path, description)
+                if binding is not None:
+                    opened_fds.append(binding.fd)
+                return binding
+
+            def authenticate(*args: object, **kwargs: object) -> object:
+                if kwargs.get("expected_identity") is not None:
+                    self.assertEqual(len(opened_fds), 2)
+                    for fd in opened_fds:
+                        os.fstat(fd)
+                return original_authenticate(*args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    GUARD, "_open_directory_binding", side_effect=capture_binding
+                ),
+                mock.patch.object(
+                    GUARD, "_target_process_identity", side_effect=authenticate
+                ),
+            ):
+                target, foreign = GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                )
+            self.assertEqual(target, [(100, 0)])
+            self.assertEqual(foreign, [])
+            self.assertEqual(len(opened_fds), 2)
+            for fd in opened_fds:
+                with self.assertRaises(OSError) as closed:
+                    os.fstat(fd)
+                self.assertEqual(closed.exception.errno, errno.EBADF)
+
+    def test_directory_bindings_close_after_enodev_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_queue(kfd_root, 100, 0, 28851)
+            gpu_id_path = kfd_root / "100" / "queues" / "0" / "gpuid"
+            opened_fds: list[int] = []
+            original_open = GUARD._open_directory_binding
+
+            def capture_binding(
+                path: pathlib.Path, description: str
+            ) -> object:
+                binding = original_open(path, description)
+                if binding is not None:
+                    opened_fds.append(binding.fd)
+                return binding
+
+            def deactivated_gpuid(
+                path: pathlib.Path, _description: str
+            ) -> str:
+                if path == gpu_id_path:
+                    raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
+                raise AssertionError(f"unexpected read: {path}")
+
+            with (
+                mock.patch.object(
+                    GUARD, "_open_directory_binding", side_effect=capture_binding
+                ),
+                mock.patch.object(
+                    GUARD, "_read_text", side_effect=deactivated_gpuid
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "clock did not advance"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                    clock=lambda: 0,
+                    sleeper=lambda _seconds: None,
+                )
+            self.assertEqual(len(opened_fds), 2)
+            for fd in opened_fds:
+                with self.assertRaises(OSError) as closed:
+                    os.fstat(fd)
+                self.assertEqual(closed.exception.errno, errno.EBADF)
+
+    def test_live_classifier_rejects_untrusted_gpuid_enodev_after_queue_exit(
+        self,
+    ) -> None:
+        for owner_kind in ("foreign", "unknown"):
+            with self.subTest(owner_kind=owner_kind):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = pathlib.Path(temporary)
+                    proc_root = root / "proc"
+                    kfd_root = root / "kfd-proc"
+                    kfd_root.mkdir()
+                    write_process(
+                        proc_root, 100, ppid=1, process_group=100, start_time=1000
+                    )
+                    if owner_kind == "foreign":
+                        write_process(
+                            proc_root,
+                            200,
+                            ppid=1,
+                            process_group=200,
+                            start_time=2000,
+                        )
+                    write_queue(kfd_root, 200, 0, 28851)
+                    queue_path = kfd_root / "200" / "queues" / "0"
+                    gpu_id_path = queue_path / "gpuid"
+                    original = GUARD._read_text
+
+                    def enodev_after_queue_exit(
+                        path: pathlib.Path, description: str
+                    ) -> str:
+                        if path == gpu_id_path:
+                            gpu_id_path.unlink()
+                            queue_path.rmdir()
+                            raise_guard_os_error(
+                                errno.ENODEV, "read KFD queue GPU ID"
+                            )
+                        return original(path, description)
+
+                    with (
+                        mock.patch.object(
+                            GUARD,
+                            "_read_text",
+                            side_effect=enodev_after_queue_exit,
+                        ),
+                        self.assertRaisesRegex(GUARD.GuardError, "cannot read"),
+                    ):
+                        GUARD.classify_selected_gpu_queues(
+                            kfd_proc_root=kfd_root,
+                            proc_root=proc_root,
+                            selected_gpu_id=28851,
+                            root_pid=100,
+                            root_start_time=1000,
+                        )
+
+    def test_kfd_enodev_outside_live_gpuid_read_remains_fatal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_queue(kfd_root, 100, 0, 28851)
+            queues_path = kfd_root / "100" / "queues"
+            original_scandir = GUARD.os.scandir
+
+            def enodev_during_queue_enumeration(path: os.PathLike[str]) -> object:
+                if pathlib.Path(path) == queues_path:
+                    raise OSError(errno.ENODEV, os.strerror(errno.ENODEV))
+                return original_scandir(path)
+
+            with (
+                mock.patch.object(
+                    GUARD.os,
+                    "scandir",
+                    side_effect=enodev_during_queue_enumeration,
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "cannot enumerate"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                )
+
+            with (
+                mock.patch.object(
+                    GUARD,
+                    "_read_text",
+                    side_effect=lambda _path, _description: raise_guard_os_error(
+                        errno.ENODEV, "read KFD queue GPU ID"
+                    ),
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "cannot read"),
+            ):
+                GUARD.selected_gpu_queue_owners(kfd_root, 28851)
+
+    def test_live_classifier_rejects_other_gpuid_errors_after_queue_exit(
+        self,
+    ) -> None:
+        fatal_errors = (
+            errno.EIO,
+            errno.ENXIO,
+            errno.ESTALE,
+            errno.EACCES,
+            errno.ESRCH,
+            errno.EBUSY,
+        )
+        for error_number in fatal_errors:
+            with self.subTest(error_number=error_number):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = pathlib.Path(temporary)
+                    proc_root = root / "proc"
+                    kfd_root = root / "kfd-proc"
+                    kfd_root.mkdir()
+                    write_process(
+                        proc_root, 100, ppid=1, process_group=100, start_time=1000
+                    )
+                    write_queue(kfd_root, 100, 0, 28851)
+                    queue_path = kfd_root / "100" / "queues" / "0"
+                    gpu_id_path = queue_path / "gpuid"
+                    original = GUARD._read_text
+
+                    def fail_after_queue_exit(
+                        path: pathlib.Path, description: str
+                    ) -> str:
+                        if path == gpu_id_path:
+                            gpu_id_path.unlink()
+                            queue_path.rmdir()
+                            raise_guard_os_error(
+                                error_number, "read KFD queue GPU ID"
+                            )
+                        return original(path, description)
+
+                    with (
+                        mock.patch.object(
+                            GUARD, "_read_text", side_effect=fail_after_queue_exit
+                        ),
+                        self.assertRaisesRegex(GUARD.GuardError, "cannot read"),
+                    ):
+                        GUARD.classify_selected_gpu_queues(
+                            kfd_proc_root=kfd_root,
+                            proc_root=proc_root,
+                            selected_gpu_id=28851,
+                            root_pid=100,
+                            root_start_time=1000,
+                        )
+
+    def test_gpuid_enodev_rejects_queue_identity_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_queue(kfd_root, 100, 0, 28851)
+            queue_path = kfd_root / "100" / "queues" / "0"
+            old_queue_path = queue_path.with_name("0-old")
+            gpu_id_path = queue_path / "gpuid"
+
+            def deactivated_gpuid(
+                path: pathlib.Path, _description: str
+            ) -> str:
+                if path == gpu_id_path:
+                    queue_path.rename(old_queue_path)
+                    write_queue(kfd_root, 100, 0, 28851)
+                    raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
+                raise AssertionError(f"unexpected read: {path}")
+
+            with (
+                mock.patch.object(
+                    GUARD, "_read_text", side_effect=deactivated_gpuid
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "queue directory.*identity changed"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                    clock=lambda: 0,
+                    sleeper=lambda _seconds: self.fail("unexpected sleep"),
+                )
+
+    def test_gpuid_enodev_rejects_queue_becoming_readable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_queue(kfd_root, 100, 0, 28851)
+            gpu_id_path = kfd_root / "100" / "queues" / "0" / "gpuid"
+            original = GUARD._read_text
+            reads = 0
+
+            def deactivated_then_readable(
+                path: pathlib.Path, description: str
+            ) -> str:
+                nonlocal reads
+                if path == gpu_id_path:
+                    reads += 1
+                    if reads == 1:
+                        raise_guard_os_error(
+                            errno.ENODEV, "read KFD queue GPU ID"
+                        )
+                return original(path, description)
+
+            with (
+                mock.patch.object(
+                    GUARD, "_read_text", side_effect=deactivated_then_readable
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "became readable"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=proc_root,
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                    clock=lambda: 0,
+                    sleeper=lambda _seconds: self.fail("unexpected sleep"),
+                )
+            self.assertEqual(reads, 2)
+
+    def test_gpuid_enodev_still_requires_post_census_pid_binding(self) -> None:
+        root_observation = GUARD.ProcessObservation(1, 100, 1000)
+        replacement = GUARD.ProcessObservation(1, 100, 2000)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_queue(kfd_root, 100, 0, 28851)
+            queue_path = kfd_root / "100" / "queues" / "0"
+            gpu_id_path = queue_path / "gpuid"
+
+            def enodev_after_queue_exit(
+                path: pathlib.Path, _description: str
+            ) -> str:
+                if path == gpu_id_path:
+                    raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
+                raise AssertionError(f"unexpected read: {path}")
+
+            with (
+                mock.patch.object(
+                    GUARD,
+                    "_read_process",
+                    side_effect=[
+                        root_observation,
+                        root_observation,
+                        None,
+                        replacement,
+                    ],
+                ),
+                mock.patch.object(
+                    GUARD, "_read_text", side_effect=enodev_after_queue_exit
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "identity changed"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=root / "proc",
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                    clock=lambda: 0,
+                    sleeper=lambda _seconds: self.fail("unexpected sleep"),
+                )
+
+    def test_gpuid_enodev_rejects_kfd_process_path_churn(self) -> None:
+        root_observation = GUARD.ProcessObservation(1, 100, 1000)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_queue(kfd_root, 100, 0, 28851)
+            process_path = kfd_root / "100"
+            old_process_path = kfd_root / "100-old"
+            queue_path = kfd_root / "100" / "queues" / "0"
+            gpu_id_path = queue_path / "gpuid"
+
+            def enodev_after_queue_exit(
+                path: pathlib.Path, _description: str
+            ) -> str:
+                if path == gpu_id_path:
+                    gpu_id_path.unlink()
+                    queue_path.rmdir()
+                    process_path.rename(old_process_path)
+                    (process_path / "queues").mkdir(parents=True)
+                    raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
+                raise AssertionError(f"unexpected read: {path}")
+
+            with (
+                mock.patch.object(
+                    GUARD,
+                    "_read_process",
+                    side_effect=[
+                        root_observation,
+                        root_observation,
+                        root_observation,
+                        root_observation,
+                    ],
+                ),
+                mock.patch.object(
+                    GUARD, "_read_text", side_effect=enodev_after_queue_exit
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "process directory.*identity changed"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=root / "proc",
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                    clock=lambda: 0,
+                    sleeper=lambda _seconds: self.fail("unexpected sleep"),
+                )
 
     def test_live_queue_enumerator_types_both_disappearance_shapes(self) -> None:
         class VanishedEntry:
@@ -862,7 +1725,7 @@ class QueueCensusTests(unittest.TestCase):
                 mock.patch.object(
                     GUARD, "_live_queue_directories", side_effect=enumerate_then_remove
                 ),
-                self.assertRaisesRegex(GUARD.GuardError, "cannot read"),
+                self.assertRaisesRegex(GUARD.GuardError, "disappeared before binding"),
             ):
                 GUARD.classify_selected_gpu_queues(
                     kfd_proc_root=kfd_root,
@@ -1806,6 +2669,130 @@ except guard.GuardError as error:
                     sleeper=lambda _seconds: None,
                 )
             self.assertFalse(output.exists())
+
+    def test_enodev_unlink_delays_compose_in_monitor_cadence(self) -> None:
+        for deactivated_count, accepted in ((1, True), (6, False)):
+            with self.subTest(
+                deactivated_count=deactivated_count, accepted=accepted
+            ), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                proc_root = root / "proc"
+                kfd_root = root / "kfd-proc"
+                kfd_root.mkdir()
+                output = root / "target.out"
+                observer_cpu = min(os.sched_getaffinity(0))
+                now_ns = 0
+                deactivated_gpuid_paths: set[pathlib.Path] = set()
+                original_read_text = GUARD._read_text
+
+                class FakeProcess:
+                    pid = 100
+
+                    def poll(self) -> int:
+                        nonlocal now_ns
+                        now_ns += 1
+                        stable_queue = kfd_root / "100" / "queues" / "0"
+                        (stable_queue / "gpuid").unlink()
+                        stable_queue.rmdir()
+                        return 0
+
+                def launch(
+                    _command: list[str],
+                    *,
+                    stdout: object,
+                    start_new_session: bool,
+                ) -> FakeProcess:
+                    self.assertTrue(start_new_session)
+                    write_process(
+                        proc_root,
+                        100,
+                        ppid=1,
+                        process_group=100,
+                        start_time=1000,
+                    )
+                    write_queue(kfd_root, 100, 0, 28851)
+                    for queue_id in range(1, deactivated_count + 1):
+                        write_queue(kfd_root, 100, queue_id, 28851)
+                        deactivated_gpuid_paths.add(
+                            kfd_root
+                            / "100"
+                            / "queues"
+                            / str(queue_id)
+                            / "gpuid"
+                        )
+                    stdout.write(b"backend=kfd\n")
+                    stdout.flush()
+                    return FakeProcess()
+
+                def deactivated_gpuid(
+                    path: pathlib.Path, description: str
+                ) -> str:
+                    if path in deactivated_gpuid_paths:
+                        raise_guard_os_error(
+                            errno.ENODEV, "read KFD queue GPU ID"
+                        )
+                    return original_read_text(path, description)
+
+                def unlink_one_deactivated_queue(_seconds: float) -> None:
+                    nonlocal now_ns
+                    now_ns += 1_900_000
+                    remaining = sorted(
+                        path for path in deactivated_gpuid_paths if path.exists()
+                    )
+                    self.assertTrue(remaining)
+                    gpu_id_path = remaining[0]
+                    queue_path = gpu_id_path.parent
+                    gpu_id_path.unlink()
+                    queue_path.rmdir()
+
+                with (
+                    mock.patch.object(GUARD.subprocess, "Popen", side_effect=launch),
+                    mock.patch.object(
+                        GUARD, "_read_text", side_effect=deactivated_gpuid
+                    ),
+                    mock.patch.object(GUARD.os, "sched_setaffinity"),
+                    mock.patch.object(
+                        GUARD.os,
+                        "sched_getaffinity",
+                        return_value={observer_cpu},
+                    ),
+                    mock.patch.object(
+                        GUARD, "_process_group_exists", return_value=False
+                    ),
+                    mock.patch.object(GUARD, "_terminate_process_group") as cleanup,
+                ):
+                    if accepted:
+                        record = GUARD.monitor_target(
+                            selected_gpu_id=28851,
+                            observer_cpu=observer_cpu,
+                            target_output=output,
+                            command=["fixed-target"],
+                            kfd_proc_root=kfd_root,
+                            proc_root=proc_root,
+                            clock=lambda: now_ns,
+                            sleeper=unlink_one_deactivated_queue,
+                        )
+                        _, observed = fields(record)
+                        self.assertEqual(
+                            observed["observed_maximum_gap_us"], "1900"
+                        )
+                        cleanup.assert_not_called()
+                    else:
+                        with self.assertRaisesRegex(
+                            GUARD.GuardError, "gap exceeded"
+                        ):
+                            GUARD.monitor_target(
+                                selected_gpu_id=28851,
+                                observer_cpu=observer_cpu,
+                                target_output=output,
+                                command=["fixed-target"],
+                                kfd_proc_root=kfd_root,
+                                proc_root=proc_root,
+                                clock=lambda: now_ns,
+                                sleeper=unlink_one_deactivated_queue,
+                            )
+                        cleanup.assert_called_once()
+                        self.assertFalse(output.exists())
 
     def test_empty_queue_view_cannot_certify_success(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

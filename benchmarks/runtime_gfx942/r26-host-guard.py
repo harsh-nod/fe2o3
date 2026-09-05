@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import os
 import pathlib
@@ -14,6 +15,7 @@ import stat
 import subprocess
 import sys
 import time
+from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Callable, Sequence
 
@@ -22,6 +24,8 @@ TOPOLOGY_SCHEMA = "fe2o3.r26-host-topology.v1"
 MONITOR_SCHEMA = "fe2o3.r26-kfd-queue-monitor.v2"
 POLL_INTERVAL_NS = 2_000_000
 MAX_OBSERVATION_GAP_NS = 10_000_000
+QUEUE_ENODEV_DISAPPEAR_TIMEOUT_NS = POLL_INTERVAL_NS
+QUEUE_ENODEV_DISAPPEAR_POLL_NS = 100_000
 PROCESS_GROUP_GRACE_SECONDS = 5.0
 PROCESS_GROUP_POLL_SECONDS = 0.01
 MAX_TEXT_BYTES = 4096
@@ -59,6 +63,25 @@ class ProcessObservation:
 class LiveTargetAuthentication:
     identity: ProcessObservation | None
     departed: bool
+
+
+@dataclass
+class RetainedDirectoryBinding:
+    path: pathlib.Path
+    description: str
+    fd: int
+    identity: tuple[int, int, int]
+
+    def close(self) -> None:
+        if self.fd >= 0:
+            os.close(self.fd)
+            self.fd = -1
+
+    def __enter__(self) -> RetainedDirectoryBinding:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
 
 
 @dataclass
@@ -484,27 +507,204 @@ def _directory_identity(
     return (observation.st_dev, observation.st_ino, observation.st_mode)
 
 
+def _open_directory_binding(
+    path: pathlib.Path, description: str
+) -> RetainedDirectoryBinding | None:
+    flags = os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise GuardError(f"cannot bind {description}: {error}") from error
+    try:
+        observation = os.fstat(fd)
+        if not stat.S_ISDIR(observation.st_mode):
+            raise GuardError(f"{description} is not a directory")
+        binding = RetainedDirectoryBinding(
+            path=path,
+            description=description,
+            fd=fd,
+            identity=(observation.st_dev, observation.st_ino, observation.st_mode),
+        )
+        current_identity = _directory_identity(path, description)
+        if current_identity is None:
+            os.close(fd)
+            return None
+        if current_identity != binding.identity:
+            raise GuardError(f"{description} changed while being bound")
+        return binding
+    except BaseException:
+        if fd >= 0:
+            os.close(fd)
+        raise
+
+
+def _revalidate_directory_binding(binding: RetainedDirectoryBinding) -> bool:
+    if binding.fd < 0:
+        raise GuardError(f"retained {binding.description} binding is closed")
+    try:
+        observation = os.fstat(binding.fd)
+    except OSError as error:
+        raise GuardError(
+            f"cannot revalidate retained {binding.description}: {error}"
+        ) from error
+    retained_identity = (observation.st_dev, observation.st_ino, observation.st_mode)
+    if not stat.S_ISDIR(observation.st_mode) or retained_identity != binding.identity:
+        raise GuardError(f"retained {binding.description} identity changed")
+    current_identity = _directory_identity(binding.path, binding.description)
+    if current_identity is None:
+        return False
+    if current_identity != binding.identity:
+        raise GuardError(f"{binding.description} identity changed")
+    return True
+
+
+def _require_directory_binding_absent(binding: RetainedDirectoryBinding) -> None:
+    if _revalidate_directory_binding(binding):
+        raise GuardError(f"{binding.description} reappeared after disappearance")
+
+
 def _confirm_departed_target(
     *,
     proc_root: pathlib.Path,
     pid: int,
-    process_path: pathlib.Path,
-    process_path_identity: tuple[int, int, int],
+    process_binding: RetainedDirectoryBinding,
 ) -> None:
     if _read_process(proc_root, pid) is not None:
         raise GuardError(
             f"target process identity changed across queue disappearance: PID {pid}"
         )
-    current_path_identity = _directory_identity(
-        process_path, f"target KFD process directory for PID {pid}"
+    _revalidate_directory_binding(process_binding)
+
+
+def _observe_exact_target_binding(
+    *,
+    proc_root: pathlib.Path,
+    pid: int,
+    root_pid: int,
+    root_start_time: int,
+    target_identity: ProcessObservation,
+    process_binding: RetainedDirectoryBinding,
+) -> LiveTargetAuthentication:
+    authentication = _target_process_identity(
+        proc_root,
+        pid,
+        root_pid,
+        root_start_time,
+        expected_identity=target_identity,
     )
-    if (
-        current_path_identity is not None
-        and current_path_identity != process_path_identity
-    ):
+    if authentication.identity != target_identity:
         raise GuardError(
-            f"target KFD process identity changed across queue disappearance: PID {pid}"
+            f"target process identity changed during queue disappearance: PID {pid}"
         )
+    process_path_present = _revalidate_directory_binding(process_binding)
+    if not process_path_present and not authentication.departed:
+        raise GuardError(
+            f"target KFD process identity changed during queue disappearance: PID {pid}"
+        )
+    return authentication
+
+
+def _confirm_enodev_queue_disappearance(
+    *,
+    proc_root: pathlib.Path,
+    pid: int,
+    root_pid: int,
+    root_start_time: int,
+    target_identity: ProcessObservation,
+    initial_target_departed: bool,
+    process_binding: RetainedDirectoryBinding,
+    queue_id: int,
+    queue_binding: RetainedDirectoryBinding,
+    clock: Callable[[], int],
+    sleeper: Callable[[float], None],
+) -> bool:
+    """Confirm one sampled queue-kobject removal, not device/reset currentness."""
+    started_ns = clock()
+    deadline_ns = started_ns + QUEUE_ENODEV_DISAPPEAR_TIMEOUT_NS
+    now_ns = clock()
+    target_departed = initial_target_departed
+    while now_ns < deadline_ns:
+        authentication = _observe_exact_target_binding(
+            proc_root=proc_root,
+            pid=pid,
+            root_pid=root_pid,
+            root_start_time=root_start_time,
+            target_identity=target_identity,
+            process_binding=process_binding,
+        )
+        if target_departed and not authentication.departed:
+            raise GuardError(
+                f"target process identity changed during queue disappearance: PID {pid}"
+            )
+        target_departed = authentication.departed
+        if not _revalidate_directory_binding(queue_binding):
+            authentication_after = _observe_exact_target_binding(
+                proc_root=proc_root,
+                pid=pid,
+                root_pid=root_pid,
+                root_start_time=root_start_time,
+                target_identity=target_identity,
+                process_binding=process_binding,
+            )
+            if target_departed and not authentication_after.departed:
+                raise GuardError(
+                    f"target process identity changed during queue disappearance: "
+                    f"PID {pid}"
+                )
+            target_departed = authentication_after.departed
+            _require_directory_binding_absent(queue_binding)
+            if target_departed:
+                _confirm_departed_target(
+                    proc_root=proc_root,
+                    pid=pid,
+                    process_binding=process_binding,
+                )
+            if clock() >= deadline_ns:
+                break
+            return target_departed
+        try:
+            _read_text(queue_binding.path / "gpuid", "KFD queue GPU ID")
+        except GuardError as error:
+            if not (
+                isinstance(error.__cause__, OSError)
+                and error.__cause__.errno == errno.ENODEV
+            ):
+                raise
+        else:
+            raise GuardError(
+                f"target KFD queue became readable during disappearance: "
+                f"PID {pid} queue {queue_id}"
+            )
+        authentication_after = _observe_exact_target_binding(
+            proc_root=proc_root,
+            pid=pid,
+            root_pid=root_pid,
+            root_start_time=root_start_time,
+            target_identity=target_identity,
+            process_binding=process_binding,
+        )
+        if target_departed and not authentication_after.departed:
+            raise GuardError(
+                f"target process identity changed during queue disappearance: PID {pid}"
+            )
+        target_departed = authentication_after.departed
+        now_ns = clock()
+        if now_ns >= deadline_ns:
+            break
+        sleep_ns = min(
+            QUEUE_ENODEV_DISAPPEAR_POLL_NS, deadline_ns - now_ns
+        )
+        sleeper(sleep_ns / 1_000_000_000)
+        next_ns = clock()
+        if next_ns <= now_ns:
+            raise GuardError("queue disappearance clock did not advance")
+        now_ns = next_ns
+    raise GuardError(
+        f"target KFD queue remained present after gpuid ENODEV: "
+        f"PID {pid} queue {queue_id}"
+    )
 
 
 def _live_queue_directories(
@@ -573,114 +773,167 @@ def classify_selected_gpu_queues(
     selected_gpu_id: int,
     root_pid: int,
     root_start_time: int,
+    clock: Callable[[], int] | None = None,
+    sleeper: Callable[[float], None] = time.sleep,
 ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    census_clock = _raw_monotonic_ns if clock is None else clock
     target: list[tuple[int, int]] = []
     foreign: list[tuple[int, int]] = []
     processes = _numeric_directories(
         kfd_proc_root, "KFD process directory", MAX_KFD_PROCESSES
     )
     for pid, process_path in processes:
-        process_path_identity = _directory_identity(
+        process_binding = _open_directory_binding(
             process_path, f"KFD process directory for PID {pid}"
         )
-        if process_path_identity is None:
+        if process_binding is None:
             raise GuardError(
                 f"KFD process directory disappeared before authentication: PID {pid}"
             )
-        authentication = _target_process_identity(
-            proc_root, pid, root_pid, root_start_time
-        )
-        target_identity = authentication.identity
-        selected_queues: list[int] = []
-        vanished = False
-        queues_path = process_path / "queues"
-        try:
-            queues, listing_vanished = _live_queue_directories(
-                queues_path,
-                f"KFD queue directory for PID {pid}",
-                MAX_QUEUES_PER_PROCESS,
-                target_identity is not None,
+        with process_binding, ExitStack() as queue_bindings:
+            authentication = _target_process_identity(
+                proc_root, pid, root_pid, root_start_time
             )
-            vanished = listing_vanished
-        except GuardError as error:
-            if (
-                target_identity is not None
-                and _disappeared_during_census(error)
-                and _path_is_confirmed_absent(
-                    process_path, f"target KFD process directory for PID {pid}"
-                )
-            ):
-                vanished = True
-                queues = []
-            else:
-                raise
-        for queue_id, queue_path in queues:
+            target_identity = authentication.identity
+            target_departed = authentication.departed
+            selected_queues: list[int] = []
+            departed_queue_bindings: list[RetainedDirectoryBinding] = []
+            vanished = False
+            queues_path = process_path / "queues"
             try:
-                raw_gpu_id = _read_text(
-                    queue_path / "gpuid", "KFD queue GPU ID"
+                queues, listing_vanished = _live_queue_directories(
+                    queues_path,
+                    f"KFD queue directory for PID {pid}",
+                    MAX_QUEUES_PER_PROCESS,
+                    target_identity is not None,
                 )
+                vanished = listing_vanished
             except GuardError as error:
                 if (
                     target_identity is not None
                     and _disappeared_during_census(error)
-                    and _path_is_confirmed_absent(
-                        queue_path, f"target KFD queue {pid}/{queue_id}"
-                    )
+                    and not _revalidate_directory_binding(process_binding)
                 ):
                     vanished = True
-                    continue
-                raise
-            gpu_id = _parse_decimal(
-                raw_gpu_id,
-                "KFD queue GPU ID",
-                (1 << 32) - 1,
+                    queues = []
+                else:
+                    raise
+            for queue_id, queue_path in queues:
+                queue_binding = _open_directory_binding(
+                    queue_path,
+                    f"KFD queue directory for PID {pid} queue {queue_id}",
+                )
+                if queue_binding is None:
+                    if target_identity is not None:
+                        vanished = True
+                        continue
+                    raise GuardError(
+                        f"KFD queue directory disappeared before binding: "
+                        f"PID {pid} queue {queue_id}"
+                    )
+                queue_bindings.enter_context(queue_binding)
+                try:
+                    raw_gpu_id = _read_text(
+                        queue_path / "gpuid", "KFD queue GPU ID"
+                    )
+                except GuardError as error:
+                    if (
+                        target_identity is not None
+                        and _disappeared_during_census(error)
+                        and not _revalidate_directory_binding(queue_binding)
+                    ):
+                        departed_queue_bindings.append(queue_binding)
+                        vanished = True
+                        continue
+                    if (
+                        target_identity is not None
+                        and isinstance(error.__cause__, OSError)
+                        and error.__cause__.errno == errno.ENODEV
+                    ):
+                        target_departed = _confirm_enodev_queue_disappearance(
+                            proc_root=proc_root,
+                            pid=pid,
+                            root_pid=root_pid,
+                            root_start_time=root_start_time,
+                            target_identity=target_identity,
+                            initial_target_departed=target_departed,
+                            process_binding=process_binding,
+                            queue_id=queue_id,
+                            queue_binding=queue_binding,
+                            clock=census_clock,
+                            sleeper=sleeper,
+                        )
+                        departed_queue_bindings.append(queue_binding)
+                        vanished = True
+                        continue
+                    raise
+                queue_path_present = _revalidate_directory_binding(queue_binding)
+                if not queue_path_present:
+                    departed_queue_bindings.append(queue_binding)
+                    vanished = True
+                gpu_id = _parse_decimal(
+                    raw_gpu_id,
+                    "KFD queue GPU ID",
+                    (1 << 32) - 1,
+                )
+                if gpu_id == selected_gpu_id:
+                    selected_queues.append(queue_id)
+
+            for queue_binding in departed_queue_bindings:
+                _require_directory_binding_absent(queue_binding)
+            if not selected_queues and not vanished and not target_departed:
+                if not _revalidate_directory_binding(process_binding):
+                    raise GuardError(
+                        f"KFD process directory disappeared before final decision: "
+                        f"PID {pid}"
+                    )
+                continue
+            authentication_after = _target_process_identity(
+                proc_root,
+                pid,
+                root_pid,
+                root_start_time,
+                expected_identity=target_identity,
             )
-            if gpu_id == selected_gpu_id:
-                selected_queues.append(queue_id)
-        if not selected_queues and not vanished and not authentication.departed:
-            continue
-        authentication_after = _target_process_identity(
-            proc_root,
-            pid,
-            root_pid,
-            root_start_time,
-            expected_identity=target_identity,
-        )
-        if authentication.departed:
-            if not authentication_after.departed:
+            for queue_binding in departed_queue_bindings:
+                _require_directory_binding_absent(queue_binding)
+            if target_departed:
+                if not authentication_after.departed:
+                    raise GuardError(
+                        f"target process identity changed across queue disappearance: PID {pid}"
+                    )
+                _confirm_departed_target(
+                    proc_root=proc_root,
+                    pid=pid,
+                    process_binding=process_binding,
+                )
+                continue
+            authenticated_departure = (
+                target_identity is not None
+                and authentication_after.departed
+                and authentication_after.identity == target_identity
+            )
+            if authenticated_departure:
+                _confirm_departed_target(
+                    proc_root=proc_root,
+                    pid=pid,
+                    process_binding=process_binding,
+                )
+                continue
+            stable_target = (
+                target_identity is not None
+                and authentication_after.identity == target_identity
+            )
+            if vanished and not stable_target:
                 raise GuardError(
                     f"target process identity changed across queue disappearance: PID {pid}"
                 )
-            _confirm_departed_target(
-                proc_root=proc_root,
-                pid=pid,
-                process_path=process_path,
-                process_path_identity=process_path_identity,
-            )
-            continue
-        authenticated_departure = (
-            target_identity is not None
-            and authentication_after.departed
-            and authentication_after.identity == target_identity
-        )
-        if authenticated_departure:
-            _confirm_departed_target(
-                proc_root=proc_root,
-                pid=pid,
-                process_path=process_path,
-                process_path_identity=process_path_identity,
-            )
-            continue
-        stable_target = (
-            target_identity is not None
-            and authentication_after.identity == target_identity
-        )
-        if vanished and not stable_target:
-            raise GuardError(
-                f"target process identity changed across queue disappearance: PID {pid}"
-            )
-        destination = target if stable_target else foreign
-        destination.extend((pid, queue_id) for queue_id in selected_queues)
+            if not _revalidate_directory_binding(process_binding):
+                raise GuardError(
+                    f"KFD process directory disappeared before final decision: PID {pid}"
+                )
+            destination = target if stable_target else foreign
+            destination.extend((pid, queue_id) for queue_id in selected_queues)
     return target, foreign
 
 
@@ -855,6 +1108,8 @@ def monitor_target(
                     selected_gpu_id=selected_gpu_id,
                     root_pid=process.pid,
                     root_start_time=root.start_time,
+                    clock=clock,
+                    sleeper=sleeper,
                 )
                 cadence.observe(clock())
                 target_selected_queue_observations += len(target)
