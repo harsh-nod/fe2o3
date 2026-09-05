@@ -229,6 +229,33 @@ class R26RunnerContractTests(unittest.TestCase):
             self.hsa_source,
         )
 
+    def test_hsa_pool_collection_skips_non_global_segments_first(self) -> None:
+        callback = self.hsa_source[
+            self.hsa_source.index("hsa_status_t collect_pool(") :
+            self.hsa_source.index("void collect_pools(")
+        ]
+        segment_query = callback.index("HSA_AMD_MEMORY_POOL_INFO_SEGMENT")
+        segment_skip = callback.index("if (segment != HSA_AMD_SEGMENT_GLOBAL)")
+        successful_skip = callback.index(
+            "return HSA_STATUS_SUCCESS;", segment_skip
+        )
+        self.assertLess(segment_query, segment_skip)
+        self.assertLess(segment_skip, successful_skip)
+        for collected_global_pool_operation in (
+            "HSA_AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_ALLOWED",
+            "HSA_AMD_MEMORY_POOL_INFO_LOCATION",
+            "HSA_AMD_MEMORY_POOL_INFO_GLOBAL_FLAGS",
+            "HSA_AMD_MEMORY_POOL_INFO_ALLOC_MAX_SIZE",
+            "HSA_AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_GRANULE",
+            "HSA_AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_ALIGNMENT",
+            "HSA_AMD_AGENT_MEMORY_POOL_INFO_ACCESS",
+            "collector->pools->push_back",
+        ):
+            with self.subTest(operation=collected_global_pool_operation):
+                self.assertLess(
+                    successful_skip, callback.index(collected_global_pool_operation)
+                )
+
     def test_hsa_comparator_binds_the_full_topology_by_unique_id(self) -> None:
         self.assertNotIn("ROCR_VISIBLE_DEVICES", self.source)
         self.assertIn(

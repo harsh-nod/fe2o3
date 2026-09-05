@@ -78,13 +78,16 @@ pool_location(hsa_amd_memory_pool_location_t location) {
 hsa_status_t collect_pool(hsa_amd_memory_pool_t pool, void *data) {
   auto *collector = static_cast<PoolCollector *>(data);
   hsa_amd_segment_t segment{};
-  bool allowed = false;
-  hsa_amd_memory_pool_location_t location{};
-  std::uint32_t flags = 0;
   hsa_status_t status = hsa_amd_memory_pool_get_info(
       pool, HSA_AMD_MEMORY_POOL_INFO_SEGMENT, &segment);
   if (status != HSA_STATUS_SUCCESS)
     return status;
+  if (segment != HSA_AMD_SEGMENT_GLOBAL)
+    return HSA_STATUS_SUCCESS;
+
+  bool allowed = false;
+  hsa_amd_memory_pool_location_t location{};
+  std::uint32_t flags = 0;
   status = hsa_amd_memory_pool_get_info(
       pool, HSA_AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_ALLOWED, &allowed);
   if (status != HSA_STATUS_SUCCESS)
@@ -93,12 +96,10 @@ hsa_status_t collect_pool(hsa_amd_memory_pool_t pool, void *data) {
                                         &location);
   if (status != HSA_STATUS_SUCCESS)
     return status;
-  if (segment == HSA_AMD_SEGMENT_GLOBAL) {
-    status = hsa_amd_memory_pool_get_info(
-        pool, HSA_AMD_MEMORY_POOL_INFO_GLOBAL_FLAGS, &flags);
-    if (status != HSA_STATUS_SUCCESS)
-      return status;
-  }
+  status = hsa_amd_memory_pool_get_info(
+      pool, HSA_AMD_MEMORY_POOL_INFO_GLOBAL_FLAGS, &flags);
+  if (status != HSA_STATUS_SUCCESS)
+    return status;
 
   std::size_t maximum_single_allocation = 0;
   std::size_t allocation_granule = 0;
@@ -140,7 +141,7 @@ hsa_status_t collect_pool(hsa_amd_memory_pool_t pool, void *data) {
           pool.handle,
           collector->owner,
           pool_location(location),
-          segment == HSA_AMD_SEGMENT_GLOBAL,
+          true,
           allowed,
           flags,
           maximum_single_allocation,
