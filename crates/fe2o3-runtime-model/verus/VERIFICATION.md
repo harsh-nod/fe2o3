@@ -9,8 +9,9 @@ directional-persistent-local-SDMA-adapter, R20 runtime-facade directional
 chunking, R21 runtime scripted-failure-seam, R22 batched directional
 persistent-SDMA-window, R23 same-device D2D persistent-SDMA-window, R24
 portable-progress, R25 persistent-compute storage-bridge, R27 persistent
-dispatch-control, and R28 persistent-hot-currentness-scope models. The
-authenticated runner proves 583 obligations and rejects 301
+dispatch-control, R28 persistent-hot-currentness-scope, and R30 bound
+host-content-certificate models. The authenticated runner proves 621
+obligations and rejects 304
 expected-negative mutations over finite abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -1267,6 +1268,61 @@ completion truth, liveness, parity, or performance.
 | Executable policy model | **Checked** | Focused Rust transition tests; private non-clone fields are not production authority evidence. |
 | Coupled boundary countermodels | **Rejected** | Two pinned mutated replay/close transition bodies fail their named checkpoint postconditions. |
 | Rust ownership, production authority conservation, concrete currentness, runtime/KFD/HSA/HIP, hardware truth, liveness, parity, or performance refinement | **Not established** | Explicitly outside the R28 proof boundary. |
+
+## R30 bound host-content certificate
+
+`r30_bound_host_content_certificate_v1.rs` proves 38 obligations for an
+independent finite certificate and promotion model. A certificate binds the
+queue identity and generation, storage identity and generation, pool
+generation, logical and physical extents, exact zero-based full range, and an
+abstract content digest. Certification additionally requires equal logical and
+physical byte counts, matching the authenticated full-write and H2D transfer
+contract rather than certifying padded unequal extents.
+
+The full-write transition follows the reviewed production ordering. It clears
+the prior certificate before the opening currentness observation. Opening
+ambiguity therefore records an invalidation with no possible write; after a
+current opening, the model records the possible write, and closing ambiguity
+leaves the host uncertified. A certificate is established only after an exact
+full write and current closing observation. CPU destination writes, SDMA
+destination writes, resize, and recycle record certificate invalidation before
+possible mutation. H2D source use and exact full-H2D completion preserve the
+source certificate.
+
+Exact completed-H2D custody binds storage and the equal full range independently
+of the optional stored certificate. Promotion first authenticates that custody, then evaluates the
+opening and closing currentness observations, and only afterward classifies a
+missing or mismatched candidate certificate as retryable. Retryable mismatch is
+an exact no-effect transition and retires no completion frontier. Ambiguity at
+either observation enters an absorbing terminal state, records the distinct
+opening or closing stage, and retains the exact completion plus the optional
+stored host certificate without retirement. Success atomically consumes the
+pending completion, advances its exact frontier, and mints Ready containing
+only the authenticated digest and completion generation. The returned host
+certificate is initially preserved, but Ready validity is independent of it;
+subsequent host destination or recycle transitions invalidate/change host state
+without changing the Ready digest.
+
+The executable R30 model has 14 focused Rust transition tests. Three pinned
+standalone coupled mutations respectively retain a certificate across a
+destination mutation, omit the production-ordered clear before opening
+currentness, and classify candidate mismatch before closing currentness. Each
+fails only at its named postcondition and imports no positive proof source.
+
+Digest values are opaque contracted inputs: neither model computes nor proves
+SHA-256. Coherent CPU write completion, DMA/HSA completion and visibility, and
+both currentness observations are also contracted inputs. There is no
+Rust-to-Verus correspondence theorem and no proof that executable Rust or the
+production runtime refines either finite model.
+
+## R30 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Full identity/range/digest binding, equal certified extents, invalidate-before-mutate ordering, H2D source preservation, two-observation promotion ordering, retry atomicity, exact ambiguity custody, terminal absorption, and atomic Ready mint/retirement | **Proved** | Thirty-eight obligations in `r30_bound_host_content_certificate_v1.rs`; finite mathematical values and contracted observations only. |
+| Executable certificate model | **Checked** | Fourteen focused Rust transition tests; no Rust-to-Verus correspondence theorem. |
+| Coupled boundary countermodels | **Rejected** | Three pinned mutated transition bodies fail their named invalidation, precheck-clear, and currentness-before-mismatch postconditions. |
+| SHA-256 correctness, coherent-write truth, DMA/HSA completion or visibility, currentness truth, executable Rust refinement, runtime/KFD/HSA/HIP, firmware, hardware, liveness, parity, or performance | **Not established** | Explicitly outside the R30 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
