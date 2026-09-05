@@ -260,18 +260,123 @@ class QueueCensusTests(unittest.TestCase):
             self.assertIsNone(authentication.identity)
             self.assertFalse(authentication.departed)
 
-    def test_live_authentication_propagates_process_read_failure(self) -> None:
-        with (
-            mock.patch.object(
-                GUARD,
-                "_read_process",
-                side_effect=GUARD.GuardError("cannot read process identity"),
-            ),
-            self.assertRaisesRegex(GUARD.GuardError, "cannot read process identity"),
+    def test_esrch_is_absence_at_each_live_authentication_read_seam(self) -> None:
+        with mock.patch.object(
+            pathlib.Path,
+            "read_text",
+            side_effect=ProcessLookupError("process exited"),
         ):
-            GUARD._target_process_identity(
+            authentication = GUARD._target_process_identity(
                 pathlib.Path("/proc"), 100, 100, 1000
             )
+        self.assertIsNone(authentication.identity)
+        self.assertFalse(authentication.departed)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            proc_root = pathlib.Path(temporary) / "proc"
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_process(proc_root, 101, ppid=100, process_group=100, start_time=1001)
+            root_stat = proc_root / "100" / "stat"
+            original_read_text = pathlib.Path.read_text
+
+            def ancestry_esrch(
+                path: pathlib.Path, *args: object, **kwargs: object
+            ) -> str:
+                if path == root_stat:
+                    raise ProcessLookupError("ancestor exited")
+                return original_read_text(path, *args, **kwargs)
+
+            with mock.patch.object(pathlib.Path, "read_text", new=ancestry_esrch):
+                authentication = GUARD._target_process_identity(
+                    proc_root, 101, 100, 1000
+                )
+            self.assertIsNone(authentication.identity)
+            self.assertFalse(authentication.departed)
+
+            root_reads = 0
+
+            def closing_esrch(
+                path: pathlib.Path, *args: object, **kwargs: object
+            ) -> str:
+                nonlocal root_reads
+                if path == root_stat:
+                    root_reads += 1
+                    if root_reads == 2:
+                        raise ProcessLookupError("target exited")
+                return original_read_text(path, *args, **kwargs)
+
+            with mock.patch.object(pathlib.Path, "read_text", new=closing_esrch):
+                authentication = GUARD._target_process_identity(
+                    proc_root, 100, 100, 1000
+                )
+            self.assertEqual(
+                authentication.identity,
+                GUARD.ProcessObservation(1, 100, 1000),
+            )
+            self.assertTrue(authentication.departed)
+
+    def test_live_authentication_propagates_process_read_failure(self) -> None:
+        for error in (PermissionError(13, "denied"), OSError(5, "I/O error")):
+            with (
+                self.subTest(error=error),
+                mock.patch.object(pathlib.Path, "read_text", side_effect=error),
+                self.assertRaisesRegex(GUARD.GuardError, "cannot read process identity"),
+            ):
+                GUARD._target_process_identity(
+                    pathlib.Path("/proc"), 100, 100, 1000
+                )
+
+    def test_final_departure_confirmation_accepts_esrch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            process_path = root / "kfd-proc" / "100"
+            process_path.mkdir(parents=True)
+            process_path_identity = GUARD._directory_identity(
+                process_path, "KFD process directory"
+            )
+            self.assertIsNotNone(process_path_identity)
+            with mock.patch.object(
+                pathlib.Path,
+                "read_text",
+                side_effect=ProcessLookupError("target exited"),
+            ):
+                GUARD._confirm_departed_target(
+                    proc_root=root / "proc",
+                    pid=100,
+                    process_path=process_path,
+                    process_path_identity=process_path_identity,
+                )
+
+    def test_kfd_esrch_is_not_typed_as_tolerable_disappearance(self) -> None:
+        with (
+            mock.patch.object(
+                pathlib.Path,
+                "read_bytes",
+                side_effect=ProcessLookupError("KFD gpuid ESRCH"),
+            ),
+            self.assertRaises(GUARD.GuardError) as gpuid_failure,
+        ):
+            GUARD._read_text(pathlib.Path("/kfd/gpuid"), "KFD queue GPU ID")
+        self.assertIsInstance(gpuid_failure.exception.__cause__, ProcessLookupError)
+        self.assertFalse(GUARD._disappeared_during_census(gpuid_failure.exception))
+
+        with (
+            mock.patch.object(
+                GUARD.os,
+                "scandir",
+                side_effect=ProcessLookupError("KFD queue enumeration ESRCH"),
+            ),
+            self.assertRaises(GUARD.GuardError) as enumeration_failure,
+        ):
+            GUARD._live_queue_directories(
+                pathlib.Path("/kfd/queues"), "KFD queue directory", 1, True
+            )
+        self.assertIsInstance(
+            enumeration_failure.exception.__cause__, ProcessLookupError
+        )
+        self.assertFalse(
+            GUARD._disappeared_during_census(enumeration_failure.exception)
+        )
 
     def test_initial_authentication_departure_is_reconfirmed_after_census(self) -> None:
         root_observation = GUARD.ProcessObservation(1, 100, 1000)

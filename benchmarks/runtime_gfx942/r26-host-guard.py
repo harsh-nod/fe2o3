@@ -350,7 +350,7 @@ def _read_process(proc_root: pathlib.Path, pid: int) -> ProcessObservation | Non
     path = proc_root / str(pid) / "stat"
     try:
         text = path.read_text(encoding="ascii")
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return None
     except (OSError, UnicodeError) as error:
         raise GuardError(
