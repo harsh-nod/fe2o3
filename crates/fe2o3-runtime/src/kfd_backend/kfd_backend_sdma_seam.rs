@@ -541,6 +541,27 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
         }
     }
 
+    pub(super) fn write_full_host_authenticated(
+        &mut self,
+        buffer: &mut SdmaBufferOwnerV1,
+        bytes: &[u8],
+    ) -> Result<Option<[u8; 32]>, String> {
+        match (self, buffer) {
+            (Self::Native(queue), SdmaBufferOwnerV1::Native(buffer)) => queue
+                .write_full_sdma_host_buffer_authenticated_v1(buffer, bytes)
+                .map_err(|error| error.to_string()),
+            #[cfg(test)]
+            (Self::Scripted(driver), SdmaBufferOwnerV1::Scripted(buffer)) => driver
+                .write_full_host_authenticated(buffer, bytes)
+                .map(Some),
+            #[cfg(test)]
+            (_, buffer) => Err(format!(
+                "directional SDMA owner/driver mismatch while writing authenticated content to {:?}",
+                buffer
+            )),
+        }
+    }
+
     pub(super) fn read_host(
         &mut self,
         buffer: &SdmaBufferOwnerV1,
@@ -1524,6 +1545,14 @@ mod scripted {
         token: ScriptedOwnerTokenV1,
         kind: ScriptedBufferKindV1,
         bytes: Vec<u8>,
+        full_content_certificate: Option<ScriptedHostContentCertificateV1>,
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct ScriptedHostContentCertificateV1 {
+        owner_id: u64,
+        byte_len: usize,
+        sha256: [u8; 32],
     }
 
     #[derive(Debug)]
@@ -1643,6 +1672,7 @@ mod scripted {
                 ),
                 kind: ScriptedBufferKindV1::Host,
                 bytes: vec![0; byte_len],
+                full_content_certificate: None,
             })
         }
 
@@ -1743,6 +1773,7 @@ mod scripted {
                 ),
                 kind,
                 bytes: vec![0; byte_len],
+                full_content_certificate: None,
             }))
         }
 
@@ -1770,8 +1801,62 @@ mod scripted {
                 .checked_add(bytes.len())
                 .filter(|end| *end <= buffer.bytes.len())
                 .ok_or("scripted write exceeds buffer")?;
+            buffer.full_content_certificate = None;
             buffer.bytes[start..end].copy_from_slice(bytes);
             Ok(())
+        }
+
+        pub(super) fn write_full_host_authenticated(
+            &mut self,
+            buffer: &mut ScriptedBufferOwnerV1,
+            bytes: &[u8],
+        ) -> Result<[u8; 32], String> {
+            if !self.owns_buffer(buffer) {
+                return Err(
+                    "scripted authenticated SDMA write owner belongs to another driver".to_owned(),
+                );
+            }
+            if buffer.kind != ScriptedBufferKindV1::Host || buffer.bytes.len() != bytes.len() {
+                return Err(
+                    "scripted authenticated SDMA write requires one exact full host extent"
+                        .to_owned(),
+                );
+            }
+            buffer.full_content_certificate = None;
+            let mut hasher = Sha256::new();
+            for (index, chunk) in bytes
+                .chunks(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as usize)
+                .enumerate()
+            {
+                let offset = (index as u64)
+                    .checked_mul(u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1))
+                    .ok_or("scripted authenticated write offset overflow")?;
+                match self.pop()? {
+                    ScriptedSdmaStepV1::Write {
+                        offset: expected_offset,
+                        byte_len,
+                    } if expected_offset == offset && byte_len == chunk.len() => {}
+                    step => {
+                        return Err(format!(
+                            "scripted authenticated SDMA write mismatch: {step:?}"
+                        ));
+                    }
+                }
+                let start = usize::try_from(offset)
+                    .map_err(|_| "scripted authenticated write offset overflow")?;
+                let end = start
+                    .checked_add(chunk.len())
+                    .ok_or("scripted authenticated write range overflow")?;
+                hasher.update(chunk);
+                buffer.bytes[start..end].copy_from_slice(chunk);
+            }
+            let digest = hasher.finalize().into();
+            buffer.full_content_certificate = Some(ScriptedHostContentCertificateV1 {
+                owner_id: buffer.token.id,
+                byte_len: buffer.bytes.len(),
+                sha256: digest,
+            });
+            Ok(digest)
         }
 
         pub(super) fn read_host(
@@ -1874,6 +1959,7 @@ mod scripted {
                             .transition(ScriptedOwnerRoleV1::Buffer(ScriptedBufferKindV1::Device)),
                         kind: ScriptedBufferKindV1::Device,
                         bytes: device.bytes,
+                        full_content_certificate: None,
                     }))
                 }
                 ScriptedFailureModeV1::Retryable => Err(SdmaTransitionFailureV1::Retryable {
@@ -1896,13 +1982,16 @@ mod scripted {
         pub(super) fn submit(
             &mut self,
             device: ScriptedDeviceOwnerV1,
-            host: ScriptedBufferOwnerV1,
+            mut host: ScriptedBufferOwnerV1,
             direction: Gfx942PersistentSdmaDirectionV1,
             requests: Box<[DirectionalSdmaCopyRequestV1]>,
         ) -> Result<
             DirectionalSdmaSubmissionOwnerV1,
             SdmaTransitionFailureV1<DirectionalSdmaPairOwnerV1>,
         > {
+            if direction == Gfx942PersistentSdmaDirectionV1::DeviceToHost {
+                host.full_content_certificate = None;
+            }
             let pair = DirectionalSdmaPairOwnerV1 {
                 device: DirectionalSdmaDeviceOwnerV1::Scripted(device),
                 host: SdmaBufferOwnerV1::Scripted(host),
@@ -2261,14 +2350,21 @@ mod scripted {
             else {
                 unreachable!("scripted completion retains a scripted pair")
             };
-            let observed_sha256: [u8; 32] = Sha256::digest(&host.bytes).into();
+            let observed_sha256 = host
+                .full_content_certificate
+                .as_ref()
+                .filter(|certificate| {
+                    certificate.owner_id == host.token.id
+                        && certificate.byte_len == host.bytes.len()
+                })
+                .map(|certificate| certificate.sha256);
             let exact = direction == Gfx942PersistentSdmaDirectionV1::HostToDevice
                 && host_offset == 0
                 && device_offset == 0
                 && u64::from(copy_bytes) == content.byte_len()
                 && device.bytes.len() == host.bytes.len()
                 && u64::try_from(device.bytes.len()).ok() == Some(content.byte_len())
-                && observed_sha256 == content.sha256();
+                && observed_sha256 == Some(content.sha256());
             if exact {
                 Ok((device, host))
             } else {
@@ -2650,6 +2746,107 @@ mod scripted {
             )),
         }
     }
+
+    #[test]
+    fn scripted_cpu_write_invalidates_authenticated_full_content() {
+        let mut driver = ScriptedSdmaDriverV1::new([
+            ScriptedSdmaStepV1::Write {
+                offset: 0,
+                byte_len: 8,
+            },
+            ScriptedSdmaStepV1::Write {
+                offset: 3,
+                byte_len: 1,
+            },
+        ]);
+        let SdmaBufferOwnerV1::Scripted(mut host) = driver.test_host_owner(8) else {
+            unreachable!()
+        };
+        let digest = driver
+            .write_full_host_authenticated(&mut host, &[0x5a; 8])
+            .unwrap();
+        assert_eq!(
+            host.full_content_certificate
+                .as_ref()
+                .map(|certificate| certificate.sha256),
+            Some(digest)
+        );
+        driver.write_host(&mut host, 3, &[0xa5]).unwrap();
+        assert!(host.full_content_certificate.is_none());
+    }
+
+    #[test]
+    fn scripted_authenticated_write_preserves_max_linear_chunk_schedule() {
+        let first_len = GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as usize;
+        let byte_len = first_len + 1;
+        let mut driver = ScriptedSdmaDriverV1::new([
+            ScriptedSdmaStepV1::Write {
+                offset: 0,
+                byte_len: first_len,
+            },
+            ScriptedSdmaStepV1::Write {
+                offset: u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1),
+                byte_len: 1,
+            },
+        ]);
+        let SdmaBufferOwnerV1::Scripted(mut host) = driver.test_host_owner(byte_len) else {
+            unreachable!()
+        };
+        let bytes = vec![0x6b; byte_len];
+        let observed = driver
+            .write_full_host_authenticated(&mut host, &bytes)
+            .unwrap();
+        assert_eq!(observed, <[u8; 32]>::from(Sha256::digest(&bytes)));
+        assert!(driver.is_exhausted());
+        assert_eq!(host.bytes, bytes);
+        assert!(host.full_content_certificate.is_some());
+    }
+
+    #[test]
+    fn scripted_request_direction_preserves_h2d_source_and_invalidates_d2h_destination() {
+        for (direction, expect_certificate) in [
+            (Gfx942PersistentSdmaDirectionV1::HostToDevice, true),
+            (Gfx942PersistentSdmaDirectionV1::DeviceToHost, false),
+        ] {
+            let mut driver = ScriptedSdmaDriverV1::new([
+                ScriptedSdmaStepV1::Write {
+                    offset: 0,
+                    byte_len: 8,
+                },
+                ScriptedSdmaStepV1::Submit {
+                    direction,
+                    host_offset: 0,
+                    device_offset: 0,
+                    copy_bytes: 8,
+                    outcome: ScriptedFailureModeV1::Retryable,
+                },
+            ]);
+            let SdmaBufferOwnerV1::Scripted(mut host) = driver.test_host_owner(8) else {
+                unreachable!()
+            };
+            driver
+                .write_full_host_authenticated(&mut host, &[0x5a; 8])
+                .unwrap();
+            let device = match driver.test_device_owner(8) {
+                DirectionalSdmaDeviceOwnerV1::Scripted(device) => device,
+                DirectionalSdmaDeviceOwnerV1::Native(_) => unreachable!(),
+            };
+            let request = DirectionalSdmaCopyRequestV1 {
+                host_offset: 0,
+                device_offset: 0,
+                copy_bytes: 8,
+            };
+            let Err(SdmaTransitionFailureV1::Retryable { custody: pair, .. }) =
+                driver.submit(device, host, direction, vec![request].into_boxed_slice())
+            else {
+                panic!("scripted request must return recoverable prepublication custody")
+            };
+            let SdmaBufferOwnerV1::Scripted(host) = pair.host else {
+                unreachable!()
+            };
+            assert_eq!(host.full_content_certificate.is_some(), expect_certificate);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2732,6 +2929,24 @@ fn scripted_mismatch_same_device_completed(
 #[cfg(test)]
 mod window_tests {
     use super::*;
+
+    #[test]
+    fn scripted_ready_promotion_does_not_rehash_host_bytes() {
+        let source = include_str!("kfd_backend_sdma_seam.rs");
+        let production = source
+            .split_once("#[cfg(test)]\nmod window_tests")
+            .expect("window tests remain after scripted implementation")
+            .0;
+        let promotion = production
+            .rsplit_once("pub(super) fn promote_full_h2d_to_compute_ready(")
+            .expect("scripted promotion method remains present")
+            .1
+            .split_once("pub(super) fn retire_same_device(")
+            .expect("scripted retirement method follows promotion")
+            .0;
+        assert!(!promotion.contains("Sha256::digest"));
+        assert!(promotion.contains(".full_content_certificate\n"));
+    }
 
     #[test]
     fn ordered_window_validation_rejects_reorder_duplicates_and_noncanonical_packets() {

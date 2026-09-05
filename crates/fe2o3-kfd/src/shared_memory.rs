@@ -2505,47 +2505,6 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         }
     }
 
-    fn sha256_mapped_host_visible_subrange(
-        &mut self,
-        token: &SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
-        offset: u64,
-        byte_len: u64,
-    ) -> Result<[u8; 32], MemorySessionError> {
-        self.check_operational_currentness()?;
-        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
-        let requested = self.allocations[index].layout.requested_bytes;
-        let start = usize::try_from(offset).map_err(|_| MemorySessionError::SizeOverflow)?;
-        let len = usize::try_from(byte_len).map_err(|_| MemorySessionError::SizeOverflow)?;
-        let end = start
-            .checked_add(len)
-            .ok_or(MemorySessionError::SizeOverflow)?;
-        if len == 0 || end > requested {
-            return Err(MemorySessionError::InvalidAllocationAuthority);
-        }
-        let outcome = {
-            let mapping = self.allocations[index]
-                .mapping
-                .as_ref()
-                .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                B::with_bytes(mapping, requested, |bytes| {
-                    Sha256::digest(&bytes[start..end]).into()
-                })
-            }))
-        };
-        let post = self.check_operational_currentness();
-        match outcome {
-            Ok(digest) => {
-                post?;
-                Ok(digest)
-            }
-            Err(payload) => {
-                let _ = post;
-                std::panic::resume_unwind(payload)
-            }
-        }
-    }
-
     fn copy_mapped_host_visible_subrange_into(
         &mut self,
         token: &SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
@@ -2618,6 +2577,51 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                 std::panic::resume_unwind(payload)
             }
         }
+    }
+
+    fn overwrite_full_mapped_host_visible_and_sha256(
+        &mut self,
+        token: &mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+        source: &[u8],
+        max_chunk_bytes: usize,
+    ) -> Result<[u8; 32], MemorySessionError> {
+        if source.is_empty() || max_chunk_bytes == 0 {
+            return Err(MemorySessionError::InvalidAllocationAuthority);
+        }
+        let mut hasher = Sha256::new();
+        for (chunk_index, source_chunk) in source.chunks(max_chunk_bytes).enumerate() {
+            self.check_operational_currentness()?;
+            let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+            let requested = self.allocations[index].layout.requested_bytes;
+            if source.len() != requested {
+                return Err(MemorySessionError::InvalidAllocationAuthority);
+            }
+            let start = chunk_index
+                .checked_mul(max_chunk_bytes)
+                .ok_or(MemorySessionError::SizeOverflow)?;
+            let end = start
+                .checked_add(source_chunk.len())
+                .ok_or(MemorySessionError::SizeOverflow)?;
+            let mapping = self.allocations[index]
+                .mapping
+                .as_mut()
+                .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                B::with_bytes_mut(mapping, requested, |destination| {
+                    hasher.update(source_chunk);
+                    destination[start..end].copy_from_slice(source_chunk);
+                })
+            }));
+            let post = self.check_operational_currentness();
+            match outcome {
+                Ok(()) => post?,
+                Err(payload) => {
+                    let _ = post;
+                    std::panic::resume_unwind(payload)
+                }
+            }
+        }
+        Ok(hasher.finalize().into())
     }
 
     fn overwrite_mapped_host_visible_subrange_in_current_scope(
@@ -4356,6 +4360,16 @@ impl SharedGttMemorySessionV1 {
             .overwrite_mapped_host_visible_subrange(token, offset, source)
     }
 
+    pub(crate) fn overwrite_full_mapped_host_visible_and_sha256(
+        &mut self,
+        token: &mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+        source: &[u8],
+        max_chunk_bytes: usize,
+    ) -> Result<[u8; 32], MemorySessionError> {
+        self.engine
+            .overwrite_full_mapped_host_visible_and_sha256(token, source, max_chunk_bytes)
+    }
+
     pub(crate) fn overwrite_mapped_host_visible_subrange_in_current_scope(
         &mut self,
         token: &mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
@@ -4374,16 +4388,6 @@ impl SharedGttMemorySessionV1 {
     ) -> Result<Box<[u8]>, MemorySessionError> {
         self.engine
             .copy_mapped_host_visible_subrange(token, offset, byte_len)
-    }
-
-    pub(crate) fn sha256_mapped_host_visible_subrange(
-        &mut self,
-        token: &SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
-        offset: u64,
-        byte_len: u64,
-    ) -> Result<[u8; 32], MemorySessionError> {
-        self.engine
-            .sha256_mapped_host_visible_subrange(token, offset, byte_len)
     }
 
     #[allow(dead_code)]
@@ -5668,12 +5672,6 @@ mod tests {
             .copy_mapped_host_visible_subrange(&token, 64, 32)
             .unwrap();
         assert_eq!(copied.as_ref(), &(64_u8..96).collect::<Vec<_>>());
-        assert_eq!(
-            engine
-                .sha256_mapped_host_visible_subrange(&token, 64, 32)
-                .unwrap(),
-            <[u8; 32]>::from(Sha256::digest(copied.as_ref()))
-        );
         let mut copied_into = [0_u8; 32];
         engine
             .copy_mapped_host_visible_subrange_into(&token, 64, &mut copied_into)
@@ -5719,19 +5717,36 @@ mod tests {
                 .copy_mapped_host_visible_subrange(&stale, 64, 32)
                 .is_err()
         );
-        assert!(
+    }
+
+    #[test]
+    fn authenticated_full_mapped_write_hashes_while_preserving_chunk_currentness() {
+        let mut engine = acquired();
+        let token = engine.allocate::<HostVisibleCoherentGttV1>(256).unwrap();
+        let mut token = engine.map_mutable(token).unwrap();
+        let source: Vec<u8> = (0..=255).collect();
+        let before = engine.backend.operational_currentness_calls;
+        let observed = engine
+            .overwrite_full_mapped_host_visible_and_sha256(&mut token, &source, 100)
+            .unwrap();
+        assert_eq!(observed, <[u8; 32]>::from(Sha256::digest(&source)));
+        assert_eq!(engine.backend.operational_currentness_calls - before, 6);
+        assert_eq!(
             engine
-                .sha256_mapped_host_visible_subrange(&stale, 64, 32)
-                .is_err()
+                .copy_mapped_host_visible_subrange(&token, 0, 256)
+                .unwrap()
+                .as_ref(),
+            source
         );
     }
 
     #[test]
-    fn mapped_coherent_hash_currentness_failure_quarantines_session() {
-        for currentness_delta in [1, 2] {
+    fn authenticated_mapped_write_currentness_failure_quarantines_session() {
+        for currentness_delta in 1..=6 {
             let mut engine = acquired();
             let token = engine.allocate::<HostVisibleCoherentGttV1>(256).unwrap();
-            let token = engine.map_mutable(token).unwrap();
+            let mut token = engine.map_mutable(token).unwrap();
+            let source = vec![0xa5; 256];
             engine.backend.fail_operational_currentness_at = Some(
                 engine
                     .backend
@@ -5741,12 +5756,26 @@ mod tests {
             );
 
             assert!(matches!(
-                engine.sha256_mapped_host_visible_subrange(&token, 64, 32),
+                engine.overwrite_full_mapped_host_visible_and_sha256(&mut token, &source, 100),
                 Err(MemorySessionError::Injected("operational_currentness"))
             ));
             assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
+            let written_bytes = match currentness_delta {
+                1 => 0,
+                2 | 3 => 100,
+                4 | 5 => 200,
+                6 => 256,
+                _ => unreachable!(),
+            };
+            let mapping = engine.allocations[0].mapping.as_ref().unwrap();
+            assert!(
+                mapping.bytes[..written_bytes]
+                    .iter()
+                    .all(|byte| *byte == 0xa5)
+            );
+            assert!(mapping.bytes[written_bytes..].iter().all(|byte| *byte == 0));
             assert!(matches!(
-                engine.sha256_mapped_host_visible_subrange(&token, 64, 32),
+                engine.overwrite_full_mapped_host_visible_and_sha256(&mut token, &source, 100),
                 Err(MemorySessionError::SharedSessionQuarantined)
             ));
         }

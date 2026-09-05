@@ -197,8 +197,11 @@ pub struct KfdRuntimeLaunchPerformanceV1 {
 /// Address-free host observation of one successful authenticated H2D-ready
 /// promotion.
 ///
-/// `authentication` is a sub-interval of the H2D completion observation. It is
-/// not subtracted from the inclusive H2D duration seen by runtime callers.
+/// `authentication` is the full ready-promotion interval after H2D completion.
+/// It includes affiliation and structural preflight, two operational-currentness
+/// checks, constant-time certificate lookup and comparison, and frontier
+/// retirement. It remains inside caller-visible H2D duration and does not reread
+/// payload bytes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct KfdRuntimeReadyPromotionPerformanceV1 {
     ordinal: u64,
@@ -223,7 +226,7 @@ impl KfdRuntimeReadyPromotionPerformanceV1 {
         self.authenticated_bytes
     }
 
-    /// Returns host time spent in the promotion/authentication transition.
+    /// Returns host time spent in the full ready-promotion transition.
     pub const fn authentication(self) -> Duration {
         self.authentication
     }
@@ -4556,6 +4559,54 @@ impl KfdRuntimeBackendV1 {
         self.recycle_transient_sdma_buffer_v1(staging, "upload")
     }
 
+    fn upload_full_sdma_host_v1(
+        &mut self,
+        allocation: u64,
+        bytes: &[u8],
+    ) -> Result<Option<[u8; 32]>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let is_host = self
+            .allocations
+            .get(&allocation)
+            .is_some_and(|record| matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::Host(_)));
+        if !is_host {
+            self.upload_sdma_range_v1(allocation, 0, bytes)?;
+            return Ok(None);
+        }
+        let buffer = match &mut self
+            .allocations
+            .get_mut(&allocation)
+            .expect("admitted host allocation remains indexed")
+            .sdma_storage
+        {
+            KfdRuntimeSdmaStorageV1::Host(buffer) => buffer,
+            _ => unreachable!("checked host storage"),
+        };
+        let result = {
+            #[cfg(test)]
+            let scripted = self.scripted_sdma.as_mut();
+            #[cfg(test)]
+            let mut ops = if let Some(driver) = scripted {
+                kfd_backend_sdma_seam::DirectionalSdmaOpsV1::Scripted(driver)
+            } else {
+                kfd_backend_sdma_seam::DirectionalSdmaOpsV1::Native(
+                    self.queue
+                        .as_mut()
+                        .expect("persistent SDMA allocation retains queue"),
+                )
+            };
+            #[cfg(not(test))]
+            let mut ops = kfd_backend_sdma_seam::DirectionalSdmaOpsV1::Native(
+                self.queue
+                    .as_mut()
+                    .expect("persistent SDMA allocation retains queue"),
+            );
+            ops.write_full_host_authenticated(buffer, bytes)
+        };
+        result.map_err(|error| {
+            self.terminal_error(format!("KFD persistent authenticated host write: {error}"))
+        })
+    }
+
     fn zero_sdma_range_v1(
         &mut self,
         allocation: u64,
@@ -6750,7 +6801,7 @@ impl KfdRuntimeBackendV1 {
     /// Returns the most recent successful authenticated H2D-ready promotion.
     ///
     /// This observation contains no allocation, queue, or native address. Its
-    /// authentication duration remains included in caller-observed H2D time.
+    /// full ready-promotion duration remains included in caller-observed H2D time.
     pub const fn last_ready_promotion_performance_v1(
         &self,
     ) -> Option<KfdRuntimeReadyPromotionPerformanceV1> {
@@ -8559,13 +8610,12 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 .as_ref()
                 .filter(|(image, _)| image.as_ref() == bytes)
             {
-                Some((Arc::clone(image), *digest))
+                Some((Arc::clone(image), Some(*digest)))
             } else {
                 let image: Arc<[u8]> =
                     try_copy_vec_v1(bytes, "KFD complete host-write image allocation failed")?
                         .into();
-                let digest = Sha256::digest(bytes).into();
-                Some((image, digest))
+                Some((image, None))
             }
         } else {
             None
@@ -8582,8 +8632,14 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         // Publish the persistent-SDMA image before changing retained host
         // authority. Earlier reconciliation may already have changed dirty
         // coordinates, so any later recovered rejection is Quiescent.
-        self.upload_sdma_range_v1(allocation, byte_offset, bytes)
-            .map_err(Self::after_possible_host_mutation)?;
+        let authenticated_sha256 = if full_write {
+            self.upload_full_sdma_host_v1(allocation, bytes)
+                .map_err(Self::after_possible_host_mutation)?
+        } else {
+            self.upload_sdma_range_v1(allocation, byte_offset, bytes)
+                .map_err(Self::after_possible_host_mutation)?;
+            None
+        };
         self.allocations
             .get_mut(&allocation)
             .expect("written allocation remains indexed")
@@ -8593,7 +8649,10 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             .allocations
             .get_mut(&allocation)
             .expect("validated allocation remains retained");
-        if let Some((image, digest)) = full_image {
+        if let Some((image, cached_digest)) = full_image {
+            let digest = authenticated_sha256
+                .or(cached_digest)
+                .unwrap_or_else(|| Sha256::digest(bytes).into());
             record.bytes = Arc::clone(&image);
             record.content_sha256 = Some(digest);
             record.last_full_host_write = Some((image, digest));

@@ -53,7 +53,7 @@ const GFX942_SDMA_DIRECTIONAL_OWNER_COUNT_V1: usize = 2;
 
 /// Frozen claim boundary for the bounded native gfx942 SDMA implementation.
 pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v4\n",
+    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v5\n",
     "kfd_sdma_queue_schema_sha256=f489ae5735f8230e4ee788fe1fa9e62b307301c13cf88ee70889b0f455af0b5b\n",
     "sdma_topology_capability_sha256=51236bbd70ece3ee4e14cc1a3e7e7cfbbe0960e745130e1a3943f9e39bc36a26\n",
     "rocm_systems_commit=1b648038a0ac164cf2f06f2a581ced12cf5f7378\n",
@@ -67,23 +67,23 @@ pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
     "bounds=copy:1..4194272,ring:4096,submission:64,ring-slots:64,in-flight:63,one-slot-always-empty,nonoverlap\n",
     "engines=generic-compatible-or-topology-exact-ordinary:2,queues-per-engine:8,h2d-index:1,d2h-index:0,targeted-queue-type:4,balanced-striped-queues:even-2..16,round-robin-per-successful-batch\n",
     "queue-identity=all-directional-or-striped-native-queue-ids-must-be-distinct-before-publication\n",
-    "memory=move-only-host-coherent-or-device-local,logical-subrange-bounded,queue-retained-while-in-flight\n",
+    "memory=move-only-host-coherent-or-device-local,logical-subrange-bounded,queue-retained-while-in-flight,exact-full-host-userspace-hash-while-copy-certificate-bound-to-queue-storage-identity-pool-generation-logical-and-physical-extents-and-range,certificate-non-clone-and-private\n",
     "submission=single-producer,all-fallible-preparation-and-allocation-retains-recoverable-requests-before-mutation,striped-multi-queue-bounds:2..16-queues-and-1..1008-requests-and-at-most-63-per-shard,all-striped-shards-and-outcome-storage-prepared-before-first-publication,no-heap-allocation-after-first-publication,write-complete-sdma-packet-images-and-retained-records-before-one-exact-release-visible-wptr-publication-and-one-final-release-doorbell-per-batch,queue-occurrence-and-generation-tagged-ticket\n",
     "completion=host-coherent-u32-fence-value-observed-through-i64-acquire,exact-generation,nonblocking-poll,queue-progress-at-host-monotonic-instant,adaptive-deadline-wait,custody-returned-only-after-observation,no-gpu-clock-calibration\n",
     "cancellation=published-packets-cannot-be-retracted,typed-rejection-retains-ticket,poll-or-explicit-drain-required\n",
-    "pool=queue-branded,best-fit-by-kind-size-and-alignment,leased-and-in-flight-excluded,concrete-generation-advanced-on-recycle,explicit-trim-before-teardown\n",
+    "pool=queue-branded,best-fit-by-kind-size-and-alignment,leased-and-in-flight-excluded,concrete-generation-advanced-on-recycle,explicit-trim-before-teardown,certificate-cleared-on-every-attempted-valid-range-cpu-write-device-destination-request-logical-resize-pool-generation-advance-or-private-reconstruction\n",
     "dispatch-data-bridge=exact-full-extent-host-content-or-completed-h2d-only,move-only-storage-identity-and-queue-and-pool-generation-binding,no-rematerialization,demotion-advances-pool-generation\n",
-    "currentness=one-operational-pre-post-envelope-per-submit-batch-or-wait-batch-or-combined-submit-through-observed-completion,internal-atomics-and-mapped-writes-only-inside-envelope\n",
+    "currentness=one-operational-pre-post-envelope-per-submit-batch-or-wait-batch-or-combined-submit-through-observed-completion,authenticated-full-host-write-retains-one-pre-post-envelope-per-max-linear-chunk,persistent-ready-certificate-validation-retains-one-pre-post-envelope,internal-atomics-and-mapped-writes-only-inside-envelope\n",
     "failure=structural-preflight-and-ordinary-capacity-rejection-recover-inputs,currentness-counter-generation-and-post-preflight-uncertainty-terminally-poison-and-retain-native-custody,striped-terminal-failure-exposes-audit-only-confirmed-and-at-most-one-indeterminate-and-untouched-observations-without-drain-or-resubmit-authority,striped-cursor-commits-only-after-complete-publication-and-closing-currentness,partial-directional-or-striped-create-or-destroy-has-process-only-terminal-custody\n",
     "teardown=destroy-sdma-before-compute,then-release-ring-control-completions-and-pooled-buffers-explicitly\n",
     "proof=abstract-pool-generation-retention-and-cross-device-coordinate-theorems-only,no-executable-rust-refinement\n",
-    "contracted=ioctl-truth,doorbell-mapping,cpu-gpu-coherence,kernel-firmware-packet-consumption,completion,event-driven-completion,gpu-clock-calibration,progress,liveness\n",
+    "contracted=ioctl-truth,doorbell-mapping,cpu-gpu-coherence,sha256-collision-resistance,userspace-certificate-is-not-kernel-attestation-or-loaded-kernel-proof,kernel-firmware-packet-consumption,completion,event-driven-completion,gpu-clock-calibration,progress,liveness\n",
     "measured=hardware-correctness-and-performance-on-identified-host-only\n",
 );
 
 /// SHA-256 of [`GFX942_SDMA_COPY_MANIFEST_V1`].
 pub const GFX942_SDMA_COPY_MANIFEST_SHA256_V1: &str =
-    "8543f344b4fba5fff152b718ea547e620e931ca01101f32f65828fe1eb9a303b";
+    "bea5fe674dc25ebb82532770c1bf53b2e3b68ea99940470dee6362e812b579d3";
 
 const SDMA_OP_COPY: u32 = 1;
 const SDMA_OP_FENCE: u32 = 5;
@@ -414,6 +414,18 @@ pub(crate) enum Gfx942SdmaBufferStorageIdentityV1 {
     Device(Gfx942DeviceMemoryIdentityV1),
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct Gfx942SdmaHostContentCertificateV1 {
+    owner: QueueKeyV1,
+    storage_identity: Gfx942SdmaBufferStorageIdentityV1,
+    pool_generation: u64,
+    logical_bytes: u64,
+    physical_bytes: u64,
+    byte_offset: u64,
+    byte_len: u64,
+    sha256: [u8; 32],
+}
+
 /// Move-only allocation accepted by the bounded SDMA queue.
 #[must_use = "the buffer owns a mapped allocation and requires explicit release"]
 pub struct Gfx942SdmaBufferV1 {
@@ -421,6 +433,7 @@ pub struct Gfx942SdmaBufferV1 {
     owner: QueueKeyV1,
     pool_generation: u64,
     logical_bytes: u64,
+    host_content_certificate: Option<Box<Gfx942SdmaHostContentCertificateV1>>,
 }
 
 impl fmt::Debug for Gfx942SdmaBufferV1 {
@@ -455,6 +468,7 @@ impl Gfx942SdmaBufferV1 {
     }
 
     pub(crate) fn advance_pool_generation(&mut self) -> Result<(), Gfx942SdmaErrorV1> {
+        self.host_content_certificate = None;
         self.pool_generation = next_pool_generation(self.pool_generation)?;
         Ok(())
     }
@@ -475,7 +489,52 @@ impl Gfx942SdmaBufferV1 {
 
     pub(crate) fn set_logical_bytes(&mut self, logical_bytes: u64) {
         debug_assert!(logical_bytes != 0 && logical_bytes <= self.physical_bytes());
+        self.host_content_certificate = None;
         self.logical_bytes = logical_bytes;
+    }
+
+    fn clear_host_content_certificate(&mut self) {
+        self.host_content_certificate = None;
+    }
+
+    fn certify_full_host_content(&mut self, sha256: [u8; 32]) {
+        debug_assert_eq!(self.kind(), Gfx942SdmaBufferKindV1::HostVisibleCoherent);
+        debug_assert_eq!(self.logical_bytes, self.physical_bytes());
+        self.host_content_certificate = Some(Box::new(Gfx942SdmaHostContentCertificateV1 {
+            owner: self.owner,
+            storage_identity: self.storage_identity(),
+            pool_generation: self.pool_generation,
+            logical_bytes: self.logical_bytes,
+            physical_bytes: self.physical_bytes(),
+            byte_offset: 0,
+            byte_len: self.physical_bytes(),
+            sha256,
+        }));
+    }
+
+    fn replace_full_host_content_certificate(
+        &mut self,
+        write: impl FnOnce(&mut Gfx942SdmaBufferStorageV1) -> Result<[u8; 32], Gfx942SdmaErrorV1>,
+    ) -> Result<[u8; 32], Gfx942SdmaErrorV1> {
+        self.clear_host_content_certificate();
+        let digest = write(&mut self.storage)?;
+        self.certify_full_host_content(digest);
+        Ok(digest)
+    }
+
+    pub(crate) fn certified_full_host_content_sha256(&self, byte_len: u64) -> Option<[u8; 32]> {
+        let certificate = self.host_content_certificate.as_ref()?;
+        (self.kind() == Gfx942SdmaBufferKindV1::HostVisibleCoherent
+            && certificate.owner == self.owner
+            && certificate.storage_identity == self.storage_identity()
+            && certificate.pool_generation == self.pool_generation
+            && certificate.logical_bytes == self.logical_bytes
+            && certificate.physical_bytes == self.physical_bytes()
+            && certificate.byte_offset == 0
+            && certificate.byte_len == byte_len
+            && byte_len == self.logical_bytes
+            && byte_len == self.physical_bytes())
+        .then_some(certificate.sha256)
     }
 
     pub(crate) const fn storage_identity(&self) -> Gfx942SdmaBufferStorageIdentityV1 {
@@ -509,6 +568,7 @@ impl Gfx942SdmaBufferV1 {
             owner,
             pool_generation,
             logical_bytes,
+            host_content_certificate: None,
         }
     }
 
@@ -709,10 +769,11 @@ impl Gfx942SdmaCopyRequestV1 {
     pub fn new(
         source: Gfx942SdmaBufferV1,
         source_offset: u64,
-        destination: Gfx942SdmaBufferV1,
+        mut destination: Gfx942SdmaBufferV1,
         destination_offset: u64,
         copy_bytes: u32,
     ) -> Self {
+        destination.clear_host_content_certificate();
         Self {
             source,
             source_offset,
@@ -5365,6 +5426,7 @@ pub(crate) fn allocate_host_buffer(
         owner,
         pool_generation: 1,
         logical_bytes: bytes as u64,
+        host_content_certificate: None,
     })
 }
 
@@ -5381,6 +5443,7 @@ pub(crate) fn allocate_device_buffer(
         owner,
         pool_generation: 1,
         logical_bytes: bytes,
+        host_content_certificate: None,
     })
 }
 
@@ -5396,6 +5459,7 @@ pub(crate) fn persistent_sdma_buffers_for_test(
         owner,
         pool_generation: 1,
         logical_bytes: 4096,
+        host_content_certificate: None,
     };
     let host = Gfx942SdmaBufferV1 {
         storage: Gfx942SdmaBufferStorageV1::Host(
@@ -5404,6 +5468,7 @@ pub(crate) fn persistent_sdma_buffers_for_test(
         owner,
         pool_generation: 1,
         logical_bytes: 4096,
+        host_content_certificate: None,
     };
     (device, host)
 }
@@ -5461,6 +5526,7 @@ pub(crate) fn write_host_buffer(
     {
         return Err(Gfx942SdmaErrorV1::Contract("logical host write range"));
     }
+    buffer.clear_host_content_certificate();
     match &mut buffer.storage {
         Gfx942SdmaBufferStorageV1::Host(token) => {
             memory.overwrite_mapped_host_visible_subrange(token, offset, source)?;
@@ -5470,6 +5536,46 @@ pub(crate) fn write_host_buffer(
             "device-local buffer is not CPU writable",
         )),
     }
+}
+
+pub(crate) fn exact_full_host_write_is_authenticatable(
+    buffer: &Gfx942SdmaBufferV1,
+    source_len: usize,
+) -> Result<bool, Gfx942SdmaErrorV1> {
+    if source_len == 0 || u64::try_from(source_len).ok() != Some(buffer.requested_bytes()) {
+        return Err(Gfx942SdmaErrorV1::Contract(
+            "authenticated host write requires one exact full logical extent",
+        ));
+    }
+    Ok(buffer.kind() == Gfx942SdmaBufferKindV1::HostVisibleCoherent
+        && buffer.requested_bytes() == buffer.physical_bytes())
+}
+
+pub(crate) fn write_full_host_buffer_authenticated(
+    memory: &mut SharedGttMemorySessionV1,
+    buffer: &mut Gfx942SdmaBufferV1,
+    source: &[u8],
+) -> Result<[u8; 32], Gfx942SdmaErrorV1> {
+    if source.is_empty()
+        || u64::try_from(source.len()).ok() != Some(buffer.logical_bytes)
+        || buffer.logical_bytes != buffer.physical_bytes()
+    {
+        return Err(Gfx942SdmaErrorV1::Contract(
+            "authenticated host write requires one exact full physical extent",
+        ));
+    }
+    buffer.replace_full_host_content_certificate(|storage| match storage {
+        Gfx942SdmaBufferStorageV1::Host(token) => memory
+            .overwrite_full_mapped_host_visible_and_sha256(
+                token,
+                source,
+                GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as usize,
+            )
+            .map_err(Into::into),
+        Gfx942SdmaBufferStorageV1::Device(_) => Err(Gfx942SdmaErrorV1::Contract(
+            "device-local buffer is not CPU writable",
+        )),
+    })
 }
 
 pub(crate) fn read_host_buffer(
@@ -5488,29 +5594,6 @@ pub(crate) fn read_host_buffer(
     match &buffer.storage {
         Gfx942SdmaBufferStorageV1::Host(token) => {
             Ok(memory.copy_mapped_host_visible_subrange(token, offset, byte_len)?)
-        }
-        Gfx942SdmaBufferStorageV1::Device(_) => Err(Gfx942SdmaErrorV1::Contract(
-            "device-local buffer is not CPU readable",
-        )),
-    }
-}
-
-pub(crate) fn sha256_host_buffer(
-    memory: &mut SharedGttMemorySessionV1,
-    buffer: &Gfx942SdmaBufferV1,
-    offset: u64,
-    byte_len: u64,
-) -> Result<[u8; 32], Gfx942SdmaErrorV1> {
-    if byte_len == 0
-        || offset
-            .checked_add(byte_len)
-            .is_none_or(|end| end > buffer.logical_bytes)
-    {
-        return Err(Gfx942SdmaErrorV1::Contract("logical host hash range"));
-    }
-    match &buffer.storage {
-        Gfx942SdmaBufferStorageV1::Host(token) => {
-            Ok(memory.sha256_mapped_host_visible_subrange(token, offset, byte_len)?)
         }
         Gfx942SdmaBufferStorageV1::Device(_) => Err(Gfx942SdmaErrorV1::Contract(
             "device-local buffer is not CPU readable",
@@ -5705,6 +5788,95 @@ mod tests {
             id: QueueInstanceIdV1(queue),
             generation: QueueGenerationV1(generation),
         }
+    }
+
+    #[test]
+    fn full_host_content_certificate_is_bound_preserved_and_invalidated() {
+        let owner = queue_key(7, 11, 13);
+        let digest = [0x5a; 32];
+        let (device, mut host) = persistent_sdma_buffers_for_test(owner, 100);
+        assert_eq!(host.certified_full_host_content_sha256(4096), None);
+        host.certify_full_host_content(digest);
+        assert_eq!(host.certified_full_host_content_sha256(4096), Some(digest));
+        assert_eq!(host.certified_full_host_content_sha256(4095), None);
+
+        let request = Gfx942SdmaCopyRequestV1::new(host, 0, device, 0, 4096);
+        let (mut host, _device) = request.into_buffers();
+        assert_eq!(
+            host.certified_full_host_content_sha256(4096),
+            Some(digest),
+            "H2D source construction must preserve exact host evidence"
+        );
+        host.set_logical_bytes(2048);
+        assert_eq!(host.certified_full_host_content_sha256(2048), None);
+
+        let (device, mut host) = persistent_sdma_buffers_for_test(owner, 200);
+        host.certify_full_host_content(digest);
+        let request = Gfx942SdmaCopyRequestV1::new(device, 0, host, 0, 4096);
+        let (_device, host) = request.into_buffers();
+        assert_eq!(
+            host.certified_full_host_content_sha256(4096),
+            None,
+            "D2H destination construction must invalidate before publication"
+        );
+
+        let (_device, mut host) = persistent_sdma_buffers_for_test(owner, 300);
+        host.certify_full_host_content(digest);
+        host.advance_pool_generation().unwrap();
+        assert_eq!(host.certified_full_host_content_sha256(4096), None);
+
+        let (_device, mut host) = persistent_sdma_buffers_for_test(owner, 400);
+        host.certify_full_host_content(digest);
+        let (storage, owner, generation, logical_bytes) = host.into_bridge_parts();
+        let host = Gfx942SdmaBufferV1::from_bridge_parts(storage, owner, generation, logical_bytes);
+        assert_eq!(host.certified_full_host_content_sha256(4096), None);
+    }
+
+    #[test]
+    fn host_content_certificate_rejects_owner_and_storage_substitution() {
+        let owner = queue_key(7, 21, 23);
+        let digest = [0xa5; 32];
+        let (_device, mut first) = persistent_sdma_buffers_for_test(owner, 500);
+        let (_device, mut second) = persistent_sdma_buffers_for_test(owner, 600);
+        first.certify_full_host_content(digest);
+        core::mem::swap(&mut first.storage, &mut second.storage);
+        assert_eq!(first.certified_full_host_content_sha256(4096), None);
+
+        second.certify_full_host_content(digest);
+        second.owner = queue_key(7, 22, 23);
+        assert_eq!(second.certified_full_host_content_sha256(4096), None);
+    }
+
+    #[test]
+    fn attempted_full_write_clears_certificate_before_lower_failure() {
+        let owner = queue_key(7, 31, 33);
+        let digest = [0x3c; 32];
+        let (_device, mut host) = persistent_sdma_buffers_for_test(owner, 700);
+        host.certify_full_host_content(digest);
+        let result = host.replace_full_host_content_certificate(|_| {
+            Err(Gfx942SdmaErrorV1::Contract(
+                "injected opening or closing currentness failure",
+            ))
+        });
+        assert!(result.is_err());
+        assert_eq!(host.certified_full_host_content_sha256(4096), None);
+    }
+
+    #[test]
+    fn padded_full_logical_write_is_valid_but_not_authenticatable() {
+        let owner = queue_key(7, 41, 43);
+        let (_device, mut host) = persistent_sdma_buffers_for_test(owner, 800);
+        assert!(matches!(
+            exact_full_host_write_is_authenticatable(&host, 4096),
+            Ok(true)
+        ));
+        host.set_logical_bytes(2048);
+        assert!(matches!(
+            exact_full_host_write_is_authenticatable(&host, 2048),
+            Ok(false)
+        ));
+        assert!(exact_full_host_write_is_authenticatable(&host, 2049).is_err());
+        assert!(exact_full_host_write_is_authenticatable(&host, 0).is_err());
     }
 
     #[test]

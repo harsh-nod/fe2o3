@@ -152,9 +152,9 @@ use crate::queue_linux::{
     permanently_poison_process_global_kfd_runtime_gate_v1,
 };
 use crate::sdma::{
-    Gfx942DirectionalSdmaQueueObservationV1, Gfx942SdmaBufferKindV1,
-    Gfx942SdmaBufferStorageIdentityV1, Gfx942SdmaBufferStorageV1, Gfx942SdmaBufferV1,
-    Gfx942SdmaCompletedCopyV1, Gfx942SdmaCopyPollV1, Gfx942SdmaCopyRequestV1,
+    GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, Gfx942DirectionalSdmaQueueObservationV1,
+    Gfx942SdmaBufferKindV1, Gfx942SdmaBufferStorageIdentityV1, Gfx942SdmaBufferStorageV1,
+    Gfx942SdmaBufferV1, Gfx942SdmaCompletedCopyV1, Gfx942SdmaCopyPollV1, Gfx942SdmaCopyRequestV1,
     Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1, Gfx942SdmaMemoryPoolObservationV1,
     Gfx942SdmaMultiQueuePlanV1, Gfx942SdmaMultiQueueShardTicketsV1,
     Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaQueueObservationV1,
@@ -162,8 +162,9 @@ use crate::sdma::{
     MultiQueueSdmaSubmitFailureV1, PersistentSdmaWindowPollV1,
     PreparedPersistentSdmaWindowPublicationFailureV1, PreparedSdmaPublicationFailureV1,
     PreparedSingleSdmaPublicationFailureV1, allocate_device_buffer, allocate_host_buffer,
-    persistent_sdma_window_packet_count, read_host_buffer, release_buffer, sha256_host_buffer,
-    striped_sdma_queue_count_is_admitted, write_host_buffer,
+    exact_full_host_write_is_authenticatable, persistent_sdma_window_packet_count,
+    read_host_buffer, release_buffer, striped_sdma_queue_count_is_admitted,
+    write_full_host_buffer_authenticated, write_host_buffer,
 };
 use crate::shared_memory::{
     AqlCompletionSignalResourceRoleV1, AqlContextSaveResourceRoleV1, AqlControlResourceRoleV1,
@@ -4039,7 +4040,14 @@ impl ComputeAqlQueueSessionV1 {
             });
         }
         let observed = self.with_live_queue_memory_model(|memory| {
-            sha256_host_buffer(memory, &host, 0, copy_bytes).map_err(Into::into)
+            memory
+                .check_queue_operational_currentness()
+                .map_err(ComputeAqlQueueSessionErrorV1::from)?;
+            let observed = host.certified_full_host_content_sha256(copy_bytes);
+            memory
+                .check_queue_operational_currentness()
+                .map_err(ComputeAqlQueueSessionErrorV1::from)?;
+            Ok(observed)
         });
         let observed = match observed {
             Ok(observed) => observed,
@@ -4061,7 +4069,9 @@ impl ComputeAqlQueueSessionV1 {
                 ));
             }
         };
-        if !content_descriptor_matches_sha256(content, copy_bytes, observed) {
+        if observed.is_none_or(|observed| {
+            !content_descriptor_matches_sha256(content, copy_bytes, observed)
+        }) {
             return Err(Gfx942PersistentComputeReadyFailureV1 {
                 error: ComputeAqlQueueSessionErrorV1::Contract(
                     "persistent compute H2D content descriptor mismatch",
@@ -7907,6 +7917,44 @@ impl ComputeAqlQueueSessionV1 {
         self.with_live_queue_memory_model(|memory| {
             write_host_buffer(memory, buffer, offset, source).map_err(Into::into)
         })
+    }
+
+    /// Writes one exact full logical host-buffer extent.
+    ///
+    /// When the logical and physical extents match, the fe2o3 KFD adapter hashes
+    /// `source` while copying it, seals the certificate inside `buffer`, and
+    /// returns `Some(digest)`. The digest is only a scalar contracted-userspace
+    /// observation, not certificate authority, kernel attestation, or
+    /// loaded-kernel proof. When the physical extent includes padding, this
+    /// preserves the ordinary chunked logical-write contract and returns `None`
+    /// without minting a certificate. Every later CPU or device-write path
+    /// invalidates a sealed certificate.
+    pub fn write_full_sdma_host_buffer_authenticated_v1(
+        &mut self,
+        buffer: &mut Gfx942SdmaBufferV1,
+        source: &[u8],
+    ) -> Result<Option<[u8; 32]>, ComputeAqlQueueSessionErrorV1> {
+        self.require_sdma_enabled()?;
+        if exact_full_host_write_is_authenticatable(buffer, source.len())? {
+            self.with_live_queue_memory_model(|memory| {
+                write_full_host_buffer_authenticated(memory, buffer, source)
+                    .map(Some)
+                    .map_err(Into::into)
+            })
+        } else {
+            for (index, chunk) in source
+                .chunks(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as usize)
+                .enumerate()
+            {
+                let offset = (index as u64)
+                    .checked_mul(u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1))
+                    .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                        "SDMA host write chunk offset overflow",
+                    ))?;
+                self.write_sdma_host_buffer(buffer, offset, chunk)?;
+            }
+            Ok(None)
+        }
     }
 
     pub fn read_sdma_host_buffer(
@@ -14919,6 +14967,27 @@ mod tests {
             bytes.len() as u64 - 1,
             digest
         ));
+    }
+
+    #[test]
+    fn persistent_ready_promotion_uses_only_bound_certificate_under_currentness() {
+        let source = include_str!("queue_live.rs");
+        let promotion = source
+            .split("pub fn promote_full_h2d_to_persistent_compute_ready_v1")
+            .nth(1)
+            .unwrap()
+            .split("pub const MAX_COMPUTE_LANES_V1")
+            .next()
+            .unwrap();
+        assert!(promotion.contains("certified_full_host_content_sha256"));
+        assert_eq!(
+            promotion
+                .matches("check_queue_operational_currentness")
+                .count(),
+            2
+        );
+        assert!(!promotion.contains("sha256_host_buffer"));
+        assert!(!promotion.contains("Sha256::digest"));
     }
 
     #[test]
