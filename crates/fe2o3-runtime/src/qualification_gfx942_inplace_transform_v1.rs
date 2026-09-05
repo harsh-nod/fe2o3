@@ -648,7 +648,10 @@ mod tests {
             .unwrap()
             .bind_kernel(GFX942_INPLACE_TRANSFORM_QUALIFICATION_KERNEL_V1)
             .unwrap();
+        assert_eq!(kernel.selected_kernel().name(), "inplace_transform");
+        assert_eq!(kernel.selected_kernel().symbol(), "inplace_transform.kd");
         assert_eq!(kernel.resources().kernarg_segment_size(), 16);
+        assert_eq!(kernel.resources().kernarg_segment_alignment(), 8);
         assert_eq!(
             kernel.resources().required_workgroup_size(),
             Some([256, 1, 1])
