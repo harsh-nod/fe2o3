@@ -194,6 +194,276 @@ class TopologyTests(unittest.TestCase):
 
 
 class QueueCensusTests(unittest.TestCase):
+    def test_live_authentication_uses_captured_leaf_and_types_departure(self) -> None:
+        root = GUARD.ProcessObservation(1, 100, 1000)
+        child = GUARD.ProcessObservation(100, 100, 1001)
+        for pid, observations in (
+            (100, [root, None]),
+            (101, [child, root, None]),
+        ):
+            with self.subTest(pid=pid), mock.patch.object(
+                GUARD, "_read_process", side_effect=observations
+            ) as read_process:
+                authentication = GUARD._target_process_identity(
+                    pathlib.Path("/proc"), pid, 100, 1000
+                )
+            self.assertEqual(authentication.identity, observations[0])
+            self.assertTrue(authentication.departed)
+            self.assertEqual(read_process.call_count, len(observations))
+
+    def test_live_authentication_rejects_reuse_or_reparenting(self) -> None:
+        root = GUARD.ProcessObservation(1, 100, 1000)
+        child = GUARD.ProcessObservation(100, 100, 1001)
+        changed = (
+            [root, GUARD.ProcessObservation(1, 100, 2000)],
+            [root, GUARD.ProcessObservation(1, 999, 1000)],
+            [child, root, GUARD.ProcessObservation(1, 100, 1001)],
+        )
+        for observations in changed:
+            with (
+                self.subTest(observations=observations),
+                mock.patch.object(GUARD, "_read_process", side_effect=observations),
+                self.assertRaisesRegex(GUARD.GuardError, "identity changed"),
+            ):
+                GUARD._target_process_identity(
+                    pathlib.Path("/proc"),
+                    100 if observations[0] == root else 101,
+                    100,
+                    1000,
+                )
+
+    def test_live_authentication_preserves_stable_root_and_descendant(self) -> None:
+        root = GUARD.ProcessObservation(1, 100, 1000)
+        child = GUARD.ProcessObservation(100, 100, 1001)
+        for pid, observations in (
+            (100, [root, root]),
+            (101, [child, root, child]),
+        ):
+            with self.subTest(pid=pid), mock.patch.object(
+                GUARD, "_read_process", side_effect=observations
+            ):
+                authentication = GUARD._target_process_identity(
+                    pathlib.Path("/proc"), pid, 100, 1000
+                )
+            self.assertEqual(authentication.identity, observations[0])
+            self.assertFalse(authentication.departed)
+
+    def test_live_authentication_does_not_authenticate_missing_ancestry(self) -> None:
+        child = GUARD.ProcessObservation(100, 100, 1001)
+        for observations in ([None], [child, None]):
+            with self.subTest(observations=observations), mock.patch.object(
+                GUARD, "_read_process", side_effect=observations
+            ):
+                authentication = GUARD._target_process_identity(
+                    pathlib.Path("/proc"), 101, 100, 1000
+                )
+            self.assertIsNone(authentication.identity)
+            self.assertFalse(authentication.departed)
+
+    def test_live_authentication_propagates_process_read_failure(self) -> None:
+        with (
+            mock.patch.object(
+                GUARD,
+                "_read_process",
+                side_effect=GUARD.GuardError("cannot read process identity"),
+            ),
+            self.assertRaisesRegex(GUARD.GuardError, "cannot read process identity"),
+        ):
+            GUARD._target_process_identity(
+                pathlib.Path("/proc"), 100, 100, 1000
+            )
+
+    def test_initial_authentication_departure_is_reconfirmed_after_census(self) -> None:
+        root_observation = GUARD.ProcessObservation(1, 100, 1000)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_queue(kfd_root, 100, 0, 28851)
+            with mock.patch.object(
+                GUARD,
+                "_read_process",
+                side_effect=[root_observation, None, None, None],
+            ) as read_process:
+                target, foreign = GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=root / "proc",
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                )
+        self.assertEqual(target, [])
+        self.assertEqual(foreign, [])
+        self.assertEqual(read_process.call_count, 4)
+
+    def test_initial_authentication_departure_rejects_pid_recreation(self) -> None:
+        root_observation = GUARD.ProcessObservation(1, 100, 1000)
+        replacement = GUARD.ProcessObservation(1, 100, 2000)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_queue(kfd_root, 100, 0, 28851)
+            with (
+                mock.patch.object(
+                    GUARD,
+                    "_read_process",
+                    side_effect=[root_observation, None, replacement],
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "identity changed"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=root / "proc",
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                )
+
+    def test_initial_departure_is_sticky_across_exact_identity_aba(self) -> None:
+        root_observation = GUARD.ProcessObservation(1, 100, 1000)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_queue(kfd_root, 100, 0, 28851)
+            with (
+                mock.patch.object(
+                    GUARD,
+                    "_read_process",
+                    side_effect=[
+                        root_observation,
+                        None,
+                        root_observation,
+                        root_observation,
+                    ],
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "identity changed"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=root / "proc",
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                )
+
+    def test_post_census_departure_is_reconfirmed(self) -> None:
+        root_observation = GUARD.ProcessObservation(1, 100, 1000)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_queue(kfd_root, 100, 0, 28851)
+            with mock.patch.object(
+                GUARD,
+                "_read_process",
+                side_effect=[
+                    root_observation,
+                    root_observation,
+                    root_observation,
+                    None,
+                    None,
+                ],
+            ):
+                target, foreign = GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=root / "proc",
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                )
+        self.assertEqual(target, [])
+        self.assertEqual(foreign, [])
+
+    def test_post_census_departure_rejects_recreation_before_decision(self) -> None:
+        root_observation = GUARD.ProcessObservation(1, 100, 1000)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_queue(kfd_root, 100, 0, 28851)
+            with (
+                mock.patch.object(
+                    GUARD,
+                    "_read_process",
+                    side_effect=[
+                        root_observation,
+                        root_observation,
+                        root_observation,
+                        None,
+                        root_observation,
+                    ],
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "identity changed"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=root / "proc",
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                )
+
+    def test_foreign_owner_cannot_launder_through_departed_target_replacement(self) -> None:
+        foreign_observation = GUARD.ProcessObservation(1, 200, 2000)
+        init_observation = GUARD.ProcessObservation(0, 1, 1)
+        replacement = GUARD.ProcessObservation(100, 100, 3000)
+        root_observation = GUARD.ProcessObservation(1, 100, 1000)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_queue(kfd_root, 200, 0, 28851)
+            with mock.patch.object(
+                GUARD,
+                "_read_process",
+                side_effect=[
+                    foreign_observation,
+                    init_observation,
+                    replacement,
+                    root_observation,
+                    None,
+                ],
+            ):
+                target, foreign = GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=root / "proc",
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                )
+        self.assertEqual(target, [])
+        self.assertEqual(foreign, [(200, 0)])
+
+    def test_departed_target_rejects_kfd_process_path_replacement(self) -> None:
+        root_observation = GUARD.ProcessObservation(1, 100, 1000)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_queue(kfd_root, 100, 0, 28851)
+            with (
+                mock.patch.object(
+                    GUARD,
+                    "_read_process",
+                    side_effect=[root_observation, None, None, None],
+                ),
+                mock.patch.object(
+                    GUARD,
+                    "_directory_identity",
+                    side_effect=[(1, 10, 0o40755), (1, 11, 0o40755)],
+                ),
+                self.assertRaisesRegex(GUARD.GuardError, "KFD process identity changed"),
+            ):
+                GUARD.classify_selected_gpu_queues(
+                    kfd_proc_root=kfd_root,
+                    proc_root=root / "proc",
+                    selected_gpu_id=28851,
+                    root_pid=100,
+                    root_start_time=1000,
+                )
+
     def test_whitelists_target_tree_and_rejects_only_foreign_selected_gpu(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -335,7 +605,7 @@ class QueueCensusTests(unittest.TestCase):
                             queue_path.parent, "KFD queue directory", 1, False
                         )
 
-    def test_live_classifier_tolerates_confirmed_target_process_disappearance(self) -> None:
+    def test_live_classifier_rejects_process_disappearance_before_authentication(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             proc_root = root / "proc"
@@ -355,18 +625,79 @@ class QueueCensusTests(unittest.TestCase):
                     process_path.rmdir()
                 return entries
 
-            with mock.patch.object(
-                GUARD, "_numeric_directories", side_effect=enumerate_then_remove
+            with (
+                mock.patch.object(
+                    GUARD, "_numeric_directories", side_effect=enumerate_then_remove
+                ),
+                self.assertRaisesRegex(
+                    GUARD.GuardError, "disappeared before authentication"
+                ),
             ):
-                target, foreign = GUARD.classify_selected_gpu_queues(
+                GUARD.classify_selected_gpu_queues(
                     kfd_proc_root=kfd_root,
                     proc_root=proc_root,
                     selected_gpu_id=28851,
                     root_pid=100,
                     root_start_time=1000,
                 )
-        self.assertEqual(target, [])
-        self.assertEqual(foreign, [])
+
+    def test_vanished_foreign_kfd_owner_cannot_be_laundered_by_pid_reuse(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            proc_root = root / "proc"
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            write_process(proc_root, 100, ppid=1, process_group=100, start_time=1000)
+            write_process(proc_root, 200, ppid=1, process_group=200, start_time=2000)
+            write_queue(kfd_root, 200, 0, 28851)
+            queue_path = kfd_root / "200" / "queues" / "0"
+            queues_path = queue_path.parent
+            process_path = queues_path.parent
+            original = GUARD._numeric_directories
+
+            def enumerate_then_remove_and_reuse_pid(
+                path: pathlib.Path, description: str, maximum_entries: int
+            ) -> list[tuple[int, pathlib.Path]]:
+                entries = original(path, description, maximum_entries)
+                if path == kfd_root:
+                    (queue_path / "gpuid").unlink()
+                    queue_path.rmdir()
+                    queues_path.rmdir()
+                    process_path.rmdir()
+                    (proc_root / "200" / "stat").unlink()
+                    (proc_root / "200").rmdir()
+                    write_process(
+                        proc_root,
+                        200,
+                        ppid=100,
+                        process_group=100,
+                        start_time=3000,
+                    )
+                return entries
+
+            with (
+                mock.patch.object(
+                    GUARD,
+                    "_numeric_directories",
+                    side_effect=enumerate_then_remove_and_reuse_pid,
+                ),
+                mock.patch.object(
+                    GUARD,
+                    "_target_process_identity",
+                    wraps=GUARD._target_process_identity,
+                ) as authenticate,
+            ):
+                with self.assertRaisesRegex(
+                    GUARD.GuardError, "disappeared before authentication"
+                ):
+                    GUARD.classify_selected_gpu_queues(
+                        kfd_proc_root=kfd_root,
+                        proc_root=proc_root,
+                        selected_gpu_id=28851,
+                        root_pid=100,
+                        root_start_time=1000,
+                    )
+            authenticate.assert_not_called()
 
     def test_strict_owner_census_rejects_queue_disappearance(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

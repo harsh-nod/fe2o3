@@ -10,6 +10,7 @@ import os
 import pathlib
 import re
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -52,6 +53,12 @@ class ProcessObservation:
     ppid: int
     process_group: int
     start_time: int
+
+
+@dataclass(frozen=True)
+class LiveTargetAuthentication:
+    identity: ProcessObservation | None
+    departed: bool
 
 
 @dataclass
@@ -371,19 +378,23 @@ def _is_target_process(
     pid: int,
     root_pid: int,
     root_start_time: int,
+    initial_observation: ProcessObservation | None = None,
 ) -> bool:
     seen: set[int] = set()
     current = pid
+    observation = initial_observation
     while current > 0 and len(seen) < 1024:
         if current in seen:
             raise GuardError("process ancestry contains a cycle")
         seen.add(current)
-        observation = _read_process(proc_root, current)
+        if observation is None:
+            observation = _read_process(proc_root, current)
         if observation is None:
             return False
         if current == root_pid:
             return observation.start_time == root_start_time
         current = observation.ppid
+        observation = None
     return False
 
 
@@ -392,18 +403,31 @@ def _target_process_identity(
     pid: int,
     root_pid: int,
     root_start_time: int,
-) -> ProcessObservation | None:
+    expected_identity: ProcessObservation | None = None,
+) -> LiveTargetAuthentication:
     before = _read_process(proc_root, pid)
-    if before is None or not _is_target_process(
-        proc_root, pid, root_pid, root_start_time
+    if before is None:
+        return LiveTargetAuthentication(expected_identity, expected_identity is not None)
+    if expected_identity is not None and before != expected_identity:
+        raise GuardError(
+            f"target process identity changed during authentication: PID {pid}"
+        )
+    if not _is_target_process(
+        proc_root,
+        pid,
+        root_pid,
+        root_start_time,
+        initial_observation=before,
     ):
-        return None
+        return LiveTargetAuthentication(None, False)
     after = _read_process(proc_root, pid)
+    if after is None:
+        return LiveTargetAuthentication(before, True)
     if after != before:
         raise GuardError(
             f"target process identity changed during authentication: PID {pid}"
         )
-    return before
+    return LiveTargetAuthentication(before, False)
 
 
 def selected_gpu_queue_owners(
@@ -444,6 +468,43 @@ def _path_is_confirmed_absent(path: pathlib.Path, description: str) -> bool:
             f"cannot confirm {description} disappearance: {error}"
         ) from error
     return False
+
+
+def _directory_identity(
+    path: pathlib.Path, description: str
+) -> tuple[int, int, int] | None:
+    try:
+        observation = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise GuardError(f"cannot inspect {description}: {error}") from error
+    if not stat.S_ISDIR(observation.st_mode):
+        raise GuardError(f"{description} is not a directory")
+    return (observation.st_dev, observation.st_ino, observation.st_mode)
+
+
+def _confirm_departed_target(
+    *,
+    proc_root: pathlib.Path,
+    pid: int,
+    process_path: pathlib.Path,
+    process_path_identity: tuple[int, int, int],
+) -> None:
+    if _read_process(proc_root, pid) is not None:
+        raise GuardError(
+            f"target process identity changed across queue disappearance: PID {pid}"
+        )
+    current_path_identity = _directory_identity(
+        process_path, f"target KFD process directory for PID {pid}"
+    )
+    if (
+        current_path_identity is not None
+        and current_path_identity != process_path_identity
+    ):
+        raise GuardError(
+            f"target KFD process identity changed across queue disappearance: PID {pid}"
+        )
 
 
 def _live_queue_directories(
@@ -519,9 +580,17 @@ def classify_selected_gpu_queues(
         kfd_proc_root, "KFD process directory", MAX_KFD_PROCESSES
     )
     for pid, process_path in processes:
-        target_identity = _target_process_identity(
+        process_path_identity = _directory_identity(
+            process_path, f"KFD process directory for PID {pid}"
+        )
+        if process_path_identity is None:
+            raise GuardError(
+                f"KFD process directory disappeared before authentication: PID {pid}"
+            )
+        authentication = _target_process_identity(
             proc_root, pid, root_pid, root_start_time
         )
+        target_identity = authentication.identity
         selected_queues: list[int] = []
         vanished = False
         queues_path = process_path / "queues"
@@ -568,13 +637,43 @@ def classify_selected_gpu_queues(
             )
             if gpu_id == selected_gpu_id:
                 selected_queues.append(queue_id)
-        if not selected_queues and not vanished:
+        if not selected_queues and not vanished and not authentication.departed:
             continue
-        identity_after = _target_process_identity(
-            proc_root, pid, root_pid, root_start_time
+        authentication_after = _target_process_identity(
+            proc_root,
+            pid,
+            root_pid,
+            root_start_time,
+            expected_identity=target_identity,
         )
+        if authentication.departed:
+            if not authentication_after.departed:
+                raise GuardError(
+                    f"target process identity changed across queue disappearance: PID {pid}"
+                )
+            _confirm_departed_target(
+                proc_root=proc_root,
+                pid=pid,
+                process_path=process_path,
+                process_path_identity=process_path_identity,
+            )
+            continue
+        authenticated_departure = (
+            target_identity is not None
+            and authentication_after.departed
+            and authentication_after.identity == target_identity
+        )
+        if authenticated_departure:
+            _confirm_departed_target(
+                proc_root=proc_root,
+                pid=pid,
+                process_path=process_path,
+                process_path_identity=process_path_identity,
+            )
+            continue
         stable_target = (
-            target_identity is not None and identity_after == target_identity
+            target_identity is not None
+            and authentication_after.identity == target_identity
         )
         if vanished and not stable_target:
             raise GuardError(
