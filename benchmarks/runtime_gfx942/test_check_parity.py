@@ -58,11 +58,13 @@ def sealed_record(prefix: str, fields: dict[str, str], digest_field: str) -> str
     )
 
 
-def valid_topology(slot: int, backend: str, edge: str) -> tuple[str, str]:
+def valid_topology(
+    slot: int, backend: str, edge: str, *, gpu_index: int = 0
+) -> tuple[str, str]:
     inner = {
         "schema": CHECKER.R26_TOPOLOGY_SCHEMA,
         "placement": CHECKER.R26_FIXED_CONTEXT["placement"],
-        "gpu_index": "0",
+        "gpu_index": str(gpu_index),
         "pci_bdf": "0000:05:00.0",
         "unique_id": "0x0123456789abcdef",
         "numa_node": "0",
@@ -154,7 +156,9 @@ def render_system_identity(fields: dict[str, str]) -> str:
     )
 
 
-def valid_system_identity(edge: str = "start", *, address_seed: int = 1) -> str:
+def valid_system_identity(
+    edge: str = "start", *, address_seed: int = 1, gpu_index: int = 0
+) -> str:
     kernel_release = "6.8.0-124-generic"
     unique_id = "0123456789abcdef"
     hsa_path = "/opt/rocm-7.2.0/lib/libhsa-runtime64.so.1.18.70200"
@@ -242,18 +246,18 @@ def valid_system_identity(edge: str = "start", *, address_seed: int = 1) -> str:
     os_release = b'ID=ubuntu\nVERSION_ID="24.04"\nPRETTY_NAME="Ubuntu 24.04 LTS"\n'
     kernel_version = f"Linux version {kernel_release} (builder@test) #1 SMP\n".encode()
     product_snapshot = f"""\
-GPU[0] : Unique ID: 0x{unique_id}
-GPU[0] : Serial Number: 692424017146
-GPU[0] : PCI Bus: 0000:05:00.0
-GPU[0] : Card Series: AMD Instinct MI300X
-GPU[0] : Card Model: 0x74a1
-GPU[0] : Card Vendor: Advanced Micro Devices, Inc. [AMD/ATI]
-GPU[0] : Card SKU: M3000100
-GPU[0] : Subsystem ID: 0x74a1
-GPU[0] : Device Rev: 0x00
-GPU[0] : Node ID: 2
-GPU[0] : GUID: 28851
-GPU[0] : GFX Version: gfx942
+GPU[{gpu_index}] : Unique ID: 0x{unique_id}
+GPU[{gpu_index}] : Serial Number: 692424017146
+GPU[{gpu_index}] : PCI Bus: 0000:05:00.0
+GPU[{gpu_index}] : Card Series: AMD Instinct MI300X
+GPU[{gpu_index}] : Card Model: 0x74a1
+GPU[{gpu_index}] : Card Vendor: Advanced Micro Devices, Inc. [AMD/ATI]
+GPU[{gpu_index}] : Card SKU: M3000100
+GPU[{gpu_index}] : Subsystem ID: 0x74a1
+GPU[{gpu_index}] : Device Rev: 0x00
+GPU[{gpu_index}] : Node ID: 2
+GPU[{gpu_index}] : GUID: 28851
+GPU[{gpu_index}] : GFX Version: gfx942
 """.encode()
     fields = {
         "schema": CHECKER.R26_SYSTEM_IDENTITY_SCHEMA,
@@ -275,7 +279,7 @@ GPU[0] : GFX Version: gfx942
         "execution_environment": CHECKER.R26_EXECUTION_ENVIRONMENT,
         "gfx_version": "gfx942",
         "gpu_guid": "28851",
-        "gpu_index": "0",
+        "gpu_index": str(gpu_index),
         "gpu_node_id": "2",
         "gpu_serial": "692424017146",
         "hip_binary_sha256": "4" * 64,
@@ -447,6 +451,7 @@ def valid_log(
     *,
     set_id: str = "a" * 64,
     git_commit: str = "1" * 40,
+    gpu_index: int = 0,
 ) -> list[str]:
     order = CHECKER.R26_COUNTERBALANCE_ORDERS[slot]
     phase_values = {
@@ -501,12 +506,12 @@ def valid_log(
                     row[f"{phase}_{summary}_ns"] = "n/a"
         rows[backend] = render("", row).strip()
 
-    _, topology_sha256 = valid_topology(slot, order[0], "start")
+    _, topology_sha256 = valid_topology(slot, order[0], "start", gpu_index=gpu_index)
     context = {
         "schema": CHECKER.R26_INPLACE_SCHEMA,
         "git_commit": git_commit,
         "target": "gfx942:xnack-",
-        "gpu_index": "0",
+        "gpu_index": str(gpu_index),
         "unique_id": "0x0123456789abcdef",
         "uuid": "GPU-0123456789abcdef",
         "bytes": "1048576",
@@ -555,18 +560,21 @@ def valid_log(
         "counterbalance_set_id": set_id,
         "backend_order": ",".join(order),
     }
-    lines = [render("context", context), valid_system_identity("start", address_seed=1)]
+    lines = [
+        render("context", context),
+        valid_system_identity("start", address_seed=1, gpu_index=gpu_index),
+    ]
 
     snapshot = (
-        b"GPU[0] : GPU use (%): 0\n"
-        b"GPU[0] : sclk clock level: 4\n"
-        b"GPU[0] : power: 51.0 W\n"
-    )
+        f"GPU[{gpu_index}] : GPU use (%): 0\n"
+        f"GPU[{gpu_index}] : sclk clock level: 4\n"
+        f"GPU[{gpu_index}] : power: 51.0 W\n"
+    ).encode()
     encoded = base64.b64encode(snapshot).decode()
     digest = hashlib.sha256(snapshot).hexdigest()
     for backend in order:
-        start_topology, _ = valid_topology(slot, backend, "start")
-        end_topology, _ = valid_topology(slot, backend, "end")
+        start_topology, _ = valid_topology(slot, backend, "start", gpu_index=gpu_index)
+        end_topology, _ = valid_topology(slot, backend, "end", gpu_index=gpu_index)
         lines.extend(
             (
                 start_topology,
@@ -593,7 +601,7 @@ def valid_log(
                 rows[backend],
             )
         )
-    lines.append(valid_system_identity("end", address_seed=9))
+    lines.append(valid_system_identity("end", address_seed=9, gpu_index=gpu_index))
     return lines
 
 
@@ -628,6 +636,35 @@ class R26CheckerTests(unittest.TestCase):
             "comparison=kfd-host-launch-timing phase=recycle statistic=p50_ns "
             "value=114 evidence_only=true",
         )
+
+    def test_physical_gpu_index_is_distinct_from_backend_local_index(self) -> None:
+        lines = valid_log(gpu_index=2)
+        self.assertEqual(self.check(lines)[-1], "validation_status=pass")
+        for backend in ("kfd", "hsa", "hip"):
+            row = CHECKER.parse_fields(lines[backend_index(lines, backend)], 0)
+            self.assertEqual(row["device_index"], "0")
+
+        row_index = backend_index(lines, "hsa")
+        row = CHECKER.parse_fields(lines[row_index], row_index + 1)
+        row["device_index"] = "2"
+        lines[row_index] = render("", row).strip()
+        monitor_index = next(
+            index
+            for index, line in enumerate(lines)
+            if line.startswith("monitor ")
+            and CHECKER.parse_fields(line, index + 1).get("phase") == "hsa"
+        )
+        target = (lines[row_index] + "\n").encode()
+        lines[monitor_index] = rewrite_guard_record(
+            lines[monitor_index],
+            "monitor",
+            target_output_bytes=str(len(target)),
+            target_output_sha256=hashlib.sha256(target).hexdigest(),
+        )
+        with self.assertRaisesRegex(
+            CHECKER.CheckError, "backend hsa has invalid R26 field device_index"
+        ):
+            self.check(lines)
 
     def test_rejects_v2_r26_schema_instead_of_mixing_row_contracts(self) -> None:
         lines = valid_log()

@@ -535,7 +535,7 @@ int main(int argc, char **argv) {
   HSA_CHECK(hsa_queue_destroy(queue));
   HSA_CHECK(hsa_executable_destroy(kernel.executable));
   HSA_CHECK(hsa_shut_down());
-  fe2o3::r26::report("hsa", "n/a", "host-staged-one-buffer", "n/a", gpu_index,
+  fe2o3::r26::report("hsa", "n/a", "host-staged-one-buffer", "n/a", 0,
                      expected_unique_id, samples);
   return 0;
 }

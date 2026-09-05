@@ -231,14 +231,13 @@ class R26RunnerContractTests(unittest.TestCase):
 
     def test_hsa_pool_collection_skips_non_global_segments_first(self) -> None:
         callback = self.hsa_source[
-            self.hsa_source.index("hsa_status_t collect_pool(") :
-            self.hsa_source.index("void collect_pools(")
+            self.hsa_source.index("hsa_status_t collect_pool(") : self.hsa_source.index(
+                "void collect_pools("
+            )
         ]
         segment_query = callback.index("HSA_AMD_MEMORY_POOL_INFO_SEGMENT")
         segment_skip = callback.index("if (segment != HSA_AMD_SEGMENT_GLOBAL)")
-        successful_skip = callback.index(
-            "return HSA_STATUS_SUCCESS;", segment_skip
-        )
+        successful_skip = callback.index("return HSA_STATUS_SUCCESS;", segment_skip)
         self.assertLess(segment_query, segment_skip)
         self.assertLess(segment_skip, successful_skip)
         for collected_global_pool_operation in (
@@ -269,10 +268,16 @@ class R26RunnerContractTests(unittest.TestCase):
         )
         self.assertIn("matching_gpu_count != 1", self.hsa_source)
         self.assertIn("gpu = candidate", self.hsa_source)
-        self.assertIn('HIP_VISIBLE_DEVICES="${gpu_index}"', self.source)
         self.assertIn(
-            '"${hip_binary}" "${hsaco}" 0 "${unique_id}"', self.source
+            'report("hsa", "n/a", "host-staged-one-buffer", "n/a", 0,',
+            self.hsa_source,
         )
+        self.assertNotIn(
+            'report("hsa", "n/a", "host-staged-one-buffer", "n/a", gpu_index,',
+            self.hsa_source,
+        )
+        self.assertIn('HIP_VISIBLE_DEVICES="${gpu_index}"', self.source)
+        self.assertIn('"${hip_binary}" "${hsaco}" 0 "${unique_id}"', self.source)
 
     def test_rocm_smi_and_persistence_tools_use_fixed_environments(self) -> None:
         rocm_invocations = [
