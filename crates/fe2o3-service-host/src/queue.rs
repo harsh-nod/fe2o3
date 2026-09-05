@@ -719,6 +719,26 @@ impl<const N: usize> ServiceRecycledQueueSessionV1<N> {
         self.recycle
     }
 
+    /// Reissues the exact addressless ranges for a retained device-local
+    /// partition before detaching the recycled queue.
+    ///
+    /// This read-only operation validates the move-only partition witness
+    /// against the same private allocation ledger retained after detach. It
+    /// preserves queue custody, dispatch generation, completed-read state, and
+    /// native allocation ownership. Only current addressless member ranges are
+    /// returned; no raw address or allocation-mutation authority is exposed.
+    pub fn reissue_partitioned_device_local<R, const M: usize>(
+        &self,
+        subleases: &ServiceAllocationSubleaseSetV1<R, DeviceLocalAllocationV1, M>,
+    ) -> Result<[ServiceDeviceDispatchRangeV1; M], ServiceAllocationErrorV1>
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        self.owner
+            .ledger
+            .reissue_partitioned_device_local(subleases)
+    }
+
     /// Consumes recycled custody into a qualification-only terminal fault state.
     ///
     /// No KFD operation is performed and no native or hardware fault is claimed.
@@ -2179,6 +2199,25 @@ mod tests {
             write!(&mut actual, "{byte:02x}").unwrap();
         }
         assert_eq!(actual, SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1);
+    }
+
+    #[test]
+    fn recycled_partition_reissue_has_an_independent_borrowed_member_count() {
+        type Subleases = ServiceAllocationSubleaseSetV1<
+            crate::DeviceWorkspaceRoleV1,
+            DeviceLocalAllocationV1,
+            2,
+        >;
+        let method: fn(
+            &ServiceRecycledQueueSessionV1<3>,
+            &Subleases,
+        )
+            -> Result<[ServiceDeviceDispatchRangeV1; 2], ServiceAllocationErrorV1> =
+            ServiceRecycledQueueSessionV1::<3>::reissue_partitioned_device_local::<
+                crate::DeviceWorkspaceRoleV1,
+                2,
+            >;
+        let _ = method;
     }
 
     #[cfg(feature = "qualification-fault-injection")]

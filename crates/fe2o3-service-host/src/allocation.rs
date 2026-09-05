@@ -3668,6 +3668,144 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn partition_reissue_rejects_every_binding_member_and_ordinal_drift() {
+        let mut prefix = binding(AllocationRoleV1::DeviceState, AllocationKindV1::DeviceLocal);
+        prefix.extent_bytes = 4_096;
+        let mut expected = binding(
+            AllocationRoleV1::DeviceWorkspace,
+            AllocationKindV1::DeviceLocal,
+        );
+        expected.id = 2;
+        expected.extent_bytes = 12_288;
+        let ranges =
+            validate_sublease_layout(expected, [(0, 4_096, 4_096), (4_096, 8_192, 4_096)]).unwrap();
+        let exact =
+            ServiceAllocationSubleaseSetV1::<DeviceWorkspaceRoleV1, DeviceLocalAllocationV1, 2> {
+                key: key(expected),
+                ranges,
+            };
+        let mut ledger = ServiceQueueAllocationLedgerV1 {
+            owner: expected.owner,
+            next_allocation_id: 3,
+            allocations: vec![
+                OwnedAllocationV1 {
+                    binding: prefix,
+                    token: None,
+                    subleases: None,
+                },
+                OwnedAllocationV1 {
+                    binding: expected,
+                    token: None,
+                    subleases: Some(ranges.to_vec()),
+                },
+            ],
+            device_bytes: prefix.extent_bytes + expected.extent_bytes,
+            host_bytes: 0,
+            device_bindings: vec![prefix, expected],
+            host_bindings: vec![],
+        };
+
+        let reissued = ledger.reissue_partitioned_device_local(&exact).unwrap();
+        assert_eq!(reissued.map(|range| range.data_index), [1, 1]);
+        assert_eq!(reissued.map(|range| range.offset_bytes), [0, 4_096]);
+        assert_eq!(reissued.map(|range| range.extent_bytes), [4_096, 8_192]);
+        assert_eq!(
+            reissued.map(|range| range.sublease_index),
+            [Some(0), Some(1)]
+        );
+        assert!(
+            reissued
+                .iter()
+                .all(|range| ledger.validate_range(*range).is_ok())
+        );
+
+        let mut foreign_owner = expected;
+        foreign_owner.owner.owner_generation += 1;
+        let mut foreign_device_owner = expected;
+        foreign_device_owner.owner.device_owner_generation += 1;
+        let mut foreign_vm_owner = expected;
+        foreign_vm_owner.owner.vm_owner_generation += 1;
+        for binding in [foreign_owner, foreign_device_owner, foreign_vm_owner] {
+            let foreign = ServiceAllocationSubleaseSetV1::<
+                DeviceWorkspaceRoleV1,
+                DeviceLocalAllocationV1,
+                2,
+            > {
+                key: key(binding),
+                ranges,
+            };
+            assert!(matches!(
+                ledger.reissue_partitioned_device_local(&foreign),
+                Err(ServiceAllocationErrorV1::OwnerBindingMismatch)
+            ));
+        }
+
+        let mut unknown_partition = expected;
+        unknown_partition.id += 1;
+        let unknown_partition =
+            ServiceAllocationSubleaseSetV1::<DeviceWorkspaceRoleV1, DeviceLocalAllocationV1, 2> {
+                key: key(unknown_partition),
+                ranges,
+            };
+        assert!(matches!(
+            ledger.reissue_partitioned_device_local(&unknown_partition),
+            Err(ServiceAllocationErrorV1::AllocationGenerationMismatch)
+        ));
+
+        let mut stale_generation = expected;
+        stale_generation.generation += 1;
+        let stale_generation =
+            ServiceAllocationSubleaseSetV1::<DeviceWorkspaceRoleV1, DeviceLocalAllocationV1, 2> {
+                key: key(stale_generation),
+                ranges,
+            };
+        assert!(matches!(
+            ledger.reissue_partitioned_device_local(&stale_generation),
+            Err(ServiceAllocationErrorV1::AllocationGenerationMismatch)
+        ));
+
+        let wrong_role =
+            ServiceAllocationSubleaseSetV1::<DeviceStateRoleV1, DeviceLocalAllocationV1, 2> {
+                key: key(expected),
+                ranges,
+            };
+        assert!(matches!(
+            ledger.reissue_partitioned_device_local(&wrong_role),
+            Err(ServiceAllocationErrorV1::RoleMismatch)
+        ));
+
+        let mut wrong_member = ranges;
+        wrong_member[1].extent_bytes -= 4_096;
+        let wrong_member =
+            ServiceAllocationSubleaseSetV1::<DeviceWorkspaceRoleV1, DeviceLocalAllocationV1, 2> {
+                key: key(expected),
+                ranges: wrong_member,
+            };
+        assert!(matches!(
+            ledger.reissue_partitioned_device_local(&wrong_member),
+            Err(ServiceAllocationErrorV1::SubleaseBindingMismatch)
+        ));
+
+        let mut wrong_member_ordinal = ranges;
+        wrong_member_ordinal.swap(0, 1);
+        let wrong_member_ordinal =
+            ServiceAllocationSubleaseSetV1::<DeviceWorkspaceRoleV1, DeviceLocalAllocationV1, 2> {
+                key: key(expected),
+                ranges: wrong_member_ordinal,
+            };
+        assert!(matches!(
+            ledger.reissue_partitioned_device_local(&wrong_member_ordinal),
+            Err(ServiceAllocationErrorV1::SubleaseBindingMismatch)
+        ));
+
+        ledger.device_bindings[1] = prefix;
+        assert!(matches!(
+            ledger.reissue_partitioned_device_local(&exact),
+            Err(ServiceAllocationErrorV1::AllocationGenerationMismatch)
+        ));
+    }
+
     fn queue_ledger(expected: AllocationBindingV1) -> ServiceQueueAllocationLedgerV1 {
         ServiceQueueAllocationLedgerV1 {
             owner: expected.owner,
