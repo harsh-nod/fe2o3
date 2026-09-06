@@ -1633,13 +1633,13 @@ pub(crate) enum ProductionRankedProjectionErrorV1 {
     Incomplete(&'static str),
     UnresolvedCallableEffect {
         block: usize,
-        source: SemanticSourceProvenanceV1,
+        source: Box<SemanticSourceProvenanceV1>,
         callee: u32,
         tail: bool,
     },
     UnresolvedDropEffect {
         block: usize,
-        source: SemanticSourceProvenanceV1,
+        source: Box<SemanticSourceProvenanceV1>,
         drop_glue: u32,
     },
     MissingAllocationProvenance {
@@ -1652,18 +1652,18 @@ pub(crate) enum ProductionRankedProjectionErrorV1 {
         kind: &'static str,
         expected: bool,
         condition_local: Option<u32>,
-        source: SemanticSourceProvenanceV1,
+        source: Box<SemanticSourceProvenanceV1>,
     },
     Unsupported(&'static str),
     Recipe(ProductionRankedKernelErrorV1),
     Construction(fe2o3_pliron::NameError),
     Compile {
-        error: ProductionRankedCompileErrorV1,
+        error: Box<ProductionRankedCompileErrorV1>,
         ranked_ir: String,
         access_sources: Vec<ProjectedAccessSourceV1>,
     },
     ReferenceEffectJoin(
-        crate::production_reference_effect_join_v2::ProductionReferenceEffectJoinErrorV2,
+        Box<crate::production_reference_effect_join_v2::ProductionReferenceEffectJoinErrorV2>,
     ),
 }
 
@@ -1703,7 +1703,7 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
                 formatter,
                 "semantic-to-ranked projection incomplete: a {}call terminator before exact callable memory-effect summaries are available; semantic block bb{block} at {} targets callable {callee}",
                 if *tail { "tail " } else { "" },
-                source_label(*source),
+                source_label(**source),
             ),
             Self::UnresolvedDropEffect {
                 block,
@@ -1712,7 +1712,7 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
             } => write!(
                 formatter,
                 "semantic-to-ranked projection incomplete: a drop terminator before exact drop-glue memory-effect summaries are available; semantic block bb{block} at {} targets drop glue {drop_glue}",
-                source_label(*source),
+                source_label(**source),
             ),
             Self::MissingAllocationProvenance {
                 local,
@@ -1731,7 +1731,7 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
             } => write!(
                 formatter,
                 "semantic-to-ranked projection incomplete: Rust {kind} assert terminator in semantic block bb{block} at {} expected condition{} to be {}; no exact dominating proof establishes it on every incoming path",
-                source_label(*source),
+                source_label(**source),
                 condition_local
                     .map(|local| format!(" local {local}"))
                     .unwrap_or_default(),
@@ -1750,7 +1750,7 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
                 error.fmt(formatter)?;
                 if let ProductionRankedCompileErrorV1::Session(
                     ProductionSessionErrorV1::RankedBounds(bounds),
-                ) = error
+                ) = error.as_ref()
                 {
                     for finding in bounds.report().findings() {
                         if let fe2o3_kernel_analysis::RankedBoundsFindingV1::StaticOutOfBounds {
@@ -1794,7 +1794,7 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
             Self::SemanticU32Induction(error) => Some(error),
             Self::StructuralValidation(error) => Some(error),
             Self::Recipe(error) => Some(error),
-            Self::Compile { error, .. } => Some(error),
+            Self::Compile { error, .. } => Some(error.as_ref()),
             Self::ReferenceEffectJoin(error) => Some(error),
             Self::Incomplete(_)
             | Self::UnresolvedCallableEffect { .. }
@@ -2321,15 +2321,11 @@ fn scalar_defined_callable_rvalue_v1(
                 && scalar_defined_callable_operand_v1(types, function, unchecked.left(), work)?
                 && scalar_defined_callable_operand_v1(types, function, unchecked.right(), work)?)
         }
-        SemanticRvalueKindV1::Cast { kind, operand }
-            if matches!(
-                kind,
-                SemanticCastKindV1::Integer | SemanticCastKindV1::Float
-            ) =>
-        {
-            Ok(scalar_defined_callable_type_v1(types, value.result_type())
-                && scalar_defined_callable_operand_v1(types, function, operand, work)?)
-        }
+        SemanticRvalueKindV1::Cast {
+            kind: SemanticCastKindV1::Integer | SemanticCastKindV1::Float,
+            operand,
+        } => Ok(scalar_defined_callable_type_v1(types, value.result_type())
+            && scalar_defined_callable_operand_v1(types, function, operand, work)?),
         SemanticRvalueKindV1::Cast { .. }
         | SemanticRvalueKindV1::Borrow { .. }
         | SemanticRvalueKindV1::AddressOf { .. }
@@ -2403,6 +2399,7 @@ fn deterministic_scalar_defined_callable_statement_v1(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn scalar_defined_callable_call_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -2461,6 +2458,7 @@ fn scalar_defined_callable_call_v1(
     Ok(DefinedCallableTerminatorEligibilityV1::shared(eligible))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn scalar_defined_callable_tail_call_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -2544,6 +2542,7 @@ fn scalar_defined_callable_assert_message_v1(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn scalar_defined_callable_terminator_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -3368,7 +3367,7 @@ fn project_and_verify_ranked_root_v1(
             system_coherent_allocations,
         )
         .map_err(|error| ProductionRankedProjectionErrorV1::Compile {
-            error,
+            error: Box::new(error),
             ranked_ir,
             access_sources: sources,
         })?
@@ -3384,7 +3383,7 @@ fn project_and_verify_ranked_root_v1(
             reserved_reference_values,
         )
         .and_then(|request| request.prove_and_compile())
-        .map_err(ProductionRankedProjectionErrorV1::ReferenceEffectJoin)?
+        .map_err(|error| ProductionRankedProjectionErrorV1::ReferenceEffectJoin(Box::new(error)))?
     };
     let ranked_ir = format_ranked_cfg(function_name(root_function)?, lowering.kernel().blocks())?;
     let export_symbol = root_function
@@ -5659,6 +5658,7 @@ fn project_gfx950_transpose_read_v1(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn transfer_capability_terminator_v1(
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -6919,6 +6919,7 @@ fn project_generated_terminator_effects_v1(
     Ok(projected)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn project_intrinsic_contracts(
     callables: &[SemanticCallableDeclV1],
     callable_effects: &DefinedCallableEmptyEffectSummariesV1,
@@ -10704,6 +10705,7 @@ fn same_semantic_operand_value_v1(left: &SemanticOperandV1, right: &SemanticOper
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn source_induction_update_v1<'a>(
     function: &'a SemanticFunctionDeclV1,
     graph: &ProjectedLoopCfgV1,
@@ -10880,6 +10882,7 @@ fn source_induction_update_v1<'a>(
     Ok(Some((update, step)))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn exact_optional_induction_selector_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -11048,8 +11051,7 @@ fn project_uniform_inductions_v1(
             explicit_value,
             ..
         } = &topology.preheader_control
-        {
-            if !exact_optional_induction_selector_v1(
+            && !exact_optional_induction_selector_v1(
                 types,
                 function,
                 discriminant,
@@ -11058,11 +11060,11 @@ fn project_uniform_inductions_v1(
                 stable_argument_origins,
                 local_definitions,
                 &semantic_ranges.address_escaped,
-            ) {
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "an optional uniform induction preheader is not controlled by one exact lane-uniform selector",
-                ));
-            }
+            )
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "an optional uniform induction preheader is not controlled by one exact lane-uniform selector",
+            ));
         }
         let induction_type = function
             .locals()
@@ -11839,6 +11841,7 @@ enum AssertionRangeOperandTaskV1 {
     ProjectedPlace(SemanticPlaceV1),
 }
 
+#[allow(clippy::large_enum_variant)]
 enum AssertionRangeExpressionTaskV1 {
     Operand(AssertionRangeOperandTaskV1),
     Binary {
@@ -15906,6 +15909,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
         Ok(can_reach_use)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn local_is_stable_between_edge_and_use(
         &mut self,
         local: usize,
@@ -18792,7 +18796,7 @@ fn projected_cfg_terminator(
                     kind: semantic_assert_kind_v1(message),
                     expected: *expected,
                     condition_local: simple_operand_local(condition).map(SemanticLocalIdV1::index),
-                    source: block.terminator().source(),
+                    source: Box::new(block.terminator().source()),
                 });
             }
             Ok(ProjectedCfgTerminatorV1::Branch(target(edge.target())?))
@@ -18925,6 +18929,7 @@ fn forward_live_inductions(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn build_ranked_cfg(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -21672,7 +21677,7 @@ fn project_terminator_accesses(
         SemanticTerminatorKindV1::Drop { drop_glue, .. } => {
             Err(ProductionRankedProjectionErrorV1::UnresolvedDropEffect {
                 block: block_index,
-                source,
+                source: Box::new(source),
                 drop_glue: drop_glue.index(),
             })
         }
@@ -21927,7 +21932,7 @@ fn require_bounds_neutral_callable(
         | None => Err(
             ProductionRankedProjectionErrorV1::UnresolvedCallableEffect {
                 block,
-                source,
+                source: Box::new(source),
                 callee: callable.index(),
                 tail,
             },
@@ -24735,13 +24740,11 @@ mod tests {
                 5,
             )
         };
-        let offset_success = if matches!(hostility, FlatIndexHostilityV1::CallRedefinedOffset) {
-            10
-        } else if matches!(hostility, FlatIndexHostilityV1::CallRedefinedOffsetAlias) {
-            10
-        } else if matches!(
+        let offset_success = if matches!(
             hostility,
-            FlatIndexHostilityV1::CheckedProjectionOffsetCallRedefined
+            FlatIndexHostilityV1::CallRedefinedOffset
+                | FlatIndexHostilityV1::CallRedefinedOffsetAlias
+                | FlatIndexHostilityV1::CheckedProjectionOffsetCallRedefined
         ) {
             10
         } else {
@@ -28395,15 +28398,15 @@ mod tests {
     }
 
     fn guarded_value_with_optional_loop_redefinition(redefine: bool) -> SemanticFunctionDeclV1 {
-        let loop_statements = redefine
-            .then(|| {
-                vec![typed_assignment(
-                    1,
-                    U64_TYPE,
-                    SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 0, 8)),
-                )]
-            })
-            .unwrap_or_default();
+        let loop_statements = if redefine {
+            vec![typed_assignment(
+                1,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 0, 8)),
+            )]
+        } else {
+            Vec::new()
+        };
         projection_function_with_locals(
             vec![
                 block(185, vec![], zero_switch(1, U64_TYPE, 3, 1)),
@@ -28668,7 +28671,7 @@ mod tests {
         insert_assertion_proof_cache_with_limit(&mut cache, (1, 0), false, 2).unwrap();
         insert_assertion_proof_cache_with_limit(&mut cache, (0, 0), false, 2).unwrap();
         assert_eq!(cache.len(), 2);
-        assert_eq!(cache[&(0, 0)], false);
+        assert!(!cache[&(0, 0)]);
         assert!(matches!(
             insert_assertion_proof_cache_with_limit(&mut cache, (2, 0), true, 2),
             Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -28767,6 +28770,7 @@ mod tests {
         )
     }
 
+    #[allow(clippy::type_complexity)]
     fn deterministic_scalar_switch_projection(
         callables: &[SemanticCallableDeclV1],
         function: &SemanticFunctionDeclV1,
@@ -28791,6 +28795,7 @@ mod tests {
         )
     }
 
+    #[allow(clippy::type_complexity)]
     fn deterministic_scalar_switch_projection_with_allocations(
         callables: &[SemanticCallableDeclV1],
         function: &SemanticFunctionDeclV1,
@@ -28820,6 +28825,7 @@ mod tests {
         )
     }
 
+    #[allow(clippy::type_complexity)]
     fn deterministic_scalar_switch_projection_with_effects(
         callables: &[SemanticCallableDeclV1],
         callable_effects: &DefinedCallableEmptyEffectSummariesV1,
@@ -29766,6 +29772,7 @@ mod tests {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn transparent_u16_marker_decl_v1(
         tag: u8,
         shape: SemanticTypeShapeV1,
@@ -31530,7 +31537,7 @@ mod tests {
         );
         let function = call_discriminant_switch(0, vec![tensor_operand(1), constant(16)]);
         let (switches, operations, _) = deterministic_scalar_switch_projection(
-            &[callable.clone()],
+            std::slice::from_ref(&callable),
             &function,
             &vec![None; function.locals().len()],
             vec![],
@@ -31579,7 +31586,7 @@ mod tests {
             ],
         );
         let (switches, operations, _) = deterministic_scalar_switch_projection(
-            &[strided_callable.clone()],
+            std::slice::from_ref(&strided_callable),
             &strided,
             &vec![None; strided.locals().len()],
             vec![],
@@ -31605,7 +31612,7 @@ mod tests {
             ],
         );
         let (switches, operations, _) = deterministic_scalar_switch_projection(
-            &[strided_callable.clone()],
+            std::slice::from_ref(&strided_callable),
             &varying_strided,
             &vec![None; varying_strided.locals().len()],
             vec![],
@@ -32142,6 +32149,7 @@ mod tests {
         )
     }
 
+    #[allow(clippy::type_complexity)]
     fn project_optional_uniform_induction_for_test(
         function: &SemanticFunctionDeclV1,
     ) -> Result<
@@ -35559,15 +35567,15 @@ mod tests {
     fn revalidated_guard_with_optional_direct_redefinition(
         redefine_after_guard: bool,
     ) -> SemanticFunctionDeclV1 {
-        let body_statements = redefine_after_guard
-            .then(|| {
-                vec![typed_assignment(
-                    1,
-                    U64_TYPE,
-                    SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 200, 8)),
-                )]
-            })
-            .unwrap_or_default();
+        let body_statements = if redefine_after_guard {
+            vec![typed_assignment(
+                1,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 200, 8)),
+            )]
+        } else {
+            Vec::new()
+        };
         projection_function_with_locals(
             vec![
                 block(
@@ -36490,7 +36498,7 @@ mod tests {
                         view: ProductionRankedValueV1::Local(access_view),
                         indices,
                     } if *access_view == view
-                        && indices.as_slice() == &[ProductionRankedValueV1::Local(index)]
+                        && indices.as_slice() == [ProductionRankedValueV1::Local(index)]
                 )
             })
             .count();

@@ -306,27 +306,6 @@ fn compiler_module_symbol_closure_v1(module: &Module) -> CompilerModuleSymbolClo
     }
 }
 
-#[cfg(test)]
-mod production_symbol_closure_tests {
-    use super::*;
-    use fe2o3_kernel_ir::{Function, Signature};
-
-    #[test]
-    fn gfx942_diagnostic_intrinsics_are_not_link_imports() {
-        let mut module = Module::new("tests::diagnostic_symbol_closure");
-        module
-            .functions
-            .push(AmdGpuDiagnosticOperation::Trap.declaration());
-        module.functions.push(Function::external_import(
-            "real_device_import",
-            Signature::new(vec![], vec![]),
-        ));
-
-        let symbols = compiler_module_symbol_closure_v1(&module);
-        assert_eq!(symbols.external_declarations, ["real_device_import"]);
-    }
-}
-
 fn ocml_link_imports(module: &Module) -> impl Iterator<Item = &'static str> + '_ {
     module.functions.iter().filter_map(|function| {
         let FloatOperation::F32Math {
@@ -694,5 +673,26 @@ fn check_compiler_module_limit(
         Err(CompilerModuleConstructionError::LimitExceeded { field, actual, max })
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod production_symbol_closure_tests {
+    use super::*;
+    use fe2o3_kernel_ir::{Function, Signature};
+
+    #[test]
+    fn gfx942_diagnostic_intrinsics_are_not_link_imports() {
+        let mut module = Module::new("tests::diagnostic_symbol_closure");
+        module
+            .functions
+            .push(AmdGpuDiagnosticOperation::Trap.declaration());
+        module.functions.push(Function::external_import(
+            "real_device_import",
+            Signature::new(vec![], vec![]),
+        ));
+
+        let symbols = compiler_module_symbol_closure_v1(&module);
+        assert_eq!(symbols.external_declarations, ["real_device_import"]);
     }
 }

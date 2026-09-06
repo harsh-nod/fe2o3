@@ -152,6 +152,7 @@ fn scalar_json(element: &str, bits: u128, element_bytes: usize) -> Value {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn exact_scalar_output_case(
     scratch: &Scratch,
     bundle: &Path,

@@ -946,7 +946,7 @@ fn terminal_operation_v1<'tcx>(
                 .get(element_storage.index() as usize)
                 .ok_or_else(|| body_owner_table_mismatch_v1("exact LDS storage type"))?;
             let alignment = storage.layout().alignment_bytes();
-            if !storage.layout().size_bytes().is_some_and(|size| size != 0)
+            if storage.layout().size_bytes().is_none_or(|size| size == 0)
                 || alignment == 0
                 || alignment > 16
                 || !alignment.is_power_of_two()
@@ -3053,7 +3053,7 @@ fn rust_workgroup_pipeline_contract_v1<'tcx>(
     Some((
         *element,
         u32::try_from(*buffers).ok()?,
-        u64::try_from(*elements).ok()?,
+        *elements,
         u32::try_from(*prefetch_distance).ok()?,
     ))
 }

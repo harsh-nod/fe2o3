@@ -2617,14 +2617,15 @@ impl<'tcx> DeviceCollector<'tcx> {
                 body,
                 caller,
             ),
-            TerminatorKind::Assert { unwind, .. }
-                if matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) =>
-            {
-                Ok(())
-            }
-            TerminatorKind::Drop { place, unwind, .. }
-                if matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) =>
-            {
+            TerminatorKind::Assert {
+                unwind: UnwindAction::Continue | UnwindAction::Unreachable,
+                ..
+            } => Ok(()),
+            TerminatorKind::Drop {
+                place,
+                unwind: UnwindAction::Continue | UnwindAction::Unreachable,
+                ..
+            } => {
                 match classify_rustc_drop_v1(self.tcx, *caller, body, *place) {
                     Ok(ProductionRustcDropClassV1::Trivial) => Ok(()),
                     Ok(ProductionRustcDropClassV1::RequiresDropGlue) => Err(self.reachable_error(

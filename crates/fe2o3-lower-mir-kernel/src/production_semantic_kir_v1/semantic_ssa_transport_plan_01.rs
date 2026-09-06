@@ -104,6 +104,7 @@ fn promoted_transport_descriptor_v1(
 }
 
 impl SemanticControlFlowSsaPlanV1 {
+    #[allow(clippy::too_many_arguments)]
     fn analyze(
         types: &[SemanticTypeDeclV1],
         callables: &[SemanticCallableDeclV1],
@@ -325,9 +326,7 @@ impl SemanticControlFlowSsaPlanV1 {
                 let definitions = shared
                     .edge_definitions(edge)
                     .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
-                    .iter()
-                    .copied()
-                    .collect();
+                    .to_vec();
                 edge_definitions.insert((block.get(), ordinal as u32), definitions);
                 edge_arguments.insert((block.get(), ordinal as u32), arguments);
             }

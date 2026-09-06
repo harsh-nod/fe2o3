@@ -477,16 +477,16 @@ fn validate_partial_move_terminator_v1(
     state: &mut SemanticPartialMoveStateV1,
     budget: &mut SemanticPartialMoveBudgetV1,
 ) -> Result<(), ProductionSemanticSsaErrorV1> {
-    let mut operand = |operand| {
-        validate_partial_move_operand_v1(function, types, operand, location, state, budget)
-    };
     match terminator {
-        SemanticTerminatorKindV1::SwitchInt { discriminant, .. } => operand(discriminant),
+        SemanticTerminatorKindV1::SwitchInt { discriminant, .. } => {
+            validate_partial_move_operand_v1(function, types, discriminant, location, state, budget)
+        }
         SemanticTerminatorKindV1::Call(call) => {
             for argument in call.arguments() {
-                operand(argument)?;
+                validate_partial_move_operand_v1(
+                    function, types, argument, location, state, budget,
+                )?;
             }
-            drop(operand);
             if let Some(destination) = call.destination()
                 && !destination.place().projections().is_empty()
             {
@@ -501,7 +501,9 @@ fn validate_partial_move_terminator_v1(
         }
         SemanticTerminatorKindV1::TailCall(call) => {
             for argument in call.arguments() {
-                operand(argument)?;
+                validate_partial_move_operand_v1(
+                    function, types, argument, location, state, budget,
+                )?;
             }
             Ok(())
         }
@@ -511,14 +513,12 @@ fn validate_partial_move_terminator_v1(
         SemanticTerminatorKindV1::Assert {
             condition, message, ..
         } => {
-            operand(condition)?;
-            drop(operand);
+            validate_partial_move_operand_v1(function, types, condition, location, state, budget)?;
             validate_partial_move_assert_message_v1(
                 function, types, message, location, state, budget,
             )
         }
         SemanticTerminatorKindV1::Return => {
-            drop(operand);
             if let Some(local) = return_local {
                 validate_partial_move_path_read_v1(local, &[], location, state, budget)?;
             }

@@ -196,7 +196,7 @@ impl CompilerOwnedReferenceEffectRequestV2 {
             imported_proofs,
             policy,
         )
-        .map_err(ProductionReferenceEffectJoinErrorV2::Compile)
+        .map_err(|error| ProductionReferenceEffectJoinErrorV2::Compile(Box::new(error)))
     }
 }
 
@@ -1482,7 +1482,7 @@ pub(crate) enum ProductionReferenceEffectJoinErrorV2 {
         detail: String,
     },
     ProofExecution(String),
-    Compile(ProductionRankedCompileErrorV2),
+    Compile(Box<ProductionRankedCompileErrorV2>),
 }
 
 impl fmt::Display for ProductionReferenceEffectJoinErrorV2 {

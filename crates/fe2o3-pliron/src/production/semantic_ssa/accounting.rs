@@ -8,36 +8,37 @@ pub(super) fn retained_cross_edge_variables_v1(
     let block_count = input.blocks().len();
     let mut first_mention = vec![None::<usize>; variable_count];
     let mut multiple_blocks = vec![false; variable_count];
-    let mut mention = |variable: SsaVariableIdV1, block: usize| {
-        let variable = variable.get() as usize;
-        if !input.promotable()[variable] {
-            match first_mention[variable] {
-                Some(first) if first != block => multiple_blocks[variable] = true,
-                Some(_) => {}
-                None => first_mention[variable] = Some(block),
+    {
+        let mut mention = |variable: SsaVariableIdV1, block: usize| {
+            let variable = variable.get() as usize;
+            if !input.promotable()[variable] {
+                match first_mention[variable] {
+                    Some(first) if first != block => multiple_blocks[variable] = true,
+                    Some(_) => {}
+                    None => first_mention[variable] = Some(block),
+                }
             }
-        }
-    };
+        };
 
-    let entry = input.entry().get() as usize;
-    for variable in input.entry_definitions().iter().copied() {
-        mention(variable, entry);
-    }
-    for (block_index, block) in input.blocks().iter().enumerate() {
-        let block_id = SsaBlockIdV1::new(block_index as u32);
-        if !plan.is_reachable(block_id) {
-            continue;
+        let entry = input.entry().get() as usize;
+        for variable in input.entry_definitions().iter().copied() {
+            mention(variable, entry);
         }
-        for event in block.events().iter().copied() {
-            mention(event.variable(), block_index);
-        }
-        for edge in block.edges() {
-            for variable in edge.definitions().iter().copied() {
-                mention(variable, block_index);
+        for (block_index, block) in input.blocks().iter().enumerate() {
+            let block_id = SsaBlockIdV1::new(block_index as u32);
+            if !plan.is_reachable(block_id) {
+                continue;
+            }
+            for event in block.events().iter().copied() {
+                mention(event.variable(), block_index);
+            }
+            for edge in block.edges() {
+                for variable in edge.definitions().iter().copied() {
+                    mention(variable, block_index);
+                }
             }
         }
     }
-    drop(mention);
 
     // Kahn elimination leaves cyclic blocks and blocks whose execution depends
     // on a cycle. A retained local mentioned there may carry state across a

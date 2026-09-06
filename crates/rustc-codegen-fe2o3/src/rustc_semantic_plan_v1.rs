@@ -432,6 +432,7 @@ impl<'tcx> ProductionSemanticPreflightPlanV1<'tcx> {
         &self.canonical_transcript
     }
 
+    #[allow(clippy::type_complexity)]
     pub(crate) fn into_identity_transcript_and_debug_files(
         self,
     ) -> Result<
@@ -1572,6 +1573,7 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn capture_body_sources_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     function: SemanticFunctionIdV1,
@@ -1788,7 +1790,7 @@ fn with_debug_source_capture_v2<T, E>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn capture_debug_sources_v2<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &Body<'tcx>,
@@ -2611,6 +2613,7 @@ fn build_canonical_producer_tables_v1<'tcx>(
     })
 }
 
+#[allow(clippy::type_complexity)]
 fn convert_debug_sources_v2(
     function: SemanticFunctionIdV1,
     function_identity: SemanticFunctionIdentityV1,

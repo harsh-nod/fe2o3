@@ -120,7 +120,7 @@
         .unwrap();
         let error = ProductionRankedProjectionErrorV1::UnresolvedCallableEffect {
             block: 19,
-            source: SemanticSourceProvenanceV1::new(Some(origin), Some(origin)),
+            source: Box::new(SemanticSourceProvenanceV1::new(Some(origin), Some(origin))),
             callee: 23,
             tail: false,
         };
@@ -394,7 +394,7 @@
         };
         let mut state = HashMap::new();
         transfer_capability_terminator_v1(
-            &[callable.clone()],
+            std::slice::from_ref(&callable),
             &function,
             0,
             &mut state,
@@ -423,7 +423,7 @@
         for noalias_class in [0, 2] {
             let mut rejected = HashMap::new();
             transfer_capability_terminator_v1(
-                &[callable.clone()],
+                std::slice::from_ref(&callable),
                 &function,
                 0,
                 &mut rejected,

@@ -187,6 +187,7 @@ fn select_simulation_mode(
     prepared
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare(
     argv: Vec<OsString>,
     selected_crate: Option<OsString>,

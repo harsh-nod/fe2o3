@@ -1744,6 +1744,7 @@ fn kernel_storage_map_body_v1(
     Ok((ordinal, layout.body))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare_production_semantic_debug_inputs_v1(
     lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
     rustc_identity_inventory: &crate::collector::AuthenticatedRustcIdentityInventoryV3,
