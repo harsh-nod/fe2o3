@@ -349,7 +349,9 @@ def validate_row(row: dict[str, str]) -> dict[str, dict[str, list[int]]]:
         expected_kfd = {
             "directional_queue_count": "0" if kind == "standalone" else "2",
             "striped_queue_count": str(queue_count),
-            "directional_smoke": "pass",
+            "directional_smoke": (
+                "not-applicable" if kind == "standalone" else "pass"
+            ),
             "aggregate_poll_smoke": "pass",
             "destroy": "pass",
         }

@@ -221,8 +221,11 @@ The checker recomputes both digests, requires distinct u32 queue IDs, and
 validates exact role order and alternating gfx942 engine placement. Combined
 profiles order H2D engine 1, D2H engine 0, then striped queues 0 through q-1 on
 alternating engines; standalone `striped16` retains only its 16 alternating
-striped queues. KFD rows also require passing directional, aggregate-poll, and
-destruction sentinels.
+striped queues. Combined KFD rows require passing directional, aggregate-poll,
+and destruction sentinels. Standalone `striped16` records the directional
+sentinel as `not-applicable` because all 16 admitted queues belong to the
+striped set, while still requiring passing aggregate-poll and destruction
+sentinels.
 
 Each of the 90 backend/workload/slot phases runs under the R26 2 ms process-tree
 queue monitor with a 10 ms maximum observation gap. Start/end telemetry,

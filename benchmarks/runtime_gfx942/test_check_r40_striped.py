@@ -71,7 +71,9 @@ def valid_row(
                 "engine_placement_sha256": hashlib.sha256(
                     engine_placement.encode("ascii")
                 ).hexdigest(),
-                "directional_smoke": "pass",
+                "directional_smoke": (
+                    "not-applicable" if kind == "standalone" else "pass"
+                ),
                 "aggregate_poll_smoke": "pass",
                 "destroy": "pass",
             }
@@ -512,6 +514,18 @@ class R40StripedCheckerTests(unittest.TestCase):
         ).hexdigest()
         with self.assertRaisesRegex(CHECKER.CheckError, "canonical role order"):
             CHECKER.validate_row(row)
+
+    def test_directional_smoke_matches_resource_kind(self) -> None:
+        standalone = valid_row("kfd", "bytes4096-q16-standalone")
+        CHECKER.validate_row(standalone)
+        standalone["directional_smoke"] = "pass"
+        with self.assertRaisesRegex(CHECKER.CheckError, "directional_smoke"):
+            CHECKER.validate_row(standalone)
+
+        combined = valid_row("kfd")
+        combined["directional_smoke"] = "not-applicable"
+        with self.assertRaisesRegex(CHECKER.CheckError, "directional_smoke"):
+            CHECKER.validate_row(combined)
 
     def test_bounded_parity_accepts_pre_registered_limits(self) -> None:
         output, demonstrated = CHECKER.validate_performance(valid_set())
