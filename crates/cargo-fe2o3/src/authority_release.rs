@@ -1102,18 +1102,20 @@ fn create_contract_file() -> Result<File, String> {
 }
 
 fn write_and_seal_contract(file: &File, bytes: &[u8]) -> Result<(), String> {
-    let mut writer = file
-        .try_clone()
-        .map_err(|error| format!("cannot clone release contract: {error}"))?;
-    writer
-        .write_all(bytes)
-        .and_then(|()| writer.flush())
-        .map_err(|error| format!("cannot write release contract: {error}"))?;
-    rustix::fs::fcntl_add_seals(
+    {
+        let mut writer = file
+            .try_clone()
+            .map_err(|error| format!("cannot clone release contract: {error}"))?;
+        writer
+            .write_all(bytes)
+            .and_then(|()| writer.flush())
+            .map_err(|error| format!("cannot write release contract: {error}"))?;
+        drop(writer);
+    }
+    fe2o3_process_identity::seal_immutable_memfd_v1(
         file,
-        rustix::fs::SealFlags::WRITE | rustix::fs::SealFlags::GROW | rustix::fs::SealFlags::SHRINK,
+        fe2o3_process_identity::ImmutableMemfdBusyPolicyV1::BoundedExternalObserverQuiescence,
     )
-    .and_then(|()| rustix::fs::fcntl_add_seals(file, rustix::fs::SealFlags::SEAL))
     .map_err(|error| format!("cannot seal release contract: {error}"))?;
     if rustix::fs::fcntl_get_seals(file)
         .map_err(|error| format!("cannot inspect release contract seals: {error}"))?
