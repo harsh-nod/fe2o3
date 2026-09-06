@@ -442,7 +442,7 @@ compute, production atomic/collective authority, broad Rust device language,
 and matched hardware qualification remain open. No R25 performance ratio or
 orders-of-magnitude claim exists without a retained matched measurement.
 
-## Current R26-R36 Status
+## Current R26-R39 Status
 
 R26 adds the matched, counterbalanced direct-KFD/raw-HSA/HIP qualification
 harness at exact commit `8953f757c6771823e5132708f45a43c32f459081` for one
@@ -524,30 +524,64 @@ HIP-adjusted. R36 still measured 2.74x-2.81x slower than HIP E2E and
 one workload, not causal, parity, orders-of-magnitude, application-speedup, or
 workload-general evidence.
 
-The authenticated aggregate formal runner through R36 includes the R27, R28,
-and R30-R36 independent bounded models. At exact proof commit
-[`8b6fe6b307ac1ef60123bd1081623670be6cef87`](https://github.com/harsh-nod/fe2o3/commit/8b6fe6b307ac1ef60123bd1081623670be6cef87),
-the complete included proof set establishes 823 obligations and rejects 326
+R37 activates native bounded waits for Published directional and same-device
+SDMA submissions at production commit
+`f81d67fa603ecf23ebd101556b327ae80f13c5ec`. The matched
+[R37 evidence](evidence/mi300x-r37-native-sdma-wait-activation-2026-09-05.md)
+records a 17.956%-25.449% KFD E2E regression and a 39.391%-50.895% H2D
+regression. A private larger-spin diagnostic recovered about 21%-22% E2E
+against R37 and motivated further wait-policy work, but it is not production
+evidence.
+
+R38 adds bounded persistent-compute wait and Ready-to-recycle composition at
+production commit `a1ea30cffbd24a5714a5fe0318b4231f42e98727`. Its
+[R38 evidence](evidence/mi300x-r38-bounded-persistent-compute-wait-2026-09-05.md)
+records mixed slotwise E2E movement from 1.183% lower to 0.321% higher and
+therefore demonstrates no performance gain. R38 is a correctness and bounded
+failure-custody tranche, not a speedup tranche.
+
+R39 applies a 50 us elapsed active-spin floor only at the directional
+persistent single/window and same-device persistent window waits at exact
+production commit `4be5243dbe835c94618a62b3702f9624cd8f9d1f`. The
+[R39 evidence](evidence/mi300x-r39-persistent-sdma-wait-policy-2026-09-05.md)
+separates private policy selection from exact-product qualification. The
+corrected product archive validates 23/23 hashes and reports KFD E2E p50 of
+262554-262889 ns, still 2.643x-2.650x slower than HIP. Against a sequential
+exact `a1ea30cf` production baseline, median raw H2D and E2E reductions were
+29.082% and 17.581%. That baseline's H2D was materially lower than the same
+commit's earlier R38 session, so the comparison is descriptive rather than
+strong causal evidence.
+
+The authenticated aggregate formal runner through R39 includes the R27, R28,
+and R30-R39 independent bounded models. At exact proof commit
+[`4a0a31c413de5f354f62f759c0406f752dc44994`](https://github.com/harsh-nod/fe2o3/commit/4a0a31c413de5f354f62f759c0406f752dc44994),
+the complete included proof set establishes 877 obligations and rejects 349
 pinned expected-negative mutations; final transcript SHA-256 is
-`445fbb609745323d4ed473a386b9f0313690a1c774e430a22a13f425af73a801`.
+`bc8baeaaed14f979e9ddec4e6d0b7d322a7dbd7635319e97ba027a8efd8a4534`.
 R33 contributes 45 obligations and four coupled negatives for the mathematical
 synchronous fusion relation. R34 contributes 54 obligations and four negatives
 for premised asynchronous fusion equivalence. R35 contributes 13 positive
 obligations and four standalone negatives. R36 contributes 15 positive
-obligations and four standalone negatives. Unlike R34's external-equivalence
+obligations and four standalone negatives. R37 contributes 15 obligations and
+seven standalone negatives; R38 contributes 19 obligations and six standalone
+negatives; R39 contributes 20 obligations and ten standalone negatives.
+Unlike R34's external-equivalence
 relation, R35 proves only a premised projection of former and fused custody and
 exact commit coordinates. R36 likewise proves only a premised projection of
 split and fused custody and logical ordering; the optimized currentness count
 is deliberately excluded from that projection and proved only as a separate
-finite arithmetic fact. The proof inputs contract currentness, lower outcomes,
-identities, certificates, tickets, and observations; there is no Rust-to-Verus
-correspondence or proof of production/public error identity, real timing,
-syscalls, driver, firmware, hardware, DMA visibility, liveness, parity, or
-performance.
+finite arithmetic fact. R37-R39 prove bounded abstract custody, routing,
+observation, and wait-policy properties, not the Rust or native
+implementations. The proof inputs contract currentness, lower outcomes,
+identities, certificates, tickets, observations, and time samples; there is no
+Rust-to-Verus correspondence or proof of production/public error identity,
+real timing, syscalls, driver, firmware, hardware, DMA visibility, liveness,
+parity, or performance.
 
-R26-R36 therefore improve one narrow persistent single-device path but do not
-close the profile. Remaining blockers include ordinary public source-to-GPU
-execution authority; broader native scheduling and concurrency beyond the
+R26-R39 therefore improve and harden one narrow persistent single-device path
+but do not close the profile. Remaining blockers include ordinary public
+source-to-GPU execution authority; broader native scheduling and concurrency
+beyond the
 bounded two-lane, caller-flush path; full persistent memory, pool, and
 concurrent-range behavior; unified compute plus native XGMI custody; production
 atomic/collective authority and native litmus evidence; broad

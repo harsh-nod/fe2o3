@@ -90,6 +90,12 @@ replacement for the support matrix.
 - [Production total-output refinement](production-total-output-refinement-v2.md)
 - [CUDA-Oxide parity matrix](cuda-oxide-parity-matrix.md)
 - [Generated parity dashboard](generated/cuda-oxide-parity-dashboard.md)
+- [MI300X R37 native SDMA wait activation
+  evidence](evidence/mi300x-r37-native-sdma-wait-activation-2026-09-05.md)
+- [MI300X R38 bounded persistent-compute wait
+  evidence](evidence/mi300x-r38-bounded-persistent-compute-wait-2026-09-05.md)
+- [MI300X R39 persistent SDMA wait policy
+  evidence](evidence/mi300x-r39-persistent-sdma-wait-policy-2026-09-05.md)
 
 Evidence documents describe exact qualified observations. They do not silently
 upgrade an experimental target or path into a supported public interface.
