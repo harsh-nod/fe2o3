@@ -37,6 +37,21 @@ def valid_row(
         "per_queue_depth": str(112 // queue_count),
     }
     if backend == "kfd":
+        roles = ([] if kind == "standalone" else ["h2d", "d2h"]) + [
+            f"striped{index}" for index in range(queue_count)
+        ]
+        queue_ids = [1000 + index for index in range(len(roles))]
+        queue_roster = ",".join(
+            f"{role}:{queue_id}"
+            for role, queue_id in zip(roles, queue_ids, strict=True)
+        )
+        engines = ([] if kind == "standalone" else [1, 0]) + [
+            index % 2 for index in range(queue_count)
+        ]
+        engine_placement = ",".join(
+            f"{role}:{queue_id}:{engine}"
+            for role, queue_id, engine in zip(roles, queue_ids, engines, strict=True)
+        )
         row.update(
             {
                 "api": "native-kfd-sdma",
@@ -48,8 +63,14 @@ def valid_row(
                 "physical_engine_count": "2",
                 "directional_queue_count": "0" if kind == "standalone" else "2",
                 "striped_queue_count": str(queue_count),
-                "queue_id_sha256": hashlib.sha256(b"queue-ids").hexdigest(),
-                "engine_placement_sha256": hashlib.sha256(b"placement").hexdigest(),
+                "queue_ids": queue_roster,
+                "queue_ids_sha256": hashlib.sha256(
+                    queue_roster.encode("ascii")
+                ).hexdigest(),
+                "engine_placement": engine_placement,
+                "engine_placement_sha256": hashlib.sha256(
+                    engine_placement.encode("ascii")
+                ).hexdigest(),
                 "directional_smoke": "pass",
                 "aggregate_poll_smoke": "pass",
                 "destroy": "pass",
@@ -388,15 +409,115 @@ class R40StripedCheckerTests(unittest.TestCase):
 
     def test_kfd_custody_digest_is_required(self) -> None:
         row = valid_row("kfd")
-        row["queue_id_sha256"] = "0" * 63
-        with self.assertRaisesRegex(CHECKER.CheckError, "queue_id_sha256"):
+        row["queue_ids_sha256"] = "0" * 63
+        with self.assertRaisesRegex(CHECKER.CheckError, "queue_ids_sha256"):
+            CHECKER.validate_row(row)
+
+    def test_kfd_queue_digest_must_match_retained_preimage(self) -> None:
+        row = valid_row("kfd")
+        row["queue_ids"] = row["queue_ids"].replace("h2d:1000", "h2d:4000")
+        row["engine_placement"] = row["engine_placement"].replace(
+            "h2d:1000:1", "h2d:4000:1"
+        )
+        row["engine_placement_sha256"] = hashlib.sha256(
+            row["engine_placement"].encode("ascii")
+        ).hexdigest()
+        with self.assertRaisesRegex(CHECKER.CheckError, "does not match its preimage"):
+            CHECKER.validate_row(row)
+
+    def test_kfd_engine_digest_must_match_retained_preimage(self) -> None:
+        row = valid_row("kfd")
+        row["engine_placement_sha256"] = "0" * 64
+        with self.assertRaisesRegex(CHECKER.CheckError, "does not match its preimage"):
+            CHECKER.validate_row(row)
+
+    def test_kfd_queue_ids_must_be_distinct(self) -> None:
+        row = valid_row("kfd")
+        row["queue_ids"] = row["queue_ids"].replace("d2h:1001", "d2h:1000")
+        row["engine_placement"] = row["engine_placement"].replace(
+            "d2h:1001", "d2h:1000"
+        )
+        row["queue_ids_sha256"] = hashlib.sha256(
+            row["queue_ids"].encode("ascii")
+        ).hexdigest()
+        row["engine_placement_sha256"] = hashlib.sha256(
+            row["engine_placement"].encode("ascii")
+        ).hexdigest()
+        with self.assertRaisesRegex(CHECKER.CheckError, "duplicate queue ID"):
+            CHECKER.validate_row(row)
+
+    def test_kfd_queue_role_order_and_cardinality_are_exact(self) -> None:
+        row = valid_row("kfd")
+        entries = row["queue_ids"].split(",")
+        row["queue_ids"] = ",".join(entries[1:])
+        row["queue_ids_sha256"] = hashlib.sha256(
+            row["queue_ids"].encode("ascii")
+        ).hexdigest()
+        with self.assertRaisesRegex(CHECKER.CheckError, "invalid cardinality"):
+            CHECKER.validate_row(row)
+
+        row = valid_row("kfd")
+        entries = row["queue_ids"].split(",")
+        entries[0], entries[1] = entries[1], entries[0]
+        row["queue_ids"] = ",".join(entries)
+        row["queue_ids_sha256"] = hashlib.sha256(
+            row["queue_ids"].encode("ascii")
+        ).hexdigest()
+        with self.assertRaisesRegex(CHECKER.CheckError, "canonical role order"):
+            CHECKER.validate_row(row)
+
+    def test_kfd_queue_ids_are_canonical_u32(self) -> None:
+        for invalid in ("01", str(1 << 32), "9" * 5000):
+            row = valid_row("kfd")
+            row["queue_ids"] = row["queue_ids"].replace("h2d:1000", f"h2d:{invalid}")
+            row["queue_ids_sha256"] = hashlib.sha256(
+                row["queue_ids"].encode("ascii")
+            ).hexdigest()
+            with self.assertRaisesRegex(CHECKER.CheckError, "queue ID"):
+                CHECKER.validate_row(row)
+
+    def test_kfd_engine_placement_must_match_queue_and_profile(self) -> None:
+        row = valid_row("kfd")
+        row["engine_placement"] = row["engine_placement"].replace(
+            "h2d:1000:1", "h2d:1000:0"
+        )
+        row["engine_placement_sha256"] = hashlib.sha256(
+            row["engine_placement"].encode("ascii")
+        ).hexdigest()
+        with self.assertRaisesRegex(CHECKER.CheckError, "violates the gfx942 profile"):
+            CHECKER.validate_row(row)
+
+        row = valid_row("kfd")
+        row["engine_placement"] = row["engine_placement"].replace(
+            "striped0:1002:0", "striped0:4000:0"
+        )
+        row["engine_placement_sha256"] = hashlib.sha256(
+            row["engine_placement"].encode("ascii")
+        ).hexdigest()
+        with self.assertRaisesRegex(CHECKER.CheckError, "does not match queue_ids"):
+            CHECKER.validate_row(row)
+
+    def test_standalone_roster_forbids_directional_roles(self) -> None:
+        row = valid_row("kfd", "bytes4096-q16-standalone")
+        self.assertTrue(row["queue_ids"].startswith("striped0:"))
+        row["queue_ids"] = row["queue_ids"].replace("striped0:1000", "h2d:1000")
+        row["engine_placement"] = row["engine_placement"].replace(
+            "striped0:1000:0", "h2d:1000:0"
+        )
+        row["queue_ids_sha256"] = hashlib.sha256(
+            row["queue_ids"].encode("ascii")
+        ).hexdigest()
+        row["engine_placement_sha256"] = hashlib.sha256(
+            row["engine_placement"].encode("ascii")
+        ).hexdigest()
+        with self.assertRaisesRegex(CHECKER.CheckError, "canonical role order"):
             CHECKER.validate_row(row)
 
     def test_bounded_parity_accepts_pre_registered_limits(self) -> None:
         output, demonstrated = CHECKER.validate_performance(valid_set())
         self.assertTrue(demonstrated)
         self.assertIn("bounded_parity_status=demonstrated", output[0])
-        self.assertIn("orders_of_magnitude_status=not-demonstrated", output[-2])
+        self.assertIn("ten_x_status=not-demonstrated", output[-2])
 
     def test_one_bad_slot_is_retained_as_non_parity_evidence(self) -> None:
         rows = valid_set()
@@ -430,13 +551,13 @@ class R40StripedCheckerTests(unittest.TestCase):
 
     def test_ten_x_requires_every_matched_cell(self) -> None:
         output, _ = CHECKER.validate_performance(valid_set(40, 1000))
-        self.assertIn("orders_of_magnitude_status=demonstrated", output[-2])
+        self.assertIn("ten_x_status=demonstrated", output[-2])
         rows = valid_set(40, 1000)
         rows[1, CHECKER.WORKLOAD_IDS[-1], "kfd"] = valid_row(
             "kfd", CHECKER.WORKLOAD_IDS[-1], 110
         )
         output, _ = CHECKER.validate_performance(rows)
-        self.assertIn("orders_of_magnitude_status=not-demonstrated", output[-2])
+        self.assertIn("ten_x_status=not-demonstrated", output[-2])
 
 
 if __name__ == "__main__":

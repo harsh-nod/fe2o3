@@ -214,11 +214,15 @@ teardown are outside the measured intervals.
 Rows use `fe2o3.async-copy-striped-benchmark.v2`. Each direction retains 30
 raw submit, wait, and E2E nanosecond samples plus p50/p95 summaries and E2E p50
 GB/s. The checker recomputes every summary and throughput value and requires
-`e2e[i] == submit[i] + wait[i]`. KFD rows additionally bind queue IDs and
-engine placement by digest and require passing directional, aggregate-poll,
-and destruction sentinels. Combined profiles report two resident directional
-queues and at most 14 striped queues; standalone `striped16` reports no
-co-resident directional queues.
+`e2e[i] == submit[i] + wait[i]`. KFD rows retain canonical `role:queue-id`
+entries in `queue_ids` and matching `role:queue-id:engine-index` entries in
+`engine_placement`. Their digests are SHA-256 over the exact ASCII field value.
+The checker recomputes both digests, requires distinct u32 queue IDs, and
+validates exact role order and alternating gfx942 engine placement. Combined
+profiles order H2D engine 1, D2H engine 0, then striped queues 0 through q-1 on
+alternating engines; standalone `striped16` retains only its 16 alternating
+striped queues. KFD rows also require passing directional, aggregate-poll, and
+destruction sentinels.
 
 Each of the 90 backend/workload/slot phases runs under the R26 2 ms process-tree
 queue monitor with a 10 ms maximum observation gap. Start/end telemetry,
@@ -237,7 +241,8 @@ at most 1.20 for every workload, direction, and reference. Missing a threshold
 does not discard structurally valid evidence; it reports
 `bounded_parity_status=not-demonstrated`. Use checker option `--require-parity`
 only when a gating job should reject that result. A 10x result is reported only
-when every matched slot/workload/direction latency ratio is at most 0.10.
+when every matched slot/workload/direction latency ratio is at most 0.10. This
+is reported as `ten_x_status`; it is not described as orders of magnitude.
 
 This scope is one host, one GPU, host-observed H2D/D2H, depth 112, and transfer
 sizes no larger than one SDMA linear packet. Directional queues are idle during

@@ -99,7 +99,9 @@ KFD_FIELDS = frozenset(
     {
         "directional_queue_count",
         "striped_queue_count",
-        "queue_id_sha256",
+        "queue_ids",
+        "queue_ids_sha256",
+        "engine_placement",
         "engine_placement_sha256",
         "directional_smoke",
         "aggregate_poll_smoke",
@@ -207,6 +209,72 @@ def canonical_nonnegative_integer(value: str, description: str) -> int:
     return int(value)
 
 
+def canonical_u32(value: str, description: str) -> int:
+    if re.fullmatch(r"0|[1-9][0-9]*", value) is None:
+        raise CheckError(f"{description} must be a canonical nonnegative integer")
+    maximum = str((1 << 32) - 1)
+    if len(value) > len(maximum) or (len(value) == len(maximum) and value > maximum):
+        raise CheckError(f"{description} exceeds the u32 bound")
+    return int(value)
+
+
+def validate_kfd_queue_roster(row: dict[str, str], queue_count: int, kind: str) -> None:
+    expected_roles = ([] if kind == "standalone" else ["h2d", "d2h"]) + [
+        f"striped{index}" for index in range(queue_count)
+    ]
+    queue_entries = row["queue_ids"].split(",")
+    if len(queue_entries) != len(expected_roles):
+        raise CheckError("backend kfd queue_ids has invalid cardinality")
+    queue_roster: list[tuple[str, int]] = []
+    for entry in queue_entries:
+        parts = entry.split(":")
+        if len(parts) != 2:
+            raise CheckError("backend kfd queue_ids is malformed")
+        role, queue_id_text = parts
+        queue_roster.append(
+            (role, canonical_u32(queue_id_text, f"backend kfd {role} queue ID"))
+        )
+    if [role for role, _ in queue_roster] != expected_roles:
+        raise CheckError("backend kfd queue_ids has invalid canonical role order")
+    queue_ids = [queue_id for _, queue_id in queue_roster]
+    if len(set(queue_ids)) != len(queue_ids):
+        raise CheckError("backend kfd queue_ids contains a duplicate queue ID")
+
+    placement_entries = row["engine_placement"].split(",")
+    if len(placement_entries) != len(expected_roles):
+        raise CheckError("backend kfd engine_placement has invalid cardinality")
+    placement: list[tuple[str, int, int]] = []
+    for entry in placement_entries:
+        parts = entry.split(":")
+        if len(parts) != 3:
+            raise CheckError("backend kfd engine_placement is malformed")
+        role, queue_id_text, engine_text = parts
+        placement.append(
+            (
+                role,
+                canonical_u32(queue_id_text, f"backend kfd {role} placement queue ID"),
+                canonical_u32(engine_text, f"backend kfd {role} engine index"),
+            )
+        )
+    if [(role, queue_id) for role, queue_id, _ in placement] != queue_roster:
+        raise CheckError("backend kfd engine_placement does not match queue_ids")
+    expected_engines = ([] if kind == "standalone" else [1, 0]) + [
+        index % 2 for index in range(queue_count)
+    ]
+    if [engine for _, _, engine in placement] != expected_engines:
+        raise CheckError("backend kfd engine_placement violates the gfx942 profile")
+
+    for preimage_field, digest_field in (
+        ("queue_ids", "queue_ids_sha256"),
+        ("engine_placement", "engine_placement_sha256"),
+    ):
+        expected_digest = hashlib.sha256(
+            row[preimage_field].encode("ascii")
+        ).hexdigest()
+        if row[digest_field] != expected_digest:
+            raise CheckError(f"backend kfd {digest_field} does not match its preimage")
+
+
 def samples(row: dict[str, str], field: str) -> list[int]:
     try:
         encoded = row[field]
@@ -288,9 +356,10 @@ def validate_row(row: dict[str, str]) -> dict[str, dict[str, list[int]]]:
         for field, expected in expected_kfd.items():
             if row[field] != expected:
                 raise CheckError(f"backend kfd has invalid {field}")
-        for field in ("queue_id_sha256", "engine_placement_sha256"):
+        for field in ("queue_ids_sha256", "engine_placement_sha256"):
             if SHA256.fullmatch(row[field]) is None:
                 raise CheckError(f"backend kfd has invalid {field}")
+        validate_kfd_queue_roster(row, queue_count, kind)
 
     raw: dict[str, dict[str, list[int]]] = {}
     transfer_bytes = bytes_count * 112
@@ -378,9 +447,9 @@ def validate_performance(
                     f"bounded_parity_status={'demonstrated' if not cell_violations else 'not-demonstrated'}"
                 )
     output.append(
-        f"schema={ROW_SCHEMA} orders_of_magnitude_status="
+        f"schema={ROW_SCHEMA} ten_x_status="
         f"{'demonstrated' if ten_x else 'not-demonstrated'} "
-        "criterion=every-matched-slot-workload-direction-kfd-latency-le-0.10x "
+        "criterion=every-matched-slot-workload-direction-kfd-latency-at-most-0.10x "
         "claim_scope=single-mi300x-gpu2-striped-copy-only"
     )
     output.append(
