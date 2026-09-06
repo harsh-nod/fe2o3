@@ -10,6 +10,13 @@ campaign: 48,000 dispatch samples across all 14 wrappers, with current HSACO
 identities, medians, confidence intervals, and retained raw-data hashes. Records
 without an admitted exact comparator remain measurements, not fastest claims.
 
+`gfx950-lowp-performance-v1.json` records the separate low-precision campaign.
+It includes the retained exact-tile compiler optimization, rejected launch and
+LDS-transpose variants, full p5/median/p95 measurements, correctness errors,
+and the exact hipBLASLt FP8 comparison. The optimized FP8 teaching slice is
+still 1.4386x slower than hipBLASLt, so it is explicitly reported as a gap.
+Run it with `perf-evidence/run-gfx950-lowp-performance.sh`.
+
 ## Measurement contract
 
 The hardware test first runs its existing digest-pinned, ABI-checked numerical

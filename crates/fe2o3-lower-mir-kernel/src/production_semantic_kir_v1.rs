@@ -17725,6 +17725,26 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             .value()
             .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
             .0;
+        // A successful exact-tile view already proves every byte addressed by
+        // a zero-base M16xK128/K128xN16 fragment is in bounds. Preserve the
+        // zero-filled path for partial tiles, but avoid 32 separately guarded
+        // loads when that stronger proof is present in the semantic IR.
+        let exact_constant =
+            |id, expected| self.emitted_unsigned_constants.get(&id).copied() == Some(expected);
+        let exact_tile = exact_constant(first_base, 0)
+            && exact_constant(second_base, 0)
+            && match contract.role {
+                SemanticMfmaOperandRoleV1::A => {
+                    exact_constant(rows, 16)
+                        && exact_constant(columns, 128)
+                        && exact_constant(stride, 128)
+                }
+                SemanticMfmaOperandRoleV1::B => {
+                    exact_constant(rows, 128)
+                        && exact_constant(columns, 16)
+                        && exact_constant(stride, 16)
+                }
+            };
 
         let fifteen = self.emit_index_constant(operations, 15)?;
         let sixteen = self.emit_index_constant(operations, 16)?;
@@ -17821,6 +17841,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             guard = self.emit_bool_and(operations, guard, column_safe)?;
             guard = self.emit_bool_and(operations, guard, index_in_bounds)?;
             let safe_index = self.emit_select_index(operations, guard, index, zero_index)?;
+            let load_index = if exact_tile { index } else { safe_index };
             let pointer = self.emit_id(
                 operations,
                 Type::pointer(
@@ -17830,19 +17851,23 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 ),
                 OperationKind::GetElementPointer {
                     base: data,
-                    offset: safe_index,
+                    offset: load_index,
                 },
             )?;
-            let loaded = self.emit_id(
-                operations,
-                Type::Scalar(ScalarType::U8),
+            let load = if exact_tile {
+                OperationKind::Load {
+                    pointer,
+                    access: MemoryAccess::new(slice.address_space, 1),
+                }
+            } else {
                 OperationKind::GuardedLoad {
                     pointer,
                     predicate: guard,
                     fallback: zero_u8,
                     access: MemoryAccess::new(slice.address_space, 1),
-                },
-            )?;
+                }
+            };
+            let loaded = self.emit_id(operations, Type::Scalar(ScalarType::U8), load)?;
             let mut widened = self.emit_id(
                 operations,
                 Type::Scalar(ScalarType::U32),
