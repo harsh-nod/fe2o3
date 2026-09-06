@@ -41,6 +41,7 @@ r36_fused_completion_poll_recycle_proof="$script_dir/r36_fused_completion_poll_r
 r37_typed_native_sdma_wait_activation_proof="$script_dir/r37_typed_native_sdma_wait_activation_v1.rs"
 r38_bounded_persistent_compute_wait_recycle_proof="$script_dir/r38_bounded_persistent_compute_wait_recycle_v1.rs"
 r39_scoped_persistent_sdma_wait_policy_proof="$script_dir/r39_scoped_persistent_sdma_wait_policy_v1.rs"
+r40_gfx942_striped_sdma_aggregate_proof="$script_dir/r40_gfx942_striped_sdma_aggregate_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -390,6 +391,21 @@ negative_r39_attempt_count="$script_dir/negative/r39_scoped_persistent_sdma_wait
 negative_r39_deadline_before_observation="$script_dir/negative/r39_scoped_persistent_sdma_wait_policy_v1_deadline_before_observation.rs"
 negative_r39_timeout_custody_loss="$script_dir/negative/r39_scoped_persistent_sdma_wait_policy_v1_timeout_custody_loss.rs"
 negative_r39_ready_custody_substitution="$script_dir/negative/r39_scoped_persistent_sdma_wait_policy_v1_ready_custody_substitution.rs"
+negative_r40_combined_sixteen="$script_dir/negative/r40_gfx942_striped_sdma_aggregate_v1_combined_sixteen.rs"
+negative_r40_currentness_open="$script_dir/negative/r40_gfx942_striped_sdma_aggregate_v1_currentness_open.rs"
+negative_r40_directional_capacity="$script_dir/negative/r40_gfx942_striped_sdma_aggregate_v1_directional_capacity.rs"
+negative_r40_dropped_prepared_roster="$script_dir/negative/r40_gfx942_striped_sdma_aggregate_v1_dropped_prepared_roster.rs"
+negative_r40_duplicate_queue_id="$script_dir/negative/r40_gfx942_striped_sdma_aggregate_v1_duplicate_queue_id.rs"
+negative_r40_early_pending="$script_dir/negative/r40_gfx942_striped_sdma_aggregate_v1_early_pending.rs"
+negative_r40_error_as_pending="$script_dir/negative/r40_gfx942_striped_sdma_aggregate_v1_error_as_pending.rs"
+negative_r40_late_output_allocation="$script_dir/negative/r40_gfx942_striped_sdma_aggregate_v1_late_output_allocation.rs"
+negative_r40_output_order="$script_dir/negative/r40_gfx942_striped_sdma_aggregate_v1_output_order.rs"
+negative_r40_partial_retirement="$script_dir/negative/r40_gfx942_striped_sdma_aggregate_v1_partial_retirement.rs"
+negative_r40_request_index_roster="$script_dir/negative/r40_gfx942_striped_sdma_aggregate_v1_request_index_roster.rs"
+negative_r40_retake_output_escape="$script_dir/negative/r40_gfx942_striped_sdma_aggregate_v1_retake_output_escape.rs"
+negative_r40_ticket_substitution="$script_dir/negative/r40_gfx942_striped_sdma_aggregate_v1_ticket_substitution.rs"
+negative_r40_timeout_before_scan="$script_dir/negative/r40_gfx942_striped_sdma_aggregate_v1_timeout_before_scan.rs"
+negative_r40_unbalanced_placement="$script_dir/negative/r40_gfx942_striped_sdma_aggregate_v1_unbalanced_placement.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -452,6 +468,7 @@ expected_r36_fused_completion_poll_recycle=$(read_pin "$pin_dir/R36_FUSED_COMPLE
 expected_r37_typed_native_sdma_wait_activation=$(read_pin "$pin_dir/R37_TYPED_NATIVE_SDMA_WAIT_ACTIVATION_SHA256")
 expected_r38_bounded_persistent_compute_wait_recycle=$(read_pin "$pin_dir/R38_BOUNDED_PERSISTENT_COMPUTE_WAIT_RECYCLE_SHA256")
 expected_r39_scoped_persistent_sdma_wait_policy=$(read_pin "$pin_dir/R39_SCOPED_PERSISTENT_SDMA_WAIT_POLICY_SHA256")
+expected_r40_gfx942_striped_sdma_aggregate=$(read_pin "$pin_dir/R40_GFX942_STRIPED_SDMA_AGGREGATE_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -801,6 +818,21 @@ expected_negative_r39_attempt_count=$(read_pin "$pin_dir/NEGATIVE_R39_ATTEMPT_CO
 expected_negative_r39_deadline_before_observation=$(read_pin "$pin_dir/NEGATIVE_R39_DEADLINE_BEFORE_OBSERVATION_SHA256")
 expected_negative_r39_timeout_custody_loss=$(read_pin "$pin_dir/NEGATIVE_R39_TIMEOUT_CUSTODY_LOSS_SHA256")
 expected_negative_r39_ready_custody_substitution=$(read_pin "$pin_dir/NEGATIVE_R39_READY_CUSTODY_SUBSTITUTION_SHA256")
+expected_negative_r40_combined_sixteen=$(read_pin "$pin_dir/NEGATIVE_R40_COMBINED_SIXTEEN_SHA256")
+expected_negative_r40_currentness_open=$(read_pin "$pin_dir/NEGATIVE_R40_CURRENTNESS_OPEN_SHA256")
+expected_negative_r40_directional_capacity=$(read_pin "$pin_dir/NEGATIVE_R40_DIRECTIONAL_CAPACITY_SHA256")
+expected_negative_r40_dropped_prepared_roster=$(read_pin "$pin_dir/NEGATIVE_R40_DROPPED_PREPARED_ROSTER_SHA256")
+expected_negative_r40_duplicate_queue_id=$(read_pin "$pin_dir/NEGATIVE_R40_DUPLICATE_QUEUE_ID_SHA256")
+expected_negative_r40_early_pending=$(read_pin "$pin_dir/NEGATIVE_R40_EARLY_PENDING_SHA256")
+expected_negative_r40_error_as_pending=$(read_pin "$pin_dir/NEGATIVE_R40_ERROR_AS_PENDING_SHA256")
+expected_negative_r40_late_output_allocation=$(read_pin "$pin_dir/NEGATIVE_R40_LATE_OUTPUT_ALLOCATION_SHA256")
+expected_negative_r40_output_order=$(read_pin "$pin_dir/NEGATIVE_R40_OUTPUT_ORDER_SHA256")
+expected_negative_r40_partial_retirement=$(read_pin "$pin_dir/NEGATIVE_R40_PARTIAL_RETIREMENT_SHA256")
+expected_negative_r40_request_index_roster=$(read_pin "$pin_dir/NEGATIVE_R40_REQUEST_INDEX_ROSTER_SHA256")
+expected_negative_r40_retake_output_escape=$(read_pin "$pin_dir/NEGATIVE_R40_RETAKE_OUTPUT_ESCAPE_SHA256")
+expected_negative_r40_ticket_substitution=$(read_pin "$pin_dir/NEGATIVE_R40_TICKET_SUBSTITUTION_SHA256")
+expected_negative_r40_timeout_before_scan=$(read_pin "$pin_dir/NEGATIVE_R40_TIMEOUT_BEFORE_SCAN_SHA256")
+expected_negative_r40_unbalanced_placement=$(read_pin "$pin_dir/NEGATIVE_R40_UNBALANCED_PLACEMENT_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -866,6 +898,7 @@ check_sources() {
     check_digest "$expected_r37_typed_native_sdma_wait_activation" "$r37_typed_native_sdma_wait_activation_proof"
     check_digest "$expected_r38_bounded_persistent_compute_wait_recycle" "$r38_bounded_persistent_compute_wait_recycle_proof"
     check_digest "$expected_r39_scoped_persistent_sdma_wait_policy" "$r39_scoped_persistent_sdma_wait_policy_proof"
+    check_digest "$expected_r40_gfx942_striped_sdma_aggregate" "$r40_gfx942_striped_sdma_aggregate_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -1215,6 +1248,21 @@ check_sources() {
     check_digest "$expected_negative_r39_deadline_before_observation" "$negative_r39_deadline_before_observation"
     check_digest "$expected_negative_r39_timeout_custody_loss" "$negative_r39_timeout_custody_loss"
     check_digest "$expected_negative_r39_ready_custody_substitution" "$negative_r39_ready_custody_substitution"
+    check_digest "$expected_negative_r40_combined_sixteen" "$negative_r40_combined_sixteen"
+    check_digest "$expected_negative_r40_currentness_open" "$negative_r40_currentness_open"
+    check_digest "$expected_negative_r40_directional_capacity" "$negative_r40_directional_capacity"
+    check_digest "$expected_negative_r40_dropped_prepared_roster" "$negative_r40_dropped_prepared_roster"
+    check_digest "$expected_negative_r40_duplicate_queue_id" "$negative_r40_duplicate_queue_id"
+    check_digest "$expected_negative_r40_early_pending" "$negative_r40_early_pending"
+    check_digest "$expected_negative_r40_error_as_pending" "$negative_r40_error_as_pending"
+    check_digest "$expected_negative_r40_late_output_allocation" "$negative_r40_late_output_allocation"
+    check_digest "$expected_negative_r40_output_order" "$negative_r40_output_order"
+    check_digest "$expected_negative_r40_partial_retirement" "$negative_r40_partial_retirement"
+    check_digest "$expected_negative_r40_request_index_roster" "$negative_r40_request_index_roster"
+    check_digest "$expected_negative_r40_retake_output_escape" "$negative_r40_retake_output_escape"
+    check_digest "$expected_negative_r40_ticket_substitution" "$negative_r40_ticket_substitution"
+    check_digest "$expected_negative_r40_timeout_before_scan" "$negative_r40_timeout_before_scan"
+    check_digest "$expected_negative_r40_unbalanced_placement" "$negative_r40_unbalanced_placement"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -1261,6 +1309,7 @@ check_sources
     "$r37_typed_native_sdma_wait_activation_proof" \
     "$r38_bounded_persistent_compute_wait_recycle_proof" \
     "$r39_scoped_persistent_sdma_wait_policy_proof" \
+    "$r40_gfx942_striped_sdma_aggregate_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -1606,7 +1655,22 @@ check_sources
     "$negative_r39_attempt_count" \
     "$negative_r39_deadline_before_observation" \
     "$negative_r39_timeout_custody_loss" \
-    "$negative_r39_ready_custody_substitution"
+    "$negative_r39_ready_custody_substitution" \
+    "$negative_r40_combined_sixteen" \
+    "$negative_r40_currentness_open" \
+    "$negative_r40_directional_capacity" \
+    "$negative_r40_dropped_prepared_roster" \
+    "$negative_r40_duplicate_queue_id" \
+    "$negative_r40_early_pending" \
+    "$negative_r40_error_as_pending" \
+    "$negative_r40_late_output_allocation" \
+    "$negative_r40_output_order" \
+    "$negative_r40_partial_retirement" \
+    "$negative_r40_request_index_roster" \
+    "$negative_r40_retake_output_escape" \
+    "$negative_r40_ticket_substitution" \
+    "$negative_r40_timeout_before_scan" \
+    "$negative_r40_unbalanced_placement"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -1743,6 +1807,7 @@ check_positive "$r36_fused_completion_poll_recycle_proof" 'verification results:
 check_positive "$r37_typed_native_sdma_wait_activation_proof" 'verification results:: 15 verified, 0 errors' r37-typed-native-sdma-wait-activation
 check_positive "$r38_bounded_persistent_compute_wait_recycle_proof" 'verification results:: 19 verified, 0 errors' r38-bounded-persistent-compute-wait-recycle
 check_positive "$r39_scoped_persistent_sdma_wait_policy_proof" 'verification results:: 20 verified, 0 errors' r39-scoped-persistent-sdma-wait-policy
+check_positive "$r40_gfx942_striped_sdma_aggregate_proof" 'verification results:: 25 verified, 0 errors' r40-gfx942-striped-sdma-aggregate
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -2092,13 +2157,28 @@ check_negative "$negative_r39_attempt_count" mutated_pending_counts_attempt_firs
 check_negative "$negative_r39_deadline_before_observation" mutated_zero_deadline_observes_once_v1 r39-deadline-before-observation
 check_negative "$negative_r39_timeout_custody_loss" mutated_timeout_retains_exact_stream_frame_v1 r39-timeout-custody-loss
 check_negative "$negative_r39_ready_custody_substitution" mutated_ready_retains_custody_and_continuation_v1 r39-ready-custody-substitution
+check_negative "$negative_r40_combined_sixteen" mutated_combined_sixteen_is_rejected_v1 r40-combined-sixteen
+check_negative "$negative_r40_currentness_open" mutated_observation_requires_closed_currentness_v1 r40-currentness-open
+check_negative "$negative_r40_directional_capacity" mutated_combined_load_includes_directional_v1 r40-directional-capacity
+check_negative "$negative_r40_dropped_prepared_roster" mutated_pending_retains_prepared_roster_v1 r40-dropped-prepared-roster
+check_negative "$negative_r40_duplicate_queue_id" mutated_queue_ids_are_distinct_v1 r40-duplicate-queue-id
+check_negative "$negative_r40_early_pending" mutated_pending_observes_entire_roster_v1 r40-early-pending
+check_negative "$negative_r40_error_as_pending" mutated_error_is_terminal_v1 r40-error-as-pending
+check_negative "$negative_r40_late_output_allocation" mutated_completion_uses_no_late_allocation_v1 r40-late-output-allocation
+check_negative "$negative_r40_output_order" mutated_output_keeps_request_order_v1 r40-output-order
+check_negative "$negative_r40_partial_retirement" mutated_failed_preflight_retires_nothing_v1 r40-partial-retirement
+check_negative "$negative_r40_request_index_roster" mutated_indices_are_exact_v1 r40-request-index-roster
+check_negative "$negative_r40_retake_output_escape" mutated_retake_failure_keeps_terminal_only_v1 r40-retake-output-escape
+check_negative "$negative_r40_ticket_substitution" mutated_ticket_is_exact_v1 r40-ticket-substitution
+check_negative "$negative_r40_timeout_before_scan" mutated_timeout_scans_and_retains_owner_v1 r40-timeout-scan-custody
+check_negative "$negative_r40_unbalanced_placement" mutated_two_slots_are_balanced_v1 r40-unbalanced-placement
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 mutations=349'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 mutations=364'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

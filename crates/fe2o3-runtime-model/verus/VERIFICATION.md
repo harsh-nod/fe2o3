@@ -14,10 +14,10 @@ host-content-certificate, R31 single-packet/window-refinement, R32
 directional-currentness-handoff, R33 fused-synchronous-directional-SDMA, R34
 fused-asynchronous-directional-SDMA, R35 fused-retained-control-replay, R36
 fused-completion-poll/recycle, R37 typed-native-SDMA-wait-activation, R38
-bounded-persistent-compute-wait/recycle, and R39 scoped-persistent-SDMA-wait
-policy models. The authenticated runner proves 877 obligations and rejects 349
-expected-negative mutations over finite abstract
-values and traces. The
+bounded-persistent-compute-wait/recycle, R39 scoped-persistent-SDMA-wait
+policy, and R40 gfx942 striped-SDMA aggregate models. The authenticated runner
+proves 902 obligations and rejects 364 expected-negative mutations over finite
+abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
 lifecycle-history sequence lengths are not bounded by these proofs.
@@ -1966,6 +1966,69 @@ positive proof source and fails its named postcondition.
 | Executable finite model | **Checked** | Six focused Rust tests cover 156 snapshot/scenario cases, exact route scope, boundaries, zero deadline, start-after-deadline, between-sample deadline passage, ordered-input rejection, and private owner structure. The executable model is not proved to refine the Verus model or production Rust. |
 | Boundary countermodels | **Rejected** | Ten pinned independent mutations fail floor, route, overflow, clamp, boundary, attempt, observation, timeout-custody, and Ready-custody/continuation postconditions. |
 | Concrete `Instant`, CPU spin/yield/sleep execution, Rust-to-Verus or production refinement, native queue ownership/completion, runtime/KFD/HSA/HIP, driver, firmware, hardware, coherence, progress, liveness, timing, parity, or performance | **Not established** | Explicitly outside the R39 proof boundary. Source-structure and nonhardware Rust tests are checks, not refinement proofs. |
+
+## R40 gfx942 striped-SDMA aggregate
+
+`r40_gfx942_striped_sdma_aggregate_v1.rs` proves exactly 25 obligations over an
+independent finite model. The runner pins that proof and 15 standalone negative
+mutations. It does not pin a production or benchmark commit. Queue identities,
+tickets, time, completion classifications, currentness closure, retirement
+preflight, and abstract allocation counters are contracted mathematical inputs.
+
+The capacity relation fixes gfx942 at two SDMA engines with eight queues per
+engine. Combined mode reserves one directional queue per engine and admits an
+even striped count from 2 through 14. Standalone mode admits an even striped
+count from 2 through 16. The placement relation alternates striped slots across
+the engines, requires a pairwise-distinct queue-ID roster within one session,
+and derives 63 requests per striped queue: 882 at combined q=14 and 1008 at
+standalone q=16. It does not establish process-global identity uniqueness or
+cross-session identity allocation.
+
+The aggregate relation requires a nonempty exact ticket sequence. Before its
+abstract publication boundary, construction produces the complete immutable
+completion-validation roster and an empty completed-output allocation with
+capacity for every request. Poll validation checks the exact plan token,
+session, submission, request count, shard tickets, validation roster, request
+indices, queue slots, queue IDs, queue generations, and closed-currentness
+marker before any status observation. The executable Rust model checks the same
+structural coordinates; there is no Rust-to-Verus refinement theorem.
+The executable constructor can return the owner and reusable immutable
+validation presentation together; subsequent model poll calls only borrow that
+presentation, observation slice, and preflight slice and do not construct a
+replacement roster or output allocation.
+
+Pending scans the complete roster before returning the exact whole owner with
+zero retirement, the prepared roster unchanged, and the empty output capacity
+retained. Timeout applies one shared absolute deadline after that same complete
+scan and preserves the same custody. A contracted first error stops the scan at
+that position and returns terminal custody. All-ready completion first requires
+the full retirement preflight; failure retires nothing, while success moves all
+already ordered shards into the prepared output. The abstract zero
+post-publication-allocation counter is a phase property, not a proof about the
+Rust allocator, panic behavior, or out-of-memory behavior.
+If a contracted model-retake fails after those moves, every moved ticket remains
+inside a distinct terminal owner and the ordinary completed output stays empty.
+That relation is not a proof about any concrete production retake path.
+
+The 15 independent countermodels reject combined q=16, omitted directional
+capacity, unbalanced placement, duplicate session queue IDs, duplicate/missing
+request indices, ticket slot/generation substitution, dropped prepared roster,
+late output allocation, first-Pending early return, prefix retirement, timeout
+before full scan together with timeout custody loss, error-as-Pending
+classification, open currentness, reversed completion order, and completed
+output escape after a failed model retake.
+
+## R40 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| gfx942 queue capacity and placement | **Proved** | Exactly 2 engines x 8 queues, combined even q=2..14 with one directional queue per engine, standalone even q=2..16, balanced striped placement, session-local distinct IDs, and exact 882/1008 maximum request capacities. No concrete topology discovery or queue creation is proved. |
+| Prepublication preparation | **Proved abstractly** | Exact immutable completion roster and empty sufficient output capacity exist before the modeled publication boundary; the modeled postpublication allocation count remains zero. This is not a Rust allocation/refinement theorem. |
+| Aggregate validation and observation | **Proved** | Exact plan/shard/ticket/currentness validation precedes observation; Pending and timeout scan the full roster under one absolute deadline; error stops with terminal custody. Observations and time are contracted inputs. |
+| Atomic whole-submission retirement | **Proved abstractly** | Pending, timeout, validation error, observation error, and failed preflight retire zero. Successful full preflight moves the complete ticket sequence in request order into the prepared output. Failed post-retirement model retake retains every moved ticket in terminal custody and exposes no normal completed sequence. No device atomic snapshot is claimed. |
+| Executable bounded model | **Checked** | Focused Rust tests exercise capacity boundaries, session-local uniqueness, exact ticket binding, validation-before-observation, full Pending/timeout scans, terminal custody, preflight atomicity, ordered completion, and move-only replay. |
+| Boundary countermodels | **Rejected** | Fifteen pinned standalone mutations fail their named capacity, preparation, validation, custody, observation, retirement, currentness, or ordering postconditions. |
+| Production Rust, KFD/HSA/HIP, ioctl/packet execution, allocator failure, native ownership/completion, clocks, driver, firmware, hardware, coherence, progress, liveness, parity, or performance | **Not established** | Explicitly outside the R40 proof boundary. The model and tests are not evidence of hardware behavior or relative performance. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust

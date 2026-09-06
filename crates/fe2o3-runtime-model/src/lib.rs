@@ -54,6 +54,7 @@ mod r36_fused_completion_poll_recycle;
 mod r37_typed_native_sdma_wait_activation;
 mod r38_bounded_persistent_compute_wait_recycle;
 mod r39_scoped_persistent_sdma_wait_policy;
+mod r40_gfx942_striped_sdma_aggregate;
 mod r9_native_evidence;
 mod typed_async;
 
@@ -95,6 +96,7 @@ pub use r36_fused_completion_poll_recycle::*;
 pub use r37_typed_native_sdma_wait_activation::*;
 pub use r38_bounded_persistent_compute_wait_recycle::*;
 pub use r39_scoped_persistent_sdma_wait_policy::*;
+pub use r40_gfx942_striped_sdma_aggregate::*;
 pub use typed_async::*;
 
 #[cfg(test)]
@@ -167,6 +169,8 @@ mod r37_typed_native_sdma_wait_activation_tests;
 mod r38_bounded_persistent_compute_wait_recycle_tests;
 #[cfg(test)]
 mod r39_scoped_persistent_sdma_wait_policy_tests;
+#[cfg(test)]
+mod r40_gfx942_striped_sdma_aggregate_tests;
 #[cfg(test)]
 mod r9_native_evidence_tests;
 #[cfg(test)]
