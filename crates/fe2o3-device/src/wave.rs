@@ -99,6 +99,14 @@ impl<Width: WaveWidth> WaveLane<Width> {
         self.lane
     }
 
+    /// Consumes the lane witness and returns its authenticated scalar lane ID.
+    ///
+    /// Consuming the witness preserves its move-only custody when callers no
+    /// longer need a typed lane capability.
+    pub const fn into_lane_id(self) -> u32 {
+        self.lane
+    }
+
     pub const fn width(&self) -> u32 {
         Width::LANES
     }
@@ -144,6 +152,34 @@ mod tests {
         assert!(WaveLane::<Wave32>::from_model_snapshot(32).is_none());
         assert!(WaveLane::<Wave64>::from_model_snapshot(63).is_some());
         assert!(WaveLane::<Wave64>::from_model_snapshot(64).is_none());
+    }
+
+    #[test]
+    fn lane_witnesses_consume_into_exact_endpoint_ids() {
+        assert_eq!(
+            WaveLane::<Wave32>::from_model_snapshot(0)
+                .unwrap()
+                .into_lane_id(),
+            0
+        );
+        assert_eq!(
+            WaveLane::<Wave32>::from_model_snapshot(31)
+                .unwrap()
+                .into_lane_id(),
+            31
+        );
+        assert_eq!(
+            WaveLane::<Wave64>::from_model_snapshot(0)
+                .unwrap()
+                .into_lane_id(),
+            0
+        );
+        assert_eq!(
+            WaveLane::<Wave64>::from_model_snapshot(63)
+                .unwrap()
+                .into_lane_id(),
+            63
+        );
     }
 
     #[test]

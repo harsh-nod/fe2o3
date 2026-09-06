@@ -58,6 +58,8 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
     feature = "workgroup_reduce_f32"
 ))]
 use fe2o3_device::{DynamicLds, WorkgroupCollectives, WorkgroupLdsScope};
+#[cfg(any(feature = "wave_lane_get", feature = "wave_lane_into_id"))]
+use fe2o3_device::{Wave64, WaveLane};
 
 #[kernel(
     typed,
@@ -89,6 +91,8 @@ use fe2o3_device::{DynamicLds, WorkgroupCollectives, WorkgroupLdsScope};
     feature = "barrier_helper",
     feature = "device_math_sqrt",
     feature = "wave_reduce_f32",
+    feature = "wave_lane_get",
+    feature = "wave_lane_into_id",
     feature = "workgroup_reduce_u32",
     feature = "workgroup_reduce_i32",
     feature = "workgroup_reduce_f32",
@@ -451,6 +455,32 @@ pub fn debug_helper(value: f32, mut output: DisjointSlice<f32>) {
     let adjusted = debug_helper_add_one(value);
     if let Some(element) = output.get_mut(thread::index_1d()) {
         *element = adjusted;
+    }
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "wave_lane_into_id")]
+pub fn wave_lane_into_id(mut output: DisjointSlice<u32>) {
+    let lane = WaveLane::<Wave64>::current();
+    let lane_id = lane.into_lane_id();
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = lane_id;
+    }
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "wave_lane_get")]
+pub fn wave_lane_get(mut output: DisjointSlice<u32>) {
+    let lane = WaveLane::<Wave64>::current();
+    let lane_id = lane.get();
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = lane_id;
     }
 }
 

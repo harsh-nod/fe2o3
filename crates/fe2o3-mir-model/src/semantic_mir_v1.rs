@@ -1933,6 +1933,68 @@ impl SemanticTypeDeclV1 {
 /// This is an ABI transport predicate, not a numerical-type classification.
 /// Every retained layout and ABI fact must agree before a consumer may replace
 /// the aggregate carrier with its physical scalar field.
+fn exact_inert_zero_sized_marker_v1(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    visiting: &mut BTreeSet<SemanticTypeIdV1>,
+) -> bool {
+    if !visiting.insert(ty) {
+        return false;
+    }
+    let Some(marker) = types.get(ty.index() as usize) else {
+        visiting.remove(&ty);
+        return false;
+    };
+    let layout = marker.layout();
+    let properties = marker.abi_properties();
+    let exact_layout = layout.size_bytes() == Some(0)
+        && layout.rustc_size_bytes() == 0
+        && layout.alignment_bytes() == 1
+        && layout.unadjusted_abi_alignment_bytes() == 1
+        && layout.max_repr_alignment_bytes().is_none()
+        && layout.largest_niche().is_none()
+        && !layout.is_uninhabited()
+        && matches!(
+            layout.variants(),
+            SemanticRustcVariantsV1::Single { index: 0 }
+        )
+        && matches!(
+            layout.backend_repr(),
+            SemanticBackendReprV1::Memory { sized: true }
+        )
+        && !properties.pass_indirectly_in_non_rustic_abis()
+        && !properties.has_unsized_foreign_tail()
+        && properties.rustc_layout_is_noundef()
+        && properties.first_pointee().is_none()
+        && properties.second_pointee().is_none()
+        && marker.rust_type_kind() == SemanticRustTypeKindV1::Ordinary;
+    let exact_shape = match (marker.shape(), layout.fields(), layout.details()) {
+        (
+            SemanticTypeShapeV1::Aggregate(fields) | SemanticTypeShapeV1::Tuple(fields),
+            SemanticFieldsShapeV1::Arbitrary {
+                source_order_offsets_bytes,
+                memory_order_source_indices,
+            },
+            SemanticTypeLayoutDetailsV1::Aggregate(details),
+        ) => {
+            source_order_offsets_bytes.len() == fields.fields().len()
+                && memory_order_source_indices.len() == fields.fields().len()
+                && source_order_offsets_bytes.iter().all(|offset| *offset == 0)
+                && details.field_offsets().len() == fields.fields().len()
+                && details.field_offsets().iter().all(|offset| *offset == 0)
+                && details.padding().is_empty()
+                && fields
+                    .fields()
+                    .iter()
+                    .copied()
+                    .all(|field| exact_inert_zero_sized_marker_v1(types, field, visiting))
+        }
+        _ => false,
+    };
+    visiting.remove(&ty);
+    exact_layout && exact_shape
+}
+
 pub fn exact_transparent_scalar_carrier_field_v1(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
@@ -1941,7 +2003,7 @@ pub fn exact_transparent_scalar_carrier_field_v1(
     let SemanticTypeShapeV1::Aggregate(fields) = carrier.shape() else {
         return None;
     };
-    let [field] = fields.fields() else {
+    let [field, markers @ ..] = fields.fields() else {
         return None;
     };
     let field_decl = types.get(field.index() as usize)?;
@@ -1955,18 +2017,20 @@ pub fn exact_transparent_scalar_carrier_field_v1(
         SemanticBackendReprV1::Scalar(SemanticBackendScalarV1::Initialized { .. })
     ) && carrier_layout.backend_repr() == field_layout.backend_repr();
     let exact_fields = matches!(
-        carrier_layout.fields(),
-        SemanticFieldsShapeV1::Arbitrary {
-            source_order_offsets_bytes,
-            memory_order_source_indices,
-        } if source_order_offsets_bytes.as_ref() == [0]
-            && memory_order_source_indices.as_ref() == [0]
+        (carrier_layout.fields(), carrier_layout.details()),
+        (
+            SemanticFieldsShapeV1::Arbitrary {
+                source_order_offsets_bytes,
+                memory_order_source_indices,
+            },
+            SemanticTypeLayoutDetailsV1::Aggregate(layout),
+        ) if source_order_offsets_bytes.len() == fields.fields().len()
+            && memory_order_source_indices.len() == fields.fields().len()
+            && source_order_offsets_bytes.first() == Some(&0)
+            && layout.field_offsets() == source_order_offsets_bytes.as_ref()
+            && layout.padding().is_empty()
     ) && matches!(field_layout.fields(), SemanticFieldsShapeV1::Primitive);
-    let exact_details = matches!(
-        carrier_layout.details(),
-        SemanticTypeLayoutDetailsV1::Aggregate(layout)
-            if layout.field_offsets() == [0] && layout.padding().is_empty()
-    ) && matches!(field_layout.details(), SemanticTypeLayoutDetailsV1::None);
+    let exact_details = matches!(field_layout.details(), SemanticTypeLayoutDetailsV1::None);
     let exact_variants = matches!(
         carrier_layout.variants(),
         SemanticRustcVariantsV1::Single { index: 0 }
@@ -1993,12 +2057,17 @@ pub fn exact_transparent_scalar_carrier_field_v1(
             && properties.second_pointee().is_none()
             && ty.rust_type_kind() == SemanticRustTypeKindV1::Ordinary
     });
+    let exact_markers = markers
+        .iter()
+        .copied()
+        .all(|marker| exact_inert_zero_sized_marker_v1(types, marker, &mut BTreeSet::new()));
     (exact_scalar_repr
         && exact_fields
         && exact_details
         && exact_variants
         && exact_layout
-        && exact_abi_properties)
+        && exact_abi_properties
+        && exact_markers)
         .then_some(*field)
 }
 

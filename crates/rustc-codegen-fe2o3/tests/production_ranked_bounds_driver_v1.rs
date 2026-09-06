@@ -253,6 +253,38 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn consuming_wave_lane_id_is_a_production_deterministic_scalar_callable() {
+    let extracted = run_feature_extraction(&ScratchTarget::new(), "wave_lane_into_id");
+    assert!(
+        extracted.status.success()
+            && extracted
+                .stderr
+                .contains("all mandatory kernel checks clean true")
+            && extracted.stderr.contains("kernel.access Write")
+            && !extracted.stderr.contains(
+                "call terminator before exact callable memory-effect summaries are available"
+            ),
+        "consuming WaveLane scalar accessor did not pass production projection:\n{}",
+        extracted.stderr,
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn borrowed_wave_lane_id_remains_outside_production_scalar_callable_admission() {
+    let extracted = run_feature_extraction(&ScratchTarget::new(), "wave_lane_get");
+    assert!(
+        !extracted.status.success()
+            && extracted.stderr.contains(
+                "call terminator before exact callable memory-effect summaries are available"
+            ),
+        "borrowed WaveLane scalar accessor unexpectedly passed production projection:\n{}",
+        extracted.stderr,
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn optimized_blocked_accessor_retains_its_checked_terminal() {
     let blocked = run_release_feature_extraction(&ScratchTarget::new(), "blocked");
     assert!(

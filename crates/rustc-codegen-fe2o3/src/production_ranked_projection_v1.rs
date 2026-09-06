@@ -60,8 +60,9 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 #[cfg(test)]
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticAxisV1, SemanticBackendScalarV1, SemanticFieldsShapeV1, SemanticRustTypeKindV1,
-    SemanticRustcVariantsV1, SemanticTypeLayoutDetailsV1,
+    SemanticAxisV1, SemanticBackendScalarV1, SemanticExternAbiV1, SemanticFieldsShapeV1,
+    SemanticFunctionSafetyV1, SemanticRustTypeKindV1, SemanticRustcVariantsV1,
+    SemanticTypeLayoutDetailsV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
@@ -29693,7 +29694,10 @@ mod tests {
     }
 
     const TRANSPARENT_U16_FIELD_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(13);
-    const TRANSPARENT_U16_CARRIER_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(14);
+    const TRANSPARENT_U16_MARKER_A_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(14);
+    const TRANSPARENT_U16_MARKER_B_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(15);
+    const TRANSPARENT_U16_CARRIER_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(16);
+    const TRANSPARENT_FUNCTION_POINTER_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(17);
 
     fn transparent_u16_backend_v1(valid_end: u128) -> SemanticBackendReprV1 {
         SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
@@ -29741,19 +29745,71 @@ mod tests {
     fn exact_transparent_u16_carrier_decl_v1() -> SemanticTypeDeclV1 {
         transparent_u16_carrier_decl_v1(
             SemanticTypeShapeV1::Aggregate(
-                SemanticAggregateTypeV1::new(vec![TRANSPARENT_U16_FIELD_TYPE]).unwrap(),
+                SemanticAggregateTypeV1::new(vec![
+                    TRANSPARENT_U16_FIELD_TYPE,
+                    TRANSPARENT_U16_MARKER_A_TYPE,
+                    TRANSPARENT_U16_MARKER_B_TYPE,
+                ])
+                .unwrap(),
             ),
-            SemanticFieldsShapeV1::arbitrary(vec![0], vec![0]).unwrap(),
+            SemanticFieldsShapeV1::arbitrary(vec![0, 2, 2], vec![0, 1, 2]).unwrap(),
             SemanticRustcVariantsV1::Single { index: 0 },
             transparent_u16_backend_v1(u16::MAX.into()),
             false,
             None,
             2,
             SemanticTypeLayoutDetailsV1::Aggregate(
-                SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+                SemanticAggregateLayoutV1::new(vec![0, 2, 2], vec![]).unwrap(),
             ),
             SemanticTypeAbiPropertiesV1::new(false, false).with_rustc_layout_is_noundef(true),
             SemanticRustTypeKindV1::Ordinary,
+        )
+    }
+
+    fn transparent_u16_marker_decl_v1(
+        tag: u8,
+        shape: SemanticTypeShapeV1,
+        fields: SemanticFieldsShapeV1,
+        variants: SemanticRustcVariantsV1,
+        backend_repr: SemanticBackendReprV1,
+        uninhabited: bool,
+        details: SemanticTypeLayoutDetailsV1,
+        properties: SemanticTypeAbiPropertiesV1,
+    ) -> SemanticTypeDeclV1 {
+        SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(tag)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(tag)),
+            SemanticTypeLayoutV1::with_exact_rustc_layout(
+                0,
+                1,
+                fields,
+                variants,
+                backend_repr,
+                None,
+                uninhabited,
+                None,
+                1,
+                0,
+                details,
+            )
+            .unwrap(),
+            shape,
+        )
+        .with_rustc_abi_properties(properties)
+    }
+
+    fn exact_transparent_u16_marker_decl_v1(tag: u8) -> SemanticTypeDeclV1 {
+        transparent_u16_marker_decl_v1(
+            tag,
+            SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![]).unwrap()),
+            SemanticFieldsShapeV1::arbitrary(vec![], vec![]).unwrap(),
+            SemanticRustcVariantsV1::Single { index: 0 },
+            SemanticBackendReprV1::memory(true),
+            false,
+            SemanticTypeLayoutDetailsV1::Aggregate(
+                SemanticAggregateLayoutV1::new(vec![], vec![]).unwrap(),
+            ),
+            SemanticTypeAbiPropertiesV1::new(false, false).with_rustc_layout_is_noundef(true),
         )
     }
 
@@ -29787,8 +29843,33 @@ mod tests {
                 SemanticTypeAbiPropertiesV1::new(false, false).with_rustc_layout_is_noundef(true),
             ),
         );
+        assert_eq!(types.len(), TRANSPARENT_U16_MARKER_A_TYPE.index() as usize);
+        types.push(exact_transparent_u16_marker_decl_v1(248));
+        assert_eq!(types.len(), TRANSPARENT_U16_MARKER_B_TYPE.index() as usize);
+        types.push(exact_transparent_u16_marker_decl_v1(249));
         assert_eq!(types.len(), TRANSPARENT_U16_CARRIER_TYPE.index() as usize);
         types.push(exact_transparent_u16_carrier_decl_v1());
+        assert_eq!(
+            types.len(),
+            TRANSPARENT_FUNCTION_POINTER_TYPE.index() as usize
+        );
+        types.push(
+            SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256(bytes(247)),
+                SemanticLayoutIdentityV1::from_sha256(bytes(247)),
+                SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+                SemanticTypeShapeV1::FunctionPointer {
+                    safety: SemanticFunctionSafetyV1::Safe,
+                    extern_abi: SemanticExternAbiV1::Rust,
+                    c_variadic: false,
+                    arguments: SemanticAggregateTypeV1::new(vec![]).unwrap(),
+                    return_type: BOOL_TYPE,
+                },
+            )
+            .with_rustc_abi_properties(
+                SemanticTypeAbiPropertiesV1::new(false, false).with_rustc_layout_is_noundef(true),
+            ),
+        );
         types
     }
 
@@ -29961,18 +30042,56 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_scalar_summary_rejects_drop_terminators() {
+        let function = scalar_summary_helper(
+            239,
+            vec![
+                block(
+                    239,
+                    vec![],
+                    SemanticTerminatorKindV1::Drop {
+                        place: summary_scalar_place(),
+                        drop_glue: SemanticFunctionIdV1::from_index(0),
+                        target: cfg_edge(SemanticEdgeRoleV1::DropReturn, 1),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(240, vec![], SemanticTerminatorKindV1::Return),
+            ],
+        );
+        let summaries = derive_defined_callable_empty_effect_summaries_v1(
+            &projection_types(),
+            &[function],
+            &[SemanticCallableDeclV1::defined(
+                SemanticFunctionIdV1::from_index(0),
+            )],
+        )
+        .unwrap();
+        assert!(!summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
+        assert!(
+            !summaries.is_exact_empty_deterministic_scalar(SemanticFunctionIdV1::from_index(0))
+        );
+    }
+
+    #[test]
     fn transparent_scalar_carrier_requires_the_exact_source_and_layout_contract() {
         let exact_types = transparent_u16_carrier_types_v1();
         let exact_field = exact_types[TRANSPARENT_U16_FIELD_TYPE.index() as usize].clone();
         let aggregate = || {
             SemanticTypeShapeV1::Aggregate(
-                SemanticAggregateTypeV1::new(vec![TRANSPARENT_U16_FIELD_TYPE]).unwrap(),
+                SemanticAggregateTypeV1::new(vec![
+                    TRANSPARENT_U16_FIELD_TYPE,
+                    TRANSPARENT_U16_MARKER_A_TYPE,
+                    TRANSPARENT_U16_MARKER_B_TYPE,
+                ])
+                .unwrap(),
             )
         };
-        let exact_fields = || SemanticFieldsShapeV1::arbitrary(vec![0], vec![0]).unwrap();
+        let exact_fields =
+            || SemanticFieldsShapeV1::arbitrary(vec![0, 2, 2], vec![0, 1, 2]).unwrap();
         let exact_details = || {
             SemanticTypeLayoutDetailsV1::Aggregate(
-                SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+                SemanticAggregateLayoutV1::new(vec![0, 2, 2], vec![]).unwrap(),
             )
         };
         let exact_properties =
@@ -29992,7 +30111,7 @@ mod tests {
                     None,
                     2,
                     0,
-                    SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+                    SemanticAggregateLayoutV1::new(vec![0, 2, 2], vec![]).unwrap(),
                 )
                 .unwrap(),
             ],
@@ -30009,7 +30128,12 @@ mod tests {
         let hostile_carriers = vec![
             transparent_u16_carrier_decl_v1(
                 SemanticTypeShapeV1::Tuple(
-                    SemanticAggregateTypeV1::new(vec![TRANSPARENT_U16_FIELD_TYPE]).unwrap(),
+                    SemanticAggregateTypeV1::new(vec![
+                        TRANSPARENT_U16_FIELD_TYPE,
+                        TRANSPARENT_U16_MARKER_A_TYPE,
+                        TRANSPARENT_U16_MARKER_B_TYPE,
+                    ])
+                    .unwrap(),
                 ),
                 exact_fields(),
                 SemanticRustcVariantsV1::Single { index: 0 },
@@ -30026,6 +30150,7 @@ mod tests {
                     SemanticAggregateTypeV1::new(vec![
                         TRANSPARENT_U16_FIELD_TYPE,
                         TRANSPARENT_U16_FIELD_TYPE,
+                        TRANSPARENT_U16_MARKER_B_TYPE,
                     ])
                     .unwrap(),
                 ),
@@ -30060,6 +30185,34 @@ mod tests {
                 None,
                 2,
                 exact_details(),
+                exact_properties(),
+                SemanticRustTypeKindV1::Ordinary,
+            ),
+            transparent_u16_carrier_decl_v1(
+                aggregate(),
+                SemanticFieldsShapeV1::arbitrary(vec![1, 2, 2], vec![0, 1, 2]).unwrap(),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                transparent_u16_backend_v1(u16::MAX.into()),
+                false,
+                None,
+                2,
+                SemanticTypeLayoutDetailsV1::Aggregate(
+                    SemanticAggregateLayoutV1::new(vec![1, 2, 2], vec![]).unwrap(),
+                ),
+                exact_properties(),
+                SemanticRustTypeKindV1::Ordinary,
+            ),
+            transparent_u16_carrier_decl_v1(
+                aggregate(),
+                exact_fields(),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                transparent_u16_backend_v1(u16::MAX.into()),
+                false,
+                None,
+                2,
+                SemanticTypeLayoutDetailsV1::Aggregate(
+                    SemanticAggregateLayoutV1::new(vec![0, 1, 2], vec![]).unwrap(),
+                ),
                 exact_properties(),
                 SemanticRustTypeKindV1::Ordinary,
             ),
@@ -30237,6 +30390,116 @@ mod tests {
         for hostile in hostile_carriers {
             let mut types = exact_types.clone();
             types[TRANSPARENT_U16_CARRIER_TYPE.index() as usize] = hostile;
+            assert!(
+                exact_transparent_scalar_carrier_field_v1(&types, TRANSPARENT_U16_CARRIER_TYPE,)
+                    .is_none()
+            );
+        }
+
+        let exact_marker_properties =
+            || SemanticTypeAbiPropertiesV1::new(false, false).with_rustc_layout_is_noundef(true);
+        let empty_aggregate = || {
+            (
+                SemanticFieldsShapeV1::arbitrary(vec![], vec![]).unwrap(),
+                SemanticTypeLayoutDetailsV1::Aggregate(
+                    SemanticAggregateLayoutV1::new(vec![], vec![]).unwrap(),
+                ),
+            )
+        };
+        let hostile_markers = vec![
+            transparent_u16_marker_decl_v1(
+                246,
+                SemanticTypeShapeV1::Opaque,
+                SemanticFieldsShapeV1::Primitive,
+                SemanticRustcVariantsV1::Single { index: 0 },
+                SemanticBackendReprV1::memory(true),
+                false,
+                SemanticTypeLayoutDetailsV1::None,
+                exact_marker_properties(),
+            ),
+            transparent_u16_marker_decl_v1(
+                245,
+                SemanticTypeShapeV1::Array {
+                    element: POINTER_TYPE,
+                    length: 0,
+                },
+                SemanticFieldsShapeV1::array(8, 0),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                SemanticBackendReprV1::memory(true),
+                false,
+                SemanticTypeLayoutDetailsV1::None,
+                exact_marker_properties(),
+            ),
+            transparent_u16_marker_decl_v1(
+                244,
+                SemanticTypeShapeV1::Array {
+                    element: TRANSPARENT_FUNCTION_POINTER_TYPE,
+                    length: 0,
+                },
+                SemanticFieldsShapeV1::array(8, 0),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                SemanticBackendReprV1::memory(true),
+                false,
+                SemanticTypeLayoutDetailsV1::None,
+                exact_marker_properties(),
+            ),
+            {
+                let (fields, details) = empty_aggregate();
+                transparent_u16_marker_decl_v1(
+                    243,
+                    SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![]).unwrap()),
+                    fields,
+                    SemanticRustcVariantsV1::Empty,
+                    SemanticBackendReprV1::memory(true),
+                    true,
+                    details,
+                    exact_marker_properties(),
+                )
+            },
+            transparent_u16_marker_decl_v1(
+                242,
+                SemanticTypeShapeV1::Aggregate(
+                    SemanticAggregateTypeV1::new(vec![TRANSPARENT_U16_MARKER_A_TYPE]).unwrap(),
+                ),
+                SemanticFieldsShapeV1::arbitrary(vec![0], vec![0]).unwrap(),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                SemanticBackendReprV1::memory(true),
+                false,
+                SemanticTypeLayoutDetailsV1::Aggregate(
+                    SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+                ),
+                exact_marker_properties(),
+            ),
+            {
+                let (fields, details) = empty_aggregate();
+                transparent_u16_marker_decl_v1(
+                    241,
+                    SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![]).unwrap()),
+                    fields,
+                    SemanticRustcVariantsV1::Single { index: 0 },
+                    SemanticBackendReprV1::memory(true),
+                    false,
+                    details,
+                    SemanticTypeAbiPropertiesV1::new(false, false),
+                )
+            },
+            {
+                let (fields, details) = empty_aggregate();
+                transparent_u16_marker_decl_v1(
+                    240,
+                    SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![]).unwrap()),
+                    fields,
+                    SemanticRustcVariantsV1::Single { index: 0 },
+                    SemanticBackendReprV1::memory(true),
+                    false,
+                    details,
+                    exact_marker_properties().with_scalar_pointee_info(Some(pointee), None),
+                )
+            },
+        ];
+        for hostile in hostile_markers {
+            let mut types = exact_types.clone();
+            types[TRANSPARENT_U16_MARKER_A_TYPE.index() as usize] = hostile;
             assert!(
                 exact_transparent_scalar_carrier_field_v1(&types, TRANSPARENT_U16_CARRIER_TYPE,)
                     .is_none()
