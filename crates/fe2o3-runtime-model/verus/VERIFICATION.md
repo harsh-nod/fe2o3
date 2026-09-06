@@ -12,9 +12,10 @@ portable-progress, R25 persistent-compute storage-bridge, R27 persistent
 dispatch-control, R28 persistent-hot-currentness-scope, R30 bound
 host-content-certificate, R31 single-packet/window-refinement, R32
 directional-currentness-handoff, R33 fused-synchronous-directional-SDMA, R34
-fused-asynchronous-directional-SDMA, R35 fused-retained-control-replay, and R36
-fused-completion-poll/recycle models. The authenticated runner proves 823
-obligations and rejects 326 expected-negative mutations over finite abstract
+fused-asynchronous-directional-SDMA, R35 fused-retained-control-replay, R36
+fused-completion-poll/recycle, and R37 typed-native-SDMA-wait-activation
+models. The authenticated runner proves 838 obligations and rejects 333
+expected-negative mutations over finite abstract
 values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -1751,6 +1752,80 @@ proof that the executable model or production Rust refines the Verus machine.
 | Executable completion-poll/recycle model | **Checked** | Nine focused Rust tests, including all 196 finite cases and 182 premise-admitted cases, structural move-only checks, plus one compile-fail non-`Clone` doctest; no Rust-to-Verus correspondence theorem. |
 | Boundary countermodels | **Rejected** | Four pinned mutations fail their named recycle-on-Pending, midpoint-before-Ready, failure-custody, and retirement-order postconditions. |
 | Production/public error identity, real clock values or physical timing, concrete currentness/completion truth, Rust privacy or borrow semantics, executable or production Rust refinement, runtime/KFD/HSA/HIP, driver, firmware, hardware, coherence, progress, liveness, parity, or performance | **Not established** | Explicitly outside the R36 proof boundary. |
+
+## R37 typed native SDMA wait activation
+
+`r37_typed_native_sdma_wait_activation_v1.rs` proves 15 obligations for an
+independent finite model reviewed against signed production commit
+`f81d67fa603ecf23ebd101556b327ae80f13c5ec`. The commit is provenance, not a
+refinement link. The model starts with exact abstract Published custody for a
+directional or same-device submission and consumes one caller-supplied native
+wait observation.
+
+Only `ExactTypedTimeout` with the exact modeled native owner and request
+identity returns recoverable Published custody. A matching non-timeout
+retryable observation is terminal and retains exact Pending native custody.
+Pending and Completed identity-change observations are terminal and retain the
+changed owner returned at their respective stage rather than substituting the
+expected owner. Teardown retains its exact opaque terminal token. Every
+terminal path removes the operational active and published-index memberships
+while preserving the exact in-flight source and destination storage
+generations, dependency count, allocation-custody counts, stream count,
+current stream membership, and surrounding stream frame.
+
+Timeout restores the exact active Published phase, sorted-index frame, both
+in-flight storage coordinates, dependency and allocation retain counts, stream
+membership and frame, and native Published owner. Both zero and positive
+abstract deadline classes perform exactly one modeled native observation.
+This is a finite event count, not evidence about a real `Instant`, elapsed
+time, syscall count, polling implementation, or device observation.
+
+Exact completion alone may advance the model. Settlement restores both exact
+storage tokens, records success, and releases one modeled dependency,
+source-custody, destination-custody, and stream owner. A partial-window
+completion restores storage but remains active in Ready custody, is absent from
+the published index, retains the logical owners, and performs zero continuation
+publications; explicit flush remains outside this transition. The routing
+model proves that explicit Poll always selects the pre-existing Poll route,
+Published waits select the matching directional or same-device native route,
+and non-Published waits retain the legacy polling route. It does not model or
+prove the internal semantics of those unchanged routes.
+
+The executable model checks exactly 56 legal cases: two custody-frame
+profiles, two copy kinds, two deadline classes, and seven meaningful outcomes
+(two completion dispositions, exact timeout, non-timeout retryable, pending
+identity change, completed identity change, and teardown). A separate exact
+eight-case matrix covers Poll/Wait across directional Published, same-device
+Published, Ready, and other entry phases. The public owning model and its
+private Published authority have structural non-`Clone` checks, and one
+compile-fail doctest rejects cloning the owning model. Verus mathematical
+carriers remain copyable and establish no Rust ownership or borrowing fact.
+
+Seven standalone pinned countermodels respectively accept a non-timeout retry
+as timeout, skip the zero-deadline observation, omit published-index
+restoration on timeout, substitute expected custody for the changed returned
+owner, eagerly republish a Ready continuation, drop source-allocation custody
+from Ready, and lose current-stream membership from Ready. Each imports no
+positive proof source and fails its named postcondition.
+
+All error classes, identities, counts, frames, storage tokens, deadlines,
+completion dispositions, and native outcomes are contracted mathematical
+inputs. The model excludes production/public error text and error identity,
+real map/vector contents, allocation bytes, queue and driver state, actual
+native owner validity, native completion truth, hardware clocks, coherence,
+progress, liveness, and performance. There is no Rust-to-Verus correspondence
+theorem and no proof that the executable model or production Rust refines the
+Verus machine.
+
+## R37 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Typed-timeout exclusivity, one abstract wait observation, exact timeout restoration, exact non-timeout/identity-change/teardown terminal custody, success-only settlement or Ready continuation, and exact modeled storage/dependency/allocation/stream coordinates | **Proved** | Fifteen obligations in `r37_typed_native_sdma_wait_activation_v1.rs`; contracted finite observations and mathematical coordinates only. |
+| Poll and wait route selection | **Proved** | Explicit Poll remains Poll; only Published directional/same-device waits select native wait. This proves route selection, not unchanged route internals. |
+| Executable typed-wait model | **Checked** | Seven focused Rust tests, including exactly 56 legal transition cases, an exact eight-case route matrix, structural move-only checks, and one compile-fail non-`Clone` doctest. |
+| Boundary countermodels | **Rejected** | Seven pinned mutations fail non-timeout classification, zero-deadline observation, timeout restoration, identity custody, continuation-publication, source-custody, and stream-currentness postconditions. |
+| Production/public error identity, real time or physical event count, actual map/vector contents, concrete native ownership or completion, Rust privacy or borrow semantics, executable or production Rust refinement, runtime/KFD/HSA/HIP, driver, firmware, hardware, coherence, progress, liveness, parity, or performance | **Not established** | Explicitly outside the R37 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
