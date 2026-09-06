@@ -2591,15 +2591,11 @@ impl Gfx942SdmaQueueOwnerV1 {
             ))?;
         memory.check_queue_operational_currentness()?;
         let mut wait = wait_profile.cursor(deadline);
-        loop {
-            if self.observe_persistent_window_completion(memory, tickets)? {
-                break;
-            }
-            if wait.expired() {
-                memory.check_queue_operational_currentness()?;
-                return Err(Gfx942SdmaErrorV1::Timeout);
-            }
-            wait.pause();
+        if !wait
+            .observe_until_ready(|| self.observe_persistent_window_completion(memory, tickets))?
+        {
+            memory.check_queue_operational_currentness()?;
+            return Err(Gfx942SdmaErrorV1::Timeout);
         }
         memory.check_queue_operational_currentness()?;
         Ok(self.complete_persistent_window(tickets))
@@ -2888,7 +2884,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             .ok_or(Gfx942SdmaErrorV1::Contract("SDMA wait deadline"))?;
         memory.check_queue_operational_currentness()?;
         let mut wait = wait_profile.cursor(deadline);
-        loop {
+        if !wait.observe_until_ready(|| {
             let observed = memory.observe_mapped_host_visible_i64_at_in_current_scope(
                 self.completions
                     .as_mut()
@@ -2896,7 +2892,7 @@ impl Gfx942SdmaQueueOwnerV1 {
                 (slot * 8) as u64,
             )?;
             if observed == i64::from(expected) {
-                break;
+                return Ok(true);
             }
             if observed != 0 {
                 self.poisoned = true;
@@ -2904,11 +2900,10 @@ impl Gfx942SdmaQueueOwnerV1 {
                     "unexpected SDMA completion value",
                 ));
             }
-            if wait.expired() {
-                memory.check_queue_operational_currentness()?;
-                return Err(Gfx942SdmaErrorV1::Timeout);
-            }
-            wait.pause();
+            Ok(false)
+        })? {
+            memory.check_queue_operational_currentness()?;
+            return Err(Gfx942SdmaErrorV1::Timeout);
         }
         memory.check_queue_operational_currentness()?;
         let record = self.records[slot].take().expect("completed SDMA record");
@@ -6956,10 +6951,32 @@ mod tests {
             .split("fn observe_progress_in_current_scope(")
             .next()
             .unwrap();
-        for body in [fused_synchronous, xgmi_single, xgmi_batch] {
+        let ordinary_batch_or_striped = lower
+            .split("pub(crate) fn wait_many_for_in_current_scope(")
+            .nth(1)
+            .unwrap()
+            .split("pub(crate) fn destroy_queue(")
+            .next()
+            .unwrap();
+        for body in [
+            fused_synchronous,
+            xgmi_single,
+            xgmi_batch,
+            ordinary_batch_or_striped,
+        ] {
             assert!(!body.contains("SdmaWaitProfileV1"));
             assert!(body.contains("MonotonicWaitV1::until(deadline)"));
         }
+
+        let persistent_compute = live
+            .split("pub fn wait_and_recycle_directional_persistent_fixed_dispatch_until_v1(")
+            .nth(1)
+            .unwrap()
+            .split("pub fn recycle_directional_persistent_fixed_dispatch_v1(")
+            .next()
+            .unwrap();
+        assert!(!persistent_compute.contains(elapsed_profile));
+        assert!(persistent_compute.contains("MonotonicWaitV1::until(deadline)"));
     }
 
     #[test]
@@ -6975,12 +6992,8 @@ mod tests {
             .split("#[allow(clippy::type_complexity)]")
             .next()
             .unwrap();
-        assert!(
-            window
-                .find("if self.observe_persistent_window_completion")
-                .unwrap()
-                < window.find("if wait.expired()").unwrap()
-        );
+        assert!(window.contains(".observe_until_ready"));
+        assert!(window.contains("self.observe_persistent_window_completion"));
 
         let single = source
             .split("pub(crate) fn wait_for(")
@@ -6989,7 +7002,20 @@ mod tests {
             .split("fn wait_for_in_current_scope_with_final_currentness(")
             .next()
             .unwrap();
-        assert!(single.find("let observed =").unwrap() < single.find("if wait.expired()").unwrap());
+        assert!(single.contains(".observe_until_ready"));
+        assert!(single.contains("let observed ="));
+
+        let wait_helper = include_str!("wait.rs")
+            .split("pub(crate) fn observe_until_ready")
+            .nth(1)
+            .unwrap()
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(
+            wait_helper.find("if observe_ready()?").unwrap()
+                < wait_helper.find("if self.expired()").unwrap()
+        );
 
         let profile = source
             .split("impl SdmaWaitProfileV1")
@@ -7000,6 +7026,33 @@ mod tests {
             .unwrap();
         assert!(profile.contains("Self::Default => MonotonicWaitV1::until(deadline)"));
         assert!(profile.contains("MonotonicWaitV1::until_with_active_spin_floor"));
+    }
+
+    #[test]
+    fn persistent_profile_drives_one_zero_deadline_observation_before_timeout() {
+        let profile = SdmaWaitProfileV1::PersistentElapsedSpinFloor(Duration::from_nanos(50_000));
+
+        let mut pending = profile.cursor(Instant::now());
+        let mut pending_observations = 0;
+        assert_eq!(
+            pending.observe_until_ready(|| {
+                pending_observations += 1;
+                Ok::<_, ()>(false)
+            }),
+            Ok(false)
+        );
+        assert_eq!(pending_observations, 1);
+
+        let mut ready = profile.cursor(Instant::now());
+        let mut ready_observations = 0;
+        assert_eq!(
+            ready.observe_until_ready(|| {
+                ready_observations += 1;
+                Ok::<_, ()>(true)
+            }),
+            Ok(true)
+        );
+        assert_eq!(ready_observations, 1);
     }
 
     #[test]

@@ -107,6 +107,24 @@ impl MonotonicWaitV1 {
             WaitActionV1::Sleep(_) => {}
         }
     }
+
+    /// Repeats one observation before consulting the deadline. `Ok(true)`
+    /// means the observed operation is ready; `Ok(false)` means the deadline
+    /// expired after a Pending observation.
+    pub(crate) fn observe_until_ready<E>(
+        &mut self,
+        mut observe_ready: impl FnMut() -> Result<bool, E>,
+    ) -> Result<bool, E> {
+        loop {
+            if observe_ready()? {
+                return Ok(true);
+            }
+            if self.expired() {
+                return Ok(false);
+            }
+            self.pause();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -116,17 +134,21 @@ mod tests {
     #[test]
     fn sustained_waits_progress_from_spin_to_yield_to_bounded_sleep() {
         let mut wait = MonotonicWaitV1::without_deadline();
-        for _ in 0..SPIN_ATTEMPTS_V1 {
+        for expected_attempts in 1..=SPIN_ATTEMPTS_V1 {
             assert_eq!(wait.next_action(), WaitActionV1::Spin);
+            assert_eq!(wait.attempts, expected_attempts);
         }
-        for _ in 0..YIELD_ATTEMPTS_V1 {
+        for expected_attempts in (SPIN_ATTEMPTS_V1 + 1)..=(SPIN_ATTEMPTS_V1 + YIELD_ATTEMPTS_V1) {
             assert_eq!(wait.next_action(), WaitActionV1::Yield);
+            assert_eq!(wait.attempts, expected_attempts);
         }
         assert_eq!(wait.next_action(), WaitActionV1::Sleep(INITIAL_SLEEP_V1));
+        assert_eq!(wait.attempts, SPIN_ATTEMPTS_V1 + YIELD_ATTEMPTS_V1 + 1);
         assert_eq!(
             wait.next_action(),
             WaitActionV1::Sleep(INITIAL_SLEEP_V1 * 2)
         );
+        assert_eq!(wait.attempts, SPIN_ATTEMPTS_V1 + YIELD_ATTEMPTS_V1 + 2);
         for _ in 0..32 {
             let WaitActionV1::Sleep(duration) = wait.next_action() else {
                 panic!("backoff returned to an active wait")
@@ -186,5 +208,64 @@ mod tests {
             Duration::from_micros(200),
         );
         assert_eq!(clamped.active_spin_until, Some(deadline));
+    }
+
+    #[test]
+    fn profiled_observation_loop_checks_zero_deadline_only_after_observing() {
+        let deadline = Instant::now();
+        let mut pending =
+            MonotonicWaitV1::until_with_active_spin_floor(deadline, Duration::from_nanos(50_000));
+        let mut pending_observations = 0;
+        assert_eq!(
+            pending.observe_until_ready(|| {
+                pending_observations += 1;
+                Ok::<_, ()>(false)
+            }),
+            Ok(false)
+        );
+        assert_eq!(pending_observations, 1);
+
+        let deadline = Instant::now();
+        let mut ready =
+            MonotonicWaitV1::until_with_active_spin_floor(deadline, Duration::from_nanos(50_000));
+        let mut ready_observations = 0;
+        assert_eq!(
+            ready.observe_until_ready(|| {
+                ready_observations += 1;
+                Ok::<_, ()>(true)
+            }),
+            Ok(true)
+        );
+        assert_eq!(ready_observations, 1);
+    }
+
+    #[test]
+    fn observation_loop_retries_pending_then_returns_ready() {
+        let mut wait = MonotonicWaitV1::without_deadline();
+        let mut observations = 0;
+        assert_eq!(
+            wait.observe_until_ready(|| {
+                observations += 1;
+                Ok::<_, ()>(observations == 2)
+            }),
+            Ok(true)
+        );
+        assert_eq!(observations, 2);
+        assert_eq!(wait.attempts, 1);
+    }
+
+    #[test]
+    fn observation_loop_propagates_closure_error_without_pausing() {
+        let mut wait = MonotonicWaitV1::without_deadline();
+        let mut observations = 0;
+        assert_eq!(
+            wait.observe_until_ready(|| {
+                observations += 1;
+                Err::<bool, _>("observation failed")
+            }),
+            Err("observation failed")
+        );
+        assert_eq!(observations, 1);
+        assert_eq!(wait.attempts, 0);
     }
 }

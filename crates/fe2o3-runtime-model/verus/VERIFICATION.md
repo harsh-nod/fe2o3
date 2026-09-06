@@ -13,9 +13,9 @@ dispatch-control, R28 persistent-hot-currentness-scope, R30 bound
 host-content-certificate, R31 single-packet/window-refinement, R32
 directional-currentness-handoff, R33 fused-synchronous-directional-SDMA, R34
 fused-asynchronous-directional-SDMA, R35 fused-retained-control-replay, R36
-fused-completion-poll/recycle, R37 typed-native-SDMA-wait-activation, and R38
-bounded-persistent-compute-wait/recycle models. The authenticated runner proves
-857 obligations and rejects 339
+fused-completion-poll/recycle, R37 typed-native-SDMA-wait-activation, R38
+bounded-persistent-compute-wait/recycle, and R39 scoped-persistent-SDMA-wait
+policy models. The authenticated runner proves 877 obligations and rejects 349
 expected-negative mutations over finite abstract
 values and traces. The
 materialization input and image sequences are
@@ -1902,6 +1902,70 @@ postcondition.
 | Executable bounded-wait model | **Checked** | Seven focused Rust tests cover 756 model-admitted contracted present-queue cases, two missing-queue profiles, eight route cases, input rejection, maximum termination, structural affine-owner checks, and compile-fail checks for cloning and transition replay. The owner is consumed by one attempt; explicit drop and invalid limits/script errors do not preserve or prove custody. The defensive retryable-preflight cases are not a reachability proof. |
 | Boundary countermodels | **Rejected** | Six pinned mutations fail zero-observation, timeout lane/index, stage custody, missing-queue authority, eager recycle, and observation-overflow postconditions. |
 | Production/public error type or identity, real `Instant` or sleep/backoff behavior, physical event indices, concrete map/vector contents, actual native ownership/completion, Rust privacy/borrowing/drop/panic behavior, custody preservation across invalid executable inputs or explicit drop, executable or production Rust refinement, runtime/KFD/HSA/HIP, driver, firmware, hardware, coherence, progress, liveness, timing, parity, or performance | **Not established** | Explicitly outside the R38 proof boundary. The finite maximum is a model bound, not a proof about production `u64::MAX`. |
+
+## R39 scoped persistent-SDMA wait policy
+
+`r39_scoped_persistent_sdma_wait_policy_v1.rs` proves 20 obligations for one
+abstract completion observation and subsequent wait-policy decision. Commit
+`4be5243dbe835c94618a62b3702f9624cd8f9d1f` was a human design-review reference,
+not an authenticated proof input or a refinement link. The runner pins the R39
+positive proof and standalone countermodel sources; it does not pin or
+authenticate a production commit or production Rust files. The aggregate
+transcript records runner results and likewise does not authenticate production
+code. Nanosecond positions, the completion observation, and the complete R37
+wait snapshot are contracted mathematical inputs rather than values obtained
+from Rust, a clock, or a native queue.
+
+The profile selector admits the exact 50,000ns elapsed active-spin floor only
+for directional persistent single, directional persistent window, and
+same-device persistent window waits. Generic persistent single, ordinary
+single, ordinary batch/striped, fused synchronous directional, XGMI single,
+XGMI batch, and persistent-compute waits retain the default policy. The default
+constants are exactly 64 spin attempts, 16 yield attempts, 25,000ns initial
+sleep, and 1,000,000ns maximum sleep.
+
+The modeled floor endpoint uses checked addition: an overflow falls back to the
+deadline and an in-range endpoint is clamped to the deadline. Completion is
+observed before deadline classification, so Ready wins even when the deadline
+has expired and an expired Pending result records one observation without a
+pause action. The deadline check and action selection use ordered, separately
+contracted time samples. A Pending result that was live at the deadline-check
+sample increments or saturates the attempt counter before selecting an action
+at the later sample. If the deadline passes between samples, default action
+selection proceeds with zero saturating remaining duration; it is not
+retroactively classified as a timeout. The floor comparison is strict; at the
+exact floor boundary the default adaptive stage resumes. Sleep is bounded by
+saturating remaining deadline duration, and exponential backoff is capped at
+the maximum. A cursor start after an already computed deadline is admitted.
+
+The executable model checks exactly 156 cases: 13 distinct public R37 snapshots
+covering both copy kinds and initial, timeout, success, continuation, identity,
+retryable, and teardown outcomes, crossed with 12 Ready/Pending, deadline,
+start-after-deadline, between-sample deadline passage, floor, adaptive-stage,
+sleep-clamp, saturation, and overflow scenarios. The output explicitly compares
+every public R37 snapshot coordinate. Separate tests check the exact three-site
+allowlist, seven exclusions, checked-add/clamp and strict-boundary behavior,
+zero-deadline ordering, ordered sample and sleep input rejection, and private
+move-only owner structure. One compile-fail doctest rejects cloning the owner.
+
+Ten standalone pinned countermodels respectively substitute 25us for the floor,
+omit an allowlisted route, activate an excluded route, wrap checked addition,
+omit deadline clamping, make the floor boundary inclusive, omit attempt
+counting, check the deadline before observation, lose a timeout stream-frame
+coordinate, and substitute Ready custody/continuation state. Each imports no
+positive proof source and fails its named postcondition.
+
+## R39 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Three-site profile selection and seven exclusions | **Proved** | The selector proves the exact 50,000ns profile for the three named persistent-SDMA sites and Default for all seven named exclusions. The proof does not establish that production dispatch reaches the abstract site supplied to the model. |
+| Checked floor endpoint and adaptive wait action | **Proved** | Checked-add overflow fallback, deadline clamp, strict floor comparison, default spin/yield stages, saturating attempt increment, saturating remaining-deadline sleep bound, and maximum backoff are mathematical properties over contracted natural-number times. |
+| Observation-before-deadline behavior | **Proved** | Ready wins at an expired deadline; expired Pending records one observation and no action. Ordered deadline-check and action samples admit deadline passage between samples, which resumes default action with zero remaining duration rather than retroactive timeout. No physical completion or clock property is established. |
+| Full R37 snapshot preservation | **Proved** | Every public R37 binding, route, outcome, active phase, index, storage, retain, custody, terminal, observation, settlement, completion, and continuation coordinate is mirrored and retained for timeout, Ready, and general steps. |
+| Executable finite model | **Checked** | Six focused Rust tests cover 156 snapshot/scenario cases, exact route scope, boundaries, zero deadline, start-after-deadline, between-sample deadline passage, ordered-input rejection, and private owner structure. The executable model is not proved to refine the Verus model or production Rust. |
+| Boundary countermodels | **Rejected** | Ten pinned independent mutations fail floor, route, overflow, clamp, boundary, attempt, observation, timeout-custody, and Ready-custody/continuation postconditions. |
+| Concrete `Instant`, CPU spin/yield/sleep execution, Rust-to-Verus or production refinement, native queue ownership/completion, runtime/KFD/HSA/HIP, driver, firmware, hardware, coherence, progress, liveness, timing, parity, or performance | **Not established** | Explicitly outside the R39 proof boundary. Source-structure and nonhardware Rust tests are checks, not refinement proofs. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
