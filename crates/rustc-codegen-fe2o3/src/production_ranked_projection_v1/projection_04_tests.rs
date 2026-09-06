@@ -199,6 +199,49 @@
     }
 
     #[test]
+    fn repeated_bounds_checks_on_one_stable_slice_share_the_exact_extent() {
+        let function = repeated_bounds_check_function(true, false);
+        let mut operations = Vec::new();
+        let mut next_value = 0;
+        let projected =
+            project_rust_bounds_checks(&function, 0, &[], &mut operations, &mut next_value)
+                .unwrap();
+
+        assert_eq!(projected.checks.len(), 2);
+        assert_eq!(projected.checks[0].slice_local, projected.checks[1].slice_local);
+        assert_eq!(projected.checks[0].extent, projected.checks[1].extent);
+        assert_ne!(projected.checks[0].index, projected.checks[1].index);
+        assert_eq!(operations.len(), 3);
+        assert_eq!(next_value, 3);
+    }
+
+    #[test]
+    fn repeated_bounds_extent_identity_does_not_cross_slice_or_mutation_boundaries() {
+        let different_slices = repeated_bounds_check_function(false, false);
+        let mut operations = Vec::new();
+        let mut next_value = 0;
+        let projected = project_rust_bounds_checks(
+            &different_slices,
+            0,
+            &[],
+            &mut operations,
+            &mut next_value,
+        )
+        .unwrap();
+        assert_ne!(projected.checks[0].slice_local, projected.checks[1].slice_local);
+        assert_ne!(projected.checks[0].extent, projected.checks[1].extent);
+        assert_eq!(operations.len(), 4);
+        assert_eq!(next_value, 4);
+
+        assert!(matches!(
+            project_test_bounds_checks(&repeated_bounds_check_function(true, true), 0),
+            Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "repeated Rust bounds checks derive an extent from a mutable slice local"
+            ))
+        ));
+    }
+
+    #[test]
     fn literal_array_bounds_check_does_not_manufacture_dynamic_authorization() {
         for function in [
             literal_bounds_check_function(63, 64),

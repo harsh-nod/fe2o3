@@ -117,3 +117,21 @@ Bundle V5 and KIR V10.
 These dispositions do not infer hardware behavior or performance. The suite
 does not compile on the CPU, predict GPU performance, use HIP/HSA, or grant
 artifact/load/launch authority.
+
+## Production Bundle V6 conformance
+
+The additive `production_semantic_capabilities_v4` and
+`run_production_semantic_conformance_v4` APIs are the current production-source
+conformance boundary. The runner accepts only an
+`AdmittedSimulationBundleInputV6`, revalidates the complete Bundle V6 plus its
+content and subject identities, source lineage, ABI, and exact canonical KIR
+V11 identity, then executes the already admitted request under its retained
+target and limits. The generated integer, floating-point, layout, checked
+access, switch, and nested-control-flow cases retain exact byte expectations.
+
+The V4 capability document keeps unsupported ordinary-source intrinsics,
+integer widths, short floating-point types, atomics, and recursive aggregate
+inputs typed unavailable. Bundle V6 adds custody for KIR V11, including exact
+same-space `ReadWrite` to `ReadOnly` pointer restriction; it does not turn an
+unavailable source producer into an implemented one. The Bundle V5/V3 APIs
+above remain a frozen compatibility contract and are not relabeled as V6.

@@ -23,6 +23,8 @@ pub enum MultiRootCorrespondenceFunctionRoleV2 {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 /// Producer rule for an operation that has no semantic statement owner.
 pub enum MultiRootCorrespondenceSyntheticRuleV2 {
+    /// Storage introduced for a retained scalar or thin-pointer Rust local.
+    RetainedLocalStorage,
     /// Storage introduced while lowering an enum payload.
     EnumPayloadStorage,
     /// Trap introduced for a failed runtime assertion.
@@ -279,6 +281,7 @@ impl MultiRootCorrespondencePayloadV2 {
             let rule = match reader.u8()? {
                 1 => MultiRootCorrespondenceSyntheticRuleV2::EnumPayloadStorage,
                 2 => MultiRootCorrespondenceSyntheticRuleV2::RuntimeAssertFailureTrap,
+                3 => MultiRootCorrespondenceSyntheticRuleV2::RetainedLocalStorage,
                 _ => return Err(MultiRootCorrespondencePayloadErrorV2::InvalidSyntheticRule),
             };
             Ok(MultiRootCorrespondenceSyntheticV2 {

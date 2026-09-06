@@ -1,7 +1,7 @@
-# Kernel IR Wire Formats V1 through V10
+# Kernel IR Wire Formats V1 through V11
 
 This document freezes the canonical binary representations produced by
-`encode_module_v1` through `encode_module_v10`. `decode_module_v1` accepts only
+`encode_module_v1` through `encode_module_v11`. `decode_module_v1` accepts only
 V1; each later decoder accepts canonical bytes up to its own version for
 migration safety. Every encoder always emits exactly its named version.
 
@@ -10,6 +10,11 @@ domain separator for identities derived from canonical V5 module bytes. It is
 not an additional wire prefix; the versioned header remains part of the bytes.
 `KERNEL_IR_DOMAIN_V6` provides the corresponding distinct
 `FE2O3/KERNEL-IR/V6\0` namespace for canonical V6 content.
+`KERNEL_IR_DOMAIN_V11` provides the distinct `FE2O3/KERNEL-IR/V11\0`
+namespace for canonical V11 content. Exact verified V11 ownership uses
+`VerifiedCanonicalKernelIrV11` and its separate policy-qualified identity;
+neither raw nor verified identities grant proof, publication, or execution
+authority.
 
 ### Content and Verified-Policy Identities
 
@@ -96,7 +101,7 @@ The 20-byte header is:
 
 ```text
 byte[8] magic = "FE2O3KI\0"
-u16     version = 1, 2, 3, 4, 5, or 6
+u16     version = 1 through 11
 u16     flags = 0
 u32     total_length_including_header
 u32     reserved = 0
@@ -178,7 +183,8 @@ Scalar tags follow declaration order: `Bool=1`, `I8=2`, `I16=3`, `I32=4`,
 `Bf16=12`, `F32=13`, `F64=14`, `I128=15` (V4), and `U128=16` (V4).
 
 Address-space tags are `Private=1`, `Workgroup=2`, `Global=3`, `Constant=4`,
-and `Generic=5`. Access-mode tags are `ReadOnly=1` and `ReadWrite=2`.
+and `Generic=5`. Access-mode tags are `ReadOnly=1`, `ReadWrite=2`, and
+`WriteOnly=3` (V9).
 
 ## Operations
 
@@ -414,8 +420,18 @@ are `X=1`, `Y=2`, and `Z=3`.
 Unary tags are `Negate=1` and `Not=2`. Frozen binary tags follow declaration
 order from `Add=1` through `ShiftRight=10`; V6 checked tags are listed above.
 Compare tags follow declaration order from `Equal=1` through
-`GreaterThanOrEqual=6`. Cast tags follow declaration
-order from `Truncate=1` through `Bitcast=8`.
+`GreaterThanOrEqual=6`. Frozen scalar cast tags follow declaration order from
+`Truncate=1` through `Bitcast=8`. V11 adds cast tag `9`,
+`RestrictPointerAccess`. V1 through V10 encoders reject that tag, and decoders
+reject a forged tag `9` under an older header.
+
+`RestrictPointerAccess` is an exact pointer-identity operation, not a scalar
+conversion or address-space cast. `verify_module` accepts only a pointer whose
+pointee type and address space are unchanged while access is narrowed from
+`ReadWrite` to `ReadOnly`. Identity casts, `ReadOnly` to `ReadWrite` widening,
+write-only substitutions, pointee changes, and address-space changes are
+invalid. The operation does not itself prove aliasing, lifetime, or Rust
+reference validity.
 
 Constant tags follow declaration order from `Bool=1` through `F64Bits=14`.
 Each payload has the width named by the variant; `Index` always carries a

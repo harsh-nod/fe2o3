@@ -4,9 +4,9 @@ use dialect_amdgcn::{
 };
 use dialect_kernel::IndexBinaryKindAttr;
 use fe2o3_kernel_ir::{
-    AmdGpuDiagnosticOperation, BinaryOp, BlockId, CheckedBinaryOperator, FunctionRole,
-    LaunchDomain, OperationKind, ScalarType, TargetCapability, Terminator, Type, WaveWidth,
-    WorkgroupSize, analyze_interprocedural_effects_v1, decode_module_v8,
+    AccessMode, AmdGpuDiagnosticOperation, BinaryOp, BlockId, CastKind, CheckedBinaryOperator,
+    FunctionRole, LaunchDomain, OperationKind, ScalarType, TargetCapability, Terminator, Type,
+    WaveWidth, WorkgroupSize, analyze_interprocedural_effects_v1, decode_module_v8,
     gfx942_xnack_minus_target_capability, gfx950_xnack_minus_target_capability, verify_module,
 };
 use fe2o3_lower_mir_kernel::{
@@ -772,6 +772,1166 @@ fn owner_from_parts(
         .unwrap()
 }
 
+fn mutable_u32_reference_type(tag: u8, u32_ty: SemanticTypeIdV1) -> SemanticTypeDeclV1 {
+    u32_reference_type(tag, u32_ty, SemanticMutabilityV1::Mutable)
+}
+
+fn immutable_u32_reference_type(tag: u8, u32_ty: SemanticTypeIdV1) -> SemanticTypeDeclV1 {
+    u32_reference_type(tag, u32_ty, SemanticMutabilityV1::Immutable)
+}
+
+fn u32_reference_type(
+    tag: u8,
+    u32_ty: SemanticTypeIdV1,
+    mutability: SemanticMutabilityV1,
+) -> SemanticTypeDeclV1 {
+    reference_type(tag, u32_ty, 4, 4, mutability)
+}
+
+fn reference_type(
+    tag: u8,
+    pointee: SemanticTypeIdV1,
+    pointee_size: u64,
+    pointee_alignment: u64,
+    mutability: SemanticMutabilityV1,
+) -> SemanticTypeDeclV1 {
+    SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(tag)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(tag)),
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(8),
+            8,
+            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+                SemanticScalarValidityRangeV1::new(1, u64::MAX.into()),
+            )),
+            false,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Pointer(
+            SemanticPointerTypeV1::new_with_kind(
+                pointee,
+                SemanticPointerKindV1::Reference,
+                mutability,
+                0,
+                64,
+                SemanticPointerMetadataV1::None,
+            )
+            .unwrap(),
+        ),
+    )
+    .with_rustc_abi_properties(
+        SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+            Some(
+                SemanticAbiPointeeInfoV1::new(
+                    match mutability {
+                        SemanticMutabilityV1::Immutable => {
+                            SemanticAbiPointeeKindV1::SharedReference { frozen: true }
+                        }
+                        SemanticMutabilityV1::Mutable => {
+                            SemanticAbiPointeeKindV1::MutableReference { unpin: true }
+                        }
+                    },
+                    pointee_size,
+                    pointee_alignment,
+                )
+                .unwrap(),
+            ),
+            None,
+        ),
+    )
+}
+
+fn mutable_global_u32_pointer_type(tag: u8, u32_ty: SemanticTypeIdV1) -> SemanticTypeDeclV1 {
+    SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(tag)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(tag)),
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(8),
+            8,
+            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                SemanticBackendPrimitiveV1::pointer(1, 8, 8),
+                SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+            )),
+            false,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Pointer(
+            SemanticPointerTypeV1::new_with_kind(
+                u32_ty,
+                SemanticPointerKindV1::Raw,
+                SemanticMutabilityV1::Mutable,
+                1,
+                64,
+                SemanticPointerMetadataV1::None,
+            )
+            .unwrap(),
+        ),
+    )
+    .with_rustc_abi_properties(
+        SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+            Some(SemanticAbiPointeeInfoV1::new(SemanticAbiPointeeKindV1::Raw, 0, 1).unwrap()),
+            None,
+        ),
+    )
+}
+
+fn retained_scalar_diamond_owner() -> ProductionSemanticMirOwnerV1 {
+    let unit = SemanticTypeIdV1::from_index(0);
+    let u32_ty = SemanticTypeIdV1::from_index(1);
+    let bool_ty = SemanticTypeIdV1::from_index(2);
+    let private_ref_ty = SemanticTypeIdV1::from_index(3);
+    let source = SemanticSourceProvenanceV1::unavailable();
+    let assign = |local, ty, value| {
+        SemanticStatementV1::new(
+            source,
+            SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                local_place(local, ty),
+                SemanticRvalueV1::new(ty, value),
+            )),
+        )
+    };
+    let edge =
+        |role, target| SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target));
+    let pointer_dereference = SemanticPlaceV1::new(
+        SemanticLocalIdV1::from_index(2),
+        vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, u32_ty).unwrap()],
+        u32_ty,
+    )
+    .unwrap();
+    let entry = block(
+        180,
+        vec![
+            assign(
+                1,
+                u32_ty,
+                SemanticRvalueKindV1::Use(scalar_constant(u32_ty, 1, 4)),
+            ),
+            assign(
+                2,
+                private_ref_ty,
+                SemanticRvalueKindV1::Borrow {
+                    kind: SemanticBorrowKindV1::Mutable,
+                    place: local_place(1, u32_ty),
+                },
+            ),
+            assign(
+                3,
+                bool_ty,
+                SemanticRvalueKindV1::Use(scalar_constant(bool_ty, 1, 1)),
+            ),
+        ],
+        SemanticTerminatorKindV1::SwitchInt {
+            discriminant: SemanticOperandV1::Copy(local_place(3, bool_ty)),
+            targets: SemanticSwitchTargetsV1::new(
+                vec![SemanticSwitchTargetV1::new(
+                    1,
+                    edge(SemanticEdgeRoleV1::SwitchValue, 1),
+                )],
+                edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+            )
+            .unwrap(),
+        },
+    );
+    let left = block(
+        181,
+        vec![
+            assign(
+                6,
+                u32_ty,
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(local_place(1, u32_ty))),
+            ),
+            SemanticStatementV1::new(
+                source,
+                SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                    pointer_dereference,
+                    scalar_constant(u32_ty, 7, 4),
+                    SemanticVolatilityV1::NonVolatile,
+                    None,
+                )),
+            ),
+            assign(
+                7,
+                u32_ty,
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(local_place(1, u32_ty))),
+            ),
+            assign(
+                4,
+                u32_ty,
+                SemanticRvalueKindV1::Use(scalar_constant(u32_ty, 10, 4)),
+            ),
+        ],
+        SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 3)),
+    );
+    let right = block(
+        182,
+        vec![assign(
+            4,
+            u32_ty,
+            SemanticRvalueKindV1::Use(scalar_constant(u32_ty, 20, 4)),
+        )],
+        SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 3)),
+    );
+    let join = block(
+        183,
+        vec![assign(
+            5,
+            u32_ty,
+            SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::Add,
+                left: SemanticOperandV1::Copy(local_place(1, u32_ty)),
+                right: SemanticOperandV1::Copy(local_place(4, u32_ty)),
+            },
+        )],
+        SemanticTerminatorKindV1::Return,
+    );
+    let locals = [
+        unit,
+        u32_ty,
+        private_ref_ty,
+        bool_ty,
+        u32_ty,
+        u32_ty,
+        u32_ty,
+        u32_ty,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, ty)| {
+        SemanticLocalDeclV1::new(
+            SemanticLocalIdentityV1::from_sha256(bytes(190 + index as u8)),
+            ty,
+            if index == 0 {
+                SemanticLocalRoleV1::Return
+            } else {
+                SemanticLocalRoleV1::Temporary
+            },
+            source,
+        )
+    })
+    .collect();
+    owner_from_parts(
+        vec![
+            unit_type(),
+            scalar_type(
+                196,
+                SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 32,
+                },
+            ),
+            scalar_type(197, SemanticScalarTypeV1::Bool),
+            mutable_u32_reference_type(198, u32_ty),
+        ],
+        locals,
+        0,
+        vec![entry, left, right, join],
+        b"semantic_retained_scalar_diamond_test",
+    )
+}
+
+fn retained_scalar_loop_owner() -> ProductionSemanticMirOwnerV1 {
+    let unit = SemanticTypeIdV1::from_index(0);
+    let u32_ty = SemanticTypeIdV1::from_index(1);
+    let bool_ty = SemanticTypeIdV1::from_index(2);
+    let reference_ty = SemanticTypeIdV1::from_index(3);
+    let source = SemanticSourceProvenanceV1::unavailable();
+    let assign = |local, ty, value| {
+        SemanticStatementV1::new(
+            source,
+            SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                local_place(local, ty),
+                SemanticRvalueV1::new(ty, value),
+            )),
+        )
+    };
+    let edge =
+        |role, target| SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target));
+    let entry = block(
+        200,
+        vec![
+            assign(
+                1,
+                u32_ty,
+                SemanticRvalueKindV1::Use(scalar_constant(u32_ty, 0, 4)),
+            ),
+            assign(
+                2,
+                reference_ty,
+                SemanticRvalueKindV1::Borrow {
+                    kind: SemanticBorrowKindV1::Mutable,
+                    place: local_place(1, u32_ty),
+                },
+            ),
+        ],
+        SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 1)),
+    );
+    let header = block(
+        201,
+        vec![assign(
+            3,
+            bool_ty,
+            SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::LessThan,
+                left: SemanticOperandV1::Copy(local_place(1, u32_ty)),
+                right: scalar_constant(u32_ty, 3, 4),
+            },
+        )],
+        SemanticTerminatorKindV1::SwitchInt {
+            discriminant: SemanticOperandV1::Copy(local_place(3, bool_ty)),
+            targets: SemanticSwitchTargetsV1::new(
+                vec![SemanticSwitchTargetV1::new(
+                    1,
+                    edge(SemanticEdgeRoleV1::SwitchValue, 2),
+                )],
+                edge(SemanticEdgeRoleV1::SwitchOtherwise, 3),
+            )
+            .unwrap(),
+        },
+    );
+    let body = block(
+        202,
+        vec![
+            assign(
+                4,
+                u32_ty,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Add,
+                    left: SemanticOperandV1::Copy(local_place(1, u32_ty)),
+                    right: scalar_constant(u32_ty, 1, 4),
+                },
+            ),
+            SemanticStatementV1::new(
+                source,
+                SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                    SemanticPlaceV1::new(
+                        SemanticLocalIdV1::from_index(2),
+                        vec![
+                            SemanticProjectionV1::new(
+                                SemanticProjectionKindV1::Dereference,
+                                u32_ty,
+                            )
+                            .unwrap(),
+                        ],
+                        u32_ty,
+                    )
+                    .unwrap(),
+                    SemanticOperandV1::Copy(local_place(4, u32_ty)),
+                    SemanticVolatilityV1::NonVolatile,
+                    None,
+                )),
+            ),
+        ],
+        SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 1)),
+    );
+    let exit = block(203, vec![], SemanticTerminatorKindV1::Return);
+    let locals = [unit, u32_ty, reference_ty, bool_ty, u32_ty]
+        .into_iter()
+        .enumerate()
+        .map(|(index, ty)| {
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(210 + index as u8)),
+                ty,
+                if index == 0 {
+                    SemanticLocalRoleV1::Return
+                } else {
+                    SemanticLocalRoleV1::Temporary
+                },
+                source,
+            )
+        })
+        .collect();
+    owner_from_parts(
+        vec![
+            unit_type(),
+            scalar_type(
+                215,
+                SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 32,
+                },
+            ),
+            scalar_type(216, SemanticScalarTypeV1::Bool),
+            mutable_u32_reference_type(217, u32_ty),
+        ],
+        locals,
+        0,
+        vec![entry, header, body, exit],
+        b"semantic_retained_scalar_loop_test",
+    )
+}
+
+fn retained_scalar_argument_owner() -> ProductionSemanticMirOwnerV1 {
+    let unit = SemanticTypeIdV1::from_index(0);
+    let u32_ty = SemanticTypeIdV1::from_index(1);
+    let shared_ref_ty = SemanticTypeIdV1::from_index(2);
+    let source = SemanticSourceProvenanceV1::unavailable();
+    let abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256(bytes(218)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+        SemanticCanonAbiV1::GpuKernel,
+        SemanticExternAbiV1::GpuKernel,
+        false,
+        false,
+        1,
+        vec![SemanticAbiArgumentV1::source(direct_abi_value(u32_ty))],
+        SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+    )
+    .unwrap();
+    let assign = |local, ty, value| {
+        SemanticStatementV1::new(
+            source,
+            SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                local_place(local, ty),
+                SemanticRvalueV1::new(ty, value),
+            )),
+        )
+    };
+    let edge =
+        |role, target| SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target));
+    let helper_call = SemanticTerminatorKindV1::Call(
+        SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(1),
+            vec![SemanticOperandV1::Copy(local_place(7, u32_ty))],
+            Some(SemanticCallDestinationV1::new(
+                local_place(5, u32_ty),
+                edge(SemanticEdgeRoleV1::CallReturn, 2),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap(),
+    );
+    let function = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(bytes(218)),
+        SemanticFunctionRoleV1::KernelRoot,
+        SemanticItemDefinitionIdentityV1::from_sha256(bytes(218)),
+        SemanticMonomorphizationIdentityV1::from_sha256(bytes(218)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(218)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(218)),
+        source,
+        abi,
+        vec![
+            return_local(),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(219)),
+                u32_ty,
+                SemanticLocalRoleV1::Argument(0),
+                source,
+            ),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(220)),
+                u32_ty,
+                SemanticLocalRoleV1::Temporary,
+                source,
+            ),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(221)),
+                u32_ty,
+                SemanticLocalRoleV1::Temporary,
+                source,
+            ),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(234)),
+                shared_ref_ty,
+                SemanticLocalRoleV1::Temporary,
+                source,
+            ),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(235)),
+                u32_ty,
+                SemanticLocalRoleV1::Temporary,
+                source,
+            ),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(244)),
+                u32_ty,
+                SemanticLocalRoleV1::Temporary,
+                source,
+            ),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(245)),
+                u32_ty,
+                SemanticLocalRoleV1::Temporary,
+                source,
+            ),
+        ],
+        SemanticBlockIdV1::from_index(0),
+        vec![
+            block(
+                222,
+                vec![
+                    assign(
+                        2,
+                        u32_ty,
+                        SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(local_place(1, u32_ty))),
+                    ),
+                    SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                            local_place(1, u32_ty),
+                            scalar_constant(u32_ty, 9, 4),
+                            SemanticVolatilityV1::NonVolatile,
+                            None,
+                        )),
+                    ),
+                    assign(
+                        3,
+                        u32_ty,
+                        SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(local_place(1, u32_ty))),
+                    ),
+                    assign(
+                        4,
+                        shared_ref_ty,
+                        SemanticRvalueKindV1::Borrow {
+                            kind: SemanticBorrowKindV1::Shared,
+                            place: local_place(1, u32_ty),
+                        },
+                    ),
+                    assign(
+                        6,
+                        u32_ty,
+                        SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
+                            SemanticPlaceV1::new(
+                                SemanticLocalIdV1::from_index(4),
+                                vec![
+                                    SemanticProjectionV1::new(
+                                        SemanticProjectionKindV1::Dereference,
+                                        u32_ty,
+                                    )
+                                    .unwrap(),
+                                ],
+                                u32_ty,
+                            )
+                            .unwrap(),
+                        )),
+                    ),
+                ],
+                SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 1)),
+            ),
+            block(
+                237,
+                vec![assign(
+                    7,
+                    u32_ty,
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
+                        SemanticPlaceV1::new(
+                            SemanticLocalIdV1::from_index(4),
+                            vec![
+                                SemanticProjectionV1::new(
+                                    SemanticProjectionKindV1::Dereference,
+                                    u32_ty,
+                                )
+                                .unwrap(),
+                            ],
+                            u32_ty,
+                        )
+                        .unwrap(),
+                    )),
+                )],
+                helper_call,
+            ),
+            block(238, vec![], SemanticTerminatorKindV1::Return),
+        ],
+    )
+    .unwrap()
+    .with_kernel_entry(SemanticKernelEntryV1::new(
+        SemanticLinkSymbolV1::new(b"semantic_retained_scalar_argument_test".to_vec()).unwrap(),
+        SemanticKernelBindingIdentityV1::from_sha256(bytes(223)),
+        SemanticKernelSourceContractV1::new(None, None, None).unwrap(),
+    ));
+    let helper_abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256(bytes(239)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+        SemanticCanonAbiV1::Rust,
+        SemanticExternAbiV1::Rust,
+        false,
+        false,
+        1,
+        vec![SemanticAbiArgumentV1::source(direct_abi_value(u32_ty))],
+        direct_abi_value(u32_ty),
+    )
+    .unwrap();
+    let helper = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(bytes(240)),
+        SemanticFunctionRoleV1::InternalHelper,
+        SemanticItemDefinitionIdentityV1::from_sha256(bytes(240)),
+        SemanticMonomorphizationIdentityV1::from_sha256(bytes(240)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(240)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(240)),
+        source,
+        helper_abi,
+        vec![
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(241)),
+                u32_ty,
+                SemanticLocalRoleV1::Return,
+                source,
+            ),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(242)),
+                u32_ty,
+                SemanticLocalRoleV1::Argument(0),
+                source,
+            ),
+        ],
+        SemanticBlockIdV1::from_index(0),
+        vec![block(
+            243,
+            vec![assign(
+                0,
+                u32_ty,
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(local_place(1, u32_ty))),
+            )],
+            SemanticTerminatorKindV1::Return,
+        )],
+    )
+    .unwrap();
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
+        vec![
+            unit_type(),
+            scalar_type(
+                224,
+                SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 32,
+                },
+            ),
+            immutable_u32_reference_type(236, u32_ty),
+        ],
+        vec![],
+        vec![],
+        vec![],
+        vec![function, helper],
+        vec![
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(1)),
+        ],
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+    .admit(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+        .unwrap()
+}
+
+fn retained_pointer_atomic_rmw_owner() -> ProductionSemanticMirOwnerV1 {
+    let unit = SemanticTypeIdV1::from_index(0);
+    let u32_ty = SemanticTypeIdV1::from_index(1);
+    let pointer_ty = SemanticTypeIdV1::from_index(2);
+    let pointer_reference_ty = SemanticTypeIdV1::from_index(3);
+    let source = SemanticSourceProvenanceV1::unavailable();
+    let atomic_address = SemanticPlaceV1::new(
+        SemanticLocalIdV1::from_index(1),
+        vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, u32_ty).unwrap()],
+        u32_ty,
+    )
+    .unwrap();
+    let abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256(bytes(225)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+        SemanticCanonAbiV1::GpuKernel,
+        SemanticExternAbiV1::GpuKernel,
+        false,
+        false,
+        1,
+        vec![SemanticAbiArgumentV1::source(direct_abi_value(pointer_ty))],
+        SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+    )
+    .unwrap();
+    let function = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(bytes(225)),
+        SemanticFunctionRoleV1::KernelRoot,
+        SemanticItemDefinitionIdentityV1::from_sha256(bytes(225)),
+        SemanticMonomorphizationIdentityV1::from_sha256(bytes(225)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(225)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(225)),
+        source,
+        abi,
+        vec![
+            return_local(),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(226)),
+                pointer_ty,
+                SemanticLocalRoleV1::Argument(0),
+                source,
+            ),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(227)),
+                u32_ty,
+                SemanticLocalRoleV1::Temporary,
+                source,
+            ),
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(228)),
+                pointer_reference_ty,
+                SemanticLocalRoleV1::Temporary,
+                source,
+            ),
+        ],
+        SemanticBlockIdV1::from_index(0),
+        vec![block(
+            229,
+            vec![
+                SemanticStatementV1::new(
+                    source,
+                    SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                        local_place(3, pointer_reference_ty),
+                        SemanticRvalueV1::new(
+                            pointer_reference_ty,
+                            SemanticRvalueKindV1::Borrow {
+                                kind: SemanticBorrowKindV1::Mutable,
+                                place: local_place(1, pointer_ty),
+                            },
+                        ),
+                    )),
+                ),
+                SemanticStatementV1::new(
+                    source,
+                    SemanticStatementKindV1::AtomicRmw(SemanticAtomicRmwV1::new(
+                        local_place(2, u32_ty),
+                        atomic_address,
+                        scalar_constant(u32_ty, 1, 4),
+                        SemanticAtomicRmwOpV1::Add,
+                        SemanticAtomicAccessV1::new(
+                            SemanticAtomicOrderingV1::Relaxed,
+                            SemanticAtomicScopeV1::Agent,
+                        ),
+                    )),
+                ),
+            ],
+            SemanticTerminatorKindV1::Return,
+        )],
+    )
+    .unwrap()
+    .with_kernel_entry(SemanticKernelEntryV1::new(
+        SemanticLinkSymbolV1::new(b"semantic_retained_pointer_atomic_rmw_test".to_vec()).unwrap(),
+        SemanticKernelBindingIdentityV1::from_sha256(bytes(230)),
+        SemanticKernelSourceContractV1::new(None, None, None).unwrap(),
+    ));
+    let admitted = InertSemanticMirRequestV1::new(
+        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
+        vec![
+            unit_type(),
+            scalar_type(
+                231,
+                SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 32,
+                },
+            ),
+            mutable_global_u32_pointer_type(232, u32_ty),
+            reference_type(233, pointer_ty, 8, 8, SemanticMutabilityV1::Mutable),
+        ],
+        vec![],
+        vec![],
+        vec![],
+        vec![function],
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+    .admit(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+        .unwrap()
+}
+
+#[derive(Clone, Copy)]
+enum RetainedScalarInvalidationV1 {
+    Uninitialized,
+    Move,
+    StorageDead,
+}
+
+fn retained_scalar_invalidation_owner(
+    invalidation: RetainedScalarInvalidationV1,
+) -> ProductionSemanticMirOwnerV1 {
+    let unit = SemanticTypeIdV1::from_index(0);
+    let u32_ty = SemanticTypeIdV1::from_index(1);
+    let reference_ty = SemanticTypeIdV1::from_index(2);
+    let source = SemanticSourceProvenanceV1::unavailable();
+    let assign = |local, ty, value| {
+        SemanticStatementV1::new(
+            source,
+            SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                local_place(local, ty),
+                SemanticRvalueV1::new(ty, value),
+            )),
+        )
+    };
+    let mut statements = Vec::new();
+    if !matches!(invalidation, RetainedScalarInvalidationV1::Uninitialized) {
+        statements.push(assign(
+            1,
+            u32_ty,
+            SemanticRvalueKindV1::Use(scalar_constant(u32_ty, 3, 4)),
+        ));
+    }
+    statements.push(assign(
+        2,
+        reference_ty,
+        SemanticRvalueKindV1::Borrow {
+            kind: SemanticBorrowKindV1::Mutable,
+            place: local_place(1, u32_ty),
+        },
+    ));
+    match invalidation {
+        RetainedScalarInvalidationV1::Uninitialized => {}
+        RetainedScalarInvalidationV1::Move => statements.push(assign(
+            3,
+            u32_ty,
+            SemanticRvalueKindV1::Use(SemanticOperandV1::Move(local_place(1, u32_ty))),
+        )),
+        RetainedScalarInvalidationV1::StorageDead => statements.push(SemanticStatementV1::new(
+            source,
+            SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(1)),
+        )),
+    }
+    statements.push(assign(
+        4,
+        u32_ty,
+        SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(local_place(1, u32_ty))),
+    ));
+    let locals = [unit, u32_ty, reference_ty, u32_ty, u32_ty]
+        .into_iter()
+        .enumerate()
+        .map(|(index, ty)| {
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(225 + index as u8)),
+                ty,
+                if index == 0 {
+                    SemanticLocalRoleV1::Return
+                } else {
+                    SemanticLocalRoleV1::Temporary
+                },
+                source,
+            )
+        })
+        .collect();
+    owner_from_parts(
+        vec![
+            unit_type(),
+            scalar_type(
+                230,
+                SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 32,
+                },
+            ),
+            mutable_u32_reference_type(231, u32_ty),
+        ],
+        locals,
+        0,
+        vec![block(232, statements, SemanticTerminatorKindV1::Return)],
+        b"semantic_retained_scalar_invalidation_test",
+    )
+}
+
+#[test]
+fn retained_scalar_slot_coexists_with_sparse_phi_and_observes_alias_writes() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        retained_scalar_diamond_owner(),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    lowered.verify_equivalence().unwrap();
+    verify_module(lowered.module()).unwrap();
+    let body = lowered.module().functions[0].body.as_ref().unwrap();
+    let entry = body
+        .blocks
+        .iter()
+        .find(|block| block.id == BlockId(0))
+        .unwrap();
+    let slot = entry
+        .operations
+        .iter()
+        .find_map(|operation| match &operation.kind {
+            OperationKind::Alloca {
+                element: Type::Scalar(ScalarType::U32),
+                address_space: fe2o3_kernel_ir::AddressSpace::Private,
+                alignment: 4,
+                ..
+            } => operation.results.first().map(|result| result.id),
+            _ => None,
+        })
+        .expect("retained scalar must have one exact private slot");
+    assert_eq!(
+        entry
+            .operations
+            .iter()
+            .filter(|operation| matches!(operation.kind, OperationKind::Alloca { .. }))
+            .count(),
+        1
+    );
+    let left = body
+        .blocks
+        .iter()
+        .find(|block| block.id == BlockId(1))
+        .unwrap();
+    let slot_accesses = left
+        .operations
+        .iter()
+        .filter_map(|operation| match operation.kind {
+            OperationKind::Load { pointer, .. } if pointer == slot => Some("load"),
+            OperationKind::Store { pointer, .. } if pointer == slot => Some("store"),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(slot_accesses, ["load", "store", "load"]);
+    let join = body
+        .blocks
+        .iter()
+        .find(|block| block.id == BlockId(3))
+        .unwrap();
+    assert_eq!(
+        join.parameters.len(),
+        1,
+        "only the branch value needs a phi"
+    );
+    assert!(join.operations.iter().any(
+        |operation| matches!(operation.kind, OperationKind::Load { pointer, .. } if pointer == slot)
+    ));
+}
+
+#[test]
+fn retained_scalar_slot_analysis_obeys_the_production_work_limit() {
+    let error = ProductionSemanticKirOwnerV1::try_lower(
+        retained_scalar_diamond_owner(),
+        ProductionSemanticKirLimitsV1::new_with_max_operations(16, 64, 64, 1),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionSemanticKirErrorV1::ResourceLimit {
+            resource: ProductionSemanticKirResourceV1::AnalysisWork,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn retained_scalar_slot_is_mutated_through_a_borrow_across_a_loop_backedge() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        retained_scalar_loop_owner(),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    lowered.verify_equivalence().unwrap();
+    let body = lowered.module().functions[0].body.as_ref().unwrap();
+    let entry = body
+        .blocks
+        .iter()
+        .find(|block| block.id == BlockId(0))
+        .unwrap();
+    let slot = entry
+        .operations
+        .iter()
+        .find_map(|operation| {
+            matches!(operation.kind, OperationKind::Alloca { .. }).then(|| operation.results[0].id)
+        })
+        .unwrap();
+    let header = body
+        .blocks
+        .iter()
+        .find(|block| block.id == BlockId(1))
+        .unwrap();
+    let loop_body = body
+        .blocks
+        .iter()
+        .find(|block| block.id == BlockId(2))
+        .unwrap();
+    assert!(header.operations.iter().any(
+        |operation| matches!(operation.kind, OperationKind::Load { pointer, .. } if pointer == slot)
+    ));
+    assert!(loop_body.operations.iter().any(
+        |operation| matches!(operation.kind, OperationKind::Store { pointer, .. } if pointer == slot)
+    ));
+    assert!(
+        header.parameters.is_empty(),
+        "slot state must not leak into SSA phis"
+    );
+}
+
+#[test]
+fn retained_scalar_argument_is_stored_once_in_the_entry_slot() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        retained_scalar_argument_owner(),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    lowered.verify_equivalence().unwrap();
+    verify_module(lowered.module()).unwrap();
+    lowered
+        .canonical_kernel_ir_v11()
+        .expect("pointer narrowing requires canonical Kernel IR V11")
+        .revalidate()
+        .unwrap();
+    assert!(lowered.canonical_kernel_ir_v8().is_none());
+    assert!(lowered.canonical_kernel_ir_v8_identity().is_none());
+    let function = &lowered.module().functions[0];
+    let body = function.body.as_ref().unwrap();
+    let [span] = lowered.correspondence().synthetic_operation_spans() else {
+        panic!("retained argument must have one private-slot prologue span");
+    };
+    assert_eq!(
+        span.rule(),
+        SemanticKirSyntheticOperationRuleV1::RetainedLocalStorage
+    );
+    assert_eq!(span.first_operation_ordinal(), 0);
+    assert_eq!(span.operation_count(), 2);
+    let parameter = body.parameters[0];
+    let slot = body.blocks[0].operations[0].results[0].id;
+    assert!(matches!(
+        body.blocks[0].operations[0].kind,
+        OperationKind::Alloca {
+            element: Type::Scalar(ScalarType::U32),
+            address_space: fe2o3_kernel_ir::AddressSpace::Private,
+            alignment: 4,
+            ..
+        }
+    ));
+    assert!(matches!(
+        body.blocks[0].operations[1].kind,
+        OperationKind::Store {
+            pointer,
+            value,
+            ..
+        } if pointer == slot && value == parameter
+    ));
+    assert!(body.blocks[0].operations.iter().skip(2).any(
+        |operation| matches!(operation.kind, OperationKind::Load { pointer, .. } if pointer == slot)
+    ));
+    let read_only_pointer = body.blocks[0]
+        .operations
+        .iter()
+        .find_map(|operation| match &operation.kind {
+            OperationKind::Cast {
+                kind: CastKind::RestrictPointerAccess,
+                value,
+                to:
+                    Type::Pointer(fe2o3_kernel_ir::PointerType {
+                        pointee,
+                        address_space: fe2o3_kernel_ir::AddressSpace::Private,
+                        access: AccessMode::ReadOnly,
+                    }),
+            } if *value == slot && pointee.as_ref() == &Type::Scalar(ScalarType::U32) => {
+                operation.results.first().map(|result| result.id)
+            }
+            _ => None,
+        })
+        .expect("shared retained borrow must explicitly restrict the slot pointer");
+    assert!(body.blocks[0].operations.iter().any(
+        |operation| matches!(operation.kind, OperationKind::Load { pointer, .. } if pointer == read_only_pointer)
+    ));
+    match &body.blocks[0].terminator {
+        Some(Terminator::Branch { target, arguments }) if *target == BlockId(1) => {
+            assert!(arguments.is_empty());
+        }
+        other => panic!("expected branch carrying the restricted pointer, found {other:?}"),
+    }
+    let call_block = body
+        .blocks
+        .iter()
+        .find(|block| block.id == BlockId(1))
+        .unwrap();
+    let edge_load = call_block
+        .operations
+        .iter()
+        .find_map(|operation| {
+            matches!(operation.kind, OperationKind::Load { pointer, .. } if pointer == read_only_pointer)
+                .then(|| operation.results[0].id)
+        })
+        .expect("the dominating restricted pointer must remain readable after the CFG edge");
+    assert!(call_block.operations.iter().any(|operation| {
+        matches!(&operation.kind, OperationKind::Call { arguments, .. } if arguments == &[edge_load])
+    }));
+    let helper = &lowered.module().functions[1];
+    assert_eq!(
+        helper.signature.parameters,
+        vec![Type::Scalar(ScalarType::U32)]
+    );
+    let mut amdgpu_module = lowered.module().clone();
+    let target = gfx942_xnack_minus_target_capability();
+    amdgpu_module.required_capabilities.insert(target.clone());
+    for function in &mut amdgpu_module.functions {
+        if function.body.is_some() {
+            function.required_capabilities.insert(target.clone());
+        }
+    }
+    amdgpu_module.kernels[0].workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    amdgpu_module.kernels[0]
+        .required_capabilities
+        .insert(TargetCapability::WaveWidth(WaveWidth::Wave64));
+    amdgpu_module.kernels[0]
+        .required_capabilities
+        .insert(target);
+    verify_module(&amdgpu_module).unwrap();
+    let llvm = lower_compiler_module_to_gfx942_xnack_minus_llvm_ir(&amdgpu_module).unwrap();
+    assert!(llvm.contains("select i1 true, ptr addrspace(5)"));
+}
+
+#[test]
+fn retained_pointer_atomic_rmw_loads_the_pointer_value_from_its_private_slot() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        retained_pointer_atomic_rmw_owner(),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    lowered.verify_equivalence().unwrap();
+    verify_module(lowered.module()).unwrap();
+    let body = lowered.module().functions[0].body.as_ref().unwrap();
+    let operations = &body.blocks[0].operations;
+    let slot = operations
+        .iter()
+        .find_map(|operation| match &operation.kind {
+            OperationKind::Alloca {
+                element: Type::Pointer(pointer),
+                address_space: fe2o3_kernel_ir::AddressSpace::Private,
+                alignment: 8,
+                ..
+            } if pointer.address_space == fe2o3_kernel_ir::AddressSpace::Global => {
+                Some(operation.results[0].id)
+            }
+            _ => None,
+        })
+        .expect("retained thin pointer must have one private slot");
+    let loaded_pointer = operations
+        .iter()
+        .find_map(|operation| match operation.kind {
+            OperationKind::Load { pointer, .. } if pointer == slot => Some(operation.results[0].id),
+            _ => None,
+        })
+        .expect("atomic address must load the pointer value from the slot");
+    assert!(operations.iter().any(|operation| matches!(
+        operation.kind,
+        OperationKind::Atomic(ref atomic)
+            if atomic.pointer == loaded_pointer && atomic.pointer != slot
+    )));
+}
+
+#[test]
+fn retained_scalar_slot_rejects_uninitialized_move_and_storage_dead_uses() {
+    for (invalidation, failing_statement) in [
+        (RetainedScalarInvalidationV1::Uninitialized, 0),
+        (RetainedScalarInvalidationV1::Move, 3),
+        (RetainedScalarInvalidationV1::StorageDead, 3),
+    ] {
+        assert!(matches!(
+            ProductionSemanticKirOwnerV1::try_lower(
+                retained_scalar_invalidation_owner(invalidation),
+                ProductionSemanticKirLimitsV1::default(),
+            ),
+            Err(ProductionSemanticKirErrorV1::MissingLocalDefinition {
+                block: 0,
+                statement: Some(statement),
+                local: 1,
+                ..
+            }) if statement == failing_statement
+        ));
+    }
+}
+
 fn return_local() -> SemanticLocalDeclV1 {
     SemanticLocalDeclV1::new(
         SemanticLocalIdentityV1::from_sha256(bytes(62)),
@@ -1212,6 +2372,7 @@ fn direct_enum_constant_owner() -> ProductionSemanticMirOwnerV1 {
 fn promoted_enum_payload_owner(
     extract_before_variant_switch: bool,
     replace_after_discriminant: bool,
+    second_branch_projection: u32,
 ) -> ProductionSemanticMirOwnerV1 {
     let unit = SemanticTypeIdV1::from_index(0);
     let u32_ty = SemanticTypeIdV1::from_index(1);
@@ -1363,7 +2524,9 @@ fn promoted_enum_payload_owner(
             vec![assign(
                 local_place(4, u32_ty),
                 u32_ty,
-                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(field_place(1))),
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(field_place(
+                    second_branch_projection,
+                ))),
             )],
             SemanticTerminatorKindV1::Return,
         ),
@@ -1683,15 +2846,52 @@ fn mutable_scalar_loop_uses_block_parameters_and_backedge_arguments() {
     .unwrap();
     lowered.verify_equivalence().unwrap();
     let blocks = &lowered.module().functions[0].body.as_ref().unwrap().blocks;
+    let entry = blocks.iter().find(|block| block.id == BlockId(0)).unwrap();
     let header = blocks.iter().find(|block| block.id == BlockId(1)).unwrap();
     let body = blocks.iter().find(|block| block.id == BlockId(2)).unwrap();
+    let exit = blocks.iter().find(|block| block.id == BlockId(3)).unwrap();
+    assert!(entry.parameters.is_empty());
     assert_eq!(header.parameters.len(), 1);
-    assert_eq!(body.parameters.len(), 1);
+    assert_eq!(header.parameters[0].ty, Type::Scalar(ScalarType::U32));
+    assert!(body.parameters.is_empty());
+    assert!(exit.parameters.is_empty());
+
+    let entry_value = entry.operations[0].results[0].id;
+    let Terminator::Branch { target, arguments } = entry.terminator.as_ref().unwrap() else {
+        panic!("loop entry must branch to the header");
+    };
+    assert_eq!(*target, BlockId(1));
+    assert_eq!(arguments, &[entry_value]);
+
+    let Terminator::ConditionalBranch {
+        condition,
+        then_arguments,
+        else_arguments,
+        ..
+    } = header.terminator.as_ref().unwrap()
+    else {
+        panic!("loop header must branch on its computed condition");
+    };
+    assert_eq!(*condition, header.operations[1].results[0].id);
+    assert!(then_arguments.is_empty());
+    assert!(else_arguments.is_empty());
+
+    let body_constant = body.operations[0].results[0].id;
+    let body_value = body.operations[1].results[0].id;
     assert!(matches!(
-        body.terminator.as_ref().unwrap(),
-        fe2o3_kernel_ir::Terminator::Branch { target, arguments }
-            if *target == BlockId(1) && arguments.len() == 1
+        body.operations[1].kind,
+        OperationKind::Binary {
+            op: BinaryOp::Add,
+            lhs,
+            rhs,
+        } if lhs == header.parameters[0].id && rhs == body_constant
     ));
+    let Terminator::Branch { target, arguments } = body.terminator.as_ref().unwrap() else {
+        panic!("loop body must branch back to the header");
+    };
+    assert_eq!(*target, BlockId(1));
+    assert_eq!(arguments, &[body_value]);
+
     let body_statement = lowered
         .correspondence()
         .statement_operation_spans()
@@ -1775,7 +2975,7 @@ fn exact_rust_enum_bytes_lower_to_payload_and_logical_discriminant() {
 #[test]
 fn promoted_enum_payloads_use_private_storage_and_variant_dominance() {
     let lowered = ProductionSemanticKirOwnerV1::try_lower(
-        promoted_enum_payload_owner(false, false),
+        promoted_enum_payload_owner(false, false, 1),
         ProductionSemanticKirLimitsV1::default(),
     )
     .unwrap();
@@ -1816,6 +3016,10 @@ fn promoted_enum_payloads_use_private_storage_and_variant_dominance() {
             .find(|candidate| candidate.id == BlockId(block))
             .unwrap();
         assert!(
+            block.parameters.is_empty(),
+            "sparse SSA must reuse the dominating merge value without redundant transport",
+        );
+        assert!(
             block
                 .operations
                 .iter()
@@ -1834,7 +3038,7 @@ fn promoted_enum_payloads_use_private_storage_and_variant_dominance() {
 #[test]
 fn promoted_enum_payload_extraction_before_the_variant_edge_fails_closed() {
     let result = ProductionSemanticKirOwnerV1::try_lower(
-        promoted_enum_payload_owner(true, false),
+        promoted_enum_payload_owner(true, false, 1),
         ProductionSemanticKirLimitsV1::default(),
     );
     assert!(matches!(
@@ -1852,13 +3056,29 @@ fn promoted_enum_payload_extraction_before_the_variant_edge_fails_closed() {
 #[test]
 fn promoted_enum_reassignment_invalidates_a_stale_discriminant_edge() {
     let result = ProductionSemanticKirOwnerV1::try_lower(
-        promoted_enum_payload_owner(false, true),
+        promoted_enum_payload_owner(false, true, 1),
         ProductionSemanticKirLimitsV1::default(),
     );
     assert!(matches!(
         result,
         Err(ProductionSemanticKirErrorV1::Unsupported {
             block: Some(4),
+            detail: "enum downcast does not match its known variant",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn promoted_enum_payload_rejects_a_sibling_variants_projection() {
+    let result = ProductionSemanticKirOwnerV1::try_lower(
+        promoted_enum_payload_owner(false, false, 0),
+        ProductionSemanticKirLimitsV1::default(),
+    );
+    assert!(matches!(
+        result,
+        Err(ProductionSemanticKirErrorV1::Unsupported {
+            block: Some(5),
             detail: "enum downcast does not match its known variant",
             ..
         })
@@ -2187,22 +3407,45 @@ fn independent_lowerings_are_deterministic() {
     assert_eq!(first.module(), second.module());
     assert_eq!(first.correspondence(), second.correspondence());
     assert_eq!(
-        first.canonical_kernel_ir_v8().canonical_bytes(),
-        second.canonical_kernel_ir_v8().canonical_bytes(),
+        first
+            .canonical_kernel_ir_v8()
+            .expect("the fixture lowers to Kernel IR V8")
+            .canonical_bytes(),
+        second
+            .canonical_kernel_ir_v8()
+            .expect("the fixture lowers to Kernel IR V8")
+            .canonical_bytes(),
     );
     assert_eq!(
         first.canonical_kernel_ir_v8_identity(),
         second.canonical_kernel_ir_v8_identity(),
     );
     assert_eq!(
-        first.canonical_kernel_ir_v8_identity().canonical_length(),
-        first.canonical_kernel_ir_v8().canonical_bytes().len() as u64,
+        first
+            .canonical_kernel_ir_v8_identity()
+            .expect("the fixture lowers to Kernel IR V8")
+            .canonical_length(),
+        first
+            .canonical_kernel_ir_v8()
+            .expect("the fixture lowers to Kernel IR V8")
+            .canonical_bytes()
+            .len() as u64,
     );
     assert_eq!(
-        decode_module_v8(first.canonical_kernel_ir_v8().canonical_bytes()).unwrap(),
+        decode_module_v8(
+            first
+                .canonical_kernel_ir_v8()
+                .expect("the fixture lowers to Kernel IR V8")
+                .canonical_bytes(),
+        )
+        .unwrap(),
         *first.module(),
     );
-    first.canonical_kernel_ir_v8().revalidate().unwrap();
+    first
+        .canonical_kernel_ir_v8()
+        .expect("the fixture lowers to Kernel IR V8")
+        .revalidate()
+        .unwrap();
 }
 
 #[test]
@@ -2220,6 +3463,7 @@ fn formal_memory_admission_retains_exact_kir_without_authority() {
             admitted
                 .semantic_kir()
                 .canonical_kernel_ir_v8()
+                .expect("the fixture lowers to Kernel IR V8")
                 .canonical_bytes(),
         )
         .unwrap(),
@@ -2314,18 +3558,22 @@ fn lowering_limits_are_enforced_before_materialization() {
 }
 
 #[test]
-fn emitted_operations_are_charged_before_storage() {
-    assert!(matches!(
-        ProductionSemanticKirOwnerV1::try_lower(
-            scalar_loop_owner(),
-            ProductionSemanticKirLimitsV1::new_with_max_operations(1, 4, 16, 1),
+fn lowering_analysis_is_charged_before_operation_emission() {
+    let result = ProductionSemanticKirOwnerV1::try_lower(
+        scalar_loop_owner(),
+        ProductionSemanticKirLimitsV1::new_with_max_operations(1, 4, 16, 1),
+    );
+    assert!(
+        matches!(
+            result,
+            Err(ProductionSemanticKirErrorV1::ResourceLimit {
+                resource: ProductionSemanticKirResourceV1::AnalysisWork,
+                actual: 2,
+                limit: 1,
+            })
         ),
-        Err(ProductionSemanticKirErrorV1::ResourceLimit {
-            resource: ProductionSemanticKirResourceV1::Operations,
-            actual: 2,
-            limit: 1,
-        })
-    ));
+        "unexpected lowering resource result: {result:?}"
+    );
 }
 
 #[derive(Clone, Copy)]

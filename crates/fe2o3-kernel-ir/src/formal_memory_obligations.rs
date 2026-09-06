@@ -5,16 +5,23 @@ use std::{
 };
 
 use crate::{
-    AccessMode, AddressSpace, Axis, BinaryOp, BlockId, ByteExpression, Constant, Function,
-    FunctionId, FunctionOperationLocation, IndexKind, IntrinsicKind, InvocationRange1d, KernelId,
-    LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation, OperationKind,
+    AccessMode, AddressSpace, Axis, BinaryOp, BlockId, ByteExpression, CastKind, Constant,
+    Function, FunctionId, FunctionOperationLocation, IndexKind, IntrinsicKind, InvocationRange1d,
+    KernelId, LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation, OperationKind,
     RegionValidationError, ScalarType, Type, ValueId, VerificationErrors, VerifiedKernelIrModuleV1,
-    analyze_interprocedural_effects_from_verified_v1, verify_module_ref,
+    analyze_control_flow, analyze_interprocedural_effects_from_verified_v1, verify_module_ref,
 };
 
+mod pointer_derivation;
+mod private_slots;
 mod receipt_v1;
 
 pub use receipt_v1::*;
+
+use pointer_derivation::{
+    AccessDerivationContext, derive_access, derive_conservative_guarded_access,
+};
+use private_slots::{classify_eligible_private_slots, collect_private_load_sources};
 
 /// A caller-supplied one-dimensional launch extent used for formal extraction.
 ///
@@ -346,6 +353,10 @@ pub enum FormalMemoryIncompleteReason {
     GuardedAccessRequiresRankedProof {
         location: FunctionOperationLocation,
     },
+    /// Kernel IR execution enters the first block without block arguments.
+    UnsupportedEntryBlockParameters {
+        block: BlockId,
+    },
     UnsupportedPointerDerivation {
         location: FunctionOperationLocation,
         pointer: ValueId,
@@ -596,17 +607,34 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
         .map(|allocation| (allocation.value, allocation.identity))
         .collect();
     let definitions = collect_definitions(function);
-    let private_load_sources = collect_private_load_sources(function, &definitions);
+    if !body.blocks[0].parameters.is_empty() {
+        reasons.insert(
+            FormalMemoryIncompleteReason::UnsupportedEntryBlockParameters {
+                block: definitions.entry,
+            },
+        );
+    }
     let value_types = collect_types(function);
-    let context = AccessDerivationContext {
-        definitions: &definitions,
-        value_types: &value_types,
-        allocation_by_value: &allocation_by_value,
-        private_load_sources: &private_load_sources,
-    };
+    let eligible_private_slots =
+        classify_eligible_private_slots(function, &definitions, &value_types, &mut reasons);
+    let private_load_sources = collect_private_load_sources(
+        function,
+        &definitions,
+        &value_types,
+        &eligible_private_slots,
+    );
+    let mut context = AccessDerivationContext::new(
+        &definitions,
+        &value_types,
+        &allocation_by_value,
+        &private_load_sources,
+    );
     let mut accesses = Vec::new();
 
     for block in &body.blocks {
+        if !definitions.is_reachable(block.id) {
+            continue;
+        }
         for (operation_index, operation) in block.operations.iter().enumerate() {
             let location = FunctionOperationLocation::new(block.id, operation_index);
             match &operation.kind {
@@ -625,9 +653,6 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                 OperationKind::Load { access, .. }
                     if access.address_space == AddressSpace::Private => {}
                 OperationKind::Load { pointer, access } => {
-                    if direct_private_alloca_access_is_internal(*pointer, *access, &definitions) {
-                        continue;
-                    }
                     if let Some(invocations) = access_invocations {
                         match derive_access(
                             location,
@@ -635,7 +660,7 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                             FormalMemoryAccessKind::Read,
                             *access,
                             invocations,
-                            &context,
+                            &mut context,
                         ) {
                             Ok(access) => accesses.push(access),
                             Err(reason) => {
@@ -652,9 +677,6 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                 | OperationKind::GuardedStore {
                     pointer, access, ..
                 } => {
-                    if direct_private_alloca_access_is_internal(*pointer, *access, &definitions) {
-                        continue;
-                    }
                     if let Some(invocations) = access_invocations {
                         match derive_access(
                             location,
@@ -662,7 +684,7 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                             FormalMemoryAccessKind::Write,
                             *access,
                             invocations,
-                            &context,
+                            &mut context,
                         ) {
                             Ok(access) => accesses.push(access),
                             Err(reason) => {
@@ -692,7 +714,7 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                             FormalMemoryAccessKind::Read,
                             *access,
                             invocations,
-                            &context,
+                            &mut context,
                         ) {
                             Ok(access) => accesses.push(access),
                             Err(exact_reason) => match derive_conservative_guarded_access(
@@ -700,7 +722,7 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                                 *pointer,
                                 *access,
                                 invocations,
-                                &context,
+                                &mut context,
                             ) {
                                 Ok(access) => accesses.push(access),
                                 Err(_) => {
@@ -721,7 +743,7 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                             FormalMemoryAccessKind::Atomic,
                             atomic.access,
                             invocations,
-                            &context,
+                            &mut context,
                         ) {
                             Ok(access) => accesses.push(access),
                             Err(reason) => {
@@ -785,29 +807,6 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
             reasons: reasons.into_iter().collect(),
         })
     }
-}
-
-fn direct_private_alloca_access_is_internal(
-    pointer: ValueId,
-    access: MemoryAccess,
-    definitions: &Definitions<'_>,
-) -> bool {
-    if access.address_space != AddressSpace::Private {
-        return false;
-    }
-    definitions
-        .operations
-        .get(&pointer)
-        .is_some_and(|(operation, _)| {
-            matches!(
-                operation.kind,
-                OperationKind::Alloca {
-                    count: None,
-                    address_space: AddressSpace::Private,
-                    ..
-                }
-            )
-        })
 }
 
 fn resolve_invocations(
@@ -914,15 +913,59 @@ fn formal_allocations(function: &Function) -> Vec<FormalAllocationParameter> {
 
 struct Definitions<'module> {
     operations: BTreeMap<ValueId, (&'module Operation, FunctionOperationLocation)>,
+    block_parameter_inputs: BTreeMap<ValueId, Vec<ValueId>>,
+    block_parameter_origins: BTreeMap<ValueId, Option<ValueId>>,
+    affine_expressions: BTreeMap<ValueId, Result<AffineExpression, IndexExpressionError>>,
+    reachable_blocks: BTreeSet<BlockId>,
+    entry: BlockId,
 }
 
 fn collect_definitions(function: &Function) -> Definitions<'_> {
     let mut operations = BTreeMap::new();
+    let mut block_parameter_inputs = BTreeMap::new();
     let body = function
         .body
         .as_ref()
         .expect("verified function is defined");
+    let control_flow = analyze_control_flow(function)
+        .expect("verified function has analyzable bounded control flow");
+    let entry = body.blocks[0].id;
+    let reachable_blocks = body
+        .blocks
+        .iter()
+        .filter_map(|block| control_flow.is_reachable(block.id).then_some(block.id))
+        .collect::<BTreeSet<_>>();
     for block in &body.blocks {
+        if !control_flow.is_reachable(block.id) {
+            continue;
+        }
+        let incoming = control_flow
+            .incoming_edges(block.id)
+            .expect("verified block is indexed by control-flow analysis");
+        for (ordinal, parameter) in block.parameters.iter().enumerate() {
+            // The initial entry transition has no SSA arguments. Backedges to
+            // entry therefore cannot authenticate an entry-block parameter.
+            let inputs = if block.id == entry {
+                Vec::new()
+            } else {
+                incoming
+                    .iter()
+                    .filter(|edge| {
+                        control_flow
+                            .edge_source(**edge)
+                            .is_some_and(|source| control_flow.is_reachable(source))
+                    })
+                    .map(|edge| {
+                        control_flow
+                            .edge_arguments(function, *edge)
+                            .get(ordinal)
+                            .copied()
+                            .expect("verified edge argument matches its block parameter")
+                    })
+                    .collect()
+            };
+            block_parameter_inputs.insert(parameter.id, inputs);
+        }
         for (operation_index, operation) in block.operations.iter().enumerate() {
             let location = FunctionOperationLocation::new(block.id, operation_index);
             for result in &operation.results {
@@ -930,168 +973,360 @@ fn collect_definitions(function: &Function) -> Definitions<'_> {
             }
         }
     }
-    Definitions { operations }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PrivateSlotState {
-    Uninitialized,
-    Exact(ValueId),
-    Unknown,
-}
-
-impl PrivateSlotState {
-    fn join(self, other: Self) -> Self {
-        if self == other { self } else { Self::Unknown }
+    let block_parameter_origins = compute_unique_block_parameter_origins(&block_parameter_inputs);
+    let affine_expressions = compute_affine_expressions(&operations, &block_parameter_origins);
+    Definitions {
+        operations,
+        block_parameter_inputs,
+        block_parameter_origins,
+        affine_expressions,
+        reachable_blocks,
+        entry,
     }
 }
 
-fn collect_private_load_sources(
-    function: &Function,
-    definitions: &Definitions<'_>,
-) -> BTreeMap<ValueId, ValueId> {
-    let body = function
-        .body
-        .as_ref()
-        .expect("verified function is defined");
-    let slots = definitions
-        .operations
+impl Definitions<'_> {
+    fn is_reachable(&self, block: BlockId) -> bool {
+        self.reachable_blocks.contains(&block)
+    }
+
+    fn unique_ssa_origin(&self, value: ValueId) -> Option<ValueId> {
+        self.block_parameter_origins
+            .get(&value)
+            .copied()
+            .unwrap_or(Some(value))
+    }
+
+    fn exact_ssa_origin(
+        &self,
+        value: ValueId,
+        value_types: &BTreeMap<ValueId, Type>,
+    ) -> Option<ValueId> {
+        let mut current = value;
+        let mut visited = BTreeSet::new();
+        loop {
+            if !visited.insert(current) {
+                return None;
+            }
+            let origin = self.unique_ssa_origin(current)?;
+            if origin != current {
+                if value_types.get(&current) != value_types.get(&origin) {
+                    return None;
+                }
+                current = origin;
+                continue;
+            }
+            let Some((operation, _)) = self.operations.get(&current) else {
+                return Some(current);
+            };
+            let OperationKind::Cast {
+                kind: CastKind::RestrictPointerAccess,
+                value: source,
+                to,
+            } = &operation.kind
+            else {
+                return Some(current);
+            };
+            let (Some(Type::Pointer(from)), Type::Pointer(to_pointer)) =
+                (value_types.get(source), to)
+            else {
+                return None;
+            };
+            if from.pointee != to_pointer.pointee
+                || from.address_space != to_pointer.address_space
+                || from.access != AccessMode::ReadWrite
+                || to_pointer.access != AccessMode::ReadOnly
+            {
+                return None;
+            }
+            current = *source;
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum OriginSummary {
+    Empty,
+    One(ValueId),
+    Ambiguous,
+}
+
+impl OriginSummary {
+    fn include(&mut self, origin: ValueId) {
+        *self = match *self {
+            Self::Empty => Self::One(origin),
+            Self::One(current) if current == origin => Self::One(current),
+            Self::One(_) | Self::Ambiguous => Self::Ambiguous,
+        };
+    }
+}
+
+/// Computes one cached origin per block parameter in linear graph work. SCCs
+/// permit invariant self/backedge carriers, but a recurrence without a
+/// non-parameter origin remains unsupported.
+fn compute_unique_block_parameter_origins(
+    inputs: &BTreeMap<ValueId, Vec<ValueId>>,
+) -> BTreeMap<ValueId, Option<ValueId>> {
+    let values = inputs.keys().copied().collect::<Vec<_>>();
+    let positions = values
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(position, value)| (value, position))
+        .collect::<BTreeMap<_, _>>();
+    let mut edges = vec![Vec::new(); values.len()];
+    let mut reverse_edges = vec![Vec::new(); values.len()];
+    let mut local_origins = vec![OriginSummary::Empty; values.len()];
+    let mut invalid = vec![false; values.len()];
+    for (value, incoming) in inputs {
+        let position = positions[value];
+        invalid[position] = incoming.is_empty();
+        for input in incoming {
+            if let Some(dependency) = positions.get(input).copied() {
+                edges[position].push(dependency);
+                reverse_edges[dependency].push(position);
+            } else {
+                local_origins[position].include(*input);
+            }
+        }
+        edges[position].sort_unstable();
+        edges[position].dedup();
+    }
+
+    let mut visited = vec![false; values.len()];
+    let mut postorder = Vec::with_capacity(values.len());
+    for start in 0..values.len() {
+        if visited[start] {
+            continue;
+        }
+        visited[start] = true;
+        let mut stack = vec![(start, 0usize)];
+        while let Some((node, next_edge)) = stack.pop() {
+            if let Some(dependency) = edges[node].get(next_edge).copied() {
+                stack.push((node, next_edge + 1));
+                if !visited[dependency] {
+                    visited[dependency] = true;
+                    stack.push((dependency, 0));
+                }
+            } else {
+                postorder.push(node);
+            }
+        }
+    }
+
+    let mut component_of = vec![usize::MAX; values.len()];
+    let mut component_count = 0usize;
+    for start in postorder.into_iter().rev() {
+        if component_of[start] != usize::MAX {
+            continue;
+        }
+        component_of[start] = component_count;
+        let mut stack = vec![start];
+        while let Some(node) = stack.pop() {
+            for dependent in &reverse_edges[node] {
+                if component_of[*dependent] == usize::MAX {
+                    component_of[*dependent] = component_count;
+                    stack.push(*dependent);
+                }
+            }
+        }
+        component_count += 1;
+    }
+
+    let mut dependencies = vec![BTreeSet::new(); component_count];
+    let mut dependents = vec![BTreeSet::new(); component_count];
+    let mut component_origins = vec![OriginSummary::Empty; component_count];
+    let mut component_invalid = vec![false; component_count];
+    for node in 0..values.len() {
+        let component = component_of[node];
+        component_invalid[component] |= invalid[node];
+        match local_origins[node] {
+            OriginSummary::One(origin) => component_origins[component].include(origin),
+            OriginSummary::Ambiguous => component_invalid[component] = true,
+            OriginSummary::Empty => {}
+        }
+        for dependency in &edges[node] {
+            let dependency = component_of[*dependency];
+            if component != dependency {
+                dependencies[component].insert(dependency);
+                dependents[dependency].insert(component);
+            }
+        }
+    }
+
+    let mut remaining_dependencies = dependencies.iter().map(BTreeSet::len).collect::<Vec<_>>();
+    let mut pending = remaining_dependencies
+        .iter()
+        .enumerate()
+        .filter_map(|(component, count)| (*count == 0).then_some(component))
+        .collect::<Vec<_>>();
+    let mut component_results = vec![None; component_count];
+    while let Some(component) = pending.pop() {
+        let mut summary = component_origins[component];
+        let mut failed = component_invalid[component];
+        for dependency in &dependencies[component] {
+            match component_results[*dependency] {
+                Some(origin) => summary.include(origin),
+                None => failed = true,
+            }
+        }
+        component_results[component] = match (failed, summary) {
+            (false, OriginSummary::One(origin)) => Some(origin),
+            _ => None,
+        };
+        for dependent in &dependents[component] {
+            remaining_dependencies[*dependent] -= 1;
+            if remaining_dependencies[*dependent] == 0 {
+                pending.push(*dependent);
+            }
+        }
+    }
+
+    values
+        .into_iter()
+        .enumerate()
+        .map(|(position, value)| (value, component_results[component_of[position]]))
+        .collect()
+}
+
+#[derive(Clone, Copy)]
+enum AffineWork {
+    Enter(ValueId),
+    Finish(ValueId),
+}
+
+/// Evaluates the supported affine operation graph once. The explicit stack
+/// avoids host stack growth on large generated expressions, while `visiting`
+/// turns any operation/phi recurrence into a deterministic unsupported result.
+fn compute_affine_expressions(
+    operations: &BTreeMap<ValueId, (&Operation, FunctionOperationLocation)>,
+    block_parameter_origins: &BTreeMap<ValueId, Option<ValueId>>,
+) -> BTreeMap<ValueId, Result<AffineExpression, IndexExpressionError>> {
+    let mut expressions = BTreeMap::new();
+    let mut visiting = BTreeSet::new();
+    let roots = operations
         .iter()
         .filter_map(|(value, (operation, _))| {
-            matches!(
-                operation.kind,
-                OperationKind::Alloca {
-                    count: None,
-                    address_space: AddressSpace::Private,
-                    ..
-                }
-            )
-            .then_some(*value)
+            matches!(operation.results.as_slice(), [result] if result.ty == Type::INDEX)
+                .then_some(*value)
         })
-        .collect::<BTreeSet<_>>();
-    if slots.is_empty() || body.blocks.is_empty() {
-        return BTreeMap::new();
-    }
+        .collect::<Vec<_>>();
 
-    let block_ids = body
-        .blocks
-        .iter()
-        .map(|block| block.id)
-        .collect::<BTreeSet<_>>();
-    let mut predecessors = block_ids
-        .iter()
-        .copied()
-        .map(|block| (block, BTreeSet::new()))
-        .collect::<BTreeMap<_, _>>();
-    for block in &body.blocks {
-        if let Some(terminator) = &block.terminator {
-            for successor in terminator.successors() {
-                if let Some(incoming) = predecessors.get_mut(&successor) {
-                    incoming.insert(block.id);
-                }
-            }
-        }
-    }
-
-    let entry = body.blocks[0].id;
-    let initial = slots
-        .iter()
-        .copied()
-        .map(|slot| (slot, PrivateSlotState::Uninitialized))
-        .collect::<BTreeMap<_, _>>();
-    let mut incoming = BTreeMap::<BlockId, BTreeMap<ValueId, PrivateSlotState>>::new();
-    let mut outgoing = BTreeMap::<BlockId, BTreeMap<ValueId, PrivateSlotState>>::new();
-    incoming.insert(entry, initial.clone());
-
-    loop {
-        let mut changed = false;
-        for block in &body.blocks {
-            let next_incoming = if block.id == entry {
-                Some(initial.clone())
-            } else {
-                predecessors.get(&block.id).and_then(|blocks| {
-                    let mut states = blocks.iter().filter_map(|block| outgoing.get(block));
-                    let first = states.next()?.clone();
-                    Some(states.fold(first, |mut joined, state| {
-                        for slot in &slots {
-                            let left = joined
-                                .get(slot)
-                                .copied()
-                                .unwrap_or(PrivateSlotState::Unknown);
-                            let right = state
-                                .get(slot)
-                                .copied()
-                                .unwrap_or(PrivateSlotState::Unknown);
-                            joined.insert(*slot, left.join(right));
-                        }
-                        joined
-                    }))
-                })
-            };
-            let Some(next_incoming) = next_incoming else {
-                continue;
-            };
-            changed |= incoming.get(&block.id) != Some(&next_incoming);
-            incoming.insert(block.id, next_incoming.clone());
-            let mut next_outgoing = next_incoming;
-            transfer_private_slot_stores(block, definitions, &mut next_outgoing);
-            changed |= outgoing.get(&block.id) != Some(&next_outgoing);
-            outgoing.insert(block.id, next_outgoing);
-        }
-        if !changed {
-            break;
-        }
-    }
-
-    let mut sources = BTreeMap::new();
-    for block in &body.blocks {
-        let Some(mut state) = incoming.get(&block.id).cloned() else {
+    for root in roots {
+        if expressions.contains_key(&root) {
             continue;
-        };
-        for operation in &block.operations {
-            if let OperationKind::Load {
-                pointer: slot,
-                access,
-            } = operation.kind
-                && direct_private_alloca_access_is_internal(slot, access, definitions)
-                && let Some(PrivateSlotState::Exact(source)) = state.get(&slot).copied()
-            {
-                for result in &operation.results {
-                    sources.insert(result.id, source);
+        }
+        let mut work = vec![AffineWork::Enter(root)];
+        while let Some(item) = work.pop() {
+            match item {
+                AffineWork::Enter(value) => {
+                    let Some(value) = block_parameter_origins
+                        .get(&value)
+                        .copied()
+                        .unwrap_or(Some(value))
+                    else {
+                        continue;
+                    };
+                    if expressions.contains_key(&value) {
+                        continue;
+                    }
+                    if !visiting.insert(value) {
+                        expressions.insert(value, Err(IndexExpressionError::Unsupported));
+                        continue;
+                    }
+                    work.push(AffineWork::Finish(value));
+                    let Some((operation, _)) = operations.get(&value) else {
+                        continue;
+                    };
+                    if !matches!(operation.results.as_slice(), [result] if result.ty == Type::INDEX)
+                    {
+                        continue;
+                    }
+                    if let OperationKind::Binary { lhs, rhs, .. } = operation.kind {
+                        for dependency in [rhs, lhs] {
+                            if let Some(dependency) = block_parameter_origins
+                                .get(&dependency)
+                                .copied()
+                                .unwrap_or(Some(dependency))
+                            {
+                                work.push(AffineWork::Enter(dependency));
+                            }
+                        }
+                    }
+                }
+                AffineWork::Finish(value) => {
+                    visiting.remove(&value);
+                    if expressions.contains_key(&value) {
+                        continue;
+                    }
+                    let expression = operations
+                        .get(&value)
+                        .and_then(|(operation, _)| {
+                            matches!(operation.results.as_slice(), [result] if result.ty == Type::INDEX)
+                                .then_some(*operation)
+                        })
+                        .map_or(Err(IndexExpressionError::Unsupported), |operation| {
+                            match &operation.kind {
+                                OperationKind::Constant(Constant::Index(value)) => {
+                                    Ok(AffineExpression::constant(*value))
+                                }
+                                OperationKind::Intrinsic(intrinsic)
+                                    if intrinsic.kind
+                                        == (IntrinsicKind::InvocationIndex {
+                                            kind: IndexKind::Global,
+                                            axis: Axis::X,
+                                        }) =>
+                                {
+                                    Ok(AffineExpression::INVOCATION)
+                                }
+                                OperationKind::Binary { op, lhs, rhs } => {
+                                    let operand = |value: ValueId| -> Result<
+                                        AffineExpression,
+                                        IndexExpressionError,
+                                    > {
+                                        let value = block_parameter_origins
+                                            .get(&value)
+                                            .copied()
+                                            .unwrap_or(Some(value))
+                                            .ok_or(IndexExpressionError::Unsupported)?;
+                                        expressions
+                                            .get(&value)
+                                            .copied()
+                                            .unwrap_or(Err(IndexExpressionError::Unsupported))
+                                    };
+                                    let lhs = operand(*lhs)?;
+                                    let rhs = operand(*rhs)?;
+                                    match op {
+                                        BinaryOp::Add => lhs
+                                            .checked_add(rhs)
+                                            .ok_or(IndexExpressionError::Overflow),
+                                        BinaryOp::Multiply
+                                            if lhs.invocation_coefficient == 0 =>
+                                        {
+                                            rhs.checked_multiply_constant(lhs.constant)
+                                                .ok_or(IndexExpressionError::Overflow)
+                                        }
+                                        BinaryOp::Multiply
+                                            if rhs.invocation_coefficient == 0 =>
+                                        {
+                                            lhs.checked_multiply_constant(rhs.constant)
+                                                .ok_or(IndexExpressionError::Overflow)
+                                        }
+                                        BinaryOp::Multiply => {
+                                            Err(IndexExpressionError::Unsupported)
+                                        }
+                                        _ => Err(IndexExpressionError::Unsupported),
+                                    }
+                                }
+                                _ => Err(IndexExpressionError::Unsupported),
+                            }
+                        });
+                    expressions.insert(value, expression);
                 }
             }
-            transfer_private_slot_store(operation, definitions, &mut state);
         }
     }
-    sources
-}
-
-fn transfer_private_slot_stores(
-    block: &crate::BasicBlock,
-    definitions: &Definitions<'_>,
-    state: &mut BTreeMap<ValueId, PrivateSlotState>,
-) {
-    for operation in &block.operations {
-        transfer_private_slot_store(operation, definitions, state);
-    }
-}
-
-fn transfer_private_slot_store(
-    operation: &Operation,
-    definitions: &Definitions<'_>,
-    state: &mut BTreeMap<ValueId, PrivateSlotState>,
-) {
-    let OperationKind::Store {
-        pointer,
-        value,
-        access,
-    } = operation.kind
-    else {
-        return;
-    };
-    if direct_private_alloca_access_is_internal(pointer, access, definitions) {
-        state.insert(pointer, PrivateSlotState::Exact(value));
-    }
+    expressions
 }
 
 fn collect_types(function: &Function) -> BTreeMap<ValueId, Type> {
@@ -1114,309 +1349,6 @@ fn collect_types(function: &Function) -> BTreeMap<ValueId, Type> {
         }
     }
     types
-}
-
-struct AccessDerivationContext<'analysis, 'module> {
-    definitions: &'analysis Definitions<'module>,
-    value_types: &'analysis BTreeMap<ValueId, Type>,
-    allocation_by_value: &'analysis BTreeMap<ValueId, FormalAllocationIdentity>,
-    private_load_sources: &'analysis BTreeMap<ValueId, ValueId>,
-}
-
-fn derive_access(
-    location: FunctionOperationLocation,
-    pointer: ValueId,
-    kind: FormalMemoryAccessKind,
-    access: MemoryAccess,
-    invocations: InvocationRange1d,
-    context: &AccessDerivationContext<'_, '_>,
-) -> Result<FormalMemoryAccess, FormalMemoryIncompleteReason> {
-    let byte_width = context
-        .value_types
-        .get(&pointer)
-        .and_then(pointer_byte_width)
-        .ok_or(FormalMemoryIncompleteReason::ElementWidthUnavailable { location, pointer })?;
-    let pointer_expression = derive_pointer_expression(
-        pointer,
-        context.definitions,
-        context.value_types,
-        context.allocation_by_value,
-        context.private_load_sources,
-        location,
-    )?;
-    Ok(FormalMemoryAccess {
-        location,
-        allocation: pointer_expression.allocation,
-        kind,
-        address_space: access.address_space,
-        byte_offset: pointer_expression.byte_offset.into_byte_expression(),
-        byte_width,
-        alignment: u64::from(access.alignment),
-        invocations,
-    })
-}
-
-/// Retains the allocation-level read effect when a guarded address cannot be
-/// represented by the affine extractor. The owner-held ranked proof remains
-/// responsible for the predicate and bounds; this conservative effect prevents
-/// that separate proof from erasing alias and race obligations.
-fn derive_conservative_guarded_access(
-    location: FunctionOperationLocation,
-    pointer: ValueId,
-    access: MemoryAccess,
-    invocations: InvocationRange1d,
-    context: &AccessDerivationContext<'_, '_>,
-) -> Result<FormalMemoryAccess, FormalMemoryIncompleteReason> {
-    let byte_width = context
-        .value_types
-        .get(&pointer)
-        .and_then(pointer_byte_width)
-        .ok_or(FormalMemoryIncompleteReason::ElementWidthUnavailable { location, pointer })?;
-    let allocation = derive_pointer_allocation(
-        pointer,
-        context.definitions,
-        context.value_types,
-        context.allocation_by_value,
-        context.private_load_sources,
-        location,
-    )?;
-    Ok(FormalMemoryAccess {
-        location,
-        allocation,
-        kind: FormalMemoryAccessKind::Read,
-        address_space: access.address_space,
-        byte_offset: ByteExpression::Unbounded,
-        byte_width,
-        alignment: u64::from(access.alignment),
-        invocations,
-    })
-}
-
-fn derive_pointer_allocation(
-    pointer: ValueId,
-    definitions: &Definitions<'_>,
-    value_types: &BTreeMap<ValueId, Type>,
-    allocation_by_value: &BTreeMap<ValueId, FormalAllocationIdentity>,
-    private_load_sources: &BTreeMap<ValueId, ValueId>,
-    access_location: FunctionOperationLocation,
-) -> Result<FormalAllocationIdentity, FormalMemoryIncompleteReason> {
-    derive_pointer_allocation_inner(
-        pointer,
-        definitions,
-        value_types,
-        allocation_by_value,
-        private_load_sources,
-        access_location,
-        &mut BTreeSet::new(),
-    )
-}
-
-fn derive_pointer_allocation_inner(
-    pointer: ValueId,
-    definitions: &Definitions<'_>,
-    value_types: &BTreeMap<ValueId, Type>,
-    allocation_by_value: &BTreeMap<ValueId, FormalAllocationIdentity>,
-    private_load_sources: &BTreeMap<ValueId, ValueId>,
-    access_location: FunctionOperationLocation,
-    visited_private_loads: &mut BTreeSet<ValueId>,
-) -> Result<FormalAllocationIdentity, FormalMemoryIncompleteReason> {
-    if let Some(allocation) = allocation_by_value.get(&pointer).copied()
-        && matches!(value_types.get(&pointer), Some(Type::Pointer(_)))
-    {
-        return Ok(allocation);
-    }
-    let Some((operation, definition_location)) = definitions.operations.get(&pointer) else {
-        return Err(FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
-            location: access_location,
-            pointer,
-        });
-    };
-    match &operation.kind {
-        OperationKind::SliceData { slice } => allocation_by_value.get(slice).copied().ok_or(
-            FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
-                location: *definition_location,
-                pointer,
-            },
-        ),
-        OperationKind::GetElementPointer { base, .. } => derive_pointer_allocation_inner(
-            *base,
-            definitions,
-            value_types,
-            allocation_by_value,
-            private_load_sources,
-            access_location,
-            visited_private_loads,
-        ),
-        OperationKind::Load { .. } => {
-            if !visited_private_loads.insert(pointer) {
-                return Err(FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
-                    location: *definition_location,
-                    pointer,
-                });
-            }
-            let source = private_load_sources.get(&pointer).copied().ok_or(
-                FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
-                    location: *definition_location,
-                    pointer,
-                },
-            )?;
-            let derived = derive_pointer_allocation_inner(
-                source,
-                definitions,
-                value_types,
-                allocation_by_value,
-                private_load_sources,
-                access_location,
-                visited_private_loads,
-            );
-            visited_private_loads.remove(&pointer);
-            derived
-        }
-        _ => Err(FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
-            location: *definition_location,
-            pointer,
-        }),
-    }
-}
-
-#[derive(Clone, Copy)]
-struct PointerExpression {
-    allocation: FormalAllocationIdentity,
-    byte_offset: AffineExpression,
-}
-
-fn derive_pointer_expression(
-    pointer: ValueId,
-    definitions: &Definitions<'_>,
-    value_types: &BTreeMap<ValueId, Type>,
-    allocation_by_value: &BTreeMap<ValueId, FormalAllocationIdentity>,
-    private_load_sources: &BTreeMap<ValueId, ValueId>,
-    access_location: FunctionOperationLocation,
-) -> Result<PointerExpression, FormalMemoryIncompleteReason> {
-    derive_pointer_expression_inner(
-        pointer,
-        definitions,
-        value_types,
-        allocation_by_value,
-        private_load_sources,
-        access_location,
-        &mut BTreeSet::new(),
-    )
-}
-
-fn derive_pointer_expression_inner(
-    pointer: ValueId,
-    definitions: &Definitions<'_>,
-    value_types: &BTreeMap<ValueId, Type>,
-    allocation_by_value: &BTreeMap<ValueId, FormalAllocationIdentity>,
-    private_load_sources: &BTreeMap<ValueId, ValueId>,
-    access_location: FunctionOperationLocation,
-    visited_private_slots: &mut BTreeSet<ValueId>,
-) -> Result<PointerExpression, FormalMemoryIncompleteReason> {
-    if let Some(allocation) = allocation_by_value.get(&pointer).copied()
-        && matches!(value_types.get(&pointer), Some(Type::Pointer(_)))
-    {
-        return Ok(PointerExpression {
-            allocation,
-            byte_offset: AffineExpression::ZERO,
-        });
-    }
-    let Some((operation, definition_location)) = definitions.operations.get(&pointer) else {
-        return Err(FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
-            location: access_location,
-            pointer,
-        });
-    };
-    match &operation.kind {
-        OperationKind::SliceData { slice } => allocation_by_value
-            .get(slice)
-            .copied()
-            .map(|allocation| PointerExpression {
-                allocation,
-                byte_offset: AffineExpression::ZERO,
-            })
-            .ok_or(FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
-                location: *definition_location,
-                pointer,
-            }),
-        OperationKind::GetElementPointer { base, offset } => {
-            let base_expression = derive_pointer_expression_inner(
-                *base,
-                definitions,
-                value_types,
-                allocation_by_value,
-                private_load_sources,
-                access_location,
-                visited_private_slots,
-            )?;
-            let element_width = value_types.get(base).and_then(pointer_byte_width).ok_or(
-                FormalMemoryIncompleteReason::ElementWidthUnavailable {
-                    location: *definition_location,
-                    pointer: *base,
-                },
-            )?;
-            let index = derive_affine_index(*offset, definitions).map_err(|error| match error {
-                IndexExpressionError::Unsupported => {
-                    FormalMemoryIncompleteReason::UnsupportedIndexExpression {
-                        location: *definition_location,
-                        index: *offset,
-                        allocation: base_expression.allocation,
-                    }
-                }
-                IndexExpressionError::Overflow => {
-                    FormalMemoryIncompleteReason::AddressArithmeticOverflow {
-                        location: *definition_location,
-                    }
-                }
-            })?;
-            let byte_delta = index.checked_multiply_constant(element_width).ok_or(
-                FormalMemoryIncompleteReason::AddressArithmeticOverflow {
-                    location: *definition_location,
-                },
-            )?;
-            let byte_offset = base_expression.byte_offset.checked_add(byte_delta).ok_or(
-                FormalMemoryIncompleteReason::AddressArithmeticOverflow {
-                    location: *definition_location,
-                },
-            )?;
-            Ok(PointerExpression {
-                allocation: base_expression.allocation,
-                byte_offset,
-            })
-        }
-        OperationKind::Load {
-            pointer: private_slot,
-            access,
-        } if direct_private_alloca_access_is_internal(*private_slot, *access, definitions) => {
-            if !visited_private_slots.insert(pointer) {
-                return Err(FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
-                    location: *definition_location,
-                    pointer,
-                });
-            }
-            let stored_value = private_load_sources.get(&pointer).copied().ok_or(
-                FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
-                    location: *definition_location,
-                    pointer,
-                },
-            )?;
-            let derived = derive_pointer_expression_inner(
-                stored_value,
-                definitions,
-                value_types,
-                allocation_by_value,
-                private_load_sources,
-                access_location,
-                visited_private_slots,
-            );
-            visited_private_slots.remove(&pointer);
-            derived
-        }
-        _ => Err(FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
-            location: *definition_location,
-            pointer,
-        }),
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -1480,41 +1412,14 @@ fn derive_affine_index(
     value: ValueId,
     definitions: &Definitions<'_>,
 ) -> Result<AffineExpression, IndexExpressionError> {
-    let (operation, _) = definitions
-        .operations
-        .get(&value)
+    let value = definitions
+        .unique_ssa_origin(value)
         .ok_or(IndexExpressionError::Unsupported)?;
-    if !matches!(operation.results.as_slice(), [result] if result.ty == Type::INDEX) {
-        return Err(IndexExpressionError::Unsupported);
-    }
-    match &operation.kind {
-        OperationKind::Constant(Constant::Index(value)) => Ok(AffineExpression::constant(*value)),
-        OperationKind::Intrinsic(intrinsic)
-            if intrinsic.kind
-                == (IntrinsicKind::InvocationIndex {
-                    kind: IndexKind::Global,
-                    axis: Axis::X,
-                }) =>
-        {
-            Ok(AffineExpression::INVOCATION)
-        }
-        OperationKind::Binary { op, lhs, rhs } => {
-            let lhs = derive_affine_index(*lhs, definitions)?;
-            let rhs = derive_affine_index(*rhs, definitions)?;
-            match op {
-                BinaryOp::Add => lhs.checked_add(rhs).ok_or(IndexExpressionError::Overflow),
-                BinaryOp::Multiply if lhs.invocation_coefficient == 0 => rhs
-                    .checked_multiply_constant(lhs.constant)
-                    .ok_or(IndexExpressionError::Overflow),
-                BinaryOp::Multiply if rhs.invocation_coefficient == 0 => lhs
-                    .checked_multiply_constant(rhs.constant)
-                    .ok_or(IndexExpressionError::Overflow),
-                BinaryOp::Multiply => Err(IndexExpressionError::Unsupported),
-                _ => Err(IndexExpressionError::Unsupported),
-            }
-        }
-        _ => Err(IndexExpressionError::Unsupported),
-    }
+    definitions
+        .affine_expressions
+        .get(&value)
+        .copied()
+        .unwrap_or(Err(IndexExpressionError::Unsupported))
 }
 
 fn pointer_byte_width(ty: &Type) -> Option<u64> {

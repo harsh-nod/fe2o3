@@ -8,12 +8,15 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, BasicBlock, BlockId, Constant, DebugSourceMapDocumentV1,
-    DebugSourceMapFileV1, Function, Kernel, LaunchDomain, LaunchExtent,
-    MAX_SIMULATION_BUNDLE_BYTES_V1, MemoryAccess, Module, Operation, OperationKind,
-    PreparedSimulationBundleV1, ScalarType, Signature, SimulationCompilerExecutionBindingV1,
-    SimulationProductionKirIdentityV1, SimulationSourceLineageV1, TargetCapability, Terminator,
-    Type, ValueDef, ValueId, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV8,
+    AccessMode, AddressSpace, BasicBlock, BlockId, CastKind, Constant, DebugSourceMapDocumentV1,
+    DebugSourceMapDocumentV2, DebugSourceMapFileV1, DebugSourceMapSpanV1, Function, Kernel,
+    LaunchDomain, LaunchExtent, MAX_SIMULATION_BUNDLE_BYTES_V1, MemoryAccess, Module, Operation,
+    OperationKind, PreparedSimulationBundleV1, PreparedSimulationBundleV6, ScalarType,
+    SemanticAggregateStorageMapV6, SemanticKernelStorageV1, SemanticKernelStorageV2,
+    SemanticStorageMapV6, Signature, SimulationCompilerExecutionBindingV1,
+    SimulationProductionKirIdentityV1, SimulationProductionKirIdentityV6,
+    SimulationSourceLineageV1, TargetCapability, Terminator, Type, ValueDef, ValueId,
+    VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV11,
     WaveOperation, WaveOperationKind, WaveWidth,
 };
 use fe2o3_kir_sim::{MAX_PERSISTED_SCHEDULE_BYTES_V1, MAX_SCHEDULE_DECISIONS_V1};
@@ -136,6 +139,119 @@ fn simulation_bundle_for_module(
     bundle.into_canonical_bytes()
 }
 
+fn simulation_bundle_v6() -> fe2o3_kernel_ir::VerifiedSimulationBundleV6 {
+    let scalar = Type::Scalar(ScalarType::U32);
+    let read_write = Type::pointer(scalar.clone(), AddressSpace::Private, AccessMode::ReadWrite);
+    let read_only = Type::pointer(scalar.clone(), AddressSpace::Private, AccessMode::ReadOnly);
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = vec![
+        Operation::effect_free(
+            ValueDef::new(ValueId(0), scalar.clone()),
+            OperationKind::Constant(Constant::U32(7)),
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(1), read_write),
+            OperationKind::Alloca {
+                element: scalar.clone(),
+                count: None,
+                address_space: AddressSpace::Private,
+                alignment: 4,
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(1),
+                value: ValueId(0),
+                access: MemoryAccess::new(AddressSpace::Private, 4),
+            },
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(2), read_only.clone()),
+            OperationKind::Cast {
+                kind: CastKind::RestrictPointerAccess,
+                value: ValueId(1),
+                to: read_only,
+            },
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(3), scalar),
+            OperationKind::Load {
+                pointer: ValueId(2),
+                access: MemoryAccess::new(AddressSpace::Private, 4),
+            },
+        ),
+    ];
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let entry = Function::kernel_entry(
+        "bundle_v6_entry",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![block],
+    );
+    let mut module = Module::new("cli-command-bundle-v6-test");
+    module.functions.push(entry);
+    module.kernels.push(Kernel::new(
+        "bundle_v6_kernel",
+        "bundle_v6_entry",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    ));
+
+    let canonical = VerifiedCanonicalKernelIrV11::from_module(module).unwrap();
+    let production_digest = *canonical.identity().digest();
+    let production_length = canonical.identity().canonical_length();
+    let prepared = PreparedSimulationBundleV6::new(
+        SimulationSourceLineageV1::new([0x61; 32], 101, [0x62; 32], 102).unwrap(),
+        SimulationProductionKirIdentityV6::new(11, production_digest, production_length).unwrap(),
+        "gfx942:xnack-",
+        canonical,
+    )
+    .unwrap();
+    let source_map = DebugSourceMapDocumentV2::new(
+        prepared.debug_source_map_binding(),
+        vec![DebugSourceMapFileV1::new([0x64; 32], 16, "bundle-v6.rs".into()).unwrap()],
+        vec![],
+        vec![DebugSourceMapSpanV1::new([0x64; 32], 1, 2, 1, 2).unwrap()],
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    let semantic = b"cli-command-bundle-v6-semantic-fixture".to_vec();
+    let semantic_digest = <[u8; 32]>::from(Sha256::digest(&semantic));
+    let storage = SemanticStorageMapV6::new(
+        *prepared.subject_identity(),
+        1,
+        semantic_digest,
+        semantic.len() as u64,
+        [0x63; 32],
+        *prepared.canonical_kir_v11_digest(),
+        prepared.canonical_kir_v11_length(),
+        vec![SemanticKernelStorageV1::new(0, 0, 0, vec![])],
+        vec![],
+    )
+    .unwrap();
+    let aggregate = SemanticAggregateStorageMapV6::new(
+        *prepared.subject_identity(),
+        *prepared.canonical_kir_v11_digest(),
+        prepared.canonical_kir_v11_length(),
+        vec![SemanticKernelStorageV2::new(0, 0, 0, 0, 1, vec![])],
+    )
+    .unwrap();
+    prepared
+        .finalize(source_map, semantic, storage, aggregate)
+        .unwrap()
+}
+
+fn hex_identity(identity: &[u8; 32]) -> String {
+    let mut result = String::with_capacity(64);
+    for byte in identity {
+        write!(&mut result, "{byte:02x}").unwrap();
+    }
+    result
+}
+
 fn op(result: u32, ty: Type, kind: OperationKind) -> Operation {
     Operation::effect_free(ValueDef::new(ValueId(result), ty), kind)
 }
@@ -231,10 +347,82 @@ fn help_is_a_successful_input_free_command() {
         assert!(output.status.success());
         assert_eq!(
             String::from_utf8(output.stdout).unwrap(),
-            "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH | --bundle-v5 PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT] | --reduce-failure [--schedule-seed U64] [--schedule-max-decisions COUNT] | --replay-failure-reduction PATH]\n"
+            "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH | --bundle-v5 PATH | --bundle-v6 PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT] | --reduce-failure [--schedule-seed U64] [--schedule-max-decisions COUNT] | --replay-failure-reduction PATH]\n"
         );
         assert!(output.stderr.is_empty());
     }
+}
+
+#[test]
+fn bundle_v6_executes_and_records_an_exact_replayable_schedule() {
+    let directory = TestDirectory::new();
+    let bundle_path = directory.path().join("kernel-v6.fe2sim");
+    let request = directory.path().join("request-v6.json");
+    let schedule = directory.path().join("schedule-v6.json");
+    let bundle = simulation_bundle_v6();
+    fs::write(&bundle_path, bundle.canonical_bytes()).unwrap();
+    fs::write(
+        &request,
+        br#"{"schema":"fe2o3-simulation-request-v1","kernel":"bundle_v6_kernel","grid":[2,1,1],"workgroup":[1,1,1],"arguments":[]}"#,
+    )
+    .unwrap();
+
+    let recorded = binary()
+        .arg("--bundle-v6")
+        .arg(&bundle_path)
+        .arg("--request")
+        .arg(&request)
+        .arg("--record-canonical-schedule")
+        .arg(&schedule)
+        .args(["--schedule-max-decisions", "8"])
+        .output()
+        .unwrap();
+    assert!(
+        recorded.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recorded.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&recorded.stdout).unwrap();
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["counts"]["invocations_executed"], 2);
+
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&fs::read(&schedule).unwrap()).unwrap();
+    assert_eq!(persisted["artifact"]["kind"], "simulation_bundle_v6");
+    assert_eq!(
+        persisted["artifact"]["bundle_sha256"],
+        hex_identity(bundle.identity().as_bytes())
+    );
+    assert_eq!(
+        persisted["artifact"]["subject_sha256"],
+        hex_identity(bundle.subject_identity())
+    );
+    assert_eq!(
+        persisted["artifact"]["kir_sha256"],
+        hex_identity(bundle.canonical_kir_v11_digest())
+    );
+
+    let replayed = binary()
+        .arg("--bundle-v6")
+        .arg(&bundle_path)
+        .arg("--request")
+        .arg(&request)
+        .arg("--replay-schedule")
+        .arg(&schedule)
+        .output()
+        .unwrap();
+    assert!(
+        replayed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replayed.stderr)
+    );
+    let replayed: serde_json::Value = serde_json::from_slice(&replayed.stdout).unwrap();
+    assert_eq!(replayed["status"], "ok");
+    assert_eq!(
+        replayed["schedule"]["transcript_sha256"],
+        result["schedule"]["transcript_sha256"]
+    );
+    assert_eq!(replayed["arguments"], result["arguments"]);
 }
 
 #[test]

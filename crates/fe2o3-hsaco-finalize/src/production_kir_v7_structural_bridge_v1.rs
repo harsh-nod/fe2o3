@@ -689,7 +689,8 @@ fn binding_from_catalog(
         },
         production_version: match structural.kir_version() {
             ProductionSourceIsaCatalogKirVersionV1::V8 => ProductionKirV7BridgeKirVersionV1::V8,
-            ProductionSourceIsaCatalogKirVersionV1::V9 => {
+            ProductionSourceIsaCatalogKirVersionV1::V9
+            | ProductionSourceIsaCatalogKirVersionV1::V11 => {
                 return Err(ProductionKirV7BridgeErrorV1::UnsupportedProductionKirVersion);
             }
         },

@@ -4,9 +4,10 @@ use std::fmt;
 use fe2o3_kernel_ir::{
     AccessMode, KernelId, KernelIrDecodeError, KernelIrEncodeError, Module, ScalarType,
     VerifiedCanonicalKernelIrIdentityV7, VerifiedCanonicalKernelIrIdentityV9,
-    VerifiedCanonicalKernelIrIdentityV10, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV9,
-    VerifiedCanonicalKernelIrV10, decode_module_v7, decode_module_v9, decode_module_v10,
-    encode_module_v7, encode_module_v9, encode_module_v10,
+    VerifiedCanonicalKernelIrIdentityV10, VerifiedCanonicalKernelIrIdentityV11,
+    VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV10,
+    VerifiedCanonicalKernelIrV11, decode_module_v7, decode_module_v9, decode_module_v10,
+    decode_module_v11, encode_module_v7, encode_module_v9, encode_module_v10, encode_module_v11,
 };
 
 const HARD_MAX_CANONICAL_BYTES_V1: usize = 16 * 1024 * 1024;
@@ -769,6 +770,16 @@ impl From<VerifiedCanonicalKernelIrIdentityV10> for SimulationKernelIrIdentityV1
     }
 }
 
+impl From<VerifiedCanonicalKernelIrIdentityV11> for SimulationKernelIrIdentityV1 {
+    fn from(identity: VerifiedCanonicalKernelIrIdentityV11) -> Self {
+        Self {
+            wire_version: fe2o3_kernel_ir::KERNEL_IR_VERSION_V11,
+            digest: *identity.digest(),
+            canonical_length: identity.canonical_length(),
+        }
+    }
+}
+
 /// Exact canonical KIR owner admitted for simulation. This owner is intentionally not `Clone`.
 #[derive(Debug)]
 pub struct AdmittedSimulationModuleV1 {
@@ -827,6 +838,22 @@ impl AdmittedSimulationModuleV1 {
             limits,
             decode_module_v10,
             encode_module_v10,
+        )
+    }
+
+    /// Consumes exact verified V11 custody, including pointer access
+    /// restrictions, without broadening any frozen admission route.
+    pub fn admit_v11(
+        canonical: VerifiedCanonicalKernelIrV11,
+        limits: SimulationLimitsV1,
+    ) -> Result<Self, SimulationAdmissionErrorV1> {
+        let identity = SimulationKernelIrIdentityV1::from(*canonical.identity());
+        Self::admit_canonical(
+            identity,
+            canonical.into_canonical_bytes(),
+            limits,
+            decode_module_v11,
+            encode_module_v11,
         )
     }
 

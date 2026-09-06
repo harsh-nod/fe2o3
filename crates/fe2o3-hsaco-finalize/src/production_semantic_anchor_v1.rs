@@ -391,6 +391,7 @@ fn parse_llvm_absence_v1(
     let version = match version.as_str() {
         "8" => ProductionReplayKernelIrVersionV1::V8,
         "9" => ProductionReplayKernelIrVersionV1::V9,
+        "11" => ProductionReplayKernelIrVersionV1::V11,
         _ => return Err(ProductionSemanticAnchorErrorV1::BindingMismatch),
     };
     let byte_len = parse_i64_field(fields[3])?;
@@ -456,6 +457,7 @@ fn parse_llvm_manifest_v1(
     let kir_version = match parse_metadata_string(fields[1], "kir-version:")?.as_str() {
         "8" => ProductionReplayKernelIrVersionV1::V8,
         "9" => ProductionReplayKernelIrVersionV1::V9,
+        "11" => ProductionReplayKernelIrVersionV1::V11,
         _ => return Err(ProductionSemanticAnchorErrorV1::BindingMismatch),
     };
     let kir_bytes = parse_i64_field(fields[2])?;
@@ -1360,6 +1362,7 @@ fn anchor_digest(domain: &[u8], input: AnchorDigestInputV1<'_>) -> u64 {
     hasher.update([match input.kir_version {
         ProductionReplayKernelIrVersionV1::V8 => 8,
         ProductionReplayKernelIrVersionV1::V9 => 9,
+        ProductionReplayKernelIrVersionV1::V11 => 11,
     }]);
     hasher.update(input.kir);
     hasher.update(input.kir_bytes.to_le_bytes());
@@ -1389,6 +1392,7 @@ fn semantic_operation_identity(
     hasher.update([match kir_version {
         ProductionReplayKernelIrVersionV1::V8 => 8,
         ProductionReplayKernelIrVersionV1::V9 => 9,
+        ProductionReplayKernelIrVersionV1::V11 => 11,
     }]);
     hasher.update(kir);
     hasher.update(kir_bytes.to_le_bytes());

@@ -387,8 +387,16 @@ impl<'a> Analyzer<'a> {
             });
         }
 
+        let (value_types, malformed_values) = index_value_types(function, body);
+        if malformed_values {
+            report.diagnostics.push(Diagnostic::Unsupported {
+                block: None,
+                operation_index: None,
+                reason: UnsupportedReason::MalformedControlFlow,
+            });
+        }
         let reachable = reachable_blocks(body, &blocks);
-        let (incoming, malformed_edges) = incoming_edges(body, &blocks, &reachable);
+        let (incoming, malformed_edges) = incoming_edges(body, &blocks, &reachable, &value_types);
         if malformed_edges {
             report.diagnostics.push(Diagnostic::Unsupported {
                 block: None,
@@ -422,7 +430,8 @@ impl<'a> Analyzer<'a> {
                 BTreeMap::new()
             }
         };
-        let trivial_phi_representatives = trivial_phi_representatives(body, &incoming);
+        let trivial_phi_representatives =
+            trivial_phi_representatives(body, &incoming, &value_types);
         let dominators = compute_dominators(body, &reachable, &incoming);
         let uniform_recurrence_edges = uniform_recurrence_edges(
             function,
@@ -431,8 +440,13 @@ impl<'a> Analyzer<'a> {
             &dominators,
             &trivial_phi_representatives,
         );
-        let (private_load_slots, private_slot_stores) =
-            private_storage_facts(body, &reachable, &dominators);
+        let (private_load_slots, private_slot_stores) = private_storage_facts(
+            body,
+            &reachable,
+            &dominators,
+            &trivial_phi_representatives,
+            &value_types,
+        );
         let known_integer_values = KnownIntegerValueAnalysis::new(
             body,
             &incoming,
@@ -876,19 +890,8 @@ impl<'a> Analyzer<'a> {
         let Some(workgroup_size) = self.workgroup_size else {
             return false;
         };
-        let Some(Operation {
-            kind:
-                OperationKind::Intrinsic(fe2o3_kernel_ir::IntrinsicOperation {
-                    kind:
-                        IntrinsicKind::InvocationIndex {
-                            kind: IndexKind::Global,
-                            axis,
-                        },
-                    ..
-                }),
-            ..
-        }) = self.value_definitions.get(&lhs).copied()
-        else {
+        let rhs = self.trivial_phi_representative(rhs);
+        let Some(axis) = self.global_invocation_index_axis(lhs) else {
             return false;
         };
         let extent = match axis {
@@ -900,61 +903,121 @@ impl<'a> Analyzer<'a> {
     }
 
     fn is_wave64_index_quotient(&self, lhs: ValueId, rhs: ValueId) -> bool {
+        let rhs = self.trivial_phi_representative(rhs);
         if self.workgroup_size != Some(WorkgroupSize::new(256, 1, 1))
             || self.unsigned_constant(rhs) != Some(64)
         {
             return false;
         }
-        matches!(
-            self.value_definitions
-                .get(&lhs)
-                .map(|operation| &operation.kind),
-            Some(OperationKind::Intrinsic(
-                fe2o3_kernel_ir::IntrinsicOperation {
-                    kind: IntrinsicKind::InvocationIndex {
-                        kind: IndexKind::Global,
-                        axis: Axis::X,
-                    },
-                    ..
+        self.global_invocation_index_axis(lhs) == Some(Axis::X)
+    }
+
+    fn global_invocation_index_axis(&self, value: ValueId) -> Option<Axis> {
+        let mut value = value;
+        let mut expected_type = None;
+        let mut visited = BTreeSet::new();
+        let mut remaining = self.value_definitions.len().checked_add(1)?;
+        loop {
+            if remaining == 0 {
+                return None;
+            }
+            remaining -= 1;
+            value = self.trivial_phi_representative(value);
+            if !visited.insert(value) {
+                return None;
+            }
+
+            let operation = self.value_definitions.get(&value).copied()?;
+            let [result] = operation.results.as_slice() else {
+                return None;
+            };
+            if result.id != value
+                || expected_type
+                    .as_ref()
+                    .is_some_and(|expected| expected != &result.ty)
+            {
+                return None;
+            }
+
+            match &operation.kind {
+                OperationKind::Intrinsic(fe2o3_kernel_ir::IntrinsicOperation {
+                    kind:
+                        IntrinsicKind::InvocationIndex {
+                            kind: IndexKind::Global,
+                            axis,
+                        },
+                    result_type,
+                }) if result.ty == Type::INDEX && result_type == &Type::INDEX => {
+                    return Some(*axis);
                 }
-            ))
-        )
+                OperationKind::Cast {
+                    kind: CastKind::Bitcast,
+                    value: source,
+                    to,
+                } if result.ty == *to => {
+                    expected_type = match to {
+                        Type::Scalar(ScalarType::U64) => Some(Type::INDEX),
+                        Type::Scalar(ScalarType::Index) => Some(Type::Scalar(ScalarType::U64)),
+                        _ => return None,
+                    };
+                    value = *source;
+                }
+                _ => return None,
+            }
+        }
     }
 
     fn unsigned_constant(&self, value: ValueId) -> Option<u64> {
-        let operation = self.value_definitions.get(&value).copied()?;
-        match &operation.kind {
-            OperationKind::Constant(constant) => match constant {
-                Constant::U8(value) => Some(u64::from(*value)),
-                Constant::U16(value) => Some(u64::from(*value)),
-                Constant::U32(value) => Some(u64::from(*value)),
-                Constant::U64(value) | Constant::Index(value) => Some(*value),
-                Constant::I8(value) => u64::try_from(*value).ok(),
-                Constant::I16(value) => u64::try_from(*value).ok(),
-                Constant::I32(value) => u64::try_from(*value).ok(),
-                Constant::I64(value) => u64::try_from(*value).ok(),
-                Constant::Bool(_)
-                | Constant::F16Bits(_)
-                | Constant::Bf16Bits(_)
-                | Constant::F32Bits(_)
-                | Constant::F64Bits(_) => None,
-            },
-            OperationKind::Cast {
-                kind: CastKind::ZeroExtend,
-                value,
-                to,
-            } if self.zero_extend_preserves_unsigned_value(*value, to) => {
-                self.unsigned_constant(*value)
+        let mut value = value;
+        let mut visited = BTreeSet::new();
+        let mut remaining = self.value_definitions.len().checked_add(1)?;
+        loop {
+            if remaining == 0 {
+                return None;
             }
-            _ => None,
+            remaining -= 1;
+            value = self.trivial_phi_representative(value);
+            if !visited.insert(value) {
+                return None;
+            }
+            let operation = self.value_definitions.get(&value).copied()?;
+            let result = operation.results.iter().find(|result| result.id == value)?;
+            match &operation.kind {
+                OperationKind::Constant(constant) if result.ty == constant.ty() => {
+                    return match constant {
+                        Constant::U8(value) => Some(u64::from(*value)),
+                        Constant::U16(value) => Some(u64::from(*value)),
+                        Constant::U32(value) => Some(u64::from(*value)),
+                        Constant::U64(value) | Constant::Index(value) => Some(*value),
+                        Constant::I8(value) => u64::try_from(*value).ok(),
+                        Constant::I16(value) => u64::try_from(*value).ok(),
+                        Constant::I32(value) => u64::try_from(*value).ok(),
+                        Constant::I64(value) => u64::try_from(*value).ok(),
+                        Constant::Bool(_)
+                        | Constant::F16Bits(_)
+                        | Constant::Bf16Bits(_)
+                        | Constant::F32Bits(_)
+                        | Constant::F64Bits(_) => None,
+                    };
+                }
+                OperationKind::Cast {
+                    kind: CastKind::ZeroExtend,
+                    value: source,
+                    to,
+                } if result.ty == *to && self.zero_extend_preserves_unsigned_value(*source, to) => {
+                    value = *source;
+                }
+                _ => return None,
+            }
         }
     }
 
     fn zero_extend_preserves_unsigned_value(&self, value: ValueId, to: &Type) -> bool {
+        let value = self.trivial_phi_representative(value);
         let Some(source) = self
             .value_definitions
             .get(&value)
-            .and_then(|operation| operation.results.first())
+            .and_then(|operation| operation.results.iter().find(|result| result.id == value))
             .map(|result| &result.ty)
         else {
             return false;
@@ -2107,7 +2170,8 @@ impl<'a> UnsignedRangeAnalysis<'a> {
             let preserves_value = match kind {
                 CastKind::ZeroExtend => source_range.max <= target_range.max,
                 CastKind::Bitcast => source_range.max == target_range.max,
-                CastKind::Truncate
+                CastKind::RestrictPointerAccess
+                | CastKind::Truncate
                 | CastKind::SignExtend
                 | CastKind::FloatExtend
                 | CastKind::FloatTruncate
@@ -2372,7 +2436,8 @@ fn cast_result_range(
         CastKind::Truncate if source.max <= target_type.max => Some(source),
         CastKind::Bitcast if source_type.max == target_type.max => Some(source),
         CastKind::Truncate => Some(target_type),
-        CastKind::ZeroExtend
+        CastKind::RestrictPointerAccess
+        | CastKind::ZeroExtend
         | CastKind::SignExtend
         | CastKind::FloatExtend
         | CastKind::FloatTruncate
@@ -2452,10 +2517,17 @@ fn private_storage_facts(
     body: &FunctionBody,
     reachable: &BTreeSet<BlockId>,
     dominators: &BTreeMap<BlockId, BTreeSet<BlockId>>,
+    trivial_phi_representatives: &BTreeMap<ValueId, ValueId>,
+    value_types: &BTreeMap<ValueId, Type>,
 ) -> (
     BTreeMap<ValueId, ValueId>,
     BTreeMap<ValueId, Vec<PrivateStore>>,
 ) {
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| (block.id, block))
+        .collect::<BTreeMap<_, _>>();
     let slots = body
         .blocks
         .iter()
@@ -2473,6 +2545,14 @@ fn private_storage_facts(
         })
         .flat_map(|operation| operation.results.iter().map(|result| result.id))
         .collect::<BTreeSet<_>>();
+    let exact_slot = |value| {
+        let origin = resolve_representative(trivial_phi_representatives, value);
+        let same_type = value_types
+            .get(&value)
+            .zip(value_types.get(&origin))
+            .is_some_and(|(value, origin)| value == origin);
+        (same_type && slots.contains(&origin)).then_some(origin)
+    };
     let mut escaped = BTreeSet::new();
     for block in body
         .blocks
@@ -2481,20 +2561,40 @@ fn private_storage_facts(
     {
         for operation in &block.operations {
             for operand in operation.kind.operands() {
-                if slots.contains(&operand)
+                if let Some(slot) = exact_slot(operand)
                     && !is_direct_private_slot_access(&operation.kind, operand)
                 {
-                    escaped.insert(operand);
+                    escaped.insert(slot);
                 }
             }
         }
         if let Some(terminator) = &block.terminator {
-            escaped.extend(
-                terminator
-                    .operands()
-                    .into_iter()
-                    .filter(|operand| slots.contains(operand)),
-            );
+            if let Some(selector) = discriminator(terminator)
+                && let Some(slot) = exact_slot(selector)
+            {
+                escaped.insert(slot);
+            }
+            if let Terminator::Return { values } = terminator {
+                escaped.extend(values.iter().filter_map(|value| exact_slot(*value)));
+            }
+            for (target, arguments) in terminator_edges(terminator) {
+                let parameters = blocks.get(&target).map(|block| block.parameters.as_slice());
+                let exact_edge = parameters.is_some_and(|parameters| {
+                    edge_has_exact_types(&arguments, parameters, value_types)
+                });
+                for (index, argument) in arguments.into_iter().enumerate() {
+                    let Some(slot) = exact_slot(argument) else {
+                        continue;
+                    };
+                    let exact_transport = exact_edge
+                        && parameters
+                            .and_then(|parameters| parameters.get(index))
+                            .is_some_and(|parameter| exact_slot(parameter.id) == Some(slot));
+                    if !exact_transport {
+                        escaped.insert(slot);
+                    }
+                }
+            }
         }
     }
 
@@ -2512,24 +2612,26 @@ fn private_storage_facts(
                     pointer,
                     value,
                     access,
-                } if eligible.contains(pointer)
+                } if exact_slot(*pointer).is_some_and(|slot| eligible.contains(&slot))
                     && access.address_space == AddressSpace::Private =>
                 {
-                    stores.entry(*pointer).or_default().push(PrivateStore {
+                    let slot = exact_slot(*pointer).expect("eligible private pointer has a slot");
+                    stores.entry(slot).or_default().push(PrivateStore {
                         block: block.id,
                         operation_index,
                         value: *value,
                     });
                 }
                 OperationKind::Load { pointer, access }
-                    if eligible.contains(pointer)
+                    if exact_slot(*pointer).is_some_and(|slot| eligible.contains(&slot))
                         && access.address_space == AddressSpace::Private =>
                 {
+                    let slot = exact_slot(*pointer).expect("eligible private pointer has a slot");
                     loads.extend(
                         operation
                             .results
                             .iter()
-                            .map(|result| (result.id, *pointer, block.id, operation_index)),
+                            .map(|result| (result.id, slot, block.id, operation_index)),
                     );
                 }
                 _ => {}
@@ -2868,12 +2970,63 @@ fn reachable_blocks(
     reachable
 }
 
+fn index_value_types(function: &Function, body: &FunctionBody) -> (BTreeMap<ValueId, Type>, bool) {
+    let mut value_types = BTreeMap::new();
+    let mut malformed = body.parameters.len() != function.signature.parameters.len();
+    let mut insert = |value, ty| {
+        if value_types.insert(value, ty).is_some() {
+            malformed = true;
+        }
+    };
+
+    for (value, ty) in body
+        .parameters
+        .iter()
+        .copied()
+        .zip(function.signature.parameters.iter().cloned())
+    {
+        insert(value, ty);
+    }
+    for block in &body.blocks {
+        for parameter in &block.parameters {
+            insert(parameter.id, parameter.ty.clone());
+        }
+        for result in block
+            .operations
+            .iter()
+            .flat_map(|operation| &operation.results)
+        {
+            insert(result.id, result.ty.clone());
+        }
+    }
+
+    (value_types, malformed)
+}
+
+fn edge_has_exact_types(
+    arguments: &[ValueId],
+    parameters: &[fe2o3_kernel_ir::ValueDef],
+    value_types: &BTreeMap<ValueId, Type>,
+) -> bool {
+    arguments.len() == parameters.len()
+        && arguments
+            .iter()
+            .zip(parameters)
+            .all(|(argument, parameter)| {
+                value_types
+                    .get(argument)
+                    .is_some_and(|argument_type| argument_type == &parameter.ty)
+            })
+}
+
 fn incoming_edges(
     body: &FunctionBody,
     blocks: &BTreeMap<BlockId, &BasicBlock>,
     reachable: &BTreeSet<BlockId>,
+    value_types: &BTreeMap<ValueId, Type>,
 ) -> (BTreeMap<BlockId, Vec<Edge>>, bool) {
     let mut incoming = BTreeMap::<BlockId, Vec<Edge>>::new();
+    let mut malformed_targets = BTreeSet::new();
     let mut malformed = false;
     for block in &body.blocks {
         if !reachable.contains(&block.id) {
@@ -2885,8 +3038,17 @@ fn incoming_edges(
         };
         let edge_discriminator = discriminator(terminator);
         for (target, arguments) in terminator_edges(terminator) {
-            if !blocks.contains_key(&target) {
+            let Some(target_block) = blocks.get(&target) else {
                 malformed = true;
+                continue;
+            };
+            if !edge_has_exact_types(&arguments, &target_block.parameters, value_types) {
+                malformed = true;
+                malformed_targets.insert(target);
+                incoming.remove(&target);
+                continue;
+            }
+            if malformed_targets.contains(&target) {
                 continue;
             }
             incoming.entry(target).or_default().push(Edge {
@@ -2902,6 +3064,7 @@ fn incoming_edges(
 fn trivial_phi_representatives(
     body: &FunctionBody,
     incoming: &BTreeMap<BlockId, Vec<Edge>>,
+    value_types: &BTreeMap<ValueId, Type>,
 ) -> BTreeMap<ValueId, ValueId> {
     let mut representatives = BTreeMap::new();
     loop {
@@ -2910,6 +3073,12 @@ fn trivial_phi_representatives(
             let Some(edges) = incoming.get(&block.id) else {
                 continue;
             };
+            if edges
+                .iter()
+                .any(|edge| !edge_has_exact_types(&edge.arguments, &block.parameters, value_types))
+            {
+                continue;
+            }
             for (index, parameter) in block.parameters.iter().enumerate() {
                 let origins = edges
                     .iter()

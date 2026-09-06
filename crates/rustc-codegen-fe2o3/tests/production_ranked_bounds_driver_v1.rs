@@ -253,6 +253,38 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn consuming_wave_lane_id_is_a_production_deterministic_scalar_callable() {
+    let extracted = run_feature_extraction(&ScratchTarget::new(), "wave_lane_into_id");
+    assert!(
+        extracted.status.success()
+            && extracted
+                .stderr
+                .contains("all mandatory kernel checks clean true")
+            && extracted.stderr.contains("kernel.access Write")
+            && !extracted.stderr.contains(
+                "call terminator before exact callable memory-effect summaries are available"
+            ),
+        "consuming WaveLane scalar accessor did not pass production projection:\n{}",
+        extracted.stderr,
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn borrowed_wave_lane_id_remains_outside_production_scalar_callable_admission() {
+    let extracted = run_feature_extraction(&ScratchTarget::new(), "wave_lane_get");
+    assert!(
+        !extracted.status.success()
+            && extracted.stderr.contains(
+                "call terminator before exact callable memory-effect summaries are available"
+            ),
+        "borrowed WaveLane scalar accessor unexpectedly passed production projection:\n{}",
+        extracted.stderr,
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn optimized_blocked_accessor_retains_its_checked_terminal() {
     let blocked = run_release_feature_extraction(&ScratchTarget::new(), "blocked");
     assert!(
@@ -265,6 +297,70 @@ fn optimized_blocked_accessor_retains_its_checked_terminal() {
             && blocked.stderr.contains("kernel.access Write"),
         "optimized blocked access lost its checked terminal:\n{}",
         blocked.stderr,
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn disjoint_block_component_index_extracts_as_checked_ordinary_data() {
+    let extracted = run_feature_extraction(&ScratchTarget::new(), "block_component_index");
+    let lines = extracted.stderr.lines().map(str::trim).collect::<Vec<_>>();
+    let result_for = |operation: &str| {
+        lines.iter().find_map(|line| {
+            let (result, actual) = line.split_once(" = ")?;
+            (actual == operation).then_some(result)
+        })
+    };
+    let lanes = result_for("kernel.index_constant 16");
+    let elements = result_for("kernel.index_constant 4");
+    let component_scaled =
+        lanes.and_then(|lanes| result_for(&format!("kernel.index_binary Multiply %0, {lanes}")));
+    let component_join = component_scaled.and_then(|component_scaled| {
+        lines.iter().find_map(|line| {
+            let (result, operation) = line.split_once(" = ")?;
+            (operation.starts_with("kernel.index_binary Add ")
+                && operation.ends_with(&format!(", {component_scaled}")))
+            .then_some(result)
+        })
+    });
+    let projected_index = component_join.and_then(|component_join| {
+        lines.iter().find_map(|line| {
+            let (result, operation) = line.split_once(" = ")?;
+            operation
+                .starts_with(&format!("kernel.index_binary Add {component_join}, "))
+                .then_some(result)
+        })
+    });
+    let fixed_offset = result_for("kernel.index_constant 48");
+    let fixed_index = fixed_offset.and_then(|fixed_offset| {
+        lines.iter().find_map(|line| {
+            let (result, operation) = line.split_once(" = ")?;
+            (operation.starts_with("kernel.index_binary Add ")
+                && operation.ends_with(&format!(", {fixed_offset}")))
+            .then_some(result)
+        })
+    });
+    assert!(
+        extracted.status.success()
+            && extracted
+                .stderr
+                .contains("all mandatory kernel checks clean true")
+            && elements.is_some_and(|elements| lines
+                .iter()
+                .any(|line| *line == format!("kernel.cond_br %0 < {elements}")
+                    || line.starts_with(&format!("kernel.cond_br %0 < {elements} "))))
+            && component_scaled.is_some()
+            && projected_index.is_some_and(|index| lines
+                .iter()
+                .any(|line| line.starts_with("kernel.access Read ")
+                    && line.ends_with(&format!("[{index}]"))))
+            && fixed_index.is_some_and(|index| lines
+                .iter()
+                .any(|line| line.starts_with("kernel.access Write ")
+                    && line.ends_with(&format!("[{index}]"))))
+            && projected_index != fixed_index,
+        "checked component projection did not pass cross-crate production extraction:\n{}",
+        extracted.stderr,
     );
 }
 
@@ -1041,6 +1137,24 @@ fn ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path() {
         assert!(!bundle.grants_load_authority());
         assert!(!bundle.grants_launch_authority());
 
+        let semantic = fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1::decode_current_production_canonical(
+            bundle.semantic_mir(),
+            fe2o3_mir_model::semantic_mir_v1::SemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            semantic.wire_version(),
+            fe2o3_mir_model::semantic_mir_v1::SemanticMirWireVersionV1::V13
+        );
+        assert!(semantic.callables().iter().any(|callable| matches!(
+            callable,
+            fe2o3_mir_model::semantic_mir_v1::SemanticCallableDeclV1::CompilerIntrinsic {
+                operation:
+                    fe2o3_mir_model::semantic_mir_v1::SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { .. },
+                ..
+            }
+        )));
+
         let (_, module) =
             fe2o3_kernel_ir::VerifiedCanonicalKernelIrV10::from_canonical_bytes_with_module(
                 bundle.canonical_kir_v10().to_vec(),
@@ -1053,15 +1167,6 @@ fn ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path() {
             .unwrap();
         let function = module.function(&kernel.entry).unwrap();
         let body = function.body.as_ref().unwrap();
-        assert!(
-            module
-                .functions
-                .iter()
-                .filter(|function| function.body.is_some())
-                .count()
-                >= 2,
-            "the ordinary source must retain the reviewed WorkgroupLdsScope constructor"
-        );
         let operations = body
             .blocks
             .iter()

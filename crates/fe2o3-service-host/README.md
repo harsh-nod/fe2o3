@@ -38,6 +38,11 @@ batch. Native addresses are
 substituted only inside KFD. A batch of 1 through 8192 packets uses one ring
 reservation and one final doorbell publication. A never-published prepared
 queue can be destroyed and return allocation custody without a doorbell store.
+Published custody supports the legacy bounded poll-count wait and a preferred
+relative millisecond wait whose monotonic deadline behavior is delegated to
+KFD. Either timeout or another terminal wait error returns an opaque
+quarantined queue owner; successful completion returns the exact completed
+generation.
 After publication, exact completion and signal recycle are required before the
 same native queue can detach its current batch, replace a complete initialized
 allocation, bind a different fixed batch, or return allocation custody for

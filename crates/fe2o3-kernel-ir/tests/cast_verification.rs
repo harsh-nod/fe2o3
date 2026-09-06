@@ -69,6 +69,7 @@ fn expected_scalar_cast(kind: CastKind, from: ScalarType, to: ScalarType) -> boo
         return false;
     };
     match kind {
+        CastKind::RestrictPointerAccess => false,
         CastKind::Truncate => from.is_integer() && to.is_integer() && from_width > to_width,
         CastKind::ZeroExtend => {
             matches!(
@@ -92,6 +93,59 @@ fn expected_scalar_cast(kind: CastKind, from: ScalarType, to: ScalarType) -> boo
         CastKind::Bitcast => {
             from.is_numeric() && to.is_numeric() && from != to && from_width == to_width
         }
+    }
+}
+
+#[test]
+fn pointer_access_restriction_is_exact_and_one_way() {
+    let rw = Type::pointer(
+        Type::Scalar(ScalarType::U32),
+        AddressSpace::Private,
+        AccessMode::ReadWrite,
+    );
+    let ro = Type::pointer(
+        Type::Scalar(ScalarType::U32),
+        AddressSpace::Private,
+        AccessMode::ReadOnly,
+    );
+    verify_module(&cast_module(
+        CastKind::RestrictPointerAccess,
+        rw.clone(),
+        ro.clone(),
+    ))
+    .expect("read-write to read-only restriction must verify");
+
+    for (from, to) in [
+        (ro.clone(), rw.clone()),
+        (rw.clone(), rw.clone()),
+        (
+            rw.clone(),
+            Type::pointer(
+                Type::Scalar(ScalarType::U32),
+                AddressSpace::Private,
+                AccessMode::WriteOnly,
+            ),
+        ),
+        (
+            rw.clone(),
+            Type::pointer(
+                Type::Scalar(ScalarType::U64),
+                AddressSpace::Private,
+                AccessMode::ReadOnly,
+            ),
+        ),
+        (
+            rw.clone(),
+            Type::pointer(
+                Type::Scalar(ScalarType::U32),
+                AddressSpace::Global,
+                AccessMode::ReadOnly,
+            ),
+        ),
+    ] {
+        let errors = verify_module(&cast_module(CastKind::RestrictPointerAccess, from, to))
+            .expect_err("pointer widening or shape change must fail closed");
+        assert!(errors.contains(DiagnosticCode::InvalidCast));
     }
 }
 

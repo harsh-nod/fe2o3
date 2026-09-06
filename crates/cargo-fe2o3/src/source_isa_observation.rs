@@ -283,10 +283,7 @@ fn map_acceptance_summary(
                 ProductionAmdTargetProfileV1::Gfx942 => SourceIsaObservationTargetProfileV1::Gfx942,
                 ProductionAmdTargetProfileV1::Gfx950 => SourceIsaObservationTargetProfileV1::Gfx950,
             },
-            match structural.version() {
-                ProductionReplayKernelIrVersionV1::V8 => SourceIsaObservationKirVersionV1::V8,
-                ProductionReplayKernelIrVersionV1::V9 => SourceIsaObservationKirVersionV1::V9,
-            },
+            map_admitted_kir_version(structural.version())?,
             SourceIsaObservationContentIdentityV1::new(neutral.sha256(), neutral.byte_len())?,
             SourceIsaObservationContentIdentityV1::new(target.sha256(), target.byte_len())?,
             SourceIsaObservationStructuralCountsV1 {
@@ -316,6 +313,18 @@ fn map_acceptance_summary(
         )?,
         witness,
     )
+}
+
+const fn map_admitted_kir_version(
+    version: ProductionReplayKernelIrVersionV1,
+) -> Result<SourceIsaObservationKirVersionV1, SourceIsaObservationFrameErrorV1> {
+    match version {
+        ProductionReplayKernelIrVersionV1::V8 => Ok(SourceIsaObservationKirVersionV1::V8),
+        ProductionReplayKernelIrVersionV1::V9 => Ok(SourceIsaObservationKirVersionV1::V9),
+        ProductionReplayKernelIrVersionV1::V11 => {
+            Err(SourceIsaObservationFrameErrorV1::InvalidClaim)
+        }
+    }
 }
 
 const fn map_unavailable_reason(
@@ -385,6 +394,9 @@ const fn map_unavailable_reason(
         },
         ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV9 => {
             SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV9
+        }
+        ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV11 => {
+            SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV11
         }
     }
 }
@@ -1223,6 +1235,28 @@ mod tests {
                 ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV9
             ),
             SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV9
+        );
+        assert_eq!(
+            map_unavailable_reason(
+                ProductionSourceIsaCorrelationUnavailableV1::SourceProjectionForKirV11
+            ),
+            SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV11
+        );
+    }
+
+    #[test]
+    fn admitted_kir_version_mapping_rejects_unprojectable_v11() {
+        assert_eq!(
+            map_admitted_kir_version(ProductionReplayKernelIrVersionV1::V8),
+            Ok(SourceIsaObservationKirVersionV1::V8)
+        );
+        assert_eq!(
+            map_admitted_kir_version(ProductionReplayKernelIrVersionV1::V9),
+            Ok(SourceIsaObservationKirVersionV1::V9)
+        );
+        assert_eq!(
+            map_admitted_kir_version(ProductionReplayKernelIrVersionV1::V11),
+            Err(SourceIsaObservationFrameErrorV1::InvalidClaim)
         );
     }
 }

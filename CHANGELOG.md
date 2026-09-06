@@ -59,3 +59,8 @@ API stabilizes. Developer-preview versions may make breaking changes.
 - Semantic MIR V10 remains frozen; the compiler trap terminal now uses its
   unambiguous additive V11 encoding. V12 retains that encoding and adds the
   checked scalar volatile-load terminal at tag 65.
+- Semantic MIR V14 retains the exact V2-V13 schemas and adds canonical tag 67
+  for checked ordinary-index projection from an immutable disjoint-block
+  witness. The projected `Option<usize>` carries no allocation authority. V14
+  also closes the inherited single-lane blocked-arithmetic bypass: every
+  blocked mapping now requires a finite authenticated rank-1 launch extent.

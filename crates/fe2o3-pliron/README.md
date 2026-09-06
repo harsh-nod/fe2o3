@@ -102,6 +102,26 @@ debug value but remains only process-local in-memory provenance; equality or
 hashing must never become an artifact, cache, proof, publication, or runtime
 identity.
 
+## Production semantic SSA resource envelope
+
+Production semantic SSA applies two independent deterministic resource
+policies. Every function first remains bounded by the unchanged planner caps:
+262,144 variables, 262,144 blocks, 65,536 edges, 1,048,576 events, 65,536 edge
+definitions, 1,048,576 output items, 2,097,152 logical storage words, and
+67,108,864 work units. Passing that check does not authorize a module to retain
+an unbounded number of individually valid plans.
+
+The cumulative module summary is separately bounded by a fixed compiler
+envelope of 1,048,576 variables, 1,048,576 blocks, 262,144 edges, 4,194,304
+events, 262,144 edge definitions, 4,194,304 output items, 8,388,608 logical
+storage words, and 268,435,456 work units. These constants are four times the
+per-function ceilings to retain a small bounded set of substantial plans. The
+factor is not multiplied by function count, is not selected by a compilation
+request, and is not an accommodation for any particular source program.
+Checked accumulation rejects arithmetic overflow before comparing the summary
+with the fixed module envelope. A stricter validated module policy may lower
+these ceilings, but no public limit value can exceed them.
+
 ## Closed generic kernel-check production path
 
 `compile_ranked_kernel_for_lowering_v1` is the single closed owner path for the

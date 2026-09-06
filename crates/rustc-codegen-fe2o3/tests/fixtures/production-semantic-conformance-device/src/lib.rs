@@ -106,6 +106,45 @@ pub fn switch_u32(selector: u32, mut output: DisjointSlice<u32>) {
     }
 }
 
+#[cfg(feature = "ssa-control-flow")]
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+    control_flow(loop_bounds(4294967295, 4), integer_switches(u32))
+)]
+pub fn ssa_control_flow(limit: u32, mut output: DisjointSlice<u32>) {
+    let mut outer = 0_u32;
+    let mut result = 0_u32;
+    while outer < limit {
+        let mut inner = 0_u32;
+        while inner < 4 {
+            let selected = match inner {
+                0 => 1,
+                1 => 2,
+                2 | 3 => 3,
+                _ => fe2o3_device::trap(),
+            };
+            result ^= selected;
+            inner += 1;
+        }
+        outer += 1;
+    }
+    if let Some(output) = output.get_mut(thread::index_1d()) {
+        *output = result;
+    }
+}
+
+#[cfg(feature = "retained-shared-borrow")]
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn retained_shared_borrow(value: u32, mut output: DisjointSlice<u32>) {
+    let shared = &value;
+    let _shared_copy = shared;
+    let observed = value;
+    if let Some(output) = output.get_mut(thread::index_1d()) {
+        *output = observed;
+    }
+}
+
 #[cfg(feature = "bounds-output")]
 #[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
 pub fn bounds_output(value: u32, mut output: DisjointSlice<u32>) {

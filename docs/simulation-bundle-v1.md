@@ -9,17 +9,19 @@ back from a failed hardware launch.
 fe2o3-export-sim \
   --crate my_kernel_crate \
   --output "$PWD/my-kernel.fe2sim" \
+  --bundle-version 6 \
   --target gfx942 \
   -- --package my-kernel-package --lib
 ```
 
-V1 is the default and retains its existing wire bytes. `--bundle-version 2`
-selects a distinct envelope and Source Map V2 route. For the broadly admitted
-kernel fragment, this opt-in route captures bounded rustc lexical scopes from
-the same extraction session and maps exact one-to-one kernel parameters to
-their exact KIR function values with a nonzero function-wide generation only
-when MIR never moves, drops, storage-resets, mutates, or mutably aliases the
-entry value.
+The example explicitly selects the current V6 envelope. Omitting
+`--bundle-version` preserves the V1 default and its existing wire bytes.
+`--bundle-version 2` selects a distinct envelope and Source Map V2 route. For
+the broadly admitted kernel fragment, this opt-in route captures bounded rustc
+lexical scopes from the same extraction session and maps exact one-to-one
+kernel parameters to their exact KIR function values with a nonzero
+function-wide generation only when MIR never moves, drops, storage-resets,
+mutates, or mutably aliases the entry value.
 Non-parameter locals, projected or constant debug values, and composite ABI
 cases without a one-to-one KIR parameter remain typed `Unrepresented`; the
 compiler does not infer temporary SSA lifetimes. Invalid, control-containing,
@@ -36,6 +38,14 @@ original encoder byte-for-byte. Any version-specific or lossy drift rejects
 export or admission. The ordinary-Rust gfx950 f32 wave collective path is the
 first production V9 case on this route. Production lowering does not yet emit
 V10-only memory intrinsics, so they remain typed producer-unavailable.
+
+`--bundle-version 6` selects the current additive self-contained envelope. V6
+binds exact verified canonical KIR V11, Source Map V2, semantic MIR, source
+lineage, and both storage maps without changing any V1-V5 bytes or decoders.
+V11 is required for the explicit same-pointee, same-address-space
+`ReadWrite`-to-`ReadOnly` pointer restriction used by retained shared borrows.
+The restriction preserves pointer identity; it does not prove Rust aliasing or
+lifetime rules.
 
 The command requires the repository's pinned nightly toolchain, its `rust-src`
 component, and the AMDGPU Rust target. `--crate` is rustc's crate name, which
@@ -56,6 +66,7 @@ admitted rustc collection
   -> target-neutral KIR lowering
   -> exact verified KIR V7 projection (Bundle V1-V4)
      or exact same-module KIR V10 encoding (Bundle V5)
+     or exact verified KIR V11 custody (Bundle V6)
   -> authority-free simulation bundle
 ```
 
@@ -96,12 +107,19 @@ fe2o3-debug sim \
 For Bundle V5, use `--bundle-v5` in both commands. That spelling is a distinct
 admission route and does not reinterpret `--bundle` or raw `--kir-v7`.
 
-Both commands use the existing hardened regular-file boundary, reject
-oversize/change/substitution, strictly decode and revalidate the complete
-bundle, map its exact target, and admit only its embedded verified KIR version:
-V7 for legacy bundles and V10 for Bundle V5. They
-do not recompile, re-lower, load, launch, or fall back to a different route.
-`--bundle` is mutually exclusive with raw `--kir-v7`.
+For Bundle V6, `fe2o3-kir-sim` uses the separate `--bundle-v6` route. The
+library-level `load_debug_simulation_bundle_v6` admission API retains the same
+exact bundle/KIR/target relationship for compiler conformance tests. The
+public `fe2o3-debug sim` CLI has not yet added a V6 spelling; use of its V5
+route must not be described as V6 custody.
+
+Each available route uses the existing hardened regular-file boundary, rejects
+oversize/change/substitution, strictly decodes and revalidates the complete
+bundle, maps its exact target, and admits only its embedded verified KIR
+version: V7 for legacy bundles, V10 for Bundle V5, and V11 for the standalone
+simulator's Bundle V6 route. The tools do not recompile, re-lower, load, launch,
+or fall back to a different route. The simulator's `--bundle`, `--bundle-v5`,
+`--bundle-v6`, and raw `--kir-v7` inputs are mutually exclusive.
 
 The compiler emits a bounded debug map from rustc spans observed in the same
 extraction transaction. `fe2o3-debug` passes the exact payload, verified
@@ -185,6 +203,12 @@ Bundle V5 instead retains the exact V8/V9 production identity and embeds its
 exact verified V10 same-module encoding. Its independent header and section
 identities bind the target, ABI, source lineage, source map, semantic MIR, and
 storage correspondence. V1-V4 canonical bytes and decoders remain unchanged.
+
+Bundle V6 retains exact verified KIR V11 directly and updates each embedded
+source/storage binding to that V11 identity. Its independent envelope is the
+production export route for modules that contain pointer-access restriction.
+V1-V5 remain strict historical compatibility formats and are never relabeled
+or silently upgraded.
 
 The bundle reserves a separately bounded `fe2o3-debug-source-map-v1` payload
 and exposes a non-circular simulation bundle subject identity for that map to

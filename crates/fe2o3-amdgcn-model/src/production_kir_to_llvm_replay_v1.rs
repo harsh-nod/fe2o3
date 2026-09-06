@@ -2,18 +2,22 @@ use std::{collections::BTreeSet, error::Error, fmt};
 
 use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 use fe2o3_kernel_ir::{
-    KERNEL_IR_MAGIC_V1, KERNEL_IR_VERSION_V8, KERNEL_IR_VERSION_V9, KernelId, MAX_KERNELS_V1,
-    MAX_MODULE_BYTES_V1, MAX_TEXT_BYTES_V1, Module, VerifiedCanonicalKernelIrErrorV8,
-    VerifiedCanonicalKernelIrErrorV9, VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
+    KERNEL_IR_MAGIC_V1, KERNEL_IR_VERSION_V8, KERNEL_IR_VERSION_V9, KERNEL_IR_VERSION_V11,
+    KernelId, MAX_KERNELS_V1, MAX_MODULE_BYTES_V1, MAX_TEXT_BYTES_V1, Module,
+    VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrErrorV9,
+    VerifiedCanonicalKernelIrErrorV11, VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
+    VerifiedCanonicalKernelIrV11,
 };
 use fe2o3_kernel_opt::{
     KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_PASS_ORDER_V2,
     KERNEL_IR_PLIRON_OPTIMIZATION_PRODUCTION_POLICY_VERSION_V2, KernelIrPlironOptimizationErrorV2,
-    KernelIrPlironOptimizationLimitsV2, KernelIrPlironOptimizationPolicyV2,
-    KernelIrPlironOptimizationReportV2, KernelIrPlironProductionPassV2,
-    KernelIrPlironStructuralReplayAdmissionErrorV2,
-    admit_production_kernel_ir_structural_replay_v2, optimize_production_kernel_ir_module_v2,
-    production_kernel_ir_pliron_optimization_limits_v2,
+    KernelIrPlironOptimizationErrorV3, KernelIrPlironOptimizationLimitsV2,
+    KernelIrPlironOptimizationPolicyV2, KernelIrPlironOptimizationReportV2,
+    KernelIrPlironProductionPassV2, KernelIrPlironStructuralReplayAdmissionErrorV2,
+    KernelIrPlironStructuralReplayAdmissionErrorV3,
+    admit_production_kernel_ir_structural_replay_v2,
+    admit_production_kernel_ir_structural_replay_v3, optimize_production_kernel_ir_module_v2,
+    optimize_production_kernel_ir_module_v3, production_kernel_ir_pliron_optimization_limits_v2,
 };
 use sha2::{Digest, Sha256};
 
@@ -45,6 +49,7 @@ const GFX942_PROFILE_TAG_V1: u8 = 1;
 const GFX950_PROFILE_TAG_V1: u8 = 2;
 const KIR_V8_TAG_V1: u8 = 8;
 const KIR_V9_TAG_V1: u8 = 9;
+const KIR_V11_TAG_V1: u8 = 11;
 const IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/KIR-TO-LLVM-REPLAY/IDENTITY/V1\0";
 
 pub const MAX_PRODUCTION_PRE_DESCRIPTOR_LLVM_BYTES_V1: usize =
@@ -55,6 +60,7 @@ pub const MAX_PRODUCTION_PRE_DESCRIPTOR_LLVM_BYTES_V1: usize =
 pub enum ProductionReplayKernelIrVersionV1 {
     V8,
     V9,
+    V11,
 }
 
 impl ProductionReplayKernelIrVersionV1 {
@@ -62,6 +68,7 @@ impl ProductionReplayKernelIrVersionV1 {
         match self {
             Self::V8 => 8,
             Self::V9 => 9,
+            Self::V11 => 11,
         }
     }
 
@@ -69,6 +76,7 @@ impl ProductionReplayKernelIrVersionV1 {
         match self {
             Self::V8 => KIR_V8_TAG_V1,
             Self::V9 => KIR_V9_TAG_V1,
+            Self::V11 => KIR_V11_TAG_V1,
         }
     }
 
@@ -76,6 +84,7 @@ impl ProductionReplayKernelIrVersionV1 {
         match tag {
             KIR_V8_TAG_V1 => Ok(Self::V8),
             KIR_V9_TAG_V1 => Ok(Self::V9),
+            KIR_V11_TAG_V1 => Ok(Self::V11),
             _ => Err(ProductionKirToLlvmReplayErrorV1::InvalidHeader),
         }
     }
@@ -431,12 +440,32 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
         let kernel_ids = target_bound.kernel_ids().to_vec();
         let (_, pre_optimization_target_identity) =
             canonicalize_target_module(target_bound.module(), version)?;
-        let optimization_admission = admit_production_kernel_ir_structural_replay_v2(
-            target_bound.module(),
-            optimized_target_bound_module,
-            live_optimization,
-        )
-        .map_err(ProductionKirToLlvmReplayErrorV1::TargetOptimizationAdmission)?;
+        let target_optimization = match version {
+            ProductionReplayKernelIrVersionV1::V11 => {
+                let admission = admit_production_kernel_ir_structural_replay_v3(
+                    target_bound.module(),
+                    optimized_target_bound_module,
+                    live_optimization,
+                )
+                .map_err(ProductionKirToLlvmReplayErrorV1::TargetOptimizationAdmissionV3)?;
+                snapshot_target_optimization_v4(
+                    pre_optimization_target_identity,
+                    admission.report(),
+                )?
+            }
+            ProductionReplayKernelIrVersionV1::V8 | ProductionReplayKernelIrVersionV1::V9 => {
+                let admission = admit_production_kernel_ir_structural_replay_v2(
+                    target_bound.module(),
+                    optimized_target_bound_module,
+                    live_optimization,
+                )
+                .map_err(ProductionKirToLlvmReplayErrorV1::TargetOptimizationAdmission)?;
+                snapshot_target_optimization_v4(
+                    pre_optimization_target_identity,
+                    admission.report(),
+                )?
+            }
+        };
         let (target_owner, target_identity) =
             canonicalize_target_module(optimized_target_bound_module, version)?;
         classify_replay_llvm(
@@ -447,10 +476,6 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
             pre_descriptor_llvm,
         )?;
 
-        let target_optimization = snapshot_target_optimization_v4(
-            pre_optimization_target_identity,
-            optimization_admission.report(),
-        )?;
         let canonical_bytes = encode_evidence_v4(
             profile,
             neutral_identity,
@@ -604,16 +629,31 @@ impl CanonicalProductionKirToLlvmReplayEvidenceV1 {
                         field: "pre-optimization target-bound Kernel IR",
                     });
                 }
-                let optimized = optimize_production_kernel_ir_module_v2(target_bound.module())
-                    .map_err(ProductionKirToLlvmReplayErrorV1::TargetOptimization)?;
+                let (optimized_module, optimized_report) = match version {
+                    ProductionReplayKernelIrVersionV1::V11 => {
+                        let optimized =
+                            optimize_production_kernel_ir_module_v3(target_bound.module())
+                                .map_err(ProductionKirToLlvmReplayErrorV1::TargetOptimizationV3)?;
+                        let (module, _canonical, report) = optimized.into_parts();
+                        (module, report)
+                    }
+                    ProductionReplayKernelIrVersionV1::V8
+                    | ProductionReplayKernelIrVersionV1::V9 => {
+                        let optimized =
+                            optimize_production_kernel_ir_module_v2(target_bound.module())
+                                .map_err(ProductionKirToLlvmReplayErrorV1::TargetOptimization)?;
+                        let (module, _canonical, report) = optimized.into_parts();
+                        (module, report)
+                    }
+                };
                 let replayed = snapshot_target_optimization_v4(
                     pre_optimization_target_identity,
-                    optimized.report(),
+                    &optimized_report,
                 )?;
                 if &replayed != optimization {
                     return Err(ProductionKirToLlvmReplayErrorV1::OptimizationAuditMismatch);
                 }
-                optimized.into_parts().0
+                optimized_module
             }
             None => target_bound.module().clone(),
         };
@@ -764,6 +804,7 @@ impl ValidatedProductionKirToLlvmReplayV1 {
 enum ExactKernelIrOwnerV1 {
     V8(VerifiedCanonicalKernelIrV8),
     V9(VerifiedCanonicalKernelIrV9),
+    V11(VerifiedCanonicalKernelIrV11),
 }
 
 impl ExactKernelIrOwnerV1 {
@@ -771,6 +812,7 @@ impl ExactKernelIrOwnerV1 {
         match self {
             Self::V8(owner) => owner.canonical_bytes(),
             Self::V9(owner) => owner.canonical_bytes(),
+            Self::V11(owner) => owner.canonical_bytes(),
         }
     }
 
@@ -786,6 +828,11 @@ impl ExactKernelIrOwnerV1 {
                 sha256: *owner.identity().digest(),
                 byte_len: owner.identity().canonical_length(),
             },
+            Self::V11(owner) => ProductionReplayKernelIrIdentityV1 {
+                version: ProductionReplayKernelIrVersionV1::V11,
+                sha256: *owner.identity().digest(),
+                byte_len: owner.identity().canonical_length(),
+            },
         }
     }
 
@@ -793,6 +840,7 @@ impl ExactKernelIrOwnerV1 {
         match self {
             Self::V8(owner) => ProductionSemanticAnchorKirIdentityV1::from_v8(owner),
             Self::V9(owner) => ProductionSemanticAnchorKirIdentityV1::from_v9(owner),
+            Self::V11(owner) => ProductionSemanticAnchorKirIdentityV1::from_v11(owner),
         }
     }
 }
@@ -813,6 +861,7 @@ fn infer_kernel_ir_version(
     match u16::from_le_bytes([version_bytes[0], version_bytes[1]]) {
         KERNEL_IR_VERSION_V8 => Ok(ProductionReplayKernelIrVersionV1::V8),
         KERNEL_IR_VERSION_V9 => Ok(ProductionReplayKernelIrVersionV1::V9),
+        KERNEL_IR_VERSION_V11 => Ok(ProductionReplayKernelIrVersionV1::V11),
         _ => Err(ProductionKirToLlvmReplayErrorV1::InvalidKernelIrHeader),
     }
 }
@@ -842,6 +891,12 @@ fn decode_exact_kernel_ir(
                     .map_err(ProductionKirToLlvmReplayErrorV1::KernelIrV9)?;
             (ExactKernelIrOwnerV1::V9(owner), module)
         }
+        ProductionReplayKernelIrVersionV1::V11 => {
+            let (owner, module) =
+                VerifiedCanonicalKernelIrV11::from_canonical_bytes_with_module(canonical_bytes)
+                    .map_err(ProductionKirToLlvmReplayErrorV1::KernelIrV11)?;
+            (ExactKernelIrOwnerV1::V11(owner), module)
+        }
     };
     let identity = owner.identity();
     Ok((owner, module, identity))
@@ -862,6 +917,10 @@ fn canonicalize_target_module(
         ProductionReplayKernelIrVersionV1::V9 => ExactKernelIrOwnerV1::V9(
             VerifiedCanonicalKernelIrV9::from_module(module.clone())
                 .map_err(ProductionKirToLlvmReplayErrorV1::KernelIrV9)?,
+        ),
+        ProductionReplayKernelIrVersionV1::V11 => ExactKernelIrOwnerV1::V11(
+            VerifiedCanonicalKernelIrV11::from_module(module.clone())
+                .map_err(ProductionKirToLlvmReplayErrorV1::KernelIrV11)?,
         ),
     };
     let identity = owner.identity();
@@ -1652,9 +1711,12 @@ pub enum ProductionKirToLlvmReplayErrorV1 {
     LlvmMismatch,
     KernelIrV8(VerifiedCanonicalKernelIrErrorV8),
     KernelIrV9(VerifiedCanonicalKernelIrErrorV9),
+    KernelIrV11(VerifiedCanonicalKernelIrErrorV11),
     TargetBinding(ProductionTargetBindingErrorV1),
     TargetOptimization(KernelIrPlironOptimizationErrorV2),
+    TargetOptimizationV3(KernelIrPlironOptimizationErrorV3),
     TargetOptimizationAdmission(KernelIrPlironStructuralReplayAdmissionErrorV2),
+    TargetOptimizationAdmissionV3(KernelIrPlironStructuralReplayAdmissionErrorV3),
     TargetLowering(LoweringErrors),
     LayoutBinding(ProductionLlvmLayoutBindingErrorV1),
 }
@@ -1679,7 +1741,7 @@ impl fmt::Display for ProductionKirToLlvmReplayErrorV1 {
                 formatter.write_str("production KIR-to-LLVM replay evidence has an invalid header")
             }
             Self::InvalidKernelIrHeader => formatter.write_str(
-                "production KIR-to-LLVM replay input is not exact canonical KIR V8 or V9",
+                "production KIR-to-LLVM replay input is not exact canonical KIR V8, V9, or V11",
             ),
             Self::InvalidLength => formatter
                 .write_str("production KIR-to-LLVM replay evidence has an invalid bounded length"),
@@ -1704,16 +1766,31 @@ impl fmt::Display for ProductionKirToLlvmReplayErrorV1 {
             }
             Self::KernelIrV8(error) => write!(formatter, "exact KIR V8 validation failed: {error}"),
             Self::KernelIrV9(error) => write!(formatter, "exact KIR V9 validation failed: {error}"),
+            Self::KernelIrV11(error) => {
+                write!(formatter, "exact KIR V11 validation failed: {error}")
+            }
             Self::TargetBinding(error) => {
                 write!(formatter, "target-binding replay failed: {error}")
             }
             Self::TargetOptimization(error) => {
                 write!(formatter, "target-KIR optimization replay failed: {error}")
             }
+            Self::TargetOptimizationV3(error) => {
+                write!(
+                    formatter,
+                    "target-KIR V11 optimization replay failed: {error}"
+                )
+            }
             Self::TargetOptimizationAdmission(error) => {
                 write!(
                     formatter,
                     "target-KIR structural replay admission failed: {error}"
+                )
+            }
+            Self::TargetOptimizationAdmissionV3(error) => {
+                write!(
+                    formatter,
+                    "target-KIR V11 structural replay admission failed: {error}"
                 )
             }
             Self::TargetLowering(error) => {
@@ -1731,9 +1808,12 @@ impl Error for ProductionKirToLlvmReplayErrorV1 {
         match self {
             Self::KernelIrV8(error) => Some(error),
             Self::KernelIrV9(error) => Some(error),
+            Self::KernelIrV11(error) => Some(error),
             Self::TargetBinding(error) => Some(error),
             Self::TargetOptimization(error) => Some(error),
+            Self::TargetOptimizationV3(error) => Some(error),
             Self::TargetOptimizationAdmission(error) => Some(error),
+            Self::TargetOptimizationAdmissionV3(error) => Some(error),
             Self::TargetLowering(error) => Some(error),
             Self::LayoutBinding(error) => Some(error),
             _ => None,
@@ -1806,9 +1886,9 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use fe2o3_kernel_ir::{
-        BasicBlock, BlockId, Constant, Function, LaunchDomain, LaunchExtent, Module, Operation,
-        OperationKind, ScalarType, Signature, Terminator, Type, ValueDef, ValueId,
-        VerifiedCanonicalKernelIrV8, WorkgroupSize,
+        AccessMode, AddressSpace, BasicBlock, BlockId, CastKind, Constant, Function, LaunchDomain,
+        LaunchExtent, Module, Operation, OperationKind, ScalarType, Signature, Terminator, Type,
+        ValueDef, ValueId, VerifiedCanonicalKernelIrV8, WorkgroupSize,
     };
 
     use super::*;
@@ -1824,6 +1904,39 @@ mod tests {
             format!("{name}_entry"),
             Signature::new(vec![], vec![]),
             vec![],
+            vec![block],
+        );
+        let mut kernel = fe2o3_kernel_ir::Kernel::new(
+            format!("{name}_kernel"),
+            format!("{name}_entry"),
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(1),
+            },
+        );
+        kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+        let mut module = Module::new(name);
+        module.functions.push(function);
+        module.kernels.push(kernel);
+        module
+    }
+
+    fn pointer_restriction_module(name: &str) -> Module {
+        let read_write = Type::pointer(Type::F32, AddressSpace::Global, AccessMode::ReadWrite);
+        let read_only = Type::pointer(Type::F32, AddressSpace::Global, AccessMode::ReadOnly);
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations.push(Operation::effect_free(
+            ValueDef::new(ValueId(1), read_only.clone()),
+            OperationKind::Cast {
+                kind: CastKind::RestrictPointerAccess,
+                value: ValueId(0),
+                to: read_only,
+            },
+        ));
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let function = Function::kernel_entry(
+            format!("{name}_entry"),
+            Signature::new(vec![read_write], vec![]),
+            vec![ValueId(0)],
             vec![block],
         );
         let mut kernel = fe2o3_kernel_ir::Kernel::new(
@@ -2348,6 +2461,55 @@ mod tests {
         assert_eq!(
             evidence.target_bound_kernel_ir_identity().version(),
             ProductionReplayKernelIrVersionV1::V9
+        );
+        assert_eq!(
+            evidence
+                .validate_against_neutral_kernel_ir(neutral_bytes)
+                .unwrap()
+                .llvm_mode(),
+            ProductionKirToLlvmReplayModeV1::SemanticAnchorsV1
+        );
+    }
+
+    #[test]
+    fn anchored_replay_retains_exact_v11_pointer_restriction_custody() {
+        let neutral_owner = VerifiedCanonicalKernelIrV11::from_module(pointer_restriction_module(
+            "v11_restriction",
+        ))
+        .unwrap();
+        let neutral_bytes = neutral_owner.canonical_bytes();
+        assert_eq!(
+            infer_kernel_ir_version(neutral_bytes).unwrap(),
+            ProductionReplayKernelIrVersionV1::V11
+        );
+        let (_, neutral_module, _) =
+            decode_exact_kernel_ir(neutral_bytes, ProductionReplayKernelIrVersionV1::V11).unwrap();
+        assert!(VerifiedCanonicalKernelIrV9::from_module(neutral_module.clone()).is_err());
+        let target =
+            bind_production_target_v1(&neutral_module, ProductionAmdTargetProfileV1::Gfx942)
+                .unwrap();
+        let optimized = optimize_production_kernel_ir_module_v3(target.module()).unwrap();
+        let target_owner =
+            VerifiedCanonicalKernelIrV11::from_module(optimized.module().clone()).unwrap();
+        let llvm = replay_llvm(
+            optimized.module(),
+            ProductionAmdTargetProfileV1::Gfx942,
+            ProductionKirToLlvmReplayModeV1::SemanticAnchorsV1,
+            ProductionSemanticAnchorKirIdentityV1::from_v11(&target_owner),
+        )
+        .unwrap();
+        assert!(llvm.contains("!\"kir-version:11\""));
+        let evidence = CanonicalProductionKirToLlvmReplayEvidenceV1::from_optimized_live_inputs_v4(
+            neutral_bytes,
+            optimized.module(),
+            optimized.report(),
+            ProductionAmdTargetProfileV1::Gfx942,
+            &llvm,
+        )
+        .unwrap();
+        assert_eq!(
+            evidence.target_bound_kernel_ir_identity().version(),
+            ProductionReplayKernelIrVersionV1::V11
         );
         assert_eq!(
             evidence

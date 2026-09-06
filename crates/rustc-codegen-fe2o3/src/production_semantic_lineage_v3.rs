@@ -33,7 +33,8 @@ use fe2o3_kernel_ir::{
     ProductionSemanticDebugAvailabilityV1, ProductionSemanticDebugCarrierV1,
     ProductionSemanticDebugProducerGapV1, ProductionSemanticDebugReceiptExtensionV1,
     VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrErrorV9,
-    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
+    VerifiedCanonicalKernelIrErrorV11, VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
+    VerifiedCanonicalKernelIrV11,
 };
 use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV4, InertCanonicalMirToKirCorrespondenceEvidenceV5,
@@ -178,6 +179,7 @@ impl LineageNeutralKirIdentityV1 {
             match self.version {
                 ProductionCanonicalKernelIrVersionV1::V8 => MultiRootCanonicalKirVersionV2::V8,
                 ProductionCanonicalKernelIrVersionV1::V9 => MultiRootCanonicalKirVersionV2::V9,
+                ProductionCanonicalKernelIrVersionV1::V11 => MultiRootCanonicalKirVersionV2::V11,
             },
             self.canonical_length,
             self.digest,
@@ -486,6 +488,7 @@ fn encode_correspondence_root_payload_v1(
     for record in synthetics {
         bytes.extend_from_slice(&record.semantic_function().index().to_le_bytes());
         bytes.push(match record.rule() {
+            fe2o3_lower_mir_kernel::SemanticKirSyntheticOperationRuleV1::RetainedLocalStorage => 3,
             fe2o3_lower_mir_kernel::SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage => 1,
             fe2o3_lower_mir_kernel::SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap => 2,
         });
@@ -882,6 +885,14 @@ impl PreparedProductionSemanticLineageV3 {
             }
             ProductionCanonicalKernelIrVersionV1::V9 => {
                 let bound_kir = VerifiedCanonicalKernelIrV9::from_module(target_module.clone())?;
+                bound_kir.revalidate()?;
+                (
+                    *bound_kir.identity().digest(),
+                    bound_kir.canonical_bytes().len() as u64,
+                )
+            }
+            ProductionCanonicalKernelIrVersionV1::V11 => {
+                let bound_kir = VerifiedCanonicalKernelIrV11::from_module(target_module.clone())?;
                 bound_kir.revalidate()?;
                 (
                     *bound_kir.identity().digest(),
@@ -1691,6 +1702,7 @@ pub(crate) enum ProductionSemanticLineageErrorV3 {
     LiveOwner(String),
     CanonicalKir(VerifiedCanonicalKernelIrErrorV8),
     CanonicalKirV9(VerifiedCanonicalKernelIrErrorV9),
+    CanonicalKirV11(VerifiedCanonicalKernelIrErrorV11),
     Correspondence(ProductionCorrespondenceEvidenceErrorV4),
     CorrespondenceV5(ProductionCorrespondenceEvidenceErrorV5),
     FormalMemory(ProductionFormalMemoryEvidenceErrorV4),
@@ -1729,6 +1741,9 @@ impl fmt::Display for ProductionSemanticLineageErrorV3 {
             }
             Self::CanonicalKirV9(error) => {
                 write!(formatter, "production V3 canonical KIR V9 failed: {error}")
+            }
+            Self::CanonicalKirV11(error) => {
+                write!(formatter, "production V3 canonical KIR V11 failed: {error}")
             }
             Self::Correspondence(error) => {
                 write!(
@@ -1804,6 +1819,12 @@ impl From<VerifiedCanonicalKernelIrErrorV8> for ProductionSemanticLineageErrorV3
 impl From<VerifiedCanonicalKernelIrErrorV9> for ProductionSemanticLineageErrorV3 {
     fn from(error: VerifiedCanonicalKernelIrErrorV9) -> Self {
         Self::CanonicalKirV9(error)
+    }
+}
+
+impl From<VerifiedCanonicalKernelIrErrorV11> for ProductionSemanticLineageErrorV3 {
+    fn from(error: VerifiedCanonicalKernelIrErrorV11) -> Self {
+        Self::CanonicalKirV11(error)
     }
 }
 

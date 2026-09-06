@@ -1,0 +1,8 @@
+// RUN: fe2o3-mir-ssa-lit %s
+// EXPECT: REJECT
+// CHECK-ERROR: error SSA input site EdgeDefinition { edge: SsaEdgeIdV1 { source: SsaBlockIdV1(0), ordinal: 0 }, definition: 0 } names variable 1, outside 0..1
+
+entry b0
+variables v0
+block b0
+edge r1 b0 defines v1

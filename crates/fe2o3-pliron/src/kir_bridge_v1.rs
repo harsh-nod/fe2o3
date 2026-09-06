@@ -28,7 +28,7 @@ use dialect_gpu::{
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BinaryOp, BlockId, CastKind, Constant, FunctionId, Module,
     Operation as KirOperation, OperationKind, ScalarType, Terminator, Type, UnaryOp, ValueId,
-    VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV10,
+    VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV10, VerifiedCanonicalKernelIrV11,
 };
 use pliron::{
     attribute::{AttrObj, attr_cast},
@@ -66,6 +66,8 @@ pub const KIR_PLIRON_BRIDGE_IDENTITY_DOMAIN_V1: &[u8] =
 /// Domain separator for V10 endpoint identities, including memory intrinsics.
 pub const KIR_PLIRON_BRIDGE_V10_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/KIR-PLIRON-BRIDGE/CANONICAL-KIR-V10/V1\0";
+pub const KIR_PLIRON_BRIDGE_V11_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/KIR-PLIRON-BRIDGE/CANONICAL-KIR-V11/V1\0";
 
 /// Domain separator for the canonical bridge-correspondence transcript.
 pub const KIR_PLIRON_BRIDGE_CORRESPONDENCE_DOMAIN_V1: &[u8] =
@@ -274,6 +276,7 @@ pub struct KirPlironGraphV1 {
 enum KirBridgeCanonicalVersionV1 {
     V9,
     V10,
+    V11,
 }
 
 #[derive(Clone, Default)]
@@ -415,6 +418,24 @@ impl PlironSession {
         )
     }
 
+    /// Constructs a typed live Pliron graph from verified canonical KIR V11.
+    pub fn import_canonical_kir_v11_o0(
+        &mut self,
+        input: &VerifiedCanonicalKernelIrV11,
+    ) -> Result<KirPlironGraphV1, KirBridgeErrorV1> {
+        input
+            .revalidate()
+            .map_err(|_| KirBridgeErrorV1::CanonicalInputRejected)?;
+        let module = fe2o3_kernel_ir::decode_module_v11(input.canonical_bytes())
+            .map_err(|_| KirBridgeErrorV1::CanonicalInputRejected)?;
+        import_module(
+            self,
+            input.canonical_bytes(),
+            KirBridgeCanonicalVersionV1::V11,
+            module,
+        )
+    }
+
     /// Extracts canonical Kernel IR from a typed live graph and requires an
     /// exact O0 round trip.
     pub fn extract_canonical_kir_v9_o0(
@@ -505,6 +526,49 @@ impl PlironSession {
         };
         Ok((output, receipt))
     }
+
+    /// Extracts KIR V11 from a typed graph and requires an exact O0 replay.
+    pub fn extract_canonical_kir_v11_o0(
+        &mut self,
+        graph: &KirPlironGraphV1,
+    ) -> Result<(VerifiedCanonicalKernelIrV11, KirBridgeRoundTripReportV1), KirBridgeErrorV1> {
+        if graph.canonical_version != KirBridgeCanonicalVersionV1::V11 {
+            return Err(KirBridgeErrorV1::GraphIdentityMismatch);
+        }
+        let output = extract_module(self, graph)?;
+        let output = VerifiedCanonicalKernelIrV11::from_module(output)
+            .map_err(|_| KirBridgeErrorV1::MalformedGraph)?;
+        let output_digest = digest(output.canonical_bytes(), KirBridgeCanonicalVersionV1::V11)?;
+        if output_digest != graph.input {
+            return Err(KirBridgeErrorV1::NonExactRoundTrip);
+        }
+        let report = KirBridgeRoundTripReportV1 {
+            input: graph.input,
+            output: output_digest,
+            correspondence: graph.correspondence.clone(),
+        };
+        Ok((output, report))
+    }
+
+    /// Extracts the current supported live graph into verified canonical V11.
+    pub fn extract_optimized_canonical_kir_v11_v1(
+        &mut self,
+        graph: &KirPlironGraphV1,
+    ) -> Result<(VerifiedCanonicalKernelIrV11, KirBridgeOptimizedReceiptV1), KirBridgeErrorV1> {
+        if graph.canonical_version != KirBridgeCanonicalVersionV1::V11 {
+            return Err(KirBridgeErrorV1::GraphIdentityMismatch);
+        }
+        let (output, correspondence) = extract_optimized_module(self, graph)?;
+        let output = VerifiedCanonicalKernelIrV11::from_module(output)
+            .map_err(|_| KirBridgeErrorV1::MalformedGraph)?;
+        let output_digest = digest(output.canonical_bytes(), KirBridgeCanonicalVersionV1::V11)?;
+        let receipt = KirBridgeOptimizedReceiptV1 {
+            input: graph.input,
+            output: output_digest,
+            correspondence,
+        };
+        Ok((output, receipt))
+    }
 }
 
 fn digest(
@@ -518,6 +582,7 @@ fn digest(
     let domain = match version {
         KirBridgeCanonicalVersionV1::V9 => KIR_PLIRON_BRIDGE_IDENTITY_DOMAIN_V1,
         KirBridgeCanonicalVersionV1::V10 => KIR_PLIRON_BRIDGE_V10_IDENTITY_DOMAIN_V1,
+        KirBridgeCanonicalVersionV1::V11 => KIR_PLIRON_BRIDGE_V11_IDENTITY_DOMAIN_V1,
     };
     hasher.update(
         u32::try_from(domain.len())
@@ -1433,6 +1498,7 @@ const fn compare_to_pliron(predicate: fe2o3_kernel_ir::ComparePredicate) -> Comp
 
 const fn cast_to_pliron(kind: CastKind) -> CastKindAttr {
     match kind {
+        CastKind::RestrictPointerAccess => CastKindAttr::RestrictPointerAccess,
         CastKind::Truncate => CastKindAttr::Truncate,
         CastKind::ZeroExtend => CastKindAttr::ZeroExtend,
         CastKind::SignExtend => CastKindAttr::SignExtend,
@@ -2857,6 +2923,7 @@ const fn compare_from_pliron(predicate: ComparePredicateAttr) -> fe2o3_kernel_ir
 
 const fn cast_from_pliron(kind: CastKindAttr) -> CastKind {
     match kind {
+        CastKindAttr::RestrictPointerAccess => CastKind::RestrictPointerAccess,
         CastKindAttr::Truncate => CastKind::Truncate,
         CastKindAttr::ZeroExtend => CastKind::ZeroExtend,
         CastKindAttr::SignExtend => CastKind::SignExtend,
@@ -2912,6 +2979,44 @@ mod tests {
             vec![entry, exit],
         ));
         module
+    }
+
+    fn pointer_restriction_module() -> Module {
+        let read_write = Type::pointer(Type::F32, AddressSpace::Global, AccessMode::ReadWrite);
+        let read_only = Type::pointer(Type::F32, AddressSpace::Global, AccessMode::ReadOnly);
+        let mut entry = fe2o3_kernel_ir::BasicBlock::new(BlockId(0));
+        entry.operations.push(KirOperation::effect_free(
+            ValueDef::new(ValueId(1), read_only.clone()),
+            OperationKind::Cast {
+                kind: CastKind::RestrictPointerAccess,
+                value: ValueId(0),
+                to: read_only,
+            },
+        ));
+        entry.terminator = Some(Terminator::Return { values: vec![] });
+        let mut module = Module::new("tests::kir_bridge_pointer_restriction_v11");
+        module.functions.push(Function::internal_helper(
+            "restrict",
+            Signature::new(vec![read_write], vec![]),
+            vec![ValueId(0)],
+            vec![entry],
+        ));
+        module
+    }
+
+    #[test]
+    fn pointer_access_restriction_round_trips_through_typed_v11_bridge() {
+        let input = VerifiedCanonicalKernelIrV11::from_module(pointer_restriction_module())
+            .expect("verified V11 input");
+        let mut session = session();
+        let graph = session
+            .import_canonical_kir_v11_o0(&input)
+            .expect("typed V11 import");
+        let (output, report) = session
+            .extract_canonical_kir_v11_o0(&graph)
+            .expect("exact typed V11 extraction");
+        assert_eq!(output.canonical_bytes(), input.canonical_bytes());
+        assert_eq!(report.input(), report.output());
     }
 
     #[test]

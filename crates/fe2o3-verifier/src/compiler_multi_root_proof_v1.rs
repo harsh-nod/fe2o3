@@ -22,7 +22,8 @@ use fe2o3_kernel_ir::{
     FormalMemoryReceiptErrorV1, FunctionBody, FunctionRole,
     InertCanonicalFormalMemoryObligationReceiptV1, MemoryAccess, Module, OperationKind, Terminator,
     VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrErrorV9,
-    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
+    VerifiedCanonicalKernelIrErrorV11, VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
+    VerifiedCanonicalKernelIrV11,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticCheckedBinaryOpV1, SemanticFunctionDeclV1,
@@ -54,6 +55,8 @@ pub enum ValidatedCompilerMultiRootKernelIrV1 {
     V8(VerifiedCanonicalKernelIrV8),
     /// Exact canonical Kernel IR V9.
     V9(VerifiedCanonicalKernelIrV9),
+    /// Exact canonical Kernel IR V11.
+    V11(VerifiedCanonicalKernelIrV11),
 }
 
 impl ValidatedCompilerMultiRootKernelIrV1 {
@@ -62,6 +65,7 @@ impl ValidatedCompilerMultiRootKernelIrV1 {
         match self {
             Self::V8(owner) => owner.canonical_bytes(),
             Self::V9(owner) => owner.canonical_bytes(),
+            Self::V11(owner) => owner.canonical_bytes(),
         }
     }
 
@@ -70,6 +74,7 @@ impl ValidatedCompilerMultiRootKernelIrV1 {
         match self {
             Self::V8(_) => MultiRootCanonicalKirVersionV2::V8,
             Self::V9(_) => MultiRootCanonicalKirVersionV2::V9,
+            Self::V11(_) => MultiRootCanonicalKirVersionV2::V11,
         }
     }
 
@@ -78,6 +83,7 @@ impl ValidatedCompilerMultiRootKernelIrV1 {
         match self {
             Self::V8(owner) => owner.identity().digest(),
             Self::V9(owner) => owner.identity().digest(),
+            Self::V11(owner) => owner.identity().digest(),
         }
     }
 
@@ -86,6 +92,7 @@ impl ValidatedCompilerMultiRootKernelIrV1 {
         match self {
             Self::V8(owner) => owner.identity().canonical_length(),
             Self::V9(owner) => owner.identity().canonical_length(),
+            Self::V11(owner) => owner.identity().canonical_length(),
         }
     }
 }
@@ -367,6 +374,13 @@ pub fn validate_compiler_multi_root_proof_inputs_v1(
             )
             .map_err(CompilerMultiRootProofValidationErrorV1::KernelIrV9)?;
             (ValidatedCompilerMultiRootKernelIrV1::V9(owner), module)
+        }
+        MultiRootCanonicalKirVersionV2::V11 => {
+            let (owner, module) = VerifiedCanonicalKernelIrV11::from_canonical_bytes_with_module(
+                kernel_ir.canonical_preimage().to_vec(),
+            )
+            .map_err(CompilerMultiRootProofValidationErrorV1::KernelIrV11)?;
+            (ValidatedCompilerMultiRootKernelIrV1::V11(owner), module)
         }
     };
     if decoded_kernel_ir.identity_digest() != &neutral_identity.digest()
@@ -1594,6 +1608,7 @@ pub enum CompilerMultiRootProofValidationErrorV1 {
     VerusRoster(MultiRootProofRosterErrorV2),
     KernelIrV8(VerifiedCanonicalKernelIrErrorV8),
     KernelIrV9(VerifiedCanonicalKernelIrErrorV9),
+    KernelIrV11(VerifiedCanonicalKernelIrErrorV11),
     RosterMismatch(&'static str),
     RootMismatch {
         root: usize,
@@ -1649,6 +1664,7 @@ impl fmt::Display for CompilerMultiRootProofValidationErrorV1 {
             Self::VerusRoster(error) => write!(formatter, "Verus roster decode failed: {error}"),
             Self::KernelIrV8(error) => write!(formatter, "Kernel IR V8 decode failed: {error}"),
             Self::KernelIrV9(error) => write!(formatter, "Kernel IR V9 decode failed: {error}"),
+            Self::KernelIrV11(error) => write!(formatter, "Kernel IR V11 decode failed: {error}"),
             Self::RosterMismatch(detail) => {
                 write!(formatter, "multi-root proof roster mismatch: {detail}")
             }
@@ -1690,6 +1706,7 @@ impl Error for CompilerMultiRootProofValidationErrorV1 {
             | Self::VerusRoster(error) => Some(error),
             Self::KernelIrV8(error) => Some(error),
             Self::KernelIrV9(error) => Some(error),
+            Self::KernelIrV11(error) => Some(error),
             Self::MiddleEndPayload { source, .. } => Some(source),
             Self::SemanticInductionAnalysis { source, .. } => Some(source),
             Self::SemanticInductionEvidence { source, .. } => Some(source),

@@ -27,15 +27,16 @@ use crate::batch::ServiceFixedBatchV1;
 
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-addressless-fixed-queue-r21-v1\n",
+    "profile=fe2o3-service-addressless-fixed-queue-r22-v1\n",
     "source.compute_aql_session_sha256=0dc31c8db1e395f0290ac607cbe9610e455238cd5b2ba95a77dfe47494b2a8dc\n",
     "queue=one-live-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-live-rebind,quiescent-rollover-may-confirm-destroy-and-create-one-replacement-queue\n",
     "batch=1-through-8192-fixed-packets,conservative-wait-for-prior-ordering-default-with-explicit-independent-opt-in,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges,optional-initialized-enclosing-host-snapshot-associated-with-one-strict-interior\n",
     "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
     "publication=one-reservation-one-write-counter-fetch-add,one-retained-final-ordering-header-per-packet,one-final-doorbell-per-fixed-batch\n",
+    "completion-wait=legacy-bounded-poll-count-or-monotonic-relative-millisecond-deadline-delegated-to-kfd,success-returns-completed-custody,timeout-or-error-quarantines-retained-queue\n",
     "custody=prepared-published-completed-recycled-unbound-linear-service-types,consuming-poll-with-progress-returns-pending-or-completed-custody-plus-same-scan-redacted-counts-and-first-pending-index,terminal-timeout-failure-borrows-addressless-currentness-enveloped-execution-observation,never-published-prepared-returning-destroy-or-exact-completion-and-signal-recycle-before-detach-rebind-or-published-history-returning-destroy\n",
     "data=read-and-readwrite-require-sealed-full-initialization,write-only-may-consume-uninitialized-exclusive-storage,initialized-state-retained-after-generic-completion-without-stale-content-digest\n",
-    "subleases=whole-native-allocation-owner-retained,partition-registry-transfers-with-ledger,partitioned-bindings-require-member-index-and-contained-offset-extent,detached-initialized-replacement-preflights-and-atomically-installs-an-exact-new-partition,replacement-denies-old-allocation-generation\n",
+    "subleases=whole-native-allocation-owner-retained,partition-registry-transfers-with-ledger,partitioned-bindings-require-member-index-and-contained-offset-extent,recycled-or-detached-partition-reissue-validates-the-current-ledger-without-mutation,detached-initialized-replacement-preflights-and-atomically-installs-an-exact-new-partition,replacement-denies-old-allocation-generation\n",
     "readback=caller-can-mint-only-from-current-recycled-owner,request-binds-exact-dispatch-generation-and-owner-checked-host-allocation-generation,lower-owner-allows-an-ordinary-range-within-one-inspected-write-or-readwrite-binding-or-one-exact-declared-initialized-enclosing-snapshot-with-an-isolated-writable-interior-and-returns-owned-bytes,no-address-or-initialization-promotion\n",
     "rebind=same-native-queue-may-consume-a-different-fixed-cardinality-program-geometry-kernarg-and-addressless-data-binding-after-exact-recycle,unbound-device-partition-insertion-removal-or-replacement-and-host-visible-replacement-advance-private-ledgers-and-reissue-shifted-addressless-ranges,rollover-may-consume-a-new-ring-size-only-after-exact-detach-and-confirmed-old-native-destroy,dispatch-generation-strictly-advances-from-the-detached-predecessor-across-either-route,lower-owner-reclaims-authoritative-model-foundation-after-every-live-allocation-lifecycle-mutation\n",
     "release=return-never-published-prepared-or-exact-recycled-attached-or-exact-ordered-detached-data-custody,destroy-native-queue,restore-service-ledger,reverse-order-unmap-and-free\n",
@@ -47,7 +48,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "c86b9a2362651b399f39c8a05d061ffe42f6e2c4716f109c463db3d26057b6eb";
+    "04f471993a7612e36326c7764a6a7e2e7ad736531b7a880f9e13afd351073e9e";
 
 /// Feature-bound contract for deliberate service queue-transition faults.
 #[cfg(feature = "qualification-fault-injection")]
@@ -409,16 +410,41 @@ impl<const N: usize> ServicePublishedQueueSessionV1<N> {
 
     /// Waits for every exact completion signal with the supplied bounded poll count.
     pub fn wait(
-        mut self,
+        self,
         polls: u32,
     ) -> Result<ServiceCompletedQueueSessionV1<N>, ServiceQueueOperationFailureV1> {
-        match self.owner.queue.wait_fixed_dispatch(self.batch, polls) {
-            Ok(completed) => Ok(ServiceCompletedQueueSessionV1 {
-                owner: self.owner,
-                completed,
-            }),
-            Err(error) => Err(quarantine(self.owner, error)),
+        let Self { mut owner, batch } = self;
+        let result = owner.queue.wait_fixed_dispatch(batch, polls);
+        match route_published_wait_custody(result, owner) {
+            Ok((owner, completed)) => Ok(ServiceCompletedQueueSessionV1 { owner, completed }),
+            Err((owner, error)) => Err(quarantine(owner, error)),
         }
+    }
+
+    /// Waits for every exact completion signal until KFD's monotonic relative
+    /// deadline for the supplied timeout in milliseconds.
+    ///
+    /// A timeout or any other terminal wait failure quarantines the retained
+    /// queue owner exactly as [`Self::wait`] does.
+    pub fn wait_for(
+        self,
+        timeout_milliseconds: u32,
+    ) -> Result<ServiceCompletedQueueSessionV1<N>, ServiceQueueOperationFailureV1> {
+        let Self { mut owner, batch } = self;
+        let result = owner
+            .queue
+            .wait_fixed_dispatch_for(batch, timeout_milliseconds);
+        match route_published_wait_custody(result, owner) {
+            Ok((owner, completed)) => Ok(ServiceCompletedQueueSessionV1 { owner, completed }),
+            Err((owner, error)) => Err(quarantine(owner, error)),
+        }
+    }
+}
+
+fn route_published_wait_custody<O, T, E>(result: Result<T, E>, owner: O) -> Result<(O, T), (O, E)> {
+    match result {
+        Ok(completed) => Ok((owner, completed)),
+        Err(error) => Err((owner, error)),
     }
 }
 
@@ -717,6 +743,26 @@ impl<const N: usize> ServiceRecycledQueueSessionV1<N> {
     /// Returns the exact lower-layer recycle observation.
     pub const fn recycle_observation(&self) -> Gfx942CompletionRecycleObservationV1 {
         self.recycle
+    }
+
+    /// Reissues the exact addressless ranges for a retained device-local
+    /// partition before detaching the recycled queue.
+    ///
+    /// This read-only operation validates the move-only partition witness
+    /// against the same private allocation ledger retained after detach. It
+    /// preserves queue custody, dispatch generation, completed-read state, and
+    /// native allocation ownership. Only current addressless member ranges are
+    /// returned; no raw address or allocation-mutation authority is exposed.
+    pub fn reissue_partitioned_device_local<R, const M: usize>(
+        &self,
+        subleases: &ServiceAllocationSubleaseSetV1<R, DeviceLocalAllocationV1, M>,
+    ) -> Result<[ServiceDeviceDispatchRangeV1; M], ServiceAllocationErrorV1>
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        self.owner
+            .ledger
+            .reissue_partitioned_device_local(subleases)
     }
 
     /// Consumes recycled custody into a qualification-only terminal fault state.
@@ -2167,6 +2213,38 @@ mod tests {
     }
 
     #[test]
+    fn published_wait_custody_routes_success_and_failure_without_owner_loss() {
+        let success = route_published_wait_custody::<_, _, u32>(Ok(17_u32), 41_u32).unwrap();
+        assert_eq!(success, (41, 17));
+
+        let failure = route_published_wait_custody::<_, u32, _>(Err(23_u32), 43_u32).unwrap_err();
+        assert_eq!(failure, (43, 23));
+    }
+
+    #[test]
+    fn bounded_wait_delegates_to_kfd_and_routes_failure_to_quarantine() {
+        let method: fn(
+            ServicePublishedQueueSessionV1<1>,
+            u32,
+        ) -> Result<
+            ServiceCompletedQueueSessionV1<1>,
+            ServiceQueueOperationFailureV1,
+        > = ServicePublishedQueueSessionV1::<1>::wait_for;
+        let _ = method;
+
+        let source = include_str!("queue.rs");
+        let wait_for = source
+            .split_once("    pub fn wait_for(\n")
+            .expect("bounded wait method remains present")
+            .1
+            .split_once("\n    }\n}\n\nfn route_published_wait_custody")
+            .expect("bounded wait method remains custody-routed")
+            .0;
+        assert!(wait_for.contains(".wait_fixed_dispatch_for(batch, timeout_milliseconds)"));
+        assert!(wait_for.contains("Err((owner, error)) => Err(quarantine(owner, error))"));
+    }
+
+    #[test]
     fn queue_manifest_hash_is_frozen() {
         assert!(
             SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1.contains(&alloc::format!(
@@ -2179,6 +2257,25 @@ mod tests {
             write!(&mut actual, "{byte:02x}").unwrap();
         }
         assert_eq!(actual, SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1);
+    }
+
+    #[test]
+    fn recycled_partition_reissue_has_an_independent_borrowed_member_count() {
+        type Subleases = ServiceAllocationSubleaseSetV1<
+            crate::DeviceWorkspaceRoleV1,
+            DeviceLocalAllocationV1,
+            2,
+        >;
+        let method: fn(
+            &ServiceRecycledQueueSessionV1<3>,
+            &Subleases,
+        )
+            -> Result<[ServiceDeviceDispatchRangeV1; 2], ServiceAllocationErrorV1> =
+            ServiceRecycledQueueSessionV1::<3>::reissue_partitioned_device_local::<
+                crate::DeviceWorkspaceRoleV1,
+                2,
+            >;
+        let _ = method;
     }
 
     #[cfg(feature = "qualification-fault-injection")]

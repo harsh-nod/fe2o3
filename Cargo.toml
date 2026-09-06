@@ -178,3 +178,6 @@ strip = "debuginfo"
 
 [profile.test.package.cargo-fe2o3]
 strip = "debuginfo"
+
+[profile.test.package.fe2o3-debug-cli]
+strip = "debuginfo"

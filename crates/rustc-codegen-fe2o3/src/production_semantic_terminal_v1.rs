@@ -34,6 +34,7 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     ThreadIndexCheckedTiled2d,
     ThreadIndexCheckedRowStriped2d,
     DisjointIndexGet,
+    DisjointBlockComponentIndex,
     DisjointIndexCheckedShift,
     DisjointSliceLen,
     DisjointSliceGetMut,
@@ -52,6 +53,7 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     WriteOnlyDisjointSliceWriteRowStriped2d,
     StridedReadView2DFromSharedSlice,
     StridedReadView2DLoadOr,
+    WorkgroupLdsScopeCurrent,
     DynamicLdsExactCurrent,
     DynamicLdsIntoCollectiveRawParts,
     WorkgroupPipelineCurrent,
@@ -129,8 +131,7 @@ pub(crate) enum ProductionSemanticTerminalRuleV1 {
 pub(crate) const fn is_traversed_reviewed_helper_v1(item: TrustedDeviceItem) -> bool {
     matches!(
         item,
-        TrustedDeviceItem::WorkgroupLdsScopeCurrent
-            | TrustedDeviceItem::Invocation3DCurrent
+        TrustedDeviceItem::Invocation3DCurrent
             | TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic
             | TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic
             | TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic
@@ -201,6 +202,9 @@ impl ProductionSemanticTerminalRuleV1 {
             TrustedDeviceItem::DisjointIndexGet => {
                 Self::Expand(ProductionTerminalExpansionV1::DisjointIndexGet)
             }
+            TrustedDeviceItem::DisjointBlockComponentIndex => {
+                Self::Expand(ProductionTerminalExpansionV1::DisjointBlockComponentIndex)
+            }
             TrustedDeviceItem::DisjointIndexCheckedShift => {
                 Self::Expand(ProductionTerminalExpansionV1::DisjointIndexCheckedShift)
             }
@@ -254,6 +258,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::StridedReadView2DLoadOr => {
                 Self::Expand(ProductionTerminalExpansionV1::StridedReadView2DLoadOr)
+            }
+            TrustedDeviceItem::WorkgroupLdsScopeCurrent => {
+                Self::Expand(ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent)
             }
             TrustedDeviceItem::DynamicLdsExactCurrent => {
                 Self::Expand(ProductionTerminalExpansionV1::DynamicLdsExactCurrent)
@@ -519,6 +526,9 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::DisjointIndexGet) => {
                 TrustedDeviceItem::DisjointIndexGet
             }
+            Self::Expand(ProductionTerminalExpansionV1::DisjointBlockComponentIndex) => {
+                TrustedDeviceItem::DisjointBlockComponentIndex
+            }
             Self::Expand(ProductionTerminalExpansionV1::DisjointIndexCheckedShift) => {
                 TrustedDeviceItem::DisjointIndexCheckedShift
             }
@@ -572,6 +582,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::StridedReadView2DLoadOr) => {
                 TrustedDeviceItem::StridedReadView2DLoadOr
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent) => {
+                TrustedDeviceItem::WorkgroupLdsScopeCurrent
             }
             Self::Expand(ProductionTerminalExpansionV1::DynamicLdsExactCurrent) => {
                 TrustedDeviceItem::DynamicLdsExactCurrent
@@ -867,6 +880,10 @@ mod tests {
                 ProductionTerminalExpansionV1::DisjointIndexGet,
             ),
             (
+                TrustedDeviceItem::DisjointBlockComponentIndex,
+                ProductionTerminalExpansionV1::DisjointBlockComponentIndex,
+            ),
+            (
                 TrustedDeviceItem::DisjointIndexCheckedShift,
                 ProductionTerminalExpansionV1::DisjointIndexCheckedShift,
             ),
@@ -1080,6 +1097,10 @@ mod tests {
                 TrustedDeviceItem::MemoryVolatileLoad,
                 ProductionTerminalExpansionV1::MemoryVolatileLoad,
             ),
+            (
+                TrustedDeviceItem::WorkgroupLdsScopeCurrent,
+                ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent,
+            ),
         ];
         for (item, expansion) in cases {
             let rule = ProductionSemanticTerminalRuleV1::from_trusted_device_item(item);
@@ -1110,7 +1131,6 @@ mod tests {
     #[test]
     fn reviewed_rust_helpers_are_traversed_instead_of_hidden_by_a_terminal() {
         for item in [
-            TrustedDeviceItem::WorkgroupLdsScopeCurrent,
             TrustedDeviceItem::Invocation3DCurrent,
             TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic,

@@ -24,9 +24,17 @@
     fn blocked_launch_bound_checks_the_last_thread_and_component_without_wrapping() {
         assert!(blocked_mapping_fits_launch_v1(Some(64), 16, 4));
         assert!(!blocked_mapping_fits_launch_v1(None, 16, 4));
+        assert!(!blocked_mapping_fits_launch_v1(None, 1, 2));
         assert!(!blocked_mapping_fits_launch_v1(Some(64), 0, 4));
         assert!(!blocked_mapping_fits_launch_v1(Some(64), 16, 0));
         assert!(!blocked_mapping_fits_launch_v1(Some(64), u64::MAX, 2));
+        assert!(blocked_mapping_fits_launch_v1(Some(64), 1, 2));
+        assert!(blocked_mapping_fits_launch_v1(Some(1_u64 << 63), 1, 2));
+        assert!(!blocked_mapping_fits_launch_v1(
+            Some((1_u64 << 63) + 1),
+            1,
+            2,
+        ));
         assert!(blocked_mapping_fits_launch_v1(Some(1_u64 << 62), 16, 4));
         assert!(!blocked_mapping_fits_launch_v1(
             Some((1_u64 << 62) + 1),
@@ -60,7 +68,7 @@
             .next()
             .expect("ranked roster receipt fields");
         for retained in [
-            "semantic_owner: ProductionSemanticMirOwnerV1",
+            "semantic_ssa_owner: ProductionSemanticSsaOwnerV1",
             "source_order_roots: Box<[ProductionRankedVerifiedRootCandidateV1]>",
             "canonical_kernel_order: Box<[usize]>",
             "canonical_roster_identity: ProductionRankedKernelRosterIdentityV1",
@@ -98,7 +106,7 @@
             .next()
             .expect("bounded complete module transition");
         assert!(module.contains("for root in source_order_roots.into_vec()"));
-        assert!(module.contains("from_unvalidated_projection_roster_candidate"));
+        assert!(module.contains("from_unvalidated_ssa_projection_roster_candidate"));
         assert!(module.contains("AuthenticatedRankedVerificationRosterV1"));
         assert!(!module.contains("into_singleton_verified_receipt"));
         assert!(!module.contains("try_lower_after_ranked_checks"));
@@ -840,6 +848,11 @@
         let owner = ProductionSemanticMirOwnerV1::try_new(
             admitted,
             fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+        )
+        .unwrap();
+        let owner = ProductionSemanticSsaOwnerV1::try_new(
+            owner,
+            fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
         )
         .unwrap();
         project_and_verify_ranked_semantic_mir_v1(

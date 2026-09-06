@@ -6408,6 +6408,20 @@ fn execute_operation(
             )))
         }
         OperationKind::Cast { kind, value, to } => {
+            if *kind == CastKind::RestrictPointerAccess {
+                let RuntimeValue::Pointer(mut pointer) =
+                    runtime_value(engine, values, *value, &site)?.clone()
+                else {
+                    return Err(engine.at(
+                        site,
+                        SimulationExecutionErrorKindV1::InternalInvariant(
+                            "preflighted pointer access restriction",
+                        ),
+                    ));
+                };
+                pointer.access = AccessMode::ReadOnly;
+                return one(RuntimeValue::Pointer(pointer));
+            }
             let value = scalar_value(engine, values, *value, &site)?;
             let Type::Scalar(to) = to else {
                 return Err(engine.at(
@@ -8412,6 +8426,9 @@ fn execute_cast(
                 "preflighted cast target",
             ))?;
     let bits = match kind {
+        CastKind::RestrictPointerAccess => {
+            unreachable!("pointer access restriction is not a scalar cast")
+        }
         CastKind::Truncate => value.bits() & mask(to_width),
         CastKind::ZeroExtend | CastKind::Bitcast => value.bits(),
         CastKind::SignExtend => signed_value(value, target)? as u128 & mask(to_width),
@@ -8421,6 +8438,7 @@ fn execute_cast(
         | CastKind::FloatToInteger => unreachable!("handled software-float cast"),
     };
     let structurally_valid = match kind {
+        CastKind::RestrictPointerAccess => false,
         CastKind::Truncate => to_width < from_width,
         CastKind::ZeroExtend | CastKind::SignExtend => to_width > from_width,
         CastKind::Bitcast => to_width == from_width,

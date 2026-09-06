@@ -181,13 +181,13 @@ fn promotes_loop_carried_values_through_explicit_backedge_arguments() {
     let (output, report) = promote_module_to_ssa(&input).unwrap();
     output.validate().unwrap();
 
-    assert_eq!(report.promoted_local_count(), 3);
+    assert_eq!(report.promoted_local_count(), 4);
     assert_eq!(
         report.functions[0].promoted_locals,
-        vec![MirLocalId(1), MirLocalId(2), MirLocalId(3),]
+        vec![MirLocalId(1), MirLocalId(2), MirLocalId(3), MirLocalId(4),]
     );
     assert_eq!(report.inserted_parameter_count(), 3);
-    assert_eq!(report.inserted_definition_count(), 4);
+    assert_eq!(report.inserted_definition_count(), 5);
 
     let body = &output.functions[0].body;
     assert!(matches!(body.form, MirBodyForm::Ssa { .. }));
@@ -213,7 +213,7 @@ fn promotes_loop_carried_values_through_explicit_backedge_arguments() {
     };
     assert_eq!(
         backedge.arguments.iter().map(value).collect::<Vec<_>>(),
-        vec![MirValueId(6), MirValueId(5)]
+        vec![MirValueId(7), MirValueId(6)]
     );
     assert_eq!(
         body.blocks[1]
@@ -229,7 +229,7 @@ fn promotes_loop_carried_values_through_explicit_backedge_arguments() {
 }
 
 #[test]
-fn leaves_storage_marked_and_not_entry_initialized_locals_as_slots() {
+fn leaves_storage_marked_locals_as_slots_but_promotes_late_definitions() {
     let mut storage_marked = loop_module();
     storage_marked.functions[0].body.blocks[0]
         .statements
@@ -244,7 +244,7 @@ fn leaves_storage_marked_and_not_entry_initialized_locals_as_slots() {
     let (_, report) = promote_module_to_ssa(&storage_marked).unwrap();
     assert_eq!(
         report.functions[0].promoted_locals,
-        vec![MirLocalId(1), MirLocalId(3)]
+        vec![MirLocalId(1), MirLocalId(3), MirLocalId(4)]
     );
 
     let mut late_initialized = loop_module();
@@ -259,9 +259,9 @@ fn leaves_storage_marked_and_not_entry_initialized_locals_as_slots() {
     let (output, report) = promote_module_to_ssa(&late_initialized).unwrap();
     assert_eq!(
         report.functions[0].promoted_locals,
-        vec![MirLocalId(1), MirLocalId(3)]
+        vec![MirLocalId(1), MirLocalId(2), MirLocalId(3), MirLocalId(4),]
     );
-    assert!(output.functions[0].body.blocks.iter().any(|block| {
+    assert!(!output.functions[0].body.blocks.iter().any(|block| {
         block.statements.iter().any(|statement| {
             matches!(
                 &statement.kind,
@@ -343,7 +343,7 @@ fn leaves_call_defined_locals_as_slots() {
     let (output, report) = promote_module_to_ssa(&input).unwrap();
     assert_eq!(
         report.functions[0].promoted_locals,
-        vec![MirLocalId(1), MirLocalId(3)]
+        vec![MirLocalId(1), MirLocalId(3), MirLocalId(4)]
     );
     let MirTerminatorKind::Call(call) = &output.functions[0].body.blocks[0].terminator.kind else {
         unreachable!();

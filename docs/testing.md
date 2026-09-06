@@ -36,6 +36,68 @@ This lane does not require ROCm or a GPU:
 scripts/ci-local.sh generic
 ```
 
+The target-independent generic SSA planner has a focused executable lit-style
+corpus:
+
+```text
+cargo test --locked -p fe2o3-mir-model --test ssa_lit
+```
+
+The sorted, size-bounded `.mir` fixtures under
+`crates/fe2o3-mir-model/tests/ssa-lit/` use a compact CFG/event language. The
+Rust harness parses and enforces one `RUN` and `EXPECT` directive per file,
+ordered `CHECK` assertions, global `CHECK-NOT` exclusions, and exact rejection
+text through `CHECK-ERROR`. This is an in-repository lit-style runner, not a
+claim that `llvm-lit` or LLVM `FileCheck` executes the fixtures.
+
+Successful fixtures require exact planner replay and equality with a second
+construction. The 49-file corpus covers live and dead diamond merges, loop
+preheaders, two-latch and nested loops, multiway branches, duplicate and
+critical edges, irreducible control flow, unreachable pruning, edge-local
+normal/unwind definitions, partial initialization, undefined uses and
+transports, canonical identity, input limits, and the retained-memory promotion
+boundary. Focused Rust tests additionally exercise sparse storage for
+nonpromotable events, a 65,536-variable by 2,048-block CFG with zero or one
+promotable local, a 12,000-block linear dominance-frontier case, a 4,096 by
+4,096 sparse-IDF case, and 63/64/65-variable bit-word boundaries across merges,
+kills, and edge definitions. The
+two-dimensional stress case would exceed the planner storage limit if block
+bitsets were still indexed by every semantic variable; it checks that the
+incremental block-domain storage follows the promoted-variable count instead.
+Semantic adapter tests also enforce exact inclusive storage/work boundaries
+and one-unit-below fail-closed behavior for the combined planner, adapter, and
+certificate accounting.
+
+The production adapter and KIR replay have focused no-GPU coverage:
+
+```text
+cargo test --locked -p fe2o3-pliron production::semantic_ssa::tests
+cargo test --locked -p fe2o3-lower-mir-kernel entry_seeds_only_the_certified_implicit_workgroup_lds_scope
+```
+
+The semantic suite covers disjoint partial moves, exact field
+reinitialization, maybe-moved joins and loops, rejected parent/child and union
+access, exact single-consumer transparent borrows, borrow escape and multi-use,
+and authenticated implicit `WorkgroupLdsScope` entry values. The lowerer suite
+checks that KIR seeds only the certified ambient value. Compiler-side kernel
+matrices then exercise the same plan and block-argument transport, including
+typed component witnesses, through real rustc extraction.
+
+The ignored, toolchain-qualified
+`ordinary_rust_nested_control_flow_executes_after_production_ssa_lowering`
+integration test compiles a kernel containing nested loops, loop-carried
+mutable locals, and a multiway `match` through rustc and the production
+SSA/KIR path. It then admits the compiler-produced Bundle V6 with exact KIR
+V11 custody and checks simulated output for zero, odd, and even trip counts
+across all 64 lanes. Bundle V5/KIR V10 remains a frozen compatibility path for
+older artifacts.
+
+These are structural SSA and executable validation tests. They do not prove
+semantic refinement, promote observable storage, formally verify the compiler,
+or assert that the frontend accepts all Rust MIR. The planner is general over
+the semantic CFG model; unsupported Rust types, operations, storage forms, and
+GPU semantics continue to fail closed.
+
 Kernel authors use `#[kernel(typed)]` without an explicit namespace. The same
 compiler-derived binding is available to every supported developer command:
 
@@ -58,6 +120,7 @@ cargo test --locked -p fe2o3-virtual-runtime -p fe2o3-virtual-runtime-cli
 cargo test --locked -p fe2o3-sim-runtime
 cargo test --locked -p fe2o3-sim-differential
 cargo test --locked -p fe2o3-kernel-ir simulation_bundle_v3
+cargo test --locked -p fe2o3-kernel-ir simulation_bundle_v6
 cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions -- --ignored --exact
 cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed -- --ignored --exact
 cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_recursive_aggregates_export_and_execute_bundle_v5 -- --ignored --exact

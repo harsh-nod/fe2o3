@@ -4,6 +4,8 @@ use std::fs::File;
 use std::io::{self, IoSliceMut, Write};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use fe2o3_worker_v3_verification_protocol::{
@@ -24,6 +26,7 @@ use sha2::{Digest, Sha256};
 
 const PAYLOAD_COPY_CHUNK_BYTES_V1: usize = 64 * 1024;
 const TMPFS_MAGIC_V1: u64 = 0x0102_1994;
+const LINUX_MAX_CANONICAL_FILESYSTEM_SOCKET_PATH_BYTES: usize = 107;
 const TRANSCRIPT_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V3/VERIFICATION-SERVICE-TRANSCRIPT/V1\0";
 const REQUIRED_IMMUTABLE_SEALS_V1: SealFlags = SealFlags::WRITE
     .union(SealFlags::GROW)
@@ -551,6 +554,37 @@ fn make_response(
 pub(crate) fn validate_control(
     control: &OwnedFd,
 ) -> Result<(), WorkerV3VerificationServiceErrorV1> {
+    validate_common_control(control)?;
+    let local = rustix::net::getsockname(control)
+        .map_err(|source| io_error("inspect control local address", source.into()))?;
+    let remote = rustix::net::getpeername(control)
+        .map_err(|source| io_error("inspect control remote address", source.into()))?;
+    if !is_unnamed_unix_address(&local) || !remote.as_ref().is_some_and(is_unnamed_unix_address) {
+        return Err(WorkerV3VerificationServiceErrorV1::InvalidControl(
+            "control is not an unnamed connected Unix socket pair",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_accepted_control(
+    control: &OwnedFd,
+    expected_service_address: &SocketAddrAny,
+) -> Result<(), WorkerV3VerificationServiceErrorV1> {
+    validate_common_control(control)?;
+    let local = rustix::net::getsockname(control)
+        .map_err(|source| io_error("inspect accepted control local address", source.into()))?;
+    let remote = rustix::net::getpeername(control)
+        .map_err(|source| io_error("inspect accepted control remote address", source.into()))?;
+    if local != *expected_service_address || !remote.as_ref().is_some_and(is_unnamed_unix_address) {
+        return Err(WorkerV3VerificationServiceErrorV1::InvalidControl(
+            "control is not the expected canonical filesystem-path service endpoint connected to an unnamed client",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_common_control(control: &OwnedFd) -> Result<(), WorkerV3VerificationServiceErrorV1> {
     let descriptor_flags = rustix::io::fcntl_getfd(control)
         .map_err(|source| io_error("inspect control descriptor flags", source.into()))?;
     let status = rustix::fs::fcntl_getfl(control)
@@ -574,17 +608,30 @@ pub(crate) fn validate_control(
             "control is not a connected Unix SOCK_SEQPACKET endpoint",
         ));
     }
-    let unnamed = SocketAddrAny::from(SocketAddrUnix::new_unnamed());
-    let local = rustix::net::getsockname(control)
-        .map_err(|source| io_error("inspect control local address", source.into()))?;
-    let remote = rustix::net::getpeername(control)
-        .map_err(|source| io_error("inspect control remote address", source.into()))?;
-    if local != unnamed || remote.as_ref() != Some(&unnamed) {
-        return Err(WorkerV3VerificationServiceErrorV1::InvalidControl(
-            "control is not an unnamed connected Unix socket pair",
-        ));
-    }
     Ok(())
+}
+
+fn is_unnamed_unix_address(address: &SocketAddrAny) -> bool {
+    *address == SocketAddrAny::from(SocketAddrUnix::new_unnamed())
+}
+
+pub(crate) fn canonical_filesystem_unix_address(path: &Path) -> Option<SocketAddrAny> {
+    let path_bytes = path.as_os_str().as_bytes();
+    if path_bytes.is_empty()
+        || path_bytes.len() > LINUX_MAX_CANONICAL_FILESYSTEM_SOCKET_PATH_BYTES
+        || path_bytes.first() != Some(&b'/')
+        || path_bytes.last() == Some(&b'/')
+    {
+        return None;
+    }
+    let mut components = path_bytes.split(|byte| *byte == b'/');
+    if components.next() != Some(&[][..])
+        || !components
+            .all(|component| !component.is_empty() && component != b"." && component != b"..")
+    {
+        return None;
+    }
+    SocketAddrUnix::new(path).ok().map(SocketAddrAny::from)
 }
 
 pub(crate) fn caller_identity(
@@ -1100,5 +1147,38 @@ impl Error for WorkerV3VerificationServiceErrorV1 {
             Self::Io { source, .. } => Some(source),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepted_path_validator_rejects_empty_relative_noncanonical_and_overlong_names() {
+        assert!(
+            canonical_filesystem_unix_address(Path::new("/run/fe2o3/worker-v3-verifier.sock"))
+                .is_some()
+        );
+
+        for path in [
+            "",
+            "relative.sock",
+            "/run//verifier.sock",
+            "/run/./verifier.sock",
+            "/run/../verifier.sock",
+            "/run/verifier.sock/",
+        ] {
+            assert!(
+                canonical_filesystem_unix_address(Path::new(path)).is_none(),
+                "{path}"
+            );
+        }
+
+        let overlong = format!("/{}", "x".repeat(107));
+        assert!(canonical_filesystem_unix_address(Path::new(&overlong)).is_none());
+
+        let nul = Path::new(std::ffi::OsStr::from_bytes(b"/run/fe2o3/\0verifier.sock"));
+        assert!(canonical_filesystem_unix_address(nul).is_none());
     }
 }

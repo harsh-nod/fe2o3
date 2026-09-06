@@ -106,6 +106,7 @@ pub enum ComparePredicateAttr {
 #[pliron_attr(name = "gpu.cast_kind", format, verifier = "succ")]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum CastKindAttr {
+    RestrictPointerAccess,
     Truncate,
     ZeroExtend,
     SignExtend,
@@ -412,6 +413,7 @@ fn valid_scalar_cast_v1(
         return false;
     };
     match kind {
+        CastKindAttr::RestrictPointerAccess => false,
         CastKindAttr::Truncate => from.is_integer() && to.is_integer() && from_width > to_width,
         CastKindAttr::ZeroExtend => {
             (from == ScalarCastTypeV1::Bool || (from.is_integer() && !from.is_signed_integer()))
@@ -780,7 +782,23 @@ impl Verify for CastOp {
         };
         let from = self.get_operand_value(ctx).get_type(ctx);
         let to = self.result(ctx).get_type(ctx);
-        if valid_scalar_cast_v1(ctx, kind, from, to) {
+        let valid_pointer_restriction = if kind == CastKindAttr::RestrictPointerAccess {
+            match (
+                from.deref(ctx).downcast_ref::<PointerType>(),
+                to.deref(ctx).downcast_ref::<PointerType>(),
+            ) {
+                (Some(from), Some(to)) => {
+                    from.pointee() == to.pointee()
+                        && from.address_space() == to.address_space()
+                        && from.access() == AccessModeAttr::ReadWrite
+                        && to.access() == AccessModeAttr::ReadOnly
+                }
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if valid_pointer_restriction || valid_scalar_cast_v1(ctx, kind, from, to) {
             Ok(())
         } else {
             verify_err!(
@@ -1705,7 +1723,8 @@ impl SideEffects for CastOp {
         self.kind(ctx).is_none_or(|kind| {
             !matches!(
                 kind,
-                CastKindAttr::Truncate
+                CastKindAttr::RestrictPointerAccess
+                    | CastKindAttr::Truncate
                     | CastKindAttr::ZeroExtend
                     | CastKindAttr::SignExtend
                     | CastKindAttr::Bitcast
@@ -1933,6 +1952,7 @@ impl ConstFoldInterface for CastOp {
             CastKindAttr::Truncate | CastKindAttr::ZeroExtend | CastKindAttr::Bitcast => {
                 operand.value().zext(width)
             }
+            CastKindAttr::RestrictPointerAccess => return vec![None],
             _ => return vec![None],
         };
         let target_type =

@@ -45,6 +45,8 @@ pub const KERNEL_IR_VERSION_V8: u16 = 8;
 pub const KERNEL_IR_VERSION_V9: u16 = 9;
 /// Kernel IR V10 adds exact typed semantic memory-intrinsic operations.
 pub const KERNEL_IR_VERSION_V10: u16 = 10;
+/// Kernel IR V11 adds one-way pointer access restriction casts.
+pub const KERNEL_IR_VERSION_V11: u16 = 11;
 /// Domain separator for identities derived from canonical Kernel IR V5 bytes.
 pub const KERNEL_IR_DOMAIN_V5: &[u8] = b"FE2O3/KERNEL-IR/V5\0";
 /// Domain separator for identities derived from canonical Kernel IR V6 bytes.
@@ -57,6 +59,8 @@ pub const KERNEL_IR_DOMAIN_V8: &[u8] = b"FE2O3/KERNEL-IR/V8\0";
 pub const KERNEL_IR_DOMAIN_V9: &[u8] = b"FE2O3/KERNEL-IR/V9\0";
 /// Domain separator for identities derived from canonical Kernel IR V10 bytes.
 pub const KERNEL_IR_DOMAIN_V10: &[u8] = b"FE2O3/KERNEL-IR/V10\0";
+/// Domain separator for identities derived from canonical Kernel IR V11 bytes.
+pub const KERNEL_IR_DOMAIN_V11: &[u8] = b"FE2O3/KERNEL-IR/V11\0";
 /// Maximum size of one encoded kernel IR module.
 pub const MAX_MODULE_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Maximum UTF-8 byte length of any identifier or extension component.
@@ -284,6 +288,11 @@ pub fn encode_module_v10(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError
     encode_module(module, KERNEL_IR_VERSION_V10)
 }
 
+/// Encodes a module in the bounded canonical kernel IR V11 wire format.
+pub fn encode_module_v11(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V11)
+}
+
 fn encode_module(module: &Module, version: u16) -> Result<Vec<u8>, KernelIrEncodeError> {
     let mut writer = Writer::new(version);
     writer.bytes(&KERNEL_IR_MAGIC_V1)?;
@@ -368,6 +377,11 @@ pub fn decode_module_v9(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
 /// Decodes canonical V1 through V10 bytes using the latest bounded reader.
 pub fn decode_module_v10(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
     decode_module(bytes, KERNEL_IR_VERSION_V10, true)
+}
+
+/// Decodes canonical V1 through V11 bytes using the latest bounded reader.
+pub fn decode_module_v11(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V11, true)
 }
 
 fn decode_module(
@@ -733,6 +747,9 @@ fn encode_operation_kind(
             writer.u32(rhs.0)?;
         }
         OperationKind::Cast { kind, value, to } => {
+            if *kind == CastKind::RestrictPointerAccess {
+                require_v11(writer, "pointer access restriction cast")?;
+            }
             writer.u8(6)?;
             writer.u8(cast_kind_tag(*kind))?;
             writer.u32(value.0)?;
@@ -887,11 +904,22 @@ fn decode_operation_kind(reader: &mut Reader<'_>) -> Result<OperationKind, Kerne
             lhs: ValueId(reader.u32()?),
             rhs: ValueId(reader.u32()?),
         },
-        6 => OperationKind::Cast {
-            kind: decode_cast_kind(reader.u8()?)?,
-            value: ValueId(reader.u32()?),
-            to: decode_type(reader, 0)?,
-        },
+        6 => {
+            let kind_tag = reader.u8()?;
+            if kind_tag == cast_kind_tag(CastKind::RestrictPointerAccess)
+                && reader.version < KERNEL_IR_VERSION_V11
+            {
+                return Err(KernelIrDecodeError::UnknownTag {
+                    kind: "cast kind",
+                    tag: kind_tag,
+                });
+            }
+            OperationKind::Cast {
+                kind: decode_cast_kind(kind_tag)?,
+                value: ValueId(reader.u32()?),
+                to: decode_type(reader, 0)?,
+            }
+        }
         7 => OperationKind::Select {
             condition: ValueId(reader.u32()?),
             true_value: ValueId(reader.u32()?),
@@ -2903,6 +2931,7 @@ enum_codec!(compare_predicate_tag, decode_compare_predicate, ComparePredicate, "
     ComparePredicate::GreaterThanOrEqual => 6,
 });
 enum_codec!(cast_kind_tag, decode_cast_kind, CastKind, "cast kind", {
+    CastKind::RestrictPointerAccess => 9,
     CastKind::Truncate => 1,
     CastKind::ZeroExtend => 2,
     CastKind::SignExtend => 3,
@@ -3066,6 +3095,17 @@ fn require_v9(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnco
 
 fn require_v10(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V10 {
+        Ok(())
+    } else {
+        Err(KernelIrEncodeError::UnsupportedInVersion {
+            version: writer.version,
+            feature,
+        })
+    }
+}
+
+fn require_v11(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+    if writer.version >= KERNEL_IR_VERSION_V11 {
         Ok(())
     } else {
         Err(KernelIrEncodeError::UnsupportedInVersion {

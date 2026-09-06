@@ -1630,6 +1630,11 @@ pub enum ComparePredicate {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum CastKind {
+    /// Restrict a read-write pointer to an otherwise identical read-only pointer.
+    ///
+    /// This is a one-way capability restriction. It cannot change the pointee or
+    /// address space and cannot widen read-only access back to read-write.
+    RestrictPointerAccess,
     /// Discard high bits from an integer value into a strictly narrower integer type.
     Truncate,
     /// Widen `Bool` or an unsigned integer by filling high bits with zero.

@@ -21,11 +21,12 @@ use fe2o3_kernel_ir::{
     OperationKind, ScalarType, Signature, SwitchCase, SynchronizationScope, TensorLayoutContractV1,
     Terminator, Type, UnaryOp, ValueDef, ValueId, VerificationErrors,
     VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrErrorV9,
-    VerifiedCanonicalKernelIrIdentityV8, VerifiedCanonicalKernelIrIdentityV9,
-    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9, WaveF32ReductionKindV1,
-    WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemory,
-    WorkgroupMemoryExtent, WorkgroupSize, analyze_interprocedural_effects_v1, plan_integer_cast_v1,
-    verify_module,
+    VerifiedCanonicalKernelIrErrorV11, VerifiedCanonicalKernelIrIdentityV8,
+    VerifiedCanonicalKernelIrIdentityV9, VerifiedCanonicalKernelIrIdentityV11,
+    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV11,
+    WaveF32ReductionKindV1, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
+    WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize, analyze_interprocedural_effects_v1,
+    plan_integer_cast_v1, verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticAbiArgumentRoleV1, SemanticAbiExtensionV1,
@@ -33,8 +34,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAbiRegisterKindV1, SemanticAggregateKindV1, SemanticAssertMessageV1,
     SemanticAtomicOrderingV1, SemanticAtomicRmwOpV1, SemanticAtomicRmwV1, SemanticAtomicScopeV1,
     SemanticAxisV1, SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBackendScalarV1,
-    SemanticBf16ConversionKindV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticCallableDeclV1,
-    SemanticCanonAbiV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
+    SemanticBf16ConversionKindV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticBorrowKindV1,
+    SemanticCallableDeclV1, SemanticCanonAbiV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
     SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
     SemanticDisjointIndexSpaceV1, SemanticEnumEncodingV1, SemanticEnumVariantV1,
     SemanticF32MathFunctionV1, SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
@@ -43,25 +44,31 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1,
     SemanticMfmaStorageLayoutV1, SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1,
     SemanticPointerKindV1, SemanticPointerMetadataV1, SemanticProjectionKindV1,
-    SemanticRustcVariantsV1, SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticScalarValueV1,
-    SemanticSourceArgumentOwnershipV1, SemanticStatementKindV1, SemanticSubgroupReductionKindV1,
-    SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeLayoutDetailsV1,
-    SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1,
-    SemanticVolatilityV1, SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
+    SemanticProjectionV1, SemanticRustcVariantsV1, SemanticRvalueKindV1, SemanticScalarTypeV1,
+    SemanticScalarValueV1, SemanticSourceArgumentOwnershipV1, SemanticStatementKindV1,
+    SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
+    SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
+    SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
+    SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
     SemanticWriteOnlyDisjointWriteKindV1, exact_transparent_scalar_carrier_field_v1,
     semantic_direct_enum_variant_v1, semantic_scalar_enum_variant_v1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadDominanceV1, SemanticOptionAvailabilityV1, SemanticOptionDominanceV1,
-    semantic_option_producers_v1,
+    SsaArgumentV1, SsaBlockIdV1, SsaResolvedEventV1, SsaValueV1, semantic_option_producers_v1,
 };
+#[cfg(test)]
+use fe2o3_pliron::plan_semantic_function_ssa_with_module_v1;
 use fe2o3_pliron::{
     MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2, PRODUCTION_KERNEL_SCALAR_SYMBOL_BASE_V2,
     ProductionNumericalContractV2, ProductionOverflowContractV2,
     ProductionRankedKernelLoweringInputV1, ProductionRankedOperationV1, ProductionRankedValueIdV1,
     ProductionRankedValueV1, ProductionSemanticBinaryOpV2, ProductionSemanticCastV2,
     ProductionSemanticComparisonV2, ProductionSemanticExpressionV2, ProductionSemanticMirErrorV1,
-    ProductionSemanticMirOwnerV1, ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2,
+    ProductionSemanticMirOwnerV1, ProductionSemanticScalarTypeV2, ProductionSemanticSsaErrorV1,
+    ProductionSemanticSsaFunctionPlanV1, ProductionSemanticSsaIdentityV1,
+    ProductionSemanticSsaLimitsV1, ProductionSemanticSsaOwnerV1, ProductionSemanticSsaSummaryV1,
+    ProductionSemanticUnaryOpV2, authenticated_ambient_workgroup_lds_scope_zst_v1,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -130,6 +137,10 @@ pub enum ProductionSemanticKirResourceV1 {
     Operations,
     /// Sparse exact source-debug bindings retained by lowering.
     DebugBindings,
+    /// Work performed by bounded semantic analyses during lowering.
+    AnalysisWork,
+    /// Exact facts retained by bounded semantic analyses during lowering.
+    AnalysisStorage,
 }
 
 /// Pointer-independent evidence relating one source block to one Kernel IR block.
@@ -421,6 +432,8 @@ impl SemanticKirTerminatorOperationSpanV1 {
 /// Closed lowering rule responsible for operations without a semantic MIR source construct.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SemanticKirSyntheticOperationRuleV1 {
+    /// Private per-invocation slots for scalar and thin-pointer Rust locals.
+    RetainedLocalStorage,
     /// Private per-invocation slots that preserve enum payloads across discriminant SSA joins.
     EnumPayloadStorage,
     /// The canonical trap operation in the shared runtime-assert failure block.
@@ -569,7 +582,7 @@ impl SemanticKirCorrespondenceV1 {
 
     fn validate_layout_against(
         &self,
-        semantic_owner: &ProductionSemanticMirOwnerV1,
+        semantic_owner: &ProductionSemanticSsaOwnerV1,
         module: &Module,
         expected_roots: &[SemanticFunctionIdV1],
         max_blocks: usize,
@@ -743,6 +756,8 @@ impl Error for ProductionMirPlironTranslationErrorV1 {}
 pub enum ProductionSemanticKirErrorV1 {
     /// The exact semantic owner failed recursive verification.
     SemanticOwner(ProductionSemanticMirErrorV1),
+    /// The mandatory semantic SSA plan failed construction or replay.
+    SemanticSsa(ProductionSemanticSsaErrorV1),
     /// A bounded lowering resource exceeded its limit.
     ResourceLimit {
         /// Resource that exceeded its limit.
@@ -778,6 +793,15 @@ pub enum ProductionSemanticKirErrorV1 {
         statement: Option<u32>,
         /// Missing semantic local index.
         local: u32,
+    },
+    /// One or more storage-retained locals require state across CFG edges.
+    RetainedLocalStorage {
+        /// Source semantic function index.
+        function: u32,
+        /// Canonical `(local, semantic type, first cause)` prefix, capped for diagnostics.
+        retained_locals: Vec<(u32, u32, &'static str)>,
+        /// Total number of retained locals that cross CFG edges.
+        retained_count: usize,
     },
     /// A variant-refined enum reached a payload projection without retained fields.
     EnumPayloadUnavailable {
@@ -844,6 +868,8 @@ pub enum ProductionSemanticKirErrorV1 {
     /// The lowered collective or LDS transpose module could not become exact verified canonical
     /// Kernel IR V9.
     CanonicalKernelIrV9(VerifiedCanonicalKernelIrErrorV9),
+    /// The lowered module uses operations introduced by exact verified canonical Kernel IR V11.
+    CanonicalKernelIrV11(VerifiedCanonicalKernelIrErrorV11),
     /// Independent semantic MIR to ranked PLIRON translation validation failed.
     MirPlironTranslation(ProductionMirPlironTranslationErrorV1),
     /// Retained correspondence no longer matches the exact source owner.
@@ -854,6 +880,7 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::SemanticOwner(error) => write!(formatter, "exact semantic owner failed: {error}"),
+            Self::SemanticSsa(error) => write!(formatter, "semantic SSA custody failed: {error}"),
             Self::ResourceLimit {
                 resource,
                 actual,
@@ -883,6 +910,14 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
             } => write!(
                 formatter,
                 "semantic-to-Kernel-IR lowering rejected function {function}, block {block}, statement {statement:?}: local {local} has no path-available SSA definition",
+            ),
+            Self::RetainedLocalStorage {
+                function,
+                retained_locals,
+                retained_count,
+            } => write!(
+                formatter,
+                "semantic-to-Kernel-IR lowering rejected function {function}: retained local/type pairs {retained_locals:?} cross control flow ({retained_count} retained local(s)); private-slot lowering is required",
             ),
             Self::EnumPayloadUnavailable {
                 function,
@@ -940,6 +975,12 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
                     "canonical Kernel IR V9 admission failed: {error}"
                 )
             }
+            Self::CanonicalKernelIrV11(error) => {
+                write!(
+                    formatter,
+                    "canonical Kernel IR V11 admission failed: {error}"
+                )
+            }
             Self::MirPlironTranslation(error) => {
                 write!(
                     formatter,
@@ -957,14 +998,17 @@ impl Error for ProductionSemanticKirErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::SemanticOwner(error) => Some(error),
+            Self::SemanticSsa(error) => Some(error),
             Self::InvalidKernelIr(error) => Some(error),
             Self::CanonicalKernelIrV8(error) => Some(error),
             Self::CanonicalKernelIrV9(error) => Some(error),
+            Self::CanonicalKernelIrV11(error) => Some(error),
             Self::MirPlironTranslation(error) => Some(error),
             Self::ResourceLimit { .. }
             | Self::AllocationFailure { .. }
             | Self::Unsupported { .. }
             | Self::MissingLocalDefinition { .. }
+            | Self::RetainedLocalStorage { .. }
             | Self::EnumPayloadUnavailable { .. }
             | Self::CapabilityUnavailable { .. }
             | Self::PlaceProjectionUnavailable { .. }
@@ -1184,7 +1228,7 @@ impl ProductionRankedSemanticProjectionRootV1 {
 /// root set and rejects duplicate roots or export names.
 #[must_use = "dropping the roster abandons its semantic-to-ranked custody"]
 pub struct ProductionRankedSemanticProjectionModuleReceiptV1 {
-    semantic: ProductionSemanticMirOwnerV1,
+    semantic_ssa: ProductionSemanticSsaOwnerV1,
     roots: Box<[ProductionRankedSemanticProjectionRootV1]>,
 }
 
@@ -1195,10 +1239,23 @@ impl ProductionRankedSemanticProjectionModuleReceiptV1 {
         semantic: ProductionSemanticMirOwnerV1,
         roots: Vec<ProductionRankedSemanticProjectionRootV1>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
-        semantic
-            .verify_equivalence()
-            .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
-        let document = semantic.semantic();
+        let semantic_ssa = ProductionSemanticSsaOwnerV1::try_new(
+            semantic,
+            ProductionSemanticSsaLimitsV1::default(),
+        )
+        .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
+        Self::from_unvalidated_ssa_projection_roster_candidate(semantic_ssa, roots)
+    }
+
+    /// Packages a ranked roster without discarding the exact production SSA plan.
+    pub fn from_unvalidated_ssa_projection_roster_candidate(
+        semantic_ssa: ProductionSemanticSsaOwnerV1,
+        roots: Vec<ProductionRankedSemanticProjectionRootV1>,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        semantic_ssa
+            .verify_replay()
+            .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
+        let document = semantic_ssa.source_semantic();
         if roots.is_empty() || roots.len() != document.roots().len() {
             return Err(unsupported(
                 0,
@@ -1222,7 +1279,7 @@ impl ProductionRankedSemanticProjectionModuleReceiptV1 {
                 ));
             }
             validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
-                &semantic,
+                semantic_ssa.source_owner(),
                 root.selected_root,
                 &root.lowering,
                 &root.ranked_ir,
@@ -1231,7 +1288,7 @@ impl ProductionRankedSemanticProjectionModuleReceiptV1 {
             )?;
         }
         Ok(Self {
-            semantic,
+            semantic_ssa,
             roots: roots.into_boxed_slice(),
         })
     }
@@ -1541,7 +1598,7 @@ impl ProductionMirPlironTranslationValidationV1 {
 /// Move-only owner of one exact semantic source and its verified Kernel IR.
 #[must_use = "dropping the owner abandons the verified target-neutral lowering"]
 pub struct ProductionSemanticKirOwnerV1 {
-    semantic: ProductionSemanticMirOwnerV1,
+    semantic_ssa: ProductionSemanticSsaOwnerV1,
     module: Module,
     canonical_kernel_ir: ProductionCanonicalKernelIrV1,
     correspondence: SemanticKirCorrespondenceV1,
@@ -1563,6 +1620,7 @@ struct RetainedRankedLaunchRootV1 {
 enum ProductionCanonicalKernelIrV1 {
     V8(VerifiedCanonicalKernelIrV8),
     V9(VerifiedCanonicalKernelIrV9),
+    V11(VerifiedCanonicalKernelIrV11),
 }
 
 /// Exact canonical Kernel IR wire version retained by production lowering.
@@ -1572,6 +1630,8 @@ pub enum ProductionCanonicalKernelIrVersionV1 {
     V8,
     /// Exact canonical Kernel IR V9.
     V9,
+    /// Exact canonical Kernel IR V11.
+    V11,
 }
 
 /// Version-bound identity of the canonical Kernel IR bytes retained by the owner.
@@ -1613,7 +1673,11 @@ impl ProductionCanonicalKernelIrIdentityV1 {
 
 impl ProductionCanonicalKernelIrV1 {
     fn from_module(module: Module) -> Result<Self, ProductionSemanticKirErrorV1> {
-        if module_requires_kernel_ir_v9_v1(&module) {
+        if module_requires_kernel_ir_v11_v1(&module) {
+            VerifiedCanonicalKernelIrV11::from_module(module)
+                .map(Self::V11)
+                .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV11)
+        } else if module_requires_kernel_ir_v9_v1(&module) {
             VerifiedCanonicalKernelIrV9::from_module(module)
                 .map(Self::V9)
                 .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV9)
@@ -1632,6 +1696,9 @@ impl ProductionCanonicalKernelIrV1 {
             Self::V9(owner) => owner
                 .revalidate()
                 .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV9),
+            Self::V11(owner) => owner
+                .revalidate()
+                .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV11),
         }
     }
 
@@ -1639,6 +1706,7 @@ impl ProductionCanonicalKernelIrV1 {
         match self {
             Self::V8(owner) => owner.canonical_bytes(),
             Self::V9(owner) => owner.canonical_bytes(),
+            Self::V11(owner) => owner.canonical_bytes(),
         }
     }
 
@@ -1654,8 +1722,31 @@ impl ProductionCanonicalKernelIrV1 {
                 digest: *owner.identity().digest(),
                 canonical_length: owner.identity().canonical_length(),
             },
+            Self::V11(owner) => ProductionCanonicalKernelIrIdentityV1 {
+                version: ProductionCanonicalKernelIrVersionV1::V11,
+                digest: *owner.identity().digest(),
+                canonical_length: owner.identity().canonical_length(),
+            },
         }
     }
+}
+
+fn module_requires_kernel_ir_v11_v1(module: &Module) -> bool {
+    module.functions.iter().any(|function| {
+        function.body.as_ref().is_some_and(|body| {
+            body.blocks.iter().any(|block| {
+                block.operations.iter().any(|operation| {
+                    matches!(
+                        operation.kind,
+                        OperationKind::Cast {
+                            kind: CastKind::RestrictPointerAccess,
+                            ..
+                        }
+                    )
+                })
+            })
+        })
+    })
 }
 
 fn module_requires_kernel_ir_v9_v1(module: &Module) -> bool {
@@ -1740,13 +1831,15 @@ impl ProductionSemanticKirOwnerV1 {
         semantic: ProductionSemanticMirOwnerV1,
         limits: ProductionSemanticKirLimitsV1,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
-        semantic
-            .verify_equivalence()
-            .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
-        let (module, correspondence) = lower_module(&semantic, limits, None)?;
+        let semantic_ssa = ProductionSemanticSsaOwnerV1::try_new(
+            semantic,
+            ProductionSemanticSsaLimitsV1::default(),
+        )
+        .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
+        let (module, correspondence) = lower_module(&semantic_ssa, limits, None)?;
         let canonical_kernel_ir = ProductionCanonicalKernelIrV1::from_module(module.clone())?;
         let owner = Self {
-            semantic,
+            semantic_ssa,
             module,
             canonical_kernel_ir,
             correspondence,
@@ -1808,16 +1901,20 @@ impl ProductionSemanticKirOwnerV1 {
         receipt: ProductionRankedSemanticProjectionModuleReceiptV1,
         limits: ProductionSemanticKirLimitsV1,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
-        let ProductionRankedSemanticProjectionModuleReceiptV1 { semantic, roots } = receipt;
-        semantic
-            .verify_equivalence()
-            .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
+        let ProductionRankedSemanticProjectionModuleReceiptV1 {
+            semantic_ssa,
+            roots,
+        } = receipt;
+        semantic_ssa
+            .verify_replay()
+            .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
+        let semantic = semantic_ssa.source_owner();
         let launch_roots = roots
             .iter()
             .map(retained_ranked_launch_root_v1)
             .collect::<Result<Vec<_>, _>>()?
             .into_boxed_slice();
-        let (module, correspondence) = lower_module(&semantic, limits, Some(&launch_roots))?;
+        let (module, correspondence) = lower_module(&semantic_ssa, limits, Some(&launch_roots))?;
         let mut generic_checks = Vec::with_capacity(roots.len());
         for root in roots.into_vec() {
             let function_name = root.function_name().to_owned();
@@ -1846,7 +1943,7 @@ impl ProductionSemanticKirOwnerV1 {
         }
         let canonical_kernel_ir = ProductionCanonicalKernelIrV1::from_module(module.clone())?;
         let owner = Self {
-            semantic,
+            semantic_ssa,
             module,
             canonical_kernel_ir,
             correspondence,
@@ -1860,13 +1957,16 @@ impl ProductionSemanticKirOwnerV1 {
 
     /// Re-verifies semantic ownership, Kernel IR, and retained correspondence.
     pub fn verify_equivalence(&self) -> Result<(), ProductionSemanticKirErrorV1> {
-        self.semantic
-            .verify_equivalence()
-            .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
+        self.semantic_ssa
+            .verify_replay()
+            .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
         self.canonical_kernel_ir.revalidate()?;
         verify_module(&self.module).map_err(ProductionSemanticKirErrorV1::InvalidKernelIr)?;
-        let (rederived_module, rederived_correspondence) =
-            lower_module(&self.semantic, self.limits, self.launch_roots.as_deref())?;
+        let (rederived_module, rederived_correspondence) = lower_module(
+            &self.semantic_ssa,
+            self.limits,
+            self.launch_roots.as_deref(),
+        )?;
         let rederived_canonical_kernel_ir =
             ProductionCanonicalKernelIrV1::from_module(rederived_module.clone())?;
         if self.module != rederived_module
@@ -1890,8 +1990,8 @@ impl ProductionSemanticKirOwnerV1 {
                 || kernel.entry.as_str() != generic_checks.function_name
                 || generic_checks.ranked_ir.is_empty()
                 || self
-                    .semantic
-                    .semantic()
+                    .semantic_ssa
+                    .source_semantic()
                     .select_kernel_body_for_root_v1(generic_checks.selected_root)
                     .is_none()
                 || self.launch_roots.as_deref().is_none_or(|roots| {
@@ -1913,7 +2013,7 @@ impl ProductionSemanticKirOwnerV1 {
                 return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
             }
             let revalidated = validate_mir_pliron_translation_with_semantic_v1(
-                Some(self.semantic.semantic()),
+                Some(self.semantic_ssa.source_semantic()),
                 &self.module,
                 &self.correspondence,
                 &generic_checks.function_name,
@@ -1932,7 +2032,17 @@ impl ProductionSemanticKirOwnerV1 {
 
     /// Borrows the retained exact semantic owner.
     pub const fn semantic(&self) -> &ProductionSemanticMirOwnerV1 {
-        &self.semantic
+        self.semantic_ssa.source_owner()
+    }
+
+    /// Returns the exact production SSA identity consumed by KIR lowering.
+    pub const fn semantic_ssa_identity(&self) -> ProductionSemanticSsaIdentityV1 {
+        self.semantic_ssa.identity()
+    }
+
+    /// Returns aggregate planner work and mixed SSA/memory classification.
+    pub const fn semantic_ssa_summary(&self) -> ProductionSemanticSsaSummaryV1 {
+        self.semantic_ssa.summary()
     }
 
     /// Borrows the structurally verified Kernel IR module.
@@ -1940,19 +2050,22 @@ impl ProductionSemanticKirOwnerV1 {
         &self.module
     }
 
-    /// Borrows the authoritative exact, semantically verified Kernel IR V8 bytes.
-    pub const fn canonical_kernel_ir_v8(&self) -> &VerifiedCanonicalKernelIrV8 {
+    /// Borrows the authoritative exact, semantically verified Kernel IR V8 owner, when retained.
+    pub const fn canonical_kernel_ir_v8(&self) -> Option<&VerifiedCanonicalKernelIrV8> {
         match &self.canonical_kernel_ir {
-            ProductionCanonicalKernelIrV1::V8(owner) => owner,
-            ProductionCanonicalKernelIrV1::V9(_) => {
-                panic!("Kernel IR V9 has no canonical V8 owner")
-            }
+            ProductionCanonicalKernelIrV1::V8(owner) => Some(owner),
+            ProductionCanonicalKernelIrV1::V9(_) | ProductionCanonicalKernelIrV1::V11(_) => None,
         }
     }
 
-    /// Borrows the typed identity of the authoritative canonical Kernel IR V8 bytes.
-    pub const fn canonical_kernel_ir_v8_identity(&self) -> &VerifiedCanonicalKernelIrIdentityV8 {
-        self.canonical_kernel_ir_v8().identity()
+    /// Borrows the typed V8 identity when the retained canonical Kernel IR is V8.
+    pub const fn canonical_kernel_ir_v8_identity(
+        &self,
+    ) -> Option<&VerifiedCanonicalKernelIrIdentityV8> {
+        match self.canonical_kernel_ir_v8() {
+            Some(owner) => Some(owner.identity()),
+            None => None,
+        }
     }
 
     /// Borrows canonical V9 ownership when the lowered module uses the exact
@@ -1961,6 +2074,7 @@ impl ProductionSemanticKirOwnerV1 {
         match &self.canonical_kernel_ir {
             ProductionCanonicalKernelIrV1::V8(_) => None,
             ProductionCanonicalKernelIrV1::V9(owner) => Some(owner),
+            ProductionCanonicalKernelIrV1::V11(_) => None,
         }
     }
 
@@ -1969,6 +2083,24 @@ impl ProductionSemanticKirOwnerV1 {
         &self,
     ) -> Option<&VerifiedCanonicalKernelIrIdentityV9> {
         match self.canonical_kernel_ir_v9() {
+            Some(owner) => Some(owner.identity()),
+            None => None,
+        }
+    }
+
+    /// Borrows canonical V11 ownership when the lowered module uses pointer-access narrowing.
+    pub const fn canonical_kernel_ir_v11(&self) -> Option<&VerifiedCanonicalKernelIrV11> {
+        match &self.canonical_kernel_ir {
+            ProductionCanonicalKernelIrV1::V8(_) | ProductionCanonicalKernelIrV1::V9(_) => None,
+            ProductionCanonicalKernelIrV1::V11(owner) => Some(owner),
+        }
+    }
+
+    /// Borrows the typed V11 identity for a module with pointer-access narrowing.
+    pub const fn canonical_kernel_ir_v11_identity(
+        &self,
+    ) -> Option<&VerifiedCanonicalKernelIrIdentityV11> {
+        match self.canonical_kernel_ir_v11() {
             Some(owner) => Some(owner.identity()),
             None => None,
         }
@@ -2264,7 +2396,7 @@ impl ProductionSemanticKirOwnerV1 {
                         location,
                     )
             })?;
-        let semantic = self.semantic.semantic();
+        let semantic = self.semantic_ssa.source_semantic();
         let function = semantic
             .functions()
             .get(span.semantic_function().index() as usize)?;
@@ -2470,6 +2602,7 @@ struct KirCorrelationIndexV1<'module> {
     operations: BTreeMap<FunctionOperationLocation, &'module Operation>,
     definitions: BTreeMap<ValueId, &'module Operation>,
     definition_locations: BTreeMap<ValueId, FunctionOperationLocation>,
+    block_parameter_inputs: BTreeMap<ValueId, Vec<ValueId>>,
     pointer_dependents: BTreeMap<ValueId, BTreeSet<ValueId>>,
     memory_consumers: Vec<KirMemoryConsumerV1>,
     unmodeled_memory_effects: Vec<FunctionOperationLocation>,
@@ -2820,6 +2953,7 @@ fn build_kir_correlation_index<'module>(
     max_operations: usize,
     budget: &mut UnsupportedIndexCorrelationBudgetV1,
 ) -> Option<KirCorrelationIndexV1<'module>> {
+    let block_parameter_inputs = index_block_parameter_inputs_v1(body, budget)?;
     let mut blocks = BTreeMap::new();
     let mut operations = BTreeMap::new();
     let mut definitions = BTreeMap::new();
@@ -2928,15 +3062,100 @@ fn build_kir_correlation_index<'module>(
     if pointer_dependency_graph_has_cycle(&pointer_dependents, pointer_indegree, budget)? {
         return None;
     }
+    for (parameter, inputs) in &block_parameter_inputs {
+        for input in inputs {
+            budget.charge()?;
+            pointer_dependents
+                .entry(*input)
+                .or_default()
+                .insert(*parameter);
+        }
+    }
     Some(KirCorrelationIndexV1 {
         blocks,
         operations,
         definitions,
         definition_locations,
+        block_parameter_inputs,
         pointer_dependents,
         memory_consumers,
         unmodeled_memory_effects,
     })
+}
+
+fn index_block_parameter_inputs_v1(
+    body: &FunctionBody,
+    budget: &mut UnsupportedIndexCorrelationBudgetV1,
+) -> Option<BTreeMap<ValueId, Vec<ValueId>>> {
+    let mut target_parameters = BTreeMap::new();
+    let mut inputs = BTreeMap::<ValueId, Vec<ValueId>>::new();
+    for block in &body.blocks {
+        budget.charge()?;
+        if target_parameters
+            .insert(block.id, block.parameters.as_slice())
+            .is_some()
+        {
+            return None;
+        }
+        for parameter in &block.parameters {
+            budget.charge()?;
+            if inputs.insert(parameter.id, Vec::new()).is_some() {
+                return None;
+            }
+        }
+    }
+    for predecessor in &body.blocks {
+        budget.charge()?;
+        let mut append = |target: BlockId, arguments: &[ValueId]| -> Option<()> {
+            budget.charge()?;
+            let parameters = target_parameters.get(&target)?;
+            if parameters.len() != arguments.len() {
+                return None;
+            }
+            for (parameter, argument) in parameters.iter().zip(arguments) {
+                budget.charge()?;
+                inputs.get_mut(&parameter.id)?.push(*argument);
+            }
+            Some(())
+        };
+        match predecessor.terminator.as_ref()? {
+            Terminator::Branch { target, arguments } => append(*target, arguments)?,
+            Terminator::ConditionalBranch {
+                then_target,
+                then_arguments,
+                else_target,
+                else_arguments,
+                ..
+            } => {
+                append(*then_target, then_arguments)?;
+                append(*else_target, else_arguments)?;
+            }
+            Terminator::Switch {
+                cases,
+                default_target,
+                default_arguments,
+                ..
+            } => {
+                for case in cases {
+                    append(case.target, &case.arguments)?;
+                }
+                append(*default_target, default_arguments)?;
+            }
+            Terminator::IntegerSwitch {
+                cases,
+                default_target,
+                default_arguments,
+                ..
+            } => {
+                for case in cases {
+                    append(case.target, &case.arguments)?;
+                }
+                append(*default_target, default_arguments)?;
+            }
+            Terminator::Return { .. } | Terminator::Unreachable => {}
+        }
+    }
+    Some(inputs)
 }
 
 fn pointer_dependency_graph_has_cycle(
@@ -3211,6 +3430,9 @@ fn index_semantic_access_sites(
         budget.charge()?;
         index_semantic_access_span(
             kir,
+            correspondence,
+            correspondence_owner,
+            kernel_semantic_function,
             span.kernel_ir_block(),
             span.first_operation_ordinal(),
             span.operation_count(),
@@ -3231,6 +3453,9 @@ fn index_semantic_access_sites(
         budget.charge()?;
         index_semantic_access_span(
             kir,
+            correspondence,
+            correspondence_owner,
+            kernel_semantic_function,
             span.kernel_ir_block(),
             span.first_operation_ordinal(),
             span.operation_count(),
@@ -3246,6 +3471,9 @@ fn index_semantic_access_sites(
 #[allow(clippy::too_many_arguments)]
 fn index_semantic_access_span(
     kir: &KirCorrelationIndexV1<'_>,
+    correspondence: &SemanticKirCorrespondenceV1,
+    correspondence_owner: SemanticFunctionIdV1,
+    semantic_function: SemanticFunctionIdV1,
     block: BlockId,
     first: u32,
     count: u32,
@@ -3263,14 +3491,37 @@ fn index_semantic_access_span(
         budget.charge()?;
         let operation_index = first.checked_add(relative_ordinal)?;
         let location = FunctionOperationLocation::new(block, operation_index);
-        for operation_access_ordinal in 0..kir_memory_accesses_v1(operation).len() {
+        for (operation_access_ordinal, (pointer, access, memory_space, atomic)) in
+            kir_memory_accesses_v1(operation).into_iter().enumerate()
+        {
             budget.charge()?;
+            let operation_access_ordinal = u32::try_from(operation_access_ordinal).ok()?;
+            let consumer = KirMemoryConsumerV1 {
+                location,
+                operation_access_ordinal,
+                pointer,
+                access,
+                memory_space,
+                atomic,
+            };
+            if memory_space == dialect_kernel::MemorySpaceAttr::Private
+                && compiler_owned_retained_local_storage_access_v1(
+                    consumer,
+                    kir,
+                    correspondence,
+                    correspondence_owner,
+                    semantic_function,
+                    &mut BTreeSet::new(),
+                    budget,
+                )?
+            {
+                continue;
+            }
             let site = SemanticAccessSiteV1 {
                 block: semantic_block,
                 statement: semantic_statement,
                 ordinal: access_ordinal,
             };
-            let operation_access_ordinal = u32::try_from(operation_access_ordinal).ok()?;
             if sites
                 .insert((location, operation_access_ordinal), site)
                 .is_some()
@@ -3717,6 +3968,7 @@ fn normalize_kir_expression_inner_v1(
     visiting: &mut BTreeSet<ValueId>,
     budget: &mut UnsupportedIndexCorrelationBudgetV1,
 ) -> Option<NormalizedScalarExpressionV1> {
+    let value = unique_kir_ssa_origin_v1(kir, value, budget)?;
     let body = function.body.as_ref()?;
     if let Some(parameter) = body
         .parameters
@@ -3727,14 +3979,6 @@ fn normalize_kir_expression_inner_v1(
         let argument = u32::try_from(parameter).ok()?;
         let symbol = PRODUCTION_KERNEL_SCALAR_SYMBOL_BASE_V2.checked_add(argument)?;
         return Some(NormalizedScalarExpressionV1::Symbol { symbol, scalar });
-    }
-    if body
-        .blocks
-        .iter()
-        .flat_map(|block| &block.parameters)
-        .any(|parameter| parameter.id == value)
-    {
-        return None;
     }
     let operation = kir.definitions.get(&value)?;
     let scalar = operation
@@ -4462,6 +4706,92 @@ fn take_neutral_recipe_operation_v1<'a>(
     Ok((operation, location))
 }
 
+fn unique_ssa_operation_origin_v1(
+    body: &FunctionBody,
+    kir: &KirCorrelationIndexV1<'_>,
+    value: ValueId,
+) -> Option<ValueId> {
+    let mut pending = vec![value];
+    let mut visited = BTreeSet::new();
+    let mut origins = BTreeSet::new();
+    while let Some(value) = pending.pop() {
+        if !visited.insert(value) {
+            continue;
+        }
+        if kir.definitions.contains_key(&value) {
+            origins.insert(value);
+            if origins.len() > 1 {
+                return None;
+            }
+            continue;
+        }
+        let mut parameter = body.blocks.iter().filter_map(|block| {
+            block
+                .parameters
+                .iter()
+                .position(|candidate| candidate.id == value)
+                .map(|ordinal| (block.id, ordinal))
+        });
+        let (target, ordinal) = parameter.next()?;
+        if parameter.next().is_some() {
+            return None;
+        }
+        let mut incoming = 0_usize;
+        let mut append = |edge_target: BlockId, arguments: &[ValueId]| -> Option<()> {
+            if edge_target != target {
+                return Some(());
+            }
+            pending.push(*arguments.get(ordinal)?);
+            incoming = incoming.checked_add(1)?;
+            Some(())
+        };
+        for predecessor in &body.blocks {
+            match predecessor.terminator.as_ref()? {
+                Terminator::Branch { target, arguments } => append(*target, arguments)?,
+                Terminator::ConditionalBranch {
+                    then_target,
+                    then_arguments,
+                    else_target,
+                    else_arguments,
+                    ..
+                } => {
+                    append(*then_target, then_arguments)?;
+                    append(*else_target, else_arguments)?;
+                }
+                Terminator::Switch {
+                    cases,
+                    default_target,
+                    default_arguments,
+                    ..
+                } => {
+                    for case in cases {
+                        append(case.target, &case.arguments)?;
+                    }
+                    append(*default_target, default_arguments)?;
+                }
+                Terminator::IntegerSwitch {
+                    cases,
+                    default_target,
+                    default_arguments,
+                    ..
+                } => {
+                    for case in cases {
+                        append(case.target, &case.arguments)?;
+                    }
+                    append(*default_target, default_arguments)?;
+                }
+                Terminator::Return { .. } | Terminator::Unreachable => {}
+            }
+        }
+        if incoming == 0 {
+            return None;
+        }
+    }
+    let mut origins = origins.into_iter();
+    let origin = origins.next()?;
+    origins.next().is_none().then_some(origin)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn replay_neutral_memory_event_v1<'a>(
     operations: &'a [Operation],
@@ -4648,14 +4978,16 @@ fn replay_neutral_workgroup_reduce_recipe_v1(
         _ => (ValueId(u32::MAX), None),
     };
     let initial_pointer = initial_pointer.ok_or_else(|| mismatch(0))?;
+    let allocation_base =
+        unique_ssa_operation_origin_v1(body, kir, base).ok_or_else(|| mismatch(0))?;
     let allocation = kir
         .definitions
-        .get(&base)
+        .get(&allocation_base)
         .copied()
         .ok_or_else(|| mismatch(0))?;
     let allocation_location = kir
         .definition_locations
-        .get(&base)
+        .get(&allocation_base)
         .copied()
         .ok_or_else(|| mismatch(0))?;
     let producer_span = correspondence
@@ -4680,7 +5012,7 @@ fn replay_neutral_workgroup_reduce_recipe_v1(
             extent: WorkgroupMemoryExtent::Static(elements),
             alignment: 4,
         }) if element == &scalar && *elements == contract.elements
-    ) || exact_operation_result_v1(allocation, &pointer_ty) != Some(base)
+    ) || exact_operation_result_v1(allocation, &pointer_ty) != Some(allocation_base)
     {
         return Err(mismatch(0));
     }
@@ -5041,14 +5373,16 @@ fn replay_neutral_workgroup_scan_recipe_v1(
         _ => (ValueId(u32::MAX), None),
     };
     let initial_pointer = initial_pointer.ok_or_else(|| mismatch(0))?;
+    let allocation_base =
+        unique_ssa_operation_origin_v1(body, kir, base).ok_or_else(|| mismatch(0))?;
     let allocation = kir
         .definitions
-        .get(&base)
+        .get(&allocation_base)
         .copied()
         .ok_or_else(|| mismatch(0))?;
     let allocation_location = kir
         .definition_locations
-        .get(&base)
+        .get(&allocation_base)
         .copied()
         .ok_or_else(|| mismatch(0))?;
     correspondence
@@ -5072,7 +5406,7 @@ fn replay_neutral_workgroup_scan_recipe_v1(
             extent: WorkgroupMemoryExtent::Static(elements),
             alignment: 4,
         }) if element == &scalar && *elements == contract.elements
-    ) || exact_operation_result_v1(allocation, &pointer_ty) != Some(base)
+    ) || exact_operation_result_v1(allocation, &pointer_ty) != Some(allocation_base)
     {
         return Err(mismatch(0));
     }
@@ -5735,25 +6069,34 @@ fn validate_mir_pliron_translation_with_semantic_v1(
         budget
             .charge()
             .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
-        if consumer.memory_space == dialect_kernel::MemorySpaceAttr::Private
-            && compiler_owned_enum_payload_access_v1(
-                consumer.pointer,
+        if consumer.memory_space == dialect_kernel::MemorySpaceAttr::Private {
+            let retained_local_storage = compiler_owned_retained_local_storage_access_v1(
+                *consumer,
                 &kir,
                 correspondence,
+                correspondence_owner,
+                semantic_function,
                 &mut BTreeSet::new(),
                 &mut budget,
             )
-            .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?
-        {
-            continue;
+            .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+            let enum_payload_storage = !retained_local_storage
+                && compiler_owned_enum_payload_access_v1(
+                    consumer.pointer,
+                    &kir,
+                    correspondence,
+                    &mut BTreeSet::new(),
+                    &mut budget,
+                )
+                .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+            if retained_local_storage || enum_payload_storage {
+                continue;
+            }
         }
         let Some(site) = semantic_sites
             .get(&(consumer.location, consumer.operation_access_ordinal))
             .copied()
         else {
-            if consumer.memory_space == dialect_kernel::MemorySpaceAttr::Private {
-                continue;
-            }
             return Err(
                 ProductionMirPlironTranslationErrorV1::UnattributedExecutableEffect {
                     location: consumer.location,
@@ -6072,6 +6415,7 @@ fn compiler_owned_enum_payload_access_v1(
     budget: &mut UnsupportedIndexCorrelationBudgetV1,
 ) -> Option<bool> {
     budget.charge()?;
+    let pointer = unique_kir_ssa_origin_v1(kir, pointer, budget)?;
     if !visiting.insert(pointer) {
         return Some(false);
     }
@@ -6134,6 +6478,114 @@ fn compiler_owned_enum_payload_access_v1(
                     budget,
                 )?
             }
+            _ => false,
+        }
+    };
+    visiting.remove(&pointer);
+    Some(result)
+}
+
+fn compiler_owned_retained_local_storage_access_v1(
+    consumer: KirMemoryConsumerV1,
+    kir: &KirCorrelationIndexV1<'_>,
+    correspondence: &SemanticKirCorrespondenceV1,
+    correspondence_owner: SemanticFunctionIdV1,
+    semantic_function: SemanticFunctionIdV1,
+    visiting: &mut BTreeSet<ValueId>,
+    budget: &mut UnsupportedIndexCorrelationBudgetV1,
+) -> Option<bool> {
+    budget.charge()?;
+    if consumer.memory_space != dialect_kernel::MemorySpaceAttr::Private
+        || consumer.atomic.is_some()
+    {
+        return Some(false);
+    }
+    let operation = kir.operations.get(&consumer.location)?;
+    let exact_slot_access = match (&operation.kind, consumer.access) {
+        (OperationKind::Load { pointer, access }, dialect_kernel::AccessKindAttr::Read) => {
+            *pointer == consumer.pointer && access.address_space == AddressSpace::Private
+        }
+        (
+            OperationKind::Store {
+                pointer, access, ..
+            },
+            dialect_kernel::AccessKindAttr::Write,
+        ) => *pointer == consumer.pointer && access.address_space == AddressSpace::Private,
+        _ => false,
+    };
+    if !exact_slot_access {
+        return Some(false);
+    }
+    compiler_owned_retained_local_storage_pointer_v1(
+        consumer.pointer,
+        kir,
+        correspondence,
+        correspondence_owner,
+        semantic_function,
+        visiting,
+        budget,
+    )
+}
+
+fn compiler_owned_retained_local_storage_pointer_v1(
+    pointer: ValueId,
+    kir: &KirCorrelationIndexV1<'_>,
+    correspondence: &SemanticKirCorrespondenceV1,
+    correspondence_owner: SemanticFunctionIdV1,
+    semantic_function: SemanticFunctionIdV1,
+    visiting: &mut BTreeSet<ValueId>,
+    budget: &mut UnsupportedIndexCorrelationBudgetV1,
+) -> Option<bool> {
+    budget.charge()?;
+    let pointer = unique_kir_ssa_origin_v1(kir, pointer, budget)?;
+    if !visiting.insert(pointer) {
+        return Some(false);
+    }
+    let Some(definition) = kir.definitions.get(&pointer) else {
+        visiting.remove(&pointer);
+        return Some(false);
+    };
+    let Some(location) = kir.definition_locations.get(&pointer).copied() else {
+        visiting.remove(&pointer);
+        return Some(false);
+    };
+    let synthetic_allocation = matches!(
+        definition.kind,
+        OperationKind::Alloca {
+            address_space: AddressSpace::Private,
+            ..
+        }
+    ) && correspondence
+        .synthetic_operation_spans()
+        .iter()
+        .any(|span| {
+            span.correspondence_owner() == correspondence_owner
+                && span.semantic_function() == semantic_function
+                && span.rule() == SemanticKirSyntheticOperationRuleV1::RetainedLocalStorage
+                && operation_span_contains_v1(
+                    span.kernel_ir_block(),
+                    span.first_operation_ordinal(),
+                    span.operation_count(),
+                    location,
+                )
+        });
+    let result = if synthetic_allocation {
+        true
+    } else {
+        match &definition.kind {
+            OperationKind::Cast {
+                kind: CastKind::RestrictPointerAccess,
+                value,
+                ..
+            } => compiler_owned_retained_local_storage_pointer_v1(
+                *value,
+                kir,
+                correspondence,
+                correspondence_owner,
+                semantic_function,
+                visiting,
+                budget,
+            )?,
             _ => false,
         }
     };
@@ -6416,51 +6868,88 @@ fn external_allocation_parameter_v1(
     function: &Function,
     kir: &KirCorrelationIndexV1<'_>,
     value: ValueId,
-    visiting: &mut BTreeSet<ValueId>,
+    visited: &mut BTreeSet<ValueId>,
     budget: &mut UnsupportedIndexCorrelationBudgetV1,
 ) -> Option<u32> {
-    budget.charge()?;
-    if !visiting.insert(value) {
-        return None;
-    }
     let body = function.body.as_ref()?;
-    if let Some(index) = body
-        .parameters
-        .iter()
-        .position(|parameter| *parameter == value)
-    {
-        let ty = function.signature.parameters.get(index)?;
-        visiting.remove(&value);
-        return matches!(ty, Type::Pointer(_) | Type::Slice(_))
-            .then(|| u32::try_from(index).ok())
-            .flatten();
+    let mut pending = vec![value];
+    let mut origins = BTreeSet::new();
+    while let Some(value) = pending.pop() {
+        budget.charge()?;
+        if !visited.insert(value) {
+            continue;
+        }
+        if let Some(index) = body
+            .parameters
+            .iter()
+            .position(|parameter| *parameter == value)
+        {
+            let ty = function.signature.parameters.get(index)?;
+            if !matches!(ty, Type::Pointer(_) | Type::Slice(_)) {
+                return None;
+            }
+            origins.insert(u32::try_from(index).ok()?);
+            if origins.len() > 1 {
+                return None;
+            }
+            continue;
+        }
+        if let Some(operation) = kir.definitions.get(&value) {
+            match &operation.kind {
+                OperationKind::SliceData { slice } => pending.push(*slice),
+                OperationKind::GetElementPointer { base, .. } => pending.push(*base),
+                OperationKind::Cast { value, .. } => pending.push(*value),
+                OperationKind::Select {
+                    true_value,
+                    false_value,
+                    ..
+                } => {
+                    pending.push(*true_value);
+                    pending.push(*false_value);
+                }
+                _ => return None,
+            }
+            continue;
+        }
+        let inputs = kir.block_parameter_inputs.get(&value)?;
+        if inputs.is_empty() {
+            return None;
+        }
+        pending.extend(inputs.iter().copied());
     }
-    let operation = kir.definitions.get(&value)?;
-    let result = match &operation.kind {
-        OperationKind::SliceData { slice } => {
-            external_allocation_parameter_v1(function, kir, *slice, visiting, budget)
+    let mut origins = origins.into_iter();
+    let origin = origins.next()?;
+    origins.next().is_none().then_some(origin)
+}
+
+fn unique_kir_ssa_origin_v1(
+    kir: &KirCorrelationIndexV1<'_>,
+    value: ValueId,
+    budget: &mut UnsupportedIndexCorrelationBudgetV1,
+) -> Option<ValueId> {
+    let mut pending = vec![value];
+    let mut visited = BTreeSet::new();
+    let mut origins = BTreeSet::new();
+    while let Some(value) = pending.pop() {
+        budget.charge()?;
+        if !visited.insert(value) {
+            continue;
         }
-        OperationKind::GetElementPointer { base, .. } => {
-            external_allocation_parameter_v1(function, kir, *base, visiting, budget)
+        if let Some(inputs) = kir.block_parameter_inputs.get(&value) {
+            if inputs.is_empty() {
+                return None;
+            }
+            pending.extend(inputs.iter().copied());
+        } else {
+            origins.insert(value);
+            if origins.len() > 1 {
+                return None;
+            }
         }
-        OperationKind::Cast { value, .. } => {
-            external_allocation_parameter_v1(function, kir, *value, visiting, budget)
-        }
-        OperationKind::Select {
-            true_value,
-            false_value,
-            ..
-        } => {
-            let first =
-                external_allocation_parameter_v1(function, kir, *true_value, visiting, budget);
-            let second =
-                external_allocation_parameter_v1(function, kir, *false_value, visiting, budget);
-            (first == second).then_some(first).flatten()
-        }
-        _ => None,
-    };
-    visiting.remove(&value);
-    result
+    }
+    let mut origins = origins.into_iter();
+    let origin = origins.next()?;
+    origins.next().is_none().then_some(origin)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -7050,13 +7539,16 @@ struct ExpectedSemanticKirBlockCoverageV1 {
 }
 
 fn validate_semantic_kir_correspondence(
-    owner: &ProductionSemanticMirOwnerV1,
+    owner: &ProductionSemanticSsaOwnerV1,
     module: &Module,
     expected_roots: &[SemanticFunctionIdV1],
     max_blocks: usize,
     correspondence: &SemanticKirCorrespondenceV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
-    let semantic = owner.semantic();
+    owner
+        .verify_replay()
+        .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
+    let semantic = owner.source_semantic();
     if correspondence.semantic_sha256 != *semantic.semantic_sha256().as_bytes()
         || correspondence.function_count != semantic.functions().len()
     {
@@ -7197,10 +7689,15 @@ fn validate_semantic_kir_correspondence(
             .body
             .as_ref()
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        let order = semantic_cfg_reverse_postorder(semantic_function)
-            .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let order = owner
+            .plan_for_function(expected_function.semantic_function)
+            .filter(|plan| plan.function_identity() == semantic_function.identity())
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
+            .plan()
+            .reverse_postorder()
+            .iter()
+            .map(|block| SemanticBlockIdV1::from_index(block.get()));
         let expected_blocks = order
-            .into_iter()
             .map(|semantic_block| {
                 let source = semantic_function
                     .blocks()
@@ -7488,12 +7985,21 @@ fn validate_operation_correspondence_layout(
         }
 
         let mut next_operation = 0_usize;
-        if let Some(span) = synthetic.get(synthetic_index)
+        let mut previous_prologue_rule = None;
+        while let Some(span) = synthetic.get(synthetic_index)
             && span.semantic_function == expected_block.semantic_function
-            && span.rule == SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage
             && span.kernel_ir_block == expected_block.kernel_ir_block
+            && span.rule != SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap
         {
-            if span.first_operation_ordinal != 0 || span.operation_count == 0 {
+            let rule_order = match span.rule {
+                SemanticKirSyntheticOperationRuleV1::RetainedLocalStorage => 0_u8,
+                SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage => 1_u8,
+                SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap => unreachable!(),
+            };
+            if span.operation_count == 0
+                || usize::try_from(span.first_operation_ordinal) != Ok(next_operation)
+                || previous_prologue_rule.is_some_and(|previous| previous >= rule_order)
+            {
                 return false;
             }
             let Some(end) = checked_operation_span_end(
@@ -7503,24 +8009,42 @@ fn validate_operation_correspondence_layout(
             ) else {
                 return false;
             };
-            if !target.operations[..end].iter().all(|operation| {
-                matches!(
-                    operation.kind,
-                    OperationKind::Alloca {
-                        address_space: AddressSpace::Private,
-                        ..
-                    } | OperationKind::Load {
-                        access: MemoryAccess {
+            let valid_operations = target.operations[next_operation..end]
+                .iter()
+                .all(|operation| match span.rule {
+                    SemanticKirSyntheticOperationRuleV1::RetainedLocalStorage => matches!(
+                        operation.kind,
+                        OperationKind::Alloca {
                             address_space: AddressSpace::Private,
                             ..
-                        },
-                        ..
-                    }
-                )
-            }) {
+                        } | OperationKind::Store {
+                            access: MemoryAccess {
+                                address_space: AddressSpace::Private,
+                                ..
+                            },
+                            ..
+                        }
+                    ),
+                    SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage => matches!(
+                        operation.kind,
+                        OperationKind::Alloca {
+                            address_space: AddressSpace::Private,
+                            ..
+                        } | OperationKind::Load {
+                            access: MemoryAccess {
+                                address_space: AddressSpace::Private,
+                                ..
+                            },
+                            ..
+                        }
+                    ),
+                    SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap => false,
+                });
+            if !valid_operations {
                 return false;
             }
             next_operation = end;
+            previous_prologue_rule = Some(rule_order);
             synthetic_index += 1;
         }
         for statement_ordinal in 0..expected_block.source_statement_count {
@@ -9509,6 +10033,7 @@ fn helper_function_id_v1(
 fn lower_one_semantic_function_v1(
     semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
     plan: &LoweredFunctionPlanV1,
+    semantic_ssa: &ProductionSemanticSsaFunctionPlanV1,
     defined_function_ids: &BTreeMap<SemanticFunctionIdV1, FunctionId>,
     defined_function_signatures: &BTreeMap<SemanticFunctionIdV1, LoweredFunctionSignatureV1>,
     required_workgroup: Option<[u32; 3]>,
@@ -9568,6 +10093,7 @@ fn lower_one_semantic_function_v1(
         semantic.types(),
         semantic.callables(),
         function,
+        semantic_ssa,
         plan.correspondence_owner,
         plan.semantic_function,
         defined_function_ids.clone(),
@@ -9587,7 +10113,12 @@ fn lower_one_semantic_function_v1(
         max_operations,
     )?;
 
-    let order = semantic_cfg_reverse_postorder(function)?;
+    let order = semantic_ssa
+        .plan()
+        .reverse_postorder()
+        .iter()
+        .map(|block| SemanticBlockIdV1::from_index(block.get()))
+        .collect::<Vec<_>>();
     let mut target_blocks = Vec::with_capacity(order.len() + usize::from(has_runtime_assert));
     let mut blocks = Vec::with_capacity(order.len());
     let mut statement_operation_spans = Vec::with_capacity(statement_count);
@@ -9611,18 +10142,25 @@ fn lower_one_semantic_function_v1(
             )
         })?;
         let mut target = BasicBlock::new(BlockId(semantic_block.index()));
-        let prologue_first = target.operations.len();
-        lowering.begin_block(semantic_block, &mut target)?;
-        let (first_operation_ordinal, operation_count) =
-            measured_operation_span(prologue_first, target.operations.len(), target.id, None)?;
-        if operation_count != 0 {
+        let prologue = lowering.begin_block(semantic_block, &mut target)?;
+        if prologue.retained_local_storage != 0 {
+            synthetic_operation_spans.push(SemanticKirSyntheticOperationSpanV1 {
+                correspondence_owner: plan.correspondence_owner,
+                semantic_function: plan.semantic_function,
+                rule: SemanticKirSyntheticOperationRuleV1::RetainedLocalStorage,
+                kernel_ir_block: target.id,
+                first_operation_ordinal: 0,
+                operation_count: prologue.retained_local_storage,
+            });
+        }
+        if prologue.enum_payload_storage != 0 {
             synthetic_operation_spans.push(SemanticKirSyntheticOperationSpanV1 {
                 correspondence_owner: plan.correspondence_owner,
                 semantic_function: plan.semantic_function,
                 rule: SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage,
                 kernel_ir_block: target.id,
-                first_operation_ordinal,
-                operation_count,
+                first_operation_ordinal: prologue.retained_local_storage,
+                operation_count: prologue.enum_payload_storage,
             });
         }
         for (statement, operation) in source.statements().iter().enumerate() {
@@ -9689,6 +10227,10 @@ fn lower_one_semantic_function_v1(
             })?,
         });
     }
+    require_semantic_ssa_definitions_consumed_v1(
+        lowering.semantic_function.index(),
+        &lowering.pending_semantic_ssa_definitions,
+    )?;
     if let Some(failure_block) = lowering.assert_failure_block {
         let mut block = BasicBlock::new(failure_block);
         let first = block.operations.len();
@@ -9816,11 +10358,11 @@ fn retained_ranked_launch_root_v1(
 }
 
 fn lower_module(
-    owner: &ProductionSemanticMirOwnerV1,
+    owner: &ProductionSemanticSsaOwnerV1,
     limits: ProductionSemanticKirLimitsV1,
     authenticated_launch_roots: Option<&[RetainedRankedLaunchRootV1]>,
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
-    let semantic = owner.semantic();
+    let semantic = owner.source_semantic();
     let Some(authenticated_launch_roots) = authenticated_launch_roots else {
         let selection = semantic.select_kernel_body_v1().ok_or_else(|| {
             unsupported(
@@ -10215,14 +10757,14 @@ where
 }
 
 fn lower_single_root_module(
-    owner: &ProductionSemanticMirOwnerV1,
+    owner: &ProductionSemanticSsaOwnerV1,
     limits: ProductionSemanticKirLimitsV1,
     selected_root: SemanticFunctionIdV1,
     authenticated_launch: Option<RetainedRankedLaunchRootV1>,
     closure_budget: &mut ReachableClosureBlockBudgetV1,
     validate_correspondence: bool,
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
-    let semantic = owner.semantic();
+    let semantic = owner.source_semantic();
     let launch_rank = authenticated_launch.map_or(1, |launch| launch.launch_rank);
     if !(1..=3).contains(&launch_rank) {
         return Err(unsupported(
@@ -10562,9 +11104,13 @@ fn lower_single_root_module(
     let mut float_declarations = BTreeMap::new();
     let mut remaining_operations = limits.max_operations;
     for (index, plan) in plans.iter().enumerate() {
+        let semantic_ssa = owner
+            .plan_for_function(plan.semantic_function)
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
         let lowered = lower_one_semantic_function_v1(
             semantic,
             plan,
+            semantic_ssa,
             &defined_function_ids,
             &defined_function_signatures,
             (index == 0).then_some(required_workgroup).flatten(),
@@ -10765,1986 +11311,10 @@ fn semantic_source_argument_for_kir_parameter_v1(
     }
 }
 
-fn semantic_cfg_reverse_postorder(
-    function: &SemanticFunctionDeclV1,
-) -> Result<Vec<SemanticBlockIdV1>, ProductionSemanticKirErrorV1> {
-    let mut postorder = Vec::with_capacity(function.blocks().len());
-    let mut visited = vec![false; function.blocks().len()];
-    let mut stack = vec![(function.entry(), false)];
-    while let Some((block, expanded)) = stack.pop() {
-        let index = usize::try_from(block.index())
-            .map_err(|_| unsupported(0, None, None, "block identity does not fit this host"))?;
-        let Some(source) = function.blocks().get(index) else {
-            return Err(unsupported(
-                0,
-                Some(block.index()),
-                None,
-                "CFG traversal references a missing block",
-            ));
-        };
-        if expanded {
-            postorder.push(block);
-            continue;
-        }
-        if visited[index] {
-            continue;
-        }
-        visited[index] = true;
-        stack.push((block, true));
-        let mut successors = Vec::with_capacity(source.terminator().kind().edge_count());
-        source
-            .terminator()
-            .kind()
-            .try_for_each_edge::<ProductionSemanticKirErrorV1>(|edge| {
-                let target = edge.target();
-                let target_index = usize::try_from(target.index()).map_err(|_| {
-                    unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "CFG successor identity does not fit this host",
-                    )
-                })?;
-                if target_index >= function.blocks().len() {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "CFG traversal references a missing successor",
-                    ));
-                }
-                successors.push(target);
-                Ok(())
-            })?;
-        stack.extend(
-            successors
-                .into_iter()
-                .rev()
-                .map(|successor| (successor, false)),
-        );
-    }
-    postorder.reverse();
-    let mut order = postorder;
-    order.extend(
-        visited
-            .iter()
-            .enumerate()
-            .filter(|(_, seen)| !**seen)
-            .map(|(index, _)| SemanticBlockIdV1::from_index(index as u32)),
-    );
-    Ok(order)
-}
-
-const MAX_PROMOTED_LOCALS_V1: usize = 128;
-const MAX_PROMOTED_BLOCK_PARAMETERS_V1: usize = 16_384;
-
-#[derive(Clone, Debug)]
-struct SemanticPromotedLocalV1 {
-    semantic_type: SemanticTypeIdV1,
-    binding: SemanticPromotedBindingV1,
-    kernel_types: Box<[Type]>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SemanticPromotedBindingV1 {
-    Ordinary,
-    DynamicLds {
-        dynamic_lds: SemanticTypeIdV1,
-        element_storage: SemanticTypeIdV1,
-        elements: u32,
-        byte_extent: u64,
-        alignment: u32,
-        producer_function: SemanticFunctionIdV1,
-        producer_block: SemanticBlockIdV1,
-    },
-    WorkgroupCollectiveScratch {
-        element: SemanticTypeIdV1,
-    },
-    MatrixFragment {
-        contract: SemanticMfmaOperandContractV1,
-        storage_layout: SemanticMfmaStorageLayoutV1,
-    },
-    AccumulatorFragment {
-        contract: SemanticMfmaAccumulatorContractV1,
-    },
-    Gfx950LdsTransposeTile {
-        format: SemanticGfx950LdsTransposeFormatV1,
-        state: SemanticGfx950LdsTransposeStateV1,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SemanticGfx950LdsTransposeStateV1 {
-    Uninitialized,
-    Staged,
-    Published,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct SemanticCurrentWaveV1 {
-    width: u32,
-}
-
-impl SemanticCurrentWaveV1 {
-    const fn new(width: u32) -> Self {
-        Self { width }
-    }
-}
-
-impl SemanticPromotedBindingV1 {
-    fn transport_types(
-        self,
-        types: &[SemanticTypeDeclV1],
-        semantic_type: SemanticTypeIdV1,
-    ) -> Result<Vec<Type>, ProductionSemanticKirErrorV1> {
-        let transport = match self {
-            Self::Ordinary => lower_ssa_value_types(types, semantic_type)?,
-            Self::DynamicLds {
-                dynamic_lds,
-                element_storage,
-                ..
-            } => {
-                if semantic_type != dynamic_lds {
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "promoted dynamic LDS semantic type changed",
-                    ));
-                }
-                vec![
-                    Type::pointer(
-                        lower_dynamic_lds_element_type_v1(types, element_storage)?,
-                        AddressSpace::Workgroup,
-                        AccessMode::ReadWrite,
-                    ),
-                    Type::INDEX,
-                    Type::INDEX,
-                ]
-            }
-            Self::WorkgroupCollectiveScratch { element } => {
-                lower_workgroup_collective_scratch_transport_v1(types, semantic_type, element)?
-            }
-            Self::MatrixFragment { contract, .. } => match contract.profile {
-                SemanticMfmaProfileV1::Bf16F32M16N16K16 => {
-                    vec![Type::Scalar(ScalarType::Bf16); 4]
-                }
-                SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128
-                | SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128 => {
-                    vec![Type::Scalar(ScalarType::U32); 8]
-                }
-            },
-            Self::AccumulatorFragment { contract } => match contract.profile {
-                SemanticMfmaProfileV1::Bf16F32M16N16K16
-                | SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128
-                | SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128 => {
-                    vec![Type::Scalar(ScalarType::F32); 4]
-                }
-            },
-            Self::Gfx950LdsTransposeTile { .. } => vec![gfx950_lds_transpose_pointer_type_v1()],
-        };
-        Ok(transport)
-    }
-
-    const fn current_wave(self) -> Option<SemanticCurrentWaveV1> {
-        match self {
-            Self::Ordinary | Self::DynamicLds { .. } | Self::WorkgroupCollectiveScratch { .. } => {
-                None
-            }
-            Self::MatrixFragment { contract, .. } => {
-                Some(SemanticCurrentWaveV1::new(contract.wave_width))
-            }
-            Self::AccumulatorFragment { contract } => {
-                Some(SemanticCurrentWaveV1::new(contract.wave_width))
-            }
-            Self::Gfx950LdsTransposeTile { .. } => Some(SemanticCurrentWaveV1::new(64)),
-        }
-    }
-
-    fn transport_values(
-        self,
-        binding: &SemanticValueBindingV1,
-    ) -> Result<Vec<(ValueId, Type)>, &'static str> {
-        match (self, binding) {
-            (Self::Ordinary, binding) => binding.values(),
-            (
-                Self::DynamicLds {
-                    dynamic_lds,
-                    element_storage,
-                    elements,
-                    byte_extent,
-                    alignment,
-                    producer_function,
-                    producer_block,
-                },
-                SemanticValueBindingV1::DynamicLds {
-                    base,
-                    base_ty,
-                    len,
-                    byte_len,
-                    dynamic_lds: actual_dynamic_lds,
-                    element_storage: actual_element_storage,
-                    elements: actual_elements,
-                    byte_extent: actual_byte_extent,
-                    alignment: actual_alignment,
-                    producer_function: actual_producer_function,
-                    producer_block: actual_producer_block,
-                },
-            ) if dynamic_lds == *actual_dynamic_lds
-                && element_storage == *actual_element_storage
-                && elements == *actual_elements
-                && byte_extent == *actual_byte_extent
-                && alignment == *actual_alignment
-                && producer_function == *actual_producer_function
-                && producer_block == *actual_producer_block =>
-            {
-                Ok(vec![
-                    (*base, base_ty.clone()),
-                    (*len, Type::INDEX),
-                    (*byte_len, Type::INDEX),
-                ])
-            }
-            (Self::WorkgroupCollectiveScratch { .. }, SemanticValueBindingV1::Aggregate(_)) => {
-                binding.values()
-            }
-            (
-                Self::MatrixFragment {
-                    contract,
-                    storage_layout,
-                },
-                SemanticValueBindingV1::MatrixFragment {
-                    values,
-                    contract: actual_contract,
-                    storage_layout: actual_storage_layout,
-                    wave,
-                },
-            ) if contract == *actual_contract
-                && storage_layout == *actual_storage_layout
-                && self.current_wave() == Some(*wave) =>
-            {
-                Ok(values.clone())
-            }
-            (
-                Self::AccumulatorFragment { contract },
-                SemanticValueBindingV1::AccumulatorFragment {
-                    values,
-                    contract: actual_contract,
-                    wave,
-                },
-            ) if contract == *actual_contract && self.current_wave() == Some(*wave) => {
-                Ok(values.clone())
-            }
-            (
-                Self::Gfx950LdsTransposeTile { format, state },
-                SemanticValueBindingV1::Gfx950LdsTransposeTile {
-                    storage,
-                    format: actual_format,
-                    state: actual_state,
-                },
-            ) if format == *actual_format && state == *actual_state => {
-                Ok(vec![(*storage, gfx950_lds_transpose_pointer_type_v1())])
-            }
-            (Self::MatrixFragment { .. }, _) => {
-                Err("promoted matrix fragment lacks its authenticated producer metadata")
-            }
-            (Self::AccumulatorFragment { .. }, _) => {
-                Err("promoted accumulator fragment lacks its authenticated producer metadata")
-            }
-            (Self::Gfx950LdsTransposeTile { .. }, _) => {
-                Err("promoted gfx950 LDS transpose tile lacks its authenticated state")
-            }
-            (Self::WorkgroupCollectiveScratch { .. }, _) => {
-                Err("promoted workgroup scratch lacks its authenticated aggregate")
-            }
-            (Self::DynamicLds { .. }, _) => {
-                Err("promoted dynamic LDS lacks its exact compiler-issued allocation contract")
-            }
-        }
-    }
-
-    fn binding_from_transport(
-        self,
-        types: &[SemanticTypeDeclV1],
-        semantic_type: SemanticTypeIdV1,
-        values: &[ValueDef],
-    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
-        if matches!(self, Self::Ordinary) {
-            return binding_from_value_defs(types, semantic_type, values);
-        }
-        let expected = self.transport_types(types, semantic_type)?;
-        if values.len() != expected.len()
-            || values
-                .iter()
-                .zip(&expected)
-                .any(|(actual, expected)| &actual.ty != expected)
-        {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "typed fragment SSA component types changed",
-            ));
-        }
-        let components: Vec<(ValueId, Type)> = values
-            .iter()
-            .map(|value| (value.id, value.ty.clone()))
-            .collect();
-        match self {
-            Self::Ordinary => unreachable!("ordinary binding returned above"),
-            Self::DynamicLds {
-                dynamic_lds,
-                element_storage,
-                elements,
-                byte_extent,
-                alignment,
-                producer_function,
-                producer_block,
-            } => Ok(SemanticValueBindingV1::DynamicLds {
-                base: components[0].0,
-                base_ty: components[0].1.clone(),
-                len: components[1].0,
-                byte_len: components[2].0,
-                dynamic_lds,
-                element_storage,
-                elements,
-                byte_extent,
-                alignment,
-                producer_function,
-                producer_block,
-            }),
-            Self::WorkgroupCollectiveScratch { .. } => {
-                binding_from_value_defs_with_validation(types, semantic_type, values, false)
-            }
-            Self::MatrixFragment {
-                contract,
-                storage_layout,
-            } => Ok(SemanticValueBindingV1::MatrixFragment {
-                values: components,
-                contract,
-                storage_layout,
-                wave: self
-                    .current_wave()
-                    .expect("matrix fragments have a current-wave association"),
-            }),
-            Self::AccumulatorFragment { contract } => {
-                Ok(SemanticValueBindingV1::AccumulatorFragment {
-                    values: components,
-                    contract,
-                    wave: self
-                        .current_wave()
-                        .expect("accumulator fragments have a current-wave association"),
-                })
-            }
-            Self::Gfx950LdsTransposeTile { format, state } => {
-                Ok(SemanticValueBindingV1::Gfx950LdsTransposeTile {
-                    storage: components[0].0,
-                    format,
-                    state,
-                })
-            }
-        }
-    }
-}
-
-fn gfx950_lds_transpose_pointer_type_v1() -> Type {
-    Type::pointer(
-        Type::Scalar(ScalarType::U8),
-        AddressSpace::Workgroup,
-        AccessMode::ReadWrite,
-    )
-}
-
-fn insert_compiler_issued_ssa_binding_v1(
-    bindings: &mut BTreeMap<SemanticTypeIdV1, SemanticPromotedBindingV1>,
-    ty: SemanticTypeIdV1,
-    binding: SemanticPromotedBindingV1,
-) -> Result<(), ProductionSemanticKirErrorV1> {
-    if let Some(existing) = bindings.insert(ty, binding)
-        && existing != binding
-    {
-        return Err(unsupported(
-            0,
-            None,
-            None,
-            "one semantic fragment type has conflicting compiler-issued contracts",
-        ));
-    }
-    Ok(())
-}
-
-fn compiler_issued_ssa_bindings_v1(
-    types: &[SemanticTypeDeclV1],
-    callables: &[SemanticCallableDeclV1],
-    function: &SemanticFunctionDeclV1,
-    semantic_function: SemanticFunctionIdV1,
-) -> Result<BTreeMap<SemanticTypeIdV1, SemanticPromotedBindingV1>, ProductionSemanticKirErrorV1> {
-    let mut bindings = BTreeMap::new();
-    for callable in callables {
-        let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable else {
-            continue;
-        };
-        require_current_production_intrinsic_v1(operation)?;
-        match operation {
-            SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
-                fragment,
-                contract,
-                storage_layout,
-                ..
-            }
-            | SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixLoadM16K128 {
-                fragment,
-                contract,
-                storage_layout,
-                ..
-            }
-            | SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixLoadM16K128 {
-                fragment,
-                contract,
-                storage_layout,
-                ..
-            } => insert_compiler_issued_ssa_binding_v1(
-                &mut bindings,
-                *fragment,
-                SemanticPromotedBindingV1::MatrixFragment {
-                    contract: *contract,
-                    storage_layout: *storage_layout,
-                },
-            )?,
-            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeCurrent {
-                tile,
-                format,
-                ..
-            } => insert_compiler_issued_ssa_binding_v1(
-                &mut bindings,
-                *tile,
-                SemanticPromotedBindingV1::Gfx950LdsTransposeTile {
-                    format: *format,
-                    state: SemanticGfx950LdsTransposeStateV1::Uninitialized,
-                },
-            )?,
-            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage {
-                output_tile,
-                format,
-                ..
-            } => insert_compiler_issued_ssa_binding_v1(
-                &mut bindings,
-                *output_tile,
-                SemanticPromotedBindingV1::Gfx950LdsTransposeTile {
-                    format: *format,
-                    state: SemanticGfx950LdsTransposeStateV1::Staged,
-                },
-            )?,
-            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish {
-                output_tile,
-                format,
-                ..
-            } => insert_compiler_issued_ssa_binding_v1(
-                &mut bindings,
-                *output_tile,
-                SemanticPromotedBindingV1::Gfx950LdsTransposeTile {
-                    format: *format,
-                    state: SemanticGfx950LdsTransposeStateV1::Published,
-                },
-            )?,
-            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead {
-                fragment,
-                contract,
-                ..
-            } => insert_compiler_issued_ssa_binding_v1(
-                &mut bindings,
-                *fragment,
-                SemanticPromotedBindingV1::MatrixFragment {
-                    contract: *contract,
-                    storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
-                },
-            )?,
-            SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
-                fragment,
-                contract,
-                ..
-            }
-            | SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
-                accumulator_fragment: fragment,
-                accumulator: contract,
-                ..
-            } => insert_compiler_issued_ssa_binding_v1(
-                &mut bindings,
-                *fragment,
-                SemanticPromotedBindingV1::AccumulatorFragment {
-                    contract: *contract,
-                },
-            )?,
-            SemanticCompilerIntrinsicOperationV1::WorkgroupReduceSum {
-                scratch, element, ..
-            } => insert_compiler_issued_ssa_binding_v1(
-                &mut bindings,
-                *scratch,
-                SemanticPromotedBindingV1::WorkgroupCollectiveScratch { element: *element },
-            )?,
-            _ => {}
-        }
-    }
-
-    for (block_index, block) in function.blocks().iter().enumerate() {
-        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
-            continue;
-        };
-        let Some(SemanticCallableDeclV1::CompilerIntrinsic {
-            operation:
-                SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
-                    dynamic_lds,
-                    element_storage,
-                    elements,
-                    ..
-                },
-            ..
-        }) = callables.get(call.callee().index() as usize)
-        else {
-            continue;
-        };
-        let destination = call.destination().ok_or_else(|| {
-            unsupported(
-                semantic_function.index(),
-                Some(block_index as u32),
-                None,
-                "compiler-issued dynamic LDS producer has no destination",
-            )
-        })?;
-        if !destination.place().projections().is_empty() || destination.place().ty() != *dynamic_lds
-        {
-            return Err(unsupported(
-                semantic_function.index(),
-                Some(block_index as u32),
-                None,
-                "compiler-issued dynamic LDS producer destination changed",
-            ));
-        }
-        let storage = types.get(element_storage.index() as usize).ok_or_else(|| {
-            unsupported(
-                semantic_function.index(),
-                Some(block_index as u32),
-                None,
-                "compiler-issued dynamic LDS storage type is missing",
-            )
-        })?;
-        let element_size = storage.layout().size_bytes().ok_or_else(|| {
-            unsupported(
-                semantic_function.index(),
-                Some(block_index as u32),
-                None,
-                "compiler-issued dynamic LDS storage is dynamically sized",
-            )
-        })?;
-        let extent = u32::try_from(*elements).map_err(|_| {
-            unsupported(
-                semantic_function.index(),
-                Some(block_index as u32),
-                None,
-                "compiler-issued dynamic LDS extent exceeds Kernel IR",
-            )
-        })?;
-        let byte_extent = elements.checked_mul(element_size).ok_or_else(|| {
-            unsupported(
-                semantic_function.index(),
-                Some(block_index as u32),
-                None,
-                "compiler-issued dynamic LDS byte extent overflows",
-            )
-        })?;
-        let alignment = u32::try_from(storage.layout().alignment_bytes()).map_err(|_| {
-            unsupported(
-                semantic_function.index(),
-                Some(block_index as u32),
-                None,
-                "compiler-issued dynamic LDS alignment exceeds Kernel IR",
-            )
-        })?;
-        insert_compiler_issued_ssa_binding_v1(
-            &mut bindings,
-            *dynamic_lds,
-            SemanticPromotedBindingV1::DynamicLds {
-                dynamic_lds: *dynamic_lds,
-                element_storage: *element_storage,
-                elements: extent,
-                byte_extent,
-                alignment,
-                producer_function: semantic_function,
-                producer_block: SemanticBlockIdV1::from_index(block_index as u32),
-            },
-        )?;
-    }
-
-    for callable in callables {
-        let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable else {
-            continue;
-        };
-        match operation {
-            SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
-                lhs_fragment,
-                rhs_fragment,
-                lhs,
-                rhs,
-                ..
-            } => {
-                for (fragment, expected) in [(*lhs_fragment, *lhs), (*rhs_fragment, *rhs)] {
-                    if let Some(binding) = bindings.get(&fragment)
-                        && !matches!(
-                            binding,
-                            SemanticPromotedBindingV1::MatrixFragment { contract, .. }
-                                if *contract == expected
-                        )
-                    {
-                        return Err(unsupported(
-                            0,
-                            None,
-                            None,
-                            "matrix consumer contract conflicts with its compiler-issued fragment type",
-                        ));
-                    }
-                }
-            }
-            SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
-                fragment,
-                ..
-            } => {
-                if let Some(binding) = bindings.get(fragment)
-                    && !matches!(
-                        binding,
-                        SemanticPromotedBindingV1::AccumulatorFragment { .. }
-                    )
-                {
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "accumulator projection conflicts with its compiler-issued fragment type",
-                    ));
-                }
-            }
-            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage {
-                input_tile,
-                format,
-                ..
-            } => {
-                if let Some(binding) = bindings.get(input_tile)
-                    && !matches!(
-                        binding,
-                        SemanticPromotedBindingV1::Gfx950LdsTransposeTile {
-                            format: actual_format,
-                            state: SemanticGfx950LdsTransposeStateV1::Uninitialized,
-                        } if actual_format == format
-                    )
-                {
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "gfx950 LDS transpose stage input has conflicting compiler-issued state",
-                    ));
-                }
-            }
-            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish {
-                input_tile,
-                format,
-                ..
-            } => {
-                if let Some(binding) = bindings.get(input_tile)
-                    && !matches!(
-                        binding,
-                        SemanticPromotedBindingV1::Gfx950LdsTransposeTile {
-                            format: actual_format,
-                            state: SemanticGfx950LdsTransposeStateV1::Staged,
-                        } if actual_format == format
-                    )
-                {
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "gfx950 LDS transpose publish input has conflicting compiler-issued state",
-                    ));
-                }
-            }
-            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead {
-                tile, format, ..
-            } => {
-                if let Some(binding) = bindings.get(tile)
-                    && !matches!(
-                        binding,
-                        SemanticPromotedBindingV1::Gfx950LdsTransposeTile {
-                            format: actual_format,
-                            state: SemanticGfx950LdsTransposeStateV1::Published,
-                        } if actual_format == format
-                    )
-                {
-                    return Err(unsupported(
-                        0,
-                        None,
-                        None,
-                        "gfx950 LDS transpose read input has conflicting compiler-issued state",
-                    ));
-                }
-            }
-            _ => {}
-        }
-    }
-    Ok(bindings)
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct SemanticWorkgroupPipelineTypeContractV1 {
-    element: SemanticTypeIdV1,
-    payload_binding: SemanticPromotedBindingV1,
-    component_types: Box<[Type]>,
-    packed_type: Type,
-    alignment: u32,
-}
-
-fn pipeline_scalar_bit_width_v1(ty: &Type) -> Option<u32> {
-    match ty.as_scalar()? {
-        ScalarType::Index => Some(64),
-        ScalarType::Bool => Some(8),
-        scalar => scalar.bit_width().map(u32::from),
-    }
-}
-
-fn pipeline_packed_type_v1(bits: u32) -> Option<Type> {
-    Some(Type::Scalar(match bits {
-        8 => ScalarType::U8,
-        16 => ScalarType::U16,
-        32 => ScalarType::U32,
-        64 => ScalarType::U64,
-        128 => ScalarType::U128,
-        _ => return None,
-    }))
-}
-
-fn pipeline_unsigned_component_type_v1(ty: &Type) -> Option<Type> {
-    Some(Type::Scalar(match pipeline_scalar_bit_width_v1(ty)? {
-        8 => ScalarType::U8,
-        16 => ScalarType::U16,
-        32 => ScalarType::U32,
-        64 => ScalarType::U64,
-        128 => ScalarType::U128,
-        _ => return None,
-    }))
-}
-
-fn pipeline_integer_constant_v1(ty: &Type, value: u64) -> Option<Constant> {
-    match ty.as_scalar()? {
-        ScalarType::U8 => u8::try_from(value).ok().map(Constant::U8),
-        ScalarType::U16 => u16::try_from(value).ok().map(Constant::U16),
-        ScalarType::U32 => u32::try_from(value).ok().map(Constant::U32),
-        ScalarType::U64 => Some(Constant::U64(value)),
-        _ => None,
-    }
-}
-
-fn workgroup_pipeline_type_contracts_v1(
-    types: &[SemanticTypeDeclV1],
-    callables: &[SemanticCallableDeclV1],
-    compiler_issued_bindings: &BTreeMap<SemanticTypeIdV1, SemanticPromotedBindingV1>,
-) -> Result<
-    BTreeMap<SemanticTypeIdV1, SemanticWorkgroupPipelineTypeContractV1>,
-    ProductionSemanticKirErrorV1,
-> {
-    let mut elements = BTreeMap::new();
-    for callable in callables {
-        let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable else {
-            continue;
-        };
-        let (pipeline, element) = match operation {
-            SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { pipeline, element }
-            | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead { pipeline, element } => {
-                (*pipeline, *element)
-            }
-            _ => continue,
-        };
-        if let Some(existing) = elements.insert(pipeline, element)
-            && existing != element
-        {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "one workgroup pipeline type has inconsistent payload types",
-            ));
-        }
-    }
-
-    let mut contracts = BTreeMap::new();
-    for (pipeline, element) in elements {
-        let payload_binding = compiler_issued_bindings
-            .get(&element)
-            .copied()
-            .unwrap_or(SemanticPromotedBindingV1::Ordinary);
-        let component_types = payload_binding.transport_types(types, element)?;
-        if component_types.is_empty() {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "workgroup pipeline payload has no physical components",
-            ));
-        }
-        let component_bits = component_types.iter().try_fold(0_u32, |total, component| {
-            let bits = pipeline_scalar_bit_width_v1(component).ok_or_else(|| {
-                unsupported(
-                    0,
-                    None,
-                    None,
-                    "workgroup pipeline payload component is not a physical scalar",
-                )
-            })?;
-            total.checked_add(bits).ok_or_else(|| {
-                unsupported(0, None, None, "workgroup pipeline payload width overflows")
-            })
-        })?;
-        let declaration = types.get(element.index() as usize).ok_or_else(|| {
-            unsupported(0, None, None, "workgroup pipeline payload type is missing")
-        })?;
-        let layout_bits = declaration
-            .layout()
-            .size_bytes()
-            .and_then(|bytes| bytes.checked_mul(8))
-            .and_then(|bits| u32::try_from(bits).ok())
-            .ok_or_else(|| {
-                unsupported(
-                    0,
-                    None,
-                    None,
-                    "workgroup pipeline payload layout width is unavailable",
-                )
-            })?;
-        if component_bits != layout_bits {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "workgroup pipeline payload transport does not cover its exact Rust layout",
-            ));
-        }
-        let packed_type = pipeline_packed_type_v1(layout_bits).ok_or_else(|| {
-            unsupported(
-                0,
-                None,
-                None,
-                "workgroup pipeline payload has no exact packed Kernel IR scalar",
-            )
-        })?;
-        if layout_bits == 128 && component_types.as_slice() != [packed_type.clone()] {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "composite 128-bit workgroup pipeline packing is not executable",
-            ));
-        }
-        let source_alignment = u32::try_from(declaration.layout().alignment_bytes())
-            .ok()
-            .filter(|alignment| *alignment != 0)
-            .ok_or_else(|| {
-                unsupported(
-                    0,
-                    None,
-                    None,
-                    "workgroup pipeline payload alignment is unavailable",
-                )
-            })?;
-        let packed_alignment = layout_bits
-            .checked_div(8)
-            .filter(|alignment| *alignment != 0)
-            .ok_or_else(|| {
-                unsupported(
-                    0,
-                    None,
-                    None,
-                    "workgroup pipeline packed alignment is unavailable",
-                )
-            })?;
-        let alignment = source_alignment.max(packed_alignment);
-        contracts.insert(
-            pipeline,
-            SemanticWorkgroupPipelineTypeContractV1 {
-                element,
-                payload_binding,
-                component_types: component_types.into_boxed_slice(),
-                packed_type,
-                alignment,
-            },
-        );
-    }
-    Ok(contracts)
-}
-
-fn require_current_production_intrinsic_v1(
-    operation: &SemanticCompilerIntrinsicOperationV1,
-) -> Result<(), ProductionSemanticKirErrorV1> {
-    if matches!(
-        operation,
-        SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. }
-    ) {
-        Err(unsupported(
-            0,
-            None,
-            None,
-            "the retired Option-returning BF16 matrix load is not admitted; use Bf16MatrixLoadZeroFilledV2",
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-struct SemanticControlFlowSsaPlanV1 {
-    compiler_issued_bindings: BTreeMap<SemanticTypeIdV1, SemanticPromotedBindingV1>,
-    promoted: BTreeMap<u32, SemanticPromotedLocalV1>,
-    live_in: BTreeMap<u32, Vec<u32>>,
-}
-
-impl SemanticControlFlowSsaPlanV1 {
-    fn analyze(
-        types: &[SemanticTypeDeclV1],
-        callables: &[SemanticCallableDeclV1],
-        function: &SemanticFunctionDeclV1,
-        semantic_function: SemanticFunctionIdV1,
-    ) -> Result<Self, ProductionSemanticKirErrorV1> {
-        let compiler_issued_bindings =
-            compiler_issued_ssa_bindings_v1(types, callables, function, semantic_function)?;
-        let mut definition_counts = vec![0_u32; function.locals().len()];
-        let mut projected = BTreeSet::new();
-        for block in function.blocks() {
-            for statement in block.statements() {
-                if let SemanticStatementKindV1::Assign(assignment) = statement.kind() {
-                    let destination = assignment.destination();
-                    if destination.projections().is_empty() {
-                        let count = definition_counts
-                            .get_mut(destination.local().index() as usize)
-                            .ok_or_else(|| {
-                                unsupported(0, None, None, "assignment local is missing")
-                            })?;
-                        *count = count.saturating_add(1);
-                    } else {
-                        projected.insert(destination.local().index());
-                    }
-                }
-            }
-            if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
-                && let Some(destination) = call.destination()
-            {
-                if destination.place().projections().is_empty() {
-                    let count = definition_counts
-                        .get_mut(destination.place().local().index() as usize)
-                        .ok_or_else(|| {
-                            unsupported(0, None, None, "call destination local is missing")
-                        })?;
-                    *count = count.saturating_add(1);
-                } else {
-                    projected.insert(destination.place().local().index());
-                }
-            }
-        }
-
-        let mut promoted = BTreeMap::new();
-        for (local, declaration) in function.locals().iter().enumerate() {
-            if definition_counts[local] < 2 || projected.contains(&(local as u32)) {
-                continue;
-            }
-            let binding = compiler_issued_bindings
-                .get(&declaration.ty())
-                .copied()
-                .unwrap_or(SemanticPromotedBindingV1::Ordinary);
-            if let Ok(kernel_types) = binding.transport_types(types, declaration.ty())
-                && !kernel_types.is_empty()
-            {
-                promoted.insert(
-                    local as u32,
-                    SemanticPromotedLocalV1 {
-                        semantic_type: declaration.ty(),
-                        binding,
-                        kernel_types: kernel_types.into_boxed_slice(),
-                    },
-                );
-            }
-        }
-        if promoted.is_empty() {
-            return Ok(Self {
-                compiler_issued_bindings,
-                promoted,
-                live_in: BTreeMap::new(),
-            });
-        }
-        if promoted.len() > MAX_PROMOTED_LOCALS_V1 {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "mutable control flow exceeds the promoted-local limit",
-            ));
-        }
-
-        let block_ids = (0..function.blocks().len())
-            .map(|block| block as u32)
-            .collect::<BTreeSet<_>>();
-        let mut uses = BTreeMap::<u32, BTreeSet<u32>>::new();
-        let mut defs = BTreeMap::<u32, BTreeSet<u32>>::new();
-        let mut successors = BTreeMap::<u32, Vec<u32>>::new();
-        let return_local = function
-            .locals()
-            .iter()
-            .position(|local| local.role() == SemanticLocalRoleV1::Return)
-            .and_then(|local| u32::try_from(local).ok());
-        for (block_index, block) in function.blocks().iter().enumerate() {
-            let block_id = block_index as u32;
-            let mut block_uses = BTreeSet::new();
-            let mut block_defs = BTreeSet::new();
-            for statement in block.statements() {
-                collect_statement_uses_v1(
-                    statement.kind(),
-                    &promoted,
-                    &block_defs,
-                    &mut block_uses,
-                );
-                if let SemanticStatementKindV1::Assign(assignment) = statement.kind()
-                    && assignment.destination().projections().is_empty()
-                    && promoted.contains_key(&assignment.destination().local().index())
-                {
-                    block_defs.insert(assignment.destination().local().index());
-                }
-            }
-            collect_terminator_uses_v1(
-                block.terminator().kind(),
-                return_local,
-                &promoted,
-                &block_defs,
-                &mut block_uses,
-            );
-            if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
-                && let Some(destination) = call.destination()
-                && destination.place().projections().is_empty()
-                && promoted.contains_key(&destination.place().local().index())
-            {
-                block_defs.insert(destination.place().local().index());
-            }
-            let mut block_successors = Vec::new();
-            block
-                .terminator()
-                .kind()
-                .try_for_each_edge::<ProductionSemanticKirErrorV1>(|edge| {
-                    if !block_ids.contains(&edge.target().index()) {
-                        return Err(unsupported(
-                            0,
-                            Some(block_id),
-                            None,
-                            "CFG successor is missing",
-                        ));
-                    }
-                    block_successors.push(edge.target().index());
-                    Ok(())
-                })?;
-            uses.insert(block_id, block_uses);
-            defs.insert(block_id, block_defs);
-            successors.insert(block_id, block_successors);
-        }
-
-        let mut live_in = function
-            .blocks()
-            .iter()
-            .enumerate()
-            .map(|(block, _)| (block as u32, BTreeSet::new()))
-            .collect::<BTreeMap<_, _>>();
-        let mut predecessors = function
-            .blocks()
-            .iter()
-            .enumerate()
-            .map(|(block, _)| (block as u32, BTreeSet::new()))
-            .collect::<BTreeMap<_, _>>();
-        for (source, targets) in &successors {
-            for target in targets {
-                predecessors
-                    .get_mut(target)
-                    .expect("validated successor")
-                    .insert(*source);
-            }
-        }
-        let mut worklist = (0..function.blocks().len() as u32).collect::<VecDeque<_>>();
-        let mut queued = (0..function.blocks().len() as u32).collect::<BTreeSet<_>>();
-        while let Some(block_id) = worklist.pop_front() {
-            queued.remove(&block_id);
-            let live_out = successors[&block_id]
-                .iter()
-                .flat_map(|target| live_in[target].iter().copied())
-                .collect::<BTreeSet<_>>();
-            let mut next = uses[&block_id].clone();
-            next.extend(live_out.difference(&defs[&block_id]).copied());
-            if next != live_in[&block_id] {
-                live_in.insert(block_id, next);
-                for predecessor in &predecessors[&block_id] {
-                    if queued.insert(*predecessor) {
-                        worklist.push_back(*predecessor);
-                    }
-                }
-            }
-        }
-
-        let entry = function.entry().index();
-        if live_in[&entry].iter().any(|local| {
-            !matches!(
-                function.locals()[*local as usize].role(),
-                SemanticLocalRoleV1::Argument(_)
-            )
-        }) {
-            return Err(unsupported(
-                0,
-                Some(entry),
-                None,
-                "mutable scalar control flow reads a local before its entry definition",
-            ));
-        }
-        let parameter_count = live_in
-            .iter()
-            .filter(|(block, _)| **block != entry)
-            .flat_map(|(_, locals)| locals)
-            .map(|local| promoted[local].kernel_types.len())
-            .sum::<usize>();
-        if parameter_count > MAX_PROMOTED_BLOCK_PARAMETERS_V1 {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "mutable scalar control flow exceeds the block-parameter limit",
-            ));
-        }
-        for (block, targets) in &successors {
-            let mut seen = BTreeSet::new();
-            for target in targets {
-                if !seen.insert(*target) && !live_in[target].is_empty() {
-                    return Err(unsupported(
-                        0,
-                        Some(*block),
-                        None,
-                        "multiple live-value edges from one block to one successor are unsupported",
-                    ));
-                }
-            }
-        }
-
-        Ok(Self {
-            compiler_issued_bindings,
-            promoted,
-            live_in: live_in
-                .into_iter()
-                .map(|(block, locals)| (block, locals.into_iter().collect()))
-                .collect(),
-        })
-    }
-
-    fn live_in(&self, block: u32) -> &[u32] {
-        self.live_in.get(&block).map_or(&[], Vec::as_slice)
-    }
-}
-
-fn analyze_promoted_enum_variants_v1(
-    types: &[SemanticTypeDeclV1],
-    function: &SemanticFunctionDeclV1,
-    control_flow_ssa: &SemanticControlFlowSsaPlanV1,
-) -> Result<BTreeMap<(u32, u32), u32>, ProductionSemanticKirErrorV1> {
-    type ExactVariantsV1 = BTreeMap<u32, u32>;
-
-    fn whole_local(operand: &SemanticOperandV1) -> Option<u32> {
-        match operand {
-            SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)
-                if place.projections().is_empty() =>
-            {
-                Some(place.local().index())
-            }
-            SemanticOperandV1::Copy(_)
-            | SemanticOperandV1::Move(_)
-            | SemanticOperandV1::Constant(_) => None,
-        }
-    }
-
-    fn meet(existing: &ExactVariantsV1, incoming: &ExactVariantsV1) -> ExactVariantsV1 {
-        existing
-            .iter()
-            .filter_map(|(local, variant)| {
-                (incoming.get(local) == Some(variant)).then_some((*local, *variant))
-            })
-            .collect()
-    }
-
-    let promoted_enums = control_flow_ssa
-        .promoted
-        .iter()
-        .filter_map(|(local, promoted)| {
-            types
-                .get(promoted.semantic_type.index() as usize)
-                .is_some_and(|declaration| {
-                    matches!(declaration.shape(), SemanticTypeShapeV1::Enum { .. })
-                })
-                .then_some(*local)
-        })
-        .collect::<BTreeSet<_>>();
-    if promoted_enums.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-
-    let block_count = function.blocks().len();
-    let entry = function.entry().index() as usize;
-    let mut incoming = vec![None::<ExactVariantsV1>; block_count];
-    let mut queued = BTreeSet::from([function.entry().index()]);
-    let mut worklist = VecDeque::from([function.entry().index()]);
-    incoming[entry] = Some(BTreeMap::new());
-
-    while let Some(block_index) = worklist.pop_front() {
-        queued.remove(&block_index);
-        let Some(block) = function.blocks().get(block_index as usize) else {
-            return Err(unsupported(
-                0,
-                Some(block_index),
-                None,
-                "promoted enum analysis references a missing block",
-            ));
-        };
-        let Some(mut facts) = incoming[block_index as usize].clone() else {
-            continue;
-        };
-        let mut discriminants = BTreeMap::<u32, u32>::new();
-        for statement in block.statements() {
-            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
-                continue;
-            };
-            let destination = assignment.destination();
-            if !destination.projections().is_empty() {
-                continue;
-            }
-            let destination = destination.local().index();
-            discriminants.remove(&destination);
-            discriminants.retain(|_, source| *source != destination);
-            if promoted_enums.contains(&destination) {
-                match assignment.value().kind() {
-                    SemanticRvalueKindV1::Aggregate(aggregate) => match aggregate.kind() {
-                        SemanticAggregateKindV1::EnumVariant(variant) => {
-                            facts.insert(destination, *variant);
-                        }
-                        _ => {
-                            facts.remove(&destination);
-                        }
-                    },
-                    _ => {
-                        facts.remove(&destination);
-                    }
-                }
-            }
-            if let SemanticRvalueKindV1::Discriminant(place) = assignment.value().kind()
-                && place.projections().is_empty()
-                && promoted_enums.contains(&place.local().index())
-            {
-                discriminants.insert(destination, place.local().index());
-            }
-        }
-
-        if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
-            && let Some(destination) = call.destination()
-            && destination.place().projections().is_empty()
-            && promoted_enums.contains(&destination.place().local().index())
-        {
-            facts.remove(&destination.place().local().index());
-        }
-
-        let mut outgoing = Vec::new();
-        if let SemanticTerminatorKindV1::SwitchInt {
-            discriminant,
-            targets,
-        } = block.terminator().kind()
-            && let Some(enum_local) =
-                whole_local(discriminant).and_then(|local| discriminants.get(&local).copied())
-        {
-            let promoted = &control_flow_ssa.promoted[&enum_local];
-            let declaration = types
-                .get(promoted.semantic_type.index() as usize)
-                .ok_or_else(|| {
-                    unsupported(
-                        0,
-                        Some(block_index),
-                        None,
-                        "promoted enum switch type is missing",
-                    )
-                })?;
-            let SemanticTypeShapeV1::Enum { variants, .. } = declaration.shape() else {
-                return Err(unsupported(
-                    0,
-                    Some(block_index),
-                    None,
-                    "promoted enum switch source is not an enum",
-                ));
-            };
-            for target in targets.values() {
-                let mut edge_facts = facts.clone();
-                if let Some((variant, _)) = variants
-                    .iter()
-                    .enumerate()
-                    .find(|(_, variant)| variant.discriminant() == target.value())
-                {
-                    edge_facts.insert(enum_local, variant as u32);
-                } else {
-                    edge_facts.remove(&enum_local);
-                }
-                outgoing.push((target.edge().target().index(), edge_facts));
-            }
-            let mut otherwise = variants.iter().enumerate().filter(|(_, variant)| {
-                !variant.is_uninhabited()
-                    && !targets
-                        .values()
-                        .iter()
-                        .any(|target| target.value() == variant.discriminant())
-            });
-            let exact_otherwise = otherwise.next().map(|(variant, _)| variant as u32);
-            if otherwise.next().is_some() {
-                facts.remove(&enum_local);
-            } else if let Some(variant) = exact_otherwise {
-                facts.insert(enum_local, variant);
-            } else {
-                facts.remove(&enum_local);
-            }
-            outgoing.push((targets.otherwise().target().index(), facts));
-        } else {
-            block
-                .terminator()
-                .kind()
-                .try_for_each_edge::<ProductionSemanticKirErrorV1>(|edge| {
-                    outgoing.push((edge.target().index(), facts.clone()));
-                    Ok(())
-                })?;
-        }
-
-        for (target, edge_facts) in outgoing {
-            let Some(target_incoming) = incoming.get_mut(target as usize) else {
-                return Err(unsupported(
-                    0,
-                    Some(block_index),
-                    None,
-                    "promoted enum analysis references a missing successor",
-                ));
-            };
-            let next = target_incoming
-                .as_ref()
-                .map_or_else(|| edge_facts.clone(), |current| meet(current, &edge_facts));
-            if target_incoming.as_ref() != Some(&next) {
-                *target_incoming = Some(next);
-                if queued.insert(target) {
-                    worklist.push_back(target);
-                }
-            }
-        }
-    }
-
-    Ok(incoming
-        .into_iter()
-        .enumerate()
-        .flat_map(|(block, facts)| {
-            facts.into_iter().flat_map(move |facts| {
-                facts
-                    .into_iter()
-                    .map(move |(local, variant)| ((block as u32, local), variant))
-            })
-        })
-        .collect())
-}
-
-fn collect_statement_uses_v1(
-    statement: &SemanticStatementKindV1,
-    promoted: &BTreeMap<u32, SemanticPromotedLocalV1>,
-    defs: &BTreeSet<u32>,
-    uses: &mut BTreeSet<u32>,
-) {
-    match statement {
-        SemanticStatementKindV1::Assign(assignment) => {
-            collect_rvalue_uses_v1(assignment.value().kind(), promoted, defs, uses);
-            if !assignment.destination().projections().is_empty() {
-                collect_place_use_v1(assignment.destination(), promoted, defs, uses);
-            }
-        }
-        SemanticStatementKindV1::Store(store) => {
-            collect_place_use_v1(store.destination(), promoted, defs, uses);
-            collect_operand_use_v1(store.value(), promoted, defs, uses);
-        }
-        _ => {}
-    }
-}
-
-fn collect_rvalue_uses_v1(
-    value: &SemanticRvalueKindV1,
-    promoted: &BTreeMap<u32, SemanticPromotedLocalV1>,
-    defs: &BTreeSet<u32>,
-    uses: &mut BTreeSet<u32>,
-) {
-    match value {
-        SemanticRvalueKindV1::Use(operand)
-        | SemanticRvalueKindV1::Unary { operand, .. }
-        | SemanticRvalueKindV1::Cast { operand, .. } => {
-            collect_operand_use_v1(operand, promoted, defs, uses);
-        }
-        SemanticRvalueKindV1::Binary { left, right, .. } => {
-            collect_operand_use_v1(left, promoted, defs, uses);
-            collect_operand_use_v1(right, promoted, defs, uses);
-        }
-        SemanticRvalueKindV1::CheckedBinary(checked) => {
-            collect_operand_use_v1(checked.left(), promoted, defs, uses);
-            collect_operand_use_v1(checked.right(), promoted, defs, uses);
-        }
-        SemanticRvalueKindV1::UncheckedBinary(unchecked) => {
-            collect_operand_use_v1(unchecked.left(), promoted, defs, uses);
-            collect_operand_use_v1(unchecked.right(), promoted, defs, uses);
-        }
-        SemanticRvalueKindV1::Borrow { place, .. }
-        | SemanticRvalueKindV1::AddressOf { place, .. }
-        | SemanticRvalueKindV1::Length(place)
-        | SemanticRvalueKindV1::Discriminant(place) => {
-            collect_place_use_v1(place, promoted, defs, uses);
-        }
-        SemanticRvalueKindV1::Aggregate(aggregate) => {
-            for operand in aggregate.operands() {
-                collect_operand_use_v1(operand, promoted, defs, uses);
-            }
-        }
-        SemanticRvalueKindV1::Load(load) => {
-            collect_place_use_v1(load.source(), promoted, defs, uses);
-        }
-    }
-}
-
-fn collect_terminator_uses_v1(
-    terminator: &SemanticTerminatorKindV1,
-    return_local: Option<u32>,
-    promoted: &BTreeMap<u32, SemanticPromotedLocalV1>,
-    defs: &BTreeSet<u32>,
-    uses: &mut BTreeSet<u32>,
-) {
-    match terminator {
-        SemanticTerminatorKindV1::SwitchInt { discriminant, .. } => {
-            collect_operand_use_v1(discriminant, promoted, defs, uses);
-        }
-        SemanticTerminatorKindV1::Call(call) => {
-            for argument in call.arguments() {
-                collect_operand_use_v1(argument, promoted, defs, uses);
-            }
-        }
-        SemanticTerminatorKindV1::Assert {
-            condition, message, ..
-        } => {
-            collect_operand_use_v1(condition, promoted, defs, uses);
-            match message {
-                SemanticAssertMessageV1::BoundsCheck { length, index }
-                | SemanticAssertMessageV1::Overflow {
-                    left: length,
-                    right: index,
-                    ..
-                } => {
-                    collect_operand_use_v1(length, promoted, defs, uses);
-                    collect_operand_use_v1(index, promoted, defs, uses);
-                }
-                SemanticAssertMessageV1::DivisionByZero(operand)
-                | SemanticAssertMessageV1::RemainderByZero(operand) => {
-                    collect_operand_use_v1(operand, promoted, defs, uses);
-                }
-                SemanticAssertMessageV1::MisalignedPointerDereference {
-                    required_alignment,
-                    found_alignment,
-                } => {
-                    collect_operand_use_v1(required_alignment, promoted, defs, uses);
-                    collect_operand_use_v1(found_alignment, promoted, defs, uses);
-                }
-                SemanticAssertMessageV1::NullPointerDereference
-                | SemanticAssertMessageV1::ResumedAfterReturn
-                | SemanticAssertMessageV1::ResumedAfterPanic => {}
-            }
-        }
-        SemanticTerminatorKindV1::Return => {
-            if let Some(local) = return_local
-                && promoted.contains_key(&local)
-                && !defs.contains(&local)
-            {
-                uses.insert(local);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn collect_operand_use_v1(
-    operand: &SemanticOperandV1,
-    promoted: &BTreeMap<u32, SemanticPromotedLocalV1>,
-    defs: &BTreeSet<u32>,
-    uses: &mut BTreeSet<u32>,
-) {
-    if let SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) = operand {
-        collect_place_use_v1(place, promoted, defs, uses);
-    }
-}
-
-fn collect_place_use_v1(
-    place: &SemanticPlaceV1,
-    promoted: &BTreeMap<u32, SemanticPromotedLocalV1>,
-    defs: &BTreeSet<u32>,
-    uses: &mut BTreeSet<u32>,
-) {
-    let local = place.local().index();
-    if promoted.contains_key(&local) && !defs.contains(&local) {
-        uses.insert(local);
-    }
-    for projection in place.projections() {
-        if let SemanticProjectionKindV1::Index(index) = projection.kind() {
-            let index = index.index();
-            if promoted.contains_key(&index) && !defs.contains(&index) {
-                uses.insert(index);
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct SemanticEnumPayloadComponentStorageV1 {
-    pointer: ValueId,
-    kernel_type: Type,
-    alignment: u32,
-}
-
-#[derive(Clone, Debug)]
-struct SemanticEnumPayloadFieldStorageV1 {
-    semantic_type: SemanticTypeIdV1,
-    exact_enum_variant: Option<u32>,
-    compiler_issued_binding: Option<SemanticPromotedBindingV1>,
-    components: Box<[SemanticEnumPayloadComponentStorageV1]>,
-}
-
-#[derive(Clone, Debug)]
-struct SemanticEnumPayloadSourceV1 {
-    place: SemanticPlaceV1,
-}
-
-#[derive(Clone, Debug)]
-struct SemanticEnumPayloadCustodyV1 {
-    source_block: SemanticBlockIdV1,
-    binding: SemanticValueBindingV1,
-}
-
-#[derive(Clone, Debug)]
-enum SemanticEnumPayloadRestoreV1 {
-    PrivateStorage(SemanticEnumPayloadFieldStorageV1),
-    UniqueSource(SemanticValueBindingV1),
-}
-
-#[derive(Clone, Copy, Debug)]
-enum SemanticCapabilityAvailabilityV1 {
-    Option(SemanticOptionAvailabilityV1),
-    EnumPayload {
-        local: SemanticLocalIdV1,
-        variant: u32,
-    },
-}
-
-#[derive(Clone, Debug)]
-enum SemanticValueBindingV1 {
-    Unit,
-    Unmaterialized,
-    Aggregate(Vec<SemanticValueBindingV1>),
-    Enum {
-        discriminant: ValueId,
-        discriminant_ty: Type,
-        semantic_type: SemanticTypeIdV1,
-        variant: Option<u32>,
-        payloads: BTreeMap<u32, Vec<SemanticValueBindingV1>>,
-    },
-    MathContext,
-    CollectiveContext,
-    WorkgroupLdsScope,
-    DynamicLds {
-        base: ValueId,
-        base_ty: Type,
-        len: ValueId,
-        byte_len: ValueId,
-        dynamic_lds: SemanticTypeIdV1,
-        element_storage: SemanticTypeIdV1,
-        elements: u32,
-        byte_extent: u64,
-        alignment: u32,
-        producer_function: SemanticFunctionIdV1,
-        producer_block: SemanticBlockIdV1,
-    },
-    MatrixContext,
-    WaveLane {
-        value: ValueId,
-        wave: SemanticCurrentWaveV1,
-    },
-    MatrixFragment {
-        values: Vec<(ValueId, Type)>,
-        contract: SemanticMfmaOperandContractV1,
-        storage_layout: SemanticMfmaStorageLayoutV1,
-        wave: SemanticCurrentWaveV1,
-    },
-    AccumulatorFragment {
-        values: Vec<(ValueId, Type)>,
-        contract: SemanticMfmaAccumulatorContractV1,
-        wave: SemanticCurrentWaveV1,
-    },
-    Gfx950LdsTransposeTile {
-        storage: ValueId,
-        format: SemanticGfx950LdsTransposeFormatV1,
-        state: SemanticGfx950LdsTransposeStateV1,
-    },
-    WorkgroupPipeline {
-        storage: ValueId,
-        pipeline: SemanticTypeIdV1,
-        element: SemanticTypeIdV1,
-        payload_binding: SemanticPromotedBindingV1,
-        component_types: Box<[Type]>,
-        packed_type: Type,
-        buffers: u32,
-        elements: u64,
-        prefetch_distance: u32,
-        alignment: u32,
-    },
-    Value {
-        id: ValueId,
-        ty: Type,
-    },
-    OptionPointer {
-        present: ValueId,
-        pointer: ValueId,
-        pointer_ty: Type,
-    },
-    IndexWitness {
-        id: ValueId,
-        index_space: SemanticDisjointIndexSpaceV1,
-        disjoint: bool,
-        availability: Option<SemanticCapabilityAvailabilityV1>,
-    },
-    OptionIndexWitness {
-        present: ValueId,
-        id: ValueId,
-        index_space: SemanticDisjointIndexSpaceV1,
-        availability: SemanticOptionAvailabilityV1,
-    },
-    GridLeader {
-        availability: SemanticCapabilityAvailabilityV1,
-    },
-    ComponentWitness {
-        raw: ValueId,
-        index_space: SemanticDisjointIndexSpaceV1,
-        availability: SemanticCapabilityAvailabilityV1,
-    },
-    OptionComponentWitness {
-        present: ValueId,
-        raw: ValueId,
-        index_space: SemanticDisjointIndexSpaceV1,
-        availability: SemanticOptionAvailabilityV1,
-    },
-    OptionGridLeader {
-        present: ValueId,
-        availability: SemanticOptionAvailabilityV1,
-    },
-}
-
-fn project_enum_payload_field(
-    selected_variant: u32,
-    payloads: &BTreeMap<u32, Vec<SemanticValueBindingV1>>,
-    field: u32,
-) -> Result<SemanticValueBindingV1, &'static str> {
-    let Some(fields) = payloads.get(&selected_variant) else {
-        return Ok(SemanticValueBindingV1::Unmaterialized);
-    };
-    fields
-        .get(field as usize)
-        .cloned()
-        .ok_or("enum payload field is unavailable in this block")
-}
-
-fn semantic_binding_kind_v1(binding: &SemanticValueBindingV1) -> &'static str {
-    match binding {
-        SemanticValueBindingV1::Unit => "unit",
-        SemanticValueBindingV1::Unmaterialized => "unmaterialized enum payload",
-        SemanticValueBindingV1::Aggregate(_) => "aggregate",
-        SemanticValueBindingV1::Enum {
-            variant: Some(_), ..
-        } => "variant-refined enum",
-        SemanticValueBindingV1::Enum { variant: None, .. } => "unrefined enum",
-        SemanticValueBindingV1::MathContext => "math context",
-        SemanticValueBindingV1::CollectiveContext => "collective context",
-        SemanticValueBindingV1::WorkgroupLdsScope => "workgroup LDS scope",
-        SemanticValueBindingV1::DynamicLds { .. } => "compiler-issued dynamic LDS",
-        SemanticValueBindingV1::MatrixContext => "matrix context",
-        SemanticValueBindingV1::WaveLane { .. } => "wave lane",
-        SemanticValueBindingV1::MatrixFragment { .. } => "matrix fragment",
-        SemanticValueBindingV1::AccumulatorFragment { .. } => "accumulator fragment",
-        SemanticValueBindingV1::Gfx950LdsTransposeTile { .. } => "gfx950 LDS transpose tile",
-        SemanticValueBindingV1::WorkgroupPipeline { .. } => "workgroup pipeline",
-        SemanticValueBindingV1::Value { .. } => "ordinary value",
-        SemanticValueBindingV1::OptionPointer { .. } => "optional pointer",
-        SemanticValueBindingV1::IndexWitness { .. } => "index witness",
-        SemanticValueBindingV1::OptionIndexWitness { .. } => "optional index witness",
-        SemanticValueBindingV1::GridLeader { .. } => "grid leader",
-        SemanticValueBindingV1::ComponentWitness { .. } => "component witness",
-        SemanticValueBindingV1::OptionComponentWitness { .. } => "optional component witness",
-        SemanticValueBindingV1::OptionGridLeader { .. } => "optional grid leader",
-    }
-}
-
-fn semantic_binding_can_restore_from_unique_source_v1(binding: &SemanticValueBindingV1) -> bool {
-    match binding {
-        SemanticValueBindingV1::Unit
-        | SemanticValueBindingV1::MathContext
-        | SemanticValueBindingV1::CollectiveContext
-        | SemanticValueBindingV1::MatrixContext
-        | SemanticValueBindingV1::WaveLane { .. }
-        | SemanticValueBindingV1::MatrixFragment { .. }
-        | SemanticValueBindingV1::AccumulatorFragment { .. }
-        | SemanticValueBindingV1::Gfx950LdsTransposeTile { .. }
-        | SemanticValueBindingV1::WorkgroupPipeline { .. }
-        | SemanticValueBindingV1::IndexWitness { .. }
-        | SemanticValueBindingV1::GridLeader { .. }
-        | SemanticValueBindingV1::ComponentWitness { .. } => true,
-        SemanticValueBindingV1::Aggregate(fields) => fields
-            .iter()
-            .all(semantic_binding_can_restore_from_unique_source_v1),
-        SemanticValueBindingV1::Value { .. } => true,
-        SemanticValueBindingV1::Unmaterialized
-        | SemanticValueBindingV1::Enum { .. }
-        | SemanticValueBindingV1::OptionPointer { .. }
-        | SemanticValueBindingV1::OptionIndexWitness { .. }
-        | SemanticValueBindingV1::OptionComponentWitness { .. }
-        | SemanticValueBindingV1::OptionGridLeader { .. }
-        | SemanticValueBindingV1::WorkgroupLdsScope
-        | SemanticValueBindingV1::DynamicLds { .. } => false,
-    }
-}
-
-fn reauthenticate_capabilities_from_enum_payload_v1(
-    binding: &mut SemanticValueBindingV1,
-    local: SemanticLocalIdV1,
-    variant: u32,
-) {
-    let availability = SemanticCapabilityAvailabilityV1::EnumPayload { local, variant };
-    match binding {
-        SemanticValueBindingV1::Aggregate(fields) => {
-            for field in fields {
-                reauthenticate_capabilities_from_enum_payload_v1(field, local, variant);
-            }
-        }
-        SemanticValueBindingV1::Enum {
-            variant: Some(selected),
-            payloads,
-            ..
-        } => {
-            if let Some(fields) = payloads.get_mut(selected) {
-                for field in fields {
-                    reauthenticate_capabilities_from_enum_payload_v1(field, local, variant);
-                }
-            }
-        }
-        SemanticValueBindingV1::IndexWitness {
-            availability: slot @ Some(_),
-            ..
-        } => *slot = Some(availability),
-        SemanticValueBindingV1::GridLeader { availability: slot }
-        | SemanticValueBindingV1::ComponentWitness {
-            availability: slot, ..
-        } => *slot = availability,
-        SemanticValueBindingV1::Unit
-        | SemanticValueBindingV1::Unmaterialized
-        | SemanticValueBindingV1::Enum { .. }
-        | SemanticValueBindingV1::MathContext
-        | SemanticValueBindingV1::CollectiveContext
-        | SemanticValueBindingV1::WorkgroupLdsScope
-        | SemanticValueBindingV1::DynamicLds { .. }
-        | SemanticValueBindingV1::MatrixContext
-        | SemanticValueBindingV1::WaveLane { .. }
-        | SemanticValueBindingV1::MatrixFragment { .. }
-        | SemanticValueBindingV1::AccumulatorFragment { .. }
-        | SemanticValueBindingV1::Gfx950LdsTransposeTile { .. }
-        | SemanticValueBindingV1::WorkgroupPipeline { .. }
-        | SemanticValueBindingV1::Value { .. }
-        | SemanticValueBindingV1::OptionPointer { .. }
-        | SemanticValueBindingV1::IndexWitness {
-            availability: None, ..
-        }
-        | SemanticValueBindingV1::OptionIndexWitness { .. }
-        | SemanticValueBindingV1::OptionComponentWitness { .. }
-        | SemanticValueBindingV1::OptionGridLeader { .. } => {}
-    }
-}
-
-impl SemanticValueBindingV1 {
-    fn value(&self) -> Result<(ValueId, Type), &'static str> {
-        match self {
-            Self::Value { id, ty } => Ok((*id, ty.clone())),
-            Self::IndexWitness { id, .. } => Ok((*id, Type::INDEX)),
-            Self::WaveLane { value, .. } => Ok((*value, Type::Scalar(ScalarType::U32))),
-            Self::Unmaterialized => {
-                Err("unmaterialized enum payload has no ordinary SSA representation")
-            }
-            Self::Unit
-            | Self::Aggregate(_)
-            | Self::Enum { .. }
-            | Self::MathContext
-            | Self::CollectiveContext
-            | Self::WorkgroupLdsScope
-            | Self::DynamicLds { .. }
-            | Self::MatrixContext
-            | Self::MatrixFragment { .. }
-            | Self::AccumulatorFragment { .. }
-            | Self::Gfx950LdsTransposeTile { .. }
-            | Self::WorkgroupPipeline { .. }
-            | Self::OptionPointer { .. }
-            | Self::OptionIndexWitness { .. }
-            | Self::ComponentWitness { .. }
-            | Self::OptionComponentWitness { .. }
-            | Self::GridLeader { .. }
-            | Self::OptionGridLeader { .. } => {
-                Err("aggregate or capability value requires a semantic projection")
-            }
-        }
-    }
-
-    fn values(&self) -> Result<Vec<(ValueId, Type)>, &'static str> {
-        let mut values = Vec::new();
-        self.append_values(&mut values)?;
-        Ok(values)
-    }
-
-    fn append_values(&self, values: &mut Vec<(ValueId, Type)>) -> Result<(), &'static str> {
-        match self {
-            Self::Value { id, ty } => values.push((*id, ty.clone())),
-            Self::IndexWitness { id, .. } => values.push((*id, Type::INDEX)),
-            Self::WaveLane { value, .. } => {
-                values.push((*value, Type::Scalar(ScalarType::U32)));
-            }
-            Self::Aggregate(fields) => {
-                for field in fields {
-                    field.append_values(values)?;
-                }
-            }
-            Self::MatrixFragment {
-                values: components, ..
-            }
-            | Self::AccumulatorFragment {
-                values: components, ..
-            } => {
-                values.extend(components.iter().cloned());
-            }
-            Self::Gfx950LdsTransposeTile { storage, .. } => {
-                values.push((*storage, gfx950_lds_transpose_pointer_type_v1()));
-            }
-            Self::Enum {
-                discriminant,
-                discriminant_ty,
-                ..
-            } => values.push((*discriminant, discriminant_ty.clone())),
-            Self::Unit => {}
-            Self::Unmaterialized => {
-                return Err("unmaterialized enum payload has no ordinary SSA representation");
-            }
-            Self::MathContext
-            | Self::CollectiveContext
-            | Self::WorkgroupLdsScope
-            | Self::DynamicLds { .. }
-            | Self::MatrixContext
-            | Self::WorkgroupPipeline { .. }
-            | Self::OptionPointer { .. }
-            | Self::OptionIndexWitness { .. }
-            | Self::ComponentWitness { .. }
-            | Self::OptionComponentWitness { .. }
-            | Self::GridLeader { .. }
-            | Self::OptionGridLeader { .. } => {
-                return Err("capability value has no ordinary SSA representation");
-            }
-        }
-        Ok(())
-    }
-}
-
-fn require_components(
-    block: SemanticBlockIdV1,
-    values: Vec<(ValueId, Type)>,
-    expected_type: Type,
-    expected_count: usize,
-    description: &'static str,
-) -> Result<Vec<(ValueId, Type)>, ProductionSemanticKirErrorV1> {
-    if values.len() != expected_count || values.iter().any(|(_, actual)| actual != &expected_type) {
-        return Err(unsupported(0, Some(block.index()), None, description));
-    }
-    Ok(values)
-}
-
-fn require_single_u32_component(
-    block: SemanticBlockIdV1,
-    binding: SemanticValueBindingV1,
-    description: &'static str,
-) -> Result<ValueId, ProductionSemanticKirErrorV1> {
-    Ok(require_components(
-        block,
-        binding
-            .values()
-            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?,
-        Type::Scalar(ScalarType::U32),
-        1,
-        description,
-    )?[0]
-        .0)
-}
-
-fn index_and_u64_are_transport_equivalent(actual: &Type, expected: &Type) -> bool {
-    matches!(
-        (actual, expected),
-        (
-            Type::Scalar(ScalarType::Index),
-            Type::Scalar(ScalarType::U64)
-        ) | (
-            Type::Scalar(ScalarType::U64),
-            Type::Scalar(ScalarType::Index)
-        )
-    )
-}
-
-fn require_current_wave_lane(
-    block: SemanticBlockIdV1,
-    binding: SemanticValueBindingV1,
-    expected_width: u32,
-    description: &'static str,
-) -> Result<(ValueId, SemanticCurrentWaveV1), ProductionSemanticKirErrorV1> {
-    let SemanticValueBindingV1::WaveLane { value, wave } = binding else {
-        return Err(unsupported(0, Some(block.index()), None, description));
-    };
-    if wave.width != expected_width {
-        return Err(unsupported(0, Some(block.index()), None, description));
-    }
-    Ok((value, wave))
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct SemanticMfmaOperandBasesV1<T> {
-    minor: T,
-    reduction: T,
-}
-
-fn semantic_mfma_operand_bases_v1<T>(
-    role: fe2o3_mir_model::semantic_mir_v1::SemanticMfmaOperandRoleV1,
-    first: T,
-    second: T,
-) -> SemanticMfmaOperandBasesV1<T> {
-    use fe2o3_mir_model::semantic_mir_v1::SemanticMfmaOperandRoleV1;
-
-    match role {
-        SemanticMfmaOperandRoleV1::A => SemanticMfmaOperandBasesV1 {
-            minor: first,
-            reduction: second,
-        },
-        SemanticMfmaOperandRoleV1::B => SemanticMfmaOperandBasesV1 {
-            minor: second,
-            reduction: first,
-        },
-    }
-}
+include!("production_semantic_kir_v1/semantic_ssa_transport_01.rs");
+include!("production_semantic_kir_v1/semantic_ssa_intrinsics_01.rs");
+include!("production_semantic_kir_v1/semantic_ssa_plan_01.rs");
+include!("production_semantic_kir_v1/semantic_ssa_enum_values_01.rs");
 
 struct SemanticFunctionLoweringV1<'a> {
     types: &'a [SemanticTypeDeclV1],
@@ -12756,6 +11326,9 @@ struct SemanticFunctionLoweringV1<'a> {
     defined_function_signatures: BTreeMap<SemanticFunctionIdV1, LoweredFunctionSignatureV1>,
     result_types: Vec<Type>,
     locals: Vec<Option<SemanticValueBindingV1>>,
+    retained_local_slots: BTreeMap<u32, SemanticRetainedLocalSlotV1>,
+    retained_local_allocas_emitted: bool,
+    retained_local_initialized: BTreeSet<u32>,
     option_dominance: SemanticOptionDominanceV1,
     enum_payload_dominance: SemanticEnumPayloadDominanceV1,
     enum_payload_storage: BTreeMap<(u32, u32, u32), SemanticEnumPayloadFieldStorageV1>,
@@ -12766,8 +11339,10 @@ struct SemanticFunctionLoweringV1<'a> {
     control_flow_ssa: SemanticControlFlowSsaPlanV1,
     workgroup_pipeline_contracts:
         BTreeMap<SemanticTypeIdV1, SemanticWorkgroupPipelineTypeContractV1>,
-    promoted_enum_variant_by_block: BTreeMap<(u32, u32), u32>,
+    promoted_enum_variant_by_value: BTreeMap<(u32, SsaValueV1), u32>,
     block_parameters: BTreeMap<u32, BTreeMap<u32, Vec<ValueDef>>>,
+    semantic_ssa_bindings: BTreeMap<SsaValueV1, SemanticValueBindingV1>,
+    pending_semantic_ssa_definitions: BTreeMap<(u32, u32), VecDeque<SsaValueV1>>,
     next_value: u32,
     assert_failure_block: Option<BlockId>,
     required_workgroup: Option<[u32; 3]>,
@@ -12805,12 +11380,22 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         authenticated_ranked_control: bool,
         max_operations: usize,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        let semantic_function = SemanticFunctionIdV1::from_index(0);
+        let semantic_ssa = plan_semantic_function_ssa_with_module_v1(
+            semantic_function,
+            function,
+            types,
+            callables,
+            ProductionSemanticSsaLimitsV1::default(),
+        )
+        .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
         Self::new_interprocedural(
             types,
             callables,
             function,
-            SemanticFunctionIdV1::from_index(0),
-            SemanticFunctionIdV1::from_index(0),
+            &semantic_ssa,
+            semantic_function,
+            semantic_function,
             BTreeMap::new(),
             BTreeMap::new(),
             Vec::new(),
@@ -12829,6 +11414,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         types: &'a [SemanticTypeDeclV1],
         callables: &'a [SemanticCallableDeclV1],
         function: &'a SemanticFunctionDeclV1,
+        semantic_ssa: &ProductionSemanticSsaFunctionPlanV1,
         correspondence_owner: SemanticFunctionIdV1,
         semantic_function: SemanticFunctionIdV1,
         defined_function_ids: BTreeMap<SemanticFunctionIdV1, FunctionId>,
@@ -12888,11 +11474,33 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             .filter_map(|value| value.0.checked_add(1))
             .max()
             .unwrap_or(0);
+        let mut direct_parameters = BTreeMap::new();
+        if let Some(parameter_local_bindings) = parameters.local_bindings {
+            for binding in parameter_local_bindings {
+                if let PlannedParameterLocalBindingV1::Direct { local, ty, .. } = binding {
+                    let local = u32::try_from(*local).map_err(|_| {
+                        unsupported(0, None, None, "parameter local does not fit Kernel IR")
+                    })?;
+                    if direct_parameters.insert(local, ty.clone()).is_some() {
+                        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                    }
+                }
+            }
+        }
         let mut next_value = u32::try_from(function.locals().len())
             .map_err(|_| unsupported(0, None, None, "local count does not fit Kernel IR"))?;
         next_value = next_value.max(parameter_floor);
-        let control_flow_ssa =
-            SemanticControlFlowSsaPlanV1::analyze(types, callables, function, semantic_function)?;
+        let control_flow_ssa = SemanticControlFlowSsaPlanV1::analyze(
+            types,
+            callables,
+            function,
+            semantic_function,
+            semantic_ssa,
+            &option_dominance,
+            &direct_parameters,
+            max_operations,
+            max_operations,
+        )?;
         let workgroup_pipeline_contracts = workgroup_pipeline_type_contracts_v1(
             types,
             callables,
@@ -12903,8 +11511,29 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         } else {
             BTreeMap::new()
         };
-        let promoted_enum_variant_by_block =
-            analyze_promoted_enum_variants_v1(types, function, &control_flow_ssa)?;
+        let promoted_enum_variant_by_value = analyze_promoted_enum_variants_v1(
+            types,
+            function,
+            &control_flow_ssa,
+            max_operations,
+            max_operations,
+        )?;
+        let mut retained_local_slots = BTreeMap::new();
+        for (local, plan) in &control_flow_ssa.retained_local_slots {
+            let pointer = ValueId(next_value);
+            next_value = next_value.checked_add(1).ok_or_else(|| {
+                unsupported(0, None, None, "retained-local slot identity overflow")
+            })?;
+            retained_local_slots.insert(
+                *local,
+                SemanticRetainedLocalSlotV1 {
+                    pointer,
+                    semantic_type: plan.semantic_type,
+                    kernel_type: plan.kernel_type.clone(),
+                    alignment: plan.alignment,
+                },
+            );
+        }
         let mut block_parameters = BTreeMap::new();
         for block in 0..function.blocks().len() as u32 {
             if block == function.entry().index() {
@@ -12927,7 +11556,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             block_parameters.insert(block, parameters);
         }
-        let enum_payload_sources = plan_unique_enum_payload_sources_v1(function, &control_flow_ssa);
+        let enum_payload_sources =
+            plan_unique_enum_payload_sources_v1(types, function, &control_flow_ssa);
         let (enum_payload_storage, enum_payload_requires_compile_time_custody) =
             plan_enum_payload_storage_v1(
                 types,
@@ -12936,6 +11566,11 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 &enum_payload_sources,
                 &mut next_value,
             )?;
+        let pending_semantic_ssa_definitions = control_flow_ssa
+            .definition_values
+            .iter()
+            .map(|(site, values)| (*site, values.iter().copied().collect()))
+            .collect();
         Ok(Self {
             types,
             callables,
@@ -12946,6 +11581,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             defined_function_signatures,
             result_types,
             locals,
+            retained_local_slots,
+            retained_local_allocas_emitted: false,
+            retained_local_initialized: BTreeSet::new(),
             option_dominance,
             enum_payload_dominance,
             enum_payload_storage,
@@ -12955,8 +11593,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             enum_payload_allocas_emitted: false,
             control_flow_ssa,
             workgroup_pipeline_contracts,
-            promoted_enum_variant_by_block,
+            promoted_enum_variant_by_value,
             block_parameters,
+            semantic_ssa_bindings: BTreeMap::new(),
+            pending_semantic_ssa_definitions,
             next_value,
             assert_failure_block,
             required_workgroup,
@@ -12978,7 +11618,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         &mut self,
         block: SemanticBlockIdV1,
         target: &mut BasicBlock,
-    ) -> Result<(), ProductionSemanticKirErrorV1> {
+    ) -> Result<SemanticBlockPrologueSpansV1, ProductionSemanticKirErrorV1> {
+        self.retained_local_initialized = self
+            .control_flow_ssa
+            .retained_initialized_at_entry
+            .get(&block.index())
+            .cloned()
+            .unwrap_or_default();
         for local in self.control_flow_ssa.promoted.keys() {
             let declaration = self.function.locals().get(*local as usize).ok_or_else(|| {
                 unsupported(0, Some(block.index()), None, "promoted local is missing")
@@ -12991,8 +11637,54 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             self.locals[*local as usize] = None;
         }
         if block == self.function.entry() {
+            for local in &self.control_flow_ssa.implicit_entry_locals {
+                let declaration = self
+                    .function
+                    .locals()
+                    .get(*local as usize)
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+                let binding = self
+                    .control_flow_ssa
+                    .compiler_issued_bindings
+                    .get(&declaration.ty())
+                    .copied()
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+                self.locals[*local as usize] =
+                    Some(binding.binding_from_transport(self.types, declaration.ty(), &[])?);
+            }
+            for (local, value) in &self.control_flow_ssa.entry_definitions {
+                let binding = self
+                    .locals
+                    .get(*local as usize)
+                    .and_then(Option::as_ref)
+                    .cloned()
+                    .ok_or(ProductionSemanticKirErrorV1::MissingLocalDefinition {
+                        function: self.semantic_function.index(),
+                        block: block.index(),
+                        statement: None,
+                        local: *local,
+                    })?;
+                insert_semantic_ssa_binding_v1(
+                    &mut self.semantic_ssa_bindings,
+                    self.semantic_function.index(),
+                    Some(block.index()),
+                    None,
+                    *value,
+                    binding,
+                )?;
+            }
+            let retained_first = target.operations.len();
+            self.emit_retained_local_allocas_v1(target)?;
+            let (_, retained_local_storage) =
+                measured_operation_span(retained_first, target.operations.len(), target.id, None)?;
+            let enum_first = target.operations.len();
             self.emit_enum_payload_allocas_v1(target)?;
-            return Ok(());
+            let (_, enum_payload_storage) =
+                measured_operation_span(enum_first, target.operations.len(), target.id, None)?;
+            return Ok(SemanticBlockPrologueSpansV1 {
+                retained_local_storage,
+                enum_payload_storage,
+            });
         }
         let parameters = self
             .block_parameters
@@ -13001,13 +11693,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             .ok_or_else(|| {
                 unsupported(0, Some(block.index()), None, "block parameters are missing")
             })?;
-        let parameter_locals = parameters.keys().copied().collect::<Vec<_>>();
+        let mut entry_locals = parameters.keys().copied().collect::<BTreeSet<_>>();
         for (local, parameters) in parameters {
             let promoted = &self.control_flow_ssa.promoted[&local];
-            let binding = promoted.binding.binding_from_transport(
+            let binding = promoted.transport.binding_from_transport(
                 self.types,
-                promoted.semantic_type,
+                promoted.transport_semantic_type,
                 &parameters,
+                &promoted.kernel_types,
             )?;
             if let SemanticValueBindingV1::DynamicLds {
                 base,
@@ -13026,11 +11719,114 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     .insert(*byte_len, *byte_extent);
             }
             self.locals[local as usize] = Some(binding);
+            let block_argument = SsaValueV1::BlockArgument {
+                block: SsaBlockIdV1::new(block.index()),
+                variable: fe2o3_mir_model::SsaVariableIdV1::new(local),
+            };
+            insert_semantic_ssa_binding_v1(
+                &mut self.semantic_ssa_bindings,
+                self.semantic_function.index(),
+                Some(block.index()),
+                None,
+                block_argument,
+                self.locals[local as usize]
+                    .as_ref()
+                    .expect("block argument was just bound")
+                    .clone(),
+            )?;
             target.parameters.extend(parameters);
         }
-        for local in parameter_locals {
+        for ((entry_block, local), value) in &self.control_flow_ssa.block_entry_values {
+            if *entry_block != block.index() {
+                continue;
+            }
+            let binding = self
+                .semantic_ssa_bindings
+                .get(value)
+                .cloned()
+                .ok_or_else(|| {
+                    unsupported(
+                        self.semantic_function.index(),
+                        Some(block.index()),
+                        None,
+                        "dominating semantic SSA value has no lowered binding",
+                    )
+                })?;
+            self.locals[*local as usize] = Some(binding);
+            entry_locals.insert(*local);
+        }
+        let enum_first = target.operations.len();
+        for local in entry_locals {
             self.refine_enum_payload_at_block_v1(block, local, target)?;
         }
+        let (_, enum_payload_storage) =
+            measured_operation_span(enum_first, target.operations.len(), target.id, None)?;
+        Ok(SemanticBlockPrologueSpansV1 {
+            retained_local_storage: 0,
+            enum_payload_storage,
+        })
+    }
+
+    fn emit_retained_local_allocas_v1(
+        &mut self,
+        target: &mut BasicBlock,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self.retained_local_allocas_emitted {
+            return Err(unsupported(
+                self.semantic_function.index(),
+                Some(target.id.0),
+                None,
+                "retained-local allocas were emitted more than once",
+            ));
+        }
+        let slots = self.retained_local_slots.clone();
+        for (local, slot) in slots {
+            let pointer_type = Type::pointer(
+                slot.kernel_type.clone(),
+                AddressSpace::Private,
+                AccessMode::ReadWrite,
+            );
+            self.push_operation(&mut target.operations, || {
+                Operation::effect_free(
+                    ValueDef::new(slot.pointer, pointer_type),
+                    OperationKind::Alloca {
+                        element: slot.kernel_type.clone(),
+                        count: None,
+                        address_space: AddressSpace::Private,
+                        alignment: slot.alignment,
+                    },
+                )
+            })?;
+            if let Some(initial) = self.locals.get(local as usize).and_then(Option::as_ref) {
+                let (value, ty) = initial.value().map_err(|detail| {
+                    unsupported(
+                        self.semantic_function.index(),
+                        Some(target.id.0),
+                        None,
+                        detail,
+                    )
+                })?;
+                if ty != slot.kernel_type {
+                    return Err(unsupported(
+                        self.semantic_function.index(),
+                        Some(target.id.0),
+                        None,
+                        "retained-local argument type differs from its private slot",
+                    ));
+                }
+                self.push_operation(&mut target.operations, || {
+                    Operation::new(
+                        Vec::new(),
+                        OperationKind::Store {
+                            pointer: slot.pointer,
+                            value,
+                            access: MemoryAccess::new(AddressSpace::Private, slot.alignment),
+                        },
+                    )
+                })?;
+            }
+        }
+        self.retained_local_allocas_emitted = true;
         Ok(())
     }
 
@@ -13082,6 +11878,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         let Some(promoted) = self.control_flow_ssa.promoted.get(&local) else {
             return Ok(());
         };
+        if !promoted.transport.uses_structural_enum_transport() {
+            return Ok(());
+        }
         let Some(declaration) = self.types.get(promoted.semantic_type.index() as usize) else {
             return Err(unsupported(
                 0,
@@ -13264,8 +12063,12 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         variant: u32,
         block: SemanticBlockIdV1,
     ) -> bool {
-        self.promoted_enum_variant_by_block
-            .get(&(block.index(), local.index()))
+        self.control_flow_ssa
+            .entry_value(self.function, block.index(), local.index())
+            .and_then(|value| {
+                self.promoted_enum_variant_by_value
+                    .get(&(block.index(), value))
+            })
             .is_some_and(|available| *available == variant)
             || self
                 .enum_payload_dominance
@@ -13276,28 +12079,70 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
     fn edge_arguments(
         &mut self,
         block: SemanticBlockIdV1,
+        edge_ordinal: u32,
         target: SemanticBlockIdV1,
         operations: &mut Vec<Operation>,
     ) -> Result<Vec<ValueId>, ProductionSemanticKirErrorV1> {
         let mut arguments = Vec::new();
-        let live_in_count = self.control_flow_ssa.live_in(target.index()).len();
-        for live_in_ordinal in 0..live_in_count {
-            let local = self.control_flow_ssa.live_in(target.index())[live_in_ordinal];
+        let planned = self
+            .control_flow_ssa
+            .edge_arguments
+            .get(&(block.index(), edge_ordinal))
+            .cloned()
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let planned_locals = planned
+            .iter()
+            .map(|argument| argument.variable().get())
+            .collect::<Vec<_>>();
+        if planned_locals.as_slice() != self.control_flow_ssa.live_in(target.index()) {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+        let definitions = self
+            .control_flow_ssa
+            .edge_definitions
+            .get(&(block.index(), edge_ordinal))
+            .cloned()
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        for definition in definitions {
+            let local = definition.variable().get();
+            let binding = self
+                .locals
+                .get(local as usize)
+                .and_then(Option::as_ref)
+                .cloned()
+                .ok_or(ProductionSemanticKirErrorV1::MissingLocalDefinition {
+                    function: self.semantic_function.index(),
+                    block: block.index(),
+                    statement: None,
+                    local,
+                })?;
+            insert_semantic_ssa_binding_v1(
+                &mut self.semantic_ssa_bindings,
+                self.semantic_function.index(),
+                Some(block.index()),
+                None,
+                definition.value(),
+                binding,
+            )?;
+        }
+        for argument in planned {
+            let local = argument.variable().get();
             let (values, expected_count) = {
                 let binding = self
-                    .locals
-                    .get(local as usize)
-                    .and_then(Option::as_ref)
-                    .ok_or(ProductionSemanticKirErrorV1::MissingLocalDefinition {
-                        function: 0,
-                        block: block.index(),
-                        statement: None,
-                        local,
+                    .semantic_ssa_bindings
+                    .get(&argument.value())
+                    .ok_or_else(|| {
+                        unsupported(
+                            self.semantic_function.index(),
+                            Some(block.index()),
+                            None,
+                            "planned semantic SSA edge value has no lowered binding",
+                        )
                     })?;
                 let promoted = &self.control_flow_ssa.promoted[&local];
                 let values = promoted
-                    .binding
-                    .transport_values(binding)
+                    .transport
+                    .transport_values(binding, &promoted.kernel_types)
                     .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
                 (values, promoted.kernel_types.len())
             };
@@ -13386,7 +12231,20 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticStatementKindV1::StorageLive(local)
             | SemanticStatementKindV1::StorageDead(local) => {
-                self.require_local(block, statement, local.index())?;
+                let local = self.require_local(block, statement, local.index())?;
+                self.locals[local] = None;
+                self.retained_local_initialized.remove(&(local as u32));
+                Ok(())
+            }
+            SemanticStatementKindV1::Deinitialize(place)
+                if place.projections().is_empty()
+                    && self
+                        .retained_local_slots
+                        .contains_key(&place.local().index()) =>
+            {
+                let local = self.require_local(block, statement, place.local().index())?;
+                self.locals[local] = None;
+                self.retained_local_initialized.remove(&(local as u32));
                 Ok(())
             }
             SemanticStatementKindV1::Assume(condition) => {
@@ -13414,8 +12272,20 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         atomic: &SemanticAtomicRmwV1,
         operations: &mut Vec<Operation>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
-        let (pointer, pointer_ty) = self
-            .resolve_place(block, statement, atomic.address())?
+        let address = if atomic.address().projections().is_empty()
+            && self
+                .retained_local_slots
+                .contains_key(&atomic.address().local().index())
+        {
+            self.retained_local_pointer_binding_v1(
+                atomic.address().local(),
+                AccessMode::ReadWrite,
+                operations,
+            )?
+        } else {
+            self.resolve_place(block, statement, atomic.address(), operations)?
+        };
+        let (pointer, pointer_ty) = address
             .value()
             .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
         let Type::Pointer(pointer_ty) = pointer_ty else {
@@ -13489,7 +12359,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 failure_ordering: None,
             }),
         )?;
-        self.bind_destination(block, statement, atomic.destination(), result)
+        self.assign_place(
+            block,
+            statement,
+            atomic.destination(),
+            result,
+            SemanticVolatilityV1::NonVolatile,
+            operations,
+        )
     }
 
     fn lower_rvalue(
@@ -13504,19 +12381,54 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             SemanticRvalueKindV1::Use(operand) => {
                 self.lower_operand(block, statement, operand, operations)
             }
-            SemanticRvalueKindV1::Borrow { kind, place }
-                if *kind == fe2o3_mir_model::semantic_mir_v1::SemanticBorrowKindV1::Mutable
-                    && place.projections().is_empty()
-                    && authenticated_workgroup_lds_scope_type_v1(
-                        self.types,
-                        self.callables,
-                        place.ty(),
-                    ) =>
-            {
-                Ok(SemanticValueBindingV1::WorkgroupLdsScope)
-            }
             SemanticRvalueKindV1::Borrow { place, .. }
             | SemanticRvalueKindV1::AddressOf { place, .. } => {
+                if place.projections().is_empty()
+                    && self
+                        .retained_local_slots
+                        .contains_key(&place.local().index())
+                {
+                    if matches!(value, SemanticRvalueKindV1::Borrow { .. })
+                        && !self
+                            .retained_local_initialized
+                            .contains(&place.local().index())
+                    {
+                        return Err(ProductionSemanticKirErrorV1::MissingLocalDefinition {
+                            function: self.semantic_function.index(),
+                            block: block.index(),
+                            statement,
+                            local: place.local().index(),
+                        });
+                    }
+                    let access = match value {
+                        SemanticRvalueKindV1::Borrow {
+                            kind: SemanticBorrowKindV1::Shared,
+                            ..
+                        }
+                        | SemanticRvalueKindV1::AddressOf {
+                            mutability: SemanticMutabilityV1::Immutable,
+                            ..
+                        } => AccessMode::ReadOnly,
+                        SemanticRvalueKindV1::Borrow {
+                            kind: SemanticBorrowKindV1::Mutable,
+                            ..
+                        }
+                        | SemanticRvalueKindV1::AddressOf {
+                            mutability: SemanticMutabilityV1::Mutable,
+                            ..
+                        } => AccessMode::ReadWrite,
+                        SemanticRvalueKindV1::Borrow {
+                            kind: SemanticBorrowKindV1::Fake,
+                            ..
+                        } => return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch),
+                        _ => unreachable!("matched retained borrow or address-of"),
+                    };
+                    return self.retained_local_pointer_binding_v1(
+                        place.local(),
+                        access,
+                        operations,
+                    );
+                }
                 if place.projections().is_empty() {
                     let local = self.require_local(block, statement, place.local().index())?;
                     let declaration = &self.function.locals()[local];
@@ -13529,16 +12441,49 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         return Ok(binding);
                     }
                 }
+                if matches!(value, SemanticRvalueKindV1::Borrow { .. })
+                    && place.projections().is_empty()
+                    && self
+                        .control_flow_ssa
+                        .ssa_value_locals
+                        .contains(&place.local().index())
+                {
+                    return self.resolve_place(block, statement, place, operations);
+                }
+                if matches!(value, SemanticRvalueKindV1::Borrow { .. })
+                    && place.projections().is_empty()
+                    && let Some(binding) = self
+                        .control_flow_ssa
+                        .compiler_issued_bindings
+                        .get(&place.ty())
+                    && matches!(
+                        binding,
+                        SemanticPromotedBindingV1::MathContext
+                            | SemanticPromotedBindingV1::CollectiveContext
+                            | SemanticPromotedBindingV1::MatrixContext
+                            | SemanticPromotedBindingV1::WaveLane { .. }
+                    )
+                {
+                    return self.resolve_place(block, statement, place, operations);
+                }
+                if place_requires_local_storage_v1(place) {
+                    return Err(unsupported(
+                        self.semantic_function.index(),
+                        Some(block.index()),
+                        statement,
+                        "ordinary local address formation requires private-slot lowering",
+                    ));
+                }
                 if place.projections().iter().any(|projection| {
                     matches!(projection.kind(), SemanticProjectionKindV1::Index(_))
                 }) {
                     self.lower_indexed_place_address(block, statement, place, operations)
                 } else {
-                    self.resolve_place(block, statement, place)
+                    self.resolve_place(block, statement, place, operations)
                 }
             }
             SemanticRvalueKindV1::Discriminant(place) => {
-                match self.resolve_place(block, statement, place)? {
+                match self.resolve_place(block, statement, place, operations)? {
                     SemanticValueBindingV1::Enum {
                         discriminant,
                         discriminant_ty,
@@ -13602,7 +12547,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticRvalueKindV1::Length(place) => {
                 let (slice, ty) = self
-                    .resolve_place(block, statement, place)?
+                    .resolve_place(block, statement, place, operations)?
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
                 if !matches!(ty, Type::Slice(_)) {
@@ -13985,8 +12930,28 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 Ok(result)
             }
             SemanticRvalueKindV1::Load(load) if load.atomic().is_none() => {
-                let (pointer, pointer_ty) = self
-                    .resolve_place(block, statement, load.source())?
+                let source = if load.source().projections().is_empty()
+                    && self
+                        .retained_local_slots
+                        .contains_key(&load.source().local().index())
+                {
+                    self.retained_local_pointer_binding_v1(
+                        load.source().local(),
+                        AccessMode::ReadWrite,
+                        operations,
+                    )?
+                } else {
+                    if place_requires_local_storage_v1(load.source()) {
+                        return Err(unsupported(
+                            self.semantic_function.index(),
+                            Some(block.index()),
+                            statement,
+                            "direct local memory load requires a supported private slot",
+                        ));
+                    }
+                    self.resolve_place(block, statement, load.source(), operations)?
+                };
+                let (pointer, pointer_ty) = source
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
                 let Type::Pointer(pointer_type) = pointer_ty else {
@@ -14112,13 +13077,21 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         }
         match operand {
             SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
+                let moved_local = matches!(operand, SemanticOperandV1::Move(_))
+                    .then_some(place)
+                    .filter(|place| place.projections().is_empty())
+                    .map(|place| place.local().index() as usize);
                 let binding = if place.projections().iter().any(|projection| {
                     matches!(projection.kind(), SemanticProjectionKindV1::Index(_))
                 }) {
                     self.lower_indexed_place_address(block, statement, place, operations)?
                 } else {
-                    self.resolve_place(block, statement, place)?
+                    self.resolve_place(block, statement, place, operations)?
                 };
+                if let Some(local) = moved_local {
+                    self.locals[local] = None;
+                    self.retained_local_initialized.remove(&(local as u32));
+                }
                 if !place
                     .projections()
                     .iter()
@@ -14371,16 +13344,21 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         let (SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)) = operand else {
             return Ok(None);
         };
-        if place.projections().iter().any(|projection| {
-            matches!(
-                projection.kind(),
-                SemanticProjectionKindV1::Index(_) | SemanticProjectionKindV1::Dereference
-            )
-        }) {
+        if !place.projections().is_empty() {
             return Ok(None);
         }
-        Ok(self
-            .resolve_place(block, statement, place)?
+        if let Some(slot) = self.retained_local_slots.get(&place.local().index()) {
+            return Ok(Some(slot.kernel_type.clone()));
+        }
+        let local = self.require_local(block, statement, place.local().index())?;
+        Ok(self.locals[local]
+            .as_ref()
+            .ok_or(ProductionSemanticKirErrorV1::MissingLocalDefinition {
+                function: self.semantic_function.index(),
+                block: block.index(),
+                statement,
+                local: place.local().index(),
+            })?
             .value()
             .ok()
             .map(|(_, ty)| ty))
@@ -14883,7 +13861,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         match terminator {
             SemanticTerminatorKindV1::Goto(edge) => Ok(Terminator::Branch {
                 target: BlockId(edge.target().index()),
-                arguments: self.edge_arguments(block, edge.target(), operations)?,
+                arguments: self.edge_arguments(block, 0, edge.target(), operations)?,
             }),
             SemanticTerminatorKindV1::SwitchInt {
                 discriminant,
@@ -14912,23 +13890,35 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     }
                     let explicit = target.edge().target();
                     let otherwise = targets.otherwise().target();
-                    let (then_target, else_target) = if target.value() == 1 {
-                        (explicit, otherwise)
-                    } else {
-                        (otherwise, explicit)
-                    };
+                    let (then_target, then_ordinal, else_target, else_ordinal) =
+                        if target.value() == 1 {
+                            (explicit, 0, otherwise, 1)
+                        } else {
+                            (otherwise, 1, explicit, 0)
+                        };
                     return Ok(Terminator::ConditionalBranch {
                         condition: selector,
                         then_target: BlockId(then_target.index()),
-                        then_arguments: self.edge_arguments(block, then_target, operations)?,
+                        then_arguments: self.edge_arguments(
+                            block,
+                            then_ordinal,
+                            then_target,
+                            operations,
+                        )?,
                         else_target: BlockId(else_target.index()),
-                        else_arguments: self.edge_arguments(block, else_target, operations)?,
+                        else_arguments: self.edge_arguments(
+                            block,
+                            else_ordinal,
+                            else_target,
+                            operations,
+                        )?,
                     });
                 }
                 let cases = targets
                     .values()
                     .iter()
-                    .map(|target| {
+                    .enumerate()
+                    .map(|(ordinal, target)| {
                         Ok(SwitchCase {
                             value: u64::try_from(target.value()).map_err(|_| {
                                 unsupported(
@@ -14941,6 +13931,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                             target: BlockId(target.edge().target().index()),
                             arguments: self.edge_arguments(
                                 block,
+                                ordinal as u32,
                                 target.edge().target(),
                                 operations,
                             )?,
@@ -14953,6 +13944,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     default_target: BlockId(targets.otherwise().target().index()),
                     default_arguments: self.edge_arguments(
                         block,
+                        targets.values().len() as u32,
                         targets.otherwise().target(),
                         operations,
                     )?,
@@ -14977,7 +13969,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 if self.infallible_asserts.contains(&block.index()) {
                     return Ok(Terminator::Branch {
                         target: BlockId(target.target().index()),
-                        arguments: self.edge_arguments(block, target.target(), operations)?,
+                        arguments: self.edge_arguments(block, 0, target.target(), operations)?,
                     });
                 }
                 let failure = self.assert_failure_block.ok_or_else(|| {
@@ -15001,7 +13993,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     ));
                 }
                 let success = BlockId(target.target().index());
-                let success_arguments = self.edge_arguments(block, target.target(), operations)?;
+                let success_arguments =
+                    self.edge_arguments(block, 0, target.target(), operations)?;
                 let (then_target, then_arguments, else_target, else_arguments) = if *expected {
                     (success, success_arguments, failure, vec![])
                 } else {
@@ -15458,6 +14451,18 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         })?;
         let mut runtime_guard = None;
         let binding = match operation {
+            SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope } => {
+                self.require_call_argument_count(block, call, 0)?;
+                if destination.place().ty() != *scope {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "current LDS scope destination type changed",
+                    ));
+                }
+                SemanticValueBindingV1::WorkgroupLdsScope
+            }
             SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
                 dynamic_lds,
                 element_storage,
@@ -16985,6 +15990,102 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     ty: Type::INDEX,
                 }
             }
+            SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex {
+                index_space,
+                lanes_per_block,
+                elements_per_lane,
+                ..
+            } => {
+                self.require_call_argument_count(block, call, 2)?;
+                let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                    lanes_per_block: *lanes_per_block,
+                    elements_per_lane: *elements_per_lane,
+                };
+                if *index_space != expected {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "DisjointBlock::component_index mapping identity changed",
+                    ));
+                }
+                let witness = self.lower_operand(block, None, &call.arguments()[0], operations)?;
+                let raw = require_block_component_witness_v1(block, witness, expected)?;
+                let component =
+                    self.lower_operand(block, None, &call.arguments()[1], operations)?;
+                let component = self.coerce_index(block, operations, component)?;
+                let (component, _) = component
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                let (index, present) = self.lower_block_component_index(
+                    block,
+                    operations,
+                    raw,
+                    component,
+                    *lanes_per_block,
+                    *elements_per_lane,
+                )?;
+                let result_type = destination.place().ty();
+                let (discriminant, variants) = semantic_enum_shape(self.types, result_type)?;
+                let [none, some] = variants else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "component-index result is not an exact two-variant Option",
+                    ));
+                };
+                if none.discriminant() != 0
+                    || !none.fields().fields().is_empty()
+                    || some.discriminant() != 1
+                    || some.fields().fields() != [call.arguments()[1].ty()]
+                {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "component-index Option layout changed",
+                    ));
+                }
+                let discriminant_ty = lower_scalar_type(self.types, discriminant)?;
+                let none_discriminant = self
+                    .emit(
+                        operations,
+                        discriminant_ty.clone(),
+                        OperationKind::Constant(integer_constant(&discriminant_ty, 0)?),
+                    )?
+                    .value()
+                    .expect("emitted None discriminant")
+                    .0;
+                let some_discriminant = self
+                    .emit(
+                        operations,
+                        discriminant_ty.clone(),
+                        OperationKind::Constant(integer_constant(&discriminant_ty, 1)?),
+                    )?
+                    .value()
+                    .expect("emitted Some discriminant")
+                    .0;
+                let discriminant_value = self
+                    .emit(
+                        operations,
+                        discriminant_ty.clone(),
+                        OperationKind::Select {
+                            condition: present,
+                            true_value: some_discriminant,
+                            false_value: none_discriminant,
+                        },
+                    )?
+                    .value()
+                    .expect("emitted component-index discriminant")
+                    .0;
+                ordinary_option_index_binding_v1(
+                    result_type,
+                    discriminant_value,
+                    discriminant_ty,
+                    index,
+                )
+            }
             SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift {
                 input_space,
                 output_space,
@@ -17554,9 +16655,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             &binding,
             operations,
         )?;
-        self.bind_destination(block, None, destination.place(), binding)?;
+        self.assign_place(
+            block,
+            None,
+            destination.place(),
+            binding,
+            SemanticVolatilityV1::NonVolatile,
+            operations,
+        )?;
         let target = BlockId(destination.edge().target().index());
-        let arguments = self.edge_arguments(block, destination.edge().target(), operations)?;
+        let arguments = self.edge_arguments(block, 0, destination.edge().target(), operations)?;
         if let Some(condition) = runtime_guard {
             let failure = self.assert_failure_block.ok_or_else(|| {
                 unsupported(
@@ -17716,10 +16824,17 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             )?,
             _ => unreachable!("bounded helper plan admits at most one result"),
         };
-        self.bind_destination(block, None, destination.place(), binding)?;
+        self.assign_place(
+            block,
+            None,
+            destination.place(),
+            binding,
+            SemanticVolatilityV1::NonVolatile,
+            operations,
+        )?;
         Ok(Terminator::Branch {
             target: BlockId(destination.edge().target().index()),
-            arguments: self.edge_arguments(block, destination.edge().target(), operations)?,
+            arguments: self.edge_arguments(block, 0, destination.edge().target(), operations)?,
         })
     }
 
@@ -18237,9 +17352,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "strided read load storage contract changed",
             ));
         }
-        let [(_, _), (offset, _), (rows, _), (columns, _), (stride, _)] = view.as_slice() else {
+        let [(_, _), offset, rows, columns, stride] = view.as_slice() else {
             unreachable!("checked five-component strided view");
         };
+        let offset = self.coerce_typed_index_component(block, operations, offset)?;
+        let rows = self.coerce_typed_index_component(block, operations, rows)?;
+        let columns = self.coerce_typed_index_component(block, operations, columns)?;
+        let stride = self.coerce_typed_index_component(block, operations, stride)?;
         let row = self.lower_operand(block, None, &call.arguments()[1], operations)?;
         let row = self
             .coerce_index(block, operations, row)?
@@ -18265,13 +17384,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             ));
         }
 
-        let row_valid = self.emit_compare(operations, ComparePredicate::LessThan, row, *rows)?;
+        let row_valid = self.emit_compare(operations, ComparePredicate::LessThan, row, rows)?;
         let column_valid =
-            self.emit_compare(operations, ComparePredicate::LessThan, column, *columns)?;
+            self.emit_compare(operations, ComparePredicate::LessThan, column, columns)?;
         let (row_offset, row_safe) =
-            self.emit_checked_index(operations, CheckedBinaryOperator::Multiply, row, *stride)?;
+            self.emit_checked_index(operations, CheckedBinaryOperator::Multiply, row, stride)?;
         let (index, offset_safe) =
-            self.emit_checked_index(operations, CheckedBinaryOperator::Add, *offset, row_offset)?;
+            self.emit_checked_index(operations, CheckedBinaryOperator::Add, offset, row_offset)?;
         let (index, column_safe) =
             self.emit_checked_index(operations, CheckedBinaryOperator::Add, index, column)?;
         let length = self.emit_id(
@@ -18364,13 +17483,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "BF16 matrix load view element type changed",
             ));
         }
-        let [(_, _), (offset, _), (rows, _), (columns, _), (stride, _)] = view.as_slice() else {
+        let [(_, _), offset, rows, columns, stride] = view.as_slice() else {
             unreachable!("checked five-component view");
         };
-        let offset = *offset;
-        let rows = *rows;
-        let columns = *columns;
-        let stride = *stride;
+        let offset = self.coerce_typed_index_component(block, operations, offset)?;
+        let rows = self.coerce_typed_index_component(block, operations, rows)?;
+        let columns = self.coerce_typed_index_component(block, operations, columns)?;
+        let stride = self.coerce_typed_index_component(block, operations, stride)?;
         let (lane, wave) = require_current_wave_lane(
             block,
             self.lower_operand(block, None, &call.arguments()[1], operations)?,
@@ -18550,14 +17669,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         let view = view
             .values()
             .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-        let [
-            (_, bits_ty),
-            (offset, _),
-            (rows, _),
-            (columns, _),
-            (stride, _),
-        ] = view.as_slice()
-        else {
+        let [(_, bits_ty), offset, rows, columns, stride] = view.as_slice() else {
             return Err(unsupported(
                 0,
                 Some(block.index()),
@@ -18582,10 +17694,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "gfx950 low-precision matrix view element type changed",
             ));
         }
-        let offset = *offset;
-        let rows = *rows;
-        let columns = *columns;
-        let stride = *stride;
+        let offset = self.coerce_typed_index_component(block, operations, offset)?;
+        let rows = self.coerce_typed_index_component(block, operations, rows)?;
+        let columns = self.coerce_typed_index_component(block, operations, columns)?;
+        let stride = self.coerce_typed_index_component(block, operations, stride)?;
         let (lane, wave) = require_current_wave_lane(
             block,
             self.lower_operand(block, None, &call.arguments()[1], operations)?,
@@ -18941,9 +18053,6 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         if *slice.element != Type::Scalar(ScalarType::U8)
             || slice.address_space != AddressSpace::Global
             || slice.access != AccessMode::ReadOnly
-            || [offset_ty, rows_ty, columns_ty, stride_ty]
-                .iter()
-                .any(|ty| **ty != Type::INDEX)
         {
             return Err(unsupported(
                 0,
@@ -18952,6 +18061,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "gfx950 LDS transpose stage source view type changed",
             ));
         }
+        let offset =
+            self.coerce_typed_index_component(block, operations, &(*offset, offset_ty.clone()))?;
+        let rows =
+            self.coerce_typed_index_component(block, operations, &(*rows, rows_ty.clone()))?;
+        let columns =
+            self.coerce_typed_index_component(block, operations, &(*columns, columns_ty.clone()))?;
+        let stride =
+            self.coerce_typed_index_component(block, operations, &(*stride, stride_ty.clone()))?;
         let token_base = self.lower_operand(block, None, &call.arguments()[2], operations)?;
         let token_base = self
             .coerce_index(block, operations, token_base)?
@@ -18973,10 +18090,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     format,
                     storage,
                     source_slice: *source_slice,
-                    offset: *offset,
-                    rows: *rows,
-                    columns: *columns,
-                    stride: *stride,
+                    offset,
+                    rows,
+                    columns,
+                    stride,
                     token_base,
                     reduction_base,
                 },
@@ -19141,7 +18258,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         input_space: SemanticDisjointIndexSpaceV1,
         output_space: SemanticDisjointIndexSpaceV1,
         offset: u64,
-        input_is_disjoint: bool,
+        expected_input_disjoint: bool,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
         self.require_call_argument_count(block, call, 1)?;
         let binding = self.lower_operand(block, None, &call.arguments()[0], operations)?;
@@ -19159,7 +18276,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "checked_shift receiver is not index authority",
             ));
         };
-        if actual != input_space || disjoint != input_is_disjoint {
+        if actual != input_space || disjoint != expected_input_disjoint {
             return Err(unsupported(
                 0,
                 Some(block.index()),
@@ -19252,6 +18369,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 })?,
             id: shifted,
             index_space: output_space,
+            // Both checked-shift APIs return `DisjointIndex`; this flag only
+            // distinguishes their thread-index and disjoint-index receivers.
+            disjoint: true,
         })
     }
 
@@ -20020,7 +19140,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 0,
                 Some(block.index()),
                 None,
-                "exclusive access index is not usize",
+                "index operand is not usize",
             ));
         }
         self.emit(
@@ -20032,6 +19152,25 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 to: Type::INDEX,
             },
         )
+    }
+
+    fn coerce_typed_index_component(
+        &mut self,
+        block: SemanticBlockIdV1,
+        operations: &mut Vec<Operation>,
+        component: &(ValueId, Type),
+    ) -> Result<ValueId, ProductionSemanticKirErrorV1> {
+        self.coerce_index(
+            block,
+            operations,
+            SemanticValueBindingV1::Value {
+                id: component.0,
+                ty: component.1.clone(),
+            },
+        )?
+        .value()
+        .map(|(id, _)| id)
+        .map_err(|detail| unsupported(0, Some(block.index()), None, detail))
     }
 
     fn lower_write_only_disjoint_slice_write(
@@ -20383,6 +19522,22 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             present,
             pointer,
             pointer_ty,
+            availability: self
+                .option_dominance
+                .availability(
+                    call.destination()
+                        .expect("checked slice access destination")
+                        .place()
+                        .local(),
+                )
+                .ok_or_else(|| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "checked slice Option lacks an authenticated Some edge",
+                    )
+                })?,
         })
     }
 
@@ -20535,6 +19690,129 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         }
     }
 
+    fn retained_local_pointer_binding_v1(
+        &mut self,
+        local: SemanticLocalIdV1,
+        access: AccessMode,
+        operations: &mut Vec<Operation>,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        let slot = self
+            .retained_local_slots
+            .get(&local.index())
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let pointer = slot.pointer;
+        let element = slot.kernel_type.clone();
+        let read_write = Type::pointer(
+            element.clone(),
+            AddressSpace::Private,
+            AccessMode::ReadWrite,
+        );
+        match access {
+            AccessMode::ReadWrite => Ok(SemanticValueBindingV1::Value {
+                id: pointer,
+                ty: read_write,
+            }),
+            AccessMode::ReadOnly => {
+                let read_only = Type::pointer(element, AddressSpace::Private, AccessMode::ReadOnly);
+                self.emit(
+                    operations,
+                    read_only.clone(),
+                    OperationKind::Cast {
+                        kind: CastKind::RestrictPointerAccess,
+                        value: pointer,
+                        to: read_only,
+                    },
+                )
+            }
+            AccessMode::WriteOnly => Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch),
+        }
+    }
+
+    fn load_retained_local_v1(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        local: SemanticLocalIdV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        if !self.retained_local_initialized.contains(&local.index()) {
+            return Err(ProductionSemanticKirErrorV1::MissingLocalDefinition {
+                function: self.semantic_function.index(),
+                block: block.index(),
+                statement,
+                local: local.index(),
+            });
+        }
+        let slot = self
+            .retained_local_slots
+            .get(&local.index())
+            .cloned()
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        if self.function.locals()[local.index() as usize].ty() != slot.semantic_type {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+        self.emit(
+            operations,
+            slot.kernel_type,
+            OperationKind::Load {
+                pointer: slot.pointer,
+                access: MemoryAccess::new(AddressSpace::Private, slot.alignment),
+            },
+        )
+        .map_err(|error| match error {
+            ProductionSemanticKirErrorV1::Unsupported { detail, .. } => unsupported(
+                self.semantic_function.index(),
+                Some(block.index()),
+                statement,
+                detail,
+            ),
+            error => error,
+        })
+    }
+
+    fn store_retained_local_v1(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        local: SemanticLocalIdV1,
+        value: &SemanticValueBindingV1,
+        volatility: SemanticVolatilityV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        let slot = self
+            .retained_local_slots
+            .get(&local.index())
+            .cloned()
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let (value, actual_type) = value
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+        if self.function.locals()[local.index() as usize].ty() != slot.semantic_type
+            || actual_type != slot.kernel_type
+        {
+            return Err(unsupported(
+                self.semantic_function.index(),
+                Some(block.index()),
+                statement,
+                "retained-local value type differs from its private slot",
+            ));
+        }
+        let mut access = MemoryAccess::new(AddressSpace::Private, slot.alignment);
+        access.volatile = volatility == SemanticVolatilityV1::Volatile;
+        self.push_operation(operations, || {
+            Operation::new(
+                Vec::new(),
+                OperationKind::Store {
+                    pointer: slot.pointer,
+                    value,
+                    access,
+                },
+            )
+        })?;
+        self.retained_local_initialized.insert(local.index());
+        Ok(())
+    }
+
     fn assign_place(
         &mut self,
         block: SemanticBlockIdV1,
@@ -20545,6 +19823,20 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         operations: &mut Vec<Operation>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         if destination.projections().is_empty() {
+            if self
+                .retained_local_slots
+                .contains_key(&destination.local().index())
+            {
+                self.store_retained_local_v1(
+                    block,
+                    statement,
+                    destination.local(),
+                    &value,
+                    volatility,
+                    operations,
+                )?;
+                return self.bind_destination(block, statement, destination, value);
+            }
             self.store_enum_payload_v1(block, statement, destination.local(), &value, operations)?;
             return self.bind_destination(block, statement, destination, value);
         }
@@ -20561,7 +19853,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             ));
         }
         let (pointer, pointer_ty) = self
-            .resolve_place(block, statement, destination)?
+            .resolve_place(block, statement, destination, operations)?
             .value()
             .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
         let (value, value_ty) = value
@@ -20608,99 +19900,114 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         operations: &mut Vec<Operation>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         let SemanticValueBindingV1::Enum {
-            variant: Some(variant),
-            payloads,
-            ..
+            variant, payloads, ..
         } = value
         else {
             return Ok(());
         };
-        let Some(fields) = payloads.get(variant) else {
-            return Err(unsupported(
-                0,
-                Some(block.index()),
-                statement,
-                "variant-refined enum has no retained payload",
-            ));
-        };
-        for (field, binding) in fields.iter().enumerate() {
-            let key = (local.index(), *variant, field as u32);
-            if self.enum_payload_sources.contains_key(&key)
-                && semantic_binding_can_restore_from_unique_source_v1(binding)
-            {
-                if self
-                    .enum_payload_compile_time_custody
-                    .insert(
-                        key,
-                        SemanticEnumPayloadCustodyV1 {
-                            source_block: block,
-                            binding: binding.clone(),
-                        },
+        let retained_payloads: Vec<_> = match variant {
+            Some(variant) => vec![(
+                *variant,
+                payloads.get(variant).ok_or_else(|| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "variant-refined enum has no retained payload",
                     )
-                    .is_some()
+                })?,
+            )],
+            None => payloads
+                .iter()
+                .map(|(variant, fields)| (*variant, fields))
+                .collect(),
+        };
+        for (variant, fields) in retained_payloads {
+            for (field, binding) in fields.iter().enumerate() {
+                let key = (local.index(), variant, field as u32);
+                if self.enum_payload_sources.contains_key(&key)
+                    && semantic_binding_can_restore_from_unique_source_v1(binding)
+                {
+                    if self
+                        .enum_payload_compile_time_custody
+                        .insert(
+                            key,
+                            SemanticEnumPayloadCustodyV1 {
+                                source_block: block,
+                                binding: binding.clone(),
+                            },
+                        )
+                        .is_some()
+                    {
+                        return Err(unsupported(
+                            0,
+                            Some(block.index()),
+                            statement,
+                            "enum payload compile-time custody was assigned more than once",
+                        ));
+                    }
+                    if !self.enum_payload_storage.contains_key(&key) || binding.values().is_err() {
+                        continue;
+                    }
+                }
+                if self
+                    .enum_payload_requires_compile_time_custody
+                    .contains(&key)
                 {
                     return Err(unsupported(
                         0,
                         Some(block.index()),
                         statement,
-                        "enum payload compile-time custody was assigned more than once",
+                        "non-storable enum payload cannot be retained from its unique source",
                     ));
                 }
-                if !self.enum_payload_storage.contains_key(&key) || binding.values().is_err() {
+                let Some(storage) = self.enum_payload_storage.get(&key).cloned() else {
                     continue;
+                };
+                let values = match storage.exact_enum_variant {
+                    Some(expected_variant) => {
+                        exact_enum_binding_values_v1(binding, expected_variant).map_err(
+                            |detail| unsupported(0, Some(block.index()), statement, detail),
+                        )?
+                    }
+                    None => binding
+                        .values()
+                        .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?,
+                };
+                if values.len() != storage.components.len() {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "enum payload changed its private-storage component types",
+                    ));
                 }
-            }
-            if self
-                .enum_payload_requires_compile_time_custody
-                .contains(&key)
-            {
-                return Err(unsupported(
-                    0,
-                    Some(block.index()),
-                    statement,
-                    "non-storable enum payload cannot be retained from its unique source",
-                ));
-            }
-            let Some(storage) = self.enum_payload_storage.get(&key).cloned() else {
-                continue;
-            };
-            let values = match storage.exact_enum_variant {
-                Some(expected_variant) => {
-                    exact_enum_binding_values_v1(binding, expected_variant)
-                        .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?
+                for ((value, actual), component) in
+                    values.into_iter().zip(storage.components.iter())
+                {
+                    let value = self.coerce_transport_value_v1(
+                        operations,
+                        block,
+                        statement,
+                        value,
+                        actual,
+                        component.kernel_type.clone(),
+                        "enum payload changed its private-storage component types",
+                    )?;
+                    self.push_operation(operations, || {
+                        Operation::new(
+                            vec![],
+                            OperationKind::Store {
+                                pointer: component.pointer,
+                                value,
+                                access: MemoryAccess::new(
+                                    AddressSpace::Private,
+                                    component.alignment,
+                                ),
+                            },
+                        )
+                    })?;
                 }
-                None => binding
-                    .values()
-                    .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?,
-            };
-            if values.len() != storage.components.len() {
-                return Err(unsupported(
-                    0,
-                    Some(block.index()),
-                    statement,
-                    "enum payload changed its private-storage component types",
-                ));
-            }
-            for ((value, actual), component) in values.into_iter().zip(storage.components.iter()) {
-                let value = self.coerce_transport_value_v1(
-                    operations,
-                    block,
-                    statement,
-                    value,
-                    actual,
-                    component.kernel_type.clone(),
-                    "enum payload changed its private-storage component types",
-                )?;
-                self.push_operation(operations, || {
-                    Operation::new(
-                        vec![],
-                        OperationKind::Store {
-                            pointer: component.pointer,
-                            value,
-                            access: MemoryAccess::new(AddressSpace::Private, component.alignment),
-                        },
-                    )
-                })?;
             }
         }
         Ok(())
@@ -20943,26 +20250,130 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             ));
         }
         let index = self.require_local(block, statement, destination.local().index())?;
-        self.locals[index] = Some(value);
+        self.locals[index] = Some(value.clone());
+        if statement.is_some()
+            && self
+                .control_flow_ssa
+                .ssa_value_locals
+                .contains(&destination.local().index())
+        {
+            let definition = self
+                .pending_semantic_ssa_definitions
+                .get_mut(&(block.index(), destination.local().index()))
+                .and_then(VecDeque::pop_front)
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            insert_semantic_ssa_binding_v1(
+                &mut self.semantic_ssa_bindings,
+                self.semantic_function.index(),
+                Some(block.index()),
+                statement,
+                definition,
+                value,
+            )?;
+        }
         Ok(())
     }
 
     fn resolve_place(
-        &self,
+        &mut self,
         block: SemanticBlockIdV1,
         statement: Option<u32>,
         place: &SemanticPlaceV1,
+        operations: &mut Vec<Operation>,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
         let index = self.require_local(block, statement, place.local().index())?;
-        let mut binding = self.locals[index].clone().ok_or(
-            ProductionSemanticKirErrorV1::MissingLocalDefinition {
-                function: 0,
-                block: block.index(),
-                statement,
-                local: place.local().index(),
-            },
-        )?;
-        for projection in place.projections() {
+        let mut binding = if self
+            .retained_local_slots
+            .contains_key(&place.local().index())
+        {
+            self.load_retained_local_v1(block, statement, place.local(), operations)?
+        } else {
+            self.locals[index].clone().ok_or(
+                ProductionSemanticKirErrorV1::MissingLocalDefinition {
+                    function: self.semantic_function.index(),
+                    block: block.index(),
+                    statement,
+                    local: place.local().index(),
+                },
+            )?
+        };
+        let mut current_type = self.function.locals()[index].ty();
+        let mut projection_index = 0;
+        while projection_index < place.projections().len() {
+            if matches!(
+                binding,
+                SemanticValueBindingV1::OptionPointer { .. }
+                    | SemanticValueBindingV1::OptionIndexWitness { .. }
+                    | SemanticValueBindingV1::OptionComponentWitness { .. }
+                    | SemanticValueBindingV1::OptionGridLeader { .. }
+            ) {
+                let Some(payload_type) = exact_option_payload_projection_v1(
+                    self.types,
+                    current_type,
+                    &place.projections()[projection_index..],
+                    place.ty(),
+                ) else {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "optional capability requires the exact Some.0 projection",
+                    ));
+                };
+                binding = match binding {
+                    SemanticValueBindingV1::OptionPointer {
+                        pointer,
+                        pointer_ty,
+                        availability,
+                        ..
+                    } => {
+                        if !self.option_dominance.allows(availability, block) {
+                            return Err(unsupported(
+                                0,
+                                Some(block.index()),
+                                statement,
+                                "optional pointer payload is used outside its authenticated Some edge",
+                            ));
+                        }
+                        SemanticValueBindingV1::Value {
+                            id: pointer,
+                            ty: pointer_ty,
+                        }
+                    }
+                    SemanticValueBindingV1::OptionIndexWitness {
+                        id,
+                        index_space,
+                        disjoint,
+                        availability,
+                        ..
+                    } => SemanticValueBindingV1::IndexWitness {
+                        id,
+                        availability: Some(SemanticCapabilityAvailabilityV1::Option(availability)),
+                        index_space,
+                        disjoint,
+                    },
+                    SemanticValueBindingV1::OptionComponentWitness {
+                        raw,
+                        index_space,
+                        availability,
+                        ..
+                    } => SemanticValueBindingV1::ComponentWitness {
+                        raw,
+                        index_space,
+                        availability: SemanticCapabilityAvailabilityV1::Option(availability),
+                    },
+                    SemanticValueBindingV1::OptionGridLeader { availability, .. } => {
+                        SemanticValueBindingV1::GridLeader {
+                            availability: SemanticCapabilityAvailabilityV1::Option(availability),
+                        }
+                    }
+                    _ => unreachable!("optional capability was checked above"),
+                };
+                current_type = payload_type;
+                projection_index += 2;
+                continue;
+            }
+            let projection = &place.projections()[projection_index];
             binding = match (binding, projection.kind()) {
                 (SemanticValueBindingV1::Unit, _) => {
                     return Err(unsupported(
@@ -21109,66 +20520,6 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     | SemanticProjectionKindV1::Subtype,
                 ) => binding,
                 (
-                    SemanticValueBindingV1::OptionPointer {
-                        pointer,
-                        pointer_ty,
-                        ..
-                    },
-                    SemanticProjectionKindV1::Field(_),
-                ) => SemanticValueBindingV1::Value {
-                    id: pointer,
-                    ty: pointer_ty,
-                },
-                (
-                    SemanticValueBindingV1::OptionIndexWitness {
-                        id,
-                        index_space,
-                        availability,
-                        ..
-                    },
-                    SemanticProjectionKindV1::Field(_),
-                ) => SemanticValueBindingV1::IndexWitness {
-                    id,
-                    availability: Some(SemanticCapabilityAvailabilityV1::Option(availability)),
-                    index_space,
-                    disjoint: true,
-                },
-                (
-                    SemanticValueBindingV1::OptionComponentWitness {
-                        raw,
-                        index_space,
-                        availability,
-                        ..
-                    },
-                    SemanticProjectionKindV1::Field(_),
-                ) => SemanticValueBindingV1::ComponentWitness {
-                    raw,
-                    index_space,
-                    availability: SemanticCapabilityAvailabilityV1::Option(availability),
-                },
-                (
-                    SemanticValueBindingV1::OptionGridLeader { availability, .. },
-                    SemanticProjectionKindV1::Field(_),
-                ) => SemanticValueBindingV1::GridLeader {
-                    availability: SemanticCapabilityAvailabilityV1::Option(availability),
-                },
-                (
-                    binding @ SemanticValueBindingV1::OptionPointer { .. },
-                    SemanticProjectionKindV1::Downcast(_),
-                ) => binding,
-                (
-                    binding @ SemanticValueBindingV1::OptionIndexWitness { .. },
-                    SemanticProjectionKindV1::Downcast(_),
-                ) => binding,
-                (
-                    binding @ SemanticValueBindingV1::OptionGridLeader { .. },
-                    SemanticProjectionKindV1::Downcast(_),
-                ) => binding,
-                (
-                    binding @ SemanticValueBindingV1::OptionComponentWitness { .. },
-                    SemanticProjectionKindV1::Downcast(_),
-                ) => binding,
-                (
                     binding @ SemanticValueBindingV1::Value { .. },
                     SemanticProjectionKindV1::Dereference
                     | SemanticProjectionKindV1::Field(0)
@@ -21221,6 +20572,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     });
                 }
             };
+            projection_index += 1;
         }
         let availability = match &binding {
             SemanticValueBindingV1::IndexWitness {
@@ -22430,6 +21782,13 @@ fn unsupported_terminator_detail(terminator: &SemanticTerminatorKindV1) -> &'sta
     }
 }
 
+fn place_requires_local_storage_v1(place: &SemanticPlaceV1) -> bool {
+    !place
+        .projections()
+        .iter()
+        .any(|projection| projection.kind() == SemanticProjectionKindV1::Dereference)
+}
+
 fn unsupported_statement_detail(statement: &SemanticStatementKindV1) -> Option<&'static str> {
     match statement {
         SemanticStatementKindV1::Assign(assignment) => {
@@ -23569,6 +22928,9 @@ fn plan_enum_payload_storage_v1(
     let mut requires_compile_time_custody = BTreeSet::new();
     let mut component_count = 0_usize;
     for (local, promoted) in &control_flow_ssa.promoted {
+        if !promoted.transport.uses_structural_enum_transport() {
+            continue;
+        }
         let declaration = types
             .get(promoted.semantic_type.index() as usize)
             .ok_or_else(|| unsupported(0, None, None, "promoted enum type is missing"))?;
@@ -23628,11 +22990,33 @@ fn plan_enum_payload_storage_v1(
                             | SemanticPromotedBindingV1::Gfx950LdsTransposeTile { .. },
                         )
                         | None => lower_ssa_value_components_v1(types, semantic_type),
-                        Some(SemanticPromotedBindingV1::DynamicLds { .. }) => Err(unsupported(
+                        Some(
+                            SemanticPromotedBindingV1::DynamicLds { .. }
+                            | SemanticPromotedBindingV1::WorkgroupPipeline { .. },
+                        ) => Err(unsupported(
                             0,
                             None,
                             None,
-                            "linear dynamic LDS cannot be stored in a promoted enum payload",
+                            "linear workgroup storage cannot be stored in a promoted enum payload",
+                        )),
+                        Some(
+                            SemanticPromotedBindingV1::MathContext
+                            | SemanticPromotedBindingV1::CollectiveContext
+                            | SemanticPromotedBindingV1::WorkgroupLdsScope
+                            | SemanticPromotedBindingV1::MatrixContext
+                            | SemanticPromotedBindingV1::WaveLane { .. }
+                            | SemanticPromotedBindingV1::IndexWitness { .. }
+                            | SemanticPromotedBindingV1::OptionIndexWitness { .. }
+                            | SemanticPromotedBindingV1::GridLeader { .. }
+                            | SemanticPromotedBindingV1::OptionGridLeader { .. }
+                            | SemanticPromotedBindingV1::ComponentWitness { .. }
+                            | SemanticPromotedBindingV1::OptionComponentWitness { .. }
+                            | SemanticPromotedBindingV1::OptionPointer { .. },
+                        ) => Err(unsupported(
+                            0,
+                            None,
+                            None,
+                            "compiler-issued authority cannot be reconstructed from an enum payload",
                         )),
                     },
                 };
@@ -23709,10 +23093,25 @@ fn plan_enum_payload_storage_v1(
 }
 
 fn plan_unique_enum_payload_sources_v1(
+    types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     control_flow_ssa: &SemanticControlFlowSsaPlanV1,
 ) -> BTreeMap<(u32, u32, u32), SemanticEnumPayloadSourceV1> {
-    let mut candidates = BTreeMap::<(u32, u32, u32), Option<SemanticEnumPayloadSourceV1>>::new();
+    let promoted_enums = control_flow_ssa
+        .promoted
+        .iter()
+        .filter_map(|(local, promoted)| {
+            (promoted.transport.uses_structural_enum_transport()
+                && types
+                    .get(promoted.semantic_type.index() as usize)
+                    .is_some_and(|declaration| {
+                        matches!(declaration.shape(), SemanticTypeShapeV1::Enum { .. })
+                    }))
+            .then_some(*local)
+        })
+        .collect::<BTreeSet<_>>();
+    let mut definition_counts = BTreeMap::<u32, u32>::new();
+    let mut candidates = BTreeMap::<(u32, u32, u32), SemanticEnumPayloadSourceV1>::new();
     for block in function.blocks() {
         for statement in block.statements() {
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
@@ -23720,12 +23119,13 @@ fn plan_unique_enum_payload_sources_v1(
             };
             let destination = assignment.destination();
             if !destination.projections().is_empty()
-                || !control_flow_ssa
-                    .promoted
-                    .contains_key(&destination.local().index())
+                || !promoted_enums.contains(&destination.local().index())
             {
                 continue;
             }
+            let local = destination.local().index();
+            let count = definition_counts.entry(local).or_default();
+            *count = count.saturating_add(1);
             let SemanticRvalueKindV1::Aggregate(aggregate) = assignment.value().kind() else {
                 continue;
             };
@@ -23733,29 +23133,48 @@ fn plan_unique_enum_payload_sources_v1(
                 continue;
             };
             for (field, operand) in aggregate.operands().iter().enumerate() {
-                let key = (destination.local().index(), *variant, field as u32);
-                let source = match operand {
+                let key = (local, *variant, field as u32);
+                if let Some(source) = match operand {
                     SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
-                        Some(SemanticEnumPayloadSourceV1 {
-                            place: place.clone(),
-                        })
+                        Some(SemanticEnumPayloadSourceV1::AggregateOperand(place.clone()))
                     }
                     SemanticOperandV1::Constant(_) => None,
-                };
-                match candidates.entry(key) {
-                    std::collections::btree_map::Entry::Vacant(entry) => {
-                        entry.insert(source);
-                    }
-                    std::collections::btree_map::Entry::Occupied(mut entry) => {
-                        entry.insert(None);
-                    }
+                } {
+                    candidates.insert(key, source);
                 }
+            }
+        }
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+            continue;
+        };
+        let Some(destination) = call.destination() else {
+            continue;
+        };
+        let destination = destination.place();
+        let local = destination.local().index();
+        if !destination.projections().is_empty() || !promoted_enums.contains(&local) {
+            continue;
+        }
+        let count = definition_counts.entry(local).or_default();
+        *count = count.saturating_add(1);
+        let Some(declaration) = types.get(destination.ty().index() as usize) else {
+            continue;
+        };
+        let SemanticTypeShapeV1::Enum { variants, .. } = declaration.shape() else {
+            continue;
+        };
+        for (variant, definition) in variants.iter().enumerate() {
+            for field in 0..definition.fields().fields().len() {
+                candidates.insert(
+                    (local, variant as u32, field as u32),
+                    SemanticEnumPayloadSourceV1::CallResult,
+                );
             }
         }
     }
     candidates
         .into_iter()
-        .filter_map(|(key, source)| source.map(|source| (key, source)))
+        .filter(|((local, _, _), _)| definition_counts.get(local) == Some(&1))
         .collect()
 }
 
@@ -23764,10 +23183,13 @@ fn exact_enum_variant_for_source_v1(
     source: &SemanticEnumPayloadSourceV1,
     semantic_type: SemanticTypeIdV1,
 ) -> Option<u32> {
-    if !source.place.projections().is_empty() || source.place.ty() != semantic_type {
+    let SemanticEnumPayloadSourceV1::AggregateOperand(place) = source else {
+        return None;
+    };
+    if !place.projections().is_empty() || place.ty() != semantic_type {
         return None;
     }
-    let local = source.place.local();
+    let local = place.local();
     let mut definitions = 0_u32;
     let mut variant = None;
     for block in function.blocks() {
@@ -24487,52 +23909,6 @@ fn disjoint_slice_descriptor(
     descriptor
 }
 
-fn authenticated_workgroup_lds_scope_type_v1(
-    types: &[SemanticTypeDeclV1],
-    callables: &[SemanticCallableDeclV1],
-    ty: SemanticTypeIdV1,
-) -> bool {
-    if !callables.iter().any(|callable| {
-        matches!(
-            callable,
-            SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }
-                if matches!(
-                    operation,
-                    SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent { scope, .. }
-                        | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate {
-                            scope,
-                            ..
-                        } if *scope == ty
-                )
-        )
-    }) {
-        return false;
-    }
-    let Some(declaration) = types.get(ty.index() as usize) else {
-        return false;
-    };
-    let SemanticTypeShapeV1::Aggregate(aggregate) = declaration.shape() else {
-        return false;
-    };
-    let SemanticTypeLayoutDetailsV1::Aggregate(layout) = declaration.layout().details() else {
-        return false;
-    };
-    declaration.layout().size_bytes() == Some(0)
-        && !declaration.layout().is_uninhabited()
-        && matches!(
-            declaration.layout().backend_repr(),
-            SemanticBackendReprV1::Memory { sized: true }
-        )
-        && aggregate.fields().len() == layout.field_offsets().len()
-        && layout.field_offsets().iter().all(|offset| *offset == 0)
-        && layout.padding().is_empty()
-        && aggregate.fields().iter().all(|field| {
-            types.get(field.index() as usize).is_some_and(|field| {
-                field.layout().size_bytes() == Some(0) && !field.layout().is_uninhabited()
-            })
-        })
-}
-
 #[cfg(test)]
 fn disjoint_slice_operation_element(
     operation: &SemanticCompilerIntrinsicOperationV1,
@@ -24958,6 +24334,56 @@ fn semantic_enum_shape(
     Ok((*discriminant, variants))
 }
 
+fn require_block_component_witness_v1(
+    block: SemanticBlockIdV1,
+    binding: SemanticValueBindingV1,
+    expected: SemanticDisjointIndexSpaceV1,
+) -> Result<ValueId, ProductionSemanticKirErrorV1> {
+    let SemanticValueBindingV1::ComponentWitness {
+        raw,
+        index_space: actual,
+        ..
+    } = binding
+    else {
+        return Err(unsupported(
+            0,
+            Some(block.index()),
+            None,
+            "DisjointBlock::component_index receiver lacks blocked ownership authority",
+        ));
+    };
+    if actual != expected {
+        return Err(unsupported(
+            0,
+            Some(block.index()),
+            None,
+            "DisjointBlock::component_index mapping identity changed",
+        ));
+    }
+    Ok(raw)
+}
+
+fn ordinary_option_index_binding_v1(
+    semantic_type: SemanticTypeIdV1,
+    discriminant: ValueId,
+    discriminant_ty: Type,
+    index: ValueId,
+) -> SemanticValueBindingV1 {
+    SemanticValueBindingV1::Enum {
+        discriminant,
+        discriminant_ty,
+        semantic_type,
+        variant: None,
+        payloads: BTreeMap::from([(
+            1,
+            vec![SemanticValueBindingV1::Value {
+                id: index,
+                ty: Type::INDEX,
+            }],
+        )]),
+    }
+}
+
 fn unique_enum_variant_with_field(
     variants: &[SemanticEnumVariantV1],
     field: SemanticTypeIdV1,
@@ -25144,6 +24570,46 @@ fn subgroup_broadcast_source_is_statically_bounded(
     }
 }
 
+fn insert_semantic_ssa_binding_v1(
+    bindings: &mut BTreeMap<SsaValueV1, SemanticValueBindingV1>,
+    function: u32,
+    block: Option<u32>,
+    statement: Option<u32>,
+    value: SsaValueV1,
+    binding: SemanticValueBindingV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    match bindings.entry(value) {
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            entry.insert(binding);
+            Ok(())
+        }
+        std::collections::btree_map::Entry::Occupied(_) => Err(unsupported(
+            function,
+            block,
+            statement,
+            "semantic SSA value was bound more than once",
+        )),
+    }
+}
+
+fn require_semantic_ssa_definitions_consumed_v1(
+    function: u32,
+    pending: &BTreeMap<(u32, u32), VecDeque<SsaValueV1>>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    if let Some(((block, _), _)) = pending
+        .iter()
+        .find(|(_, definitions)| !definitions.is_empty())
+    {
+        return Err(unsupported(
+            function,
+            Some(*block),
+            None,
+            "semantic SSA definition plan was not fully consumed",
+        ));
+    }
+    Ok(())
+}
+
 const fn unsupported(
     function: u32,
     block: Option<u32>,
@@ -25171,6 +24637,59 @@ fn hex_identity(bytes: &[u8; 32]) -> String {
 #[cfg(test)]
 mod resource_tests {
     include!("production_semantic_kir_v1/resource_01_tests.rs");
+    include!("production_semantic_kir_v1/semantic_ssa_01_tests.rs");
+
+    #[test]
+    fn semantic_ssa_completion_accepts_an_exhausted_definition_plan() {
+        let pending = BTreeMap::from([((0, 7), VecDeque::new())]);
+
+        assert!(require_semantic_ssa_definitions_consumed_v1(3, &pending).is_ok());
+    }
+
+    #[test]
+    fn semantic_ssa_completion_rejects_a_leftover_dead_definition() {
+        let definition = SsaValueV1::Definition(fe2o3_mir_model::SsaDefinitionIdV1::new(11));
+        let pending = BTreeMap::from([((4, 7), VecDeque::from([definition]))]);
+
+        assert!(matches!(
+            require_semantic_ssa_definitions_consumed_v1(3, &pending),
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                function: 3,
+                block: Some(4),
+                statement: None,
+                detail: "semantic SSA definition plan was not fully consumed",
+            })
+        ));
+    }
+
+    #[test]
+    fn semantic_ssa_binding_rejects_an_insertion_collision_without_overwrite() {
+        let definition = SsaValueV1::Definition(fe2o3_mir_model::SsaDefinitionIdV1::new(11));
+        let original = SemanticValueBindingV1::Unit;
+        let mut bindings = BTreeMap::from([(definition, original.clone())]);
+
+        assert!(matches!(
+            insert_semantic_ssa_binding_v1(
+                &mut bindings,
+                3,
+                Some(4),
+                Some(5),
+                definition,
+                SemanticValueBindingV1::Unmaterialized,
+            ),
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                function: 3,
+                block: Some(4),
+                statement: Some(5),
+                detail: "semantic SSA value was bound more than once",
+            })
+        ));
+        assert!(matches!(
+            bindings.get(&definition),
+            Some(SemanticValueBindingV1::Unit)
+        ));
+    }
+
     #[test]
     fn admitted_strided_read_scalars_have_exact_byte_alignments() {
         for (scalar, alignment) in [
@@ -25283,13 +24802,28 @@ mod resource_tests {
             operation: SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element },
             operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256([164; 32]),
         };
-        let block = SemanticBasicBlockV1::new(
-            SemanticBlockIdentityV1::from_sha256([165; 32]),
-            source,
-            vec![],
-            SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
-        )
-        .unwrap();
+        let blocks = vec![
+            SemanticBasicBlockV1::new(
+                SemanticBlockIdentityV1::from_sha256([165; 32]),
+                source,
+                vec![],
+                SemanticTerminatorV1::new(
+                    source,
+                    SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
+                        SemanticEdgeRoleV1::Goto,
+                        SemanticBlockIdV1::from_index(1),
+                    )),
+                ),
+            )
+            .unwrap(),
+            SemanticBasicBlockV1::new(
+                SemanticBlockIdentityV1::from_sha256([183; 32]),
+                source,
+                vec![],
+                SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
+            )
+            .unwrap(),
+        ];
         let function = SemanticFunctionDeclV1::new(
             SemanticFunctionIdentityV1::from_sha256([166; 32]),
             SemanticFunctionRoleV1::InternalHelper,
@@ -25326,7 +24860,7 @@ mod resource_tests {
                 ),
             ],
             SemanticBlockIdV1::from_index(0),
-            vec![block],
+            blocks,
         )
         .unwrap();
         let callables = [callable];
@@ -25626,9 +25160,10 @@ mod resource_tests {
                 BTreeSet::new(),
                 1,
                 false,
-                max_operations,
+                max_operations.max(2),
             )
             .unwrap();
+            lowering.max_operations = max_operations;
             lowering.locals[1] = Some(SemanticValueBindingV1::Value {
                 id: ValueId(0),
                 ty: Type::INDEX,
@@ -26337,16 +25872,36 @@ mod resource_tests {
             SemanticExternAbiV1::Rust,
             false,
             false,
-            0,
-            vec![],
+            1,
+            vec![SemanticAbiArgumentV1::source(value(input))],
             SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
         )
         .unwrap();
         let place = |local, ty| {
             SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap()
         };
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(0),
+            vec![SemanticOperandV1::Copy(place(1, input))],
+            Some(SemanticCallDestinationV1::new(
+                place(2, output),
+                SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::CallReturn,
+                    SemanticBlockIdV1::from_index(1),
+                ),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
         let block = SemanticBasicBlockV1::new(
             SemanticBlockIdentityV1::from_sha256([117; 32]),
+            source,
+            vec![],
+            SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Call(call.clone())),
+        )
+        .unwrap();
+        let exit = SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1::from_sha256([126; 32]),
             source,
             vec![],
             SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
@@ -26371,7 +25926,7 @@ mod resource_tests {
                 SemanticLocalDeclV1::new(
                     SemanticLocalIdentityV1::from_sha256([124; 32]),
                     input,
-                    SemanticLocalRoleV1::Temporary,
+                    SemanticLocalRoleV1::Argument(0),
                     source,
                 ),
                 SemanticLocalDeclV1::new(
@@ -26382,7 +25937,7 @@ mod resource_tests {
                 ),
             ],
             SemanticBlockIdV1::from_index(0),
-            vec![block],
+            vec![block, exit],
         )
         .unwrap();
         let callables = [callable];
@@ -26406,19 +25961,6 @@ mod resource_tests {
         .unwrap();
         lowering.locals[1] = Some(input_binding);
         lowering.next_value = 8;
-        let call = SemanticDirectCallV1::new_callable(
-            SemanticCallableIdV1::from_index(0),
-            vec![SemanticOperandV1::Copy(place(1, input))],
-            Some(SemanticCallDestinationV1::new(
-                place(2, output),
-                SemanticControlFlowEdgeV1::new(
-                    SemanticEdgeRoleV1::CallReturn,
-                    SemanticBlockIdV1::from_index(0),
-                ),
-            )),
-            SemanticUnwindActionV1::Unreachable,
-        )
-        .unwrap();
         let mut operations = Vec::new();
         lowering
             .lower_call(SemanticBlockIdV1::from_index(0), &call, &mut operations)
@@ -27288,6 +26830,178 @@ mod resource_tests {
     }
 
     #[test]
+    fn promoted_index_witness_round_trip_preserves_all_authority_metadata() {
+        let semantic_type = SemanticTypeIdV1::from_index(0);
+        let availability = SemanticCapabilityAvailabilityV1::EnumPayload {
+            local: SemanticLocalIdV1::from_index(9),
+            variant: 3,
+        };
+        let descriptor = SemanticPromotedBindingV1::IndexWitness {
+            index_space: SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset: 7 },
+            disjoint: true,
+            availability: Some(availability),
+        };
+        let binding = SemanticValueBindingV1::IndexWitness {
+            id: ValueId(70),
+            index_space: SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset: 7 },
+            disjoint: true,
+            availability: Some(availability),
+        };
+
+        assert_eq!(
+            descriptor
+                .transport_types(std::slice::from_ref(&unit_type()), semantic_type)
+                .unwrap(),
+            vec![Type::INDEX]
+        );
+        let values = descriptor.transport_values(&binding).unwrap();
+        assert_eq!(values, vec![(ValueId(70), Type::INDEX)]);
+        let definitions = values
+            .iter()
+            .map(|(id, ty)| ValueDef::new(*id, ty.clone()))
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            descriptor
+                .binding_from_transport(
+                    std::slice::from_ref(&unit_type()),
+                    semantic_type,
+                    &definitions,
+                )
+                .unwrap(),
+            SemanticValueBindingV1::IndexWitness {
+                id: ValueId(70),
+                index_space: SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset: 7 },
+                disjoint: true,
+                availability: Some(actual),
+            } if actual == availability
+        ));
+    }
+
+    #[test]
+    fn promoted_index_witness_rejects_changed_provenance() {
+        let availability = SemanticCapabilityAvailabilityV1::EnumPayload {
+            local: SemanticLocalIdV1::from_index(9),
+            variant: 3,
+        };
+        let descriptor = SemanticPromotedBindingV1::IndexWitness {
+            index_space: SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset: 7 },
+            disjoint: true,
+            availability: Some(availability),
+        };
+        for forged in [
+            SemanticValueBindingV1::IndexWitness {
+                id: ValueId(70),
+                index_space: SemanticDisjointIndexSpaceV1::Index1d,
+                disjoint: true,
+                availability: Some(availability),
+            },
+            SemanticValueBindingV1::IndexWitness {
+                id: ValueId(70),
+                index_space: SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset: 7 },
+                disjoint: false,
+                availability: Some(availability),
+            },
+            SemanticValueBindingV1::IndexWitness {
+                id: ValueId(70),
+                index_space: SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset: 7 },
+                disjoint: true,
+                availability: None,
+            },
+        ] {
+            assert_eq!(
+                descriptor.transport_values(&forged).unwrap_err(),
+                "promoted index witness lacks its authenticated producer metadata"
+            );
+        }
+    }
+
+    #[test]
+    fn promoted_grid_leader_round_trip_is_a_zero_bit_proof_token() {
+        let semantic_type = SemanticTypeIdV1::from_index(0);
+        let availability = SemanticCapabilityAvailabilityV1::EnumPayload {
+            local: SemanticLocalIdV1::from_index(5),
+            variant: 1,
+        };
+        let descriptor = SemanticPromotedBindingV1::GridLeader { availability };
+        let binding = SemanticValueBindingV1::GridLeader { availability };
+
+        assert!(
+            descriptor
+                .transport_types(std::slice::from_ref(&unit_type()), semantic_type)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(descriptor.transport_values(&binding).unwrap().is_empty());
+        assert!(matches!(
+            descriptor
+                .binding_from_transport(
+                    std::slice::from_ref(&unit_type()),
+                    semantic_type,
+                    &[],
+                )
+                .unwrap(),
+            SemanticValueBindingV1::GridLeader {
+                availability: actual,
+            } if actual == availability
+        ));
+
+        let forged = SemanticValueBindingV1::GridLeader {
+            availability: SemanticCapabilityAvailabilityV1::EnumPayload {
+                local: SemanticLocalIdV1::from_index(5),
+                variant: 0,
+            },
+        };
+        assert_eq!(
+            descriptor.transport_values(&forged).unwrap_err(),
+            "promoted grid leader lacks its authenticated availability"
+        );
+        assert!(
+            descriptor
+                .binding_from_transport(
+                    std::slice::from_ref(&unit_type()),
+                    semantic_type,
+                    &[ValueDef::new(ValueId(0), Type::INDEX)],
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn direct_index_descriptor_requires_the_exact_compiler_producer_type() {
+        let witness = SemanticTypeIdV1::from_index(1);
+        let raw = SemanticTypeIdV1::from_index(2);
+        let operation = SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
+            input_witness: witness,
+            output_witness: witness,
+            raw_index: raw,
+            index_space: SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset: 4 },
+        };
+        assert_eq!(
+            direct_index_witness_contract_v1(&operation, witness),
+            Some(SemanticPromotedBindingV1::IndexWitness {
+                index_space: SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset: 4 },
+                disjoint: true,
+                availability: None,
+            })
+        );
+        assert_eq!(
+            direct_index_witness_contract_v1(&operation, SemanticTypeIdV1::from_index(3)),
+            None
+        );
+        assert_eq!(
+            direct_index_witness_contract_v1(
+                &SemanticCompilerIntrinsicOperationV1::DisjointIndexGet {
+                    index_witness: witness,
+                    raw_index: raw,
+                    index_space: SemanticDisjointIndexSpaceV1::ShiftedIndex1d { offset: 4 },
+                },
+                witness,
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn current_wave_lane_rejects_plain_values_and_wrong_widths() {
         let block = SemanticBlockIdV1::from_index(3);
         let plain = SemanticValueBindingV1::Value {
@@ -27662,6 +27376,413 @@ mod resource_tests {
     }
 
     #[test]
+    fn block_component_projection_requires_exact_authority_and_returns_ordinary_enum_data() {
+        let block = SemanticBlockIdV1::from_index(3);
+        let exact = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+            lanes_per_block: 16,
+            elements_per_lane: 4,
+        };
+        let availability = SemanticCapabilityAvailabilityV1::EnumPayload {
+            local: SemanticLocalIdV1::from_index(2),
+            variant: 1,
+        };
+        let witness = SemanticValueBindingV1::ComponentWitness {
+            raw: ValueId(7),
+            index_space: exact,
+            availability,
+        };
+        assert_eq!(
+            require_block_component_witness_v1(block, witness.clone(), exact).unwrap(),
+            ValueId(7)
+        );
+        assert!(matches!(
+            require_block_component_witness_v1(
+                block,
+                witness,
+                SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                    lanes_per_block: 8,
+                    elements_per_lane: 8,
+                },
+            ),
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                detail: "DisjointBlock::component_index mapping identity changed",
+                ..
+            })
+        ));
+        assert!(matches!(
+            require_block_component_witness_v1(
+                block,
+                SemanticValueBindingV1::Value {
+                    id: ValueId(7),
+                    ty: Type::INDEX,
+                },
+                exact,
+            ),
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                detail: "DisjointBlock::component_index receiver lacks blocked ownership authority",
+                ..
+            })
+        ));
+
+        let option = ordinary_option_index_binding_v1(
+            SemanticTypeIdV1::from_index(9),
+            ValueId(10),
+            Type::Scalar(ScalarType::U8),
+            ValueId(11),
+        );
+        let SemanticValueBindingV1::Enum {
+            discriminant,
+            discriminant_ty,
+            semantic_type,
+            variant,
+            payloads,
+        } = option
+        else {
+            panic!("component index must not become a compiler-issued optional capability")
+        };
+        assert_eq!(discriminant, ValueId(10));
+        assert_eq!(discriminant_ty, Type::Scalar(ScalarType::U8));
+        assert_eq!(semantic_type, SemanticTypeIdV1::from_index(9));
+        assert_eq!(variant, None);
+        assert!(matches!(
+            payloads.get(&1).map(Vec::as_slice),
+            Some([SemanticValueBindingV1::Value {
+                id: ValueId(11),
+                ty: Type::Scalar(ScalarType::Index),
+            }])
+        ));
+    }
+
+    #[test]
+    fn control_flow_ssa_accepts_129_linear_locals_without_phi_transport() {
+        let unit = SemanticTypeIdV1::from_index(0);
+        let u32_ty = SemanticTypeIdV1::from_index(1);
+        let opaque_ty = SemanticTypeIdV1::from_index(2);
+        let source = SemanticSourceProvenanceV1::unavailable();
+        let place = |local, ty| {
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap()
+        };
+        let scalar = |value| {
+            SemanticOperandV1::Constant(SemanticConstantV1::new(
+                u32_ty,
+                SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(value, 4).unwrap()),
+            ))
+        };
+        let mut definitions = Vec::new();
+        let mut uses = Vec::new();
+        for local in 1..=129_u32 {
+            let ty = if local == 1 { opaque_ty } else { u32_ty };
+            let value = if local == 1 {
+                SemanticRvalueV1::new(
+                    opaque_ty,
+                    SemanticRvalueKindV1::aggregate(SemanticAggregateKindV1::Aggregate, vec![])
+                        .unwrap(),
+                )
+            } else {
+                SemanticRvalueV1::new(u32_ty, SemanticRvalueKindV1::Use(scalar(u128::from(local))))
+            };
+            definitions.push(SemanticStatementV1::new(
+                source,
+                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(place(local, ty), value)),
+            ));
+            uses.push(SemanticStatementV1::new(
+                source,
+                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    place(local, ty),
+                    SemanticRvalueV1::new(
+                        ty,
+                        SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(local, ty))),
+                    ),
+                )),
+            ));
+        }
+        let goto = SemanticControlFlowEdgeV1::new(
+            SemanticEdgeRoleV1::Goto,
+            SemanticBlockIdV1::from_index(1),
+        );
+        let blocks = vec![
+            SemanticBasicBlockV1::new(
+                SemanticBlockIdentityV1::from_sha256([244; 32]),
+                source,
+                definitions,
+                SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Goto(goto)),
+            )
+            .unwrap(),
+            SemanticBasicBlockV1::new(
+                SemanticBlockIdentityV1::from_sha256([245; 32]),
+                source,
+                uses,
+                SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
+            )
+            .unwrap(),
+        ];
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256([246; 32]),
+            SemanticLayoutIdentityV1::from_sha256([247; 32]),
+            SemanticCanonAbiV1::Rust,
+            SemanticExternAbiV1::Rust,
+            false,
+            false,
+            0,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let mut locals = vec![SemanticLocalDeclV1::new(
+            SemanticLocalIdentityV1::from_sha256([248; 32]),
+            unit,
+            SemanticLocalRoleV1::Return,
+            source,
+        )];
+        locals.extend((1..=129_u32).map(|local| {
+            let ty = if local == 1 { opaque_ty } else { u32_ty };
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256([local as u8; 32]),
+                ty,
+                SemanticLocalRoleV1::Temporary,
+                source,
+            )
+        }));
+        let function = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256([249; 32]),
+            SemanticFunctionRoleV1::InternalHelper,
+            SemanticItemDefinitionIdentityV1::from_sha256([250; 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([251; 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([252; 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([253; 32]),
+            source,
+            abi,
+            locals,
+            SemanticBlockIdV1::from_index(0),
+            blocks,
+        )
+        .unwrap();
+        let types = vec![
+            unit_type(),
+            unsigned_scalar_type(254, 32),
+            SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256([255; 32]),
+                SemanticLayoutIdentityV1::from_sha256([1; 32]),
+                SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                SemanticTypeShapeV1::Opaque,
+            ),
+        ];
+        let semantic_ssa = plan_semantic_function_ssa_with_module_v1(
+            SemanticFunctionIdV1::from_index(0),
+            &function,
+            &types,
+            &[],
+            ProductionSemanticSsaLimitsV1::default(),
+        )
+        .unwrap();
+        let option_dominance = SemanticOptionDominanceV1::analyze(&function, &[]).unwrap();
+
+        let plan = SemanticControlFlowSsaPlanV1::analyze(
+            &types,
+            &[],
+            &function,
+            SemanticFunctionIdV1::from_index(0),
+            &semantic_ssa,
+            &option_dominance,
+            &BTreeMap::new(),
+            usize::MAX,
+            usize::MAX,
+        )
+        .expect("linear dominating definitions need no Kernel IR block parameters");
+        assert!(plan.promoted.is_empty());
+        assert!(plan.live_in(1).is_empty());
+        assert_eq!(plan.ssa_value_locals.len(), 130);
+    }
+
+    fn call_produced_enum_source_fixture_v1(
+        additional_definition: bool,
+    ) -> (
+        Vec<SemanticTypeDeclV1>,
+        SemanticFunctionDeclV1,
+        SemanticControlFlowSsaPlanV1,
+    ) {
+        let unit = SemanticTypeIdV1::from_index(0);
+        let u32_ty = SemanticTypeIdV1::from_index(1);
+        let enum_ty = SemanticTypeIdV1::from_index(2);
+        let source = SemanticSourceProvenanceV1::unavailable();
+        let enum_type = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([230; 32]),
+            SemanticLayoutIdentityV1::from_sha256([231; 32]),
+            SemanticTypeLayoutV1::new(Some(8), 4).unwrap(),
+            SemanticTypeShapeV1::Enum {
+                discriminant: u32_ty,
+                variants: vec![
+                    SemanticEnumVariantV1::new(
+                        0,
+                        SemanticAggregateTypeV1::new(vec![u32_ty]).unwrap(),
+                    ),
+                    SemanticEnumVariantV1::new(
+                        1,
+                        SemanticAggregateTypeV1::new(vec![u32_ty]).unwrap(),
+                    ),
+                ]
+                .into_boxed_slice(),
+            },
+        );
+        let place = |local, ty| {
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap()
+        };
+        let return_edge = SemanticControlFlowEdgeV1::new(
+            SemanticEdgeRoleV1::CallReturn,
+            SemanticBlockIdV1::from_index(1),
+        );
+        let call = SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(0),
+            vec![],
+            Some(SemanticCallDestinationV1::new(
+                place(1, enum_ty),
+                return_edge,
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap();
+        let mut statements = Vec::new();
+        if additional_definition {
+            statements.push(SemanticStatementV1::new(
+                source,
+                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    place(1, enum_ty),
+                    SemanticRvalueV1::new(
+                        enum_ty,
+                        SemanticRvalueKindV1::aggregate(
+                            SemanticAggregateKindV1::EnumVariant(0),
+                            vec![SemanticOperandV1::Constant(SemanticConstantV1::new(
+                                u32_ty,
+                                SemanticConstantValueV1::Scalar(
+                                    SemanticScalarValueV1::new(7, 4).unwrap(),
+                                ),
+                            ))],
+                        )
+                        .unwrap(),
+                    ),
+                )),
+            ));
+        }
+        let blocks = vec![
+            SemanticBasicBlockV1::new(
+                SemanticBlockIdentityV1::from_sha256([232; 32]),
+                source,
+                vec![],
+                SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Call(call)),
+            )
+            .unwrap(),
+            SemanticBasicBlockV1::new(
+                SemanticBlockIdentityV1::from_sha256([233; 32]),
+                source,
+                statements,
+                SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
+            )
+            .unwrap(),
+        ];
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256([234; 32]),
+            SemanticLayoutIdentityV1::from_sha256([235; 32]),
+            SemanticCanonAbiV1::Rust,
+            SemanticExternAbiV1::Rust,
+            false,
+            false,
+            0,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let function = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256([236; 32]),
+            SemanticFunctionRoleV1::InternalHelper,
+            SemanticItemDefinitionIdentityV1::from_sha256([237; 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([238; 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([239; 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([240; 32]),
+            source,
+            abi,
+            vec![
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([241; 32]),
+                    unit,
+                    SemanticLocalRoleV1::Return,
+                    source,
+                ),
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([242; 32]),
+                    enum_ty,
+                    SemanticLocalRoleV1::Temporary,
+                    source,
+                ),
+            ],
+            SemanticBlockIdV1::from_index(0),
+            blocks,
+        )
+        .unwrap();
+        let promoted = SemanticPromotedLocalV1 {
+            semantic_type: enum_ty,
+            transport_semantic_type: enum_ty,
+            transport: SemanticPromotedTransportV1::Semantic(SemanticPromotedBindingV1::Ordinary),
+            kernel_types: vec![Type::Scalar(ScalarType::U32)].into_boxed_slice(),
+        };
+        let plan = SemanticControlFlowSsaPlanV1 {
+            compiler_issued_bindings: BTreeMap::new(),
+            implicit_entry_locals: BTreeSet::new(),
+            ssa_value_locals: BTreeSet::from([1]),
+            retained_local_slots: BTreeMap::new(),
+            retained_initialized_at_entry: BTreeMap::new(),
+            promoted: BTreeMap::from([(1, promoted)]),
+            live_in: BTreeMap::new(),
+            block_entry_values: BTreeMap::new(),
+            entry_definitions: BTreeMap::new(),
+            definition_values: BTreeMap::new(),
+            edge_definitions: BTreeMap::new(),
+            edge_arguments: BTreeMap::new(),
+        };
+        (
+            vec![unit_type(), unsigned_scalar_type(243, 32), enum_type],
+            function,
+            plan,
+        )
+    }
+
+    #[test]
+    fn unique_call_result_certifies_each_dynamic_enum_payload_field() {
+        let (types, function, plan) = call_produced_enum_source_fixture_v1(false);
+        let sources = plan_unique_enum_payload_sources_v1(&types, &function, &plan);
+        assert_eq!(sources.len(), 2);
+        for variant in 0..2 {
+            assert!(matches!(
+                sources.get(&(1, variant, 0)),
+                Some(SemanticEnumPayloadSourceV1::CallResult)
+            ));
+        }
+    }
+
+    #[test]
+    fn second_whole_enum_definition_revokes_call_result_custody() {
+        let (types, function, plan) = call_produced_enum_source_fixture_v1(true);
+        assert!(plan_unique_enum_payload_sources_v1(&types, &function, &plan).is_empty());
+    }
+
+    #[test]
+    fn dynamic_nested_enum_payload_is_not_restorable_without_projection_custody() {
+        let nested = SemanticValueBindingV1::Enum {
+            discriminant: ValueId(7),
+            discriminant_ty: Type::Scalar(ScalarType::U32),
+            semantic_type: SemanticTypeIdV1::from_index(2),
+            variant: None,
+            payloads: BTreeMap::from([(
+                0,
+                vec![SemanticValueBindingV1::Value {
+                    id: ValueId(8),
+                    ty: Type::INDEX,
+                }],
+            )]),
+        };
+        assert!(!semantic_binding_can_restore_from_unique_source_v1(&nested));
+    }
+
+    #[test]
     fn unmaterialized_wrong_variant_rejects_at_the_lowerer_observation_boundary() {
         let unit = SemanticTypeIdV1::from_index(0);
         let types = [unit_type()];
@@ -27731,7 +27852,12 @@ mod resource_tests {
         .unwrap();
 
         assert!(matches!(
-            lowering.resolve_place(SemanticBlockIdV1::from_index(0), Some(0), &projected),
+            lowering.resolve_place(
+                SemanticBlockIdV1::from_index(0),
+                Some(0),
+                &projected,
+                &mut Vec::new(),
+            ),
             Err(ProductionSemanticKirErrorV1::Unsupported {
                 detail: "unmaterialized enum payload cannot be observed",
                 ..
@@ -28279,6 +28405,123 @@ mod resource_tests {
         }
     }
 
+    fn retained_local_storage_translation_fixture() -> UnsupportedIndexCorrelationFixtureV1 {
+        let scalar = Type::Scalar(ScalarType::U32);
+        let read_write =
+            Type::pointer(scalar.clone(), AddressSpace::Private, AccessMode::ReadWrite);
+        let read_only = Type::pointer(scalar.clone(), AddressSpace::Private, AccessMode::ReadOnly);
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations = vec![
+            Operation::effect_free(
+                ValueDef::new(ValueId(1), read_write),
+                OperationKind::Alloca {
+                    element: scalar.clone(),
+                    count: None,
+                    address_space: AddressSpace::Private,
+                    alignment: 4,
+                },
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(1),
+                    value: ValueId(0),
+                    access: MemoryAccess::new(AddressSpace::Private, 4),
+                },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(2), read_only.clone()),
+                OperationKind::Cast {
+                    kind: CastKind::RestrictPointerAccess,
+                    value: ValueId(1),
+                    to: read_only,
+                },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(3), scalar.clone()),
+                OperationKind::Load {
+                    pointer: ValueId(2),
+                    access: MemoryAccess::new(AddressSpace::Private, 4),
+                },
+            ),
+        ];
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let mut module = Module::new("retained-local-storage-translation");
+        module.functions.push(Function::kernel_entry(
+            "unsupported_index_correlation",
+            Signature::new(vec![scalar], vec![]),
+            vec![ValueId(0)],
+            vec![block],
+        ));
+        module.kernels.push(Kernel::new(
+            "retained-local-storage-translation",
+            "unsupported_index_correlation",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(64),
+            },
+        ));
+        verify_module(&module).expect("retained local storage fixture must be valid Kernel IR");
+        let correspondence_owner = SemanticFunctionIdV1::from_index(0);
+        let semantic_function = SemanticFunctionIdV1::from_index(0);
+        let correspondence = SemanticKirCorrespondenceV1 {
+            semantic_sha256: [8; 32],
+            function_count: 1,
+            lowered_functions: vec![SemanticKirFunctionCorrespondenceV1 {
+                correspondence_owner,
+                semantic_function,
+                kernel_ir_function: FunctionId::new("unsupported_index_correlation"),
+                role: SemanticKirFunctionRoleV1::KernelEntry,
+            }]
+            .into_boxed_slice(),
+            blocks: vec![SemanticKirBlockCorrespondenceV1 {
+                correspondence_owner,
+                semantic_function,
+                semantic_block: SemanticBlockIdV1::from_index(0),
+                kernel_ir_block: BlockId(0),
+                source_statement_count: 1,
+            }]
+            .into_boxed_slice(),
+            statement_operation_spans: vec![SemanticKirStatementOperationSpanV1 {
+                correspondence_owner,
+                semantic_function,
+                semantic_block: SemanticBlockIdV1::from_index(0),
+                statement_ordinal: 0,
+                kernel_ir_block: BlockId(0),
+                first_operation_ordinal: 2,
+                operation_count: 2,
+            }]
+            .into_boxed_slice(),
+            terminator_operation_spans: vec![SemanticKirTerminatorOperationSpanV1 {
+                correspondence_owner,
+                semantic_function,
+                semantic_block: SemanticBlockIdV1::from_index(0),
+                kernel_ir_block: BlockId(0),
+                first_operation_ordinal: 4,
+                operation_count: 0,
+            }]
+            .into_boxed_slice(),
+            generated_terminator_values: Box::new([]),
+            synthetic_operation_spans: vec![SemanticKirSyntheticOperationSpanV1 {
+                correspondence_owner,
+                semantic_function,
+                rule: SemanticKirSyntheticOperationRuleV1::RetainedLocalStorage,
+                kernel_ir_block: BlockId(0),
+                first_operation_ordinal: 0,
+                operation_count: 2,
+            }]
+            .into_boxed_slice(),
+            parameter_bindings: Box::new([]),
+            parameter_component_bindings: Box::new([]),
+            ignored_parameter_bindings: Box::new([]),
+        };
+        UnsupportedIndexCorrelationFixtureV1 {
+            module,
+            correspondence,
+            reasons: vec![],
+            source: ProductionRankedAccessSourceV1::new(0, Some(0), 0, 0, 0),
+        }
+    }
+
     fn ranked_correlation_input(
         access: AccessKindAttr,
         allocation_origin: u64,
@@ -28724,6 +28967,94 @@ mod resource_tests {
         assert_eq!(report.value_expressions(), 0);
         assert_eq!(report.conservative_ranked_effects(), 0);
         assert!(!report.grants_artifact_or_launch_authority());
+    }
+
+    #[test]
+    fn mir_pliron_translation_accepts_exact_retained_private_slot_accesses() {
+        let fixture = retained_local_storage_translation_fixture();
+        let lowering = ranked_correlation_input_for_effects(vec![], 1);
+        let report = validate_translation_fixture(&fixture, &lowering, &[], 16)
+            .expect("compiler-owned retained slot effects need no ranked memory counterpart");
+        assert_eq!(report.semantic_sha256(), &[8; 32]);
+        assert_eq!(report.memory_effects(), 0);
+        assert_eq!(report.conservative_ranked_effects(), 0);
+    }
+
+    #[test]
+    fn mir_pliron_translation_rejects_unowned_private_slot_accesses() {
+        let mut fixture = retained_local_storage_translation_fixture();
+        fixture.correspondence.synthetic_operation_spans = Box::new([]);
+        let lowering = ranked_correlation_input_for_effects(vec![], 1);
+        let result = validate_translation_fixture(&fixture, &lowering, &[], 16);
+        assert!(
+            matches!(
+                result,
+                Err(
+                    ProductionMirPlironTranslationErrorV1::UnattributedExecutableEffect {
+                        location: FunctionOperationLocation {
+                            block: BlockId(0),
+                            operation_index: 1,
+                        },
+                    }
+                )
+            ),
+            "unexpected unowned private-slot result: {result:?}"
+        );
+
+        let mut wrong_owner = retained_local_storage_translation_fixture();
+        wrong_owner.correspondence.synthetic_operation_spans[0].correspondence_owner =
+            SemanticFunctionIdV1::from_index(1);
+        assert!(matches!(
+            validate_translation_fixture(&wrong_owner, &lowering, &[], 16),
+            Err(
+                ProductionMirPlironTranslationErrorV1::UnattributedExecutableEffect {
+                    location: FunctionOperationLocation {
+                        block: BlockId(0),
+                        operation_index: 1,
+                    },
+                }
+            )
+        ));
+
+        let mut unrelated_slot = retained_local_storage_translation_fixture();
+        let body = unrelated_slot.module.functions[0].body.as_mut().unwrap();
+        body.blocks[0].operations.extend([
+            Operation::effect_free(
+                ValueDef::new(
+                    ValueId(4),
+                    Type::pointer(
+                        Type::Scalar(ScalarType::U32),
+                        AddressSpace::Private,
+                        AccessMode::ReadWrite,
+                    ),
+                ),
+                OperationKind::Alloca {
+                    element: Type::Scalar(ScalarType::U32),
+                    count: None,
+                    address_space: AddressSpace::Private,
+                    alignment: 4,
+                },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(5), Type::Scalar(ScalarType::U32)),
+                OperationKind::Load {
+                    pointer: ValueId(4),
+                    access: MemoryAccess::new(AddressSpace::Private, 4),
+                },
+            ),
+        ]);
+        verify_module(&unrelated_slot.module).expect("unrelated private slot remains valid KIR");
+        assert!(matches!(
+            validate_translation_fixture(&unrelated_slot, &lowering, &[], 16),
+            Err(
+                ProductionMirPlironTranslationErrorV1::UnattributedExecutableEffect {
+                    location: FunctionOperationLocation {
+                        block: BlockId(0),
+                        operation_index: 5,
+                    },
+                }
+            )
+        ));
     }
 
     #[test]

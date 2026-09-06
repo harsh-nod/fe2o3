@@ -2,14 +2,15 @@ use std::mem::size_of;
 
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Atomic, AtomicKind, Axis,
-    BarrierSemantics, BasicBlock, BinaryOp, BlockId, CheckedBinaryOperator, ComparePredicate,
-    Constant, Convergence, DiagnosticCode, Fence, Function, IndexKind, IntegerSwitchCase,
-    IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, MemoryAccess,
-    MemoryOrdering, Module, Operation, OperationKind, ScalarType, Signature, SwitchCase,
-    SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueDef, ValueId,
-    VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV10,
-    WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemory,
-    WorkgroupMemoryExtent, WorkgroupSize, verify_module,
+    BarrierSemantics, BasicBlock, BinaryOp, BlockId, CastKind, CheckedBinaryOperator,
+    ComparePredicate, Constant, Convergence, DiagnosticCode, Fence, Function, IndexKind,
+    IntegerSwitchCase, IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
+    MemoryAccess, MemoryOrdering, Module, Operation, OperationKind, ScalarType, Signature,
+    SwitchCase, SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueDef,
+    ValueId, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV9,
+    VerifiedCanonicalKernelIrV10, VerifiedCanonicalKernelIrV11, WaveOperation, WaveOperationKind,
+    WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
+    verify_module,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, BufferViewArgumentV1,
@@ -67,6 +68,12 @@ fn admitted_v10(module: Module) -> AdmittedSimulationModuleV1 {
     let canonical = VerifiedCanonicalKernelIrV10::from_module(module).expect("verified fixture");
     AdmittedSimulationModuleV1::admit_v10(canonical, SimulationLimitsV1::default())
         .expect("admitted exact V10 fixture")
+}
+
+fn admitted_v11(module: Module) -> AdmittedSimulationModuleV1 {
+    let canonical = VerifiedCanonicalKernelIrV11::from_module(module).expect("verified fixture");
+    AdmittedSimulationModuleV1::admit_v11(canonical, SimulationLimitsV1::default())
+        .expect("admitted exact V11 fixture")
 }
 
 fn dynamic_domain_1d() -> LaunchDomain {
@@ -631,6 +638,8 @@ fn executes_checked_select_unary_and_private_memory_operations() {
     let global_pointer = Type::pointer(u8_ty.clone(), AddressSpace::Global, AccessMode::ReadWrite);
     let private_pointer =
         Type::pointer(u8_ty.clone(), AddressSpace::Private, AccessMode::ReadWrite);
+    let private_read_only =
+        Type::pointer(u8_ty.clone(), AddressSpace::Private, AccessMode::ReadOnly);
     let mut block = BasicBlock::new(BlockId(0));
     block.operations = vec![
         op(1, u8_ty.clone(), OperationKind::Constant(Constant::U8(250))),
@@ -678,10 +687,19 @@ fn executes_checked_select_unary_and_private_memory_operations() {
             },
         ),
         op(
+            13,
+            private_read_only.clone(),
+            OperationKind::Cast {
+                kind: CastKind::RestrictPointerAccess,
+                value: ValueId(7),
+                to: private_read_only,
+            },
+        ),
+        op(
             8,
             u8_ty.clone(),
             OperationKind::Load {
-                pointer: ValueId(7),
+                pointer: ValueId(13),
                 access: MemoryAccess::new(AddressSpace::Private, 1),
             },
         ),
@@ -742,7 +760,7 @@ fn executes_checked_select_unary_and_private_memory_operations() {
     );
     request.events = EventPolicyV1::Enabled;
     let mut events = Collector::default();
-    let execution = admitted(module)
+    let execution = admitted_v11(module)
         .simulate_with_sink(
             &request,
             SimulationTargetV1::amdgpu_64(),

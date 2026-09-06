@@ -155,6 +155,8 @@ pub enum MirToKirSyntheticRuleEvidenceV4 {
     EnumPayloadStorage = 1,
     /// Canonical trap in the shared runtime-assert failure block.
     RuntimeAssertFailureTrap = 2,
+    /// Private storage used for retained scalar and thin-pointer locals.
+    RetainedLocalStorage = 3,
 }
 
 /// Exact operation span emitted by one synthetic lowering rule.
@@ -291,6 +293,9 @@ impl InertCanonicalMirToKirCorrespondenceEvidenceV4 {
             .iter()
             .map(|span| MirToKirSyntheticSpanEvidenceV4 {
                 rule: match span.rule() {
+                    SemanticKirSyntheticOperationRuleV1::RetainedLocalStorage => {
+                        MirToKirSyntheticRuleEvidenceV4::RetainedLocalStorage
+                    }
                     SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage => {
                         MirToKirSyntheticRuleEvidenceV4::EnumPayloadStorage
                     }
@@ -355,6 +360,7 @@ impl InertCanonicalMirToKirCorrespondenceEvidenceV4 {
         let kernel_ir_version = match reader.u16()? {
             8 => ProductionCanonicalKernelIrVersionV1::V8,
             9 => ProductionCanonicalKernelIrVersionV1::V9,
+            11 => ProductionCanonicalKernelIrVersionV1::V11,
             _ => return Err(ProductionCorrespondenceEvidenceErrorV4::InvalidHeader),
         };
         if reader.u16()? != 0 {
@@ -822,6 +828,7 @@ fn encode(
         match canonical_kernel_ir.version() {
             ProductionCanonicalKernelIrVersionV1::V8 => 8,
             ProductionCanonicalKernelIrVersionV1::V9 => 9,
+            ProductionCanonicalKernelIrVersionV1::V11 => 11,
         },
     );
     push_u16(&mut bytes, 0);
@@ -935,6 +942,7 @@ fn decode_synthetic(
     let rule = match reader.u32()? {
         1 => MirToKirSyntheticRuleEvidenceV4::EnumPayloadStorage,
         2 => MirToKirSyntheticRuleEvidenceV4::RuntimeAssertFailureTrap,
+        3 => MirToKirSyntheticRuleEvidenceV4::RetainedLocalStorage,
         _ => return Err(ProductionCorrespondenceEvidenceErrorV4::InvalidRecord),
     };
     Ok(MirToKirSyntheticSpanEvidenceV4 {

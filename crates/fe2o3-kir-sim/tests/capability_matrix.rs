@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::process::Command;
 
 use fe2o3_kir_sim::{
-    SCALAR_CAPABILITY_ROWS_V1, SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1,
-    SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1, SimulationCapabilityDispositionV1,
-    SimulationKirWireVersionV1, SimulationOperationSurfaceV1, SimulationUnsupportedReasonCodeV1,
-    TOP_LEVEL_CAPABILITY_ROWS_V1, semantic_capability_matrix_v1,
+    POINTER_CAPABILITY_ROWS_V1, SCALAR_CAPABILITY_ROWS_V1,
+    SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1, SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1,
+    SimulationCapabilityDispositionV1, SimulationKirWireVersionV1, SimulationOperationSurfaceV1,
+    SimulationUnsupportedReasonCodeV1, TOP_LEVEL_CAPABILITY_ROWS_V1, semantic_capability_matrix_v1,
 };
 
 #[test]
@@ -18,6 +18,7 @@ fn matrix_is_complete_unique_bounded_and_authority_free() {
     assert!(!matrix.performance_prediction);
     assert_eq!(matrix.top_level_rows.len(), TOP_LEVEL_CAPABILITY_ROWS_V1);
     assert_eq!(matrix.scalar_rows.len(), SCALAR_CAPABILITY_ROWS_V1);
+    assert_eq!(matrix.pointer_rows.len(), POINTER_CAPABILITY_ROWS_V1);
 
     let top_keys = matrix
         .top_level_rows
@@ -31,17 +32,73 @@ fn matrix_is_complete_unique_bounded_and_authority_free() {
         .map(|row| (row.profile, row.family, row.operation, row.lhs, row.rhs))
         .collect::<BTreeSet<_>>();
     assert_eq!(scalar_keys.len(), matrix.scalar_rows.len());
+    let pointer_keys = matrix
+        .pointer_rows
+        .iter()
+        .map(|row| {
+            (
+                row.profile,
+                row.kir_wire_version,
+                row.operation,
+                row.from_access,
+                row.to_access,
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(pointer_keys.len(), matrix.pointer_rows.len());
 
     for capability in matrix
         .top_level_rows
         .iter()
         .map(|row| &row.capability)
         .chain(matrix.scalar_rows.iter().map(|row| &row.capability))
+        .chain(matrix.pointer_rows.iter().map(|row| &row.capability))
     {
         match capability {
             SimulationCapabilityDispositionV1::Owned { .. }
             | SimulationCapabilityDispositionV1::Unsupported { .. } => {}
         }
+    }
+}
+
+#[test]
+fn pointer_access_restriction_is_typed_memory_owned_only_in_v11() {
+    let matrix = semantic_capability_matrix_v1();
+    for profile in matrix
+        .pointer_rows
+        .iter()
+        .map(|row| row.profile)
+        .collect::<BTreeSet<_>>()
+    {
+        for version in [
+            SimulationKirWireVersionV1::V7,
+            SimulationKirWireVersionV1::V9,
+            SimulationKirWireVersionV1::V10,
+        ] {
+            assert!(matches!(
+                matrix
+                    .pointer_rows
+                    .iter()
+                    .find(|row| { row.profile == profile && row.kir_wire_version == version })
+                    .unwrap()
+                    .capability,
+                SimulationCapabilityDispositionV1::Unsupported {
+                    reason: SimulationUnsupportedReasonCodeV1::InvalidPointerAccessRestriction,
+                }
+            ));
+        }
+        assert!(matches!(
+            matrix
+                .pointer_rows
+                .iter()
+                .find(|row| {
+                    row.profile == profile
+                        && row.kir_wire_version == SimulationKirWireVersionV1::V11
+                })
+                .unwrap()
+                .capability,
+            SimulationCapabilityDispositionV1::Owned { .. }
+        ));
     }
 }
 
@@ -264,5 +321,9 @@ fn json_command_emits_the_same_stable_matrix() {
     assert_eq!(
         value["scalar_rows"].as_array().unwrap().len(),
         SCALAR_CAPABILITY_ROWS_V1
+    );
+    assert_eq!(
+        value["pointer_rows"].as_array().unwrap().len(),
+        POINTER_CAPABILITY_ROWS_V1
     );
 }

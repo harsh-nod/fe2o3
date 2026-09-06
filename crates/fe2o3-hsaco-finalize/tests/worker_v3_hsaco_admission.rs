@@ -104,7 +104,7 @@ use fe2o3_kernel_ir::{
     SemanticDebugTransformationClassV2, SemanticDebugTransformationClassificationV2,
     SemanticDebugTransformationEvidenceInputV2, SemanticDebugTransformationEvidenceKindV2,
     SemanticDebugTransformationV1, SemanticDebugUnavailableReasonV1, VerifiedCanonicalKernelIrV7,
-    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
+    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV11,
     production_semantic_debug_transformation_capabilities_v1,
 };
 use fe2o3_verifier::{
@@ -1716,6 +1716,11 @@ fn semantic_anchor_handoff_with_version_and_family(
                 .unwrap()
                 .1
         }
+        ProductionReplayKernelIrVersionV1::V11 => {
+            VerifiedCanonicalKernelIrV11::from_canonical_bytes_with_module(neutral_bytes)
+                .unwrap()
+                .1
+        }
     };
     let target_bound = bind_production_target_v1(&neutral_module, profile).unwrap();
     let anchor_identity = match version {
@@ -1728,6 +1733,11 @@ fn semantic_anchor_handoff_with_version_and_family(
             let owner =
                 VerifiedCanonicalKernelIrV9::from_module(target_bound.module().clone()).unwrap();
             dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v9(&owner)
+        }
+        ProductionReplayKernelIrVersionV1::V11 => {
+            let owner =
+                VerifiedCanonicalKernelIrV11::from_module(target_bound.module().clone()).unwrap();
+            dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v11(&owner)
         }
     };
     let dialect = match profile {
@@ -1787,6 +1797,10 @@ fn replay_kernel_ir_bytes(
     match version {
         ProductionReplayKernelIrVersionV1::V8 => canonical_v8.to_vec(),
         ProductionReplayKernelIrVersionV1::V9 => VerifiedCanonicalKernelIrV9::from_module(module)
+            .unwrap()
+            .canonical_bytes()
+            .to_vec(),
+        ProductionReplayKernelIrVersionV1::V11 => VerifiedCanonicalKernelIrV11::from_module(module)
             .unwrap()
             .canonical_bytes()
             .to_vec(),
@@ -4010,6 +4024,11 @@ fn capsule_bytes_with_semantic_to_llvm_and_version_for_family(
                 .unwrap()
                 .1
         }
+        ProductionReplayKernelIrVersionV1::V11 => {
+            VerifiedCanonicalKernelIrV11::from_canonical_bytes_with_module(receipts[4].0.clone())
+                .unwrap()
+                .1
+        }
     };
     let target_bound = bind_production_target_v1(&neutral_module, profile).unwrap();
     let anchor_identity = match replay_version {
@@ -4022,6 +4041,11 @@ fn capsule_bytes_with_semantic_to_llvm_and_version_for_family(
             let owner =
                 VerifiedCanonicalKernelIrV9::from_module(target_bound.module().clone()).unwrap();
             dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v9(&owner)
+        }
+        ProductionReplayKernelIrVersionV1::V11 => {
+            let owner =
+                VerifiedCanonicalKernelIrV11::from_module(target_bound.module().clone()).unwrap();
+            dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v11(&owner)
         }
     };
     let dialect_llvm = match profile {

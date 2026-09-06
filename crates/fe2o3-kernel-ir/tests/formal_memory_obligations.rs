@@ -54,6 +54,120 @@ fn analyze(module: &Module, extent: u64) -> FormalMemoryObligationAnalysis {
 }
 
 #[test]
+fn read_only_pointer_restriction_preserves_formal_allocation_provenance() {
+    let read_write = global_pointer(AccessMode::ReadWrite);
+    let read_only = global_pointer(AccessMode::ReadOnly);
+    let module = module_with_kernel(
+        vec![read_write],
+        vec![
+            op(
+                1,
+                read_only.clone(),
+                OperationKind::Cast {
+                    kind: CastKind::RestrictPointerAccess,
+                    value: ValueId(0),
+                    to: read_only,
+                },
+            ),
+            op(
+                2,
+                Type::F32,
+                OperationKind::Load {
+                    pointer: ValueId(1),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ),
+        ],
+        dynamic_1d(),
+    );
+
+    let analysis = analyze(&module, 1);
+    assert!(analysis.is_complete(), "{analysis:?}");
+    assert_eq!(analysis.obligations().accesses().len(), 1);
+    assert_eq!(
+        analysis.obligations().accesses()[0]
+            .allocation()
+            .parameter_index(),
+        0
+    );
+}
+
+#[test]
+fn read_only_private_slot_view_remains_an_internal_tracked_alias() {
+    let global_pointer = global_pointer(AccessMode::ReadWrite);
+    let private_read_write = Type::pointer(
+        global_pointer.clone(),
+        AddressSpace::Private,
+        AccessMode::ReadWrite,
+    );
+    let private_read_only = Type::pointer(
+        global_pointer.clone(),
+        AddressSpace::Private,
+        AccessMode::ReadOnly,
+    );
+    let private_access = MemoryAccess::new(AddressSpace::Private, 8);
+    let module = module_with_kernel(
+        vec![global_pointer.clone(), Type::F32],
+        vec![
+            op(
+                2,
+                private_read_write,
+                OperationKind::Alloca {
+                    element: global_pointer.clone(),
+                    count: None,
+                    address_space: AddressSpace::Private,
+                    alignment: 8,
+                },
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(2),
+                    value: ValueId(0),
+                    access: private_access,
+                },
+            ),
+            op(
+                3,
+                private_read_only.clone(),
+                OperationKind::Cast {
+                    kind: CastKind::RestrictPointerAccess,
+                    value: ValueId(2),
+                    to: private_read_only,
+                },
+            ),
+            op(
+                4,
+                global_pointer,
+                OperationKind::Load {
+                    pointer: ValueId(3),
+                    access: private_access,
+                },
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(4),
+                    value: ValueId(1),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ),
+        ],
+        dynamic_1d(),
+    );
+
+    let analysis = analyze(&module, 1);
+    assert!(analysis.is_complete(), "{analysis:?}");
+    assert_eq!(analysis.obligations().accesses().len(), 1);
+    assert_eq!(
+        analysis.obligations().accesses()[0]
+            .allocation()
+            .parameter_index(),
+        0
+    );
+}
+
+#[test]
 fn terminating_assert_fail_is_formally_closed_and_has_no_memory_obligations() {
     let diagnostic = AmdGpuDiagnosticOperation::AssertFail {
         site_id: ValueId(0),
@@ -1730,4 +1844,905 @@ fn guarded_ranked_read_retains_a_conservative_alias_effect() {
     assert_eq!(alias.right().parameter_index(), 1);
     assert_eq!(alias.left_accessed_bytes().start(), 0);
     assert_eq!(alias.left_accessed_bytes().end_exclusive(), u64::MAX);
+}
+
+fn ssa_memory_module(
+    parameters: Vec<Type>,
+    parameter_values: Vec<ValueId>,
+    blocks: Vec<BasicBlock>,
+) -> Module {
+    let function = Function::kernel_entry(
+        "kernel_impl",
+        Signature::new(parameters, vec![]),
+        parameter_values,
+        blocks,
+    );
+    let mut module = Module::new("formal-memory-ssa-test");
+    module.functions.push(function);
+    module
+        .kernels
+        .push(Kernel::new("kernel", "kernel_impl", dynamic_1d()));
+    module
+}
+
+#[test]
+fn invariant_slice_and_pointer_ssa_carriers_preserve_allocations() {
+    let slice = global_slice(AccessMode::ReadOnly);
+    let pointer = global_pointer(AccessMode::ReadOnly);
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![ValueId(0)],
+    });
+    let mut body = BasicBlock::new(BlockId(1));
+    body.parameters
+        .push(ValueDef::new(ValueId(1), slice.clone()));
+    body.operations = vec![
+        op(2, Type::INDEX, OperationKind::Constant(Constant::Index(0))),
+        op(
+            3,
+            pointer.clone(),
+            OperationKind::SliceData { slice: ValueId(1) },
+        ),
+        op(
+            4,
+            pointer,
+            OperationKind::GetElementPointer {
+                base: ValueId(3),
+                offset: ValueId(2),
+            },
+        ),
+        op(
+            5,
+            Type::F32,
+            OperationKind::Load {
+                pointer: ValueId(4),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+    ];
+    body.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![ValueId(1)],
+    });
+    let module = ssa_memory_module(vec![slice], vec![ValueId(0)], vec![entry, body]);
+
+    let analysis = analyze(&module, 8);
+    assert!(
+        analysis.is_complete(),
+        "{:?}",
+        analysis.incomplete_reasons()
+    );
+    let access = &analysis.obligations().accesses()[0];
+    assert_eq!(access.allocation().parameter_index(), 0);
+    assert_eq!(
+        access.byte_offset(),
+        ByteExpression::invocation_affine(0, 0)
+    );
+}
+
+#[test]
+fn pointer_ssa_carrier_preserves_its_exact_offset() {
+    let pointer = global_pointer(AccessMode::ReadWrite);
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations = vec![
+        op(2, Type::INDEX, OperationKind::Constant(Constant::Index(3))),
+        op(
+            3,
+            pointer.clone(),
+            OperationKind::GetElementPointer {
+                base: ValueId(0),
+                offset: ValueId(2),
+            },
+        ),
+    ];
+    entry.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![ValueId(3)],
+    });
+    let mut body = BasicBlock::new(BlockId(1));
+    body.parameters
+        .push(ValueDef::new(ValueId(4), pointer.clone()));
+    body.operations.push(Operation::new(
+        vec![],
+        OperationKind::Store {
+            pointer: ValueId(4),
+            value: ValueId(1),
+            access: MemoryAccess::new(AddressSpace::Global, 4),
+        },
+    ));
+    body.terminator = Some(Terminator::Return { values: vec![] });
+    let module = ssa_memory_module(
+        vec![pointer, Type::F32],
+        vec![ValueId(0), ValueId(1)],
+        vec![entry, body],
+    );
+
+    let analysis = analyze(&module, 1);
+    assert!(
+        analysis.is_complete(),
+        "{:?}",
+        analysis.incomplete_reasons()
+    );
+    assert_eq!(
+        analysis.obligations().accesses()[0].byte_offset(),
+        ByteExpression::invocation_affine(12, 0)
+    );
+}
+
+#[test]
+fn parallel_ssa_edges_require_one_allocation_origin() {
+    let slice = global_slice(AccessMode::ReadOnly);
+    let pointer = global_pointer(AccessMode::ReadOnly);
+    let build = |different_allocations: bool| {
+        let mut entry = BasicBlock::new(BlockId(0));
+        entry.terminator = Some(Terminator::ConditionalBranch {
+            condition: ValueId(2),
+            then_target: BlockId(1),
+            then_arguments: vec![ValueId(0)],
+            else_target: BlockId(1),
+            else_arguments: vec![if different_allocations {
+                ValueId(1)
+            } else {
+                ValueId(0)
+            }],
+        });
+        let mut body = BasicBlock::new(BlockId(1));
+        body.parameters
+            .push(ValueDef::new(ValueId(3), slice.clone()));
+        body.operations = vec![
+            op(4, Type::INDEX, OperationKind::Constant(Constant::Index(0))),
+            op(
+                5,
+                pointer.clone(),
+                OperationKind::SliceData { slice: ValueId(3) },
+            ),
+            op(
+                6,
+                pointer.clone(),
+                OperationKind::GetElementPointer {
+                    base: ValueId(5),
+                    offset: ValueId(4),
+                },
+            ),
+            op(
+                7,
+                Type::F32,
+                OperationKind::Load {
+                    pointer: ValueId(6),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ),
+        ];
+        body.terminator = Some(Terminator::Return { values: vec![] });
+        ssa_memory_module(
+            vec![slice.clone(), slice.clone(), Type::BOOL],
+            vec![ValueId(0), ValueId(1), ValueId(2)],
+            vec![entry, body],
+        )
+    };
+
+    assert!(analyze(&build(false), 1).is_complete());
+    assert!(
+        analyze(&build(true), 1)
+            .incomplete_reasons()
+            .iter()
+            .any(|reason| matches!(
+                reason,
+                FormalMemoryIncompleteReason::UnsupportedPointerDerivation { .. }
+            ))
+    );
+}
+
+#[test]
+fn index_ssa_phi_accepts_equal_inputs_and_rejects_different_inputs() {
+    let pointer = global_pointer(AccessMode::ReadWrite);
+    let build = |different_indices: bool| {
+        let mut entry = BasicBlock::new(BlockId(0));
+        entry.operations = vec![
+            op(3, Type::INDEX, OperationKind::Constant(Constant::Index(0))),
+            op(4, Type::INDEX, OperationKind::Constant(Constant::Index(1))),
+        ];
+        entry.terminator = Some(Terminator::ConditionalBranch {
+            condition: ValueId(2),
+            then_target: BlockId(1),
+            then_arguments: vec![ValueId(3)],
+            else_target: BlockId(1),
+            else_arguments: vec![if different_indices {
+                ValueId(4)
+            } else {
+                ValueId(3)
+            }],
+        });
+        let mut body = BasicBlock::new(BlockId(1));
+        body.parameters.push(ValueDef::new(ValueId(5), Type::INDEX));
+        body.operations = vec![
+            op(
+                6,
+                pointer.clone(),
+                OperationKind::GetElementPointer {
+                    base: ValueId(0),
+                    offset: ValueId(5),
+                },
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(6),
+                    value: ValueId(1),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ),
+        ];
+        body.terminator = Some(Terminator::Return { values: vec![] });
+        ssa_memory_module(
+            vec![pointer.clone(), Type::F32, Type::BOOL],
+            vec![ValueId(0), ValueId(1), ValueId(2)],
+            vec![entry, body],
+        )
+    };
+
+    assert!(analyze(&build(false), 1).is_complete());
+    assert!(
+        analyze(&build(true), 1)
+            .incomplete_reasons()
+            .iter()
+            .any(|reason| matches!(
+                reason,
+                FormalMemoryIncompleteReason::UnsupportedIndexExpression { .. }
+            ))
+    );
+}
+
+#[test]
+fn entry_block_parameters_always_fail_formal_extraction_closed() {
+    let scalar = Type::Scalar(ScalarType::U32);
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry
+        .parameters
+        .push(ValueDef::new(ValueId(1), scalar.clone()));
+    entry.terminator = Some(Terminator::Branch {
+        target: BlockId(0),
+        arguments: vec![ValueId(0)],
+    });
+    let module = ssa_memory_module(vec![scalar], vec![ValueId(0)], vec![entry]);
+
+    assert_eq!(
+        analyze(&module, 1).incomplete_reasons(),
+        &[FormalMemoryIncompleteReason::UnsupportedEntryBlockParameters { block: BlockId(0) }]
+    );
+}
+
+#[test]
+fn pointer_phi_operation_recurrence_fails_closed_without_recursion() {
+    let pointer = global_pointer(AccessMode::ReadWrite);
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.push(op(
+        3,
+        Type::INDEX,
+        OperationKind::Constant(Constant::Index(0)),
+    ));
+    entry.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![ValueId(0)],
+    });
+    let mut loop_block = BasicBlock::new(BlockId(1));
+    loop_block
+        .parameters
+        .push(ValueDef::new(ValueId(4), pointer.clone()));
+    loop_block.operations = vec![
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(4),
+                value: ValueId(1),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+        op(
+            5,
+            pointer.clone(),
+            OperationKind::GetElementPointer {
+                base: ValueId(4),
+                offset: ValueId(3),
+            },
+        ),
+    ];
+    loop_block.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(2),
+        then_target: BlockId(1),
+        then_arguments: vec![ValueId(5)],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    let mut exit = BasicBlock::new(BlockId(2));
+    exit.terminator = Some(Terminator::Return { values: vec![] });
+    let module = ssa_memory_module(
+        vec![pointer, Type::F32, Type::BOOL],
+        vec![ValueId(0), ValueId(1), ValueId(2)],
+        vec![entry, loop_block, exit],
+    );
+
+    assert!(
+        analyze(&module, 1)
+            .incomplete_reasons()
+            .iter()
+            .any(|reason| matches!(
+                reason,
+                FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
+                    pointer: ValueId(4),
+                    ..
+                }
+            ))
+    );
+}
+
+#[test]
+fn index_phi_operation_recurrence_fails_closed_without_recursion() {
+    let pointer = global_pointer(AccessMode::ReadWrite);
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations = vec![
+        op(3, Type::INDEX, OperationKind::Constant(Constant::Index(0))),
+        op(4, Type::INDEX, OperationKind::Constant(Constant::Index(1))),
+    ];
+    entry.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![ValueId(3)],
+    });
+    let mut loop_block = BasicBlock::new(BlockId(1));
+    loop_block
+        .parameters
+        .push(ValueDef::new(ValueId(5), Type::INDEX));
+    loop_block.operations = vec![
+        op(
+            6,
+            pointer.clone(),
+            OperationKind::GetElementPointer {
+                base: ValueId(0),
+                offset: ValueId(5),
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(6),
+                value: ValueId(1),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+        op(
+            7,
+            Type::INDEX,
+            OperationKind::Binary {
+                op: BinaryOp::Add,
+                lhs: ValueId(5),
+                rhs: ValueId(4),
+            },
+        ),
+    ];
+    loop_block.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(2),
+        then_target: BlockId(1),
+        then_arguments: vec![ValueId(7)],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    let mut exit = BasicBlock::new(BlockId(2));
+    exit.terminator = Some(Terminator::Return { values: vec![] });
+    let module = ssa_memory_module(
+        vec![pointer, Type::F32, Type::BOOL],
+        vec![ValueId(0), ValueId(1), ValueId(2)],
+        vec![entry, loop_block, exit],
+    );
+
+    assert!(
+        analyze(&module, 1)
+            .incomplete_reasons()
+            .iter()
+            .any(|reason| matches!(
+                reason,
+                FormalMemoryIncompleteReason::UnsupportedIndexExpression {
+                    index: ValueId(5),
+                    ..
+                }
+            ))
+    );
+}
+
+#[test]
+fn unreachable_phi_operation_cycles_do_not_affect_obligations() {
+    let pointer = global_pointer(AccessMode::ReadWrite);
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.terminator = Some(Terminator::Return { values: vec![] });
+    let mut dead = BasicBlock::new(BlockId(1));
+    dead.parameters.push(ValueDef::new(ValueId(3), Type::INDEX));
+    dead.operations = vec![
+        op(4, Type::INDEX, OperationKind::Constant(Constant::Index(1))),
+        op(
+            5,
+            Type::INDEX,
+            OperationKind::Binary {
+                op: BinaryOp::Add,
+                lhs: ValueId(3),
+                rhs: ValueId(4),
+            },
+        ),
+        op(
+            6,
+            pointer.clone(),
+            OperationKind::GetElementPointer {
+                base: ValueId(0),
+                offset: ValueId(3),
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(6),
+                value: ValueId(1),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+    ];
+    dead.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![ValueId(5)],
+    });
+    let module = ssa_memory_module(
+        vec![pointer, Type::F32],
+        vec![ValueId(0), ValueId(1)],
+        vec![entry, dead],
+    );
+
+    let analysis = analyze(&module, 1);
+    assert!(analysis.is_complete());
+    assert!(analysis.obligations().accesses().is_empty());
+}
+
+#[test]
+fn private_pointer_join_normalizes_equivalent_ssa_carriers() {
+    let global_pointer = global_pointer(AccessMode::ReadWrite);
+    let private_slot = Type::pointer(
+        global_pointer.clone(),
+        AddressSpace::Private,
+        AccessMode::ReadWrite,
+    );
+    let private_access = MemoryAccess::new(AddressSpace::Private, 8);
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.push(op(
+        3,
+        private_slot,
+        OperationKind::Alloca {
+            element: global_pointer.clone(),
+            count: None,
+            address_space: AddressSpace::Private,
+            alignment: 8,
+        },
+    ));
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(2),
+        then_target: BlockId(1),
+        then_arguments: vec![ValueId(0)],
+        else_target: BlockId(2),
+        else_arguments: vec![ValueId(0)],
+    });
+    let mut left = BasicBlock::new(BlockId(1));
+    left.parameters
+        .push(ValueDef::new(ValueId(4), global_pointer.clone()));
+    left.operations.push(Operation::new(
+        vec![],
+        OperationKind::Store {
+            pointer: ValueId(3),
+            value: ValueId(4),
+            access: private_access,
+        },
+    ));
+    left.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![],
+    });
+    let mut right = BasicBlock::new(BlockId(2));
+    right
+        .parameters
+        .push(ValueDef::new(ValueId(5), global_pointer.clone()));
+    right.operations.push(Operation::new(
+        vec![],
+        OperationKind::Store {
+            pointer: ValueId(3),
+            value: ValueId(5),
+            access: private_access,
+        },
+    ));
+    right.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![],
+    });
+    let mut join = BasicBlock::new(BlockId(3));
+    join.operations = vec![
+        op(
+            6,
+            global_pointer.clone(),
+            OperationKind::Load {
+                pointer: ValueId(3),
+                access: private_access,
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(6),
+                value: ValueId(1),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+    ];
+    join.terminator = Some(Terminator::Return { values: vec![] });
+    let module = ssa_memory_module(
+        vec![global_pointer, Type::F32, Type::BOOL],
+        vec![ValueId(0), ValueId(1), ValueId(2)],
+        vec![entry, left, right, join],
+    );
+
+    let analysis = analyze(&module, 1);
+    assert!(
+        analysis.is_complete(),
+        "{:?}",
+        analysis.incomplete_reasons()
+    );
+    assert_eq!(
+        analysis.obligations().accesses()[0]
+            .allocation()
+            .parameter_index(),
+        0
+    );
+}
+
+#[test]
+fn private_slot_store_through_block_parameter_replaces_the_direct_load_source() {
+    let global_pointer = global_pointer(AccessMode::ReadWrite);
+    let private_slot = Type::pointer(
+        global_pointer.clone(),
+        AddressSpace::Private,
+        AccessMode::ReadWrite,
+    );
+    let private_access = MemoryAccess::new(AddressSpace::Private, 8);
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations = vec![
+        op(
+            3,
+            private_slot.clone(),
+            OperationKind::Alloca {
+                element: global_pointer.clone(),
+                count: None,
+                address_space: AddressSpace::Private,
+                alignment: 8,
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(3),
+                value: ValueId(0),
+                access: private_access,
+            },
+        ),
+    ];
+    entry.terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![ValueId(3)],
+    });
+    let mut body = BasicBlock::new(BlockId(1));
+    body.parameters
+        .push(ValueDef::new(ValueId(4), private_slot));
+    body.operations = vec![
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(4),
+                value: ValueId(1),
+                access: private_access,
+            },
+        ),
+        op(
+            5,
+            global_pointer.clone(),
+            OperationKind::Load {
+                pointer: ValueId(3),
+                access: private_access,
+            },
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(5),
+                value: ValueId(2),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+    ];
+    body.terminator = Some(Terminator::Return { values: vec![] });
+    let module = ssa_memory_module(
+        vec![global_pointer.clone(), global_pointer, Type::F32],
+        vec![ValueId(0), ValueId(1), ValueId(2)],
+        vec![entry, body],
+    );
+
+    let analysis = analyze(&module, 1);
+    assert!(
+        analysis.is_complete(),
+        "{:?}",
+        analysis.incomplete_reasons()
+    );
+    assert_eq!(analysis.obligations().accesses().len(), 1);
+    assert_eq!(
+        analysis.obligations().accesses()[0]
+            .allocation()
+            .parameter_index(),
+        1
+    );
+}
+
+#[test]
+fn selected_private_slot_pointer_is_an_incomplete_escape() {
+    let global_pointer = global_pointer(AccessMode::ReadWrite);
+    let private_slot = Type::pointer(
+        global_pointer.clone(),
+        AddressSpace::Private,
+        AccessMode::ReadWrite,
+    );
+    let private_access = MemoryAccess::new(AddressSpace::Private, 8);
+    let module = module_with_kernel(
+        vec![global_pointer.clone(), Type::F32, Type::BOOL],
+        vec![
+            op(
+                3,
+                private_slot.clone(),
+                OperationKind::Alloca {
+                    element: global_pointer.clone(),
+                    count: None,
+                    address_space: AddressSpace::Private,
+                    alignment: 8,
+                },
+            ),
+            op(
+                4,
+                private_slot,
+                OperationKind::Select {
+                    condition: ValueId(2),
+                    true_value: ValueId(3),
+                    false_value: ValueId(3),
+                },
+            ),
+            op(
+                5,
+                global_pointer,
+                OperationKind::Load {
+                    pointer: ValueId(4),
+                    access: private_access,
+                },
+            ),
+            Operation::new(
+                vec![],
+                OperationKind::Store {
+                    pointer: ValueId(5),
+                    value: ValueId(1),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ),
+        ],
+        dynamic_1d(),
+    );
+
+    let analysis = analyze(&module, 1);
+    assert!(!analysis.is_complete());
+    assert!(analysis.incomplete_reasons().iter().any(|reason| matches!(
+        reason,
+        FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
+            pointer: ValueId(3),
+            ..
+        }
+    )));
+}
+
+#[test]
+fn deeply_nested_affine_ssa_is_evaluated_iteratively() {
+    const CHAIN_LENGTH: u32 = 8_192;
+
+    let pointer = global_pointer(AccessMode::ReadWrite);
+    let constant = ValueId(CHAIN_LENGTH + 2);
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations.push(op(
+        constant.0,
+        Type::INDEX,
+        OperationKind::Constant(Constant::Index(0)),
+    ));
+    let mut previous = constant;
+    for result in (2..=CHAIN_LENGTH + 1).rev() {
+        entry.operations.push(op(
+            result,
+            Type::INDEX,
+            OperationKind::Binary {
+                op: BinaryOp::Add,
+                lhs: previous,
+                rhs: constant,
+            },
+        ));
+        previous = ValueId(result);
+    }
+    entry.operations.push(op(
+        CHAIN_LENGTH + 3,
+        pointer.clone(),
+        OperationKind::GetElementPointer {
+            base: ValueId(0),
+            offset: previous,
+        },
+    ));
+    entry.operations.push(Operation::new(
+        vec![],
+        OperationKind::Store {
+            pointer: ValueId(CHAIN_LENGTH + 3),
+            value: ValueId(1),
+            access: MemoryAccess::new(AddressSpace::Global, 4),
+        },
+    ));
+    entry.terminator = Some(Terminator::Return { values: vec![] });
+    let module = ssa_memory_module(
+        vec![pointer, Type::F32],
+        vec![ValueId(0), ValueId(1)],
+        vec![entry],
+    );
+
+    let analysis = analyze(&module, 1);
+    assert!(
+        analysis.is_complete(),
+        "{:?}",
+        analysis.incomplete_reasons()
+    );
+    assert_eq!(
+        analysis.obligations().accesses()[0].byte_offset(),
+        ByteExpression::invocation_affine(0, 0)
+    );
+}
+
+#[test]
+fn many_accesses_reuse_one_deep_pointer_chain() {
+    const CHAIN_LENGTH: u32 = 4_096;
+    const ACCESS_COUNT: u32 = 512;
+
+    let pointer = global_pointer(AccessMode::ReadOnly);
+    let mut operations = vec![op(
+        1,
+        Type::INDEX,
+        OperationKind::Constant(Constant::Index(0)),
+    )];
+    let mut previous = ValueId(0);
+    for result in 2..=CHAIN_LENGTH + 1 {
+        operations.push(op(
+            result,
+            pointer.clone(),
+            OperationKind::GetElementPointer {
+                base: previous,
+                offset: ValueId(1),
+            },
+        ));
+        previous = ValueId(result);
+    }
+    for result in CHAIN_LENGTH + 2..CHAIN_LENGTH + 2 + ACCESS_COUNT {
+        operations.push(op(
+            result,
+            Type::F32,
+            OperationKind::Load {
+                pointer: previous,
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ));
+    }
+    let module = module_with_kernel(vec![pointer], operations, dynamic_1d());
+
+    let analysis = analyze(&module, 1);
+    assert!(
+        analysis.is_complete(),
+        "{:?}",
+        analysis.incomplete_reasons()
+    );
+    assert_eq!(
+        analysis.obligations().accesses().len(),
+        ACCESS_COUNT as usize
+    );
+    assert!(
+        analysis
+            .obligations()
+            .accesses()
+            .iter()
+            .all(|access| access.byte_offset() == ByteExpression::invocation_affine(0, 0))
+    );
+}
+
+#[test]
+fn many_guarded_accesses_reuse_one_deep_unsupported_pointer_chain() {
+    const CHAIN_LENGTH: u32 = 4_096;
+    const ACCESS_COUNT: u32 = 2_048;
+
+    let pointer = global_pointer(AccessMode::ReadOnly);
+    let mut operations = vec![
+        op(
+            3,
+            pointer.clone(),
+            OperationKind::Select {
+                condition: ValueId(1),
+                true_value: ValueId(0),
+                false_value: ValueId(0),
+            },
+        ),
+        op(4, Type::INDEX, OperationKind::Constant(Constant::Index(0))),
+    ];
+    let mut shared = ValueId(3);
+    for result in 5..CHAIN_LENGTH + 5 {
+        operations.push(op(
+            result,
+            pointer.clone(),
+            OperationKind::GetElementPointer {
+                base: shared,
+                offset: ValueId(4),
+            },
+        ));
+        shared = ValueId(result);
+    }
+    let mut next = CHAIN_LENGTH + 5;
+    for _ in 0..ACCESS_COUNT {
+        let access_pointer = ValueId(next);
+        operations.push(op(
+            next,
+            pointer.clone(),
+            OperationKind::GetElementPointer {
+                base: shared,
+                offset: ValueId(4),
+            },
+        ));
+        next += 1;
+        operations.push(Operation::new(
+            vec![ValueDef::new(ValueId(next), Type::F32)],
+            OperationKind::GuardedLoad {
+                pointer: access_pointer,
+                predicate: ValueId(1),
+                fallback: ValueId(2),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ));
+        next += 1;
+    }
+    let module = module_with_kernel(
+        vec![pointer, Type::BOOL, Type::F32],
+        operations,
+        dynamic_1d(),
+    );
+
+    let analysis = analyze(&module, 1);
+    assert!(!analysis.is_complete());
+    assert!(analysis.obligations().accesses().is_empty());
+    assert_eq!(
+        analysis
+            .incomplete_reasons()
+            .iter()
+            .filter(|reason| matches!(
+                reason,
+                FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
+                    pointer: ValueId(3),
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        analysis
+            .incomplete_reasons()
+            .iter()
+            .filter(|reason| matches!(
+                reason,
+                FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { .. }
+            ))
+            .count(),
+        ACCESS_COUNT as usize
+    );
 }

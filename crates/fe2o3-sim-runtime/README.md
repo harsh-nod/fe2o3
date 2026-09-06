@@ -2,9 +2,11 @@
 
 `fe2o3-sim-runtime` is an explicitly selected, no-GPU implementation of
 `fe2o3_runtime::RuntimeBackendV1`. It executes exact admitted `.fe2sim` V3,
-V4, or V5 Kernel IR through `fe2o3-virtual-runtime`; it never probes for or
+V4, V5, or V6 Kernel IR through `fe2o3-virtual-runtime`; it never probes for or
 falls back to GPU execution. V5 revalidates an exact production V8/V9 to
-same-module V10 bridge and admits the V10 execution bytes directly.
+same-module V10 bridge. The current V6 route revalidates and admits exact KIR
+V11 directly, including verified `ReadWrite` to `ReadOnly` pointer-access
+restriction.
 
 The backend reports `hardware = false` and `performance_prediction = false`.
 Its results are deterministic semantic-simulation evidence within the admitted
@@ -22,9 +24,10 @@ the simulator limits. Worker loss makes the backend terminal and retains
 outstanding resources.
 
 V3 materializes exact scalar, thin global pointer, and global slice storage
-correspondences. V4 and V5 content-bind an independently versioned one-to-many
-semantic component map, including explicit physical kernarg size, alignment,
-and slots; V5 binds that map directly to its exact KIR V10 body. The production
+correspondences. V4 through V6 content-bind an independently versioned
+one-to-many semantic component map, including explicit physical kernarg size,
+alignment, and slots; V5 binds that map to exact KIR V10 and V6 binds it to
+exact KIR V11. The production
 exporter derives those components from rustc layout, ABI, and the sole
 semantic-MIR-to-KIR lowering correspondence. The consumer independently
 rederives canonical KIR packing and admits bounded, pointer-free by-value

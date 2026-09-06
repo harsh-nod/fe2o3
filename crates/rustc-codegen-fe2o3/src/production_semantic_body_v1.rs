@@ -423,6 +423,9 @@ pub(crate) enum ProductionSemanticBodyErrorV1 {
     IdentityTableMismatch {
         table: &'static str,
     },
+    RustcStartBlockPredecessor {
+        predecessor: u32,
+    },
     Unsupported {
         construct: String,
         block: Option<u32>,
@@ -454,6 +457,10 @@ impl fmt::Display for ProductionSemanticBodyErrorV1 {
                     "semantic body construction rejected inconsistent {table}"
                 )
             }
+            Self::RustcStartBlockPredecessor { predecessor } => write!(
+                formatter,
+                "semantic body construction rejected invalid rustc MIR: start block has predecessor block {predecessor}",
+            ),
             Self::Unsupported {
                 construct,
                 block,
@@ -646,6 +653,25 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
         owner.charge(SemanticMirResourceV1::Functions, 1)?;
         owner.charge(SemanticMirResourceV1::Locals, input.body.local_decls.len())?;
         owner.charge(SemanticMirResourceV1::Blocks, input.body.basic_blocks.len())?;
+        // This is a rustc MIR invariant, not a restriction on generic semantic MIR.
+        // Recheck it at the consuming boundary so KIR lowering may rely on it.
+        require_no_entry_predecessors_v1(
+            START_BLOCK.index(),
+            input
+                .body
+                .basic_blocks
+                .iter_enumerated()
+                .map(|(predecessor, data)| {
+                    (
+                        predecessor.index(),
+                        data.terminator
+                            .iter()
+                            .flat_map(|terminator| terminator.successors())
+                            .map(|successor| successor.index()),
+                    )
+                }),
+            || owner.charge(SemanticMirResourceV1::ValidationWork, 1),
+        )?;
 
         let type_ids = build_type_table_v1(input.tcx, input.instance, input.type_bindings, owner)?;
         let (locals_by_raw, locals_by_semantic) =
@@ -1795,6 +1821,31 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
     }
 }
 
+fn require_no_entry_predecessors_v1<I, S, F>(
+    entry: usize,
+    successors_by_block: I,
+    mut charge_work: F,
+) -> Result<(), ProductionSemanticBodyErrorV1>
+where
+    I: IntoIterator<Item = (usize, S)>,
+    S: IntoIterator<Item = usize>,
+    F: FnMut() -> Result<(), ProductionSemanticBodyErrorV1>,
+{
+    for (predecessor, successors) in successors_by_block {
+        for successor in successors {
+            charge_work()?;
+            if successor == entry {
+                let predecessor = u32::try_from(predecessor)
+                    .map_err(|_| table("rustc control-flow block identity"))?;
+                return Err(ProductionSemanticBodyErrorV1::RustcStartBlockPredecessor {
+                    predecessor,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 fn build_type_table_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
@@ -2096,6 +2147,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent
         | ProductionTerminalExpansionV1::Gfx950SubgroupCurrent
         | ProductionTerminalExpansionV1::ThreadIndex1d
+        | ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent
         | ProductionTerminalExpansionV1::Trap
         | ProductionTerminalExpansionV1::ColdPath => Some(0),
         ProductionTerminalExpansionV1::ThreadIndexGet
@@ -2120,6 +2172,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::SubgroupReduceMaxF32
         | ProductionTerminalExpansionV1::Gfx950SubgroupReduceMaxF32
         | ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32
+        | ProductionTerminalExpansionV1::DisjointBlockComponentIndex
         | ProductionTerminalExpansionV1::MemoryVolatileLoad
         | ProductionTerminalExpansionV1::WorkgroupPipelineStage
         | ProductionTerminalExpansionV1::WorkgroupPipelineCommit
@@ -2285,11 +2338,19 @@ mod tests {
             Some(0)
         );
         assert_eq!(
+            terminal_argument_count_v1(ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent),
+            Some(0)
+        );
+        assert_eq!(
             terminal_argument_count_v1(ProductionTerminalExpansionV1::ThreadIndexGet),
             Some(1)
         );
         assert_eq!(
             terminal_argument_count_v1(ProductionTerminalExpansionV1::DisjointSliceGetMut),
+            Some(2)
+        );
+        assert_eq!(
+            terminal_argument_count_v1(ProductionTerminalExpansionV1::DisjointBlockComponentIndex,),
             Some(2)
         );
     }
@@ -2325,6 +2386,90 @@ mod tests {
             panic!("unexpected error kind");
         };
         assert_eq!(construct.len(), MAX_ERROR_COMPONENT_CHARS_V1);
+    }
+
+    #[test]
+    fn rustc_entry_contract_accepts_loop_continue_and_break_edges() {
+        // b1 is the loop header, b2 continues to it, and b1 may break to b3.
+        // The rustc start block b0 remains outside the cycle.
+        let successors: &[&[usize]] = &[&[1], &[2, 3], &[1], &[]];
+        let mut work = 0_u64;
+        require_no_entry_predecessors_v1(
+            0,
+            successors
+                .iter()
+                .enumerate()
+                .map(|(block, targets)| (block, targets.iter().copied())),
+            || {
+                work += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(work, 4);
+    }
+
+    #[test]
+    fn rustc_entry_contract_rejects_the_exact_predecessor() {
+        let successors: &[&[usize]] = &[&[1], &[0]];
+        let error = require_no_entry_predecessors_v1(
+            0,
+            successors
+                .iter()
+                .enumerate()
+                .map(|(block, targets)| (block, targets.iter().copied())),
+            || Ok(()),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ProductionSemanticBodyErrorV1::RustcStartBlockPredecessor { predecessor: 1 }
+        ));
+        assert_eq!(
+            error.to_string(),
+            "semantic body construction rejected invalid rustc MIR: start block has predecessor block 1"
+        );
+    }
+
+    #[test]
+    fn rustc_entry_contract_charges_the_exact_edge_boundary() {
+        let successors: &[&[usize]] = &[&[1], &[2, 3], &[1], &[]];
+        let exact_limits = SemanticMirLimitsV1::default()
+            .with_limit(SemanticMirResourceV1::ValidationWork, 4)
+            .unwrap();
+        let mut exact = ConstructionTotalsV1::default();
+        require_no_entry_predecessors_v1(
+            0,
+            successors
+                .iter()
+                .enumerate()
+                .map(|(block, targets)| (block, targets.iter().copied())),
+            || exact.charge(SemanticMirResourceV1::ValidationWork, 1, exact_limits),
+        )
+        .unwrap();
+        assert_eq!(exact.validation_work, 4);
+
+        let exhausted_limits = SemanticMirLimitsV1::default()
+            .with_limit(SemanticMirResourceV1::ValidationWork, 3)
+            .unwrap();
+        let mut exhausted = ConstructionTotalsV1::default();
+        let error = require_no_entry_predecessors_v1(
+            0,
+            successors
+                .iter()
+                .enumerate()
+                .map(|(block, targets)| (block, targets.iter().copied())),
+            || exhausted.charge(SemanticMirResourceV1::ValidationWork, 1, exhausted_limits),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ProductionSemanticBodyErrorV1::LimitExceeded {
+                resource: SemanticMirResourceV1::ValidationWork,
+                actual: 4,
+                maximum: 3,
+            }
+        ));
     }
 
     #[test]

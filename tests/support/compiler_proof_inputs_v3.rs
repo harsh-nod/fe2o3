@@ -159,6 +159,7 @@ fn canonical_compiler_proof_inputs(
         (
             semantic_kir
                 .canonical_kernel_ir_v8()
+                .expect("lossless induction fixture must retain canonical KIR V8")
                 .canonical_bytes()
                 .to_vec(),
             correspondence,

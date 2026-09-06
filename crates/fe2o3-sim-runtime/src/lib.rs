@@ -2,13 +2,15 @@
 #![doc = include_str!("../README.md")]
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, FunctionRole, KernelId, MAX_SIMULATION_BUNDLE_BYTES_V5,
-    OperationKind, ScalarType, SemanticAggregateStorageMapV5, SemanticArgumentOwnershipV1,
-    SemanticComponentStorageBindingV2, SemanticKernargSlotV2, SemanticKernelStorageV2,
-    SemanticKirComponentRepresentationV2, SemanticKirStorageRepresentationV1,
-    SemanticStorageBindingV1, SemanticStorageMapV1, SemanticStorageMapV2, SemanticStorageMapV5,
-    SemanticStorageProjectionV2, Type, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV10,
+    AccessMode, AddressSpace, FunctionRole, KernelId, MAX_SIMULATION_BUNDLE_BYTES_V6,
+    OperationKind, ScalarType, SemanticAggregateStorageMapV5, SemanticAggregateStorageMapV6,
+    SemanticArgumentOwnershipV1, SemanticComponentStorageBindingV2, SemanticKernargSlotV2,
+    SemanticKernelStorageV2, SemanticKirComponentRepresentationV2,
+    SemanticKirStorageRepresentationV1, SemanticStorageBindingV1, SemanticStorageMapV1,
+    SemanticStorageMapV2, SemanticStorageMapV5, SemanticStorageMapV6, SemanticStorageProjectionV2,
+    Type, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV10, VerifiedCanonicalKernelIrV11,
     VerifiedSimulationBundleV3, VerifiedSimulationBundleV4, VerifiedSimulationBundleV5,
+    VerifiedSimulationBundleV6,
 };
 use fe2o3_kir_sim::{AdmittedSimulationModuleV1, DynamicWorkgroupMemoryRequestV1, ScalarBitsV1};
 use fe2o3_mir_model::semantic_mir_v1::{
@@ -678,10 +680,10 @@ impl RuntimeBackendV1 for SimRuntimeBackendV1 {
         if device != DEVICE_HANDLE {
             return Err(rejected_handle("device"));
         }
-        if image.len() > MAX_SIMULATION_BUNDLE_BYTES_V5 {
+        if image.len() > MAX_SIMULATION_BUNDLE_BYTES_V6 {
             return Err(RuntimeBackendFailureV1::Rejected(
                 SimRuntimeBackendErrorV1::InvalidBundle(
-                    "bundle exceeds the V5 byte limit".to_owned(),
+                    "bundle exceeds the V6 byte limit".to_owned(),
                 ),
             ));
         }
@@ -987,6 +989,7 @@ struct ParsedBundleV1 {
 enum ParsedCanonicalKirV1 {
     V7(VerifiedCanonicalKernelIrV7),
     V10(VerifiedCanonicalKernelIrV10),
+    V11(VerifiedCanonicalKernelIrV11),
 }
 
 fn parse_bundle(
@@ -994,7 +997,51 @@ fn parse_bundle(
     target: VirtualTargetProfileV1,
 ) -> Result<ParsedBundleV1, SimRuntimeBackendErrorV1> {
     let (semantic, storage_kernels, component_kernels, canonical, module) =
-        if VerifiedSimulationBundleV5::has_magic_prefix(image) {
+        if VerifiedSimulationBundleV6::has_magic_prefix(image) {
+            let bundle =
+                VerifiedSimulationBundleV6::from_canonical_bytes(copy_bundle_image_v2(image)?)
+                    .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            bundle
+                .revalidate()
+                .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            if bundle.target() != target.label() {
+                return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(format!(
+                    "bundle target {} does not match backend target {}",
+                    bundle.target(),
+                    target.label()
+                )));
+            }
+            let semantic = AdmittedInertSemanticMirV1::decode_current_production_canonical(
+                bundle.semantic_mir(),
+                SemanticMirLimitsV1::default(),
+            )
+            .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            let storage = SemanticStorageMapV6::from_canonical_json_bytes(bundle.storage_map())
+                .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            let component = SemanticAggregateStorageMapV6::from_canonical_json_bytes(
+                bundle.aggregate_storage_map(),
+            )
+            .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            if semantic.wire_version().as_u16() != storage.semantic_mir_version()
+                || semantic.target_layout_identity().as_bytes() != storage.target_layout_identity()
+            {
+                return Err(SimRuntimeBackendErrorV1::InvalidBundle(
+                    "semantic MIR and V6 storage-map target identity differ".to_owned(),
+                ));
+            }
+            let (canonical, module) =
+                VerifiedCanonicalKernelIrV11::from_canonical_bytes_with_module(
+                    copy_bundle_image_v2(bundle.canonical_kir_v11())?,
+                )
+                .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
+            (
+                semantic,
+                storage.kernels().to_vec(),
+                Some(component.kernels().to_vec()),
+                ParsedCanonicalKirV1::V11(canonical),
+                module,
+            )
+        } else if VerifiedSimulationBundleV5::has_magic_prefix(image) {
             let bundle =
                 VerifiedSimulationBundleV5::from_canonical_bytes(copy_bundle_image_v2(image)?)
                     .map_err(|error| SimRuntimeBackendErrorV1::InvalidBundle(error.to_string()))?;
@@ -1278,6 +1325,10 @@ fn parse_bundle(
             fe2o3_kir_sim::SimulationLimitsV1::default(),
         ),
         ParsedCanonicalKirV1::V10(canonical) => AdmittedSimulationModuleV1::admit_v10(
+            canonical,
+            fe2o3_kir_sim::SimulationLimitsV1::default(),
+        ),
+        ParsedCanonicalKirV1::V11(canonical) => AdmittedSimulationModuleV1::admit_v11(
             canonical,
             fe2o3_kir_sim::SimulationLimitsV1::default(),
         ),
@@ -4094,17 +4145,32 @@ mod tests {
     use super::*;
     use fe2o3_kernel_ir::SemanticArgumentStorageV2;
     use fe2o3_kernel_ir::{
-        BasicBlock, BlockId, Function, FunctionId, Module, Operation, Signature, Terminator,
-        ValueDef, ValueId, WorkgroupMemory, WorkgroupMemoryExtent,
+        BasicBlock, BlockId, CastKind, Constant, DebugSourceMapDocumentV2, DebugSourceMapFileV1,
+        DebugSourceMapSpanV1, Function, FunctionId, Kernel, LaunchDomain, LaunchExtent,
+        MemoryAccess, Module, Operation, PreparedSimulationBundleV6, SemanticAggregateStorageMapV6,
+        SemanticKernelStorageV1, SemanticKernelStorageV2, SemanticStorageMapV6, Signature,
+        SimulationProductionKirIdentityV6, SimulationSourceLineageV1, Terminator, ValueDef,
+        ValueId, VerifiedCanonicalKernelIrV11, WorkgroupMemory, WorkgroupMemoryExtent,
     };
     use fe2o3_mir_model::semantic_mir_v1::{
-        SemanticAbiCastV1, SemanticAbiPointeeInfoV1, SemanticAbiRegisterV1,
-        SemanticAbiRegularAttributesV1, SemanticAbiUniformV1, SemanticAbiValueAttributesV1,
-        SemanticAbiValueV1, SemanticAggregateLayoutV1, SemanticAggregateTypeV1,
-        SemanticBackendScalarV1, SemanticLayoutIdentityV1, SemanticPaddingV1,
-        SemanticPointerTypeV1, SemanticTypeAbiPropertiesV1, SemanticTypeIdentityV1,
-        SemanticTypeLayoutV1, SemanticValidityScalarTypeV1,
+        InertSemanticMirRequestV1, SemanticAbiCastV1, SemanticAbiIdentityV1,
+        SemanticAbiPointeeInfoV1, SemanticAbiRegisterV1, SemanticAbiRegularAttributesV1,
+        SemanticAbiUniformV1, SemanticAbiValueAttributesV1, SemanticAbiValueV1,
+        SemanticAggregateLayoutV1, SemanticAggregateTypeV1, SemanticBasicBlockV1,
+        SemanticBlockIdV1, SemanticBlockIdentityV1, SemanticConstGenericArgumentsIdentityV1,
+        SemanticExternAbiV1, SemanticFunctionAbiV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
+        SemanticFunctionIdentityV1, SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
+        SemanticItemDefinitionIdentityV1, SemanticKernelBindingIdentityV1, SemanticKernelEntryV1,
+        SemanticKernelLaunchBoundsV1, SemanticKernelSourceContractV1, SemanticLayoutIdentityV1,
+        SemanticLinkSymbolV1, SemanticLocalDeclV1, SemanticLocalIdentityV1,
+        SemanticMonomorphizationIdentityV1, SemanticPaddingV1, SemanticPointerTypeV1,
+        SemanticSourceProvenanceV1, SemanticTargetDataLayoutV1, SemanticTerminatorKindV1,
+        SemanticTerminatorV1, SemanticTypeAbiPropertiesV1, SemanticTypeIdentityV1,
+        SemanticTypeLayoutV1, SemanticTypeShapeV1, SemanticValidityScalarTypeV1,
+        SemanticWorkgroupDimensionsV1,
     };
+
+    include!("sim_bundle_v6_tests.rs");
 
     fn runtime_dynamic_reachability_module(call_helper: bool) -> (Module, FunctionId) {
         let entry_id = FunctionId::new("entry");

@@ -4,6 +4,12 @@
 //! Dynamic slice facts come only from canonical Rust bounds asserts whose
 //! success edge uniquely controls an access to the same slice and index.
 
+mod analysis_multi_split_v1;
+
+use analysis_multi_split_v1::{
+    append_analysis_multi_split_blocks, append_analysis_multi_split_blocks_with_arguments,
+};
+
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fmt,
@@ -54,8 +60,9 @@ use fe2o3_mir_model::semantic_mir_v1::{
 };
 #[cfg(test)]
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticAxisV1, SemanticBackendScalarV1, SemanticFieldsShapeV1, SemanticRustTypeKindV1,
-    SemanticRustcVariantsV1, SemanticTypeLayoutDetailsV1,
+    SemanticAxisV1, SemanticBackendScalarV1, SemanticExternAbiV1, SemanticFieldsShapeV1,
+    SemanticFunctionSafetyV1, SemanticRustTypeKindV1, SemanticRustcVariantsV1,
+    SemanticTypeLayoutDetailsV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
@@ -73,9 +80,9 @@ use fe2o3_pliron::{
     ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
     ProductionSemanticBinaryOpV2, ProductionSemanticCastV2, ProductionSemanticComparisonV2,
     ProductionSemanticExpressionV2, ProductionSemanticLoadV2, ProductionSemanticMirErrorV1,
-    ProductionSemanticMirOwnerV1, ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2,
-    ProductionSessionErrorV1, ProductionSessionLimitsV1,
-    compile_ranked_kernel_for_gfx942_lowering_v1,
+    ProductionSemanticMirOwnerV1, ProductionSemanticScalarTypeV2, ProductionSemanticSsaErrorV1,
+    ProductionSemanticSsaOwnerV1, ProductionSemanticUnaryOpV2, ProductionSessionErrorV1,
+    ProductionSessionLimitsV1, compile_ranked_kernel_for_gfx942_lowering_v1,
 };
 
 const ROOT_NAME_V1: &str = "semantic_safety_module";
@@ -159,6 +166,12 @@ struct ProjectedDisjointIndexV1 {
     mapping: SemanticDisjointIndexSpaceV1,
     precondition: Option<(ProductionRankedValueV1, ProductionRankedValueV1)>,
     availability: Option<CapabilityAvailabilityV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectedOrdinaryIndexV1 {
+    value: ProductionRankedValueV1,
+    availability: SemanticEnumPayloadAvailabilityV1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -251,6 +264,7 @@ struct CheckedReferencesV1 {
 
 struct IntrinsicProjectionV1 {
     index_values: Vec<Option<ProjectedDisjointIndexV1>>,
+    ordinary_index_values: Vec<Option<ProjectedOrdinaryIndexV1>>,
     local_contracts: ProjectionLocalContractsV1,
     guarded_accesses: Vec<GuardedRankedAccessV1>,
     option_predicates: Vec<Option<GuardPredicateV1>>,
@@ -757,7 +771,7 @@ impl ProductionRankedRootProgramV1 {
 /// Move-only ordered roster retaining one exact admitted Rust semantic owner
 /// and every root-specific PLIRON graph that passed mandatory generic checks.
 pub(crate) struct ProductionRankedSemanticProgramV1 {
-    semantic_owner: ProductionSemanticMirOwnerV1,
+    semantic_ssa_owner: ProductionSemanticSsaOwnerV1,
     roots: Box<[ProductionRankedRootProgramV1]>,
 }
 
@@ -829,7 +843,7 @@ impl ProductionRankedVerifiedRootCandidateV1 {
 /// ordering, KIR, artifact, publication, load, or launch authority is present.
 #[must_use = "dropping the ranked roster receipt abandons its production lineage"]
 pub struct ProductionRankedSemanticProjectionRosterReceiptV1 {
-    semantic_owner: ProductionSemanticMirOwnerV1,
+    semantic_ssa_owner: ProductionSemanticSsaOwnerV1,
     source_order_roots: Box<[ProductionRankedVerifiedRootCandidateV1]>,
     canonical_kernel_order: Box<[usize]>,
     canonical_roster_identity: ProductionRankedKernelRosterIdentityV1,
@@ -991,6 +1005,7 @@ pub(crate) enum ProductionRankedVerificationErrorV1 {
     RosterMetadata(&'static str),
     RosterIdentity,
     SemanticOwner(ProductionSemanticMirErrorV1),
+    SemanticSsa(ProductionSemanticSsaErrorV1),
     SemanticU32Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
     Custody(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     MiddleEndEvidence(fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV5),
@@ -1008,6 +1023,12 @@ impl fmt::Display for ProductionRankedVerificationErrorV1 {
             Self::RosterIdentity => formatter.write_str("ranked roster canonical identity changed"),
             Self::SemanticOwner(error) => {
                 write!(formatter, "ranked roster semantic custody failed: {error}")
+            }
+            Self::SemanticSsa(error) => {
+                write!(
+                    formatter,
+                    "ranked roster semantic SSA custody failed: {error}"
+                )
             }
             Self::SemanticU32Induction(error) => {
                 write!(formatter, "ranked roster induction custody failed: {error}")
@@ -1038,6 +1059,7 @@ impl std::error::Error for ProductionRankedVerificationErrorV1 {
         match self {
             Self::RosterMetadata(_) | Self::RosterIdentity => None,
             Self::SemanticOwner(error) => Some(error),
+            Self::SemanticSsa(error) => Some(error),
             Self::SemanticU32Induction(error) => Some(error),
             Self::Custody(error) => Some(error),
             Self::MiddleEndEvidence(error) => Some(error),
@@ -1362,15 +1384,19 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
     }
 
     pub(crate) fn verify_equivalence(&self) -> Result<(), ProductionRankedVerificationErrorV1> {
+        self.semantic_ssa_owner
+            .verify_replay()
+            .map_err(ProductionRankedVerificationErrorV1::SemanticSsa)?;
+        let semantic_owner = self.semantic_ssa_owner.source_owner();
         let semantic_bindings = self
             .source_order_roots
             .iter()
             .map(ranked_verified_root_semantic_binding_v1)
             .collect::<Vec<_>>();
-        validate_ranked_roster_semantic_bindings_v1(&self.semantic_owner, &semantic_bindings)?;
+        validate_ranked_roster_semantic_bindings_v1(semantic_owner, &semantic_bindings)?;
         for root in &self.source_order_roots {
             fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
-                &self.semantic_owner,
+                semantic_owner,
                 root.semantic_root,
                 &root.lowering,
                 &root.ranked_ir,
@@ -1379,7 +1405,7 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
             )
             .map_err(ProductionRankedVerificationErrorV1::Custody)?;
             let revalidated = fe2o3_pliron::ProductionMiddleEndEvidenceV5::try_new(
-                &self.semantic_owner,
+                semantic_owner,
                 &root.lowering,
                 &root.ranked_ir,
             )
@@ -1404,7 +1430,7 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
                     "changed per-root ranked verification custody",
                 ));
             }
-            validate_ranked_root_induction_custody_v1(&self.semantic_owner, root)?;
+            validate_ranked_root_induction_custody_v1(semantic_owner, root)?;
         }
         let records = ranked_roster_identity_records_v1(&self.source_order_roots);
         require_exact_ranked_kernel_roster_identity_v1(
@@ -1425,7 +1451,7 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
     > {
         self.verify_equivalence()?;
         let Self {
-            semantic_owner,
+            semantic_ssa_owner,
             source_order_roots,
             canonical_kernel_order,
             canonical_roster_identity,
@@ -1466,8 +1492,8 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
                 verification,
             });
         }
-        let receipt = fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionModuleReceiptV1::from_unvalidated_projection_roster_candidate(
-            semantic_owner,
+        let receipt = fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionModuleReceiptV1::from_unvalidated_ssa_projection_roster_candidate(
+            semantic_ssa_owner,
             lowering_roots,
         )
         .map_err(ProductionRankedVerificationErrorV1::Custody)?;
@@ -1497,11 +1523,11 @@ impl ProductionRankedSemanticProgramV1 {
     }
 
     pub(crate) fn semantic_function_count(&self) -> usize {
-        self.semantic_owner.semantic().functions().len()
+        self.semantic_ssa_owner.source_semantic().functions().len()
     }
 
     pub(crate) fn semantic_callable_count(&self) -> usize {
-        self.semantic_owner.semantic().callables().len()
+        self.semantic_ssa_owner.source_semantic().callables().len()
     }
 
     pub(crate) fn bounds_are_clean(&self) -> bool {
@@ -1527,19 +1553,23 @@ impl ProductionRankedSemanticProgramV1 {
         ProductionRankedVerificationErrorV1,
     > {
         let Self {
-            semantic_owner,
+            semantic_ssa_owner,
             roots,
         } = self;
+        semantic_ssa_owner
+            .verify_replay()
+            .map_err(ProductionRankedVerificationErrorV1::SemanticSsa)?;
+        let semantic_owner = semantic_ssa_owner.source_owner();
         let semantic_bindings = roots
             .iter()
             .map(ranked_root_program_semantic_binding_v1)
             .collect::<Vec<_>>();
-        validate_ranked_roster_semantic_bindings_v1(&semantic_owner, &semantic_bindings)?;
+        validate_ranked_roster_semantic_bindings_v1(semantic_owner, &semantic_bindings)?;
 
         let mut verified_roots = Vec::with_capacity(roots.len());
         for root in roots.into_vec() {
             fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
-                &semantic_owner,
+                semantic_owner,
                 root.semantic_root,
                 &root.lowering,
                 &root.ranked_ir,
@@ -1561,7 +1591,7 @@ impl ProductionRankedSemanticProgramV1 {
                 executable_effect_sources,
             } = root;
             let verification = authenticate_ranked_root_v5(
-                &semantic_owner,
+                semantic_owner,
                 &lowering,
                 &ranked_ir,
                 semantic_u32_induction,
@@ -1585,7 +1615,7 @@ impl ProductionRankedSemanticProgramV1 {
         let (canonical_roster_identity, canonical_kernel_order) =
             derive_ranked_kernel_roster_identity_v1(&records)?;
         let receipt = ProductionRankedSemanticProjectionRosterReceiptV1 {
-            semantic_owner,
+            semantic_ssa_owner,
             source_order_roots,
             canonical_kernel_order,
             canonical_roster_identity,
@@ -1597,7 +1627,7 @@ impl ProductionRankedSemanticProgramV1 {
 
 #[derive(Debug)]
 pub(crate) enum ProductionRankedProjectionErrorV1 {
-    SemanticOwner(ProductionSemanticMirErrorV1),
+    SemanticSsa(ProductionSemanticSsaErrorV1),
     SemanticU32Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
     StructuralValidation(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     Incomplete(&'static str),
@@ -1640,8 +1670,8 @@ pub(crate) enum ProductionRankedProjectionErrorV1 {
 impl fmt::Display for ProductionRankedProjectionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::SemanticOwner(error) => {
-                write!(formatter, "exact semantic middle end failed: {error}")
+            Self::SemanticSsa(error) => {
+                write!(formatter, "semantic SSA custody failed: {error}")
             }
             Self::SemanticU32Induction(error) => {
                 write!(
@@ -1760,7 +1790,7 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
 impl std::error::Error for ProductionRankedProjectionErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::SemanticOwner(error) => Some(error),
+            Self::SemanticSsa(error) => Some(error),
             Self::SemanticU32Induction(error) => Some(error),
             Self::StructuralValidation(error) => Some(error),
             Self::Recipe(error) => Some(error),
@@ -2777,14 +2807,15 @@ fn derive_defined_callable_empty_effect_summaries_v1(
 }
 
 pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
-    semantic_owner: ProductionSemanticMirOwnerV1,
+    semantic_ssa_owner: ProductionSemanticSsaOwnerV1,
     root_inputs: &[ProductionRankedRootInputV1],
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
-    semantic_owner
-        .verify_equivalence()
-        .map_err(ProductionRankedProjectionErrorV1::SemanticOwner)?;
-    let semantic = semantic_owner.semantic();
+    semantic_ssa_owner
+        .verify_replay()
+        .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
+    let semantic_owner = semantic_ssa_owner.source_owner();
+    let semantic = semantic_ssa_owner.source_semantic();
     let callable_effects = derive_defined_callable_empty_effect_summaries_v1(
         semantic.types(),
         semantic.functions(),
@@ -2846,7 +2877,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
             ));
         }
         fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
-            &semantic_owner,
+            semantic_owner,
             semantic_root,
             &root.lowering,
             &root.ranked_ir,
@@ -2856,11 +2887,11 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         .map_err(ProductionRankedProjectionErrorV1::StructuralValidation)?;
         roots.push(root);
     }
-    semantic_owner
-        .verify_equivalence()
-        .map_err(ProductionRankedProjectionErrorV1::SemanticOwner)?;
+    semantic_ssa_owner
+        .verify_replay()
+        .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
     Ok(ProductionRankedSemanticProgramV1 {
-        semantic_owner,
+        semantic_ssa_owner,
         roots: roots.into_boxed_slice(),
     })
 }
@@ -3030,10 +3061,17 @@ fn project_and_verify_ranked_root_v1(
         &mut next_value,
         &mut discarded_ir,
     )?;
-    let bounds_checks = project_rust_bounds_checks(
+    let bounds_checks = project_rust_bounds_checks_with_ordinary_v1(
         function,
         intrinsic.extent_argument_count,
         &intrinsic.index_values,
+        &intrinsic.ordinary_index_values,
+        Some(
+            &intrinsic
+                .local_contracts
+                .checked_references
+                .enum_payload_dominance,
+        ),
         &mut entry_operations,
         &mut next_value,
     )?;
@@ -4131,10 +4169,31 @@ fn production_access_sources(
     Ok(retained)
 }
 
+#[cfg(test)]
 fn project_rust_bounds_checks(
     function: &SemanticFunctionDeclV1,
     first_argument: usize,
     known_indices: &[Option<ProjectedDisjointIndexV1>],
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+) -> Result<ProjectedBoundsChecksV1, ProductionRankedProjectionErrorV1> {
+    project_rust_bounds_checks_with_ordinary_v1(
+        function,
+        first_argument,
+        known_indices,
+        &[],
+        None,
+        operations,
+        next_value,
+    )
+}
+
+fn project_rust_bounds_checks_with_ordinary_v1(
+    function: &SemanticFunctionDeclV1,
+    first_argument: usize,
+    known_indices: &[Option<ProjectedDisjointIndexV1>],
+    ordinary_indices: &[Option<ProjectedOrdinaryIndexV1>],
+    enum_payload_dominance: Option<&SemanticEnumPayloadDominanceV1>,
     operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
 ) -> Result<ProjectedBoundsChecksV1, ProductionRankedProjectionErrorV1> {
@@ -4206,6 +4265,11 @@ fn project_rust_bounds_checks(
             })?;
     }
 
+    if !ordinary_indices.is_empty() && ordinary_indices.len() != function.locals().len() {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "ordinary intrinsic index facts do not match the semantic local table",
+        ));
+    }
     let mut local_values = if known_indices.is_empty() {
         vec![None; function.locals().len()]
     } else {
@@ -4219,6 +4283,8 @@ fn project_rust_bounds_checks(
             .map(|index| index.map(|index| index.value))
             .collect()
     };
+    // Separate MIR `Len` temporaries for one stable slice describe one ranked extent.
+    let mut slice_extents = vec![None; function.locals().len()];
     let mut checks = Vec::new();
     for (block_index, block) in function.blocks().iter().enumerate() {
         let guard = match block.terminator().kind() {
@@ -4358,6 +4424,39 @@ fn project_rust_bounds_checks(
                 "a Rust bounds-check success block not uniquely controlled by that check",
             ));
         }
+        if let Some(ordinary) = ordinary_indices
+            .get(index_local.index() as usize)
+            .copied()
+            .flatten()
+        {
+            let Some(enum_payload_dominance) = enum_payload_dominance else {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "ordinary enum index facts lack enum-dominance evidence",
+                ));
+            };
+            if !enum_payload_dominance.allows(
+                ordinary.availability,
+                SemanticBlockIdV1::from_index(block_index as u32),
+            ) {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "an ordinary enum index payload is used outside its authenticated variant edge",
+                ));
+            }
+            let slot = local_values.get_mut(index_local.index() as usize).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "an ordinary enum index payload is outside the semantic local table",
+                ),
+            )?;
+            match *slot {
+                None => *slot = Some(ordinary.value),
+                Some(existing) if existing == ordinary.value => {}
+                Some(_) => {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "an ordinary enum index payload conflicts with index capability authority",
+                    ));
+                }
+            }
+        }
         let mut unknown_for = |local: SemanticLocalIdV1| {
             let slot = local_values.get_mut(local.index() as usize).ok_or(
                 ProductionRankedProjectionErrorV1::Unsupported(
@@ -4380,6 +4479,35 @@ fn project_rust_bounds_checks(
             *slot = Some(value);
             Ok(value)
         };
+        let prior_extent = *slice_extents.get(slice_local.index() as usize).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a Rust bounds-check slice outside the semantic local table",
+            ),
+        )?;
+        if prior_extent.is_some() {
+            let slice_definition = definitions.get(slice_local.index() as usize).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "a Rust bounds-check slice outside the semantic local table",
+                ),
+            )?;
+            let stable = match function.locals()[slice_local.index() as usize].role() {
+                SemanticLocalRoleV1::Argument(_) => slice_definition.count == 0,
+                _ => slice_definition.count == 1,
+            };
+            if !stable {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "repeated Rust bounds checks derive an extent from a mutable slice local",
+                ));
+            }
+        }
+        let index = unknown_for(index_local)?;
+        let extent = if let Some(extent) = prior_extent {
+            extent
+        } else {
+            let extent = unknown_for(length_local)?;
+            slice_extents[slice_local.index() as usize] = Some(extent);
+            extent
+        };
         checks.try_reserve(1).map_err(|_| {
             ProductionRankedProjectionErrorV1::Unsupported(
                 "Rust bounds-check projection storage cannot be reserved",
@@ -4389,8 +4517,8 @@ fn project_rust_bounds_checks(
             access_block,
             slice_local,
             index_local,
-            index: unknown_for(index_local)?,
-            extent: unknown_for(length_local)?,
+            index,
+            extent,
             must_authorize_access,
         });
     }
@@ -6444,9 +6572,6 @@ fn blocked_mapping_fits_launch_v1(
     let Some(block_elements) = lanes_per_block.checked_mul(elements_per_lane) else {
         return false;
     };
-    if lanes_per_block == 1 {
-        return true;
-    }
     let Some(upper_bound) = linear_launch_upper_bound else {
         return false;
     };
@@ -7128,7 +7253,7 @@ fn project_intrinsic_contracts(
     }
 
     enum_payload_stores.sort_unstable_by_key(|store| (store.carrier, store.variant));
-    for load in enum_payload_loads {
+    for load in enum_payload_loads.iter().copied() {
         let key = (load.carrier, load.variant);
         let first =
             enum_payload_stores.partition_point(|store| (store.carrier, store.variant) < key);
@@ -7568,6 +7693,23 @@ fn project_intrinsic_contracts(
             "capability worklist exceeded its charged def-use edges",
         ));
     }
+
+    let ordinary_index_values = project_disjoint_block_component_indices_v1(
+        callables,
+        function,
+        linear_launch_upper_bound,
+        constants,
+        &index_values,
+        &local_definitions,
+        &scalar_inventory.address_escaped,
+        &enum_payload_loads,
+        &option_dominance,
+        &enum_payload_dominance,
+        &mut option_predicates,
+        operations,
+        next_value,
+        ranked_ir,
+    )?;
 
     let mut views_by_origin: Vec<Option<ProjectedViewV1>> = vec![None; function.locals().len()];
     let mut guarded_accesses = Vec::new();
@@ -8551,6 +8693,7 @@ fn project_intrinsic_contracts(
         project_generated_terminator_effects_v1(types, function, callables)?;
     Ok(IntrinsicProjectionV1 {
         index_values,
+        ordinary_index_values,
         local_contracts,
         extent_argument_count: if guarded_accesses.is_empty()
             && direct_read_effects.iter().all(Option::is_none)
@@ -17931,6 +18074,329 @@ fn projected_disjoint_operand_v1(
     Ok(projected)
 }
 
+fn push_projected_index_constant_v1(
+    value: u64,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+    ranked_ir: &mut String,
+) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
+    reserve_operation(operations)?;
+    let result = next_value_id(next_value)?;
+    operations.push(ProductionRankedOperationV1::IndexConstant { result, value });
+    push_ranked_ir(
+        ranked_ir,
+        &format!("  %{} = kernel.index_constant {value}\n", result.get()),
+    )?;
+    Ok(ProductionRankedValueV1::Local(result))
+}
+
+fn push_projected_index_binary_v1(
+    kind: IndexBinaryKindAttr,
+    lhs: ProductionRankedValueV1,
+    rhs: ProductionRankedValueV1,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+    ranked_ir: &mut String,
+) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
+    reserve_operation(operations)?;
+    let result = next_value_id(next_value)?;
+    operations.push(ProductionRankedOperationV1::IndexBinary {
+        result,
+        kind,
+        lhs,
+        rhs,
+    });
+    push_ranked_ir(
+        ranked_ir,
+        &format!(
+            "  %{} = kernel.index_binary {kind:?} {}, {}\n",
+            result.get(),
+            ranked_value_text_v1(lhs),
+            ranked_value_text_v1(rhs),
+        ),
+    )?;
+    Ok(ProductionRankedValueV1::Local(result))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_disjoint_block_component_indices_v1(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    linear_launch_upper_bound: Option<u64>,
+    constants: &[Option<u64>],
+    index_values: &[Option<ProjectedDisjointIndexV1>],
+    local_definitions: &[u8],
+    address_escaped: &[bool],
+    enum_payload_loads: &[PendingEnumPayloadLoadV1],
+    option_dominance: &SemanticOptionDominanceV1,
+    enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
+    option_predicates: &mut [Option<GuardPredicateV1>],
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+    ranked_ir: &mut String,
+) -> Result<Vec<Option<ProjectedOrdinaryIndexV1>>, ProductionRankedProjectionErrorV1> {
+    let local_count = function.locals().len();
+    if index_values.len() != local_count
+        || local_definitions.len() != local_count
+        || address_escaped.len() != local_count
+        || option_predicates.len() != local_count
+    {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "component-index projection inventories do not match the semantic local table",
+        ));
+    }
+    let mut option_payload_values = vec![None; local_count];
+    for (block_index, block) in function.blocks().iter().enumerate() {
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+            continue;
+        };
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic {
+            operation:
+                SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex {
+                    index_space,
+                    lanes_per_block,
+                    elements_per_lane,
+                    ..
+                },
+            ..
+        }) = callables.get(call.callee().index() as usize)
+        else {
+            continue;
+        };
+        let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+            lanes_per_block: *lanes_per_block,
+            elements_per_lane: *elements_per_lane,
+        };
+        if *index_space != expected
+            || !blocked_mapping_fits_launch_v1(
+                linear_launch_upper_bound,
+                *lanes_per_block,
+                *elements_per_lane,
+            )
+        {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "component-index blocked geometry is malformed or exceeds the authenticated launch",
+            ));
+        }
+        let destination = simple_call_destination(call)?.index() as usize;
+        if local_definitions.get(destination).copied() != Some(1)
+            || address_escaped.get(destination).copied() != Some(false)
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a component-index Option result lacks one stable local destination",
+            ));
+        }
+        if option_payload_values[destination].is_some() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "multiple component-index payloads target one semantic local",
+            ));
+        }
+        let block_index_value = projected_disjoint_operand_v1(
+            call,
+            0,
+            index_values,
+            option_dominance,
+            enum_payload_dominance,
+            block_index,
+        )?;
+        if block_index_value.mapping != expected {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "component-index receiver mapping identity changed",
+            ));
+        }
+        let component = if let Some(component) = call
+            .arguments()
+            .get(1)
+            .and_then(|operand| constant_operand_value(operand, constants))
+        {
+            push_projected_index_constant_v1(component, operations, next_value, ranked_ir)?
+        } else {
+            let component_local = call
+                .arguments()
+                .get(1)
+                .and_then(simple_operand_local)
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a component-index operand is not one exact scalar local or constant",
+                ))?;
+            let component = index_values
+                .get(component_local.index() as usize)
+                .copied()
+                .flatten()
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a component-index scalar lacks exact ranked value provenance",
+                ))?;
+            if !component.availability.is_none_or(|availability| {
+                capability_availability_allows(
+                    option_dominance,
+                    enum_payload_dominance,
+                    availability,
+                    SemanticBlockIdV1::from_index(block_index as u32),
+                )
+            }) {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a component-index scalar is used outside its authenticated source region",
+                ));
+            }
+            component.value
+        };
+        let lanes =
+            push_projected_index_constant_v1(*lanes_per_block, operations, next_value, ranked_ir)?;
+        let elements = push_projected_index_constant_v1(
+            *elements_per_lane,
+            operations,
+            next_value,
+            ranked_ir,
+        )?;
+        let block_elements = lanes_per_block.checked_mul(*elements_per_lane).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "component-index blocked dimensions overflow u64",
+            ),
+        )?;
+        let block_elements =
+            push_projected_index_constant_v1(block_elements, operations, next_value, ranked_ir)?;
+        let block_number = push_projected_index_binary_v1(
+            IndexBinaryKindAttr::Divide,
+            block_index_value.value,
+            lanes,
+            operations,
+            next_value,
+            ranked_ir,
+        )?;
+        let lane = push_projected_index_binary_v1(
+            IndexBinaryKindAttr::Remainder,
+            block_index_value.value,
+            lanes,
+            operations,
+            next_value,
+            ranked_ir,
+        )?;
+        let block_base = push_projected_index_binary_v1(
+            IndexBinaryKindAttr::Multiply,
+            block_number,
+            block_elements,
+            operations,
+            next_value,
+            ranked_ir,
+        )?;
+        let component_base = push_projected_index_binary_v1(
+            IndexBinaryKindAttr::Multiply,
+            component,
+            lanes,
+            operations,
+            next_value,
+            ranked_ir,
+        )?;
+        let component_index = push_projected_index_binary_v1(
+            IndexBinaryKindAttr::Add,
+            block_base,
+            component_base,
+            operations,
+            next_value,
+            ranked_ir,
+        )?;
+        let component_index = push_projected_index_binary_v1(
+            IndexBinaryKindAttr::Add,
+            component_index,
+            lane,
+            operations,
+            next_value,
+            ranked_ir,
+        )?;
+        let predicate = option_predicates.get_mut(destination).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a component-index Option result is outside the semantic local table",
+            ),
+        )?;
+        if predicate.is_some() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "multiple predicates target one component-index Option local",
+            ));
+        }
+        *predicate = Some(GuardPredicateV1 {
+            comparisons: vec![(component, elements)],
+        });
+        option_payload_values[destination] = Some(component_index);
+    }
+
+    bind_component_index_enum_payloads_v1(
+        function,
+        &option_payload_values,
+        local_definitions,
+        address_escaped,
+        enum_payload_loads,
+        enum_payload_dominance,
+    )
+}
+
+fn bind_component_index_enum_payloads_v1(
+    function: &SemanticFunctionDeclV1,
+    option_payload_values: &[Option<ProductionRankedValueV1>],
+    local_definitions: &[u8],
+    address_escaped: &[bool],
+    enum_payload_loads: &[PendingEnumPayloadLoadV1],
+    enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
+) -> Result<Vec<Option<ProjectedOrdinaryIndexV1>>, ProductionRankedProjectionErrorV1> {
+    let local_count = function.locals().len();
+    if option_payload_values.len() != local_count
+        || local_definitions.len() != local_count
+        || address_escaped.len() != local_count
+    {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "component-index enum-payload inventories do not match the semantic local table",
+        ));
+    }
+    let mut ordinary_index_values = vec![None; local_count];
+    for load in enum_payload_loads {
+        let Some(payload) = option_payload_values.get(load.carrier).copied().flatten() else {
+            continue;
+        };
+        if load.variant != 1
+            || local_definitions.get(load.carrier).copied() != Some(1)
+            || local_definitions.get(load.destination).copied() != Some(1)
+            || address_escaped.get(load.destination).copied() != Some(false)
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a component-index payload load changed carrier, variant, or local custody",
+            ));
+        }
+        let availability = enum_payload_dominance
+            .availability(
+                SemanticLocalIdV1::from_index(load.carrier as u32),
+                load.variant,
+            )
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a component-index Some payload lacks an exact enum-dominance region",
+            ))?;
+        if !enum_payload_dominance.allows(
+            availability,
+            SemanticBlockIdV1::from_index(load.use_block as u32),
+        ) {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a component-index payload is loaded outside its authenticated Some edge",
+            ));
+        }
+        let projected = ProjectedOrdinaryIndexV1 {
+            value: payload,
+            availability,
+        };
+        let slot = ordinary_index_values.get_mut(load.destination).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a component-index payload destination is outside the semantic local table",
+            ),
+        )?;
+        match *slot {
+            None => *slot = Some(projected),
+            Some(existing) if existing == projected => {}
+            Some(_) => {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "multiple component-index payloads reach one ordinary index local",
+                ));
+            }
+        }
+    }
+    Ok(ordinary_index_values)
+}
+
 fn capability_availability_allows(
     option: &SemanticOptionDominanceV1,
     enum_payload: &SemanticEnumPayloadDominanceV1,
@@ -18139,6 +18605,9 @@ enum ProjectedCfgTerminatorV1 {
         first_block: usize,
         second_block: usize,
     },
+    AnalysisMultiSplit {
+        blocks: Vec<usize>,
+    },
     ExactSwitch(ProjectedDeterministicSwitchV1),
     Return,
     Trap,
@@ -18184,28 +18653,60 @@ fn projected_cfg_terminator(
                 {
                     return Ok(ProjectedCfgTerminatorV1::ExactSwitch(projected));
                 }
-                if targets.values().len() == 1 {
-                    return Ok(ProjectedCfgTerminatorV1::AnalysisSplit {
-                        first_block: target(targets.values()[0].edge().target())?,
-                        second_block: target(targets.otherwise().target())?,
-                    });
+                let successor_capacity = targets.values().len().checked_add(1).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "analysis switch successor count overflow",
+                    ),
+                )?;
+                if successor_capacity > MAX_RANKED_BOUNDS_EDGES {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "analysis switch edge count exceeds the ranked edge limit",
+                    ));
                 }
-                if targets.values().len() == 2
+                let otherwise = target(targets.otherwise().target())?;
+                let elide_fallback = targets.values().len() == 2
                     && targets.values()[0].value() == 0
                     && targets.values()[1].value() == 1
-                    && switch_fallback_is_empty_unreachable_v1(
-                        function,
-                        target(targets.otherwise().target())?,
+                    && switch_fallback_is_empty_unreachable_v1(function, otherwise);
+                let mut successors = Vec::new();
+                successors
+                    .try_reserve_exact(successor_capacity)
+                    .map_err(|_| {
+                        ProductionRankedProjectionErrorV1::Unsupported(
+                            "analysis switch successor storage cannot be reserved",
+                        )
+                    })?;
+                let mut seen = HashSet::new();
+                seen.try_reserve(successor_capacity).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "analysis switch successor set cannot be reserved",
                     )
-                {
-                    return Ok(ProjectedCfgTerminatorV1::AnalysisSplit {
-                        first_block: target(targets.values()[0].edge().target())?,
-                        second_block: target(targets.values()[1].edge().target())?,
-                    });
+                })?;
+                for successor in targets.values() {
+                    let successor = target(successor.edge().target())?;
+                    if seen.insert(successor) {
+                        successors.push(successor);
+                    }
                 }
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a general switch whose only extra successor is not one empty unreachable fallback",
-                ));
+                if !elide_fallback && seen.insert(otherwise) {
+                    successors.push(otherwise);
+                }
+                if successors.len() > MAX_RANKED_BOUNDS_BLOCKS {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "analysis switch successor count exceeds the ranked block limit",
+                    ));
+                }
+                return match successors.as_slice() {
+                    [] => Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "analysis switch has no successor",
+                    )),
+                    [successor] => Ok(ProjectedCfgTerminatorV1::Branch(*successor)),
+                    [first_block, second_block] => Ok(ProjectedCfgTerminatorV1::AnalysisSplit {
+                        first_block: *first_block,
+                        second_block: *second_block,
+                    }),
+                    _ => Ok(ProjectedCfgTerminatorV1::AnalysisMultiSplit { blocks: successors }),
+                };
             };
             if targets.values().len() == 1 {
                 let explicit = &targets.values()[0];
@@ -18368,6 +18869,13 @@ fn projected_block_expansion(
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                 "deterministic switch CFG block count overflow",
             ))?;
+    }
+    if let ProjectedCfgTerminatorV1::AnalysisMultiSplit { blocks } = terminator {
+        count = count.checked_add(blocks.len().saturating_sub(2)).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "analysis switch CFG block count overflow",
+            ),
+        )?;
     }
     Ok(count)
 }
@@ -18974,6 +19482,18 @@ fn build_ranked_cfg(
                     first_block: ranked_block_id(projected_target(&base_blocks, first_block)?)?,
                     second_block: ranked_block_id(projected_target(&base_blocks, second_block)?)?,
                 },
+                ProjectedCfgTerminatorV1::AnalysisMultiSplit { blocks: targets } => {
+                    append_analysis_multi_split_blocks_with_arguments(
+                        &mut blocks,
+                        current,
+                        operations,
+                        &targets,
+                        &base_blocks,
+                        live,
+                        &live_inductions,
+                    )?;
+                    continue;
+                }
                 ProjectedCfgTerminatorV1::ExactSwitch(switch) if switch.targets.is_empty() => {
                     ProductionRankedTerminatorV1::BranchArgs {
                         arguments: arguments_for(switch.otherwise)?,
@@ -19064,6 +19584,15 @@ fn build_ranked_cfg(
                     second_block: ranked_block_id(projected_target(&base_blocks, second_block)?)?,
                 },
             )?,
+            ProjectedCfgTerminatorV1::AnalysisMultiSplit { blocks: targets } => {
+                append_analysis_multi_split_blocks(
+                    &mut blocks,
+                    current,
+                    operations,
+                    &targets,
+                    &base_blocks,
+                )?;
+            }
             ProjectedCfgTerminatorV1::ExactSwitch(switch) => {
                 append_exact_switch_blocks(
                     &mut blocks,
@@ -19355,6 +19884,9 @@ fn reachable_projected_blocks(
             } => {
                 pending.push(*first_block);
                 pending.push(*second_block);
+            }
+            ProjectedCfgTerminatorV1::AnalysisMultiSplit { blocks } => {
+                pending.extend(blocks.iter().copied());
             }
             ProjectedCfgTerminatorV1::ExactSwitch(switch) => {
                 pending.extend(switch.targets.iter().map(|(_, _, target)| *target));
@@ -21249,6 +21781,7 @@ fn project_direct_call_accesses(
                 | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift { .. }
                 | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedBlock { .. }
                 | SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { .. }
+                | SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex { .. }
                 | SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift { .. }
                 | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut { .. }
                 | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut { .. }
@@ -22592,6 +23125,7 @@ mod tests {
     include!("production_ranked_projection_v1/projection_06_tests.rs");
     include!("production_ranked_projection_v1/projection_07_tests.rs");
     include!("production_ranked_projection_v1/projection_08_tests.rs");
+    include!("production_ranked_projection_v1/analysis_multi_split_v1_tests.rs");
     #[test]
     fn non_bounds_asserts_are_elided_only_after_exact_constant_success() {
         let unresolved = non_bounds_assert_function(tensor_operand(1));
@@ -28144,7 +28678,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_binary_switch_keeps_reachable_or_malformed_fallbacks_fail_closed() {
+    fn unresolved_binary_switch_keeps_live_and_unauthenticated_fallbacks() {
         for function in [
             explicit_binary_switch_with_fallback([0, 1], vec![], SemanticTerminatorKindV1::Return),
             explicit_binary_switch_with_fallback(
@@ -28158,12 +28692,13 @@ mod tests {
                 SemanticTerminatorKindV1::Unreachable,
             ),
         ] {
-            assert!(matches!(
-                projected_cfg_terminator(&function, 0, &[], false, &[], &[const { None }; 2], &[]),
-                Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "a general switch whose only extra successor is not one empty unreachable fallback"
-                ))
-            ));
+            assert_eq!(
+                projected_cfg_terminator(&function, 0, &[], false, &[], &[const { None }; 2], &[],)
+                    .unwrap(),
+                ProjectedCfgTerminatorV1::AnalysisMultiSplit {
+                    blocks: vec![1, 2, 3],
+                }
+            );
         }
     }
 
@@ -29159,7 +29694,10 @@ mod tests {
     }
 
     const TRANSPARENT_U16_FIELD_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(13);
-    const TRANSPARENT_U16_CARRIER_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(14);
+    const TRANSPARENT_U16_MARKER_A_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(14);
+    const TRANSPARENT_U16_MARKER_B_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(15);
+    const TRANSPARENT_U16_CARRIER_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(16);
+    const TRANSPARENT_FUNCTION_POINTER_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(17);
 
     fn transparent_u16_backend_v1(valid_end: u128) -> SemanticBackendReprV1 {
         SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
@@ -29207,19 +29745,71 @@ mod tests {
     fn exact_transparent_u16_carrier_decl_v1() -> SemanticTypeDeclV1 {
         transparent_u16_carrier_decl_v1(
             SemanticTypeShapeV1::Aggregate(
-                SemanticAggregateTypeV1::new(vec![TRANSPARENT_U16_FIELD_TYPE]).unwrap(),
+                SemanticAggregateTypeV1::new(vec![
+                    TRANSPARENT_U16_FIELD_TYPE,
+                    TRANSPARENT_U16_MARKER_A_TYPE,
+                    TRANSPARENT_U16_MARKER_B_TYPE,
+                ])
+                .unwrap(),
             ),
-            SemanticFieldsShapeV1::arbitrary(vec![0], vec![0]).unwrap(),
+            SemanticFieldsShapeV1::arbitrary(vec![0, 2, 2], vec![0, 1, 2]).unwrap(),
             SemanticRustcVariantsV1::Single { index: 0 },
             transparent_u16_backend_v1(u16::MAX.into()),
             false,
             None,
             2,
             SemanticTypeLayoutDetailsV1::Aggregate(
-                SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+                SemanticAggregateLayoutV1::new(vec![0, 2, 2], vec![]).unwrap(),
             ),
             SemanticTypeAbiPropertiesV1::new(false, false).with_rustc_layout_is_noundef(true),
             SemanticRustTypeKindV1::Ordinary,
+        )
+    }
+
+    fn transparent_u16_marker_decl_v1(
+        tag: u8,
+        shape: SemanticTypeShapeV1,
+        fields: SemanticFieldsShapeV1,
+        variants: SemanticRustcVariantsV1,
+        backend_repr: SemanticBackendReprV1,
+        uninhabited: bool,
+        details: SemanticTypeLayoutDetailsV1,
+        properties: SemanticTypeAbiPropertiesV1,
+    ) -> SemanticTypeDeclV1 {
+        SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(tag)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(tag)),
+            SemanticTypeLayoutV1::with_exact_rustc_layout(
+                0,
+                1,
+                fields,
+                variants,
+                backend_repr,
+                None,
+                uninhabited,
+                None,
+                1,
+                0,
+                details,
+            )
+            .unwrap(),
+            shape,
+        )
+        .with_rustc_abi_properties(properties)
+    }
+
+    fn exact_transparent_u16_marker_decl_v1(tag: u8) -> SemanticTypeDeclV1 {
+        transparent_u16_marker_decl_v1(
+            tag,
+            SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![]).unwrap()),
+            SemanticFieldsShapeV1::arbitrary(vec![], vec![]).unwrap(),
+            SemanticRustcVariantsV1::Single { index: 0 },
+            SemanticBackendReprV1::memory(true),
+            false,
+            SemanticTypeLayoutDetailsV1::Aggregate(
+                SemanticAggregateLayoutV1::new(vec![], vec![]).unwrap(),
+            ),
+            SemanticTypeAbiPropertiesV1::new(false, false).with_rustc_layout_is_noundef(true),
         )
     }
 
@@ -29253,8 +29843,33 @@ mod tests {
                 SemanticTypeAbiPropertiesV1::new(false, false).with_rustc_layout_is_noundef(true),
             ),
         );
+        assert_eq!(types.len(), TRANSPARENT_U16_MARKER_A_TYPE.index() as usize);
+        types.push(exact_transparent_u16_marker_decl_v1(248));
+        assert_eq!(types.len(), TRANSPARENT_U16_MARKER_B_TYPE.index() as usize);
+        types.push(exact_transparent_u16_marker_decl_v1(249));
         assert_eq!(types.len(), TRANSPARENT_U16_CARRIER_TYPE.index() as usize);
         types.push(exact_transparent_u16_carrier_decl_v1());
+        assert_eq!(
+            types.len(),
+            TRANSPARENT_FUNCTION_POINTER_TYPE.index() as usize
+        );
+        types.push(
+            SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256(bytes(247)),
+                SemanticLayoutIdentityV1::from_sha256(bytes(247)),
+                SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+                SemanticTypeShapeV1::FunctionPointer {
+                    safety: SemanticFunctionSafetyV1::Safe,
+                    extern_abi: SemanticExternAbiV1::Rust,
+                    c_variadic: false,
+                    arguments: SemanticAggregateTypeV1::new(vec![]).unwrap(),
+                    return_type: BOOL_TYPE,
+                },
+            )
+            .with_rustc_abi_properties(
+                SemanticTypeAbiPropertiesV1::new(false, false).with_rustc_layout_is_noundef(true),
+            ),
+        );
         types
     }
 
@@ -29427,18 +30042,56 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_scalar_summary_rejects_drop_terminators() {
+        let function = scalar_summary_helper(
+            239,
+            vec![
+                block(
+                    239,
+                    vec![],
+                    SemanticTerminatorKindV1::Drop {
+                        place: summary_scalar_place(),
+                        drop_glue: SemanticFunctionIdV1::from_index(0),
+                        target: cfg_edge(SemanticEdgeRoleV1::DropReturn, 1),
+                        unwind: SemanticUnwindActionV1::Unreachable,
+                    },
+                ),
+                block(240, vec![], SemanticTerminatorKindV1::Return),
+            ],
+        );
+        let summaries = derive_defined_callable_empty_effect_summaries_v1(
+            &projection_types(),
+            &[function],
+            &[SemanticCallableDeclV1::defined(
+                SemanticFunctionIdV1::from_index(0),
+            )],
+        )
+        .unwrap();
+        assert!(!summaries.is_exact_empty(SemanticFunctionIdV1::from_index(0)));
+        assert!(
+            !summaries.is_exact_empty_deterministic_scalar(SemanticFunctionIdV1::from_index(0))
+        );
+    }
+
+    #[test]
     fn transparent_scalar_carrier_requires_the_exact_source_and_layout_contract() {
         let exact_types = transparent_u16_carrier_types_v1();
         let exact_field = exact_types[TRANSPARENT_U16_FIELD_TYPE.index() as usize].clone();
         let aggregate = || {
             SemanticTypeShapeV1::Aggregate(
-                SemanticAggregateTypeV1::new(vec![TRANSPARENT_U16_FIELD_TYPE]).unwrap(),
+                SemanticAggregateTypeV1::new(vec![
+                    TRANSPARENT_U16_FIELD_TYPE,
+                    TRANSPARENT_U16_MARKER_A_TYPE,
+                    TRANSPARENT_U16_MARKER_B_TYPE,
+                ])
+                .unwrap(),
             )
         };
-        let exact_fields = || SemanticFieldsShapeV1::arbitrary(vec![0], vec![0]).unwrap();
+        let exact_fields =
+            || SemanticFieldsShapeV1::arbitrary(vec![0, 2, 2], vec![0, 1, 2]).unwrap();
         let exact_details = || {
             SemanticTypeLayoutDetailsV1::Aggregate(
-                SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+                SemanticAggregateLayoutV1::new(vec![0, 2, 2], vec![]).unwrap(),
             )
         };
         let exact_properties =
@@ -29458,7 +30111,7 @@ mod tests {
                     None,
                     2,
                     0,
-                    SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+                    SemanticAggregateLayoutV1::new(vec![0, 2, 2], vec![]).unwrap(),
                 )
                 .unwrap(),
             ],
@@ -29475,7 +30128,12 @@ mod tests {
         let hostile_carriers = vec![
             transparent_u16_carrier_decl_v1(
                 SemanticTypeShapeV1::Tuple(
-                    SemanticAggregateTypeV1::new(vec![TRANSPARENT_U16_FIELD_TYPE]).unwrap(),
+                    SemanticAggregateTypeV1::new(vec![
+                        TRANSPARENT_U16_FIELD_TYPE,
+                        TRANSPARENT_U16_MARKER_A_TYPE,
+                        TRANSPARENT_U16_MARKER_B_TYPE,
+                    ])
+                    .unwrap(),
                 ),
                 exact_fields(),
                 SemanticRustcVariantsV1::Single { index: 0 },
@@ -29492,6 +30150,7 @@ mod tests {
                     SemanticAggregateTypeV1::new(vec![
                         TRANSPARENT_U16_FIELD_TYPE,
                         TRANSPARENT_U16_FIELD_TYPE,
+                        TRANSPARENT_U16_MARKER_B_TYPE,
                     ])
                     .unwrap(),
                 ),
@@ -29526,6 +30185,34 @@ mod tests {
                 None,
                 2,
                 exact_details(),
+                exact_properties(),
+                SemanticRustTypeKindV1::Ordinary,
+            ),
+            transparent_u16_carrier_decl_v1(
+                aggregate(),
+                SemanticFieldsShapeV1::arbitrary(vec![1, 2, 2], vec![0, 1, 2]).unwrap(),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                transparent_u16_backend_v1(u16::MAX.into()),
+                false,
+                None,
+                2,
+                SemanticTypeLayoutDetailsV1::Aggregate(
+                    SemanticAggregateLayoutV1::new(vec![1, 2, 2], vec![]).unwrap(),
+                ),
+                exact_properties(),
+                SemanticRustTypeKindV1::Ordinary,
+            ),
+            transparent_u16_carrier_decl_v1(
+                aggregate(),
+                exact_fields(),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                transparent_u16_backend_v1(u16::MAX.into()),
+                false,
+                None,
+                2,
+                SemanticTypeLayoutDetailsV1::Aggregate(
+                    SemanticAggregateLayoutV1::new(vec![0, 1, 2], vec![]).unwrap(),
+                ),
                 exact_properties(),
                 SemanticRustTypeKindV1::Ordinary,
             ),
@@ -29703,6 +30390,116 @@ mod tests {
         for hostile in hostile_carriers {
             let mut types = exact_types.clone();
             types[TRANSPARENT_U16_CARRIER_TYPE.index() as usize] = hostile;
+            assert!(
+                exact_transparent_scalar_carrier_field_v1(&types, TRANSPARENT_U16_CARRIER_TYPE,)
+                    .is_none()
+            );
+        }
+
+        let exact_marker_properties =
+            || SemanticTypeAbiPropertiesV1::new(false, false).with_rustc_layout_is_noundef(true);
+        let empty_aggregate = || {
+            (
+                SemanticFieldsShapeV1::arbitrary(vec![], vec![]).unwrap(),
+                SemanticTypeLayoutDetailsV1::Aggregate(
+                    SemanticAggregateLayoutV1::new(vec![], vec![]).unwrap(),
+                ),
+            )
+        };
+        let hostile_markers = vec![
+            transparent_u16_marker_decl_v1(
+                246,
+                SemanticTypeShapeV1::Opaque,
+                SemanticFieldsShapeV1::Primitive,
+                SemanticRustcVariantsV1::Single { index: 0 },
+                SemanticBackendReprV1::memory(true),
+                false,
+                SemanticTypeLayoutDetailsV1::None,
+                exact_marker_properties(),
+            ),
+            transparent_u16_marker_decl_v1(
+                245,
+                SemanticTypeShapeV1::Array {
+                    element: POINTER_TYPE,
+                    length: 0,
+                },
+                SemanticFieldsShapeV1::array(8, 0),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                SemanticBackendReprV1::memory(true),
+                false,
+                SemanticTypeLayoutDetailsV1::None,
+                exact_marker_properties(),
+            ),
+            transparent_u16_marker_decl_v1(
+                244,
+                SemanticTypeShapeV1::Array {
+                    element: TRANSPARENT_FUNCTION_POINTER_TYPE,
+                    length: 0,
+                },
+                SemanticFieldsShapeV1::array(8, 0),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                SemanticBackendReprV1::memory(true),
+                false,
+                SemanticTypeLayoutDetailsV1::None,
+                exact_marker_properties(),
+            ),
+            {
+                let (fields, details) = empty_aggregate();
+                transparent_u16_marker_decl_v1(
+                    243,
+                    SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![]).unwrap()),
+                    fields,
+                    SemanticRustcVariantsV1::Empty,
+                    SemanticBackendReprV1::memory(true),
+                    true,
+                    details,
+                    exact_marker_properties(),
+                )
+            },
+            transparent_u16_marker_decl_v1(
+                242,
+                SemanticTypeShapeV1::Aggregate(
+                    SemanticAggregateTypeV1::new(vec![TRANSPARENT_U16_MARKER_A_TYPE]).unwrap(),
+                ),
+                SemanticFieldsShapeV1::arbitrary(vec![0], vec![0]).unwrap(),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                SemanticBackendReprV1::memory(true),
+                false,
+                SemanticTypeLayoutDetailsV1::Aggregate(
+                    SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+                ),
+                exact_marker_properties(),
+            ),
+            {
+                let (fields, details) = empty_aggregate();
+                transparent_u16_marker_decl_v1(
+                    241,
+                    SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![]).unwrap()),
+                    fields,
+                    SemanticRustcVariantsV1::Single { index: 0 },
+                    SemanticBackendReprV1::memory(true),
+                    false,
+                    details,
+                    SemanticTypeAbiPropertiesV1::new(false, false),
+                )
+            },
+            {
+                let (fields, details) = empty_aggregate();
+                transparent_u16_marker_decl_v1(
+                    240,
+                    SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![]).unwrap()),
+                    fields,
+                    SemanticRustcVariantsV1::Single { index: 0 },
+                    SemanticBackendReprV1::memory(true),
+                    false,
+                    details,
+                    exact_marker_properties().with_scalar_pointee_info(Some(pointee), None),
+                )
+            },
+        ];
+        for hostile in hostile_markers {
+            let mut types = exact_types.clone();
+            types[TRANSPARENT_U16_MARKER_A_TYPE.index() as usize] = hostile;
             assert!(
                 exact_transparent_scalar_carrier_field_v1(&types, TRANSPARENT_U16_CARRIER_TYPE,)
                     .is_none()
@@ -35631,6 +36428,11 @@ mod tests {
             fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
         )
         .unwrap();
+        let owner = ProductionSemanticSsaOwnerV1::try_new(
+            owner,
+            fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
+        )
+        .unwrap();
         let projected = project_and_verify_ranked_semantic_mir_v1(
             owner,
             &[ranked_root_input("deep_constant_alias", 0xd5, 1)],
@@ -36366,7 +37168,7 @@ mod tests {
     }
 
     #[test]
-    fn body_control_threads_typed_induction_edges() {
+    fn body_control_threads_typed_induction_over_a_duplicate_switch_target() {
         let function = multi_block_induction_function(
             InductionCfgShape::AnalysisSplit,
             SemanticLocalRoleV1::Argument(0),
@@ -36386,13 +37188,15 @@ mod tests {
                 .collect(),
         )
         .unwrap();
-        assert!(blocks.iter().any(|block| matches!(
+        assert!(matches!(
+            blocks[3].terminator(),
+            ProductionRankedTerminatorV1::BranchArgs { arguments, target }
+                if arguments.len() == 1 && *target == 4
+        ));
+        assert!(!blocks.iter().any(|block| matches!(
             block.terminator(),
-            ProductionRankedTerminatorV1::AnalysisSplitArgs {
-                first_arguments,
-                second_arguments,
-                ..
-            } if first_arguments.len() == 1 && second_arguments.len() == 1
+            ProductionRankedTerminatorV1::AnalysisSplit { .. }
+                | ProductionRankedTerminatorV1::AnalysisSplitArgs { .. }
         )));
     }
 

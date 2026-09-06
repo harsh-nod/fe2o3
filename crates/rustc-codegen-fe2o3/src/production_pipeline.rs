@@ -41,6 +41,7 @@ pub(crate) enum ProductionPipelineError {
     EmptyCollectedDeviceClosure,
     SemanticImport(crate::collector::ProductionSemanticImportErrorV1),
     SemanticMiddleEnd(fe2o3_pliron::ProductionSemanticMirErrorV1),
+    SemanticSsa(fe2o3_pliron::ProductionSemanticSsaErrorV1),
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
     RankedVerification(crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
@@ -52,6 +53,7 @@ pub(crate) enum ProductionPipelineError {
     SimulationBundleV3(fe2o3_kernel_ir::SimulationBundleErrorV3),
     SimulationBundleV4(fe2o3_kernel_ir::SimulationBundleErrorV4),
     SimulationBundleV5(fe2o3_kernel_ir::SimulationBundleErrorV5),
+    SimulationBundleV6(fe2o3_kernel_ir::SimulationBundleErrorV6),
     SimulationDebugMapV2(fe2o3_kernel_ir::DebugSourceMapErrorV2),
     SimulationDebugSourceCaptureUnavailable(fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1),
     SimulationDebugMapCorrespondence(&'static str),
@@ -59,12 +61,15 @@ pub(crate) enum ProductionPipelineError {
     SemanticDebugFragment(fe2o3_kernel_ir::ProductionSemanticDebugFragmentErrorV1),
     SimulationSourceLineage(fe2o3_compiler_lineage::LineageErrorV3),
     SimulationProductionKirV9,
+    SimulationProductionKirV11,
     FormalMemoryAdmission(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     Geometry(crate::production_geometry_v1::ProductionGeometryErrorV1),
     TargetBinding(dialect_amdgcn::ProductionTargetBindingErrorV1),
     TargetOptimization(fe2o3_kernel_opt::KernelIrPlironOptimizationErrorV2),
+    TargetOptimizationV3(fe2o3_kernel_opt::KernelIrPlironOptimizationErrorV3),
     TargetKernelIrV8(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV8),
     TargetKernelIrV9(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV9),
+    TargetKernelIrV11(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV11),
     TargetLowering(dialect_amdgcn::LoweringErrors),
     UpstreamLlvmLayoutBinding(dialect_amdgcn::ProductionLlvmLayoutBindingErrorV1),
     DescriptorEvidence(crate::compiler_descriptor::CompilerDescriptorError),
@@ -95,6 +100,9 @@ impl fmt::Display for ProductionPipelineError {
             Self::SemanticImport(error) => write!(formatter, "production compilation {error}"),
             Self::SemanticMiddleEnd(error) => {
                 write!(formatter, "production compilation exact semantic middle end failed: {error}")
+            }
+            Self::SemanticSsa(error) => {
+                write!(formatter, "production compilation semantic SSA planning failed: {error}")
             }
             Self::RankedProjection(error) => {
                 write!(formatter, "production compilation general kernel verification failed: {error}")
@@ -135,6 +143,10 @@ impl fmt::Display for ProductionPipelineError {
                 formatter,
                 "production compilation simulation bundle V5 failed: {error}"
             ),
+            Self::SimulationBundleV6(error) => write!(
+                formatter,
+                "production compilation simulation bundle V6 failed: {error}"
+            ),
             Self::SimulationDebugMapV2(error) => write!(
                 formatter,
                 "production compilation simulation debug map V2 failed: {error}"
@@ -162,6 +174,9 @@ impl fmt::Display for ProductionPipelineError {
             Self::SimulationProductionKirV9 => formatter.write_str(
                 "production Kernel IR V9 is not representable by the exact V7 CPU simulator; no downgrade or hardware fallback was attempted",
             ),
+            Self::SimulationProductionKirV11 => formatter.write_str(
+                "production Kernel IR V11 is not representable by the exact V7/V10 simulation projections; no downgrade or hardware fallback was attempted",
+            ),
             Self::FormalMemoryAdmission(error) => {
                 write!(formatter, "production compilation formal memory admission failed: {error}")
             }
@@ -175,6 +190,10 @@ impl fmt::Display for ProductionPipelineError {
                 formatter,
                 "production compilation target-KIR optimization failed: {error}"
             ),
+            Self::TargetOptimizationV3(error) => write!(
+                formatter,
+                "production compilation target-KIR V11 optimization failed: {error}"
+            ),
             Self::TargetKernelIrV8(error) => write!(
                 formatter,
                 "production compilation target-bound Kernel IR V8 identity failed: {error}"
@@ -182,6 +201,10 @@ impl fmt::Display for ProductionPipelineError {
             Self::TargetKernelIrV9(error) => write!(
                 formatter,
                 "production compilation target-bound Kernel IR V9 identity failed: {error}"
+            ),
+            Self::TargetKernelIrV11(error) => write!(
+                formatter,
+                "production compilation target-bound Kernel IR V11 identity failed: {error}"
             ),
             Self::TargetLowering(error) => {
                 write!(formatter, "production compilation AMDGPU LLVM lowering failed: {error}")
@@ -236,6 +259,7 @@ impl std::error::Error for ProductionPipelineError {
         match self {
             Self::SemanticImport(error) => Some(error),
             Self::SemanticMiddleEnd(error) => Some(error),
+            Self::SemanticSsa(error) => Some(error),
             Self::RankedProjection(error) => Some(error),
             Self::RankedVerification(error) => Some(error),
             Self::TargetNeutralLowering(error) => Some(error),
@@ -246,6 +270,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::SimulationBundleV3(error) => Some(error),
             Self::SimulationBundleV4(error) => Some(error),
             Self::SimulationBundleV5(error) => Some(error),
+            Self::SimulationBundleV6(error) => Some(error),
             Self::SimulationDebugMapV2(error) => Some(error),
             Self::SemanticDebugMap(error) => Some(error),
             Self::SemanticDebugFragment(error) => Some(error),
@@ -254,8 +279,10 @@ impl std::error::Error for ProductionPipelineError {
             Self::Geometry(error) => Some(error),
             Self::TargetBinding(error) => Some(error),
             Self::TargetOptimization(error) => Some(error),
+            Self::TargetOptimizationV3(error) => Some(error),
             Self::TargetKernelIrV8(error) => Some(error),
             Self::TargetKernelIrV9(error) => Some(error),
+            Self::TargetKernelIrV11(error) => Some(error),
             Self::TargetLowering(error) => Some(error),
             Self::UpstreamLlvmLayoutBinding(error) => Some(error),
             Self::DescriptorEvidence(error) => Some(error),
@@ -271,6 +298,7 @@ impl std::error::Error for ProductionPipelineError {
             | Self::MissingMirPlironTranslationValidation
             | Self::RustcLineageMismatch
             | Self::SimulationProductionKirV9
+            | Self::SimulationProductionKirV11
             | Self::SimulationDebugSourceCaptureUnavailable(_)
             | Self::SimulationDebugMapCorrespondence(_)
             | Self::ExtractionCannotPublish
@@ -386,6 +414,11 @@ pub(super) struct AdmittedSemanticMirStage {
 
 pub(super) struct EquivalentSemanticMirStage {
     semantic_mir: fe2o3_pliron::ProductionSemanticMirOwnerV1,
+    bindings: AuthenticatedProductionBindings,
+}
+
+pub(super) struct SsaSemanticMirStage {
+    semantic_ssa: fe2o3_pliron::ProductionSemanticSsaOwnerV1,
     bindings: AuthenticatedProductionBindings,
 }
 
@@ -542,6 +575,9 @@ impl TargetNeutralProductionCompilation {
             }
             fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V9 => {
                 return Err(ProductionPipelineError::SimulationProductionKirV9);
+            }
+            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V11 => {
+                return Err(ProductionPipelineError::SimulationProductionKirV11);
             }
         };
         let canonical_v7 =
@@ -709,6 +745,9 @@ impl TargetNeutralProductionCompilation {
             match production.version() {
                 fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V8 => 8,
                 fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V9 => 9,
+                fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V11 => {
+                    return Err(ProductionPipelineError::SimulationProductionKirV11);
+                }
             },
             *production.digest(),
             production.canonical_length(),
@@ -802,6 +841,119 @@ impl TargetNeutralProductionCompilation {
             .map_err(ProductionPipelineError::SimulationBundleV5)
     }
 
+    fn into_simulation_bundle_v6(
+        self,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV6, ProductionPipelineError> {
+        let Self {
+            lowered,
+            ranked_verification: _,
+            bindings,
+        } = self;
+        lowered
+            .verify_equivalence()
+            .map_err(ProductionPipelineError::TargetNeutralLowering)?;
+        require_complete_simulation_debug_source_capture_v2(bindings.debug_capture_gap)?;
+        if bindings
+            .rustc_preflight_plan
+            .rustc_identity_inventory_sha256()
+            != bindings.rustc_identity_inventory.sha256()
+        {
+            return Err(ProductionPipelineError::RustcLineageMismatch);
+        }
+        let canonical_v11 =
+            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV11::from_module(lowered.module().clone())
+                .map_err(|error| {
+                    ProductionPipelineError::SimulationBundleV6(
+                        fe2o3_kernel_ir::SimulationBundleErrorV6::CanonicalKir(error),
+                    )
+                })?;
+        let production = fe2o3_kernel_ir::SimulationProductionKirIdentityV6::new(
+            11,
+            *canonical_v11.identity().digest(),
+            canonical_v11.identity().canonical_length(),
+        )
+        .map_err(ProductionPipelineError::SimulationBundleV6)?;
+        let inventory_receipt =
+            fe2o3_compiler_lineage::InertRustcIdentityInventoryReceiptV3::from_canonical_preimage(
+                bindings.rustc_identity_inventory.canonical_transcript(),
+            )
+            .map_err(ProductionPipelineError::SimulationSourceLineage)?;
+        let preflight_receipt =
+            fe2o3_compiler_lineage::InertRustcPreflightPlanReceiptV3::from_canonical_preimage(
+                bindings.rustc_preflight_plan.canonical_transcript(),
+            )
+            .map_err(ProductionPipelineError::SimulationSourceLineage)?;
+        let inventory_identity = inventory_receipt.identity();
+        let preflight_identity = preflight_receipt.identity();
+        let lineage = fe2o3_kernel_ir::SimulationSourceLineageV1::new(
+            *inventory_identity.sha256(),
+            inventory_identity.byte_len(),
+            *preflight_identity.sha256(),
+            preflight_identity.byte_len(),
+        )
+        .map_err(ProductionPipelineError::SimulationBundle)?;
+        let prepared = fe2o3_kernel_ir::PreparedSimulationBundleV6::new(
+            lineage,
+            production,
+            bindings.rustc_target.profile().device_target(),
+            canonical_v11,
+        )
+        .map_err(ProductionPipelineError::SimulationBundleV6)?;
+        let debug_map = compiler_debug_source_map_v2(
+            &lowered,
+            &bindings.debug_source_files,
+            &bindings.debug_source_scopes,
+            &bindings.debug_source_variables,
+            prepared.debug_source_map_binding(),
+        )?;
+        let semantic = lowered.semantic().semantic();
+        let mut semantic_mir = Vec::new();
+        semantic_mir
+            .try_reserve_exact(semantic.canonical_encoding().len())
+            .map_err(|_| {
+                ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "semantic MIR V6 bundle allocation failed",
+                )
+            })?;
+        semantic_mir.extend_from_slice(semantic.canonical_encoding());
+        let subject = *prepared.subject_identity();
+        let kir_digest = *prepared.canonical_kir_v11_digest();
+        let kir_bytes = prepared.canonical_kir_v11_length();
+        let legacy_storage = compiler_semantic_storage_map_v1(
+            &lowered,
+            &bindings.debug_source_variables,
+            SemanticStorageMapBindingInputV1 {
+                container_identity: subject,
+                subject_identity: subject,
+                canonical_kir_digest: kir_digest,
+                canonical_kir_bytes: kir_bytes,
+            },
+        )?;
+        let storage = fe2o3_kernel_ir::SemanticStorageMapV6::new(
+            subject,
+            semantic.wire_version().as_u16(),
+            *semantic.semantic_sha256().as_bytes(),
+            semantic.canonical_encoding().len() as u64,
+            *semantic.target_layout_identity().as_bytes(),
+            kir_digest,
+            kir_bytes,
+            legacy_storage.kernels().to_vec(),
+            legacy_storage.variables().to_vec(),
+        )
+        .map_err(ProductionPipelineError::SimulationBundleV6)?;
+        let legacy_aggregate = compiler_semantic_storage_map_v2(&lowered, subject)?;
+        let aggregate = fe2o3_kernel_ir::SemanticAggregateStorageMapV6::new(
+            subject,
+            kir_digest,
+            kir_bytes,
+            legacy_aggregate.kernels().to_vec(),
+        )
+        .map_err(ProductionPipelineError::SimulationBundleV6)?;
+        prepared
+            .finalize(debug_map, semantic_mir, storage, aggregate)
+            .map_err(ProductionPipelineError::SimulationBundleV6)
+    }
+
     fn admit_formal_memory(
         self,
     ) -> Result<FormalMemoryAdmittedProductionCompilation, ProductionPipelineError> {
@@ -890,10 +1042,27 @@ impl FormalMemoryAdmittedProductionCompilation {
         )
         .map_err(ProductionPipelineError::TargetBinding)?;
         let (target_module, kernel_ids) = target_bound.into_parts();
-        let (target_module, _canonical_target_module, target_optimization) =
-            fe2o3_kernel_opt::optimize_production_kernel_ir_module_v2(&target_module)
-                .map_err(ProductionPipelineError::TargetOptimization)?
-                .into_parts();
+        let production_kir_version = admitted
+            .semantic_kir()
+            .canonical_kernel_ir_identity()
+            .version();
+        let (target_module, target_optimization) = match production_kir_version {
+            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V11 => {
+                let (module, _canonical, report) =
+                    fe2o3_kernel_opt::optimize_production_kernel_ir_module_v3(&target_module)
+                        .map_err(ProductionPipelineError::TargetOptimizationV3)?
+                        .into_parts();
+                (module, report)
+            }
+            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V8
+            | fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V9 => {
+                let (module, _canonical, report) =
+                    fe2o3_kernel_opt::optimize_production_kernel_ir_module_v2(&target_module)
+                        .map_err(ProductionPipelineError::TargetOptimization)?
+                        .into_parts();
+                (module, report)
+            }
+        };
         if kernel_ids.len() != target_module.kernels.len()
             || kernel_ids
                 .iter()
@@ -923,6 +1092,13 @@ impl FormalMemoryAdmittedProductionCompilation {
                 )
                 .map_err(ProductionPipelineError::TargetKernelIrV9)?;
                 dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v9(&owner)
+            }
+            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V11 => {
+                let owner = fe2o3_kernel_ir::VerifiedCanonicalKernelIrV11::from_module(
+                    target_module.clone(),
+                )
+                .map_err(ProductionPipelineError::TargetKernelIrV11)?;
+                dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v11(&owner)
             }
         };
         let lowering = match target_profile {
@@ -972,6 +1148,7 @@ impl TargetLoweredProductionCompilation {
         {
             fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V8 => 8,
             fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V9 => 9,
+            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V11 => 11,
         }
     }
 
@@ -1597,7 +1774,10 @@ fn prepare_production_semantic_debug_inputs_v1(
                 canonical_kir_v7,
             }
         }
-        Err(ProductionPipelineError::SimulationProductionKirV9) => {
+        Err(
+            ProductionPipelineError::SimulationProductionKirV9
+            | ProductionPipelineError::SimulationProductionKirV11,
+        ) => {
             crate::production_semantic_debug_v1::ProductionSemanticDebugInputsV1::unavailable(
                 fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::CanonicalKirV7ProjectionUnavailable,
             )
@@ -1651,6 +1831,9 @@ fn compiler_production_semantic_debug_source_map_v1(
         }
         fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V9 => {
             return Err(ProductionPipelineError::SimulationProductionKirV9);
+        }
+        fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V11 => {
+            return Err(ProductionPipelineError::SimulationProductionKirV11);
         }
     };
     let canonical_kir =
@@ -1809,6 +1992,9 @@ fn compiler_debug_source_map_v1(
                 u64::from(operation),
             );
             let rule = match span.rule() {
+                fe2o3_lower_mir_kernel::SemanticKirSyntheticOperationRuleV1::RetainedLocalStorage => {
+                    3
+                }
                 fe2o3_lower_mir_kernel::SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage => {
                     1
                 }
@@ -3067,6 +3253,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         let admitted = self.import_semantic_mir()?;
         admitted
             .construct_semantic_middle_end()?
+            .construct_semantic_ssa()?
             .verify_general_kernel_checks()
     }
 
@@ -3078,6 +3265,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         let admitted = self.import_semantic_mir()?;
         admitted
             .construct_semantic_middle_end()?
+            .construct_semantic_ssa()?
             .verify_general_kernel_checks()?
             .lower_target_neutral()?
             .admit_formal_memory()?
@@ -3094,6 +3282,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         let admitted = self.import_semantic_mir()?;
         admitted
             .construct_semantic_middle_end()?
+            .construct_semantic_ssa()?
             .verify_general_kernel_checks()?
             .lower_target_neutral()?
             .into_simulation_bundle_v1(
@@ -3110,6 +3299,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         let admitted = self.import_semantic_mir()?;
         admitted
             .construct_semantic_middle_end()?
+            .construct_semantic_ssa()?
             .verify_general_kernel_checks()?
             .lower_target_neutral()?
             .into_simulation_bundle_v2(
@@ -3125,6 +3315,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         let admitted = self.import_semantic_mir()?;
         admitted
             .construct_semantic_middle_end()?
+            .construct_semantic_ssa()?
             .verify_general_kernel_checks()?
             .lower_target_neutral()?
             .into_simulation_bundle_v3(
@@ -3141,6 +3332,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         let admitted = self.import_semantic_mir()?;
         admitted
             .construct_semantic_middle_end()?
+            .construct_semantic_ssa()?
             .verify_general_kernel_checks()?
             .lower_target_neutral()?
             .into_simulation_bundle_v4(
@@ -3158,9 +3350,23 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         let admitted = self.import_semantic_mir()?;
         admitted
             .construct_semantic_middle_end()?
+            .construct_semantic_ssa()?
             .verify_general_kernel_checks()?
             .lower_target_neutral()?
             .into_simulation_bundle_v5()
+    }
+
+    /// Exports an authority-free V6 simulation bundle whose exact same-module
+    /// execution body is canonical KIR V11.
+    pub(crate) fn export_simulation_bundle_v6(
+        self,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV6, ProductionPipelineError> {
+        self.import_semantic_mir()?
+            .construct_semantic_middle_end()?
+            .construct_semantic_ssa()?
+            .verify_general_kernel_checks()?
+            .lower_target_neutral()?
+            .into_simulation_bundle_v6()
     }
 
     /// Publishes the exact production compiler module into the managed,
@@ -3178,7 +3384,10 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     pub(crate) fn require_semantic_mir_import(self) -> ProductionPipelineError {
         match self.import_semantic_mir() {
             Ok(transaction) => match transaction.construct_semantic_middle_end() {
-                Ok(transaction) => transaction.require_target_neutral_lowering(),
+                Ok(transaction) => match transaction.construct_semantic_ssa() {
+                    Ok(transaction) => transaction.require_target_neutral_lowering(),
+                    Err(error) => error,
+                },
                 Err(error) => error,
             },
             Err(error) => error,
@@ -3211,33 +3420,56 @@ impl<'tcx> ProductionCompilation<'tcx, AdmittedSemanticMirStage> {
 }
 
 impl<'tcx> ProductionCompilation<'tcx, EquivalentSemanticMirStage> {
-    fn require_target_neutral_lowering(self) -> ProductionPipelineError {
+    fn construct_semantic_ssa(
+        self,
+    ) -> Result<ProductionCompilation<'tcx, SsaSemanticMirStage>, ProductionPipelineError> {
         let EquivalentSemanticMirStage {
             semantic_mir,
             bindings,
         } = self.stage;
+        let semantic_ssa = fe2o3_pliron::ProductionSemanticSsaOwnerV1::try_new(
+            semantic_mir,
+            fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
+        )
+        .map_err(ProductionPipelineError::SemanticSsa)?;
+        Ok(ProductionCompilation {
+            stage: SsaSemanticMirStage {
+                semantic_ssa,
+                bindings,
+            },
+            invariant_session: PhantomData,
+        })
+    }
+}
+
+impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
+    fn require_target_neutral_lowering(self) -> ProductionPipelineError {
+        let SsaSemanticMirStage {
+            semantic_ssa,
+            bindings,
+        } = self.stage;
         let error =
             crate::collector::ProductionSemanticImportErrorV1::TargetNeutralLoweringPending {
-                functions: semantic_mir.semantic().functions().len(),
-                callables: semantic_mir.semantic().callables().len(),
+                functions: semantic_ssa.source_semantic().functions().len(),
+                callables: semantic_ssa.source_semantic().callables().len(),
                 rustc_identity_inventory_sha256: bindings.rustc_identity_inventory.sha256(),
                 rustc_preflight_plan_sha256: bindings.rustc_preflight_plan.sha256(),
-                semantic_sha256: *semantic_mir.semantic().semantic_sha256().as_bytes(),
+                semantic_sha256: *semantic_ssa.source_semantic().semantic_sha256().as_bytes(),
             };
-        drop((semantic_mir, bindings));
+        drop((semantic_ssa, bindings));
         ProductionPipelineError::SemanticImport(error)
     }
 
     fn verify_general_kernel_checks(
         self,
     ) -> Result<RankedVerifiedProductionCompilation, ProductionPipelineError> {
-        let EquivalentSemanticMirStage {
-            semantic_mir,
+        let SsaSemanticMirStage {
+            semantic_ssa,
             bindings,
         } = self.stage;
         crate::compiler_descriptor::validate_production_v1_semantic_ownership_evidence(
             &bindings.typed_descriptor_roots,
-            semantic_mir.semantic(),
+            semantic_ssa.source_semantic(),
         )
         .map_err(ProductionPipelineError::DescriptorEvidence)?;
         let ranked_roots = bindings
@@ -3260,7 +3492,7 @@ impl<'tcx> ProductionCompilation<'tcx, EquivalentSemanticMirStage> {
             .collect::<Result<Vec<_>, ProductionPipelineError>>()?;
         let ranked =
             crate::production_ranked_projection_v1::project_and_verify_ranked_semantic_mir_v1(
-                semantic_mir,
+                semantic_ssa,
                 &ranked_roots,
                 &bindings.reference_effect_bindings,
             )
@@ -3478,6 +3710,11 @@ mod tests {
                 "fe2o3_kernel_opt::optimize_production_kernel_ir_module_v2(&target_module)"
             )
         );
+        assert!(
+            transaction.contains(
+                "fe2o3_kernel_opt::optimize_production_kernel_ir_module_v3(&target_module)"
+            )
+        );
         assert!(transaction.contains("dialect_amdgcn::bind_production_llvm22_worker_layout_v1("));
         let bind = transaction
             .find("dialect_amdgcn::bind_production_target_v1(")
@@ -3485,10 +3722,13 @@ mod tests {
         let optimize = transaction
             .find("fe2o3_kernel_opt::optimize_production_kernel_ir_module_v2(&target_module)")
             .expect("fixed production optimizer");
+        let optimize_v11 = transaction
+            .find("fe2o3_kernel_opt::optimize_production_kernel_ir_module_v3(&target_module)")
+            .expect("fixed V11 production optimizer");
         let lower = transaction
             .find("lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(")
             .expect("AMDGPU LLVM lowering");
-        assert!(bind < optimize && optimize < lower);
+        assert!(bind < optimize && bind < optimize_v11 && optimize < lower && optimize_v11 < lower);
         let implementation = source
             .split("#[cfg(test)]")
             .next()
@@ -3510,10 +3750,16 @@ mod tests {
         let verify = transaction
             .find(".verify_general_kernel_checks()?")
             .expect("mandatory general PLIRON checks");
+        let ssa = transaction
+            .find(".construct_semantic_ssa()?")
+            .expect("mandatory semantic SSA custody");
         let lower = transaction
             .find(".lower_target_neutral()?")
             .expect("target-neutral lowering");
-        assert!(verify < lower, "lowering ran before general PLIRON checks");
+        assert!(
+            ssa < verify && verify < lower,
+            "semantic SSA, ranked verification, and lowering typestates are out of order",
+        );
         assert!(
             include_str!("production_ranked_projection_v1.rs")
                 .contains("prepare_reference_effect_request_v2")

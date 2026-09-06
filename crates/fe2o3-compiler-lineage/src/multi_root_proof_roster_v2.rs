@@ -60,6 +60,8 @@ pub enum MultiRootCanonicalKirVersionV2 {
     V8,
     /// Canonical Kernel IR V9.
     V9,
+    /// Canonical Kernel IR V11.
+    V11,
 }
 
 impl MultiRootCanonicalKirVersionV2 {
@@ -68,6 +70,7 @@ impl MultiRootCanonicalKirVersionV2 {
         match self {
             Self::V8 => 8,
             Self::V9 => 9,
+            Self::V11 => 11,
         }
     }
 
@@ -75,6 +78,7 @@ impl MultiRootCanonicalKirVersionV2 {
         match version {
             8 => Ok(Self::V8),
             9 => Ok(Self::V9),
+            11 => Ok(Self::V11),
             _ => Err(MultiRootProofRosterErrorV2::InvalidKernelIrVersion { observed: version }),
         }
     }
@@ -1118,6 +1122,34 @@ mod tests {
             );
             assert!(!decoded.establishes_compiler_refinement());
         }
+    }
+
+    #[test]
+    fn v11_neutral_identity_round_trips_without_changing_frozen_v8_tag() {
+        let roots = roots();
+        let transcript = MultiRootProofRosterTranscriptV2::new(MultiRootProofRosterInputsV2 {
+            kind: MultiRootProofRosterKindV2::MiddleEnd,
+            semantic_mir_sha256: [2; 32],
+            neutral_kir: MultiRootNeutralKirIdentityV2::new(
+                MultiRootCanonicalKirVersionV2::V11,
+                8192,
+                [0x33; 32],
+            )
+            .unwrap(),
+            roster_identity: [4; 32],
+            canonical_kernel_order: &[1, 0],
+            roots: &roots,
+        })
+        .unwrap();
+        let decoded =
+            MultiRootProofRosterTranscriptV2::decode(transcript.canonical_bytes()).unwrap();
+        assert_eq!(
+            decoded.neutral_kir().version(),
+            MultiRootCanonicalKirVersionV2::V11
+        );
+        assert_eq!(decoded.neutral_kir().version().wire_version(), 11);
+        assert_eq!(MultiRootCanonicalKirVersionV2::V8.wire_version(), 8);
+        assert_eq!(MultiRootCanonicalKirVersionV2::V9.wire_version(), 9);
     }
 
     #[test]

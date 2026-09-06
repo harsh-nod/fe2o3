@@ -50,8 +50,9 @@ documentation.
 
 - [Source-to-simulator bundle V1](simulation-bundle-v1.md): production
   extraction into an authority-free simulation bundle.
-- [Production semantic CPU conformance V3](simulator-production-conformance-v3.md):
-  exact ordinary-source Bundle V5/KIR V10 output checks and typed producer gaps.
+- [Production semantic CPU conformance V3/V4](simulator-production-conformance-v3.md):
+  exact ordinary-source Bundle V5/KIR V10 compatibility and current Bundle
+  V6/KIR V11 output checks with typed producer gaps.
 - [Semantic schedule V1](semantic-schedule-v1.md): deterministic schedule
   recording and replay.
 - [Authority-free virtual runtime V1](virtual-runtime-v1.md): bounded
