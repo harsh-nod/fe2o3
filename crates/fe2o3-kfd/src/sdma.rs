@@ -51,9 +51,26 @@ const GFX942_SDMA_H2D_OWNER_SLOT_V1: usize = 1;
 const GFX942_SDMA_SINGLE_OWNER_COUNT_V1: usize = 1;
 const GFX942_SDMA_DIRECTIONAL_OWNER_COUNT_V1: usize = 2;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SdmaWaitProfileV1 {
+    Default,
+    PersistentElapsedSpinFloor(Duration),
+}
+
+impl SdmaWaitProfileV1 {
+    fn cursor(self, deadline: Instant) -> MonotonicWaitV1 {
+        match self {
+            Self::Default => MonotonicWaitV1::until(deadline),
+            Self::PersistentElapsedSpinFloor(floor) => {
+                MonotonicWaitV1::until_with_active_spin_floor(deadline, floor)
+            }
+        }
+    }
+}
+
 /// Frozen claim boundary for the bounded native gfx942 SDMA implementation.
 pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v5\n",
+    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v6\n",
     "kfd_sdma_queue_schema_sha256=f489ae5735f8230e4ee788fe1fa9e62b307301c13cf88ee70889b0f455af0b5b\n",
     "sdma_topology_capability_sha256=51236bbd70ece3ee4e14cc1a3e7e7cfbbe0960e745130e1a3943f9e39bc36a26\n",
     "rocm_systems_commit=1b648038a0ac164cf2f06f2a581ced12cf5f7378\n",
@@ -70,6 +87,7 @@ pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
     "memory=move-only-host-coherent-or-device-local,logical-subrange-bounded,queue-retained-while-in-flight,exact-full-host-userspace-hash-while-copy-certificate-bound-to-queue-storage-identity-pool-generation-logical-and-physical-extents-and-range,certificate-non-clone-and-private\n",
     "submission=single-producer,all-fallible-preparation-and-allocation-retains-recoverable-requests-before-mutation,striped-multi-queue-bounds:2..16-queues-and-1..1008-requests-and-at-most-63-per-shard,all-striped-shards-and-outcome-storage-prepared-before-first-publication,no-heap-allocation-after-first-publication,write-complete-sdma-packet-images-and-retained-records-before-one-exact-release-visible-wptr-publication-and-one-final-release-doorbell-per-batch,queue-occurrence-and-generation-tagged-ticket\n",
     "completion=host-coherent-u32-fence-value-observed-through-i64-acquire,exact-generation,nonblocking-poll,queue-progress-at-host-monotonic-instant,adaptive-deadline-wait,custody-returned-only-after-observation,no-gpu-clock-calibration\n",
+    "persistent-sdma-wait-policy=elapsed-active-spin-floor:50000ns,checked-add-and-clamp-to-deadline,attempts-counted-during-floor,exact-floor-boundary-resumes-default-adaptive-stage,first-observation-unconditional;scope=directional-persistent-single,directional-persistent-window,same-device-persistent-window;excluded=ordinary-directional,generic-striped,fused-synchronous,xgmi,persistent-compute\n",
     "cancellation=published-packets-cannot-be-retracted,typed-rejection-retains-ticket,poll-or-explicit-drain-required\n",
     "pool=queue-branded,best-fit-by-kind-size-and-alignment,leased-and-in-flight-excluded,concrete-generation-advanced-on-recycle,explicit-trim-before-teardown,certificate-cleared-on-every-attempted-valid-range-cpu-write-device-destination-request-logical-resize-pool-generation-advance-or-private-reconstruction\n",
     "dispatch-data-bridge=exact-full-extent-host-content-or-completed-h2d-only,move-only-storage-identity-and-queue-and-pool-generation-binding,no-rematerialization,demotion-advances-pool-generation\n",
@@ -83,7 +101,7 @@ pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_SDMA_COPY_MANIFEST_V1`].
 pub const GFX942_SDMA_COPY_MANIFEST_SHA256_V1: &str =
-    "bea5fe674dc25ebb82532770c1bf53b2e3b68ea99940470dee6362e812b579d3";
+    "c4dc0b4d058579c0edb99be5593f22f7d0123e4680758b0d86aa18bbf146fa62";
 
 const SDMA_OP_COPY: u32 = 1;
 const SDMA_OP_FENCE: u32 = 5;
@@ -2562,6 +2580,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         memory: &mut SharedGttMemorySessionV1,
         tickets: &[Gfx942SdmaCopyTicketV1],
         timeout: Duration,
+        wait_profile: SdmaWaitProfileV1,
     ) -> Result<CompletedPersistentSdmaWindowV1, Gfx942SdmaErrorV1> {
         self.require_live()?;
         self.validate_persistent_window_tickets(tickets)?;
@@ -2570,8 +2589,8 @@ impl Gfx942SdmaQueueOwnerV1 {
             .ok_or(Gfx942SdmaErrorV1::Contract(
                 "persistent SDMA window wait deadline",
             ))?;
-        let mut wait = MonotonicWaitV1::until(deadline);
         memory.check_queue_operational_currentness()?;
+        let mut wait = wait_profile.cursor(deadline);
         loop {
             if self.observe_persistent_window_completion(memory, tickets)? {
                 break;
@@ -2856,6 +2875,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         memory: &mut SharedGttMemorySessionV1,
         ticket: Gfx942SdmaCopyTicketV1,
         timeout: Duration,
+        wait_profile: SdmaWaitProfileV1,
     ) -> Result<Gfx942SdmaCompletedCopyV1, Gfx942SdmaErrorV1> {
         self.require_live()?;
         let slot = self.validate_ticket(ticket)?;
@@ -2866,8 +2886,8 @@ impl Gfx942SdmaQueueOwnerV1 {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(Gfx942SdmaErrorV1::Contract("SDMA wait deadline"))?;
-        let mut wait = MonotonicWaitV1::until(deadline);
         memory.check_queue_operational_currentness()?;
+        let mut wait = wait_profile.cursor(deadline);
         loop {
             let observed = memory.observe_mapped_host_visible_i64_at_in_current_scope(
                 self.completions
@@ -4879,9 +4899,14 @@ impl Gfx942SdmaQueueSetV1 {
         memory: &mut SharedGttMemorySessionV1,
         tickets: &[Gfx942SdmaCopyTicketV1],
         timeout: Duration,
+        wait_profile: SdmaWaitProfileV1,
     ) -> Result<CompletedPersistentSdmaWindowV1, Gfx942SdmaErrorV1> {
-        self.owner_for_tickets(tickets)?
-            .wait_persistent_window_for(memory, tickets, timeout)
+        self.owner_for_tickets(tickets)?.wait_persistent_window_for(
+            memory,
+            tickets,
+            timeout,
+            wait_profile,
+        )
     }
 
     pub(crate) fn poll(
@@ -4914,9 +4939,10 @@ impl Gfx942SdmaQueueSetV1 {
         memory: &mut SharedGttMemorySessionV1,
         ticket: Gfx942SdmaCopyTicketV1,
         timeout: Duration,
+        wait_profile: SdmaWaitProfileV1,
     ) -> Result<Gfx942SdmaCompletedCopyV1, Gfx942SdmaErrorV1> {
         self.owner_for_ticket(ticket)?
-            .wait_for(memory, ticket, timeout)
+            .wait_for(memory, ticket, timeout, wait_profile)
     }
 
     pub(crate) fn wait_for_in_current_scope_with_final_currentness(
@@ -6849,6 +6875,131 @@ mod tests {
         assert!(!publish_body.contains("Vec::new"));
         assert!(!publish_body.contains(".collect"));
         assert!(!publish_body.contains("to_string"));
+    }
+
+    #[test]
+    fn persistent_elapsed_spin_profile_is_confined_to_three_public_wait_routes() {
+        let live = include_str!("queue_live.rs")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap();
+        let method =
+            |start: &str, end: &str| live.split(start).nth(1).unwrap().split(end).next().unwrap();
+        let elapsed_profile = "SdmaWaitProfileV1::PersistentElapsedSpinFloor";
+
+        for body in [
+            method(
+                "pub fn wait_directional_persistent_sdma_copy_for_v1(",
+                "pub fn submit_directional_persistent_sdma_window_v1(",
+            ),
+            method(
+                "pub fn wait_directional_persistent_sdma_window_for_v1(",
+                "pub fn submit_same_device_persistent_sdma_window_v1(",
+            ),
+            method(
+                "pub fn wait_same_device_persistent_sdma_window_for_v1(",
+                "pub fn recycle_sdma_buffer(",
+            ),
+        ] {
+            assert_eq!(body.matches(elapsed_profile).count(), 1);
+        }
+        assert_eq!(live.matches(elapsed_profile).count(), 3);
+
+        let generic_persistent = method(
+            "pub fn wait_persistent_sdma_copy_for_v1(",
+            "pub fn promote_sdma_device_buffer_to_directional_persistent_allocation_v1(",
+        );
+        let ordinary = method(
+            "pub fn wait_sdma_copy_for(",
+            "pub fn wait_sdma_copy_batch_for(",
+        );
+        assert!(generic_persistent.contains("SdmaWaitProfileV1::Default"));
+        assert!(ordinary.contains("SdmaWaitProfileV1::Default"));
+
+        for body in [
+            generic_persistent,
+            ordinary,
+            method(
+                "pub fn execute_synchronous_directional_persistent_sdma_copy_for_v1(",
+                "pub fn poll_directional_persistent_sdma_copy_v1(",
+            ),
+            method(
+                "pub fn wait_and_recycle_directional_persistent_fixed_dispatch_until_v1(",
+                "pub fn recycle_directional_persistent_fixed_dispatch_v1(",
+            ),
+        ] {
+            assert!(!body.contains(elapsed_profile));
+        }
+
+        let lower = include_str!("sdma.rs")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap();
+        let fused_synchronous = lower
+            .split("fn wait_for_in_current_scope_with_final_currentness(")
+            .nth(1)
+            .unwrap()
+            .split("pub(crate) fn wait_many_for(")
+            .next()
+            .unwrap();
+        let xgmi_single = lower
+            .split("fn wait_xgmi_for_in_current_scope(")
+            .nth(1)
+            .unwrap()
+            .split("fn wait_many_xgmi_for_in_current_scope(")
+            .next()
+            .unwrap();
+        let xgmi_batch = lower
+            .split("fn wait_many_xgmi_for_in_current_scope(")
+            .nth(1)
+            .unwrap()
+            .split("fn observe_progress_in_current_scope(")
+            .next()
+            .unwrap();
+        for body in [fused_synchronous, xgmi_single, xgmi_batch] {
+            assert!(!body.contains("SdmaWaitProfileV1"));
+            assert!(body.contains("MonotonicWaitV1::until(deadline)"));
+        }
+    }
+
+    #[test]
+    fn profiled_sdma_waits_observe_before_testing_the_deadline() {
+        let source = include_str!("sdma.rs")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap();
+        let window = source
+            .split("fn wait_persistent_window_for(")
+            .nth(1)
+            .unwrap()
+            .split("#[allow(clippy::type_complexity)]")
+            .next()
+            .unwrap();
+        assert!(
+            window
+                .find("if self.observe_persistent_window_completion")
+                .unwrap()
+                < window.find("if wait.expired()").unwrap()
+        );
+
+        let single = source
+            .split("pub(crate) fn wait_for(")
+            .nth(1)
+            .unwrap()
+            .split("fn wait_for_in_current_scope_with_final_currentness(")
+            .next()
+            .unwrap();
+        assert!(single.find("let observed =").unwrap() < single.find("if wait.expired()").unwrap());
+
+        let profile = source
+            .split("impl SdmaWaitProfileV1")
+            .nth(1)
+            .unwrap()
+            .split("/// Frozen claim boundary")
+            .next()
+            .unwrap();
+        assert!(profile.contains("Self::Default => MonotonicWaitV1::until(deadline)"));
+        assert!(profile.contains("MonotonicWaitV1::until_with_active_spin_floor"));
     }
 
     #[test]

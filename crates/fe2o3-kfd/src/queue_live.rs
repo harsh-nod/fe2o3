@@ -168,10 +168,11 @@ use crate::sdma::{
     MultiQueueSdmaSubmitFailureV1, PersistentSdmaWindowPollV1,
     PreparedPersistentSdmaWindowPublicationFailureV1, PreparedPersistentSdmaWindowV1,
     PreparedSdmaPublicationFailureV1, PreparedSingleSdmaPublicationFailureV1, PreparedSingleSdmaV1,
-    SingleSdmaWaitInCurrentScopeV1, allocate_device_buffer, allocate_host_buffer,
-    exact_full_host_write_is_authenticatable, persistent_sdma_window_packet_count,
-    planned_ticket_matches_queue_occurrence, read_host_buffer, release_buffer,
-    striped_sdma_queue_count_is_admitted, write_full_host_buffer_authenticated, write_host_buffer,
+    SdmaWaitProfileV1, SingleSdmaWaitInCurrentScopeV1, allocate_device_buffer,
+    allocate_host_buffer, exact_full_host_write_is_authenticatable,
+    persistent_sdma_window_packet_count, planned_ticket_matches_queue_occurrence, read_host_buffer,
+    release_buffer, striped_sdma_queue_count_is_admitted, write_full_host_buffer_authenticated,
+    write_host_buffer,
 };
 use crate::shared_memory::{
     AqlCompletionSignalResourceRoleV1, AqlContextSaveResourceRoleV1, AqlControlResourceRoleV1,
@@ -210,6 +211,7 @@ pub use dispatch::{
 };
 
 const CONTROL_BYTES: usize = 4_096;
+const PERSISTENT_SDMA_ACTIVE_SPIN_FLOOR_V1: Duration = Duration::from_micros(50);
 pub(crate) const GFX942_DESTROYED_QUEUE_RELEASED_RESOURCE_COUNT_V1: u8 = 5;
 static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
@@ -6303,7 +6305,7 @@ impl ComputeAqlQueueSessionV1 {
         let ticket = submission.ticket;
         let mut wait_result = None;
         let wait_operation = self.with_sdma_owner_memory(|owner, memory| {
-            wait_result = Some(owner.wait_for(memory, ticket, timeout));
+            wait_result = Some(owner.wait_for(memory, ticket, timeout, SdmaWaitProfileV1::Default));
             Ok(())
         });
         let Some(wait_result) = wait_result else {
@@ -7545,7 +7547,12 @@ impl ComputeAqlQueueSessionV1 {
         let ticket = submission.ticket;
         let mut wait_result = None;
         let wait_operation = self.with_sdma_owner_memory(|owner, memory| {
-            wait_result = Some(owner.wait_for(memory, ticket, timeout));
+            wait_result = Some(owner.wait_for(
+                memory,
+                ticket,
+                timeout,
+                SdmaWaitProfileV1::PersistentElapsedSpinFloor(PERSISTENT_SDMA_ACTIVE_SPIN_FLOOR_V1),
+            ));
             Ok(())
         });
         let Some(wait_result) = wait_result else {
@@ -8136,8 +8143,12 @@ impl ComputeAqlQueueSessionV1 {
         }
         let mut wait_result = None;
         let wait_operation = self.with_sdma_owner_memory(|owner, memory| {
-            wait_result =
-                Some(owner.wait_persistent_window_for(memory, &submission.tickets, timeout));
+            wait_result = Some(owner.wait_persistent_window_for(
+                memory,
+                &submission.tickets,
+                timeout,
+                SdmaWaitProfileV1::PersistentElapsedSpinFloor(PERSISTENT_SDMA_ACTIVE_SPIN_FLOOR_V1),
+            ));
             Ok(())
         });
         let Some(wait_result) = wait_result else {
@@ -8789,8 +8800,12 @@ impl ComputeAqlQueueSessionV1 {
         }
         let mut wait_result = None;
         let wait_operation = self.with_sdma_owner_memory(|owner, memory| {
-            wait_result =
-                Some(owner.wait_persistent_window_for(memory, &submission.tickets, timeout));
+            wait_result = Some(owner.wait_persistent_window_for(
+                memory,
+                &submission.tickets,
+                timeout,
+                SdmaWaitProfileV1::PersistentElapsedSpinFloor(PERSISTENT_SDMA_ACTIVE_SPIN_FLOOR_V1),
+            ));
             Ok(())
         });
         let Some(wait_result) = wait_result else {
@@ -9917,7 +9932,9 @@ impl ComputeAqlQueueSessionV1 {
         timeout: Duration,
     ) -> Result<Gfx942SdmaCompletedCopyV1, ComputeAqlQueueSessionErrorV1> {
         let result = self.with_sdma_owner_memory(|owner, memory| {
-            owner.wait_for(memory, ticket, timeout).map_err(Into::into)
+            owner
+                .wait_for(memory, ticket, timeout, SdmaWaitProfileV1::Default)
+                .map_err(Into::into)
         });
         if result.as_ref().is_err_and(|error| {
             !matches!(
@@ -18151,6 +18168,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn persistent_sdma_active_spin_floor_is_bound_to_the_frozen_manifest() {
+        assert_eq!(
+            PERSISTENT_SDMA_ACTIVE_SPIN_FLOOR_V1,
+            Duration::from_nanos(50_000)
+        );
+        assert!(crate::sdma::GFX942_SDMA_COPY_MANIFEST_V1.lines().any(|line| {
+            line == "persistent-sdma-wait-policy=elapsed-active-spin-floor:50000ns,checked-add-and-clamp-to-deadline,attempts-counted-during-floor,exact-floor-boundary-resumes-default-adaptive-stage,first-observation-unconditional;scope=directional-persistent-single,directional-persistent-window,same-device-persistent-window;excluded=ordinary-directional,generic-striped,fused-synchronous,xgmi,persistent-compute"
+        }));
     }
 
     #[test]

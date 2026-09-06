@@ -131,7 +131,7 @@ g++ -std=c++17 -O3 -Wall -Wextra -Werror \
 
 rocm_version=unknown
 [[ ! -r "${rocm_path}/.info/version" ]] || IFS= read -r rocm_version < "${rocm_path}/.info/version"
-printf 'context schema=fe2o3.async-copy-benchmark.v1 git_commit=%s target=gfx942:xnack- gpu_indices=%s,%s unique_ids=%s,%s bytes=%s depths=%s warmups=%s samples=%s kfd_profile=%s kfd_multi_profile=directional max_busy_percent=%s phase_timeout_seconds=%s rocm_version=%s rustc=%s sdma_manifest_sha256=bea5fe674dc25ebb82532770c1bf53b2e3b68ea99940470dee6362e812b579d3\n' \
+printf 'context schema=fe2o3.async-copy-benchmark.v1 git_commit=%s target=gfx942:xnack- gpu_indices=%s,%s unique_ids=%s,%s bytes=%s depths=%s warmups=%s samples=%s kfd_profile=%s kfd_multi_profile=directional max_busy_percent=%s phase_timeout_seconds=%s rocm_version=%s rustc=%s sdma_manifest_sha256=c4dc0b4d058579c0edb99be5593f22f7d0123e4680758b0d86aa18bbf146fa62\n' \
   "$(git rev-parse HEAD)" "${gpu_index}" "${second_gpu_index}" \
   "${unique_id}" "${second_unique_id}" "${bytes}" \
   "${depths// /,}" "${warmups}" "${samples}" "${kfd_profile}" "${max_busy}" "${phase_timeout}" \
