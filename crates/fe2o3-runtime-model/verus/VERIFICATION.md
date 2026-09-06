@@ -13,8 +13,9 @@ dispatch-control, R28 persistent-hot-currentness-scope, R30 bound
 host-content-certificate, R31 single-packet/window-refinement, R32
 directional-currentness-handoff, R33 fused-synchronous-directional-SDMA, R34
 fused-asynchronous-directional-SDMA, R35 fused-retained-control-replay, R36
-fused-completion-poll/recycle, and R37 typed-native-SDMA-wait-activation
-models. The authenticated runner proves 838 obligations and rejects 333
+fused-completion-poll/recycle, R37 typed-native-SDMA-wait-activation, and R38
+bounded-persistent-compute-wait/recycle models. The authenticated runner proves
+857 obligations and rejects 339
 expected-negative mutations over finite abstract
 values and traces. The
 materialization input and image sequences are
@@ -1826,6 +1827,81 @@ Verus machine.
 | Executable typed-wait model | **Checked** | Seven focused Rust tests, including exactly 56 legal transition cases, an exact eight-case route matrix, structural move-only checks, and one compile-fail non-`Clone` doctest. |
 | Boundary countermodels | **Rejected** | Seven pinned mutations fail non-timeout classification, zero-deadline observation, timeout restoration, identity custody, continuation-publication, source-custody, and stream-currentness postconditions. |
 | Production/public error identity, real time or physical event count, actual map/vector contents, concrete native ownership or completion, Rust privacy or borrow semantics, executable or production Rust refinement, runtime/KFD/HSA/HIP, driver, firmware, hardware, coherence, progress, liveness, parity, or performance | **Not established** | Explicitly outside the R37 proof boundary. |
+
+## R38 bounded persistent-compute wait and recycle
+
+`r38_bounded_persistent_compute_wait_recycle_v1.rs` proves 19 obligations for
+one abstract Published persistent-compute dispatch. It is designed against
+signed production commit `a1ea30cffbd24a5714a5fe0318b4231f42e98727`. The input contains an exact
+lane/submission/stream/allocation/module/dependency/event and queue occurrence,
+the relevant generations and completion marker, positive retain counts, a
+finite `Pending^n` prefix, one R36 fused poll/recycle terminal result, a
+deadline boundary, an observation maximum, and queue presence. All are
+contracted mathematical observations rather than facts obtained from Rust or a
+native queue.
+
+The R38 route projection begins only after the earlier R37 active-SDMA guard
+has not matched. Its `Other` phase denotes another entry in that residual
+compute-routing domain and excludes published directional or same-device SDMA
+operations, which use the R37 native route.
+
+The constant-time transition observes the R36 composition before checking a
+deadline after Pending. Zero deadline therefore produces exactly one
+observation. A finite maximum terminates without an increment beyond the
+maximum. Timeout restores the exact Published active execution, active lane and
+submission, lane/submission and lane/stream indexes, `ComputeInFlight` storage,
+module/dependency/event retain counts, allocation owner count and current
+owner, stream tail and current owner, completion reservation, absent completion
+record, and unique Published authority. Reaching Ready composes through the
+R36 Recycled result and records the supplied midpoint only after the Ready
+observation. A lower KFD foreign poll or recycle preflight returns retryable
+Published or Completed custody without poisoning the lower queue; the modeled
+runtime handler removes its active state, retains that exact custody, and enters
+its terminal state. These preflights are defensive contracted inputs for a
+foreign/phase mismatch and their inclusion proves no production reachability,
+including after a nonempty Pending prefix. The eleven internal failure stages
+return ProcessTeardown authority with an exact Published, Completed, or
+Recycled retained-native stage and opaque nonzero token; in particular,
+DispatchRecycle retains Recycled internally and is never modeled as returned
+retryable Recycled custody. Missing queue retains Published authority without
+claiming an observation. Every result has exactly one stage authority.
+
+The executable model checks exactly 756 model-admitted contracted present-queue
+cases: two identity/count profiles, three deadline boundaries, three observation
+maxima, three Pending-prefix lengths, and 14 R36 terminal results (Recycled, two
+exact lower retryable preflights consumed by the runtime handler, and
+ProcessTeardown forms of all eleven internal failures). Two missing-queue
+profiles and an exact eight-case Poll/Wait route matrix are checked separately.
+The route matrix proves only selection within that residual domain: Poll
+remains Poll, Published persistent wait selects the bounded route, and
+Prepared, Materialized, and scoped Other waits retain the legacy poll fallback.
+A structural source check and two compile-fail doctests confirm that the
+executable owner contains one private Published authority, is not cloneable,
+and is consumed by one transition attempt. This is affine, not linear,
+ownership: explicit drop and invalid limits/script errors do not preserve or
+prove custody. Verus mathematical carriers are copyable, and every R38 state
+transition theorem assumes valid contracted binding, limits, and script inputs.
+Neither fact establishes Rust ownership behavior outside those boundaries.
+
+Six standalone pinned countermodels respectively skip the zero-deadline first
+observation, lose the lane/submission index on timeout, substitute Completed
+for the internally retained Recycled stage of DispatchRecycle ProcessTeardown, drop missing-queue Published authority, continue
+past a Pending deadline into eager recycle, and increment beyond the observation
+maximum. Each imports no positive proof source and fails its named
+postcondition.
+
+## R38 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| First observation before zero deadline; exact finite Pending-prefix observation count; deadline/maximum termination | **Proved** | Nineteen obligations in `r38_bounded_persistent_compute_wait_recycle_v1.rs`; natural-number bounds and contracted observations only. |
+| Timeout restoration | **Proved** | The timeout theorem explicitly enumerates binding, route, result, terminal status, active execution, lane/submission and lane/stream indexes, allocation storage, module/dependency/event retains, allocation ownership/current owner, stream tail/current owner, completion reservation, submission-record absence, observation/composition count, midpoint/Ready/recycle flags, and all four authority counts. |
+| Ready, lower retryable preflights, and all eleven internal failure stages | **Proved** | Ready explicitly enumerates every state coordinate through an R36 Recycled result. One symbolic preflight theorem proves that the runtime handler consumes lower retryable Poll/Recycle owners into terminal retained Published/Completed custody, removes active execution, and poisons the runtime. The resulting runtime custody is neither retryable nor publicly returned. One symbolic ProcessTeardown theorem enumerates every coordinate for all eleven internal stages, including exact retained-native Published/Completed/Recycled stage, midpoint visibility, opaque token, and unique teardown authority. DispatchRecycle is internal Recycled retention, never retryable Recycled return. |
+| Missing queue | **Proved** | The missing-queue theorem explicitly enumerates every coordinate, zero observations, no R36 invocation, terminal state, and one retained Published authority. |
+| Poll, Prepared, Materialized, and scoped Other behavior | **Route selection proved** | Within the residual compute-routing domain after the R37 active-SDMA guard misses, Poll remains the Poll route and Prepared, Materialized, and Other waits retain legacy polling. Published directional and same-device SDMA waits are outside this R38 route domain and use the R37 native route. Internals of the unchanged routes are not modeled. |
+| Executable bounded-wait model | **Checked** | Seven focused Rust tests cover 756 model-admitted contracted present-queue cases, two missing-queue profiles, eight route cases, input rejection, maximum termination, structural affine-owner checks, and compile-fail checks for cloning and transition replay. The owner is consumed by one attempt; explicit drop and invalid limits/script errors do not preserve or prove custody. The defensive retryable-preflight cases are not a reachability proof. |
+| Boundary countermodels | **Rejected** | Six pinned mutations fail zero-observation, timeout lane/index, stage custody, missing-queue authority, eager recycle, and observation-overflow postconditions. |
+| Production/public error type or identity, real `Instant` or sleep/backoff behavior, physical event indices, concrete map/vector contents, actual native ownership/completion, Rust privacy/borrowing/drop/panic behavior, custody preservation across invalid executable inputs or explicit drop, executable or production Rust refinement, runtime/KFD/HSA/HIP, driver, firmware, hardware, coherence, progress, liveness, timing, parity, or performance | **Not established** | Explicitly outside the R38 proof boundary. The finite maximum is a model bound, not a proof about production `u64::MAX`. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust

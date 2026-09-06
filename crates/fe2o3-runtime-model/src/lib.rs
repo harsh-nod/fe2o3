@@ -52,6 +52,7 @@ mod r34_fused_asynchronous_directional_sdma;
 mod r35_fused_retained_control_replay;
 mod r36_fused_completion_poll_recycle;
 mod r37_typed_native_sdma_wait_activation;
+mod r38_bounded_persistent_compute_wait_recycle;
 mod r9_native_evidence;
 mod typed_async;
 
@@ -91,6 +92,7 @@ pub use r34_fused_asynchronous_directional_sdma::*;
 pub use r35_fused_retained_control_replay::*;
 pub use r36_fused_completion_poll_recycle::*;
 pub use r37_typed_native_sdma_wait_activation::*;
+pub use r38_bounded_persistent_compute_wait_recycle::*;
 pub use typed_async::*;
 
 #[cfg(test)]
@@ -159,6 +161,8 @@ mod r35_fused_retained_control_replay_tests;
 mod r36_fused_completion_poll_recycle_tests;
 #[cfg(test)]
 mod r37_typed_native_sdma_wait_activation_tests;
+#[cfg(test)]
+mod r38_bounded_persistent_compute_wait_recycle_tests;
 #[cfg(test)]
 mod r9_native_evidence_tests;
 #[cfg(test)]
