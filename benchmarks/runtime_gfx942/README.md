@@ -174,6 +174,77 @@ condition. This harness does not benchmark peer copy: the KFD facade peer
 operation is host staged, while HIP/HSA native peer operations would be a
 different mechanism.
 
+### R40 Aggregate Striped Copy Qualification
+
+R40 measures the aggregate striped submission surface against matched HIP and
+HSA copy workloads on the repository's fixed MI300X qualification device:
+
+```sh
+mkdir -p /tmp/fe2o3-r40-evidence
+FE2O3_R40_OUTPUT_DIR=/tmp/fe2o3-r40-evidence \
+  benchmarks/runtime_gfx942/run-r40-striped-mi300x.sh
+```
+
+The runner admits only physical GPU index 2 with unique ID
+`0xd2e26fef80cf5c33`. It runs depth 112 with 10 warmups and 30 samples for
+4 KiB and 1 MiB transfers. Each size covers combined directional-plus-striped
+profiles with 2, 4, 8, and 14 striped queues, plus the standalone 16-queue
+profile. Three slots rotate backend order as KFD/HSA/HIP, HSA/HIP/KFD, and
+HIP/KFD/HSA. Workloads run forward, reverse, and rotated by five positions in
+those slots.
+
+The KFD binary contract is:
+
+```text
+kfd-sdma-copy-benchmark <unique-id> <bytes> <depth> <warmups> <samples> \
+  <combined-striped2|combined-striped4|combined-striped8|combined-striped14|striped16> \
+  <aggregate>
+```
+
+The HIP and HSA comparators accept logical device index, exact unique ID, the
+same four statistical/shape values, logical queue count, and profile. HIP uses
+that many nonblocking streams. HSA uses that many logical dependency lanes;
+`physical_engine_count=not-observed` prevents the logical width from being
+presented as a hardware-engine count. Every path assigns request `i` to
+`(submission_ordinal + i) % q`, publishes in rotating queue-major order, and
+validates every byte after every H2D-then-D2H round. Allocation, queue/stream
+creation, request construction, pattern initialization, validation, and
+teardown are outside the measured intervals.
+
+Rows use `fe2o3.async-copy-striped-benchmark.v2`. Each direction retains 30
+raw submit, wait, and E2E nanosecond samples plus p50/p95 summaries and E2E p50
+GB/s. The checker recomputes every summary and throughput value and requires
+`e2e[i] == submit[i] + wait[i]`. KFD rows additionally bind queue IDs and
+engine placement by digest and require passing directional, aggregate-poll,
+and destruction sentinels. Combined profiles report two resident directional
+queues and at most 14 striped queues; standalone `striped16` reports no
+co-resident directional queues.
+
+Each of the 90 backend/workload/slot phases runs under the R26 2 ms process-tree
+queue monitor with a 10 ms maximum observation gap. Start/end telemetry,
+topology, exact target output, process reaping, zero foreign/terminal selected
+queues, and stable system identity are retained. KFD phases additionally
+require zero GPU busy at the post boundary. A successful run atomically
+publishes the three logs, validation report, exact Git source archive, file
+manifest, and a separately SHA-256-sealed archive. Temporary and verification
+trees use unique `fe2o3-r40-striped-*` paths and are removed by traps; the
+runner never resets the GPU or signals foreign processes.
+
+The pre-registered bounded comparison uses the median of the three paired
+slotwise KFD/reference ratios. It reports parity only when median latency is at
+most 1.10, median bandwidth is at least 0.90, and every slot latency ratio is
+at most 1.20 for every workload, direction, and reference. Missing a threshold
+does not discard structurally valid evidence; it reports
+`bounded_parity_status=not-demonstrated`. Use checker option `--require-parity`
+only when a gating job should reject that result. A 10x result is reported only
+when every matched slot/workload/direction latency ratio is at most 0.10.
+
+This scope is one host, one GPU, host-observed H2D/D2H, depth 112, and transfer
+sizes no larger than one SDMA linear packet. Directional queues are idle during
+the measured combined aggregate copy. The harness does not cover bidirectional
+overlap, compute/copy overlap, larger windowing, other devices, or runtime-wide
+HIP/HSA parity, and its output cannot support a generic speedup claim.
+
 ### Large Directional Window Qualification
 
 Run the R22 public-facade large-copy comparison on an idle MI300X system:
