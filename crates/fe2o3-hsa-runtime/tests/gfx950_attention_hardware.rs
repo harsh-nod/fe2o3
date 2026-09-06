@@ -555,11 +555,29 @@ unsafe fn dispatch_multigrid(
                 case.label
             ),
         )?;
-        let completion = adapter.launch_and_wait(executable, kernel, geometry, kernarg)?;
-        require(
-            completion.completed(),
-            format!("{} dispatch did not complete", case.label),
-        )?;
+        let mut session =
+            adapter.prepare_profiled_dispatch_session(executable, kernel, geometry, kernarg)?;
+        session.dispatch()?;
+
+        if std::env::var("FE2O3_GFX950_LOWP_PERF").as_deref() == Ok("1") {
+            const WARMUPS: usize = 1_000;
+            const SAMPLES: usize = 3_000;
+            for _ in 0..WARMUPS {
+                session.dispatch()?;
+            }
+            let mut durations = Vec::with_capacity(SAMPLES);
+            for _ in 0..SAMPLES {
+                durations.push(session.dispatch()?.duration_ns());
+            }
+            durations.sort_unstable();
+            println!(
+                "PERF {} warmups={WARMUPS} samples={SAMPLES} p50_ns={} p05_ns={} p95_ns={}",
+                case.export,
+                durations[SAMPLES / 2],
+                durations[SAMPLES / 20],
+                durations[SAMPLES * 19 / 20],
+            );
+        }
     }
     Ok(())
 }
