@@ -394,6 +394,31 @@ pub enum Gfx942PersistentComputePollAndRecycleV1 {
     },
 }
 
+/// Bounded persistent-compute observation with immediate signal recycle on Ready.
+///
+/// Timeout retains the exact Published dispatch and reports how many completion
+/// observations were made. Ready reports the same midpoint and Recycled custody
+/// as [`Gfx942PersistentComputePollAndRecycleV1`].
+///
+/// ```compile_fail
+/// use fe2o3_kfd::Gfx942PersistentComputeWaitAndRecycleV1;
+///
+/// fn assert_clone<T: Clone>() {}
+/// assert_clone::<Gfx942PersistentComputeWaitAndRecycleV1>();
+/// ```
+#[must_use = "timeout custody must be waited again and recycled custody must be detached"]
+pub enum Gfx942PersistentComputeWaitAndRecycleV1 {
+    Timeout {
+        dispatch: Gfx942PersistentComputeDispatchV1,
+        observations: u64,
+    },
+    Recycled {
+        recycled: Gfx942RecycledPersistentComputeDispatchV1,
+        completion_observed_at: Instant,
+        observations: u64,
+    },
+}
+
 /// Failure from the fused persistent-compute completion/recycle operation.
 ///
 /// The variant identifies whether exact retryable custody, when any, remains

@@ -69,9 +69,10 @@ use crate::persistent_compute::{
     Gfx942PersistentComputePollV1, Gfx942PersistentComputeReadyFailureCustodyV1,
     Gfx942PersistentComputeReadyFailureV1, Gfx942PersistentComputeReadyTerminalCustodyV1,
     Gfx942PersistentComputeReadyV1, Gfx942PersistentComputeRecycleFailureV1,
-    Gfx942PreparedPersistentComputeDispatchV1, Gfx942RecycledPersistentComputeDispatchV1,
-    PersistentComputeAttachmentV1, PersistentComputeBindingKeyV1,
-    PersistentComputeTerminalNativeCustodyV1, PersistentComputeUseStateV1,
+    Gfx942PersistentComputeWaitAndRecycleV1, Gfx942PreparedPersistentComputeDispatchV1,
+    Gfx942RecycledPersistentComputeDispatchV1, PersistentComputeAttachmentV1,
+    PersistentComputeBindingKeyV1, PersistentComputeTerminalNativeCustodyV1,
+    PersistentComputeUseStateV1,
 };
 use crate::persistent_directional_sdma::{
     DirectionalPersistentSdmaCompletionObservationV1,
@@ -182,6 +183,7 @@ use crate::shared_memory::{
     SharedGttAllocationV1, SharedGttMappedResourceFactsV1, SharedGttMemorySessionV1,
     SharedGttQueueResourceAuthorityV1, UserptrAqlControlGttV1, UserptrAqlQueueProbeGttV1,
 };
+use crate::wait::MonotonicWaitV1;
 use crate::{
     CheckedGfx942XnackMinusDevice, GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1,
     Gfx942AqlQueueResourcePlanV1, Gfx942QueueResourcePlanningError, KfdWithAdmittedUapi,
@@ -2926,6 +2928,57 @@ fn execute_persistent_compute_poll_and_recycle_v1<
         recycled,
         completion_observed_at,
     })
+}
+
+enum PersistentComputeWaitAndRecycleTransitionV1<Pending, Recycled, Midpoint> {
+    Timeout {
+        pending: Pending,
+        observations: u64,
+    },
+    Recycled {
+        recycled: Recycled,
+        completion_observed_at: Midpoint,
+        observations: u64,
+    },
+}
+
+fn execute_persistent_compute_wait_and_recycle_v1<Context, Pending, Recycled, Midpoint, Failure>(
+    context: &mut Context,
+    mut pending: Pending,
+    mut poll_and_recycle: impl FnMut(
+        &mut Context,
+        Pending,
+    ) -> Result<
+        PersistentComputePollAndRecycleTransitionV1<Pending, Recycled, Midpoint>,
+        Failure,
+    >,
+    mut timeout_after_pending: impl FnMut(&mut Context) -> bool,
+) -> Result<PersistentComputeWaitAndRecycleTransitionV1<Pending, Recycled, Midpoint>, Failure> {
+    let mut observations = 0_u64;
+    loop {
+        observations = observations.saturating_add(1);
+        match poll_and_recycle(context, pending)? {
+            PersistentComputePollAndRecycleTransitionV1::Pending(next) => {
+                pending = next;
+                if observations == u64::MAX || timeout_after_pending(context) {
+                    return Ok(PersistentComputeWaitAndRecycleTransitionV1::Timeout {
+                        pending,
+                        observations,
+                    });
+                }
+            }
+            PersistentComputePollAndRecycleTransitionV1::Recycled {
+                recycled,
+                completion_observed_at,
+            } => {
+                return Ok(PersistentComputeWaitAndRecycleTransitionV1::Recycled {
+                    recycled,
+                    completion_observed_at,
+                    observations,
+                });
+            }
+        }
+    }
 }
 
 fn resolve_persistent_retained_control_replay_loan_v1<Request, Outcome, Error>(
@@ -11517,6 +11570,71 @@ impl ComputeAqlQueueSessionV1 {
         }
     }
 
+    /// Waits until one published persistent-compute dispatch completes or the
+    /// monotonic deadline expires, recycling its signal immediately on Ready.
+    ///
+    /// The first completion observation is unconditional, including when
+    /// `deadline` has already elapsed. A clean timeout returns the exact
+    /// Published dispatch without resetting its signal or advancing either
+    /// retirement ledger.
+    #[allow(clippy::result_large_err)]
+    pub fn wait_and_recycle_directional_persistent_fixed_dispatch_until_v1(
+        &mut self,
+        dispatch_receipt: Gfx942PersistentComputeDispatchV1,
+        deadline: Instant,
+    ) -> Result<
+        Gfx942PersistentComputeWaitAndRecycleV1,
+        Gfx942PersistentComputePollAndRecycleFailureV1,
+    > {
+        let mut wait = MonotonicWaitV1::until(deadline);
+        let transition = execute_persistent_compute_wait_and_recycle_v1(
+            self,
+            dispatch_receipt,
+            |session, dispatch| {
+                session
+                    .poll_and_recycle_directional_persistent_fixed_dispatch_v1(dispatch)
+                    .map(|transition| match transition {
+                        Gfx942PersistentComputePollAndRecycleV1::Pending(dispatch) => {
+                            PersistentComputePollAndRecycleTransitionV1::Pending(dispatch)
+                        }
+                        Gfx942PersistentComputePollAndRecycleV1::Recycled {
+                            recycled,
+                            completion_observed_at,
+                        } => PersistentComputePollAndRecycleTransitionV1::Recycled {
+                            recycled,
+                            completion_observed_at,
+                        },
+                    })
+            },
+            |_| {
+                if wait.expired() {
+                    true
+                } else {
+                    wait.pause();
+                    wait.expired()
+                }
+            },
+        )?;
+        Ok(match transition {
+            PersistentComputeWaitAndRecycleTransitionV1::Timeout {
+                pending: dispatch,
+                observations,
+            } => Gfx942PersistentComputeWaitAndRecycleV1::Timeout {
+                dispatch,
+                observations,
+            },
+            PersistentComputeWaitAndRecycleTransitionV1::Recycled {
+                recycled,
+                completion_observed_at,
+                observations,
+            } => Gfx942PersistentComputeWaitAndRecycleV1::Recycled {
+                recycled,
+                completion_observed_at,
+                observations,
+            },
+        })
+    }
+
     /// Recycles the exact completion signal after device completion.
     #[allow(clippy::result_large_err)]
     pub fn recycle_directional_persistent_fixed_dispatch_v1(
@@ -19072,6 +19190,255 @@ mod tests {
             assert_eq!(failure.custody, expected_custody);
             assert_eq!(actual_poll_failure, poll_failure);
         }
+    }
+
+    struct CompletionWaitRecycleScriptStateV1 {
+        scripts: std::collections::VecDeque<CompletionRecycleScriptV1>,
+        trace: Vec<&'static str>,
+        pending_boundaries: u64,
+        timeout_after_pending_boundaries: u64,
+    }
+
+    struct CompletionWaitPendingV1(u64);
+
+    type CompletionWaitRecycleScriptResultV1 = Result<
+        PersistentComputeWaitAndRecycleTransitionV1<CompletionWaitPendingV1, u64, u64>,
+        PersistentComputePollAndRecycleTransitionFailureV1<
+            CompletionRecycleScriptFailureV1,
+            CompletionRecycleScriptFailureV1,
+        >,
+    >;
+
+    fn execute_completion_wait_recycle_scripts_v1(
+        pending: CompletionWaitPendingV1,
+        scripts: impl IntoIterator<Item = CompletionRecycleScriptV1>,
+        timeout_after_pending_boundaries: u64,
+    ) -> (CompletionWaitRecycleScriptResultV1, Vec<&'static str>) {
+        let mut state = CompletionWaitRecycleScriptStateV1 {
+            scripts: scripts.into_iter().collect(),
+            trace: Vec::new(),
+            pending_boundaries: 0,
+            timeout_after_pending_boundaries,
+        };
+        let result = execute_persistent_compute_wait_and_recycle_v1(
+            &mut state,
+            pending,
+            |state, pending| {
+                assert_eq!(pending.0, 73);
+                let script = state
+                    .scripts
+                    .pop_front()
+                    .expect("wait script retains one outcome per observation");
+                let (result, trace) = execute_completion_recycle_script_v1(script);
+                state.trace.extend(trace);
+                result.map(|transition| match transition {
+                    PersistentComputePollAndRecycleTransitionV1::Pending(pending) => {
+                        PersistentComputePollAndRecycleTransitionV1::Pending(
+                            CompletionWaitPendingV1(pending),
+                        )
+                    }
+                    PersistentComputePollAndRecycleTransitionV1::Recycled {
+                        recycled,
+                        completion_observed_at,
+                    } => PersistentComputePollAndRecycleTransitionV1::Recycled {
+                        recycled,
+                        completion_observed_at,
+                    },
+                })
+            },
+            |state| {
+                state.pending_boundaries += 1;
+                state.pending_boundaries >= state.timeout_after_pending_boundaries
+            },
+        );
+        (result, state.trace)
+    }
+
+    #[test]
+    fn persistent_completion_wait_driver_counts_zero_deadline_late_and_retry_observations() {
+        let (timeout, trace) = execute_completion_wait_recycle_scripts_v1(
+            CompletionWaitPendingV1(73),
+            [CompletionRecycleScriptV1::Pending],
+            1,
+        );
+        let retry_pending = match timeout {
+            Ok(PersistentComputeWaitAndRecycleTransitionV1::Timeout {
+                pending,
+                observations: 1,
+            }) => pending,
+            _ => panic!("first pending observation must return exact timeout custody"),
+        };
+        assert_eq!(trace, ["check-a", "acquire", "check-b"]);
+        assert!(!trace.contains(&"midpoint"));
+        assert!(!trace.contains(&"reset"));
+
+        for (scripts, expected_observations) in [
+            (vec![CompletionRecycleScriptV1::Ready], 1),
+            (
+                vec![
+                    CompletionRecycleScriptV1::Pending,
+                    CompletionRecycleScriptV1::Ready,
+                ],
+                2,
+            ),
+            (
+                vec![
+                    CompletionRecycleScriptV1::Pending,
+                    CompletionRecycleScriptV1::Pending,
+                    CompletionRecycleScriptV1::Ready,
+                ],
+                3,
+            ),
+        ] {
+            let (ready, trace) = execute_completion_wait_recycle_scripts_v1(
+                CompletionWaitPendingV1(73),
+                scripts,
+                u64::MAX,
+            );
+            assert!(matches!(
+                ready,
+                Ok(PersistentComputeWaitAndRecycleTransitionV1::Recycled {
+                    recycled: 73,
+                    completion_observed_at: 101,
+                    observations,
+                }) if observations == expected_observations
+            ));
+            assert_eq!(
+                trace.iter().filter(|event| **event == "acquire").count(),
+                expected_observations as usize
+            );
+            assert_eq!(trace.iter().filter(|event| **event == "reset").count(), 1);
+        }
+
+        let (retry, _) = execute_completion_wait_recycle_scripts_v1(
+            retry_pending,
+            [CompletionRecycleScriptV1::Ready],
+            u64::MAX,
+        );
+        assert!(matches!(
+            retry,
+            Ok(PersistentComputeWaitAndRecycleTransitionV1::Recycled {
+                recycled: 73,
+                observations: 1,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn persistent_completion_wait_driver_preserves_every_failure_route_and_custody() {
+        for (script, expected_custody, poll_failure) in [
+            (
+                CompletionRecycleScriptV1::PublishedStateFailure,
+                CompletionRecycleScriptCustodyV1::Published(73),
+                true,
+            ),
+            (
+                CompletionRecycleScriptV1::DispatchGenerationFailure,
+                CompletionRecycleScriptCustodyV1::Published(73),
+                true,
+            ),
+            (
+                CompletionRecycleScriptV1::CompletionObservationFailure,
+                CompletionRecycleScriptCustodyV1::Published(73),
+                true,
+            ),
+            (
+                CompletionRecycleScriptV1::DispatchCompletionFailure,
+                CompletionRecycleScriptCustodyV1::Completed(73),
+                true,
+            ),
+            (
+                CompletionRecycleScriptV1::AllocationCompletionFailure,
+                CompletionRecycleScriptCustodyV1::Completed(73),
+                true,
+            ),
+            (
+                CompletionRecycleScriptV1::SignalGenerationFailure,
+                CompletionRecycleScriptCustodyV1::Completed(73),
+                false,
+            ),
+            (
+                CompletionRecycleScriptV1::SignalResetFailure,
+                CompletionRecycleScriptCustodyV1::Completed(73),
+                false,
+            ),
+            (
+                CompletionRecycleScriptV1::ClosingCurrentnessFailure,
+                CompletionRecycleScriptCustodyV1::Completed(73),
+                false,
+            ),
+            (
+                CompletionRecycleScriptV1::RecycleCurrentnessFailure,
+                CompletionRecycleScriptCustodyV1::Completed(73),
+                false,
+            ),
+            (
+                CompletionRecycleScriptV1::RecycleInfrastructureFailure,
+                CompletionRecycleScriptCustodyV1::Completed(73),
+                false,
+            ),
+            (
+                CompletionRecycleScriptV1::DispatchRecycleFailure,
+                CompletionRecycleScriptCustodyV1::Recycled(73),
+                false,
+            ),
+        ] {
+            let (result, _) = execute_completion_wait_recycle_scripts_v1(
+                CompletionWaitPendingV1(73),
+                [script],
+                u64::MAX,
+            );
+            let (failure, actual_poll_failure) = match result {
+                Err(PersistentComputePollAndRecycleTransitionFailureV1::Poll(failure)) => {
+                    (failure, true)
+                }
+                Err(PersistentComputePollAndRecycleTransitionFailureV1::Recycle(failure)) => {
+                    (failure, false)
+                }
+                Ok(_) => panic!("failure wait script unexpectedly succeeded"),
+            };
+            assert_eq!(failure.point, script);
+            assert_eq!(failure.custody, expected_custody);
+            assert_eq!(actual_poll_failure, poll_failure);
+        }
+    }
+
+    #[test]
+    fn persistent_completion_wait_route_reuses_fused_poll_without_split_recycle() {
+        let production = include_str!("queue_live.rs")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap();
+        let wait = production
+            .split("pub fn wait_and_recycle_directional_persistent_fixed_dispatch_until_v1")
+            .nth(1)
+            .unwrap()
+            .split("pub fn recycle_directional_persistent_fixed_dispatch_v1")
+            .next()
+            .unwrap();
+        assert_eq!(
+            wait.matches("poll_and_recycle_directional_persistent_fixed_dispatch_v1(dispatch)")
+                .count(),
+            1
+        );
+        assert_eq!(
+            wait.matches("execute_persistent_compute_wait_and_recycle_v1")
+                .count(),
+            1
+        );
+        assert!(!wait.contains("poll_directional_persistent_fixed_dispatch_v1"));
+        assert!(!wait.contains("session.recycle_directional_persistent_fixed_dispatch_v1("));
+
+        let driver = production
+            .split("fn execute_persistent_compute_wait_and_recycle_v1")
+            .nth(1)
+            .unwrap()
+            .split("fn resolve_persistent_retained_control_replay_loan_v1")
+            .next()
+            .unwrap();
+        assert!(driver.contains("observations.saturating_add(1)"));
+        assert!(driver.contains("observations == u64::MAX"));
     }
 
     #[test]
