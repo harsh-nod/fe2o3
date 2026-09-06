@@ -38,6 +38,7 @@ fn rust_source_is_primary_and_uses_production_lowering() {
     }
     for feature in [
         "ablation-expert-serial",
+        "ablation-route-redundant-lanes",
         "ablation-combine-transposed",
         "ablation-speculative-recompute-prefix",
         "ablation-ngram-reverse-probe",
@@ -88,5 +89,37 @@ fn rust_source_is_primary_and_uses_production_lowering() {
     assert!(compact.contains("packed_routes.wrapping_shr(2_usize.wrapping_mul(route0)asu32)"));
     assert!(source.contains("route0 += 1;"));
     assert!(source.contains("route1 += 1;"));
-    assert!(source.contains("depth += 1;"));
+    assert!(
+        source.contains("let depth = depth_group.wrapping_add(step.wrapping_mul(depth_stride));")
+    );
+    assert!(source.contains("let depth_stride = 4_usize;"));
+    assert!(source.contains("step += 1;"));
+}
+
+#[test]
+fn current_performance_audit_is_complete_and_conservative() {
+    let audit: serde_json::Value =
+        serde_json::from_str(include_str!("../sota-performance-audit-v1.json")).unwrap();
+    assert_eq!(
+        audit["schema"],
+        "fe2o3.gfx950.systems-sota-performance-audit.v1"
+    );
+    assert_eq!(audit["device"]["physical_gpu"], 5);
+    assert_eq!(audit["protocol"]["samples_per_series"], 500);
+    assert_eq!(audit["results"].as_array().unwrap().len(), 8);
+    assert!(
+        audit["claim_boundary"]
+            .as_str()
+            .unwrap()
+            .contains("No external state-of-the-art claim")
+    );
+
+    for result in audit["results"].as_array().unwrap() {
+        assert_eq!(result["external_comparison_verdict"], "excluded-not-exact");
+        assert!(result["resource_floor_ns"].as_f64().unwrap() > 0.0);
+        assert!(
+            result["measured_over_floor"].is_number() || result["measured_over_floor"].is_array()
+        );
+        assert!(result["correctness"].as_str().unwrap().contains("passed"));
+    }
 }

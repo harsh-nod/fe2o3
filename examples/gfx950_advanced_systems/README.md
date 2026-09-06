@@ -72,6 +72,46 @@ Run the production Rust lowering and numerical verification on a gfx950 host:
 ./run-muon-update-gfx950.sh
 ```
 
+## Current GPU-5 performance audit
+
+The 2026-09-05 campaign measured the current WG256/grid-`[4, 1, 1]` Rust
+artifacts on physical GPU 5 of `ssh mi350` with
+`ROCR_VISIBLE_DEVICES=5` and `HIP_VISIBLE_DEVICES` unset. Each series used 200
+warmups, five blocks of 100 ROCr HSA dispatch timestamps, and 20 rewarm
+dispatches per block. Every artifact passed its independent CPU oracle before
+timing and after every block, including immutable-input and output-canary
+checks.
+
+| Kernel | Current median / p95 | Exact ablation | Measured contribution | Public comparison verdict |
+| --- | ---: | --- | --- | --- |
+| MoE route | `17.320 / 17.680 us` | redundant four-lane reductions: `21.120 us` | depth striping and uniform partial-sum broadcasts: `1.219x`, `17.99%` lower | Excluded: public fused-MoE paths do not match E4/top-2/K128/N16 routing semantics |
+| Expert-rank GEMM | rank 0 `55.440 / 63.880 us`; rank 1 `55.621 / 63.680 us` | serial MFMA schedule: rank 0 `58.660 us`; rank 1 `53.260 us` | Rank-dependent reversal; no stable gain claimed | Excluded: AITER/CK grouped GEMMs do not match routing, shared-expert, shape, and output semantics |
+| Expert combine | `5.400 / 5.600 us` | none admitted | Direct coalesced fixed-order add retained | Excluded: no public kernel has this standalone fixed-order boundary |
+| Speculative transaction | `11.120 / 12.080 us` | prefix recompute: `10.960 us` | `1.46%` reversal conflicts with the earlier campaign; no stable gain claimed | Excluded: vLLM/SGLang use different state, batching, and acceptance contracts |
+| Qwen N-gram gather | `12.880 / 13.920 us` | reverse probe: `15.160 us` | ascending insertion-order probing: `1.177x`, `15.04%` lower | Excluded: serving paths use different table, cache, and proposal boundaries |
+| Gradient staging | shards 0/1 `5.480 / 5.480 us` | none admitted | Direct coalesced copy retained | Excluded: this is not a collective or model inference operator |
+| Muon update | `6.800 / 7.040 us` | broadcast16: `6.800 us` | Median tie; no sub-resolution gain claimed | Excluded: public distributed Muon kernels use production matrix sizes |
+
+For route, the current kernel assigns the four lanes associated with a token
+to disjoint depth residues. The lanes issue one quarter of the activation and
+router-weight loads, then use twelve uniform Wave64 broadcasts to merge four
+FP32 partial sums. The live `ablation-route-redundant-lanes` feature restores
+the former full K128 reduction in every lane and provides the exact measured
+baseline. The N-gram result confirms that forward linear probing matches table
+construction better than the otherwise equivalent reverse walk. The other
+rows record ties, reversals, or unavailable admitted variants rather than
+inventing an optimization contribution.
+
+[`sota-performance-audit-v1.json`](sota-performance-audit-v1.json) is the
+machine-readable source for timings, artifact and raw-record SHA-256 digests,
+public baseline pins, model-relevance limits, and the per-operator optimistic
+resource floors. The floor is
+`max(unique bytes / 8 TB/s, FP32 FLOPs / 144.2 TFLOP/s, low-precision FLOPs /
+the named peak)`. It deliberately omits dispatch latency, cache-line
+amplification, dependencies, scalar/transcendental work, and occupancy limits;
+the measured-to-floor ratios therefore diagnose these tiny teaching fixtures
+rather than forecast production throughput. No external SOTA claim is made.
+
 The expert runner requires exactly three mixed FP4/FP8
 `v_mfma_f32_16x16x128_f8f6f4` instructions with `cbsz:4`: two rank-local
 experts and the optional shared expert. Routing and expert exponential math
@@ -109,9 +149,10 @@ evidence only; the minimal one-sample runner settings are not performance
 evidence. `combine-transposed` still fails closed before GPU launch because
 the projection cannot prove an arithmetic-overflow assertion for its dynamic
 source index. `stage-tile4` still fails closed because its subgroup broadcast
-source lane is not statically bounded. The two route ablation feature names in
-the manifest do not select live alternate Rust bodies; their rejected historical
-experiments remain documentation rather than runnable kernels.
+source lane is not statically bounded. The older `route-owner-only` and
+`route-unpacked` feature names remain documentation-only historical
+experiments. The current `route-redundant-lanes` feature selects a live
+alternate Rust body and is part of the GPU-5 performance audit above.
 
 ## Historical exploratory Rust optimization evidence
 

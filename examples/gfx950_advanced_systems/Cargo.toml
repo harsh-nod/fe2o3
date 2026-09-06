@@ -17,6 +17,7 @@ kernel-stage-gradient-shard = []
 kernel-muon-update = []
 ablation-route-owner-only = []
 ablation-route-unpacked = []
+ablation-route-redundant-lanes = []
 ablation-expert-serial = []
 ablation-combine-transposed = []
 ablation-speculative-recompute-prefix = []
@@ -31,6 +32,9 @@ fe2o3-device = { path = "../../crates/fe2o3-device" }
 
 [target.'cfg(not(target_arch = "amdgpu"))'.dependencies]
 fe2o3-host = { path = "../../crates/fe2o3-host" }
+
+[dev-dependencies]
+serde_json = "1"
 
 [lib]
 name = "fe2o3_gfx950_advanced_systems"

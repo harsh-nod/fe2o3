@@ -67,13 +67,28 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     else {
         return;
     };
-    // Decode packed E2M1 activations once per depth and score all four experts.
+    // Four lanes cooperate on each token by taking every fourth reduction
+    // element. This eliminates the former four-way duplicate input traffic;
+    // uniform broadcasts merge the partials without a workgroup barrier.
     let mut route_logit0 = 0.0_f32;
     let mut route_logit1 = 0.0_f32;
     let mut route_logit2 = 0.0_f32;
     let mut route_logit3 = 0.0_f32;
-    let mut depth = 0_usize;
-    while depth < HIDDEN {
+    #[cfg(feature = "ablation-route-redundant-lanes")]
+    let depth_group = 0_usize;
+    #[cfg(not(feature = "ablation-route-redundant-lanes"))]
+    let depth_group = wave_lane / TOKENS;
+    #[cfg(feature = "ablation-route-redundant-lanes")]
+    let depth_stride = 1_usize;
+    #[cfg(not(feature = "ablation-route-redundant-lanes"))]
+    let depth_stride = 4_usize;
+    #[cfg(feature = "ablation-route-redundant-lanes")]
+    let depth_steps = HIDDEN;
+    #[cfg(not(feature = "ablation-route-redundant-lanes"))]
+    let depth_steps = HIDDEN / 4;
+    let mut step = 0_usize;
+    while step < depth_steps {
+        let depth = depth_group.wrapping_add(step.wrapping_mul(depth_stride));
         let bits = activations.load_or(token, depth, 0);
         let magnitude =
             (0xc864_3210_u32.wrapping_shr(((bits & 7) as u32).wrapping_mul(4)) & 15) as f32 * 0.5;
@@ -83,7 +98,31 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
         route_logit1 += activation * router_weights.load_or(1, depth, 0.0);
         route_logit2 += activation * router_weights.load_or(2, depth, 0.0);
         route_logit3 += activation * router_weights.load_or(3, depth, 0.0);
-        depth += 1;
+        step += 1;
+    }
+    let subgroup = Gfx950Subgroup::current();
+    #[cfg(not(feature = "ablation-route-redundant-lanes"))]
+    {
+        let partial0 = route_logit0;
+        let partial1 = route_logit1;
+        let partial2 = route_logit2;
+        let partial3 = route_logit3;
+        route_logit0 = partial0
+            + subgroup.broadcast_f32::<64>(partial0, token.wrapping_add(16) as u32 & 63)
+            + subgroup.broadcast_f32::<64>(partial0, token.wrapping_add(32) as u32 & 63)
+            + subgroup.broadcast_f32::<64>(partial0, token.wrapping_add(48) as u32 & 63);
+        route_logit1 = partial1
+            + subgroup.broadcast_f32::<64>(partial1, token.wrapping_add(16) as u32 & 63)
+            + subgroup.broadcast_f32::<64>(partial1, token.wrapping_add(32) as u32 & 63)
+            + subgroup.broadcast_f32::<64>(partial1, token.wrapping_add(48) as u32 & 63);
+        route_logit2 = partial2
+            + subgroup.broadcast_f32::<64>(partial2, token.wrapping_add(16) as u32 & 63)
+            + subgroup.broadcast_f32::<64>(partial2, token.wrapping_add(32) as u32 & 63)
+            + subgroup.broadcast_f32::<64>(partial2, token.wrapping_add(48) as u32 & 63);
+        route_logit3 = partial3
+            + subgroup.broadcast_f32::<64>(partial3, token.wrapping_add(16) as u32 & 63)
+            + subgroup.broadcast_f32::<64>(partial3, token.wrapping_add(32) as u32 & 63)
+            + subgroup.broadcast_f32::<64>(partial3, token.wrapping_add(48) as u32 & 63);
     }
     // A branch-light ranking network gives deterministic top-2 tie handling.
     let precedes12 = (route_logit1 >= route_logit2) as u32;
@@ -137,7 +176,6 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     let first_weight_local = first_exp / denominator;
     let second_weight_local = second_exp / denominator;
     // Broadcast each token's route so lanes can form counts and dispatch metadata.
-    let subgroup = Gfx950Subgroup::current();
     let top_source = ((wave_lane / TOP_K) & (TOKENS - 1)) as u32 & 63;
     let local_pair = first_local | (second_local << 2);
     let top_pair = subgroup.broadcast_f32::<64>(local_pair as f32, top_source) as u32;

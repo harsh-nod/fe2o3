@@ -522,6 +522,7 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-device",
  "fe2o3-host",
+ "serde_json",
 ]
 
 [[package]]

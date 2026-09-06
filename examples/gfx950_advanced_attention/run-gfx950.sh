@@ -23,6 +23,8 @@ if [[ $SUITE == systems ]]; then
         kernel-combine-expert-ranks:canonical|kernel-speculative-transaction:canonical|\
         kernel-qwen-ngram-gather:canonical|kernel-stage-gradient-shard:canonical|\
         kernel-muon-update:canonical) ;;
+        kernel-moe-route:route-redundant-lanes)
+            EXTRA_FEATURE=ablation-route-redundant-lanes ;;
         kernel-moe-expert-rank:expert-serial) EXTRA_FEATURE=ablation-expert-serial ;;
         kernel-combine-expert-ranks:combine-transposed)
             EXTRA_FEATURE=ablation-combine-transposed ;;
