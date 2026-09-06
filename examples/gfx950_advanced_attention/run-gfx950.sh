@@ -61,6 +61,9 @@ case "$SUITE:$FEATURE" in
     attention:kernel-deepseek-sparse-attention)
         SYMBOL=gfx950_deepseek_sparse_attention; KERNARG=112; WG=256; LDS=0; OCML=1
         TEST=gfx950_deepseek_sparse_attention_rust_cov6_matches_cpu_reference; ISA=scalar ;;
+    attention:kernel-deepseek-sparse-attention-leader-exp-v1)
+        SYMBOL=gfx950_deepseek_sparse_attention; KERNARG=112; WG=256; LDS=0; OCML=1
+        TEST=gfx950_deepseek_sparse_attention_rust_cov6_matches_cpu_reference; ISA=scalar ;;
     attention:kernel-compressed-hybrid-attention)
         SYMBOL=gfx950_compressed_hybrid_attention; KERNARG=80; WG=256; LDS=8192; OCML=1
         TEST=gfx950_compressed_hybrid_attention_rust_cov6_matches_cpu_reference; ISA=fp8_attention ;;
