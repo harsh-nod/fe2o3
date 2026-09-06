@@ -9521,6 +9521,340 @@ fn retain_identical_direct_switch_predicate_v1(
     Ok(())
 }
 
+struct DeterministicControlReachabilityV1 {
+    block_count: usize,
+    predecessors: Option<Vec<Vec<usize>>>,
+    targets: HashMap<usize, Vec<u8>>,
+    work: usize,
+    storage_entries: usize,
+}
+
+impl DeterministicControlReachabilityV1 {
+    fn new(block_count: usize) -> Result<Self, ProductionRankedProjectionErrorV1> {
+        if block_count > MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1 {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar reachability state exceeded its explicit storage limit",
+            ));
+        }
+        Ok(Self {
+            block_count,
+            predecessors: None,
+            targets: HashMap::new(),
+            work: 0,
+            storage_entries: 0,
+        })
+    }
+
+    #[cfg(test)]
+    fn install_successors(
+        &mut self,
+        successors: &[Vec<usize>],
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        if successors.len() != self.block_count {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar successor table does not match the semantic CFG",
+            ));
+        }
+        self.install_predecessors(|block, retained_storage| {
+            let temporary_entries = successors[block].len().checked_mul(2).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "deterministic scalar reachability storage accounting overflowed",
+                ),
+            )?;
+            if retained_storage
+                .checked_add(temporary_entries)
+                .is_none_or(|peak| peak > MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1)
+            {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "deterministic scalar reachability state exceeded its explicit storage limit",
+                ));
+            }
+            let mut copied = Vec::new();
+            copied
+                .try_reserve_exact(successors[block].len())
+                .map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "deterministic scalar successor storage cannot be reserved",
+                    )
+                })?;
+            copied.extend_from_slice(&successors[block]);
+            Ok(copied)
+        })
+    }
+
+    fn install_function_successors(
+        &mut self,
+        function: &SemanticFunctionDeclV1,
+        switch_predicates: &[Option<GuardPredicateV1>],
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        if function.blocks().len() != self.block_count {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar successor table does not match the semantic CFG",
+            ));
+        }
+        self.install_predecessors(|block, retained_storage| {
+            let terminator = function.blocks()[block].terminator().kind();
+            let temporary_entries = terminator.edge_count().checked_mul(2).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "deterministic scalar reachability storage accounting overflowed",
+                ),
+            )?;
+            if retained_storage
+                .checked_add(temporary_entries)
+                .is_none_or(|peak| peak > MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1)
+            {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "deterministic scalar reachability state exceeded its explicit storage limit",
+                ));
+            }
+            deterministic_control_successors_v1(function, switch_predicates, terminator)
+        })
+    }
+
+    fn install_predecessors(
+        &mut self,
+        mut successors_for: impl FnMut(
+            usize,
+            usize,
+        ) -> Result<Vec<usize>, ProductionRankedProjectionErrorV1>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        if self.predecessors.is_some() {
+            return Ok(());
+        }
+
+        let mut next_work = self.work;
+        let mut next_storage = self.storage_entries.checked_add(self.block_count).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar reachability storage accounting overflowed",
+            ),
+        )?;
+        if next_storage > MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1 {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar reachability state exceeded its explicit storage limit",
+            ));
+        }
+        let mut predecessors = Vec::new();
+        predecessors
+            .try_reserve_exact(self.block_count)
+            .map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "deterministic scalar predecessor table cannot be reserved",
+                )
+            })?;
+        predecessors.resize_with(self.block_count, Vec::new);
+        for block in 0..self.block_count {
+            let block_successors = successors_for(block, next_storage)?;
+            let temporary_entries = block_successors.len().checked_mul(2).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "deterministic scalar reachability storage accounting overflowed",
+                ),
+            )?;
+            for successor in block_successors.iter().copied() {
+                if successor >= self.block_count {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a deterministic scalar reachability edge is outside the semantic CFG",
+                    ));
+                }
+                next_work = next_work.checked_add(1).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "deterministic scalar reachability work accounting overflowed",
+                    ),
+                )?;
+                if next_work > MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1 {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "deterministic scalar reachability exceeded its explicit work limit",
+                    ));
+                }
+                next_storage = next_storage.checked_add(1).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "deterministic scalar reachability storage accounting overflowed",
+                    ),
+                )?;
+                if next_storage
+                    .checked_add(temporary_entries)
+                    .is_none_or(|peak| peak > MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1)
+                {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "deterministic scalar reachability state exceeded its explicit storage limit",
+                    ));
+                }
+                predecessors[successor].try_reserve(1).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "deterministic scalar predecessor storage cannot be reserved",
+                    )
+                })?;
+                predecessors[successor].push(block);
+            }
+        }
+        self.predecessors = Some(predecessors);
+        self.work = next_work;
+        self.storage_entries = next_storage;
+        Ok(())
+    }
+
+    fn block_can_reach(
+        &mut self,
+        start: usize,
+        target: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        if start >= self.block_count || target >= self.block_count {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a deterministic scalar reachability query is outside the semantic CFG",
+            ));
+        }
+        if start == target {
+            return Ok(true);
+        }
+        if let Some(reaches) = self.targets.get(&target) {
+            return Ok(reaches[start] != 0);
+        }
+        let next_storage = self
+            .storage_entries
+            .checked_add(self.block_count)
+            .and_then(|entries| entries.checked_add(1))
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar reachability storage accounting overflowed",
+            ))?;
+        if next_storage
+            .checked_add(self.block_count)
+            .is_none_or(|peak| peak > MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1)
+        {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar reachability state exceeded its explicit storage limit",
+            ));
+        }
+        self.targets.try_reserve(1).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar reachability cache cannot be reserved",
+            )
+        })?;
+        let Some(predecessors) = self.predecessors.as_ref() else {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar predecessor state was not initialized",
+            ));
+        };
+
+        let mut reaches = Vec::new();
+        reaches.try_reserve_exact(self.block_count).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar reachability bitmap cannot be reserved",
+            )
+        })?;
+        reaches.resize(self.block_count, 0_u8);
+        let mut worklist = Vec::new();
+        worklist.try_reserve_exact(self.block_count).map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar reachability worklist cannot be reserved",
+            )
+        })?;
+        reaches[target] = 1;
+        worklist.push(target);
+        let mut next_work = self.work;
+        while let Some(block) = worklist.pop() {
+            for predecessor in predecessors[block].iter().copied() {
+                next_work = next_work.checked_add(1).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "deterministic scalar reachability work accounting overflowed",
+                    ),
+                )?;
+                if next_work > MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1 {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "deterministic scalar reachability exceeded its explicit work limit",
+                    ));
+                }
+                if reaches[predecessor] == 0 {
+                    reaches[predecessor] = 1;
+                    worklist.push(predecessor);
+                }
+            }
+        }
+
+        let result = reaches[start] != 0;
+        self.targets.insert(target, reaches);
+        self.work = next_work;
+        self.storage_entries = next_storage;
+        Ok(result)
+    }
+}
+
+fn deterministic_control_successors_v1(
+    function: &SemanticFunctionDeclV1,
+    switch_predicates: &[Option<GuardPredicateV1>],
+    terminator: &SemanticTerminatorKindV1,
+) -> Result<Vec<usize>, ProductionRankedProjectionErrorV1> {
+    let proven_true = match terminator {
+        SemanticTerminatorKindV1::SwitchInt {
+            discriminant,
+            targets,
+        } => simple_operand_local(discriminant)
+            .and_then(|local| switch_predicates.get(local.index() as usize))
+            .and_then(Option::as_ref)
+            .filter(|predicate| predicate.comparisons.is_empty())
+            .map(|_| {
+                let target = if targets.values().len() == 1 {
+                    match targets.values()[0].value() {
+                        0 => targets.otherwise().target(),
+                        1 => targets.values()[0].edge().target(),
+                        _ => {
+                            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                                "an authenticated empty predicate did not select a boolean switch",
+                            ));
+                        }
+                    }
+                } else {
+                    let Some(target) = targets.values().iter().find(|target| target.value() == 1)
+                    else {
+                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                            "an authenticated empty predicate had no true switch variant",
+                        ));
+                    };
+                    target.edge().target()
+                };
+                Ok(target.index() as usize)
+            })
+            .transpose()?,
+        _ => None,
+    };
+    if let Some(successor) = proven_true {
+        if successor >= function.blocks().len() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a deterministic scalar proven control edge is outside the semantic CFG",
+            ));
+        }
+        return Ok(vec![successor]);
+    }
+
+    let mut successors = Vec::new();
+    successors
+        .try_reserve(terminator.edge_count())
+        .map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar successor storage cannot be reserved",
+            )
+        })?;
+    let mut successor_set = HashSet::new();
+    successor_set
+        .try_reserve(terminator.edge_count())
+        .map_err(|_| {
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar successor set cannot be reserved",
+            )
+        })?;
+    terminator.try_for_each_edge::<ProductionRankedProjectionErrorV1>(|edge| {
+        let successor = edge.target().index() as usize;
+        if successor >= function.blocks().len() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a deterministic scalar control edge is outside the semantic CFG",
+            ));
+        }
+        if successor_set.insert(successor) {
+            successors.push(successor);
+        }
+        Ok(())
+    })?;
+    Ok(successors)
+}
+
 struct DeterministicScalarProjectorV1<'a> {
     callables: &'a [SemanticCallableDeclV1],
     callable_effects: &'a DefinedCallableEmptyEffectSummariesV1,
@@ -9538,10 +9872,7 @@ struct DeterministicScalarProjectorV1<'a> {
     states: Vec<u8>,
     summaries: Vec<Option<DeterministicScalarSummaryV1>>,
     ranked_constants: HashMap<u64, ProductionRankedValueV1>,
-    reachability: HashMap<(usize, usize), bool>,
-    reachability_marks: Vec<u32>,
-    reachability_epoch: u32,
-    reachability_work: usize,
+    reachability: DeterministicControlReachabilityV1,
 }
 
 impl<'a> DeterministicScalarProjectorV1<'a> {
@@ -9632,10 +9963,7 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
             states: vec![0; local_count],
             summaries: vec![None; local_count],
             ranked_constants: HashMap::new(),
-            reachability: HashMap::new(),
-            reachability_marks: vec![0; function.blocks().len()],
-            reachability_epoch: 0,
-            reachability_work: 0,
+            reachability: DeterministicControlReachabilityV1::new(function.blocks().len())?,
         })
     }
 
@@ -9892,77 +10220,7 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
         &self,
         terminator: &SemanticTerminatorKindV1,
     ) -> Result<Vec<usize>, ProductionRankedProjectionErrorV1> {
-        let proven_true = match terminator {
-            SemanticTerminatorKindV1::SwitchInt {
-                discriminant,
-                targets,
-            } => simple_operand_local(discriminant)
-                .and_then(|local| self.switch_predicates.get(local.index() as usize))
-                .and_then(Option::as_ref)
-                .filter(|predicate| predicate.comparisons.is_empty())
-                .map(|_| {
-                    let target = if targets.values().len() == 1 {
-                        match targets.values()[0].value() {
-                            0 => targets.otherwise().target(),
-                            1 => targets.values()[0].edge().target(),
-                            _ => {
-                                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                                    "an authenticated empty predicate did not select a boolean switch",
-                                ));
-                            }
-                        }
-                    } else {
-                        let Some(target) = targets.values().iter().find(|target| target.value() == 1)
-                        else {
-                            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                                "an authenticated empty predicate had no true switch variant",
-                            ));
-                        };
-                        target.edge().target()
-                    };
-                    Ok(target.index() as usize)
-                })
-                .transpose()?,
-            _ => None,
-        };
-        if let Some(successor) = proven_true {
-            if successor >= self.function.blocks().len() {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a deterministic scalar proven control edge is outside the semantic CFG",
-                ));
-            }
-            return Ok(vec![successor]);
-        }
-
-        let mut successors = Vec::new();
-        successors
-            .try_reserve(terminator.edge_count())
-            .map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "deterministic scalar successor storage cannot be reserved",
-                )
-            })?;
-        let mut successor_set = HashSet::new();
-        successor_set
-            .try_reserve(terminator.edge_count())
-            .map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "deterministic scalar successor set cannot be reserved",
-                )
-            })?;
-        terminator.try_for_each_edge::<ProductionRankedProjectionErrorV1>(|edge| {
-            let successor = edge.target().index() as usize;
-            if successor >= self.function.blocks().len() {
-                return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                    "a deterministic scalar control edge is outside the semantic CFG",
-                ));
-            }
-            if successor_set.insert(successor) {
-                successors.push(successor);
-            }
-            Ok(())
-        })?;
-        Ok(successors)
+        deterministic_control_successors_v1(self.function, self.switch_predicates, terminator)
     }
 
     fn block_can_reach(
@@ -9970,69 +10228,17 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
         start: usize,
         target: usize,
     ) -> Result<bool, ProductionRankedProjectionErrorV1> {
-        if start >= self.function.blocks().len() || target >= self.function.blocks().len() {
+        let block_count = self.function.blocks().len();
+        if start >= block_count || target >= block_count {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "a deterministic scalar reachability query is outside the semantic CFG",
             ));
         }
-        if let Some(reaches) = self.reachability.get(&(start, target)).copied() {
-            return Ok(reaches);
+        if self.reachability.predecessors.is_none() {
+            self.reachability
+                .install_function_successors(self.function, self.switch_predicates)?;
         }
-        self.reachability_epoch = self.reachability_epoch.wrapping_add(1);
-        if self.reachability_epoch == 0 {
-            self.reachability_marks.fill(0);
-            self.reachability_epoch = 1;
-        }
-        let epoch = self.reachability_epoch;
-        let mut worklist = Vec::new();
-        worklist.try_reserve(1).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "deterministic scalar reachability worklist cannot be reserved",
-            )
-        })?;
-        worklist.push(start);
-        self.reachability_marks[start] = epoch;
-        let mut reaches = false;
-        while let Some(block) = worklist.pop() {
-            if block == target {
-                reaches = true;
-                break;
-            }
-            let terminator = self.function.blocks()[block].terminator().kind().clone();
-            for successor in self.control_successors(&terminator)? {
-                self.reachability_work = self.reachability_work.checked_add(1).ok_or(
-                    ProductionRankedProjectionErrorV1::Unsupported(
-                        "deterministic scalar reachability work accounting overflowed",
-                    ),
-                )?;
-                if self.reachability_work > MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1 {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "deterministic scalar reachability exceeded its explicit work limit",
-                    ));
-                }
-                let Some(mark) = self.reachability_marks.get_mut(successor) else {
-                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
-                        "a deterministic scalar reachability edge is outside the semantic CFG",
-                    ));
-                };
-                if *mark != epoch {
-                    *mark = epoch;
-                    worklist.try_reserve(1).map_err(|_| {
-                        ProductionRankedProjectionErrorV1::Unsupported(
-                            "deterministic scalar reachability worklist cannot be reserved",
-                        )
-                    })?;
-                    worklist.push(successor);
-                }
-            }
-        }
-        self.reachability.try_reserve(1).map_err(|_| {
-            ProductionRankedProjectionErrorV1::Unsupported(
-                "deterministic scalar reachability cache cannot be reserved",
-            )
-        })?;
-        self.reachability.insert((start, target), reaches);
-        Ok(reaches)
+        self.reachability.block_can_reach(start, target)
     }
 
     fn resolve_rvalue(
@@ -37292,6 +37498,198 @@ mod tests {
             ),
             "a uniform induction bound is not an exact total unsigned index expression",
         );
+    }
+
+    fn reachability_oracle(successors: &[Vec<usize>], start: usize, target: usize) -> bool {
+        let mut visited = vec![false; successors.len()];
+        let mut worklist = vec![start];
+        visited[start] = true;
+        while let Some(block) = worklist.pop() {
+            if block == target {
+                return true;
+            }
+            for successor in successors[block].iter().copied() {
+                if !visited[successor] {
+                    visited[successor] = true;
+                    worklist.push(successor);
+                }
+            }
+        }
+        false
+    }
+
+    fn legacy_pair_reachability_work(
+        successors: &[Vec<usize>],
+        starts: impl IntoIterator<Item = usize> + Clone,
+        targets: impl IntoIterator<Item = usize>,
+    ) -> usize {
+        let mut work = 0_usize;
+        for target in targets {
+            for start in starts.clone() {
+                let mut visited = vec![false; successors.len()];
+                let mut worklist = vec![start];
+                visited[start] = true;
+                while let Some(block) = worklist.pop() {
+                    if block == target {
+                        break;
+                    }
+                    for successor in successors[block].iter().copied() {
+                        work += 1;
+                        if !visited[successor] {
+                            visited[successor] = true;
+                            worklist.push(successor);
+                        }
+                    }
+                }
+            }
+        }
+        work
+    }
+
+    #[test]
+    fn reverse_reachability_matches_the_cycle_and_unreachable_oracle() {
+        let successors = vec![vec![1], vec![2], vec![0, 3], vec![], vec![5], vec![]];
+        let mut reachability = DeterministicControlReachabilityV1::new(successors.len()).unwrap();
+        reachability.install_successors(&successors).unwrap();
+        for start in 0..successors.len() {
+            for target in 0..successors.len() {
+                assert_eq!(
+                    reachability.block_can_reach(start, target).unwrap(),
+                    reachability_oracle(&successors, start, target),
+                    "reachability mismatch for {start} -> {target}",
+                );
+            }
+        }
+        let completed_work = reachability.work;
+        for start in (0..successors.len()).rev() {
+            for target in (0..successors.len()).rev() {
+                reachability.block_can_reach(start, target).unwrap();
+            }
+        }
+        assert_eq!(reachability.work, completed_work);
+    }
+
+    #[test]
+    fn reverse_reachability_uses_the_exact_proven_control_successors() {
+        let function = projection_function(vec![
+            block(230, vec![], zero_switch(2, SCALAR_TYPE, 1, 2)),
+            block(
+                231,
+                vec![],
+                SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+            ),
+            block(
+                232,
+                vec![],
+                SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+            ),
+            block(233, vec![], SemanticTerminatorKindV1::Return),
+        ]);
+        let mut unproved_predicates = vec![None; function.locals().len()];
+        let unproved = function
+            .blocks()
+            .iter()
+            .map(|block| {
+                deterministic_control_successors_v1(
+                    &function,
+                    &unproved_predicates,
+                    block.terminator().kind(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(unproved[0], vec![1, 2]);
+
+        unproved_predicates[2] = Some(GuardPredicateV1 {
+            comparisons: vec![],
+        });
+        let proven = function
+            .blocks()
+            .iter()
+            .map(|block| {
+                deterministic_control_successors_v1(
+                    &function,
+                    &unproved_predicates,
+                    block.terminator().kind(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(proven[0], vec![2]);
+        let mut reachability = DeterministicControlReachabilityV1::new(proven.len()).unwrap();
+        reachability.install_successors(&proven).unwrap();
+        assert!(!reachability.block_can_reach(0, 1).unwrap());
+        assert!(reachability.block_can_reach(0, 2).unwrap());
+        assert!(reachability.block_can_reach(0, 3).unwrap());
+    }
+
+    #[test]
+    fn reverse_reachability_removes_pair_query_order_amplification() {
+        const BLOCKS: usize = 289;
+        const TARGETS: usize = 36;
+        let successors = (0..BLOCKS)
+            .map(|block| vec![(block + 1) % BLOCKS])
+            .collect::<Vec<_>>();
+        assert!(
+            legacy_pair_reachability_work(&successors, 0..BLOCKS, 0..TARGETS)
+                > MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1
+        );
+
+        let mut forward = DeterministicControlReachabilityV1::new(BLOCKS).unwrap();
+        forward.install_successors(&successors).unwrap();
+        for target in 0..TARGETS {
+            for start in 0..BLOCKS {
+                assert!(forward.block_can_reach(start, target).unwrap());
+            }
+        }
+        assert_eq!(forward.targets.len(), TARGETS);
+        assert_eq!(forward.work, BLOCKS + BLOCKS * TARGETS);
+
+        let mut reversed = DeterministicControlReachabilityV1::new(BLOCKS).unwrap();
+        reversed.install_successors(&successors).unwrap();
+        for target in (0..TARGETS).rev() {
+            for start in (0..BLOCKS).rev() {
+                assert!(reversed.block_can_reach(start, target).unwrap());
+            }
+        }
+        assert_eq!(reversed.targets.len(), TARGETS);
+        assert_eq!(reversed.work, forward.work);
+    }
+
+    #[test]
+    fn reverse_reachability_limit_failures_publish_no_partial_cache() {
+        let successors = vec![vec![1], vec![]];
+        let mut adjacency = DeterministicControlReachabilityV1::new(successors.len()).unwrap();
+        adjacency.work = MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1;
+        assert!(matches!(
+            adjacency.install_successors(&successors),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar reachability exceeded its explicit work limit"
+            ))
+        ));
+        assert!(adjacency.predecessors.is_none());
+        assert!(adjacency.targets.is_empty());
+
+        let mut traversal = DeterministicControlReachabilityV1::new(successors.len()).unwrap();
+        traversal.install_successors(&successors).unwrap();
+        traversal.work = MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1;
+        assert!(matches!(
+            traversal.block_can_reach(0, 1),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar reachability exceeded its explicit work limit"
+            ))
+        ));
+        assert!(!traversal.targets.contains_key(&1));
+
+        traversal.work = 0;
+        traversal.storage_entries = MAX_PROJECTED_CAPABILITY_STATE_ENTRIES_V1;
+        assert!(matches!(
+            traversal.block_can_reach(0, 1),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "deterministic scalar reachability state exceeded its explicit storage limit"
+            ))
+        ));
+        assert!(!traversal.targets.contains_key(&1));
     }
 
     #[test]
