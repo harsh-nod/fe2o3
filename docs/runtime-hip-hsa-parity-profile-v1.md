@@ -442,7 +442,7 @@ compute, production atomic/collective authority, broad Rust device language,
 and matched hardware qualification remain open. No R25 performance ratio or
 orders-of-magnitude claim exists without a retained matched measurement.
 
-## Current R26-R35 Status
+## Current R26-R36 Status
 
 R26 adds the matched, counterbalanced direct-KFD/raw-HSA/HIP qualification
 harness at exact commit `8953f757c6771823e5132708f45a43c32f459081` for one
@@ -512,25 +512,40 @@ compute. One elevated clean-monitor baseline compute slot and sequential
 revision ordering limit attribution. The result is descriptive for one
 workload, not causal, parity, orders-of-magnitude, or workload-general evidence.
 
-The authenticated aggregate formal runner through R35 includes the R27, R28,
-and R30-R35 independent bounded models. At exact proof commit
-[`91475313b441c6ab691e39fa7fe1bf2441827681`](https://github.com/harsh-nod/fe2o3/commit/91475313b441c6ab691e39fa7fe1bf2441827681),
-the complete included proof set establishes 808 obligations and rejects 322
+R36 fuses persistent-compute completion polling and signal recycle at exact
+production commit `d32aa6e61e49fb16e44ba3cd715563e9e452b23f`, carrying a private
+currentness handoff that removes only recycle's duplicate opening check. The
+matched [R36 evidence](evidence/mi300x-r36-completion-recycle-fusion-2026-09-05.md)
+reports a 46.990% median slotwise reduction in the directly targeted
+completion-signal-recycle p50 and a 31.059% reduction in inclusive recycle.
+Median slotwise E2E movement was 1.76% raw, 2.44% HSA-adjusted, and 1.67%
+HIP-adjusted. R36 still measured 2.74x-2.81x slower than HIP E2E and
+3.32x-3.35x slower than HIP compute. This clean `n=3` result is descriptive for
+one workload, not causal, parity, orders-of-magnitude, application-speedup, or
+workload-general evidence.
+
+The authenticated aggregate formal runner through R36 includes the R27, R28,
+and R30-R36 independent bounded models. At exact proof commit
+[`8b6fe6b307ac1ef60123bd1081623670be6cef87`](https://github.com/harsh-nod/fe2o3/commit/8b6fe6b307ac1ef60123bd1081623670be6cef87),
+the complete included proof set establishes 823 obligations and rejects 326
 pinned expected-negative mutations; final transcript SHA-256 is
-`40090d573642767f00ac742264c97ecc177e5b6c8555d40a0813912ebf8c2ad5`.
+`445fbb609745323d4ed473a386b9f0313690a1c774e430a22a13f425af73a801`.
 R33 contributes 45 obligations and four coupled negatives for the mathematical
 synchronous fusion relation. R34 contributes 54 obligations and four negatives
 for premised asynchronous fusion equivalence. R35 contributes 13 positive
+obligations and four standalone negatives. R36 contributes 15 positive
 obligations and four standalone negatives. Unlike R34's external-equivalence
 relation, R35 proves only a premised projection of former and fused custody and
-exact commit coordinates; it excludes production/public error identity,
-terminal failure stage, internal authority labels, event indices, and loan and
-currentness counts from that relation. The proof inputs contract currentness,
-lower outcomes, identities, certificates, tickets, and loan results; there is
-no Rust-to-Verus correspondence or proof of syscalls, driver, firmware,
-hardware, DMA visibility, liveness, parity, or performance.
+exact commit coordinates. R36 likewise proves only a premised projection of
+split and fused custody and logical ordering; the optimized currentness count
+is deliberately excluded from that projection and proved only as a separate
+finite arithmetic fact. The proof inputs contract currentness, lower outcomes,
+identities, certificates, tickets, and observations; there is no Rust-to-Verus
+correspondence or proof of production/public error identity, real timing,
+syscalls, driver, firmware, hardware, DMA visibility, liveness, parity, or
+performance.
 
-R26-R35 therefore improve one narrow persistent single-device path but do not
+R26-R36 therefore improve one narrow persistent single-device path but do not
 close the profile. Remaining blockers include ordinary public source-to-GPU
 execution authority; broader native scheduling and concurrency beyond the
 bounded two-lane, caller-flush path; full persistent memory, pool, and
