@@ -75,13 +75,14 @@ pub use dependency::{
 
 pub use dispatch_binding::{
     GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1, GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1,
-    GFX942_MAX_FIXED_DISPATCH_DATA_V1, GFX942_MAX_FIXED_DISPATCH_PACKETS_V1,
-    GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1, Gfx942CompletedDispatchBatchV1,
-    Gfx942CompletedDispatchReadRequestV1, Gfx942CompletedDispatchReadbackV1,
-    Gfx942CompletedDispatchSnapshotRequestV1, Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1,
-    Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1, Gfx942DispatchPollWithProgressV1,
-    Gfx942DispatchProgressV1, Gfx942FixedDispatchDataKindV1, Gfx942FixedDispatchDataLayoutV1,
-    Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1, Gfx942RecycledDispatchWriteRequestV1,
+    GFX942_MAX_FIXED_DISPATCH_DATA_V1, GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1,
+    GFX942_MAX_FIXED_DISPATCH_PACKETS_V1, GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1,
+    Gfx942CompletedDispatchBatchV1, Gfx942CompletedDispatchReadRequestV1,
+    Gfx942CompletedDispatchReadbackV1, Gfx942CompletedDispatchSnapshotRequestV1,
+    Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1, Gfx942DispatchBufferBindingV1,
+    Gfx942DispatchPollV1, Gfx942DispatchPollWithProgressV1, Gfx942DispatchProgressV1,
+    Gfx942FixedDispatchDataKindV1, Gfx942FixedDispatchDataLayoutV1, Gfx942FixedDispatchDataV1,
+    Gfx942FixedDispatchPacketV1, Gfx942RecycledDispatchWriteRequestV1,
     preflight_gfx942_fixed_dispatch_replacement,
 };
 
@@ -132,8 +133,8 @@ pub use live::{
 
 /// Canonical claim boundary for the executable native-queue foundation.
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r48-v1\n",
-    "compute_session_sha256=0d8defe7e30a0388a58733af6e3b4f48334552eb67b3f0178e912e293fac4127\n",
+    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r52-v1\n",
+    "compute_session_sha256=421064a18734a53bfc41e627a2abeb1d402e2b3fcf4a98b1a456f9dc3c1b7be0\n",
     "operations=create,update,disable,destroy\n",
     "projection=existing-bounded-queue-lifecycle-model,pending-before-ioctl,append-only-history\n",
     "resources=backend-specific-private-capability,linearly-retained,exact-ring-control-eop-cwsr-mappings-required\n",
@@ -144,18 +145,18 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
     "composition=shared-memory-linear-role-authorities,exact-one-page-same-va-userptr-writable-coherent-control,exact-set-device-memory-dispatch-transfer,identity-memory-and-private-nonclone-invariant-certificate-foundation-bundle,native-engine-authenticates-exact-session-domain-device-vm-issuer-generation-and-revision-bindings,live-allocation-lifecycle-mutation-central-certificate-loan-and-reclaim,whole-slice-doorbell-mmap\n",
     "creation=every-error-from-userptr-control-allocation-attempt-through-live-session-return-recovers-no-authority-permanently-poisons-process-global-runtime-gate-and-requires-process-termination\n",
     "submission=crate-private-single-producer-aql-fixed-batch-v2-through-8192,ring-capacity-checked,one-actual-write-counter-fetch-add-by-count,all-invalid-bodies-before-release-headers,one-final-doorbell-store\n",
-    "completion=separate-linear-8192-signal-host-coherent-arena,heap-owned-fixed-cardinality-retention,unique-signal-per-packet,crate-private-generation-binding,bounded-acquire-poll,addressless-timeout-execution-observation-before-terminal-poison,release-reset-after-exact-batch-completion-and-zero-event-reader-pins,session-owned-addressless-cross-queue-dependency-occurrence-lifecycle\n",
+    "completion=separate-linear-8192-signal-host-coherent-arena,heap-owned-fixed-cardinality-retention,unique-signal-per-packet,crate-private-exact-batch-queue-mapping-slot-generation-dispatch-roster-and-packet-occurrence-binding,bounded-acquire-poll,addressless-timeout-execution-observation-before-terminal-poison,release-reset-after-exact-batch-completion-and-zero-event-reader-pins,session-owned-addressless-cross-queue-dependency-occurrence-lifecycle\n",
     "barrier-probe=three-consuming-fresh-queue-entries,gfx942-production-executable-one-span-or-plain-executable-one-span-or-selected-gpu-userptr-final-rocr-derived-flags-one-span-ring-with-no-full-rocr-order-parity,typed-poll-bound-before-device-consumption,zero-dependency-system-scope-packet,isolated-one-signal-lease,no-code-kernarg-or-dispatch-generation,success-after-completion-reset-and-confirmed-destroy-release-only,every-error-at-or-after-userptr-control-registration-entry-permanently-poisons-process-global-runtime-gate-and-is-terminal,execution-failure-opaque-quarantine-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,terminal-teardown-or-panic-retains-permanent-gate-poison-recovers-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
-    "dispatch-binding=public-addressless-inspected-code-zero-pointer-and-caller-zero-implicit-kernarg-private-substitution,mapped-device-lease-fixed-batch-completion-generation-composition,metadata-derived-COV6-geometry-and-dynamic-lds-only,queue-pointer-and-runtime-address-fields-rejected,real-resource-retention-through-recycle,recycled-only-detach-and-rebind-on-one-live-queue,actual-mapped-authority-return-after-never-published-prepared-or-exact-recycle\n",
-    "dispatch-generation=rebind-is-seeded-from-exact-detached-predecessor-and-strictly-advances-before-publication\n",
-    "missing=kernel-dispatch-hardware-completion-and-exception-refinement,live-kernel-batch-evidence,kernel-memory-effect-refinement,kernel-numerical-correctness,machine-proof\n",
+    "dispatch-binding=public-addressless-inspected-code-zero-pointer-and-caller-zero-implicit-kernarg-private-substitution,mapped-device-lease-fixed-batch-completion-generation-composition,metadata-derived-COV6-geometry-and-dynamic-lds-only,queue-pointer-and-runtime-address-fields-rejected,one-immutable-wait-for-prior-recipe-with-up-to-64-host-retained-exact-epochs,real-resource-retention-until-every-slot-vacant,recycled-only-detach-and-rebind-on-one-live-queue,actual-mapped-authority-return-after-never-published-prepared-or-all-exact-recycles\n",
+    "dispatch-generation=globally-nonzero-recipe-occurrence-plus-fixed-slot-index-nonzero-slot-generation-and-nonzero-dispatch-generation,rebind-is-seeded-from-exact-maximum-detached-predecessor-and-strictly-advances-before-publication\n",
+    "missing=kernel-dispatch-hardware-completion-and-exception-refinement,live-kernel-batch-evidence,kernel-memory-effect-refinement,kernel-numerical-correctness,machine-proof,general-multi-recipe-or-shared-buffer-dag,concurrent-kernel-execution,performance-or-hip-hsa-parity\n",
     "proof=model-projection-and-hostile-tests-only,no-rust-verus-syscall-hardware-or-performance-claim,cpu-gpu-atomic-coherence-and-mmio-refinement-contracted\n",
     "authority=redacted-live-session,queue-id-observation-only,no-fd-gpu-address-mmio-pointer-or-dispatch-export\n",
 );
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "3c70d6324980f972f683169e07bb57a1bd30538958367e7048d7637caa26e679";
+    "737c9f77ed829f0eead464ca30dc917dd071446f6afc00f6ccfc68cd55308249";
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

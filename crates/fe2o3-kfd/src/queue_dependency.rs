@@ -1205,6 +1205,12 @@ pub(super) struct CompletedComputeDependencyTargetUseV1 {
 }
 
 impl CompletedComputeDependencyTargetUseV1 {
+    pub(super) fn completion_occurrence_v1(
+        &self,
+    ) -> Result<super::completion::CompletionBatchOccurrenceV1, Gfx942CompletionErrorV1> {
+        self.target_completion.occurrence_v1()
+    }
+
     pub(super) fn matches_source_owner(&self, owner: &CompletionSignalArenaOwnerV1) -> bool {
         !self.readers.is_empty()
             && self.readers.iter().all(|reader| {
@@ -1213,6 +1219,14 @@ impl CompletedComputeDependencyTargetUseV1 {
                     reader.source.signal_mapping,
                 )
             })
+    }
+}
+
+impl PublishedComputeDependencyTargetUseV1 {
+    pub(super) fn completion_occurrence_v1(
+        &self,
+    ) -> Result<super::completion::CompletionBatchOccurrenceV1, Gfx942CompletionErrorV1> {
+        self.target_batch.occurrence_v1()
     }
 }
 

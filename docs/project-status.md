@@ -1489,3 +1489,21 @@ accepted, and a production backend rejects `FE2O3_QUALIFICATION_ORACLE_V1`.
 The retired manifest smoke command is not a production or direct-KFD path and
 is no longer exposed. Hardware execution must enter an explicit runtime-owned
 gate; artifact qualification never implies load or dispatch authority.
+
+## Runtime R52 Status
+
+R52 admits up to 64 simultaneously host-retained fixed-dispatch epochs on one
+physical compute lane over one immutable recipe. A fixed preallocated slot
+table binds every epoch to nonzero recipe, slot, slot-generation, dispatch,
+exact completion-batch, dispatch-roster, and packet identities. Host tests
+cover A/B/C coexistence, 64/65 capacity, out-of-order retirement, slot reuse,
+hostile identity substitution, no-effect rollback, terminal errors and unwind,
+and mutation and teardown refusal.
+
+Every recipe packet uses `WaitForPrior`, so R52 does not claim concurrent
+kernel execution. The shared completion arena and ring capacity can impose a
+lower practical bound. General multi-recipe or shared-buffer DAGs, hardware
+ordering/completion truth, native performance gains, and HIP/HSA parity remain
+open. The existing runtime model is not a refinement of this production state
+machine, and no MI300X benchmark evidence is attached. See the
+[R52 claim boundary](../crates/fe2o3-kfd/docs/r52-native-fixed-dispatch-multi-inflight-v1.md).

@@ -7,6 +7,7 @@
 //! completion has been observed and explicitly recycled.
 
 use core::fmt;
+use core::hash::{Hash, Hasher};
 use std::time::Instant;
 
 use fe2o3_aql::{
@@ -19,6 +20,7 @@ use fe2o3_aql::{
     AqlPreparedKernelDispatchV1, ObservedGpuAddressV1,
 };
 use fe2o3_runtime_model::{MemoryMappingKeyV1, QueueKeyV1};
+use sha2::{Digest, Sha256};
 
 use crate::shared_memory::SharedGttMappedResourceFactsV1;
 use crate::wait::MonotonicWaitV1;
@@ -45,29 +47,29 @@ pub(super) const MAX_COMPLETION_POLL_ATTEMPTS_V1: u32 = 1_000_000;
 
 /// Canonical claim boundary for the private completion-signal slice.
 pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-completion-r48-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-completion-r52-v1\n",
     "aql_dispatch_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0\n",
     "aql_barrier_and_schema_sha256=bdca900cd5c6eaccbddfc5a854e956382a08ce87bec4ccd5284baacf932cdfb5\n",
     "aql_fixed_batch_schema_sha256=a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a\n",
     "compute_event_custody_schema_sha256=3b235c35d117c198fcb21f65197431a47de78ed5081b95b459bbde61c6410e9a\n",
     "arena=one-host-visible-coherent-gtt-allocation,524288-bytes,8192-distinct-64-byte-aligned-user-signals\n",
-    "batch=1-through-8192,heap-owned-fixed-cardinality-state,one-unique-signal-per-packet,no-aggregate-alias\n",
+    "batch=1-through-8192,heap-owned-fixed-cardinality-state,one-unique-signal-per-packet,no-aggregate-alias,one-sha256-occurrence-commitment-over-exact-batch-id-queue-signal-mapping-ordered-slot-indices-and-generations-dispatch-roster-packet-count-and-first-last-packet-identities\n",
     "initialization=typed-amd-busy-signal-construction,kind-user-1,value-pending-1,event-fields-zero,before-gpu-map\n",
     "fixed-batch-binding=crate-private-packet-construction,per-packet-independent-or-wait-for-prior-ordering-retained,no-public-signal-address,exact-queue-vm-signal-code-kernarg-and-nonzero-dispatch-generations-retained,actual-resource-lifetimes-owned-by-private-c5-queue-owner\n",
     "observation=monotonic-deadline-or-legacy-bounded-poll,short-spin-then-yield-and-bounded-exponential-sleep,one-pre-post-currentness-envelope-around-one-exact-retained-signal-set-of-atomic-i64-acquire-loads,same-scan-redacted-packet-completed-pending-and-first-pending-index-progress,all-retained-signals-zero-before-ready,unexpected-value-is-fault,timeout-retains-linear-operation-privately-until-addressless-counter-first-retained-packet-first-retained-signal-exception-currentness-snapshot\n",
     "event-custody=addressless-exact-occurrence-and-native-reader-ledgers,bounded-8192-each,complete-batch-atomic-record-bind-retain-and-release,independent-checked-event-and-reader-pin-counts,drop-inert\n",
-    "validation=fixed-8192-slot-bitmap-with-one-pass-linear-retention-slot-uniqueness-check\n",
+    "validation=fixed-8192-slot-bitmap-with-one-pass-linear-retention-slot-uniqueness-check-and-one-pass-linear-exact-dispatch-roster-validation\n",
     "recycle=fixed-batch-only-after-exact-all-signal-completion-and-zero-event-and-reader-pins-or-barrier-probe-only-after-exact-one-signal-completion,atomic-i64-release-reset-to-pending,checked-slot-generation-increment\n",
     "barrier-probe=isolated-owner-phase,exact-one-slot,queue-and-signal-generations-only,no-code-kernarg-or-dispatch-generation,bound-published-completed-recycled-linear-custody,zero-dependency-system-scope-header-0x1403\n",
     "failure=currentness-native-observation-unexpected-value-timeout-invalid-poll-bound-generation-exhaustion-or-reset-ambiguity-poisons-owner-and-queue;timeout-snapshot-precedes-poison-and-grants-no-native-authority;teardown-required\n",
     "release=queue-destroy-first,only-when-every-batch-was-completed-and-recycled-and-event-reader-ledgers-are-empty,explicit-unmap-and-free,no-drop-native-effects\n",
-    "proof=host-state-machine-and-mock-fault-tests-only,cpu-gpu-atomic-coherence-device-write-visibility-firmware-signal-and-quiescence-refinement-contracted\n",
-    "excluded=public-safe-launch,dependency-packet-publication,resource-lifetime-mint,copy,alias-proof,hardware-execution,ioctl-validation\n",
+    "proof=host-state-machine-and-mock-fault-tests-only,sha256-collision-resistance-cpu-gpu-atomic-coherence-device-write-visibility-firmware-signal-and-quiescence-refinement-contracted\n",
+    "excluded=public-safe-launch,dependency-packet-publication,resource-lifetime-mint,copy,alias-proof,formal-collision-free-occurrence-proof,hardware-execution,ioctl-validation\n",
 );
 
 /// SHA-256 of [`GFX942_AQL_COMPLETION_MANIFEST_V1`].
 pub const GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1: &str =
-    "4481a25efdf8819281454992ef02d785164da45b74afe0140de27ba8b600226c";
+    "485b21257623afce41573b27922350f125bcd7f5d339f8a89cf9a2c7c6ca77f1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CompletionOwnerPhaseV1 {
@@ -113,12 +115,122 @@ fn allocate_completion_slot_records_v1()
         .map_err(|_| Gfx942CompletionErrorV1::InvalidArena("completion state cardinality"))
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct CompletionDispatchGenerationBindingV1 {
     queue: QueueKeyV1,
     code: MemoryMappingKeyV1,
     kernarg: MemoryMappingKeyV1,
     dispatch_generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct CompletionBatchOccurrenceV1 {
+    pub(super) batch_id: u64,
+    pub(super) queue: QueueKeyV1,
+    pub(super) signal_mapping: MemoryMappingKeyV1,
+    pub(super) packet_count: usize,
+    pub(super) first_packet_id: u64,
+    pub(super) last_packet_id: u64,
+    pub(super) roster_sha256: [u8; 32],
+    pub(super) dispatch_roster: CompletionDispatchRosterV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct CompletionDispatchRosterV1 {
+    pub(super) queue: QueueKeyV1,
+    pub(super) packet_count: usize,
+    pub(super) dispatch_generation: u64,
+    pub(super) roster_sha256: [u8; 32],
+}
+
+struct CompletionOccurrenceHasherV1(Sha256);
+
+impl Hasher for CompletionOccurrenceHasherV1 {
+    fn finish(&self) -> u64 {
+        0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+}
+
+pub(super) fn completion_dispatch_roster_v1(
+    dispatches: &[CompletionDispatchGenerationBindingV1],
+) -> Result<CompletionDispatchRosterV1, Gfx942CompletionErrorV1> {
+    completion_dispatch_roster_with_visits_v1(dispatches).map(|(roster, _)| roster)
+}
+
+fn completion_dispatch_roster_with_visits_v1(
+    dispatches: &[CompletionDispatchGenerationBindingV1],
+) -> Result<(CompletionDispatchRosterV1, usize), Gfx942CompletionErrorV1> {
+    let first = dispatches
+        .first()
+        .ok_or(Gfx942CompletionErrorV1::ZeroPacketCount)?;
+    if first.dispatch_generation == 0 {
+        return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
+    }
+    let mut hasher = CompletionOccurrenceHasherV1(Sha256::new());
+    dispatches.len().hash(&mut hasher);
+    let mut visits = 0;
+    for dispatch in dispatches {
+        visits += 1;
+        if dispatch.queue != first.queue
+            || dispatch.dispatch_generation != first.dispatch_generation
+        {
+            return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
+        }
+        dispatch.hash(&mut hasher);
+    }
+    Ok((
+        CompletionDispatchRosterV1 {
+            queue: first.queue,
+            packet_count: dispatches.len(),
+            dispatch_generation: first.dispatch_generation,
+            roster_sha256: hasher.0.finalize().into(),
+        },
+        visits,
+    ))
+}
+
+fn completion_batch_occurrence_v1<const N: usize>(
+    retention: &CompletionBatchRetentionV1<N>,
+) -> Result<CompletionBatchOccurrenceV1, Gfx942CompletionErrorV1> {
+    let last_packet_id = retention
+        .last_packet_id
+        .ok_or(Gfx942CompletionErrorV1::StaleBatchGeneration)?;
+    let packet_count =
+        u64::try_from(N).map_err(|_| Gfx942CompletionErrorV1::PacketCountExceedsMaximum {
+            requested: N,
+            maximum: AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize,
+        })?;
+    let first_packet_id = last_packet_id
+        .checked_add(1)
+        .and_then(|next| next.checked_sub(packet_count))
+        .ok_or(Gfx942CompletionErrorV1::StaleBatchGeneration)?;
+    let dispatch_roster = completion_dispatch_roster_v1(&*retention.dispatches)?;
+    if dispatch_roster.queue != retention.queue || dispatch_roster.packet_count != N {
+        return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
+    }
+    let mut hasher = CompletionOccurrenceHasherV1(Sha256::new());
+    retention.batch_id.hash(&mut hasher);
+    retention.queue.hash(&mut hasher);
+    retention.signal_mapping.hash(&mut hasher);
+    retention.slots.hash(&mut hasher);
+    retention.dispatches.hash(&mut hasher);
+    N.hash(&mut hasher);
+    first_packet_id.hash(&mut hasher);
+    last_packet_id.hash(&mut hasher);
+    Ok(CompletionBatchOccurrenceV1 {
+        batch_id: retention.batch_id,
+        queue: retention.queue,
+        signal_mapping: retention.signal_mapping,
+        packet_count: N,
+        first_packet_id,
+        last_packet_id,
+        roster_sha256: hasher.0.finalize().into(),
+        dispatch_roster,
+    })
 }
 
 impl CompletionDispatchGenerationBindingV1 {
@@ -191,6 +303,15 @@ impl CompletionPacketTemplateV1 {
             kernarg_alignment,
             generations,
         }
+    }
+
+    pub(super) const fn generations(self) -> CompletionDispatchGenerationBindingV1 {
+        self.generations
+    }
+
+    #[cfg(test)]
+    pub(super) const fn ordering_for_test(self) -> AqlDispatchOrderingV1 {
+        self.ordering
     }
 }
 
@@ -461,6 +582,12 @@ impl<const N: usize> fmt::Debug for Gfx942CompletionBatchV1<N> {
 }
 
 impl<const N: usize> Gfx942CompletionBatchV1<N> {
+    pub(super) fn occurrence_v1(
+        &self,
+    ) -> Result<CompletionBatchOccurrenceV1, Gfx942CompletionErrorV1> {
+        completion_batch_occurrence_v1(&self.retention)
+    }
+
     pub(super) fn first_packet_and_signal_slot(
         &self,
     ) -> Result<(u64, u32), Gfx942CompletionErrorV1> {
@@ -499,6 +626,14 @@ impl<const N: usize> Gfx942CompletionBatchV1<N> {
 #[must_use = "completed signal slots must be explicitly recycled"]
 pub struct Gfx942CompletedBatchV1<const N: usize> {
     retention: CompletionBatchRetentionV1<N>,
+}
+
+impl<const N: usize> Gfx942CompletedBatchV1<N> {
+    pub(super) fn occurrence_v1(
+        &self,
+    ) -> Result<CompletionBatchOccurrenceV1, Gfx942CompletionErrorV1> {
+        completion_batch_occurrence_v1(&self.retention)
+    }
 }
 
 impl<const N: usize> fmt::Debug for Gfx942CompletedBatchV1<N> {
@@ -834,6 +969,79 @@ pub(super) struct CompletionSignalArenaOwnerV1 {
 }
 
 impl CompletionSignalArenaOwnerV1 {
+    #[cfg(test)]
+    pub(super) fn fill_all_signals_for_test(
+        &mut self,
+        template: CompletionPacketTemplateV1,
+    ) -> Gfx942CompletionBatchV1<COMPLETION_SIGNAL_CAPACITY_V1> {
+        let templates = CompletionPacketTemplatesV1::try_from_vec(vec![
+            template;
+            COMPLETION_SIGNAL_CAPACITY_V1
+        ])
+        .expect("fixed test cardinality");
+        let bound = self.bind_fixed_batch(templates).unwrap();
+        let (_, retention) = bound.into_parts();
+        self.mark_published(
+            retention,
+            u64::try_from(COMPLETION_SIGNAL_CAPACITY_V1).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[cfg(test)]
+    pub(super) fn complete_and_recycle_all_for_test(
+        &mut self,
+        batch: Gfx942CompletionBatchV1<COMPLETION_SIGNAL_CAPACITY_V1>,
+    ) {
+        self.validate_published(&batch.retention).unwrap();
+        self.require_unpinned(&batch.retention.slots).unwrap();
+        for slot in batch.retention.slots.iter() {
+            let record = &mut self.slots[slot.index as usize];
+            record.generation = record.generation.checked_add(1).unwrap();
+            record.phase = CompletionSlotPhaseV1::Available;
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn complete_one_without_native_for_test(
+        &mut self,
+        batch: Gfx942CompletionBatchV1<1>,
+    ) -> Gfx942CompletedBatchV1<1> {
+        self.validate_published(&batch.retention).unwrap();
+        let slot = batch.retention.slots[0];
+        self.slots[slot.index as usize].phase = CompletionSlotPhaseV1::Completed {
+            batch_id: batch.retention.batch_id,
+        };
+        Gfx942CompletedBatchV1 {
+            retention: batch.retention,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn recycle_one_without_native_for_test(
+        &mut self,
+        completed: Gfx942CompletedBatchV1<1>,
+    ) -> Gfx942CompletionRecycleObservationV1 {
+        self.validate_completed(&completed.retention).unwrap();
+        self.require_unpinned(&completed.retention.slots).unwrap();
+        let slot = completed.retention.slots[0];
+        let record = &mut self.slots[slot.index as usize];
+        record.generation = record.generation.checked_add(1).unwrap();
+        record.phase = CompletionSlotPhaseV1::Available;
+        Gfx942CompletionRecycleObservationV1 { packet_count: 1 }
+    }
+
+    #[cfg(test)]
+    pub(super) fn state_snapshot_for_test(&self) -> (u64, usize) {
+        (
+            self.next_batch_id,
+            self.slots
+                .iter()
+                .filter(|slot| slot.phase == CompletionSlotPhaseV1::Available)
+                .count(),
+        )
+    }
+
     pub(super) fn record_dependency_event_batch_for_bound_v1<const N: usize>(
         &mut self,
         session_occurrence: u64,
@@ -2538,6 +2746,20 @@ mod tests {
         let owner = owner();
         assert_eq!(owner.slots.len(), COMPLETION_SIGNAL_CAPACITY_V1);
         assert!(core::mem::size_of::<CompletionSignalArenaOwnerV1>() <= 128);
+    }
+
+    #[test]
+    fn maximum_dispatch_roster_validation_is_one_visit_per_packet() {
+        let binding = CompletionDispatchGenerationBindingV1::new(
+            queue(),
+            mapping(queue().vm, 30, 1),
+            mapping(queue().vm, 31, 2),
+            4,
+        );
+        let bindings = vec![binding; COMPLETION_SIGNAL_CAPACITY_V1];
+        let (roster, visits) = completion_dispatch_roster_with_visits_v1(&bindings).unwrap();
+        assert_eq!(roster.packet_count, COMPLETION_SIGNAL_CAPACITY_V1);
+        assert_eq!(visits, COMPLETION_SIGNAL_CAPACITY_V1);
     }
 
     fn template(index: u64) -> CompletionPacketTemplateV1 {

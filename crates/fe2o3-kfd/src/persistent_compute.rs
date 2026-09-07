@@ -14,7 +14,7 @@ use fe2o3_runtime_model::QueueKeyV1;
 
 use crate::persistent_allocation::{
     Gfx942PersistentCompletedV1, Gfx942PersistentDependencyFrontierV1, Gfx942PersistentPreparedV1,
-    Gfx942PersistentPublishedV1, Gfx942PersistentUseLeaseV1,
+    Gfx942PersistentPublishedV1, Gfx942PersistentReservedV1, Gfx942PersistentUseLeaseV1,
 };
 use crate::persistent_directional_sdma::{
     Gfx942DirectionalPersistentSdmaFrontierRetirementFailureV1,
@@ -29,24 +29,24 @@ use crate::shared_memory::Gfx942DeviceMemoryIdentityV1;
 
 /// Claim boundary for the first persistent directional-SDMA/compute bridge.
 pub const GFX942_PERSISTENT_LOCAL_COMPUTE_ADAPTER_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-gfx942-kfd-persistent-local-compute-r25-v2\n",
+    "profile=fe2o3-gfx942-kfd-persistent-local-compute-r52-v1\n",
     "target=gfx942:xnack-,one-primary-compute-queue-and-one-directional-sdma-pair\n",
     "admission=one-local-fresh-or-exact-size-pooled-logical-equals-physical-allocation,one-fixed-compute-packet,one-full-allocation-device-local-binding,complete-live-device-set-of-one,metadata-derived-access\n",
     "binding=exact-parent-and-compute-queue-occurrence,attachment-generation,pool-generation,logical-and-physical-extent,mapped-storage-identity,persistent-owner-incarnation,dispatch-generation,and-prepare-once-control-identity-over-code-abi-packet-geometry-kernarg-content-role-and-storage-layout\n",
     "initialization=read-or-readwrite-requires-one-exact-full-h2d-completion-and-exact-pre-h2d-host-certificate-content-descriptor-match,certificate-is-minted-only-by-userspace-hash-while-copy-and-bound-to-queue-storage-identity-pool-generation-full-extents-and-range,h2d-source-linear-custody-preserves-certificate,d2h-or-any-other-host-mutation-invalidates-before-publication,promotion-retains-pre-post-operational-currentness,h2d-source-host-owner-is-returned-separately,ready-retains-only-device-owner-and-sealed-byte-digest,bind-relabels-the-digest-to-the-final-kernel-role-without-copy,write-only-may-use-quiescent-uninitialized-custody,no-compute-write-initialization-promotion\n",
     "lifecycle=first-launch-preflight-reserve-prepare-detach-and-allocate-map-retain-control,confirmed-only-publish,pending-retains-all-custody,exact-completion-then-signal-recycle-then-data-only-detach-native-restore-and-settle,subsequent-exact-replay-reattaches-only-data-to-the-retained-control-and-advances-generation,explicit-frontier-retirement,ordinary-destroy-releases-retained-control-exactly-once\n",
     "ledger=the-existing-directional-sdma-outstanding-buffer-debit-and-pool-generation-are-preserved\n",
-    "failure=pre-retention-rejection-returns-input,confirmed-no-effect-ring-occupancy-retains-prepared-retry,post-retention-publication-completion-recycle-detach-or-restore-ambiguity-quarantines-and-requires-process-teardown\n",
+    "failure=pre-retention-rejection-returns-input-only-after-confirmed-reserved-or-prepared-cancellation,cancellation-failure-retains-the-exact-typed-lease-in-a-terminal-attachment,confirmed-no-effect-ring-or-completion-signal-occupancy-retains-prepared-retry,post-retention-publication-completion-recycle-detach-restore-or-consuming-unwind-ambiguity-preserves-the-owner-ledger-phase-claims-no-exact-native-stage-when-consumed-and-requires-process-teardown\n",
     "partial-prepare=after-first-code-or-kernarg-allocation,the-terminal-queue-owned-shared-memory-session-registry-retains-every-native-record,linear-token-drop-performs-no-native-cleanup,and-process-teardown-is-required\n",
-    "terminal-custody=queue-or-returned-failure-retains-the-exact-attached-published-completed-recycled-data-storage-or-restored-owner-stage-with-address-free-observation\n",
+    "terminal-custody=queue-or-returned-failure-retains-an-exact-attached-published-completed-recycled-data-storage-or-restored-owner-stage-only-when-that-native-token-remains-known,otherwise-stage-observation-is-none\n",
     "authority=no-native-address-handle-pointer-fd-packet-signal-or-storage-identity-export\n",
     "limits=no-auxiliary-lane,no-padded-pooled-or-partial-range,no-second-device-allocation,no-concurrent-sdma,no-xgmi,no-generic-fixed-dispatch-escape-while-attached,certificate-is-userspace-write-evidence-not-kernel-attestation-or-loaded-kernel-proof,sha256-collision-resistance-and-cpu-gpu-coherence-contracted\n",
-    "evidence=native-neutral-transition-and-failure-tests-only,no-rust-to-model-refinement,no-hardware-execution-or-performance-evidence\n",
+    "evidence=native-neutral-transition-cancellation-quarantine-and-unwind-failure-tests-only,no-rust-to-model-refinement,no-hardware-execution-or-performance-evidence\n",
 );
 
 /// SHA-256 of [`GFX942_PERSISTENT_LOCAL_COMPUTE_ADAPTER_MANIFEST_V1`].
 pub const GFX942_PERSISTENT_LOCAL_COMPUTE_ADAPTER_MANIFEST_SHA256_V1: &str =
-    "f7c0d2b4ccf7d1f7369928ee8631b21fd1ba35bc8b02a8ab88eb164b8f962197";
+    "86d284a16c6bdb43c03d78d09bd34d9eb8247b9cb23d1d7e4a223d4927531f87";
 
 /// Metadata-derived aggregate access of the exact persistent compute binding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -518,6 +518,7 @@ impl Gfx942PersistentComputeCompletedV1 {
 }
 
 pub(crate) enum PersistentComputeUseStateV1 {
+    Reserved(#[allow(dead_code)] Gfx942PersistentUseLeaseV1<Gfx942PersistentReservedV1>),
     Prepared(Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>),
     Published(Gfx942PersistentUseLeaseV1<Gfx942PersistentPublishedV1>),
     Completed(Gfx942PersistentUseLeaseV1<Gfx942PersistentCompletedV1>),
@@ -695,6 +696,7 @@ impl Gfx942PersistentComputeTerminalCustodyV1 {
 }
 
 #[must_use = "retryable custody must be retried; terminal custody requires process teardown"]
+#[allow(clippy::large_enum_variant)]
 pub enum Gfx942PersistentComputeTransitionFailureCustodyV1<T> {
     Retryable(T),
     ProcessTeardown(Gfx942PersistentComputeTerminalCustodyV1),

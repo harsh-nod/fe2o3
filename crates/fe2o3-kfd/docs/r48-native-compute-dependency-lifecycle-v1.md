@@ -84,13 +84,14 @@ The multiple-active-target owner, one-source-arena production composition, and
 post-dependent-completion atomic reader/event release have no R42/R45 executable
 or Verus refinement.
 This slice gives each source event one dependent consumer, accepts all fan-in
-events for a target from exactly one source arena/lane, and exposes polling rather
-than a bounded/event-backed wait. Multi-source-lane fan-in, event fan-out, and a
-service-host dependency facade remain future work. The current public facade does
-not yet have executable evidence for an in-flight A-to-B-to-C chain across its
-physical compute-lane dispatch resources; multi-inflight reuse per physical lane
-is a remaining gap. This is lower host-state evidence for a bounded chain and a
-single-source-arena lifecycle, not generic event-DAG parity.
+events for a target from exactly one source arena/lane, and exposes polling
+rather than a bounded/event-backed wait. Multi-source-lane fan-in, event
+fan-out, and a service-host dependency facade remain future work. R52 adds
+[bounded host-retained coexistence](r52-native-fixed-dispatch-multi-inflight-v1.md)
+for up to 64 epochs over one immutable `WaitForPrior` recipe on one physical
+lane. It does not extend this R48 dependency graph to multiple recipes or prove
+concurrent kernel execution. This remains lower host-state evidence for a
+bounded chain and a single-source-arena lifecycle, not generic event-DAG parity.
 
 Each dependency poll retains the existing pre/post currentness checks around one
 signal load. Those checks include reset-fd readiness, VRAM-loss observation, and

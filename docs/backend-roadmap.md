@@ -590,3 +590,27 @@ sharing, or a unified multi-device compute owner. Native
 MI300X execution and matched KFD/HSA/HIP timing for this exact path remain the
 next qualification step. The separate measured local-copy throughput gap also
 remains open.
+
+## R52 fixed-dispatch host pipelining
+
+R52 replaces the one-active-generation fixed-dispatch owner with one immutable
+recipe and a preallocated 64-slot epoch table per physical compute lane. It can
+retain A, B, and C publication/completion custody at the same time without
+requiring A or B to be recycled before C is accepted. Each packet is
+`WaitForPrior`; this is bounded host pipelining, not concurrent kernel
+execution. Exact recipe, slot, slot-generation, dispatch-generation,
+completion-batch, roster, and packet identities prevent stale slot reuse and
+cross-owner substitution.
+
+The 65th live epoch, ring occupancy, and completion-signal exhaustion reject
+before native effect and cancel only the exact reservation. All slot identities
+remain burned. Readback, resource mutation, detach/rebind, effect promotion,
+and teardown stay blocked until every slot is vacant. First-claim and later
+errors terminally poison local state and process admission; proven
+`SignalPinned` recycle is the narrow retryable completed-custody case.
+
+This tranche is covered by production state-machine and mock fault tests. The
+existing runtime model is not a refinement of ordered shared-recipe epochs.
+General multi-recipe/shared-buffer DAGs, simultaneous kernel execution,
+hardware ordering truth, performance gains, and HIP/HSA parity remain open.
+See the [R52 claim boundary](../crates/fe2o3-kfd/docs/r52-native-fixed-dispatch-multi-inflight-v1.md).

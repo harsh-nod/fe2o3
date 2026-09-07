@@ -8,6 +8,7 @@
 #![allow(dead_code)]
 
 use core::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use fe2o3_amdhsa_loader::{KernelIdentityInputsV1, ValidatedKernelEnvelope};
 use fe2o3_aql::{
@@ -22,9 +23,10 @@ use fe2o3_runtime_model::{MemoryMappingKeyV1, QueueKeyV1};
 use sha2::{Digest, Sha256};
 
 use super::completion::{
-    CompletionDispatchGenerationBindingV1, CompletionPacketTemplateV1, Gfx942CompletedBatchV1,
-    Gfx942CompletionBatchV1, Gfx942CompletionErrorV1, Gfx942CompletionPollV1,
-    Gfx942CompletionPollWithProgressV1, Gfx942CompletionProgressV1,
+    CompletionBatchOccurrenceV1, CompletionDispatchGenerationBindingV1, CompletionDispatchRosterV1,
+    CompletionPacketTemplateV1, Gfx942CompletedBatchV1, Gfx942CompletionBatchV1,
+    Gfx942CompletionErrorV1, Gfx942CompletionPollV1, Gfx942CompletionPollWithProgressV1,
+    Gfx942CompletionProgressV1, completion_dispatch_roster_v1,
 };
 use super::device_content::{Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1};
 use crate::HOST_VISIBLE_MEMORY_PAGE_BYTES_V1;
@@ -46,6 +48,9 @@ pub(crate) const MAX_DISPATCH_DATA_LEASES_V1: usize = GFX942_MAX_FIXED_DISPATCH_
 pub(crate) const MAX_DISPATCH_KERNARG_BYTES_V1: usize = 65_536;
 pub const GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1: usize = 32;
 pub const GFX942_MAX_FIXED_DISPATCH_PACKETS_V1: usize = AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize;
+/// Maximum simultaneous accepted dispatch epochs over one immutable lane recipe.
+pub const GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1: usize = 64;
+static NEXT_DISPATCH_RECIPE_OCCURRENCE_V1: AtomicU64 = AtomicU64::new(1);
 const KERNEL_DESCRIPTOR_BYTES_V1: u64 = 64;
 const COV6_IMPLICIT_ARGUMENT_BYTES_V1: usize = COV6_IMPLICIT_ARGUMENT_BYTES as usize;
 
@@ -175,6 +180,10 @@ impl Gfx942FixedDispatchPacketV1 {
     }
 
     /// Creates an explicitly independent packet that need not wait for prior work.
+    ///
+    /// Phase-1 native fixed-recipe preparation rejects independent packets before
+    /// acquiring native resources. This constructor remains for API compatibility
+    /// with non-fixed paths and future ordering policies.
     pub fn new_independent(
         program_index: usize,
         geometry: AqlDispatchGeometryV1,
@@ -651,26 +660,26 @@ impl Gfx942CompletedDispatchReadbackV1 {
 
 /// Frozen claim boundary for the addressless fixed-dispatch binding slice.
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r12-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-dispatch-binding-r52-v1\n",
     "target=gfx942:xnack-,COV6,one-selected-current-device-vm-and-queue-generation\n",
     "code=1-through-32-validated-amdhsa-kernel-envelopes,content-and-selected-descriptor-identity,exact-zero-then-copy-materialization-into-owned-gtt,read-only-seal-before-map,per-packet-program-selection,unused-inspected-programs-retained-without-publication,descriptor-resolution-with-checked-relative-arithmetic\n",
     "kernarg=public-inert-complete-byte-images,exact-inspected-size-and-power-of-two-alignment,optional-exact-trailing-256-byte-COV6-implicit-suffix-must-be-caller-zero,metadata-declared-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds-only,queue-pointer-and-runtime-service-or-address-fields-rejected,all-global-buffer-fields-zero,checked-nonoverlapping-8-byte-internal-device-pointer-patches,one-owned-kernarg-gtt-arena-with-N-distinct-checked-aligned-slices,private-initialization-before-map\n",
     "geometry=block-count-floor-grid-div-workgroup,remainder-grid-mod-workgroup,inactive-dimensions-count-and-group-one-remainder-zero,uniform-workgroup-rejects-any-nonzero-remainder\n",
     "data=1-through-16-actual-linear-mapped-device-local-or-host-visible-coherent-authorities,exact-device-vm-and-allocation-generation,complete-device-local-live-set,all-authorities-retained-even-when-no-packet-references-them,checked-bounded-referenced-subranges,inspected-actual-access-derived-internally-only-for-referenced-authorities,read-or-readwrite-requires-sealed-full-extent-initialization,write-only-admits-uninitialized-exclusive-storage,optional-enclosing-snapshot-requires-coherent-full-initialization\n",
-    "batch=1-through-8192,aql-fixed-batch-v2,minimum-ring-packet-capacity-checked,all-program-code-owners,N-distinct-kernarg-slices,conservative-wait-for-prior-default-with-explicit-independent-opt-in,one-generation-bound-template-retaining-the-final-header-per-packet,one-reservation-one-write-counter-fetch-add-one-final-doorbell-and-one-signal-per-packet-composition\n",
-    "retention=queue-owns-all-code-kernarg-and-data-authorities-through-exact-ready-and-recycle,unreferenced-data-has-no-inspected-effect-or-readback-authority,ordinary-destroy-releases-all,returning-destroy-requires-one-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,replacement-owner-seeded-from-exact-recycled-predecessor-and-strictly-advances-before-publication,one-full-range-persistent-owner-may-retain-immutable-code-mapped-kernarg-packet-premise-and-recycled-generation-while-detaching-only-its-exact-data-authority,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
-    "readback=owned-byte-copy-only-after-exact-completion-and-signal-recycle,exact-dispatch-generation-and-retained-host-visible-allocation-authority,ordinary-request-must-be-contained-in-exactly-one-metadata-inspected-write-or-readwrite-binding;optional-snapshot-request-must-exactly-match-one-retained-strictly-enclosing-initialized-range-with-one-isolated-inspected-writable-interior;device-local-readonly-unwritten-out-of-range-overlapping-subrange-and-stale-requests-rejected,no-initialization-promotion\n",
+    "batch=1-through-8192,aql-fixed-batch-v2,minimum-ring-packet-capacity-checked,all-program-code-owners,N-distinct-kernarg-slices,every-public-fixed-recipe-packet-must-wait-for-prior,one-immutable-recipe-with-one-globally-minted-nonzero-occurrence-and-one-preallocated-64-slot-epoch-table,each-accepted-epoch-binds-exact-queue-recipe-slot-slot-generation-dispatch-generation-roster-completion-occurrence-and-packet-interval,one-reservation-one-write-counter-fetch-add-one-final-doorbell-and-one-signal-per-packet-composition\n",
+    "retention=queue-owns-all-code-kernarg-and-data-authorities-through-every-exact-ready-and-recycle,unreferenced-data-has-no-inspected-effect-or-readback-authority,ordinary-and-returning-destroy-require-all-64-epoch-slots-vacant,returning-destroy-uses-the-monotonic-maximum-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,replacement-owner-seeded-from-exact-recycled-predecessor-and-strictly-advances-before-publication,one-full-range-persistent-owner-may-retain-immutable-code-mapped-kernarg-packet-premise-and-recycled-generation-while-detaching-only-its-exact-data-authority,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
+    "readback=owned-byte-copy-only-when-all-64-epoch-slots-are-vacant-after-exact-completion-and-signal-recycle,exact-dispatch-generation-and-retained-host-visible-allocation-authority,ordinary-request-must-be-contained-in-exactly-one-metadata-inspected-write-or-readwrite-binding;optional-snapshot-request-must-exactly-match-one-retained-strictly-enclosing-initialized-range-with-one-isolated-inspected-writable-interior;device-local-readonly-unwritten-out-of-range-overlapping-subrange-and-stale-requests-rejected,no-initialization-promotion\n",
     "queue-transfer=ordinary-path-still-rejects-device-memory,dispatch-path-requires-exact-complete-distinct-set-of-every-live-mapped-c3-lease-before-model-mutation\n",
-    "failure=all-layout-and-identity-validation-before-native-preparation,persistent-control-replay-requires-exact-queue-code-abi-packet-kernarg-role-layout-storage-and-recycled-predecessor-identity;post-side-effect-failure,currentness,publication,completion,timeout,recycle-or-release-ambiguity-poisons-and-requires-teardown\n",
+    "failure=all-layout-ordering-capacity-and-identity-validation-before-native-preparation,65th-live-epoch-rejects-without-mutation,completion-signal-or-ring-capacity-rejection-cancels-only-the-exact-reserved-epoch-and-burns-global-and-slot-generations,persistent-control-replay-requires-exact-queue-code-abi-packet-kernarg-role-layout-storage-and-recycled-predecessor-identity;post-side-effect-failure,currentness,publication,completion,timeout,recycle-release-or-unwind-ambiguity-poisons-and-requires-teardown\n",
     "authority=public-linear-addressless-construction-submit-poll-wait-recycle-and-returning-destroy,no-address-handle-pointer-fd-packet-template-signal-or-mmio-export\n",
-    "proof=bounded-host-state-machine-and-mock-fault-tests-only,no-concrete-verus-or-machine-refinement\n",
+    "proof=bounded-host-state-machine-and-mock-fault-tests-only,no-concrete-verus-or-machine-refinement-of-ordered-shared-recipe-epochs\n",
     "contracted=code-segment-permission-refinement,cpu-gpu-coherence,firmware-dispatch-effects-and-quiescence,acquire-observed-device-write-visibility\n",
-    "excluded=queue-pointer,printf-hostcall-heap-default-queue-completion-action-multigrid-private-base-shared-base-and-unknown-implicit-fields,caller-effect-assertion,caller-initialization-assertion,public-packet-template,async-copy,device-address-export,peer-map,full-write-coverage-or-initialization-promotion,numerical-correctness,hardware-execution\n",
+    "excluded=queue-pointer,printf-hostcall-heap-default-queue-completion-action-multigrid-private-base-shared-base-and-unknown-implicit-fields,caller-effect-assertion,caller-initialization-assertion,public-packet-template,async-copy,device-address-export,peer-map,full-write-coverage-or-initialization-promotion,numerical-correctness,hardware-execution,general-multi-recipe-or-shared-buffer-dag,concurrent-kernel-execution,performance-or-hip-hsa-parity\n",
 );
 
 /// SHA-256 of [`GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1`].
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1: &str =
-    "811fbd200ac0b72e5aff81494225b6ea37f517d62bad3779544653c2aae6d815";
+    "854c96e2293317e3e70879b7af332ea953f6edfe00329f45b6f1b70dc743cb6d";
 
 type CodeAuthority = SharedGttQueueResourceAuthorityV1<
     AqlDispatchCodeResourceRoleV1,
@@ -1016,6 +1025,7 @@ pub enum Gfx942DispatchBindingErrorV1 {
     WrongQueueGeneration,
     StaleDispatchGeneration,
     ResourcePhase,
+    DispatchEpochCapacity { maximum: usize },
     GenerationExhausted,
     Poisoned,
 }
@@ -1041,95 +1051,276 @@ impl From<Gfx942CompletionErrorV1> for Gfx942DispatchBindingErrorV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DispatchOwnerPhaseV1 {
-    Prepared,
-    InFlight { generation: u64 },
-    Completed { generation: u64 },
-    Poisoned,
+enum DispatchEpochPhaseV1 {
+    Vacant,
+    Reserved {
+        dispatch_generation: u64,
+        expected_roster: CompletionDispatchRosterV1,
+    },
+    Published {
+        dispatch_generation: u64,
+        completion: CompletionBatchOccurrenceV1,
+    },
+    Completed {
+        dispatch_generation: u64,
+        completion: CompletionBatchOccurrenceV1,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DispatchEpochSlotV1 {
+    slot_generation: u64,
+    phase: DispatchEpochPhaseV1,
+}
+
+impl DispatchEpochSlotV1 {
+    const VACANT: Self = Self {
+        slot_generation: 0,
+        phase: DispatchEpochPhaseV1::Vacant,
+    };
+}
+
+/// Sealed identity for one accepted epoch of one immutable lane recipe.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct DispatchEpochIdentityV1 {
+    queue: QueueKeyV1,
+    recipe_occurrence: u64,
+    slot_index: u8,
+    slot_generation: u64,
+    dispatch_generation: u64,
+}
+
+impl DispatchEpochIdentityV1 {
+    pub(super) const fn dispatch_generation(self) -> u64 {
+        self.dispatch_generation
+    }
+
+    #[cfg(test)]
+    pub(super) const fn for_test(queue: QueueKeyV1, dispatch_generation: u64) -> Self {
+        Self {
+            queue,
+            recipe_occurrence: 1,
+            slot_index: 0,
+            slot_generation: dispatch_generation,
+            dispatch_generation,
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+#[cfg_attr(test, derive(Clone))]
 struct DispatchGenerationOwnerV1 {
     next_generation: u64,
-    phase: DispatchOwnerPhaseV1,
+    recipe_occurrence: u64,
+    recipe_queue: Option<QueueKeyV1>,
+    slots: Box<[DispatchEpochSlotV1; GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1]>,
     recycled_generation: Option<u64>,
+    poisoned: bool,
+}
+
+fn mint_dispatch_recipe_occurrence_v1() -> Result<u64, Gfx942DispatchBindingErrorV1> {
+    NEXT_DISPATCH_RECIPE_OCCURRENCE_V1
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            (current != 0).then(|| current.checked_add(1)).flatten()
+        })
+        .map_err(|_| Gfx942DispatchBindingErrorV1::GenerationExhausted)
 }
 
 impl DispatchGenerationOwnerV1 {
-    const fn new() -> Self {
-        Self {
-            next_generation: 1,
-            phase: DispatchOwnerPhaseV1::Prepared,
-            recycled_generation: None,
-        }
+    fn new() -> Result<Self, Gfx942DispatchBindingErrorV1> {
+        Self::with_next_generation(1)
     }
 
-    fn after_recycled(predecessor: u64) -> Result<Self, Gfx942DispatchBindingErrorV1> {
-        if predecessor == 0 {
-            return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
-        }
-        let next_generation = predecessor
+    fn with_next_generation(next_generation: u64) -> Result<Self, Gfx942DispatchBindingErrorV1> {
+        next_generation
             .checked_add(1)
-            .filter(|generation| generation.checked_add(1).is_some())
             .ok_or(Gfx942DispatchBindingErrorV1::GenerationExhausted)?;
         Ok(Self {
             next_generation,
-            phase: DispatchOwnerPhaseV1::Prepared,
+            recipe_occurrence: mint_dispatch_recipe_occurrence_v1()?,
+            recipe_queue: None,
+            slots: Box::new([DispatchEpochSlotV1::VACANT; GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1]),
             recycled_generation: None,
+            poisoned: false,
         })
+    }
+
+    fn after_recycled(predecessor: u64) -> Result<Self, Gfx942DispatchBindingErrorV1> {
+        let next_generation = next_dispatch_generation_after_recycled_v1(predecessor)?;
+        Self::with_next_generation(next_generation)
     }
 
     fn after_detached(predecessor: u64) -> Result<Self, Gfx942DispatchBindingErrorV1> {
         if predecessor == 0 {
-            Ok(Self::new())
+            Self::new()
         } else {
             Self::after_recycled(predecessor)
         }
     }
 
-    fn next(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
-        self.ensure_prepared()?;
-        let generation = self.next_generation;
-        generation
+    fn reserve(
+        &mut self,
+        queue: QueueKeyV1,
+        expected_roster: CompletionDispatchRosterV1,
+    ) -> Result<DispatchEpochIdentityV1, Gfx942DispatchBindingErrorV1> {
+        let (slot_index, dispatch_generation, slot_generation) =
+            self.preflight_reservation(queue)?;
+        if expected_roster.queue != queue
+            || expected_roster.dispatch_generation != dispatch_generation
+            || expected_roster.packet_count == 0
+        {
+            return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
+        }
+        let next_generation = dispatch_generation + 1;
+        let slot_index_u8 =
+            u8::try_from(slot_index).map_err(|_| Gfx942DispatchBindingErrorV1::ResourcePhase)?;
+
+        self.recipe_queue = Some(queue);
+        self.next_generation = next_generation;
+        self.slots[slot_index] = DispatchEpochSlotV1 {
+            slot_generation,
+            phase: DispatchEpochPhaseV1::Reserved {
+                dispatch_generation,
+                expected_roster,
+            },
+        };
+        Ok(DispatchEpochIdentityV1 {
+            queue,
+            recipe_occurrence: self.recipe_occurrence,
+            slot_index: slot_index_u8,
+            slot_generation,
+            dispatch_generation,
+        })
+    }
+
+    fn preflight_reservation(
+        &self,
+        queue: QueueKeyV1,
+    ) -> Result<(usize, u64, u64), Gfx942DispatchBindingErrorV1> {
+        self.ensure_not_poisoned()?;
+        if self.recipe_queue.is_some_and(|bound| bound != queue) {
+            return Err(Gfx942DispatchBindingErrorV1::WrongQueueGeneration);
+        }
+        let mut has_vacant_slot = false;
+        let reusable_slot = self.slots.iter().enumerate().find_map(|(index, slot)| {
+            if slot.phase != DispatchEpochPhaseV1::Vacant {
+                return None;
+            }
+            has_vacant_slot = true;
+            slot.slot_generation
+                .checked_add(1)
+                .filter(|generation| *generation != 0)
+                .map(|generation| (index, generation))
+        });
+        let (slot_index, slot_generation) = match reusable_slot {
+            Some(slot) => slot,
+            None if has_vacant_slot => {
+                return Err(Gfx942DispatchBindingErrorV1::GenerationExhausted);
+            }
+            None => {
+                return Err(Gfx942DispatchBindingErrorV1::DispatchEpochCapacity {
+                    maximum: GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1,
+                });
+            }
+        };
+        let dispatch_generation = self.next_generation;
+        dispatch_generation
             .checked_add(1)
             .ok_or(Gfx942DispatchBindingErrorV1::GenerationExhausted)?;
-        Ok(generation)
+        Ok((slot_index, dispatch_generation, slot_generation))
     }
 
-    fn commit_begin(&mut self, generation: u64) {
-        debug_assert_eq!(self.next_generation, generation);
-        self.next_generation = generation + 1;
-        self.phase = DispatchOwnerPhaseV1::InFlight { generation };
-        // Phase checks hide the prior exact recycle while this generation is
-        // active. Retain it so a no-effect cancellation can restore the last
-        // reportable publication instead of fabricating generation zero.
-    }
-
-    fn active(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
-        match self.phase {
-            DispatchOwnerPhaseV1::InFlight { generation }
-            | DispatchOwnerPhaseV1::Completed { generation } => Ok(generation),
-            DispatchOwnerPhaseV1::Poisoned => Err(Gfx942DispatchBindingErrorV1::Poisoned),
-            DispatchOwnerPhaseV1::Prepared => Err(Gfx942DispatchBindingErrorV1::ResourcePhase),
+    fn mark_published(
+        &mut self,
+        identity: DispatchEpochIdentityV1,
+        completion: CompletionBatchOccurrenceV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.require_identity(
+            identity,
+            DispatchEpochPhaseV1::Reserved {
+                dispatch_generation: identity.dispatch_generation,
+                expected_roster: completion.dispatch_roster,
+            },
+        )?;
+        if completion.queue != identity.queue {
+            return Err(Gfx942DispatchBindingErrorV1::WrongQueueGeneration);
         }
-    }
-
-    fn cancel(&mut self, generation: u64) -> Result<(), Gfx942DispatchBindingErrorV1> {
-        self.require(DispatchOwnerPhaseV1::InFlight { generation })?;
-        self.phase = DispatchOwnerPhaseV1::Prepared;
+        self.slots[identity.slot_index as usize].phase = DispatchEpochPhaseV1::Published {
+            dispatch_generation: identity.dispatch_generation,
+            completion,
+        };
         Ok(())
     }
 
-    fn complete(&mut self, generation: u64) -> Result<(), Gfx942DispatchBindingErrorV1> {
-        self.require(DispatchOwnerPhaseV1::InFlight { generation })?;
-        self.phase = DispatchOwnerPhaseV1::Completed { generation };
+    fn validate_published(
+        &self,
+        identity: DispatchEpochIdentityV1,
+        completion: CompletionBatchOccurrenceV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.require_identity(
+            identity,
+            DispatchEpochPhaseV1::Published {
+                dispatch_generation: identity.dispatch_generation,
+                completion,
+            },
+        )
+    }
+
+    fn cancel_epoch(
+        &mut self,
+        identity: DispatchEpochIdentityV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.require_identity(
+            identity,
+            DispatchEpochPhaseV1::Reserved {
+                dispatch_generation: identity.dispatch_generation,
+                expected_roster: self.expected_roster(identity)?,
+            },
+        )?;
+        self.slots[identity.slot_index as usize].phase = DispatchEpochPhaseV1::Vacant;
         Ok(())
     }
 
-    fn recycle(&mut self, generation: u64) -> Result<(), Gfx942DispatchBindingErrorV1> {
-        self.require(DispatchOwnerPhaseV1::Completed { generation })?;
-        self.phase = DispatchOwnerPhaseV1::Prepared;
-        self.recycled_generation = Some(generation);
+    fn complete_epoch(
+        &mut self,
+        identity: DispatchEpochIdentityV1,
+        completion: CompletionBatchOccurrenceV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.validate_published(identity, completion)?;
+        self.slots[identity.slot_index as usize].phase = DispatchEpochPhaseV1::Completed {
+            dispatch_generation: identity.dispatch_generation,
+            completion,
+        };
+        Ok(())
+    }
+
+    fn validate_completed(
+        &self,
+        identity: DispatchEpochIdentityV1,
+        completion: CompletionBatchOccurrenceV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.require_identity(
+            identity,
+            DispatchEpochPhaseV1::Completed {
+                dispatch_generation: identity.dispatch_generation,
+                completion,
+            },
+        )
+    }
+
+    fn recycle_epoch(
+        &mut self,
+        identity: DispatchEpochIdentityV1,
+        completion: CompletionBatchOccurrenceV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.validate_completed(identity, completion)?;
+        self.slots[identity.slot_index as usize].phase = DispatchEpochPhaseV1::Vacant;
+        self.recycled_generation = Some(
+            self.recycled_generation
+                .map_or(identity.dispatch_generation, |prior| {
+                    prior.max(identity.dispatch_generation)
+                }),
+        );
         Ok(())
     }
 
@@ -1145,23 +1336,220 @@ impl DispatchGenerationOwnerV1 {
     }
 
     fn poison(&mut self) {
-        self.phase = DispatchOwnerPhaseV1::Poisoned;
+        self.poisoned = true;
+    }
+
+    fn ensure_not_poisoned(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        if self.poisoned {
+            Err(Gfx942DispatchBindingErrorV1::Poisoned)
+        } else {
+            Ok(())
+        }
     }
 
     fn ensure_prepared(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {
-        match self.phase {
-            DispatchOwnerPhaseV1::Prepared => Ok(()),
-            DispatchOwnerPhaseV1::Poisoned => Err(Gfx942DispatchBindingErrorV1::Poisoned),
-            _ => Err(Gfx942DispatchBindingErrorV1::ResourcePhase),
+        self.ensure_not_poisoned()?;
+        if self
+            .slots
+            .iter()
+            .all(|slot| slot.phase == DispatchEpochPhaseV1::Vacant)
+        {
+            Ok(())
+        } else {
+            Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
         }
     }
 
-    fn require(&self, expected: DispatchOwnerPhaseV1) -> Result<(), Gfx942DispatchBindingErrorV1> {
-        match self.phase {
-            DispatchOwnerPhaseV1::Poisoned => Err(Gfx942DispatchBindingErrorV1::Poisoned),
-            actual if actual == expected => Ok(()),
+    fn require_identity(
+        &self,
+        identity: DispatchEpochIdentityV1,
+        expected: DispatchEpochPhaseV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.ensure_not_poisoned()?;
+        if identity.recipe_occurrence != self.recipe_occurrence
+            || Some(identity.queue) != self.recipe_queue
+            || identity.slot_index as usize >= self.slots.len()
+        {
+            return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
+        }
+        let slot = self.slots[identity.slot_index as usize];
+        if slot.slot_generation != identity.slot_generation || slot.phase != expected {
+            return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
+        }
+        Ok(())
+    }
+
+    fn expected_roster(
+        &self,
+        identity: DispatchEpochIdentityV1,
+    ) -> Result<CompletionDispatchRosterV1, Gfx942DispatchBindingErrorV1> {
+        self.ensure_not_poisoned()?;
+        let slot = self
+            .slots
+            .get(identity.slot_index as usize)
+            .ok_or(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration)?;
+        match slot.phase {
+            DispatchEpochPhaseV1::Reserved {
+                dispatch_generation,
+                expected_roster,
+            } if dispatch_generation == identity.dispatch_generation => Ok(expected_roster),
             _ => Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration),
         }
+    }
+
+    #[cfg(test)]
+    fn next(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+        self.ensure_prepared()?;
+        self.next_generation
+            .checked_add(1)
+            .ok_or(Gfx942DispatchBindingErrorV1::GenerationExhausted)?;
+        Ok(self.next_generation)
+    }
+
+    #[cfg(test)]
+    fn commit_begin(&mut self, generation: u64) {
+        debug_assert_eq!(generation, self.next_generation);
+        self.next_generation = generation + 1;
+        self.slots[0].slot_generation += 1;
+        self.slots[0].phase = DispatchEpochPhaseV1::Reserved {
+            dispatch_generation: generation,
+            expected_roster: test_completion_roster_v1(generation),
+        };
+    }
+
+    #[cfg(test)]
+    fn active(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+        self.ensure_not_poisoned()?;
+        self.slots
+            .iter()
+            .find_map(|slot| match slot.phase {
+                DispatchEpochPhaseV1::Reserved {
+                    dispatch_generation,
+                    ..
+                }
+                | DispatchEpochPhaseV1::Published {
+                    dispatch_generation,
+                    ..
+                }
+                | DispatchEpochPhaseV1::Completed {
+                    dispatch_generation,
+                    ..
+                } => Some(dispatch_generation),
+                DispatchEpochPhaseV1::Vacant => None,
+            })
+            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)
+    }
+
+    #[cfg(test)]
+    fn cancel(&mut self, generation: u64) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.test_require_generation(generation, false)?;
+        self.slots[0].phase = DispatchEpochPhaseV1::Vacant;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn complete(&mut self, generation: u64) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.test_require_generation(generation, false)?;
+        self.slots[0].phase = DispatchEpochPhaseV1::Completed {
+            dispatch_generation: generation,
+            completion: test_completion_occurrence_v1(generation),
+        };
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn recycle(&mut self, generation: u64) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.test_require_generation(generation, true)?;
+        self.slots[0].phase = DispatchEpochPhaseV1::Vacant;
+        self.recycled_generation = Some(
+            self.recycled_generation
+                .map_or(generation, |prior| prior.max(generation)),
+        );
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn test_require_generation(
+        &self,
+        generation: u64,
+        completed: bool,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.ensure_not_poisoned()?;
+        let matches = match self.slots[0].phase {
+            DispatchEpochPhaseV1::Reserved {
+                dispatch_generation,
+                ..
+            } => !completed && dispatch_generation == generation,
+            DispatchEpochPhaseV1::Completed {
+                dispatch_generation,
+                ..
+            } => completed && dispatch_generation == generation,
+            _ => false,
+        };
+        if matches {
+            Ok(())
+        } else {
+            Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration)
+        }
+    }
+}
+
+fn next_dispatch_generation_after_recycled_v1(
+    predecessor: u64,
+) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+    if predecessor == 0 {
+        return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
+    }
+    predecessor
+        .checked_add(1)
+        .filter(|generation| generation.checked_add(1).is_some())
+        .ok_or(Gfx942DispatchBindingErrorV1::GenerationExhausted)
+}
+
+#[cfg(test)]
+fn test_dispatch_queue_v1() -> QueueKeyV1 {
+    QueueKeyV1 {
+        vm: fe2o3_runtime_model::VmKeyV1 {
+            device: fe2o3_runtime_model::DeviceKeyV1 {
+                physical: fe2o3_runtime_model::PhysicalDeviceIdV1(1),
+                generation: fe2o3_runtime_model::DeviceGenerationV1(1),
+            },
+            id: fe2o3_runtime_model::VmIdV1(1),
+        },
+        id: fe2o3_runtime_model::QueueInstanceIdV1(1),
+        generation: fe2o3_runtime_model::QueueGenerationV1(1),
+    }
+}
+
+#[cfg(test)]
+fn test_completion_roster_v1(generation: u64) -> CompletionDispatchRosterV1 {
+    CompletionDispatchRosterV1 {
+        queue: test_dispatch_queue_v1(),
+        packet_count: 1,
+        dispatch_generation: generation,
+        roster_sha256: [generation as u8; 32],
+    }
+}
+
+#[cfg(test)]
+fn test_completion_occurrence_v1(generation: u64) -> CompletionBatchOccurrenceV1 {
+    let queue = test_dispatch_queue_v1();
+    CompletionBatchOccurrenceV1 {
+        batch_id: generation,
+        queue,
+        signal_mapping: MemoryMappingKeyV1 {
+            allocation: fe2o3_runtime_model::MemoryAllocationKeyV1 {
+                vm: queue.vm,
+                id: fe2o3_runtime_model::AllocationIdV1(1),
+                generation: fe2o3_runtime_model::AllocationGenerationV1(1),
+            },
+            id: fe2o3_runtime_model::MappingIdV1(1),
+        },
+        packet_count: 1,
+        first_packet_id: generation,
+        last_packet_id: generation,
+        roster_sha256: [generation as u8; 32],
+        dispatch_roster: test_completion_roster_v1(generation),
     }
 }
 
@@ -1169,9 +1557,111 @@ impl DispatchGenerationOwnerV1 {
 /// without fabricating code, kernarg, data, or native memory authority.
 #[cfg(test)]
 pub(super) struct TestOnlyDispatchGenerationOwnerV1 {
-    generation: DispatchGenerationOwnerV1,
+    next_generation: u64,
+    active_generation: Option<u64>,
     predecessor_generation: u64,
     last_cancelled_generation: Option<u64>,
+}
+
+#[cfg(test)]
+pub(super) struct TestOnlyMultiInflightDispatchOwnerV1 {
+    owner: DispatchGenerationOwnerV1,
+}
+
+#[cfg(test)]
+impl TestOnlyMultiInflightDispatchOwnerV1 {
+    pub(super) fn new() -> Self {
+        Self {
+            owner: DispatchGenerationOwnerV1::new().unwrap(),
+        }
+    }
+
+    pub(super) const fn next_generation(&self) -> u64 {
+        self.owner.next_generation
+    }
+
+    pub(super) fn reserve_one(
+        &mut self,
+        queue: QueueKeyV1,
+        template: CompletionPacketTemplateV1,
+    ) -> Result<DispatchEpochIdentityV1, Gfx942DispatchBindingErrorV1> {
+        let roster = completion_dispatch_roster_v1(&[template.generations()])?;
+        self.owner.reserve(queue, roster)
+    }
+
+    pub(super) fn mark_published(
+        &mut self,
+        identity: DispatchEpochIdentityV1,
+        completion: &Gfx942CompletionBatchV1<1>,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        let occurrence = completion
+            .occurrence_v1()
+            .map_err(Gfx942DispatchBindingErrorV1::Completion)?;
+        self.owner.mark_published(identity, occurrence)
+    }
+
+    pub(super) fn cancel(
+        &mut self,
+        identity: DispatchEpochIdentityV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.owner.cancel_epoch(identity)
+    }
+
+    pub(super) fn validate_published(
+        &self,
+        identity: DispatchEpochIdentityV1,
+        completion: &Gfx942CompletionBatchV1<1>,
+    ) -> Result<CompletionBatchOccurrenceV1, Gfx942DispatchBindingErrorV1> {
+        let occurrence = completion
+            .occurrence_v1()
+            .map_err(Gfx942DispatchBindingErrorV1::Completion)?;
+        self.owner.validate_published(identity, occurrence)?;
+        Ok(occurrence)
+    }
+
+    pub(super) fn mark_completed(
+        &mut self,
+        identity: DispatchEpochIdentityV1,
+        completion: CompletionBatchOccurrenceV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.owner.complete_epoch(identity, completion)
+    }
+
+    pub(super) fn validate_completed(
+        &self,
+        identity: DispatchEpochIdentityV1,
+        completed: &Gfx942CompletedBatchV1<1>,
+    ) -> Result<CompletionBatchOccurrenceV1, Gfx942DispatchBindingErrorV1> {
+        let occurrence = completed
+            .occurrence_v1()
+            .map_err(Gfx942DispatchBindingErrorV1::Completion)?;
+        self.owner.validate_completed(identity, occurrence)?;
+        Ok(occurrence)
+    }
+
+    pub(super) fn mark_recycled(
+        &mut self,
+        identity: DispatchEpochIdentityV1,
+        completion: CompletionBatchOccurrenceV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.owner.recycle_epoch(identity, completion)
+    }
+
+    pub(super) fn live_epoch_count(&self) -> usize {
+        self.owner
+            .slots
+            .iter()
+            .filter(|slot| slot.phase != DispatchEpochPhaseV1::Vacant)
+            .count()
+    }
+
+    pub(super) fn poison(&mut self) {
+        self.owner.poison();
+    }
+
+    pub(super) fn ensure_releasable(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.owner.ensure_prepared()
+    }
 }
 
 #[cfg(test)]
@@ -1179,23 +1669,27 @@ impl TestOnlyDispatchGenerationOwnerV1 {
     pub(super) fn after_recycled(
         predecessor_generation: u64,
     ) -> Result<Self, Gfx942DispatchBindingErrorV1> {
-        let generation = DispatchGenerationOwnerV1::after_recycled(predecessor_generation)?;
-        if generation.next_generation != predecessor_generation + 1
-            || generation.phase != DispatchOwnerPhaseV1::Prepared
-            || generation.recycled_generation.is_some()
-        {
-            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
-        }
+        let next_generation = predecessor_generation
+            .checked_add(1)
+            .filter(|generation| generation.checked_add(1).is_some())
+            .ok_or(Gfx942DispatchBindingErrorV1::GenerationExhausted)?;
         Ok(Self {
-            generation,
+            next_generation,
+            active_generation: None,
             predecessor_generation,
             last_cancelled_generation: None,
         })
     }
 
     pub(super) fn bind_one(&mut self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
-        let generation = self.generation.next()?;
-        self.generation.commit_begin(generation);
+        if self.active_generation.is_some() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+        }
+        let generation = self.next_generation;
+        self.next_generation = generation
+            .checked_add(1)
+            .ok_or(Gfx942DispatchBindingErrorV1::GenerationExhausted)?;
+        self.active_generation = Some(generation);
         Ok(generation)
     }
 
@@ -1203,7 +1697,10 @@ impl TestOnlyDispatchGenerationOwnerV1 {
         &mut self,
         generation: u64,
     ) -> Result<(), Gfx942DispatchBindingErrorV1> {
-        self.generation.cancel(generation)?;
+        if self.active_generation != Some(generation) {
+            return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
+        }
+        self.active_generation = None;
         self.last_cancelled_generation = Some(generation);
         Ok(())
     }
@@ -1217,7 +1714,8 @@ impl TestOnlyDispatchGenerationOwnerV1 {
     }
 
     pub(super) fn active_generation(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
-        self.generation.active()
+        self.active_generation
+            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)
     }
 }
 
@@ -1504,15 +2002,14 @@ impl DispatchResourceOwnerV1 {
             .collect()
     }
 
-    pub(super) fn active_generation(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
-        self.generation.active()
-    }
-
     pub(super) fn bind_templates<const N: usize>(
         &mut self,
         queue: QueueKeyV1,
-    ) -> Result<[CompletionPacketTemplateV1; N], Gfx942DispatchBindingErrorV1> {
-        self.require_prepared()?;
+    ) -> Result<
+        ([CompletionPacketTemplateV1; N], DispatchEpochIdentityV1),
+        Gfx942DispatchBindingErrorV1,
+    > {
+        self.generation.ensure_not_poisoned()?;
         validate_packet_count::<N>()?;
         if self.packets.len() != N
             || self.code_identity.len() != self.code.len()
@@ -1526,7 +2023,17 @@ impl DispatchResourceOwnerV1 {
         {
             return Err(Gfx942DispatchBindingErrorV1::WrongQueueGeneration);
         }
-        let generation = self.generation.next()?;
+        if let Some(packet_index) = self
+            .packets
+            .iter()
+            .position(|packet| packet.ordering != AqlDispatchOrderingV1::WaitForPrior)
+        {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet: packet_index,
+                detail: "multi-inflight recipe requires wait-for-prior ordering",
+            });
+        }
+        let (_, generation, _) = self.generation.preflight_reservation(queue)?;
         let templates: Vec<_> = self
             .packets
             .iter()
@@ -1562,36 +2069,96 @@ impl DispatchResourceOwnerV1 {
                 ))
             })
             .collect::<Result<Vec<_>, Gfx942DispatchBindingErrorV1>>()?;
-        let templates =
+        let templates: [CompletionPacketTemplateV1; N] =
             templates
                 .try_into()
                 .map_err(|_| Gfx942DispatchBindingErrorV1::InvalidKernarg {
                     packet: 0,
                     detail: "prepared packet cardinality",
                 })?;
-        self.generation.commit_begin(generation);
-        Ok(templates)
+        let dispatches: Vec<_> = templates
+            .iter()
+            .map(|template| template.generations())
+            .collect();
+        let expected_roster = completion_dispatch_roster_v1(&dispatches)?;
+        let identity = self.generation.reserve(queue, expected_roster)?;
+        debug_assert_eq!(identity.dispatch_generation, generation);
+        Ok((templates, identity))
     }
 
     pub(super) fn cancel_binding(
         &mut self,
-        generation: u64,
+        identity: DispatchEpochIdentityV1,
     ) -> Result<(), Gfx942DispatchBindingErrorV1> {
-        self.generation.cancel(generation)
+        self.generation.cancel_epoch(identity)
     }
 
-    pub(super) fn mark_completed(
+    pub(super) fn mark_published<const N: usize>(
         &mut self,
-        generation: u64,
+        identity: DispatchEpochIdentityV1,
+        completion: &Gfx942CompletionBatchV1<N>,
     ) -> Result<(), Gfx942DispatchBindingErrorV1> {
-        self.generation.complete(generation)
+        self.generation
+            .mark_published(identity, completion.occurrence_v1()?)
     }
 
-    pub(super) fn mark_recycled(
+    pub(super) fn mark_published_occurrence(
         &mut self,
-        generation: u64,
+        identity: DispatchEpochIdentityV1,
+        completion: CompletionBatchOccurrenceV1,
     ) -> Result<(), Gfx942DispatchBindingErrorV1> {
-        self.generation.recycle(generation)
+        self.generation.mark_published(identity, completion)
+    }
+
+    pub(super) fn validate_published<const N: usize>(
+        &self,
+        identity: DispatchEpochIdentityV1,
+        completion: &Gfx942CompletionBatchV1<N>,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.generation
+            .validate_published(identity, completion.occurrence_v1()?)
+    }
+
+    pub(super) fn validate_published_occurrence(
+        &self,
+        identity: DispatchEpochIdentityV1,
+        completion: CompletionBatchOccurrenceV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.generation.validate_published(identity, completion)
+    }
+
+    pub(super) fn mark_completed<const N: usize>(
+        &mut self,
+        identity: DispatchEpochIdentityV1,
+        completion: &Gfx942CompletedBatchV1<N>,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.generation
+            .complete_epoch(identity, completion.occurrence_v1()?)
+    }
+
+    pub(super) fn mark_completed_occurrence(
+        &mut self,
+        identity: DispatchEpochIdentityV1,
+        completion: CompletionBatchOccurrenceV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.generation.complete_epoch(identity, completion)
+    }
+
+    pub(super) fn validate_completed<const N: usize>(
+        &self,
+        identity: DispatchEpochIdentityV1,
+        completion: &Gfx942CompletedBatchV1<N>,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.generation
+            .validate_completed(identity, completion.occurrence_v1()?)
+    }
+
+    pub(super) fn mark_recycled_occurrence(
+        &mut self,
+        identity: DispatchEpochIdentityV1,
+        completion: CompletionBatchOccurrenceV1,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.generation.recycle_epoch(identity, completion)
     }
 
     pub(super) fn poison(&mut self) {
@@ -2179,7 +2746,7 @@ fn validate_completed_snapshot_request(
 #[must_use = "a published dispatch batch must remain bound through completion"]
 pub struct Gfx942DispatchBatchV1<const N: usize> {
     completion: Gfx942CompletionBatchV1<N>,
-    generation: u64,
+    identity: DispatchEpochIdentityV1,
 }
 
 impl<const N: usize> fmt::Debug for Gfx942DispatchBatchV1<N> {
@@ -2205,7 +2772,7 @@ impl<const N: usize> fmt::Debug for Gfx942DispatchBatchV1<N> {
 #[must_use = "completed dispatch resources remain retained until signal recycle"]
 pub struct Gfx942CompletedDispatchBatchV1<const N: usize> {
     completion: Gfx942CompletedBatchV1<N>,
-    generation: u64,
+    identity: DispatchEpochIdentityV1,
 }
 
 impl<const N: usize> fmt::Debug for Gfx942CompletedDispatchBatchV1<N> {
@@ -2279,32 +2846,32 @@ pub enum Gfx942DispatchPollWithProgressV1<const N: usize> {
 
 pub(super) fn wrap_published<const N: usize>(
     completion: Gfx942CompletionBatchV1<N>,
-    generation: u64,
+    identity: DispatchEpochIdentityV1,
 ) -> Gfx942DispatchBatchV1<N> {
     Gfx942DispatchBatchV1 {
         completion,
-        generation,
+        identity,
     }
 }
 
 pub(super) fn unwrap_published<const N: usize>(
     batch: Gfx942DispatchBatchV1<N>,
-) -> (Gfx942CompletionBatchV1<N>, u64) {
-    (batch.completion, batch.generation)
+) -> (Gfx942CompletionBatchV1<N>, DispatchEpochIdentityV1) {
+    (batch.completion, batch.identity)
 }
 
 pub(super) fn wrap_poll<const N: usize>(
     poll: Gfx942CompletionPollV1<N>,
-    generation: u64,
+    identity: DispatchEpochIdentityV1,
 ) -> Gfx942DispatchPollV1<N> {
     match poll {
         Gfx942CompletionPollV1::Pending(completion) => {
-            Gfx942DispatchPollV1::Pending(wrap_published(completion, generation))
+            Gfx942DispatchPollV1::Pending(wrap_published(completion, identity))
         }
         Gfx942CompletionPollV1::Ready(completion) => {
             Gfx942DispatchPollV1::Ready(Gfx942CompletedDispatchBatchV1 {
                 completion,
-                generation,
+                identity,
             })
         }
     }
@@ -2312,12 +2879,12 @@ pub(super) fn wrap_poll<const N: usize>(
 
 pub(super) fn wrap_poll_with_progress<const N: usize>(
     poll: Gfx942CompletionPollWithProgressV1<N>,
-    generation: u64,
+    identity: DispatchEpochIdentityV1,
 ) -> Gfx942DispatchPollWithProgressV1<N> {
     match poll {
         Gfx942CompletionPollWithProgressV1::Pending { batch, progress } => {
             Gfx942DispatchPollWithProgressV1::Pending {
-                batch: wrap_published(batch, generation),
+                batch: wrap_published(batch, identity),
                 progress: Gfx942DispatchProgressV1::from_completion(progress),
             }
         }
@@ -2327,7 +2894,7 @@ pub(super) fn wrap_poll_with_progress<const N: usize>(
         } => Gfx942DispatchPollWithProgressV1::Ready {
             completed: Gfx942CompletedDispatchBatchV1 {
                 completion: completed,
-                generation,
+                identity,
             },
             progress: Gfx942DispatchProgressV1::from_completion(progress),
         },
@@ -2336,17 +2903,17 @@ pub(super) fn wrap_poll_with_progress<const N: usize>(
 
 pub(super) fn unwrap_completed<const N: usize>(
     batch: Gfx942CompletedDispatchBatchV1<N>,
-) -> (Gfx942CompletedBatchV1<N>, u64) {
-    (batch.completion, batch.generation)
+) -> (Gfx942CompletedBatchV1<N>, DispatchEpochIdentityV1) {
+    (batch.completion, batch.identity)
 }
 
 pub(super) fn wrap_completed<const N: usize>(
     completion: Gfx942CompletedBatchV1<N>,
-    generation: u64,
+    identity: DispatchEpochIdentityV1,
 ) -> Gfx942CompletedDispatchBatchV1<N> {
     Gfx942CompletedDispatchBatchV1 {
         completion,
-        generation,
+        identity,
     }
 }
 
@@ -2359,6 +2926,7 @@ pub(super) fn prepare_dispatch_resources<const N: usize>(
     data: Vec<DeviceDataAllocationInputV1>,
 ) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
     validate_packet_count::<N>()?;
+    let generation = DispatchGenerationOwnerV1::new()?;
     let resources = kernel.resources();
     let plan = *kernel.envelope().plan();
     let image_len_u64 = plan
@@ -2560,7 +3128,7 @@ pub(super) fn prepare_dispatch_resources<const N: usize>(
         packets,
         data: data_authorities,
         data_premises,
-        generation: DispatchGenerationOwnerV1::new(),
+        generation,
         persistent_control: PersistentFixedDispatchControlStateV1::Ordinary,
     })
 }
@@ -2654,6 +3222,15 @@ fn plan_public_fixed_dispatch_resources<const N: usize>(
         return Err(Gfx942DispatchBindingErrorV1::InvalidData {
             index: data_layouts.len().min(data_initialized.len()),
             detail: "initialization/layout cardinality",
+        });
+    }
+    if let Some(packet) = packets
+        .iter()
+        .position(|packet| packet.ordering != AqlDispatchOrderingV1::WaitForPrior)
+    {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+            packet,
+            detail: "multi-inflight recipe requires wait-for-prior ordering",
         });
     }
     validate_packet_program_indices(programs.len(), packets)?;
@@ -2804,7 +3381,7 @@ pub fn preflight_gfx942_fixed_dispatch_replacement<const N: usize>(
     predecessor_generation: u64,
 ) -> Result<u64, Gfx942DispatchBindingErrorV1> {
     validate_fixed_batch_ring::<N>(ring_bytes)?;
-    DispatchGenerationOwnerV1::after_recycled(predecessor_generation)?;
+    next_dispatch_generation_after_recycled_v1(predecessor_generation)?;
     let data_layouts: Vec<_> = data.iter().map(Gfx942FixedDispatchDataV1::layout).collect();
     let data_initialized: Vec<_> = data
         .iter()
@@ -2828,7 +3405,7 @@ pub(super) fn prepare_public_fixed_dispatch_resources<const N: usize>(
         programs,
         packets,
         data,
-        DispatchGenerationOwnerV1::new(),
+        DispatchGenerationOwnerV1::new()?,
         false,
     )
     .map_err(|failure| failure.error)
@@ -2877,7 +3454,7 @@ pub(super) fn prepare_persistent_fixed_dispatch_resources_v1(
 ) -> Result<DispatchResourceOwnerV1, PersistentFixedDispatchPreparationFailureV1> {
     let generation = match predecessor_generation {
         Some(predecessor) => DispatchGenerationOwnerV1::after_recycled(predecessor),
-        None => Ok(DispatchGenerationOwnerV1::new()),
+        None => DispatchGenerationOwnerV1::new(),
     };
     let generation = match generation {
         Ok(generation) => generation,
@@ -4930,7 +5507,7 @@ mod tests {
 
     #[test]
     fn owner_phase_is_linear_and_terminal_poison_is_sticky() {
-        let mut owner = DispatchGenerationOwnerV1::new();
+        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
         let generation = owner.next().unwrap();
         assert_eq!(generation, 1);
         assert!(owner.active().is_err());
@@ -4947,6 +5524,283 @@ mod tests {
             owner.next(),
             Err(Gfx942DispatchBindingErrorV1::Poisoned)
         ));
+    }
+
+    #[test]
+    fn multi_inflight_epoch_table_is_preallocated_bounded_and_reusable_without_aba() {
+        let queue = test_dispatch_queue_v1();
+        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
+        let table = owner.slots.as_ptr();
+        let mut identities = Vec::new();
+        for generation in 1..=GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1 as u64 {
+            let identity = owner
+                .reserve(queue, test_completion_roster_v1(generation))
+                .unwrap();
+            assert_eq!(identity.dispatch_generation(), generation);
+            identities.push(identity);
+        }
+        assert_eq!(owner.slots.as_ptr(), table);
+        for identity in &identities {
+            assert_ne!(identity.recipe_occurrence, 0);
+            assert_ne!(identity.slot_generation, 0);
+            assert_ne!(identity.dispatch_generation, 0);
+        }
+        let next_generation = owner.next_generation;
+        let full_snapshot = owner.clone();
+        assert!(matches!(
+            owner.reserve(queue, test_completion_roster_v1(next_generation)),
+            Err(Gfx942DispatchBindingErrorV1::DispatchEpochCapacity {
+                maximum: GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1,
+            })
+        ));
+        assert_eq!(owner, full_snapshot);
+
+        let released = identities[1];
+        owner.cancel_epoch(released).unwrap();
+        let reused = owner
+            .reserve(queue, test_completion_roster_v1(next_generation))
+            .unwrap();
+        assert_eq!(reused.slot_index, released.slot_index);
+        assert_eq!(reused.slot_generation, released.slot_generation + 1);
+        assert!(matches!(
+            owner.cancel_epoch(released),
+            Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration)
+        ));
+        assert_eq!(owner.slots.as_ptr(), table);
+    }
+
+    #[test]
+    fn exact_epoch_authentication_rejects_every_identity_and_completion_substitution() {
+        let queue = test_dispatch_queue_v1();
+        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
+        let identity = owner.reserve(queue, test_completion_roster_v1(1)).unwrap();
+        let completion = test_completion_occurrence_v1(1);
+        owner.mark_published(identity, completion).unwrap();
+
+        let foreign = DispatchGenerationOwnerV1::new()
+            .unwrap()
+            .reserve(queue, test_completion_roster_v1(1))
+            .unwrap();
+        let identities = [
+            foreign,
+            DispatchEpochIdentityV1 {
+                slot_generation: identity.slot_generation + 1,
+                ..identity
+            },
+            DispatchEpochIdentityV1 {
+                dispatch_generation: identity.dispatch_generation + 1,
+                ..identity
+            },
+            DispatchEpochIdentityV1 {
+                slot_index: identity.slot_index + 1,
+                ..identity
+            },
+            DispatchEpochIdentityV1 {
+                slot_index: u8::MAX,
+                ..identity
+            },
+            DispatchEpochIdentityV1 {
+                recipe_occurrence: identity.recipe_occurrence + 1,
+                ..identity
+            },
+            DispatchEpochIdentityV1 {
+                queue: QueueKeyV1 {
+                    id: fe2o3_runtime_model::QueueInstanceIdV1(queue.id.0 + 1),
+                    ..queue
+                },
+                ..identity
+            },
+        ];
+        for stale in identities {
+            assert!(matches!(
+                owner.validate_published(stale, completion),
+                Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration)
+                    | Err(Gfx942DispatchBindingErrorV1::WrongQueueGeneration)
+            ));
+        }
+
+        let substitutions = [
+            CompletionBatchOccurrenceV1 {
+                batch_id: completion.batch_id + 1,
+                ..completion
+            },
+            CompletionBatchOccurrenceV1 {
+                queue: QueueKeyV1 {
+                    id: fe2o3_runtime_model::QueueInstanceIdV1(queue.id.0 + 1),
+                    ..queue
+                },
+                ..completion
+            },
+            CompletionBatchOccurrenceV1 {
+                signal_mapping: MemoryMappingKeyV1 {
+                    id: fe2o3_runtime_model::MappingIdV1(completion.signal_mapping.id.0 + 1),
+                    ..completion.signal_mapping
+                },
+                ..completion
+            },
+            CompletionBatchOccurrenceV1 {
+                packet_count: completion.packet_count + 1,
+                ..completion
+            },
+            CompletionBatchOccurrenceV1 {
+                first_packet_id: completion.first_packet_id + 1,
+                ..completion
+            },
+            CompletionBatchOccurrenceV1 {
+                last_packet_id: completion.last_packet_id + 1,
+                ..completion
+            },
+            CompletionBatchOccurrenceV1 {
+                roster_sha256: [0xa5; 32],
+                ..completion
+            },
+            CompletionBatchOccurrenceV1 {
+                dispatch_roster: CompletionDispatchRosterV1 {
+                    queue: QueueKeyV1 {
+                        id: fe2o3_runtime_model::QueueInstanceIdV1(queue.id.0 + 1),
+                        ..queue
+                    },
+                    ..completion.dispatch_roster
+                },
+                ..completion
+            },
+            CompletionBatchOccurrenceV1 {
+                dispatch_roster: CompletionDispatchRosterV1 {
+                    packet_count: completion.dispatch_roster.packet_count + 1,
+                    ..completion.dispatch_roster
+                },
+                ..completion
+            },
+            CompletionBatchOccurrenceV1 {
+                dispatch_roster: CompletionDispatchRosterV1 {
+                    dispatch_generation: completion.dispatch_roster.dispatch_generation + 1,
+                    ..completion.dispatch_roster
+                },
+                ..completion
+            },
+            CompletionBatchOccurrenceV1 {
+                dispatch_roster: CompletionDispatchRosterV1 {
+                    roster_sha256: [0x5a; 32],
+                    ..completion.dispatch_roster
+                },
+                ..completion
+            },
+        ];
+        for stale in substitutions {
+            assert!(matches!(
+                owner.validate_published(identity, stale),
+                Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration)
+            ));
+        }
+        owner.validate_published(identity, completion).unwrap();
+    }
+
+    #[test]
+    fn exhausted_vacant_slot_is_skipped_without_mutating_failed_admission() {
+        let queue = test_dispatch_queue_v1();
+        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
+        owner.slots[0].slot_generation = u64::MAX;
+        let identity = owner.reserve(queue, test_completion_roster_v1(1)).unwrap();
+        assert_eq!(identity.slot_index, 1);
+        assert_eq!(identity.slot_generation, 1);
+
+        owner.cancel_epoch(identity).unwrap();
+        for slot in owner.slots.iter_mut() {
+            slot.slot_generation = u64::MAX;
+        }
+        let snapshot = owner.clone();
+        assert!(matches!(
+            owner.reserve(queue, test_completion_roster_v1(2)),
+            Err(Gfx942DispatchBindingErrorV1::GenerationExhausted)
+        ));
+        assert_eq!(owner, snapshot);
+    }
+
+    #[test]
+    fn host_retained_physical_lane_a_b_c_epochs_coexist_and_retire_out_of_observation_order() {
+        let queue = test_dispatch_queue_v1();
+        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
+        let mut epochs = Vec::new();
+        for generation in 1..=3 {
+            let identity = owner
+                .reserve(queue, test_completion_roster_v1(generation))
+                .unwrap();
+            let completion = test_completion_occurrence_v1(generation);
+            owner.mark_published(identity, completion).unwrap();
+            epochs.push((identity, completion));
+        }
+        assert!(matches!(
+            owner.ensure_prepared(),
+            Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
+        ));
+        for index in [1, 2, 0] {
+            let (identity, completion) = epochs[index];
+            owner.complete_epoch(identity, completion).unwrap();
+            owner.recycle_epoch(identity, completion).unwrap();
+        }
+        assert_eq!(owner.returned_generation().unwrap(), 3);
+    }
+
+    #[test]
+    fn out_of_order_host_retirement_keeps_the_monotonic_completed_frontier() {
+        let queue = test_dispatch_queue_v1();
+        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
+        let mut epochs = Vec::new();
+        for generation in 1..=8 {
+            let identity = owner
+                .reserve(queue, test_completion_roster_v1(generation))
+                .unwrap();
+            let completion = test_completion_occurrence_v1(generation);
+            owner.mark_published(identity, completion).unwrap();
+            epochs.push((identity, completion));
+        }
+        for (identity, completion) in epochs.iter().rev().copied() {
+            owner.complete_epoch(identity, completion).unwrap();
+            owner.recycle_epoch(identity, completion).unwrap();
+        }
+        assert_eq!(owner.returned_generation().unwrap(), 8);
+        assert!(owner.ensure_prepared().is_ok());
+        for (identity, completion) in epochs {
+            assert!(owner.complete_epoch(identity, completion).is_err());
+            assert!(owner.recycle_epoch(identity, completion).is_err());
+        }
+    }
+
+    #[test]
+    fn every_live_epoch_phase_blocks_every_owner_global_recipe_transition() {
+        let queue = test_dispatch_queue_v1();
+        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
+        let identity = owner.reserve(queue, test_completion_roster_v1(1)).unwrap();
+        let completion = test_completion_occurrence_v1(1);
+        for live in [
+            owner.clone(),
+            {
+                let mut published = owner.clone();
+                published.mark_published(identity, completion).unwrap();
+                published
+            },
+            {
+                let mut completed = owner.clone();
+                completed.mark_published(identity, completion).unwrap();
+                completed.complete_epoch(identity, completion).unwrap();
+                completed
+            },
+        ] {
+            assert!(matches!(
+                live.ensure_prepared(),
+                Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
+            ));
+            assert!(matches!(
+                live.returned_generation(),
+                Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
+            ));
+            assert!(matches!(
+                live.returning_destroy_generation(),
+                Err(Gfx942DispatchBindingErrorV1::ResourcePhase)
+            ));
+        }
+        owner.cancel_epoch(identity).unwrap();
+        assert_eq!(owner.returning_destroy_generation().unwrap(), 0);
     }
 
     fn persistent_control_test_queue(queue: u64) -> QueueKeyV1 {
@@ -5118,14 +5972,6 @@ mod tests {
                 &image,
                 [0x71; 32],
                 1024,
-                AqlDispatchOrderingV1::Independent,
-                0,
-                1024,
-            ),
-            identity(
-                &image,
-                [0x71; 32],
-                1024,
                 AqlDispatchOrderingV1::WaitForPrior,
                 64,
                 1024,
@@ -5141,6 +5987,23 @@ mod tests {
         ] {
             assert_ne!(baseline, changed);
         }
+
+        assert!(matches!(
+            actual_persistent_control_test_identity(
+                &image,
+                [0x71; 32],
+                1024,
+                AqlDispatchOrderingV1::Independent,
+                0,
+                1024,
+                0,
+                4096,
+            ),
+            Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                detail: "multi-inflight recipe requires wait-for-prior ordering",
+                ..
+            })
+        ));
 
         for (data_byte_offset, byte_len) in [(1, 4096), (0, 4095)] {
             assert!(matches!(
@@ -5164,7 +6027,7 @@ mod tests {
         let queue = persistent_control_test_queue(19);
         let (device, _) = crate::sdma::persistent_sdma_buffers_for_test(queue, 101);
         let expected = persistent_control_test_identity(queue, device.storage_identity());
-        let mut generation = DispatchGenerationOwnerV1::new();
+        let mut generation = DispatchGenerationOwnerV1::new().unwrap();
 
         assert!(matches!(
             validate_persistent_control_replay_v1(
@@ -5225,7 +6088,7 @@ mod tests {
         let (device, _) = crate::sdma::persistent_sdma_buffers_for_test(queue, 202);
         let (other_device, _) = crate::sdma::persistent_sdma_buffers_for_test(queue, 203);
         let expected = persistent_control_test_identity(queue, device.storage_identity());
-        let mut generation = DispatchGenerationOwnerV1::new();
+        let mut generation = DispatchGenerationOwnerV1::new().unwrap();
         let current = generation.next().unwrap();
         generation.commit_begin(current);
         generation.complete(current).unwrap();
@@ -5288,7 +6151,7 @@ mod tests {
         let queue = persistent_control_test_queue(29);
         let (device, _) = crate::sdma::persistent_sdma_buffers_for_test(queue, 303);
         let expected = persistent_control_test_identity(queue, device.storage_identity());
-        let mut generation = DispatchGenerationOwnerV1::new();
+        let mut generation = DispatchGenerationOwnerV1::new().unwrap();
         for expected_generation in 1..=4 {
             let current = generation.next().unwrap();
             assert_eq!(current, expected_generation);
@@ -5367,7 +6230,7 @@ mod tests {
         // Ordinary queue destruction consumes the owner through `release`,
         // which deliberately accepts detached data because its separate SDMA
         // owner releases that authority. Only code and kernarg remain here.
-        let mut generation = DispatchGenerationOwnerV1::new();
+        let mut generation = DispatchGenerationOwnerV1::new().unwrap();
         let current = generation.next().unwrap();
         generation.commit_begin(current);
         generation.complete(current).unwrap();
@@ -5456,7 +6319,7 @@ mod tests {
         let queue = persistent_control_test_queue(37);
         let (device, _) = crate::sdma::persistent_sdma_buffers_for_test(queue, 505);
         let identity = persistent_control_test_identity(queue, device.storage_identity());
-        let mut generation = DispatchGenerationOwnerV1::new();
+        let mut generation = DispatchGenerationOwnerV1::new().unwrap();
         for expected in 1..=7 {
             let current = generation.next().unwrap();
             assert_eq!(current, expected);
@@ -5504,7 +6367,7 @@ mod tests {
 
     #[test]
     fn replacement_owner_advances_from_exact_recycled_generation() {
-        let mut first = DispatchGenerationOwnerV1::new();
+        let mut first = DispatchGenerationOwnerV1::new().unwrap();
         let first_generation = first.next().unwrap();
         first.commit_begin(first_generation);
         first.complete(first_generation).unwrap();
@@ -5625,7 +6488,7 @@ mod tests {
         validate_fixed_batch_ring::<2>(65_536).unwrap();
 
         let fully_initialized = true;
-        let mut owner = DispatchGenerationOwnerV1::new();
+        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
         let first_generation = owner.next().unwrap();
         owner.commit_begin(first_generation);
         owner.complete(first_generation).unwrap();
@@ -5644,11 +6507,11 @@ mod tests {
 
     #[test]
     fn stale_and_double_use_transitions_never_mutate_generation_state() {
-        let mut owner = DispatchGenerationOwnerV1::new();
+        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
         let generation = owner.next().unwrap();
         owner.commit_begin(generation);
         for stale in [0, generation + 1, u64::MAX] {
-            let before = owner;
+            let before = owner.clone();
             assert!(matches!(
                 owner.cancel(stale),
                 Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration)
@@ -5666,11 +6529,11 @@ mod tests {
             assert_eq!(owner, before);
         }
         owner.complete(generation).unwrap();
-        let completed = owner;
+        let completed = owner.clone();
         assert!(owner.complete(generation).is_err());
         assert_eq!(owner, completed);
         owner.recycle(generation).unwrap();
-        let recycled = owner;
+        let recycled = owner.clone();
         assert!(owner.recycle(generation).is_err());
         assert_eq!(owner, recycled);
         assert_eq!(owner.returned_generation().unwrap(), generation);
@@ -5684,7 +6547,7 @@ mod tests {
 
     #[test]
     fn retryable_cancel_preserves_last_recycle_for_returning_destroy() {
-        let mut owner = DispatchGenerationOwnerV1::new();
+        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
         let first_generation = owner.next().unwrap();
         owner.commit_begin(first_generation);
         owner.complete(first_generation).unwrap();
@@ -5709,20 +6572,20 @@ mod tests {
 
     #[test]
     fn returning_destroy_admits_unpublished_or_exactly_recycled_only() {
-        let mut owner = DispatchGenerationOwnerV1::new();
-        let unpublished = owner;
+        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
+        let unpublished = owner.clone();
         assert!(owner.returned_generation().is_err());
         assert_eq!(owner.returning_destroy_generation().unwrap(), 0);
         assert_eq!(owner, unpublished);
 
         let generation = owner.next().unwrap();
         owner.commit_begin(generation);
-        let in_flight = owner;
+        let in_flight = owner.clone();
         assert!(owner.returned_generation().is_err());
         assert!(owner.returning_destroy_generation().is_err());
         assert_eq!(owner, in_flight);
         owner.complete(generation).unwrap();
-        let completed = owner;
+        let completed = owner.clone();
         assert!(owner.returned_generation().is_err());
         assert!(owner.returning_destroy_generation().is_err());
         assert_eq!(owner, completed);
@@ -5779,7 +6642,7 @@ mod tests {
             DeviceDataEffectV1::WriteOnly,
             &[(64, 64)],
         );
-        let mut owner = DispatchGenerationOwnerV1::new();
+        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
         let generation = owner.next().unwrap();
         let request = Gfx942CompletedDispatchReadRequestV1::new(generation, 0, 64, 64);
         assert!(validate_completed_read_request(&owner, &[writable], request).is_err());
@@ -5879,7 +6742,7 @@ mod tests {
 
     #[test]
     fn completed_snapshot_requests_require_exact_recycled_declaration() {
-        let mut owner = DispatchGenerationOwnerV1::new();
+        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
         let generation = owner.next().unwrap();
         owner.commit_begin(generation);
         owner.complete(generation).unwrap();
@@ -5970,30 +6833,27 @@ mod tests {
 
     #[test]
     fn exhaustion_and_poison_from_each_phase_are_terminal_and_fail_closed() {
-        let exhausted = DispatchGenerationOwnerV1 {
-            next_generation: u64::MAX,
-            phase: DispatchOwnerPhaseV1::Prepared,
-            recycled_generation: None,
-        };
-        let before = exhausted;
+        let mut exhausted = DispatchGenerationOwnerV1::new().unwrap();
+        exhausted.next_generation = u64::MAX;
+        let before_slots = *exhausted.slots;
+        let before_recycled = exhausted.recycled_generation;
         assert!(matches!(
             exhausted.next(),
             Err(Gfx942DispatchBindingErrorV1::GenerationExhausted)
         ));
-        assert_eq!(exhausted, before);
+        assert_eq!(*exhausted.slots, before_slots);
+        assert_eq!(exhausted.recycled_generation, before_recycled);
 
-        for phase in [
-            DispatchOwnerPhaseV1::Prepared,
-            DispatchOwnerPhaseV1::InFlight { generation: 7 },
-            DispatchOwnerPhaseV1::Completed { generation: 7 },
-        ] {
-            let mut owner = DispatchGenerationOwnerV1 {
-                next_generation: 8,
-                phase,
-                recycled_generation: None,
-            };
+        for phase in 0..3 {
+            let mut owner = DispatchGenerationOwnerV1::with_next_generation(7).unwrap();
+            if phase >= 1 {
+                owner.commit_begin(7);
+            }
+            if phase == 2 {
+                owner.complete(7).unwrap();
+            }
             owner.poison();
-            assert_eq!(owner.phase, DispatchOwnerPhaseV1::Poisoned);
+            assert!(owner.poisoned);
             assert!(matches!(
                 owner.next(),
                 Err(Gfx942DispatchBindingErrorV1::Poisoned)
