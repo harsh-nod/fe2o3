@@ -227,9 +227,9 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r42-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r43-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
-    "memory_profile_sha256=b3f844fab1ac479d004589c119222eacc72b478383934b31451c97d08b0b2200\n",
+    "memory_profile_sha256=52351c439a7c64e91a353749201e2e35e8793474b76de5baca34090287a66034\n",
     "kfd_userptr_memory_schema_sha256=c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e\n",
     "kfd_userptr_queue_control_schema_sha256=f1d75410d6bfacff2ea15ecfff226eb8aed7912ee324a36b8ed8550fa52bce02\n",
     "queue_resource_profile_sha256=37d45132916d2ecefdec8f53ecab817cbdbaa9b9863440353163bd460626ab02\n",
@@ -276,7 +276,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "2c818d2771519b5f5bae65e26f26f28b422156a03673676cddcacd0dc10a22cd";
+    "af2adfd219f507b96f4bce08c40d94f2c28f93cf4ac48cc22675383f98989f11";
 
 type AqlSpecialRingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -18112,7 +18112,7 @@ mod tests {
         )));
         assert_eq!(
             SHARED_GTT_MEMORY_PROFILE_SHA256_V1,
-            "b3f844fab1ac479d004589c119222eacc72b478383934b31451c97d08b0b2200"
+            "52351c439a7c64e91a353749201e2e35e8793474b76de5baca34090287a66034"
         );
         assert_eq!(
             GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1,
