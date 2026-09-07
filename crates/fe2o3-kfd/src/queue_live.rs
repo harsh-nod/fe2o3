@@ -5152,8 +5152,8 @@ impl ComputeAqlQueueSessionV1 {
 
     /// Adds one generic gfx942 SDMA queue to this session.
     ///
-    /// Pre-USERPTR preparation failures are retryable. Every failure at or
-    /// beyond USERPTR registration returns terminal process-teardown custody.
+    /// Failures before the first live shared-memory/currentness operation are retryable.
+    /// Every failure at or beyond that boundary returns terminal process-teardown custody.
     // Inline terminal custody avoids a fallible allocation after native state changes.
     #[allow(clippy::result_large_err)]
     pub fn enable_sdma_copy_engine(
