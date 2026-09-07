@@ -5,10 +5,11 @@ use fe2o3_amdgcn_model::{
     lower_device_module_to_gfx942_xnack_minus_llvm_ir,
 };
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, Function, FunctionId, FunctionRole,
-    IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, Module, Operation, OperationKind,
-    Signature, TargetCapability, Terminator, Type, ValueDef, ValueId, VerifiedCanonicalKernelIrV9,
-    WaveWidth, WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
+    AccessMode, AddressSpace, Axis, BasicBlock, BinaryOp, BlockId, Function, FunctionId,
+    FunctionRole, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
+    Module, Operation, OperationKind, Signature, TargetCapability, Terminator, Type, ValueDef,
+    ValueId, VerifiedCanonicalKernelIrV9, WaveWidth, WorkgroupMemory, WorkgroupMemoryExtent,
+    WorkgroupSize,
 };
 
 fn returning_block(operations: Vec<Operation>, values: Vec<ValueId>) -> BasicBlock {
@@ -172,6 +173,48 @@ fn compiler_module() -> Module {
     module
 }
 
+fn helper_workgroup_count_module() -> Module {
+    let operations = [Axis::X, Axis::Y, Axis::Z]
+        .into_iter()
+        .enumerate()
+        .map(|(result, axis)| {
+            Operation::effect_free(
+                ValueDef::new(ValueId(result as u32), Type::INDEX),
+                OperationKind::Intrinsic(IntrinsicOperation::new(
+                    IntrinsicKind::InvocationIndex {
+                        kind: IndexKind::WorkgroupCount,
+                        axis,
+                    },
+                    Type::INDEX,
+                )),
+            )
+        })
+        .collect();
+    let helper = Function::internal_helper(
+        "grid_dimensions",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![returning_block(operations, vec![])],
+    );
+    let mut module = Module::new("tests::helper_workgroup_count");
+    module.functions = vec![void_entry("entry", &["grid_dimensions"]), helper];
+    let mut grid_kernel = Kernel::new(
+        "grid_kernel",
+        "entry",
+        LaunchDomain::D3 {
+            x: LaunchExtent::Dynamic,
+            y: LaunchExtent::Dynamic,
+            z: LaunchExtent::Dynamic,
+        },
+    );
+    grid_kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    grid_kernel
+        .required_capabilities
+        .insert(TargetCapability::WaveWidth(WaveWidth::Wave64));
+    module.kernels = vec![grid_kernel];
+    module
+}
+
 fn exact_gfx942_xnack_minus_compiler_module(mut module: Module) -> Module {
     let target = fe2o3_kernel_ir::gfx942_xnack_minus_target_capability();
     module.required_capabilities.insert(target.clone());
@@ -209,6 +252,30 @@ fn canonical_order_is_independent_of_module_vector_order() {
     assert_eq!(
         lower_compiler_module_to_llvm_ir(&permuted).unwrap(),
         baseline
+    );
+}
+
+#[test]
+fn outlined_device_helpers_read_all_workgroup_counts_from_the_dispatch_packet() {
+    let llvm = lower_compiler_module_to_llvm_ir(&helper_workgroup_count_module()).unwrap();
+    for (result, workgroup_offset, grid_offset) in [(0, 4, 12), (1, 6, 16), (2, 8, 20)] {
+        assert!(llvm.contains(&format!(
+            "%v{result}.grid.ptr = getelementptr inbounds i8, ptr addrspace(4) %v{result}.dispatch, i64 {grid_offset}"
+        )));
+        assert!(llvm.contains(&format!(
+            "%v{result}.workgroup.ptr = getelementptr inbounds i8, ptr addrspace(4) %v{result}.dispatch, i64 {workgroup_offset}"
+        )));
+        assert!(llvm.contains(&format!(
+            "%v{result}.workgroup.i16 = load i16, ptr addrspace(4) %v{result}.workgroup.ptr, align 2"
+        )));
+        assert!(llvm.contains(&format!(
+            "%v{result} = udiv i64 %v{result}.rounded, %v{result}.workgroup"
+        )));
+    }
+    assert_eq!(
+        llvm.matches("declare ptr addrspace(4) @llvm.amdgcn.dispatch.ptr()")
+            .count(),
+        1
     );
 }
 

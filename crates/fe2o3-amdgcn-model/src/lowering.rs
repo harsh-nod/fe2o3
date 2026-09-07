@@ -4426,8 +4426,8 @@ impl<'a> FunctionLowerer<'a> {
                 })?;
             }
             OperationKind::Intrinsic(intrinsic)
-                if self.kernel.is_some()
-                    && (matches!(
+                if (self.kernel.is_some()
+                    && matches!(
                         intrinsic.kind,
                         IntrinsicKind::InvocationIndex {
                             kind: IndexKind::Global,
@@ -4439,7 +4439,15 @@ impl<'a> FunctionLowerer<'a> {
                                 | IndexKind::WorkgroupCount,
                             axis: Axis::X,
                         }
-                    )) => {}
+                    ))
+                    || (self.kernel.is_none()
+                        && matches!(
+                            intrinsic.kind,
+                            IntrinsicKind::InvocationIndex {
+                                kind: IndexKind::WorkgroupCount,
+                                ..
+                            }
+                        )) => {}
             OperationKind::MemoryIntrinsic(intrinsic) => {
                 validate_memory_intrinsic(intrinsic, &location, self.target)?;
             }
@@ -6185,12 +6193,13 @@ impl<'a> FunctionLowerer<'a> {
                     }
                     IntrinsicKind::InvocationIndex {
                         kind: IndexKind::WorkgroupCount,
-                        axis: Axis::X,
+                        axis,
                     } => {
-                        let extent = self
-                            .workgroup_size
-                            .expect("validated workgroup-count intrinsic")
-                            .x;
+                        let (workgroup_offset, grid_offset, static_extent) = match axis {
+                            Axis::X => (4, 12, self.workgroup_size.map(|size| size.x)),
+                            Axis::Y => (6, 16, self.workgroup_size.map(|size| size.y)),
+                            Axis::Z => (8, 20, self.workgroup_size.map(|size| size.z)),
+                        };
                         writeln!(
                             output,
                             "  {result}.dispatch = call ptr addrspace(4) @{}()",
@@ -6199,7 +6208,7 @@ impl<'a> FunctionLowerer<'a> {
                         .unwrap();
                         writeln!(
                             output,
-                            "  {result}.grid.ptr = getelementptr inbounds i8, ptr addrspace(4) {result}.dispatch, i64 12"
+                            "  {result}.grid.ptr = getelementptr inbounds i8, ptr addrspace(4) {result}.dispatch, i64 {grid_offset}"
                         )
                         .unwrap();
                         writeln!(
@@ -6212,14 +6221,47 @@ impl<'a> FunctionLowerer<'a> {
                             "  {result}.grid = zext i32 {result}.grid.i32 to i64"
                         )
                         .unwrap();
-                        writeln!(
-                            output,
-                            "  {result}.rounded = add i64 {result}.grid, {}",
-                            extent - 1
-                        )
-                        .unwrap();
-                        writeln!(output, "  {result} = udiv i64 {result}.rounded, {extent}")
+                        if let Some(extent) = static_extent {
+                            writeln!(
+                                output,
+                                "  {result}.rounded = add i64 {result}.grid, {}",
+                                extent - 1
+                            )
                             .unwrap();
+                            writeln!(output, "  {result} = udiv i64 {result}.rounded, {extent}")
+                                .unwrap();
+                        } else {
+                            writeln!(
+                                output,
+                                "  {result}.workgroup.ptr = getelementptr inbounds i8, ptr addrspace(4) {result}.dispatch, i64 {workgroup_offset}"
+                            )
+                            .unwrap();
+                            writeln!(
+                                output,
+                                "  {result}.workgroup.i16 = load i16, ptr addrspace(4) {result}.workgroup.ptr, align 2"
+                            )
+                            .unwrap();
+                            writeln!(
+                                output,
+                                "  {result}.workgroup = zext i16 {result}.workgroup.i16 to i64"
+                            )
+                            .unwrap();
+                            writeln!(
+                                output,
+                                "  {result}.workgroup.minus_one = sub i64 {result}.workgroup, 1"
+                            )
+                            .unwrap();
+                            writeln!(
+                                output,
+                                "  {result}.rounded = add i64 {result}.grid, {result}.workgroup.minus_one"
+                            )
+                            .unwrap();
+                            writeln!(
+                                output,
+                                "  {result} = udiv i64 {result}.rounded, {result}.workgroup"
+                            )
+                            .unwrap();
+                        }
                     }
                     _ => unreachable!("preflight rejected unsupported intrinsic"),
                 }
