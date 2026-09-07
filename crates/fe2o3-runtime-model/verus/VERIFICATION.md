@@ -20,9 +20,10 @@ aggregate, R42 compute-event signal-custody, R44 live-foundation
 invariant-certificate, R45 compute-dependency-publisher, and R46 gfx942
 striped-SDMA tail-wait, R48 retryable striped-SDMA tail-wait, R51 native
 compute-dependency lifecycle, and R56 two-native-SDMA mux models. The
-authenticated runner proves 1179 obligations and rejects 535
-expected-negative mutations over finite
-abstract values and traces. The
+authenticated runner proves 1179 obligations and checks 535 pinned
+expected-negative proof files over finite abstract values and traces. Each
+negative file must fail exactly one named postcondition. These standalone
+countermodels are not source transformations of the positive proofs. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
 lifecycle-history sequence lengths are not bounded by these proofs.
@@ -511,9 +512,10 @@ retention, device-bound identities, and currentness quarantine.
 | Native KFD scheduler, AQL/SDMA publication, completion, currentness, or quiescence | **Not established** | A sealed adapter must authenticate every concrete transition before the model can support runtime authority. |
 | Fairness, progress, arbitrary stream counts, HSA/HIP parity, or performance | **Not established** | The executable model is bounded, the proofs are safety-only, and no matched-hardware result follows from them. |
 
-Run the proofs and all expected-negative mutations with the exact Verus
+Run the proofs and all expected-negative files with the exact Verus
 release whose executable, complete release closure, version, proof sources,
-source checker, transcript, and mutations are pinned under `verus/pins`:
+source checkers, transcript, and expected-negative files are pinned under
+`verus/pins`:
 
 ```sh
 VERUS=/absolute/path/to/verus \
@@ -525,7 +527,15 @@ VERUS=/absolute/path/to/verus \
 then relies on this runner's executable and complete-closure pins before any
 proof result is accepted.
 
-The mutations must fail at their named postconditions: release while retained,
+The runner also authenticates and executes `check-negative-quality.py`. Its
+deterministic reject/accept fixtures ensure that a negative file cannot consist
+only of directly negating a zero-argument literal-true predicate, while still
+permitting an explicit omitted-coordinate mutant such as a relation that
+accepts unequal identities. This lexical gate excludes that name-only
+contradiction shape; it does not turn standalone countermodels into mutations
+of, or refinement proofs for, the positive sources.
+
+The expected-negative files must fail at their named postconditions: release while retained,
 VM generation substitution, stale generation reuse, topology/render PCI
 substitution, dropped DRM schema identity, lost history predecessor, mixed
 cross-source identity, a dropped final reset-fence observation, allocation free
@@ -602,8 +612,9 @@ over-capacity registration leave the waiter count unchanged; a pending
 observation preserves the exact registration; terminal status and runtime error
 outcomes are not substituted; abandonment and engine stop preserve submission
 and event custody without cancellation or release; and event-key ordering is
-lexicographic in context generation and event identity. Eight expected-negative
-mutations demonstrate rejection when those properties are reversed. The
+lexicographic in context generation and event identity. Eight standalone
+expected-negative files reconstruct adverse states or relations and fail at
+their named postconditions. The
 independent executable `src/r14_async_observer.rs` model additionally tests
 stable ordering, out-of-order completion, immediate terminal registration, and
 shutdown outcomes.
@@ -1048,8 +1059,8 @@ has yet been acquired.
 
 The executable R23 model has 24 focused Rust tests. Its private authority and
 lease types have no `Clone` or `Copy` implementation. Twenty-eight pinned
-expected-negative witnesses cover allocation and backing aliases, device and VM
-binding, mapped overlap and range bounds, exact lease roles and ranges, window
+standalone expected-negative files reconstruct allocation and backing aliases,
+device and VM binding, mapped overlap and range bounds, exact lease roles and ranges, window
 bound, packet coverage and pairing, slot uniqueness and independent per-slot
 generation, ticket queue binding, preparation visibility, write-pointer and
 doorbell counts, prepublication restoration, pending and timeout custody,
@@ -1106,8 +1117,8 @@ history. Abandon and drop only disable observation; they preserve phase and
 custody. Stop retires all active abstract pair counts while preserving history
 and logical custody, without performing a final poll, flush, or cursor advance.
 
-The executable R24 model has 16 focused Rust tests. Nineteen pinned
-expected-negative witnesses cover event/stream half-installation, independent
+The executable R24 model has 16 focused Rust tests. Nineteen pinned standalone
+expected-negative files reconstruct event/stream half-installation, independent
 active event and stream duplication, retired-capacity reuse, poll and flush
 budget overruns, cyclic roster escape and identity substitution, continuation
 before poll, retryable poll custody and progress retirement, retryable flush
@@ -1169,7 +1180,7 @@ inputs and the storage extent are bounded by finite `u64` coordinates even
 though the Verus carrier uses mathematical natural numbers.
 
 The executable R25 model has 17 focused Rust tests. Eighteen pinned standalone
-expected-negative witnesses cover storage substitution, derived authorization,
+expected-negative files reconstruct storage substitution, derived authorization,
 read initialization, exact full extent, fallback after fast-path selection,
 retryable and ambiguous publication, pending custody, completion-before-restore,
 completion-coordinate authentication, post-retention quarantine, retryable
@@ -2015,8 +2026,8 @@ If a contracted model-retake fails after those moves, every moved ticket remains
 inside a distinct terminal owner and the ordinary completed output stays empty.
 That relation is not a proof about any concrete production retake path.
 
-The 15 independent countermodels reject combined q=16, omitted directional
-capacity, unbalanced placement, duplicate session queue IDs, duplicate/missing
+The 15 independent countermodels reconstruct and reject combined q=16, omitted
+directional capacity, unbalanced placement, duplicate session queue IDs, duplicate/missing
 request indices, ticket slot/generation substitution, dropped prepared roster,
 late output allocation, first-Pending early return, prefix retirement, timeout
 before full scan together with timeout custody loss, error-as-Pending
@@ -2085,8 +2096,8 @@ exposes no normal prefix; terminal custody retains the complete ordered batch,
 records the restored prefix length for audit, preserves the committed cursor,
 and leaves every owner quarantined. Quarantine has no modeled exit.
 
-The 21 independent countermodels reject combined q=16, a 64-request shard,
-device-owner aliasing, device-storage aliasing, host-storage aliasing,
+The 21 independent countermodels reconstruct and reject combined q=16, a
+64-request shard, device-owner aliasing, device-storage aliasing, host-storage aliasing,
 directional-pair currentness substitution, host binding substitution,
 non-device-local persistent storage, a linear-copy size above the packet
 maximum, reordered preparation recovery, two indeterminate shards, a dropped
@@ -2199,8 +2210,8 @@ and returns SessionOwned authority. Thus the modeled complete lifecycle has
 exactly two scans, at its transfer and restore trust boundaries. Scan counts are
 abstract events, not timing or performance evidence.
 
-The 17 countermodels reject unvalidated minting, foundation substitution,
-omitted issuer identity, duplicate loaning, loan-generation overflow,
+The 17 standalone countermodels reconstruct and reject unvalidated minting,
+foundation substitution, omitted issuer identity, duplicate loaning, loan-generation overflow,
 cross-session or stale reclaim, out-of-phase reclaim, noninductive or stale
 mutation, certificate substitution, restore without a certificate, omitted
 final scan, retained certificate after restore, per-cycle rescanning, reusable
@@ -2273,7 +2284,7 @@ reader-release path.
 | Publication boundary | **Proved abstractly** | Exact B37 packing, one reservation/claim/doorbell, bodies before headers, no completion loads, retry only on pre-effect ring occupancy, and opaque terminal custody from preclaim invariant or first claim attempt onward. |
 | Retry rollback | **Proved abstractly** | Complete immutable target, route, arena-well-formedness, and exact live-reader preflight precedes all releases; failure mutates nothing, while success releases in reverse, returns events in original order, and consumes target liveness. |
 | Executable bounded model | **Checked** | Sixteen focused Rust tests exercise boundaries, substitutions, minting, packing, publication faults, multi-owner rollback, failure atomicity, exact reader records, and target replay rejection. |
-| Boundary countermodels | **Rejected** | Twenty-nine pinned mutations fail their named target split, route, rollback, epoch, retry, pre-poll, graph, packing, ordering, signal, live-reader, replay, or custody postcondition. |
+| Boundary countermodels | **Rejected** | Twenty-nine pinned standalone expected-negative files reconstruct target split, route, rollback, epoch, retry, pre-poll, graph, packing, ordering, signal, live-reader, replay, or custody faults and fail their named postconditions. |
 | Public facade, dependent-completion release, production Rust refinement, native/KFD behavior, hardware, parity, or performance | **Not established** | Explicitly outside the R45 proof boundary. |
 
 ## R46 gfx942 striped-SDMA tail wait
@@ -2457,14 +2468,16 @@ production functions implement the abstract transitions.
 | Lifecycle and pin discharge | **Proved abstractly and checked** | Exact five-phase chain; Pending is inert; only exact completion atomically releases every source reader/event pair once; target-event custody remains independently pinned. |
 | Retry, terminal, recycle, teardown | **Proved abstractly and checked** | Ring-full retry and rollback have no native effect; `SignalPinned` recycle preserves completed custody and state; terminal is absorbing; teardown iff active and all pin counts are zero. |
 | Executable bounded model | **Checked** | Eleven Rust tests cover the full path, production-named traces, pure preflight, burned rollback, exact 128/129 capacity, exact fan-in, substitutions, terminal absorption, pin-gated recycle, and teardown. |
-| Boundary countermodels | **Rejected** | Fourteen pinned mutations fail the active bound, epoch timing/nonzero rule, one-arena route, phase chain, completion identity, one-time paired release, custody stability, retry no-effect, pin-gated recycle, terminal absorption, or teardown postcondition. |
+| Boundary countermodels | **Rejected** | Fourteen pinned standalone expected-negative files reconstruct active-bound, epoch, route, phase, completion, release, custody, retry, recycle, terminal, or teardown faults and fail their named postconditions. |
 | Rust-to-Verus refinement, production/native truth, KFD/HSA/HIP behavior, hardware, progress, parity, or performance | **Not established** | Explicitly outside the R51 proof boundary. |
 
 ## R56 two-native SDMA mux
 
 `r56_two_native_sdma_mux_v1.rs` verifies exactly 41 obligations over an
 independent finite abstraction of logical-lane multiplexing. The runner pins
-that proof and 25 standalone expected-negative countermodels. The executable
+that proof and 25 standalone expected-negative files. Each reconstructs an
+explicit adverse value, relation, publication prefix, or custody state and
+fails its named postcondition. The executable
 no-std model has 19 focused tests, including exhaustive admission checks over
 all five lane counts, every valid cursor, and all 125 request counts in
 `2..=126`.
@@ -2510,7 +2523,7 @@ carrier before such an unwind could be modeled as recoverable.
 | Capacity and identities | **Proved abstractly and checked** | Requests `2..=126`, at most 63 per native, with exact request/lane/native/engine/queue/slot/generation/packet coordinates. |
 | Publication and cursor | **Proved abstractly and checked** | Full active success publishes in cursor-rotated native order with two pointer publications, doorbells, and tails; cursor commits only after exact two-native success and closing currentness. |
 | Failure and release custody | **Proved abstractly and checked** | Opening rejection and recoverable zero-effect have prefix zero; a first-native indeterminate outcome has exact first/untouched shard custody; second-native recoverable or indeterminate outcomes have the exact rotated prefix and coordinates; closing failure has prefix two without commit; post-commit timeout retains exact published custody; only direct equality with the exact ticket roster releases all requests once and in order. Post-effect panic is excluded. |
-| Boundary countermodels | **Rejected** | Twenty-five pinned mutations cover all ticket coordinates, tail substitution, singleton, missing/duplicate request, unstable FIFO, native and aggregate overflow, false striped-2 relabel, publication counts, recoverable native effect, first-native indeterminate shard custody, partial commit and coordinates, fixed publication order, closing-prefix loss, timeout phase/custody, and release-roster identity. |
+| Boundary countermodels | **Rejected** | Twenty-five pinned standalone expected-negative files reconstruct all ticket-coordinate and tail substitutions, singleton, missing/duplicate request, unstable FIFO, native and aggregate overflow, false striped-2 relabel, publication-count, recoverable-effect, indeterminate-custody, partial-commit/coordinate, publication-order, closing-prefix, timeout-custody, and release-roster faults. They are not source transformations of the positive R56 proof. |
 | Rust-to-Verus refinement, native queue implementation, packet/atomic truth, KFD/HSA/HIP behavior, hardware concurrency, progress, parity, or performance | **Not established** | Explicitly outside the standalone R56 model and proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the

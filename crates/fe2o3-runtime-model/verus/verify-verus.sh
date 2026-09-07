@@ -589,6 +589,9 @@ pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
 source_checker="$repo_root/examples/wave64_collectives_v1/check-proof-source.py"
+negative_quality_checker="$script_dir/check-negative-quality.py"
+negative_quality_reject_fixture="$script_dir/tests/fixtures/negative-quality-direct-literal.rs"
+negative_quality_accept_fixture="$script_dir/tests/fixtures/negative-quality-adverse-input.rs"
 verus_bin=${VERUS:-verus}
 
 if [ "$#" -ne 0 ]; then
@@ -1193,6 +1196,9 @@ expected_negative_r56_timeout_custody=$(read_pin "$pin_dir/NEGATIVE_R56_TIMEOUT_
 expected_negative_r56_unstable_fifo=$(read_pin "$pin_dir/NEGATIVE_R56_UNSTABLE_FIFO_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
+expected_negative_quality_checker=$(read_pin "$pin_dir/NEGATIVE_QUALITY_CHECKER_SHA256")
+expected_negative_quality_reject_fixture=$(read_pin "$pin_dir/NEGATIVE_QUALITY_REJECT_FIXTURE_SHA256")
+expected_negative_quality_accept_fixture=$(read_pin "$pin_dir/NEGATIVE_QUALITY_ACCEPT_FIXTURE_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
 expected_version=$(sed -n '1p' "$pin_dir/VERUS_VERSION")
 case "$expected_version" in
@@ -1801,6 +1807,9 @@ check_sources() {
     check_digest "$expected_negative_r56_timeout_custody" "$negative_r56_timeout_custody"
     check_digest "$expected_negative_r56_unstable_fifo" "$negative_r56_unstable_fifo"
     check_digest "$expected_source_checker" "$source_checker"
+    check_digest "$expected_negative_quality_checker" "$negative_quality_checker"
+    check_digest "$expected_negative_quality_reject_fixture" "$negative_quality_reject_fixture"
+    check_digest "$expected_negative_quality_accept_fixture" "$negative_quality_accept_fixture"
 }
 
 check_sources
@@ -2388,6 +2397,11 @@ check_sources
     "$negative_r56_timeout_custody" \
     "$negative_r56_unstable_fifo"
 
+"$negative_quality_checker" --self-test \
+    "$negative_quality_reject_fixture" \
+    "$negative_quality_accept_fixture"
+"$negative_quality_checker" "$script_dir/negative"
+
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
     *) verus_path=$(command -v "$verus_bin" 2>/dev/null || true) ;;
@@ -2478,7 +2492,7 @@ check_negative() {
     if ! grep -Fq "$marker" "$log" \
         || ! grep -Fq 'error: postcondition not satisfied' "$log" \
         || ! grep -Fq 'verification results:: 0 verified, 1 errors' "$log"; then
-        printf 'FAIL: mutation failed at an unexpected verification surface: %s\n' "$label" >&2
+        printf 'FAIL: expected-negative proof failed at an unexpected verification surface: %s\n' "$label" >&2
         cat "$log" >&2
         exit 1
     fi
@@ -3073,7 +3087,7 @@ check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 mutations=535'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 expected_negative_files=535'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2
