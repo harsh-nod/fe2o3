@@ -206,12 +206,13 @@ same four statistical/shape values, logical queue count, and profile. HIP uses
 that many nonblocking streams. HSA uses that many logical dependency lanes;
 `physical_engine_count=not-observed` prevents the logical width from being
 presented as a hardware-engine count. Every path assigns request `i` to
-`(submission_ordinal + i) % q`, publishes in rotating queue-major order, and
-validates every byte after every H2D-then-D2H round. Allocation, queue/stream
-creation, request construction, pattern initialization, validation, and
-teardown are outside the measured intervals.
+`(cursor + i) % q`, publishes in cursor-relative queue-major order, and advances
+the next cursor by the completed phase's request count modulo `q`. It validates
+every byte after every H2D-then-D2H round. Allocation, queue/stream creation,
+request construction, pattern initialization, validation, and teardown are
+outside the measured intervals.
 
-Rows use `fe2o3.async-copy-striped-benchmark.v2`. Each direction retains 30
+Rows use `fe2o3.async-copy-striped-benchmark.v3`. Each direction retains 30
 raw submit, wait, and E2E nanosecond samples plus p50/p95 summaries and E2E p50
 GB/s. The checker recomputes every summary and throughput value and requires
 `e2e[i] == submit[i] + wait[i]`. KFD rows retain canonical `role:queue-id`

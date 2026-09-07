@@ -70,6 +70,18 @@ class R40StripedRunnerContractTests(unittest.TestCase):
         self.assertIn('"${depth}" "${warmups}" "${samples}"', self.source)
         self.assertIn("--example kfd-sdma-copy-benchmark", self.source)
 
+    def test_native_comparators_use_request_count_cursor_continuation(self) -> None:
+        common = RUNNER.with_name("striped_copy_benchmark_common.hpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"fe2o3.async-copy-striped-benchmark.v3"', common)
+        self.assertIn('"continuing-round-robin-v1"', common)
+        self.assertIn('"cursor-queue-major-v1"', common)
+        for source_name in ("striped_copy_hip.cpp", "striped_copy_hsa.cpp"):
+            source = RUNNER.with_name(source_name).read_text(encoding="utf-8")
+            self.assertEqual(source.count("continuation_cursor("), 2)
+            self.assertNotIn("submission_ordinal", source)
+
     def test_every_phase_is_guarded_and_reaped(self) -> None:
         self.assertIn('"${host_guard}" monitor', self.source)
         self.assertIn("--observer-cpu", self.source)

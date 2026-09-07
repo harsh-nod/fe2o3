@@ -15,9 +15,9 @@
 
 namespace fe2o3::r40 {
 
-constexpr char kSchema[] = "fe2o3.async-copy-striped-benchmark.v2";
-constexpr char kAssignment[] = "rotating-round-robin-v1";
-constexpr char kSubmitOrder[] = "rotating-queue-major-v1";
+constexpr char kSchema[] = "fe2o3.async-copy-striped-benchmark.v3";
+constexpr char kAssignment[] = "continuing-round-robin-v1";
+constexpr char kSubmitOrder[] = "cursor-queue-major-v1";
 constexpr std::size_t kMaximumBytes = 4U * 1024U * 1024U - 1024U;
 constexpr std::size_t kMaximumDepth = 1008;
 constexpr std::size_t kMaximumLogicalQueues = 16;
@@ -86,14 +86,14 @@ inline std::uint8_t round_pattern(std::size_t round, std::size_t request) {
 }
 
 inline std::vector<std::size_t>
-publication_order(std::size_t submission_ordinal, std::size_t depth,
+publication_order(std::size_t cursor, std::size_t depth,
                   std::size_t logical_queue_count) {
   std::vector<std::size_t> order;
   if (logical_queue_count == 0 || logical_queue_count > kMaximumLogicalQueues ||
       depth == 0 || depth > kMaximumDepth || depth % logical_queue_count != 0)
     return order;
   order.reserve(depth);
-  const std::size_t origin = submission_ordinal % logical_queue_count;
+  const std::size_t origin = cursor % logical_queue_count;
   for (std::size_t lane_offset = 0; lane_offset < logical_queue_count;
        ++lane_offset) {
     const std::size_t lane = (origin + lane_offset) % logical_queue_count;
@@ -103,6 +103,18 @@ publication_order(std::size_t submission_ordinal, std::size_t depth,
     }
   }
   return order;
+}
+
+inline std::size_t continuation_cursor(std::size_t cursor,
+                                       std::size_t request_count,
+                                       std::size_t logical_queue_count) {
+  if (logical_queue_count == 0)
+    return 0;
+  const std::size_t origin = cursor % logical_queue_count;
+  const std::size_t advance = request_count % logical_queue_count;
+  return origin >= logical_queue_count - advance
+             ? origin - (logical_queue_count - advance)
+             : origin + advance;
 }
 
 inline std::uint64_t elapsed_ns(std::chrono::steady_clock::time_point start,

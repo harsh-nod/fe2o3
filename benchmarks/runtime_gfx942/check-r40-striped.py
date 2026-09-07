@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Iterable
 
 
-ROW_SCHEMA = "fe2o3.async-copy-striped-benchmark.v2"
+ROW_SCHEMA = "fe2o3.async-copy-striped-benchmark.v3"
 EVIDENCE_SCHEMA = "fe2o3.r40-striped-evidence.v1"
 MANIFEST_SCHEMA = "fe2o3.r40-striped-evidence-manifest.v1"
 BACKEND_ORDERS = {
@@ -50,8 +50,8 @@ EXPECTED_UNIQUE_ID = "0xd2e26fef80cf5c33"
 FIXED_ROW = {
     "schema": ROW_SCHEMA,
     "depth": "112",
-    "assignment": "rotating-round-robin-v1",
-    "submit_order": "rotating-queue-major-v1",
+    "assignment": "continuing-round-robin-v1",
+    "submit_order": "cursor-queue-major-v1",
     "direction": "h2d-then-d2h",
     "warmups": "10",
     "samples": "30",

@@ -63,6 +63,18 @@ int main() {
   assert(fe2o3::r40::publication_order(0, 112, 0).empty());
   assert(fe2o3::r40::publication_order(0, 111, 14).empty());
   assert(fe2o3::r40::publication_order(0, 112, 17).empty());
+  std::size_t cursor = 3;
+  std::size_t expected_cursor = cursor;
+  for (std::size_t phase = 0; phase < 9; ++phase) {
+    expected_cursor = (expected_cursor + 5) % 4;
+    cursor = fe2o3::r40::continuation_cursor(cursor, 5, 4);
+    assert(cursor == expected_cursor);
+  }
+  assert(fe2o3::r40::continuation_cursor(
+             std::numeric_limits<std::size_t>::max(),
+             std::numeric_limits<std::size_t>::max(), 16) ==
+         14);
+  assert(fe2o3::r40::continuation_cursor(7, 5, 0) == 0);
   parse({"benchmark", "0", "0xd2e26fef80cf5c33", "4096", "112", "10", "30",
          "16", "combined-striped16"},
         &accepted);

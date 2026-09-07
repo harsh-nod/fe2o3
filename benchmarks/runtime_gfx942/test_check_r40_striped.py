@@ -383,6 +383,17 @@ class R40StripedCheckerTests(unittest.TestCase):
         for backend in ("kfd", "hsa", "hip"):
             CHECKER.validate_row(valid_row(backend))
 
+    def test_prior_schema_and_rotation_labels_are_rejected(self) -> None:
+        for field, stale in (
+            ("schema", "fe2o3.async-copy-striped-benchmark.v2"),
+            ("assignment", "rotating-round-robin-v1"),
+            ("submit_order", "rotating-queue-major-v1"),
+        ):
+            row = valid_row("kfd")
+            row[field] = stale
+            with self.assertRaisesRegex(CHECKER.CheckError, field):
+                CHECKER.validate_row(row)
+
     def test_zero_logical_queue_count_is_not_admitted(self) -> None:
         row = valid_row("hip")
         row["logical_queue_count"] = "0"

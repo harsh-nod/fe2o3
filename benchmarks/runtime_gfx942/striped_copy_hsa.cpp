@@ -256,24 +256,22 @@ int main(int argc, char **argv) {
                                                    config.logical_queue_count));
 
   fe2o3::r40::PhaseSamples h2d(config.samples), d2h(config.samples);
-  std::size_t submission_ordinal = 0;
+  std::size_t cursor = 0;
   for (std::size_t round = 0; round < config.rounds; ++round) {
     for (std::size_t request = 0; request < config.depth; ++request) {
       const std::uint8_t value = fe2o3::r40::round_pattern(round, request);
       std::memset(upload[request], value, config.bytes);
       std::memset(download[request], value ^ 0xffU, config.bytes);
     }
-    const auto run_phase = [&](bool upload_direction,
-                               std::size_t submission_ordinal,
+    const auto run_phase = [&](bool upload_direction, std::size_t cursor,
                                fe2o3::r40::PhaseSamples *samples) {
-      const auto &order =
-          orders[submission_ordinal % config.logical_queue_count];
+      const auto &order = orders[cursor % config.logical_queue_count];
       std::vector<hsa_signal_t> lane_tail(config.logical_queue_count);
       std::vector<bool> lane_has_tail(config.logical_queue_count, false);
       const auto t0 = std::chrono::steady_clock::now();
       for (const std::size_t request : order) {
         const std::size_t lane =
-            (submission_ordinal + request) % config.logical_queue_count;
+            (cursor + request) % config.logical_queue_count;
         const std::uint32_t dependency_count = lane_has_tail[lane] ? 1U : 0U;
         const hsa_signal_t *dependency =
             lane_has_tail[lane] ? &lane_tail[lane] : nullptr;
@@ -291,7 +289,7 @@ int main(int argc, char **argv) {
       for (std::size_t lane_offset = 0;
            lane_offset < config.logical_queue_count; ++lane_offset) {
         const std::size_t lane =
-            (submission_ordinal + lane_offset) % config.logical_queue_count;
+            (cursor + lane_offset) % config.logical_queue_count;
         if (!lane_has_tail[lane])
           std::exit(3);
         const hsa_signal_value_t observed =
@@ -308,10 +306,12 @@ int main(int argc, char **argv) {
                            fe2o3::r40::elapsed_ns(t1, t2)))
         std::exit(3);
     };
-    run_phase(true, submission_ordinal, &h2d);
-    submission_ordinal = (submission_ordinal + 1) % config.logical_queue_count;
-    run_phase(false, submission_ordinal, &d2h);
-    submission_ordinal = (submission_ordinal + 1) % config.logical_queue_count;
+    run_phase(true, cursor, &h2d);
+    cursor = fe2o3::r40::continuation_cursor(
+        cursor, config.depth, config.logical_queue_count);
+    run_phase(false, cursor, &d2h);
+    cursor = fe2o3::r40::continuation_cursor(
+        cursor, config.depth, config.logical_queue_count);
     if (!fe2o3::r40::validate_buffers(download, config.bytes, round, "hsa"))
       return 3;
   }
