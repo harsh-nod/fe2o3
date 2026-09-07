@@ -1,19 +1,22 @@
 //! Crate-private acceptance and native-publication custody for cross-queue dependencies.
 //!
-//! This module deliberately stops before the public lane facade and dependent
-//! completion transition. It authenticates one exact target use, preserves
-//! source events and reader leases across native outcomes, and binds successful
-//! publication to the exact final target packet without observing completion.
+//! It authenticates one exact target use, preserves source events and reader
+//! leases across native outcomes, binds successful publication to the exact
+//! final target packet, and releases source pins only after exact dependent
+//! completion. The public lane facade owns the sole production session owner.
 
 #![allow(dead_code)]
 
 use core::fmt;
+use std::collections::{HashMap, HashSet};
 
 use super::completion::{
     CompletionBatchRetentionV1, CompletionSignalArenaOwnerV1,
     ComputeDependencyOccurrenceIdentityV1, ComputeDependencyTargetPlanErrorV1,
-    Gfx942CompletionBatchV1, Gfx942CompletionErrorV1, Gfx942ComputeDependencyReaderLeaseV1,
-    Gfx942ComputeEventOccurrenceV1, PreparedComputeDependencyTargetV1,
+    Gfx942CompletedBatchV1, Gfx942CompletionBatchV1, Gfx942CompletionErrorV1,
+    Gfx942CompletionPollWithProgressV1, Gfx942ComputeDependencyReaderLeaseV1,
+    Gfx942ComputeEventOccurrenceV1, NativeCompletionSignalBackendV1,
+    PreparedComputeDependencyTargetV1,
 };
 use super::submit::{
     NativeAqlSubmissionBackendV1, NativeAqlSubmissionErrorV1, NativeAqlSubmissionOwnerV1,
@@ -26,35 +29,43 @@ use fe2o3_aql::{
     AqlTerminalDependencyDispatchCustodyV1,
 };
 
+/// Frozen storage bound for exact active dependency targets in one live session.
+pub const MAX_ACTIVE_DEPENDENCY_TARGETS_PER_SESSION_V1: usize = 128;
+
 /// Canonical claim boundary for the crate-private R43 publisher foundation.
 pub const GFX942_COMPUTE_DEPENDENCY_PUBLISHER_FOUNDATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-dependency-publisher-foundation-r43-v1\n",
-    "scope=crate-private-session-acceptance-native-b37-publication-and-linear-source-reader-custody\n",
-    "capacity=1-through-256-distinct-source-occurrences,1-through-52-barriers,one-final-dispatch\n",
+    "profile=fe2o3-mi300x-gfx942-compute-dependency-publisher-foundation-r48-v1\n",
+    "scope=session-owned-acceptance-source-occurrence-native-b37-publication-exact-dependent-completion-and-linear-release\n",
+    "capacity=1-through-256-distinct-source-occurrences,1-through-52-barriers,one-final-dispatch,128-preallocated-active-target-records-per-session\n",
     "acceptance=nonzero-session-occurrence,per-owner-unique-monotonic-epochs,burned-without-rewind\n",
-    "concurrency=one-active-dependent-target-per-owner\n",
+    "concurrency=one-production-owner-per-live-queue-session,multiple-exact-active-targets-keyed-by-unique-epoch,each-target-and-its-one-source-arena-use-distinct-session-lanes\n",
     "target=target-owner-sealed-bound-batch,event,completion-signal,session-occurrence,acceptance-epoch,queue,mapping,batch,slot-generation,dispatch-generation,final-packet-id\n",
-    "source=one-or-more-arenas,same-session,strictly-earlier-epoch,different-queue,published-occurrence,distinct-exact-signal\n",
-    "premise=exactly-one-acceptance-owner-per-session-occurrence-and-all-source-epochs-minted-by-that-owner-required-for-session-wide-uniqueness,not-enforced\n",
+    "source=exactly-one-authenticated-source-arena-per-target,same-session,strictly-earlier-epoch,different-queue,published-occurrence,distinct-exact-signal\n",
+    "source-event=one-private-prepublication-reservation-per-bound-source-packet,public-addressless-occurrence-exposed-only-after-exact-source-publication-and-packet-id-bind\n",
+    "validation=preallocated-hash-ledger-with-one-pass-expected-linear-exact-signal-duplicate-preflight\n",
+    "owner=sole-private-owner-is-structurally-retained-in-live-session,session-occurrence-derived-from-the-nonzero-monotonic-queue-session-identity,all-source-and-target-epochs-minted-there\n",
     "prepublication-failure=exact-acceptance,sealed-target-event-bound-resources,and-source-reader-custody-returned-without-native-publication\n",
     "native=one-complete-ring-reservation,one-write-index-claim,all-bodies-before-all-release-headers,one-final-doorbell\n",
     "rollback=ring-capacity-only-retryable,complete-immutable-exact-source-arena-route-and-target-custody-preflight,source-reader-leases-released-in-reverse,events-returned-in-original-order,before-target-resource-cancel\n",
-    "future-release=retained-reader-custody-preserves-source-arena-identities-for-the-same-owner-roster-preflight;dependent-completion-facade-excluded\n",
-    "terminal=preclaim-native-invariant-or-first-claim-attempt-and-later-poisons,opaque-custody,no-retry-conversion\n",
+    "completion=exact-target-owner-session-epoch-queue-mapping-batch-slot-dispatch-and-packet-occurrence-observed-before-one-atomic-source-reader-event-release\n",
+    "recycle=source-and-target-signal-reset-blocked-while-event-or-reader-pinned,source-enabled-after-exact-dependent-completion-release,target-enabled-after-explicit-target-event-release\n",
+    "terminal=preclaim-native-invariant-or-first-claim-attempt-and-later-poisons,opaque-custody,native-callback-panic-is-typed-callback-panic,no-retry-conversion\n",
     "observation=signal-address-identity-projection-only,no-completion-load-or-host-prepoll\n",
-    "proof=executable-host-state-and-native-callback-fault-tests-only\n",
-    "excluded=public-lane-facade,duplicate-owner-enforcement,source-event-epoch-minting-facade,dependent-completion-observation-and-reader-release,hardware,performance,parity,machine-checked-refinement\n",
+    "facade=public-move-only-addressless-lane-event-source-batch-target-poll-and-release-custody,successful-target-publication-returns-one-stable-boxed-dispatch-and-independent-published-target-event,no-signal-address-packet-id-slot-generation-or-reader-ticket-authority\n",
+    "proof=executable-host-state-native-callback-fault-hostile-identity-and-source-shape-tests-only\n",
+    "excluded=native-ordering-or-completion-truth-refinement,hardware,performance,parity,machine-checked-refinement\n",
 );
 
 /// SHA-256 of [`GFX942_COMPUTE_DEPENDENCY_PUBLISHER_FOUNDATION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_DEPENDENCY_PUBLISHER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "f25f2c714b1d6b7e602f1d39941aede9f84703af366ecd09788016ab1f9fdbed";
+    "f988416cc136b8c09f3716af33a50207a929b3e53459e0a6de04abdb930008f7";
 
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum ComputeDependencyTargetUseErrorV1 {
     InvalidSessionOccurrence,
     AcceptanceEpochExhausted,
     ActiveTargetUse,
+    ActiveTargetCapacity,
     Poisoned,
     EmptyDependencyRoster,
     TooManyDependencies,
@@ -76,6 +87,7 @@ enum ComputeDependencyTargetUsePhaseV1 {
     Prepared,
     NativePublished,
     Published,
+    Completed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,12 +99,12 @@ struct ActiveComputeDependencyTargetUseV1 {
 
 /// Per-owner issuer and exact active-target ledger.
 ///
-/// Session-wide uniqueness requires exactly one such owner for the session
-/// occurrence; construction does not enforce that external ownership premise.
+/// Production construction occurs exactly once inside the live queue session.
+/// Unit tests may construct isolated owners to exercise the foundation.
 pub(super) struct ComputeDependencySessionOwnerV1 {
     session_occurrence: u64,
     next_acceptance_epoch: Option<u64>,
-    active: Option<ActiveComputeDependencyTargetUseV1>,
+    active: HashMap<u64, ActiveComputeDependencyTargetUseV1>,
     poisoned: bool,
 }
 
@@ -101,12 +113,44 @@ impl ComputeDependencySessionOwnerV1 {
         if session_occurrence == 0 {
             return Err(ComputeDependencyTargetUseErrorV1::InvalidSessionOccurrence);
         }
+        let mut active = HashMap::new();
+        active
+            .try_reserve(MAX_ACTIVE_DEPENDENCY_TARGETS_PER_SESSION_V1)
+            .map_err(|_| ComputeDependencyTargetUseErrorV1::Allocation)?;
         Ok(Self {
             session_occurrence,
             next_acceptance_epoch: Some(1),
-            active: None,
+            active,
             poisoned: false,
         })
+    }
+
+    pub(super) const fn session_occurrence(&self) -> u64 {
+        self.session_occurrence
+    }
+
+    pub(super) fn ensure_idle(&self) -> Result<(), ComputeDependencyTargetUseErrorV1> {
+        if self.poisoned {
+            return Err(ComputeDependencyTargetUseErrorV1::Poisoned);
+        }
+        if !self.active.is_empty() {
+            return Err(ComputeDependencyTargetUseErrorV1::ActiveTargetUse);
+        }
+        Ok(())
+    }
+
+    pub(super) fn poison(&mut self) {
+        self.poisoned = true;
+    }
+
+    pub(super) fn ensure_target_capacity(&self) -> Result<(), ComputeDependencyTargetUseErrorV1> {
+        if self.poisoned {
+            return Err(ComputeDependencyTargetUseErrorV1::Poisoned);
+        }
+        if self.active.len() >= MAX_ACTIVE_DEPENDENCY_TARGETS_PER_SESSION_V1 {
+            return Err(ComputeDependencyTargetUseErrorV1::ActiveTargetCapacity);
+        }
+        Ok(())
     }
 
     /// Issues and burns one epoch. Cancellation never rewinds this counter.
@@ -115,9 +159,6 @@ impl ComputeDependencySessionOwnerV1 {
     ) -> Result<ComputeDependencyAcceptanceV1, ComputeDependencyTargetUseErrorV1> {
         if self.poisoned {
             return Err(ComputeDependencyTargetUseErrorV1::Poisoned);
-        }
-        if self.active.is_some() {
-            return Err(ComputeDependencyTargetUseErrorV1::ActiveTargetUse);
         }
         let Some(epoch) = self.next_acceptance_epoch else {
             self.poisoned = true;
@@ -152,13 +193,16 @@ impl ComputeDependencySessionOwnerV1 {
                 readers,
             ));
         }
-        if self.active.is_some() {
+        if self.active.contains_key(&acceptance.epoch) {
             return Err(fail(
                 ComputeDependencyTargetUseErrorV1::ActiveTargetUse,
                 acceptance,
                 target,
                 readers,
             ));
+        }
+        if let Err(error) = self.ensure_target_capacity() {
+            return Err(fail(error, acceptance, target, readers));
         }
         if let Err(error) = target_owner.validate_dependency_target_v1(&target) {
             return Err(fail(
@@ -217,7 +261,8 @@ impl ComputeDependencySessionOwnerV1 {
             dependency_count: readers.len() as u16,
             phase: ComputeDependencyTargetUsePhaseV1::Prepared,
         };
-        self.active = Some(key);
+        let replaced = self.active.insert(key.target.acceptance_epoch, key);
+        debug_assert!(replaced.is_none());
         Ok(PreparedComputeDependencyTargetUseV1 {
             key,
             target_completion,
@@ -234,7 +279,9 @@ impl ComputeDependencySessionOwnerV1 {
         backend: &mut B,
     ) -> Result<NativePublishedComputeDependencyTargetUseV1, ComputeDependencyPublicationFailureV1>
     {
-        if self.poisoned || self.active != Some(prepared.key) {
+        if self.poisoned
+            || self.active.get(&prepared.key.target.acceptance_epoch) != Some(&prepared.key)
+        {
             self.poisoned = true;
             return Err(ComputeDependencyPublicationFailureV1::Terminal(Box::new(
                 TerminalComputeDependencyTargetUseV1 {
@@ -243,7 +290,7 @@ impl ComputeDependencySessionOwnerV1 {
                     key: prepared.key,
                     target_completion: TerminalComputeDependencyCompletionV1::Bound {
                         retention: prepared.target_completion,
-                        event: prepared.target_event,
+                        event: Some(prepared.target_event),
                     },
                     readers: prepared.readers,
                     plan: TerminalComputeDependencyPlanV1::BeforeClaim(prepared.plan),
@@ -259,7 +306,7 @@ impl ComputeDependencySessionOwnerV1 {
         } = prepared;
         match submission.submit_dependency_dispatch_classified(plan, backend) {
             Ok(publication) => {
-                let Some(active) = self.active.as_mut() else {
+                let Some(active) = self.active.get_mut(&key.target.acceptance_epoch) else {
                     unreachable!("active target was validated before native publication")
                 };
                 active.phase = ComputeDependencyTargetUsePhaseV1::NativePublished;
@@ -298,7 +345,7 @@ impl ComputeDependencySessionOwnerV1 {
                         key,
                         target_completion: TerminalComputeDependencyCompletionV1::Bound {
                             retention: target_completion,
-                            event: target_event,
+                            event: Some(target_event),
                         },
                         readers,
                         plan: TerminalComputeDependencyPlanV1::BeforeClaim(prepared),
@@ -318,7 +365,7 @@ impl ComputeDependencySessionOwnerV1 {
                         key,
                         target_completion: TerminalComputeDependencyCompletionV1::Bound {
                             retention: target_completion,
-                            event: target_event,
+                            event: Some(target_event),
                         },
                         readers,
                         plan: TerminalComputeDependencyPlanV1::Ambiguous(custody),
@@ -328,12 +375,32 @@ impl ComputeDependencySessionOwnerV1 {
         }
     }
 
+    pub(super) fn terminal_before_native_publication(
+        &mut self,
+        prepared: PreparedComputeDependencyTargetUseV1,
+        error: NativeAqlSubmissionErrorV1,
+    ) -> Box<TerminalComputeDependencyTargetUseV1> {
+        self.poisoned = true;
+        Box::new(TerminalComputeDependencyTargetUseV1 {
+            error,
+            boundary: None,
+            key: prepared.key,
+            target_completion: TerminalComputeDependencyCompletionV1::Bound {
+                retention: prepared.target_completion,
+                event: Some(prepared.target_event),
+            },
+            readers: prepared.readers,
+            plan: TerminalComputeDependencyPlanV1::BeforeClaim(prepared.plan),
+        })
+    }
+
     #[allow(clippy::result_large_err)]
     pub(super) fn bind_published_target(
         &mut self,
         native: NativePublishedComputeDependencyTargetUseV1,
         target_owner: &mut CompletionSignalArenaOwnerV1,
-    ) -> Result<PublishedComputeDependencyTargetUseV1, TerminalComputeDependencyTargetUseV1> {
+    ) -> Result<PublishedComputeDependencyTargetBundleV1, TerminalComputeDependencyTargetUseV1>
+    {
         let target_batch = match target_owner.mark_published_retaining(
             native.target_completion,
             native.publication.last_packet_id(),
@@ -347,7 +414,7 @@ impl ComputeDependencySessionOwnerV1 {
                     key: native.key,
                     target_completion: TerminalComputeDependencyCompletionV1::Bound {
                         retention,
-                        event: native.target_event,
+                        event: Some(native.target_event),
                     },
                     readers: native.readers,
                     plan: TerminalComputeDependencyPlanV1::PostPublicationCompletion(error),
@@ -368,7 +435,7 @@ impl ComputeDependencySessionOwnerV1 {
                     key: native.key,
                     target_completion: TerminalComputeDependencyCompletionV1::Published {
                         batch: target_batch,
-                        event: native.target_event,
+                        event: Some(native.target_event),
                     },
                     readers: native.readers,
                     plan: TerminalComputeDependencyPlanV1::PostPublicationCompletion(error),
@@ -387,7 +454,7 @@ impl ComputeDependencySessionOwnerV1 {
                     key: native.key,
                     target_completion: TerminalComputeDependencyCompletionV1::Published {
                         batch: target_batch,
-                        event,
+                        event: Some(event),
                     },
                     readers: native.readers,
                     plan: TerminalComputeDependencyPlanV1::PostPublicationCompletion(error),
@@ -399,7 +466,7 @@ impl ComputeDependencySessionOwnerV1 {
             ..native.key.target
         };
         if self.poisoned
-            || self.active != Some(native.key)
+            || self.active.get(&native.key.target.acceptance_epoch) != Some(&native.key)
             || published_target != expected
             || native.publication.dependency_count() != native.key.dependency_count
         {
@@ -410,7 +477,7 @@ impl ComputeDependencySessionOwnerV1 {
                 key: native.key,
                 target_completion: TerminalComputeDependencyCompletionV1::Published {
                     batch: target_batch,
-                    event: target_event,
+                    event: Some(target_event),
                 },
                 readers: native.readers,
                 plan: TerminalComputeDependencyPlanV1::Published(native.publication),
@@ -421,14 +488,240 @@ impl ComputeDependencySessionOwnerV1 {
             phase: ComputeDependencyTargetUsePhaseV1::Published,
             ..native.key
         };
-        self.active = Some(key);
-        Ok(PublishedComputeDependencyTargetUseV1 {
+        let replaced = self.active.insert(key.target.acceptance_epoch, key);
+        debug_assert!(replaced.is_some());
+        Ok(PublishedComputeDependencyTargetBundleV1 {
+            published: PublishedComputeDependencyTargetUseV1 {
+                key,
+                target_batch,
+                readers: native.readers,
+                publication: native.publication,
+            },
+            target_event,
+        })
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn observe_published_target_once<B: NativeCompletionSignalBackendV1>(
+        &mut self,
+        published: PublishedComputeDependencyTargetUseV1,
+        target_owner: &mut CompletionSignalArenaOwnerV1,
+        backend: &mut B,
+    ) -> Result<ComputeDependencyTargetPollV1, TerminalComputeDependencyTargetUseV1> {
+        if self.poisoned
+            || self.active.get(&published.key.target.acceptance_epoch) != Some(&published.key)
+        {
+            self.poisoned = true;
+            return Err(TerminalComputeDependencyTargetUseV1 {
+                error: NativeAqlSubmissionErrorV1::Poisoned,
+                boundary: Some(AqlDependencyDispatchPublicationBoundaryV1::Doorbell),
+                key: published.key,
+                target_completion: TerminalComputeDependencyCompletionV1::Published {
+                    batch: published.target_batch,
+                    event: None,
+                },
+                readers: published.readers,
+                plan: TerminalComputeDependencyPlanV1::Published(published.publication),
+            });
+        }
+        let PublishedComputeDependencyTargetUseV1 {
             key,
             target_batch,
-            target_event,
-            readers: native.readers,
-            publication: native.publication,
+            readers,
+            publication,
+        } = published;
+        match target_owner.observe_once_with_progress_retaining(target_batch, backend) {
+            Ok(Gfx942CompletionPollWithProgressV1::Pending { batch, .. }) => Ok(
+                ComputeDependencyTargetPollV1::Pending(PublishedComputeDependencyTargetUseV1 {
+                    key,
+                    target_batch: batch,
+                    readers,
+                    publication,
+                }),
+            ),
+            Ok(Gfx942CompletionPollWithProgressV1::Ready { completed, .. }) => {
+                let completed_key = ActiveComputeDependencyTargetUseV1 {
+                    phase: ComputeDependencyTargetUsePhaseV1::Completed,
+                    ..key
+                };
+                let replaced = self
+                    .active
+                    .insert(completed_key.target.acceptance_epoch, completed_key);
+                debug_assert!(replaced.is_some());
+                Ok(ComputeDependencyTargetPollV1::Ready(
+                    CompletedComputeDependencyTargetUseV1 {
+                        key: completed_key,
+                        target_completion: completed,
+                        readers,
+                        publication,
+                    },
+                ))
+            }
+            Err((error, batch)) => {
+                self.poisoned = true;
+                Err(TerminalComputeDependencyTargetUseV1 {
+                    error: NativeAqlSubmissionErrorV1::InvalidQueue(
+                        "dependent completion observation",
+                    ),
+                    boundary: Some(AqlDependencyDispatchPublicationBoundaryV1::Doorbell),
+                    key,
+                    target_completion: TerminalComputeDependencyCompletionV1::Published {
+                        batch,
+                        event: None,
+                    },
+                    readers,
+                    plan: TerminalComputeDependencyPlanV1::PostPublicationCompletion(error),
+                })
+            }
+        }
+    }
+
+    /// Consumes source reader and event pins only after exact dependent
+    /// completion. The production profile has two compute lanes, so all valid
+    /// sources for one target belong to the one other lane owner.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn release_after_dependent_completion(
+        &mut self,
+        completed: CompletedComputeDependencyTargetUseV1,
+        target_owner: &CompletionSignalArenaOwnerV1,
+        source_owner: &mut CompletionSignalArenaOwnerV1,
+    ) -> Result<ReleasedComputeDependencyTargetUseV1, TerminalComputeDependencyTargetUseV1> {
+        let fail = |owner: &mut Self,
+                    error: Gfx942CompletionErrorV1,
+                    completed: CompletedComputeDependencyTargetUseV1| {
+            owner.poisoned = true;
+            TerminalComputeDependencyTargetUseV1 {
+                error: NativeAqlSubmissionErrorV1::InvalidQueue(
+                    "dependent completion reader release",
+                ),
+                boundary: Some(AqlDependencyDispatchPublicationBoundaryV1::Doorbell),
+                key: completed.key,
+                target_completion: TerminalComputeDependencyCompletionV1::Completed {
+                    batch: completed.target_completion,
+                    event: None,
+                },
+                readers: completed.readers,
+                plan: TerminalComputeDependencyPlanV1::PostPublicationCompletion(error),
+            }
+        };
+        if self.poisoned
+            || self.active.get(&completed.key.target.acceptance_epoch) != Some(&completed.key)
+        {
+            return Err(fail(
+                self,
+                Gfx942CompletionErrorV1::StaleBatchGeneration,
+                completed,
+            ));
+        }
+        let _target = match target_owner.completed_dependency_target_identity_v1(
+            completed.key.target.session_occurrence,
+            completed.key.target.acceptance_epoch,
+            &completed.target_completion,
+        ) {
+            Ok(target) if target == completed.key.target => target,
+            Ok(_) => {
+                return Err(fail(
+                    self,
+                    Gfx942CompletionErrorV1::StaleBatchGeneration,
+                    completed,
+                ));
+            }
+            Err(error) => return Err(fail(self, error, completed)),
+        };
+        let mut retained = Vec::new();
+        let mut metadata = Vec::new();
+        let mut restored_readers = Vec::new();
+        if retained.try_reserve_exact(completed.readers.len()).is_err()
+            || metadata.try_reserve_exact(completed.readers.len()).is_err()
+            || restored_readers
+                .try_reserve_exact(completed.readers.len())
+                .is_err()
+        {
+            return Err(fail(
+                self,
+                Gfx942CompletionErrorV1::DependencyLedgerAllocation,
+                completed,
+            ));
+        }
+        for reader in &completed.readers {
+            if !source_owner.matches_dependency_source_arena_v1(
+                reader.source.queue,
+                reader.source.signal_mapping,
+            ) || source_owner.dependency_source_identity_v1(&reader.event) != Ok(reader.source)
+                || source_owner.native_dependency_signal_observation_v1(&reader.lease)
+                    != Ok(reader.signal)
+            {
+                return Err(fail(
+                    self,
+                    Gfx942CompletionErrorV1::StaleDependencyReader,
+                    completed,
+                ));
+            }
+            metadata.push((reader.source, reader.signal));
+        }
+        let CompletedComputeDependencyTargetUseV1 {
+            key,
+            target_completion,
+            readers,
+            publication,
+        } = completed;
+        retained.extend(
+            readers
+                .into_iter()
+                .map(|reader| (reader.event, reader.lease)),
+        );
+        if let Err((error, retained)) =
+            source_owner.release_dependency_reader_event_batch_v1(retained)
+        {
+            for ((event, lease), (source, signal)) in retained.into_iter().zip(metadata) {
+                restored_readers.push(RetainedComputeDependencyReaderV1 {
+                    event,
+                    lease,
+                    source,
+                    signal,
+                });
+            }
+            self.poisoned = true;
+            return Err(TerminalComputeDependencyTargetUseV1 {
+                error: NativeAqlSubmissionErrorV1::InvalidQueue(
+                    "dependent completion reader release",
+                ),
+                boundary: Some(AqlDependencyDispatchPublicationBoundaryV1::Doorbell),
+                key,
+                target_completion: TerminalComputeDependencyCompletionV1::Completed {
+                    batch: target_completion,
+                    event: None,
+                },
+                readers: restored_readers,
+                plan: TerminalComputeDependencyPlanV1::PostPublicationCompletion(error),
+            });
+        }
+        let removed = self.active.remove(&key.target.acceptance_epoch);
+        debug_assert_eq!(removed, Some(key));
+        Ok(ReleasedComputeDependencyTargetUseV1 {
+            target_completion,
+            dependency_count: key.dependency_count,
+            publication,
         })
+    }
+
+    pub(super) fn terminal_after_dependent_completion(
+        &mut self,
+        completed: CompletedComputeDependencyTargetUseV1,
+        error: NativeAqlSubmissionErrorV1,
+    ) -> TerminalComputeDependencyTargetUseV1 {
+        self.poisoned = true;
+        TerminalComputeDependencyTargetUseV1 {
+            error,
+            boundary: Some(AqlDependencyDispatchPublicationBoundaryV1::Doorbell),
+            key: completed.key,
+            target_completion: TerminalComputeDependencyCompletionV1::Completed {
+                batch: completed.target_completion,
+                event: None,
+            },
+            readers: completed.readers,
+            plan: TerminalComputeDependencyPlanV1::Published(completed.publication),
+        }
     }
 
     /// Releases every reader after a proven no-effect native rejection.
@@ -441,7 +734,9 @@ impl ComputeDependencySessionOwnerV1 {
         target_owner: &mut CompletionSignalArenaOwnerV1,
     ) -> Result<CancelledComputeDependencyTargetUseV1, ComputeDependencyRollbackFailureV1> {
         let RetryableComputeDependencyTargetUseV1 { prepared, .. } = *retryable;
-        if self.poisoned || self.active != Some(prepared.key) {
+        if self.poisoned
+            || self.active.get(&prepared.key.target.acceptance_epoch) != Some(&prepared.key)
+        {
             self.poisoned = true;
             return Err(rollback_preflight_failure_v1(
                 ComputeDependencyTargetUseErrorV1::Poisoned,
@@ -589,7 +884,8 @@ impl ComputeDependencySessionOwnerV1 {
                 plan,
             });
         }
-        self.active = None;
+        let removed = self.active.remove(&key.target.acceptance_epoch);
+        debug_assert_eq!(removed, Some(key));
         Ok(CancelledComputeDependencyTargetUseV1 {
             target: key.target,
             target_completion,
@@ -702,6 +998,133 @@ pub(super) fn retain_dependency_reader_for_target_v1(
     })
 }
 
+#[allow(clippy::result_large_err)]
+pub(super) fn retain_dependency_readers_for_target_v1(
+    source_owner: &mut CompletionSignalArenaOwnerV1,
+    events: Vec<Gfx942ComputeEventOccurrenceV1>,
+    acceptance: &ComputeDependencyAcceptanceV1,
+) -> Result<Vec<RetainedComputeDependencyReaderV1>, ComputeDependencyReaderBatchFailureV1> {
+    let mut readers = Vec::new();
+    if readers.try_reserve_exact(events.len()).is_err() {
+        return Err(ComputeDependencyReaderBatchFailureV1::Rejected {
+            error: Gfx942CompletionErrorV1::DependencyLedgerAllocation,
+            events,
+        });
+    }
+    let retained = match source_owner.retain_dependency_reader_batch_v1(
+        events,
+        acceptance.session_occurrence,
+        acceptance.epoch,
+    ) {
+        Ok(retained) => retained,
+        Err((error, events)) => {
+            return Err(ComputeDependencyReaderBatchFailureV1::Rejected { error, events });
+        }
+    };
+    for (event, lease) in retained {
+        let source = match source_owner.dependency_source_identity_v1(&event) {
+            Ok(source) => source,
+            Err(error) => {
+                return Err(ComputeDependencyReaderBatchFailureV1::Terminal(Box::new(
+                    TerminalComputeDependencyReaderBatchV1 {
+                        error,
+                        retained: readers,
+                        event,
+                        lease,
+                    },
+                )));
+            }
+        };
+        let signal = match source_owner.native_dependency_signal_observation_v1(&lease) {
+            Ok(signal) => signal,
+            Err(error) => {
+                return Err(ComputeDependencyReaderBatchFailureV1::Terminal(Box::new(
+                    TerminalComputeDependencyReaderBatchV1 {
+                        error,
+                        retained: readers,
+                        event,
+                        lease,
+                    },
+                )));
+            }
+        };
+        readers.push(RetainedComputeDependencyReaderV1 {
+            event,
+            lease,
+            source,
+            signal,
+        });
+    }
+    Ok(readers)
+}
+
+pub(super) enum ComputeDependencyReaderBatchFailureV1 {
+    Rejected {
+        error: Gfx942CompletionErrorV1,
+        events: Vec<Gfx942ComputeEventOccurrenceV1>,
+    },
+    Terminal(Box<TerminalComputeDependencyReaderBatchV1>),
+}
+
+pub(super) struct TerminalComputeDependencyReaderBatchV1 {
+    error: Gfx942CompletionErrorV1,
+    retained: Vec<RetainedComputeDependencyReaderV1>,
+    event: Gfx942ComputeEventOccurrenceV1,
+    lease: Gfx942ComputeDependencyReaderLeaseV1,
+}
+
+#[allow(clippy::result_large_err)]
+pub(super) fn rollback_dependency_readers_before_publication_v1(
+    source_owner: &mut CompletionSignalArenaOwnerV1,
+    readers: Vec<RetainedComputeDependencyReaderV1>,
+) -> Result<
+    Vec<Gfx942ComputeEventOccurrenceV1>,
+    (
+        Gfx942CompletionErrorV1,
+        Vec<RetainedComputeDependencyReaderV1>,
+    ),
+> {
+    let mut retained = Vec::new();
+    let mut metadata = Vec::new();
+    if retained.try_reserve_exact(readers.len()).is_err()
+        || metadata.try_reserve_exact(readers.len()).is_err()
+    {
+        return Err((Gfx942CompletionErrorV1::DependencyLedgerAllocation, readers));
+    }
+    for reader in &readers {
+        if source_owner.dependency_source_identity_v1(&reader.event) != Ok(reader.source)
+            || source_owner.native_dependency_signal_observation_v1(&reader.lease)
+                != Ok(reader.signal)
+        {
+            return Err((Gfx942CompletionErrorV1::StaleDependencyReader, readers));
+        }
+        metadata.push((reader.source, reader.signal));
+    }
+    retained.extend(
+        readers
+            .into_iter()
+            .map(|reader| (reader.event, reader.lease)),
+    );
+    match source_owner.release_dependency_reader_batch_v1(retained) {
+        Ok(events) => Ok(events),
+        Err((error, retained)) => {
+            let readers = retained
+                .into_iter()
+                .zip(metadata)
+                .map(
+                    |((event, lease), (source, signal))| RetainedComputeDependencyReaderV1 {
+                        event,
+                        lease,
+                        source,
+                        signal,
+                    },
+                )
+                .collect();
+            Err((error, readers))
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct ComputeDependencyBeginFailureV1 {
     pub(super) error: ComputeDependencyTargetUseErrorV1,
@@ -748,8 +1171,55 @@ pub(super) struct NativePublishedComputeDependencyTargetUseV1 {
 pub(super) struct PublishedComputeDependencyTargetUseV1 {
     key: ActiveComputeDependencyTargetUseV1,
     target_batch: Gfx942CompletionBatchV1<1>,
-    target_event: Gfx942ComputeEventOccurrenceV1,
     readers: Vec<RetainedComputeDependencyReaderV1>,
+    publication: AqlDependencyDispatchPublicationV1,
+}
+
+#[derive(Debug)]
+pub(super) struct PublishedComputeDependencyTargetBundleV1 {
+    published: PublishedComputeDependencyTargetUseV1,
+    target_event: Gfx942ComputeEventOccurrenceV1,
+}
+
+impl PublishedComputeDependencyTargetBundleV1 {
+    pub(super) fn into_parts(
+        self,
+    ) -> (
+        PublishedComputeDependencyTargetUseV1,
+        Gfx942ComputeEventOccurrenceV1,
+    ) {
+        (self.published, self.target_event)
+    }
+}
+
+pub(super) enum ComputeDependencyTargetPollV1 {
+    Pending(PublishedComputeDependencyTargetUseV1),
+    Ready(CompletedComputeDependencyTargetUseV1),
+}
+
+pub(super) struct CompletedComputeDependencyTargetUseV1 {
+    key: ActiveComputeDependencyTargetUseV1,
+    target_completion: Gfx942CompletedBatchV1<1>,
+    readers: Vec<RetainedComputeDependencyReaderV1>,
+    publication: AqlDependencyDispatchPublicationV1,
+}
+
+impl CompletedComputeDependencyTargetUseV1 {
+    pub(super) fn matches_source_owner(&self, owner: &CompletionSignalArenaOwnerV1) -> bool {
+        !self.readers.is_empty()
+            && self.readers.iter().all(|reader| {
+                owner.matches_dependency_source_arena_v1(
+                    reader.source.queue,
+                    reader.source.signal_mapping,
+                )
+            })
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct ReleasedComputeDependencyTargetUseV1 {
+    pub(super) target_completion: Gfx942CompletedBatchV1<1>,
+    pub(super) dependency_count: u16,
     publication: AqlDependencyDispatchPublicationV1,
 }
 
@@ -773,11 +1243,15 @@ enum TerminalComputeDependencyPlanV1 {
 enum TerminalComputeDependencyCompletionV1 {
     Bound {
         retention: CompletionBatchRetentionV1<1>,
-        event: Gfx942ComputeEventOccurrenceV1,
+        event: Option<Gfx942ComputeEventOccurrenceV1>,
     },
     Published {
         batch: Gfx942CompletionBatchV1<1>,
-        event: Gfx942ComputeEventOccurrenceV1,
+        event: Option<Gfx942ComputeEventOccurrenceV1>,
+    },
+    Completed {
+        batch: Gfx942CompletedBatchV1<1>,
+        event: Option<Gfx942ComputeEventOccurrenceV1>,
     },
 }
 
@@ -824,6 +1298,17 @@ pub(super) struct CancelledComputeDependencyTargetUseV1 {
     events: Vec<Gfx942ComputeEventOccurrenceV1>,
 }
 
+impl CancelledComputeDependencyTargetUseV1 {
+    pub(super) fn into_parts(
+        self,
+    ) -> (
+        CompletionBatchRetentionV1<1>,
+        Vec<Gfx942ComputeEventOccurrenceV1>,
+    ) {
+        (self.target_completion, self.events)
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct ComputeDependencyRollbackFailureV1 {
     error: ComputeDependencyTargetUseErrorV1,
@@ -858,7 +1343,12 @@ fn validate_target_use_v1(
     if sources.len() > AQL_MAX_DEPENDENCY_SIGNALS_V1 {
         return Err(ComputeDependencyTargetUseErrorV1::TooManyDependencies);
     }
-    for (index, source) in sources.iter().enumerate() {
+    let mut exact_signals = HashSet::new();
+    exact_signals
+        .try_reserve(sources.len())
+        .map_err(|_| ComputeDependencyTargetUseErrorV1::Allocation)?;
+    let mut source_arena = None;
+    for source in sources {
         if source.session_occurrence != session_occurrence {
             return Err(ComputeDependencyTargetUseErrorV1::CrossSessionDependency);
         }
@@ -879,11 +1369,16 @@ fn validate_target_use_v1(
         {
             return Err(ComputeDependencyTargetUseErrorV1::InvalidTargetIdentity);
         }
-        if sources[..index].iter().any(|prior| {
-            prior.signal_mapping == source.signal_mapping
-                && prior.slot_index == source.slot_index
-                && prior.slot_generation == source.slot_generation
-        }) {
+        let exact_arena = (source.queue, source.signal_mapping);
+        if source_arena.is_some_and(|expected| expected != exact_arena) {
+            return Err(ComputeDependencyTargetUseErrorV1::SourceOwnerRosterMismatch);
+        }
+        source_arena = Some(exact_arena);
+        if !exact_signals.insert((
+            source.signal_mapping,
+            source.slot_index,
+            source.slot_generation,
+        )) {
             return Err(ComputeDependencyTargetUseErrorV1::DuplicateDependency);
         }
     }
@@ -912,13 +1407,6 @@ mod tests {
     #[repr(align(64))]
     struct DependencyRing([u8; 4_096]);
 
-    #[derive(Clone, Copy)]
-    enum HostileSourceOwnerRosterV1 {
-        MissingOwner,
-        SubstitutedOwner,
-        DuplicateArenaIdentity,
-    }
-
     struct DependencyBackend {
         ring: DependencyRing,
         write: AtomicU64,
@@ -926,6 +1414,39 @@ mod tests {
         checks: usize,
         fail_check: Option<usize>,
         panic_check: Option<usize>,
+    }
+
+    struct CompletionBackend {
+        observation: fe2o3_aql::AqlCompletionObservationV1,
+        reset_calls: usize,
+    }
+
+    impl NativeCompletionSignalBackendV1 for CompletionBackend {
+        fn check_currentness(&mut self) -> Result<(), Gfx942CompletionErrorV1> {
+            Ok(())
+        }
+
+        fn observe_one_acquire_in_current_scope(
+            &mut self,
+            _slot_index: u32,
+        ) -> Result<fe2o3_aql::AqlCompletionObservationV1, Gfx942CompletionErrorV1> {
+            Ok(self.observation)
+        }
+
+        fn observe_batch_acquire_in_current_scope(
+            &mut self,
+            slot_indices: &[u32],
+        ) -> Result<Vec<fe2o3_aql::AqlCompletionObservationV1>, Gfx942CompletionErrorV1> {
+            Ok(vec![self.observation; slot_indices.len()])
+        }
+
+        fn reset_pending_release(
+            &mut self,
+            _slot_index: u32,
+        ) -> Result<(), Gfx942CompletionErrorV1> {
+            self.reset_calls += 1;
+            Ok(())
+        }
     }
 
     impl DependencyBackend {
@@ -1037,6 +1558,7 @@ mod tests {
 
     fn real_prepared_target() -> (
         CompletionSignalArenaOwnerV1,
+        Gfx942CompletionBatchV1<1>,
         CompletionSignalArenaOwnerV1,
         ComputeDependencySessionOwnerV1,
         PreparedComputeDependencyTargetUseV1,
@@ -1084,6 +1606,7 @@ mod tests {
             .unwrap();
         (
             source_owner,
+            source_batch,
             target_owner,
             acceptance_owner,
             prepared,
@@ -1104,72 +1627,6 @@ mod tests {
         let event = owner.record_dependency_event_v1(7, 1, &retention).unwrap();
         let batch = owner.mark_published(retention, packet_id).unwrap();
         owner.bind_dependency_event_v1(event, &batch).unwrap()
-    }
-
-    fn multi_source_retryable_target() -> (
-        CompletionSignalArenaOwnerV1,
-        CompletionSignalArenaOwnerV1,
-        CompletionSignalArenaOwnerV1,
-        ComputeDependencySessionOwnerV1,
-        Box<RetryableComputeDependencyTargetUseV1>,
-    ) {
-        let first_queue = queue(1);
-        let second_queue = queue(3);
-        let target_queue = queue(2);
-        let mut first_owner =
-            CompletionSignalArenaOwnerV1::for_dependency_test(first_queue, 101, 0x10_000);
-        let mut second_owner =
-            CompletionSignalArenaOwnerV1::for_dependency_test(second_queue, 102, 0x20_000);
-        let first_event = published_source_event(&mut first_owner, first_queue, 11, 100);
-        let second_event = published_source_event(&mut second_owner, second_queue, 12, 200);
-
-        let mut acceptance_owner = ComputeDependencySessionOwnerV1::new(7).unwrap();
-        assert_eq!(
-            acceptance_owner.reserve_acceptance_epoch().unwrap().epoch(),
-            1
-        );
-        let acceptance = acceptance_owner.reserve_acceptance_epoch().unwrap();
-        let first_reader =
-            retain_dependency_reader_for_target_v1(&mut first_owner, first_event, &acceptance)
-                .unwrap();
-        let second_reader =
-            retain_dependency_reader_for_target_v1(&mut second_owner, second_event, &acceptance)
-                .unwrap();
-
-        let mut target_owner =
-            CompletionSignalArenaOwnerV1::for_dependency_test(target_queue, 103, 0x30_000);
-        let target_bound = target_owner
-            .bind_batch([template(target_queue, 21)])
-            .unwrap();
-        let target = target_owner
-            .prepare_dependency_target_v1(7, acceptance.epoch(), target_bound)
-            .unwrap();
-        let prepared = acceptance_owner
-            .begin_target_use(
-                &target_owner,
-                acceptance,
-                target,
-                vec![first_reader, second_reader],
-            )
-            .unwrap();
-        let mut submission = NativeAqlSubmissionOwnerV1::from_counters(4_096, 64, 0).unwrap();
-        let mut backend = DependencyBackend::new(64, 0);
-        let retryable = match acceptance_owner
-            .publish_native(prepared, &mut submission, &mut backend)
-            .unwrap_err()
-        {
-            ComputeDependencyPublicationFailureV1::Retryable(custody) => custody,
-            ComputeDependencyPublicationFailureV1::Terminal(_) => {
-                panic!("multi-source ring occupancy unexpectedly became terminal")
-            }
-        };
-        (
-            first_owner,
-            second_owner,
-            target_owner,
-            acceptance_owner,
-            retryable,
-        )
     }
 
     fn occurrence(
@@ -1205,7 +1662,23 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_session_owners_document_the_unenforced_single_owner_premise() {
+    fn final_nonzero_epoch_is_issued_once_then_exhaustion_poison_is_permanent() {
+        let mut owner = ComputeDependencySessionOwnerV1::new(7).unwrap();
+        owner.next_acceptance_epoch = Some(u64::MAX);
+        assert_eq!(owner.reserve_acceptance_epoch().unwrap().epoch(), u64::MAX);
+        assert_eq!(owner.next_epoch(), None);
+        assert_eq!(
+            owner.reserve_acceptance_epoch(),
+            Err(ComputeDependencyTargetUseErrorV1::AcceptanceEpochExhausted)
+        );
+        assert_eq!(
+            owner.reserve_acceptance_epoch(),
+            Err(ComputeDependencyTargetUseErrorV1::Poisoned)
+        );
+    }
+
+    #[test]
+    fn isolated_foundation_owners_show_why_production_construction_stays_private() {
         let mut first = ComputeDependencySessionOwnerV1::new(7).unwrap();
         let mut duplicate = ComputeDependencySessionOwnerV1::new(7).unwrap();
         assert_eq!(first.reserve_acceptance_epoch().unwrap().epoch(), 1);
@@ -1260,7 +1733,7 @@ mod tests {
             ));
             assert_eq!(returned_acceptance.epoch(), 1);
             assert!(returned_readers.is_empty());
-            assert!(acceptance_owner.active.is_none());
+            assert!(acceptance_owner.active.is_empty());
             assert_eq!(backend.write.load(Ordering::Relaxed), 0);
             assert_eq!(backend.ring.0, before);
         }
@@ -1308,6 +1781,15 @@ mod tests {
             validate_target_use_v1(7, &acceptance, target, &[first, first]),
             Err(ComputeDependencyTargetUseErrorV1::DuplicateDependency)
         );
+        assert_eq!(
+            validate_target_use_v1(
+                7,
+                &acceptance,
+                target,
+                &[first, occurrence(7, 2, 3, 4, Some(11))],
+            ),
+            Err(ComputeDependencyTargetUseErrorV1::SourceOwnerRosterMismatch)
+        );
     }
 
     #[test]
@@ -1329,6 +1811,14 @@ mod tests {
         assert_eq!(
             validate_target_use_v1(7, &acceptance, target, &[occurrence(7, 1, 1, 3, None)]),
             Err(ComputeDependencyTargetUseErrorV1::InvalidTargetIdentity)
+        );
+
+        let maximum = (0..AQL_MAX_DEPENDENCY_SIGNALS_V1)
+            .map(|slot| occurrence(7, 1, 1, slot as u32, Some(u64::from(slot as u32) + 10)))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            validate_target_use_v1(7, &acceptance, target, &maximum),
+            Ok(())
         );
     }
 
@@ -1443,123 +1933,16 @@ mod tests {
     }
 
     #[test]
-    fn two_source_owner_rollback_routes_exactly_and_returns_original_order() {
-        let (mut first_owner, mut second_owner, mut target_owner, mut acceptance_owner, retryable) =
-            multi_source_retryable_target();
-        let mut source_owners = [&mut second_owner, &mut first_owner];
-        let cancelled = acceptance_owner
-            .rollback_retryable_before_side_effect(retryable, &mut source_owners, &mut target_owner)
-            .unwrap();
-        let mut events = cancelled.events.into_iter();
-        let first_event = events.next().unwrap();
-        let second_event = events.next().unwrap();
-        assert!(events.next().is_none());
-        assert_eq!(
-            first_owner
-                .dependency_source_identity_v1(&first_event)
-                .unwrap()
-                .queue,
-            queue(1)
-        );
-        assert_eq!(
-            second_owner
-                .dependency_source_identity_v1(&second_event)
-                .unwrap()
-                .queue,
-            queue(3)
-        );
-        let (first_event, first_lease) = first_owner
-            .retain_dependency_reader_v1(first_event, 7, 2)
-            .unwrap();
-        let (second_event, second_lease) = second_owner
-            .retain_dependency_reader_v1(second_event, 7, 2)
-            .unwrap();
-        first_owner
-            .release_dependency_reader_v1(first_lease)
-            .unwrap();
-        second_owner
-            .release_dependency_reader_v1(second_lease)
-            .unwrap();
-        first_owner
-            .release_dependency_event_v1(first_event)
-            .unwrap();
-        second_owner
-            .release_dependency_event_v1(second_event)
-            .unwrap();
-        target_owner
-            .cancel_bound(cancelled.target_completion)
-            .unwrap();
-    }
-
-    #[test]
-    fn hostile_two_source_owner_rosters_fail_before_any_reader_release() {
-        for hostile in [
-            HostileSourceOwnerRosterV1::MissingOwner,
-            HostileSourceOwnerRosterV1::SubstitutedOwner,
-            HostileSourceOwnerRosterV1::DuplicateArenaIdentity,
-        ] {
-            let (mut first_owner, second_owner, mut target_owner, mut acceptance_owner, retryable) =
-                multi_source_retryable_target();
-            let failure = match hostile {
-                HostileSourceOwnerRosterV1::MissingOwner => {
-                    let mut roster = [&mut first_owner];
-                    acceptance_owner.rollback_retryable_before_side_effect(
-                        retryable,
-                        &mut roster,
-                        &mut target_owner,
-                    )
-                }
-                HostileSourceOwnerRosterV1::SubstitutedOwner => {
-                    let mut decoy =
-                        CompletionSignalArenaOwnerV1::for_dependency_test(queue(4), 104, 0x40_000);
-                    let mut roster = [&mut first_owner, &mut decoy];
-                    acceptance_owner.rollback_retryable_before_side_effect(
-                        retryable,
-                        &mut roster,
-                        &mut target_owner,
-                    )
-                }
-                HostileSourceOwnerRosterV1::DuplicateArenaIdentity => {
-                    let mut duplicate =
-                        CompletionSignalArenaOwnerV1::for_dependency_test(queue(1), 101, 0x10_000);
-                    let mut roster = [&mut first_owner, &mut duplicate];
-                    acceptance_owner.rollback_retryable_before_side_effect(
-                        retryable,
-                        &mut roster,
-                        &mut target_owner,
-                    )
-                }
-            };
-            let failure = match failure {
-                Err(failure) => failure,
-                Ok(_) => panic!("hostile source-owner roster unexpectedly rolled back"),
-            };
-            assert_eq!(
-                failure.error,
-                ComputeDependencyTargetUseErrorV1::SourceOwnerRosterMismatch
-            );
-            assert!(failure.released_events.is_empty());
-            assert_eq!(failure.retained_readers.len(), 2);
-            assert_eq!(
-                first_owner
-                    .native_dependency_signal_observation_v1(&failure.retained_readers[0].lease)
-                    .unwrap(),
-                failure.retained_readers[0].signal
-            );
-            assert_eq!(
-                second_owner
-                    .native_dependency_signal_observation_v1(&failure.retained_readers[1].lease)
-                    .unwrap(),
-                failure.retained_readers[1].signal
-            );
-        }
-    }
-
-    #[test]
     fn claim_currentness_and_panic_keep_real_target_and_reader_authority_terminal() {
         for panic in [false, true] {
-            let (source_owner, target_owner, mut acceptance_owner, prepared, mut submission) =
-                real_prepared_target();
+            let (
+                source_owner,
+                _source_batch,
+                target_owner,
+                mut acceptance_owner,
+                prepared,
+                mut submission,
+            ) = real_prepared_target();
             let mut backend = DependencyBackend::new(0, 0);
             if panic {
                 backend.panic_check = Some(3);
@@ -1605,17 +1988,24 @@ mod tests {
 
     #[test]
     fn successful_native_publication_binds_exact_target_without_source_polling() {
-        let (source_owner, mut target_owner, mut acceptance_owner, prepared, mut submission) =
-            real_prepared_target();
+        let (
+            source_owner,
+            _source_batch,
+            mut target_owner,
+            mut acceptance_owner,
+            prepared,
+            mut submission,
+        ) = real_prepared_target();
         let mut backend = DependencyBackend::new(0, 0);
         let native = acceptance_owner
             .publish_native(prepared, &mut submission, &mut backend)
             .unwrap();
         assert_eq!(backend.checks, 4);
         assert_eq!(backend.write.load(Ordering::Relaxed), 2);
-        let published = acceptance_owner
+        let (published, target_event) = acceptance_owner
             .bind_published_target(native, &mut target_owner)
-            .unwrap();
+            .unwrap()
+            .into_parts();
         assert_eq!(
             published.key.phase,
             ComputeDependencyTargetUsePhaseV1::Published
@@ -1623,7 +2013,7 @@ mod tests {
         assert_eq!(published.key.target.packet_id, Some(1));
         assert_eq!(published.readers.len(), 1);
         assert_eq!(
-            published.target_event.binding_state(),
+            target_event.binding_state(),
             super::super::completion::Gfx942ComputeEventBindingStateV1::Bound
         );
         assert_eq!(published.publication.dependency_count(), 1);
@@ -1639,8 +2029,14 @@ mod tests {
 
     #[test]
     fn published_target_owner_substitution_is_terminal() {
-        let (mut source_owner, target_owner, mut acceptance_owner, prepared, mut submission) =
-            real_prepared_target();
+        let (
+            mut source_owner,
+            _source_batch,
+            target_owner,
+            mut acceptance_owner,
+            prepared,
+            mut submission,
+        ) = real_prepared_target();
         let mut backend = DependencyBackend::new(0, 0);
         let native = acceptance_owner
             .publish_native(prepared, &mut submission, &mut backend)
@@ -1664,6 +2060,353 @@ mod tests {
             target_owner.ensure_releasable(),
             Err(Gfx942CompletionErrorV1::BatchStillRetained)
         );
+    }
+
+    #[test]
+    fn exact_target_completion_releases_source_pins_once_then_enables_recycle() {
+        let (
+            mut source_owner,
+            source_batch,
+            mut target_owner,
+            mut acceptance_owner,
+            prepared,
+            mut submission,
+        ) = real_prepared_target();
+
+        let mut native_backend = DependencyBackend::new(0, 0);
+        let native = acceptance_owner
+            .publish_native(prepared, &mut submission, &mut native_backend)
+            .unwrap();
+        let (published, target_event) = acceptance_owner
+            .bind_published_target(native, &mut target_owner)
+            .unwrap()
+            .into_parts();
+
+        let mut pending_backend = CompletionBackend {
+            observation: fe2o3_aql::AqlCompletionObservationV1::Pending,
+            reset_calls: 0,
+        };
+        let published = match acceptance_owner
+            .observe_published_target_once(published, &mut target_owner, &mut pending_backend)
+            .unwrap()
+        {
+            ComputeDependencyTargetPollV1::Pending(published) => published,
+            ComputeDependencyTargetPollV1::Ready(_) => panic!("pending target completed"),
+        };
+
+        let mut complete_backend = CompletionBackend {
+            observation: fe2o3_aql::AqlCompletionObservationV1::Completed,
+            reset_calls: 0,
+        };
+        let source_completed = match source_owner
+            .observe_once(source_batch, &mut complete_backend)
+            .unwrap()
+        {
+            super::super::completion::Gfx942CompletionPollV1::Ready(completed) => completed,
+            super::super::completion::Gfx942CompletionPollV1::Pending(_) => {
+                panic!("completed source remained pending")
+            }
+        };
+        let source_completed =
+            match source_owner.recycle_retaining(source_completed, &mut complete_backend) {
+                Err((Gfx942CompletionErrorV1::SignalPinned { .. }, completed)) => completed,
+                other => panic!("source recycle was not pinned: {other:?}"),
+            };
+        assert_eq!(complete_backend.reset_calls, 0);
+
+        let completed = match acceptance_owner
+            .observe_published_target_once(published, &mut target_owner, &mut complete_backend)
+            .unwrap()
+        {
+            ComputeDependencyTargetPollV1::Ready(completed) => completed,
+            ComputeDependencyTargetPollV1::Pending(_) => {
+                panic!("completed target remained pending")
+            }
+        };
+        let released = acceptance_owner
+            .release_after_dependent_completion(completed, &target_owner, &mut source_owner)
+            .unwrap();
+        assert_eq!(released.dependency_count, 1);
+        assert!(acceptance_owner.active.is_empty());
+
+        source_owner
+            .recycle_retaining(source_completed, &mut complete_backend)
+            .unwrap();
+        assert_eq!(complete_backend.reset_calls, 1);
+        let target_completed = released.target_completion;
+        let target_completed =
+            match target_owner.recycle_retaining(target_completed, &mut complete_backend) {
+                Err((Gfx942CompletionErrorV1::SignalPinned { .. }, completed)) => completed,
+                other => panic!("target recycle was not event-pinned: {other:?}"),
+            };
+        target_owner
+            .release_dependency_event_v1(target_event)
+            .unwrap();
+        target_owner
+            .recycle_retaining(target_completed, &mut complete_backend)
+            .unwrap();
+        assert_eq!(complete_backend.reset_calls, 2);
+        assert_eq!(source_owner.ensure_releasable(), Ok(()));
+        assert_eq!(target_owner.ensure_releasable(), Ok(()));
+    }
+
+    #[test]
+    fn published_target_event_can_feed_a_second_target_before_first_completion() {
+        let (
+            mut source_owner,
+            _source_batch,
+            mut middle_owner,
+            mut acceptance_owner,
+            prepared_middle,
+            mut submission,
+        ) = real_prepared_target();
+        let mut native_backend = DependencyBackend::new(0, 0);
+        let native_middle = acceptance_owner
+            .publish_native(prepared_middle, &mut submission, &mut native_backend)
+            .unwrap();
+        let (published_middle, middle_event) = acceptance_owner
+            .bind_published_target(native_middle, &mut middle_owner)
+            .unwrap()
+            .into_parts();
+
+        let final_acceptance = acceptance_owner.reserve_acceptance_epoch().unwrap();
+        assert_eq!(final_acceptance.epoch(), 3);
+        let middle_reader = retain_dependency_reader_for_target_v1(
+            &mut middle_owner,
+            middle_event,
+            &final_acceptance,
+        )
+        .unwrap();
+        let final_queue = queue(3);
+        let mut final_owner =
+            CompletionSignalArenaOwnerV1::for_persistent_compute_cancellation_test(final_queue);
+        let final_bound = final_owner.bind_batch([template(final_queue, 31)]).unwrap();
+        let final_target = final_owner
+            .prepare_dependency_target_v1(
+                final_acceptance.session_occurrence(),
+                final_acceptance.epoch(),
+                final_bound,
+            )
+            .unwrap();
+        let _prepared_final = acceptance_owner
+            .begin_target_use(
+                &final_owner,
+                final_acceptance,
+                final_target,
+                vec![middle_reader],
+            )
+            .unwrap();
+        assert_eq!(acceptance_owner.active.len(), 2);
+
+        let mut completed_backend = CompletionBackend {
+            observation: fe2o3_aql::AqlCompletionObservationV1::Completed,
+            reset_calls: 0,
+        };
+        let completed_middle = match acceptance_owner
+            .observe_published_target_once(
+                published_middle,
+                &mut middle_owner,
+                &mut completed_backend,
+            )
+            .unwrap()
+        {
+            ComputeDependencyTargetPollV1::Ready(completed) => completed,
+            ComputeDependencyTargetPollV1::Pending(_) => panic!("middle target remained pending"),
+        };
+        acceptance_owner
+            .release_after_dependent_completion(completed_middle, &middle_owner, &mut source_owner)
+            .unwrap();
+        assert_eq!(acceptance_owner.active.len(), 1);
+        assert_eq!(
+            middle_owner.ensure_releasable(),
+            Err(Gfx942CompletionErrorV1::BatchStillRetained)
+        );
+    }
+
+    #[test]
+    fn active_target_capacity_accepts_128_rejects_129_without_effect_and_reuses_release() {
+        let (
+            mut source_owner,
+            _source_batch,
+            mut target_owner,
+            mut acceptance_owner,
+            first_prepared,
+            mut submission,
+        ) = real_prepared_target();
+        assert!(acceptance_owner.active.capacity() >= MAX_ACTIVE_DEPENDENCY_TARGETS_PER_SESSION_V1);
+
+        for epoch in 10_000..10_126 {
+            let target = occurrence(7, epoch, 100 + epoch, epoch as u32, None);
+            assert!(
+                acceptance_owner
+                    .active
+                    .insert(
+                        epoch,
+                        ActiveComputeDependencyTargetUseV1 {
+                            target,
+                            dependency_count: 1,
+                            phase: ComputeDependencyTargetUsePhaseV1::Published,
+                        },
+                    )
+                    .is_none()
+            );
+        }
+        assert_eq!(acceptance_owner.active.len(), 127);
+
+        let second_acceptance = acceptance_owner.reserve_acceptance_epoch().unwrap();
+        let second_event = published_source_event(&mut source_owner, queue(1), 12, 101);
+        let second_reader = retain_dependency_reader_for_target_v1(
+            &mut source_owner,
+            second_event,
+            &second_acceptance,
+        )
+        .unwrap();
+        let second_bound = target_owner.bind_batch([template(queue(2), 22)]).unwrap();
+        let second_target = target_owner
+            .prepare_dependency_target_v1(7, second_acceptance.epoch(), second_bound)
+            .unwrap();
+        let _second_prepared = acceptance_owner
+            .begin_target_use(
+                &target_owner,
+                second_acceptance,
+                second_target,
+                vec![second_reader],
+            )
+            .unwrap();
+        assert_eq!(
+            acceptance_owner.active.len(),
+            MAX_ACTIVE_DEPENDENCY_TARGETS_PER_SESSION_V1
+        );
+
+        let rejected_acceptance = acceptance_owner.reserve_acceptance_epoch().unwrap();
+        let rejected_epoch = rejected_acceptance.epoch();
+        let rejected_event = published_source_event(&mut source_owner, queue(1), 13, 102);
+        let rejected_reader = retain_dependency_reader_for_target_v1(
+            &mut source_owner,
+            rejected_event,
+            &rejected_acceptance,
+        )
+        .unwrap();
+        let rejected_bound = target_owner.bind_batch([template(queue(2), 23)]).unwrap();
+        let rejected_target = target_owner
+            .prepare_dependency_target_v1(7, rejected_epoch, rejected_bound)
+            .unwrap();
+        let rejected_identity = rejected_target.identity();
+        let native_backend = DependencyBackend::new(0, 0);
+        let ring_before = native_backend.ring.0;
+        let failure = match acceptance_owner.begin_target_use(
+            &target_owner,
+            rejected_acceptance,
+            rejected_target,
+            vec![rejected_reader],
+        ) {
+            Err(failure) => failure,
+            Ok(_) => panic!("the 129th active target was admitted"),
+        };
+        let (error, returned_acceptance, returned_target, returned_readers) = failure.into_parts();
+        assert_eq!(
+            error,
+            ComputeDependencyTargetUseErrorV1::ActiveTargetCapacity
+        );
+        assert_eq!(returned_acceptance.epoch(), rejected_epoch);
+        assert_eq!(returned_target.identity(), rejected_identity);
+        assert_eq!(returned_readers.len(), 1);
+        assert_eq!(native_backend.write.load(Ordering::Relaxed), 0);
+        assert_eq!(native_backend.ring.0, ring_before);
+        assert_eq!(
+            acceptance_owner.active.len(),
+            MAX_ACTIVE_DEPENDENCY_TARGETS_PER_SESSION_V1
+        );
+
+        let mut native_backend = DependencyBackend::new(0, 0);
+        let native_first = acceptance_owner
+            .publish_native(first_prepared, &mut submission, &mut native_backend)
+            .unwrap();
+        let (published_first, _target_event) = acceptance_owner
+            .bind_published_target(native_first, &mut target_owner)
+            .unwrap()
+            .into_parts();
+        let mut completion_backend = CompletionBackend {
+            observation: fe2o3_aql::AqlCompletionObservationV1::Completed,
+            reset_calls: 0,
+        };
+        let completed_first = match acceptance_owner
+            .observe_published_target_once(
+                published_first,
+                &mut target_owner,
+                &mut completion_backend,
+            )
+            .unwrap()
+        {
+            ComputeDependencyTargetPollV1::Ready(completed) => completed,
+            ComputeDependencyTargetPollV1::Pending(_) => panic!("target remained pending"),
+        };
+        acceptance_owner
+            .release_after_dependent_completion(completed_first, &target_owner, &mut source_owner)
+            .unwrap();
+        assert_eq!(acceptance_owner.active.len(), 127);
+
+        acceptance_owner
+            .begin_target_use(
+                &target_owner,
+                returned_acceptance,
+                returned_target,
+                returned_readers,
+            )
+            .expect("a completed target must release one active-record slot");
+        assert_eq!(
+            acceptance_owner.active.len(),
+            MAX_ACTIVE_DEPENDENCY_TARGETS_PER_SESSION_V1
+        );
+    }
+
+    #[test]
+    fn mixed_source_owners_are_rejected_before_native_publication() {
+        let first_queue = queue(1);
+        let second_queue = queue(2);
+        let target_queue = queue(3);
+        let mut first_owner =
+            CompletionSignalArenaOwnerV1::for_dependency_test(first_queue, 101, 0x10_000);
+        let mut second_owner =
+            CompletionSignalArenaOwnerV1::for_dependency_test(second_queue, 102, 0x20_000);
+        let first_event = published_source_event(&mut first_owner, first_queue, 11, 100);
+        let second_event = published_source_event(&mut second_owner, second_queue, 12, 200);
+        let mut acceptance_owner = ComputeDependencySessionOwnerV1::new(7).unwrap();
+        acceptance_owner.reserve_acceptance_epoch().unwrap();
+        let acceptance = acceptance_owner.reserve_acceptance_epoch().unwrap();
+        let first_reader =
+            retain_dependency_reader_for_target_v1(&mut first_owner, first_event, &acceptance)
+                .unwrap();
+        let second_reader =
+            retain_dependency_reader_for_target_v1(&mut second_owner, second_event, &acceptance)
+                .unwrap();
+        let mut target_owner =
+            CompletionSignalArenaOwnerV1::for_dependency_test(target_queue, 103, 0x30_000);
+        let target_bound = target_owner
+            .bind_batch([template(target_queue, 21)])
+            .unwrap();
+        let target = target_owner
+            .prepare_dependency_target_v1(7, acceptance.epoch(), target_bound)
+            .unwrap();
+        let failure = acceptance_owner.begin_target_use(
+            &target_owner,
+            acceptance,
+            target,
+            vec![first_reader, second_reader],
+        );
+        let failure = match failure {
+            Err(failure) => failure,
+            Ok(_) => panic!("mixed-owner foundation preparation was admitted"),
+        };
+        let (error, _acceptance, _target, readers) = failure.into_parts();
+        assert_eq!(
+            error,
+            ComputeDependencyTargetUseErrorV1::SourceOwnerRosterMismatch
+        );
+        assert_eq!(readers.len(), 2);
+        assert!(acceptance_owner.active.is_empty());
+        assert_eq!(first_owner.dependency_reader_count_for_test(), 1);
+        assert_eq!(second_owner.dependency_reader_count_for_test(), 1);
     }
 
     #[test]

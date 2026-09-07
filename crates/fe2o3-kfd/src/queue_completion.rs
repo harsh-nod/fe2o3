@@ -26,7 +26,10 @@ use crate::wait::MonotonicWaitV1;
 #[path = "queue_completion/dependency_event.rs"]
 mod dependency_event;
 
-use dependency_event::CompletionDependencyLedgerV1;
+use dependency_event::{
+    CompletionDependencyLedgerV1, Gfx942ComputeDependencyReaderBatchFailureV1,
+    Gfx942ComputeDependencyReaderBatchV1, Gfx942ComputeEventBatchFailureV1,
+};
 pub use dependency_event::{
     GFX942_COMPUTE_EVENT_CUSTODY_MANIFEST_SHA256_V1, GFX942_COMPUTE_EVENT_CUSTODY_MANIFEST_V1,
     GFX942_MAX_COMPUTE_DEPENDENCY_READERS_V1, GFX942_MAX_COMPUTE_EVENT_OCCURRENCES_V1,
@@ -42,17 +45,18 @@ pub(super) const MAX_COMPLETION_POLL_ATTEMPTS_V1: u32 = 1_000_000;
 
 /// Canonical claim boundary for the private completion-signal slice.
 pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-completion-r42-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-completion-r48-v1\n",
     "aql_dispatch_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0\n",
     "aql_barrier_and_schema_sha256=bdca900cd5c6eaccbddfc5a854e956382a08ce87bec4ccd5284baacf932cdfb5\n",
     "aql_fixed_batch_schema_sha256=a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a\n",
-    "compute_event_custody_schema_sha256=f8ecd29fabba9c6dd924cf8a0c41272f313d87115f41aeb7a7bd38f2b0acf0cd\n",
+    "compute_event_custody_schema_sha256=3b235c35d117c198fcb21f65197431a47de78ed5081b95b459bbde61c6410e9a\n",
     "arena=one-host-visible-coherent-gtt-allocation,524288-bytes,8192-distinct-64-byte-aligned-user-signals\n",
     "batch=1-through-8192,heap-owned-fixed-cardinality-state,one-unique-signal-per-packet,no-aggregate-alias\n",
     "initialization=typed-amd-busy-signal-construction,kind-user-1,value-pending-1,event-fields-zero,before-gpu-map\n",
     "fixed-batch-binding=crate-private-packet-construction,per-packet-independent-or-wait-for-prior-ordering-retained,no-public-signal-address,exact-queue-vm-signal-code-kernarg-and-nonzero-dispatch-generations-retained,actual-resource-lifetimes-owned-by-private-c5-queue-owner\n",
     "observation=monotonic-deadline-or-legacy-bounded-poll,short-spin-then-yield-and-bounded-exponential-sleep,one-pre-post-currentness-envelope-around-one-exact-retained-signal-set-of-atomic-i64-acquire-loads,same-scan-redacted-packet-completed-pending-and-first-pending-index-progress,all-retained-signals-zero-before-ready,unexpected-value-is-fault,timeout-retains-linear-operation-privately-until-addressless-counter-first-retained-packet-first-retained-signal-exception-currentness-snapshot\n",
-    "event-custody=addressless-exact-occurrence-and-native-reader-ledgers,bounded-8192-each,independent-checked-event-and-reader-pin-counts,drop-inert\n",
+    "event-custody=addressless-exact-occurrence-and-native-reader-ledgers,bounded-8192-each,complete-batch-atomic-record-bind-retain-and-release,independent-checked-event-and-reader-pin-counts,drop-inert\n",
+    "validation=fixed-8192-slot-bitmap-with-one-pass-linear-retention-slot-uniqueness-check\n",
     "recycle=fixed-batch-only-after-exact-all-signal-completion-and-zero-event-and-reader-pins-or-barrier-probe-only-after-exact-one-signal-completion,atomic-i64-release-reset-to-pending,checked-slot-generation-increment\n",
     "barrier-probe=isolated-owner-phase,exact-one-slot,queue-and-signal-generations-only,no-code-kernarg-or-dispatch-generation,bound-published-completed-recycled-linear-custody,zero-dependency-system-scope-header-0x1403\n",
     "failure=currentness-native-observation-unexpected-value-timeout-invalid-poll-bound-generation-exhaustion-or-reset-ambiguity-poisons-owner-and-queue;timeout-snapshot-precedes-poison-and-grants-no-native-authority;teardown-required\n",
@@ -63,7 +67,7 @@ pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_AQL_COMPLETION_MANIFEST_V1`].
 pub const GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1: &str =
-    "ae6076e1d964f90ad74eb9a02ac14d1702ba9782d2df03a80b8cb9014be9167b";
+    "4481a25efdf8819281454992ef02d785164da45b74afe0140de27ba8b600226c";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CompletionOwnerPhaseV1 {
@@ -830,6 +834,32 @@ pub(super) struct CompletionSignalArenaOwnerV1 {
 }
 
 impl CompletionSignalArenaOwnerV1 {
+    pub(super) fn record_dependency_event_batch_for_bound_v1<const N: usize>(
+        &mut self,
+        session_occurrence: u64,
+        source_acceptance_epoch: u64,
+        bound: &BoundCompletionBatchV1<N>,
+    ) -> Result<Vec<Gfx942ComputeEventOccurrenceV1>, Gfx942CompletionErrorV1> {
+        self.record_dependency_event_batch_v1(
+            session_occurrence,
+            source_acceptance_epoch,
+            &bound.retention,
+        )
+    }
+
+    pub(super) fn record_dependency_event_batch_v1<const N: usize>(
+        &mut self,
+        session_occurrence: u64,
+        source_acceptance_epoch: u64,
+        retention: &CompletionBatchRetentionV1<N>,
+    ) -> Result<Vec<Gfx942ComputeEventOccurrenceV1>, Gfx942CompletionErrorV1> {
+        self.record_unbound_compute_event_batch(
+            session_occurrence,
+            source_acceptance_epoch,
+            retention,
+        )
+    }
+
     pub(super) fn new(
         queue: QueueKeyV1,
         facts: &SharedGttMappedResourceFactsV1,
@@ -1749,22 +1779,24 @@ impl CompletionSignalArenaOwnerV1 {
         if retention.queue != self.queue || retention.signal_mapping != self.signal_mapping {
             return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
         }
+        let mut seen_slots = [0_u64; COMPLETION_SIGNAL_CAPACITY_V1.div_ceil(64)];
         for (batch_index, slot) in retention.slots.iter().enumerate() {
             let Some(record) = self.slots.get(slot.index as usize) else {
                 return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
             };
+            let word = &mut seen_slots[slot.index as usize / 64];
+            let bit = 1_u64 << (slot.index % 64);
             if record.generation != slot.generation
                 || record.phase != expected(retention.batch_id)
                 || retention.dispatches[batch_index].queue != retention.queue
                 || retention.dispatches[batch_index].dispatch_generation == 0
                 || retention.dispatches[batch_index].code.allocation.vm != retention.queue.vm
                 || retention.dispatches[batch_index].kernarg.allocation.vm != retention.queue.vm
-                || retention.slots[..batch_index]
-                    .iter()
-                    .any(|prior| prior.index == slot.index)
+                || *word & bit != 0
             {
                 return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
             }
+            *word |= bit;
         }
         Ok(())
     }
@@ -2032,6 +2064,18 @@ impl CompletionSignalArenaOwnerV1 {
     }
 
     #[allow(clippy::result_large_err)]
+    pub(super) fn bind_dependency_event_batch_v1<const N: usize>(
+        &mut self,
+        events: Vec<Gfx942ComputeEventOccurrenceV1>,
+        batch: &Gfx942CompletionBatchV1<N>,
+    ) -> Result<
+        Vec<Gfx942ComputeEventOccurrenceV1>,
+        (Gfx942CompletionErrorV1, Vec<Gfx942ComputeEventOccurrenceV1>),
+    > {
+        self.bind_compute_event_batch_after_publication(events, batch)
+    }
+
+    #[allow(clippy::result_large_err)]
     pub(super) fn retain_dependency_reader_v1(
         &mut self,
         event: Gfx942ComputeEventOccurrenceV1,
@@ -2045,6 +2089,20 @@ impl CompletionSignalArenaOwnerV1 {
         (Gfx942CompletionErrorV1, Gfx942ComputeEventOccurrenceV1),
     > {
         self.retain_compute_dependency_reader(event, session_occurrence, dependent_acceptance_epoch)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn retain_dependency_reader_batch_v1(
+        &mut self,
+        events: Vec<Gfx942ComputeEventOccurrenceV1>,
+        session_occurrence: u64,
+        dependent_acceptance_epoch: u64,
+    ) -> Result<Gfx942ComputeDependencyReaderBatchV1, Gfx942ComputeEventBatchFailureV1> {
+        self.retain_compute_dependency_reader_batch(
+            events,
+            session_occurrence,
+            dependent_acceptance_epoch,
+        )
     }
 
     #[allow(clippy::result_large_err)]
@@ -2062,6 +2120,15 @@ impl CompletionSignalArenaOwnerV1 {
     }
 
     #[allow(clippy::result_large_err)]
+    pub(super) fn release_dependency_reader_batch_v1(
+        &mut self,
+        retained: Gfx942ComputeDependencyReaderBatchV1,
+    ) -> Result<Vec<Gfx942ComputeEventOccurrenceV1>, Gfx942ComputeDependencyReaderBatchFailureV1>
+    {
+        self.release_compute_dependency_reader_batch(retained)
+    }
+
+    #[allow(clippy::result_large_err)]
     pub(super) fn release_dependency_event_v1(
         &mut self,
         event: Gfx942ComputeEventOccurrenceV1,
@@ -2070,6 +2137,22 @@ impl CompletionSignalArenaOwnerV1 {
         (Gfx942CompletionErrorV1, Gfx942ComputeEventOccurrenceV1),
     > {
         self.release_compute_event(event)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn release_dependency_event_batch_v1(
+        &mut self,
+        events: Vec<Gfx942ComputeEventOccurrenceV1>,
+    ) -> Result<usize, (Gfx942CompletionErrorV1, Vec<Gfx942ComputeEventOccurrenceV1>)> {
+        self.release_compute_event_batch(events)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn release_dependency_reader_event_batch_v1(
+        &mut self,
+        retained: Gfx942ComputeDependencyReaderBatchV1,
+    ) -> Result<usize, Gfx942ComputeDependencyReaderBatchFailureV1> {
+        self.release_compute_dependency_reader_event_batch(retained)
     }
 
     pub(super) fn dependency_source_identity_v1(
@@ -2092,6 +2175,28 @@ impl CompletionSignalArenaOwnerV1 {
         signal_mapping: MemoryMappingKeyV1,
     ) -> bool {
         self.queue == queue && self.signal_mapping == signal_mapping
+    }
+
+    pub(super) fn matches_dependency_event_v1(
+        &self,
+        event: &Gfx942ComputeEventOccurrenceV1,
+    ) -> bool {
+        let (queue, signal_mapping) = event.arena_identity();
+        self.matches_dependency_source_arena_v1(queue, signal_mapping)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn cancel_prepared_dependency_target_v1(
+        &mut self,
+        target: PreparedComputeDependencyTargetV1,
+    ) -> Result<(), Gfx942CompletionErrorV1> {
+        self.validate_dependency_target_v1(&target)?;
+        let PreparedComputeDependencyTargetV1 {
+            retention, event, ..
+        } = target;
+        self.release_dependency_event_v1(event)
+            .map_err(|(error, _event)| error)?;
+        self.cancel_bound(retention)
     }
 
     pub(super) fn bound_dependency_target_identity_v1(
@@ -2140,6 +2245,20 @@ impl CompletionSignalArenaOwnerV1 {
             session_occurrence,
             acceptance_epoch,
             &batch.retention,
+        ))
+    }
+
+    pub(super) fn completed_dependency_target_identity_v1(
+        &self,
+        session_occurrence: u64,
+        acceptance_epoch: u64,
+        completed: &Gfx942CompletedBatchV1<1>,
+    ) -> Result<ComputeDependencyOccurrenceIdentityV1, Gfx942CompletionErrorV1> {
+        self.validate_completed(&completed.retention)?;
+        Ok(dependency_target_identity_v1(
+            session_occurrence,
+            acceptance_epoch,
+            &completed.retention,
         ))
     }
 }

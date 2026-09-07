@@ -27,8 +27,8 @@ use crate::batch::ServiceFixedBatchV1;
 
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-addressless-fixed-queue-r45-v1\n",
-    "source.compute_aql_session_sha256=c61844f88524f7bf2b1dc9b10505cfa54bf0ad471ff68cc4e8b4d681cad209b8\n",
+    "profile=fe2o3-service-addressless-fixed-queue-r48-v1\n",
+    "source.compute_aql_session_sha256=0d8defe7e30a0388a58733af6e3b4f48334552eb67b3f0178e912e293fac4127\n",
     "queue=one-live-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-live-rebind,quiescent-rollover-may-confirm-destroy-and-create-one-replacement-queue\n",
     "batch=1-through-8192-fixed-packets,conservative-wait-for-prior-ordering-default-with-explicit-independent-opt-in,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges,optional-initialized-enclosing-host-snapshot-associated-with-one-strict-interior\n",
     "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
@@ -43,12 +43,12 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
     "qualification-fault-injection=feature-gated-post-recycle-before-completed-read-attempt-terminal-typestate,prior-attempt-rejects-and-returns-recycled-owner,ordinary-native-teardown-only,no-synthetic-kfd-error-or-hardware-fault-claim\n",
     "failure=pure-rejection-recovers-input-owners,ambiguous-native-side-effect-is-terminal-and-denies-retry,opaque-quarantine-retains-available-owner-state,timeout-observation-grants-no-live-introspection-or-authority\n",
     "authority=no-native-address-handle-pointer-fd-mmio-signal-or-packet-template-export,no-caller-initialization-or-effect-assertion\n",
-    "excluded=executable-correctness,effect-correctness-beyond-inspected-metadata,full-write-coverage,content-interpretation,numerical-correctness,rust-verus-or-syscall-refinement,hardware-execution,performance\n",
+    "excluded=compute-dependency-service-facade,executable-correctness,effect-correctness-beyond-inspected-metadata,full-write-coverage,content-interpretation,numerical-correctness,rust-verus-or-syscall-refinement,hardware-execution,performance\n",
 );
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "f05e2c952d6bf91c3cca02c0fae60ad5bd1c713791924d0620a22109282be3f7";
+    "663cf108e939adbbc9235a52e843ed743963527248f0bdfe81676c0667164802";
 
 /// Feature-bound contract for deliberate service queue-transition faults.
 #[cfg(feature = "qualification-fault-injection")]
@@ -552,7 +552,10 @@ impl<const N: usize> ServiceCompletedQueueSessionV1<N> {
                 }),
                 Err(error) => Err(quarantine(self.owner, error)),
             },
-            Err(error) => Err(quarantine(self.owner, error)),
+            Err(failure) => {
+                let (error, _completed) = failure.into_parts();
+                Err(quarantine(self.owner, error))
+            }
         }
     }
 }
