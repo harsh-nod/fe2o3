@@ -67,6 +67,8 @@ pub const GFX942_SDMA_MAX_COMBINED_STRIPED_QUEUES_V1: usize = KFD_GFX942_SDMA_EN
 pub const GFX942_SDMA_MAX_MULTI_QUEUE_SHARDS_V1: usize = GFX942_SDMA_MAX_STRIPED_QUEUES_V1;
 pub const GFX942_SDMA_MAX_MULTI_QUEUE_REQUESTS_V1: usize =
     GFX942_SDMA_MAX_STRIPED_QUEUES_V1 * GFX942_SDMA_MAX_IN_FLIGHT_V1;
+/// Ring, control, and completion allocation records retained by each SDMA queue.
+pub const GFX942_SDMA_SHARED_ALLOCATION_RECORDS_PER_QUEUE_V1: usize = 3;
 const GFX942_SDMA_D2H_OWNER_SLOT_V1: usize = 0;
 const GFX942_SDMA_H2D_OWNER_SLOT_V1: usize = 1;
 const GFX942_SDMA_SINGLE_OWNER_COUNT_V1: usize = 1;
@@ -6193,6 +6195,14 @@ mod tests {
     fn word(packet: &Gfx942SdmaCopySubmissionV1, index: usize) -> u32 {
         let offset = index * 4;
         u32::from_le_bytes(packet.bytes[offset..offset + 4].try_into().unwrap())
+    }
+
+    #[test]
+    fn shared_allocation_record_shape_covers_ring_control_and_completions() {
+        assert_eq!(
+            GFX942_SDMA_SHARED_ALLOCATION_RECORDS_PER_QUEUE_V1,
+            1 + 1 + 1
+        );
     }
 
     fn queue_key(physical: u64, queue: u64, generation: u64) -> QueueKeyV1 {

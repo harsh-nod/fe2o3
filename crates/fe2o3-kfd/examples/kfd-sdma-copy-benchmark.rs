@@ -16,6 +16,17 @@ struct Buffers {
     download: Gfx942SdmaBufferV1,
 }
 
+struct AggregateBuffers {
+    host: Gfx942SdmaBufferV1,
+    device: Gfx942SdmaBufferV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AggregateResourceBudget {
+    shared_records: usize,
+    device_records: usize,
+}
+
 #[derive(Clone, Copy)]
 struct PhaseTiming {
     total_ns: u128,
@@ -258,6 +269,27 @@ fn admitted_aggregate_profile(profile: &str) -> Option<AggregateProfile> {
     }
 }
 
+fn aggregate_resource_budget(
+    profile: AggregateProfile,
+    depth: usize,
+) -> Option<AggregateResourceBudget> {
+    let sdma_queue_count =
+        (profile.queue_count() as usize).checked_add(profile.directional_queue_count() as usize)?;
+    let queue_shared_records = sdma_queue_count
+        .checked_mul(fe2o3_kfd::GFX942_SDMA_SHARED_ALLOCATION_RECORDS_PER_QUEUE_V1)?;
+    Some(AggregateResourceBudget {
+        shared_records: fe2o3_kfd::GFX942_COMPUTE_AQL_SHARED_ALLOCATION_RECORDS_V1
+            .checked_add(queue_shared_records)?
+            .checked_add(depth)?,
+        device_records: depth,
+    })
+}
+
+const fn aggregate_resource_budget_is_admitted(budget: AggregateResourceBudget) -> bool {
+    budget.shared_records <= fe2o3_kfd::MAX_SHARED_GTT_ALLOCATIONS_V1
+        && budget.device_records <= fe2o3_kfd::MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1
+}
+
 fn allocate_buffers(
     queue: &mut ComputeAqlQueueSessionV1,
     count: usize,
@@ -286,63 +318,81 @@ fn recycle_buffers(
     Ok(())
 }
 
+fn allocate_aggregate_buffers(
+    queue: &mut ComputeAqlQueueSessionV1,
+    count: usize,
+    copy_bytes: usize,
+) -> Result<Vec<AggregateBuffers>, Box<dyn std::error::Error>> {
+    let mut buffers = Vec::with_capacity(count);
+    for _ in 0..count {
+        buffers.push(AggregateBuffers {
+            host: queue.allocate_sdma_pooled_host_buffer(copy_bytes)?,
+            device: queue.allocate_sdma_pooled_device_buffer(copy_bytes as u64, 4096)?,
+        });
+    }
+    Ok(buffers)
+}
+
+fn recycle_aggregate_buffers(
+    queue: &mut ComputeAqlQueueSessionV1,
+    buffers: Vec<AggregateBuffers>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for buffer in buffers {
+        queue.recycle_sdma_buffer(buffer.host)?;
+        queue.recycle_sdma_buffer(buffer.device)?;
+    }
+    Ok(())
+}
+
 fn aggregate_phase_inputs(
-    buffers: Vec<Buffers>,
+    buffers: Vec<AggregateBuffers>,
     copy_bytes: usize,
     direction: AggregateDirection,
-) -> (Vec<Gfx942SdmaCopyRequestV1>, Vec<Gfx942SdmaBufferV1>) {
+) -> Vec<Gfx942SdmaCopyRequestV1> {
     let mut requests = Vec::with_capacity(buffers.len());
-    let mut retained = Vec::with_capacity(buffers.len());
     for buffer in buffers {
         match direction {
             AggregateDirection::HostToDevice => {
                 requests.push(Gfx942SdmaCopyRequestV1::new(
-                    buffer.upload,
+                    buffer.host,
                     0,
                     buffer.device,
                     0,
                     copy_bytes as u32,
                 ));
-                retained.push(buffer.download);
             }
             AggregateDirection::DeviceToHost => {
                 requests.push(Gfx942SdmaCopyRequestV1::new(
                     buffer.device,
                     0,
-                    buffer.download,
+                    buffer.host,
                     0,
                     copy_bytes as u32,
                 ));
-                retained.push(buffer.upload);
             }
         }
     }
-    (requests, retained)
+    requests
 }
 
 fn restore_aggregate_buffers(
     completed: Gfx942SdmaMultiQueueCompletedV1,
-    retained: Vec<Gfx942SdmaBufferV1>,
     direction: AggregateDirection,
-) -> Result<Vec<Buffers>, Box<dyn std::error::Error>> {
-    if completed.plan().request_count() != retained.len()
-        || completed.completed().len() != retained.len()
-    {
+) -> Result<Vec<AggregateBuffers>, Box<dyn std::error::Error>> {
+    if completed.plan().request_count() != completed.completed().len() {
         return Err("aggregate completion cardinality mismatch".into());
     }
-    let mut restored = Vec::with_capacity(retained.len());
-    for (completed, retained) in completed.into_completed().into_iter().zip(retained) {
+    let mut restored = Vec::with_capacity(completed.completed().len());
+    for completed in completed.into_completed() {
         let (source, destination) = completed.into_buffers();
         restored.push(match direction {
-            AggregateDirection::HostToDevice => Buffers {
-                upload: source,
+            AggregateDirection::HostToDevice => AggregateBuffers {
+                host: source,
                 device: destination,
-                download: retained,
             },
-            AggregateDirection::DeviceToHost => Buffers {
-                upload: retained,
+            AggregateDirection::DeviceToHost => AggregateBuffers {
+                host: destination,
                 device: source,
-                download: destination,
             },
         });
     }
@@ -369,11 +419,11 @@ fn wait_aggregate(
 
 fn run_aggregate_phase(
     queue: &mut ComputeAqlQueueSessionV1,
-    buffers: Vec<Buffers>,
+    buffers: Vec<AggregateBuffers>,
     copy_bytes: usize,
     direction: AggregateDirection,
-) -> Result<(Vec<Buffers>, PhaseTiming), Box<dyn std::error::Error>> {
-    let (requests, retained) = aggregate_phase_inputs(buffers, copy_bytes, direction);
+) -> Result<(Vec<AggregateBuffers>, PhaseTiming), Box<dyn std::error::Error>> {
+    let requests = aggregate_phase_inputs(buffers, copy_bytes, direction);
     let t0 = Instant::now();
     let submission = submit_aggregate(queue, requests)?;
     let t1 = Instant::now();
@@ -384,7 +434,7 @@ fn run_aggregate_phase(
         submit_ns: t1.duration_since(t0).as_nanos(),
         wait_ns: t2.duration_since(t1).as_nanos(),
     };
-    let restored = restore_aggregate_buffers(completed, retained, direction)?;
+    let restored = restore_aggregate_buffers(completed, direction)?;
     Ok((restored, timing))
 }
 
@@ -406,20 +456,20 @@ fn run_aggregate_poll_smoke(
     queue_count: usize,
     copy_bytes: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut buffers = allocate_buffers(queue, queue_count, copy_bytes)?;
-    prepare_and_poison(queue, &mut buffers, copy_bytes, 0)?;
-    let (requests, retained) =
-        aggregate_phase_inputs(buffers, copy_bytes, AggregateDirection::HostToDevice);
+    let mut buffers = allocate_aggregate_buffers(queue, queue_count, copy_bytes)?;
+    prepare_aggregate_sources(queue, &mut buffers, copy_bytes, 0)?;
+    let requests = aggregate_phase_inputs(buffers, copy_bytes, AggregateDirection::HostToDevice);
     let submission = submit_aggregate(queue, requests)?;
     if submission.plan().active_shard_count() != queue_count {
         return Err("aggregate poll smoke did not cover every striped queue".into());
     }
     let completed = finish_aggregate_poll_smoke(queue, submission)?;
-    let buffers = restore_aggregate_buffers(completed, retained, AggregateDirection::HostToDevice)?;
+    let mut buffers = restore_aggregate_buffers(completed, AggregateDirection::HostToDevice)?;
+    poison_aggregate_destinations(queue, &mut buffers, copy_bytes, 0)?;
     let (buffers, _) =
         run_aggregate_phase(queue, buffers, copy_bytes, AggregateDirection::DeviceToHost)?;
-    validate_round(queue, &buffers, copy_bytes, 0)?;
-    recycle_buffers(queue, buffers)
+    validate_aggregate_round(queue, &buffers, copy_bytes, 0)?;
+    recycle_aggregate_buffers(queue, buffers)
 }
 
 fn run_directional_smoke(
@@ -623,6 +673,56 @@ fn validate_round(
     Ok(())
 }
 
+fn prepare_aggregate_sources(
+    queue: &mut ComputeAqlQueueSessionV1,
+    buffers: &mut [AggregateBuffers],
+    copy_bytes: usize,
+    round: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for (slot, buffer) in buffers.iter_mut().enumerate() {
+        queue.write_sdma_host_buffer(
+            &mut buffer.host,
+            0,
+            &vec![round_pattern(round, slot); copy_bytes],
+        )?;
+    }
+    Ok(())
+}
+
+fn poison_aggregate_destinations(
+    queue: &mut ComputeAqlQueueSessionV1,
+    buffers: &mut [AggregateBuffers],
+    copy_bytes: usize,
+    round: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for (slot, buffer) in buffers.iter_mut().enumerate() {
+        queue.write_sdma_host_buffer(
+            &mut buffer.host,
+            0,
+            &vec![round_pattern(round, slot) ^ 0xff; copy_bytes],
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_aggregate_round(
+    queue: &mut ComputeAqlQueueSessionV1,
+    buffers: &[AggregateBuffers],
+    copy_bytes: usize,
+    round: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for (slot, buffer) in buffers.iter().enumerate() {
+        let expected = round_pattern(round, slot);
+        let observed = queue.read_sdma_host_buffer(&buffer.host, 0, copy_bytes as u64)?;
+        if observed.len() != copy_bytes || observed.iter().any(|byte| *byte != expected) {
+            return Err(
+                format!("aggregate SDMA copy mismatch at round {round}, slot {slot}").into(),
+            );
+        }
+    }
+    Ok(())
+}
+
 fn sample_csv(samples: &[u128]) -> String {
     samples
         .iter()
@@ -693,6 +793,11 @@ fn run_aggregate_benchmark(args: &[String]) -> Result<(), Box<dyn std::error::Er
     let transfer_bytes = copy_bytes
         .checked_mul(depth)
         .ok_or("aggregate transfer byte count overflow")?;
+    let resource_budget = aggregate_resource_budget(profile, depth)
+        .ok_or("aggregate allocation record budget overflow")?;
+    if !aggregate_resource_budget_is_admitted(resource_budget) {
+        return Err("aggregate allocation record budget exceeds the runtime profile".into());
+    }
 
     let device = OpenedKfd::open_default()?
         .admit_uapi()?
@@ -714,17 +819,19 @@ fn run_aggregate_benchmark(args: &[String]) -> Result<(), Box<dyn std::error::Er
     }
     run_aggregate_poll_smoke(&mut queue, queue_count, copy_bytes)?;
 
-    let mut buffers = allocate_buffers(&mut queue, depth, copy_bytes)?;
+    let mut buffers = allocate_aggregate_buffers(&mut queue, depth, copy_bytes)?;
     let mut h2d = AggregateSamples::with_capacity(sample_count);
     let mut d2h = AggregateSamples::with_capacity(sample_count);
     for round in 0..rounds {
-        prepare_and_poison(&mut queue, &mut buffers, copy_bytes, round)?;
+        prepare_aggregate_sources(&mut queue, &mut buffers, copy_bytes, round)?;
         let (next, h2d_timing) = run_aggregate_phase(
             &mut queue,
             buffers,
             copy_bytes,
             AggregateDirection::HostToDevice,
         )?;
+        let mut next = next;
+        poison_aggregate_destinations(&mut queue, &mut next, copy_bytes, round)?;
         let (next, d2h_timing) = run_aggregate_phase(
             &mut queue,
             next,
@@ -732,13 +839,13 @@ fn run_aggregate_benchmark(args: &[String]) -> Result<(), Box<dyn std::error::Er
             AggregateDirection::DeviceToHost,
         )?;
         buffers = next;
-        validate_round(&mut queue, &buffers, copy_bytes, round)?;
+        validate_aggregate_round(&mut queue, &buffers, copy_bytes, round)?;
         if round >= warmups {
             h2d.push(h2d_timing)?;
             d2h.push(d2h_timing)?;
         }
     }
-    recycle_buffers(&mut queue, buffers)?;
+    recycle_aggregate_buffers(&mut queue, buffers)?;
     queue.trim_sdma_memory_pool()?;
     queue.destroy()?;
 
@@ -935,8 +1042,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AggregateProfile, AggregateSamples, PhaseTiming, admitted_aggregate_profile,
-        admitted_striped_queue_count, balanced_batch_lengths, sha256_ascii,
+        AggregateProfile, AggregateResourceBudget, AggregateSamples, PhaseTiming,
+        admitted_aggregate_profile, admitted_striped_queue_count, aggregate_resource_budget,
+        aggregate_resource_budget_is_admitted, balanced_batch_lengths, sha256_ascii,
     };
 
     #[test]
@@ -1010,6 +1118,31 @@ mod tests {
     }
 
     #[test]
+    fn r40_aggregate_capacity_budget_admits_depth_112_and_rejects_one_over() {
+        let budget = aggregate_resource_budget(AggregateProfile::Standalone16, 112).unwrap();
+        assert_eq!(
+            budget,
+            AggregateResourceBudget {
+                shared_records: 165,
+                device_records: 112,
+            }
+        );
+        assert!(aggregate_resource_budget_is_admitted(budget));
+        assert!(!aggregate_resource_budget_is_admitted(
+            AggregateResourceBudget {
+                shared_records: fe2o3_kfd::MAX_SHARED_GTT_ALLOCATIONS_V1 + 1,
+                device_records: 0,
+            }
+        ));
+        assert!(!aggregate_resource_budget_is_admitted(
+            AggregateResourceBudget {
+                shared_records: 0,
+                device_records: fe2o3_kfd::MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1 + 1,
+            }
+        ));
+    }
+
+    #[test]
     fn aggregate_source_keeps_setup_and_teardown_outside_timing() {
         let source = include_str!("kfd-sdma-copy-benchmark.rs");
         let phase = source
@@ -1026,7 +1159,7 @@ mod tests {
             "let t1 = Instant::now()",
             "wait_aggregate(queue, submission)",
             "let t2 = Instant::now()",
-            "restore_aggregate_buffers(completed, retained, direction)",
+            "restore_aggregate_buffers(completed, direction)",
         ] {
             assert!(phase.contains(marker));
         }
@@ -1049,6 +1182,24 @@ mod tests {
             .split("fn main()")
             .next()
             .unwrap();
+        let prepare = benchmark.find("prepare_aggregate_sources").unwrap();
+        let h2d = benchmark[prepare..]
+            .find("AggregateDirection::HostToDevice")
+            .map(|offset| prepare + offset)
+            .unwrap();
+        let poison = benchmark[h2d..]
+            .find("poison_aggregate_destinations")
+            .map(|offset| h2d + offset)
+            .unwrap();
+        let d2h = benchmark[poison..]
+            .find("AggregateDirection::DeviceToHost")
+            .map(|offset| poison + offset)
+            .unwrap();
+        let validate = benchmark[d2h..]
+            .find("validate_aggregate_round")
+            .map(|offset| d2h + offset)
+            .unwrap();
+        assert!(prepare < h2d && h2d < poison && poison < d2h && d2h < validate);
         assert!(
             benchmark.find("queue.destroy()?").unwrap() < benchmark.find("destroy=pass").unwrap()
         );

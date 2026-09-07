@@ -210,7 +210,12 @@ presented as a hardware-engine count. Every path assigns request `i` to
 the next cursor by the completed phase's request count modulo `q`. It validates
 every byte after every H2D-then-D2H round. Allocation, queue/stream creation,
 request construction, pattern initialization, validation, and teardown are
-outside the measured intervals.
+outside the measured intervals. KFD retains one move-only host allocation and
+one move-only device allocation per request. After H2D completes, it poisons
+that same host allocation before constructing D2H, so full-buffer validation
+still proves the return copy without doubling host allocation ownership. At the
+maximum admitted depth, the standalone profile budgets 165 of 256 shared-GTT
+records and 112 of 128 device-memory records before opening KFD.
 
 Rows use `fe2o3.async-copy-striped-benchmark.v3`. Each direction retains 30
 raw submit, wait, and E2E nanosecond samples plus p50/p95 summaries and E2E p50

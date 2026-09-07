@@ -31,14 +31,14 @@ use super::memory::{
 use crate::CheckedGfx942XnackMinusDevice;
 use crate::queue::{Gfx942DeviceContentDescriptorV1, Gfx942RepeatedByteContentV1};
 
-pub const MAX_SHARED_GTT_ALLOCATIONS_V1: usize = 64;
+pub const MAX_SHARED_GTT_ALLOCATIONS_V1: usize = 256;
 pub const MAX_SHARED_GTT_SINGLE_CPU_BYTES_V1: u64 = 1 << 31;
 pub const MAX_SHARED_GTT_GPU_VA_BYTES_V1: u64 = 8 << 30;
 pub const MIN_AQL_QUEUE_BYTES_V1: u64 = 4_096;
 static NEXT_SHARED_MEMORY_SESSION_ID_V1: AtomicU64 = AtomicU64::new(1);
 static NEXT_XGMI_SDMA_QUEUE_INSTANCE_V1: AtomicU64 = AtomicU64::new(1);
 pub const MAX_AQL_QUEUE_BYTES_V1: u64 = 1 << 31;
-pub const MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1: usize = 64;
+pub const MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1: usize = 128;
 pub const MAX_GFX942_DEVICE_MEMORY_BYTES_V1: u64 = 192 << 30;
 pub const MAX_GFX942_DEVICE_MEMORY_ALIGNMENT_V1: u64 = HOST_VISIBLE_MEMORY_PAGE_BYTES_V1;
 const PUBLIC_DEVICE_PARALLEL_FILL_THRESHOLD_BYTES_V1: usize = 64 << 20;
@@ -47,12 +47,13 @@ const MAX_PUBLIC_DEVICE_PARALLEL_FILL_WORKERS_V1: usize = 16;
 
 /// Canonical contract for bounded device-local allocation leases.
 pub const GFX942_DEVICE_MEMORY_LEASE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-device-memory-lease-r2-v1\n",
+    "profile=fe2o3-mi300x-gfx942-device-memory-lease-r3-v1\n",
     "device_profile_sha256=e12ea33b259666e7928612403109640b03b0d637b893a2c15b87d17a4211c8de\n",
     "kfd_device_memory_schema_sha256=0594e7289aa2527cdc76f94371178f78c08e422dff44c985826d7e2fc7bdb951\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device-and-vm\n",
     "profile=device-local-vram-hbm-writable:0x80000001\n",
-    "bounds=allocation-records:64,retained-bytes:206158430208,alignment-power-of-two-max:4096,page:4096\n",
+    "bounds=allocation-records:128,retained-bytes:206158430208,alignment-power-of-two-max:4096,page:4096\n",
+    "record-storage=fallibly-pre-reserved-to-full-count-before-first-currentness-and-vm-acquisition,no-post-native-record-vector-growth-allocation\n",
     "lifecycle=linear-non-clone-unmapped-to-mapped-to-unmapped-to-released\n",
     "mapping=exact-one-selected-gpu,no-peer,no-retry-after-native-attempt\n",
     "authority=retained-kfd-render-vm-device-and-allocation-generation,no-public-handle-va-pointer-or-fd\n",
@@ -64,11 +65,11 @@ pub const GFX942_DEVICE_MEMORY_LEASE_MANIFEST_V1: &str = concat!(
 );
 
 pub const GFX942_DEVICE_MEMORY_LEASE_MANIFEST_SHA256_V1: &str =
-    "5e614f6b3c5fc9d92b331393c3eff63641d3c32910b115de234d0918e97edc19";
+    "f4b03e7389b968a42d82aedc2c1860feebe8f46f9c347837b34391414d78ff4e";
 
 pub const GFX942_DEVICE_MEMORY_LEASE_MANIFEST_SHA256_BYTES_V1: [u8; 32] = [
-    0x5e, 0x61, 0x4f, 0x6b, 0x3c, 0x5f, 0xc9, 0xd9, 0x2b, 0x33, 0x13, 0x93, 0xc3, 0xef, 0xf6, 0x36,
-    0x41, 0xd3, 0xc3, 0x29, 0x10, 0xb1, 0x15, 0xde, 0x23, 0x4d, 0x09, 0x18, 0xe9, 0x7e, 0xdc, 0x19,
+    0xf4, 0xb0, 0x3e, 0x73, 0x89, 0xb9, 0x68, 0xa4, 0x2d, 0x82, 0xae, 0xdc, 0x2c, 0x18, 0x60, 0xfe,
+    0xeb, 0xe8, 0xf4, 0x6f, 0x9c, 0x34, 0x78, 0x37, 0xb3, 0x43, 0x91, 0x41, 0x4d, 0x78, 0xff, 0x4e,
 ];
 
 /// Canonical contract for CPU initialization of public device-local storage.
@@ -88,15 +89,16 @@ pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_V1: &str = concat!(
 pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_SHA256_V1: &str =
     "e187789f3fbbaafa4d9d0e78f0012d12cb113fdfadb4aa61a3d2fce4dd044daa";
 
-/// Canonical contract for the bounded multi-allocation R2 adapter.
+/// Canonical contract for the bounded multi-allocation adapter.
 pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-shared-gtt-memory-r14-v1\n",
+    "profile=fe2o3-mi300x-shared-gtt-memory-r15-v1\n",
     "base_memory_profile_sha256=9623a22bfb2686afa9e4d99dcec0a352c7fd7c6514b84ff714c40cfb9095d2b8\n",
     "kfd_memory_schema_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
     "kfd_userptr_memory_schema_sha256=c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e\n",
     "kfd_userptr_queue_control_schema_sha256=f1d75410d6bfacff2ea15ecfff226eb8aed7912ee324a36b8ed8550fa52bce02\n",
     "profiles=host-visible-coherent:0x84000002,kernarg:0x86000002,gfx942-aql-ring-executable:0xc4000002,executable:0xc4000002,executable-aql-probe:0xc4000002,userptr-aql-probe:0xd6000004,userptr-aql-control:0x84000004\n",
-    "bounds=allocations:64,single-cpu-bytes:2147483648,total-gpu-va-bytes:8589934592,page:4096\n",
+    "bounds=allocations:256,single-cpu-bytes:2147483648,total-gpu-va-bytes:8589934592,page:4096\n",
+    "record-storage=shared:256,device:128,fallibly-pre-reserved-to-full-count-before-first-currentness-and-vm-acquisition,no-post-native-record-vector-growth-allocation\n",
     "aql=logical-ring:power-of-two-4096..2147483648,gpu-va-and-cpu-vma:exact-logical-size,gfx942-no-gfx7-gfx8-double-map-workaround,rocr-executable-ring-policy\n",
     "aql-executable-probe=crate-private-ring-profile,logical-ring:power-of-two-4096..2147483648,gpu-va-and-cpu-vma:exact-logical-size,no-aql-queue-mem-or-uncached-flags,one-shot-barrier-probe-only\n",
     "aql-userptr-probe=crate-private-ring-profile,logical-ring:power-of-two-4096..2147483648,gpu-va-and-cpu-vma:exact-same-address-logical-size,userptr-executable-coherent-uncached-no-substitute,no-aql-queue-mem,one-shot-barrier-probe-only\n",
@@ -119,11 +121,11 @@ pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
 );
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_V1: &str =
-    "bc7724673724d8cb9b370ac19c92342b17b760217370b977b76c7ae403ef8f38";
+    "b3f844fab1ac479d004589c119222eacc72b478383934b31451c97d08b0b2200";
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0xbc, 0x77, 0x24, 0x67, 0x37, 0x24, 0xd8, 0xcb, 0x9b, 0x37, 0x0a, 0xc1, 0x9c, 0x92, 0x34, 0x2b,
-    0x17, 0xb7, 0x60, 0x21, 0x73, 0x70, 0xb9, 0x77, 0xb7, 0x6c, 0x7a, 0xe4, 0x03, 0xef, 0x8f, 0x38,
+    0xb3, 0xf8, 0x44, 0xfa, 0xb1, 0xac, 0x47, 0x9d, 0x00, 0x45, 0x89, 0xc1, 0x19, 0x22, 0x2e, 0xac,
+    0xc7, 0x2b, 0x47, 0x83, 0x83, 0x93, 0x4b, 0x31, 0x45, 0x1c, 0x97, 0xd0, 0x8b, 0x0b, 0x22, 0x00,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1075,6 +1077,18 @@ struct SharedMemoryEngine<B: MemoryBackend> {
 
 impl<B: MemoryBackend> SharedMemoryEngine<B> {
     fn acquire(mut backend: B) -> Result<Self, MemorySessionError> {
+        let mut allocations = Vec::new();
+        allocations
+            .try_reserve_exact(MAX_SHARED_GTT_ALLOCATIONS_V1)
+            .map_err(|_| MemorySessionError::SharedAllocationCapacity {
+                maximum: MAX_SHARED_GTT_ALLOCATIONS_V1,
+            })?;
+        let mut device_memory = Vec::new();
+        device_memory
+            .try_reserve_exact(MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1)
+            .map_err(|_| MemorySessionError::DeviceMemoryAllocationCapacity {
+                maximum: MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1,
+            })?;
         let session_id = NEXT_SHARED_MEMORY_SESSION_ID_V1
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(1)
@@ -1093,10 +1107,10 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             backend,
             session_id,
             phase: SharedMemorySessionPhaseV1::Active,
-            allocations: Vec::new(),
+            allocations,
             next_id: 1,
             retained_gpu_va_bytes: 0,
-            device_memory: Vec::new(),
+            device_memory,
             next_device_memory_id: 1,
             retained_device_memory_bytes: 0,
         })
@@ -6323,6 +6337,8 @@ mod tests {
     #[test]
     fn bounds_and_aql_shape_fail_before_native_mutation() {
         let mut engine = acquired();
+        assert!(engine.allocations.capacity() >= MAX_SHARED_GTT_ALLOCATIONS_V1);
+        assert!(engine.device_memory.capacity() >= MAX_GFX942_DEVICE_MEMORY_ALLOCATION_RECORDS_V1);
         assert!(matches!(
             engine.allocate::<AqlQueueGttV1>(8193),
             Err(MemorySessionError::InvalidProfileSize(_))

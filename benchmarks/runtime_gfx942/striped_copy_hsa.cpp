@@ -230,22 +230,17 @@ int main(int argc, char **argv) {
   const hsa_amd_memory_pool_t device_pool =
       collected_pools[pool_roles.device].pool;
 
-  std::vector<std::uint8_t *> upload(config.depth), download(config.depth);
+  std::vector<std::uint8_t *> host(config.depth);
   std::vector<void *> device(config.depth);
   std::vector<hsa_signal_t> signals(config.depth);
   for (std::size_t request = 0; request < config.depth; ++request) {
-    void *upload_pointer = nullptr;
-    void *download_pointer = nullptr;
+    void *host_pointer = nullptr;
     HSA_CHECK(hsa_amd_memory_pool_allocate(host_pool, config.bytes, 0,
-                                           &upload_pointer));
-    HSA_CHECK(hsa_amd_memory_pool_allocate(host_pool, config.bytes, 0,
-                                           &download_pointer));
-    upload[request] = static_cast<std::uint8_t *>(upload_pointer);
-    download[request] = static_cast<std::uint8_t *>(download_pointer);
+                                           &host_pointer));
+    host[request] = static_cast<std::uint8_t *>(host_pointer);
     HSA_CHECK(hsa_amd_memory_pool_allocate(device_pool, config.bytes, 0,
                                            &device[request]));
-    HSA_CHECK(hsa_amd_agents_allow_access(1, &gpu, nullptr, upload[request]));
-    HSA_CHECK(hsa_amd_agents_allow_access(1, &gpu, nullptr, download[request]));
+    HSA_CHECK(hsa_amd_agents_allow_access(1, &gpu, nullptr, host[request]));
     HSA_CHECK(hsa_amd_agents_allow_access(1, &gpu, nullptr, device[request]));
     HSA_CHECK(hsa_signal_create(1, 0, nullptr, &signals[request]));
   }
@@ -260,8 +255,7 @@ int main(int argc, char **argv) {
   for (std::size_t round = 0; round < config.rounds; ++round) {
     for (std::size_t request = 0; request < config.depth; ++request) {
       const std::uint8_t value = fe2o3::r40::round_pattern(round, request);
-      std::memset(upload[request], value, config.bytes);
-      std::memset(download[request], value ^ 0xffU, config.bytes);
+      std::memset(host[request], value, config.bytes);
     }
     const auto run_phase = [&](bool upload_direction, std::size_t cursor,
                                fe2o3::r40::PhaseSamples *samples) {
@@ -276,9 +270,9 @@ int main(int argc, char **argv) {
         const hsa_signal_t *dependency =
             lane_has_tail[lane] ? &lane_tail[lane] : nullptr;
         HSA_CHECK(hsa_amd_memory_async_copy(
-            upload_direction ? device[request] : download[request],
+            upload_direction ? device[request] : host[request],
             upload_direction ? gpu : cpu,
-            upload_direction ? static_cast<void *>(upload[request])
+            upload_direction ? static_cast<void *>(host[request])
                              : device[request],
             upload_direction ? cpu : gpu, config.bytes, dependency_count,
             dependency, signals[request]));
@@ -309,18 +303,21 @@ int main(int argc, char **argv) {
     run_phase(true, cursor, &h2d);
     cursor = fe2o3::r40::continuation_cursor(
         cursor, config.depth, config.logical_queue_count);
+    for (std::size_t request = 0; request < config.depth; ++request) {
+      const std::uint8_t value = fe2o3::r40::round_pattern(round, request);
+      std::memset(host[request], value ^ 0xffU, config.bytes);
+    }
     run_phase(false, cursor, &d2h);
     cursor = fe2o3::r40::continuation_cursor(
         cursor, config.depth, config.logical_queue_count);
-    if (!fe2o3::r40::validate_buffers(download, config.bytes, round, "hsa"))
+    if (!fe2o3::r40::validate_buffers(host, config.bytes, round, "hsa"))
       return 3;
   }
 
   for (std::size_t request = 0; request < config.depth; ++request) {
     HSA_CHECK(hsa_signal_destroy(signals[request]));
     HSA_CHECK(hsa_amd_memory_pool_free(device[request]));
-    HSA_CHECK(hsa_amd_memory_pool_free(upload[request]));
-    HSA_CHECK(hsa_amd_memory_pool_free(download[request]));
+    HSA_CHECK(hsa_amd_memory_pool_free(host[request]));
   }
   HSA_CHECK(hsa_shut_down());
   const std::string resource_profile =

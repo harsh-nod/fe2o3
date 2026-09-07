@@ -82,6 +82,20 @@ class R40StripedRunnerContractTests(unittest.TestCase):
             self.assertEqual(source.count("continuation_cursor("), 2)
             self.assertNotIn("submission_ordinal", source)
 
+    def test_native_comparators_reuse_and_poison_one_host_buffer_per_request(self) -> None:
+        for source_name in ("striped_copy_hip.cpp", "striped_copy_hsa.cpp"):
+            source = RUNNER.with_name(source_name).read_text(encoding="utf-8")
+            self.assertIn("std::vector<std::uint8_t *> host(config.depth)", source)
+            self.assertNotIn("upload(config.depth)", source)
+            self.assertNotIn("download(config.depth)", source)
+            h2d = source.index("run_phase(true, cursor, &h2d)")
+            poison = source.index("value ^ 0xffU", h2d)
+            d2h = source.index("run_phase(false, cursor, &d2h)", poison)
+            validate = source.index("validate_buffers(host", d2h)
+            self.assertLess(h2d, poison)
+            self.assertLess(poison, d2h)
+            self.assertLess(d2h, validate)
+
     def test_every_phase_is_guarded_and_reaped(self) -> None:
         self.assertIn('"${host_guard}" monitor', self.source)
         self.assertIn("--observer-cpu", self.source)

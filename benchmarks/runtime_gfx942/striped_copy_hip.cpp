@@ -57,14 +57,12 @@ int main(int argc, char **argv) {
   }
 
   std::vector<hipStream_t> streams(config.logical_queue_count);
-  std::vector<std::uint8_t *> upload(config.depth), download(config.depth);
+  std::vector<std::uint8_t *> host(config.depth);
   std::vector<void *> device(config.depth);
   for (hipStream_t &stream : streams)
     HIP_CHECK(hipStreamCreateWithFlags(&stream, hipStreamNonBlocking));
   for (std::size_t request = 0; request < config.depth; ++request) {
-    HIP_CHECK(hipHostMalloc(reinterpret_cast<void **>(&upload[request]),
-                            config.bytes));
-    HIP_CHECK(hipHostMalloc(reinterpret_cast<void **>(&download[request]),
+    HIP_CHECK(hipHostMalloc(reinterpret_cast<void **>(&host[request]),
                             config.bytes));
     HIP_CHECK(hipMalloc(&device[request], config.bytes));
   }
@@ -79,8 +77,7 @@ int main(int argc, char **argv) {
   for (std::size_t round = 0; round < config.rounds; ++round) {
     for (std::size_t request = 0; request < config.depth; ++request) {
       const std::uint8_t value = fe2o3::r40::round_pattern(round, request);
-      std::memset(upload[request], value, config.bytes);
-      std::memset(download[request], value ^ 0xffU, config.bytes);
+      std::memset(host[request], value, config.bytes);
     }
     const auto run_phase = [&](bool upload_direction, std::size_t cursor,
                                fe2o3::r40::PhaseSamples *samples) {
@@ -90,8 +87,8 @@ int main(int argc, char **argv) {
         const std::size_t lane =
             (cursor + request) % config.logical_queue_count;
         HIP_CHECK(hipMemcpyAsync(
-            upload_direction ? device[request] : download[request],
-            upload_direction ? static_cast<void *>(upload[request])
+            upload_direction ? device[request] : host[request],
+            upload_direction ? static_cast<void *>(host[request])
                              : device[request],
             config.bytes,
             upload_direction ? hipMemcpyHostToDevice : hipMemcpyDeviceToHost,
@@ -113,17 +110,20 @@ int main(int argc, char **argv) {
     run_phase(true, cursor, &h2d);
     cursor = fe2o3::r40::continuation_cursor(
         cursor, config.depth, config.logical_queue_count);
+    for (std::size_t request = 0; request < config.depth; ++request) {
+      const std::uint8_t value = fe2o3::r40::round_pattern(round, request);
+      std::memset(host[request], value ^ 0xffU, config.bytes);
+    }
     run_phase(false, cursor, &d2h);
     cursor = fe2o3::r40::continuation_cursor(
         cursor, config.depth, config.logical_queue_count);
-    if (!fe2o3::r40::validate_buffers(download, config.bytes, round, "hip"))
+    if (!fe2o3::r40::validate_buffers(host, config.bytes, round, "hip"))
       return 3;
   }
 
   for (std::size_t request = 0; request < config.depth; ++request) {
     HIP_CHECK(hipFree(device[request]));
-    HIP_CHECK(hipHostFree(upload[request]));
-    HIP_CHECK(hipHostFree(download[request]));
+    HIP_CHECK(hipHostFree(host[request]));
   }
   for (const hipStream_t stream : streams)
     HIP_CHECK(hipStreamDestroy(stream));

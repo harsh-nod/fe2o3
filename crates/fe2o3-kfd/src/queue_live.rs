@@ -221,13 +221,15 @@ pub use sdma_multi_queue::{
 const CONTROL_BYTES: usize = 4_096;
 const PERSISTENT_SDMA_ACTIVE_SPIN_FLOOR_V1: Duration = Duration::from_micros(50);
 pub(crate) const GFX942_DESTROYED_QUEUE_RELEASED_RESOURCE_COUNT_V1: u8 = 5;
+/// Ring, control, completions, EOP, and context-save records for one compute queue.
+pub const GFX942_COMPUTE_AQL_SHARED_ALLOCATION_RECORDS_V1: usize = 5;
 static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r40-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r41-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
-    "memory_profile_sha256=bc7724673724d8cb9b370ac19c92342b17b760217370b977b76c7ae403ef8f38\n",
+    "memory_profile_sha256=b3f844fab1ac479d004589c119222eacc72b478383934b31451c97d08b0b2200\n",
     "kfd_userptr_memory_schema_sha256=c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e\n",
     "kfd_userptr_queue_control_schema_sha256=f1d75410d6bfacff2ea15ecfff226eb8aed7912ee324a36b8ed8550fa52bce02\n",
     "queue_resource_profile_sha256=37d45132916d2ecefdec8f53ecab817cbdbaa9b9863440353163bd460626ab02\n",
@@ -245,6 +247,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "source.kfd_chardev.c=f9a8805c5d479faee25e457051aa428e4bb523ecf1c7b1618a6a5f79ca5d7bba\n",
     "source.kfd_process.c=d76db8cbb546aa23dffb33b1d04244037e12246b49b752303194c68dd685e409\n",
     "resources=linear-private-ring-control-eop-cwsr-completion-code-kernarg-and-exact-device-local-or-coherent-host-data-authorities,exact-one-existing-shared-vm-session,transferred-model-ownership\n",
+    "shared-record-shape=primary-compute:ring1-control1-completions1-eop1-context-save1,sdma-per-queue:ring1-control1-completions1\n",
     "gtt_policy=reusable-and-dispatch-ring:gfx942-host-visible-executable-single-span-without-gfx7-gfx8-double-map-workaround,one-shot-diagnostic-rings:plain-executable-gtt-one-span-or-userptr-writable-executable-coherent-uncached-no-substitute-one-span,control:exact-one-page-same-va-userptr-writable-coherent,completion-signals:host-visible-coherent-gtt,eop-and-cwsr:executable;ring-userptr-never-selectable-by-reusable-or-dispatch-queue-APIs\n",
     "userptr-diagnostic=smallest-selected-gpu-ring-backing-discriminator,no-full-rocr-allocation-or-map-order-parity-claim\n",
     "creation-boundary=planning-session-dispatch-and-ring-errors-before-userptr-control-registration-entry-retain-existing-classification,every-error-from-the-control-allocation-attempt-through-live-session-return-is-terminal-recovers-no-authority-permanently-poisons-the-process-global-runtime-gate-and-requires-process-termination\n",
@@ -272,7 +275,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "4d7b30bcb0686d81dfa600122752fb1baf80aa9e639b744ccc273a79c84f051e";
+    "bbbc9182d3a5ee25f49ae5b68634934a79a222cd47c335d59fb9bab2172863bd";
 
 type AqlSpecialRingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -18079,6 +18082,10 @@ mod tests {
     #[test]
     fn session_manifest_digest_is_frozen() {
         assert_eq!(
+            GFX942_COMPUTE_AQL_SHARED_ALLOCATION_RECORDS_V1,
+            1 + 1 + 1 + 1 + 1
+        );
+        assert_eq!(
             fe2o3_aql::AQL_DISPATCH_ABI_SCHEMA_MANIFEST_SHA256_V1,
             "82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0"
         );
@@ -18104,7 +18111,7 @@ mod tests {
         )));
         assert_eq!(
             SHARED_GTT_MEMORY_PROFILE_SHA256_V1,
-            "bc7724673724d8cb9b370ac19c92342b17b760217370b977b76c7ae403ef8f38"
+            "b3f844fab1ac479d004589c119222eacc72b478383934b31451c97d08b0b2200"
         );
         assert_eq!(
             GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1,
