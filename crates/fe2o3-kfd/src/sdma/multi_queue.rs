@@ -2,6 +2,7 @@
 
 use core::fmt;
 use fe2o3_kfd_uapi::{KFD_GFX942_SDMA_ENGINE_COUNT_V1, KFD_GFX942_SDMA_QUEUES_PER_ENGINE_V1};
+use std::time::Duration;
 
 use super::{
     GFX942_SDMA_MAX_COMBINED_STRIPED_QUEUES_V1, GFX942_SDMA_MAX_IN_FLIGHT_V1,
@@ -16,6 +17,72 @@ mod tail_wait;
 #[allow(unsafe_code)]
 mod tail_wait_cpu;
 pub(crate) use tail_wait::Gfx942SdmaStripedTailWaitOutcomeV1;
+
+/// Closed spin-budget roster for the profiled striped-tail benchmark experiment.
+///
+/// This is a diagnostic policy selector, not a duration parser or a production
+/// wait-policy input. The ordinary striped wait cannot receive this selector.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Gfx942SdmaStripedDiagnosticSpinBudgetV1 {
+    /// Preserve the current 64-spin, 16-yield, then bounded-sleep policy.
+    #[default]
+    Current,
+    /// Actively poll for 250 us before the existing adaptive tail.
+    Micros250,
+    /// Actively poll for 500 us before the existing adaptive tail.
+    Micros500,
+    /// Actively poll for 1 ms before the existing adaptive tail.
+    Millis1,
+    /// Actively poll for 1.5 ms before the existing adaptive tail.
+    Micros1500,
+    /// Actively poll for 3 ms before the existing adaptive tail.
+    Millis3,
+}
+
+impl Gfx942SdmaStripedDiagnosticSpinBudgetV1 {
+    /// Canonical command-line and record label.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::Micros250 => "250us",
+            Self::Micros500 => "500us",
+            Self::Millis1 => "1ms",
+            Self::Micros1500 => "1500us",
+            Self::Millis3 => "3ms",
+        }
+    }
+
+    /// Configured elapsed active-spin floor in nanoseconds; zero means current policy.
+    pub const fn nanoseconds(self) -> u64 {
+        match self {
+            Self::Current => 0,
+            Self::Micros250 => 250_000,
+            Self::Micros500 => 500_000,
+            Self::Millis1 => 1_000_000,
+            Self::Micros1500 => 1_500_000,
+            Self::Millis3 => 3_000_000,
+        }
+    }
+
+    /// Canonical wait-policy family recorded by the diagnostic benchmark.
+    pub const fn policy_label(self) -> &'static str {
+        match self {
+            Self::Current => "current-adaptive-v1",
+            Self::Micros250
+            | Self::Micros500
+            | Self::Millis1
+            | Self::Micros1500
+            | Self::Millis3 => "diagnostic-active-spin-floor-v1",
+        }
+    }
+
+    pub(crate) const fn active_spin_floor(self) -> Option<Duration> {
+        match self {
+            Self::Current => None,
+            _ => Some(Duration::from_nanos(self.nanoseconds())),
+        }
+    }
+}
 
 /// Availability and validity of one profiled tail-scan CPU-cost observation.
 ///
@@ -41,6 +108,7 @@ pub enum Gfx942SdmaStripedWaitCpuMeasurementStatusV1 {
 /// the explicitly profiled path; the ordinary wait does not collect them.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Gfx942SdmaStripedWaitDiagnosticsV1 {
+    pub(crate) diagnostic_spin_budget: Gfx942SdmaStripedDiagnosticSpinBudgetV1,
     pub(crate) active_queue_count: u8,
     pub(crate) request_count: u16,
     pub(crate) tail_scan_rounds: u64,
@@ -64,6 +132,11 @@ pub struct Gfx942SdmaStripedWaitDiagnosticsV1 {
 }
 
 impl Gfx942SdmaStripedWaitDiagnosticsV1 {
+    /// Closed wait-policy choice used by this profiled diagnostic wait.
+    pub const fn diagnostic_spin_budget(self) -> Gfx942SdmaStripedDiagnosticSpinBudgetV1 {
+        self.diagnostic_spin_budget
+    }
+
     pub const fn active_queue_count(self) -> u8 {
         self.active_queue_count
     }
@@ -1498,6 +1571,49 @@ mod tests {
         DeviceGenerationV1, DeviceKeyV1, PhysicalDeviceIdV1, QueueGenerationV1, QueueInstanceIdV1,
         QueueKeyV1, VmIdV1, VmKeyV1,
     };
+
+    #[test]
+    fn diagnostic_spin_budget_is_a_closed_bounded_roster() {
+        for (budget, label, nanoseconds) in [
+            (
+                Gfx942SdmaStripedDiagnosticSpinBudgetV1::Current,
+                "current",
+                0,
+            ),
+            (
+                Gfx942SdmaStripedDiagnosticSpinBudgetV1::Micros250,
+                "250us",
+                250_000,
+            ),
+            (
+                Gfx942SdmaStripedDiagnosticSpinBudgetV1::Micros500,
+                "500us",
+                500_000,
+            ),
+            (
+                Gfx942SdmaStripedDiagnosticSpinBudgetV1::Millis1,
+                "1ms",
+                1_000_000,
+            ),
+            (
+                Gfx942SdmaStripedDiagnosticSpinBudgetV1::Micros1500,
+                "1500us",
+                1_500_000,
+            ),
+            (
+                Gfx942SdmaStripedDiagnosticSpinBudgetV1::Millis3,
+                "3ms",
+                3_000_000,
+            ),
+        ] {
+            assert_eq!(budget.label(), label);
+            assert_eq!(budget.nanoseconds(), nanoseconds);
+            assert_eq!(
+                budget.active_spin_floor(),
+                (nanoseconds != 0).then(|| Duration::from_nanos(nanoseconds))
+            );
+        }
+    }
 
     fn queue_key(physical: u64, queue: u64, generation: u64) -> QueueKeyV1 {
         QueueKeyV1 {

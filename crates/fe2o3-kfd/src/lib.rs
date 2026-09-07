@@ -181,10 +181,11 @@ pub use sdma::{
     Gfx942SdmaMultiQueuePlanErrorV1, Gfx942SdmaMultiQueuePlanV1, Gfx942SdmaMultiQueuePollV1,
     Gfx942SdmaMultiQueueShardTicketsV1, Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaPacketErrorV1,
     Gfx942SdmaQueueObservationV1, Gfx942SdmaQueueProgressObservationV1,
-    Gfx942SdmaStripedWaitCpuMeasurementStatusV1, Gfx942SdmaStripedWaitDiagnosticsV1,
-    Gfx942SdmaUnpublishedCopyRequestV1, Gfx942XgmiBatchSubmissionFailureV1,
-    Gfx942XgmiBatchWaitFailureV1, Gfx942XgmiCompletedCopyV1, Gfx942XgmiCopyFailureV1,
-    Gfx942XgmiCopyPollV1, Gfx942XgmiSdmaCopyRequestV1, Gfx942XgmiWaitFailureV1,
+    Gfx942SdmaStripedDiagnosticSpinBudgetV1, Gfx942SdmaStripedWaitCpuMeasurementStatusV1,
+    Gfx942SdmaStripedWaitDiagnosticsV1, Gfx942SdmaUnpublishedCopyRequestV1,
+    Gfx942XgmiBatchSubmissionFailureV1, Gfx942XgmiBatchWaitFailureV1, Gfx942XgmiCompletedCopyV1,
+    Gfx942XgmiCopyFailureV1, Gfx942XgmiCopyPollV1, Gfx942XgmiSdmaCopyRequestV1,
+    Gfx942XgmiWaitFailureV1,
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

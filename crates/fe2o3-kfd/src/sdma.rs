@@ -40,8 +40,8 @@ use multi_queue::next_striped_owner;
 pub use multi_queue::{
     Gfx942SdmaMultiQueueCompletedV1, Gfx942SdmaMultiQueuePlanErrorV1, Gfx942SdmaMultiQueuePlanV1,
     Gfx942SdmaMultiQueuePollV1, Gfx942SdmaMultiQueueShardTicketsV1,
-    Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaStripedWaitCpuMeasurementStatusV1,
-    Gfx942SdmaStripedWaitDiagnosticsV1,
+    Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaStripedDiagnosticSpinBudgetV1,
+    Gfx942SdmaStripedWaitCpuMeasurementStatusV1, Gfx942SdmaStripedWaitDiagnosticsV1,
 };
 #[cfg(test)]
 pub(crate) use multi_queue::{
@@ -98,7 +98,7 @@ impl SdmaWaitProfileV1 {
 
 /// Frozen claim boundary for the bounded native gfx942 SDMA implementation.
 pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v13\n",
+    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v14\n",
     "kfd_sdma_queue_schema_sha256=f489ae5735f8230e4ee788fe1fa9e62b307301c13cf88ee70889b0f455af0b5b\n",
     "sdma_topology_capability_sha256=51236bbd70ece3ee4e14cc1a3e7e7cfbbe0960e745130e1a3943f9e39bc36a26\n",
     "rocm_systems_commit=1b648038a0ac164cf2f06f2a581ced12cf5f7378\n",
@@ -115,8 +115,9 @@ pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
     "memory=move-only-host-coherent-or-device-local,logical-subrange-bounded,queue-retained-while-in-flight,exact-full-host-userspace-hash-while-copy-certificate-bound-to-queue-storage-identity-pool-generation-logical-and-physical-extents-and-range,certificate-non-clone-and-private\n",
     "submission=single-producer,all-fallible-preparation-and-allocation-retains-recoverable-requests-before-mutation,standalone-striped-multi-queue-bounds:2..16-queues-and-1..1008-requests,combined-striped-multi-queue-bounds:2..14-queues-and-1..882-requests,at-most-63-per-shard,all-striped-shards-and-outcome-storage-prepared-before-first-publication,no-heap-allocation-after-first-publication,write-complete-sdma-packet-images-and-retained-records-before-one-exact-release-visible-wptr-publication-and-one-final-release-doorbell-per-batch,queue-occurrence-and-generation-tagged-ticket\n",
     "completion=host-coherent-u32-fence-value-observed-through-i64-acquire,exact-owner-queue-slot-generation-and-request-index-binding,nonblocking-whole-submission-poll-observes-every-entry-before-pending,striped-blocking-wait-keeps-the-sole-full-submission-owner-outside-the-unwind-catching-live-memory-envelope-and-prebinds-one-exact-tail-per-active-shard-and-observes-only-those-tails-before-one-shared-monotonic-deadline,all-tail-ready-or-deadline-performs-one-full-ordered-status-and-retirement-preflight-audit,tail-ready-with-pending-prefix-fails-terminally,a-private-lifetime-bound-all-ready-witness-authorizes-only-the-immediate-abort-on-unwind-ordered-custody-move-without-reobservation-or-revalidation,completed-custody-in-original-request-order,timeout-retains-the-whole-submission-and-retry-starts-a-new-native-wait-epoch,queue-progress-at-host-monotonic-instant,no-atomic-device-snapshot-or-gpu-clock-calibration\n",
-    "diagnostics=opt-in-success-only-striped-tail-host-decomposition,active-queue-and-request-counts,tail-round-and-observation-counts,spin-yield-sleep-pause-counts,requested-not-actual-sleep-duration,first-and-all-tail-host-monotonic-offsets,bind-opening-currentness-tail-scan-final-audit-closing-currentness-and-retirement-host-monotonic-durations,tail-scan-linux-clock-thread-cputime-id-nanoseconds-and-rusage-thread-voluntary-and-involuntary-context-switch-deltas-with-explicit-available-unavailable-invalid-status,syscall-failure-and-invalid-or-overflowing-observations-clear-all-three-cpu-cost-values-without-an-operational-error,ordinary-wait-uses-a-compile-time-disabled-profile-without-cpu-cost-syscalls-or-counters,no-device-timestamps-or-engine-counters,no-admission-or-completion-authority,profiled-host-overhead-is-not-unprofiled-overhead\n",
-    "striped-wait-policy=first-observation-unconditional,64-spin-pauses,16-yield-pauses,subsequent-sleep-requests-capped-at-25000ns-and-clamped-to-one-shared-monotonic-deadline,actual-scheduler-wake-latency-unbounded,no-completion-authority-from-pause-schedule\n",
+    "diagnostics=opt-in-success-only-striped-tail-host-decomposition,active-queue-and-request-counts,tail-round-and-observation-counts,spin-yield-sleep-pause-counts,requested-not-actual-sleep-duration,first-and-all-tail-host-monotonic-offsets,bind-opening-currentness-tail-scan-final-audit-closing-currentness-and-retirement-host-monotonic-durations,tail-scan-linux-clock-thread-cputime-id-nanoseconds-and-rusage-thread-voluntary-and-involuntary-context-switch-deltas-with-explicit-available-unavailable-invalid-status,syscall-failure-and-invalid-or-overflowing-observations-clear-all-three-cpu-cost-values-without-an-operational-error,ordinary-wait-uses-a-compile-time-disabled-profile-without-cpu-cost-syscalls-or-counters,closed-diagnostic-spin-budget-recorded-in-every-successful-profile,no-device-timestamps-or-engine-counters,no-admission-or-completion-authority,profiled-host-overhead-is-not-unprofiled-overhead\n",
+    "striped-wait-policy=ordinary-and-profiled-current-first-observation-unconditional,64-spin-pauses,16-yield-pauses,subsequent-sleep-requests-capped-at-25000ns-and-clamped-to-one-shared-monotonic-deadline,actual-scheduler-wake-latency-unbounded,no-completion-authority-from-pause-schedule\n",
+    "diagnostic-striped-spin-budget-experiment=profiled-only,closed-roster:current-or-250000ns-or-500000ns-or-1000000ns-or-1500000ns-or-3000000ns,nonzero-values-are-elapsed-active-spin-floors-checked-add-and-clamped-to-the-same-deadline,attempts-counted-during-floor,then-existing-adaptive-stage-with-25000ns-sleep-ceiling,ordinary-wrapper-always-selects-current,nonprofiled-noncurrent-rejected,budget-and-timing-and-profiling-observations-have-no-completion-authority,gpu-progresses-during-actual-host-sleeps,wall-minus-thread-cpu-minus-requested-sleep-is-not-avoidable-latency,spin-changes-host-observation-wakeup-cpu-and-context-switch-behavior-without-device-duration-causality,no-unbounded-input\n",
     "striped-tail-fence-premise=each-copy-submission-ends-in-the-exact-mtype-3-system-1-snoop-1-fence,each-bound-owner-engine-index-is-exactly-queue-ordinal-modulo-two,within-one-admitted-gfx942-sdma-engine-observing-the-exact-queue-slot-generation-bound-tail-fence-completion-implies-every-preceding-copy-and-fence-occurrence-on-that-shard-is-complete-and-system-visible,firmware-ordering-and-cpu-gpu-coherence-are-external-contracts\n",
     "persistent-sdma-wait-policy=elapsed-active-spin-floor:50000ns,checked-add-and-clamp-to-deadline,attempts-counted-during-floor,exact-floor-boundary-resumes-default-adaptive-stage,first-observation-unconditional;scope=directional-persistent-single,directional-persistent-window,same-device-persistent-window;excluded=ordinary-directional,generic-striped,fused-synchronous,xgmi,persistent-compute\n",
     "cancellation=published-packets-cannot-be-retracted,typed-rejection-retains-ticket,poll-or-explicit-drain-required\n",
@@ -127,12 +128,12 @@ pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
     "teardown=combined-striped-before-directional-before-compute,standalone-sdma-before-compute,then-release-ring-control-completions-and-pooled-buffers-explicitly,terminal-creation-custody-has-no-in-process-cleanup-authority\n",
     "proof=abstract-pool-generation-retention-and-cross-device-coordinate-theorems-only,r46-model-is-not-an-executable-rust-refinement,host-thread-cpu-and-context-switch-measurements-are-not-proof\n",
     "contracted=ioctl-truth,doorbell-mapping,cpu-gpu-coherence,sha256-collision-resistance,userspace-certificate-is-not-kernel-attestation-or-loaded-kernel-proof,kernel-firmware-packet-consumption,completion,event-driven-completion,gpu-clock-calibration,progress,liveness\n",
-    "measured=hardware-correctness-and-performance-on-identified-host-only,no-parity-or-striped-tail-wait-speedup-measured-for-this-revision\n",
+    "measured=prior-host-diagnostic-motivates-closed-spin-budget-roster-only,no-r56-gpu-result,no-parity-or-striped-tail-wait-speedup-measured-for-this-revision,no-claim-that-spin-closes-the-observed-hip-gap\n",
 );
 
 /// SHA-256 of [`GFX942_SDMA_COPY_MANIFEST_V1`].
 pub const GFX942_SDMA_COPY_MANIFEST_SHA256_V1: &str =
-    "5abb6d5fb9dcf321d82dfadf2ffcdd310d197b5ddb42ec3d88658ab26f1451e9";
+    "6ae8a129c33783ba8f0ff95c66f925221a8af127972e0f5093aa676fb311a59b";
 
 const SDMA_OP_COPY: u32 = 1;
 const SDMA_OP_FENCE: u32 = 5;
@@ -7072,8 +7073,15 @@ mod tests {
             "without-cpu-cost-syscalls-or-counters",
             "explicit-available-unavailable-invalid-status",
             "clear-all-three-cpu-cost-values-without-an-operational-error",
+            "closed-diagnostic-spin-budget-recorded-in-every-successful-profile",
             "host-thread-cpu-and-context-switch-measurements-are-not-proof",
             "profiled-host-overhead-is-not-unprofiled-overhead",
+            "ordinary-wrapper-always-selects-current",
+            "nonprofiled-noncurrent-rejected",
+            "closed-roster:current-or-250000ns-or-500000ns-or-1000000ns-or-1500000ns-or-3000000ns",
+            "wall-minus-thread-cpu-minus-requested-sleep-is-not-avoidable-latency",
+            "spin-changes-host-observation-wakeup-cpu-and-context-switch-behavior-without-device-duration-causality",
+            "no-unbounded-input",
             "subsequent-sleep-requests-capped-at-25000ns",
             "actual-scheduler-wake-latency-unbounded",
             "no-completion-authority-from-pause-schedule",
@@ -7086,6 +7094,7 @@ mod tests {
             "and-invokes-the-same-terminalizer",
             "r46-model-is-not-an-executable-rust-refinement",
             "no-parity-or-striped-tail-wait-speedup-measured-for-this-revision",
+            "no-claim-that-spin-closes-the-observed-hip-gap",
         ] {
             assert!(GFX942_SDMA_COPY_MANIFEST_V1.contains(required));
         }

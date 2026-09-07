@@ -7,7 +7,8 @@ use fe2o3_kfd::{
     ComputeAqlQueueSessionV1, DeviceSelector, Gfx942CombinedSdmaCapacityV1, Gfx942SdmaBufferV1,
     Gfx942SdmaCopyRequestV1, Gfx942SdmaMultiQueueCompletedV1, Gfx942SdmaMultiQueuePollV1,
     Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaQueueObservationV1,
-    Gfx942SdmaStripedWaitCpuMeasurementStatusV1, Gfx942SdmaStripedWaitDiagnosticsV1, OpenedKfd,
+    Gfx942SdmaStripedDiagnosticSpinBudgetV1, Gfx942SdmaStripedWaitCpuMeasurementStatusV1,
+    Gfx942SdmaStripedWaitDiagnosticsV1, OpenedKfd,
 };
 use sha2::{Digest, Sha256};
 
@@ -102,12 +103,17 @@ impl AggregateSamples {
 }
 
 struct AggregateDiagnosticSamples {
+    diagnostic_spin_budget: Gfx942SdmaStripedDiagnosticSpinBudgetV1,
     waits: Vec<Gfx942SdmaStripedWaitDiagnosticsV1>,
 }
 
 impl AggregateDiagnosticSamples {
-    fn with_capacity(samples: usize) -> Self {
+    fn with_capacity(
+        samples: usize,
+        diagnostic_spin_budget: Gfx942SdmaStripedDiagnosticSpinBudgetV1,
+    ) -> Self {
         Self {
+            diagnostic_spin_budget,
             waits: Vec::with_capacity(samples),
         }
     }
@@ -133,7 +139,8 @@ impl AggregateDiagnosticSamples {
             Gfx942SdmaStripedWaitCpuMeasurementStatusV1::Unavailable
             | Gfx942SdmaStripedWaitCpuMeasurementStatusV1::Invalid => cpu_fields_absent,
         };
-        if usize::from(diagnostics.active_queue_count()) != expected_queue_count
+        if diagnostics.diagnostic_spin_budget() != self.diagnostic_spin_budget
+            || usize::from(diagnostics.active_queue_count()) != expected_queue_count
             || usize::from(diagnostics.request_count()) != expected_request_count
             || diagnostics.tail_scan_rounds() == 0
             || diagnostics.tail_observations()
@@ -327,6 +334,20 @@ fn admitted_aggregate_profile(profile: &str) -> Option<AggregateProfile> {
     }
 }
 
+fn admitted_diagnostic_spin_budget(
+    budget: &str,
+) -> Option<Gfx942SdmaStripedDiagnosticSpinBudgetV1> {
+    match budget {
+        "current" => Some(Gfx942SdmaStripedDiagnosticSpinBudgetV1::Current),
+        "250us" => Some(Gfx942SdmaStripedDiagnosticSpinBudgetV1::Micros250),
+        "500us" => Some(Gfx942SdmaStripedDiagnosticSpinBudgetV1::Micros500),
+        "1ms" => Some(Gfx942SdmaStripedDiagnosticSpinBudgetV1::Millis1),
+        "1500us" => Some(Gfx942SdmaStripedDiagnosticSpinBudgetV1::Micros1500),
+        "3ms" => Some(Gfx942SdmaStripedDiagnosticSpinBudgetV1::Millis3),
+        _ => None,
+    }
+}
+
 fn aggregate_resource_budget(
     profile: AggregateProfile,
     depth: usize,
@@ -478,6 +499,7 @@ fn wait_aggregate(
 fn wait_aggregate_profiled(
     queue: &mut ComputeAqlQueueSessionV1,
     submission: Gfx942SdmaMultiQueueSubmissionV1,
+    diagnostic_spin_budget: Gfx942SdmaStripedDiagnosticSpinBudgetV1,
 ) -> Result<
     (
         Gfx942SdmaMultiQueueCompletedV1,
@@ -486,7 +508,11 @@ fn wait_aggregate_profiled(
     Box<dyn std::error::Error>,
 > {
     queue
-        .wait_gfx942_striped_sdma_copy_batch_profiled_for_v1(submission, Duration::from_secs(30))
+        .wait_gfx942_striped_sdma_copy_batch_profiled_with_diagnostic_spin_budget_for_v1(
+            submission,
+            Duration::from_secs(30),
+            diagnostic_spin_budget,
+        )
         .map_err(|failure| failure.into_parts().0.into())
 }
 
@@ -501,13 +527,15 @@ fn run_aggregate_phase<const PROFILE: bool>(
     buffers: Vec<AggregateBuffers>,
     copy_bytes: usize,
     direction: AggregateDirection,
+    diagnostic_spin_budget: Gfx942SdmaStripedDiagnosticSpinBudgetV1,
 ) -> Result<AggregatePhaseResult, Box<dyn std::error::Error>> {
     let requests = aggregate_phase_inputs(buffers, copy_bytes, direction);
     let t0 = Instant::now();
     let submission = submit_aggregate(queue, requests)?;
     let t1 = Instant::now();
     let (completed, diagnostics) = if PROFILE {
-        let (completed, diagnostics) = wait_aggregate_profiled(queue, submission)?;
+        let (completed, diagnostics) =
+            wait_aggregate_profiled(queue, submission, diagnostic_spin_budget)?;
         (completed, Some(diagnostics))
     } else {
         (wait_aggregate(queue, submission)?, None)
@@ -550,8 +578,13 @@ fn run_aggregate_poll_smoke(
     let completed = finish_aggregate_poll_smoke(queue, submission)?;
     let mut buffers = restore_aggregate_buffers(completed, AggregateDirection::HostToDevice)?;
     poison_aggregate_destinations(queue, &mut buffers, copy_bytes, 0)?;
-    let (buffers, _, _) =
-        run_aggregate_phase::<false>(queue, buffers, copy_bytes, AggregateDirection::DeviceToHost)?;
+    let (buffers, _, _) = run_aggregate_phase::<false>(
+        queue,
+        buffers,
+        copy_bytes,
+        AggregateDirection::DeviceToHost,
+        Gfx942SdmaStripedDiagnosticSpinBudgetV1::Current,
+    )?;
     validate_aggregate_round(queue, &buffers, copy_bytes, 0)?;
     recycle_aggregate_buffers(queue, buffers)
 }
@@ -1038,9 +1071,27 @@ fn append_optional_wait_diagnostic_field(
     .expect("writing to a String cannot fail");
 }
 
+fn append_diagnostic_spin_policy(
+    row: &mut String,
+    diagnostic_spin_budget: Gfx942SdmaStripedDiagnosticSpinBudgetV1,
+) {
+    write!(
+        row,
+        " wait_policy={} diagnostic_spin_budget={} diagnostic_spin_budget_ns={}",
+        diagnostic_spin_budget.policy_label(),
+        diagnostic_spin_budget.label(),
+        diagnostic_spin_budget.nanoseconds(),
+    )
+    .expect("writing to a String cannot fail");
+}
+
 fn run_aggregate_benchmark<const PROFILE: bool>(
     args: &[String],
+    diagnostic_spin_budget: Gfx942SdmaStripedDiagnosticSpinBudgetV1,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if !PROFILE && diagnostic_spin_budget != Gfx942SdmaStripedDiagnosticSpinBudgetV1::Current {
+        return Err("diagnostic spin budget requires aggregate-profiled mode".into());
+    }
     let unique_id = if let Some(hex) = args[0].strip_prefix("0x") {
         u64::from_str_radix(hex, 16)?
     } else {
@@ -1102,10 +1153,10 @@ fn run_aggregate_benchmark<const PROFILE: bool>(
     let mut buffers = allocate_aggregate_buffers(&mut queue, depth, copy_bytes)?;
     let mut h2d = AggregateSamples::with_capacity(sample_count);
     let mut d2h = AggregateSamples::with_capacity(sample_count);
-    let mut h2d_diagnostics =
-        PROFILE.then(|| AggregateDiagnosticSamples::with_capacity(sample_count));
-    let mut d2h_diagnostics =
-        PROFILE.then(|| AggregateDiagnosticSamples::with_capacity(sample_count));
+    let mut h2d_diagnostics = PROFILE
+        .then(|| AggregateDiagnosticSamples::with_capacity(sample_count, diagnostic_spin_budget));
+    let mut d2h_diagnostics = PROFILE
+        .then(|| AggregateDiagnosticSamples::with_capacity(sample_count, diagnostic_spin_budget));
     for round in 0..rounds {
         prepare_aggregate_sources(&mut queue, &mut buffers, copy_bytes, round)?;
         let (next, h2d_timing, h2d_wait_diagnostics) = run_aggregate_phase::<PROFILE>(
@@ -1113,6 +1164,7 @@ fn run_aggregate_benchmark<const PROFILE: bool>(
             buffers,
             copy_bytes,
             AggregateDirection::HostToDevice,
+            diagnostic_spin_budget,
         )?;
         let mut next = next;
         poison_aggregate_destinations(&mut queue, &mut next, copy_bytes, round)?;
@@ -1121,6 +1173,7 @@ fn run_aggregate_benchmark<const PROFILE: bool>(
             next,
             copy_bytes,
             AggregateDirection::DeviceToHost,
+            diagnostic_spin_budget,
         )?;
         buffers = next;
         validate_aggregate_round(&mut queue, &buffers, copy_bytes, round)?;
@@ -1151,12 +1204,20 @@ fn run_aggregate_benchmark<const PROFILE: bool>(
     queue.trim_sdma_memory_pool()?;
     queue.destroy()?;
 
-    let workload_id = format!(
-        "bytes{copy_bytes}-q{queue_count}-{}",
-        profile.workload_kind()
-    );
+    let workload_id = if PROFILE {
+        format!(
+            "bytes{copy_bytes}-q{queue_count}-{}-spin{}",
+            profile.workload_kind(),
+            diagnostic_spin_budget.label(),
+        )
+    } else {
+        format!(
+            "bytes{copy_bytes}-q{queue_count}-{}",
+            profile.workload_kind()
+        )
+    };
     let schema = if PROFILE {
-        "fe2o3.kfd-striped-wait-diagnostics.v2"
+        "fe2o3.kfd-striped-wait-spin-budget-diagnostics.v1"
     } else {
         "fe2o3.async-copy-striped-benchmark.v3"
     };
@@ -1164,6 +1225,9 @@ fn run_aggregate_benchmark<const PROFILE: bool>(
         "backend=kfd schema={schema} workload_id={workload_id} unique_id={unique_id:016x} bytes={copy_bytes} depth={depth} logical_queue_count={queue_count} per_queue_depth={} assignment=continuing-round-robin-v1 submit_order=cursor-queue-major-v1 direction=h2d-then-d2h warmups={warmups} samples={sample_count} validation=full-buffer-every-round queue_creation_timed=no allocation_timed=no api=native-kfd-sdma resource_profile={resource_profile} physical_engine_count=2",
         depth / queue_count,
     );
+    if PROFILE {
+        append_diagnostic_spin_policy(&mut row, diagnostic_spin_budget);
+    }
     append_aggregate_metrics(&mut row, "h2d", &h2d, transfer_bytes);
     append_aggregate_metrics(&mut row, "d2h", &d2h, transfer_bytes);
     if PROFILE {
@@ -1200,10 +1264,22 @@ fn run_aggregate_benchmark<const PROFILE: bool>(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.len() == 7 && args[6] == "aggregate" {
-        return run_aggregate_benchmark::<false>(&args);
+        return run_aggregate_benchmark::<false>(
+            &args,
+            Gfx942SdmaStripedDiagnosticSpinBudgetV1::Current,
+        );
     }
-    if args.len() == 7 && args[6] == "aggregate-profiled" {
-        return run_aggregate_benchmark::<true>(&args);
+    if (7..=8).contains(&args.len()) && args[6] == "aggregate-profiled" {
+        let diagnostic_spin_budget = args.get(7).map_or(
+            Some(Gfx942SdmaStripedDiagnosticSpinBudgetV1::Current),
+            |budget| admitted_diagnostic_spin_budget(budget),
+        );
+        return run_aggregate_benchmark::<true>(
+            &args,
+            diagnostic_spin_budget.ok_or(
+                "diagnostic spin budget must be current, 250us, 500us, 1ms, 1500us, or 3ms",
+            )?,
+        );
     }
     if !(5..=6).contains(&args.len()) {
         return Err(
@@ -1369,9 +1445,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::{
         AggregateDiagnosticSamples, AggregateProfile, AggregateResourceBudget, AggregateSamples,
-        PhaseTiming, admitted_aggregate_profile, admitted_striped_queue_count,
-        aggregate_resource_budget, aggregate_resource_budget_is_admitted,
-        append_aggregate_wait_diagnostics, balanced_batch_lengths, sha256_ascii,
+        PhaseTiming, admitted_aggregate_profile, admitted_diagnostic_spin_budget,
+        admitted_striped_queue_count, aggregate_resource_budget,
+        aggregate_resource_budget_is_admitted, append_aggregate_wait_diagnostics,
+        append_diagnostic_spin_policy, balanced_batch_lengths, sha256_ascii,
     };
 
     #[test]
@@ -1421,6 +1498,104 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_spin_budget_roster_is_exact_and_rejects_arbitrary_input() {
+        use fe2o3_kfd::Gfx942SdmaStripedDiagnosticSpinBudgetV1 as Budget;
+
+        for (label, budget, nanoseconds, policy) in [
+            ("current", Budget::Current, 0, "current-adaptive-v1"),
+            (
+                "250us",
+                Budget::Micros250,
+                250_000,
+                "diagnostic-active-spin-floor-v1",
+            ),
+            (
+                "500us",
+                Budget::Micros500,
+                500_000,
+                "diagnostic-active-spin-floor-v1",
+            ),
+            (
+                "1ms",
+                Budget::Millis1,
+                1_000_000,
+                "diagnostic-active-spin-floor-v1",
+            ),
+            (
+                "1500us",
+                Budget::Micros1500,
+                1_500_000,
+                "diagnostic-active-spin-floor-v1",
+            ),
+            (
+                "3ms",
+                Budget::Millis3,
+                3_000_000,
+                "diagnostic-active-spin-floor-v1",
+            ),
+        ] {
+            assert_eq!(admitted_diagnostic_spin_budget(label), Some(budget));
+            assert_eq!(budget.label(), label);
+            assert_eq!(budget.nanoseconds(), nanoseconds);
+            assert_eq!(budget.policy_label(), policy);
+        }
+        for rejected in [
+            "",
+            "0",
+            "1us",
+            "249us",
+            "251us",
+            "750us",
+            "1000us",
+            "1.5ms",
+            "1501us",
+            "3000us",
+            "4ms",
+            "18446744073709551615ns",
+            "CURRENT",
+            " current",
+        ] {
+            assert_eq!(admitted_diagnostic_spin_budget(rejected), None);
+        }
+    }
+
+    #[test]
+    fn diagnostic_spin_policy_renderer_is_exact_for_every_admitted_budget() {
+        use fe2o3_kfd::Gfx942SdmaStripedDiagnosticSpinBudgetV1 as Budget;
+
+        for (budget, expected) in [
+            (
+                Budget::Current,
+                " wait_policy=current-adaptive-v1 diagnostic_spin_budget=current diagnostic_spin_budget_ns=0",
+            ),
+            (
+                Budget::Micros250,
+                " wait_policy=diagnostic-active-spin-floor-v1 diagnostic_spin_budget=250us diagnostic_spin_budget_ns=250000",
+            ),
+            (
+                Budget::Micros500,
+                " wait_policy=diagnostic-active-spin-floor-v1 diagnostic_spin_budget=500us diagnostic_spin_budget_ns=500000",
+            ),
+            (
+                Budget::Millis1,
+                " wait_policy=diagnostic-active-spin-floor-v1 diagnostic_spin_budget=1ms diagnostic_spin_budget_ns=1000000",
+            ),
+            (
+                Budget::Micros1500,
+                " wait_policy=diagnostic-active-spin-floor-v1 diagnostic_spin_budget=1500us diagnostic_spin_budget_ns=1500000",
+            ),
+            (
+                Budget::Millis3,
+                " wait_policy=diagnostic-active-spin-floor-v1 diagnostic_spin_budget=3ms diagnostic_spin_budget_ns=3000000",
+            ),
+        ] {
+            let mut row = String::new();
+            append_diagnostic_spin_policy(&mut row, budget);
+            assert_eq!(row, expected);
+        }
+    }
+
+    #[test]
     fn aggregate_samples_require_exact_positive_phase_accounting() {
         let mut samples = AggregateSamples::with_capacity(1);
         samples
@@ -1447,6 +1622,7 @@ mod tests {
     #[test]
     fn unavailable_cpu_cost_samples_remain_explicit_in_diagnostic_output() {
         let samples = AggregateDiagnosticSamples {
+            diagnostic_spin_budget: fe2o3_kfd::Gfx942SdmaStripedDiagnosticSpinBudgetV1::Current,
             waits: vec![fe2o3_kfd::Gfx942SdmaStripedWaitDiagnosticsV1::default()],
         };
         let mut row = String::new();

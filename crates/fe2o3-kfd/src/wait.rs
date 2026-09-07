@@ -62,13 +62,32 @@ impl MonotonicWaitV1 {
         deadline: Instant,
         active_spin_floor: Duration,
     ) -> Self {
-        Self::until_with_active_spin_floor_from(Instant::now(), deadline, active_spin_floor)
+        Self::until_with_active_spin_floor_and_sleep_ceiling_from(
+            Instant::now(),
+            deadline,
+            active_spin_floor,
+            MAX_SLEEP_V1,
+        )
     }
 
-    fn until_with_active_spin_floor_from(
+    pub(crate) fn until_with_active_spin_floor_and_sleep_ceiling(
+        deadline: Instant,
+        active_spin_floor: Duration,
+        max_sleep: Duration,
+    ) -> Self {
+        Self::until_with_active_spin_floor_and_sleep_ceiling_from(
+            Instant::now(),
+            deadline,
+            active_spin_floor,
+            max_sleep,
+        )
+    }
+
+    fn until_with_active_spin_floor_and_sleep_ceiling_from(
         started: Instant,
         deadline: Instant,
         active_spin_floor: Duration,
+        max_sleep: Duration,
     ) -> Self {
         let active_spin_until = started
             .checked_add(active_spin_floor)
@@ -77,8 +96,8 @@ impl MonotonicWaitV1 {
             deadline: Some(deadline),
             active_spin_until: Some(active_spin_until),
             attempts: 0,
-            next_sleep: INITIAL_SLEEP_V1,
-            max_sleep: MAX_SLEEP_V1,
+            next_sleep: INITIAL_SLEEP_V1.min(max_sleep),
+            max_sleep,
         }
     }
 
@@ -221,10 +240,11 @@ mod tests {
     fn active_spin_floor_is_elapsed_and_clamped_to_deadline() {
         let started = Instant::now();
         let deadline = started + Duration::from_micros(100);
-        let mut wait = MonotonicWaitV1::until_with_active_spin_floor_from(
+        let mut wait = MonotonicWaitV1::until_with_active_spin_floor_and_sleep_ceiling_from(
             started,
             deadline,
             Duration::from_micros(50),
+            MAX_SLEEP_V1,
         );
 
         for _ in 0..SPIN_ATTEMPTS_V1 {
@@ -240,12 +260,39 @@ mod tests {
         );
         assert_eq!(wait.attempts, SPIN_ATTEMPTS_V1 + 1);
 
-        let clamped = MonotonicWaitV1::until_with_active_spin_floor_from(
+        let clamped = MonotonicWaitV1::until_with_active_spin_floor_and_sleep_ceiling_from(
             started,
             deadline,
             Duration::from_micros(200),
+            MAX_SLEEP_V1,
         );
         assert_eq!(clamped.active_spin_until, Some(deadline));
+    }
+
+    #[test]
+    fn active_spin_floor_preserves_the_explicit_sleep_ceiling() {
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(1);
+        let ceiling = Duration::from_micros(25);
+        let mut wait = MonotonicWaitV1::until_with_active_spin_floor_and_sleep_ceiling_from(
+            started,
+            deadline,
+            Duration::from_micros(250),
+            ceiling,
+        );
+
+        for _ in 0..(SPIN_ATTEMPTS_V1 + YIELD_ATTEMPTS_V1) {
+            assert_eq!(
+                wait.next_action_at(started + Duration::from_micros(249)),
+                WaitActionV1::Spin
+            );
+        }
+        for _ in 0..8 {
+            assert_eq!(
+                wait.next_action_at(started + Duration::from_micros(250)),
+                WaitActionV1::Sleep(ceiling)
+            );
+        }
     }
 
     #[test]

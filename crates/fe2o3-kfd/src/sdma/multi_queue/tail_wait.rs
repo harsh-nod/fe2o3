@@ -17,8 +17,8 @@ use super::tail_wait_cpu::{
 };
 use super::{
     Gfx942SdmaMultiQueueCompletedV1, Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaQueueSetV1,
-    Gfx942SdmaStripedWaitCpuMeasurementStatusV1, Gfx942SdmaStripedWaitDiagnosticsV1,
-    ValidatedMultiQueueCompletionEntryV1,
+    Gfx942SdmaStripedDiagnosticSpinBudgetV1, Gfx942SdmaStripedWaitCpuMeasurementStatusV1,
+    Gfx942SdmaStripedWaitDiagnosticsV1, ValidatedMultiQueueCompletionEntryV1,
 };
 use crate::sdma::{
     GFX942_SDMA_MAX_STRIPED_QUEUES_V1, Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1,
@@ -253,6 +253,16 @@ fn profile_elapsed_ns_v1<const PROFILE: bool>(started: Option<Instant>) -> u64 {
     }
 }
 
+const fn diagnostic_spin_budget_is_admitted_for_profile_v1<const PROFILE: bool>(
+    diagnostic_spin_budget: Gfx942SdmaStripedDiagnosticSpinBudgetV1,
+) -> bool {
+    PROFILE
+        || matches!(
+            diagnostic_spin_budget,
+            Gfx942SdmaStripedDiagnosticSpinBudgetV1::Current
+        )
+}
+
 fn record_thread_wait_cpu_measurement_v1(
     diagnostics: &mut Gfx942SdmaStripedWaitDiagnosticsV1,
     measurement: ThreadWaitCpuMeasurementV1,
@@ -444,13 +454,23 @@ impl Gfx942SdmaQueueSetV1 {
         memory: &mut SharedGttMemorySessionV1,
         retained: &mut Option<Gfx942SdmaMultiQueueSubmissionV1>,
         timeout: Duration,
+        diagnostic_spin_budget: Gfx942SdmaStripedDiagnosticSpinBudgetV1,
         diagnostics: &mut Gfx942SdmaStripedWaitDiagnosticsV1,
     ) -> Gfx942SdmaStripedTailWaitOutcomeV1 {
+        if !diagnostic_spin_budget_is_admitted_for_profile_v1::<PROFILE>(diagnostic_spin_budget) {
+            return Gfx942SdmaStripedTailWaitOutcomeV1::Terminal(Gfx942SdmaErrorV1::Contract(
+                "diagnostic striped spin budget requires profiling",
+            ));
+        }
+        if PROFILE {
+            diagnostics.diagnostic_spin_budget = diagnostic_spin_budget;
+        }
         let audit = with_borrowed_striped_submission_v1(retained, |submission| {
             self.audit_prepared_striped_multi_queue_tails_for::<PROFILE>(
                 memory,
                 submission,
                 timeout,
+                diagnostic_spin_budget,
                 diagnostics,
             )
         });
@@ -484,6 +504,7 @@ impl Gfx942SdmaQueueSetV1 {
         memory: &mut SharedGttMemorySessionV1,
         submission: &'a Gfx942SdmaMultiQueueSubmissionV1,
         timeout: Duration,
+        diagnostic_spin_budget: Gfx942SdmaStripedDiagnosticSpinBudgetV1,
         diagnostics: &mut Gfx942SdmaStripedWaitDiagnosticsV1,
     ) -> Result<Gfx942SdmaStripedTailWaitAuditV1<'a>, Gfx942SdmaErrorV1> {
         let deadline = Instant::now()
@@ -504,8 +525,19 @@ impl Gfx942SdmaQueueSetV1 {
             diagnostics.opening_currentness_ns =
                 profile_elapsed_ns_v1::<PROFILE>(opening_currentness_started);
         }
-        let mut wait =
-            MonotonicWaitV1::until_with_sleep_ceiling(deadline, GFX942_STRIPED_SDMA_MAX_SLEEP_V1);
+        let mut wait = match diagnostic_spin_budget.active_spin_floor() {
+            Some(active_spin_floor) => {
+                MonotonicWaitV1::until_with_active_spin_floor_and_sleep_ceiling(
+                    deadline,
+                    active_spin_floor,
+                    GFX942_STRIPED_SDMA_MAX_SLEEP_V1,
+                )
+            }
+            None => MonotonicWaitV1::until_with_sleep_ceiling(
+                deadline,
+                GFX942_STRIPED_SDMA_MAX_SLEEP_V1,
+            ),
+        };
         let active_queues = &prepared.active_queues[..usize::from(prepared.tail_count)];
         let tail_scan_started = profile_start_v1::<PROFILE>();
         let tail_scan_cpu_started = profile_tail_cpu_snapshot_v1::<PROFILE>();
@@ -779,6 +811,27 @@ mod tests {
         assert!(tail_signal_generation_is_exact_v1(7, 7));
         assert!(!tail_signal_generation_is_exact_v1(7, 8));
         assert!(!tail_signal_generation_is_exact_v1(0, 0));
+    }
+
+    #[test]
+    fn noncurrent_spin_budgets_are_confined_to_the_profiled_path() {
+        for budget in [
+            Gfx942SdmaStripedDiagnosticSpinBudgetV1::Micros250,
+            Gfx942SdmaStripedDiagnosticSpinBudgetV1::Micros500,
+            Gfx942SdmaStripedDiagnosticSpinBudgetV1::Millis1,
+            Gfx942SdmaStripedDiagnosticSpinBudgetV1::Micros1500,
+            Gfx942SdmaStripedDiagnosticSpinBudgetV1::Millis3,
+        ] {
+            assert!(!diagnostic_spin_budget_is_admitted_for_profile_v1::<false>(
+                budget
+            ));
+            assert!(diagnostic_spin_budget_is_admitted_for_profile_v1::<true>(
+                budget
+            ));
+        }
+        assert!(diagnostic_spin_budget_is_admitted_for_profile_v1::<false>(
+            Gfx942SdmaStripedDiagnosticSpinBudgetV1::Current
+        ));
     }
 
     #[test]
@@ -1188,6 +1241,12 @@ mod tests {
                 .count(),
             1
         );
+        assert_eq!(
+            source
+                .matches("MonotonicWaitV1::until_with_active_spin_floor_and_sleep_ceiling")
+                .count(),
+            1
+        );
         assert_eq!(source.matches("for entry in entries").count(), 1);
         assert!(source.contains("Gfx942SdmaStripedAllReadyAuditV1<'a>"));
         assert!(source.contains("submission: &'a Gfx942SdmaMultiQueueSubmissionV1"));
@@ -1207,6 +1266,15 @@ mod tests {
         assert!(!retirement.contains("observe_validated_slot_in_current_scope"));
         assert!(!retirement.contains("validate_ticket"));
         assert!(!retirement.contains("validated_slot_remains_present"));
+        let full_audit = source
+            .split("fn full_ordered_striped_audit_v1")
+            .nth(1)
+            .unwrap()
+            .split("fn observe_full_ordered_striped_roster_v1")
+            .next()
+            .unwrap();
+        assert!(!full_audit.contains("diagnostic_spin_budget"));
+        assert!(!full_audit.contains("tail_scan_"));
         let no_unwind = source
             .split("fn retire_after_striped_full_audit_no_unwind_v1")
             .nth(1)

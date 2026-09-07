@@ -201,9 +201,14 @@ kfd-sdma-copy-benchmark <unique-id> <bytes> <depth> <warmups> <samples> \
   <aggregate>
 ```
 
-For wait-path diagnosis, the same binary accepts `aggregate-profiled` as the
-last argument. That opt-in mode emits
-`fe2o3.kfd-striped-wait-diagnostics.v2` and adds per-sample/p50/p95 tail
+For wait-path diagnosis, the same binary accepts `aggregate-profiled` followed
+by an optional closed spin-budget label. The admitted labels are `current`,
+`250us`, `500us`, `1ms`, `1500us`, and `3ms`; omission selects `current`.
+Arbitrary durations and unbounded spinning are rejected before KFD is opened.
+That opt-in mode emits
+`fe2o3.kfd-striped-wait-spin-budget-diagnostics.v1` and adds canonical
+`wait_policy`, `diagnostic_spin_budget`, and `diagnostic_spin_budget_ns` fields,
+plus per-sample/p50/p95 tail
 rounds, tail observations, wait actions, requested sleep duration,
 first/all-tail readiness, binding, currentness, tail-scan, final-audit, and
 retirement fields. It also emits per-sample availability plus per-sample,
@@ -212,7 +217,8 @@ switch deltas for the tail-scan/wait loop:
 
 ```sh
 cargo run -p fe2o3-kfd --release --example kfd-sdma-copy-benchmark -- \
-  0xd2e26fef80cf5c33 1048576 112 10 30 combined-striped14 aggregate-profiled
+  0xd2e26fef80cf5c33 1048576 112 10 30 combined-striped14 \
+  aggregate-profiled 3ms
 ```
 
 This standalone diagnostic mode is not accepted by the R40 evidence checker
@@ -222,7 +228,14 @@ reported as `unavailable` after a syscall failure and `invalid` after invalid
 or overflowing values; neither condition changes queue completion or custody.
 The values are measurements, not device timestamps, physical-engine counters,
 completion proofs, evidence of scheduler causality, parity evidence, or a
-speedup claim.
+speedup claim. GPU progress continues during actual host sleeps, requested
+sleep is not measured sleep, and wall time minus thread CPU time minus requested
+sleep is not cumulative avoidable latency. A spin floor changes host
+observation and wakeup behavior and can perturb CPU time and context switching;
+it does not establish a native-scheduling or device-duration change.
+The `3ms` candidate covers the approximately 2.50--2.62 ms tail windows in the
+motivating R55 screen, but no candidate is claimed to close the approximately
+0.7 ms HIP gap without matched measurements.
 
 The HIP and HSA comparators accept logical device index, exact unique ID, the
 same four statistical/shape values, logical queue count, and profile. HIP uses

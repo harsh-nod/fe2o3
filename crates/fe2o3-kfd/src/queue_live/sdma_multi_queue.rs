@@ -10,9 +10,9 @@ use super::{
 use crate::sdma::{
     Gfx942SdmaCopyRequestV1, Gfx942SdmaErrorV1, Gfx942SdmaMultiQueueCompletedV1,
     Gfx942SdmaMultiQueuePlanV1, Gfx942SdmaMultiQueuePollV1, Gfx942SdmaMultiQueueShardTicketsV1,
-    Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaStripedTailWaitOutcomeV1,
-    Gfx942SdmaStripedWaitDiagnosticsV1, Gfx942SdmaUnpublishedCopyRequestV1,
-    MultiQueueSdmaSubmitFailureV1,
+    Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaStripedDiagnosticSpinBudgetV1,
+    Gfx942SdmaStripedTailWaitOutcomeV1, Gfx942SdmaStripedWaitDiagnosticsV1,
+    Gfx942SdmaUnpublishedCopyRequestV1, MultiQueueSdmaSubmitFailureV1,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -599,8 +599,12 @@ impl ComputeAqlQueueSessionV1 {
         submission: Gfx942SdmaMultiQueueSubmissionV1,
         timeout: Duration,
     ) -> Result<Gfx942SdmaMultiQueueCompletedV1, Gfx942SdmaMultiQueueExecutionFailureV1> {
-        self.wait_gfx942_striped_sdma_copy_batch_impl_v1::<false>(submission, timeout)
-            .map(|(completed, _)| completed)
+        self.wait_gfx942_striped_sdma_copy_batch_impl_v1::<false>(
+            submission,
+            timeout,
+            Gfx942SdmaStripedDiagnosticSpinBudgetV1::Current,
+        )
+        .map(|(completed, _)| completed)
     }
 
     /// Runs the same retained striped-tail wait while recording host-side diagnostics.
@@ -622,7 +626,38 @@ impl ComputeAqlQueueSessionV1 {
         ),
         Gfx942SdmaMultiQueueExecutionFailureV1,
     > {
-        self.wait_gfx942_striped_sdma_copy_batch_impl_v1::<true>(submission, timeout)
+        self.wait_gfx942_striped_sdma_copy_batch_impl_v1::<true>(
+            submission,
+            timeout,
+            Gfx942SdmaStripedDiagnosticSpinBudgetV1::Current,
+        )
+    }
+
+    /// Runs the profiled wait with one preregistered diagnostic active-spin budget.
+    ///
+    /// Non-current choices busy-poll for the selected elapsed floor, clamped to the
+    /// same caller deadline, before continuing the existing adaptive pause schedule
+    /// with its 25 us sleep-request ceiling. This is a benchmark experiment only:
+    /// the selector is closed, the ordinary wait cannot receive it, and neither the
+    /// budget nor any timing observation supplies completion authority.
+    #[allow(clippy::result_large_err)]
+    pub fn wait_gfx942_striped_sdma_copy_batch_profiled_with_diagnostic_spin_budget_for_v1(
+        &mut self,
+        submission: Gfx942SdmaMultiQueueSubmissionV1,
+        timeout: Duration,
+        diagnostic_spin_budget: Gfx942SdmaStripedDiagnosticSpinBudgetV1,
+    ) -> Result<
+        (
+            Gfx942SdmaMultiQueueCompletedV1,
+            Gfx942SdmaStripedWaitDiagnosticsV1,
+        ),
+        Gfx942SdmaMultiQueueExecutionFailureV1,
+    > {
+        self.wait_gfx942_striped_sdma_copy_batch_impl_v1::<true>(
+            submission,
+            timeout,
+            diagnostic_spin_budget,
+        )
     }
 
     #[allow(clippy::result_large_err)]
@@ -630,6 +665,7 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         submission: Gfx942SdmaMultiQueueSubmissionV1,
         timeout: Duration,
+        diagnostic_spin_budget: Gfx942SdmaStripedDiagnosticSpinBudgetV1,
     ) -> Result<
         (
             Gfx942SdmaMultiQueueCompletedV1,
@@ -647,6 +683,7 @@ impl ComputeAqlQueueSessionV1 {
                         memory,
                         &mut retained,
                         timeout,
+                        diagnostic_spin_budget,
                         &mut diagnostics,
                     ),
                 );
@@ -1132,6 +1169,13 @@ mod tests {
             .split("pub fn wait_gfx942_striped_sdma_copy_batch_profiled_for_v1")
             .nth(1)
             .unwrap()
+            .split("pub fn wait_gfx942_striped_sdma_copy_batch_profiled_with_diagnostic_spin_budget_for_v1")
+            .next()
+            .unwrap();
+        let diagnostic = live
+            .split("pub fn wait_gfx942_striped_sdma_copy_batch_profiled_with_diagnostic_spin_budget_for_v1")
+            .nth(1)
+            .unwrap()
             .split("fn wait_gfx942_striped_sdma_copy_batch_impl_v1")
             .next()
             .unwrap();
@@ -1144,8 +1188,12 @@ mod tests {
             .unwrap();
 
         assert!(ordinary.contains("impl_v1::<false>"));
+        assert!(ordinary.contains("Gfx942SdmaStripedDiagnosticSpinBudgetV1::Current"));
         assert!(profiled.contains("impl_v1::<true>"));
-        for wrapper in [ordinary, profiled] {
+        assert!(profiled.contains("Gfx942SdmaStripedDiagnosticSpinBudgetV1::Current"));
+        assert!(diagnostic.contains("impl_v1::<true>"));
+        assert!(diagnostic.contains("diagnostic_spin_budget"));
+        for wrapper in [ordinary, profiled, diagnostic] {
             assert!(!wrapper.contains("with_striped_sdma_owner_memory"));
             assert!(!wrapper.contains("retained.take()"));
             assert!(!wrapper.contains("ProcessTeardown("));
