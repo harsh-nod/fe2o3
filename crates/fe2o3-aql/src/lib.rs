@@ -9,6 +9,10 @@
 
 extern crate alloc;
 
+mod dependency_dispatch;
+
+pub use dependency_dispatch::*;
+
 use alloc::boxed::Box;
 use core::{
     mem::{align_of, offset_of, size_of},
