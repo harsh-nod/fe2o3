@@ -2406,6 +2406,59 @@ instruction-count, wall-clock, or performance property.
 | Boundary countermodels | **Rejected** | Thirty-five pinned standalone countermodels fail profile, cursor, engine, epoch, packet, signal, ring-slot, mixed-ready queue, final-tail union, tail, audit, authentic timeout-retry, currentness, panic, retirement, or retake postconditions; they are not source transformations. |
 | Production Rust refinement, allocator behavior, native fence/coherence/currentness truth, hardware, KFD/HSA/HIP behavior, parity, or performance | **Not established** | Explicitly outside the R48 proof boundary. |
 
+## R51 public R48 compute-dependency lifecycle
+
+`r51_native_compute_dependency_lifecycle_v1.rs` verifies exactly 31
+obligations over an independent finite abstraction of the public R48 lifecycle.
+The runner pins that proof and 14 standalone expected-negative countermodels.
+The executable no-std model has 11 focused tests. The production-named trace
+fixtures are review aids only: neither the executable model nor the Verus file
+is a Rust-to-Verus or production-Rust refinement.
+
+Admission has an exact 128-active-target bound and one-through-256 event fan-in.
+Every event for one target names exactly one source arena and lane, a distinct
+public custody and signal identity, the same nonzero owner/session, and a
+strictly earlier epoch. Pure facade preflight rejection is state- and
+epoch-inert. An admitted source or target burns one nonzero monotonic acceptance
+epoch, and retry rollback cannot rewind it.
+
+The successful target path is exactly `Prepared -> NativePublished -> Published
+-> Completed -> Released`. Abstract dispatch and event custody remains stable
+through phase changes and a Pending poll returns the same executable `Box`.
+Only an exact dependent completion releases the complete source reader/event
+pin roster, atomically and once. The independent target event remains pinned
+until explicit release. A `SignalPinned` recycle returns unchanged completed
+custody and performs zero reset mutation; recycle becomes admissible only after
+the relevant pins are gone.
+
+Ring-full is the only modeled retryable native boundary. It has zero native
+effect, and rollback removes exactly the temporary reader pins, target event,
+and active target while returning source events in order. A first-claim-or-later
+fault enters an absorbing terminal state and retains all active and pin custody.
+Normal teardown is admitted if and only if active targets and all reader/event
+pin counts are zero. The concrete native truth of completion and no-effect
+classification remains an input.
+
+The lockstep-style success fixture names `ensure_target_capacity`,
+`reserve_acceptance_epoch`, `retain_dependency_readers_for_target_v1`,
+`begin_target_use`, `publish_native`, `bind_published_target`,
+`poll_compute_dependency_dispatch_v1`, `observe_published_target_once`,
+`release_dependency_reader_event_batch_v1`, and
+`release_after_dependent_completion`. Matching names and order do not prove the
+production functions implement the abstract transitions.
+
+## R51 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Capacity and epochs | **Proved abstractly and checked** | Exact 128 active targets; target 129 rejected before mutation; 1..256 dependencies; admitted epochs are nonzero, monotonic, and remain burned after rollback. |
+| Arena and custody identity | **Proved abstractly and checked** | One exact source arena/lane per target, distinct event/signal identities, strictly earlier same-session sources, and stable abstract public dispatch/event custody. |
+| Lifecycle and pin discharge | **Proved abstractly and checked** | Exact five-phase chain; Pending is inert; only exact completion atomically releases every source reader/event pair once; target-event custody remains independently pinned. |
+| Retry, terminal, recycle, teardown | **Proved abstractly and checked** | Ring-full retry and rollback have no native effect; `SignalPinned` recycle preserves completed custody and state; terminal is absorbing; teardown iff active and all pin counts are zero. |
+| Executable bounded model | **Checked** | Eleven Rust tests cover the full path, production-named traces, pure preflight, burned rollback, exact 128/129 capacity, exact fan-in, substitutions, terminal absorption, pin-gated recycle, and teardown. |
+| Boundary countermodels | **Rejected** | Fourteen pinned mutations fail the active bound, epoch timing/nonzero rule, one-arena route, phase chain, completion identity, one-time paired release, custody stability, retry no-effect, pin-gated recycle, terminal absorption, or teardown postcondition. |
+| Rust-to-Verus refinement, production/native truth, KFD/HSA/HIP behavior, hardware, progress, parity, or performance | **Not established** | Explicitly outside the R51 proof boundary. |
+
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
 implements that relation, nor that the adapter observed truthful kernel data.
