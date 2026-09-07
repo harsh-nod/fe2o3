@@ -18,8 +18,9 @@ bounded-persistent-compute-wait/recycle, R39 scoped-persistent-SDMA-wait
 policy, R40 gfx942 striped-SDMA aggregate, R41 persistent striped-SDMA
 aggregate, R42 compute-event signal-custody, R44 live-foundation
 invariant-certificate, R45 compute-dependency-publisher, and R46 gfx942
-striped-SDMA tail-wait, and R48 retryable striped-SDMA tail-wait models. The
-authenticated runner proves 1107 obligations and rejects 496
+striped-SDMA tail-wait, R48 retryable striped-SDMA tail-wait, R51 native
+compute-dependency lifecycle, and R56 two-native-SDMA mux models. The
+authenticated runner proves 1179 obligations and rejects 535
 expected-negative mutations over finite
 abstract values and traces. The
 materialization input and image sequences are
@@ -2458,6 +2459,59 @@ production functions implement the abstract transitions.
 | Executable bounded model | **Checked** | Eleven Rust tests cover the full path, production-named traces, pure preflight, burned rollback, exact 128/129 capacity, exact fan-in, substitutions, terminal absorption, pin-gated recycle, and teardown. |
 | Boundary countermodels | **Rejected** | Fourteen pinned mutations fail the active bound, epoch timing/nonzero rule, one-arena route, phase chain, completion identity, one-time paired release, custody stability, retry no-effect, pin-gated recycle, terminal absorption, or teardown postcondition. |
 | Rust-to-Verus refinement, production/native truth, KFD/HSA/HIP behavior, hardware, progress, parity, or performance | **Not established** | Explicitly outside the R51 proof boundary. |
+
+## R56 two-native SDMA mux
+
+`r56_two_native_sdma_mux_v1.rs` verifies exactly 41 obligations over an
+independent finite abstraction of logical-lane multiplexing. The runner pins
+that proof and 25 standalone expected-negative countermodels. The executable
+no-std model has 19 focused tests, including exhaustive admission checks over
+all five lane counts, every valid cursor, and all 125 request counts in
+`2..=126`.
+
+The lane domain is exactly `L in {2,4,8,14,16}` and the request-count domain is
+exactly `2..=126`. Request `i` uses logical lane
+`(cursor+i)%L`, native ordinal `lane%2`, and the corresponding exact engine,
+queue, slot, generation, packet, and request identity. Each native issue stream
+is the stable filter of canonical request order, and logical lanes remain FIFO.
+The 126-request aggregate cap implies at most 63 packets per native occurrence.
+
+Every admitted complete batch activates both native occurrences and has exactly
+two abstract write-pointer publications, doorbells, and bound tails. Native
+publication starts at `cursor%2` and then visits the other native occurrence.
+Opening-currentness rejection and a typed first-native recoverable/no-effect
+result both have an empty publication prefix and do not commit. The recoverable
+case returns the exact original request vector without transferred ticket
+authority. An indeterminate first publication also has no confirmed prefix; it
+records the exact rotated first-native request-index/ticket shard and the
+complete untouched second-native shard as terminal custody. A confirmed first
+publication followed by a recoverable or indeterminate second publication
+records the exact one-element rotated prefix, the confirmed or indeterminate
+coordinate, and the untouched coordinate. A closing-currentness failure retains
+both publications but does not commit.
+
+Only exact two-native publication plus exact closing currentness commits the
+rotated cursor. A subsequent wait timeout is defined only over that exact
+published owner and retains both publications, their tails, every ticket, and
+the already committed cursor. Completion releases the original ordered request
+roster only when the observed ticket sequence equals the published ticket
+sequence; an inexact roster retains the whole published owner. Zero and
+singleton batches reject before preparation. Malformed presentations and all
+confirmed or indeterminate publication effects quarantine exact custody.
+Post-effect panic is excluded from this typed transition model: concrete code
+would need fail-stop behavior or a separately specified and proved custody
+carrier before such an unwind could be modeled as recoverable.
+
+## R56 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Logical/native placement | **Proved abstractly and checked** | Five logical-lane counts, rotating cursor, stable native filters, per-lane FIFO, and exactly two native engine/queue occurrences. |
+| Capacity and identities | **Proved abstractly and checked** | Requests `2..=126`, at most 63 per native, with exact request/lane/native/engine/queue/slot/generation/packet coordinates. |
+| Publication and cursor | **Proved abstractly and checked** | Full active success publishes in cursor-rotated native order with two pointer publications, doorbells, and tails; cursor commits only after exact two-native success and closing currentness. |
+| Failure and release custody | **Proved abstractly and checked** | Opening rejection and recoverable zero-effect have prefix zero; a first-native indeterminate outcome has exact first/untouched shard custody; second-native recoverable or indeterminate outcomes have the exact rotated prefix and coordinates; closing failure has prefix two without commit; post-commit timeout retains exact published custody; only direct equality with the exact ticket roster releases all requests once and in order. Post-effect panic is excluded. |
+| Boundary countermodels | **Rejected** | Twenty-five pinned mutations cover all ticket coordinates, tail substitution, singleton, missing/duplicate request, unstable FIFO, native and aggregate overflow, false striped-2 relabel, publication counts, recoverable native effect, first-native indeterminate shard custody, partial commit and coordinates, fixed publication order, closing-prefix loss, timeout phase/custody, and release-roster identity. |
+| Rust-to-Verus refinement, native queue implementation, packet/atomic truth, KFD/HSA/HIP behavior, hardware concurrency, progress, parity, or performance | **Not established** | Explicitly outside the standalone R56 model and proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
