@@ -36,7 +36,11 @@ also consume inspected executable envelopes, complete kernarg byte images, and
 checked addressless device-local or host-visible coherent ranges into a fixed
 batch. Native addresses are
 substituted only inside KFD. A batch of 1 through 8192 packets uses one ring
-reservation and one final doorbell publication. A never-published prepared
+reservation and one final doorbell publication. The fixed service recipe
+requires `WaitForPrior` ordering for every packet. The public
+`ServiceFixedDispatchPacketV1::new_independent` constructor remains as an inert
+compatibility descriptor, but create, bind, and rollover reject it before
+ownership transfer or lower preflight. A never-published prepared
 queue can be destroyed and return allocation custody without a doorbell store.
 Published custody supports the legacy bounded poll-count wait and a preferred
 relative millisecond wait whose monotonic deadline behavior is delegated to
@@ -54,6 +58,10 @@ updated foundation before returning. An owned
 full-extent coherent initialization path is distinct from the arbitrary scoped
 host-write path, so only the former can satisfy an inspected read or read-write
 argument.
+
+The underlying KFD owner can retain multiple exact publication epochs for one
+immutable recipe. This service facade still exposes one linear publication
+epoch at a time and does not expose out-of-order observation or recycle.
 
 For an admitted metadata-derived subset, callers supply a complete kernarg
 image whose exact trailing 256-byte COV6 implicit suffix is zero. The retained

@@ -153,7 +153,12 @@ impl ServiceFixedDispatchPacketV1 {
         )
     }
 
-    /// Creates a packet that may execute independently of earlier queue packets.
+    /// Creates an inert independent-order descriptor for API compatibility.
+    ///
+    /// The fixed-recipe service queue does not admit independent ordering. Its
+    /// create, bind, and rollover transitions reject a batch containing this
+    /// descriptor before transferring ownership or invoking lower preflight.
+    /// This constructor therefore grants no independent-execution authority.
     pub fn new_independent(
         program_index: usize,
         geometry: AqlDispatchGeometryV1,
@@ -339,6 +344,18 @@ impl<'a, const N: usize> ServiceFixedBatchV1<'a, N> {
         (self.programs, self.packets)
     }
 
+    pub(crate) fn validate_fixed_recipe_ordering(&self) -> Result<(), &'static str> {
+        if self
+            .packets
+            .iter()
+            .all(|packet| packet.ordering == AqlDispatchOrderingV1::WaitForPrior)
+        {
+            Ok(())
+        } else {
+            Err("fixed dispatch recipe ordering")
+        }
+    }
+
     pub(crate) fn validate(
         &self,
         ledger: &ServiceQueueAllocationLedgerV1,
@@ -413,7 +430,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fixed_packet_default_is_ordered_and_independent_is_explicit() {
+    fn fixed_packet_default_is_ordered_and_independent_descriptor_is_retained() {
         let geometry = AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap();
         let ordered = ServiceFixedDispatchPacketV1::new(
             0,
@@ -439,6 +456,37 @@ mod tests {
         assert_eq!(
             independent.into_kfd().ordering(),
             AqlDispatchOrderingV1::Independent
+        );
+    }
+
+    #[test]
+    fn fixed_recipe_admission_accepts_only_wait_for_prior_packets() {
+        let geometry = AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap();
+        let ordered = ServiceFixedBatchV1::new(
+            Vec::new(),
+            [ServiceFixedDispatchPacketV1::new(
+                0,
+                geometry,
+                0,
+                Vec::new().into_boxed_slice(),
+                Vec::new().into_boxed_slice(),
+            )],
+        );
+        assert_eq!(ordered.validate_fixed_recipe_ordering(), Ok(()));
+
+        let independent = ServiceFixedBatchV1::new(
+            Vec::new(),
+            [ServiceFixedDispatchPacketV1::new_independent(
+                0,
+                geometry,
+                0,
+                Vec::new().into_boxed_slice(),
+                Vec::new().into_boxed_slice(),
+            )],
+        );
+        assert_eq!(
+            independent.validate_fixed_recipe_ordering(),
+            Err("fixed dispatch recipe ordering")
         );
     }
 }

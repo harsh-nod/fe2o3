@@ -27,10 +27,10 @@ use crate::batch::ServiceFixedBatchV1;
 
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-addressless-fixed-queue-r48-v1\n",
-    "source.compute_aql_session_sha256=0d8defe7e30a0388a58733af6e3b4f48334552eb67b3f0178e912e293fac4127\n",
-    "queue=one-live-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-live-rebind,quiescent-rollover-may-confirm-destroy-and-create-one-replacement-queue\n",
-    "batch=1-through-8192-fixed-packets,conservative-wait-for-prior-ordering-default-with-explicit-independent-opt-in,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges,optional-initialized-enclosing-host-snapshot-associated-with-one-strict-interior\n",
+    "profile=fe2o3-service-addressless-fixed-queue-r52-v1\n",
+    "source.compute_aql_session_sha256=421064a18734a53bfc41e627a2abeb1d402e2b3fcf4a98b1a456f9dc3c1b7be0\n",
+    "queue=one-live-kfd-compute-aql-owner,one-linear-service-visible-publication-epoch,ring-event-doorbell-and-signal-resources-retained-across-live-rebind,quiescent-rollover-may-confirm-destroy-and-create-one-replacement-queue\n",
+    "batch=1-through-8192-fixed-packets,wait-for-prior-ordering-required-before-service-ownership-transfer-or-lower-preflight,independent-order-descriptor-retained-only-for-api-compatibility-and-rejected-at-fixed-recipe-admission,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges,optional-initialized-enclosing-host-snapshot-associated-with-one-strict-interior\n",
     "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
     "publication=one-reservation-one-write-counter-fetch-add,one-retained-final-ordering-header-per-packet,one-final-doorbell-per-fixed-batch\n",
     "completion-wait=legacy-bounded-poll-count-or-monotonic-relative-millisecond-deadline-delegated-to-kfd,success-returns-completed-custody,timeout-or-error-quarantines-retained-queue\n",
@@ -43,12 +43,12 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
     "qualification-fault-injection=feature-gated-post-recycle-before-completed-read-attempt-terminal-typestate,prior-attempt-rejects-and-returns-recycled-owner,ordinary-native-teardown-only,no-synthetic-kfd-error-or-hardware-fault-claim\n",
     "failure=pure-rejection-recovers-input-owners,ambiguous-native-side-effect-is-terminal-and-denies-retry,opaque-quarantine-retains-available-owner-state,timeout-observation-grants-no-live-introspection-or-authority\n",
     "authority=no-native-address-handle-pointer-fd-mmio-signal-or-packet-template-export,no-caller-initialization-or-effect-assertion\n",
-    "excluded=compute-dependency-service-facade,executable-correctness,effect-correctness-beyond-inspected-metadata,full-write-coverage,content-interpretation,numerical-correctness,rust-verus-or-syscall-refinement,hardware-execution,performance\n",
+    "excluded=compute-dependency-service-facade,multi-inflight-fixed-dispatch-service-facade,out-of-order-fixed-dispatch-service-observation,executable-correctness,effect-correctness-beyond-inspected-metadata,full-write-coverage,content-interpretation,numerical-correctness,rust-verus-or-syscall-refinement,hardware-execution,performance\n",
 );
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "663cf108e939adbbc9235a52e843ed743963527248f0bdfe81676c0667164802";
+    "41e9f3c7fc489635639db804593f3f5b64656cc7de0e9f3b4d58553d59bc7f68";
 
 /// Feature-bound contract for deliberate service queue-transition faults.
 #[cfg(feature = "qualification-fault-injection")]
@@ -70,7 +70,7 @@ pub const SERVICE_QUALIFICATION_QUEUE_FAULT_CONTRACT_SHA256_V1: &str =
 pub enum ServiceQueueErrorV1 {
     /// A service allocation binding or ledger invariant was rejected.
     Allocation(ServiceAllocationErrorV1),
-    /// The packet count or ring capacity was rejected before KFD ownership transfer.
+    /// Packet ordering, packet count, or ring capacity was rejected before transfer.
     BatchContract(&'static str),
     /// The retained KFD queue operation failed.
     Kfd(ComputeAqlQueueSessionErrorV1),
@@ -257,6 +257,13 @@ impl<const N: usize> ServiceQueueSessionV1<N> {
         ring_bytes: u32,
         batch: ServiceFixedBatchV1<'a, N>,
     ) -> Result<Self, ServiceQueueCreateFailureV1<'a, N>> {
+        if let Err(field) = batch.validate_fixed_recipe_ordering() {
+            return Err(ServiceQueueCreateFailureV1::Rejected {
+                error: ServiceQueueErrorV1::BatchContract(field),
+                allocations: Box::new(allocations),
+                batch: Box::new(batch),
+            });
+        }
         if let Err(error) = validate_ring::<N>(ring_bytes) {
             return Err(ServiceQueueCreateFailureV1::Rejected {
                 error,
@@ -1120,6 +1127,13 @@ impl ServiceQueueUnboundSessionV1 {
         mut self,
         batch: ServiceFixedBatchV1<'a, M>,
     ) -> Result<ServiceQueueSessionV1<M>, ServiceQueueBindFailureV1<'a, M>> {
+        if let Err(field) = batch.validate_fixed_recipe_ordering() {
+            return Err(ServiceQueueBindFailureV1::Rejected {
+                error: ServiceQueueErrorV1::BatchContract(field),
+                queue: Box::new(self),
+                batch: Box::new(batch),
+            });
+        }
         if let Err(error) = validate_ring::<M>(self.owner.observation().ring_bytes()) {
             return Err(ServiceQueueBindFailureV1::Rejected {
                 error,
@@ -1175,6 +1189,13 @@ impl ServiceQueueUnboundSessionV1 {
         ring_bytes: u32,
         batch: ServiceFixedBatchV1<'a, M>,
     ) -> Result<ServiceQueueRolloverSuccessV1<M>, ServiceQueueRolloverFailureV1<'a, M>> {
+        if let Err(field) = batch.validate_fixed_recipe_ordering() {
+            return Err(ServiceQueueRolloverFailureV1::Rejected {
+                error: ServiceQueueErrorV1::BatchContract(field),
+                queue: Box::new(self),
+                batch: Box::new(batch),
+            });
+        }
         if let Err(error) = validate_ring::<M>(ring_bytes) {
             return Err(ServiceQueueRolloverFailureV1::Rejected {
                 error,
@@ -2213,6 +2234,67 @@ mod tests {
             validate_ring::<8192>(262_144),
             Err(ServiceQueueErrorV1::BatchContract(_))
         ));
+    }
+
+    #[test]
+    fn fixed_recipe_ordering_precedes_transfer_and_lower_preflight() {
+        let source = include_str!("queue.rs");
+        let create = source
+            .split_once("    pub fn create<'a>(\n")
+            .expect("create transition remains present")
+            .1
+            .split_once("\n    /// Returns a redacted native queue observation")
+            .expect("create transition remains bounded")
+            .0;
+        let create_ordering = create
+            .find("batch.validate_fixed_recipe_ordering()")
+            .expect("create validates fixed-recipe ordering");
+        let create_transfer = create
+            .find("allocations.into_queue_transfer()")
+            .expect("create retains the explicit ownership transfer");
+        let create_lower = create
+            .find(".create_compute_aql_queue_with_fixed_dispatch(")
+            .expect("create retains lower queue composition");
+        assert!(create_ordering < create_transfer);
+        assert!(create_ordering < create_lower);
+        assert!(create[..create_transfer].contains("ServiceQueueCreateFailureV1::Rejected"));
+        assert!(create[..create_transfer].contains("ServiceQueueErrorV1::BatchContract(field)"));
+        assert!(create[..create_transfer].contains("allocations: Box::new(allocations)"));
+        assert!(create[..create_transfer].contains("batch: Box::new(batch)"));
+
+        let bind = source
+            .split_once("    pub fn bind<'a, const M: usize>(\n")
+            .expect("bind transition remains present")
+            .1
+            .split_once("\n    /// Destroys the quiescent native queue")
+            .expect("bind transition remains bounded")
+            .0;
+        let bind_ordering = bind
+            .find("batch.validate_fixed_recipe_ordering()")
+            .expect("bind validates fixed-recipe ordering");
+        let bind_lower = bind
+            .find("batch.preflight_replacement(")
+            .expect("bind retains lower replacement preflight");
+        assert!(bind_ordering < bind_lower);
+        assert!(bind.contains("ServiceQueueBindFailureV1::Rejected"));
+        assert!(bind.contains("ServiceQueueErrorV1::BatchContract(field)"));
+
+        let rollover = source
+            .split_once("    pub fn rollover<'a, const M: usize>(\n")
+            .expect("rollover transition remains present")
+            .1
+            .split_once("\n    /// Replaces one complete detached allocation")
+            .expect("rollover transition remains bounded")
+            .0;
+        let rollover_ordering = rollover
+            .find("batch.validate_fixed_recipe_ordering()")
+            .expect("rollover validates fixed-recipe ordering");
+        let rollover_lower = rollover
+            .find("batch.preflight_replacement(")
+            .expect("rollover retains lower replacement preflight");
+        assert!(rollover_ordering < rollover_lower);
+        assert!(rollover.contains("ServiceQueueRolloverFailureV1::Rejected"));
+        assert!(rollover.contains("ServiceQueueErrorV1::BatchContract(field)"));
     }
 
     #[test]
