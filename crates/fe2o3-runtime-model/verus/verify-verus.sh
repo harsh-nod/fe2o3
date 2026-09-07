@@ -42,6 +42,7 @@ r37_typed_native_sdma_wait_activation_proof="$script_dir/r37_typed_native_sdma_w
 r38_bounded_persistent_compute_wait_recycle_proof="$script_dir/r38_bounded_persistent_compute_wait_recycle_v1.rs"
 r39_scoped_persistent_sdma_wait_policy_proof="$script_dir/r39_scoped_persistent_sdma_wait_policy_v1.rs"
 r40_gfx942_striped_sdma_aggregate_proof="$script_dir/r40_gfx942_striped_sdma_aggregate_v1.rs"
+r41_persistent_striped_sdma_aggregate_proof="$script_dir/r41_persistent_striped_sdma_aggregate_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -406,6 +407,27 @@ negative_r40_retake_output_escape="$script_dir/negative/r40_gfx942_striped_sdma_
 negative_r40_ticket_substitution="$script_dir/negative/r40_gfx942_striped_sdma_aggregate_v1_ticket_substitution.rs"
 negative_r40_timeout_before_scan="$script_dir/negative/r40_gfx942_striped_sdma_aggregate_v1_timeout_before_scan.rs"
 negative_r40_unbalanced_placement="$script_dir/negative/r40_gfx942_striped_sdma_aggregate_v1_unbalanced_placement.rs"
+negative_r41_combined_sixteen="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_combined_sixteen.rs"
+negative_r41_shard_sixty_four="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_shard_sixty_four.rs"
+negative_r41_device_owner_alias="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_device_owner_alias.rs"
+negative_r41_device_storage_alias="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_device_storage_alias.rs"
+negative_r41_device_kind_substitution="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_device_kind_substitution.rs"
+negative_r41_host_storage_alias="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_host_storage_alias.rs"
+negative_r41_host_binding_substitution="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_host_binding_substitution.rs"
+negative_r41_linear_copy_bound="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_linear_copy_bound.rs"
+negative_r41_pair_currentness="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_pair_currentness.rs"
+negative_r41_prepare_recovery_order="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_prepare_recovery_order.rs"
+negative_r41_partition_indeterminate="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_partition_indeterminate.rs"
+negative_r41_partition_untouched="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_partition_untouched.rs"
+negative_r41_partial_cursor_commit="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_partial_cursor_commit.rs"
+negative_r41_currentness_close="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_currentness_close.rs"
+negative_r41_ticket_occurrence="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_ticket_occurrence.rs"
+negative_r41_pending_prefix="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_pending_prefix.rs"
+negative_r41_timeout_custody="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_timeout_custody.rs"
+negative_r41_preflight_partial_restore="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_preflight_partial_restore.rs"
+negative_r41_restoration_escape="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_restoration_escape.rs"
+negative_r41_quarantine_release="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_quarantine_release.rs"
+negative_r41_completion_cursor_rollback="$script_dir/negative/r41_persistent_striped_sdma_aggregate_v1_completion_cursor_rollback.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -469,6 +491,7 @@ expected_r37_typed_native_sdma_wait_activation=$(read_pin "$pin_dir/R37_TYPED_NA
 expected_r38_bounded_persistent_compute_wait_recycle=$(read_pin "$pin_dir/R38_BOUNDED_PERSISTENT_COMPUTE_WAIT_RECYCLE_SHA256")
 expected_r39_scoped_persistent_sdma_wait_policy=$(read_pin "$pin_dir/R39_SCOPED_PERSISTENT_SDMA_WAIT_POLICY_SHA256")
 expected_r40_gfx942_striped_sdma_aggregate=$(read_pin "$pin_dir/R40_GFX942_STRIPED_SDMA_AGGREGATE_SHA256")
+expected_r41_persistent_striped_sdma_aggregate=$(read_pin "$pin_dir/R41_PERSISTENT_STRIPED_SDMA_AGGREGATE_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -833,6 +856,27 @@ expected_negative_r40_retake_output_escape=$(read_pin "$pin_dir/NEGATIVE_R40_RET
 expected_negative_r40_ticket_substitution=$(read_pin "$pin_dir/NEGATIVE_R40_TICKET_SUBSTITUTION_SHA256")
 expected_negative_r40_timeout_before_scan=$(read_pin "$pin_dir/NEGATIVE_R40_TIMEOUT_BEFORE_SCAN_SHA256")
 expected_negative_r40_unbalanced_placement=$(read_pin "$pin_dir/NEGATIVE_R40_UNBALANCED_PLACEMENT_SHA256")
+expected_negative_r41_combined_sixteen=$(read_pin "$pin_dir/NEGATIVE_R41_COMBINED_SIXTEEN_SHA256")
+expected_negative_r41_shard_sixty_four=$(read_pin "$pin_dir/NEGATIVE_R41_SHARD_SIXTY_FOUR_SHA256")
+expected_negative_r41_device_owner_alias=$(read_pin "$pin_dir/NEGATIVE_R41_DEVICE_OWNER_ALIAS_SHA256")
+expected_negative_r41_device_storage_alias=$(read_pin "$pin_dir/NEGATIVE_R41_DEVICE_STORAGE_ALIAS_SHA256")
+expected_negative_r41_device_kind_substitution=$(read_pin "$pin_dir/NEGATIVE_R41_DEVICE_KIND_SUBSTITUTION_SHA256")
+expected_negative_r41_host_storage_alias=$(read_pin "$pin_dir/NEGATIVE_R41_HOST_STORAGE_ALIAS_SHA256")
+expected_negative_r41_host_binding_substitution=$(read_pin "$pin_dir/NEGATIVE_R41_HOST_BINDING_SUBSTITUTION_SHA256")
+expected_negative_r41_linear_copy_bound=$(read_pin "$pin_dir/NEGATIVE_R41_LINEAR_COPY_BOUND_SHA256")
+expected_negative_r41_pair_currentness=$(read_pin "$pin_dir/NEGATIVE_R41_PAIR_CURRENTNESS_SHA256")
+expected_negative_r41_prepare_recovery_order=$(read_pin "$pin_dir/NEGATIVE_R41_PREPARE_RECOVERY_ORDER_SHA256")
+expected_negative_r41_partition_indeterminate=$(read_pin "$pin_dir/NEGATIVE_R41_PARTITION_INDETERMINATE_SHA256")
+expected_negative_r41_partition_untouched=$(read_pin "$pin_dir/NEGATIVE_R41_PARTITION_UNTOUCHED_SHA256")
+expected_negative_r41_partial_cursor_commit=$(read_pin "$pin_dir/NEGATIVE_R41_PARTIAL_CURSOR_COMMIT_SHA256")
+expected_negative_r41_currentness_close=$(read_pin "$pin_dir/NEGATIVE_R41_CURRENTNESS_CLOSE_SHA256")
+expected_negative_r41_ticket_occurrence=$(read_pin "$pin_dir/NEGATIVE_R41_TICKET_OCCURRENCE_SHA256")
+expected_negative_r41_pending_prefix=$(read_pin "$pin_dir/NEGATIVE_R41_PENDING_PREFIX_SHA256")
+expected_negative_r41_timeout_custody=$(read_pin "$pin_dir/NEGATIVE_R41_TIMEOUT_CUSTODY_SHA256")
+expected_negative_r41_preflight_partial_restore=$(read_pin "$pin_dir/NEGATIVE_R41_PREFLIGHT_PARTIAL_RESTORE_SHA256")
+expected_negative_r41_restoration_escape=$(read_pin "$pin_dir/NEGATIVE_R41_RESTORATION_ESCAPE_SHA256")
+expected_negative_r41_quarantine_release=$(read_pin "$pin_dir/NEGATIVE_R41_QUARANTINE_RELEASE_SHA256")
+expected_negative_r41_completion_cursor_rollback=$(read_pin "$pin_dir/NEGATIVE_R41_COMPLETION_CURSOR_ROLLBACK_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -899,6 +943,7 @@ check_sources() {
     check_digest "$expected_r38_bounded_persistent_compute_wait_recycle" "$r38_bounded_persistent_compute_wait_recycle_proof"
     check_digest "$expected_r39_scoped_persistent_sdma_wait_policy" "$r39_scoped_persistent_sdma_wait_policy_proof"
     check_digest "$expected_r40_gfx942_striped_sdma_aggregate" "$r40_gfx942_striped_sdma_aggregate_proof"
+    check_digest "$expected_r41_persistent_striped_sdma_aggregate" "$r41_persistent_striped_sdma_aggregate_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -1263,6 +1308,27 @@ check_sources() {
     check_digest "$expected_negative_r40_ticket_substitution" "$negative_r40_ticket_substitution"
     check_digest "$expected_negative_r40_timeout_before_scan" "$negative_r40_timeout_before_scan"
     check_digest "$expected_negative_r40_unbalanced_placement" "$negative_r40_unbalanced_placement"
+    check_digest "$expected_negative_r41_combined_sixteen" "$negative_r41_combined_sixteen"
+    check_digest "$expected_negative_r41_shard_sixty_four" "$negative_r41_shard_sixty_four"
+    check_digest "$expected_negative_r41_device_owner_alias" "$negative_r41_device_owner_alias"
+    check_digest "$expected_negative_r41_device_storage_alias" "$negative_r41_device_storage_alias"
+    check_digest "$expected_negative_r41_device_kind_substitution" "$negative_r41_device_kind_substitution"
+    check_digest "$expected_negative_r41_host_storage_alias" "$negative_r41_host_storage_alias"
+    check_digest "$expected_negative_r41_host_binding_substitution" "$negative_r41_host_binding_substitution"
+    check_digest "$expected_negative_r41_linear_copy_bound" "$negative_r41_linear_copy_bound"
+    check_digest "$expected_negative_r41_pair_currentness" "$negative_r41_pair_currentness"
+    check_digest "$expected_negative_r41_prepare_recovery_order" "$negative_r41_prepare_recovery_order"
+    check_digest "$expected_negative_r41_partition_indeterminate" "$negative_r41_partition_indeterminate"
+    check_digest "$expected_negative_r41_partition_untouched" "$negative_r41_partition_untouched"
+    check_digest "$expected_negative_r41_partial_cursor_commit" "$negative_r41_partial_cursor_commit"
+    check_digest "$expected_negative_r41_currentness_close" "$negative_r41_currentness_close"
+    check_digest "$expected_negative_r41_ticket_occurrence" "$negative_r41_ticket_occurrence"
+    check_digest "$expected_negative_r41_pending_prefix" "$negative_r41_pending_prefix"
+    check_digest "$expected_negative_r41_timeout_custody" "$negative_r41_timeout_custody"
+    check_digest "$expected_negative_r41_preflight_partial_restore" "$negative_r41_preflight_partial_restore"
+    check_digest "$expected_negative_r41_restoration_escape" "$negative_r41_restoration_escape"
+    check_digest "$expected_negative_r41_quarantine_release" "$negative_r41_quarantine_release"
+    check_digest "$expected_negative_r41_completion_cursor_rollback" "$negative_r41_completion_cursor_rollback"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -1310,6 +1376,7 @@ check_sources
     "$r38_bounded_persistent_compute_wait_recycle_proof" \
     "$r39_scoped_persistent_sdma_wait_policy_proof" \
     "$r40_gfx942_striped_sdma_aggregate_proof" \
+    "$r41_persistent_striped_sdma_aggregate_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -1670,7 +1737,28 @@ check_sources
     "$negative_r40_retake_output_escape" \
     "$negative_r40_ticket_substitution" \
     "$negative_r40_timeout_before_scan" \
-    "$negative_r40_unbalanced_placement"
+    "$negative_r40_unbalanced_placement" \
+    "$negative_r41_combined_sixteen" \
+    "$negative_r41_shard_sixty_four" \
+    "$negative_r41_device_owner_alias" \
+    "$negative_r41_device_storage_alias" \
+    "$negative_r41_device_kind_substitution" \
+    "$negative_r41_host_storage_alias" \
+    "$negative_r41_host_binding_substitution" \
+    "$negative_r41_linear_copy_bound" \
+    "$negative_r41_pair_currentness" \
+    "$negative_r41_prepare_recovery_order" \
+    "$negative_r41_partition_indeterminate" \
+    "$negative_r41_partition_untouched" \
+    "$negative_r41_partial_cursor_commit" \
+    "$negative_r41_currentness_close" \
+    "$negative_r41_ticket_occurrence" \
+    "$negative_r41_pending_prefix" \
+    "$negative_r41_timeout_custody" \
+    "$negative_r41_preflight_partial_restore" \
+    "$negative_r41_restoration_escape" \
+    "$negative_r41_quarantine_release" \
+    "$negative_r41_completion_cursor_rollback"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -1808,6 +1896,7 @@ check_positive "$r37_typed_native_sdma_wait_activation_proof" 'verification resu
 check_positive "$r38_bounded_persistent_compute_wait_recycle_proof" 'verification results:: 19 verified, 0 errors' r38-bounded-persistent-compute-wait-recycle
 check_positive "$r39_scoped_persistent_sdma_wait_policy_proof" 'verification results:: 20 verified, 0 errors' r39-scoped-persistent-sdma-wait-policy
 check_positive "$r40_gfx942_striped_sdma_aggregate_proof" 'verification results:: 25 verified, 0 errors' r40-gfx942-striped-sdma-aggregate
+check_positive "$r41_persistent_striped_sdma_aggregate_proof" 'verification results:: 43 verified, 0 errors' r41-persistent-striped-sdma-aggregate
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -2172,13 +2261,34 @@ check_negative "$negative_r40_retake_output_escape" mutated_retake_failure_keeps
 check_negative "$negative_r40_ticket_substitution" mutated_ticket_is_exact_v1 r40-ticket-substitution
 check_negative "$negative_r40_timeout_before_scan" mutated_timeout_scans_and_retains_owner_v1 r40-timeout-scan-custody
 check_negative "$negative_r40_unbalanced_placement" mutated_two_slots_are_balanced_v1 r40-unbalanced-placement
+check_negative "$negative_r41_combined_sixteen" mutated_combined_sixteen_is_rejected_v1 r41-combined-sixteen
+check_negative "$negative_r41_shard_sixty_four" mutated_each_shard_is_bounded_v1 r41-shard-sixty-four
+check_negative "$negative_r41_device_owner_alias" mutated_device_owners_are_distinct_v1 r41-device-owner-alias
+check_negative "$negative_r41_device_storage_alias" mutated_device_storage_is_distinct_v1 r41-device-storage-alias
+check_negative "$negative_r41_device_kind_substitution" mutated_persistent_device_storage_is_local_v1 r41-device-kind-substitution
+check_negative "$negative_r41_host_storage_alias" mutated_host_storage_is_distinct_v1 r41-host-storage-alias
+check_negative "$negative_r41_host_binding_substitution" mutated_host_binding_is_exact_v1 r41-host-binding-substitution
+check_negative "$negative_r41_linear_copy_bound" mutated_linear_copy_is_single_packet_bounded_v1 r41-linear-copy-bound
+check_negative "$negative_r41_pair_currentness" mutated_request_pair_is_current_v1 r41-pair-currentness
+check_negative "$negative_r41_prepare_recovery_order" mutated_preparation_recovery_is_ordered_v1 r41-prepare-recovery-order
+check_negative "$negative_r41_partition_indeterminate" mutated_publication_has_at_most_one_indeterminate_v1 r41-partition-indeterminate
+check_negative "$negative_r41_partition_untouched" mutated_partition_is_exact_v1 r41-partition-untouched
+check_negative "$negative_r41_partial_cursor_commit" mutated_partial_publication_preserves_cursor_v1 r41-partial-cursor-commit
+check_negative "$negative_r41_currentness_close" mutated_cursor_commit_requires_close_v1 r41-currentness-close
+check_negative "$negative_r41_ticket_occurrence" mutated_ticket_occurrence_is_exact_v1 r41-ticket-occurrence
+check_negative "$negative_r41_pending_prefix" mutated_pending_scans_whole_roster_v1 r41-pending-prefix
+check_negative "$negative_r41_timeout_custody" mutated_timeout_retains_whole_custody_v1 r41-timeout-custody
+check_negative "$negative_r41_preflight_partial_restore" mutated_failed_preflight_restores_nothing_v1 r41-preflight-partial-restore
+check_negative "$negative_r41_restoration_escape" mutated_failed_restoration_has_no_normal_output_v1 r41-restoration-escape
+check_negative "$negative_r41_quarantine_release" mutated_quarantine_is_monotonic_v1 r41-quarantine-release
+check_negative "$negative_r41_completion_cursor_rollback" mutated_completion_terminal_retains_cursor_v1 r41-completion-cursor-rollback
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 mutations=364'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 mutations=385'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

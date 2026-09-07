@@ -15,7 +15,8 @@ directional-currentness-handoff, R33 fused-synchronous-directional-SDMA, R34
 fused-asynchronous-directional-SDMA, R35 fused-retained-control-replay, R36
 fused-completion-poll/recycle, R37 typed-native-SDMA-wait-activation, R38
 bounded-persistent-compute-wait/recycle, R39 scoped-persistent-SDMA-wait
-policy, and R40 gfx942 striped-SDMA aggregate models. The authenticated runner
+policy, R40 gfx942 striped-SDMA aggregate, and R41 persistent striped-SDMA
+aggregate models. The authenticated runner
 proves 902 obligations and rejects 364 expected-negative mutations over finite
 abstract values and traces. The
 materialization input and image sequences are
@@ -2029,6 +2030,79 @@ output escape after a failed model retake.
 | Executable bounded model | **Checked** | Focused Rust tests exercise capacity boundaries, session-local uniqueness, exact ticket binding, validation-before-observation, full Pending/timeout scans, terminal custody, preflight atomicity, ordered completion, and move-only replay. |
 | Boundary countermodels | **Rejected** | Fifteen pinned standalone mutations fail their named capacity, preparation, validation, custody, observation, retirement, currentness, or ordering postconditions. |
 | Production Rust, KFD/HSA/HIP, ioctl/packet execution, allocator failure, native ownership/completion, clocks, driver, firmware, hardware, coherence, progress, liveness, parity, or performance | **Not established** | Explicitly outside the R40 proof boundary. The model and tests are not evidence of hardware behavior or relative performance. |
+
+## R41 persistent striped-SDMA aggregate
+
+`r41_persistent_striped_sdma_aggregate_v1.rs` proves exactly 43 obligations over
+an independent finite persistent-custody model. The runner pins that proof and
+21 standalone negative mutations. The executable model composes the public R40
+combined queue-plan value, but there is no Rust-to-Verus, production-Rust, or
+native refinement theorem.
+
+Admission accepts only exact combined directional-and-striped plans with an
+even striped count from 2 through 14. A batch has 1 through 882 requests and at
+most 63 requests assigned to each round-robin shard. Every request names one
+whole persistent device owner, one device storage identity, and one host
+storage identity; all three identity classes are pairwise distinct. Every
+request also matches the exact session, directional queue pair and generation,
+and striped generation. Device and host pool generations are independent,
+nonzero, per-buffer identity coordinates. Device extents retain the inherited
+nonzero, page-aligned, at-most-256-MiB persistent-allocation premise. Host
+identity retains its own logical and physical extents and coherent-GTT kind.
+Device storage is explicitly device-local. No shared generation or host maximum
+is invented. Each request represents one gfx942 linear-copy packet of at most
+`0x003f_ffe0` bytes; windowed large-copy support is outside this model. The model
+intentionally has no operation for splitting or aliasing one persistent
+allocation across queues.
+
+Preparation constructs the complete ticket and completion-identity roster and
+abstract recovery, completed-output, and terminal capacities before the
+publication relation. An injected preparation failure either returns the exact
+request sequence in original order with an unchanged cursor, or places every
+owner in absorbing terminal quarantine. These phase counters are mathematical
+fields and do not prove allocation, panic, or out-of-memory behavior.
+
+Publication is represented at shard granularity. Its exact partition consists
+of a confirmed prefix, at most one indeterminate shard, and the untouched
+suffix; every request index remains associated with its assigned shard.
+Anything short of complete publication is terminal quarantine. Complete
+publication commits the round-robin cursor only after exact currentness
+closure. A preparation- or publication-stage terminal therefore retains the
+uncommitted input cursor. Once a submission exists, that commit is historical:
+validation, observation, preflight, and persistent-restoration terminal paths
+all retain the committed result and cannot model a cursor rollback.
+
+Completion validates the exact presentation and currentness before observing
+statuses. Pending and timeout scan and retain the entire published submission
+with zero restoration. All-ready completion preflights every completion
+identity before restoring any persistent owner. Successful restoration returns
+and settles all owners in request order. A failure at any restoration index
+exposes no normal prefix; terminal custody retains the complete ordered batch,
+records the restored prefix length for audit, preserves the committed cursor,
+and leaves every owner quarantined. Quarantine has no modeled exit.
+
+The 21 independent countermodels reject combined q=16, a 64-request shard,
+device-owner aliasing, device-storage aliasing, host-storage aliasing,
+directional-pair currentness substitution, host binding substitution,
+non-device-local persistent storage, a linear-copy size above the packet
+maximum, reordered preparation recovery, two indeterminate shards, a dropped
+untouched shard, cursor advance after partial publication, commit with open
+currentness, ticket occurrence substitution, Pending prefix observation,
+timeout custody loss, restoration before full identity preflight, normal output
+escape after restoration failure, quarantine release, and completion-terminal
+cursor rollback.
+
+## R41 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Combined capacity and identity admission | **Proved abstractly** | Even q=2..14, 63 requests per shard, at most 882 requests, exact same-session directional/striped occurrences and currentness, and pairwise-distinct persistent owner, device storage, and host storage identities. Discovery and native identity truth are contracted. |
+| Preparation and recovery | **Proved abstractly** | Complete immutable identity roster and abstract output capacities precede publication. Preparation failure returns every request in order or quarantines all of them, without cursor advance. No allocator behavior is established. |
+| Publication custody and cursor | **Proved** | Full publication or an exact confirmed/at-most-one-indeterminate/untouched shard partition. Only full publication plus exact close commits; post-submission terminal paths preserve that historical commit. |
+| Completion and persistent restoration | **Proved abstractly** | Pending/timeout preserve whole custody after a full scan. Full identity preflight precedes restoration. Success settles all owners in order; any failure retains all owners terminally with no normal prefix and monotonic quarantine. |
+| Executable bounded model | **Checked** | Focused Rust transitions cover capacity, alias and currentness rejection, every injected preparation/restoration position, shard partitions, waiting custody, preflight atomicity, ordered completion, quarantine, and cursor history. |
+| Boundary countermodels | **Rejected** | Twenty-one pinned standalone mutations fail their named capacity, identity, recovery, partition, waiting, restoration, quarantine, currentness, or cursor-history postconditions. |
+| Production Rust, KFD/HSA/HIP, ioctl/packet execution, allocator failure, native ownership/completion, clocks, driver, firmware, hardware, coherence, progress, liveness, parity, or performance | **Not established** | Explicitly outside the R41 proof boundary. The model and tests are not evidence of native behavior or relative performance. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
