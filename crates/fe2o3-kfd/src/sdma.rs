@@ -38,18 +38,24 @@ use crate::wait::MonotonicWaitV1;
 mod multi_queue;
 use multi_queue::next_striped_owner;
 pub use multi_queue::{
-    Gfx942SdmaMultiQueueCompletedV1, Gfx942SdmaMultiQueuePlanErrorV1, Gfx942SdmaMultiQueuePlanV1,
-    Gfx942SdmaMultiQueuePollV1, Gfx942SdmaMultiQueueShardTicketsV1,
-    Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaStripedDiagnosticSpinBudgetV1,
-    Gfx942SdmaStripedWaitCpuMeasurementStatusV1, Gfx942SdmaStripedWaitDiagnosticsV1,
+    GFX942_SDMA_LOGICAL_MUX_MAX_REQUESTS_PER_NATIVE_QUEUE_V2,
+    GFX942_SDMA_LOGICAL_MUX_MAX_REQUESTS_V2, GFX942_SDMA_LOGICAL_MUX_NATIVE_QUEUE_COUNT_V2,
+    Gfx942SdmaLogicalMuxCompletedV2, Gfx942SdmaLogicalMuxNativeShardObservationV2,
+    Gfx942SdmaLogicalMuxObservationV2, Gfx942SdmaLogicalMuxPlanErrorV2, Gfx942SdmaLogicalMuxPlanV2,
+    Gfx942SdmaLogicalMuxPollV2, Gfx942SdmaLogicalMuxSubmissionV2, Gfx942SdmaMultiQueueCompletedV1,
+    Gfx942SdmaMultiQueuePlanErrorV1, Gfx942SdmaMultiQueuePlanV1, Gfx942SdmaMultiQueuePollV1,
+    Gfx942SdmaMultiQueueShardTicketsV1, Gfx942SdmaMultiQueueSubmissionV1,
+    Gfx942SdmaStripedDiagnosticSpinBudgetV1, Gfx942SdmaStripedWaitCpuMeasurementStatusV1,
+    Gfx942SdmaStripedWaitDiagnosticsV1,
 };
 #[cfg(test)]
 pub(crate) use multi_queue::{
     Gfx942SdmaMultiQueueIdentityForTestV1, striped_submission_for_unwind_test,
 };
 pub(crate) use multi_queue::{
-    Gfx942SdmaStripedTailWaitOutcomeV1, MultiQueueSdmaSubmitFailureV1,
-    combined_striped_sdma_queue_count_is_admitted, striped_sdma_queue_count_is_admitted,
+    Gfx942SdmaStripedTailWaitOutcomeV1, LogicalMuxSdmaSubmitFailureV2,
+    MultiQueueSdmaSubmitFailureV1, combined_striped_sdma_queue_count_is_admitted,
+    gfx942_sdma_logical_mux_lane_count_is_admitted_v2, striped_sdma_queue_count_is_admitted,
 };
 
 pub const GFX942_SDMA_COPY_PACKET_BYTES_V1: usize = 7 * 4;
@@ -72,6 +78,25 @@ pub const GFX942_SDMA_MAX_COMBINED_STRIPED_QUEUES_V1: usize = KFD_GFX942_SDMA_EN
 pub const GFX942_SDMA_MAX_MULTI_QUEUE_SHARDS_V1: usize = GFX942_SDMA_MAX_STRIPED_QUEUES_V1;
 pub const GFX942_SDMA_MAX_MULTI_QUEUE_REQUESTS_V1: usize =
     GFX942_SDMA_MAX_STRIPED_QUEUES_V1 * GFX942_SDMA_MAX_IN_FLIGHT_V1;
+
+/// Frozen claim boundary for the experimental two-native logical-lane mux.
+pub const GFX942_SDMA_LOGICAL_MUX_MANIFEST_V2: &str = concat!(
+    "profile=fe2o3-gfx942-kfd-sdma-logical-mux-r56-v2\n",
+    "lower_sdma_manifest_sha256=5abb6d5fb9dcf321d82dfadf2ffcdd310d197b5ddb42ec3d88658ab26f1451e9\n",
+    "topology=exact-gfx942-ordinary-sdma-two-engines-eight-queues-per-engine,two-persistent-native-queues,engine0-then-engine1,distinct-session-owned-queue-ids\n",
+    "logical-lanes=closed-counts:2,4,8,14,16,cursor-domain-is-logical-lane,request-i-lane=(cursor+i)%lane-count,native=lane%2\n",
+    "bounds=requests:2..126,exactly-two-nonempty-native-shards,at-most-63-per-native-shard\n",
+    "ordering=original-request-order-is-logical-cursor-lane-major,each-native-shard-is-stable-filter-of-that-order,logical-lanes-sharing-one-native-queue-gain-cross-lane-order\n",
+    "publication=prepare-both-shards-and-all-outcome-storage-before-first-publication,one-copy-plus-system-snoop-fence-per-request,one-write-pointer-publication-and-one-doorbell-per-native-queue,no-heap-allocation-after-first-publication\n",
+    "completion=bind-two-exact-native-tail-fences,shared-monotonic-deadline,full-original-request-ordered-status-audit,currentness-check,and-all-or-nothing-custody-retirement\n",
+    "cursor=unchanged-for-rejection-preparation-any-partial-indeterminate-closing-currentness-or-live-model-retake-failure,advance-only-after-both-native-publications-closing-currentness-successful-live-model-retake-and-restored-owner-commit\n",
+    "failure=lower-layer-classified-no-native-effect-before-first-publication-recovers-original-ordered-inputs,ordinary-returned-terminal-errors-retain-audit-only-custody-and-poison-session-and-process-admission,facade-caught-rust-unwind-after-entering-live-owner-memory-operation-is-conservatively-post-effect-and-the-restoring-owner-helper-resumes-only-to-the-enclosing-facade-catch-which-poisons-session-and-process-admission-then-aborts-without-typed-custody-or-resumption-past-the-public-facade,nested-retirement-suffix-unwind-after-submission-ownership-move-causes-lower-immediate-abort-without-typed-custody-or-guaranteed-owner-restoration-or-explicit-poison,no-continued-execution-after-either-unwind-class,confirmed-one-optional-indeterminate-and-untouched-custody-remains-audit-only\n",
+    "excluded=typed-panic-recovery,hip-stream-independence,independent-logical-lane-progress,priority,scheduling,event,capture,per-stream-synchronization,atomic-device-snapshot,formal-refinement,hardware-correctness,performance,hip-or-hsa-parity\n",
+);
+
+/// SHA-256 of [`GFX942_SDMA_LOGICAL_MUX_MANIFEST_V2`].
+pub const GFX942_SDMA_LOGICAL_MUX_MANIFEST_SHA256_V2: &str =
+    "51fe738b83cf2a306b8c62edeec9f270c78e94e57dc1b24eaf83df26fdbdfde0";
 /// Ring, control, and completion allocation records retained by each SDMA queue.
 pub const GFX942_SDMA_SHARED_ALLOCATION_RECORDS_PER_QUEUE_V1: usize = 3;
 const GFX942_SDMA_D2H_OWNER_SLOT_V1: usize = 0;
@@ -4553,6 +4578,11 @@ pub(crate) enum Gfx942SdmaQueueSetV1 {
         owners: Vec<Gfx942SdmaQueueOwnerV1>,
         next_owner: usize,
     },
+    LogicalMuxV2 {
+        owners: Vec<Gfx942SdmaQueueOwnerV1>,
+        logical_lane_count: u8,
+        next_logical_lane: u8,
+    },
     /// All known and indeterminate native queues retained after creation failure.
     TerminalRetained {
         primary: Vec<Gfx942SdmaQueueOwnerV1>,
@@ -5256,7 +5286,10 @@ impl Gfx942SdmaQueueSetV1 {
     pub(crate) fn generic_observation(&self) -> Option<Gfx942SdmaQueueObservationV1> {
         match self {
             Self::Generic(owners) => owners.first().map(Gfx942SdmaQueueOwnerV1::observation),
-            Self::Directional(_) | Self::Striped { .. } | Self::TerminalRetained { .. } => None,
+            Self::Directional(_)
+            | Self::Striped { .. }
+            | Self::LogicalMuxV2 { .. }
+            | Self::TerminalRetained { .. } => None,
         }
     }
 
@@ -5277,9 +5310,38 @@ impl Gfx942SdmaQueueSetV1 {
         matches!(self, Self::Striped { .. })
     }
 
+    pub(crate) const fn is_logical_mux_v2(&self) -> bool {
+        matches!(self, Self::LogicalMuxV2 { .. })
+    }
+
+    pub(crate) fn multi_queue_owners_v1(
+        &self,
+    ) -> Result<&[Gfx942SdmaQueueOwnerV1], Gfx942SdmaErrorV1> {
+        match self {
+            Self::Striped { owners, .. } | Self::LogicalMuxV2 { owners, .. } => Ok(owners),
+            Self::Generic(_) | Self::Directional(_) | Self::TerminalRetained { .. } => Err(
+                Gfx942SdmaErrorV1::Contract("multi-queue operation requires a queue roster"),
+            ),
+        }
+    }
+
+    pub(crate) fn multi_queue_owners_mut_v1(
+        &mut self,
+    ) -> Result<&mut [Gfx942SdmaQueueOwnerV1], Gfx942SdmaErrorV1> {
+        match self {
+            Self::Striped { owners, .. } | Self::LogicalMuxV2 { owners, .. } => Ok(owners),
+            Self::Generic(_) | Self::Directional(_) | Self::TerminalRetained { .. } => Err(
+                Gfx942SdmaErrorV1::Contract("multi-queue operation requires a queue roster"),
+            ),
+        }
+    }
+
     pub(crate) fn contains_confirmed_queue_id(&self, queue_id: u32) -> bool {
         match self {
-            Self::Generic(owners) | Self::Directional(owners) | Self::Striped { owners, .. } => {
+            Self::Generic(owners)
+            | Self::Directional(owners)
+            | Self::Striped { owners, .. }
+            | Self::LogicalMuxV2 { owners, .. } => {
                 owners.iter().any(|owner| owner.queue_id == queue_id)
             }
             Self::TerminalRetained {
@@ -5296,7 +5358,8 @@ impl Gfx942SdmaQueueSetV1 {
             match owner {
                 Gfx942SdmaQueueSetV1::Generic(owners)
                 | Gfx942SdmaQueueSetV1::Directional(owners)
-                | Gfx942SdmaQueueSetV1::Striped { owners, .. } => owners,
+                | Gfx942SdmaQueueSetV1::Striped { owners, .. }
+                | Gfx942SdmaQueueSetV1::LogicalMuxV2 { owners, .. } => owners,
                 Gfx942SdmaQueueSetV1::TerminalRetained { .. } => std::process::abort(),
             }
         }
@@ -5315,7 +5378,10 @@ impl Gfx942SdmaQueueSetV1 {
         &self,
     ) -> Option<Gfx942DirectionalSdmaQueueObservationV1> {
         match self {
-            Self::Generic(_) | Self::Striped { .. } | Self::TerminalRetained { .. } => None,
+            Self::Generic(_)
+            | Self::Striped { .. }
+            | Self::LogicalMuxV2 { .. }
+            | Self::TerminalRetained { .. } => None,
             Self::Directional(owners) => Some(Gfx942DirectionalSdmaQueueObservationV1 {
                 host_to_device: owners.get(GFX942_SDMA_H2D_OWNER_SLOT_V1)?.observation(),
                 device_to_host: owners.get(GFX942_SDMA_D2H_OWNER_SLOT_V1)?.observation(),
@@ -5664,7 +5730,7 @@ impl Gfx942SdmaQueueSetV1 {
                 .first()
                 .is_some_and(|owner| owner.engine_index.is_some()),
             Self::Directional(_) => true,
-            Self::Striped { .. } => true,
+            Self::Striped { .. } | Self::LogicalMuxV2 { .. } => true,
             Self::TerminalRetained { .. } => true,
         };
         if targeted {
@@ -5683,6 +5749,17 @@ impl Gfx942SdmaQueueSetV1 {
                 owners[GFX942_SDMA_D2H_OWNER_SLOT_V1].destroy_queue(memory)
             }
             Self::Striped { owners, .. } => {
+                for owner in owners {
+                    owner.destroy_queue(memory)?;
+                }
+                Ok(())
+            }
+            Self::LogicalMuxV2 { owners, .. } => {
+                if owners.len() != GFX942_SDMA_LOGICAL_MUX_NATIVE_QUEUE_COUNT_V2 {
+                    return Err(Gfx942SdmaErrorV1::Contract(
+                        "logical-mux native queue roster",
+                    ));
+                }
                 for owner in owners {
                     owner.destroy_queue(memory)?;
                 }
@@ -5726,6 +5803,12 @@ impl Gfx942SdmaQueueSetV1 {
                 }
                 Ok(())
             }
+            Self::LogicalMuxV2 { mut owners, .. } => {
+                while let Some(owner) = owners.pop() {
+                    owner.release_resources(memory)?;
+                }
+                Ok(())
+            }
             Self::TerminalRetained { .. } => Err(Gfx942SdmaErrorV1::Contract(
                 "terminal retained SDMA resources require process teardown",
             )),
@@ -5737,6 +5820,9 @@ impl Gfx942SdmaQueueSetV1 {
             Self::Generic(_) => 3,
             Self::Directional(_) => 6,
             Self::Striped { owners, .. } => {
+                u8::try_from(owners.len().saturating_mul(3)).unwrap_or(u8::MAX)
+            }
+            Self::LogicalMuxV2 { owners, .. } => {
                 u8::try_from(owners.len().saturating_mul(3)).unwrap_or(u8::MAX)
             }
             Self::TerminalRetained {
@@ -5775,6 +5861,18 @@ impl Gfx942SdmaQueueSetV1 {
                     || *next_owner >= owners.len()
                     || owners.iter().any(Gfx942SdmaQueueOwnerV1::is_poisoned)
             }
+            Self::LogicalMuxV2 {
+                owners,
+                logical_lane_count,
+                next_logical_lane,
+            } => {
+                owners.len() != GFX942_SDMA_LOGICAL_MUX_NATIVE_QUEUE_COUNT_V2
+                    || !gfx942_sdma_logical_mux_lane_count_is_admitted_v2(u32::from(
+                        *logical_lane_count,
+                    ))
+                    || usize::from(*next_logical_lane) >= usize::from(*logical_lane_count)
+                    || owners.iter().any(Gfx942SdmaQueueOwnerV1::is_poisoned)
+            }
             Self::TerminalRetained { .. } => true,
         }
     }
@@ -5808,6 +5906,9 @@ impl Gfx942SdmaQueueSetV1 {
             Self::Striped { owners, next_owner } => owners
                 .get_mut(*next_owner)
                 .ok_or(Gfx942SdmaErrorV1::Contract("striped SDMA owner cursor")),
+            Self::LogicalMuxV2 { .. } => Err(Gfx942SdmaErrorV1::Contract(
+                "logical-mux queues require the V2 batch API",
+            )),
             Self::TerminalRetained { .. } => Err(Gfx942SdmaErrorV1::Contract(
                 "terminal retained SDMA queues require process teardown",
             )),
@@ -5855,6 +5956,10 @@ impl Gfx942SdmaQueueSetV1 {
                 .find(|owner| owner.queue_id == ticket.queue_id)
                 .ok_or(Gfx942SdmaErrorV1::Contract("SDMA ticket queue occurrence")),
             Self::Striped { owners, .. } => owners
+                .iter_mut()
+                .find(|owner| owner.queue_id == ticket.queue_id)
+                .ok_or(Gfx942SdmaErrorV1::Contract("SDMA ticket queue occurrence")),
+            Self::LogicalMuxV2 { owners, .. } => owners
                 .iter_mut()
                 .find(|owner| owner.queue_id == ticket.queue_id)
                 .ok_or(Gfx942SdmaErrorV1::Contract("SDMA ticket queue occurrence")),
@@ -7105,5 +7210,38 @@ mod tests {
             write!(&mut rendered, "{byte:02x}").unwrap();
         }
         assert_eq!(rendered, GFX942_SDMA_COPY_MANIFEST_SHA256_V1);
+    }
+
+    #[test]
+    fn logical_mux_manifest_digest_and_exclusions_are_frozen() {
+        for required in [
+            "two-persistent-native-queues",
+            "logical-lanes=closed-counts:2,4,8,14,16",
+            "requests:2..126",
+            "at-most-63-per-native-shard",
+            "each-native-shard-is-stable-filter-of-that-order",
+            "one-write-pointer-publication-and-one-doorbell-per-native-queue",
+            "bind-two-exact-native-tail-fences",
+            "advance-only-after-both-native-publications-closing-currentness-successful-live-model-retake-and-restored-owner-commit",
+            "lower-layer-classified-no-native-effect-before-first-publication",
+            "facade-caught-rust-unwind-after-entering-live-owner-memory-operation-is-conservatively-post-effect",
+            "restoring-owner-helper-resumes-only-to-the-enclosing-facade-catch",
+            "nested-retirement-suffix-unwind-after-submission-ownership-move-causes-lower-immediate-abort",
+            "without-typed-custody-or-guaranteed-owner-restoration-or-explicit-poison",
+            "no-continued-execution-after-either-unwind-class",
+            "typed-panic-recovery",
+            "hip-stream-independence",
+            "formal-refinement",
+            "performance",
+        ] {
+            assert!(GFX942_SDMA_LOGICAL_MUX_MANIFEST_V2.contains(required));
+        }
+        let digest = Sha256::digest(GFX942_SDMA_LOGICAL_MUX_MANIFEST_V2);
+        let mut rendered = String::with_capacity(64);
+        for byte in digest {
+            use core::fmt::Write;
+            write!(&mut rendered, "{byte:02x}").unwrap();
+        }
+        assert_eq!(rendered, GFX942_SDMA_LOGICAL_MUX_MANIFEST_SHA256_V2);
     }
 }

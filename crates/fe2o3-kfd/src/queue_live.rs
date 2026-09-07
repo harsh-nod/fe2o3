@@ -170,13 +170,14 @@ use crate::sdma::{
     Gfx942DirectionalSdmaQueueObservationV1, Gfx942SdmaBufferKindV1,
     Gfx942SdmaBufferStorageIdentityV1, Gfx942SdmaBufferStorageV1, Gfx942SdmaBufferV1,
     Gfx942SdmaCompletedCopyV1, Gfx942SdmaCopyPollV1, Gfx942SdmaCopyRequestV1,
-    Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1, Gfx942SdmaMemoryPoolObservationV1,
-    Gfx942SdmaQueueObservationV1, Gfx942SdmaQueueProgressObservationV1, Gfx942SdmaQueueSetV1,
-    PersistentSdmaWindowPollV1, PreparedPersistentSdmaWindowPublicationFailureV1,
-    PreparedPersistentSdmaWindowV1, PreparedSdmaPublicationFailureV1,
-    PreparedSingleSdmaPublicationFailureV1, PreparedSingleSdmaV1, SdmaWaitProfileV1,
-    SingleSdmaWaitInCurrentScopeV1, allocate_device_buffer, allocate_host_buffer,
-    combined_striped_sdma_queue_count_is_admitted, exact_full_host_write_is_authenticatable,
+    Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1, Gfx942SdmaLogicalMuxObservationV2,
+    Gfx942SdmaMemoryPoolObservationV1, Gfx942SdmaQueueObservationV1,
+    Gfx942SdmaQueueProgressObservationV1, Gfx942SdmaQueueSetV1, PersistentSdmaWindowPollV1,
+    PreparedPersistentSdmaWindowPublicationFailureV1, PreparedPersistentSdmaWindowV1,
+    PreparedSdmaPublicationFailureV1, PreparedSingleSdmaPublicationFailureV1, PreparedSingleSdmaV1,
+    SdmaWaitProfileV1, SingleSdmaWaitInCurrentScopeV1, allocate_device_buffer,
+    allocate_host_buffer, combined_striped_sdma_queue_count_is_admitted,
+    exact_full_host_write_is_authenticatable, gfx942_sdma_logical_mux_lane_count_is_admitted_v2,
     persistent_sdma_window_packet_count, planned_ticket_matches_queue_occurrence, read_host_buffer,
     release_buffer, striped_sdma_queue_count_is_admitted, write_full_host_buffer_authenticated,
     write_host_buffer,
@@ -205,6 +206,8 @@ use fe2o3_aql::{
 #[allow(unsafe_code)]
 #[path = "queue_dispatch_live.rs"]
 mod dispatch;
+#[path = "queue_live/sdma_logical_mux.rs"]
+mod sdma_logical_mux;
 #[path = "queue_live/sdma_multi_queue.rs"]
 mod sdma_multi_queue;
 
@@ -219,6 +222,12 @@ pub use dispatch::{
     execute_gfx942_kfd_dispatch_unchecked_v1,
 };
 
+pub use sdma_logical_mux::{
+    Gfx942SdmaLogicalMuxExecutionCustodyV2, Gfx942SdmaLogicalMuxExecutionFailureV2,
+    Gfx942SdmaLogicalMuxFailureCustodyV2, Gfx942SdmaLogicalMuxFailureDispositionV2,
+    Gfx942SdmaLogicalMuxSubmissionFailureV2, Gfx942SdmaLogicalMuxTerminalCustodyV2,
+    Gfx942SdmaLogicalMuxTerminalNativeShardObservationV2,
+};
 pub use sdma_multi_queue::{
     Gfx942SdmaMultiQueueExecutionCustodyV1, Gfx942SdmaMultiQueueExecutionFailureV1,
     Gfx942SdmaMultiQueueFailureCustodyV1, Gfx942SdmaMultiQueueFailureDispositionV1,
@@ -6643,6 +6652,45 @@ impl ComputeAqlQueueSessionV1 {
         )?;
         self.sdma = Some(owner);
         Ok(observations)
+    }
+
+    /// Adds the experimental V2 logical-lane mux over exactly two native queues.
+    ///
+    /// `logical_lane_count` is one of `2`, `4`, `8`, `14`, or `16`. The two
+    /// persistent native queues target engine indices 0 and 1. Logical lanes
+    /// sharing a native queue are ordered by the mux and therefore do not have
+    /// HIP stream independence or independent scheduling semantics.
+    #[allow(clippy::result_large_err)]
+    pub fn enable_gfx942_two_native_sdma_logical_mux_v2(
+        &mut self,
+        logical_lane_count: u32,
+    ) -> Result<Gfx942SdmaLogicalMuxObservationV2, ComputeAqlQueueSessionErrorV1> {
+        if self.sdma.is_some() || self.striped_sdma.is_some() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "SDMA copy engine is already enabled",
+            ));
+        }
+        if !gfx942_sdma_logical_mux_lane_count_is_admitted_v2(logical_lane_count) {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "logical-mux SDMA lane count must be one of 2,4,8,14,16",
+            ));
+        }
+        let reserved = self.active_compute_queue_ids_for_sdma_creation_v1()?;
+        let key = self.key;
+        let (owner, observation) = self.with_sdma_queue_creation_custody_v1(
+            "logical-mux SDMA queue creation",
+            |memory| {
+                Gfx942SdmaQueueSetV1::create_logical_mux_v2(
+                    memory,
+                    key,
+                    logical_lane_count,
+                    &reserved,
+                )
+            },
+            |(owner, _)| Gfx942SdmaQueueSetV1::retain_created_for_terminal(owner, None),
+        )?;
+        self.sdma = Some(owner);
+        Ok(observation)
     }
 
     /// Adds the directional pair and a co-resident balanced striped queue set.
@@ -16180,6 +16228,24 @@ impl ComputeAqlQueueSessionV1 {
         Ok(())
     }
 
+    fn require_logical_mux_sdma_enabled_v2(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "terminal queue session requires process teardown",
+            ));
+        }
+        if !self
+            .sdma
+            .as_ref()
+            .is_some_and(Gfx942SdmaQueueSetV1::is_logical_mux_v2)
+        {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "two-native logical-mux SDMA engines are not enabled",
+            ));
+        }
+        Ok(())
+    }
+
     fn active_compute_queue_ids_for_sdma_creation_v1(
         &mut self,
     ) -> Result<Vec<u32>, ComputeAqlQueueSessionErrorV1> {
@@ -16243,6 +16309,13 @@ impl ComputeAqlQueueSessionV1 {
         self.striped_sdma
             .as_ref()
             .or_else(|| self.sdma.as_ref().filter(|owner| owner.is_striped()))
+            .is_none_or(Gfx942SdmaQueueSetV1::is_poisoned)
+    }
+
+    fn logical_mux_sdma_is_poisoned_v2(&self) -> bool {
+        self.sdma
+            .as_ref()
+            .filter(|owner| owner.is_logical_mux_v2())
             .is_none_or(Gfx942SdmaQueueSetV1::is_poisoned)
     }
 
@@ -17091,6 +17164,29 @@ impl ComputeAqlQueueSessionV1 {
         } else {
             self.sdma = Some(owner);
         }
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    fn with_logical_mux_sdma_owner_memory_v2<R>(
+        &mut self,
+        operation: impl FnOnce(
+            &mut Gfx942SdmaQueueSetV1,
+            &mut SharedGttMemorySessionV1,
+        ) -> Result<R, ComputeAqlQueueSessionErrorV1>,
+    ) -> Result<R, ComputeAqlQueueSessionErrorV1> {
+        self.require_logical_mux_sdma_enabled_v2()?;
+        let Some(mut owner) = self.sdma.take() else {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "missing two-native logical-mux SDMA owner",
+            ));
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.with_live_queue_memory_model(|memory| operation(&mut owner, memory))
+        }));
+        self.sdma = Some(owner);
         match result {
             Ok(result) => result,
             Err(payload) => std::panic::resume_unwind(payload),

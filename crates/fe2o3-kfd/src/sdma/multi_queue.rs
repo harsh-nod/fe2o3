@@ -13,9 +13,19 @@ use super::{
     map_multi_queue_plan_error, ticket_matches_queue_occurrence,
 };
 use crate::shared_memory::SharedGttMemorySessionV1;
+mod logical_mux;
 mod tail_wait;
 #[allow(unsafe_code)]
 mod tail_wait_cpu;
+pub(crate) use logical_mux::LogicalMuxSdmaSubmitFailureV2;
+pub use logical_mux::{
+    GFX942_SDMA_LOGICAL_MUX_MAX_REQUESTS_PER_NATIVE_QUEUE_V2,
+    GFX942_SDMA_LOGICAL_MUX_MAX_REQUESTS_V2, GFX942_SDMA_LOGICAL_MUX_NATIVE_QUEUE_COUNT_V2,
+    Gfx942SdmaLogicalMuxCompletedV2, Gfx942SdmaLogicalMuxNativeShardObservationV2,
+    Gfx942SdmaLogicalMuxObservationV2, Gfx942SdmaLogicalMuxPlanErrorV2, Gfx942SdmaLogicalMuxPlanV2,
+    Gfx942SdmaLogicalMuxPollV2, Gfx942SdmaLogicalMuxSubmissionV2,
+    gfx942_sdma_logical_mux_lane_count_is_admitted_v2,
+};
 pub(crate) use tail_wait::Gfx942SdmaStripedTailWaitOutcomeV1;
 
 /// Closed spin-budget roster for the profiled striped-tail benchmark experiment.
@@ -758,7 +768,12 @@ impl Gfx942SdmaQueueSetV1 {
         requests: Vec<Gfx942SdmaCopyRequestV1>,
     ) -> Result<Gfx942SdmaMultiQueueSubmissionV1, MultiQueueSdmaSubmitFailureV1> {
         let (owners, next_owner) = match self {
-            Self::Striped { owners, next_owner } => (owners, next_owner),
+            Self::Striped { owners, next_owner } => (owners, *next_owner),
+            Self::LogicalMuxV2 {
+                owners,
+                next_logical_lane,
+                ..
+            } => (owners, usize::from(*next_logical_lane) % 2),
             Self::Generic(_) | Self::Directional(_) | Self::TerminalRetained { .. } => {
                 return Err(MultiQueueSdmaSubmitFailureV1::Preparation(
                     MultiQueueSdmaPreparationFailureV1 {
@@ -782,7 +797,7 @@ impl Gfx942SdmaQueueSetV1 {
             ));
         }
         queue_ids.extend(owners.iter().map(|owner| owner.queue_id));
-        let plan = match Gfx942SdmaMultiQueuePlanV1::new(&queue_ids, requests.len(), *next_owner) {
+        let plan = match Gfx942SdmaMultiQueuePlanV1::new(&queue_ids, requests.len(), next_owner) {
             Ok(plan) => plan,
             Err(error) => {
                 return Err(MultiQueueSdmaSubmitFailureV1::Preparation(
@@ -906,11 +921,7 @@ impl Gfx942SdmaQueueSetV1 {
         &self,
         submission: &Gfx942SdmaMultiQueueSubmissionV1,
     ) -> Result<(), Gfx942SdmaErrorV1> {
-        let Self::Striped { owners, .. } = self else {
-            return Err(Gfx942SdmaErrorV1::Contract(
-                "striped completion requires striped SDMA queues",
-            ));
-        };
+        let owners = self.multi_queue_owners_v1()?;
         if submission.plan.queue_ids().len() != owners.len()
             || !submission
                 .plan
@@ -1008,11 +1019,7 @@ impl Gfx942SdmaQueueSetV1 {
         memory: &mut SharedGttMemorySessionV1,
         submission: &Gfx942SdmaMultiQueueSubmissionV1,
     ) -> Result<bool, Gfx942SdmaErrorV1> {
-        let Self::Striped { owners, .. } = self else {
-            return Err(Gfx942SdmaErrorV1::Contract(
-                "striped completion requires striped SDMA queues",
-            ));
-        };
+        let owners = self.multi_queue_owners_mut_v1()?;
         observe_entire_completion_roster(&submission.completion.ordered, |entry| {
             let owner = owners.get_mut(usize::from(entry.queue_ordinal)).ok_or(
                 Gfx942SdmaErrorV1::Contract("striped completion owner disappeared"),
@@ -1031,11 +1038,9 @@ impl Gfx942SdmaQueueSetV1 {
         Gfx942SdmaMultiQueueCompletedV1,
         (Gfx942SdmaErrorV1, Gfx942SdmaMultiQueueSubmissionV1),
     > {
-        let Self::Striped { owners, .. } = self else {
-            return Err((
-                Gfx942SdmaErrorV1::Contract("striped retirement requires striped SDMA queues"),
-                submission,
-            ));
+        let owners = match self.multi_queue_owners_mut_v1() {
+            Ok(owners) => owners,
+            Err(error) => return Err((error, submission)),
         };
         // This complete pass makes the subsequent custody moves infallible:
         // neither the queue roster nor its records can change between passes.

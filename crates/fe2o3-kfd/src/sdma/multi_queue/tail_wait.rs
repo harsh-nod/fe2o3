@@ -59,11 +59,7 @@ impl<'a> PreparedStripedTailWaitV1<'a> {
             return Err(Gfx942SdmaErrorV1::Contract("striped tail fence encoding"));
         }
         queue_set.confirm_striped_multi_queue_completion(submission)?;
-        let Gfx942SdmaQueueSetV1::Striped { owners, .. } = queue_set else {
-            return Err(Gfx942SdmaErrorV1::Contract(
-                "striped tail binding requires striped SDMA queues",
-            ));
-        };
+        let owners = queue_set.multi_queue_owners_v1()?;
 
         let mut tails_by_queue = [None; GFX942_SDMA_MAX_STRIPED_QUEUES_V1];
         let mut active_queues = [BoundActiveQueueV1 {
@@ -605,11 +601,7 @@ impl Gfx942SdmaQueueSetV1 {
         memory: &mut SharedGttMemorySessionV1,
         tail: BoundStripedTailV1,
     ) -> Result<bool, Gfx942SdmaErrorV1> {
-        let Self::Striped { owners, .. } = self else {
-            return Err(Gfx942SdmaErrorV1::Contract(
-                "striped tail observation requires striped SDMA queues",
-            ));
-        };
+        let owners = self.multi_queue_owners_mut_v1()?;
         let owner =
             owners
                 .get_mut(usize::from(tail.queue_ordinal))
@@ -656,11 +648,7 @@ impl Gfx942SdmaQueueSetV1 {
         entries: &[ValidatedMultiQueueCompletionEntryV1],
         tails_by_queue: &[Option<BoundStripedTailV1>; GFX942_SDMA_MAX_STRIPED_QUEUES_V1],
     ) -> Result<(bool, u16, u16, u16), Gfx942SdmaErrorV1> {
-        let Self::Striped { owners, .. } = self else {
-            return Err(Gfx942SdmaErrorV1::Contract(
-                "striped full audit requires striped SDMA queues",
-            ));
-        };
+        let owners = self.multi_queue_owners_mut_v1()?;
         let mut final_ready_tail_mask = 0_u16;
         let mut seen_tail_mask = 0_u16;
         let (all_entries_ready, pending_queue_mask) =
@@ -718,9 +706,9 @@ impl Gfx942SdmaQueueSetV1 {
         permit: Gfx942SdmaStripedRetirementPermitV1,
         submission: Gfx942SdmaMultiQueueSubmissionV1,
     ) -> Gfx942SdmaMultiQueueCompletedV1 {
-        let Self::Striped { owners, .. } = self else {
-            std::process::abort();
-        };
+        let owners = self
+            .multi_queue_owners_mut_v1()
+            .unwrap_or_else(|_| std::process::abort());
         let (plan, _shards, mut completion) = submission.into_parts();
         // Binding authenticated an empty `completed` vector whose capacity is
         // at least the exact ordered length. Nothing can mutate either vector

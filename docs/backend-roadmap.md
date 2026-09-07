@@ -614,3 +614,49 @@ existing runtime model is not a refinement of ordered shared-recipe epochs.
 General multi-recipe/shared-buffer DAGs, simultaneous kernel execution,
 hardware ordering truth, performance gains, and HIP/HSA parity remain open.
 See the [R52 claim boundary](../crates/fe2o3-kfd/docs/r52-native-fixed-dispatch-multi-inflight-v1.md).
+
+## R56 two-native logical SDMA mux
+
+R56 adds a distinct experimental V2 copy profile that multiplexes logical lane
+counts 2, 4, 8, 14, or 16 over exactly two persistent gfx942 ordinary SDMA
+queues on engines 0 and 1. Each batch contains 2 through 126 requests. The
+logical cursor assigns request `i` to `(cursor + i) % L`; native selection is
+`lane % 2`, and each native queue receives the stable filter of original
+request order. Both shards are prepared before either publication, contain at
+most 63 copy-plus-fence packets, and receive exactly one write-pointer
+publication and one doorbell. Two exact tail fences precede a full original-
+order audit and all-or-nothing retirement.
+
+The logical cursor advances only after both publications, closing currentness,
+successful live-model retake, and commit through the restored SDMA owner. A
+retake error leaves the cursor unchanged and returns the two-publication batch
+as terminal audit-only custody. A lower-layer-classified first-native no-effect
+failure reconstructs the original ordered request vector for retry. Confirmed
+or indeterminate publication, currentness loss, and identity mismatch retain
+audit-only terminal custody and poison both local and process admission.
+Ordinary returned failures keep those typed custody paths.
+
+Rust unwind is not a typed failure or recovery route. An unwind that reaches
+the V2 facade catch is conservatively potentially post-effect: the owner helper
+has restored owner placement before resuming into that enclosing catch, which
+poisons local and process execution authority and aborts. A distinct nested
+case exists after the all-ready wait moves submission ownership into the lower
+abort-only retirement suffix. Its private guard catches an unwind and aborts
+immediately, before control can reach facade restoration or poisoning; neither
+is guaranteed on that route. Neither unwind class continues execution or
+returns typed custody. Host tests cover the closed lane roster, depth-112
+mappings, the 63-per-native bound, singleton and missing-engine rejection,
+successful publication order, first-native no-effect recovery, recoverable and
+indeterminate second-native faults, first-native indeterminate custody,
+failure classification, cursor gating after successful retake, allocation-free
+post-publication structure, and both unwind boundary structures.
+
+The `logical-mux{2,4,8,14,16}` benchmark profiles use the separate
+`fe2o3.async-copy-logical-mux-benchmark.v1` schema and are designed for a first
+depth-112 comparison with the corresponding N-native profiles. No hardware run
+is part of this tranche. The mux adds ordering between logical lanes sharing a
+native queue and therefore does not establish HIP stream independence,
+independent progress, scheduling, priorities, events, capture, or per-stream
+synchronization. There is no Rust-to-model refinement, hardware correctness,
+performance, HIP/HSA parity, workload-general speedup, or typed panic-recovery
+claim.

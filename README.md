@@ -249,6 +249,18 @@ milestones are retained in the [project status archive](docs/project-status.md).
   without a mutation-proof decoder.
 - Multi-GPU distributed kernels and communication/computation overlap are not
   a supported execution surface.
+- The experimental R56 logical SDMA mux maps 2, 4, 8, 14, or 16 logical lanes
+  onto two native queues and adds ordering between lanes sharing a queue; it is
+  not HIP stream independence or scheduling parity. Its cursor advances only
+  after both publications, closing currentness, successful live-model retake,
+  and commit through the restored owner. For an unwind that reaches the V2
+  facade catch, the helper first restores the owner; the catch then poisons
+  local and process KFD authority and aborts. If wait retirement unwinds after
+  moving submission ownership into its lower abort-only suffix, that lower
+  guard aborts immediately, and explicit owner restoration or poisoning is not
+  guaranteed. Neither route continues execution or returns typed panic
+  custody; ordinary returned failures retain their documented typed retryable
+  or terminal custody.
 - The compiler and protocols are evolving. Do not treat crate APIs, KIR, bundle,
   debugger, profiler, receipt, or evidence formats as stable unless a document
   explicitly freezes a version.

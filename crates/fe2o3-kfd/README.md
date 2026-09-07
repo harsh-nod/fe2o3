@@ -722,6 +722,37 @@ exercises the shared post-publication cursor/state transition, not the outer
 live-session currentness/poison path. These tests do not claim live native fault
 injection or firmware/coherence proof.
 
+R56 adds a separate experimental
+`enable_gfx942_two_native_sdma_logical_mux_v2` profile. It admits logical lane
+counts 2, 4, 8, 14, or 16 while creating exactly two persistent native queues,
+one on ordinary engine 0 and one on engine 1. A V2 batch contains 2 through 126
+requests. Request `i` is labeled lane `(cursor + i) % L` and assigned to native
+queue `lane % 2`; each native shard is the stable filter of original request
+order. Both nonempty shards are fully prepared before either publication, and
+each has at most 63 copy-plus-fence packets, one write-pointer publication, and
+one doorbell. Completion binds two exact tails and then performs the same full
+original-order audit and all-or-nothing custody retirement as V1. Singleton
+batches are rejected, and the logical cursor advances only after both native
+publications and closing currentness succeed.
+
+A lower-layer-classified first-native no-effect publication failure returns
+the original request vector in canonical order for retry. Any confirmed or
+indeterminate native shard, closing-currentness loss, identity mismatch, or
+post-publication unwind is terminal and retains audit-only custody through
+process teardown.
+
+The mux intentionally imposes ordering between logical lanes that share one
+native queue. It is not HIP stream independence, independent progress,
+priority, event, capture, or per-stream synchronization parity. Its manifest is
+`GFX942_SDMA_LOGICAL_MUX_MANIFEST_V2`. The benchmark accepts
+`logical-mux{2,4,8,14,16}` with final mode `logical-mux` or
+`logical-mux-profiled`; the intended first comparison is depth 112 against the
+corresponding old N-native aggregate profile. Those rows use the separate
+`fe2o3.async-copy-logical-mux-benchmark.v1` schema and identify both native
+queue IDs, exact engine placement, logical and native depths, and the semantic
+exclusion. No hardware, performance, HIP/HSA parity, or formal-refinement claim
+follows until exact retained evidence exists.
+
 `GFX942_SDMA_COPY_MANIFEST_V1` pins the additive KFD SDMA schema and topology
 capability sidecar, reviewed ROCr revision, direction policy and packet sources,
 packet bytes, bounds, currentness, failure, and teardown contracts. Verus proves
@@ -738,6 +769,7 @@ Representative commands are:
 ```text
 cargo run -p fe2o3-kfd --example kfd-sdma-copy-benchmark -- <gpu> <bytes> <depth> <warmups> <samples> directional
 cargo run -p fe2o3-kfd --example kfd-sdma-copy-benchmark -- <gpu> <bytes> <depth> <warmups> <samples> striped8
+cargo run -p fe2o3-kfd --example kfd-sdma-copy-benchmark -- <gpu> <bytes> 112 <warmups> <samples> logical-mux16 logical-mux
 cargo run -p fe2o3-kfd --example kfd-sdma-multi-device-benchmark -- <gpu0> <gpu1> <bytes> <depth-per-device> <warmups> <samples>
 cargo run -p fe2o3-kfd --example kfd-sdma-xgmi-peer-benchmark -- <gpu0> <gpu1> <bytes> <depth> <warmups> <samples>
 ```

@@ -5,8 +5,9 @@ use std::time::{Duration, Instant};
 
 use fe2o3_kfd::{
     ComputeAqlQueueSessionV1, DeviceSelector, Gfx942CombinedSdmaCapacityV1, Gfx942SdmaBufferV1,
-    Gfx942SdmaCopyRequestV1, Gfx942SdmaMultiQueueCompletedV1, Gfx942SdmaMultiQueuePollV1,
-    Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaQueueObservationV1,
+    Gfx942SdmaCopyRequestV1, Gfx942SdmaLogicalMuxCompletedV2, Gfx942SdmaLogicalMuxObservationV2,
+    Gfx942SdmaLogicalMuxPollV2, Gfx942SdmaLogicalMuxSubmissionV2, Gfx942SdmaMultiQueueCompletedV1,
+    Gfx942SdmaMultiQueuePollV1, Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaQueueObservationV1,
     Gfx942SdmaStripedDiagnosticSpinBudgetV1, Gfx942SdmaStripedWaitCpuMeasurementStatusV1,
     Gfx942SdmaStripedWaitDiagnosticsV1, OpenedKfd,
 };
@@ -348,6 +349,17 @@ fn admitted_diagnostic_spin_budget(
     }
 }
 
+fn admitted_logical_mux_lane_count(profile: &str) -> Option<u32> {
+    match profile {
+        "logical-mux2" => Some(2),
+        "logical-mux4" => Some(4),
+        "logical-mux8" => Some(8),
+        "logical-mux14" => Some(14),
+        "logical-mux16" => Some(16),
+        _ => None,
+    }
+}
+
 fn aggregate_resource_budget(
     profile: AggregateProfile,
     depth: usize,
@@ -584,6 +596,119 @@ fn run_aggregate_poll_smoke(
         copy_bytes,
         AggregateDirection::DeviceToHost,
         Gfx942SdmaStripedDiagnosticSpinBudgetV1::Current,
+    )?;
+    validate_aggregate_round(queue, &buffers, copy_bytes, 0)?;
+    recycle_aggregate_buffers(queue, buffers)
+}
+
+fn restore_logical_mux_buffers(
+    completed: Gfx942SdmaLogicalMuxCompletedV2,
+    direction: AggregateDirection,
+) -> Result<Vec<AggregateBuffers>, Box<dyn std::error::Error>> {
+    if completed.plan().request_count() != completed.completed().len() {
+        return Err("logical-mux completion cardinality mismatch".into());
+    }
+    let mut restored = Vec::with_capacity(completed.completed().len());
+    for completed in completed.into_completed() {
+        let (source, destination) = completed.into_buffers();
+        restored.push(match direction {
+            AggregateDirection::HostToDevice => AggregateBuffers {
+                host: source,
+                device: destination,
+            },
+            AggregateDirection::DeviceToHost => AggregateBuffers {
+                host: destination,
+                device: source,
+            },
+        });
+    }
+    Ok(restored)
+}
+
+fn submit_logical_mux(
+    queue: &mut ComputeAqlQueueSessionV1,
+    requests: Vec<Gfx942SdmaCopyRequestV1>,
+) -> Result<Gfx942SdmaLogicalMuxSubmissionV2, Box<dyn std::error::Error>> {
+    queue
+        .submit_gfx942_sdma_logical_mux_batch_v2(requests)
+        .map_err(|failure| failure.into_parts().0.into())
+}
+
+fn wait_logical_mux<const PROFILE: bool>(
+    queue: &mut ComputeAqlQueueSessionV1,
+    submission: Gfx942SdmaLogicalMuxSubmissionV2,
+) -> Result<
+    (
+        Gfx942SdmaLogicalMuxCompletedV2,
+        Option<Gfx942SdmaStripedWaitDiagnosticsV1>,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    if PROFILE {
+        let (completed, diagnostics) = queue
+            .wait_gfx942_sdma_logical_mux_batch_profiled_for_v2(submission, Duration::from_secs(30))
+            .map_err(|failure| failure.into_parts().0)?;
+        Ok((completed, Some(diagnostics)))
+    } else {
+        let completed = queue
+            .wait_gfx942_sdma_logical_mux_batch_for_v2(submission, Duration::from_secs(30))
+            .map_err(|failure| failure.into_parts().0)?;
+        Ok((completed, None))
+    }
+}
+
+fn run_logical_mux_phase<const PROFILE: bool>(
+    queue: &mut ComputeAqlQueueSessionV1,
+    buffers: Vec<AggregateBuffers>,
+    copy_bytes: usize,
+    direction: AggregateDirection,
+) -> Result<AggregatePhaseResult, Box<dyn std::error::Error>> {
+    let requests = aggregate_phase_inputs(buffers, copy_bytes, direction);
+    let t0 = Instant::now();
+    let submission = submit_logical_mux(queue, requests)?;
+    let t1 = Instant::now();
+    let (completed, diagnostics) = wait_logical_mux::<PROFILE>(queue, submission)?;
+    let t2 = Instant::now();
+    let timing = PhaseTiming {
+        total_ns: t2.duration_since(t0).as_nanos(),
+        submit_ns: t1.duration_since(t0).as_nanos(),
+        wait_ns: t2.duration_since(t1).as_nanos(),
+    };
+    let restored = restore_logical_mux_buffers(completed, direction)?;
+    Ok((restored, timing, diagnostics))
+}
+
+fn run_logical_mux_poll_smoke(
+    queue: &mut ComputeAqlQueueSessionV1,
+    logical_lane_count: usize,
+    copy_bytes: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut buffers = allocate_aggregate_buffers(queue, logical_lane_count, copy_bytes)?;
+    prepare_aggregate_sources(queue, &mut buffers, copy_bytes, 0)?;
+    let requests = aggregate_phase_inputs(buffers, copy_bytes, AggregateDirection::HostToDevice);
+    let submission = submit_logical_mux(queue, requests)?;
+    if submission.native_shard_count() != 2
+        || (0..logical_lane_count)
+            .any(|index| submission.plan().logical_lane_for_request(index) != Some(index))
+    {
+        return Err("logical-mux poll smoke plan mismatch".into());
+    }
+    let completed = match queue
+        .poll_gfx942_sdma_logical_mux_batch_v2(submission)
+        .map_err(|failure| failure.into_parts().0)?
+    {
+        Gfx942SdmaLogicalMuxPollV2::Pending(submission) => {
+            wait_logical_mux::<false>(queue, submission)?.0
+        }
+        Gfx942SdmaLogicalMuxPollV2::Completed(completed) => completed,
+    };
+    let mut buffers = restore_logical_mux_buffers(completed, AggregateDirection::HostToDevice)?;
+    poison_aggregate_destinations(queue, &mut buffers, copy_bytes, 0)?;
+    let (buffers, _, _) = run_logical_mux_phase::<false>(
+        queue,
+        buffers,
+        copy_bytes,
+        AggregateDirection::DeviceToHost,
     )?;
     validate_aggregate_round(queue, &buffers, copy_bytes, 0)?;
     recycle_aggregate_buffers(queue, buffers)
@@ -1261,6 +1386,200 @@ fn run_aggregate_benchmark<const PROFILE: bool>(
     Ok(())
 }
 
+fn logical_mux_queue_evidence(
+    observation: Gfx942SdmaLogicalMuxObservationV2,
+    expected_lane_count: usize,
+) -> Result<AggregateQueueEvidence, Box<dyn std::error::Error>> {
+    let native = observation.native_queues();
+    if observation.logical_lane_count() != expected_lane_count
+        || native[0].engine_index != Some(0)
+        || native[1].engine_index != Some(1)
+        || native[0].queue_id == native[1].queue_id
+    {
+        return Err("logical-mux queue placement or identity mismatch".into());
+    }
+    let queue_ids = format!(
+        "native0:{},native1:{}",
+        native[0].queue_id, native[1].queue_id
+    );
+    let engine_placement = format!(
+        "native0:{}:0,native1:{}:1",
+        native[0].queue_id, native[1].queue_id
+    );
+    Ok(AggregateQueueEvidence {
+        queue_ids_sha256: sha256_ascii(&queue_ids),
+        engine_placement_sha256: sha256_ascii(&engine_placement),
+        queue_ids,
+        engine_placement,
+    })
+}
+
+fn run_logical_mux_benchmark<const PROFILE: bool>(
+    args: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let unique_id = if let Some(hex) = args[0].strip_prefix("0x") {
+        u64::from_str_radix(hex, 16)?
+    } else {
+        args[0].parse()?
+    };
+    let copy_bytes: usize = args[1].parse()?;
+    let depth: usize = args[2].parse()?;
+    let warmups: usize = args[3].parse()?;
+    let sample_count: usize = args[4].parse()?;
+    let resource_profile = args[5].as_str();
+    let logical_lane_count = admitted_logical_mux_lane_count(resource_profile)
+        .ok_or("unknown logical-mux SDMA profile")? as usize;
+    if copy_bytes == 0 || copy_bytes > fe2o3_kfd::GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as usize {
+        return Err("copy size is outside one gfx942 linear-copy packet".into());
+    }
+    if !(2..=fe2o3_kfd::GFX942_SDMA_LOGICAL_MUX_MAX_REQUESTS_V2).contains(&depth)
+        || !depth.is_multiple_of(logical_lane_count)
+        || sample_count == 0
+    {
+        return Err("logical-mux depth or sample count is out of range".into());
+    }
+    let rounds = warmups
+        .checked_add(sample_count)
+        .ok_or("warmup and sample count overflow")?;
+    let transfer_bytes = copy_bytes
+        .checked_mul(depth)
+        .ok_or("logical-mux transfer byte count overflow")?;
+    let budget = AggregateResourceBudget {
+        shared_records: fe2o3_kfd::GFX942_COMPUTE_AQL_SHARED_ALLOCATION_RECORDS_V1
+            .checked_add(
+                2_usize
+                    .checked_mul(fe2o3_kfd::GFX942_SDMA_SHARED_ALLOCATION_RECORDS_PER_QUEUE_V1)
+                    .ok_or("logical-mux queue resource budget overflow")?,
+            )
+            .and_then(|count| count.checked_add(depth))
+            .ok_or("logical-mux allocation record budget overflow")?,
+        device_records: depth,
+    };
+    if !aggregate_resource_budget_is_admitted(budget) {
+        return Err("logical-mux allocation record budget exceeds the runtime profile".into());
+    }
+
+    let device = OpenedKfd::open_default()?
+        .admit_uapi()?
+        .bind_gfx942_xnack_minus(DeviceSelector::UniqueId(unique_id))?;
+    let mut queue = device.create_compute_aql_queue(4096)?;
+    let observation =
+        queue.enable_gfx942_two_native_sdma_logical_mux_v2(logical_lane_count as u32)?;
+    let queue_evidence = logical_mux_queue_evidence(observation, logical_lane_count)?;
+    run_logical_mux_poll_smoke(&mut queue, logical_lane_count, copy_bytes)?;
+
+    let mut buffers = allocate_aggregate_buffers(&mut queue, depth, copy_bytes)?;
+    let mut h2d = AggregateSamples::with_capacity(sample_count);
+    let mut d2h = AggregateSamples::with_capacity(sample_count);
+    let mut h2d_diagnostics = PROFILE.then(|| {
+        AggregateDiagnosticSamples::with_capacity(
+            sample_count,
+            Gfx942SdmaStripedDiagnosticSpinBudgetV1::Current,
+        )
+    });
+    let mut d2h_diagnostics = PROFILE.then(|| {
+        AggregateDiagnosticSamples::with_capacity(
+            sample_count,
+            Gfx942SdmaStripedDiagnosticSpinBudgetV1::Current,
+        )
+    });
+    for round in 0..rounds {
+        prepare_aggregate_sources(&mut queue, &mut buffers, copy_bytes, round)?;
+        let (next, h2d_timing, h2d_wait_diagnostics) = run_logical_mux_phase::<PROFILE>(
+            &mut queue,
+            buffers,
+            copy_bytes,
+            AggregateDirection::HostToDevice,
+        )?;
+        let mut next = next;
+        poison_aggregate_destinations(&mut queue, &mut next, copy_bytes, round)?;
+        let (next, d2h_timing, d2h_wait_diagnostics) = run_logical_mux_phase::<PROFILE>(
+            &mut queue,
+            next,
+            copy_bytes,
+            AggregateDirection::DeviceToHost,
+        )?;
+        buffers = next;
+        validate_aggregate_round(&mut queue, &buffers, copy_bytes, round)?;
+        if round >= warmups {
+            h2d.push(h2d_timing)?;
+            d2h.push(d2h_timing)?;
+            if PROFILE {
+                h2d_diagnostics
+                    .as_mut()
+                    .expect("profiled logical-mux benchmark has H2D diagnostics")
+                    .push(
+                        h2d_wait_diagnostics.expect("profiled H2D phase returns diagnostics"),
+                        2,
+                        depth,
+                    )?;
+                d2h_diagnostics
+                    .as_mut()
+                    .expect("profiled logical-mux benchmark has D2H diagnostics")
+                    .push(
+                        d2h_wait_diagnostics.expect("profiled D2H phase returns diagnostics"),
+                        2,
+                        depth,
+                    )?;
+            }
+        }
+    }
+    recycle_aggregate_buffers(&mut queue, buffers)?;
+    queue.trim_sdma_memory_pool()?;
+    queue.destroy()?;
+
+    let workload_id = format!("bytes{copy_bytes}-q{logical_lane_count}-two-native-mux");
+    let schema = if PROFILE {
+        "fe2o3.kfd-logical-mux-wait-diagnostics.v1"
+    } else {
+        "fe2o3.async-copy-logical-mux-benchmark.v1"
+    };
+    let mut row = format!(
+        "backend=kfd schema={schema} workload_id={workload_id} unique_id={unique_id:016x} bytes={copy_bytes} depth={depth} logical_queue_count={logical_lane_count} per_logical_queue_depth={} physical_native_queue_count=2 per_native_queue_depth={} assignment=logical-cursor-mod-lane-then-mod-two-v2 submit_order=original-request-stable-filter-per-native-v2 direction=h2d-then-d2h warmups={warmups} samples={sample_count} validation=full-buffer-every-round queue_creation_timed=no allocation_timed=no api=native-kfd-sdma-logical-mux-v2 resource_profile={resource_profile} physical_engine_count=2 runtime_manifest_sha256={} semantic_scope=cross-logical-lane-order-no-stream-independence",
+        depth / logical_lane_count,
+        depth / 2,
+        fe2o3_kfd::GFX942_SDMA_LOGICAL_MUX_MANIFEST_SHA256_V2,
+    );
+    append_aggregate_metrics(&mut row, "h2d", &h2d, transfer_bytes);
+    append_aggregate_metrics(&mut row, "d2h", &d2h, transfer_bytes);
+    if PROFILE {
+        append_aggregate_wait_diagnostics(
+            &mut row,
+            "h2d",
+            h2d_diagnostics
+                .as_ref()
+                .expect("profiled logical-mux benchmark has H2D diagnostic samples"),
+        );
+        append_aggregate_wait_diagnostics(
+            &mut row,
+            "d2h",
+            d2h_diagnostics
+                .as_ref()
+                .expect("profiled logical-mux benchmark has D2H diagnostic samples"),
+        );
+    }
+    write!(
+        row,
+        " native_queue_ids={} native_queue_ids_sha256={} engine_placement={} engine_placement_sha256={} logical_mux_poll_smoke=pass blocking_wait=exact-two-native-tail-v2 destroy=pass",
+        queue_evidence.queue_ids,
+        queue_evidence.queue_ids_sha256,
+        queue_evidence.engine_placement,
+        queue_evidence.engine_placement_sha256,
+    )
+    .expect("writing to a String cannot fail");
+    println!("{row}");
+    Ok(())
+}
+
+const KFD_SDMA_COPY_BENCHMARK_USAGE_V2: &str = concat!(
+    "usage: kfd-sdma-copy-benchmark <unique-id> <bytes> <depth> <warmups> <samples> [generic|directional|engine0|engine1|striped{even 2..16}]\n",
+    "       kfd-sdma-copy-benchmark <unique-id> <bytes> <depth> <warmups> <samples> <combined-striped{2|4|8|14}|striped16> <aggregate|aggregate-profiled>\n",
+    "       kfd-sdma-copy-benchmark <unique-id> <bytes> <depth> <warmups> <samples> <logical-mux{2|4|8|14|16}> <logical-mux|logical-mux-profiled>\n",
+    "logical-mux facade-caught unwind policy: the owner helper restores before resuming into the enclosing facade catch, which poisons local and process KFD authority and aborts without returning typed custody\n",
+    "logical-mux nested retirement-suffix unwind policy: after submission ownership moves, the lower guard aborts immediately; explicit owner restoration and poisoning are not guaranteed; neither unwind route continues execution\n",
+    "logical-mux exclusions: no typed panic recovery, HIP stream independence, independent lane progress, scheduling, priority, events, capture, per-stream synchronization, formal refinement, hardware correctness, performance, or HIP/HSA parity",
+);
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.len() == 7 && args[6] == "aggregate" {
@@ -1281,10 +1600,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?,
         );
     }
+    if args.len() == 7 && args[6] == "logical-mux" {
+        return run_logical_mux_benchmark::<false>(&args);
+    }
+    if args.len() == 7 && args[6] == "logical-mux-profiled" {
+        return run_logical_mux_benchmark::<true>(&args);
+    }
     if !(5..=6).contains(&args.len()) {
-        return Err(
-            "usage: kfd-sdma-copy-benchmark <unique-id> <bytes> <depth> <warmups> <samples> [generic|directional|engine0|engine1|striped{even 2..16}]".into(),
-        );
+        return Err(KFD_SDMA_COPY_BENCHMARK_USAGE_V2.into());
     }
     let unique_id = if let Some(hex) = args[0].strip_prefix("0x") {
         u64::from_str_radix(hex, 16)?
@@ -1445,7 +1768,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::{
         AggregateDiagnosticSamples, AggregateProfile, AggregateResourceBudget, AggregateSamples,
-        PhaseTiming, admitted_aggregate_profile, admitted_diagnostic_spin_budget,
+        KFD_SDMA_COPY_BENCHMARK_USAGE_V2, PhaseTiming, admitted_aggregate_profile,
+        admitted_diagnostic_spin_budget, admitted_logical_mux_lane_count,
         admitted_striped_queue_count, aggregate_resource_budget,
         aggregate_resource_budget_is_admitted, append_aggregate_wait_diagnostics,
         append_diagnostic_spin_policy, balanced_batch_lengths, sha256_ascii,
@@ -1466,6 +1790,77 @@ mod tests {
         assert_eq!(admitted_striped_queue_count("striped16"), Some(16));
         for rejected in ["striped0", "striped1", "striped3", "striped18", "stripedx"] {
             assert_eq!(admitted_striped_queue_count(rejected), None);
+        }
+    }
+
+    #[test]
+    fn logical_mux_profile_roster_is_exact() {
+        for (profile, lane_count) in [
+            ("logical-mux2", 2),
+            ("logical-mux4", 4),
+            ("logical-mux8", 8),
+            ("logical-mux14", 14),
+            ("logical-mux16", 16),
+        ] {
+            assert_eq!(admitted_logical_mux_lane_count(profile), Some(lane_count));
+        }
+        for rejected in [
+            "logical-mux0",
+            "logical-mux1",
+            "logical-mux6",
+            "logical-mux12",
+            "logical-mux18",
+            "mux16",
+        ] {
+            assert_eq!(admitted_logical_mux_lane_count(rejected), None);
+        }
+    }
+
+    #[test]
+    fn logical_mux_benchmark_schema_exposes_non_parity_semantics_and_two_native_queues() {
+        let source = include_str!("kfd-sdma-copy-benchmark.rs");
+        let benchmark = source
+            .split("fn run_logical_mux_benchmark<const PROFILE: bool>(")
+            .nth(1)
+            .unwrap()
+            .split("fn main()")
+            .next()
+            .unwrap();
+        for required in [
+            "fe2o3.async-copy-logical-mux-benchmark.v1",
+            "logical_queue_count={logical_lane_count}",
+            "physical_native_queue_count=2",
+            "original-request-stable-filter-per-native-v2",
+            "runtime_manifest_sha256={}",
+            "cross-logical-lane-order-no-stream-independence",
+            "exact-two-native-tail-v2",
+        ] {
+            assert!(benchmark.contains(required), "missing {required}");
+        }
+    }
+
+    #[test]
+    fn benchmark_usage_states_logical_mux_fail_stop_and_exclusions() {
+        for required in [
+            "logical-mux{2|4|8|14|16}",
+            "facade-caught unwind policy",
+            "owner helper restores before resuming into the enclosing facade catch",
+            "poisons local and process KFD authority and aborts",
+            "nested retirement-suffix unwind policy",
+            "after submission ownership moves, the lower guard aborts immediately",
+            "explicit owner restoration and poisoning are not guaranteed",
+            "neither unwind route continues execution",
+            "no typed panic recovery",
+            "HIP stream independence",
+            "formal refinement",
+            "hardware correctness",
+            "performance",
+            "HIP/HSA parity",
+        ] {
+            assert!(
+                KFD_SDMA_COPY_BENCHMARK_USAGE_V2.contains(required),
+                "missing {required}"
+            );
         }
     }
 
