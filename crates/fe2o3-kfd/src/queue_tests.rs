@@ -31,10 +31,15 @@ fn profile() -> DeviceAdmissionProfileV1 {
 }
 
 fn correlation() -> ModelCorrelatedDeviceV1 {
+    correlation_for(0x6ced_1647_a296_545c, 5)
+}
+
+fn correlation_for(gpu_unique_id: u64, bus: u8) -> ModelCorrelatedDeviceV1 {
     let epoch = ObservationEpochV1(9);
+    let device_ordinal = u32::from(bus.checked_sub(5).expect("test PCI bus is at least 5"));
     let pci = PciAddressV1 {
         domain: 0,
-        bus: 5,
+        bus,
         device: 0,
         function: 0,
     };
@@ -54,10 +59,10 @@ fn correlation() -> ModelCorrelatedDeviceV1 {
         vec![UntrustedTopologyObservationV1 {
             domain_id: domain(),
             epoch,
-            topology_node_id: 2,
-            kfd_gpu_id: 28_851,
-            gpu_unique_id: 0x6ced_1647_a296_545c,
-            drm_render_minor: DRM_RENDER_MIN_MINOR_V1,
+            topology_node_id: 2 + device_ordinal,
+            kfd_gpu_id: 28_851 + device_ordinal,
+            gpu_unique_id,
+            drm_render_minor: DRM_RENDER_MIN_MINOR_V1 + device_ordinal,
             pci,
             vendor_id: AMD_PCI_VENDOR_ID_V1,
             device_id: MI300X_PCI_DEVICE_ID_V1,
@@ -70,9 +75,9 @@ fn correlation() -> ModelCorrelatedDeviceV1 {
             epoch,
             node: DeviceNodeV1 {
                 major: DRM_DEVICE_MAJOR_V1,
-                minor: DRM_RENDER_MIN_MINOR_V1,
+                minor: DRM_RENDER_MIN_MINOR_V1 + device_ordinal,
             },
-            gpu_unique_id: 0x6ced_1647_a296_545c,
+            gpu_unique_id,
             pci,
             vendor_id: AMD_PCI_VENDOR_ID_V1,
             device_id: MI300X_PCI_DEVICE_ID_V1,
@@ -117,7 +122,7 @@ fn fixture() -> Fixture {
             },
         )
         .unwrap();
-    let memory = MemoryLifecycleStateV1::new(domain())
+    let memory = MemoryLifecycleStateV1::new_monotonic_non_reusable(domain())
         .next(MemoryTransitionV1::AcquireVm {
             admission: vm,
             mapping_devices: vec![device],
@@ -128,19 +133,265 @@ fn fixture() -> Fixture {
             },
         })
         .unwrap();
+    let mut foundation = QueueModelFoundationV1::uncertified(identity, memory);
+    foundation
+        .mint_invariant_certificate(1, device, vm.model_key())
+        .unwrap();
     Fixture {
-        foundation: QueueModelFoundationV1 { identity, memory },
+        foundation,
         device,
         vm,
         next_identity: 1_000,
     }
 }
 
+#[test]
+fn foundation_certificate_rejects_binding_generation_and_revision_substitution() {
+    let mut fixture = fixture();
+    let issuer = fixture.foundation.issuer().unwrap();
+    let vm = fixture.vm.model_key();
+    assert!(
+        fixture
+            .foundation
+            .authenticate(2, fixture.device, vm, issuer)
+            .is_err()
+    );
+    assert!(
+        fixture
+            .foundation
+            .authenticate(1, fixture.device, vm, issuer + 1)
+            .is_err()
+    );
+    assert!(
+        fixture
+            .foundation
+            .authenticate(
+                1,
+                fixture.device,
+                VmKeyV1 {
+                    device: vm.device,
+                    id: VmIdV1(vm.id.0 + 1),
+                },
+                issuer,
+            )
+            .is_err()
+    );
+
+    let (_, other_device) = DeviceIdentityStateV1::new(domain())
+        .register_device_model_only(correlation(), DeviceGenerationV1(2))
+        .unwrap();
+    assert!(
+        fixture
+            .foundation
+            .authenticate(1, other_device, vm, issuer)
+            .is_err()
+    );
+    assert!(
+        fixture
+            .foundation
+            .begin_live_loan(1, fixture.device, vm, issuer, 2)
+            .is_err()
+    );
+
+    let memory = fixture.foundation.memory().clone();
+    fixture
+        .foundation
+        .replace_memory_after_sealed_transition(memory)
+        .unwrap();
+    let starting_revision = fixture
+        .foundation
+        .begin_live_loan(1, fixture.device, vm, issuer, 1)
+        .unwrap();
+    fixture.foundation.certificate.as_mut().unwrap().revision = starting_revision - 1;
+    assert!(
+        fixture
+            .foundation
+            .authenticate_live_loan(1, fixture.device, vm, issuer, 1, starting_revision,)
+            .is_err()
+    );
+}
+
+#[test]
+fn foundation_certificate_rejects_active_vm_from_a_different_selected_device() {
+    let identity = DeviceIdentityStateV1::new(domain());
+    let (identity, first_device) = identity
+        .register_device_model_only(correlation(), DeviceGenerationV1(1))
+        .unwrap();
+    let (identity, second_device) = identity
+        .register_device_model_only(
+            correlation_for(0x7ced_1647_a296_545c, 6),
+            DeviceGenerationV1(1),
+        )
+        .unwrap();
+    let first_correlation = first_device.correlation();
+    let (identity, first_vm) = identity
+        .register_vm_model_only(
+            first_device,
+            UntrustedVmObservationV1 {
+                domain_id: domain(),
+                device: first_device.model_key(),
+                vm_id: VmIdV1(19),
+                kfd_gpu_id: first_correlation.kfd_gpu_id(),
+                render_node: first_correlation.render_node(),
+                pci: first_correlation.identity().pci,
+            },
+        )
+        .unwrap();
+    let memory = MemoryLifecycleStateV1::new_monotonic_non_reusable(domain())
+        .next(MemoryTransitionV1::AcquireVm {
+            admission: first_vm,
+            mapping_devices: vec![first_device],
+            handle: UntrustedVmHandleObservationV1(19),
+            aperture: GpuVaRangeV1 {
+                base: 0x1_0000,
+                byte_len: 0x20_0000,
+            },
+        })
+        .unwrap();
+    let mut foundation = QueueModelFoundationV1::uncertified(identity, memory);
+    assert!(
+        foundation
+            .mint_invariant_certificate(1, second_device, first_vm.model_key())
+            .is_err()
+    );
+    assert!(!foundation.is_certified_for_test());
+}
+
+#[test]
+fn foundation_certificate_rejects_same_key_cross_state_correlation_substitution() {
+    let identity = DeviceIdentityStateV1::new(domain());
+    let (identity, state_device) = identity
+        .register_device_model_only(correlation(), DeviceGenerationV1(1))
+        .unwrap();
+    let state_correlation = state_device.correlation();
+    let (identity, state_vm) = identity
+        .register_vm_model_only(
+            state_device,
+            UntrustedVmObservationV1 {
+                domain_id: domain(),
+                device: state_device.model_key(),
+                vm_id: VmIdV1(29),
+                kfd_gpu_id: state_correlation.kfd_gpu_id(),
+                render_node: state_correlation.render_node(),
+                pci: state_correlation.identity().pci,
+            },
+        )
+        .unwrap();
+    let (_, substituted_device) = DeviceIdentityStateV1::new(domain())
+        .register_device_model_only(
+            correlation_for(0x6ced_1647_a296_545c, 6),
+            DeviceGenerationV1(1),
+        )
+        .unwrap();
+    assert_eq!(state_device.model_key(), substituted_device.model_key());
+    assert_ne!(state_device.correlation(), substituted_device.correlation());
+
+    let memory = MemoryLifecycleStateV1::new_monotonic_non_reusable(domain())
+        .next(MemoryTransitionV1::AcquireVm {
+            admission: state_vm,
+            mapping_devices: vec![state_device],
+            handle: UntrustedVmHandleObservationV1(29),
+            aperture: GpuVaRangeV1 {
+                base: 0x1_0000,
+                byte_len: 0x20_0000,
+            },
+        })
+        .unwrap();
+    let mut foundation = QueueModelFoundationV1::uncertified(identity, memory);
+    assert!(
+        foundation
+            .mint_invariant_certificate(1, substituted_device, state_vm.model_key(),)
+            .is_err()
+    );
+    assert!(!foundation.is_certified_for_test());
+}
+
+#[test]
+fn live_certificate_checks_do_not_repeat_global_validation() {
+    let before = queue_foundation_full_validation_count_v1();
+    let mut fixture = fixture();
+    let issuer = fixture.foundation.issuer().unwrap();
+    let vm = fixture.vm.model_key();
+    assert_eq!(queue_foundation_full_validation_count_v1(), before + 1);
+
+    for generation in 1..=32 {
+        let memory = fixture.foundation.memory().clone();
+        fixture
+            .foundation
+            .replace_memory_after_sealed_transition(memory)
+            .unwrap();
+        let starting_revision = fixture
+            .foundation
+            .begin_live_loan(1, fixture.device, vm, issuer, generation)
+            .unwrap();
+        fixture
+            .foundation
+            .authenticate_live_loan(1, fixture.device, vm, issuer, generation, starting_revision)
+            .unwrap();
+    }
+    assert_eq!(queue_foundation_full_validation_count_v1(), before + 1);
+
+    fixture
+        .foundation
+        .validate_full(1, fixture.device, vm, issuer)
+        .unwrap();
+    assert_eq!(queue_foundation_full_validation_count_v1(), before + 2);
+}
+
+#[test]
+fn certificate_revision_capacity_rejects_boundaries_without_model_mutation() {
+    let mut fixture = fixture();
+    let original = fixture.foundation.memory().clone();
+
+    fixture
+        .foundation
+        .set_certificate_revision_for_test(u64::MAX - 1)
+        .unwrap();
+    assert_eq!(
+        fixture.foundation.preflight_memory_transition_revisions(2),
+        Err("queue foundation certificate revision exhausted")
+    );
+    assert_eq!(fixture.foundation.memory(), &original);
+    fixture.foundation.authenticate_origin().unwrap();
+
+    fixture
+        .foundation
+        .set_certificate_revision_for_test(u64::MAX)
+        .unwrap();
+    assert_eq!(
+        fixture.foundation.preflight_memory_transition_revisions(1),
+        Err("queue foundation certificate revision exhausted")
+    );
+    assert_eq!(fixture.foundation.memory(), &original);
+    fixture.foundation.authenticate_origin().unwrap();
+
+    fixture
+        .foundation
+        .set_certificate_revision_for_test(u64::MAX - 1)
+        .unwrap();
+    fixture
+        .foundation
+        .preflight_memory_transition_revisions(1)
+        .unwrap();
+    fixture
+        .foundation
+        .replace_memory_after_sealed_transition(original.clone())
+        .unwrap();
+    fixture.foundation.authenticate_origin().unwrap();
+    assert!(
+        fixture
+            .foundation
+            .preflight_memory_transition_revisions(1)
+            .is_err()
+    );
+    assert_eq!(fixture.foundation.memory(), &original);
+}
+
 impl Fixture {
     fn authority(&mut self, seed: u8) -> FakeAuthority {
         let base = self.next_identity;
         self.next_identity += 1_000;
-        let mut memory = self.foundation.memory.clone();
+        let mut memory = self.foundation.memory().clone();
         let mut bindings = Vec::new();
         for index in 0_u64..COMPUTE_AQL_RESOURCE_COUNT_V1 as u64 {
             let reservation = VaReservationKeyV1 {
@@ -206,7 +457,9 @@ impl Fixture {
                 expected_access: MemoryAccessV1::ReadWrite,
             });
         }
-        self.foundation.memory = memory;
+        self.foundation
+            .replace_memory_after_sealed_transition(memory)
+            .unwrap();
         let queue = QueueKeyV1 {
             vm: self.vm.model_key(),
             id: QueueInstanceIdV1(base + 500),
@@ -313,6 +566,15 @@ impl NativeQueueBackendV1 for FakeBackend {
         self.foundation
             .take()
             .ok_or(NativeQueueAdapterErrorV1::ModelProjection)
+    }
+
+    fn authenticate_model_foundation(
+        &self,
+        foundation: &QueueModelFoundationV1,
+    ) -> Result<(), NativeQueueAdapterErrorV1> {
+        foundation
+            .authenticate_origin()
+            .map_err(|_| NativeQueueAdapterErrorV1::ModelProjection)
     }
 
     fn resource_view(
@@ -471,6 +733,69 @@ fn complete_lifecycle_projects_exact_history_and_releases_only_explicitly() {
     assert_eq!(engine.journal_summary().live_publications, 0);
     let backend = engine.into_backend().unwrap();
     assert_eq!(backend.calls.borrow().len(), 4);
+}
+
+#[test]
+fn destroy_rejects_exhausted_release_revision_before_native_call() {
+    let (mut engine, key) = active_engine(Vec::new());
+    engine
+        .foundation
+        .set_certificate_revision_for_test(u64::MAX)
+        .unwrap();
+    let calls_before = engine.backend.calls.borrow().len();
+    let memory_before = engine.foundation.memory().clone();
+
+    assert_eq!(
+        engine.destroy(key),
+        Err(NativeQueueAdapterErrorV1::ModelProjection)
+    );
+    assert_eq!(engine.backend.calls.borrow().len(), calls_before);
+    assert_eq!(engine.phase(key), Some(ComputeAqlQueuePhaseV1::Active));
+    assert_eq!(engine.foundation.memory(), &memory_before);
+    engine.foundation.authenticate_origin().unwrap();
+
+    let (mut engine, key) = active_engine(vec![success(Mutation::None)]);
+    engine
+        .foundation
+        .set_certificate_revision_for_test(u64::MAX - 1)
+        .unwrap();
+    engine.destroy(key).unwrap();
+    let calls_after_destroy = engine.backend.calls.borrow().len();
+    assert!(matches!(
+        engine.backend.calls.borrow().last(),
+        Some(LoggedCall::Destroy(_))
+    ));
+    let _authority = engine.release_destroyed_resources(key).unwrap();
+    assert_eq!(engine.backend.calls.borrow().len(), calls_after_destroy);
+    assert_eq!(engine.journal_summary().live_publications, 0);
+    engine.foundation.authenticate_origin().unwrap();
+}
+
+#[test]
+fn admit_revision_exhaustion_retains_authority_in_terminal_engine() {
+    let mut fixture = fixture();
+    let authority = fixture.authority(10);
+    let key = authority.0.plan.queue;
+    fixture
+        .foundation
+        .set_certificate_revision_for_test(u64::MAX)
+        .unwrap();
+    let memory_before = fixture.foundation.memory().clone();
+    let mut engine =
+        NativeQueueEngineV1::new(FakeBackend::new(fixture.foundation, Vec::new())).unwrap();
+
+    assert_eq!(
+        engine.admit(authority),
+        Err(NativeQueueAdapterErrorV1::AuthorityPoisoned)
+    );
+    assert!(engine.authority_poisoned);
+    assert!(engine.model.queues().is_empty());
+    assert_eq!(engine.foundation.memory(), &memory_before);
+    assert_eq!(engine.resources.len(), 1);
+    assert_eq!(engine.resources[0].key, key);
+    assert!(engine.resources[0].authority.is_some());
+    assert!(engine.backend.calls.borrow().is_empty());
+    engine.foundation.authenticate_origin().unwrap();
 }
 
 #[test]

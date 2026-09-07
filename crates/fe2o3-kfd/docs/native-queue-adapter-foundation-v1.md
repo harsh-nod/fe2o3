@@ -8,9 +8,14 @@ backend from numeric addresses.
 
 ## Executable transition contract
 
-The adapter owns one process-domain identity snapshot, memory model, queue
-model, and a backend-specific private resource authority for every admitted
-queue plan. The adapter retains that value linearly and never clones it. It
+The adapter owns one private move-only bundle containing the process-domain
+identity snapshot, memory model, and structural-invariant certificate, plus a
+queue model and backend-specific private resource authority for every admitted
+queue plan. The certificate is minted only after full global validation and
+binds the exact session, domain, selected device, VM, issuer, loan generation,
+and monotonic mutation revision. The native engine authenticates that complete
+binding rather than accepting domain agreement alone. The adapter retains the
+bundle linearly and never clones it. It
 checks the opener PID and contracted device currentness before and after every
 CREATE, UPDATE, DISABLE, or DESTROY ioctl. The corresponding
 `Begin*` transition is committed before the lifecycle ioctl is issued. The
@@ -78,6 +83,30 @@ visibility;
   devices;
 - no cleanup syscall in capability `Drop`; explicit release remains
   fail-closed and at most once.
+
+Live mutation swaps the whole certified bundle into the shared-memory session.
+Loan and retake use local binding/generation/revision authentication and do not
+repeat global journal validation. All sealed lifecycle projections advance the
+certificate revision; final restoration performs the next full validation and
+revokes the certificate. A fresh issuer defines a new generation namespace if
+the restored session later creates another queue, so tokens from the previous
+queue remain stale even though numbering restarts at one. The memory validator
+also checks the private journal-index/record bijection at full-validation
+boundaries. Exact revision capacity is preflighted before native allocation,
+map, unmap, release, plan admission, and queue destroy. Plan-admission
+exhaustion retains authority inside the terminal native engine; the
+initial-queue wrapper returns no recoverable Rust authority. Consumed
+memory-token custody is quarantined. Both paths close the process gate. These
+checks establish boundary disposition only; they are not practical-frequency
+or performance evidence.
+
+The central Rust unwind boundary attempts retake before terminal poisoning and
+permanent process-gate closure, then resumes the original panic even if retake
+failed. A retake failure after normal callback return uses the same terminal and
+process-gate disposition. Borrowed SDMA and selected-lane state is restored before resumption.
+For a consuming callee, an owner is restored only when it remains in the local
+slot; otherwise no recoverable owner or native-resource custody is claimed.
+No unsafe/raw-pointer RAII cleanup or native Drop action is introduced.
 
 The production V1 composition satisfies these ownership requirements with a
 separately named fe2o3 GTT-only policy: AQL_QUEUE for the ring,
@@ -251,3 +280,5 @@ syscall-to-model refinement, and no proof of the kernel, firmware, mappings,
 atomics, or hardware memory model. A later refinement must relate each concrete
 request/observation pair to the exact `Begin*`/`Observe*` history edge and prove
 that all concrete uncertain outcomes select `Indeterminate`.
+The private certificate does not change that boundary: it is structural Rust
+state, not currentness, hardware, performance, or Rust-to-Verus evidence.

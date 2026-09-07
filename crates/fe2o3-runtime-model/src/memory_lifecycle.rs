@@ -574,6 +574,15 @@ impl<K> PersistentJournalIndexV1<K> {
 }
 
 impl<K: Copy + Ord> PersistentJournalIndexV1<K> {
+    fn len(&self) -> usize {
+        fn node_len<K>(node: Option<&JournalIndexNodeV1<K>>) -> usize {
+            node.map_or(0, |node| {
+                1 + node_len(node.left.as_deref()) + node_len(node.right.as_deref())
+            })
+        }
+        node_len(self.root.as_deref())
+    }
+
     fn get(&self, key: K) -> Option<usize> {
         let mut node = self.root.as_deref();
         while let Some(current) = node {
@@ -631,6 +640,15 @@ impl<K, T> IndexedJournalV1<K, T> {
 }
 
 impl<K: Copy + Ord, T: Clone> IndexedJournalV1<K, T> {
+    fn index_is_coherent(&self) -> bool {
+        self.index.len() == self.records.len()
+            && self
+                .records
+                .iter()
+                .enumerate()
+                .all(|(index, record)| self.index.get((self.key_of)(record)) == Some(index))
+    }
+
     pub(crate) fn push(&mut self, record: T) {
         let key = (self.key_of)(&record);
         let index = self.records.len();
@@ -968,6 +986,7 @@ pub enum MemoryInvariantViolationV1 {
     InvalidState(MemoryRecordRefV1),
     EarlyRelease(MemoryRecordRefV1),
     InvalidIssuedIdHighWatermark(MemoryIssuedIdHighWatermarkV1),
+    JournalIndexMismatch(MemoryRecordKindV1),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1325,6 +1344,7 @@ impl MemoryLifecycleStateV1 {
     }
 
     pub fn validate_global_invariants(&self) -> Result<(), MemoryInvariantViolationV1> {
+        self.validate_journal_indexes()?;
         self.validate_capacities()?;
         self.validate_vms()?;
         self.validate_reservations()?;
@@ -1333,6 +1353,33 @@ impl MemoryLifecycleStateV1 {
         self.validate_publications()?;
         self.validate_release_order()?;
         self.validate_issued_id_high_watermarks()?;
+        Ok(())
+    }
+
+    fn validate_journal_indexes(&self) -> Result<(), MemoryInvariantViolationV1> {
+        for (kind, coherent) in [
+            (MemoryRecordKindV1::Vm, self.vms.index_is_coherent()),
+            (
+                MemoryRecordKindV1::VaReservation,
+                self.reservations.index_is_coherent(),
+            ),
+            (
+                MemoryRecordKindV1::Allocation,
+                self.allocations.index_is_coherent(),
+            ),
+            (
+                MemoryRecordKindV1::Mapping,
+                self.mappings.index_is_coherent(),
+            ),
+            (
+                MemoryRecordKindV1::Publication,
+                self.publications.index_is_coherent(),
+            ),
+        ] {
+            if !coherent {
+                return Err(MemoryInvariantViolationV1::JournalIndexMismatch(kind));
+            }
+        }
         Ok(())
     }
 
@@ -2473,4 +2520,84 @@ fn valid_allocation_spec(spec: MemoryAllocationSpecV1, reservation: VaReservatio
         && valid_alignment(spec.alignment)
         && reservation.range.base.is_multiple_of(spec.alignment)
         && spec.alignment <= reservation.alignment
+}
+
+#[cfg(test)]
+mod indexed_journal_tests {
+    use super::*;
+
+    fn key(record: &(u64, u8)) -> u64 {
+        record.0
+    }
+
+    #[test]
+    fn index_validation_rejects_missing_and_stale_entries_after_rebuild() {
+        let mut journal = IndexedJournalV1::new(key);
+        journal.push((7, 1));
+        journal.push((3, 2));
+        journal.push((11, 3));
+        assert!(journal.index_is_coherent());
+
+        journal.retain(|record| record.0 != 3);
+        assert!(journal.index_is_coherent());
+        assert_eq!(journal.get(7), Some(&(7, 1)));
+        assert_eq!(journal.get(3), None);
+
+        journal.index = PersistentJournalIndexV1::new();
+        assert!(!journal.index_is_coherent());
+    }
+
+    #[test]
+    fn global_validation_names_every_corrupted_journal_index_class() {
+        let domain = DeviceObservationDomainIdV1::from_untrusted_digest(
+            IdentityDigestV1::from_untrusted_bytes([9; IDENTITY_DIGEST_BYTES_V1]),
+        );
+        let device = DeviceKeyV1 {
+            physical: PhysicalDeviceIdV1(1),
+            generation: DeviceGenerationV1(1),
+        };
+        let vm = VmKeyV1 {
+            device,
+            id: VmIdV1(1),
+        };
+        let reservation = VaReservationKeyV1 {
+            vm,
+            id: VaReservationIdV1(1),
+        };
+        let allocation = MemoryAllocationKeyV1 {
+            vm,
+            id: AllocationIdV1(1),
+            generation: AllocationGenerationV1(1),
+        };
+        let mapping = MemoryMappingKeyV1 {
+            allocation,
+            id: MappingIdV1(1),
+        };
+        let publication = MemoryPublicationKeyV1 {
+            mapping,
+            id: MemoryPublicationIdV1(1),
+        };
+
+        for (kind, corrupt) in [
+            (MemoryRecordKindV1::Vm, 0_u8),
+            (MemoryRecordKindV1::VaReservation, 1),
+            (MemoryRecordKindV1::Allocation, 2),
+            (MemoryRecordKindV1::Mapping, 3),
+            (MemoryRecordKindV1::Publication, 4),
+        ] {
+            let mut state = MemoryLifecycleStateV1::new_monotonic_non_reusable(domain);
+            match corrupt {
+                0 => assert!(state.vms.index.insert(vm, 7)),
+                1 => assert!(state.reservations.index.insert(reservation, 7)),
+                2 => assert!(state.allocations.index.insert(allocation, 7)),
+                3 => assert!(state.mappings.index.insert(mapping, 7)),
+                4 => assert!(state.publications.index.insert(publication, 7)),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                state.validate_global_invariants(),
+                Err(MemoryInvariantViolationV1::JournalIndexMismatch(kind))
+            );
+        }
+    }
 }

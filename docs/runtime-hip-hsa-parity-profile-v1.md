@@ -512,6 +512,27 @@ compute. One elevated clean-monitor baseline compute slot and sequential
 revision ordering limit attribution. The result is descriptive for one
 workload, not causal, parity, orders-of-magnitude, or workload-general evidence.
 
+The P0 custody slice developed from exact public commit `bfd956ab` replaces
+repeated queue-foundation global scans with a private move-only structural
+certificate coupled to the exact identity and memory state. It performs full
+validation at mint and final restore, uses local authenticated checks for live
+loan/retake, advances a revision through sealed memory mutations, and closes
+Rust unwind by attempted retake followed by terminal/process poisoning before
+resuming the original panic. Hostile CPU tests cover binding substitution,
+stale generations, revision rollback, restored-session reuse, journal-index
+corruption, and panic-payload preservation. This is not a hardware run or a
+performance result, and the certificate is not currentness, syscall-to-model,
+or Rust-to-Verus refinement evidence.
+
+The follow-up boundary hardening preflights exact certificate-revision capacity
+before native memory effects, plan admission, and queue destroy. Exhaustion is
+terminal: plan authority is retained inside the terminal native engine, while
+the initial-queue wrapper returns no recoverable Rust authority; consumed
+memory-token custody is quarantined. The process gate is closed in either case.
+Normal-return retake failure is likewise terminal and process-gated. The
+injected `u64` boundary tests are safety checks, not evidence of practical
+frequency or performance.
+
 R36 fuses persistent-compute completion polling and signal recycle at exact
 production commit `d32aa6e61e49fb16e44ba3cd715563e9e452b23f`, carrying a private
 currentness handoff that removes only recycle's duplicate opening check. The

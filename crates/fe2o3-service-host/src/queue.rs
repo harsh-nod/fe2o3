@@ -27,8 +27,8 @@ use crate::batch::ServiceFixedBatchV1;
 
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-addressless-fixed-queue-r43-v1\n",
-    "source.compute_aql_session_sha256=af2adfd219f507b96f4bce08c40d94f2c28f93cf4ac48cc22675383f98989f11\n",
+    "profile=fe2o3-service-addressless-fixed-queue-r45-v1\n",
+    "source.compute_aql_session_sha256=c61844f88524f7bf2b1dc9b10505cfa54bf0ad471ff68cc4e8b4d681cad209b8\n",
     "queue=one-live-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-live-rebind,quiescent-rollover-may-confirm-destroy-and-create-one-replacement-queue\n",
     "batch=1-through-8192-fixed-packets,conservative-wait-for-prior-ordering-default-with-explicit-independent-opt-in,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges,optional-initialized-enclosing-host-snapshot-associated-with-one-strict-interior\n",
     "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
@@ -38,17 +38,17 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
     "data=read-and-readwrite-require-sealed-full-initialization,write-only-may-consume-uninitialized-exclusive-storage,initialized-state-retained-after-generic-completion-without-stale-content-digest\n",
     "subleases=whole-native-allocation-owner-retained,partition-registry-transfers-with-ledger,partitioned-bindings-require-member-index-and-contained-offset-extent,recycled-or-detached-partition-reissue-validates-the-current-ledger-without-mutation,detached-initialized-replacement-preflights-and-atomically-installs-an-exact-new-partition,replacement-denies-old-allocation-generation\n",
     "readback=caller-can-mint-only-from-current-recycled-owner,request-binds-exact-dispatch-generation-and-owner-checked-host-allocation-generation,lower-owner-allows-an-ordinary-range-within-one-inspected-write-or-readwrite-binding-or-one-exact-declared-initialized-enclosing-snapshot-with-an-isolated-writable-interior-and-returns-owned-bytes,no-address-or-initialization-promotion\n",
-    "rebind=same-native-queue-may-consume-a-different-fixed-cardinality-program-geometry-kernarg-and-addressless-data-binding-after-exact-recycle,unbound-device-partition-insertion-removal-or-replacement-and-host-visible-replacement-advance-private-ledgers-and-reissue-shifted-addressless-ranges,rollover-may-consume-a-new-ring-size-only-after-exact-detach-and-confirmed-old-native-destroy,dispatch-generation-strictly-advances-from-the-detached-predecessor-across-either-route,lower-owner-reclaims-authoritative-model-foundation-after-every-live-allocation-lifecycle-mutation\n",
+    "rebind=same-native-queue-may-consume-a-different-fixed-cardinality-program-geometry-kernarg-and-addressless-data-binding-after-exact-recycle,unbound-device-partition-insertion-removal-or-replacement-and-host-visible-replacement-advance-private-ledgers-and-reissue-shifted-addressless-ranges,rollover-may-consume-a-new-ring-size-only-after-exact-detach-and-confirmed-old-native-destroy,dispatch-generation-strictly-advances-from-the-detached-predecessor-across-either-route,lower-owner-uses-the-private-certified-foundation-envelope-for-every-live-allocation-lifecycle-mutation-and-terminally-process-gates-before-resuming-rust-unwind\n",
     "release=return-never-published-prepared-or-exact-recycled-attached-or-exact-ordered-detached-data-custody,destroy-native-queue,restore-service-ledger,reverse-order-unmap-and-free\n",
     "qualification-fault-injection=feature-gated-post-recycle-before-completed-read-attempt-terminal-typestate,prior-attempt-rejects-and-returns-recycled-owner,ordinary-native-teardown-only,no-synthetic-kfd-error-or-hardware-fault-claim\n",
     "failure=pure-rejection-recovers-input-owners,ambiguous-native-side-effect-is-terminal-and-denies-retry,opaque-quarantine-retains-available-owner-state,timeout-observation-grants-no-live-introspection-or-authority\n",
     "authority=no-native-address-handle-pointer-fd-mmio-signal-or-packet-template-export,no-caller-initialization-or-effect-assertion\n",
-    "excluded=executable-correctness,effect-correctness-beyond-inspected-metadata,full-write-coverage,content-interpretation,numerical-correctness,hardware-execution,performance\n",
+    "excluded=executable-correctness,effect-correctness-beyond-inspected-metadata,full-write-coverage,content-interpretation,numerical-correctness,rust-verus-or-syscall-refinement,hardware-execution,performance\n",
 );
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "a139fb17435ef999c13bb74ed88b93fcf43bfde975f6d4d3e3c8e16e778b5138";
+    "f05e2c952d6bf91c3cca02c0fae60ad5bd1c713791924d0620a22109282be3f7";
 
 /// Feature-bound contract for deliberate service queue-transition faults.
 #[cfg(feature = "qualification-fault-injection")]

@@ -16,11 +16,10 @@ use fe2o3_kfd_uapi::{
     KFD_IOC_ALLOC_MEM_FLAGS_AQL_QUEUE_MEM, KfdAllocMemoryFlags,
 };
 use fe2o3_runtime_model::{
-    AllocationGenerationV1, AllocationIdV1, DeviceIdentityStateV1, DeviceKeyV1, GpuVaRangeV1,
-    MappingIdV1, MemoryAccessV1, MemoryAllocationKeyV1, MemoryAllocationSpecV1, MemoryCoherenceV1,
-    MemoryIdentityDisciplineV1, MemoryKindV1, MemoryLifecycleStateV1, MemoryMappingKeyV1,
-    MemoryPublicationIdV1, MemoryPublicationKeyV1, MemoryTransitionErrorV1, MemoryTransitionV1,
-    ModelAdmissionStatusV1, ModelDeviceAdmissionV1, PartialOperationStatusV1,
+    AllocationGenerationV1, AllocationIdV1, DeviceKeyV1, GpuVaRangeV1, MappingIdV1, MemoryAccessV1,
+    MemoryAllocationKeyV1, MemoryAllocationSpecV1, MemoryCoherenceV1, MemoryKindV1,
+    MemoryLifecycleStateV1, MemoryMappingKeyV1, MemoryPublicationIdV1, MemoryPublicationKeyV1,
+    MemoryTransitionErrorV1, MemoryTransitionV1, ModelDeviceAdmissionV1, PartialOperationStatusV1,
     PartialProgressObservationV1, QueueGenerationV1, QueueInstanceIdV1, QueueKeyV1,
     UntrustedAllocationHandleObservationV1, UntrustedVmHandleObservationV1, VaReservationIdV1,
     VaReservationKeyV1, VmIdV1, VmKeyV1,
@@ -32,7 +31,9 @@ use super::memory::{
     MemorySessionError, NEXT_MODEL_VM_ID, begin_process_vm_attempt, finish_process_vm_attempt,
 };
 use crate::CheckedGfx942XnackMinusDevice;
-use crate::queue::{Gfx942DeviceContentDescriptorV1, Gfx942RepeatedByteContentV1};
+use crate::queue::{
+    Gfx942DeviceContentDescriptorV1, Gfx942RepeatedByteContentV1, QueueModelFoundationV1,
+};
 
 pub const MAX_SHARED_GTT_ALLOCATIONS_V1: usize = 256;
 pub const MAX_SHARED_GTT_SINGLE_CPU_BYTES_V1: u64 = 1 << 31;
@@ -95,7 +96,7 @@ pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_SHA256_V1: &str =
 
 /// Canonical contract for the bounded multi-allocation adapter.
 pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-shared-gtt-memory-r16-v1\n",
+    "profile=fe2o3-mi300x-shared-gtt-memory-r18-v1\n",
     "base_memory_profile_sha256=9623a22bfb2686afa9e4d99dcec0a352c7fd7c6514b84ff714c40cfb9095d2b8\n",
     "kfd_memory_schema_sha256=5c210c3d7ada17794b10cde6f48a28f105a6e79dd8dce77c66b14dca6074eea8\n",
     "kfd_userptr_memory_schema_sha256=c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e\n",
@@ -110,7 +111,7 @@ pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
     "aql-userptr-control=crate-private-host-visible-coherent-control-profile,exact-one-page,same-cpu-and-gpu-address,userptr-writable-coherent,no-executable-uncached-no-substitute-or-aql-queue-mem,all-compute-aql-queue-paths\n",
     "va_allocator=kernel-selected-prot-none-guards-retained-until-successful-free,checked-nonoverlap\n",
     "authority=one-retained-kfd-render-vm,multiple-linear-redacted-tokens,no-fd-handle-va-or-pointer-export\n",
-    "queue-bridge=crate-private-role-marked-linear-mapped-capabilities,ring-control-eop-cwsr-completion-signal-dispatch-code-dispatch-kernarg-and-dispatch-host-data-roles,private-va-mapping-publication-facts,no-public-mint,live-queue-model-foundation-restored-before-every-allocation-lifecycle-mutation-and-reclaimed-afterward\n",
+    "queue-bridge=crate-private-role-marked-linear-mapped-capabilities,ring-control-eop-cwsr-completion-signal-dispatch-code-dispatch-kernarg-and-dispatch-host-data-roles,private-va-mapping-publication-facts,no-public-mint,identity-memory-and-private-move-only-certificate-one-structural-bundle,certificate-minted-only-after-full-session-domain-exact-active-device-record-profile-correlation-vm-to-selected-device-binding-and-global-invariant-check,exact-session-domain-device-vm-issuer-generation-and-monotonic-revision-authentication,live-loan-and-retake-use-local-certificate-checks-without-global-journal-scan,all-sealed-memory-model-updates-advance-revision,exact-two-revision-preflight-before-allocation-and-one-before-map-unmap-release-native-effects,final-restore-performs-one-full-check-and-revokes-certificate-before-session-return\n",
     "device-dispatch-bridge=exact-complete-distinct-set-of-every-live-mapped-c3-lease-required-before-model-transfer,actual-linear-lease-retained,private-address-facts\n",
     "queue-gtt-policy=reusable-and-dispatch-ring:gfx942-host-visible-executable-single-span,diagnostic-barrier-ring:plain-executable-gtt-or-selected-gpu-userptr-with-exact-final-rocr-derived-flags-and-no-full-rocr-allocation-or-map-order-parity,control:exact-same-va-userptr-writable-coherent,completion-signals:host-visible-coherent-gtt,eop-and-cwsr:executable\n",
     "cpu_views=closure-scoped-before-map;mapped-queue-diagnostic-access-only-through-private-packet-id-and-signal-slot-bounded-acquire-or-volatile-observation;mapped-completion-access-only-through-slot-bounded-acquire-observe-and-release-reset;mapped-dispatch-data-copy-is-crate-private-bounded-owned-or-caller-destination-and-generation-gated-by-the-retaining-queue,no-safe-mapped-borrow-escape\n",
@@ -118,19 +119,19 @@ pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
     "currentness=lifecycle-transitions-and-persistent-control-open-close-use-full-contracted-process-namespace-descriptor-uapi-xnack-drm-identity-vram-loss-topology-aperture-composite;exact-retained-control-replay-and-active-mapped-memory-submission-and-completion-use-opener-pid-before-non-draining-zero-timeout-reset-fifo-readiness-then-dedicated-wrapping-drm-vram-loss-counter-equality-then-closing-readiness-operational-fence;readiness-means-nonempty-fifo-only-by-pinned-kfd-source-contract-not-loaded-kernel-authentication;operational-fence-excludes-process-incarnation-namespace-descriptor-uapi-xnack-drm-identity-topology-and-aperture-reobservation-and-cannot-exclude-reset-counter-wrap-or-observation-ABA;packet-atomics-execute-inside-explicit-owner-pre-post-scopes\n",
     "executable=ordinary-ExecutableGttV1-only:cpu-construction-rw-to-vma-read-only-before-gpu-map,gpu-writable-flag-remains-contracted;diagnostic-ExecutableAqlQueueProbeGttV1-remains-cpu-mutable-after-gpu-map-for-aql-publication\n",
     "userptr-lifecycle=reserve-vma,anonymous-dontfork-read-write-pages,register-same-cpu-and-gpu-address,map-gpu,unmap-gpu,free-bo-before-cpu-vma-unmap,no-separate-reservation-unmap\n",
-    "failure=global-quarantine-after-started-or-ambiguous-native-transaction,no-drop-cleanup-or-retry\n",
+    "failure=global-quarantine-after-started-or-ambiguous-native-transaction,certificate-revision-capacity-exhaustion-before-a-consuming-native-transition-quarantines-the-session-and-permanently-process-gates-with-no-recoverable-token-custody,live-mutation-retake-failure-terminally-poisons-and-process-gates-on-normal-return-or-unwind,unwind-resumes-original-panic,consuming-callee-panic-claims-no-recoverable-owner-custody,no-drop-cleanup-or-retry\n",
     "fork=current-base-contract,prot-none-dontfork-before-rw,no-raw-fork-clone-during-setup\n",
-    "model=completion-only-append-journal,profile-kind-and-gpu-va-span,no-cpu-vma-or-seal-transition\n",
+    "model=completion-only-append-journal,profile-kind-and-gpu-va-span,full-validator-includes-private-key-index-to-record-bijection,no-cpu-vma-or-seal-transition\n",
     "proof=no-concrete-verus-refinement,kernel-and-model-coupling-contracted,hostile-tests-only\n",
     "excluded=queue-ioctl,doorbell,packet-publication,dispatch-generation-policy,completion-policy-or-aggregation,general-userptr-api,peer-map,hardware-coherence-proof\n",
 );
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_V1: &str =
-    "52351c439a7c64e91a353749201e2e35e8793474b76de5baca34090287a66034";
+    "026c8c05b6388149765ccb84a95739de6a6ddbbe89577217284b18bdcfdcbdd3";
 
 pub const SHARED_GTT_MEMORY_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0x52, 0x35, 0x1c, 0x43, 0x9a, 0x7c, 0x64, 0xe9, 0x1a, 0x35, 0x37, 0x49, 0x20, 0x1e, 0x2e, 0x35,
-    0xe8, 0x79, 0x34, 0x74, 0xb7, 0x6d, 0xe5, 0xba, 0xca, 0x34, 0x09, 0x02, 0x87, 0xa6, 0x60, 0x34,
+    0x02, 0x6c, 0x8c, 0x05, 0xb6, 0x38, 0x81, 0x49, 0x76, 0x5c, 0xcb, 0x84, 0xa9, 0x57, 0x39, 0xde,
+    0x6a, 0x6d, 0xdb, 0xbe, 0x89, 0x57, 0x72, 0x17, 0x28, 0x4b, 0x18, 0xbd, 0xcf, 0xdc, 0xbd, 0xd3,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3020,6 +3021,21 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
     }
 }
 
+fn preflight_queue_foundation_native_memory_transition_v1<B: MemoryBackend>(
+    foundation: &QueueModelFoundationV1,
+    engine: &mut SharedMemoryEngine<B>,
+    needed: u64,
+    process_poison: impl FnOnce(),
+) -> Result<(), MemorySessionError> {
+    match foundation.preflight_memory_transition_revisions(needed) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            process_poison();
+            engine.quarantine(MemorySessionError::Model(error))
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RepeatedByteFillPlanV1 {
     chunk_bytes: usize,
@@ -3238,14 +3254,16 @@ fn ranges_overlap(left: u64, left_len: u64, right: u64, right_len: u64) -> bool 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum QueueModelOwnershipPhaseV1 {
     SessionOwned,
-    QueueOwned,
-    SessionOwnedLiveLoan { generation: u64 },
+    QueueOwned { issuer: u64 },
+    SessionOwnedLiveLoan { issuer: u64, generation: u64 },
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub(crate) struct LiveQueueModelFoundationLoanV1 {
     session_id: u64,
+    issuer: u64,
     generation: u64,
+    starting_revision: u64,
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -3263,75 +3281,132 @@ impl QueueModelOwnershipV1 {
         }
     }
 
-    fn transfer_to_queue(&mut self) -> Result<(), ()> {
-        if self.phase != QueueModelOwnershipPhaseV1::SessionOwned {
+    const fn is_session_owned(&self) -> bool {
+        matches!(self.phase, QueueModelOwnershipPhaseV1::SessionOwned)
+    }
+
+    const fn queue_owned_issuer(&self) -> Option<u64> {
+        match self.phase {
+            QueueModelOwnershipPhaseV1::QueueOwned { issuer } => Some(issuer),
+            _ => None,
+        }
+    }
+
+    fn certify_and_transfer_to_queue(
+        &mut self,
+        foundation: &mut QueueModelFoundationV1,
+        session_id: u64,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
+    ) -> Result<u64, &'static str> {
+        if !self.is_session_owned() {
+            return Err("shared queue model ownership already transferred");
+        }
+        let issuer = foundation.mint_invariant_certificate(session_id, device, vm)?;
+        // A fresh issuer defines a new loan-generation namespace, so tokens
+        // from the prior queue occurrence remain stale even when numbering
+        // restarts at one.
+        self.next_live_loan_generation = 1;
+        self.phase = QueueModelOwnershipPhaseV1::QueueOwned { issuer };
+        Ok(issuer)
+    }
+
+    #[cfg(test)]
+    fn transfer_to_queue(&mut self, issuer: u64) -> Result<(), ()> {
+        if self.phase != QueueModelOwnershipPhaseV1::SessionOwned || issuer == 0 {
             return Err(());
         }
-        self.phase = QueueModelOwnershipPhaseV1::QueueOwned;
+        self.phase = QueueModelOwnershipPhaseV1::QueueOwned { issuer };
         Ok(())
     }
 
-    fn begin_live_loan(&mut self, session_id: u64) -> Result<LiveQueueModelFoundationLoanV1, ()> {
-        if self.phase != QueueModelOwnershipPhaseV1::QueueOwned || session_id == 0 {
+    fn begin_live_loan(
+        &mut self,
+        session_id: u64,
+        foundation: &mut QueueModelFoundationV1,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
+    ) -> Result<LiveQueueModelFoundationLoanV1, ()> {
+        let QueueModelOwnershipPhaseV1::QueueOwned { issuer } = self.phase else {
             return Err(());
-        }
+        };
         let generation = self.next_live_loan_generation;
-        self.next_live_loan_generation = generation.checked_add(1).ok_or(())?;
-        self.phase = QueueModelOwnershipPhaseV1::SessionOwnedLiveLoan { generation };
+        let next_generation = generation.checked_add(1).ok_or(())?;
+        let starting_revision = foundation
+            .begin_live_loan(session_id, device, vm, issuer, generation)
+            .map_err(|_| ())?;
+        self.next_live_loan_generation = next_generation;
+        self.phase = QueueModelOwnershipPhaseV1::SessionOwnedLiveLoan { issuer, generation };
         Ok(LiveQueueModelFoundationLoanV1 {
             session_id,
+            issuer,
             generation,
+            starting_revision,
         })
     }
 
     fn finish_live_loan(
         &mut self,
         session_id: u64,
+        foundation: &QueueModelFoundationV1,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
         loan: LiveQueueModelFoundationLoanV1,
     ) -> Result<(), ()> {
         if loan.session_id != session_id
             || self.phase
                 != (QueueModelOwnershipPhaseV1::SessionOwnedLiveLoan {
+                    issuer: loan.issuer,
                     generation: loan.generation,
                 })
         {
             return Err(());
         }
-        self.phase = QueueModelOwnershipPhaseV1::QueueOwned;
+        foundation
+            .authenticate_live_loan(
+                session_id,
+                device,
+                vm,
+                loan.issuer,
+                loan.generation,
+                loan.starting_revision,
+            )
+            .map_err(|_| ())?;
+        self.phase = QueueModelOwnershipPhaseV1::QueueOwned {
+            issuer: loan.issuer,
+        };
         Ok(())
     }
 
     fn loan_foundation(
         &mut self,
         session_id: u64,
-        session_identity: &mut DeviceIdentityStateV1,
-        session_model: &mut MemoryLifecycleStateV1,
-        queue_identity: &mut DeviceIdentityStateV1,
-        queue_model: &mut MemoryLifecycleStateV1,
+        session_foundation: &mut QueueModelFoundationV1,
+        queue_foundation: &mut QueueModelFoundationV1,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
     ) -> Result<LiveQueueModelFoundationLoanV1, ()> {
-        let loan = self.begin_live_loan(session_id)?;
-        core::mem::swap(session_identity, queue_identity);
-        core::mem::swap(session_model, queue_model);
+        let loan = self.begin_live_loan(session_id, queue_foundation, device, vm)?;
+        core::mem::swap(session_foundation, queue_foundation);
         Ok(loan)
     }
 
     fn reclaim_foundation(
         &mut self,
         session_id: u64,
-        session_identity: &mut DeviceIdentityStateV1,
-        session_model: &mut MemoryLifecycleStateV1,
-        queue_identity: &mut DeviceIdentityStateV1,
-        queue_model: &mut MemoryLifecycleStateV1,
+        session_foundation: &mut QueueModelFoundationV1,
+        queue_foundation: &mut QueueModelFoundationV1,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
         loan: LiveQueueModelFoundationLoanV1,
     ) -> Result<(), ()> {
-        self.finish_live_loan(session_id, loan)?;
-        core::mem::swap(session_identity, queue_identity);
-        core::mem::swap(session_model, queue_model);
+        self.finish_live_loan(session_id, session_foundation, device, vm, loan)?;
+        core::mem::swap(session_foundation, queue_foundation);
         Ok(())
     }
 
-    fn restore_to_session(&mut self) -> Result<(), ()> {
-        if self.phase != QueueModelOwnershipPhaseV1::QueueOwned {
+    fn restore_to_session(&mut self, issuer: u64) -> Result<(), ()> {
+        if self.phase != (QueueModelOwnershipPhaseV1::QueueOwned { issuer }) {
             return Err(());
         }
         self.phase = QueueModelOwnershipPhaseV1::SessionOwned;
@@ -3343,8 +3418,7 @@ impl QueueModelOwnershipV1 {
 #[must_use = "dropping the shared session performs no munmap, FREE, or retry"]
 pub struct SharedGttMemorySessionV1 {
     engine: SharedMemoryEngine<crate::memory_linux::LinuxMemoryBackend>,
-    identity: DeviceIdentityStateV1,
-    model: MemoryLifecycleStateV1,
+    foundation: QueueModelFoundationV1,
     model_device: ModelDeviceAdmissionV1,
     vm: VmKeyV1,
     model_ownership: QueueModelOwnershipV1,
@@ -3389,8 +3463,7 @@ impl CheckedGfx942XnackMinusDevice {
                     .map_err(|_| MemorySessionError::Model("VM acquisition projection"))?;
             Ok(SharedGttMemorySessionV1 {
                 engine,
-                identity,
-                model,
+                foundation: QueueModelFoundationV1::uncertified(identity, model),
                 model_device,
                 vm: model_vm.model_key(),
                 model_ownership: QueueModelOwnershipV1::new(),
@@ -3413,6 +3486,18 @@ impl SharedGttMemorySessionV1 {
             .iter()
             .filter(|record| record.phase != SharedAllocationPhaseV1::Released)
             .count()
+    }
+
+    fn preflight_native_memory_transition_revisions(
+        &mut self,
+        needed: u64,
+    ) -> Result<(), MemorySessionError> {
+        preflight_queue_foundation_native_memory_transition_v1(
+            &self.foundation,
+            &mut self.engine,
+            needed,
+            crate::queue_linux::permanently_poison_process_global_kfd_runtime_gate_v1,
+        )
     }
 
     pub fn retained_device_memory_lease_count(&self) -> usize {
@@ -3790,7 +3875,7 @@ impl SharedGttMemorySessionV1 {
     }
 
     pub fn model_journal_summary(&self) -> MemoryModelJournalSummary {
-        MemoryModelJournalSummary::from_model(&self.model)
+        MemoryModelJournalSummary::from_model(self.foundation.memory())
     }
 
     pub(crate) fn opener_pid(&self) -> u32 {
@@ -3904,7 +3989,7 @@ impl SharedGttMemorySessionV1 {
 
     pub(crate) fn take_queue_model_foundation(
         &mut self,
-    ) -> Result<(DeviceIdentityStateV1, MemoryLifecycleStateV1), MemorySessionError> {
+    ) -> Result<QueueModelFoundationV1, MemorySessionError> {
         self.check_queue_currentness()?;
         if self.retained_device_memory_lease_count() != 0 {
             return Err(MemorySessionError::DeviceMemoryQueueBindingRequired);
@@ -3920,7 +4005,7 @@ impl SharedGttMemorySessionV1 {
     pub(crate) fn take_queue_model_foundation_with_dispatch_memory(
         &mut self,
         authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
-    ) -> Result<(DeviceIdentityStateV1, MemoryLifecycleStateV1), MemorySessionError> {
+    ) -> Result<QueueModelFoundationV1, MemorySessionError> {
         self.check_queue_currentness()?;
         self.engine.validate_dispatch_device_memory_set(
             authorities,
@@ -3966,40 +4051,40 @@ impl SharedGttMemorySessionV1 {
 
     fn take_queue_model_foundation_after_device_memory_check(
         &mut self,
-    ) -> Result<(DeviceIdentityStateV1, MemoryLifecycleStateV1), MemorySessionError> {
-        self.model_ownership.transfer_to_queue().map_err(|()| {
-            MemorySessionError::Model("shared queue model ownership already transferred")
-        })?;
-        let domain = self.model.domain_id();
-        Ok((
-            core::mem::replace(&mut self.identity, DeviceIdentityStateV1::new(domain)),
-            core::mem::replace(
-                &mut self.model,
-                MemoryLifecycleStateV1::new_monotonic_non_reusable(domain),
-            ),
+    ) -> Result<QueueModelFoundationV1, MemorySessionError> {
+        let issuer = self
+            .model_ownership
+            .certify_and_transfer_to_queue(
+                &mut self.foundation,
+                self.engine.session_id,
+                self.model_device,
+                self.vm,
+            )
+            .map_err(MemorySessionError::Model)?;
+        debug_assert_eq!(self.model_ownership.queue_owned_issuer(), Some(issuer));
+        let domain = self.foundation.memory().domain_id();
+        Ok(core::mem::replace(
+            &mut self.foundation,
+            QueueModelFoundationV1::empty(domain),
         ))
     }
 
     pub(crate) fn loan_queue_model_foundation_for_live_mutation(
         &mut self,
-        queue_identity: &mut DeviceIdentityStateV1,
-        queue_model: &mut MemoryLifecycleStateV1,
+        queue_foundation: &mut QueueModelFoundationV1,
     ) -> Result<LiveQueueModelFoundationLoanV1, MemorySessionError> {
-        if !self.queue_model_foundation_is_valid(queue_identity, queue_model) {
-            return self.engine.quarantine(MemorySessionError::Model(
-                "shared live-queue model ownership restoration",
-            ));
-        }
         let loan = self
             .model_ownership
             .loan_foundation(
                 self.engine.session_id,
-                &mut self.identity,
-                &mut self.model,
-                queue_identity,
-                queue_model,
+                &mut self.foundation,
+                queue_foundation,
+                self.model_device,
+                self.vm,
             )
-            .map_err(|()| MemorySessionError::Model("shared live-queue model ownership loan"))?;
+            .map_err(|()| {
+                MemorySessionError::Model("shared live-queue certificate ownership loan")
+            })?;
         Ok(loan)
     }
 
@@ -4007,67 +4092,68 @@ impl SharedGttMemorySessionV1 {
     /// immediately preceding live-queue restoration.
     pub(crate) fn retake_queue_model_foundation_after_live_mutation(
         &mut self,
-        queue_identity: &mut DeviceIdentityStateV1,
-        queue_model: &mut MemoryLifecycleStateV1,
+        queue_foundation: &mut QueueModelFoundationV1,
         loan: LiveQueueModelFoundationLoanV1,
     ) -> Result<(), MemorySessionError> {
-        if !self.queue_model_foundation_is_valid(&self.identity, &self.model) {
-            return self.engine.quarantine(MemorySessionError::Model(
-                "shared live-queue model ownership reclamation",
-            ));
-        }
         self.model_ownership
             .reclaim_foundation(
                 self.engine.session_id,
-                &mut self.identity,
-                &mut self.model,
-                queue_identity,
-                queue_model,
+                &mut self.foundation,
+                queue_foundation,
+                self.model_device,
+                self.vm,
                 loan,
             )
             .map_err(|()| {
-                MemorySessionError::Model("shared live-queue model ownership reclamation")
+                MemorySessionError::Model("shared live-queue certificate ownership reclamation")
             })?;
         Ok(())
     }
 
-    fn queue_model_foundation_is_valid(
+    pub(crate) fn authenticate_queue_model_foundation(
         &self,
-        identity: &DeviceIdentityStateV1,
-        model: &MemoryLifecycleStateV1,
-    ) -> bool {
-        identity.domain_id() == self.model_device.domain_id()
-            && model.domain_id() == self.model_device.domain_id()
-            && model.identity_discipline() == MemoryIdentityDisciplineV1::MonotonicNonReusable
-            && identity.validate_global_invariants().is_ok()
-            && model.validate_global_invariants().is_ok()
-            && identity.devices().iter().any(|record| {
-                record.key == self.model_device.model_key()
-                    && record.status == ModelAdmissionStatusV1::Active
-            })
-            && identity.vms().iter().any(|record| {
-                record.key == self.vm && record.status == ModelAdmissionStatusV1::Active
-            })
-            && model.vms().iter().any(|record| {
-                record.admission.model_key() == self.vm
-                    && record.state == fe2o3_runtime_model::MemoryVmStateV1::Active
-            })
+        foundation: &QueueModelFoundationV1,
+    ) -> Result<(), MemorySessionError> {
+        let issuer = self
+            .model_ownership
+            .queue_owned_issuer()
+            .ok_or(MemorySessionError::Model(
+                "shared queue foundation ownership phase",
+            ))?;
+        foundation
+            .authenticate(self.engine.session_id, self.model_device, self.vm, issuer)
+            .map_err(MemorySessionError::Model)
     }
 
     pub(crate) fn restore_queue_model_foundation(
         &mut self,
-        identity: DeviceIdentityStateV1,
-        model: MemoryLifecycleStateV1,
+        foundation: QueueModelFoundationV1,
     ) -> Result<(), MemorySessionError> {
-        if !self.queue_model_foundation_is_valid(&identity, &model)
-            || self.model_ownership.restore_to_session().is_err()
+        let issuer = self
+            .model_ownership
+            .queue_owned_issuer()
+            .ok_or(MemorySessionError::Model(
+                "shared queue foundation ownership phase",
+            ))?;
+        if foundation
+            .validate_full(self.engine.session_id, self.model_device, self.vm, issuer)
+            .is_err()
+            || self.model_ownership.restore_to_session(issuer).is_err()
         {
             return self.engine.quarantine(MemorySessionError::Model(
                 "shared queue model ownership restoration",
             ));
         }
-        self.identity = identity;
-        self.model = model;
+        let mut foundation = foundation;
+        foundation
+            .revoke_invariant_certificate(
+                self.engine.session_id,
+                self.model_device,
+                self.vm,
+                issuer,
+            )
+            .expect("fully validated exact foundation certificate remains revocable");
+        self.foundation = foundation;
         Ok(())
     }
 
@@ -4464,15 +4550,20 @@ impl SharedGttMemorySessionV1 {
         &mut self,
         requested_bytes: usize,
     ) -> Result<SharedGttAllocationV1<P, GttCpuWritableV1>, MemorySessionError> {
-        self.model = self
-            .model
+        self.preflight_native_memory_transition_revisions(2)?;
+        let checkpoint = self
+            .foundation
+            .memory()
             .checkpoint_released()
             .map_err(|_| MemorySessionError::Model("shared memory journal checkpoint"))?;
+        self.foundation
+            .replace_memory_after_sealed_transition(checkpoint)
+            .map_err(MemorySessionError::Model)?;
         let token = self.engine.allocate::<P>(requested_bytes)?;
         let (id, generation, layout, base, handle) = self.engine.evidence(&token)?;
         let (reservation, allocation, _) = model_keys(self.vm, id, generation);
         let projected = project_allocation(
-            &self.model,
+            self.foundation.memory(),
             reservation,
             allocation,
             base,
@@ -4482,7 +4573,9 @@ impl SharedGttMemorySessionV1 {
         );
         match projected {
             Ok(model) => {
-                self.model = model;
+                self.foundation
+                    .replace_memory_after_sealed_transition(model)
+                    .map_err(MemorySessionError::Model)?;
                 Ok(token)
             }
             Err(_) => self
@@ -4843,6 +4936,7 @@ impl SharedGttMemorySessionV1 {
         &mut self,
         token: SharedGttAllocationV1<P, GttCpuWritableV1>,
     ) -> Result<SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>, MemorySessionError> {
+        self.preflight_native_memory_transition_revisions(1)?;
         let (id, generation, _, _, _) = self.engine.evidence(&token)?;
         let (_, _, mapping) = model_keys(self.vm, id, generation);
         let mapped = self.engine.map_mutable(token)?;
@@ -4857,6 +4951,7 @@ impl SharedGttMemorySessionV1 {
         SharedGttAllocationV1<ExecutableGttV1, GttGpuAccessibleExecutableV1>,
         MemorySessionError,
     > {
+        self.preflight_native_memory_transition_revisions(1)?;
         let (id, generation, _, _, _) = self.engine.evidence(&token)?;
         let (_, _, mapping) = model_keys(self.vm, id, generation);
         let mapped = self.engine.map_executable(token)?;
@@ -4868,6 +4963,7 @@ impl SharedGttMemorySessionV1 {
         &mut self,
         token: SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
     ) -> Result<SharedGttAllocationV1<P, GttCpuWritableV1>, MemorySessionError> {
+        self.preflight_native_memory_transition_revisions(1)?;
         let (id, generation, _, _, _) = self.engine.evidence(&token)?;
         let (_, _, mapping) = model_keys(self.vm, id, generation);
         let unmapped = self.engine.unmap_mutable(token)?;
@@ -4880,6 +4976,7 @@ impl SharedGttMemorySessionV1 {
         token: SharedGttAllocationV1<ExecutableGttV1, GttGpuAccessibleExecutableV1>,
     ) -> Result<SharedGttAllocationV1<ExecutableGttV1, GttExecutableImmutableV1>, MemorySessionError>
     {
+        self.preflight_native_memory_transition_revisions(1)?;
         let (id, generation, _, _, _) = self.engine.evidence(&token)?;
         let (_, _, mapping) = model_keys(self.vm, id, generation);
         let unmapped = self.engine.unmap_executable(token)?;
@@ -4906,12 +5003,15 @@ impl SharedGttMemorySessionV1 {
         token: SharedGttAllocationV1<P, S>,
         phase: SharedAllocationPhaseV1,
     ) -> Result<(), MemorySessionError> {
+        self.preflight_native_memory_transition_revisions(1)?;
         let (id, generation, _, _, _) = self.engine.evidence(&token)?;
         let (reservation, allocation, mapping) = model_keys(self.vm, id, generation);
-        let projected = project_release(&self.model, reservation, allocation, mapping)
+        let projected = project_release(self.foundation.memory(), reservation, allocation, mapping)
             .map_err(|_| MemorySessionError::Model("shared release projection"))?;
         self.engine.release(token, phase)?;
-        self.model = projected;
+        self.foundation
+            .replace_memory_after_sealed_transition(projected)
+            .map_err(MemorySessionError::Model)?;
         Ok(())
     }
 
@@ -4919,9 +5019,11 @@ impl SharedGttMemorySessionV1 {
         &mut self,
         mapping: MemoryMappingKeyV1,
     ) -> Result<(), MemorySessionError> {
-        match project_map(&self.model, mapping, self.model_device) {
+        match project_map(self.foundation.memory(), mapping, self.model_device) {
             Ok(model) => {
-                self.model = model;
+                self.foundation
+                    .replace_memory_after_sealed_transition(model)
+                    .map_err(MemorySessionError::Model)?;
                 Ok(())
             }
             Err(_) => self
@@ -4934,9 +5036,11 @@ impl SharedGttMemorySessionV1 {
         &mut self,
         mapping: MemoryMappingKeyV1,
     ) -> Result<(), MemorySessionError> {
-        match project_unmap(&self.model, mapping) {
+        match project_unmap(self.foundation.memory(), mapping) {
             Ok(model) => {
-                self.model = model;
+                self.foundation
+                    .replace_memory_after_sealed_transition(model)
+                    .map_err(MemorySessionError::Model)?;
                 Ok(())
             }
             Err(_) => self
@@ -5584,13 +5688,13 @@ mod tests {
     }
 
     fn transferred_model_foundation() -> (
-        DeviceIdentityStateV1,
+        model::DeviceIdentityStateV1,
         MemoryLifecycleStateV1,
         ModelDeviceAdmissionV1,
         VmKeyV1,
     ) {
         let domain_id = model_domain();
-        let (identity, device) = DeviceIdentityStateV1::new(domain_id)
+        let (identity, device) = model::DeviceIdentityStateV1::new(domain_id)
             .register_device_model_only(model_correlation(), model::DeviceGenerationV1(1))
             .unwrap();
         let correlated = device.correlation();
@@ -5644,81 +5748,219 @@ mod tests {
 
     #[test]
     fn live_queue_model_loan_requires_the_exact_move_only_token() {
+        let (identity, memory, device, vm) = transferred_model_foundation();
+        let mut foundation = QueueModelFoundationV1::uncertified(identity, memory);
+        let issuer = foundation
+            .mint_invariant_certificate(7, device, vm)
+            .unwrap();
         let mut ownership = QueueModelOwnershipV1::new();
-        ownership.transfer_to_queue().unwrap();
-        let loan = ownership.begin_live_loan(7).unwrap();
+        ownership.transfer_to_queue(issuer).unwrap();
+        let loan = ownership
+            .begin_live_loan(7, &mut foundation, device, vm)
+            .unwrap();
 
         assert_eq!(
             ownership.phase,
-            QueueModelOwnershipPhaseV1::SessionOwnedLiveLoan { generation: 1 }
+            QueueModelOwnershipPhaseV1::SessionOwnedLiveLoan {
+                issuer,
+                generation: 1,
+            }
         );
-        assert!(ownership.transfer_to_queue().is_err());
-        assert!(ownership.begin_live_loan(7).is_err());
-        assert!(ownership.restore_to_session().is_err());
+        assert!(ownership.transfer_to_queue(issuer).is_err());
+        assert!(
+            ownership
+                .begin_live_loan(7, &mut foundation, device, vm)
+                .is_err()
+        );
+        assert!(ownership.restore_to_session(issuer).is_err());
         assert!(
             ownership
                 .finish_live_loan(
                     7,
+                    &foundation,
+                    device,
+                    vm,
                     LiveQueueModelFoundationLoanV1 {
                         session_id: 8,
+                        issuer,
                         generation: 1,
+                        starting_revision: loan.starting_revision,
                     },
                 )
                 .is_err()
         );
         assert_eq!(
             ownership.phase,
-            QueueModelOwnershipPhaseV1::SessionOwnedLiveLoan { generation: 1 }
+            QueueModelOwnershipPhaseV1::SessionOwnedLiveLoan {
+                issuer,
+                generation: 1,
+            }
         );
 
-        ownership.finish_live_loan(7, loan).unwrap();
-        assert_eq!(ownership.phase, QueueModelOwnershipPhaseV1::QueueOwned);
-        ownership.restore_to_session().unwrap();
+        ownership
+            .finish_live_loan(7, &foundation, device, vm, loan)
+            .unwrap();
+        assert_eq!(
+            ownership.phase,
+            QueueModelOwnershipPhaseV1::QueueOwned { issuer }
+        );
+        ownership.restore_to_session(issuer).unwrap();
         assert_eq!(ownership.phase, QueueModelOwnershipPhaseV1::SessionOwned);
     }
 
     #[test]
     fn failed_live_mutation_retains_one_reclaimable_model_loan() {
+        let (identity, memory, device, vm) = transferred_model_foundation();
+        let mut foundation = QueueModelFoundationV1::uncertified(identity, memory);
+        let issuer = foundation
+            .mint_invariant_certificate(11, device, vm)
+            .unwrap();
         let mut ownership = QueueModelOwnershipV1::new();
-        ownership.transfer_to_queue().unwrap();
-        let loan = ownership.begin_live_loan(11).unwrap();
+        ownership.transfer_to_queue(issuer).unwrap();
+        let loan = ownership
+            .begin_live_loan(11, &mut foundation, device, vm)
+            .unwrap();
 
         // A concrete mutation failure leaves the unique foundation session-owned.
-        assert!(ownership.transfer_to_queue().is_err());
-        assert!(ownership.restore_to_session().is_err());
-        ownership.finish_live_loan(11, loan).unwrap();
+        assert!(ownership.transfer_to_queue(issuer).is_err());
+        assert!(ownership.restore_to_session(issuer).is_err());
+        ownership
+            .finish_live_loan(11, &foundation, device, vm, loan)
+            .unwrap();
 
-        let next = ownership.begin_live_loan(11).unwrap();
+        let next = ownership
+            .begin_live_loan(11, &mut foundation, device, vm)
+            .unwrap();
         assert_eq!(next.generation, 2);
-        ownership.finish_live_loan(11, next).unwrap();
-        assert_eq!(ownership.phase, QueueModelOwnershipPhaseV1::QueueOwned);
+        ownership
+            .finish_live_loan(11, &foundation, device, vm, next)
+            .unwrap();
+        assert_eq!(
+            ownership.phase,
+            QueueModelOwnershipPhaseV1::QueueOwned { issuer }
+        );
+    }
+
+    #[test]
+    fn wrong_transfer_phase_does_not_mint_or_mutate_foundation_certificate() {
+        let (identity, memory, device, vm) = transferred_model_foundation();
+        let mut foundation = QueueModelFoundationV1::uncertified(identity, memory);
+        let mut ownership = QueueModelOwnershipV1::new();
+        ownership.transfer_to_queue(77).unwrap();
+
+        assert!(
+            ownership
+                .certify_and_transfer_to_queue(&mut foundation, 31, device, vm)
+                .is_err()
+        );
+        assert!(!foundation.is_certified_for_test());
+        assert_eq!(
+            ownership.phase,
+            QueueModelOwnershipPhaseV1::QueueOwned { issuer: 77 }
+        );
+    }
+
+    #[test]
+    fn final_restore_revokes_certificate_and_allows_fresh_queue_transfer() {
+        let (identity, memory, device, vm) = transferred_model_foundation();
+        let domain = memory.domain_id();
+        let mut foundation = QueueModelFoundationV1::uncertified(identity, memory);
+        let mut session_foundation = QueueModelFoundationV1::empty(domain);
+        let mut ownership = QueueModelOwnershipV1::new();
+        let first = ownership
+            .certify_and_transfer_to_queue(&mut foundation, 37, device, vm)
+            .unwrap();
+        let first_loan = ownership
+            .loan_foundation(37, &mut session_foundation, &mut foundation, device, vm)
+            .unwrap();
+        let stale_first_loan = LiveQueueModelFoundationLoanV1 {
+            session_id: first_loan.session_id,
+            issuer: first_loan.issuer,
+            generation: first_loan.generation,
+            starting_revision: first_loan.starting_revision,
+        };
+        ownership
+            .reclaim_foundation(
+                37,
+                &mut session_foundation,
+                &mut foundation,
+                device,
+                vm,
+                first_loan,
+            )
+            .unwrap();
+        foundation.validate_full(37, device, vm, first).unwrap();
+        ownership.restore_to_session(first).unwrap();
+        foundation
+            .revoke_invariant_certificate(37, device, vm, first)
+            .unwrap();
+        assert!(!foundation.is_certified_for_test());
+
+        let second = ownership
+            .certify_and_transfer_to_queue(&mut foundation, 37, device, vm)
+            .unwrap();
+        assert_ne!(first, second);
+        let second_loan = ownership
+            .loan_foundation(37, &mut session_foundation, &mut foundation, device, vm)
+            .unwrap();
+        assert_eq!(second_loan.generation, 1);
+        assert_eq!(second_loan.issuer, second);
+        assert!(
+            ownership
+                .reclaim_foundation(
+                    37,
+                    &mut session_foundation,
+                    &mut foundation,
+                    device,
+                    vm,
+                    stale_first_loan,
+                )
+                .is_err()
+        );
+        ownership
+            .reclaim_foundation(
+                37,
+                &mut session_foundation,
+                &mut foundation,
+                device,
+                vm,
+                second_loan,
+            )
+            .unwrap();
+        assert_eq!(
+            ownership.phase,
+            QueueModelOwnershipPhaseV1::QueueOwned { issuer: second }
+        );
     }
 
     #[test]
     fn live_foundation_loan_reclaims_concrete_allocation_lifecycle_updates() {
-        let (mut queue_identity, mut queue_model, device, vm) = transferred_model_foundation();
-        let domain = queue_model.domain_id();
-        let mut session_identity = DeviceIdentityStateV1::new(domain);
-        let mut session_model = MemoryLifecycleStateV1::new_monotonic_non_reusable(domain);
+        let (identity, memory, device, vm) = transferred_model_foundation();
+        let domain = memory.domain_id();
+        let mut queue_foundation = QueueModelFoundationV1::uncertified(identity, memory);
+        let issuer = queue_foundation
+            .mint_invariant_certificate(17, device, vm)
+            .unwrap();
+        let mut session_foundation = QueueModelFoundationV1::empty(domain);
         let mut ownership = QueueModelOwnershipV1::new();
-        ownership.transfer_to_queue().unwrap();
+        ownership.transfer_to_queue(issuer).unwrap();
 
         let loan = ownership
             .loan_foundation(
                 17,
-                &mut session_identity,
-                &mut session_model,
-                &mut queue_identity,
-                &mut queue_model,
+                &mut session_foundation,
+                &mut queue_foundation,
+                device,
+                vm,
             )
             .unwrap();
-        assert_eq!(session_identity.devices().len(), 1);
-        assert!(queue_identity.devices().is_empty());
+        assert_eq!(session_foundation.identity().devices().len(), 1);
+        assert!(queue_foundation.identity().devices().is_empty());
 
         let (reservation, allocation, mapping) = model_keys(vm, 41, 1);
         let layout = profile_layout::<HostVisibleCoherentGttV1>(4096).unwrap();
-        session_model = project_allocation(
-            &session_model,
+        let model = project_allocation(
+            session_foundation.memory(),
             reservation,
             allocation,
             0x2_0000,
@@ -5727,112 +5969,311 @@ mod tests {
             MemoryKindV1::HostVisibleCoherent,
         )
         .unwrap();
-        session_model = project_map(&session_model, mapping, device).unwrap();
+        session_foundation
+            .replace_memory_after_sealed_transition(model)
+            .unwrap();
+        let model = project_map(session_foundation.memory(), mapping, device).unwrap();
+        session_foundation
+            .replace_memory_after_sealed_transition(model)
+            .unwrap();
         ownership
             .reclaim_foundation(
                 17,
-                &mut session_identity,
-                &mut session_model,
-                &mut queue_identity,
-                &mut queue_model,
+                &mut session_foundation,
+                &mut queue_foundation,
+                device,
+                vm,
                 loan,
             )
             .unwrap();
-        assert_eq!(queue_identity.devices().len(), 1);
-        assert!(session_identity.devices().is_empty());
+        assert_eq!(queue_foundation.identity().devices().len(), 1);
+        assert!(session_foundation.identity().devices().is_empty());
         assert_eq!(
-            queue_model.mappings()[0].state,
+            queue_foundation.memory().mappings()[0].state,
             model::MemoryMappingStateV1::Mapped
         );
 
         let loan = ownership
             .loan_foundation(
                 17,
-                &mut session_identity,
-                &mut session_model,
-                &mut queue_identity,
-                &mut queue_model,
+                &mut session_foundation,
+                &mut queue_foundation,
+                device,
+                vm,
             )
             .unwrap();
-        session_model = project_unmap(&session_model, mapping).unwrap();
-        session_model = project_release(&session_model, reservation, allocation, mapping).unwrap();
+        let model = project_unmap(session_foundation.memory(), mapping).unwrap();
+        session_foundation
+            .replace_memory_after_sealed_transition(model)
+            .unwrap();
+        let model = project_release(
+            session_foundation.memory(),
+            reservation,
+            allocation,
+            mapping,
+        )
+        .unwrap();
+        session_foundation
+            .replace_memory_after_sealed_transition(model)
+            .unwrap();
         ownership
             .reclaim_foundation(
                 17,
-                &mut session_identity,
-                &mut session_model,
-                &mut queue_identity,
-                &mut queue_model,
+                &mut session_foundation,
+                &mut queue_foundation,
+                device,
+                vm,
                 loan,
             )
             .unwrap();
         assert_eq!(
-            queue_model.mappings()[0].state,
+            queue_foundation.memory().mappings()[0].state,
             model::MemoryMappingStateV1::Released
         );
         assert_eq!(
-            queue_model.allocations()[0].state,
+            queue_foundation.memory().allocations()[0].state,
             model::MemoryAllocationStateV1::Released
         );
         assert_eq!(
-            queue_model.reservations()[0].state,
+            queue_foundation.memory().reservations()[0].state,
             model::VaReservationStateV1::Released
         );
     }
 
     #[test]
+    fn certified_native_memory_effects_preflight_exact_revision_budgets() {
+        for (revision, needed) in [(u64::MAX - 1, 2), (u64::MAX, 1)] {
+            let (identity, memory, device, vm) = transferred_model_foundation();
+            let mut foundation = QueueModelFoundationV1::uncertified(identity, memory);
+            let issuer = foundation
+                .mint_invariant_certificate(59, device, vm)
+                .unwrap();
+            foundation
+                .set_certificate_revision_for_test(revision)
+                .unwrap();
+            let process_poisoned = Cell::new(false);
+            let mut engine = acquired();
+            let operations_before = engine.backend.operations.clone();
+            let failure = preflight_queue_foundation_native_memory_transition_v1(
+                &foundation,
+                &mut engine,
+                needed,
+                || process_poisoned.set(true),
+            );
+            assert!(matches!(
+                failure,
+                Err(MemorySessionError::Model(
+                    "queue foundation certificate revision exhausted"
+                ))
+            ));
+            assert_eq!(engine.backend.operations, operations_before);
+            assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
+            assert!(process_poisoned.get());
+            assert_eq!(foundation.memory().validate_global_invariants(), Ok(()));
+            foundation.authenticate(59, device, vm, issuer).unwrap();
+        }
+
+        let source = include_str!("shared_memory.rs");
+        let cases = [
+            (
+                "fn allocate_profile<P:",
+                "pub fn with_bytes<",
+                2,
+                "self.engine.allocate::<P>",
+            ),
+            (
+                "pub fn map_to_gpu<P:",
+                "pub fn map_executable_to_gpu",
+                1,
+                "self.engine.map_mutable",
+            ),
+            (
+                "pub fn map_executable_to_gpu",
+                "pub fn unmap_from_gpu<P:",
+                1,
+                "self.engine.map_executable",
+            ),
+            (
+                "pub fn unmap_from_gpu<P:",
+                "pub fn unmap_executable_from_gpu",
+                1,
+                "self.engine.unmap_mutable",
+            ),
+            (
+                "pub fn unmap_executable_from_gpu",
+                "pub fn release<P:",
+                1,
+                "self.engine.unmap_executable",
+            ),
+            (
+                "fn release_with_phase<P:",
+                "fn commit_map_projection",
+                1,
+                "self.engine.release",
+            ),
+        ];
+        for (start, end, budget, native) in cases {
+            let body = source
+                .split(start)
+                .nth(1)
+                .unwrap()
+                .split(end)
+                .next()
+                .unwrap();
+            let preflight = body
+                .find(&format!(
+                    "preflight_native_memory_transition_revisions({budget})"
+                ))
+                .unwrap();
+            let native = body.find(native).unwrap();
+            assert!(preflight < native, "{start} must preflight before {native}");
+        }
+    }
+
+    #[test]
     fn live_foundation_loan_survives_operation_and_retake_rejection_without_loss() {
-        let (mut queue_identity, mut queue_model, _, vm) = transferred_model_foundation();
-        let expected = queue_model.clone();
-        let domain = queue_model.domain_id();
-        let mut session_identity = DeviceIdentityStateV1::new(domain);
-        let mut session_model = MemoryLifecycleStateV1::new_monotonic_non_reusable(domain);
+        let (identity, memory, device, vm) = transferred_model_foundation();
+        let expected = memory.clone();
+        let domain = memory.domain_id();
+        let mut queue_foundation = QueueModelFoundationV1::uncertified(identity, memory);
+        let issuer = queue_foundation
+            .mint_invariant_certificate(23, device, vm)
+            .unwrap();
+        let mut session_foundation = QueueModelFoundationV1::empty(domain);
         let mut ownership = QueueModelOwnershipV1::new();
-        ownership.transfer_to_queue().unwrap();
+        ownership.transfer_to_queue(issuer).unwrap();
 
         let loan = ownership
             .loan_foundation(
                 23,
-                &mut session_identity,
-                &mut session_model,
-                &mut queue_identity,
-                &mut queue_model,
+                &mut session_foundation,
+                &mut queue_foundation,
+                device,
+                vm,
             )
             .unwrap();
         let (_, _, missing_mapping) = model_keys(vm, 99, 1);
-        assert!(project_unmap(&session_model, missing_mapping).is_err());
+        assert!(project_unmap(session_foundation.memory(), missing_mapping).is_err());
         assert!(
             ownership
                 .reclaim_foundation(
                     23,
-                    &mut session_identity,
-                    &mut session_model,
-                    &mut queue_identity,
-                    &mut queue_model,
+                    &mut session_foundation,
+                    &mut queue_foundation,
+                    device,
+                    vm,
                     LiveQueueModelFoundationLoanV1 {
                         session_id: 24,
+                        issuer,
                         generation: loan.generation,
+                        starting_revision: loan.starting_revision,
                     },
                 )
                 .is_err()
         );
-        assert_eq!(session_identity.devices().len(), 1);
-        assert!(queue_identity.devices().is_empty());
+        assert_eq!(session_foundation.identity().devices().len(), 1);
+        assert!(queue_foundation.identity().devices().is_empty());
 
         ownership
             .reclaim_foundation(
                 23,
-                &mut session_identity,
-                &mut session_model,
-                &mut queue_identity,
-                &mut queue_model,
+                &mut session_foundation,
+                &mut queue_foundation,
+                device,
+                vm,
                 loan,
             )
             .unwrap();
-        assert_eq!(queue_model, expected);
-        assert_eq!(queue_identity.devices().len(), 1);
-        assert!(session_identity.devices().is_empty());
-        assert_eq!(ownership.phase, QueueModelOwnershipPhaseV1::QueueOwned);
+        assert_eq!(queue_foundation.memory(), &expected);
+        assert_eq!(queue_foundation.identity().devices().len(), 1);
+        assert!(session_foundation.identity().devices().is_empty());
+        assert_eq!(
+            ownership.phase,
+            QueueModelOwnershipPhaseV1::QueueOwned { issuer }
+        );
+    }
+
+    #[test]
+    fn panic_before_and_after_allocation_map_projection_remains_retakeable() {
+        for completed_steps in 0..=2 {
+            let (identity, memory, device, vm) = transferred_model_foundation();
+            let domain = memory.domain_id();
+            let mut queue_foundation = QueueModelFoundationV1::uncertified(identity, memory);
+            let issuer = queue_foundation
+                .mint_invariant_certificate(43, device, vm)
+                .unwrap();
+            let mut session_foundation = QueueModelFoundationV1::empty(domain);
+            let mut ownership = QueueModelOwnershipV1::new();
+            ownership.transfer_to_queue(issuer).unwrap();
+            let mut retained_loan = None;
+            let (reservation, allocation, mapping) = model_keys(vm, 51 + completed_steps, 1);
+            let layout = profile_layout::<HostVisibleCoherentGttV1>(4096).unwrap();
+
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                retained_loan = Some(
+                    ownership
+                        .loan_foundation(
+                            43,
+                            &mut session_foundation,
+                            &mut queue_foundation,
+                            device,
+                            vm,
+                        )
+                        .unwrap(),
+                );
+                if completed_steps >= 1 {
+                    let model = project_allocation(
+                        session_foundation.memory(),
+                        reservation,
+                        allocation,
+                        0x3_0000,
+                        layout,
+                        51 + completed_steps,
+                        MemoryKindV1::HostVisibleCoherent,
+                    )
+                    .unwrap();
+                    session_foundation
+                        .replace_memory_after_sealed_transition(model)
+                        .unwrap();
+                }
+                if completed_steps >= 2 {
+                    let model = project_map(session_foundation.memory(), mapping, device).unwrap();
+                    session_foundation
+                        .replace_memory_after_sealed_transition(model)
+                        .unwrap();
+                }
+                std::panic::panic_any(("injected live model panic", completed_steps));
+            }))
+            .expect_err("injected panic must escape the model mutation body");
+            assert_eq!(
+                caught.downcast_ref::<(&'static str, u64)>(),
+                Some(&("injected live model panic", completed_steps))
+            );
+            ownership
+                .reclaim_foundation(
+                    43,
+                    &mut session_foundation,
+                    &mut queue_foundation,
+                    device,
+                    vm,
+                    retained_loan.take().unwrap(),
+                )
+                .unwrap();
+            assert!(
+                queue_foundation
+                    .memory()
+                    .validate_global_invariants()
+                    .is_ok()
+            );
+            assert_eq!(
+                queue_foundation.memory().allocations().len(),
+                usize::from(completed_steps >= 1)
+            );
+            assert_eq!(
+                queue_foundation.memory().mappings().len(),
+                usize::from(completed_steps >= 2)
+            );
+        }
     }
 
     #[test]

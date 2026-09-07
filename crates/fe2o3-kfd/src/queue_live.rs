@@ -14,9 +14,8 @@ use fe2o3_kfd_uapi::{
 };
 use fe2o3_runtime_model::{
     ComputeAqlQueuePlanV1, ComputeAqlQueueResourcesV1, ComputeAqlResourceBindingV1,
-    ComputeAqlTargetProfileV1, DeviceIdentityStateV1, IdentityDigestV1, MemoryAccessV1,
-    MemoryCoherenceV1, MemoryKindV1, MemoryLifecycleStateV1, QueueConfigurationIdV1,
-    QueueGenerationV1, QueueInstanceIdV1, QueueKeyV1, QueuePlanIdV1,
+    ComputeAqlTargetProfileV1, IdentityDigestV1, MemoryAccessV1, MemoryCoherenceV1, MemoryKindV1,
+    QueueConfigurationIdV1, QueueGenerationV1, QueueInstanceIdV1, QueueKeyV1, QueuePlanIdV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -227,9 +226,9 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r43-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r45-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
-    "memory_profile_sha256=52351c439a7c64e91a353749201e2e35e8793474b76de5baca34090287a66034\n",
+    "memory_profile_sha256=026c8c05b6388149765ccb84a95739de6a6ddbbe89577217284b18bdcfdcbdd3\n",
     "kfd_userptr_memory_schema_sha256=c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e\n",
     "kfd_userptr_queue_control_schema_sha256=f1d75410d6bfacff2ea15ecfff226eb8aed7912ee324a36b8ed8550fa52bce02\n",
     "queue_resource_profile_sha256=37d45132916d2ecefdec8f53ecab817cbdbaa9b9863440353163bd460626ab02\n",
@@ -248,6 +247,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "source.kfd_chardev.c=f9a8805c5d479faee25e457051aa428e4bb523ecf1c7b1618a6a5f79ca5d7bba\n",
     "source.kfd_process.c=d76db8cbb546aa23dffb33b1d04244037e12246b49b752303194c68dd685e409\n",
     "resources=linear-private-ring-control-eop-cwsr-completion-code-kernarg-and-exact-device-local-or-coherent-host-data-authorities,exact-one-existing-shared-vm-session,transferred-model-ownership\n",
+    "model-custody=identity-memory-and-private-nonclone-certificate-move-as-one-bundle,exact-session-domain-selected-device-vm-issuer-loan-generation-and-monotonic-revision-authentication,one-full-global-validation-at-mint-and-final-restore,local-constant-field-loan-and-retake-checks,all-shared-lifecycle-projections-advance-revision,exact-revision-capacity-preflight-before-native-memory-effects-plan-admission-and-queue-destroy,fresh-issuer-resets-generation-namespace-after-certificate-revocation\n",
     "shared-record-shape=primary-compute:ring1-control1-completions1-eop1-context-save1,sdma-per-queue:ring1-control1-completions1\n",
     "gtt_policy=reusable-and-dispatch-ring:gfx942-host-visible-executable-single-span-without-gfx7-gfx8-double-map-workaround,one-shot-diagnostic-rings:plain-executable-gtt-one-span-or-userptr-writable-executable-coherent-uncached-no-substitute-one-span,control:exact-one-page-same-va-userptr-writable-coherent,completion-signals:host-visible-coherent-gtt,eop-and-cwsr:executable;ring-userptr-never-selectable-by-reusable-or-dispatch-queue-APIs\n",
     "userptr-diagnostic=smallest-selected-gpu-ring-backing-discriminator,no-full-rocr-allocation-or-map-order-parity-claim\n",
@@ -262,21 +262,22 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "liveness-probe=three-public-consuming-checked-device-entries-select-production-gfx942-executable-one-span-diagnostic-plain-executable-one-span-or-diagnostic-userptr-writable-executable-coherent-uncached-no-substitute-one-span-ring,selected-backing-and-exact-ring-span-bound-into-plan-and-configuration,selected-backing-bound-into-every-redacted-outcome,typed-nonzero-bounded-polls-validated-before-device-consumption,diagnostic-backings-not-selectable-by-reusable-or-dispatch-queue-APIs,exact-fresh-zero-history-no-dispatch-queue,one-zero-dependency-system-scope-barrier,queue-and-signal-generation-only,submission-retryable-only-by-explicit-before-side-effect-stage-classification,success-requires-currentness-packet-count1-write1-read0or1-timing-sensitive-header0x1403-or-device-consumed-invalid1-setup0-user-signal-completed-zero-exception-then-signal-reset-and-confirmed-explicit-queue-destroy,Creation-has-no-live-queue-and-precedes-userptr-control-registration-entry,TerminalCreation-covers-every-error-at-or-after-userptr-control-registration-entry-every-create-result-not-explicitly-failed-no-effect-and-every-post-create-failure-recovers-no-authority-permanently-poisons-process-global-runtime-gate-and-requires-process-termination,QuarantinedExecution-retains-opaque-custody-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,TerminalTeardown-and-panic-retain-permanent-gate-poison-and-recover-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
     "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-8192-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set-retained-even-when-unreferenced-by-current-batch,referenced-subset-only-inspected-access-and-sealed-initialization-gates,ordinary-release-or-never-published-prepared-or-exact-recycle-gated-attached-or-detached-return-after-destroy\n",
     "readback=coherent-host-data-only,owned-bounded-copy-or-exact-caller-owned-destination-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation,ordinary-range-within-one-inspected-write-or-readwrite-binding-or-exact-admitted-initialized-enclosing-snapshot,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
-    "rebinding=exact-completion-and-signal-recycle-before-detach,ordinary-detach-releases-code-and-kernarg,one-full-range-persistent-control-detach-retains-immutable-code-mapped-kernarg-packet-premise-and-recycled-generation-while-returning-only-the-exact-data-authority-for-directional-sdma,initial-persistent-control-open-and-explicit-release-use-full-currentness,its-exact-retained-control-replay-uses-operational-currentness-and-requires-exact-same-queue-vm-code-abi-packet-kernarg-role-layout-storage-and-predecessor-generation,live-rebind-retains-queue-ring-signal-event-doorbell-and-runtime,quiescent-rollover-confirms-old-native-destroy-before-new-queue-creation,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,preflighted-device-or-host-insertion-at-exact-ordinal-and-release-gated-removal-or-replacement-while-unbound,exact-identity-kind-and-bounds-checked-in-place-initialized-coherent-overwrite-while-unbound-or-attached-and-recycled,attached-recycled-exact-shape-resubmission-advances-generation-without-code-kernarg-or-data-detach,replacement-owner-seeded-from-exact-predecessor-and-next-publication-strictly-advances-dispatch-generation-across-live-rebind-or-queue-rollover,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-ring-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest,authoritative-model-foundation-restored-around-every-live-queue-allocation-lifecycle-mutation-and-reclaimed-before-return\n",
+    "rebinding=exact-completion-and-signal-recycle-before-detach,ordinary-detach-releases-code-and-kernarg,one-full-range-persistent-control-detach-retains-immutable-code-mapped-kernarg-packet-premise-and-recycled-generation-while-returning-only-the-exact-data-authority-for-directional-sdma,initial-persistent-control-open-and-explicit-release-use-full-currentness,its-exact-retained-control-replay-uses-operational-currentness-and-requires-exact-same-queue-vm-code-abi-packet-kernarg-role-layout-storage-and-predecessor-generation,live-rebind-retains-queue-ring-signal-event-doorbell-and-runtime,quiescent-rollover-confirms-old-native-destroy-before-new-queue-creation,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,preflighted-device-or-host-insertion-at-exact-ordinal-and-release-gated-removal-or-replacement-while-unbound,exact-identity-kind-and-bounds-checked-in-place-initialized-coherent-overwrite-while-unbound-or-attached-and-recycled,attached-recycled-exact-shape-resubmission-advances-generation-without-code-kernarg-or-data-detach,replacement-owner-seeded-from-exact-predecessor-and-next-publication-strictly-advances-dispatch-generation-across-live-rebind-or-queue-rollover,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-ring-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest,all-live-shared-memory-lifecycle-model-mutation-including-public-prepare-data-and-three-persistent-manual-paths-use-one-central-certificate-custody-envelope\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
     "lifecycle=runtime-enable,event-create,queue-create;all-completion-batches-observed-and-recycled-and-event-reader-ledgers-empty;queue-destroy,event-destroy,immediate-payload-zero-protect-unmap,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;debug-runtime-authority-leaves-token-before-event-and-create-lifecycle-mutation-with-no-post-handoff-restoration;published-owners-no-drop-ioctl-store-munmap-or-free;armed-unpublished-payload-guard-drop-zero-protect-unmap\n",
+    "unwind=central-rust-catch-attempts-explicit-certificate-retake,retake-failure-on-normal-return-or-unwind-terminally-poisons-and-permanently-process-gates,unwind-then-resumes-original-panic,borrowed-sdma-and-selected-lane-owners-restored-before-resume,consuming-callee-panic-restores-only-owner-still-present-and-otherwise-claims-no-recoverable-owner-or-native-resource-custody,no-foreign-unwind-or-drop-native-cleanup\n",
     "currentness=active-queue-opener-pid-before-non-draining-zero-timeout-reset-fifo-readiness-then-dedicated-wrapping-drm-vram-loss-counter-equality-then-closing-readiness-operational-fence-before-exact-persistent-replay,publication,after-bounded-preparation,and-before-mmio;readiness-means-nonempty-fifo-only-by-pinned-kfd-source-contract-not-loaded-kernel-authentication;packet-atomics-run-inside-those-owner-scopes;lifecycle-ioctls-and-persistent-control-open-close-retain-full-process-namespace-descriptor-uapi-xnack-drm-identity-vram-loss-topology-aperture-composite;operational-fence-excludes-those-lifecycle-identity-reobservations-and-cannot-exclude-reset-counter-wrap-or-observation-ABA;timeout-observation-confirms-device-runtime-event-and-CWSR-structure-before-and-after-its-sequential-racy-loads\n",
-    "proof=queue-and-aql-model-obligations-only,cpu-gpu-atomic-coherence-mmio-driver-firmware-refinement-contracted\n",
+    "proof=queue-and-aql-model-obligations-and-hostile-rust-tests-only,no-rust-verus-syscall-or-hardware-refinement,no-performance-claim,cpu-gpu-atomic-coherence-mmio-driver-firmware-refinement-contracted\n",
     "event-lifecycle=linear-private-kfd-event,no-kfd-event-page-mmap,separate-private-payload-page-cleaned-on-unpublished-install-failure,armed-unpublished-payload-cleanup-through-all-pre-create-failures-until-immediately-before-native-create-queue-call,zeroized-protected-and-unmapped-immediately-after-event-destroy-before-runtime-disable-and-independent-of-later-resource-release,payload-cleanup-failure-after-event-destroy-aborts-process-before-owner-loss,queue-destroy-before-event-destroy-before-runtime-disable-before-cwsr-free-and-full-reservation-munmap,published-owners-no-drop-ioctl-or-unmap\n",
     "cwsr-address-semantics=bo-cpu-vma-is-create-address-except-exact-24-owned-fixed-private-anonymous-control-stack-pages,prot-none-then-dontfork-then-rw,whole-span-seal-then-exact-shadow-rw-restore;headers-and-control-stack-kfd-copy-targets,wave-state-remains-read-only-bo-mapped,event-payload-disjoint-from-all-control-stack-pages;ordinary-hardware-preemption-restore-contracted\n",
     "exception-observation=crate-private-one-shot-timeout-0-through-1000ms-wait-and-terminal-timeout-direct-volatile-CWSR-reason,wait-and-payload-must-agree,unknown-reason-rejected,zero-reason-is-racy-snapshot-not-absence-proof,no-atomic-or-lossless-delivery-claim\n",
-    "failure=counter-divergence-regression-currentness-and-any-possible-side-effect-runtime-event-shadow-wait-publication-completion-observation-timeout-reset-or-teardown-error-terminally-poisons;timeout-snapshot-capture-failure-reports-currentness-or-observation-instead-of-unbound-evidence;no-in-process-recovery-rollback-or-cleanup-after-terminal-observation;only-explicitly-classified-pre-side-effect-full-or-insufficient-space-retryable\n",
+    "failure=counter-divergence-regression-currentness-and-any-possible-side-effect-runtime-event-shadow-wait-publication-completion-observation-timeout-reset-or-teardown-error-terminally-poisons;certificate-revision-exhaustion-retains-plan-authority-inside-terminal-native-engine-but-initial-wrapper-recovers-no-rust-authority-or-quarantines-consumed-memory-token-custody-and-permanently-process-gates;timeout-snapshot-capture-failure-reports-currentness-or-observation-instead-of-unbound-evidence;no-in-process-recovery-rollback-or-cleanup-after-terminal-observation;only-explicitly-classified-pre-side-effect-full-or-insufficient-space-retryable\n",
     "excluded=kernel-dispatch-hardware-completion-fault-or-exception-delivery-refinement,kernel-effect-correctness-beyond-inspected-metadata,full-kernel-write-coverage,kernel-numerical-correctness,device-local-update,multi-producer,foreign-kfd-process-coordination,private-cwsr-wave-record-decoding\n",
 );
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "af2adfd219f507b96f4bce08c40d94f2c28f93cf4ac48cc22675383f98989f11";
+    "c61844f88524f7bf2b1dc9b10505cfa54bf0ad471ff68cc4e8b4d681cad209b8";
 
 type AqlSpecialRingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -652,6 +653,26 @@ struct LinuxNativeQueueBackendV1 {
     foundation_in_engine: bool,
 }
 
+#[cold]
+fn resume_live_queue_model_panic_v1(
+    payload: Box<dyn std::any::Any + Send>,
+    _retake: Result<(), ComputeAqlQueueSessionErrorV1>,
+) -> ! {
+    // Retake failure must not replace the original panic payload.
+    std::panic::resume_unwind(payload)
+}
+
+fn fail_closed_live_queue_model_retake_v1<E>(
+    retake: &Result<(), E>,
+    terminal_poison: impl FnOnce(),
+    process_poison: impl FnOnce(),
+) {
+    if retake.is_err() {
+        terminal_poison();
+        process_poison();
+    }
+}
+
 impl NativeQueueBackendV1 for LinuxNativeQueueBackendV1 {
     type ResourceAuthority = QueueResourceAuthorityV1;
 
@@ -670,6 +691,15 @@ impl NativeQueueBackendV1 for LinuxNativeQueueBackendV1 {
                 ))?;
         self.foundation_in_engine = true;
         Ok(foundation)
+    }
+
+    fn authenticate_model_foundation(
+        &self,
+        foundation: &QueueModelFoundationV1,
+    ) -> Result<(), NativeQueueAdapterErrorV1> {
+        self.session
+            .authenticate_queue_model_foundation(foundation)
+            .map_err(|_| NativeQueueAdapterErrorV1::InvalidResource("queue foundation certificate"))
     }
 
     fn resource_view(
@@ -4663,7 +4693,18 @@ impl ComputeAqlQueueSessionV1 {
                 .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
                     "missing queue engine",
                 ))?;
-            let key = engine.admit(authority).map_err(map_native)?;
+            let key = match engine.admit(authority) {
+                Ok(key) => key,
+                Err(error @ NativeQueueAdapterErrorV1::AuthorityPoisoned) => {
+                    self.poison_terminal();
+                    permanently_poison_process_global_kfd_runtime_gate_v1();
+                    return Err(terminal_creation(
+                        "auxiliary queue model admission",
+                        map_native(error),
+                    ));
+                }
+                Err(error) => return Err(map_native(error)),
+            };
             let mut shadows = None;
             engine
                 .create_at_native_boundary(key, || {
@@ -5043,7 +5084,7 @@ impl ComputeAqlQueueSessionV1 {
         )?;
         let submission = NativeAqlSubmissionOwnerV1::new(ring_bytes)
             .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("AQL ring submission model"))?;
-        let (identity, model) = match dispatch.as_ref() {
+        let foundation = match dispatch.as_ref() {
             Some(dispatch) => {
                 let device_authorities = dispatch.device_authorities();
                 memory.take_queue_model_foundation_with_dispatch_memory(&device_authorities)?
@@ -5052,14 +5093,21 @@ impl ComputeAqlQueueSessionV1 {
         };
         let backend = LinuxNativeQueueBackendV1 {
             session: memory,
-            foundation: Some(QueueModelFoundationV1 {
-                identity,
-                memory: model,
-            }),
+            foundation: Some(foundation),
             foundation_in_engine: false,
         };
         let mut engine = NativeQueueEngineV1::new(backend).map_err(map_native)?;
-        let key = engine.admit(authority).map_err(map_native)?;
+        let key = match engine.admit(authority) {
+            Ok(key) => key,
+            Err(error @ NativeQueueAdapterErrorV1::AuthorityPoisoned) => {
+                permanently_poison_process_global_kfd_runtime_gate_v1();
+                return Err(terminal_creation(
+                    "queue model admission",
+                    map_native(error),
+                ));
+            }
+            Err(error) => return Err(map_native(error)),
+        };
         let mut shadows = None;
         engine
             .create_at_native_boundary(key, || {
@@ -10361,20 +10409,32 @@ impl ComputeAqlQueueSessionV1 {
             None => Gfx942FixedDispatchDataV1::uninitialized(lease),
         };
         debug_assert_eq!(initialized, authenticated_sha256.is_some());
-        let loan = match self.restore_model_ownership_for_live_mutation() {
-            Ok(loan) => loan,
-            Err(error) => {
-                allocation
-                    .owner
-                    .quarantine_prepared(
-                        prepared,
-                        Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
-                    )
-                    .expect("private prepared use remains current");
+        let mut retained_data = Some(data);
+        let prepared_dispatch = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.with_live_queue_memory_model_custody(|memory| {
+                prepare_persistent_fixed_dispatch_resources_v1(
+                    memory,
+                    programs,
+                    packets,
+                    retained_data
+                        .take()
+                        .expect("custody operation executes at most once"),
+                    detached_generation,
+                    control_identity,
+                )
+            })
+        }));
+        let prepared_dispatch = match prepared_dispatch {
+            Ok(prepared_dispatch) => prepared_dispatch,
+            Err(payload) => {
+                let state = quarantine_persistent_retained_control_replay_prepared_v1(
+                    &mut allocation.owner,
+                    prepared,
+                );
                 self.persistent_compute = Some(PersistentComputeAttachmentV1 {
                     allocation,
                     authenticated_sha256,
-                    state: PersistentComputeUseStateV1::Quarantined,
+                    state,
                     binding: PersistentComputeBindingKeyV1 {
                         queue: self.key,
                         attachment_generation,
@@ -10382,48 +10442,28 @@ impl ComputeAqlQueueSessionV1 {
                     storage_identity,
                     effect,
                     predecessor_dispatch_generation: detached_generation,
-                    terminal_custody: Some(PersistentComputeTerminalNativeCustodyV1::Data(vec![
-                        data,
-                    ])),
+                    terminal_custody: retained_data
+                        .take()
+                        .map(|data| PersistentComputeTerminalNativeCustodyV1::Data(vec![data])),
                 });
                 self.next_persistent_compute_generation = next_attachment_generation;
                 self.poison_terminal();
-                return Err(Gfx942PersistentComputeBindFailureV1 {
-                    error,
-                    custody: Gfx942PersistentComputeBindFailureCustodyV1::ProcessTeardown(
-                        Gfx942PersistentComputeBindTerminalCustodyV1 { input: None },
-                    ),
-                });
+                permanently_poison_process_global_kfd_runtime_gate_v1();
+                std::panic::resume_unwind(payload)
             }
         };
-        let prepared_dispatch = {
-            let memory = &mut self
-                .engine
-                .as_mut()
-                .expect("model loan requires queue engine")
-                .backend
-                .session;
-            prepare_persistent_fixed_dispatch_resources_v1(
-                memory,
-                programs,
-                packets,
-                data,
-                detached_generation,
-                control_identity,
-            )
-        };
-        let retake = self.retake_model_ownership_after_live_mutation(loan);
-        let prepared_dispatch = match (prepared_dispatch, retake) {
-            (Ok(dispatch), Ok(())) => Ok(dispatch),
-            (Err(failure), Ok(())) => Err((failure.error.into(), failure.data)),
-            (Ok(dispatch), Err(error)) => {
+        let prepared_dispatch = match prepared_dispatch {
+            Ok((Ok(dispatch), Ok(()))) => Ok(dispatch),
+            Ok((Err(failure), Ok(()))) => Err((failure.error.into(), failure.data)),
+            Ok((Ok(dispatch), Err(error))) => {
                 self.dispatch = Some(dispatch);
                 Err((error, Vec::new()))
             }
-            (Err(failure), Err(error)) => {
+            Ok((Err(failure), Err(error))) => {
                 let _ = failure.error;
                 Err((error, failure.data))
             }
+            Err(error) => Err((error, retained_data.into_iter().collect())),
         };
         let prepared_dispatch = match prepared_dispatch {
             Ok(dispatch) => dispatch,
@@ -11638,29 +11678,40 @@ impl ComputeAqlQueueSessionV1 {
             self.poison_terminal();
             return Err(error);
         }
-        let loan = self.restore_model_ownership_for_live_mutation()?;
-        let dispatch = self
-            .dispatch
-            .take()
-            .expect("validated detached persistent control remains retained");
-        let release = dispatch.release_detached_persistent_control_v1(
-            &mut self
-                .engine
-                .as_mut()
-                .expect("model loan requires queue engine")
-                .backend
-                .session,
-            generation,
+        let mut dispatch = Some(
+            self.dispatch
+                .take()
+                .expect("validated detached persistent control remains retained"),
         );
-        let retake = self.retake_model_ownership_after_live_mutation(loan);
-        match (release, retake) {
-            (Ok(()), Ok(())) => Ok(true),
-            (Err(error), Ok(())) => {
+        let envelope = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.with_live_queue_memory_model_custody(|memory| {
+                dispatch
+                    .take()
+                    .expect("custody operation executes at most once")
+                    .release_detached_persistent_control_v1(memory, generation)
+            })
+        }));
+        let envelope = match envelope {
+            Ok(envelope) => envelope,
+            Err(payload) => {
+                self.dispatch = dispatch;
+                self.poison_terminal();
+                permanently_poison_process_global_kfd_runtime_gate_v1();
+                std::panic::resume_unwind(payload)
+            }
+        };
+        match envelope {
+            Ok((Ok(()), Ok(()))) => Ok(true),
+            Ok((Err(error), Ok(()))) => {
                 self.poison_terminal();
                 Err(error.into())
             }
-            (_, Err(error)) => {
+            Ok((_, Err(error))) => {
                 self.poison_terminal();
+                Err(error)
+            }
+            Err(error) => {
+                self.dispatch = dispatch;
                 Err(error)
             }
         }
@@ -13961,6 +14012,20 @@ impl ComputeAqlQueueSessionV1 {
                 (false, Some((generation, data)))
             }
         };
+        if self
+            .engine
+            .as_ref()
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "missing queue engine",
+            ))?
+            .foundation
+            .preflight_memory_transition_revisions(1)
+            .is_err()
+        {
+            self.poison_terminal();
+            permanently_poison_process_global_kfd_runtime_gate_v1();
+            return Err(map_native(NativeQueueAdapterErrorV1::ModelProjection));
+        }
         if let Some(striped_sdma) = self.striped_sdma.as_mut() {
             let memory = &mut self
                 .engine
@@ -15061,9 +15126,14 @@ impl ComputeAqlQueueSessionV1 {
     ) -> Result<R, ComputeAqlQueueSessionErrorV1> {
         self.require_sdma_enabled()?;
         let mut owner = self.sdma.take().expect("checked SDMA owner");
-        let result = self.with_live_queue_memory_model(|memory| operation(&mut owner, memory));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.with_live_queue_memory_model(|memory| operation(&mut owner, memory))
+        }));
         self.sdma = Some(owner);
-        result
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     fn with_striped_sdma_owner_memory<R>(
@@ -15085,13 +15155,18 @@ impl ComputeAqlQueueSessionV1 {
                 "missing striped SDMA owner",
             ));
         };
-        let result = self.with_live_queue_memory_model(|memory| operation(&mut owner, memory));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.with_live_queue_memory_model(|memory| operation(&mut owner, memory))
+        }));
         if separate {
             self.striped_sdma = Some(owner);
         } else {
             self.sdma = Some(owner);
         }
-        result
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 
     fn with_live_queue_memory_model<R>(
@@ -15100,21 +15175,37 @@ impl ComputeAqlQueueSessionV1 {
             &mut SharedGttMemorySessionV1,
         ) -> Result<R, ComputeAqlQueueSessionErrorV1>,
     ) -> Result<R, ComputeAqlQueueSessionErrorV1> {
+        let (result, retake) = self.with_live_queue_memory_model_custody(operation)?;
+        retake?;
+        result
+    }
+
+    fn with_live_queue_memory_model_custody<R>(
+        &mut self,
+        operation: impl FnOnce(&mut SharedGttMemorySessionV1) -> R,
+    ) -> Result<(R, Result<(), ComputeAqlQueueSessionErrorV1>), ComputeAqlQueueSessionErrorV1> {
         let loan = self.restore_model_ownership_for_live_mutation()?;
-        let result = {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let engine = self
                 .engine
                 .as_mut()
-                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                    "missing queue engine",
-                ))?;
+                .expect("model loan requires queue engine");
             operation(&mut engine.backend.session)
-        };
-        if let Err(error) = self.retake_model_ownership_after_live_mutation(loan) {
-            self.poison_terminal();
-            return Err(error);
+        }));
+        let retake = self.retake_model_ownership_after_live_mutation(loan);
+        fail_closed_live_queue_model_retake_v1(
+            &retake,
+            || self.poison_terminal(),
+            permanently_poison_process_global_kfd_runtime_gate_v1,
+        );
+        match result {
+            Ok(result) => Ok((result, retake)),
+            Err(payload) => {
+                self.poison_terminal();
+                permanently_poison_process_global_kfd_runtime_gate_v1();
+                resume_live_queue_model_panic_v1(payload, retake)
+            }
         }
-        result
     }
 
     fn with_sdma_queue_creation_custody_v1<R>(
@@ -15126,10 +15217,22 @@ impl ComputeAqlQueueSessionV1 {
         terminalize_success: impl FnOnce(R) -> Gfx942SdmaQueueSetV1,
     ) -> Result<R, ComputeAqlQueueSessionErrorV1> {
         let mut created = None;
-        let envelope = self.with_live_queue_memory_model(|memory| {
-            created = Some(operation(memory));
-            Ok(())
-        });
+        let envelope = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.with_live_queue_memory_model(|memory| {
+                created = Some(operation(memory));
+                Ok(())
+            })
+        }));
+        let envelope = match envelope {
+            Ok(envelope) => envelope,
+            Err(payload) => {
+                // A panicking creation callee may already have consumed native
+                // owners. No recoverable owner custody is claimed in that case.
+                self.poison_terminal();
+                permanently_poison_process_global_kfd_runtime_gate_v1();
+                std::panic::resume_unwind(payload)
+            }
+        };
         match (envelope, created) {
             (Ok(()), Some(Ok(created))) => Ok(created),
             (Ok(()), Some(Err(failure))) => {
@@ -15195,40 +15298,52 @@ impl ComputeAqlQueueSessionV1 {
         if !after_recycle && let Some(returned) = self.persistent_compute_test_release.take() {
             return Ok(returned);
         }
-        let loan = self
-            .restore_model_ownership_for_live_mutation()
-            .map_err(|error| (error, Vec::new()))?;
         let Some(dispatch) = self.dispatch.take() else {
-            let retake = self.retake_model_ownership_after_live_mutation(loan);
             return Err((
-                retake
-                    .err()
-                    .unwrap_or_else(|| Gfx942DispatchBindingErrorV1::ResourcePhase.into()),
+                Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
                 Vec::new(),
             ));
         };
-        let result = {
-            let memory = &mut self
-                .engine
-                .as_mut()
-                .expect("model loan requires queue engine")
-                .backend
-                .session;
-            if after_recycle {
-                dispatch.release_persistent_data_after_recycle(memory)
-            } else {
-                dispatch.release_persistent_data_before_publication(memory)
+        let mut dispatch = Some(dispatch);
+        let envelope = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.with_live_queue_memory_model_custody(|memory| {
+                let dispatch = dispatch
+                    .take()
+                    .expect("custody operation executes at most once");
+                if after_recycle {
+                    dispatch.release_persistent_data_after_recycle(memory)
+                } else {
+                    dispatch.release_persistent_data_before_publication(memory)
+                }
+                .map_err(|(error, data)| (error.into(), data))
+            })
+        }));
+        let envelope = match envelope {
+            Ok(envelope) => envelope,
+            Err(payload) => {
+                // A consuming callee may already have dropped the owner while
+                // unwinding. Restore it only when it remains in this frame;
+                // otherwise only terminal/process-poison disposition is known;
+                // no retained owner or native-resource custody is claimed.
+                self.dispatch = dispatch;
+                self.poison_terminal();
+                permanently_poison_process_global_kfd_runtime_gate_v1();
+                std::panic::resume_unwind(payload)
             }
-            .map_err(|(error, data)| (error.into(), data))
         };
-        if let Err(error) = self.retake_model_ownership_after_live_mutation(loan) {
-            self.poison_terminal();
-            let data = match result {
-                Ok((_, data)) | Err((_, data)) => data,
-            };
-            return Err((error, data));
+        match envelope {
+            Ok((result, Ok(()))) => result,
+            Ok((result, Err(error))) => {
+                let data = match result {
+                    Ok((_, data)) | Err((_, data)) => data,
+                };
+                Err((error, data))
+            }
+            Err(error) => {
+                self.dispatch = dispatch;
+                Err((error, Vec::new()))
+            }
         }
-        result
     }
 
     fn detach_persistent_dispatch_data_retaining_control_v1(
@@ -15268,10 +15383,7 @@ impl ComputeAqlQueueSessionV1 {
         let loan = engine
             .backend
             .session
-            .loan_queue_model_foundation_for_live_mutation(
-                &mut engine.identity,
-                &mut engine.memory,
-            )?;
+            .loan_queue_model_foundation_for_live_mutation(&mut engine.foundation)?;
         engine.backend.foundation_in_engine = false;
         Ok(loan)
     }
@@ -15294,11 +15406,7 @@ impl ComputeAqlQueueSessionV1 {
         engine
             .backend
             .session
-            .retake_queue_model_foundation_after_live_mutation(
-                &mut engine.identity,
-                &mut engine.memory,
-                loan,
-            )?;
+            .retake_queue_model_foundation_after_live_mutation(&mut engine.foundation, loan)?;
         engine.backend.foundation_in_engine = true;
         Ok(())
     }
@@ -15313,16 +15421,15 @@ impl ComputeAqlQueueSessionV1 {
         if !engine.backend.foundation_in_engine {
             return Ok(());
         }
-        let domain = engine.identity.domain_id();
-        let identity = core::mem::replace(&mut engine.identity, DeviceIdentityStateV1::new(domain));
-        let memory = core::mem::replace(
-            &mut engine.memory,
-            MemoryLifecycleStateV1::new_monotonic_non_reusable(domain),
+        let domain = engine.foundation.identity().domain_id();
+        let foundation = core::mem::replace(
+            &mut engine.foundation,
+            QueueModelFoundationV1::empty(domain),
         );
         engine
             .backend
             .session
-            .restore_queue_model_foundation(identity, memory)?;
+            .restore_queue_model_foundation(foundation)?;
         engine.backend.foundation_in_engine = false;
         Ok(())
     }
@@ -15701,6 +15808,183 @@ fn map_submission(error: NativeAqlSubmissionErrorV1) -> ComputeAqlQueueSessionEr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nonpanic_retake_failure_requests_local_and_process_terminal_poison() {
+        let terminal_poisoned = core::cell::Cell::new(false);
+        let process_poisoned = core::cell::Cell::new(false);
+        let retake = Err::<(), _>(ComputeAqlQueueSessionErrorV1::Contract(
+            "injected retake failure",
+        ));
+        fail_closed_live_queue_model_retake_v1(
+            &retake,
+            || terminal_poisoned.set(true),
+            || process_poisoned.set(true),
+        );
+        assert!(terminal_poisoned.get());
+        assert!(process_poisoned.get());
+
+        let source = include_str!("queue_live.rs");
+        let envelope = source
+            .split("fn with_live_queue_memory_model_custody<R>")
+            .nth(1)
+            .unwrap()
+            .split("fn with_sdma_queue_creation_custody_v1<R>")
+            .next()
+            .unwrap();
+        let failure = envelope
+            .find("fail_closed_live_queue_model_retake_v1(")
+            .unwrap();
+        let terminal = envelope[failure..].find("self.poison_terminal()").unwrap() + failure;
+        let process = envelope[failure..]
+            .find("permanently_poison_process_global_kfd_runtime_gate_v1")
+            .unwrap()
+            + failure;
+        let result = envelope.find("match result").unwrap();
+        assert!(failure < terminal);
+        assert!(terminal < process);
+        assert!(process < result);
+    }
+
+    #[test]
+    fn destroy_revision_preflight_preserves_precondition_order_and_is_terminal() {
+        let source = include_str!("queue_live.rs");
+        let destroy = source
+            .split("fn destroy_queue_and_event(")
+            .nth(1)
+            .unwrap()
+            .split("fn complete_destroy<T>")
+            .next()
+            .unwrap();
+        let releasable = destroy
+            .find("self.completion_owner.ensure_releasable()")
+            .unwrap();
+        let mode = destroy
+            .find("let (return_attached, detached_return) = match mode")
+            .unwrap();
+        let preflight = destroy
+            .find("preflight_memory_transition_revisions(1)")
+            .unwrap();
+        let terminal = destroy[preflight..].find("self.poison_terminal()").unwrap() + preflight;
+        let process = destroy[preflight..]
+            .find("permanently_poison_process_global_kfd_runtime_gate_v1()")
+            .unwrap()
+            + preflight;
+        let first_native = destroy.find("striped_sdma.destroy_queue(memory)").unwrap();
+        assert!(releasable < mode);
+        assert!(mode < preflight);
+        assert!(preflight < terminal);
+        assert!(terminal < process);
+        assert!(process < first_native);
+    }
+
+    #[test]
+    fn retake_failure_does_not_replace_the_original_panic_payload() {
+        let caught = std::panic::catch_unwind(|| {
+            resume_live_queue_model_panic_v1(
+                Box::new("original queue mutation panic"),
+                Err(ComputeAqlQueueSessionErrorV1::Contract(
+                    "injected retake failure",
+                )),
+            )
+        })
+        .expect_err("panic resumption must escape the cleanup boundary");
+        assert_eq!(
+            caught.downcast_ref::<&'static str>(),
+            Some(&"original queue mutation panic")
+        );
+
+        let source = include_str!("queue_live.rs");
+        let envelope = source
+            .split("fn with_live_queue_memory_model_custody<R>")
+            .nth(1)
+            .unwrap()
+            .split("fn with_sdma_queue_creation_custody_v1<R>")
+            .next()
+            .unwrap();
+        let retake = envelope
+            .find("retake_model_ownership_after_live_mutation(loan)")
+            .unwrap();
+        let unwind = envelope.find("Err(payload)").unwrap();
+        let terminal = envelope[unwind..].find("self.poison_terminal()").unwrap() + unwind;
+        let process_gate = envelope[unwind..]
+            .find("permanently_poison_process_global_kfd_runtime_gate_v1()")
+            .unwrap()
+            + unwind;
+        let resume = envelope[unwind..]
+            .find("resume_live_queue_model_panic_v1(payload, retake)")
+            .unwrap()
+            + unwind;
+        assert!(retake < unwind);
+        assert!(unwind < terminal);
+        assert!(terminal < process_gate);
+        assert!(process_gate < resume);
+
+        let bind = source
+            .split("pub fn bind_directional_persistent_fixed_dispatch_v1")
+            .nth(1)
+            .unwrap()
+            .split("pub fn submit_directional_persistent_fixed_dispatch_v1")
+            .next()
+            .unwrap();
+        let panic_arm = bind
+            .split("let prepared_dispatch = match prepared_dispatch")
+            .nth(1)
+            .unwrap()
+            .split("let prepared_dispatch = match prepared_dispatch")
+            .next()
+            .unwrap();
+        assert!(panic_arm.contains("quarantine_persistent_retained_control_replay_prepared_v1"));
+        assert!(panic_arm.contains("state,"));
+        assert!(!panic_arm.contains("state: PersistentComputeUseStateV1::Quarantined"));
+    }
+
+    #[test]
+    fn every_live_foundation_mutation_and_moved_owner_uses_the_unwind_envelope() {
+        let source = include_str!("queue_live.rs");
+        let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
+        assert_eq!(
+            production
+                .matches("restore_model_ownership_for_live_mutation()")
+                .count(),
+            1
+        );
+        assert_eq!(
+            production
+                .matches("retake_model_ownership_after_live_mutation(loan)")
+                .count(),
+            1
+        );
+
+        let auxiliary = production
+            .split("pub fn create_auxiliary_compute_lane_with_fixed_dispatch")
+            .nth(1)
+            .unwrap()
+            .split("pub fn destroy_auxiliary_compute_lane_v1")
+            .next()
+            .unwrap();
+        let envelope = auxiliary
+            .find("with_live_queue_memory_model(move |memory|")
+            .unwrap();
+        let callback = auxiliary.find("prepare_data(memory)?").unwrap();
+        assert!(envelope < callback);
+
+        for wrapper in [
+            "fn with_sdma_owner_memory<R>",
+            "fn with_striped_sdma_owner_memory<R>",
+        ] {
+            let body = production
+                .split(wrapper)
+                .nth(1)
+                .unwrap()
+                .split("\n    fn ")
+                .next()
+                .unwrap();
+            assert!(body.contains("std::panic::catch_unwind"));
+            assert!(body.contains("self.with_live_queue_memory_model"));
+            assert!(body.contains("std::panic::resume_unwind(payload)"));
+        }
+    }
 
     #[test]
     fn destroyed_queue_observation_counts_base_and_optional_sdma_resources() {
@@ -18113,7 +18397,7 @@ mod tests {
         )));
         assert_eq!(
             SHARED_GTT_MEMORY_PROFILE_SHA256_V1,
-            "52351c439a7c64e91a353749201e2e35e8793474b76de5baca34090287a66034"
+            "026c8c05b6388149765ccb84a95739de6a6ddbbe89577217284b18bdcfdcbdd3"
         );
         assert_eq!(
             GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1,
@@ -18710,18 +18994,29 @@ mod tests {
         assert!(retained < replay_call);
         assert!(replay_call < initial_start);
         let initial = &bind[initial_start..];
-        assert_eq!(initial.matches("with_live_queue_memory_model").count(), 1);
         assert_eq!(
             initial
-                .matches("restore_model_ownership_for_live_mutation")
+                .matches("with_live_queue_memory_model(|memory|")
                 .count(),
             1
         );
         assert_eq!(
             initial
-                .matches("retake_model_ownership_after_live_mutation")
+                .matches("with_live_queue_memory_model_custody")
                 .count(),
             1
+        );
+        assert_eq!(
+            initial
+                .matches("restore_model_ownership_for_live_mutation")
+                .count(),
+            0
+        );
+        assert_eq!(
+            initial
+                .matches("retake_model_ownership_after_live_mutation")
+                .count(),
+            0
         );
         assert_eq!(
             initial
@@ -18741,8 +19036,10 @@ mod tests {
             .next()
             .unwrap();
         let close_audit = release.find(".check_queue_currentness()").unwrap();
-        let consume_control = release.find(".dispatch\n            .take()").unwrap();
+        let consume_control = release.find("let mut dispatch = Some(").unwrap();
         assert!(close_audit < consume_control);
+        assert!(release.contains("std::panic::catch_unwind"));
+        assert!(release.contains("with_live_queue_memory_model_custody"));
 
         let shared_memory = include_str!("shared_memory.rs");
         let operational = shared_memory

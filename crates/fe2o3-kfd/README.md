@@ -297,7 +297,22 @@ initialization declaration into copy evidence or expose a numeric address.
 While a native queue remains live, every detach, rebind, allocation,
 initialization, or release mutation temporarily restores that same model
 foundation to the shared session and reclaims the updated foundation before
-returning to queue operation.
+returning to queue operation. Identity and memory now move with a private,
+non-cloneable structural-invariant certificate. The certificate is minted only
+after one full identity/memory/device/VM validation, binds the exact session,
+domain, selected device, VM, issuer, loan generation, and monotonic mutation
+revision, and makes ordinary loan/retake authentication independent of journal
+depth. Every sealed shared-memory projection advances the revision, including
+mutations performed by the public dispatch-data preparation callback. Final
+queue restoration performs one full validation, then revokes the certificate
+so the returned session may later transfer to a fresh queue occurrence. Before
+native allocation, map, unmap, release, plan admission, or queue destruction,
+the implementation preflights the exact remaining revision capacity. Plan
+admission exhaustion retains authority inside the terminal native engine; the
+initial-queue wrapper then returns no recoverable Rust authority. Consuming
+memory-token exhaustion quarantines the shared session. Both paths permanently
+close the process gate. This is fail-closed boundary safety, not evidence about
+practical counter frequency or performance.
 The dedicated bounded lease journal is not projected into the runtime memory
 model and has no Verus-to-Rust or syscall refinement. Ordinary C3 leases still
 grant no CPU mapping, initialization, sync or async copy, alias, quiescence,
@@ -565,6 +580,15 @@ or model-restoration failure yields no recoverable returned state. The consumed
 session and its no-effect drops retain any possibly live native resources for
 process teardown; there is no partial in-process cleanup or retry.
 
+Rust unwind across a live model loan is caught inside the private custody
+envelope. The implementation attempts exact retake, terminally poisons the
+queue and permanently closes the process runtime gate if retake fails on either
+normal return or unwind, and then resumes the original panic on unwind. Borrowed
+SDMA and selected-lane owners are restored before that resume. If a panicking
+callee already consumed an owner, only terminal/process poison disposition is
+known; no retained owner or native-resource custody is claimed. Drop still
+performs no native cleanup.
+
 There is no initialization boolean or caller-supplied read premise. Implicit
 fields outside the exact geometry/dynamic-LDS subset remain unsupported.
 Per-segment GPU permission behavior for the uniformly mapped code allocation,
@@ -572,6 +596,9 @@ concrete effect/alias semantics, CPU/GPU coherence, firmware packet execution,
 acquire-observed device-write visibility, and quiescence remain Contracted. The host
 state machines and mock fault tests are not a concrete Verus or machine
 refinement; the public custody path alone is not hardware execution evidence.
+The certificate is likewise not currentness evidence, a syscall-to-model or
+Rust-to-Verus refinement proof, measured performance evidence, or a hardware
+validity claim.
 
 ### C6 unbacked device-content copy foundation
 
