@@ -6,14 +6,15 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAbiValueV1, SemanticBasicBlockV1, SemanticBlockIdV1, SemanticBlockIdentityV1,
     SemanticBorrowKindV1, SemanticCallDestinationV1, SemanticCallableIdV1, SemanticCanonAbiV1,
     SemanticCompilerIntrinsicIdentityV1, SemanticConstGenericArgumentsIdentityV1,
-    SemanticControlFlowEdgeV1, SemanticDirectCallV1, SemanticExternAbiV1, SemanticFunctionAbiV1,
-    SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
-    SemanticItemDefinitionIdentityV1, SemanticLayoutIdentityV1, SemanticLocalDeclV1,
-    SemanticLocalIdV1, SemanticLocalIdentityV1, SemanticMemoryStoreV1, SemanticMirLimitsV1,
-    SemanticMonomorphizationIdentityV1, SemanticNonBodyCallableBindingV1, SemanticProjectionV1,
-    SemanticRvalueV1, SemanticStatementV1, SemanticSwitchTargetV1, SemanticSwitchTargetsV1,
-    SemanticTargetDataLayoutV1, SemanticTerminatorV1, SemanticTypeIdentityV1, SemanticTypeLayoutV1,
-    SemanticUnwindActionV1, SemanticVolatilityV1,
+    SemanticControlFlowEdgeV1, SemanticDirectCallV1, SemanticDisjointIndexSpaceV1,
+    SemanticExternAbiV1, SemanticFunctionAbiV1, SemanticFunctionRoleV1,
+    SemanticGenericTypeArgumentsIdentityV1, SemanticItemDefinitionIdentityV1,
+    SemanticLayoutIdentityV1, SemanticLocalDeclV1, SemanticLocalIdV1, SemanticLocalIdentityV1,
+    SemanticMemoryStoreV1, SemanticMirLimitsV1, SemanticMonomorphizationIdentityV1,
+    SemanticNonBodyCallableBindingV1, SemanticProjectionV1, SemanticRvalueV1, SemanticStatementV1,
+    SemanticSwitchTargetV1, SemanticSwitchTargetsV1, SemanticTargetDataLayoutV1,
+    SemanticTerminatorV1, SemanticTypeIdentityV1, SemanticTypeLayoutV1, SemanticUnwindActionV1,
+    SemanticVolatilityV1,
 };
 
 fn test_bytes(tag: u8) -> [u8; 32] {
@@ -176,6 +177,25 @@ fn test_borrow(reference_local: u32, source_local: u32) -> SemanticStatementV1 {
     test_typed_borrow(reference_local, 1, source_local, 0)
 }
 
+fn test_reborrow(reference_local: u32, source_reference_local: u32) -> SemanticStatementV1 {
+    let reference_type = SemanticTypeIdV1::from_index(1);
+    SemanticStatementV1::new(
+        fe2o3_mir_model::semantic_mir_v1::SemanticSourceProvenanceV1::unavailable(),
+        SemanticStatementKindV1::Assign(
+            fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1::new(
+                test_typed_place(reference_local, 1),
+                SemanticRvalueV1::new(
+                    reference_type,
+                    SemanticRvalueKindV1::Borrow {
+                        kind: SemanticBorrowKindV1::Mutable,
+                        place: test_dereference_place(source_reference_local, 0),
+                    },
+                ),
+            ),
+        ),
+    )
+}
+
 fn test_typed_borrow(
     reference_local: u32,
     reference_type: u32,
@@ -306,6 +326,14 @@ fn test_block(
 }
 
 fn test_function(blocks: Vec<SemanticBasicBlockV1>) -> SemanticFunctionDeclV1 {
+    test_function_with_reference_locals(blocks, 4)
+}
+
+fn test_function_with_reference_locals(
+    blocks: Vec<SemanticBasicBlockV1>,
+    local_count: usize,
+) -> SemanticFunctionDeclV1 {
+    assert!(local_count >= 4);
     let scalar = SemanticTypeIdV1::from_index(1);
     let abi = SemanticFunctionAbiV1::from_rustc(
         SemanticAbiIdentityV1::from_sha256(test_bytes(50)),
@@ -319,6 +347,19 @@ fn test_function(blocks: Vec<SemanticBasicBlockV1>) -> SemanticFunctionDeclV1 {
         SemanticAbiValueV1::new(scalar, SemanticAbiPassModeV1::Ignore),
     )
     .unwrap();
+    let mut locals = vec![
+        test_local(60, 1, SemanticLocalRoleV1::Return),
+        test_local(61, 0, SemanticLocalRoleV1::Argument(0)),
+        test_local(62, 1, SemanticLocalRoleV1::Temporary),
+        test_local(63, 1, SemanticLocalRoleV1::Temporary),
+    ];
+    for local in locals.len()..local_count {
+        locals.push(test_local(
+            u8::try_from(local).unwrap().wrapping_add(64),
+            1,
+            SemanticLocalRoleV1::Temporary,
+        ));
+    }
     SemanticFunctionDeclV1::new(
         SemanticFunctionIdentityV1::from_sha256(test_bytes(52)),
         SemanticFunctionRoleV1::KernelRoot,
@@ -328,12 +369,7 @@ fn test_function(blocks: Vec<SemanticBasicBlockV1>) -> SemanticFunctionDeclV1 {
         SemanticConstGenericArgumentsIdentityV1::from_sha256(test_bytes(56)),
         fe2o3_mir_model::semantic_mir_v1::SemanticSourceProvenanceV1::unavailable(),
         abi,
-        vec![
-            test_local(60, 1, SemanticLocalRoleV1::Return),
-            test_local(61, 0, SemanticLocalRoleV1::Argument(0)),
-            test_local(62, 1, SemanticLocalRoleV1::Temporary),
-            test_local(63, 1, SemanticLocalRoleV1::Temporary),
-        ],
+        locals,
         SemanticBlockIdV1::from_index(0),
         blocks,
     )
@@ -1630,6 +1666,184 @@ fn transparent_borrow_accepts_one_direct_compiler_intrinsic_consumer() {
     let callables = [test_intrinsic_callable(function.abi().clone())];
 
     assert!(source_is_promotable(&function, &callables));
+}
+
+#[test]
+fn transparent_borrow_accepts_repeated_block_component_projections() {
+    let function = test_function_with_reference_locals(
+        vec![
+            test_block(
+                75,
+                vec![test_borrow(2, 1)],
+                test_call(
+                    0,
+                    vec![
+                        SemanticOperandV1::Copy(test_scalar_place(2)),
+                        SemanticOperandV1::Copy(test_scalar_place(3)),
+                    ],
+                    Some(SemanticCallDestinationV1::new(
+                        test_scalar_place(0),
+                        test_edge(SemanticEdgeRoleV1::CallReturn, 1),
+                    )),
+                ),
+            ),
+            test_block(
+                76,
+                vec![test_borrow(4, 1)],
+                test_call(
+                    0,
+                    vec![
+                        SemanticOperandV1::Copy(test_scalar_place(4)),
+                        SemanticOperandV1::Copy(test_scalar_place(3)),
+                    ],
+                    None,
+                ),
+            ),
+        ],
+        5,
+    );
+    let callables = [test_operation_callable(
+        function.abi().clone(),
+        SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex {
+            block_witness: SemanticTypeIdV1::from_index(0),
+            raw_index: SemanticTypeIdV1::from_index(1),
+            index_space: SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                lanes_per_block: 64,
+                elements_per_lane: 8,
+            },
+            lanes_per_block: 64,
+            elements_per_lane: 8,
+        },
+        116,
+    )];
+    let transparent = transparent_borrow_sites_v1(&function, &callables);
+
+    assert_eq!(transparent.len(), 2);
+    assert!(source_is_promotable(&function, &callables));
+}
+
+#[test]
+fn transparent_borrow_accepts_an_exact_reborrow_chain_to_one_intrinsic() {
+    let function = test_function(vec![test_block(
+        69,
+        vec![test_borrow(2, 1), test_reborrow(3, 2)],
+        test_call(0, vec![SemanticOperandV1::Copy(test_scalar_place(3))], None),
+    )]);
+    let callables = [test_intrinsic_callable(function.abi().clone())];
+    let transparent = transparent_borrow_sites_v1(&function, &callables);
+    let (input, _, _) = semantic_function_ssa_input_v1(&function, None, &callables, &transparent);
+
+    assert_eq!(transparent.len(), 2);
+    assert!(input.promotable()[1]);
+    assert!(input.promotable()[2]);
+    assert!(input.promotable()[3]);
+}
+
+#[test]
+fn transparent_reborrow_rejects_an_escaping_intermediate_reference() {
+    let function = test_function(vec![test_block(
+        70,
+        vec![
+            test_borrow(2, 1),
+            test_reborrow(3, 2),
+            test_assign(0, SemanticOperandV1::Copy(test_scalar_place(2))),
+        ],
+        test_call(0, vec![SemanticOperandV1::Copy(test_scalar_place(3))], None),
+    )]);
+    let callables = [test_intrinsic_callable(function.abi().clone())];
+    let transparent = transparent_borrow_sites_v1(&function, &callables);
+
+    assert!(transparent.is_empty());
+    assert!(!source_is_promotable(&function, &callables));
+}
+
+#[test]
+fn transparent_reborrow_rejects_a_forked_intermediate_reference() {
+    let function = test_function_with_reference_locals(
+        vec![
+            test_block(
+                71,
+                vec![test_borrow(2, 1), test_reborrow(3, 2)],
+                test_call(
+                    0,
+                    vec![SemanticOperandV1::Copy(test_scalar_place(3))],
+                    Some(SemanticCallDestinationV1::new(
+                        test_scalar_place(0),
+                        test_edge(SemanticEdgeRoleV1::CallReturn, 1),
+                    )),
+                ),
+            ),
+            test_block(
+                72,
+                vec![test_reborrow(4, 2)],
+                test_call(0, vec![SemanticOperandV1::Copy(test_scalar_place(4))], None),
+            ),
+        ],
+        5,
+    );
+    let callables = [test_intrinsic_callable(function.abi().clone())];
+
+    assert!(transparent_borrow_sites_v1(&function, &callables).is_empty());
+    assert!(!source_is_promotable(&function, &callables));
+}
+
+#[test]
+fn transparent_reborrow_rejects_a_chain_ending_in_an_ordinary_call() {
+    let function = test_function(vec![test_block(
+        73,
+        vec![test_borrow(2, 1), test_reborrow(3, 2)],
+        test_call(0, vec![SemanticOperandV1::Copy(test_scalar_place(3))], None),
+    )]);
+    let callables = [SemanticCallableDeclV1::defined(
+        SemanticFunctionIdV1::from_index(0),
+    )];
+
+    assert!(transparent_borrow_sites_v1(&function, &callables).is_empty());
+    assert!(!source_is_promotable(&function, &callables));
+}
+
+#[test]
+fn transparent_reborrow_rejects_a_chain_ending_in_a_rejected_intrinsic() {
+    let function = test_function(vec![test_block(
+        77,
+        vec![test_borrow(2, 1), test_reborrow(3, 2)],
+        test_call(0, vec![SemanticOperandV1::Copy(test_scalar_place(3))], None),
+    )]);
+    let callables = [test_operation_callable(
+        function.abi().clone(),
+        SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
+            scope: SemanticTypeIdV1::from_index(1),
+            dynamic_lds: SemanticTypeIdV1::from_index(1),
+            element_storage: SemanticTypeIdV1::from_index(1),
+            elements: 1,
+        },
+        117,
+    )];
+
+    assert!(transparent_borrow_sites_v1(&function, &callables).is_empty());
+    assert!(!source_is_promotable(&function, &callables));
+}
+
+#[test]
+fn transparent_reborrow_rejects_borrowing_the_reference_value() {
+    let function = test_function(vec![test_block(
+        74,
+        vec![test_borrow(2, 1), test_typed_borrow(3, 1, 2, 1)],
+        test_call(0, vec![SemanticOperandV1::Copy(test_scalar_place(3))], None),
+    )]);
+    let callables = [test_operation_callable(
+        function.abi().clone(),
+        SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
+            scope: SemanticTypeIdV1::from_index(1),
+            dynamic_lds: SemanticTypeIdV1::from_index(1),
+            element_storage: SemanticTypeIdV1::from_index(1),
+            elements: 1,
+        },
+        115,
+    )];
+
+    assert!(transparent_borrow_sites_v1(&function, &callables).is_empty());
+    assert!(!source_is_promotable(&function, &callables));
 }
 
 #[test]

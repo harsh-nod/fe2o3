@@ -9,9 +9,12 @@ pub(super) struct SemanticTransparentBorrowSiteV1 {
 #[derive(Clone, Copy)]
 struct SemanticBorrowCandidateV1 {
     site: SemanticTransparentBorrowSiteV1,
+    source_local: u32,
     source_type: SemanticTypeIdV1,
+    source_reference: Option<u32>,
     valid: bool,
     consumers: u32,
+    intrinsic_consumer: bool,
 }
 
 pub(super) fn transparent_borrow_sites_v1(
@@ -29,19 +32,28 @@ pub(super) fn transparent_borrow_sites_v1(
             let SemanticRvalueKindV1::Borrow { place, .. } = assignment.value().kind() else {
                 continue;
             };
-            if !assignment.destination().projections().is_empty() || !place.projections().is_empty()
-            {
+            if !assignment.destination().projections().is_empty() {
                 continue;
             }
+            let source_reference = match place.projections() {
+                [] => None,
+                [projection] if projection.kind() == SemanticProjectionKindV1::Dereference => {
+                    Some(place.local().index())
+                }
+                _ => continue,
+            };
             let reference_local = assignment.destination().local().index();
             let candidate = SemanticBorrowCandidateV1 {
                 site: SemanticTransparentBorrowSiteV1 {
                     block: block_index as u32,
                     statement: statement_index as u32,
                 },
+                source_local: place.local().index(),
                 source_type: place.ty(),
+                source_reference,
                 valid: true,
                 consumers: 0,
+                intrinsic_consumer: false,
             };
             let index = candidates.len();
             candidates.push(candidate);
@@ -79,11 +91,33 @@ pub(super) fn transparent_borrow_sites_v1(
         );
     }
 
-    candidates
+    let mut accepted = BTreeSet::new();
+    for terminal in 0..candidates.len() {
+        if !candidates[terminal].intrinsic_consumer {
+            continue;
+        }
+        let mut chain = Vec::new();
+        let mut visited = BTreeSet::new();
+        let mut current = terminal;
+        loop {
+            let candidate = candidates[current];
+            if !candidate.valid || candidate.consumers != 1 || !visited.insert(current) {
+                break;
+            }
+            chain.push(current);
+            let Some(source_reference) = candidate.source_reference else {
+                accepted.extend(chain);
+                break;
+            };
+            let Some(parent) = candidate_by_reference.get(&source_reference).copied() else {
+                break;
+            };
+            current = parent;
+        }
+    }
+    accepted
         .into_iter()
-        .filter_map(|candidate| {
-            (candidate.valid && candidate.consumers == 1).then_some(candidate.site)
-        })
+        .map(|candidate| candidates[candidate].site)
         .collect()
 }
 
@@ -153,28 +187,45 @@ fn invalidate_reference_uses_in_statement_v1(
 ) {
     match statement {
         SemanticStatementKindV1::Assign(assignment) => {
+            let candidate_definition = candidate_by_reference
+                .get(&assignment.destination().local().index())
+                .copied()
+                .filter(|candidate| candidates[*candidate].site == site);
             if let Some(candidate) = candidate_by_reference
                 .get(&assignment.destination().local().index())
                 .copied()
-                && candidates[candidate].site != site
+                && candidate_definition != Some(candidate)
             {
                 candidates[candidate].valid = false;
             }
-            let is_candidate_definition = candidate_by_reference
-                .get(&assignment.destination().local().index())
-                .is_some_and(|candidate| candidates[*candidate].site == site);
-            if !is_candidate_definition {
+            if let Some(candidate) = candidate_definition {
+                if let Some(source_reference) = candidates[candidate].source_reference {
+                    match candidate_by_reference.get(&source_reference).copied() {
+                        Some(parent) if parent != candidate => {
+                            candidates[parent].consumers =
+                                candidates[parent].consumers.saturating_add(1);
+                        }
+                        Some(_) | None => candidates[candidate].valid = false,
+                    }
+                } else if let Some(parent) = candidate_by_reference
+                    .get(&candidates[candidate].source_local)
+                    .copied()
+                {
+                    candidates[parent].valid = false;
+                    candidates[candidate].valid = false;
+                }
+            } else {
                 invalidate_reference_place_v1(
                     assignment.destination(),
                     candidate_by_reference,
                     candidates,
                 );
+                invalidate_reference_rvalue_v1(
+                    assignment.value().kind(),
+                    candidate_by_reference,
+                    candidates,
+                );
             }
-            invalidate_reference_rvalue_v1(
-                assignment.value().kind(),
-                candidate_by_reference,
-                candidates,
-            );
         }
         SemanticStatementKindV1::Store(store) => {
             invalidate_reference_place_v1(store.destination(), candidate_by_reference, candidates);
@@ -273,6 +324,7 @@ fn validate_reference_uses_in_terminator_v1(
                 if accepted {
                     candidates[candidate_index].consumers =
                         candidates[candidate_index].consumers.saturating_add(1);
+                    candidates[candidate_index].intrinsic_consumer = true;
                 } else {
                     candidates[candidate_index].valid = false;
                 }
@@ -410,6 +462,9 @@ fn compiler_intrinsic_accepts_transparent_borrow_v1(
         | SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { index_witness, .. } => {
             argument == 0 && source_type == *index_witness
         }
+        SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex {
+            block_witness, ..
+        } => argument == 0 && source_type == *block_witness,
         SemanticCompilerIntrinsicOperationV1::DisjointSliceLen { disjoint_slice, .. }
         | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen {
             disjoint_slice, ..
