@@ -23,6 +23,8 @@ use crate::sdma::{
 use crate::shared_memory::SharedGttMemorySessionV1;
 use crate::wait::{MonotonicWaitV1, WaitActionV1};
 
+const GFX942_STRIPED_SDMA_MAX_SLEEP_V1: Duration = Duration::from_micros(25);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct BoundStripedTailV1 {
     queue_ordinal: u16,
@@ -468,7 +470,8 @@ impl Gfx942SdmaQueueSetV1 {
             diagnostics.opening_currentness_ns =
                 profile_elapsed_ns_v1::<PROFILE>(opening_currentness_started);
         }
-        let mut wait = MonotonicWaitV1::until(deadline);
+        let mut wait =
+            MonotonicWaitV1::until_with_sleep_ceiling(deadline, GFX942_STRIPED_SDMA_MAX_SLEEP_V1);
         let active_queues = &prepared.active_queues[..usize::from(prepared.tail_count)];
         let tail_scan_started = profile_start_v1::<PROFILE>();
         let ready_tail_queue_mask = observe_tail_rounds_profiled_until_v1::<PROFILE, _, _, _>(
@@ -1079,6 +1082,16 @@ mod tests {
         assert!(!source.contains("collect::<"));
         assert!(!source.contains("observe_entire_completion_roster("));
         assert!(!source.contains("retire_prepared_striped_multi_queue_completion"));
+        assert!(
+            source
+                .contains("GFX942_STRIPED_SDMA_MAX_SLEEP_V1: Duration = Duration::from_micros(25)")
+        );
+        assert_eq!(
+            source
+                .matches("MonotonicWaitV1::until_with_sleep_ceiling")
+                .count(),
+            1
+        );
         assert_eq!(source.matches("for entry in entries").count(), 1);
         assert!(source.contains("Gfx942SdmaStripedAllReadyAuditV1<'a>"));
         assert!(source.contains("submission: &'a Gfx942SdmaMultiQueueSubmissionV1"));

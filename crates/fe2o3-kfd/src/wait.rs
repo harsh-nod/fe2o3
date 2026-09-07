@@ -24,6 +24,7 @@ pub(crate) struct MonotonicWaitV1 {
     active_spin_until: Option<Instant>,
     attempts: u32,
     next_sleep: Duration,
+    max_sleep: Duration,
 }
 
 impl MonotonicWaitV1 {
@@ -33,6 +34,7 @@ impl MonotonicWaitV1 {
             active_spin_until: None,
             attempts: 0,
             next_sleep: INITIAL_SLEEP_V1,
+            max_sleep: MAX_SLEEP_V1,
         }
     }
 
@@ -42,6 +44,17 @@ impl MonotonicWaitV1 {
             active_spin_until: None,
             attempts: 0,
             next_sleep: INITIAL_SLEEP_V1,
+            max_sleep: MAX_SLEEP_V1,
+        }
+    }
+
+    pub(crate) fn until_with_sleep_ceiling(deadline: Instant, max_sleep: Duration) -> Self {
+        Self {
+            deadline: Some(deadline),
+            active_spin_until: None,
+            attempts: 0,
+            next_sleep: INITIAL_SLEEP_V1.min(max_sleep),
+            max_sleep,
         }
     }
 
@@ -65,6 +78,7 @@ impl MonotonicWaitV1 {
             active_spin_until: Some(active_spin_until),
             attempts: 0,
             next_sleep: INITIAL_SLEEP_V1,
+            max_sleep: MAX_SLEEP_V1,
         }
     }
 
@@ -91,7 +105,7 @@ impl MonotonicWaitV1 {
             .deadline
             .map(|deadline| deadline.saturating_duration_since(now))
             .map_or(self.next_sleep, |remaining| remaining.min(self.next_sleep));
-        self.next_sleep = self.next_sleep.saturating_mul(2).min(MAX_SLEEP_V1);
+        self.next_sleep = self.next_sleep.saturating_mul(2).min(self.max_sleep);
         WaitActionV1::Sleep(sleep)
     }
 
@@ -177,6 +191,24 @@ mod tests {
             wait.next_action_at(started),
             WaitActionV1::Sleep(INITIAL_SLEEP_V1)
         );
+    }
+
+    #[test]
+    fn explicit_sleep_ceiling_is_applied_before_and_after_backoff() {
+        let started = Instant::now();
+        let ceiling = Duration::from_micros(25);
+        let mut wait =
+            MonotonicWaitV1::until_with_sleep_ceiling(started + Duration::from_secs(1), ceiling);
+        for _ in 0..SPIN_ATTEMPTS_V1 {
+            assert_eq!(wait.next_action_at(started), WaitActionV1::Spin);
+        }
+        for _ in 0..YIELD_ATTEMPTS_V1 {
+            assert_eq!(wait.next_action_at(started), WaitActionV1::Yield);
+        }
+        for _ in 0..32 {
+            assert_eq!(wait.next_action_at(started), WaitActionV1::Sleep(ceiling));
+        }
+        assert_eq!(wait.max_sleep, ceiling);
     }
 
     #[test]
