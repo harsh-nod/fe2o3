@@ -28,6 +28,8 @@
 
 use alloc::vec::Vec;
 
+use crate::r46_gfx942_striped_sdma_tail_wait::R46AllReadyFullAuditWitnessV1;
+
 pub const R40_GFX942_SDMA_ENGINE_COUNT_V1: u8 = 2;
 pub const R40_GFX942_SDMA_QUEUES_PER_ENGINE_V1: u8 = 8;
 pub const R40_GFX942_COMBINED_MIN_STRIPED_QUEUES_V1: u8 = 2;
@@ -557,6 +559,38 @@ impl R40AggregateSubmissionV1 {
                     retained_shards: prepared_completed_output,
                 })
             }
+        }
+    }
+
+    /// Completes retirement after a crate-internal caller has already
+    /// authenticated and observed the entire completion roster and checked the
+    /// entire retirement preflight, represented by an R46-private move-only
+    /// witness. This deliberately does not re-observe either roster; the R40
+    /// public observer remains the general checked path.
+    pub(crate) fn complete_after_external_full_audit_model_only(
+        self,
+        witness: R46AllReadyFullAuditWitnessV1,
+    ) -> R40AggregateCompletedV1 {
+        debug_assert!(witness.matches_plan_model_only(&self.plan));
+        let observation_count = witness.observation_count_model_only();
+        debug_assert!(self.is_fully_prepared_model_only());
+        debug_assert_eq!(observation_count, self.completion_validation_roster.len());
+        let Self {
+            plan,
+            shards,
+            completion_validation_roster: _,
+            mut prepared_completed_output,
+        } = self;
+        debug_assert!(prepared_completed_output.is_empty());
+        debug_assert!(prepared_completed_output.capacity() >= shards.len());
+        for shard in shards {
+            prepared_completed_output.push(shard);
+        }
+        R40AggregateCompletedV1 {
+            retired_count: prepared_completed_output.len(),
+            observation_count,
+            plan,
+            shards: prepared_completed_output,
         }
     }
 

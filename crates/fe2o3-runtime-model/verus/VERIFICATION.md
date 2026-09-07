@@ -16,9 +16,9 @@ fused-asynchronous-directional-SDMA, R35 fused-retained-control-replay, R36
 fused-completion-poll/recycle, R37 typed-native-SDMA-wait-activation, R38
 bounded-persistent-compute-wait/recycle, R39 scoped-persistent-SDMA-wait
 policy, R40 gfx942 striped-SDMA aggregate, R41 persistent striped-SDMA
-aggregate, R42 compute-event signal-custody, and R44 live-foundation
-invariant-certificate models. The authenticated runner
-proves 993 obligations and rejects 417 expected-negative mutations over finite
+aggregate, R42 compute-event signal-custody, R44 live-foundation
+invariant-certificate, and R46 gfx942 striped-SDMA tail-wait models. The
+authenticated runner proves 1025 obligations and rejects 432 expected-negative mutations over finite
 abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -2215,6 +2215,65 @@ admitted mutation.
 | Lifecycle restore | **Proved abstractly** | Exact final validation consumes the certificate and returns SessionOwned state. Invalid certificate or validation cannot produce session authority. |
 | Executable bounded model | **Checked** | Nine Rust tests exercise mint rejection, same-foundation cross-registry substitution, admitted and rejected mutation, exact loan failures, overflow, final consumption, 4096 scan-free cycles, and 128 mutation cycles. |
 | Production refinement, panic/allocator behavior, native validation, KFD/HSA/HIP behavior, hardware, parity, or performance | **Not established** | Explicitly outside the R44 proof boundary. |
+
+## R46 gfx942 striped-SDMA tail wait
+
+`r46_gfx942_striped_sdma_tail_wait_v1.rs` verifies exactly 32 obligations over
+an independent finite wait model. The runner pins that proof and 15 standalone
+negative mutations. The executable no-std host model has eleven focused tests.
+Neither model refines the native runtime or grants production authority.
+
+Binding consumes one exact R40 aggregate and presentation, derives the exact
+nonempty active-shard roster and ordered request partition, and validates one
+distinct final tail identity per shard. Each tail binds session, submission,
+engine, queue slot, queue ID, queue generation, last request, fence occurrence,
+and signal slot/generation. The minimal ordering premise is explicit: within
+one admitted gfx942 SDMA engine, the signal read names that exact system-scope
+tail fence, and completion of that fence implies every preceding copy/fence
+occurrence in its shard is complete and visible. Native truth of this premise
+is not established.
+
+An admitted nonfinal round checks currentness and makes one fused pass over the
+exact tail roster. Pending before the shared deadline returns the exact
+move-only owner with no full-roster audit. Tail errors and substituted
+currentness or identities fail closed. When all tails are ready, or the
+deadline is reached, the host model makes one fused pass over the exact ordered
+R40 roster, completion states, and retirement readiness. It then uses a
+crate-private R40 retirement move that consumes an R46-private, move-only
+all-ready audit witness and does not re-observe the roster; the R40 public
+general observer is unchanged. The witness cannot be constructed outside R46
+and is minted only after the complete audit and preflight. A ready tail with a
+Pending prefix is a named contract violation. Timeout is final custody, occurs
+only after the full audit finds Pending, remains structurally exact, and has no
+consuming resume escape.
+
+The abstract observation count for an admitted wait is exactly
+`rounds * active_shards + N`: each complete authenticated round observes `S`
+tails and a final path observes one exact ordered `N` roster. Malformed roster
+validation prefixes are rejected before committing an abstract observation
+count; the count is not a CPU instruction or comparison counter. Retirement
+moves are a separate `N` move and are not observations. The model records zero
+post-bind allocation events and performs no partial retirement. These are
+abstract transition and source-shape facts, not allocator, timing, or speedup
+evidence.
+
+The 15 countermodels reject tail substitution, duplicate or missing shards,
+queue/slot/generation substitution, omitted signal-to-fence binding, omitted
+final audit, timeout before audit, Pending or Error prefixes hidden by a tail,
+omitted currentness, lost custody, false full-roster-per-round complexity
+accounting, and a forged all-ready audit witness.
+
+## R46 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Active-shard and tail identity | **Proved abstractly** | Exact submission, ordered shard partitions, per-shard tail identity, and distinct fence/signal occurrences. Native identity truth is a premise. |
+| Tail completion ordering | **Explicit premise, not hardware-proved** | An exact signal read names the tail fence; system-scope tail completion implies preceding shard work is complete and visible on one admitted gfx942 SDMA engine. |
+| Blocking wait transition | **Modeled and checked** | Currentness and exact tails are checked each round; predeadline Pending retains active whole custody without an `N` audit; tail error is terminal. |
+| Final audit and retirement | **Proved abstractly** | All-ready tails or deadline cause one exact ordered `N` audit. Error, contract violation, timeout, and preflight rejection retain whole custody; success retires all tickets in original order. |
+| Observation work | **Proved arithmetically** | Admitted final observation work is `rounds*S + N`, not `rounds*N`; malformed identity-validation prefixes and the separate `N` retirement move are excluded, so this establishes no CPU or wall-clock gain. |
+| Executable bounded model | **Checked** | Eleven Rust tests cover active partitions through 882 requests/14 shards, hostile early/late identity and roster inputs, Pending rounds, final success/error/timeout, no partial retirement, exact order, and observation counts. |
+| Production refinement, panic/allocator behavior, native fence validation, hardware, KFD/HSA/HIP behavior, parity, or performance | **Not established** | Explicitly outside the R46 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
