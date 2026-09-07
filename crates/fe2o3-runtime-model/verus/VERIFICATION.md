@@ -15,9 +15,9 @@ directional-currentness-handoff, R33 fused-synchronous-directional-SDMA, R34
 fused-asynchronous-directional-SDMA, R35 fused-retained-control-replay, R36
 fused-completion-poll/recycle, R37 typed-native-SDMA-wait-activation, R38
 bounded-persistent-compute-wait/recycle, R39 scoped-persistent-SDMA-wait
-policy, R40 gfx942 striped-SDMA aggregate, and R41 persistent striped-SDMA
-aggregate models. The authenticated runner
-proves 902 obligations and rejects 364 expected-negative mutations over finite
+policy, R40 gfx942 striped-SDMA aggregate, R41 persistent striped-SDMA
+aggregate, and R42 compute-event signal-custody models. The authenticated runner
+proves 966 obligations and rejects 400 expected-negative mutations over finite
 abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -2103,6 +2103,56 @@ cursor rollback.
 | Executable bounded model | **Checked** | Focused Rust transitions cover capacity, alias and currentness rejection, every injected preparation/restoration position, shard partitions, waiting custody, preflight atomicity, ordered completion, quarantine, and cursor history. |
 | Boundary countermodels | **Rejected** | Twenty-one pinned standalone mutations fail their named capacity, identity, recovery, partition, waiting, restoration, quarantine, currentness, or cursor-history postconditions. |
 | Production Rust, KFD/HSA/HIP, ioctl/packet execution, allocator failure, native ownership/completion, clocks, driver, firmware, hardware, coherence, progress, liveness, parity, or performance | **Not established** | Explicitly outside the R41 proof boundary. The model and tests are not evidence of native behavior or relative performance. |
+
+## R42 compute-event signal custody
+
+`r42_compute_event_signal_custody_v1.rs` proves exactly 21 obligations over an
+independent finite addressless event and native-reader custody model. The
+runner pins that proof and 15 standalone negative mutations. The executable
+host model uses bounded event and reader ledgers, but there is no Rust-to-Verus
+or production-Rust refinement theorem.
+
+The source occurrence identity contains a session, source acceptance epoch,
+queue key, signal-mapping identity, slot and slot generation, and dispatch
+generation. It contains no raw address. Recording an event increments only the
+event-pin class and produces an Unbound event. After modeled publication the
+event binds to the exact nonzero source packet ID once; a second bind is
+rejected. Source completion preserves both pin classes.
+
+Native-reader admission requires an exact Bound source occurrence, a
+Published or Completed source, available bounded reader capacity, a
+nonduplicate target-use classification, and a caller-supplied
+`TargetEpochUniquenessPremiseV1`. The proof checks that this premise names the
+same session, asserts uniqueness, and orders the target epoch strictly after
+the source epoch. It does not prove that assertion globally and does not bind
+the target epoch to a target queue, dispatch, packet, or publication. The
+strict epoch ordering rejects self and backwards-epoch cycle edges in this
+finite model; it is not a proof of a production dependency graph.
+
+Event and reader pins are independent. Explicit event release cannot release a
+reader pin, explicit reader release cannot release an event pin, and either
+pin blocks reset/recycle after completion. Successful modeled recycle advances
+only the completion-slot generation and clears the packet binding. Event and
+reader capacities are each exactly 8192. Stale, duplicate, cross-session,
+self-dependency, backwards-cycle, missing-premise, and capacity failures retain
+the exact abstract pre-state.
+
+The 15 independent countermodels reject event rebinding, completion that drops
+either pin class, cross-class release, recycle with either pin, state mutation
+on stale/duplicate/cross-session/self/cycle rejection, state mutation at either
+capacity, and admission that invents a missing uniqueness premise.
+
+## R42 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Addressless source/event binding | **Proved abstractly** | Exact source occurrence coordinates, Unbound-to-Bound once, and exact nonzero source packet binding. Identity truth and native packet publication are contracted inputs. |
+| Event and native-reader custody | **Proved abstractly** | Independent bounded pin counters; completion retains both; each explicit release changes only its own class; either class blocks recycle. The Verus model does not refine the executable ledgers. |
+| Target epoch and dependency admission | **Premise checked, not proved** | Same-session and strictly increasing target epoch are checked together with an explicit caller uniqueness assertion. Global uniqueness, target-publication identity, and a production dependency graph are not established. |
+| Failure atomicity | **Proved abstractly** | Stale, duplicate, cross-session, self/cycle, capacity, and missing-premise rejection use the exact unchanged abstract state. Native allocation, panic, and terminal ambiguity are outside this model. |
+| Executable bounded model | **Checked** | Focused Rust tests exercise one-time binding, independent pins, completed-source recycle gating, hostile admission, both 8192-entry capacity boundaries, and generation advance. These tests grant no native authority. |
+| Boundary countermodels | **Rejected** | Fifteen pinned standalone mutations fail their named binding, pin-custody, recycle, admission, or capacity postconditions. |
+| Production refinement, target-publication identity, native/hardware validation, KFD/HSA/HIP behavior, parity, or performance | **Not established** | Explicitly outside the R42 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
