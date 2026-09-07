@@ -60,6 +60,13 @@ enum LoweringTarget {
 }
 
 impl LoweringTarget {
+    const fn supports_native_f32_sqrt(self) -> bool {
+        matches!(
+            self,
+            Self::Gfx942StrictFloatV1 | Self::Gfx942XnackMinusV1 | Self::Gfx950XnackMinusV1
+        )
+    }
+
     const fn requires_physical_workgroup_barrier(self) -> bool {
         !matches!(self, Self::Baseline)
     }
@@ -2083,7 +2090,7 @@ fn emit_float_support_declarations(
     for function in &requirements.math {
         match function.required_implementation() {
             F32MathImplementation::IeeeSqrtRoundTiesEvenIgnoreExceptionsV1 => {
-                let arguments = if target == LoweringTarget::Gfx950XnackMinusV1 {
+                let arguments = if target.supports_native_f32_sqrt() {
                     "float"
                 } else {
                     "float, metadata, metadata"
@@ -2484,7 +2491,7 @@ fn narrow_float_helpers(format: NarrowFloatFormat) -> (&'static str, &'static st
 
 fn constrained_math_name(function: F32MathFunction, target: LoweringTarget) -> &'static str {
     match function {
-        F32MathFunction::Sqrt if target == LoweringTarget::Gfx950XnackMinusV1 => "llvm.sqrt.f32",
+        F32MathFunction::Sqrt if target.supports_native_f32_sqrt() => "llvm.sqrt.f32",
         F32MathFunction::Sqrt => "llvm.experimental.constrained.sqrt.f32",
         F32MathFunction::FusedMultiplyAdd => "llvm.experimental.constrained.fma.f32",
         F32MathFunction::Floor => "llvm.experimental.constrained.floor.f32",
@@ -8196,7 +8203,7 @@ impl<'a> FunctionLowerer<'a> {
                     let [argument] = arguments.as_slice() else {
                         unreachable!("verifier checked sqrt arity")
                     };
-                    let metadata = if self.target == LoweringTarget::Gfx950XnackMinusV1 {
+                    let metadata = if self.target.supports_native_f32_sqrt() {
                         ""
                     } else {
                         ", metadata !\"round.tonearest\", metadata !\"fpexcept.ignore\""
@@ -9396,6 +9403,26 @@ mod tests {
             &Type::F32,
             LoweringTarget::Baseline
         ));
+    }
+
+    #[test]
+    fn native_sqrt_target_set_is_explicit() {
+        assert!(!LoweringTarget::Baseline.supports_native_f32_sqrt());
+        assert_eq!(
+            constrained_math_name(F32MathFunction::Sqrt, LoweringTarget::Baseline),
+            "llvm.experimental.constrained.sqrt.f32"
+        );
+        for target in [
+            LoweringTarget::Gfx942StrictFloatV1,
+            LoweringTarget::Gfx942XnackMinusV1,
+            LoweringTarget::Gfx950XnackMinusV1,
+        ] {
+            assert!(target.supports_native_f32_sqrt());
+            assert_eq!(
+                constrained_math_name(F32MathFunction::Sqrt, target),
+                "llvm.sqrt.f32"
+            );
+        }
     }
 
     #[test]

@@ -97,6 +97,19 @@ fn f16_divide_module() -> Module {
     )
 }
 
+fn sqrt_module() -> Module {
+    math_kernel(
+        vec![Type::F32],
+        Type::F32,
+        FloatOperation::F32Math {
+            function: F32MathFunction::Sqrt,
+            implementation: F32MathImplementation::IeeeSqrtRoundTiesEvenIgnoreExceptionsV1,
+            arguments: vec![ValueId(0)],
+        },
+        [],
+    )
+}
+
 fn two_kernel_ocml_module() -> Module {
     let shared_helper = Function::internal_helper(
         "shared_math_helper",
@@ -222,6 +235,25 @@ fn fabs_has_exact_llvm_intrinsic_observation() {
     assert_eq!(llvm.matches("call float @llvm.fabs.f32(float").count(), 1);
     assert!(!llvm.contains("llvm.fabs.f64"));
     assert!(!llvm.contains(" fast "));
+}
+
+#[test]
+fn sqrt_has_exact_native_llvm_intrinsic_observation() {
+    let llvm = lower_kernel_to_gfx942_llvm_ir(&sqrt_module(), &"math_kernel".into()).unwrap();
+    assert_eq!(
+        llvm.matches("declare float @llvm.sqrt.f32(float)").count(),
+        1
+    );
+    assert_eq!(
+        llvm.matches("call float @llvm.sqrt.f32(float %arg0)")
+            .count(),
+        1
+    );
+    assert!(!llvm.contains("llvm.experimental.constrained.sqrt.f32"));
+    assert!(llvm.contains("\"denormal-fp-math-f32\"=\"ieee,ieee\""));
+    assert!(llvm.contains("\"unsafe-fp-math\"=\"false\""));
+    assert!(llvm.contains("\"approx-func-fp-math\"=\"false\""));
+    assert!(!llvm.contains("call fast float @llvm.sqrt.f32"));
 }
 
 #[test]
@@ -417,6 +449,7 @@ fn rocm_compiles_and_inspects_gfx942_float_modules() {
     let modules = [
         ("bf16x2", packed_bf16_fma_module(), true),
         ("f16", f16_divide_module(), true),
+        ("sqrt", sqrt_module(), true),
         (
             "ocml",
             math_kernel(
