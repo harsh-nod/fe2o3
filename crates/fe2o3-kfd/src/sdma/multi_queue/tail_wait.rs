@@ -14,14 +14,14 @@ use std::time::{Duration, Instant};
 
 use super::{
     Gfx942SdmaMultiQueueCompletedV1, Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaQueueSetV1,
-    ValidatedMultiQueueCompletionEntryV1,
+    Gfx942SdmaStripedWaitDiagnosticsV1, ValidatedMultiQueueCompletionEntryV1,
 };
 use crate::sdma::{
     GFX942_SDMA_MAX_STRIPED_QUEUES_V1, Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1,
     SDMA_FENCE_SYSTEM_SNOOP_HEADER_V1, SDMA_OP_FENCE,
 };
 use crate::shared_memory::SharedGttMemorySessionV1;
-use crate::wait::MonotonicWaitV1;
+use crate::wait::{MonotonicWaitV1, WaitActionV1};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct BoundStripedTailV1 {
@@ -218,7 +218,7 @@ enum StripedFullAuditDispositionV1 {
 
 trait TailWaitCursorV1 {
     fn deadline_reached(&self) -> bool;
-    fn pause(&mut self);
+    fn pause(&mut self) -> WaitActionV1;
 }
 
 impl TailWaitCursorV1 for MonotonicWaitV1 {
@@ -226,35 +226,99 @@ impl TailWaitCursorV1 for MonotonicWaitV1 {
         MonotonicWaitV1::expired(self)
     }
 
-    fn pause(&mut self) {
-        MonotonicWaitV1::pause(self);
+    fn pause(&mut self) -> WaitActionV1 {
+        MonotonicWaitV1::pause_observed(self)
     }
 }
 
-fn observe_tail_rounds_until_v1<T, E, W: TailWaitCursorV1>(
+fn saturating_duration_ns_v1(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+}
+
+fn profile_start_v1<const PROFILE: bool>() -> Option<Instant> {
+    if PROFILE { Some(Instant::now()) } else { None }
+}
+
+fn profile_elapsed_ns_v1<const PROFILE: bool>(started: Option<Instant>) -> u64 {
+    if PROFILE {
+        started.map_or(0, |started| saturating_duration_ns_v1(started.elapsed()))
+    } else {
+        0
+    }
+}
+
+fn observe_tail_rounds_profiled_until_v1<const PROFILE: bool, T, E, W: TailWaitCursorV1>(
     tails: &[T],
     mut tail_queue_bit: impl FnMut(&T) -> u16,
     mut observe_tail: impl FnMut(&T) -> Result<bool, E>,
     wait: &mut W,
+    diagnostics: &mut Gfx942SdmaStripedWaitDiagnosticsV1,
+    scan_started: Option<Instant>,
 ) -> Result<u16, E> {
     loop {
+        if PROFILE {
+            diagnostics.tail_scan_rounds = diagnostics.tail_scan_rounds.saturating_add(1);
+        }
         let mut active_queue_mask = 0_u16;
         let mut ready_queue_mask = 0_u16;
         for tail in tails {
             let queue_bit = tail_queue_bit(tail);
             active_queue_mask |= queue_bit;
+            if PROFILE {
+                diagnostics.tail_observations = diagnostics.tail_observations.saturating_add(1);
+            }
             if observe_tail(tail)? {
                 ready_queue_mask |= queue_bit;
             }
         }
+        if PROFILE && ready_queue_mask != 0 && diagnostics.first_tail_ready_ns.is_none() {
+            diagnostics.first_tail_ready_ns = Some(profile_elapsed_ns_v1::<PROFILE>(scan_started));
+        }
         if ready_queue_mask == active_queue_mask {
+            if PROFILE {
+                diagnostics.all_tails_ready_ns =
+                    Some(profile_elapsed_ns_v1::<PROFILE>(scan_started));
+            }
             return Ok(ready_queue_mask);
         }
         if wait.deadline_reached() {
             return Ok(ready_queue_mask);
         }
-        wait.pause();
+        let action = wait.pause();
+        if PROFILE {
+            match action {
+                WaitActionV1::Spin => {
+                    diagnostics.spin_pauses = diagnostics.spin_pauses.saturating_add(1);
+                }
+                WaitActionV1::Yield => {
+                    diagnostics.yield_pauses = diagnostics.yield_pauses.saturating_add(1);
+                }
+                WaitActionV1::Sleep(duration) => {
+                    diagnostics.sleep_pauses = diagnostics.sleep_pauses.saturating_add(1);
+                    diagnostics.requested_sleep_ns = diagnostics
+                        .requested_sleep_ns
+                        .saturating_add(saturating_duration_ns_v1(duration));
+                }
+            }
+        }
     }
+}
+
+#[cfg(test)]
+fn observe_tail_rounds_until_v1<T, E, W: TailWaitCursorV1>(
+    tails: &[T],
+    tail_queue_bit: impl FnMut(&T) -> u16,
+    observe_tail: impl FnMut(&T) -> Result<bool, E>,
+    wait: &mut W,
+) -> Result<u16, E> {
+    observe_tail_rounds_profiled_until_v1::<false, _, _, _>(
+        tails,
+        tail_queue_bit,
+        observe_tail,
+        wait,
+        &mut Gfx942SdmaStripedWaitDiagnosticsV1::default(),
+        None,
+    )
 }
 
 fn observe_full_ordered_roster_v1<T, E>(
@@ -339,22 +403,33 @@ impl Gfx942SdmaQueueSetV1 {
     /// fallible/native operation. The sole move occurs only after the private
     /// lifetime-bound audit is consumed, immediately before the abort-only
     /// retirement suffix.
-    pub(crate) fn wait_prepared_striped_multi_queue_tails_retaining_for(
+    pub(crate) fn wait_prepared_striped_multi_queue_tails_retaining_for<const PROFILE: bool>(
         &mut self,
         memory: &mut SharedGttMemorySessionV1,
         retained: &mut Option<Gfx942SdmaMultiQueueSubmissionV1>,
         timeout: Duration,
+        diagnostics: &mut Gfx942SdmaStripedWaitDiagnosticsV1,
     ) -> Gfx942SdmaStripedTailWaitOutcomeV1 {
         let audit = with_borrowed_striped_submission_v1(retained, |submission| {
-            self.audit_prepared_striped_multi_queue_tails_for(memory, submission, timeout)
+            self.audit_prepared_striped_multi_queue_tails_for::<PROFILE>(
+                memory,
+                submission,
+                timeout,
+                diagnostics,
+            )
         });
         match audit {
             Ok(Gfx942SdmaStripedTailWaitAuditV1::AllReady(audit)) => {
                 let permit = audit.authorize_retirement();
                 let submission = retained.take().unwrap_or_else(|| std::process::abort());
-                Gfx942SdmaStripedTailWaitOutcomeV1::Completed(
-                    self.retire_after_striped_full_audit_no_unwind_v1(permit, submission),
-                )
+                let retirement_started = profile_start_v1::<PROFILE>();
+                let completed =
+                    self.retire_after_striped_full_audit_no_unwind_v1(permit, submission);
+                if PROFILE {
+                    diagnostics.retirement_ns =
+                        profile_elapsed_ns_v1::<PROFILE>(retirement_started);
+                }
+                Gfx942SdmaStripedTailWaitOutcomeV1::Completed(completed)
             }
             Ok(Gfx942SdmaStripedTailWaitAuditV1::Pending) => {
                 Gfx942SdmaStripedTailWaitOutcomeV1::Pending
@@ -368,20 +443,35 @@ impl Gfx942SdmaQueueSetV1 {
         }
     }
 
-    fn audit_prepared_striped_multi_queue_tails_for<'a>(
+    fn audit_prepared_striped_multi_queue_tails_for<'a, const PROFILE: bool>(
         &mut self,
         memory: &mut SharedGttMemorySessionV1,
         submission: &'a Gfx942SdmaMultiQueueSubmissionV1,
         timeout: Duration,
+        diagnostics: &mut Gfx942SdmaStripedWaitDiagnosticsV1,
     ) -> Result<Gfx942SdmaStripedTailWaitAuditV1<'a>, Gfx942SdmaErrorV1> {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(Gfx942SdmaErrorV1::Contract("striped tail wait deadline"))?;
+        let bind_started = profile_start_v1::<PROFILE>();
         let prepared = PreparedStripedTailWaitV1::bind(self, submission)?;
+        if PROFILE {
+            diagnostics.active_queue_count = prepared.tail_count;
+            diagnostics.request_count =
+                u16::try_from(submission.plan.request_count()).unwrap_or(u16::MAX);
+            diagnostics.bind_ns = profile_elapsed_ns_v1::<PROFILE>(bind_started);
+        }
+
+        let opening_currentness_started = profile_start_v1::<PROFILE>();
         memory.check_queue_operational_currentness()?;
+        if PROFILE {
+            diagnostics.opening_currentness_ns =
+                profile_elapsed_ns_v1::<PROFILE>(opening_currentness_started);
+        }
         let mut wait = MonotonicWaitV1::until(deadline);
         let active_queues = &prepared.active_queues[..usize::from(prepared.tail_count)];
-        let ready_tail_queue_mask = observe_tail_rounds_until_v1(
+        let tail_scan_started = profile_start_v1::<PROFILE>();
+        let ready_tail_queue_mask = observe_tail_rounds_profiled_until_v1::<PROFILE, _, _, _>(
             active_queues,
             |active_queue| active_queue.queue_bit,
             |active_queue| {
@@ -404,11 +494,27 @@ impl Gfx942SdmaQueueSetV1 {
                 self.observe_bound_striped_tail_v1(memory, tail)
             },
             &mut wait,
+            diagnostics,
+            tail_scan_started,
         );
+        if PROFILE {
+            diagnostics.tail_scan_ns = profile_elapsed_ns_v1::<PROFILE>(tail_scan_started);
+        }
         let ready_tail_queue_mask = ready_tail_queue_mask?;
+
+        let final_audit_started = profile_start_v1::<PROFILE>();
         let final_audit =
             self.full_ordered_striped_audit_v1(memory, &prepared, ready_tail_queue_mask)?;
+        if PROFILE {
+            diagnostics.final_audit_ns = profile_elapsed_ns_v1::<PROFILE>(final_audit_started);
+        }
+
+        let closing_currentness_started = profile_start_v1::<PROFILE>();
         memory.check_queue_operational_currentness()?;
+        if PROFILE {
+            diagnostics.closing_currentness_ns =
+                profile_elapsed_ns_v1::<PROFILE>(closing_currentness_started);
+        }
         match final_audit {
             StripedFullAuditOutcomeV1::AllReady => Ok(Gfx942SdmaStripedTailWaitAuditV1::AllReady(
                 Gfx942SdmaStripedAllReadyAuditV1 { submission },
@@ -585,8 +691,26 @@ mod tests {
             self.pauses >= self.expire_after_pauses
         }
 
-        fn pause(&mut self) {
+        fn pause(&mut self) -> WaitActionV1 {
             self.pauses += 1;
+            WaitActionV1::Spin
+        }
+    }
+
+    struct ScriptedTailWaitCursorV1 {
+        actions: [WaitActionV1; 3],
+        next_action: usize,
+    }
+
+    impl TailWaitCursorV1 for ScriptedTailWaitCursorV1 {
+        fn deadline_reached(&self) -> bool {
+            false
+        }
+
+        fn pause(&mut self) -> WaitActionV1 {
+            let action = self.actions[self.next_action];
+            self.next_action += 1;
+            action
         }
     }
 
@@ -681,6 +805,47 @@ mod tests {
                 tails
             );
         }
+    }
+
+    #[test]
+    fn profiled_tail_rounds_count_actions_and_readiness_without_changing_order() {
+        let tails = [0_u8, 1];
+        let mut observations = Vec::new();
+        let mut wait = ScriptedTailWaitCursorV1 {
+            actions: [
+                WaitActionV1::Spin,
+                WaitActionV1::Yield,
+                WaitActionV1::Sleep(Duration::from_micros(25)),
+            ],
+            next_action: 0,
+        };
+        let mut diagnostics = Gfx942SdmaStripedWaitDiagnosticsV1::default();
+        let scan_started = Instant::now();
+        let ready_mask = observe_tail_rounds_profiled_until_v1::<true, _, _, _>(
+            &tails,
+            |tail| 1_u16 << *tail,
+            |tail| {
+                let round = observations.len() / tails.len();
+                observations.push((round, *tail));
+                Ok::<bool, ()>(round >= 3 || (round >= 1 && *tail == 0))
+            },
+            &mut wait,
+            &mut diagnostics,
+            Some(scan_started),
+        )
+        .unwrap();
+
+        assert_eq!(ready_mask, 0b11);
+        assert_eq!(observations.len(), 4 * tails.len());
+        assert_eq!(diagnostics.tail_scan_rounds(), 4);
+        assert_eq!(diagnostics.tail_observations(), 8);
+        assert_eq!(diagnostics.spin_pauses(), 1);
+        assert_eq!(diagnostics.yield_pauses(), 1);
+        assert_eq!(diagnostics.sleep_pauses(), 1);
+        assert_eq!(diagnostics.requested_sleep_ns(), 25_000);
+        let first = diagnostics.first_tail_ready_ns().unwrap();
+        let all = diagnostics.all_tails_ready_ns().unwrap();
+        assert!(all >= first);
     }
 
     #[test]

@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 use fe2o3_kfd::{
     ComputeAqlQueueSessionV1, DeviceSelector, Gfx942CombinedSdmaCapacityV1, Gfx942SdmaBufferV1,
     Gfx942SdmaCopyRequestV1, Gfx942SdmaMultiQueueCompletedV1, Gfx942SdmaMultiQueuePollV1,
-    Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaQueueObservationV1, OpenedKfd,
+    Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaQueueObservationV1,
+    Gfx942SdmaStripedWaitDiagnosticsV1, OpenedKfd,
 };
 use sha2::{Digest, Sha256};
 
@@ -96,6 +97,47 @@ impl AggregateSamples {
         self.submit.push(timing.submit_ns);
         self.wait.push(timing.wait_ns);
         self.e2e.push(timing.total_ns);
+        Ok(())
+    }
+}
+
+struct AggregateDiagnosticSamples {
+    waits: Vec<Gfx942SdmaStripedWaitDiagnosticsV1>,
+}
+
+impl AggregateDiagnosticSamples {
+    fn with_capacity(samples: usize) -> Self {
+        Self {
+            waits: Vec::with_capacity(samples),
+        }
+    }
+
+    fn push(
+        &mut self,
+        diagnostics: Gfx942SdmaStripedWaitDiagnosticsV1,
+        expected_queue_count: usize,
+        expected_request_count: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if usize::from(diagnostics.active_queue_count()) != expected_queue_count
+            || usize::from(diagnostics.request_count()) != expected_request_count
+            || diagnostics.tail_scan_rounds() == 0
+            || diagnostics.tail_observations()
+                != diagnostics
+                    .tail_scan_rounds()
+                    .checked_mul(u64::from(diagnostics.active_queue_count()))
+                    .ok_or("profiled tail observation count overflow")?
+            || diagnostics
+                .spin_pauses()
+                .checked_add(diagnostics.yield_pauses())
+                .and_then(|pauses| pauses.checked_add(diagnostics.sleep_pauses()))
+                != diagnostics.tail_scan_rounds().checked_sub(1)
+            || diagnostics.first_tail_ready_ns().is_none()
+            || diagnostics.all_tails_ready_ns().is_none()
+            || diagnostics.first_tail_ready_ns() > diagnostics.all_tails_ready_ns()
+        {
+            return Err("profiled striped wait diagnostics are internally inconsistent".into());
+        }
+        self.waits.push(diagnostics);
         Ok(())
     }
 }
@@ -417,17 +459,43 @@ fn wait_aggregate(
         .map_err(|failure| failure.into_parts().0.into())
 }
 
-fn run_aggregate_phase(
+fn wait_aggregate_profiled(
+    queue: &mut ComputeAqlQueueSessionV1,
+    submission: Gfx942SdmaMultiQueueSubmissionV1,
+) -> Result<
+    (
+        Gfx942SdmaMultiQueueCompletedV1,
+        Gfx942SdmaStripedWaitDiagnosticsV1,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    queue
+        .wait_gfx942_striped_sdma_copy_batch_profiled_for_v1(submission, Duration::from_secs(30))
+        .map_err(|failure| failure.into_parts().0.into())
+}
+
+type AggregatePhaseResult = (
+    Vec<AggregateBuffers>,
+    PhaseTiming,
+    Option<Gfx942SdmaStripedWaitDiagnosticsV1>,
+);
+
+fn run_aggregate_phase<const PROFILE: bool>(
     queue: &mut ComputeAqlQueueSessionV1,
     buffers: Vec<AggregateBuffers>,
     copy_bytes: usize,
     direction: AggregateDirection,
-) -> Result<(Vec<AggregateBuffers>, PhaseTiming), Box<dyn std::error::Error>> {
+) -> Result<AggregatePhaseResult, Box<dyn std::error::Error>> {
     let requests = aggregate_phase_inputs(buffers, copy_bytes, direction);
     let t0 = Instant::now();
     let submission = submit_aggregate(queue, requests)?;
     let t1 = Instant::now();
-    let completed = wait_aggregate(queue, submission)?;
+    let (completed, diagnostics) = if PROFILE {
+        let (completed, diagnostics) = wait_aggregate_profiled(queue, submission)?;
+        (completed, Some(diagnostics))
+    } else {
+        (wait_aggregate(queue, submission)?, None)
+    };
     let t2 = Instant::now();
     let timing = PhaseTiming {
         total_ns: t2.duration_since(t0).as_nanos(),
@@ -435,7 +503,7 @@ fn run_aggregate_phase(
         wait_ns: t2.duration_since(t1).as_nanos(),
     };
     let restored = restore_aggregate_buffers(completed, direction)?;
-    Ok((restored, timing))
+    Ok((restored, timing, diagnostics))
 }
 
 fn finish_aggregate_poll_smoke(
@@ -466,8 +534,8 @@ fn run_aggregate_poll_smoke(
     let completed = finish_aggregate_poll_smoke(queue, submission)?;
     let mut buffers = restore_aggregate_buffers(completed, AggregateDirection::HostToDevice)?;
     poison_aggregate_destinations(queue, &mut buffers, copy_bytes, 0)?;
-    let (buffers, _) =
-        run_aggregate_phase(queue, buffers, copy_bytes, AggregateDirection::DeviceToHost)?;
+    let (buffers, _, _) =
+        run_aggregate_phase::<false>(queue, buffers, copy_bytes, AggregateDirection::DeviceToHost)?;
     validate_aggregate_round(queue, &buffers, copy_bytes, 0)?;
     recycle_aggregate_buffers(queue, buffers)
 }
@@ -760,7 +828,96 @@ fn append_aggregate_metrics(
     .expect("writing to a String cannot fail");
 }
 
-fn run_aggregate_benchmark(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+fn first_tail_ready_ns(diagnostics: Gfx942SdmaStripedWaitDiagnosticsV1) -> u64 {
+    diagnostics.first_tail_ready_ns().unwrap_or(u64::MAX)
+}
+
+fn all_tails_ready_ns(diagnostics: Gfx942SdmaStripedWaitDiagnosticsV1) -> u64 {
+    diagnostics.all_tails_ready_ns().unwrap_or(u64::MAX)
+}
+
+fn append_aggregate_wait_diagnostics(
+    row: &mut String,
+    direction: &str,
+    samples: &AggregateDiagnosticSamples,
+) {
+    type DiagnosticField = (&'static str, fn(Gfx942SdmaStripedWaitDiagnosticsV1) -> u64);
+
+    let fields: [DiagnosticField; 14] = [
+        (
+            "tail_rounds",
+            Gfx942SdmaStripedWaitDiagnosticsV1::tail_scan_rounds,
+        ),
+        (
+            "tail_observations",
+            Gfx942SdmaStripedWaitDiagnosticsV1::tail_observations,
+        ),
+        (
+            "spin_pauses",
+            Gfx942SdmaStripedWaitDiagnosticsV1::spin_pauses,
+        ),
+        (
+            "yield_pauses",
+            Gfx942SdmaStripedWaitDiagnosticsV1::yield_pauses,
+        ),
+        (
+            "sleep_pauses",
+            Gfx942SdmaStripedWaitDiagnosticsV1::sleep_pauses,
+        ),
+        (
+            "requested_sleep_ns",
+            Gfx942SdmaStripedWaitDiagnosticsV1::requested_sleep_ns,
+        ),
+        ("first_tail_ready_ns", first_tail_ready_ns),
+        ("all_tails_ready_ns", all_tails_ready_ns),
+        ("bind_ns", Gfx942SdmaStripedWaitDiagnosticsV1::bind_ns),
+        (
+            "opening_currentness_ns",
+            Gfx942SdmaStripedWaitDiagnosticsV1::opening_currentness_ns,
+        ),
+        (
+            "tail_scan_ns",
+            Gfx942SdmaStripedWaitDiagnosticsV1::tail_scan_ns,
+        ),
+        (
+            "final_audit_ns",
+            Gfx942SdmaStripedWaitDiagnosticsV1::final_audit_ns,
+        ),
+        (
+            "closing_currentness_ns",
+            Gfx942SdmaStripedWaitDiagnosticsV1::closing_currentness_ns,
+        ),
+        (
+            "retirement_ns",
+            Gfx942SdmaStripedWaitDiagnosticsV1::retirement_ns,
+        ),
+    ];
+    for (field, getter) in fields {
+        let values = samples
+            .waits
+            .iter()
+            .copied()
+            .map(getter)
+            .collect::<Vec<_>>();
+        let mut ordered = values.clone();
+        ordered.sort_unstable();
+        let p50 = ordered[(ordered.len() - 1) / 2];
+        let csv = values
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        write!(
+            row,
+            " {direction}_{field}_samples={csv} {direction}_{field}_p50={p50}"
+        )
+        .expect("writing to a String cannot fail");
+    }
+}
+
+fn run_aggregate_benchmark<const PROFILE: bool>(
+    args: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
     let unique_id = if let Some(hex) = args[0].strip_prefix("0x") {
         u64::from_str_radix(hex, 16)?
     } else {
@@ -822,9 +979,13 @@ fn run_aggregate_benchmark(args: &[String]) -> Result<(), Box<dyn std::error::Er
     let mut buffers = allocate_aggregate_buffers(&mut queue, depth, copy_bytes)?;
     let mut h2d = AggregateSamples::with_capacity(sample_count);
     let mut d2h = AggregateSamples::with_capacity(sample_count);
+    let mut h2d_diagnostics =
+        PROFILE.then(|| AggregateDiagnosticSamples::with_capacity(sample_count));
+    let mut d2h_diagnostics =
+        PROFILE.then(|| AggregateDiagnosticSamples::with_capacity(sample_count));
     for round in 0..rounds {
         prepare_aggregate_sources(&mut queue, &mut buffers, copy_bytes, round)?;
-        let (next, h2d_timing) = run_aggregate_phase(
+        let (next, h2d_timing, h2d_wait_diagnostics) = run_aggregate_phase::<PROFILE>(
             &mut queue,
             buffers,
             copy_bytes,
@@ -832,7 +993,7 @@ fn run_aggregate_benchmark(args: &[String]) -> Result<(), Box<dyn std::error::Er
         )?;
         let mut next = next;
         poison_aggregate_destinations(&mut queue, &mut next, copy_bytes, round)?;
-        let (next, d2h_timing) = run_aggregate_phase(
+        let (next, d2h_timing, d2h_wait_diagnostics) = run_aggregate_phase::<PROFILE>(
             &mut queue,
             next,
             copy_bytes,
@@ -843,6 +1004,24 @@ fn run_aggregate_benchmark(args: &[String]) -> Result<(), Box<dyn std::error::Er
         if round >= warmups {
             h2d.push(h2d_timing)?;
             d2h.push(d2h_timing)?;
+            if PROFILE {
+                h2d_diagnostics
+                    .as_mut()
+                    .expect("profiled benchmark has H2D diagnostic storage")
+                    .push(
+                        h2d_wait_diagnostics.expect("profiled H2D phase returns diagnostics"),
+                        queue_count,
+                        depth,
+                    )?;
+                d2h_diagnostics
+                    .as_mut()
+                    .expect("profiled benchmark has D2H diagnostic storage")
+                    .push(
+                        d2h_wait_diagnostics.expect("profiled D2H phase returns diagnostics"),
+                        queue_count,
+                        depth,
+                    )?;
+            }
         }
     }
     recycle_aggregate_buffers(&mut queue, buffers)?;
@@ -853,12 +1032,33 @@ fn run_aggregate_benchmark(args: &[String]) -> Result<(), Box<dyn std::error::Er
         "bytes{copy_bytes}-q{queue_count}-{}",
         profile.workload_kind()
     );
+    let schema = if PROFILE {
+        "fe2o3.kfd-striped-wait-diagnostics.v1"
+    } else {
+        "fe2o3.async-copy-striped-benchmark.v3"
+    };
     let mut row = format!(
-        "backend=kfd schema=fe2o3.async-copy-striped-benchmark.v3 workload_id={workload_id} unique_id={unique_id:016x} bytes={copy_bytes} depth={depth} logical_queue_count={queue_count} per_queue_depth={} assignment=continuing-round-robin-v1 submit_order=cursor-queue-major-v1 direction=h2d-then-d2h warmups={warmups} samples={sample_count} validation=full-buffer-every-round queue_creation_timed=no allocation_timed=no api=native-kfd-sdma resource_profile={resource_profile} physical_engine_count=2",
+        "backend=kfd schema={schema} workload_id={workload_id} unique_id={unique_id:016x} bytes={copy_bytes} depth={depth} logical_queue_count={queue_count} per_queue_depth={} assignment=continuing-round-robin-v1 submit_order=cursor-queue-major-v1 direction=h2d-then-d2h warmups={warmups} samples={sample_count} validation=full-buffer-every-round queue_creation_timed=no allocation_timed=no api=native-kfd-sdma resource_profile={resource_profile} physical_engine_count=2",
         depth / queue_count,
     );
     append_aggregate_metrics(&mut row, "h2d", &h2d, transfer_bytes);
     append_aggregate_metrics(&mut row, "d2h", &d2h, transfer_bytes);
+    if PROFILE {
+        append_aggregate_wait_diagnostics(
+            &mut row,
+            "h2d",
+            h2d_diagnostics
+                .as_ref()
+                .expect("profiled benchmark has H2D diagnostic samples"),
+        );
+        append_aggregate_wait_diagnostics(
+            &mut row,
+            "d2h",
+            d2h_diagnostics
+                .as_ref()
+                .expect("profiled benchmark has D2H diagnostic samples"),
+        );
+    }
     write!(
         row,
         " directional_queue_count={} striped_queue_count={queue_count} queue_ids={} queue_ids_sha256={} engine_placement={} engine_placement_sha256={} directional_smoke={} aggregate_poll_smoke=pass blocking_wait=exact-striped-tail-v1 destroy=pass",
@@ -877,7 +1077,10 @@ fn run_aggregate_benchmark(args: &[String]) -> Result<(), Box<dyn std::error::Er
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.len() == 7 && args[6] == "aggregate" {
-        return run_aggregate_benchmark(&args);
+        return run_aggregate_benchmark::<false>(&args);
+    }
+    if args.len() == 7 && args[6] == "aggregate-profiled" {
+        return run_aggregate_benchmark::<true>(&args);
     }
     if !(5..=6).contains(&args.len()) {
         return Err(
@@ -1146,7 +1349,7 @@ mod tests {
     fn aggregate_source_keeps_setup_and_teardown_outside_timing() {
         let source = include_str!("kfd-sdma-copy-benchmark.rs");
         let phase = source
-            .split("fn run_aggregate_phase(")
+            .split("fn run_aggregate_phase<const PROFILE: bool>(")
             .nth(1)
             .unwrap()
             .split("fn finish_aggregate_poll_smoke(")
@@ -1177,7 +1380,7 @@ mod tests {
         assert!(production.contains("blocking_wait=exact-striped-tail-v1"));
 
         let benchmark = source
-            .split("fn run_aggregate_benchmark(")
+            .split("fn run_aggregate_benchmark<const PROFILE: bool>(")
             .nth(1)
             .unwrap()
             .split("fn main()")

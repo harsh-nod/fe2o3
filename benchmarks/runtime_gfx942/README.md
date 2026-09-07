@@ -201,6 +201,22 @@ kfd-sdma-copy-benchmark <unique-id> <bytes> <depth> <warmups> <samples> \
   <aggregate>
 ```
 
+For wait-path diagnosis, the same binary accepts `aggregate-profiled` as the
+last argument. That opt-in mode emits
+`fe2o3.kfd-striped-wait-diagnostics.v1` and adds per-sample/p50 tail rounds,
+tail observations, wait actions, requested sleep duration, first/all-tail
+readiness, binding, currentness, tail-scan, final-audit, and retirement fields:
+
+```sh
+cargo run -p fe2o3-kfd --release --example kfd-sdma-copy-benchmark -- \
+  0xd2e26fef80cf5c33 1048576 112 10 30 combined-striped14 aggregate-profiled
+```
+
+This standalone diagnostic mode is not accepted by the R40 evidence checker
+and must not be mixed into an R40 counterbalance set. Its host timestamp reads
+and counters perturb the profiled path. The values are not device timestamps,
+physical-engine counters, or evidence of scheduler causality.
+
 The HIP and HSA comparators accept logical device index, exact unique ID, the
 same four statistical/shape values, logical queue count, and profile. HIP uses
 that many nonblocking streams. HSA uses that many logical dependency lanes;

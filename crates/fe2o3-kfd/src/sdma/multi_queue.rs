@@ -15,6 +15,101 @@ use crate::shared_memory::SharedGttMemorySessionV1;
 mod tail_wait;
 pub(crate) use tail_wait::Gfx942SdmaStripedTailWaitOutcomeV1;
 
+/// Host-side decomposition of one successful profiled striped-tail wait.
+///
+/// These counters and monotonic durations are diagnostic observations. They
+/// are not GPU timestamps, physical-engine counters, completion evidence, or
+/// an admission input. Collecting them adds host timestamp reads to the
+/// explicitly profiled path; the ordinary wait does not collect them.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Gfx942SdmaStripedWaitDiagnosticsV1 {
+    pub(crate) active_queue_count: u8,
+    pub(crate) request_count: u16,
+    pub(crate) tail_scan_rounds: u64,
+    pub(crate) tail_observations: u64,
+    pub(crate) spin_pauses: u64,
+    pub(crate) yield_pauses: u64,
+    pub(crate) sleep_pauses: u64,
+    pub(crate) requested_sleep_ns: u64,
+    pub(crate) first_tail_ready_ns: Option<u64>,
+    pub(crate) all_tails_ready_ns: Option<u64>,
+    pub(crate) bind_ns: u64,
+    pub(crate) opening_currentness_ns: u64,
+    pub(crate) tail_scan_ns: u64,
+    pub(crate) final_audit_ns: u64,
+    pub(crate) closing_currentness_ns: u64,
+    pub(crate) retirement_ns: u64,
+}
+
+impl Gfx942SdmaStripedWaitDiagnosticsV1 {
+    pub const fn active_queue_count(self) -> u8 {
+        self.active_queue_count
+    }
+
+    pub const fn request_count(self) -> u16 {
+        self.request_count
+    }
+
+    pub const fn tail_scan_rounds(self) -> u64 {
+        self.tail_scan_rounds
+    }
+
+    pub const fn tail_observations(self) -> u64 {
+        self.tail_observations
+    }
+
+    pub const fn spin_pauses(self) -> u64 {
+        self.spin_pauses
+    }
+
+    pub const fn yield_pauses(self) -> u64 {
+        self.yield_pauses
+    }
+
+    pub const fn sleep_pauses(self) -> u64 {
+        self.sleep_pauses
+    }
+
+    /// Sum of requested sleep durations, not measured scheduler sleep time.
+    pub const fn requested_sleep_ns(self) -> u64 {
+        self.requested_sleep_ns
+    }
+
+    /// Host-monotonic offset after the first scan round that observed any ready tail.
+    pub const fn first_tail_ready_ns(self) -> Option<u64> {
+        self.first_tail_ready_ns
+    }
+
+    /// Host-monotonic offset after the first scan round that observed all tails ready.
+    pub const fn all_tails_ready_ns(self) -> Option<u64> {
+        self.all_tails_ready_ns
+    }
+
+    pub const fn bind_ns(self) -> u64 {
+        self.bind_ns
+    }
+
+    pub const fn opening_currentness_ns(self) -> u64 {
+        self.opening_currentness_ns
+    }
+
+    pub const fn tail_scan_ns(self) -> u64 {
+        self.tail_scan_ns
+    }
+
+    pub const fn final_audit_ns(self) -> u64 {
+        self.final_audit_ns
+    }
+
+    pub const fn closing_currentness_ns(self) -> u64 {
+        self.closing_currentness_ns
+    }
+
+    pub const fn retirement_ns(self) -> u64 {
+        self.retirement_ns
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Gfx942SdmaMultiQueuePlanErrorV1 {

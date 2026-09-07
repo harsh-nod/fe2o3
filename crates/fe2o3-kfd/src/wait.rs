@@ -8,7 +8,7 @@ const INITIAL_SLEEP_V1: Duration = Duration::from_micros(25);
 const MAX_SLEEP_V1: Duration = Duration::from_millis(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum WaitActionV1 {
+pub(crate) enum WaitActionV1 {
     Spin,
     Yield,
     Sleep(Duration),
@@ -99,13 +99,19 @@ impl MonotonicWaitV1 {
         self.next_action_at(Instant::now())
     }
 
-    pub(crate) fn pause(&mut self) {
-        match self.next_action() {
+    pub(crate) fn pause_observed(&mut self) -> WaitActionV1 {
+        let action = self.next_action();
+        match action {
             WaitActionV1::Spin => core::hint::spin_loop(),
             WaitActionV1::Yield => std::thread::yield_now(),
             WaitActionV1::Sleep(duration) if !duration.is_zero() => std::thread::sleep(duration),
             WaitActionV1::Sleep(_) => {}
         }
+        action
+    }
+
+    pub(crate) fn pause(&mut self) {
+        let _ = self.pause_observed();
     }
 
     /// Repeats one observation before consulting the deadline. `Ok(true)`

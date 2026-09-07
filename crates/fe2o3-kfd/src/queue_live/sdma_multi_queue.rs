@@ -11,7 +11,8 @@ use crate::sdma::{
     Gfx942SdmaCopyRequestV1, Gfx942SdmaErrorV1, Gfx942SdmaMultiQueueCompletedV1,
     Gfx942SdmaMultiQueuePlanV1, Gfx942SdmaMultiQueuePollV1, Gfx942SdmaMultiQueueShardTicketsV1,
     Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaStripedTailWaitOutcomeV1,
-    Gfx942SdmaUnpublishedCopyRequestV1, MultiQueueSdmaSubmitFailureV1,
+    Gfx942SdmaStripedWaitDiagnosticsV1, Gfx942SdmaUnpublishedCopyRequestV1,
+    MultiQueueSdmaSubmitFailureV1,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -598,15 +599,56 @@ impl ComputeAqlQueueSessionV1 {
         submission: Gfx942SdmaMultiQueueSubmissionV1,
         timeout: Duration,
     ) -> Result<Gfx942SdmaMultiQueueCompletedV1, Gfx942SdmaMultiQueueExecutionFailureV1> {
+        self.wait_gfx942_striped_sdma_copy_batch_impl_v1::<false>(submission, timeout)
+            .map(|(completed, _)| completed)
+    }
+
+    /// Runs the same retained striped-tail wait while recording host-side diagnostics.
+    ///
+    /// The diagnostic path adds host timestamp reads and counters. Its observations
+    /// are not device timestamps or execution authority, and benchmark comparisons
+    /// must use this method consistently rather than comparing it to the unprofiled
+    /// path as though their host overhead were identical.
+    #[allow(clippy::result_large_err)]
+    pub fn wait_gfx942_striped_sdma_copy_batch_profiled_for_v1(
+        &mut self,
+        submission: Gfx942SdmaMultiQueueSubmissionV1,
+        timeout: Duration,
+    ) -> Result<
+        (
+            Gfx942SdmaMultiQueueCompletedV1,
+            Gfx942SdmaStripedWaitDiagnosticsV1,
+        ),
+        Gfx942SdmaMultiQueueExecutionFailureV1,
+    > {
+        self.wait_gfx942_striped_sdma_copy_batch_impl_v1::<true>(submission, timeout)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn wait_gfx942_striped_sdma_copy_batch_impl_v1<const PROFILE: bool>(
+        &mut self,
+        submission: Gfx942SdmaMultiQueueSubmissionV1,
+        timeout: Duration,
+    ) -> Result<
+        (
+            Gfx942SdmaMultiQueueCompletedV1,
+            Gfx942SdmaStripedWaitDiagnosticsV1,
+        ),
+        Gfx942SdmaMultiQueueExecutionFailureV1,
+    > {
         let mut retained = Some(submission);
         let mut lower = None;
+        let mut diagnostics = Gfx942SdmaStripedWaitDiagnosticsV1::default();
         let operation = catch_striped_wait_epoch_unwind_v1(|| {
             self.with_striped_sdma_owner_memory(|owner, memory| {
-                lower = Some(owner.wait_prepared_striped_multi_queue_tails_retaining_for(
-                    memory,
-                    &mut retained,
-                    timeout,
-                ));
+                lower = Some(
+                    owner.wait_prepared_striped_multi_queue_tails_retaining_for::<PROFILE>(
+                        memory,
+                        &mut retained,
+                        timeout,
+                        &mut diagnostics,
+                    ),
+                );
                 Ok(())
             })
         });
@@ -645,7 +687,9 @@ impl ComputeAqlQueueSessionV1 {
             });
         }
         match lower {
-            Some(Gfx942SdmaStripedTailWaitOutcomeV1::Completed(completed)) => Ok(completed),
+            Some(Gfx942SdmaStripedTailWaitOutcomeV1::Completed(completed)) => {
+                Ok((completed, diagnostics))
+            }
             Some(Gfx942SdmaStripedTailWaitOutcomeV1::Pending) => {
                 Err(Gfx942SdmaMultiQueueExecutionFailureV1 {
                     error: ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Timeout),
@@ -1068,6 +1112,53 @@ mod tests {
             .unwrap();
         assert!(borrow < audit && audit < authorize);
         assert!(authorize < consume && consume < retire);
+    }
+
+    #[test]
+    fn profiled_and_ordinary_waits_share_one_custody_machine() {
+        let live = include_str!("sdma_multi_queue.rs")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap();
+        let ordinary = live
+            .split("pub fn wait_gfx942_striped_sdma_copy_batch_for_v1")
+            .nth(1)
+            .unwrap()
+            .split("pub fn wait_gfx942_striped_sdma_copy_batch_profiled_for_v1")
+            .next()
+            .unwrap();
+        let profiled = live
+            .split("pub fn wait_gfx942_striped_sdma_copy_batch_profiled_for_v1")
+            .nth(1)
+            .unwrap()
+            .split("fn wait_gfx942_striped_sdma_copy_batch_impl_v1")
+            .next()
+            .unwrap();
+        let common = live
+            .split("fn wait_gfx942_striped_sdma_copy_batch_impl_v1")
+            .nth(1)
+            .unwrap()
+            .split("pub fn execute_sdma_copy_batch_for")
+            .next()
+            .unwrap();
+
+        assert!(ordinary.contains("impl_v1::<false>"));
+        assert!(profiled.contains("impl_v1::<true>"));
+        for wrapper in [ordinary, profiled] {
+            assert!(!wrapper.contains("with_striped_sdma_owner_memory"));
+            assert!(!wrapper.contains("retained.take()"));
+            assert!(!wrapper.contains("ProcessTeardown("));
+        }
+        assert_eq!(common.matches("with_striped_sdma_owner_memory").count(), 1);
+        assert_eq!(common.matches("ProcessTeardown(").count(), 4);
+        assert_eq!(
+            common
+                .matches("self.poison_gfx942_multi_queue_terminal_v1()")
+                .count(),
+            4
+        );
+        assert!(common.contains("Gfx942SdmaMultiQueueExecutionCustodyV1::Pending("));
+        assert!(common.contains("wait_prepared_striped_multi_queue_tails_retaining_for"));
     }
 
     #[test]
