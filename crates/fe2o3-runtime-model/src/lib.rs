@@ -57,6 +57,7 @@ mod r39_scoped_persistent_sdma_wait_policy;
 mod r40_gfx942_striped_sdma_aggregate;
 mod r41_persistent_striped_sdma_aggregate;
 mod r42_compute_event_signal_custody;
+mod r44_live_foundation_invariant_certificate;
 mod r9_native_evidence;
 mod typed_async;
 
@@ -101,6 +102,7 @@ pub use r39_scoped_persistent_sdma_wait_policy::*;
 pub use r40_gfx942_striped_sdma_aggregate::*;
 pub use r41_persistent_striped_sdma_aggregate::*;
 pub use r42_compute_event_signal_custody::*;
+pub use r44_live_foundation_invariant_certificate::*;
 pub use typed_async::*;
 
 #[cfg(test)]
@@ -179,6 +181,8 @@ mod r40_gfx942_striped_sdma_aggregate_tests;
 mod r41_persistent_striped_sdma_aggregate_tests;
 #[cfg(test)]
 mod r42_compute_event_signal_custody_tests;
+#[cfg(test)]
+mod r44_live_foundation_invariant_certificate_tests;
 #[cfg(test)]
 mod r9_native_evidence_tests;
 #[cfg(test)]

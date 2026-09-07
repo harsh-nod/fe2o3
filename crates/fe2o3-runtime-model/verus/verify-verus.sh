@@ -44,6 +44,7 @@ r39_scoped_persistent_sdma_wait_policy_proof="$script_dir/r39_scoped_persistent_
 r40_gfx942_striped_sdma_aggregate_proof="$script_dir/r40_gfx942_striped_sdma_aggregate_v1.rs"
 r41_persistent_striped_sdma_aggregate_proof="$script_dir/r41_persistent_striped_sdma_aggregate_v1.rs"
 r42_compute_event_signal_custody_proof="$script_dir/r42_compute_event_signal_custody_v1.rs"
+r44_live_foundation_invariant_certificate_proof="$script_dir/r44_live_foundation_invariant_certificate_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -444,6 +445,23 @@ negative_r42_cycle_mutation="$script_dir/negative/r42_compute_event_signal_custo
 negative_r42_event_capacity_mutation="$script_dir/negative/r42_compute_event_signal_custody_v1_event_capacity_mutation.rs"
 negative_r42_reader_capacity_mutation="$script_dir/negative/r42_compute_event_signal_custody_v1_reader_capacity_mutation.rs"
 negative_r42_missing_premise="$script_dir/negative/r42_compute_event_signal_custody_v1_missing_premise.rs"
+negative_r44_unvalidated_mint="$script_dir/negative/r44_live_foundation_invariant_certificate_v1_unvalidated_mint.rs"
+negative_r44_foundation_substitution="$script_dir/negative/r44_live_foundation_invariant_certificate_v1_foundation_substitution.rs"
+negative_r44_issuer_omission="$script_dir/negative/r44_live_foundation_invariant_certificate_v1_issuer_omission.rs"
+negative_r44_duplicate_loan="$script_dir/negative/r44_live_foundation_invariant_certificate_v1_duplicate_loan.rs"
+negative_r44_generation_overflow="$script_dir/negative/r44_live_foundation_invariant_certificate_v1_generation_overflow.rs"
+negative_r44_cross_session_reclaim="$script_dir/negative/r44_live_foundation_invariant_certificate_v1_cross_session_reclaim.rs"
+negative_r44_stale_reclaim="$script_dir/negative/r44_live_foundation_invariant_certificate_v1_stale_reclaim.rs"
+negative_r44_reclaim_out_of_phase="$script_dir/negative/r44_live_foundation_invariant_certificate_v1_reclaim_out_of_phase.rs"
+negative_r44_noninductive_mutation="$script_dir/negative/r44_live_foundation_invariant_certificate_v1_noninductive_mutation.rs"
+negative_r44_stale_mutation="$script_dir/negative/r44_live_foundation_invariant_certificate_v1_stale_mutation.rs"
+negative_r44_certificate_substitution="$script_dir/negative/r44_live_foundation_invariant_certificate_v1_certificate_substitution.rs"
+negative_r44_restore_without_certificate="$script_dir/negative/r44_live_foundation_invariant_certificate_v1_restore_without_certificate.rs"
+negative_r44_restore_scan="$script_dir/negative/r44_live_foundation_invariant_certificate_v1_restore_scan.rs"
+negative_r44_restore_consumption="$script_dir/negative/r44_live_foundation_invariant_certificate_v1_restore_consumption.rs"
+negative_r44_cycle_rescan="$script_dir/negative/r44_live_foundation_invariant_certificate_v1_cycle_rescan.rs"
+negative_r44_invalid_mutation_authority="$script_dir/negative/r44_live_foundation_invariant_certificate_v1_invalid_mutation_authority.rs"
+negative_r44_certificate_revision="$script_dir/negative/r44_live_foundation_invariant_certificate_v1_certificate_revision.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -509,6 +527,7 @@ expected_r39_scoped_persistent_sdma_wait_policy=$(read_pin "$pin_dir/R39_SCOPED_
 expected_r40_gfx942_striped_sdma_aggregate=$(read_pin "$pin_dir/R40_GFX942_STRIPED_SDMA_AGGREGATE_SHA256")
 expected_r41_persistent_striped_sdma_aggregate=$(read_pin "$pin_dir/R41_PERSISTENT_STRIPED_SDMA_AGGREGATE_SHA256")
 expected_r42_compute_event_signal_custody=$(read_pin "$pin_dir/R42_COMPUTE_EVENT_SIGNAL_CUSTODY_SHA256")
+expected_r44_live_foundation_invariant_certificate=$(read_pin "$pin_dir/R44_LIVE_FOUNDATION_INVARIANT_CERTIFICATE_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -909,6 +928,23 @@ expected_negative_r42_cycle_mutation=$(read_pin "$pin_dir/NEGATIVE_R42_CYCLE_MUT
 expected_negative_r42_event_capacity_mutation=$(read_pin "$pin_dir/NEGATIVE_R42_EVENT_CAPACITY_MUTATION_SHA256")
 expected_negative_r42_reader_capacity_mutation=$(read_pin "$pin_dir/NEGATIVE_R42_READER_CAPACITY_MUTATION_SHA256")
 expected_negative_r42_missing_premise=$(read_pin "$pin_dir/NEGATIVE_R42_MISSING_PREMISE_SHA256")
+expected_negative_r44_unvalidated_mint=$(read_pin "$pin_dir/NEGATIVE_R44_UNVALIDATED_MINT_SHA256")
+expected_negative_r44_foundation_substitution=$(read_pin "$pin_dir/NEGATIVE_R44_FOUNDATION_SUBSTITUTION_SHA256")
+expected_negative_r44_issuer_omission=$(read_pin "$pin_dir/NEGATIVE_R44_ISSUER_OMISSION_SHA256")
+expected_negative_r44_duplicate_loan=$(read_pin "$pin_dir/NEGATIVE_R44_DUPLICATE_LOAN_SHA256")
+expected_negative_r44_generation_overflow=$(read_pin "$pin_dir/NEGATIVE_R44_GENERATION_OVERFLOW_SHA256")
+expected_negative_r44_cross_session_reclaim=$(read_pin "$pin_dir/NEGATIVE_R44_CROSS_SESSION_RECLAIM_SHA256")
+expected_negative_r44_stale_reclaim=$(read_pin "$pin_dir/NEGATIVE_R44_STALE_RECLAIM_SHA256")
+expected_negative_r44_reclaim_out_of_phase=$(read_pin "$pin_dir/NEGATIVE_R44_RECLAIM_OUT_OF_PHASE_SHA256")
+expected_negative_r44_noninductive_mutation=$(read_pin "$pin_dir/NEGATIVE_R44_NONINDUCTIVE_MUTATION_SHA256")
+expected_negative_r44_stale_mutation=$(read_pin "$pin_dir/NEGATIVE_R44_STALE_MUTATION_SHA256")
+expected_negative_r44_certificate_substitution=$(read_pin "$pin_dir/NEGATIVE_R44_CERTIFICATE_SUBSTITUTION_SHA256")
+expected_negative_r44_restore_without_certificate=$(read_pin "$pin_dir/NEGATIVE_R44_RESTORE_WITHOUT_CERTIFICATE_SHA256")
+expected_negative_r44_restore_scan=$(read_pin "$pin_dir/NEGATIVE_R44_RESTORE_SCAN_SHA256")
+expected_negative_r44_restore_consumption=$(read_pin "$pin_dir/NEGATIVE_R44_RESTORE_CONSUMPTION_SHA256")
+expected_negative_r44_cycle_rescan=$(read_pin "$pin_dir/NEGATIVE_R44_CYCLE_RESCAN_SHA256")
+expected_negative_r44_invalid_mutation_authority=$(read_pin "$pin_dir/NEGATIVE_R44_INVALID_MUTATION_AUTHORITY_SHA256")
+expected_negative_r44_certificate_revision=$(read_pin "$pin_dir/NEGATIVE_R44_CERTIFICATE_REVISION_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -977,6 +1013,7 @@ check_sources() {
     check_digest "$expected_r40_gfx942_striped_sdma_aggregate" "$r40_gfx942_striped_sdma_aggregate_proof"
     check_digest "$expected_r41_persistent_striped_sdma_aggregate" "$r41_persistent_striped_sdma_aggregate_proof"
     check_digest "$expected_r42_compute_event_signal_custody" "$r42_compute_event_signal_custody_proof"
+    check_digest "$expected_r44_live_foundation_invariant_certificate" "$r44_live_foundation_invariant_certificate_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -1377,6 +1414,23 @@ check_sources() {
     check_digest "$expected_negative_r42_event_capacity_mutation" "$negative_r42_event_capacity_mutation"
     check_digest "$expected_negative_r42_reader_capacity_mutation" "$negative_r42_reader_capacity_mutation"
     check_digest "$expected_negative_r42_missing_premise" "$negative_r42_missing_premise"
+    check_digest "$expected_negative_r44_unvalidated_mint" "$negative_r44_unvalidated_mint"
+    check_digest "$expected_negative_r44_foundation_substitution" "$negative_r44_foundation_substitution"
+    check_digest "$expected_negative_r44_issuer_omission" "$negative_r44_issuer_omission"
+    check_digest "$expected_negative_r44_duplicate_loan" "$negative_r44_duplicate_loan"
+    check_digest "$expected_negative_r44_generation_overflow" "$negative_r44_generation_overflow"
+    check_digest "$expected_negative_r44_cross_session_reclaim" "$negative_r44_cross_session_reclaim"
+    check_digest "$expected_negative_r44_stale_reclaim" "$negative_r44_stale_reclaim"
+    check_digest "$expected_negative_r44_reclaim_out_of_phase" "$negative_r44_reclaim_out_of_phase"
+    check_digest "$expected_negative_r44_noninductive_mutation" "$negative_r44_noninductive_mutation"
+    check_digest "$expected_negative_r44_stale_mutation" "$negative_r44_stale_mutation"
+    check_digest "$expected_negative_r44_certificate_substitution" "$negative_r44_certificate_substitution"
+    check_digest "$expected_negative_r44_restore_without_certificate" "$negative_r44_restore_without_certificate"
+    check_digest "$expected_negative_r44_restore_scan" "$negative_r44_restore_scan"
+    check_digest "$expected_negative_r44_restore_consumption" "$negative_r44_restore_consumption"
+    check_digest "$expected_negative_r44_cycle_rescan" "$negative_r44_cycle_rescan"
+    check_digest "$expected_negative_r44_invalid_mutation_authority" "$negative_r44_invalid_mutation_authority"
+    check_digest "$expected_negative_r44_certificate_revision" "$negative_r44_certificate_revision"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -1426,6 +1480,7 @@ check_sources
     "$r40_gfx942_striped_sdma_aggregate_proof" \
     "$r41_persistent_striped_sdma_aggregate_proof" \
     "$r42_compute_event_signal_custody_proof" \
+    "$r44_live_foundation_invariant_certificate_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -1822,7 +1877,24 @@ check_sources
     "$negative_r42_cycle_mutation" \
     "$negative_r42_event_capacity_mutation" \
     "$negative_r42_reader_capacity_mutation" \
-    "$negative_r42_missing_premise"
+    "$negative_r42_missing_premise" \
+    "$negative_r44_unvalidated_mint" \
+    "$negative_r44_foundation_substitution" \
+    "$negative_r44_issuer_omission" \
+    "$negative_r44_duplicate_loan" \
+    "$negative_r44_generation_overflow" \
+    "$negative_r44_cross_session_reclaim" \
+    "$negative_r44_stale_reclaim" \
+    "$negative_r44_reclaim_out_of_phase" \
+    "$negative_r44_noninductive_mutation" \
+    "$negative_r44_stale_mutation" \
+    "$negative_r44_certificate_substitution" \
+    "$negative_r44_restore_without_certificate" \
+    "$negative_r44_restore_scan" \
+    "$negative_r44_restore_consumption" \
+    "$negative_r44_cycle_rescan" \
+    "$negative_r44_invalid_mutation_authority" \
+    "$negative_r44_certificate_revision"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -1962,6 +2034,7 @@ check_positive "$r39_scoped_persistent_sdma_wait_policy_proof" 'verification res
 check_positive "$r40_gfx942_striped_sdma_aggregate_proof" 'verification results:: 25 verified, 0 errors' r40-gfx942-striped-sdma-aggregate
 check_positive "$r41_persistent_striped_sdma_aggregate_proof" 'verification results:: 43 verified, 0 errors' r41-persistent-striped-sdma-aggregate
 check_positive "$r42_compute_event_signal_custody_proof" 'verification results:: 21 verified, 0 errors' r42-compute-event-signal-custody
+check_positive "$r44_live_foundation_invariant_certificate_proof" 'verification results:: 27 verified, 0 errors' r44-live-foundation-invariant-certificate
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -2362,13 +2435,30 @@ check_negative "$negative_r42_cycle_mutation" mutated_cycle_failure_has_no_mutat
 check_negative "$negative_r42_event_capacity_mutation" mutated_event_capacity_failure_has_no_mutation_v1 r42-event-capacity-mutation
 check_negative "$negative_r42_reader_capacity_mutation" mutated_reader_capacity_failure_has_no_mutation_v1 r42-reader-capacity-mutation
 check_negative "$negative_r42_missing_premise" mutated_missing_premise_is_admitted_v1 r42-missing-premise
+check_negative "$negative_r44_unvalidated_mint" mutated_unvalidated_transfer_mints_certificate_v1 r44-unvalidated-mint
+check_negative "$negative_r44_foundation_substitution" mutated_substituted_transfer_is_exact_v1 r44-foundation-substitution
+check_negative "$negative_r44_issuer_omission" mutated_issuer_omission_rejects_cross_registry_swap_v1 r44-issuer-omission
+check_negative "$negative_r44_duplicate_loan" mutated_duplicate_live_loan_is_linear_v1 r44-duplicate-loan
+check_negative "$negative_r44_generation_overflow" mutated_generation_overflow_is_admitted_v1 r44-generation-overflow
+check_negative "$negative_r44_cross_session_reclaim" mutated_cross_session_reclaim_is_exact_v1 r44-cross-session-reclaim
+check_negative "$negative_r44_stale_reclaim" mutated_stale_reclaim_is_exact_v1 r44-stale-reclaim
+check_negative "$negative_r44_reclaim_out_of_phase" mutated_reclaim_out_of_phase_is_admitted_v1 r44-reclaim-out-of-phase
+check_negative "$negative_r44_noninductive_mutation" mutated_noninductive_mutation_preserves_state_v1 r44-noninductive-mutation
+check_negative "$negative_r44_stale_mutation" mutated_stale_mutation_preserves_state_v1 r44-stale-mutation
+check_negative "$negative_r44_certificate_substitution" mutated_certificate_substitution_preserves_state_v1 r44-certificate-substitution
+check_negative "$negative_r44_restore_without_certificate" mutated_restore_without_certificate_yields_no_session_v1 r44-restore-without-certificate
+check_negative "$negative_r44_restore_scan" mutated_restore_performs_final_scan_v1 r44-restore-scan
+check_negative "$negative_r44_restore_consumption" mutated_restore_consumes_certificate_v1 r44-restore-consumption
+check_negative "$negative_r44_cycle_rescan" mutated_cycles_add_zero_scans_v1 r44-cycle-rescan
+check_negative "$negative_r44_invalid_mutation_authority" mutated_invalid_mutation_yields_no_reusable_authority_v1 r44-invalid-mutation-authority
+check_negative "$negative_r44_certificate_revision" mutated_mutation_updates_certificate_revision_v1 r44-certificate-revision
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 mutations=400'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 mutations=417'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

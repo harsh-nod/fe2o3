@@ -16,8 +16,9 @@ fused-asynchronous-directional-SDMA, R35 fused-retained-control-replay, R36
 fused-completion-poll/recycle, R37 typed-native-SDMA-wait-activation, R38
 bounded-persistent-compute-wait/recycle, R39 scoped-persistent-SDMA-wait
 policy, R40 gfx942 striped-SDMA aggregate, R41 persistent striped-SDMA
-aggregate, and R42 compute-event signal-custody models. The authenticated runner
-proves 966 obligations and rejects 400 expected-negative mutations over finite
+aggregate, R42 compute-event signal-custody, and R44 live-foundation
+invariant-certificate models. The authenticated runner
+proves 993 obligations and rejects 417 expected-negative mutations over finite
 abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -2153,6 +2154,67 @@ capacity, and admission that invents a missing uniqueness premise.
 | Executable bounded model | **Checked** | Focused Rust tests exercise one-time binding, independent pins, completed-source recycle gating, hostile admission, both 8192-entry capacity boundaries, and generation advance. These tests grant no native authority. |
 | Boundary countermodels | **Rejected** | Fifteen pinned standalone mutations fail their named binding, pin-custody, recycle, admission, or capacity postconditions. |
 | Production refinement, target-publication identity, native/hardware validation, KFD/HSA/HIP behavior, parity, or performance | **Not established** | Explicitly outside the R42 proof boundary. |
+
+## R44 live-foundation invariant certificate
+
+`r44_live_foundation_invariant_certificate_v1.rs` verifies exactly 27 obligations
+over an independent finite certificate model. The runner pins that proof and
+17 standalone negative mutations. The executable no-std host model has nine
+focused tests. Neither model refines `fe2o3-kfd` or grants production authority.
+
+The modeled registry has a nonzero issuer occurrence, and every certificate,
+live loan, and admitted mutation binds that occurrence. Issuer-occurrence
+uniqueness is a caller-supplied premise; this model checks exact equality but
+does not provide a global occurrence allocator. The modeled foundation binds
+one session occurrence, domain, device, VM,
+identity generation, memory generation, and foundation revision. A queue
+certificate is minted only when a contracted full-validation result matches
+that exact foundation and reports all invariants valid at the SessionOwned to
+QueueOwned transfer. The certificate is move-only in the executable model.
+
+Opening a live mutation consumes queue-certificate custody and produces one
+move-only loan carrying the exact session, monotonically increasing generation,
+and certificate ID, plus a move-only live certificate. The registry phase is
+then `SessionOwnedLiveLoan { generation }`; duplicate loans, generation
+overflow, stale or cross-session tokens, and out-of-phase reclaim are rejected
+without changing state. Exact reclaim returns QueueOwned certificate custody.
+
+During a live loan, only a caller-classified inductive mutation with the exact
+session, certificate ID, current revision, and next revision is admitted. It
+updates the foundation and certificate revision together. Noninductive,
+substituted, stale, or overflowing mutations return live custody unchanged and
+cannot directly produce reusable queue or session authority. The
+`preserves_full_invariants` classification is a contracted input; these proofs
+do not establish that any production allocation-lifecycle operation satisfies
+it.
+
+Loan/reclaim and admitted-mutation transitions preserve the abstract global
+scan count. One theorem summarizes any finite number of valid cycles and proves
+zero repeated scans, subject to the generation bound. Final lifecycle restore
+requires another exact contracted full validation, consumes the certificate,
+and returns SessionOwned authority. Thus the modeled complete lifecycle has
+exactly two scans, at its transfer and restore trust boundaries. Scan counts are
+abstract events, not timing or performance evidence.
+
+The 17 countermodels reject unvalidated minting, foundation substitution,
+omitted issuer identity, duplicate loaning, loan-generation overflow,
+cross-session or stale reclaim, out-of-phase reclaim, noninductive or stale
+mutation, certificate substitution, restore without a certificate, omitted
+final scan, retained certificate after restore, per-cycle rescanning, reusable
+authority from invalid mutation, and a stale certificate revision after
+admitted mutation.
+
+## R44 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Certificate mint and phases | **Proved abstractly** | Exact contracted full validation precedes mint; phases are SessionOwned, QueueOwned, or one exact SessionOwnedLiveLoan generation. Certificate custody includes an exact nonzero registry occurrence. Validation truth and occurrence uniqueness are inputs. |
+| Linear live loan | **Modeled and checked** | Executable certificate/loan carriers are non-Clone and consuming; formal values prove exact session/generation admission but do not prove Rust linearity. Duplicate, stale, cross-session, overflow, and phase failures are inert. |
+| Inductive mutation preservation | **Premise checked, not production-proved** | Exact identity and revision checks update the foundation and certificate together. The inductive-preservation boolean is caller-contracted. Invalid inputs remain live and yield no reusable authority directly. |
+| Scan summary | **Proved abstractly** | Any finite valid-cycle summary preserves the global-scan count; transfer and final restore each add one. This establishes no implementation cost or speedup. |
+| Lifecycle restore | **Proved abstractly** | Exact final validation consumes the certificate and returns SessionOwned state. Invalid certificate or validation cannot produce session authority. |
+| Executable bounded model | **Checked** | Nine Rust tests exercise mint rejection, same-foundation cross-registry substitution, admitted and rejected mutation, exact loan failures, overflow, final consumption, 4096 scan-free cycles, and 128 mutation cycles. |
+| Production refinement, panic/allocator behavior, native validation, KFD/HSA/HIP behavior, hardware, parity, or performance | **Not established** | Explicitly outside the R44 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
