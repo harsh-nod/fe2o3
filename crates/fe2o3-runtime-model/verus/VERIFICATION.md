@@ -17,8 +17,9 @@ fused-completion-poll/recycle, R37 typed-native-SDMA-wait-activation, R38
 bounded-persistent-compute-wait/recycle, R39 scoped-persistent-SDMA-wait
 policy, R40 gfx942 striped-SDMA aggregate, R41 persistent striped-SDMA
 aggregate, R42 compute-event signal-custody, R44 live-foundation
-invariant-certificate, and R46 gfx942 striped-SDMA tail-wait models. The
-authenticated runner proves 1025 obligations and rejects 432 expected-negative mutations over finite
+invariant-certificate, R45 compute-dependency-publisher, and R46 gfx942
+striped-SDMA tail-wait models. The authenticated runner proves 1064 obligations
+and rejects 461 expected-negative mutations over finite
 abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -2215,6 +2216,63 @@ admitted mutation.
 | Lifecycle restore | **Proved abstractly** | Exact final validation consumes the certificate and returns SessionOwned state. Invalid certificate or validation cannot produce session authority. |
 | Executable bounded model | **Checked** | Nine Rust tests exercise mint rejection, same-foundation cross-registry substitution, admitted and rejected mutation, exact loan failures, overflow, final consumption, 4096 scan-free cycles, and 128 mutation cycles. |
 | Production refinement, panic/allocator behavior, native validation, KFD/HSA/HIP behavior, hardware, parity, or performance | **Not established** | Explicitly outside the R44 proof boundary. |
+
+## R45 compute dependency publisher
+
+`r45_compute_dependency_publisher_v1.rs` verifies exactly 39 obligations over
+an independent finite model of the crate-private R43 dependency-publisher
+foundation. The runner pins that proof and 29 standalone negative mutations.
+The executable model has 16 focused tests. There is no Rust-to-Verus or
+production-Rust refinement theorem.
+
+An acceptance carries a nonzero publisher-owner occurrence, session, mint ID,
+and monotonically increasing epoch. Exact issuance is checked against the
+owner's outstanding mint. The exactly-one publisher owner and source-epoch
+minting properties are explicit premises rather than global theorems; creating
+a second owner with the same occurrence falls outside the admitted model.
+Rejected preparation preserves the acceptance, sealed target, and source
+reader custody, while consumed epochs remain burned.
+
+One sealed target bundle couples the target occurrence, batch, retained event,
+retention ID, structured completion-signal identity, and final dispatch. The
+final dispatch names that exact target and completion signal. A source roster
+contains 1 through 256 distinct, same-session, cross-queue occurrences with
+strictly earlier epochs. Equal epochs are self-dependencies and later epochs
+are cycles. Each source reader binds one exact nonzero event and lease to its
+source occurrence and addressless signal tuple `(mapping, slot, generation)`.
+
+The modeled B37 plan packs at most five dependency signals into each barrier,
+followed by one final dispatch. Successful publication has one reservation,
+one claim, every packet body before its header, and one doorbell. It performs
+zero completion loads. Ring occupancy is the sole retryable pre-effect result;
+a preclaim invariant failure and every failure from the first claim attempt
+onward are terminal and retain opaque source and target authority. Malformed
+fault coordinates fail closed before native effects.
+
+Retry rollback first checks the exact live target, a complete unique route to
+all source arenas, and an exact unique live reader record in each selected
+well-formed arena. Missing, substituted, or duplicate arena identities;
+duplicate live records, leases, or events; stale or substituted reader
+components; and stale target state cause zero release or arena mutation.
+Success releases readers in reverse order, returns their source events in
+original dependency order, and consumes the target arena's live event. That
+same arena no longer validates the target; the move-only retry custody is
+consumed, and the acceptance mint is no longer outstanding, so the modeled
+rollback cannot be repeated. This does not establish a global target-event
+registry. The model deliberately does not cover the dependent-completion
+reader-release path.
+
+## R45 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Acceptance minting | **Premise checked and modeled** | Per-owner monotonic burned epochs and exact outstanding mint authentication. Exactly-one-owner and source-epoch minting are explicit premises, not globally established. |
+| Target and source identity | **Proved abstractly** | Exact sealed target components and structured addressless signal identity; 1..256 distinct same-session earlier cross-queue sources with distinct event and lease identity. |
+| Publication boundary | **Proved abstractly** | Exact B37 packing, one reservation/claim/doorbell, bodies before headers, no completion loads, retry only on pre-effect ring occupancy, and opaque terminal custody from preclaim invariant or first claim attempt onward. |
+| Retry rollback | **Proved abstractly** | Complete immutable target, route, arena-well-formedness, and exact live-reader preflight precedes all releases; failure mutates nothing, while success releases in reverse, returns events in original order, and consumes target liveness. |
+| Executable bounded model | **Checked** | Sixteen focused Rust tests exercise boundaries, substitutions, minting, packing, publication faults, multi-owner rollback, failure atomicity, exact reader records, and target replay rejection. |
+| Boundary countermodels | **Rejected** | Twenty-nine pinned mutations fail their named target split, route, rollback, epoch, retry, pre-poll, graph, packing, ordering, signal, live-reader, replay, or custody postcondition. |
+| Public facade, dependent-completion release, production Rust refinement, native/KFD behavior, hardware, parity, or performance | **Not established** | Explicitly outside the R45 proof boundary. |
 
 ## R46 gfx942 striped-SDMA tail wait
 
