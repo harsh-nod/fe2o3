@@ -45,6 +45,12 @@ immutable ordered completion roster. Both the queue-local state and the
 process-global KFD admission gate are poisoned. Drop is not used to restore this
 custody.
 
+The same centralized local-and-process poison transition now precedes every
+striped submission, poll, or wait return that exposes process-teardown custody.
+Retryable no-native-effect preflight and preparation failures do not invoke that
+transition. Neither does the blocking wait timeout, which returns exact pending
+custody for another wait epoch.
+
 The public timeout retains the unchanged whole submission. Calling the public
 wait again starts a new native wait epoch and therefore permits one new final
 audit. This behavior is deliberately not presented as a refinement of the R46
@@ -55,7 +61,8 @@ model's terminal timeout receipt.
 Host fault-injection tests cover multi-round tail work, ready and timeout
 classification, tail errors, pending prefixes under ready tails, identity and
 engine substitution, closing-currentness loss, panic custody, local and
-subprocess-global poison, and the single full-audit source shape.
+subprocess-global poison, exact terminal-return source shape, retryable
+non-poisoning, and the single full-audit source shape.
 The existing exact gfx942 aggregate benchmark invokes this public wait path and
 fully validates copied bytes, but R47 does not run it. There is no Rust-to-R46
 refinement, hardware validation, or measured performance claim in this tranche.

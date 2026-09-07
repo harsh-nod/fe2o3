@@ -257,16 +257,30 @@ fn catch_striped_wait_epoch_unwind_v1<R>(operation: impl FnOnce() -> R) -> std::
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation))
 }
 
-fn take_striped_wait_panic_custody_v1<T>(
-    retained: &mut Option<T>,
+fn poison_multi_queue_terminal_boundary_v1(
     poison_local: impl FnOnce(),
     poison_process: impl FnOnce(),
+) {
+    poison_local();
+    poison_process();
+}
+
+fn enforce_multi_queue_submission_disposition_v1(
+    disposition: Gfx942SdmaMultiQueueFailureDispositionV1,
+    poison_local: impl FnOnce(),
+    poison_process: impl FnOnce(),
+) {
+    if disposition != Gfx942SdmaMultiQueueFailureDispositionV1::RetryablePreflight {
+        poison_multi_queue_terminal_boundary_v1(poison_local, poison_process);
+    }
+}
+
+fn take_striped_wait_panic_custody_v1<T>(
+    retained: &mut Option<T>,
+    poison_terminal: impl FnOnce(),
 ) -> T {
     let custody = retained.take().unwrap_or_else(|| std::process::abort());
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        poison_local();
-        poison_process();
-    })) {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(poison_terminal)) {
         Ok(()) => custody,
         Err(payload) => {
             core::mem::forget(custody);
@@ -324,6 +338,24 @@ const fn classify_multi_queue_publication_failure(
 }
 
 impl ComputeAqlQueueSessionV1 {
+    fn poison_gfx942_multi_queue_terminal_v1(&mut self) {
+        poison_multi_queue_terminal_boundary_v1(
+            || self.poison_terminal(),
+            permanently_poison_process_global_kfd_runtime_gate_v1,
+        );
+    }
+
+    fn enforce_gfx942_multi_queue_submission_disposition_v1(
+        &mut self,
+        disposition: Gfx942SdmaMultiQueueFailureDispositionV1,
+    ) {
+        enforce_multi_queue_submission_disposition_v1(
+            disposition,
+            || self.poison_terminal(),
+            permanently_poison_process_global_kfd_runtime_gate_v1,
+        );
+    }
+
     /// Preflights and then publishes one balanced batch across every striped SDMA queue.
     ///
     /// All shards are prepared before the first queue write-pointer publication. Native queues
@@ -338,7 +370,10 @@ impl ComputeAqlQueueSessionV1 {
     ) -> Result<Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaMultiQueueSubmissionFailureV1> {
         if let Err(error) = self.require_striped_sdma_enabled() {
             let disposition = classify_multi_queue_availability_failure(self.terminal_poisoned);
-            let custody = if self.terminal_poisoned {
+            let terminal =
+                disposition != Gfx942SdmaMultiQueueFailureDispositionV1::RetryablePreflight;
+            self.enforce_gfx942_multi_queue_submission_disposition_v1(disposition);
+            let custody = if terminal {
                 Gfx942SdmaMultiQueueFailureCustodyV1::ProcessTeardown(
                     Gfx942SdmaMultiQueueTerminalCustodyV1::before_publication(requests),
                 )
@@ -391,7 +426,7 @@ impl ComputeAqlQueueSessionV1 {
             Ok(())
         });
         if submitted.is_none() {
-            self.poison_terminal();
+            self.poison_gfx942_multi_queue_terminal_v1();
             return Err(Gfx942SdmaMultiQueueSubmissionFailureV1 {
                 error: operation
                     .err()
@@ -412,7 +447,7 @@ impl ComputeAqlQueueSessionV1 {
             Ok(submission) => match closing_error {
                 None => Ok(submission),
                 Some(error) => {
-                    self.poison_terminal();
+                    self.poison_gfx942_multi_queue_terminal_v1();
                     Err(Gfx942SdmaMultiQueueSubmissionFailureV1 {
                         error,
                         disposition:
@@ -428,11 +463,9 @@ impl ComputeAqlQueueSessionV1 {
                 let disposition =
                     classify_multi_queue_preparation_failure(poisoned, closing_error.is_some());
                 let terminal =
-                    disposition == Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPrePublication;
+                    disposition != Gfx942SdmaMultiQueueFailureDispositionV1::RetryablePreflight;
                 let error = closing_error.unwrap_or_else(|| failure.error.into());
-                if terminal {
-                    self.poison_terminal();
-                }
+                self.enforce_gfx942_multi_queue_submission_disposition_v1(disposition);
                 let custody = if terminal {
                     Gfx942SdmaMultiQueueFailureCustodyV1::ProcessTeardown(
                         Gfx942SdmaMultiQueueTerminalCustodyV1::before_publication(failure.requests),
@@ -447,11 +480,11 @@ impl ComputeAqlQueueSessionV1 {
                 })
             }
             Err(MultiQueueSdmaSubmitFailureV1::Publication(failure)) => {
-                self.poison_terminal();
                 let disposition = classify_multi_queue_publication_failure(
                     failure.published.len(),
                     failure.indeterminate.is_some(),
                 );
+                self.enforce_gfx942_multi_queue_submission_disposition_v1(disposition);
                 Err(Gfx942SdmaMultiQueueSubmissionFailureV1 {
                     error: closing_error.unwrap_or_else(|| failure.error.into()),
                     disposition,
@@ -466,7 +499,7 @@ impl ComputeAqlQueueSessionV1 {
                 })
             }
             Err(MultiQueueSdmaSubmitFailureV1::PublishedValidation { error, submission }) => {
-                self.poison_terminal();
+                self.poison_gfx942_multi_queue_terminal_v1();
                 Err(Gfx942SdmaMultiQueueSubmissionFailureV1 {
                     error: closing_error.unwrap_or_else(|| error.into()),
                     disposition: Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPostPublication,
@@ -517,7 +550,7 @@ impl ComputeAqlQueueSessionV1 {
                     retained.take().unwrap_or_else(|| std::process::abort()),
                 ),
             };
-            self.poison_terminal();
+            self.poison_gfx942_multi_queue_terminal_v1();
             return Err(Gfx942SdmaMultiQueueExecutionFailureV1 {
                 error,
                 custody: Gfx942SdmaMultiQueueExecutionCustodyV1::ProcessTeardown(terminal),
@@ -526,7 +559,7 @@ impl ComputeAqlQueueSessionV1 {
         match lower {
             Some(Ok(outcome)) => Ok(outcome),
             Some(Err((error, submission))) => {
-                self.poison_terminal();
+                self.poison_gfx942_multi_queue_terminal_v1();
                 Err(Gfx942SdmaMultiQueueExecutionFailureV1 {
                     error: error.into(),
                     custody: Gfx942SdmaMultiQueueExecutionCustodyV1::ProcessTeardown(
@@ -535,7 +568,7 @@ impl ComputeAqlQueueSessionV1 {
                 })
             }
             None => {
-                self.poison_terminal();
+                self.poison_gfx942_multi_queue_terminal_v1();
                 Err(Gfx942SdmaMultiQueueExecutionFailureV1 {
                     error: ComputeAqlQueueSessionErrorV1::Contract(
                         "striped completion observation did not execute",
@@ -580,11 +613,9 @@ impl ComputeAqlQueueSessionV1 {
         let operation = match operation {
             Ok(operation) => operation,
             Err(payload) => {
-                let submission = take_striped_wait_panic_custody_v1(
-                    &mut retained,
-                    || self.poison_terminal(),
-                    permanently_poison_process_global_kfd_runtime_gate_v1,
-                );
+                let submission = take_striped_wait_panic_custody_v1(&mut retained, || {
+                    self.poison_gfx942_multi_queue_terminal_v1()
+                });
                 core::mem::forget(payload);
                 return Err(Gfx942SdmaMultiQueueExecutionFailureV1 {
                     error: ComputeAqlQueueSessionErrorV1::Contract(
@@ -607,7 +638,7 @@ impl ComputeAqlQueueSessionV1 {
                     retained.take().unwrap_or_else(|| std::process::abort()),
                 ),
             };
-            self.poison_terminal();
+            self.poison_gfx942_multi_queue_terminal_v1();
             return Err(Gfx942SdmaMultiQueueExecutionFailureV1 {
                 error,
                 custody: Gfx942SdmaMultiQueueExecutionCustodyV1::ProcessTeardown(terminal),
@@ -624,7 +655,7 @@ impl ComputeAqlQueueSessionV1 {
                 })
             }
             Some(Gfx942SdmaStripedTailWaitOutcomeV1::Terminal(error)) => {
-                self.poison_terminal();
+                self.poison_gfx942_multi_queue_terminal_v1();
                 Err(Gfx942SdmaMultiQueueExecutionFailureV1 {
                     error: error.into(),
                     custody: Gfx942SdmaMultiQueueExecutionCustodyV1::ProcessTeardown(
@@ -635,7 +666,7 @@ impl ComputeAqlQueueSessionV1 {
                 })
             }
             None => {
-                self.poison_terminal();
+                self.poison_gfx942_multi_queue_terminal_v1();
                 Err(Gfx942SdmaMultiQueueExecutionFailureV1 {
                     error: ComputeAqlQueueSessionErrorV1::Contract(
                         "striped completion wait did not execute",
@@ -688,6 +719,35 @@ mod tests {
     }
 
     #[test]
+    fn submission_disposition_terminalizer_is_exact_and_retryable_is_inert() {
+        for disposition in [
+            Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPrePublication,
+            Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPartialPublication,
+            Gfx942SdmaMultiQueueFailureDispositionV1::TerminalPostPublication,
+        ] {
+            let local_calls = core::cell::Cell::new(0_u8);
+            let process_calls = core::cell::Cell::new(0_u8);
+            enforce_multi_queue_submission_disposition_v1(
+                disposition,
+                || local_calls.set(local_calls.get() + 1),
+                || process_calls.set(process_calls.get() + 1),
+            );
+            assert_eq!(local_calls.get(), 1, "disposition={disposition:?}");
+            assert_eq!(process_calls.get(), 1, "disposition={disposition:?}");
+        }
+
+        let local_calls = core::cell::Cell::new(0_u8);
+        let process_calls = core::cell::Cell::new(0_u8);
+        enforce_multi_queue_submission_disposition_v1(
+            Gfx942SdmaMultiQueueFailureDispositionV1::RetryablePreflight,
+            || local_calls.set(local_calls.get() + 1),
+            || process_calls.set(process_calls.get() + 1),
+        );
+        assert_eq!(local_calls.get(), 0);
+        assert_eq!(process_calls.get(), 0);
+    }
+
+    #[test]
     fn already_terminal_multi_queue_session_never_advertises_retryable_custody() {
         assert_eq!(
             classify_multi_queue_availability_failure(false),
@@ -735,11 +795,12 @@ mod tests {
 
         let local_poisoned = core::cell::Cell::new(false);
         let process_poisoned = core::cell::Cell::new(false);
-        let recovered = take_striped_wait_panic_custody_v1(
-            &mut retained,
-            || local_poisoned.set(true),
-            || process_poisoned.set(true),
-        );
+        let recovered = take_striped_wait_panic_custody_v1(&mut retained, || {
+            poison_multi_queue_terminal_boundary_v1(
+                || local_poisoned.set(true),
+                || process_poisoned.set(true),
+            );
+        });
         assert!(local_poisoned.get());
         assert!(process_poisoned.get());
         assert!(retained.is_none());
@@ -753,11 +814,11 @@ mod tests {
     }
 
     #[test]
-    fn striped_wait_panic_poison_is_process_global_in_a_subprocess() {
-        const CHILD_ENV: &str = "FE2O3_TEST_STRIPED_WAIT_PANIC_POISON";
+    fn multi_queue_terminal_boundary_is_process_global_in_a_subprocess() {
+        const CHILD_ENV: &str = "FE2O3_TEST_MULTI_QUEUE_TERMINAL_POISON";
         if std::env::var_os(CHILD_ENV).is_none() {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
-                .arg("striped_wait_panic_poison_is_process_global_in_a_subprocess")
+                .arg("multi_queue_terminal_boundary_is_process_global_in_a_subprocess")
                 .arg("--nocapture")
                 .env(CHILD_ENV, "1")
                 .output()
@@ -772,27 +833,12 @@ mod tests {
         }
 
         let teardown_arm = arm_process_global_kfd_runtime_gate_for_teardown_v1();
-        let submission = crate::sdma::striped_submission_for_unwind_test();
-        let exact = submission.exact_identity_for_unwind_test();
-        let mut retained = Some(submission);
-        let caught = catch_striped_wait_epoch_unwind_v1(|| {
-            let _borrowed = retained.as_ref().expect("borrowed panic custody");
-            panic!("injected striped wait panic");
-        });
-        assert!(caught.is_err());
-        let local_poisoned = core::cell::Cell::new(false);
-        let recovered = take_striped_wait_panic_custody_v1(
-            &mut retained,
-            || local_poisoned.set(true),
+        let local_calls = core::cell::Cell::new(0_u8);
+        poison_multi_queue_terminal_boundary_v1(
+            || local_calls.set(local_calls.get() + 1),
             permanently_poison_process_global_kfd_runtime_gate_v1,
         );
-        assert!(local_poisoned.get());
-        assert_eq!(recovered.exact_identity_for_unwind_test(), exact);
-        let terminal = Gfx942SdmaMultiQueueTerminalCustodyV1::complete_publication(recovered);
-        assert_eq!(
-            terminal.exact_complete_publication_identity_for_test(),
-            Some(exact)
-        );
+        assert_eq!(local_calls.get(), 1);
         teardown_arm.confirm_destroyed();
 
         use std::os::fd::AsFd;
@@ -803,6 +849,111 @@ mod tests {
                 "process-global gate poisoned"
             ))
         ));
+    }
+
+    #[test]
+    fn every_process_teardown_exit_uses_one_terminalizer_and_timeout_does_not() {
+        let live = include_str!("sdma_multi_queue.rs")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap();
+        let submit = live
+            .split("pub fn submit_gfx942_striped_sdma_copy_batch_v1")
+            .nth(1)
+            .unwrap()
+            .split("pub fn poll_gfx942_striped_sdma_copy_batch_v1")
+            .next()
+            .unwrap();
+        let poll = live
+            .split("pub fn poll_gfx942_striped_sdma_copy_batch_v1")
+            .nth(1)
+            .unwrap()
+            .split("pub fn wait_gfx942_striped_sdma_copy_batch_for_v1")
+            .next()
+            .unwrap();
+        let wait = live
+            .split("pub fn wait_gfx942_striped_sdma_copy_batch_for_v1")
+            .nth(1)
+            .unwrap()
+            .split("pub fn execute_sdma_copy_batch_for")
+            .next()
+            .unwrap();
+        let terminalizer = live
+            .split("fn poison_gfx942_multi_queue_terminal_v1")
+            .nth(1)
+            .unwrap()
+            .split("fn enforce_gfx942_multi_queue_submission_disposition_v1")
+            .next()
+            .unwrap();
+        let disposition_enforcer = live
+            .split("fn enforce_gfx942_multi_queue_submission_disposition_v1")
+            .nth(1)
+            .unwrap()
+            .split("/// Preflights and then publishes")
+            .next()
+            .unwrap();
+
+        assert_eq!(terminalizer.matches("self.poison_terminal()").count(), 1);
+        assert_eq!(
+            terminalizer
+                .matches("permanently_poison_process_global_kfd_runtime_gate_v1")
+                .count(),
+            1
+        );
+        assert_eq!(
+            disposition_enforcer
+                .matches("enforce_multi_queue_submission_disposition_v1")
+                .count(),
+            1
+        );
+        assert_eq!(
+            disposition_enforcer
+                .matches("self.poison_terminal()")
+                .count(),
+            1
+        );
+        assert_eq!(
+            disposition_enforcer
+                .matches("permanently_poison_process_global_kfd_runtime_gate_v1")
+                .count(),
+            1
+        );
+
+        let submit_terminalizers = submit
+            .matches("self.poison_gfx942_multi_queue_terminal_v1()")
+            .count()
+            + submit
+                .matches("self.enforce_gfx942_multi_queue_submission_disposition_v1(disposition)")
+                .count();
+        assert_eq!(submit.matches("ProcessTeardown(").count(), 6);
+        assert_eq!(submit_terminalizers, 6);
+        assert_eq!(poll.matches("ProcessTeardown(").count(), 3);
+        assert_eq!(
+            poll.matches("self.poison_gfx942_multi_queue_terminal_v1()")
+                .count(),
+            3
+        );
+        assert_eq!(wait.matches("ProcessTeardown(").count(), 4);
+        assert_eq!(
+            wait.matches("self.poison_gfx942_multi_queue_terminal_v1()")
+                .count(),
+            4
+        );
+
+        for body in [submit, poll, wait] {
+            assert!(!body.contains("permanently_poison_process_global_kfd_runtime_gate_v1"));
+            assert!(!body.contains("self.poison_terminal()"));
+        }
+        let timeout = wait
+            .split("Some(Gfx942SdmaStripedTailWaitOutcomeV1::Pending) => {")
+            .nth(1)
+            .unwrap()
+            .split("Some(Gfx942SdmaStripedTailWaitOutcomeV1::Terminal(error))")
+            .next()
+            .unwrap();
+        assert!(timeout.contains("Gfx942SdmaErrorV1::Timeout"));
+        assert!(timeout.contains("Gfx942SdmaMultiQueueExecutionCustodyV1::Pending("));
+        assert!(!timeout.contains("poison_gfx942_multi_queue_terminal_v1"));
     }
 
     #[test]
@@ -877,7 +1028,8 @@ mod tests {
         assert!(wait.contains("wait_prepared_striped_multi_queue_tails_retaining_for"));
         assert!(wait.contains("catch_striped_wait_epoch_unwind_v1"));
         assert!(wait.contains("take_striped_wait_panic_custody_v1"));
-        assert!(wait.contains("permanently_poison_process_global_kfd_runtime_gate_v1"));
+        assert!(wait.contains("poison_gfx942_multi_queue_terminal_v1"));
+        assert!(!wait.contains("permanently_poison_process_global_kfd_runtime_gate_v1"));
         assert!(!wait.contains("wait_prepared_striped_multi_queue_completion_for"));
         assert!(!wait.contains("retire_prepared_striped_multi_queue_completion"));
         let lower_wait = wait

@@ -97,7 +97,7 @@ impl SdmaWaitProfileV1 {
 
 /// Frozen claim boundary for the bounded native gfx942 SDMA implementation.
 pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v9\n",
+    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v10\n",
     "kfd_sdma_queue_schema_sha256=f489ae5735f8230e4ee788fe1fa9e62b307301c13cf88ee70889b0f455af0b5b\n",
     "sdma_topology_capability_sha256=51236bbd70ece3ee4e14cc1a3e7e7cfbbe0960e745130e1a3943f9e39bc36a26\n",
     "rocm_systems_commit=1b648038a0ac164cf2f06f2a581ced12cf5f7378\n",
@@ -120,7 +120,7 @@ pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
     "pool=queue-branded,best-fit-by-kind-size-and-alignment,leased-and-in-flight-excluded,concrete-generation-advanced-on-recycle,explicit-trim-before-teardown,certificate-cleared-on-every-attempted-valid-range-cpu-write-device-destination-request-logical-resize-pool-generation-advance-or-private-reconstruction\n",
     "dispatch-data-bridge=exact-full-extent-host-content-or-completed-h2d-only,move-only-storage-identity-and-queue-and-pool-generation-binding,no-rematerialization,demotion-advances-pool-generation\n",
     "currentness=one-operational-pre-post-envelope-per-submit-batch-or-wait-batch-or-combined-submit-through-observed-completion,authenticated-full-host-write-retains-one-pre-post-envelope-per-max-linear-chunk,persistent-ready-certificate-validation-retains-one-pre-post-envelope,internal-atomics-and-mapped-writes-only-inside-envelope\n",
-    "failure=structural-preflight-before-the-first-live-shared-memory-or-currentness-operation-recovers-inputs,every-error-or-caught-unwind-at-or-after-that-boundary-permanently-poisons-process-global-kfd-admission-and-requires-process-teardown-independent-of-whether-a-confirmed-queue-roster-exists,prepared-live-and-terminal-creation-custody-are-distinct,validated-xgmi-route-scope-failure-quarantines-both-participating-sessions,currentness-counter-generation-and-post-preflight-uncertainty-terminally-poison-and-retain-native-custody,striped-terminal-failure-exposes-audit-only-confirmed-and-at-most-one-indeterminate-and-untouched-observations-without-drain-or-resubmit-authority,striped-wait-panic-before-the-abort-only-retirement-suffix-preserves-the-exact-sealed-plan-shards-and-ordered-completion-roster-in-terminal-custody-and-poisons-both-the-local-session-and-process-global-admission,striped-cursor-commits-only-after-complete-publication-and-closing-currentness\n",
+    "failure=structural-preflight-before-the-first-live-shared-memory-or-currentness-operation-recovers-inputs,retryable-no-native-effect-availability-detached-compute-foreign-buffer-and-recoverable-preparation-failures-preserve-inputs-and-do-not-poison,every-terminal-error-or-caught-unwind-at-or-after-that-boundary-permanently-poisons-process-global-kfd-admission-and-requires-process-teardown-independent-of-whether-a-confirmed-queue-roster-exists,prepared-live-and-terminal-creation-custody-are-distinct,validated-xgmi-route-scope-failure-quarantines-both-participating-sessions,currentness-counter-generation-and-post-preflight-uncertainty-terminally-poison-and-retain-native-custody,every-striped-submit-poll-or-wait-process-teardown-return-invokes-one-central-terminalizer-that-poisons-both-the-local-session-and-process-global-admission,striped-terminal-failure-exposes-audit-only-confirmed-and-at-most-one-indeterminate-and-untouched-observations-without-drain-or-resubmit-authority,striped-wait-timeout-retains-exact-pending-custody-and-does-not-invoke-the-terminalizer,striped-wait-panic-before-the-abort-only-retirement-suffix-preserves-the-exact-sealed-plan-shards-and-ordered-completion-roster-in-terminal-custody-and-invokes-the-same-terminalizer,striped-cursor-commits-only-after-complete-publication-and-closing-currentness\n",
     "teardown=combined-striped-before-directional-before-compute,standalone-sdma-before-compute,then-release-ring-control-completions-and-pooled-buffers-explicitly,terminal-creation-custody-has-no-in-process-cleanup-authority\n",
     "proof=abstract-pool-generation-retention-and-cross-device-coordinate-theorems-only,r46-model-is-not-an-executable-rust-refinement\n",
     "contracted=ioctl-truth,doorbell-mapping,cpu-gpu-coherence,sha256-collision-resistance,userspace-certificate-is-not-kernel-attestation-or-loaded-kernel-proof,kernel-firmware-packet-consumption,completion,event-driven-completion,gpu-clock-calibration,progress,liveness\n",
@@ -129,7 +129,7 @@ pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_SDMA_COPY_MANIFEST_V1`].
 pub const GFX942_SDMA_COPY_MANIFEST_SHA256_V1: &str =
-    "55bd06b90d5648bb45c13bfd5fb1fc3006f56398a15fcf5d69567bb8170b35b2";
+    "7e19a45bd8f7aac5edd4ce683e1183e62222307416d115e2f49c0459da292e2c";
 
 const SDMA_OP_COPY: u32 = 1;
 const SDMA_OP_FENCE: u32 = 5;
@@ -7068,6 +7068,10 @@ mod tests {
             "striped-tail-fence-premise=each-copy-submission-ends-in-the-exact-mtype-3-system-1-snoop-1-fence",
             "each-bound-owner-engine-index-is-exactly-queue-ordinal-modulo-two",
             "preserves-the-exact-sealed-plan-shards-and-ordered-completion-roster-in-terminal-custody",
+            "retryable-no-native-effect-availability-detached-compute-foreign-buffer-and-recoverable-preparation-failures-preserve-inputs-and-do-not-poison",
+            "every-striped-submit-poll-or-wait-process-teardown-return-invokes-one-central-terminalizer",
+            "striped-wait-timeout-retains-exact-pending-custody-and-does-not-invoke-the-terminalizer",
+            "and-invokes-the-same-terminalizer",
             "r46-model-is-not-an-executable-rust-refinement",
             "no-striped-tail-wait-speedup-measured-for-this-revision",
         ] {
