@@ -1,8 +1,6 @@
 //! Balanced multi-queue SDMA planning, publication, and aggregate completion.
 
 use core::fmt;
-use std::time::{Duration, Instant};
-
 use fe2o3_kfd_uapi::{KFD_GFX942_SDMA_ENGINE_COUNT_V1, KFD_GFX942_SDMA_QUEUES_PER_ENGINE_V1};
 
 use super::{
@@ -14,7 +12,8 @@ use super::{
     map_multi_queue_plan_error, ticket_matches_queue_occurrence,
 };
 use crate::shared_memory::SharedGttMemorySessionV1;
-use crate::wait::MonotonicWaitV1;
+mod tail_wait;
+pub(crate) use tail_wait::Gfx942SdmaStripedTailWaitOutcomeV1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -236,6 +235,96 @@ impl Gfx942SdmaMultiQueueSubmissionV1 {
         PreparedMultiQueueCompletionV1,
     ) {
         (self.plan, self.shards, self.completion)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exact_identity_for_unwind_test(&self) -> Gfx942SdmaMultiQueueIdentityForTestV1 {
+        Gfx942SdmaMultiQueueIdentityForTestV1 {
+            plan: self.plan.clone(),
+            shards: self
+                .shards
+                .iter()
+                .map(|shard| {
+                    (
+                        shard.queue_ordinal,
+                        shard.queue_id,
+                        shard.request_indices.clone(),
+                        shard.tickets.clone(),
+                    )
+                })
+                .collect(),
+            ordered: self.completion.ordered.clone(),
+            ordered_capacity: self.completion.ordered.capacity(),
+            completed_capacity: self.completion.completed.capacity(),
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Gfx942SdmaMultiQueueIdentityForTestV1 {
+    plan: Gfx942SdmaMultiQueuePlanV1,
+    shards: Vec<(u16, u32, Vec<u16>, Vec<Gfx942SdmaCopyTicketV1>)>,
+    ordered: Vec<ValidatedMultiQueueCompletionEntryV1>,
+    ordered_capacity: usize,
+    completed_capacity: usize,
+}
+
+#[cfg(test)]
+pub(crate) fn striped_submission_for_unwind_test() -> Gfx942SdmaMultiQueueSubmissionV1 {
+    let queue_ids = [41_u32, 43];
+    let plan =
+        Gfx942SdmaMultiQueuePlanV1::new(&queue_ids, 4, 0).expect("fixed unwind-test striped plan");
+    let owner = fe2o3_runtime_model::QueueKeyV1 {
+        vm: fe2o3_runtime_model::VmKeyV1 {
+            device: fe2o3_runtime_model::DeviceKeyV1 {
+                physical: fe2o3_runtime_model::PhysicalDeviceIdV1(7),
+                generation: fe2o3_runtime_model::DeviceGenerationV1(11),
+            },
+            id: fe2o3_runtime_model::VmIdV1(13),
+        },
+        id: fe2o3_runtime_model::QueueInstanceIdV1(17),
+        generation: fe2o3_runtime_model::QueueGenerationV1(19),
+    };
+    let mut shard_requests = [Vec::new(), Vec::new()];
+    let mut shard_tickets = [Vec::new(), Vec::new()];
+    let mut ordered = Vec::with_capacity(plan.request_count());
+    for request_index in 0_u16..4 {
+        let queue_ordinal = plan
+            .queue_for_request(usize::from(request_index))
+            .expect("fixed unwind-test request assignment");
+        let ticket = Gfx942SdmaCopyTicketV1 {
+            owner,
+            queue_id: queue_ids[queue_ordinal],
+            slot: request_index + 3,
+            generation: u32::from(request_index) + 23,
+        };
+        shard_requests[queue_ordinal].push(request_index);
+        shard_tickets[queue_ordinal].push(ticket);
+        ordered.push(ValidatedMultiQueueCompletionEntryV1 {
+            request_index,
+            queue_ordinal: queue_ordinal as u16,
+            ticket,
+        });
+    }
+    Gfx942SdmaMultiQueueSubmissionV1 {
+        plan,
+        shards: queue_ids
+            .into_iter()
+            .enumerate()
+            .map(
+                |(queue_ordinal, queue_id)| Gfx942SdmaMultiQueueShardTicketsV1 {
+                    queue_ordinal: queue_ordinal as u16,
+                    queue_id,
+                    request_indices: core::mem::take(&mut shard_requests[queue_ordinal]),
+                    tickets: core::mem::take(&mut shard_tickets[queue_ordinal]),
+                },
+            )
+            .collect(),
+        completion: PreparedMultiQueueCompletionV1 {
+            ordered,
+            completed: Vec::with_capacity(4),
+        },
     }
 }
 
@@ -711,29 +800,6 @@ impl Gfx942SdmaQueueSetV1 {
             let slot = owner.validate_ticket(entry.ticket)?;
             owner.observe_validated_slot_in_current_scope(memory, slot)
         })
-    }
-
-    pub(crate) fn wait_prepared_striped_multi_queue_completion_for(
-        &mut self,
-        memory: &mut SharedGttMemorySessionV1,
-        submission: &Gfx942SdmaMultiQueueSubmissionV1,
-        timeout: Duration,
-    ) -> Result<bool, Gfx942SdmaErrorV1> {
-        let deadline = Instant::now()
-            .checked_add(timeout)
-            .ok_or(Gfx942SdmaErrorV1::Contract(
-                "striped completion wait deadline",
-            ))?;
-        let mut wait = MonotonicWaitV1::until(deadline);
-        loop {
-            if self.observe_prepared_striped_multi_queue_completion(memory, submission)? {
-                return Ok(true);
-            }
-            if wait.expired() {
-                return Ok(false);
-            }
-            wait.pause();
-        }
     }
 
     // Returning the complete submission preserves all-or-nothing custody.
@@ -1530,7 +1596,7 @@ mod tests {
             .split("pub(crate) fn observe_prepared_striped_multi_queue_completion")
             .nth(1)
             .unwrap()
-            .split("pub(crate) fn wait_prepared_striped_multi_queue_completion_for")
+            .split("pub(crate) fn retire_prepared_striped_multi_queue_completion")
             .next()
             .unwrap();
         assert!(observation.contains("owner.validate_ticket(entry.ticket)"));

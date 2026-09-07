@@ -75,6 +75,7 @@ def valid_row(
                     "not-applicable" if kind == "standalone" else "pass"
                 ),
                 "aggregate_poll_smoke": "pass",
+                "blocking_wait": "exact-striped-tail-v1",
                 "destroy": "pass",
             }
         )
@@ -537,6 +538,18 @@ class R40StripedCheckerTests(unittest.TestCase):
         combined["directional_smoke"] = "not-applicable"
         with self.assertRaisesRegex(CHECKER.CheckError, "directional_smoke"):
             CHECKER.validate_row(combined)
+
+    def test_kfd_blocking_wait_contract_is_exact(self) -> None:
+        row = valid_row("kfd")
+        CHECKER.validate_row(row)
+
+        row["blocking_wait"] = "full-roster-poll-v1"
+        with self.assertRaisesRegex(CHECKER.CheckError, "blocking_wait"):
+            CHECKER.validate_row(row)
+
+        del row["blocking_wait"]
+        with self.assertRaisesRegex(CHECKER.CheckError, "blocking_wait"):
+            CHECKER.validate_row(row)
 
     def test_bounded_parity_accepts_pre_registered_limits(self) -> None:
         output, demonstrated = CHECKER.validate_performance(valid_set())

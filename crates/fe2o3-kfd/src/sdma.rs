@@ -42,9 +42,13 @@ pub use multi_queue::{
     Gfx942SdmaMultiQueuePollV1, Gfx942SdmaMultiQueueShardTicketsV1,
     Gfx942SdmaMultiQueueSubmissionV1,
 };
+#[cfg(test)]
 pub(crate) use multi_queue::{
-    MultiQueueSdmaSubmitFailureV1, combined_striped_sdma_queue_count_is_admitted,
-    striped_sdma_queue_count_is_admitted,
+    Gfx942SdmaMultiQueueIdentityForTestV1, striped_submission_for_unwind_test,
+};
+pub(crate) use multi_queue::{
+    Gfx942SdmaStripedTailWaitOutcomeV1, MultiQueueSdmaSubmitFailureV1,
+    combined_striped_sdma_queue_count_is_admitted, striped_sdma_queue_count_is_admitted,
 };
 
 pub const GFX942_SDMA_COPY_PACKET_BYTES_V1: usize = 7 * 4;
@@ -93,7 +97,7 @@ impl SdmaWaitProfileV1 {
 
 /// Frozen claim boundary for the bounded native gfx942 SDMA implementation.
 pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v7\n",
+    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v9\n",
     "kfd_sdma_queue_schema_sha256=f489ae5735f8230e4ee788fe1fa9e62b307301c13cf88ee70889b0f455af0b5b\n",
     "sdma_topology_capability_sha256=51236bbd70ece3ee4e14cc1a3e7e7cfbbe0960e745130e1a3943f9e39bc36a26\n",
     "rocm_systems_commit=1b648038a0ac164cf2f06f2a581ced12cf5f7378\n",
@@ -109,22 +113,23 @@ pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
     "queue-identity=distinct-among-the-session-owned-primary-and-live-auxiliary-compute-queues-and-the-created-directional-or-striped-sdma-sets-only,no-foreign-process-or-other-session-global-uniqueness-claim\n",
     "memory=move-only-host-coherent-or-device-local,logical-subrange-bounded,queue-retained-while-in-flight,exact-full-host-userspace-hash-while-copy-certificate-bound-to-queue-storage-identity-pool-generation-logical-and-physical-extents-and-range,certificate-non-clone-and-private\n",
     "submission=single-producer,all-fallible-preparation-and-allocation-retains-recoverable-requests-before-mutation,standalone-striped-multi-queue-bounds:2..16-queues-and-1..1008-requests,combined-striped-multi-queue-bounds:2..14-queues-and-1..882-requests,at-most-63-per-shard,all-striped-shards-and-outcome-storage-prepared-before-first-publication,no-heap-allocation-after-first-publication,write-complete-sdma-packet-images-and-retained-records-before-one-exact-release-visible-wptr-publication-and-one-final-release-doorbell-per-batch,queue-occurrence-and-generation-tagged-ticket\n",
-    "completion=host-coherent-u32-fence-value-observed-through-i64-acquire,exact-owner-queue-slot-generation-and-request-index-binding,nonblocking-whole-submission-poll,one-shared-monotonic-deadline-wait,observe-every-entry-before-pending,validate-every-record-before-an-infallible-normal-return-retirement-suffix,completed-custody-in-original-request-order,timeout-retains-the-whole-submission,queue-progress-at-host-monotonic-instant,no-atomic-device-snapshot-or-gpu-clock-calibration\n",
+    "completion=host-coherent-u32-fence-value-observed-through-i64-acquire,exact-owner-queue-slot-generation-and-request-index-binding,nonblocking-whole-submission-poll-observes-every-entry-before-pending,striped-blocking-wait-keeps-the-sole-full-submission-owner-outside-the-unwind-catching-live-memory-envelope-and-prebinds-one-exact-tail-per-active-shard-and-observes-only-those-tails-before-one-shared-monotonic-deadline,all-tail-ready-or-deadline-performs-one-full-ordered-status-and-retirement-preflight-audit,tail-ready-with-pending-prefix-fails-terminally,a-private-lifetime-bound-all-ready-witness-authorizes-only-the-immediate-abort-on-unwind-ordered-custody-move-without-reobservation-or-revalidation,completed-custody-in-original-request-order,timeout-retains-the-whole-submission-and-retry-starts-a-new-native-wait-epoch,queue-progress-at-host-monotonic-instant,no-atomic-device-snapshot-or-gpu-clock-calibration\n",
+    "striped-tail-fence-premise=each-copy-submission-ends-in-the-exact-mtype-3-system-1-snoop-1-fence,each-bound-owner-engine-index-is-exactly-queue-ordinal-modulo-two,within-one-admitted-gfx942-sdma-engine-observing-the-exact-queue-slot-generation-bound-tail-fence-completion-implies-every-preceding-copy-and-fence-occurrence-on-that-shard-is-complete-and-system-visible,firmware-ordering-and-cpu-gpu-coherence-are-external-contracts\n",
     "persistent-sdma-wait-policy=elapsed-active-spin-floor:50000ns,checked-add-and-clamp-to-deadline,attempts-counted-during-floor,exact-floor-boundary-resumes-default-adaptive-stage,first-observation-unconditional;scope=directional-persistent-single,directional-persistent-window,same-device-persistent-window;excluded=ordinary-directional,generic-striped,fused-synchronous,xgmi,persistent-compute\n",
     "cancellation=published-packets-cannot-be-retracted,typed-rejection-retains-ticket,poll-or-explicit-drain-required\n",
     "pool=queue-branded,best-fit-by-kind-size-and-alignment,leased-and-in-flight-excluded,concrete-generation-advanced-on-recycle,explicit-trim-before-teardown,certificate-cleared-on-every-attempted-valid-range-cpu-write-device-destination-request-logical-resize-pool-generation-advance-or-private-reconstruction\n",
     "dispatch-data-bridge=exact-full-extent-host-content-or-completed-h2d-only,move-only-storage-identity-and-queue-and-pool-generation-binding,no-rematerialization,demotion-advances-pool-generation\n",
     "currentness=one-operational-pre-post-envelope-per-submit-batch-or-wait-batch-or-combined-submit-through-observed-completion,authenticated-full-host-write-retains-one-pre-post-envelope-per-max-linear-chunk,persistent-ready-certificate-validation-retains-one-pre-post-envelope,internal-atomics-and-mapped-writes-only-inside-envelope\n",
-    "failure=structural-preflight-before-the-first-live-shared-memory-or-currentness-operation-recovers-inputs,every-error-or-caught-unwind-at-or-after-that-boundary-permanently-poisons-process-global-kfd-admission-and-requires-process-teardown-independent-of-whether-a-confirmed-queue-roster-exists,prepared-live-and-terminal-creation-custody-are-distinct,validated-xgmi-route-scope-failure-quarantines-both-participating-sessions,currentness-counter-generation-and-post-preflight-uncertainty-terminally-poison-and-retain-native-custody,striped-terminal-failure-exposes-audit-only-confirmed-and-at-most-one-indeterminate-and-untouched-observations-without-drain-or-resubmit-authority,striped-cursor-commits-only-after-complete-publication-and-closing-currentness\n",
+    "failure=structural-preflight-before-the-first-live-shared-memory-or-currentness-operation-recovers-inputs,every-error-or-caught-unwind-at-or-after-that-boundary-permanently-poisons-process-global-kfd-admission-and-requires-process-teardown-independent-of-whether-a-confirmed-queue-roster-exists,prepared-live-and-terminal-creation-custody-are-distinct,validated-xgmi-route-scope-failure-quarantines-both-participating-sessions,currentness-counter-generation-and-post-preflight-uncertainty-terminally-poison-and-retain-native-custody,striped-terminal-failure-exposes-audit-only-confirmed-and-at-most-one-indeterminate-and-untouched-observations-without-drain-or-resubmit-authority,striped-wait-panic-before-the-abort-only-retirement-suffix-preserves-the-exact-sealed-plan-shards-and-ordered-completion-roster-in-terminal-custody-and-poisons-both-the-local-session-and-process-global-admission,striped-cursor-commits-only-after-complete-publication-and-closing-currentness\n",
     "teardown=combined-striped-before-directional-before-compute,standalone-sdma-before-compute,then-release-ring-control-completions-and-pooled-buffers-explicitly,terminal-creation-custody-has-no-in-process-cleanup-authority\n",
-    "proof=abstract-pool-generation-retention-and-cross-device-coordinate-theorems-only,no-executable-rust-refinement\n",
+    "proof=abstract-pool-generation-retention-and-cross-device-coordinate-theorems-only,r46-model-is-not-an-executable-rust-refinement\n",
     "contracted=ioctl-truth,doorbell-mapping,cpu-gpu-coherence,sha256-collision-resistance,userspace-certificate-is-not-kernel-attestation-or-loaded-kernel-proof,kernel-firmware-packet-consumption,completion,event-driven-completion,gpu-clock-calibration,progress,liveness\n",
-    "measured=hardware-correctness-and-performance-on-identified-host-only\n",
+    "measured=hardware-correctness-and-performance-on-identified-host-only,no-striped-tail-wait-speedup-measured-for-this-revision\n",
 );
 
 /// SHA-256 of [`GFX942_SDMA_COPY_MANIFEST_V1`].
 pub const GFX942_SDMA_COPY_MANIFEST_SHA256_V1: &str =
-    "6395c2993b5e5e9b8d066ab08fecde0f647258a888cb070d9998ac4c1b2a7a81";
+    "55bd06b90d5648bb45c13bfd5fb1fc3006f56398a15fcf5d69567bb8170b35b2";
 
 const SDMA_OP_COPY: u32 = 1;
 const SDMA_OP_FENCE: u32 = 5;
@@ -223,6 +228,15 @@ impl Gfx942SdmaCopySubmissionV1 {
 
     pub const fn bytes(&self) -> &[u8; GFX942_SDMA_SUBMISSION_BYTES_V1] {
         &self.bytes
+    }
+
+    const fn fence_header(&self) -> u32 {
+        u32::from_le_bytes([
+            self.bytes[28],
+            self.bytes[29],
+            self.bytes[30],
+            self.bytes[31],
+        ])
     }
 
     pub const fn copy_bytes(self) -> u32 {
@@ -737,6 +751,7 @@ pub struct Gfx942SdmaMemoryPoolObservationV1 {
 struct SdmaCopyRecordV1 {
     generation: u32,
     completion_value: u32,
+    fence_header: u32,
     completion_observed: bool,
     source: Gfx942SdmaBufferV1,
     destination: Gfx942SdmaBufferV1,
@@ -1604,6 +1619,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         self.records[ring_slot] = Some(SdmaCopyRecordV1 {
             generation,
             completion_value,
+            fence_header: packet.fence_header(),
             completion_observed: false,
             source,
             destination,
@@ -2114,6 +2130,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         self.records[copy.slot] = Some(SdmaCopyRecordV1 {
             generation: copy.generation,
             completion_value: copy.completion_value,
+            fence_header: copy.packet.fence_header(),
             completion_observed: false,
             source: request.source,
             destination: request.destination,
@@ -2685,6 +2702,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             self.records[item.slot] = Some(SdmaCopyRecordV1 {
                 generation: item.generation,
                 completion_value: item.completion_value,
+                fence_header: item.packet.fence_header(),
                 completion_observed: false,
                 source: request.source,
                 destination: request.destination,
@@ -7040,6 +7058,21 @@ mod tests {
             GFX942_SDMA_COPY_MANIFEST_V1
                 .contains(crate::topology::GFX942_SDMA_TOPOLOGY_CAPABILITY_MANIFEST_SHA256_V1)
         );
+        for required in [
+            "nonblocking-whole-submission-poll-observes-every-entry-before-pending",
+            "prebinds-one-exact-tail-per-active-shard",
+            "tail-ready-with-pending-prefix-fails-terminally",
+            "private-lifetime-bound-all-ready-witness",
+            "immediate-abort-on-unwind-ordered-custody-move-without-reobservation-or-revalidation",
+            "timeout-retains-the-whole-submission-and-retry-starts-a-new-native-wait-epoch",
+            "striped-tail-fence-premise=each-copy-submission-ends-in-the-exact-mtype-3-system-1-snoop-1-fence",
+            "each-bound-owner-engine-index-is-exactly-queue-ordinal-modulo-two",
+            "preserves-the-exact-sealed-plan-shards-and-ordered-completion-roster-in-terminal-custody",
+            "r46-model-is-not-an-executable-rust-refinement",
+            "no-striped-tail-wait-speedup-measured-for-this-revision",
+        ] {
+            assert!(GFX942_SDMA_COPY_MANIFEST_V1.contains(required));
+        }
         let digest = Sha256::digest(GFX942_SDMA_COPY_MANIFEST_V1);
         let mut rendered = String::with_capacity(64);
         for byte in digest {

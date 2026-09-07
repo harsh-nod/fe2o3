@@ -5,12 +5,13 @@ use std::time::Duration;
 use super::{
     ComputeAqlQueueSessionErrorV1, ComputeAqlQueueSessionV1, SdmaPublicationModeV1,
     admit_sdma_publication_while_compute_detached,
+    permanently_poison_process_global_kfd_runtime_gate_v1,
 };
 use crate::sdma::{
     Gfx942SdmaCopyRequestV1, Gfx942SdmaErrorV1, Gfx942SdmaMultiQueueCompletedV1,
     Gfx942SdmaMultiQueuePlanV1, Gfx942SdmaMultiQueuePollV1, Gfx942SdmaMultiQueueShardTicketsV1,
-    Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaUnpublishedCopyRequestV1,
-    MultiQueueSdmaSubmitFailureV1,
+    Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaStripedTailWaitOutcomeV1,
+    Gfx942SdmaUnpublishedCopyRequestV1, MultiQueueSdmaSubmitFailureV1,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,10 +60,7 @@ enum Gfx942SdmaTerminalCustodyStateV1 {
         indeterminate: Option<Gfx942SdmaMultiQueueShardTicketsV1>,
         untouched: Vec<Gfx942SdmaUnpublishedCopyRequestV1>,
     },
-    CompletePublication {
-        plan: Gfx942SdmaMultiQueuePlanV1,
-        confirmed: Vec<Gfx942SdmaMultiQueueShardTicketsV1>,
-    },
+    CompletePublication(Gfx942SdmaMultiQueueSubmissionV1),
     CompletedOpaque(Gfx942SdmaMultiQueueCompletedV1),
 }
 
@@ -101,9 +99,8 @@ impl Gfx942SdmaMultiQueueTerminalCustodyV1 {
     }
 
     fn complete_publication(submission: Gfx942SdmaMultiQueueSubmissionV1) -> Self {
-        let (plan, confirmed, _completion) = submission.into_parts();
         Self {
-            state: Gfx942SdmaTerminalCustodyStateV1::CompletePublication { plan, confirmed },
+            state: Gfx942SdmaTerminalCustodyStateV1::CompletePublication(submission),
         }
     }
 
@@ -116,8 +113,10 @@ impl Gfx942SdmaMultiQueueTerminalCustodyV1 {
     pub const fn plan(&self) -> Option<&Gfx942SdmaMultiQueuePlanV1> {
         match &self.state {
             Gfx942SdmaTerminalCustodyStateV1::BeforePublication(_) => None,
-            Gfx942SdmaTerminalCustodyStateV1::Publication { plan, .. }
-            | Gfx942SdmaTerminalCustodyStateV1::CompletePublication { plan, .. } => Some(plan),
+            Gfx942SdmaTerminalCustodyStateV1::Publication { plan, .. } => Some(plan),
+            Gfx942SdmaTerminalCustodyStateV1::CompletePublication(submission) => {
+                Some(submission.plan())
+            }
             Gfx942SdmaTerminalCustodyStateV1::CompletedOpaque(completed) => Some(completed.plan()),
         }
     }
@@ -125,9 +124,9 @@ impl Gfx942SdmaMultiQueueTerminalCustodyV1 {
     pub fn confirmed_shard_count(&self) -> usize {
         match &self.state {
             Gfx942SdmaTerminalCustodyStateV1::BeforePublication(_) => 0,
-            Gfx942SdmaTerminalCustodyStateV1::Publication { confirmed, .. }
-            | Gfx942SdmaTerminalCustodyStateV1::CompletePublication { confirmed, .. } => {
-                confirmed.len()
+            Gfx942SdmaTerminalCustodyStateV1::Publication { confirmed, .. } => confirmed.len(),
+            Gfx942SdmaTerminalCustodyStateV1::CompletePublication(submission) => {
+                submission.shards().len()
             }
             Gfx942SdmaTerminalCustodyStateV1::CompletedOpaque(_) => 0,
         }
@@ -139,9 +138,9 @@ impl Gfx942SdmaMultiQueueTerminalCustodyV1 {
     ) -> Option<Gfx942SdmaTerminalShardObservationV1<'_>> {
         let shard = match &self.state {
             Gfx942SdmaTerminalCustodyStateV1::BeforePublication(_) => None,
-            Gfx942SdmaTerminalCustodyStateV1::Publication { confirmed, .. }
-            | Gfx942SdmaTerminalCustodyStateV1::CompletePublication { confirmed, .. } => {
-                confirmed.get(index)
+            Gfx942SdmaTerminalCustodyStateV1::Publication { confirmed, .. } => confirmed.get(index),
+            Gfx942SdmaTerminalCustodyStateV1::CompletePublication(submission) => {
+                submission.shards().get(index)
             }
             Gfx942SdmaTerminalCustodyStateV1::CompletedOpaque(_) => None,
         }?;
@@ -171,7 +170,7 @@ impl Gfx942SdmaMultiQueueTerminalCustodyV1 {
         match &self.state {
             Gfx942SdmaTerminalCustodyStateV1::BeforePublication(requests) => requests.len(),
             Gfx942SdmaTerminalCustodyStateV1::Publication { untouched, .. } => untouched.len(),
-            Gfx942SdmaTerminalCustodyStateV1::CompletePublication { .. }
+            Gfx942SdmaTerminalCustodyStateV1::CompletePublication(_)
             | Gfx942SdmaTerminalCustodyStateV1::CompletedOpaque(_) => 0,
         }
     }
@@ -184,9 +183,19 @@ impl Gfx942SdmaMultiQueueTerminalCustodyV1 {
             Gfx942SdmaTerminalCustodyStateV1::Publication { untouched, .. } => {
                 untouched.get(index).map(|request| request.request_index())
             }
-            Gfx942SdmaTerminalCustodyStateV1::CompletePublication { .. }
+            Gfx942SdmaTerminalCustodyStateV1::CompletePublication(_)
             | Gfx942SdmaTerminalCustodyStateV1::CompletedOpaque(_) => None,
         }
+    }
+
+    #[cfg(test)]
+    fn exact_complete_publication_identity_for_test(
+        &self,
+    ) -> Option<crate::sdma::Gfx942SdmaMultiQueueIdentityForTestV1> {
+        let Gfx942SdmaTerminalCustodyStateV1::CompletePublication(submission) = &self.state else {
+            return None;
+        };
+        Some(submission.exact_identity_for_unwind_test())
     }
 }
 
@@ -242,6 +251,29 @@ pub enum Gfx942SdmaMultiQueueExecutionCustodyV1 {
 pub struct Gfx942SdmaMultiQueueExecutionFailureV1 {
     error: ComputeAqlQueueSessionErrorV1,
     custody: Gfx942SdmaMultiQueueExecutionCustodyV1,
+}
+
+fn catch_striped_wait_epoch_unwind_v1<R>(operation: impl FnOnce() -> R) -> std::thread::Result<R> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation))
+}
+
+fn take_striped_wait_panic_custody_v1<T>(
+    retained: &mut Option<T>,
+    poison_local: impl FnOnce(),
+    poison_process: impl FnOnce(),
+) -> T {
+    let custody = retained.take().unwrap_or_else(|| std::process::abort());
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        poison_local();
+        poison_process();
+    })) {
+        Ok(()) => custody,
+        Err(payload) => {
+            core::mem::forget(custody);
+            core::mem::forget(payload);
+            std::process::abort();
+        }
+    }
 }
 
 impl Gfx942SdmaMultiQueueExecutionFailureV1 {
@@ -518,7 +550,14 @@ impl ComputeAqlQueueSessionV1 {
         }
     }
 
-    /// Waits on every striped shard with one shared deadline and whole-batch custody.
+    /// Waits on exact striped-shard tail fences with one shared deadline.
+    ///
+    /// Each call is one native wait epoch. Before the deadline, an epoch observes only one
+    /// prebound system+snoop tail fence per active shard. Tail readiness or the deadline triggers
+    /// one full ordered completion/currentness/retirement-preflight audit. A timeout returns the
+    /// unchanged whole submission; passing it to this method again begins a new epoch with a new
+    /// final audit. This retryable native timeout is not a refinement of R46's terminal timeout
+    /// receipt, and the native gfx942 fence-ordering premise is not proved by Rust.
     // Whole-submission custody is preallocated before publication and stays inline on failure.
     #[allow(clippy::result_large_err)]
     pub fn wait_gfx942_striped_sdma_copy_batch_for_v1(
@@ -528,34 +567,43 @@ impl ComputeAqlQueueSessionV1 {
     ) -> Result<Gfx942SdmaMultiQueueCompletedV1, Gfx942SdmaMultiQueueExecutionFailureV1> {
         let mut retained = Some(submission);
         let mut lower = None;
-        let operation = self.with_striped_sdma_owner_memory(|owner, memory| {
-            memory.check_queue_operational_currentness()?;
-            let ready = owner.wait_prepared_striped_multi_queue_completion_for(
-                memory,
-                retained.as_ref().expect("aggregate custody retained"),
-                timeout,
-            )?;
-            memory.check_queue_operational_currentness()?;
-            let submission = retained.take().expect("aggregate custody consumed once");
-            lower = Some(if ready {
-                owner
-                    .retire_prepared_striped_multi_queue_completion(submission)
-                    .map(Gfx942SdmaMultiQueuePollV1::Completed)
-            } else {
-                Ok(Gfx942SdmaMultiQueuePollV1::Pending(submission))
-            });
-            Ok(())
+        let operation = catch_striped_wait_epoch_unwind_v1(|| {
+            self.with_striped_sdma_owner_memory(|owner, memory| {
+                lower = Some(owner.wait_prepared_striped_multi_queue_tails_retaining_for(
+                    memory,
+                    &mut retained,
+                    timeout,
+                ));
+                Ok(())
+            })
         });
+        let operation = match operation {
+            Ok(operation) => operation,
+            Err(payload) => {
+                let submission = take_striped_wait_panic_custody_v1(
+                    &mut retained,
+                    || self.poison_terminal(),
+                    permanently_poison_process_global_kfd_runtime_gate_v1,
+                );
+                core::mem::forget(payload);
+                return Err(Gfx942SdmaMultiQueueExecutionFailureV1 {
+                    error: ComputeAqlQueueSessionErrorV1::Contract(
+                        "striped tail wait panicked after publication",
+                    ),
+                    custody: Gfx942SdmaMultiQueueExecutionCustodyV1::ProcessTeardown(
+                        Gfx942SdmaMultiQueueTerminalCustodyV1::complete_publication(submission),
+                    ),
+                });
+            }
+        };
         if let Err(error) = operation {
             let terminal = match lower {
-                Some(Ok(Gfx942SdmaMultiQueuePollV1::Pending(submission)))
-                | Some(Err((_, submission))) => {
-                    Gfx942SdmaMultiQueueTerminalCustodyV1::complete_publication(submission)
-                }
-                Some(Ok(Gfx942SdmaMultiQueuePollV1::Completed(completed))) => {
+                Some(Gfx942SdmaStripedTailWaitOutcomeV1::Completed(completed)) => {
                     Gfx942SdmaMultiQueueTerminalCustodyV1::completed_opaque(completed)
                 }
-                None => Gfx942SdmaMultiQueueTerminalCustodyV1::complete_publication(
+                Some(Gfx942SdmaStripedTailWaitOutcomeV1::Pending)
+                | Some(Gfx942SdmaStripedTailWaitOutcomeV1::Terminal(_))
+                | None => Gfx942SdmaMultiQueueTerminalCustodyV1::complete_publication(
                     retained.take().unwrap_or_else(|| std::process::abort()),
                 ),
             };
@@ -566,19 +614,23 @@ impl ComputeAqlQueueSessionV1 {
             });
         }
         match lower {
-            Some(Ok(Gfx942SdmaMultiQueuePollV1::Completed(completed))) => Ok(completed),
-            Some(Ok(Gfx942SdmaMultiQueuePollV1::Pending(submission))) => {
+            Some(Gfx942SdmaStripedTailWaitOutcomeV1::Completed(completed)) => Ok(completed),
+            Some(Gfx942SdmaStripedTailWaitOutcomeV1::Pending) => {
                 Err(Gfx942SdmaMultiQueueExecutionFailureV1 {
                     error: ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Timeout),
-                    custody: Gfx942SdmaMultiQueueExecutionCustodyV1::Pending(submission),
+                    custody: Gfx942SdmaMultiQueueExecutionCustodyV1::Pending(
+                        retained.take().unwrap_or_else(|| std::process::abort()),
+                    ),
                 })
             }
-            Some(Err((error, submission))) => {
+            Some(Gfx942SdmaStripedTailWaitOutcomeV1::Terminal(error)) => {
                 self.poison_terminal();
                 Err(Gfx942SdmaMultiQueueExecutionFailureV1 {
                     error: error.into(),
                     custody: Gfx942SdmaMultiQueueExecutionCustodyV1::ProcessTeardown(
-                        Gfx942SdmaMultiQueueTerminalCustodyV1::complete_publication(submission),
+                        Gfx942SdmaMultiQueueTerminalCustodyV1::complete_publication(
+                            retained.take().unwrap_or_else(|| std::process::abort()),
+                        ),
                     ),
                 })
             }
@@ -602,6 +654,10 @@ impl ComputeAqlQueueSessionV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::queue_linux::{
+        LinuxDoorbellErrorV1, LinuxKfdRuntimeEnabledV1,
+        arm_process_global_kfd_runtime_gate_for_teardown_v1,
+    };
 
     #[test]
     fn multi_queue_failures_distinguish_retryable_and_terminal_truth() {
@@ -658,6 +714,95 @@ mod tests {
         };
         let retained = request_indices(observation);
         assert_eq!(retained, indices);
+    }
+
+    #[test]
+    fn injected_wait_panic_retains_the_exact_sealed_submission() {
+        let submission = crate::sdma::striped_submission_for_unwind_test();
+        let exact = submission.exact_identity_for_unwind_test();
+        let mut retained = Some(submission);
+        let caught = catch_striped_wait_epoch_unwind_v1(|| {
+            assert_eq!(
+                retained
+                    .as_ref()
+                    .expect("borrowed panic custody")
+                    .exact_identity_for_unwind_test(),
+                exact
+            );
+            panic!("injected striped wait panic");
+        });
+        assert!(caught.is_err());
+
+        let local_poisoned = core::cell::Cell::new(false);
+        let process_poisoned = core::cell::Cell::new(false);
+        let recovered = take_striped_wait_panic_custody_v1(
+            &mut retained,
+            || local_poisoned.set(true),
+            || process_poisoned.set(true),
+        );
+        assert!(local_poisoned.get());
+        assert!(process_poisoned.get());
+        assert!(retained.is_none());
+        assert_eq!(recovered.exact_identity_for_unwind_test(), exact);
+
+        let terminal = Gfx942SdmaMultiQueueTerminalCustodyV1::complete_publication(recovered);
+        assert_eq!(
+            terminal.exact_complete_publication_identity_for_test(),
+            Some(exact)
+        );
+    }
+
+    #[test]
+    fn striped_wait_panic_poison_is_process_global_in_a_subprocess() {
+        const CHILD_ENV: &str = "FE2O3_TEST_STRIPED_WAIT_PANIC_POISON";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("striped_wait_panic_poison_is_process_global_in_a_subprocess")
+                .arg("--nocapture")
+                .env(CHILD_ENV, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "child failed:\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let teardown_arm = arm_process_global_kfd_runtime_gate_for_teardown_v1();
+        let submission = crate::sdma::striped_submission_for_unwind_test();
+        let exact = submission.exact_identity_for_unwind_test();
+        let mut retained = Some(submission);
+        let caught = catch_striped_wait_epoch_unwind_v1(|| {
+            let _borrowed = retained.as_ref().expect("borrowed panic custody");
+            panic!("injected striped wait panic");
+        });
+        assert!(caught.is_err());
+        let local_poisoned = core::cell::Cell::new(false);
+        let recovered = take_striped_wait_panic_custody_v1(
+            &mut retained,
+            || local_poisoned.set(true),
+            permanently_poison_process_global_kfd_runtime_gate_v1,
+        );
+        assert!(local_poisoned.get());
+        assert_eq!(recovered.exact_identity_for_unwind_test(), exact);
+        let terminal = Gfx942SdmaMultiQueueTerminalCustodyV1::complete_publication(recovered);
+        assert_eq!(
+            terminal.exact_complete_publication_identity_for_test(),
+            Some(exact)
+        );
+        teardown_arm.confirm_destroyed();
+
+        use std::os::fd::AsFd;
+        let file = std::fs::File::open("/dev/null").unwrap();
+        assert!(matches!(
+            LinuxKfdRuntimeEnabledV1::enable(file.as_fd(), std::process::id()),
+            Err(LinuxDoorbellErrorV1::Runtime(
+                "process-global gate poisoned"
+            ))
+        ));
     }
 
     #[test]
@@ -721,25 +866,56 @@ mod tests {
             .next()
             .unwrap();
         assert_eq!(wait.matches("with_striped_sdma_owner_memory").count(), 1);
-        assert_eq!(
-            wait.matches("check_queue_operational_currentness").count(),
-            2
-        );
         assert!(!wait.contains("Vec::"));
         assert!(!wait.contains("try_reserve"));
         assert!(!wait.contains("collect"));
         assert!(!wait.contains("prepare_striped_multi_queue_completion"));
         assert!(wait.contains("Gfx942SdmaErrorV1::Timeout"));
-        assert!(wait.contains("Gfx942SdmaMultiQueueExecutionCustodyV1::Pending(submission)"));
+        assert!(wait.contains("Gfx942SdmaMultiQueueExecutionCustodyV1::Pending("));
         assert!(!wait.contains(".striped_sdma.as_mut()"));
         assert!(wait.contains("completed_opaque(completed)"));
-        assert!(
-            wait.find("wait_prepared_striped_multi_queue_completion_for")
-                .unwrap()
-                < wait
-                    .find("retire_prepared_striped_multi_queue_completion")
-                    .unwrap()
+        assert!(wait.contains("wait_prepared_striped_multi_queue_tails_retaining_for"));
+        assert!(wait.contains("catch_striped_wait_epoch_unwind_v1"));
+        assert!(wait.contains("take_striped_wait_panic_custody_v1"));
+        assert!(wait.contains("permanently_poison_process_global_kfd_runtime_gate_v1"));
+        assert!(!wait.contains("wait_prepared_striped_multi_queue_completion_for"));
+        assert!(!wait.contains("retire_prepared_striped_multi_queue_completion"));
+        let lower_wait = wait
+            .find("wait_prepared_striped_multi_queue_tails_retaining_for")
+            .unwrap();
+        assert!(wait[..lower_wait].contains("let mut retained = Some(submission)"));
+        assert!(wait[lower_wait..].contains("&mut retained"));
+
+        let optimized = include_str!("../sdma/multi_queue/tail_wait.rs")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap();
+        let optimized_wait = optimized
+            .split("pub(crate) fn wait_prepared_striped_multi_queue_tails_retaining_for")
+            .nth(1)
+            .unwrap()
+            .split("fn observe_bound_striped_tail_v1")
+            .next()
+            .unwrap();
+        assert_eq!(
+            optimized_wait
+                .matches("check_queue_operational_currentness")
+                .count(),
+            2
         );
+        let borrow = optimized_wait
+            .find("with_borrowed_striped_submission_v1")
+            .unwrap();
+        let audit = optimized_wait
+            .find("audit_prepared_striped_multi_queue_tails_for")
+            .unwrap();
+        let authorize = optimized_wait.find("audit.authorize_retirement()").unwrap();
+        let consume = optimized_wait.find("retained.take()").unwrap();
+        let retire = optimized_wait
+            .find("retire_after_striped_full_audit_no_unwind_v1")
+            .unwrap();
+        assert!(borrow < audit && audit < authorize);
+        assert!(authorize < consume && consume < retire);
     }
 
     #[test]
@@ -776,5 +952,7 @@ mod tests {
         assert!(!source.contains("impl Drop for Gfx942SdmaMultiQueueTerminalCustodyV1"));
         assert!(source.contains("Dropping the wrapper discards audit observations only"));
         assert!(source.contains("performs no native"));
+        assert!(source.contains("CompletePublication(Gfx942SdmaMultiQueueSubmissionV1)"));
+        assert!(!source.contains("let (plan, confirmed, _completion) = submission.into_parts()"));
     }
 }

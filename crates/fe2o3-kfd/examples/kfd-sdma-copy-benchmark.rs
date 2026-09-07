@@ -861,7 +861,7 @@ fn run_aggregate_benchmark(args: &[String]) -> Result<(), Box<dyn std::error::Er
     append_aggregate_metrics(&mut row, "d2h", &d2h, transfer_bytes);
     write!(
         row,
-        " directional_queue_count={} striped_queue_count={queue_count} queue_ids={} queue_ids_sha256={} engine_placement={} engine_placement_sha256={} directional_smoke={} aggregate_poll_smoke=pass destroy=pass",
+        " directional_queue_count={} striped_queue_count={queue_count} queue_ids={} queue_ids_sha256={} engine_placement={} engine_placement_sha256={} directional_smoke={} aggregate_poll_smoke=pass blocking_wait=exact-striped-tail-v1 destroy=pass",
         profile.directional_queue_count(),
         queue_evidence.queue_ids,
         queue_evidence.queue_ids_sha256,
@@ -1174,6 +1174,7 @@ mod tests {
         let production = source.split("#[cfg(test)]").next().unwrap();
         assert!(!production.contains(".tickets()"));
         assert!(!production.contains("into_tickets"));
+        assert!(production.contains("blocking_wait=exact-striped-tail-v1"));
 
         let benchmark = source
             .split("fn run_aggregate_benchmark(")

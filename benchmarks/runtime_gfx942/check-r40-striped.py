@@ -105,6 +105,7 @@ KFD_FIELDS = frozenset(
         "engine_placement_sha256",
         "directional_smoke",
         "aggregate_poll_smoke",
+        "blocking_wait",
         "destroy",
     }
 )
@@ -353,6 +354,7 @@ def validate_row(row: dict[str, str]) -> dict[str, dict[str, list[int]]]:
                 "not-applicable" if kind == "standalone" else "pass"
             ),
             "aggregate_poll_smoke": "pass",
+            "blocking_wait": "exact-striped-tail-v1",
             "destroy": "pass",
         }
         for field, expected in expected_kfd.items():
