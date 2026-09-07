@@ -67,7 +67,14 @@ fn fixture() -> TestWorkspace {
     write(
         &workspace.0,
         "Cargo.toml",
-        "[workspace]\nresolver = \"2\"\nmembers = [\n  \"fallback-internal\",\n  \"managed-evidence\",\n  \"managed-feature\",\n  \"managed-include\",\n  \"managed-library\",\n  \"ordinary\",\n  \"ordinary-dependent\",\n]\n",
+        "[workspace]\nresolver = \"2\"\nmembers = [\n  \"crates/rustc-codegen-fe2o3/tests/fixtures/compiler-only\",\n  \"fallback-internal\",\n  \"managed-evidence\",\n  \"managed-feature\",\n  \"managed-include\",\n  \"managed-library\",\n  \"ordinary\",\n  \"ordinary-dependent\",\n]\n",
+    );
+    add_package(
+        &workspace
+            .0
+            .join("crates/rustc-codegen-fe2o3/tests/fixtures"),
+        "compiler-only",
+        "pub fn compiler_input() {}\n",
     );
     add_package(
         &workspace.0,
@@ -228,6 +235,51 @@ fn literal_cli_discovers_and_revalidates_the_real_exact_managed_set() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+#[test]
+fn literal_cli_discovers_and_revalidates_the_complete_codegen_fixture_set() {
+    let workspace = fixture();
+    let binary = env!("CARGO_BIN_EXE_cargo-fe2o3");
+    let output = workspace
+        .command(binary)
+        .args(["examples", "list", "rustc-codegen-fixtures"])
+        .env("CARGO", cargo())
+        .output()
+        .expect("run rustc-codegen fixture projection discovery");
+    assert!(
+        output.status.success(),
+        "fixture projection discovery failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("UTF-8 fixture projection"),
+        "compiler-only\n"
+    );
+
+    let status = workspace
+        .command(binary)
+        .args(["examples", "check-rustc-codegen-fixtures", "compiler-only"])
+        .env("CARGO", cargo())
+        .status()
+        .expect("run exact rustc-codegen fixture revalidation");
+    assert!(status.success(), "exact fixture revalidation failed");
+
+    let output = workspace
+        .command(binary)
+        .args(["examples", "check-rustc-codegen-fixtures"])
+        .env("CARGO", cargo())
+        .output()
+        .expect("run incomplete rustc-codegen fixture projection");
+    assert!(
+        !output.status.success(),
+        "incomplete fixture set was accepted"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("fixture package projection changed"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

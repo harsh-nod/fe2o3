@@ -15,6 +15,7 @@ use syn::visit::{self, Visit};
 use syn::{Attribute, Expr, ExprMethodCall, ItemFn, Lit, Meta, Token, punctuated::Punctuated};
 
 const MANIFEST_PATH: &str = "examples/regression-manifest-v1.txt";
+const RUSTC_CODEGEN_FIXTURE_ROOT: &str = "crates/rustc-codegen-fe2o3/tests/fixtures";
 const MANIFEST_VERSION: &str = "fe2o3-example-regressions-v1";
 const MANIFEST_COLUMNS: &str = "package|rustc_check|rocm_compile|gpu_smoke|artifacts";
 const MAX_PACKAGE_SOURCE_DEPTH: usize = 64;
@@ -138,6 +139,26 @@ fn command_result(args: &[String]) -> Result<Vec<String>, String> {
     }
     if matches!(args, [command, lane] if command == "list" && lane == "wrapper-managed") {
         return workspace_binding_managed_packages(&workspace_root);
+    }
+    if matches!(args, [command, lane] if command == "list" && lane == "rustc-codegen-fixtures") {
+        return workspace_rustc_codegen_fixture_packages(&workspace_root);
+    }
+    if let [command, packages @ ..] = args
+        && command == "check-rustc-codegen-fixtures"
+    {
+        validate_sorted_unique_package_list(packages, "rustc-codegen fixture")?;
+        let observed = workspace_rustc_codegen_fixture_packages(&workspace_root)?;
+        if packages != observed.as_slice() {
+            return Err(format!(
+                "rustc-codegen fixture package projection changed: expected [{}], observed [{}]",
+                packages.join(","),
+                observed.join(",")
+            ));
+        }
+        return Ok(vec![format!(
+            "rustc-codegen fixture projection: {} package(s)",
+            observed.len()
+        )]);
     }
     if let [command, packages @ ..] = args
         && command == "check-wrapper-managed"
@@ -349,7 +370,7 @@ fn command_result(args: &[String]) -> Result<Vec<String>, String> {
             )])
         }
         _ => Err(
-            "usage: cargo fe2o3 examples <check|list <all|rustc-check|rocm-compile|gpu-smoke|wrapper-managed|cpu-test-raw|cpu-test-wrapper-managed>|check-artifacts <package> <absolute-artifact-directory>|check-cpu-test-partition <raw-package>... -- <wrapper-managed-package>...|check-wrapper-managed <package>...|check-wrapper-namespaces <package>...>"
+            "usage: cargo fe2o3 examples <check|list <all|rustc-check|rocm-compile|gpu-smoke|wrapper-managed|rustc-codegen-fixtures|cpu-test-raw|cpu-test-wrapper-managed>|check-artifacts <package> <absolute-artifact-directory>|check-cpu-test-partition <raw-package>... -- <wrapper-managed-package>...|check-wrapper-managed <package>...|check-rustc-codegen-fixtures <package>...|check-wrapper-namespaces <package>...>"
                 .to_string(),
         ),
     }
@@ -707,6 +728,26 @@ fn cargo_metadata(workspace_root: &Path) -> Result<serde_json::Value, String> {
 
 fn workspace_binding_managed_packages(workspace_root: &Path) -> Result<Vec<String>, String> {
     Ok(workspace_binding_projection(workspace_root, None)?.managed_package_names())
+}
+
+fn workspace_rustc_codegen_fixture_packages(workspace_root: &Path) -> Result<Vec<String>, String> {
+    let fixture_root = canonical_contained_path(
+        &workspace_root.join(RUSTC_CODEGEN_FIXTURE_ROOT),
+        workspace_root,
+        "rustc-codegen fixture root",
+    )?;
+    let packages = workspace_binding_projection(workspace_root, None)?
+        .targets
+        .into_iter()
+        .filter(|target| target.package_root.starts_with(&fixture_root))
+        .map(|target| target.package_name)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if packages.is_empty() {
+        return Err("workspace contains no rustc-codegen fixture package".to_owned());
+    }
+    Ok(packages)
 }
 
 pub(crate) fn pinned_workspace_binding_projection(

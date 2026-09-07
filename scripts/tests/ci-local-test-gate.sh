@@ -307,7 +307,14 @@ load_example_packages() {
       fi
       ;;
     wrapper-managed)
-      destination=(fe2o3-managed-a fe2o3-managed-b)
+      destination=(
+        fe2o3-managed-a
+        fe2o3-managed-b
+        fe2o3-managed-compiler-fixture
+      )
+      ;;
+    rustc-codegen-fixtures)
+      destination=(fe2o3-managed-compiler-fixture)
       ;;
     *)
       destination=()
@@ -637,7 +644,7 @@ assert_equals \
   "$(step_command cpu-test-partition-revalidation)" \
   'managed CPU tests did not revalidate both complete package lists'
 assert_equals \
-  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-wrapper-managed fe2o3-managed-a fe2o3-managed-b" \
+  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-wrapper-managed fe2o3-managed-a fe2o3-managed-b fe2o3-managed-compiler-fixture" \
   "$(step_command cpu-test-binding-projection-revalidation)" \
   'managed CPU tests did not revalidate the complete structural projection'
 assert_equals \
@@ -683,17 +690,21 @@ STEP_COMMANDS=()
 run_workspace_tests
 assert_no_codegen_test_driver
 assert_equals \
-  "cargo test --locked --workspace --all-targets --exclude ${RUSTC_CODEGEN_TEST_PACKAGE} --exclude fe2o3-artifact-transaction --exclude fe2o3-managed-a --exclude fe2o3-managed-b" \
+  "cargo test --locked --workspace --all-targets --exclude ${RUSTC_CODEGEN_TEST_PACKAGE} --exclude fe2o3-artifact-transaction --exclude fe2o3-managed-a --exclude fe2o3-managed-b --exclude fe2o3-managed-compiler-fixture" \
   "$(step_command workspace-tests)" \
-  'full workspace test command must isolate backend, artifact, and binding-managed packages'
+  'full workspace test command must isolate backend, artifact, compiler fixtures, and binding-managed packages'
 assert_equals \
-  "env FE2O3_HIP_SYS_DISABLE=1 ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 test --locked --all-targets -p fe2o3-managed-a -p fe2o3-managed-b" \
+  "env FE2O3_HIP_SYS_DISABLE=1 ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 test --locked --all-targets -p fe2o3-managed-a -p fe2o3-managed-b -p fe2o3-managed-compiler-fixture" \
   "$(step_command workspace-binding-example-tests)" \
-  'full workspace tests did not route managed examples through cargo-fe2o3'
+  'full workspace tests did not route managed host-test packages through cargo-fe2o3'
 assert_equals \
-  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-wrapper-managed fe2o3-managed-a fe2o3-managed-b" \
+  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-wrapper-managed fe2o3-managed-a fe2o3-managed-b fe2o3-managed-compiler-fixture" \
   "$(step_command workspace-binding-example-revalidation)" \
   'full workspace tests did not revalidate the binding projection'
+assert_equals \
+  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-rustc-codegen-fixtures fe2o3-managed-compiler-fixture" \
+  "$(step_command workspace-rustc-codegen-fixture-revalidation)" \
+  'full workspace tests did not revalidate the compiler-fixture projection'
 assert_equals \
   'env FE2O3_HIP_SYS_DISABLE=1 RUST_TEST_THREADS=8 cargo test --locked -p fe2o3-artifact-transaction' \
   "$(step_command fe2o3-artifact-transaction-tests)" \
@@ -846,7 +857,7 @@ assert_equals \
   "$(step_command workspace-binding-check-boundary)" \
   'managed check omitted the backend/artifact/publication hostile boundary'
 assert_equals \
-  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-wrapper-managed fe2o3-managed-a fe2o3-managed-b" \
+  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-wrapper-managed fe2o3-managed-a fe2o3-managed-b fe2o3-managed-compiler-fixture" \
   "$(step_command workspace-binding-projection-revalidation)" \
   'managed check did not revalidate the exact structural package projection'
 assert_equals \
@@ -914,7 +925,7 @@ assert_equals \
   "$(step_command cpu-test-partition-revalidation)" \
   'generic core did not revalidate both complete CPU package lists'
 assert_equals \
-  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-wrapper-managed fe2o3-managed-a fe2o3-managed-b" \
+  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-wrapper-managed fe2o3-managed-a fe2o3-managed-b fe2o3-managed-compiler-fixture" \
   "$(step_command cpu-test-binding-projection-revalidation)" \
   'generic core did not revalidate the CPU binding projection'
 for core_step in "${STEP_NAMES[@]}"; do
@@ -955,7 +966,7 @@ assert_equals \
   "$(step_command cpu-test-partition-revalidation)" \
   'empty managed CPU intersection skipped complete partition revalidation'
 assert_equals \
-  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-wrapper-managed fe2o3-managed-a fe2o3-managed-b" \
+  "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 examples check-wrapper-managed fe2o3-managed-a fe2o3-managed-b fe2o3-managed-compiler-fixture" \
   "$(step_command cpu-test-binding-projection-revalidation)" \
   'empty managed CPU intersection skipped full structural revalidation'
 EMPTY_WRAPPER_CPU_INTERSECTION=0
