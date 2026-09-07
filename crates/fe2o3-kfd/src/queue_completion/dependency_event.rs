@@ -12,11 +12,13 @@
 use core::fmt;
 use std::collections::HashMap;
 
+use fe2o3_aql::{AMD_SIGNAL_BYTES_V1, AqlDependencySignalObservationV1};
 use fe2o3_runtime_model::{MemoryMappingKeyV1, QueueKeyV1};
 
 use super::{
     COMPLETION_SIGNAL_CAPACITY_V1, CompletionBatchRetentionV1, CompletionSignalArenaOwnerV1,
-    CompletionSlotLeaseV1, CompletionSlotPhaseV1, Gfx942CompletionBatchV1, Gfx942CompletionErrorV1,
+    CompletionSlotLeaseV1, CompletionSlotPhaseV1, ComputeDependencyOccurrenceIdentityV1,
+    Gfx942CompletionBatchV1, Gfx942CompletionErrorV1,
 };
 
 /// Maximum simultaneously retained event occurrences in one signal arena.
@@ -422,6 +424,77 @@ impl CompletionSignalArenaOwnerV1 {
         Ok(Gfx942ComputeDependencyReaderReleaseObservationV1)
     }
 
+    pub(super) fn project_compute_dependency_source_identity(
+        &self,
+        event: &Gfx942ComputeEventOccurrenceV1,
+    ) -> Result<ComputeDependencyOccurrenceIdentityV1, Gfx942CompletionErrorV1> {
+        self.require_ready()?;
+        self.validate_active_event(event)?;
+        self.validate_published_or_completed_occurrence(event.exact)?;
+        Ok(ComputeDependencyOccurrenceIdentityV1 {
+            session_occurrence: event.exact.session_occurrence,
+            acceptance_epoch: event.exact.source_acceptance_epoch,
+            batch_id: event.exact.batch_id,
+            queue: event.exact.queue,
+            signal_mapping: event.exact.signal_mapping,
+            slot_index: event.exact.slot.index,
+            slot_generation: event.exact.slot.generation,
+            dispatch_generation: event.exact.dispatch_generation,
+            packet_id: event.exact.packet_id,
+        })
+    }
+
+    pub(super) fn validate_unbound_dependency_target_event_v1(
+        &self,
+        event: &Gfx942ComputeEventOccurrenceV1,
+        session_occurrence: u64,
+        acceptance_epoch: u64,
+        retention: &CompletionBatchRetentionV1<1>,
+    ) -> Result<(), Gfx942CompletionErrorV1> {
+        self.require_ready()?;
+        self.validate_bound(retention)?;
+        self.validate_active_event(event)?;
+        let expected = exact_occurrence(session_occurrence, acceptance_epoch, retention, 0, None)?;
+        if event.exact != expected {
+            return Err(Gfx942CompletionErrorV1::StaleEventOccurrence);
+        }
+        Ok(())
+    }
+
+    /// Revalidates an active native-reader lease and derives its GPU address.
+    /// This is an identity projection only; it never loads the signal value.
+    pub(super) fn project_native_dependency_signal_observation(
+        &self,
+        lease: &Gfx942ComputeDependencyReaderLeaseV1,
+    ) -> Result<AqlDependencySignalObservationV1, Gfx942CompletionErrorV1> {
+        self.require_ready()?;
+        self.validate_published_or_completed_occurrence(lease.source)?;
+        let use_key = DependencyReaderUseKeyV1 {
+            event_id: lease.event_id,
+            dependent_acceptance_epoch: lease.dependent_acceptance_epoch,
+        };
+        let expected = ActiveDependencyReaderV1 {
+            lease_id: lease.lease_id,
+            source: lease.source,
+        };
+        if self.dependency_ledger.readers.get(&use_key) != Some(&expected) {
+            return Err(Gfx942CompletionErrorV1::StaleDependencyReader);
+        }
+        let offset = u64::from(lease.source.slot.index)
+            .checked_mul(AMD_SIGNAL_BYTES_V1 as u64)
+            .ok_or(Gfx942CompletionErrorV1::InvalidArena(
+                "dependency signal slot offset",
+            ))?;
+        let raw =
+            self.gpu_base
+                .checked_add(offset)
+                .ok_or(Gfx942CompletionErrorV1::InvalidArena(
+                    "dependency signal address",
+                ))?;
+        AqlDependencySignalObservationV1::new(raw)
+            .map_err(|_| Gfx942CompletionErrorV1::InvalidArena("dependency signal observation"))
+    }
+
     fn validate_active_event(
         &self,
         event: &Gfx942ComputeEventOccurrenceV1,
@@ -539,8 +612,8 @@ fn packet_id_at<const N: usize>(
 mod tests {
     use super::*;
     use fe2o3_aql::{
-        AqlCompletionObservationV1, AqlDispatchGeometryV1, AqlDispatchOrderingV1,
-        ObservedGpuAddressV1,
+        AMD_SIGNAL_ALIGNMENT_V1, AqlCompletionObservationV1, AqlDispatchGeometryV1,
+        AqlDispatchOrderingV1, ObservedGpuAddressV1,
     };
     use fe2o3_runtime_model::{
         AllocationGenerationV1, AllocationIdV1, DeviceGenerationV1, DeviceKeyV1, MappingIdV1,
@@ -960,6 +1033,56 @@ mod tests {
         owner.recycle_retaining(completed, &mut backend).unwrap();
         assert_eq!(backend.reset_calls, 1);
         assert!(!format!("{duplicate:?}").contains("0x"));
+    }
+
+    #[test]
+    fn parent_bridge_projects_exact_identity_and_signal_without_observation() {
+        let mut owner = owner();
+        let (batch, event) = published(&mut owner);
+        let source = owner.dependency_source_identity_v1(&event).unwrap();
+        assert_eq!(source.session_occurrence, SESSION);
+        assert_eq!(source.acceptance_epoch, SOURCE_EPOCH);
+        assert_eq!(source.queue, queue());
+        assert_eq!(source.packet_id, Some(101));
+
+        let (event, lease) = owner
+            .retain_dependency_reader_v1(event, SESSION, DEPENDENT_EPOCH)
+            .unwrap();
+        let signal = owner
+            .native_dependency_signal_observation_v1(&lease)
+            .unwrap();
+        assert_eq!(signal.raw(), AMD_SIGNAL_ALIGNMENT_V1 as u64);
+
+        let mut backend = CompletedBackend { reset_calls: 0 };
+        let completed = complete(&mut owner, batch, &mut backend);
+        assert_eq!(backend.reset_calls, 0);
+        owner.release_dependency_event_v1(event).unwrap();
+        owner.release_dependency_reader_v1(lease).unwrap();
+        owner.recycle_retaining(completed, &mut backend).unwrap();
+        assert_eq!(backend.reset_calls, 1);
+    }
+
+    #[test]
+    fn target_identity_bridge_binds_only_after_publication() {
+        let mut owner = owner();
+        let bound = owner.bind_batch([template()]).unwrap();
+        let (_, retention) = bound.into_parts();
+        let prepared = owner
+            .bound_dependency_target_identity_v1(SESSION, DEPENDENT_EPOCH, &retention)
+            .unwrap();
+        assert_eq!(prepared.session_occurrence, SESSION);
+        assert_eq!(prepared.acceptance_epoch, DEPENDENT_EPOCH);
+        assert_eq!(prepared.packet_id, None);
+        let batch = owner.mark_published(retention, 401).unwrap();
+        let published = owner
+            .published_dependency_target_identity_v1(SESSION, DEPENDENT_EPOCH, &batch)
+            .unwrap();
+        assert_eq!(published.packet_id, Some(401));
+        assert_eq!(published.queue, prepared.queue);
+        assert_eq!(published.signal_mapping, prepared.signal_mapping);
+        assert_eq!(published.slot_index, prepared.slot_index);
+        assert_eq!(published.slot_generation, prepared.slot_generation);
+        assert_eq!(published.dispatch_generation, prepared.dispatch_generation);
     }
 
     #[test]

@@ -12,9 +12,11 @@ use std::time::Instant;
 use fe2o3_aql::{
     AMD_SIGNAL_ALIGNMENT_V1, AMD_SIGNAL_BYTES_V1, AQL_MAX_FIXED_BATCH_PACKETS_V2,
     AmdBusyCompletionSignalV1, AqlBarrierAndPacketErrorV1, AqlBarrierAndPacketV1,
-    AqlCompletionObservationV1, AqlDispatchGeometryV1, AqlDispatchOrderingV1,
-    AqlDispatchPacketError, AqlKernelDispatchPacketV1, AqlPreparedKernelDispatchBatchErrorV1,
-    AqlPreparedKernelDispatchBatchV2, AqlPreparedKernelDispatchV1, ObservedGpuAddressV1,
+    AqlCompletionObservationV1, AqlDependencyDispatchPlanErrorV1, AqlDependencySignalObservationV1,
+    AqlDispatchGeometryV1, AqlDispatchOrderingV1, AqlDispatchPacketError,
+    AqlKernelDispatchPacketV1, AqlPreparedDependencyDispatchV1,
+    AqlPreparedKernelDispatchBatchErrorV1, AqlPreparedKernelDispatchBatchV2,
+    AqlPreparedKernelDispatchV1, ObservedGpuAddressV1,
 };
 use fe2o3_runtime_model::{MemoryMappingKeyV1, QueueKeyV1};
 
@@ -194,6 +196,20 @@ struct CompletionSlotLeaseV1 {
     generation: u64,
 }
 
+/// Crate-private, addressless identity for one exact completion occurrence.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) struct ComputeDependencyOccurrenceIdentityV1 {
+    pub(super) session_occurrence: u64,
+    pub(super) acceptance_epoch: u64,
+    pub(super) batch_id: u64,
+    pub(super) queue: QueueKeyV1,
+    pub(super) signal_mapping: MemoryMappingKeyV1,
+    pub(super) slot_index: u32,
+    pub(super) slot_generation: u64,
+    pub(super) dispatch_generation: u64,
+    pub(super) packet_id: Option<u64>,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(super) struct BarrierProbeRetentionV1 {
     probe_id: u64,
@@ -328,6 +344,15 @@ pub(super) struct BoundCompletionBatchV1<const N: usize> {
     retention: CompletionBatchRetentionV1<N>,
 }
 
+impl<const N: usize> fmt::Debug for BoundCompletionBatchV1<N> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BoundCompletionBatchV1")
+            .field("packet_count", &N)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<const N: usize> BoundCompletionBatchV1<N> {
     pub(super) fn into_parts(
         self,
@@ -337,6 +362,62 @@ impl<const N: usize> BoundCompletionBatchV1<N> {
     ) {
         (self.packets, self.retention)
     }
+}
+
+/// Sealed prepublication target derived from one exact bound completion batch.
+pub(super) struct PreparedComputeDependencyTargetV1 {
+    identity: ComputeDependencyOccurrenceIdentityV1,
+    retention: CompletionBatchRetentionV1<1>,
+    event: Gfx942ComputeEventOccurrenceV1,
+    final_dispatch: AqlPreparedKernelDispatchV1,
+}
+
+impl fmt::Debug for PreparedComputeDependencyTargetV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedComputeDependencyTargetV1")
+            .finish_non_exhaustive()
+    }
+}
+
+impl PreparedComputeDependencyTargetV1 {
+    pub(super) const fn identity(&self) -> ComputeDependencyOccurrenceIdentityV1 {
+        self.identity
+    }
+}
+
+pub(super) struct PlannedComputeDependencyTargetV1 {
+    identity: ComputeDependencyOccurrenceIdentityV1,
+    retention: CompletionBatchRetentionV1<1>,
+    event: Gfx942ComputeEventOccurrenceV1,
+    plan: AqlPreparedDependencyDispatchV1,
+}
+
+impl PlannedComputeDependencyTargetV1 {
+    pub(super) fn into_parts(
+        self,
+    ) -> (
+        ComputeDependencyOccurrenceIdentityV1,
+        CompletionBatchRetentionV1<1>,
+        Gfx942ComputeEventOccurrenceV1,
+        AqlPreparedDependencyDispatchV1,
+    ) {
+        (self.identity, self.retention, self.event, self.plan)
+    }
+}
+
+#[derive(Debug)]
+pub(super) enum ComputeDependencyTargetPlanErrorV1 {
+    Completion(Gfx942CompletionErrorV1),
+    Plan(AqlDependencyDispatchPlanErrorV1),
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(super) enum ComputeDependencyTargetSubstitutionV1 {
+    FinalDispatch,
+    Retention,
+    Event,
 }
 
 /// Linear authority for one published completion batch.
@@ -781,17 +862,23 @@ impl CompletionSignalArenaOwnerV1 {
 
     #[cfg(test)]
     pub(super) fn for_persistent_compute_cancellation_test(queue: QueueKeyV1) -> Self {
+        Self::for_dependency_test(queue, 1, AMD_SIGNAL_ALIGNMENT_V1 as u64)
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_dependency_test(queue: QueueKeyV1, arena_id: u64, gpu_base: u64) -> Self {
+        assert!(gpu_base != 0 && gpu_base.is_multiple_of(AMD_SIGNAL_ALIGNMENT_V1 as u64));
         Self {
             queue,
             signal_mapping: MemoryMappingKeyV1 {
                 allocation: fe2o3_runtime_model::MemoryAllocationKeyV1 {
                     vm: queue.vm,
-                    id: fe2o3_runtime_model::AllocationIdV1(1),
+                    id: fe2o3_runtime_model::AllocationIdV1(arena_id),
                     generation: fe2o3_runtime_model::AllocationGenerationV1(1),
                 },
-                id: fe2o3_runtime_model::MappingIdV1(1),
+                id: fe2o3_runtime_model::MappingIdV1(arena_id),
             },
-            gpu_base: AMD_SIGNAL_ALIGNMENT_V1 as u64,
+            gpu_base,
             next_batch_id: 1,
             slots: allocate_completion_slot_records_v1()
                 .expect("fixed completion test roster is allocatable"),
@@ -1157,10 +1244,23 @@ impl CompletionSignalArenaOwnerV1 {
 
     pub(super) fn mark_published<const N: usize>(
         &mut self,
-        mut retention: CompletionBatchRetentionV1<N>,
+        retention: CompletionBatchRetentionV1<N>,
         last_packet_id: u64,
     ) -> Result<Gfx942CompletionBatchV1<N>, Gfx942CompletionErrorV1> {
-        self.validate_bound(&retention)?;
+        self.mark_published_retaining(retention, last_packet_id)
+            .map_err(|(error, _retention)| error)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn mark_published_retaining<const N: usize>(
+        &mut self,
+        mut retention: CompletionBatchRetentionV1<N>,
+        last_packet_id: u64,
+    ) -> Result<Gfx942CompletionBatchV1<N>, (Gfx942CompletionErrorV1, CompletionBatchRetentionV1<N>)>
+    {
+        if let Err(error) = self.validate_bound(&retention) {
+            return Err((error, retention));
+        }
         for slot in retention.slots.iter() {
             self.slots[slot.index as usize].phase = CompletionSlotPhaseV1::Published {
                 batch_id: retention.batch_id,
@@ -1726,6 +1826,364 @@ impl CompletionSignalArenaOwnerV1 {
     fn poison<T>(&mut self, error: Gfx942CompletionErrorV1) -> Result<T, Gfx942CompletionErrorV1> {
         self.phase = CompletionOwnerPhaseV1::Poisoned;
         Err(error)
+    }
+}
+
+// Parent-module bridges keep completion-event internals private to their
+// behavior owner while allowing the sibling queue orchestrator to compose the
+// exact linear transitions.
+#[allow(dead_code)]
+impl CompletionSignalArenaOwnerV1 {
+    /// Couples one exact bound batch to its addressless target identity and
+    /// newly recorded event before any native queue effect is possible.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn prepare_dependency_target_v1(
+        &mut self,
+        session_occurrence: u64,
+        acceptance_epoch: u64,
+        bound: BoundCompletionBatchV1<1>,
+    ) -> Result<
+        PreparedComputeDependencyTargetV1,
+        (Gfx942CompletionErrorV1, BoundCompletionBatchV1<1>),
+    > {
+        let result = (|| {
+            self.require_ready()?;
+            self.validate_bound(&bound.retention)?;
+            let expected_signal = self.dependency_target_signal_v1(&bound.retention)?;
+            if !bound.packets.matches_one_completion_signal(expected_signal) {
+                return Err(Gfx942CompletionErrorV1::InvalidArena(
+                    "dependency target completion signal",
+                ));
+            }
+            Ok(dependency_target_identity_v1(
+                session_occurrence,
+                acceptance_epoch,
+                &bound.retention,
+            ))
+        })();
+        let identity = match result {
+            Ok(identity) => identity,
+            Err(error) => return Err((error, bound)),
+        };
+        let event = match self.record_unbound_compute_event(
+            session_occurrence,
+            acceptance_epoch,
+            &bound.retention,
+            0,
+        ) {
+            Ok(event) => event,
+            Err(error) => return Err((error, bound)),
+        };
+        let (packets, retention) = bound.into_parts();
+        Ok(PreparedComputeDependencyTargetV1 {
+            identity,
+            retention,
+            event,
+            final_dispatch: packets.into_one(),
+        })
+    }
+
+    /// Reauthenticates the sealed target and consumes its coupled dispatch
+    /// only while building the exact dependency plan.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn plan_dependency_target_v1(
+        &self,
+        target: PreparedComputeDependencyTargetV1,
+        dependencies: &[AqlDependencySignalObservationV1],
+    ) -> Result<
+        PlannedComputeDependencyTargetV1,
+        (
+            ComputeDependencyTargetPlanErrorV1,
+            PreparedComputeDependencyTargetV1,
+        ),
+    > {
+        if let Err(error) = self.validate_dependency_target_v1(&target) {
+            return Err((
+                ComputeDependencyTargetPlanErrorV1::Completion(error),
+                target,
+            ));
+        }
+        let PreparedComputeDependencyTargetV1 {
+            identity,
+            retention,
+            event,
+            final_dispatch,
+        } = target;
+        match AqlPreparedDependencyDispatchV1::new(dependencies, final_dispatch) {
+            Ok(plan) => Ok(PlannedComputeDependencyTargetV1 {
+                identity,
+                retention,
+                event,
+                plan,
+            }),
+            Err(failure) => {
+                let error = failure.error();
+                Err((
+                    ComputeDependencyTargetPlanErrorV1::Plan(error),
+                    PreparedComputeDependencyTargetV1 {
+                        identity,
+                        retention,
+                        event,
+                        final_dispatch: failure.into_final_dispatch(),
+                    },
+                ))
+            }
+        }
+    }
+
+    pub(super) fn validate_dependency_target_v1(
+        &self,
+        target: &PreparedComputeDependencyTargetV1,
+    ) -> Result<(), Gfx942CompletionErrorV1> {
+        self.require_ready()?;
+        self.validate_bound(&target.retention)?;
+        let expected_identity = dependency_target_identity_v1(
+            target.identity.session_occurrence,
+            target.identity.acceptance_epoch,
+            &target.retention,
+        );
+        if target.identity != expected_identity {
+            return Err(Gfx942CompletionErrorV1::StaleBatchGeneration);
+        }
+        self.validate_unbound_dependency_target_event_v1(
+            &target.event,
+            target.identity.session_occurrence,
+            target.identity.acceptance_epoch,
+            &target.retention,
+        )?;
+        let expected_signal = self.dependency_target_signal_v1(&target.retention)?;
+        if !target
+            .final_dispatch
+            .completion_signal_matches(expected_signal)
+        {
+            return Err(Gfx942CompletionErrorV1::InvalidArena(
+                "dependency target completion signal",
+            ));
+        }
+        Ok(())
+    }
+
+    fn dependency_target_signal_v1(
+        &self,
+        retention: &CompletionBatchRetentionV1<1>,
+    ) -> Result<ObservedGpuAddressV1, Gfx942CompletionErrorV1> {
+        let offset = u64::from(retention.slots[0].index)
+            .checked_mul(AMD_SIGNAL_BYTES_V1 as u64)
+            .ok_or(Gfx942CompletionErrorV1::InvalidArena(
+                "dependency target signal offset",
+            ))?;
+        let raw =
+            self.gpu_base
+                .checked_add(offset)
+                .ok_or(Gfx942CompletionErrorV1::InvalidArena(
+                    "dependency target signal address",
+                ))?;
+        ObservedGpuAddressV1::new(raw)
+            .map_err(|_| Gfx942CompletionErrorV1::InvalidArena("dependency target signal"))
+    }
+
+    pub(super) fn record_dependency_event_v1(
+        &mut self,
+        session_occurrence: u64,
+        source_acceptance_epoch: u64,
+        retention: &CompletionBatchRetentionV1<1>,
+    ) -> Result<Gfx942ComputeEventOccurrenceV1, Gfx942CompletionErrorV1> {
+        self.record_unbound_compute_event(session_occurrence, source_acceptance_epoch, retention, 0)
+    }
+
+    pub(super) fn record_dependency_event_at_v1<const N: usize>(
+        &mut self,
+        session_occurrence: u64,
+        source_acceptance_epoch: u64,
+        retention: &CompletionBatchRetentionV1<N>,
+        batch_index: usize,
+    ) -> Result<Gfx942ComputeEventOccurrenceV1, Gfx942CompletionErrorV1> {
+        self.record_unbound_compute_event(
+            session_occurrence,
+            source_acceptance_epoch,
+            retention,
+            batch_index,
+        )
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn bind_dependency_event_v1(
+        &mut self,
+        event: Gfx942ComputeEventOccurrenceV1,
+        batch: &Gfx942CompletionBatchV1<1>,
+    ) -> Result<
+        Gfx942ComputeEventOccurrenceV1,
+        (Gfx942CompletionErrorV1, Gfx942ComputeEventOccurrenceV1),
+    > {
+        self.bind_compute_event_after_publication(event, batch, 0)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn bind_dependency_event_at_v1<const N: usize>(
+        &mut self,
+        event: Gfx942ComputeEventOccurrenceV1,
+        batch: &Gfx942CompletionBatchV1<N>,
+        batch_index: usize,
+    ) -> Result<
+        Gfx942ComputeEventOccurrenceV1,
+        (Gfx942CompletionErrorV1, Gfx942ComputeEventOccurrenceV1),
+    > {
+        self.bind_compute_event_after_publication(event, batch, batch_index)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn retain_dependency_reader_v1(
+        &mut self,
+        event: Gfx942ComputeEventOccurrenceV1,
+        session_occurrence: u64,
+        dependent_acceptance_epoch: u64,
+    ) -> Result<
+        (
+            Gfx942ComputeEventOccurrenceV1,
+            Gfx942ComputeDependencyReaderLeaseV1,
+        ),
+        (Gfx942CompletionErrorV1, Gfx942ComputeEventOccurrenceV1),
+    > {
+        self.retain_compute_dependency_reader(event, session_occurrence, dependent_acceptance_epoch)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn release_dependency_reader_v1(
+        &mut self,
+        lease: Gfx942ComputeDependencyReaderLeaseV1,
+    ) -> Result<
+        Gfx942ComputeDependencyReaderReleaseObservationV1,
+        (
+            Gfx942CompletionErrorV1,
+            Gfx942ComputeDependencyReaderLeaseV1,
+        ),
+    > {
+        self.release_compute_dependency_reader(lease)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn release_dependency_event_v1(
+        &mut self,
+        event: Gfx942ComputeEventOccurrenceV1,
+    ) -> Result<
+        Gfx942ComputeEventReleaseObservationV1,
+        (Gfx942CompletionErrorV1, Gfx942ComputeEventOccurrenceV1),
+    > {
+        self.release_compute_event(event)
+    }
+
+    pub(super) fn dependency_source_identity_v1(
+        &self,
+        event: &Gfx942ComputeEventOccurrenceV1,
+    ) -> Result<ComputeDependencyOccurrenceIdentityV1, Gfx942CompletionErrorV1> {
+        self.project_compute_dependency_source_identity(event)
+    }
+
+    pub(super) fn native_dependency_signal_observation_v1(
+        &self,
+        lease: &Gfx942ComputeDependencyReaderLeaseV1,
+    ) -> Result<AqlDependencySignalObservationV1, Gfx942CompletionErrorV1> {
+        self.project_native_dependency_signal_observation(lease)
+    }
+
+    pub(super) fn matches_dependency_source_arena_v1(
+        &self,
+        queue: QueueKeyV1,
+        signal_mapping: MemoryMappingKeyV1,
+    ) -> bool {
+        self.queue == queue && self.signal_mapping == signal_mapping
+    }
+
+    pub(super) fn bound_dependency_target_identity_v1(
+        &self,
+        session_occurrence: u64,
+        acceptance_epoch: u64,
+        retention: &CompletionBatchRetentionV1<1>,
+    ) -> Result<ComputeDependencyOccurrenceIdentityV1, Gfx942CompletionErrorV1> {
+        self.validate_bound(retention)?;
+        Ok(dependency_target_identity_v1(
+            session_occurrence,
+            acceptance_epoch,
+            retention,
+        ))
+    }
+
+    pub(super) fn validate_bound_dependency_target_custody_v1(
+        &self,
+        session_occurrence: u64,
+        acceptance_epoch: u64,
+        retention: &CompletionBatchRetentionV1<1>,
+        event: &Gfx942ComputeEventOccurrenceV1,
+    ) -> Result<ComputeDependencyOccurrenceIdentityV1, Gfx942CompletionErrorV1> {
+        let identity = self.bound_dependency_target_identity_v1(
+            session_occurrence,
+            acceptance_epoch,
+            retention,
+        )?;
+        self.validate_unbound_dependency_target_event_v1(
+            event,
+            session_occurrence,
+            acceptance_epoch,
+            retention,
+        )?;
+        Ok(identity)
+    }
+
+    pub(super) fn published_dependency_target_identity_v1(
+        &self,
+        session_occurrence: u64,
+        acceptance_epoch: u64,
+        batch: &Gfx942CompletionBatchV1<1>,
+    ) -> Result<ComputeDependencyOccurrenceIdentityV1, Gfx942CompletionErrorV1> {
+        self.validate_published(&batch.retention)?;
+        Ok(dependency_target_identity_v1(
+            session_occurrence,
+            acceptance_epoch,
+            &batch.retention,
+        ))
+    }
+}
+
+#[cfg(test)]
+pub(super) fn substitute_dependency_target_component_for_test(
+    mut first: PreparedComputeDependencyTargetV1,
+    mut second: PreparedComputeDependencyTargetV1,
+    substitution: ComputeDependencyTargetSubstitutionV1,
+) -> (
+    PreparedComputeDependencyTargetV1,
+    PreparedComputeDependencyTargetV1,
+) {
+    match substitution {
+        ComputeDependencyTargetSubstitutionV1::FinalDispatch => {
+            core::mem::swap(&mut first.final_dispatch, &mut second.final_dispatch);
+        }
+        ComputeDependencyTargetSubstitutionV1::Retention => {
+            core::mem::swap(&mut first.retention, &mut second.retention);
+        }
+        ComputeDependencyTargetSubstitutionV1::Event => {
+            core::mem::swap(&mut first.event, &mut second.event);
+        }
+    }
+    (first, second)
+}
+
+fn dependency_target_identity_v1(
+    session_occurrence: u64,
+    acceptance_epoch: u64,
+    retention: &CompletionBatchRetentionV1<1>,
+) -> ComputeDependencyOccurrenceIdentityV1 {
+    let slot = retention.slots[0];
+    let dispatch = retention.dispatches[0];
+    ComputeDependencyOccurrenceIdentityV1 {
+        session_occurrence,
+        acceptance_epoch,
+        batch_id: retention.batch_id,
+        queue: retention.queue,
+        signal_mapping: retention.signal_mapping,
+        slot_index: slot.index,
+        slot_generation: slot.generation,
+        dispatch_generation: dispatch.dispatch_generation,
+        packet_id: retention.last_packet_id,
     }
 }
 

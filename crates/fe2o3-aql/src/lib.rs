@@ -902,6 +902,11 @@ impl AqlPreparedKernelDispatchV1 {
         self.ordering
     }
 
+    /// Checks the exact completion signal retained for publication.
+    pub fn completion_signal_matches(&self, expected: ObservedGpuAddressV1) -> bool {
+        self.packet.completion_signal() == expected.raw()
+    }
+
     pub fn publish_with<T: AqlPacketPublicationTargetV1>(
         self,
         target: &mut T,
@@ -1021,6 +1026,19 @@ impl<const N: usize> AqlPreparedKernelDispatchBatchV2<N> {
             target.publish_release_header(batch_index as u32, packet.ordering.header())?;
         }
         Ok(())
+    }
+}
+
+impl AqlPreparedKernelDispatchBatchV2<1> {
+    /// Checks the completion signal retained by the sole prepared dispatch.
+    pub fn matches_one_completion_signal(&self, expected: ObservedGpuAddressV1) -> bool {
+        self.packets[0].completion_signal_matches(expected)
+    }
+
+    /// Moves the sole prepared dispatch out of an exact one-packet batch.
+    pub fn into_one(self) -> AqlPreparedKernelDispatchV1 {
+        let [packet] = *self.packets;
+        packet
     }
 }
 
@@ -1214,5 +1232,50 @@ mod tests {
             signal.observe_acquire(),
             AqlCompletionObservationV1::Unexpected(-7)
         );
+    }
+
+    #[test]
+    fn one_packet_v2_batch_returns_its_exact_dispatch_owner() {
+        let packet = AqlKernelDispatchPacketV1::new_unpublished(
+            AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+            0,
+            0,
+            ObservedGpuAddressV1::new(0x10_000).unwrap(),
+            ObservedGpuAddressV1::new(0x20_000).unwrap(),
+            16,
+            ObservedGpuAddressV1::new(0x30_000).unwrap(),
+        )
+        .unwrap();
+        let expected = AqlKernelDispatchPacketV1::new_unpublished(
+            AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+            0,
+            0,
+            ObservedGpuAddressV1::new(0x10_000).unwrap(),
+            ObservedGpuAddressV1::new(0x20_000).unwrap(),
+            16,
+            ObservedGpuAddressV1::new(0x30_000).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            AqlPreparedKernelDispatchBatchV2::one(packet).into_one(),
+            expected
+        );
+    }
+
+    #[test]
+    fn one_packet_v2_batch_authenticates_its_completion_signal() {
+        let packet = AqlKernelDispatchPacketV1::new_unpublished(
+            AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+            0,
+            0,
+            ObservedGpuAddressV1::new(0x10_000).unwrap(),
+            ObservedGpuAddressV1::new(0x20_000).unwrap(),
+            16,
+            ObservedGpuAddressV1::new(0x30_000).unwrap(),
+        )
+        .unwrap();
+        let batch = AqlPreparedKernelDispatchBatchV2::one(packet);
+        assert!(batch.matches_one_completion_signal(ObservedGpuAddressV1::new(0x30_000).unwrap()));
+        assert!(!batch.matches_one_completion_signal(ObservedGpuAddressV1::new(0x30_040).unwrap()));
     }
 }

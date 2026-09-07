@@ -7,15 +7,20 @@
 //! atomic-memory-model proof.
 
 use core::sync::atomic::{AtomicU32, AtomicU64};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 #[cfg(test)]
 use core::sync::atomic::{Ordering, fence};
 
 use fe2o3_aql::{
     AQL_INVALID_PACKET_HEADER_V1, AQL_KERNEL_DISPATCH_PACKET_BYTES_V1, AqlBarrierAndPacketV1,
-    AqlBarrierAndPublicationTargetV1, AqlKernelDispatchPacketV1, AqlPacketBatchPublicationTargetV1,
-    AqlPreparedBarrierAndV1, AqlPreparedKernelDispatchBatchV2, AqlRingBatchReservationV1,
-    AqlRingCapacityV1, AqlRingReservationError, AqlSingleProducerRingModelV1,
+    AqlBarrierAndPublicationTargetV1, AqlDependencyBarrierPacketV1,
+    AqlDependencyDispatchPublicationBoundaryV1, AqlDependencyDispatchPublicationFailureV1,
+    AqlDependencyDispatchPublicationTargetV1, AqlDependencyDispatchPublicationV1,
+    AqlKernelDispatchPacketV1, AqlPacketBatchPublicationTargetV1, AqlPreparedBarrierAndV1,
+    AqlPreparedDependencyDispatchV1, AqlPreparedKernelDispatchBatchV2,
+    AqlRingBatchReservationEntryV1, AqlRingBatchReservationV1, AqlRingCapacityV1,
+    AqlRingReservationError, AqlSingleProducerRingModelV1, AqlTerminalDependencyDispatchCustodyV1,
 };
 use fe2o3_kfd_uapi::{
     KfdContextSaveAreaHeaderV1, KfdQueueExceptionPayloadAddressV1, KfdSignalEventIdV1,
@@ -50,6 +55,7 @@ pub(crate) enum NativeAqlSubmissionErrorV1 {
     PacketBody,
     PacketHeader,
     Doorbell,
+    CallbackPanic,
 }
 
 /// Side-effect classification for one kernel-dispatch batch submission.
@@ -74,6 +80,27 @@ pub(super) enum NativeBarrierAndSubmissionFailureV1 {
     Terminal(NativeAqlSubmissionErrorV1),
 }
 
+/// Side-effect classification for one dependency-ordered dispatch.
+#[derive(Debug, Eq, PartialEq)]
+pub(super) enum NativeDependencyDispatchSubmissionFailureV1 {
+    /// Ring occupancy rejected the complete plan before the claim callback.
+    RetryableBeforeSideEffect {
+        error: NativeAqlSubmissionErrorV1,
+        prepared: AqlPreparedDependencyDispatchV1,
+    },
+    /// A fail-closed native precondition rejected before the claim callback.
+    TerminalBeforeClaim {
+        error: NativeAqlSubmissionErrorV1,
+        prepared: AqlPreparedDependencyDispatchV1,
+    },
+    /// The write-index claim callback was attempted or a later callback failed.
+    TerminalAmbiguous {
+        error: NativeAqlSubmissionErrorV1,
+        boundary: AqlDependencyDispatchPublicationBoundaryV1,
+        custody: AqlTerminalDependencyDispatchCustodyV1,
+    },
+}
+
 /// Linear state for one retained single-producer native queue.
 ///
 /// This type is intentionally not `Clone`. Counter divergence, invalid
@@ -94,7 +121,7 @@ impl NativeAqlSubmissionOwnerV1 {
         self.phase = SubmissionPhaseV1::Poisoned;
     }
 
-    fn from_counters(
+    pub(super) fn from_counters(
         ring_bytes: u32,
         write: u64,
         read: u64,
@@ -217,6 +244,115 @@ impl NativeAqlSubmissionOwnerV1 {
             .map_err(NativeAqlSubmissionFailureV1::Terminal)?;
         self.phase = SubmissionPhaseV1::Ready;
         Ok(reservation.last_packet_id())
+    }
+
+    /// Publishes one complete b37 dependency plan through the retained queue.
+    ///
+    /// Capacity rejection is the only retryable result. The owner is poisoned
+    /// before `publish_with` can invoke its first callback; callback errors and
+    /// panics therefore retain nonretryable planner custody.
+    pub(super) fn submit_dependency_dispatch_classified<B: NativeAqlSubmissionBackendV1>(
+        &mut self,
+        prepared: AqlPreparedDependencyDispatchV1,
+        backend: &mut B,
+    ) -> Result<AqlDependencyDispatchPublicationV1, NativeDependencyDispatchSubmissionFailureV1>
+    {
+        if self.phase != SubmissionPhaseV1::Ready {
+            return Err(
+                NativeDependencyDispatchSubmissionFailureV1::TerminalBeforeClaim {
+                    error: NativeAqlSubmissionErrorV1::Poisoned,
+                    prepared,
+                },
+            );
+        }
+        if let Err(error) = catch_dependency_callback(|| backend.check_currentness()) {
+            self.phase = SubmissionPhaseV1::Poisoned;
+            return Err(
+                NativeDependencyDispatchSubmissionFailureV1::TerminalBeforeClaim {
+                    error,
+                    prepared,
+                },
+            );
+        }
+        let (observed_write, observed_read) =
+            match catch_dependency_callback(|| backend.observe_counters_acquire()) {
+                Ok(observation) => observation,
+                Err(error) => {
+                    self.phase = SubmissionPhaseV1::Poisoned;
+                    return Err(
+                        NativeDependencyDispatchSubmissionFailureV1::TerminalBeforeClaim {
+                            error,
+                            prepared,
+                        },
+                    );
+                }
+            };
+        let expected_write = self.ring.write();
+        if observed_write != expected_write {
+            self.phase = SubmissionPhaseV1::Poisoned;
+            return Err(
+                NativeDependencyDispatchSubmissionFailureV1::TerminalBeforeClaim {
+                    error: NativeAqlSubmissionErrorV1::WriteCounterReplay {
+                        expected: expected_write,
+                        observed: observed_write,
+                    },
+                    prepared,
+                },
+            );
+        }
+        if let Err(error) = catch_dependency_callback(|| backend.check_currentness()) {
+            self.phase = SubmissionPhaseV1::Poisoned;
+            return Err(
+                NativeDependencyDispatchSubmissionFailureV1::TerminalBeforeClaim {
+                    error,
+                    prepared,
+                },
+            );
+        }
+
+        self.phase = SubmissionPhaseV1::Poisoned;
+        let mut target = NativeDependencyDispatchTargetV1 {
+            backend,
+            expected_first_packet_id: expected_write,
+        };
+        match prepared.publish_with(&mut self.ring, observed_read, &mut target) {
+            Ok(publication) => {
+                self.phase = SubmissionPhaseV1::Ready;
+                Ok(publication)
+            }
+            Err(AqlDependencyDispatchPublicationFailureV1::RetryableBeforeSideEffect {
+                error,
+                prepared,
+            }) => {
+                self.phase = SubmissionPhaseV1::Ready;
+                Err(
+                    NativeDependencyDispatchSubmissionFailureV1::RetryableBeforeSideEffect {
+                        error: NativeAqlSubmissionErrorV1::Ring(error),
+                        prepared,
+                    },
+                )
+            }
+            Err(AqlDependencyDispatchPublicationFailureV1::RejectedBeforeSideEffect {
+                error,
+                prepared,
+            }) => Err(
+                NativeDependencyDispatchSubmissionFailureV1::TerminalBeforeClaim {
+                    error: NativeAqlSubmissionErrorV1::Ring(error),
+                    prepared,
+                },
+            ),
+            Err(AqlDependencyDispatchPublicationFailureV1::TerminalAmbiguous {
+                error,
+                boundary,
+                custody,
+            }) => Err(
+                NativeDependencyDispatchSubmissionFailureV1::TerminalAmbiguous {
+                    error,
+                    boundary,
+                    custody,
+                },
+            ),
+        }
     }
 
     /// Publishes exactly one zero-dependency BARRIER_AND packet.
@@ -367,6 +503,99 @@ impl<B: NativeAqlSubmissionBackendV1> AqlPacketBatchPublicationTargetV1
 struct NativeBarrierAndTargetV1<'a, B> {
     backend: &'a mut B,
     slot: u32,
+}
+
+struct NativeDependencyDispatchTargetV1<'a, B> {
+    backend: &'a mut B,
+    expected_first_packet_id: u64,
+}
+
+fn catch_dependency_callback<T>(
+    operation: impl FnOnce() -> Result<T, NativeAqlSubmissionErrorV1>,
+) -> Result<T, NativeAqlSubmissionErrorV1> {
+    match catch_unwind(AssertUnwindSafe(operation)) {
+        Ok(result) => result,
+        Err(_) => Err(NativeAqlSubmissionErrorV1::CallbackPanic),
+    }
+}
+
+impl<B: NativeAqlSubmissionBackendV1> AqlDependencyDispatchPublicationTargetV1
+    for NativeDependencyDispatchTargetV1<'_, B>
+{
+    type Error = NativeAqlSubmissionErrorV1;
+
+    fn claim_write_index_acq_rel(
+        &mut self,
+        first_packet_id: u64,
+        packet_count: u32,
+    ) -> Result<(), Self::Error> {
+        if first_packet_id != self.expected_first_packet_id {
+            return Err(NativeAqlSubmissionErrorV1::InvalidRing(
+                "dependency reservation replay",
+            ));
+        }
+        catch_dependency_callback(|| self.backend.check_currentness())?;
+        let observed = catch_dependency_callback(|| {
+            self.backend
+                .fetch_add_write_acq_rel(u64::from(packet_count))
+        })?;
+        if observed != first_packet_id {
+            return Err(NativeAqlSubmissionErrorV1::WriteCounterRace {
+                expected: first_packet_id,
+                observed,
+            });
+        }
+        Ok(())
+    }
+
+    fn write_unpublished_barrier(
+        &mut self,
+        entry: AqlRingBatchReservationEntryV1,
+        packet: &AqlDependencyBarrierPacketV1,
+    ) -> Result<(), Self::Error> {
+        catch_dependency_callback(|| {
+            self.backend
+                .write_unpublished(entry.slot_index(), &packet.encode_unpublished_le())
+        })
+    }
+
+    fn write_unpublished_dispatch(
+        &mut self,
+        entry: AqlRingBatchReservationEntryV1,
+        packet: &AqlKernelDispatchPacketV1,
+    ) -> Result<(), Self::Error> {
+        catch_dependency_callback(|| {
+            self.backend
+                .write_unpublished(entry.slot_index(), &packet.encode_unpublished_le())
+        })
+    }
+
+    fn publish_barrier_release_header(
+        &mut self,
+        entry: AqlRingBatchReservationEntryV1,
+        header: u16,
+    ) -> Result<(), Self::Error> {
+        catch_dependency_callback(|| {
+            self.backend
+                .publish_release_header(entry.slot_index(), header)
+        })
+    }
+
+    fn publish_dispatch_release_header(
+        &mut self,
+        entry: AqlRingBatchReservationEntryV1,
+        header: u16,
+    ) -> Result<(), Self::Error> {
+        catch_dependency_callback(|| {
+            self.backend
+                .publish_release_header(entry.slot_index(), header)
+        })
+    }
+
+    fn ring_doorbell_release(&mut self, packet_id: u64) -> Result<(), Self::Error> {
+        catch_dependency_callback(|| self.backend.check_currentness())?;
+        catch_dependency_callback(|| self.backend.ring_doorbell_release(packet_id))
+    }
 }
 
 impl<B: NativeAqlSubmissionBackendV1> AqlBarrierAndPublicationTargetV1
@@ -570,7 +799,8 @@ fn release_fence_before_mmio() {
 mod tests {
     use super::*;
     use fe2o3_aql::{
-        AqlBarrierAndPacketV1, AqlDispatchGeometryV1, AqlKernelDispatchPacketV1,
+        AqlBarrierAndPacketV1, AqlDependencySignalObservationV1, AqlDispatchGeometryV1,
+        AqlKernelDispatchPacketV1, AqlPreparedDependencyDispatchV1,
         AqlPreparedKernelDispatchBatchV2, ObservedGpuAddressV1,
     };
 
@@ -595,6 +825,8 @@ mod tests {
         fail_check_error: Option<NativeAqlSubmissionErrorV1>,
         fail_after: Option<FailureAfterV1>,
         fail_error: Option<NativeAqlSubmissionErrorV1>,
+        panic_check: Option<usize>,
+        panic_after: Option<FailureAfterV1>,
         fetch_return_override: Option<u64>,
         body_calls: usize,
         header_calls: usize,
@@ -628,6 +860,8 @@ mod tests {
                 fail_check_error: None,
                 fail_after: None,
                 fail_error: None,
+                panic_check: None,
+                panic_after: None,
                 fetch_return_override: None,
                 body_calls: 0,
                 header_calls: 0,
@@ -650,6 +884,11 @@ mod tests {
         fn check_currentness(&mut self) -> Result<(), NativeAqlSubmissionErrorV1> {
             self.checks += 1;
             self.trace.push("check");
+            assert_ne!(
+                self.panic_check,
+                Some(self.checks),
+                "injected currentness panic"
+            );
             if self.fail_check == Some(self.checks) {
                 Err(self
                     .fail_check_error
@@ -673,6 +912,11 @@ mod tests {
             increment: u64,
         ) -> Result<u64, NativeAqlSubmissionErrorV1> {
             self.trace.push("fetch-add");
+            assert_ne!(
+                self.panic_after,
+                Some(FailureAfterV1::FetchAdd),
+                "injected fetch-add panic"
+            );
             let observed = self.write.fetch_add(increment, Ordering::AcqRel);
             if self.fail_after == Some(FailureAfterV1::FetchAdd) {
                 return Err(self
@@ -691,6 +935,11 @@ mod tests {
             self.trace.push("body");
             let call = self.body_calls;
             self.body_calls += 1;
+            assert_ne!(
+                self.panic_after,
+                Some(FailureAfterV1::Body(call)),
+                "injected body panic"
+            );
             write_unpublished_slot(self.logical_ring(), slot, packet)?;
             if self.fail_after == Some(FailureAfterV1::Body(call)) {
                 return Err(self
@@ -709,6 +958,11 @@ mod tests {
             self.trace.push("header");
             let call = self.header_calls;
             self.header_calls += 1;
+            assert_ne!(
+                self.panic_after,
+                Some(FailureAfterV1::Header(call)),
+                "injected header panic"
+            );
             publish_slot_header_release(self.logical_ring(), slot, header)?;
             if self.fail_after == Some(FailureAfterV1::Header(call)) {
                 return Err(self
@@ -724,6 +978,11 @@ mod tests {
             packet_id: u64,
         ) -> Result<(), NativeAqlSubmissionErrorV1> {
             self.trace.push("doorbell");
+            assert_ne!(
+                self.panic_after,
+                Some(FailureAfterV1::Doorbell),
+                "injected doorbell panic"
+            );
             release_fence_before_mmio();
             self.doorbells.push(packet_id);
             if self.fail_after == Some(FailureAfterV1::Doorbell) {
@@ -766,6 +1025,15 @@ mod tests {
             .try_into()
             .unwrap();
         AqlPreparedKernelDispatchBatchV2::try_from_boxed_packets(packets).unwrap()
+    }
+
+    fn dependency_plan(count: usize) -> AqlPreparedDependencyDispatchV1 {
+        let signals = (0..count)
+            .map(|index| {
+                AqlDependencySignalObservationV1::new(0x40_000 + index as u64 * 64).unwrap()
+            })
+            .collect::<Vec<_>>();
+        AqlPreparedDependencyDispatchV1::new(&signals, indexed_packet(7)).unwrap()
     }
 
     #[test]
@@ -852,6 +1120,228 @@ mod tests {
             u64::from_le_bytes(backend.logical_ring()[56..64].try_into().unwrap()),
             0x30_040
         );
+    }
+
+    #[test]
+    fn dependency_dispatch_uses_one_claim_all_bodies_all_headers_and_one_doorbell() {
+        for dependency_count in [0, 1, 5, 6, 256] {
+            let mut owner = NativeAqlSubmissionOwnerV1::new(4_096).unwrap();
+            let mut backend = FakeBackend::new(0, 0);
+            let publication = owner
+                .submit_dependency_dispatch_classified(
+                    dependency_plan(dependency_count),
+                    &mut backend,
+                )
+                .unwrap();
+            let barriers = dependency_count.div_ceil(5);
+            assert_eq!(publication.dependency_count(), dependency_count as u16);
+            assert_eq!(publication.barrier_count(), barriers as u16);
+            assert_eq!(publication.packet_count(), barriers as u32 + 1);
+            assert_eq!(
+                backend.write.load(Ordering::Relaxed),
+                u64::from(publication.packet_count())
+            );
+            assert_eq!(backend.body_calls, barriers + 1);
+            assert_eq!(backend.header_calls, barriers + 1);
+            assert_eq!(backend.doorbells, [publication.last_packet_id()]);
+            assert_eq!(
+                backend
+                    .trace
+                    .iter()
+                    .filter(|event| **event == "fetch-add")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                backend
+                    .trace
+                    .iter()
+                    .filter(|event| **event == "doorbell")
+                    .count(),
+                1
+            );
+            let first_header = backend.slot_word(0, 0) & 0xffff;
+            if dependency_count == 0 {
+                assert_eq!(first_header, 0x1402);
+            } else {
+                assert_eq!(first_header, 0x1403);
+                let final_slot = barriers as u32;
+                assert_eq!(backend.slot_word(final_slot, 0) & 0xffff, 0x1502);
+            }
+        }
+    }
+
+    #[test]
+    fn dependency_ring_pressure_is_retryable_and_preserves_the_plan() {
+        let mut owner = NativeAqlSubmissionOwnerV1::from_counters(4_096, 64, 0).unwrap();
+        let mut backend = FakeBackend::new(64, 0);
+        let prepared = match owner
+            .submit_dependency_dispatch_classified(dependency_plan(6), &mut backend)
+            .unwrap_err()
+        {
+            NativeDependencyDispatchSubmissionFailureV1::RetryableBeforeSideEffect {
+                error: NativeAqlSubmissionErrorV1::Ring(AqlRingReservationError::Full),
+                prepared,
+            } => prepared,
+            failure => panic!("unexpected failure: {failure:?}"),
+        };
+        assert_eq!(backend.trace, ["check", "observe", "check"]);
+        assert_eq!(backend.write.load(Ordering::Relaxed), 64);
+        backend.read.store(3, Ordering::Release);
+        let publication = owner
+            .submit_dependency_dispatch_classified(prepared, &mut backend)
+            .unwrap();
+        assert_eq!(publication.first_packet_id(), 64);
+        assert_eq!(publication.last_packet_id(), 66);
+    }
+
+    #[test]
+    fn dependency_callback_failures_report_exact_terminal_boundaries() {
+        let cases = [
+            (
+                FailureAfterV1::FetchAdd,
+                AqlDependencyDispatchPublicationBoundaryV1::ClaimWriteIndex,
+            ),
+            (
+                FailureAfterV1::Body(0),
+                AqlDependencyDispatchPublicationBoundaryV1::BarrierBody { barrier_index: 0 },
+            ),
+            (
+                FailureAfterV1::Body(2),
+                AqlDependencyDispatchPublicationBoundaryV1::FinalDispatchBody,
+            ),
+            (
+                FailureAfterV1::Header(0),
+                AqlDependencyDispatchPublicationBoundaryV1::BarrierHeader { barrier_index: 0 },
+            ),
+            (
+                FailureAfterV1::Header(2),
+                AqlDependencyDispatchPublicationBoundaryV1::FinalDispatchHeader,
+            ),
+            (
+                FailureAfterV1::Doorbell,
+                AqlDependencyDispatchPublicationBoundaryV1::Doorbell,
+            ),
+        ];
+        for (stage, expected_boundary) in cases {
+            let mut owner = NativeAqlSubmissionOwnerV1::new(4_096).unwrap();
+            let mut backend = FakeBackend::new(0, 0);
+            backend.fail_after = Some(stage);
+            let failure = owner
+                .submit_dependency_dispatch_classified(dependency_plan(6), &mut backend)
+                .unwrap_err();
+            assert!(matches!(
+                failure,
+                NativeDependencyDispatchSubmissionFailureV1::TerminalAmbiguous {
+                    boundary,
+                    ..
+                } if boundary == expected_boundary
+            ));
+            assert!(matches!(
+                owner.submit_dependency_dispatch_classified(dependency_plan(1), &mut backend),
+                Err(
+                    NativeDependencyDispatchSubmissionFailureV1::TerminalBeforeClaim {
+                        error: NativeAqlSubmissionErrorV1::Poisoned,
+                        ..
+                    }
+                )
+            ));
+        }
+    }
+
+    #[test]
+    fn dependency_callback_panics_become_terminal_custody() {
+        let cases = [
+            (
+                None,
+                Some(3),
+                AqlDependencyDispatchPublicationBoundaryV1::ClaimWriteIndex,
+            ),
+            (
+                Some(FailureAfterV1::FetchAdd),
+                None,
+                AqlDependencyDispatchPublicationBoundaryV1::ClaimWriteIndex,
+            ),
+            (
+                Some(FailureAfterV1::Body(0)),
+                None,
+                AqlDependencyDispatchPublicationBoundaryV1::BarrierBody { barrier_index: 0 },
+            ),
+            (
+                Some(FailureAfterV1::Header(2)),
+                None,
+                AqlDependencyDispatchPublicationBoundaryV1::FinalDispatchHeader,
+            ),
+            (
+                Some(FailureAfterV1::Doorbell),
+                None,
+                AqlDependencyDispatchPublicationBoundaryV1::Doorbell,
+            ),
+        ];
+        for (panic_after, panic_check, expected_boundary) in cases {
+            let mut owner = NativeAqlSubmissionOwnerV1::new(4_096).unwrap();
+            let mut backend = FakeBackend::new(0, 0);
+            backend.panic_after = panic_after;
+            backend.panic_check = panic_check;
+            let failure = owner
+                .submit_dependency_dispatch_classified(dependency_plan(6), &mut backend)
+                .unwrap_err();
+            assert!(matches!(
+                failure,
+                NativeDependencyDispatchSubmissionFailureV1::TerminalAmbiguous {
+                    error: NativeAqlSubmissionErrorV1::CallbackPanic,
+                    boundary,
+                    ..
+                } if boundary == expected_boundary
+            ));
+        }
+    }
+
+    #[test]
+    fn dependency_currentness_rejection_before_claim_is_terminal_without_ring_effect() {
+        for failed_check in [1, 2] {
+            let mut owner = NativeAqlSubmissionOwnerV1::new(4_096).unwrap();
+            let mut backend = FakeBackend::new(0, 0);
+            backend.fail_check = Some(failed_check);
+            let before = backend.logical_ring().to_vec();
+            assert!(matches!(
+                owner.submit_dependency_dispatch_classified(dependency_plan(6), &mut backend),
+                Err(
+                    NativeDependencyDispatchSubmissionFailureV1::TerminalBeforeClaim {
+                        error: NativeAqlSubmissionErrorV1::Currentness,
+                        ..
+                    }
+                )
+            ));
+            assert_eq!(backend.write.load(Ordering::Relaxed), 0);
+            assert!(backend.doorbells.is_empty());
+            assert_eq!(backend.logical_ring(), before);
+        }
+    }
+
+    #[test]
+    fn dependency_preclaim_panics_are_terminal_with_exact_plan_custody() {
+        for panic_check in [1, 2] {
+            let mut owner = NativeAqlSubmissionOwnerV1::new(4_096).unwrap();
+            let mut backend = FakeBackend::new(0, 0);
+            backend.panic_check = Some(panic_check);
+            let before = backend.logical_ring().to_vec();
+            let failure = owner
+                .submit_dependency_dispatch_classified(dependency_plan(6), &mut backend)
+                .unwrap_err();
+            let NativeDependencyDispatchSubmissionFailureV1::TerminalBeforeClaim {
+                error,
+                prepared,
+            } = failure
+            else {
+                panic!("preclaim panic returned nonterminal custody")
+            };
+            assert_eq!(error, NativeAqlSubmissionErrorV1::CallbackPanic);
+            assert_eq!(prepared.dependency_count(), 6);
+            assert_eq!(backend.write.load(Ordering::Relaxed), 0);
+            assert!(backend.doorbells.is_empty());
+            assert_eq!(backend.logical_ring(), before);
+        }
     }
 
     #[test]

@@ -15693,6 +15693,7 @@ fn map_submission(error: NativeAqlSubmissionErrorV1) -> ComputeAqlQueueSessionEr
         NativeAqlSubmissionErrorV1::PacketBody => "submission packet body",
         NativeAqlSubmissionErrorV1::PacketHeader => "submission packet header",
         NativeAqlSubmissionErrorV1::Doorbell => "submission doorbell",
+        NativeAqlSubmissionErrorV1::CallbackPanic => "submission callback panic",
     };
     ComputeAqlQueueSessionErrorV1::Native(detail)
 }

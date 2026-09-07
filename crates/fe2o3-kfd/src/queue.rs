@@ -44,6 +44,9 @@ pub(crate) mod submit;
 #[path = "queue_completion.rs"]
 pub(crate) mod completion;
 
+#[path = "queue_dependency.rs"]
+pub(crate) mod dependency;
+
 #[path = "queue_dispatch_binding.rs"]
 pub(crate) mod dispatch_binding;
 
@@ -60,6 +63,11 @@ pub use completion::{
     Gfx942ComputeDependencyReaderReleaseObservationV1, Gfx942ComputeEventBindingStateV1,
     Gfx942ComputeEventOccurrenceV1, Gfx942ComputeEventReleaseObservationV1,
     Gfx942TimeoutExecutionObservationV1, Gfx942TimeoutSignalObservationV1,
+};
+
+pub use dependency::{
+    GFX942_COMPUTE_DEPENDENCY_PUBLISHER_FOUNDATION_MANIFEST_SHA256_V1,
+    GFX942_COMPUTE_DEPENDENCY_PUBLISHER_FOUNDATION_MANIFEST_V1,
 };
 
 pub use dispatch_binding::{
