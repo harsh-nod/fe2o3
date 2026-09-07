@@ -91,6 +91,7 @@ pub use live::{
     Gfx942KfdQueueExceptionObservationV1, Gfx942RecycledDispatchResourcesV1,
     Gfx942SdmaBatchExecutionFailureV1, Gfx942SdmaBatchExecutionRecoveryV1,
     Gfx942SdmaBatchSubmissionFailureV1, Gfx942SdmaBufferTransitionFailureV1,
+    Gfx942SdmaMultiQueueExecutionCustodyV1, Gfx942SdmaMultiQueueExecutionFailureV1,
     Gfx942SdmaMultiQueueFailureCustodyV1, Gfx942SdmaMultiQueueFailureDispositionV1,
     Gfx942SdmaMultiQueueSubmissionFailureV1, Gfx942SdmaMultiQueueTerminalCustodyV1,
     Gfx942SdmaSubmissionFailureV1, Gfx942SdmaTerminalShardObservationV1,
@@ -110,8 +111,8 @@ pub use live::{
 
 /// Canonical claim boundary for the executable native-queue foundation.
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r26-v1\n",
-    "compute_session_sha256=0dc31c8db1e395f0290ac607cbe9610e455238cd5b2ba95a77dfe47494b2a8dc\n",
+    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r27-v1\n",
+    "compute_session_sha256=4d7b30bcb0686d81dfa600122752fb1baf80aa9e639b744ccc273a79c84f051e\n",
     "operations=create,update,disable,destroy\n",
     "projection=existing-bounded-queue-lifecycle-model,pending-before-ioctl,append-only-history\n",
     "resources=backend-specific-private-capability,linearly-retained,exact-ring-control-eop-cwsr-mappings-required\n",
@@ -133,7 +134,7 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "e0e6e2f9342717d1c793a6355c5b7c113e6452c2c8197973d3416633b7d1296b";
+    "33603a8b48d5510be86cb49005e2928e0c0d1a5276b0679c372807416282a3e5";
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

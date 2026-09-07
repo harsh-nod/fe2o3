@@ -1727,22 +1727,15 @@ pub(crate) fn restore_directional_persistent_sdma_request_v1(
         Gfx942SdmaCopyRequestV1,
     ),
 > {
-    let offsets_exact = request.copy_bytes == copy_bytes
-        && match direction {
-            Gfx942PersistentSdmaDirectionV1::HostToDevice => {
-                request.source_offset == host_offset
-                    && request.destination_offset == device_offset
-                    && request.source.kind() == Gfx942SdmaBufferKindV1::HostVisibleCoherent
-                    && request.destination.kind() == Gfx942SdmaBufferKindV1::DeviceLocal
-            }
-            Gfx942PersistentSdmaDirectionV1::DeviceToHost => {
-                request.source_offset == device_offset
-                    && request.destination_offset == host_offset
-                    && request.source.kind() == Gfx942SdmaBufferKindV1::DeviceLocal
-                    && request.destination.kind() == Gfx942SdmaBufferKindV1::HostVisibleCoherent
-            }
-        };
-    if !offsets_exact {
+    if !directional_persistent_sdma_request_matches_v1(
+        &allocation,
+        direction,
+        host_offset,
+        device_offset,
+        copy_bytes,
+        host_binding,
+        &request,
+    ) {
         return Err((allocation, request));
     }
     let Gfx942SdmaCopyRequestV1 {
@@ -1755,29 +1748,9 @@ pub(crate) fn restore_directional_persistent_sdma_request_v1(
         Gfx942PersistentSdmaDirectionV1::HostToDevice => (destination, source),
         Gfx942PersistentSdmaDirectionV1::DeviceToHost => (source, destination),
     };
-    let attachment = allocation.attachment;
-    if !device.belongs_to(attachment.queue)
-        || !host_binding.matches(&host)
-        || device.storage_identity() != attachment.storage_identity
-        || device.pool_generation() != attachment.pool_generation
-        || device.requested_bytes() != attachment.logical_bytes
-        || device.physical_bytes() != attachment.physical_bytes
-    {
-        return Err((
-            allocation,
-            directional_persistent_sdma_request_v1(
-                direction,
-                host,
-                host_offset,
-                device,
-                device_offset,
-                copy_bytes,
-            ),
-        ));
-    }
     let (storage, owner, pool_generation, logical_bytes) = device.into_bridge_parts();
     let Gfx942SdmaBufferStorageV1::Device(lease) = storage else {
-        unreachable!("checked device-local storage")
+        unreachable!("prevalidated device-local storage")
     };
     if let Err((_, lease)) = allocation.owner.restore_local_native_from_sdma(lease) {
         let device = Gfx942SdmaBufferV1::from_bridge_parts(
@@ -1799,6 +1772,47 @@ pub(crate) fn restore_directional_persistent_sdma_request_v1(
         ));
     }
     Ok((allocation, host))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn directional_persistent_sdma_request_matches_v1(
+    allocation: &Gfx942DirectionalQueuePersistentAllocationV1,
+    direction: Gfx942PersistentSdmaDirectionV1,
+    host_offset: u64,
+    device_offset: u64,
+    copy_bytes: u32,
+    host_binding: Gfx942PersistentDirectionalSdmaHostBindingV1,
+    request: &Gfx942SdmaCopyRequestV1,
+) -> bool {
+    let offsets_exact = request.copy_bytes == copy_bytes
+        && match direction {
+            Gfx942PersistentSdmaDirectionV1::HostToDevice => {
+                request.source_offset == host_offset
+                    && request.destination_offset == device_offset
+                    && request.source.kind() == Gfx942SdmaBufferKindV1::HostVisibleCoherent
+                    && request.destination.kind() == Gfx942SdmaBufferKindV1::DeviceLocal
+            }
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost => {
+                request.source_offset == device_offset
+                    && request.destination_offset == host_offset
+                    && request.source.kind() == Gfx942SdmaBufferKindV1::DeviceLocal
+                    && request.destination.kind() == Gfx942SdmaBufferKindV1::HostVisibleCoherent
+            }
+        };
+    if !offsets_exact {
+        return false;
+    }
+    let (device, host) = match direction {
+        Gfx942PersistentSdmaDirectionV1::HostToDevice => (&request.destination, &request.source),
+        Gfx942PersistentSdmaDirectionV1::DeviceToHost => (&request.source, &request.destination),
+    };
+    let attachment = allocation.attachment;
+    device.belongs_to(attachment.queue)
+        && host_binding.matches(host)
+        && device.storage_identity() == attachment.storage_identity
+        && device.pool_generation() == attachment.pool_generation
+        && device.requested_bytes() == attachment.logical_bytes
+        && device.physical_bytes() == attachment.physical_bytes
 }
 
 #[allow(clippy::result_large_err, clippy::too_many_arguments)]

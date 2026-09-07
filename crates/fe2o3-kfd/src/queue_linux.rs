@@ -94,6 +94,56 @@ pub(crate) fn permanently_poison_process_global_kfd_runtime_gate_v1() {
     lock_runtime_gate_v1(&KFD_RUNTIME_GATE).poison();
 }
 
+struct RuntimeGateTerminalCreationArmV1<'a> {
+    gate: &'a Mutex<ProcessGlobalKfdRuntimeGateV1>,
+    finished: bool,
+}
+
+impl RuntimeGateTerminalCreationArmV1<'_> {
+    fn disarm(mut self) {
+        finish_runtime_gate_creation_arm(self.gate, true);
+        self.finished = true;
+    }
+}
+
+impl Drop for RuntimeGateTerminalCreationArmV1<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            finish_runtime_gate_creation_arm(self.gate, false);
+        }
+    }
+}
+
+fn arm_runtime_gate_for_terminal_creation(
+    gate: &Mutex<ProcessGlobalKfdRuntimeGateV1>,
+) -> Result<RuntimeGateTerminalCreationArmV1<'_>, LinuxDoorbellErrorV1> {
+    lock_runtime_gate_v1(gate).arm_creation()?;
+    Ok(RuntimeGateTerminalCreationArmV1 {
+        gate,
+        finished: false,
+    })
+}
+
+fn finish_runtime_gate_creation_arm(gate: &Mutex<ProcessGlobalKfdRuntimeGateV1>, confirmed: bool) {
+    lock_runtime_gate_v1(gate).finish_creation_arm(confirmed);
+}
+
+/// Poisons the process-global gate unless one queue-creation attempt reaches
+/// a fully validated live owner and explicitly disarms the guard.
+pub(crate) struct ProcessGlobalKfdRuntimeCreationArmV1(RuntimeGateTerminalCreationArmV1<'static>);
+
+impl ProcessGlobalKfdRuntimeCreationArmV1 {
+    pub(crate) fn disarm(self) {
+        self.0.disarm();
+    }
+}
+
+pub(crate) fn arm_process_global_kfd_runtime_gate_for_creation_v1()
+-> Result<ProcessGlobalKfdRuntimeCreationArmV1, LinuxDoorbellErrorV1> {
+    arm_runtime_gate_for_terminal_creation(&KFD_RUNTIME_GATE)
+        .map(ProcessGlobalKfdRuntimeCreationArmV1)
+}
+
 fn lock_runtime_gate_v1(
     gate: &Mutex<ProcessGlobalKfdRuntimeGateV1>,
 ) -> MutexGuard<'_, ProcessGlobalKfdRuntimeGateV1> {
@@ -118,6 +168,7 @@ enum ProcessKfdRuntimeStateV1 {
 struct ProcessGlobalKfdRuntimeGateV1 {
     runtime: ProcessKfdRuntimeStateV1,
     teardown_arms: usize,
+    creation_in_flight: bool,
     permanently_poisoned: bool,
 }
 
@@ -126,21 +177,46 @@ impl ProcessGlobalKfdRuntimeGateV1 {
         Self {
             runtime: ProcessKfdRuntimeStateV1::Disabled,
             teardown_arms: 0,
+            creation_in_flight: false,
             permanently_poisoned: false,
         }
     }
 
     fn admit_runtime(&mut self, opener_pid: u32) -> Result<bool, LinuxDoorbellErrorV1> {
-        if self.is_blocked() {
+        if self.permanently_poisoned {
             return Err(LinuxDoorbellErrorV1::Runtime(
                 "process-global gate poisoned",
             ));
+        }
+        if self.teardown_arms != 0 || self.creation_in_flight {
+            return Err(LinuxDoorbellErrorV1::Runtime("process-global gate blocked"));
         }
         self.runtime.join_enabled(opener_pid)
     }
 
     const fn is_blocked(&self) -> bool {
-        self.teardown_arms != 0 || self.permanently_poisoned
+        self.teardown_arms != 0 || self.creation_in_flight || self.permanently_poisoned
+    }
+
+    fn arm_creation(&mut self) -> Result<(), LinuxDoorbellErrorV1> {
+        if self.is_blocked() {
+            return Err(LinuxDoorbellErrorV1::Runtime(
+                "process-global creation gate unavailable",
+            ));
+        }
+        self.creation_in_flight = true;
+        Ok(())
+    }
+
+    fn finish_creation_arm(&mut self, confirmed: bool) {
+        if !self.creation_in_flight {
+            self.poison();
+            return;
+        }
+        self.creation_in_flight = false;
+        if !confirmed {
+            self.poison();
+        }
     }
 
     fn arm_teardown(&mut self) -> bool {
@@ -2099,6 +2175,58 @@ mod tests {
     }
 
     #[test]
+    fn terminal_creation_arm_poisons_on_drop_or_unwind_and_disarms_only_on_success() {
+        let successful_gate = Mutex::new(ProcessGlobalKfdRuntimeGateV1::new());
+        let successful_arm = arm_runtime_gate_for_terminal_creation(&successful_gate).unwrap();
+        {
+            let mut gate = lock_runtime_gate_v1(&successful_gate);
+            assert!(gate.creation_in_flight);
+            assert!(gate.admit_runtime(41).is_err());
+            assert!(gate.arm_creation().is_err());
+        }
+        successful_arm.disarm();
+        {
+            let mut gate = lock_runtime_gate_v1(&successful_gate);
+            assert!(!gate.creation_in_flight);
+            assert!(!gate.permanently_poisoned);
+            assert!(gate.admit_runtime(41).unwrap());
+        }
+
+        let dropped_gate = Mutex::new(ProcessGlobalKfdRuntimeGateV1::new());
+        drop(arm_runtime_gate_for_terminal_creation(&dropped_gate).unwrap());
+        {
+            let gate = lock_runtime_gate_v1(&dropped_gate);
+            assert!(!gate.creation_in_flight);
+            assert!(gate.permanently_poisoned);
+        }
+
+        let panic_gate = Mutex::new(ProcessGlobalKfdRuntimeGateV1::new());
+        let result = std::panic::catch_unwind(|| {
+            let _arm = arm_runtime_gate_for_terminal_creation(&panic_gate).unwrap();
+            panic!("simulated creation panic");
+        });
+        assert!(result.is_err());
+        {
+            let gate = lock_runtime_gate_v1(&panic_gate);
+            assert!(!gate.creation_in_flight);
+            assert!(gate.permanently_poisoned);
+        }
+
+        let poisoned_gate = Mutex::new(ProcessGlobalKfdRuntimeGateV1::new());
+        lock_runtime_gate_v1(&poisoned_gate).poison();
+        assert!(arm_runtime_gate_for_terminal_creation(&poisoned_gate).is_err());
+        assert!(lock_runtime_gate_v1(&poisoned_gate).permanently_poisoned);
+
+        let poisoned_while_armed_gate = Mutex::new(ProcessGlobalKfdRuntimeGateV1::new());
+        let arm = arm_runtime_gate_for_terminal_creation(&poisoned_while_armed_gate).unwrap();
+        lock_runtime_gate_v1(&poisoned_while_armed_gate).poison();
+        arm.disarm();
+        let gate = lock_runtime_gate_v1(&poisoned_while_armed_gate);
+        assert!(!gate.creation_in_flight);
+        assert!(gate.permanently_poisoned);
+    }
+
+    #[test]
     fn teardown_arm_attempt_after_admission_check_linearizes_after_lease() {
         use std::sync::{Arc, Barrier, mpsc};
 
@@ -2137,9 +2265,7 @@ mod tests {
         assert!(blocked_admission.is_blocked());
         assert!(matches!(
             blocked_admission.admit_runtime(pid),
-            Err(LinuxDoorbellErrorV1::Runtime(
-                "process-global gate poisoned"
-            ))
+            Err(LinuxDoorbellErrorV1::Runtime("process-global gate blocked"))
         ));
         drop(blocked_admission);
         release_tx.send(()).unwrap();
