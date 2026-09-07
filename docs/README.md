@@ -98,6 +98,8 @@ replacement for the support matrix.
   evidence](evidence/mi300x-r39-persistent-sdma-wait-policy-2026-09-05.md)
 - [MI300X R40 striped SDMA scaling
   evidence](evidence/mi300x-r40-striped-sdma-scaling-2026-09-07.md)
+- [MI300X R54/R55 striped SDMA qualification
+  evidence](evidence/mi300x-r54-r55-striped-sdma-qualification-2026-09-07.md)
 
 Evidence documents describe exact qualified observations. They do not silently
 upgrade an experimental target or path into a supported public interface.
