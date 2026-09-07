@@ -35,6 +35,7 @@ MAX_QUEUES_PER_PROCESS = 4096
 MAX_ID = 1_048_575
 MAX_ID_SET_CARDINALITY = 65_536
 MAX_TARGET_OUTPUT_BYTES = 1 << 20
+START_GATE_TOKEN = b"fe2o3-r26-start\n"
 EXPECTED_AMD_VENDOR = 0x1002
 EXPECTED_GFX_TARGET_VERSION = 90_402
 MANAGED_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT, signal.SIGTERM)
@@ -430,7 +431,9 @@ def _target_process_identity(
 ) -> LiveTargetAuthentication:
     before = _read_process(proc_root, pid)
     if before is None:
-        return LiveTargetAuthentication(expected_identity, expected_identity is not None)
+        return LiveTargetAuthentication(
+            expected_identity, expected_identity is not None
+        )
     if expected_identity is not None and before != expected_identity:
         raise GuardError(
             f"target process identity changed during authentication: PID {pid}"
@@ -693,9 +696,7 @@ def _confirm_enodev_queue_disappearance(
         now_ns = clock()
         if now_ns >= deadline_ns:
             break
-        sleep_ns = min(
-            QUEUE_ENODEV_DISAPPEAR_POLL_NS, deadline_ns - now_ns
-        )
+        sleep_ns = min(QUEUE_ENODEV_DISAPPEAR_POLL_NS, deadline_ns - now_ns)
         sleeper(sleep_ns / 1_000_000_000)
         next_ns = clock()
         if next_ns <= now_ns:
@@ -833,9 +834,7 @@ def classify_selected_gpu_queues(
                     )
                 queue_bindings.enter_context(queue_binding)
                 try:
-                    raw_gpu_id = _read_text(
-                        queue_path / "gpuid", "KFD queue GPU ID"
-                    )
+                    raw_gpu_id = _read_text(queue_path / "gpuid", "KFD queue GPU ID")
                 except GuardError as error:
                     if (
                         target_identity is not None
@@ -1031,6 +1030,33 @@ def _hash_file(path: pathlib.Path) -> tuple[int, str]:
     return byte_count, digest.hexdigest()
 
 
+def _exec_after_start_gate(start_fd: int, command: Sequence[str]) -> int:
+    """Block before exec until the parent authenticates a clean KFD census."""
+    if start_fd < 3 or not command or not command[0]:
+        return 125
+    received = bytearray()
+    try:
+        while len(received) <= len(START_GATE_TOKEN):
+            chunk = os.read(start_fd, len(START_GATE_TOKEN) + 1 - len(received))
+            if not chunk:
+                break
+            received.extend(chunk)
+    except OSError:
+        return 125
+    finally:
+        try:
+            os.close(start_fd)
+        except OSError:
+            pass
+    if bytes(received) != START_GATE_TOKEN:
+        return 125
+    try:
+        os.execvpe(command[0], list(command), os.environ)
+    except OSError:
+        return 126
+    return 126
+
+
 def monitor_target(
     *,
     selected_gpu_id: int,
@@ -1054,6 +1080,8 @@ def monitor_target(
     process: subprocess.Popen[bytes] | None = None
     process_group_absence_verified = False
     target_output_created = False
+    start_read_fd = -1
+    start_write_fd = -1
     try:
         try:
             os.sched_setaffinity(0, {observer_cpu})
@@ -1084,13 +1112,24 @@ def monitor_target(
             raise GuardError(f"cannot create private target stdout: {error}") from error
         with os.fdopen(output_fd, "wb") as output:
             try:
+                start_read_fd, start_write_fd = os.pipe2(os.O_CLOEXEC)
                 process = subprocess.Popen(
-                    command,
+                    [
+                        sys.executable,
+                        os.path.abspath(__file__),
+                        "_exec-after-start-gate",
+                        str(start_read_fd),
+                        "--",
+                        *command,
+                    ],
                     stdout=output,
                     start_new_session=True,
+                    pass_fds=(start_read_fd,),
                 )
             except OSError as error:
                 raise GuardError(f"cannot start target command: {error}") from error
+            os.close(start_read_fd)
+            start_read_fd = -1
 
             root = _read_process(proc_root, process.pid)
             if root is None:
@@ -1100,6 +1139,38 @@ def monitor_target(
                     "target did not establish its dedicated process group: "
                     f"pid={process.pid} process_group={root.process_group}"
                 )
+            gated_target, gated_foreign = classify_selected_gpu_queues(
+                kfd_proc_root=kfd_proc_root,
+                proc_root=proc_root,
+                selected_gpu_id=selected_gpu_id,
+                root_pid=process.pid,
+                root_start_time=root.start_time,
+                clock=clock,
+                sleeper=sleeper,
+            )
+            cadence.observe(clock())
+            if gated_target:
+                pid, queue = gated_target[0]
+                raise GuardError(
+                    "gated target created a selected-GPU queue before release: "
+                    f"pid={pid} queue={queue}"
+                )
+            if gated_foreign:
+                pid, queue = gated_foreign[0]
+                raise GuardError(
+                    f"foreign selected-GPU queue observed: pid={pid} queue={queue}"
+                )
+            try:
+                written = os.write(start_write_fd, START_GATE_TOKEN)
+            except OSError as error:
+                raise GuardError(
+                    f"cannot release target start gate: {error}"
+                ) from error
+            finally:
+                os.close(start_write_fd)
+                start_write_fd = -1
+            if written != len(START_GATE_TOKEN):
+                raise GuardError("short write while releasing target start gate")
             target_selected_queue_observations = 0
             while True:
                 target, foreign = classify_selected_gpu_queues(
@@ -1179,6 +1250,13 @@ def monitor_target(
         return _sealed_record("monitor", fields, "monitor_sha256")
     except BaseException as original_error:
         cleanup_error: BaseException | None = None
+        for descriptor in (start_read_fd, start_write_fd):
+            if descriptor >= 0:
+                try:
+                    os.close(descriptor)
+                except OSError as error:
+                    if cleanup_error is None:
+                        cleanup_error = error
         try:
             if process is not None and not process_group_absence_verified:
                 _terminate_process_group(process)
@@ -1268,6 +1346,15 @@ def _raise_signal_error(signum: int, _frame: object) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    raw_arguments = list(sys.argv[1:] if argv is None else argv)
+    if raw_arguments[:1] == ["_exec-after-start-gate"]:
+        if len(raw_arguments) < 4 or raw_arguments[2] != "--":
+            return 125
+        try:
+            start_fd = _parse_decimal(raw_arguments[1], "start gate descriptor", MAX_ID)
+        except GuardError:
+            return 125
+        return _exec_after_start_gate(start_fd, raw_arguments[3:])
     try:
         for signum in MANAGED_SIGNALS:
             signal.signal(signum, _raise_signal_error)

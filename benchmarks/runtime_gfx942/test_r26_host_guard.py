@@ -207,9 +207,12 @@ class QueueCensusTests(unittest.TestCase):
             (100, [root, None]),
             (101, [child, root, None]),
         ):
-            with self.subTest(pid=pid), mock.patch.object(
-                GUARD, "_read_process", side_effect=observations
-            ) as read_process:
+            with (
+                self.subTest(pid=pid),
+                mock.patch.object(
+                    GUARD, "_read_process", side_effect=observations
+                ) as read_process,
+            ):
                 authentication = GUARD._target_process_identity(
                     pathlib.Path("/proc"), pid, 100, 1000
                 )
@@ -245,8 +248,9 @@ class QueueCensusTests(unittest.TestCase):
             (100, [root, root]),
             (101, [child, root, child]),
         ):
-            with self.subTest(pid=pid), mock.patch.object(
-                GUARD, "_read_process", side_effect=observations
+            with (
+                self.subTest(pid=pid),
+                mock.patch.object(GUARD, "_read_process", side_effect=observations),
             ):
                 authentication = GUARD._target_process_identity(
                     pathlib.Path("/proc"), pid, 100, 1000
@@ -257,8 +261,9 @@ class QueueCensusTests(unittest.TestCase):
     def test_live_authentication_does_not_authenticate_missing_ancestry(self) -> None:
         child = GUARD.ProcessObservation(100, 100, 1001)
         for observations in ([None], [child, None]):
-            with self.subTest(observations=observations), mock.patch.object(
-                GUARD, "_read_process", side_effect=observations
+            with (
+                self.subTest(observations=observations),
+                mock.patch.object(GUARD, "_read_process", side_effect=observations),
             ):
                 authentication = GUARD._target_process_identity(
                     pathlib.Path("/proc"), 101, 100, 1000
@@ -326,11 +331,11 @@ class QueueCensusTests(unittest.TestCase):
             with (
                 self.subTest(error=error),
                 mock.patch.object(pathlib.Path, "read_text", side_effect=error),
-                self.assertRaisesRegex(GUARD.GuardError, "cannot read process identity"),
+                self.assertRaisesRegex(
+                    GUARD.GuardError, "cannot read process identity"
+                ),
             ):
-                GUARD._target_process_identity(
-                    pathlib.Path("/proc"), 100, 100, 1000
-                )
+                GUARD._target_process_identity(pathlib.Path("/proc"), 100, 100, 1000)
 
     def test_final_departure_confirmation_accepts_esrch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -523,7 +528,9 @@ class QueueCensusTests(unittest.TestCase):
                     root_start_time=1000,
                 )
 
-    def test_foreign_owner_cannot_launder_through_departed_target_replacement(self) -> None:
+    def test_foreign_owner_cannot_launder_through_departed_target_replacement(
+        self,
+    ) -> None:
         foreign_observation = GUARD.ProcessObservation(1, 200, 2000)
         init_observation = GUARD.ProcessObservation(0, 1, 1)
         replacement = GUARD.ProcessObservation(100, 100, 3000)
@@ -566,9 +573,7 @@ class QueueCensusTests(unittest.TestCase):
             gpu_id_path = process_path / "queues" / "0" / "gpuid"
             original = GUARD._read_text
 
-            def replace_process_path(
-                path: pathlib.Path, description: str
-            ) -> str:
+            def replace_process_path(path: pathlib.Path, description: str) -> str:
                 value = original(path, description)
                 if path == gpu_id_path:
                     process_path.rename(old_process_path)
@@ -584,7 +589,9 @@ class QueueCensusTests(unittest.TestCase):
                 mock.patch.object(
                     GUARD, "_read_text", side_effect=replace_process_path
                 ),
-                self.assertRaisesRegex(GUARD.GuardError, "process directory.*identity changed"),
+                self.assertRaisesRegex(
+                    GUARD.GuardError, "process directory.*identity changed"
+                ),
             ):
                 GUARD.classify_selected_gpu_queues(
                     kfd_proc_root=kfd_root,
@@ -661,7 +668,9 @@ class QueueCensusTests(unittest.TestCase):
         self.assertEqual(target, [])
         self.assertEqual(foreign, [(101, 0)])
 
-    def test_live_classifier_tolerates_confirmed_target_queue_disappearance(self) -> None:
+    def test_live_classifier_tolerates_confirmed_target_queue_disappearance(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             proc_root = root / "proc"
@@ -679,9 +688,7 @@ class QueueCensusTests(unittest.TestCase):
                 maximum_entries: int,
                 target_owned: bool,
             ) -> tuple[list[tuple[int, pathlib.Path]], bool]:
-                entries = original(
-                    path, description, maximum_entries, target_owned
-                )
+                entries = original(path, description, maximum_entries, target_owned)
                 if path == queues_path:
                     (queue_path / "gpuid").unlink()
                     queue_path.rmdir()
@@ -714,9 +721,7 @@ class QueueCensusTests(unittest.TestCase):
             gpu_id_path = queue_path / "gpuid"
             original = GUARD._read_text
 
-            def enodev_after_queue_exit(
-                path: pathlib.Path, description: str
-            ) -> str:
+            def enodev_after_queue_exit(path: pathlib.Path, description: str) -> str:
                 if path == gpu_id_path:
                     gpu_id_path.unlink()
                     queue_path.rmdir()
@@ -751,9 +756,7 @@ class QueueCensusTests(unittest.TestCase):
             now_ns = 0
             sleeps: list[int] = []
 
-            def deactivated_gpuid(
-                path: pathlib.Path, _description: str
-            ) -> str:
+            def deactivated_gpuid(path: pathlib.Path, _description: str) -> str:
                 if path == gpu_id_path:
                     raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
                 raise AssertionError(f"unexpected read: {path}")
@@ -766,9 +769,7 @@ class QueueCensusTests(unittest.TestCase):
                 gpu_id_path.unlink()
                 queue_path.rmdir()
 
-            with mock.patch.object(
-                GUARD, "_read_text", side_effect=deactivated_gpuid
-            ):
+            with mock.patch.object(GUARD, "_read_text", side_effect=deactivated_gpuid):
                 target, foreign = GUARD.classify_selected_gpu_queues(
                     kfd_proc_root=kfd_root,
                     proc_root=proc_root,
@@ -798,9 +799,7 @@ class QueueCensusTests(unittest.TestCase):
             now_ns = 0
             departed = False
 
-            def depart_on_enodev(
-                path: pathlib.Path, _description: str
-            ) -> str:
+            def depart_on_enodev(path: pathlib.Path, _description: str) -> str:
                 nonlocal departed
                 if path == gpu_id_path:
                     if not departed:
@@ -815,9 +814,7 @@ class QueueCensusTests(unittest.TestCase):
                 gpu_id_path.unlink()
                 queue_path.rmdir()
 
-            with mock.patch.object(
-                GUARD, "_read_text", side_effect=depart_on_enodev
-            ):
+            with mock.patch.object(GUARD, "_read_text", side_effect=depart_on_enodev):
                 target, foreign = GUARD.classify_selected_gpu_queues(
                     kfd_proc_root=kfd_root,
                     proc_root=proc_root,
@@ -842,9 +839,7 @@ class QueueCensusTests(unittest.TestCase):
             gpu_id_path = queue_path / "gpuid"
             now_ns = 0
 
-            def deactivated_gpuid(
-                path: pathlib.Path, _description: str
-            ) -> str:
+            def deactivated_gpuid(path: pathlib.Path, _description: str) -> str:
                 if path == gpu_id_path:
                     raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
                 raise AssertionError(f"unexpected read: {path}")
@@ -871,9 +866,7 @@ class QueueCensusTests(unittest.TestCase):
                 mock.patch.object(
                     GUARD, "_read_process", side_effect=process_observations
                 ) as read_process,
-                mock.patch.object(
-                    GUARD, "_read_text", side_effect=deactivated_gpuid
-                ),
+                mock.patch.object(GUARD, "_read_text", side_effect=deactivated_gpuid),
                 self.assertRaisesRegex(GUARD.GuardError, "identity changed"),
             ):
                 GUARD.classify_selected_gpu_queues(
@@ -902,9 +895,7 @@ class QueueCensusTests(unittest.TestCase):
             }
             now_ns = 0
 
-            def deactivated_gpuid(
-                path: pathlib.Path, _description: str
-            ) -> str:
+            def deactivated_gpuid(path: pathlib.Path, _description: str) -> str:
                 if path in gpu_id_paths:
                     raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
                 raise AssertionError(f"unexpected read: {path}")
@@ -931,9 +922,7 @@ class QueueCensusTests(unittest.TestCase):
                 mock.patch.object(
                     GUARD, "_read_process", side_effect=process_observations
                 ) as read_process,
-                mock.patch.object(
-                    GUARD, "_read_text", side_effect=deactivated_gpuid
-                ),
+                mock.patch.object(GUARD, "_read_text", side_effect=deactivated_gpuid),
                 self.assertRaisesRegex(GUARD.GuardError, "identity changed"),
             ):
                 GUARD.classify_selected_gpu_queues(
@@ -962,9 +951,7 @@ class QueueCensusTests(unittest.TestCase):
             now_ns = 0
             sleeps: list[int] = []
 
-            def enodev_while_present(
-                path: pathlib.Path, description: str
-            ) -> str:
+            def enodev_while_present(path: pathlib.Path, description: str) -> str:
                 if path == gpu_id_path:
                     raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
                 return original(path, description)
@@ -991,9 +978,7 @@ class QueueCensusTests(unittest.TestCase):
                     sleeper=advance_clock,
                 )
             self.assertTrue(gpu_id_path.parent.is_dir())
-            self.assertEqual(
-                sum(sleeps), GUARD.QUEUE_ENODEV_DISAPPEAR_TIMEOUT_NS
-            )
+            self.assertEqual(sum(sleeps), GUARD.QUEUE_ENODEV_DISAPPEAR_TIMEOUT_NS)
             self.assertLess(
                 GUARD.QUEUE_ENODEV_DISAPPEAR_TIMEOUT_NS,
                 GUARD.MAX_OBSERVATION_GAP_NS,
@@ -1015,17 +1000,13 @@ class QueueCensusTests(unittest.TestCase):
             write_queue(kfd_root, 100, 0, 28851)
             gpu_id_path = kfd_root / "100" / "queues" / "0" / "gpuid"
 
-            def deactivated_gpuid(
-                path: pathlib.Path, _description: str
-            ) -> str:
+            def deactivated_gpuid(path: pathlib.Path, _description: str) -> str:
                 if path == gpu_id_path:
                     raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
                 raise AssertionError(f"unexpected read: {path}")
 
             with (
-                mock.patch.object(
-                    GUARD, "_read_text", side_effect=deactivated_gpuid
-                ),
+                mock.patch.object(GUARD, "_read_text", side_effect=deactivated_gpuid),
                 self.assertRaisesRegex(GUARD.GuardError, "clock did not advance"),
             ):
                 GUARD.classify_selected_gpu_queues(
@@ -1049,9 +1030,7 @@ class QueueCensusTests(unittest.TestCase):
             gpu_id_path = kfd_root / "100" / "queues" / "0" / "gpuid"
             now_ns = 0
 
-            def deactivated_gpuid(
-                path: pathlib.Path, _description: str
-            ) -> str:
+            def deactivated_gpuid(path: pathlib.Path, _description: str) -> str:
                 if path == gpu_id_path:
                     raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
                 raise AssertionError(f"unexpected read: {path}")
@@ -1061,9 +1040,7 @@ class QueueCensusTests(unittest.TestCase):
                 now_ns += GUARD.QUEUE_ENODEV_DISAPPEAR_TIMEOUT_NS + 1
 
             with (
-                mock.patch.object(
-                    GUARD, "_read_text", side_effect=deactivated_gpuid
-                ),
+                mock.patch.object(GUARD, "_read_text", side_effect=deactivated_gpuid),
                 self.assertRaisesRegex(GUARD.GuardError, "remained present"),
             ):
                 GUARD.classify_selected_gpu_queues(
@@ -1088,9 +1065,7 @@ class QueueCensusTests(unittest.TestCase):
             gpu_id_path = queue_path / "gpuid"
             now_ns = 0
 
-            def deactivated_gpuid(
-                path: pathlib.Path, _description: str
-            ) -> str:
+            def deactivated_gpuid(path: pathlib.Path, _description: str) -> str:
                 if path == gpu_id_path:
                     raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
                 raise AssertionError(f"unexpected read: {path}")
@@ -1102,9 +1077,7 @@ class QueueCensusTests(unittest.TestCase):
                 queue_path.rmdir()
 
             with (
-                mock.patch.object(
-                    GUARD, "_read_text", side_effect=deactivated_gpuid
-                ),
+                mock.patch.object(GUARD, "_read_text", side_effect=deactivated_gpuid),
                 self.assertRaisesRegex(GUARD.GuardError, "remained present"),
             ):
                 GUARD.classify_selected_gpu_queues(
@@ -1130,9 +1103,7 @@ class QueueCensusTests(unittest.TestCase):
             original_open = GUARD._open_directory_binding
             original_authenticate = GUARD._target_process_identity
 
-            def capture_binding(
-                path: pathlib.Path, description: str
-            ) -> object:
+            def capture_binding(path: pathlib.Path, description: str) -> object:
                 binding = original_open(path, description)
                 if binding is not None:
                     opened_fds.append(binding.fd)
@@ -1180,17 +1151,13 @@ class QueueCensusTests(unittest.TestCase):
             opened_fds: list[int] = []
             original_open = GUARD._open_directory_binding
 
-            def capture_binding(
-                path: pathlib.Path, description: str
-            ) -> object:
+            def capture_binding(path: pathlib.Path, description: str) -> object:
                 binding = original_open(path, description)
                 if binding is not None:
                     opened_fds.append(binding.fd)
                 return binding
 
-            def deactivated_gpuid(
-                path: pathlib.Path, _description: str
-            ) -> str:
+            def deactivated_gpuid(path: pathlib.Path, _description: str) -> str:
                 if path == gpu_id_path:
                     raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
                 raise AssertionError(f"unexpected read: {path}")
@@ -1199,9 +1166,7 @@ class QueueCensusTests(unittest.TestCase):
                 mock.patch.object(
                     GUARD, "_open_directory_binding", side_effect=capture_binding
                 ),
-                mock.patch.object(
-                    GUARD, "_read_text", side_effect=deactivated_gpuid
-                ),
+                mock.patch.object(GUARD, "_read_text", side_effect=deactivated_gpuid),
                 self.assertRaisesRegex(GUARD.GuardError, "clock did not advance"),
             ):
                 GUARD.classify_selected_gpu_queues(
@@ -1251,9 +1216,7 @@ class QueueCensusTests(unittest.TestCase):
                         if path == gpu_id_path:
                             gpu_id_path.unlink()
                             queue_path.rmdir()
-                            raise_guard_os_error(
-                                errno.ENODEV, "read KFD queue GPU ID"
-                            )
+                            raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
                         return original(path, description)
 
                     with (
@@ -1348,9 +1311,7 @@ class QueueCensusTests(unittest.TestCase):
                         if path == gpu_id_path:
                             gpu_id_path.unlink()
                             queue_path.rmdir()
-                            raise_guard_os_error(
-                                error_number, "read KFD queue GPU ID"
-                            )
+                            raise_guard_os_error(error_number, "read KFD queue GPU ID")
                         return original(path, description)
 
                     with (
@@ -1379,9 +1340,7 @@ class QueueCensusTests(unittest.TestCase):
             old_queue_path = queue_path.with_name("0-old")
             gpu_id_path = queue_path / "gpuid"
 
-            def deactivated_gpuid(
-                path: pathlib.Path, _description: str
-            ) -> str:
+            def deactivated_gpuid(path: pathlib.Path, _description: str) -> str:
                 if path == gpu_id_path:
                     queue_path.rename(old_queue_path)
                     write_queue(kfd_root, 100, 0, 28851)
@@ -1389,10 +1348,10 @@ class QueueCensusTests(unittest.TestCase):
                 raise AssertionError(f"unexpected read: {path}")
 
             with (
-                mock.patch.object(
-                    GUARD, "_read_text", side_effect=deactivated_gpuid
+                mock.patch.object(GUARD, "_read_text", side_effect=deactivated_gpuid),
+                self.assertRaisesRegex(
+                    GUARD.GuardError, "queue directory.*identity changed"
                 ),
-                self.assertRaisesRegex(GUARD.GuardError, "queue directory.*identity changed"),
             ):
                 GUARD.classify_selected_gpu_queues(
                     kfd_proc_root=kfd_root,
@@ -1416,16 +1375,12 @@ class QueueCensusTests(unittest.TestCase):
             original = GUARD._read_text
             reads = 0
 
-            def deactivated_then_readable(
-                path: pathlib.Path, description: str
-            ) -> str:
+            def deactivated_then_readable(path: pathlib.Path, description: str) -> str:
                 nonlocal reads
                 if path == gpu_id_path:
                     reads += 1
                     if reads == 1:
-                        raise_guard_os_error(
-                            errno.ENODEV, "read KFD queue GPU ID"
-                        )
+                        raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
                 return original(path, description)
 
             with (
@@ -1456,9 +1411,7 @@ class QueueCensusTests(unittest.TestCase):
             queue_path = kfd_root / "100" / "queues" / "0"
             gpu_id_path = queue_path / "gpuid"
 
-            def enodev_after_queue_exit(
-                path: pathlib.Path, _description: str
-            ) -> str:
+            def enodev_after_queue_exit(path: pathlib.Path, _description: str) -> str:
                 if path == gpu_id_path:
                     raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
                 raise AssertionError(f"unexpected read: {path}")
@@ -1501,9 +1454,7 @@ class QueueCensusTests(unittest.TestCase):
             queue_path = kfd_root / "100" / "queues" / "0"
             gpu_id_path = queue_path / "gpuid"
 
-            def enodev_after_queue_exit(
-                path: pathlib.Path, _description: str
-            ) -> str:
+            def enodev_after_queue_exit(path: pathlib.Path, _description: str) -> str:
                 if path == gpu_id_path:
                     gpu_id_path.unlink()
                     queue_path.rmdir()
@@ -1526,7 +1477,9 @@ class QueueCensusTests(unittest.TestCase):
                 mock.patch.object(
                     GUARD, "_read_text", side_effect=enodev_after_queue_exit
                 ),
-                self.assertRaisesRegex(GUARD.GuardError, "process directory.*identity changed"),
+                self.assertRaisesRegex(
+                    GUARD.GuardError, "process directory.*identity changed"
+                ),
             ):
                 GUARD.classify_selected_gpu_queues(
                     kfd_proc_root=kfd_root,
@@ -1573,7 +1526,9 @@ class QueueCensusTests(unittest.TestCase):
                             queue_path.parent, "KFD queue directory", 1, False
                         )
 
-    def test_live_classifier_rejects_process_disappearance_before_authentication(self) -> None:
+    def test_live_classifier_rejects_process_disappearance_before_authentication(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             proc_root = root / "proc"
@@ -1713,9 +1668,7 @@ class QueueCensusTests(unittest.TestCase):
                 maximum_entries: int,
                 target_owned: bool,
             ) -> tuple[list[tuple[int, pathlib.Path]], bool]:
-                entries = original(
-                    path, description, maximum_entries, target_owned
-                )
+                entries = original(path, description, maximum_entries, target_owned)
                 if path == queues_path:
                     (queue_path / "gpuid").unlink()
                     queue_path.rmdir()
@@ -1744,12 +1697,18 @@ class QueueCensusTests(unittest.TestCase):
                     kfd_root = root / "kfd-proc"
                     kfd_root.mkdir()
                     write_process(
-                        proc_root, target_pid, ppid=1,
-                        process_group=target_pid, start_time=target_pid * 10,
+                        proc_root,
+                        target_pid,
+                        ppid=1,
+                        process_group=target_pid,
+                        start_time=target_pid * 10,
                     )
                     write_process(
-                        proc_root, foreign_pid, ppid=1,
-                        process_group=foreign_pid, start_time=foreign_pid * 10,
+                        proc_root,
+                        foreign_pid,
+                        ppid=1,
+                        process_group=foreign_pid,
+                        start_time=foreign_pid * 10,
                     )
                     write_queue(kfd_root, target_pid, 1, 28851)
                     write_queue(kfd_root, foreign_pid, 0, 28851)
@@ -1825,9 +1784,7 @@ class QueueCensusTests(unittest.TestCase):
                 maximum_entries: int,
                 target_owned: bool,
             ) -> tuple[list[tuple[int, pathlib.Path]], bool]:
-                entries = original(
-                    path, description, maximum_entries, target_owned
-                )
+                entries = original(path, description, maximum_entries, target_owned)
                 if path == queues_path:
                     (queue_path / "gpuid").unlink()
                     queue_path.rmdir()
@@ -1884,7 +1841,9 @@ class QueueCensusTests(unittest.TestCase):
                     try:
                         raise PermissionError("denied")
                     except PermissionError as error:
-                        raise GUARD.GuardError("cannot read KFD queue GPU ID") from error
+                        raise GUARD.GuardError(
+                            "cannot read KFD queue GPU ID"
+                        ) from error
                 return original(path, description)
 
             with (
@@ -2143,6 +2102,7 @@ except guard.GuardError as error:
         kfd_root.mkdir()
         observer_cpu = min(os.sched_getaffinity(0))
         now_ns = 0
+        census = 0
 
         def deterministic_clock() -> int:
             nonlocal now_ns
@@ -2157,11 +2117,19 @@ except guard.GuardError as error:
                 )
             )
             if target_observed:
+
+                def classify(
+                    **_arguments: object,
+                ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+                    nonlocal census
+                    census += 1
+                    return ([], []) if census == 1 else ([(123, 0)], [])
+
                 stack.enter_context(
                     mock.patch.object(
                         GUARD,
                         "classify_selected_gpu_queues",
-                        return_value=([(123, 0)], []),
+                        side_effect=classify,
                     )
                 )
             return GUARD.monitor_target(
@@ -2205,6 +2173,53 @@ except guard.GuardError as error:
             observed["target_output_sha256"],
             hashlib.sha256(retained_output.encode()).hexdigest(),
         )
+
+    def test_target_exec_waits_for_clean_gated_census(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kfd_root = root / "kfd-proc"
+            kfd_root.mkdir()
+            marker = root / "target-started"
+            observer_cpu = min(os.sched_getaffinity(0))
+            census = 0
+
+            def classify(
+                **_arguments: object,
+            ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+                nonlocal census
+                census += 1
+                if census == 1:
+                    self.assertFalse(marker.exists())
+                    return [], []
+                return [(123, 0)], []
+
+            with (
+                mock.patch.object(GUARD.os, "sched_setaffinity"),
+                mock.patch.object(
+                    GUARD.os, "sched_getaffinity", return_value={observer_cpu}
+                ),
+                mock.patch.object(
+                    GUARD, "classify_selected_gpu_queues", side_effect=classify
+                ),
+            ):
+                GUARD.monitor_target(
+                    selected_gpu_id=28851,
+                    observer_cpu=observer_cpu,
+                    target_output=root / "target.out",
+                    command=[
+                        sys.executable,
+                        "-c",
+                        (
+                            "import pathlib,time; "
+                            f"pathlib.Path({str(marker)!r}).write_text('started'); "
+                            "time.sleep(0.03); print('backend=kfd')"
+                        ),
+                    ],
+                    kfd_proc_root=kfd_root,
+                    proc_root=pathlib.Path("/proc"),
+                )
+            self.assertTrue(marker.exists())
+            self.assertGreaterEqual(census, 2)
 
     def test_observer_is_pinned_before_the_prelaunch_census(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2301,9 +2316,11 @@ except guard.GuardError as error:
                 *,
                 stdout: object,
                 start_new_session: bool,
+                pass_fds: tuple[int, ...],
             ) -> FakeProcess:
                 nonlocal now_ns
                 self.assertTrue(start_new_session)
+                self.assertEqual(len(pass_fds), 1)
                 now_ns += GUARD.MAX_OBSERVATION_GAP_NS + 1
                 stdout.write(b"backend=kfd\n")
                 stdout.flush()
@@ -2364,8 +2381,10 @@ except guard.GuardError as error:
                 *,
                 stdout: object,
                 start_new_session: bool,
+                pass_fds: tuple[int, ...],
             ) -> FakeProcess:
                 self.assertTrue(start_new_session)
+                self.assertEqual(len(pass_fds), 1)
                 stdout.write(b"backend=kfd\n")
                 stdout.flush()
                 return FakeProcess()
@@ -2415,6 +2434,7 @@ except guard.GuardError as error:
             observer_cpu = min(os.sched_getaffinity(0))
             now_ns = 0
             owner_calls = 0
+            classify_calls = 0
             sleeps: list[int] = []
 
             def launch(
@@ -2422,8 +2442,10 @@ except guard.GuardError as error:
                 *,
                 stdout: object,
                 start_new_session: bool,
+                pass_fds: tuple[int, ...],
             ) -> FakeProcess:
                 self.assertTrue(start_new_session)
+                self.assertEqual(len(pass_fds), 1)
                 stdout.write(b"backend=kfd\n")
                 stdout.flush()
                 return FakeProcess()
@@ -2431,9 +2453,10 @@ except guard.GuardError as error:
             def classify(
                 **_arguments: object,
             ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
-                nonlocal now_ns
+                nonlocal classify_calls, now_ns
+                classify_calls += 1
                 now_ns += 100_000
-                return [(100, 0)], []
+                return ([], []) if classify_calls == 1 else ([(100, 0)], [])
 
             def owners(_root: pathlib.Path, _gpu_id: int) -> list[tuple[int, int]]:
                 nonlocal now_ns, owner_calls
@@ -2450,6 +2473,9 @@ except guard.GuardError as error:
 
             with (
                 mock.patch.object(GUARD.subprocess, "Popen", side_effect=launch),
+                mock.patch.object(
+                    GUARD.os, "write", return_value=len(GUARD.START_GATE_TOKEN)
+                ),
                 mock.patch.object(
                     GUARD,
                     "_read_process",
@@ -2477,7 +2503,7 @@ except guard.GuardError as error:
                     clock=lambda: now_ns,
                     sleeper=sleeper,
                 )
-        self.assertEqual(sleeps, [1_900_000, 1_900_000])
+        self.assertEqual(sleeps, [1_800_000, 1_900_000])
 
     def test_terminal_selected_gpu_queue_rejects_success(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2493,6 +2519,12 @@ except guard.GuardError as error:
                 now_ns += GUARD.POLL_INTERVAL_NS
                 return now_ns
 
+            original_write = GUARD.os.write
+
+            def release_target(descriptor: int, payload: bytes) -> int:
+                setattr(clock, "released", True)
+                return original_write(descriptor, payload)
+
             with (
                 mock.patch.object(GUARD.os, "sched_setaffinity"),
                 mock.patch.object(
@@ -2501,7 +2533,18 @@ except guard.GuardError as error:
                 mock.patch.object(
                     GUARD,
                     "classify_selected_gpu_queues",
-                    return_value=([(123, 0)], []),
+                    side_effect=(
+                        lambda **_arguments: (
+                            ([], [])
+                            if not hasattr(clock, "released")
+                            else ([(123, 0)], [])
+                        )
+                    ),
+                ),
+                mock.patch.object(
+                    GUARD.os,
+                    "write",
+                    side_effect=release_target,
                 ),
                 mock.patch.object(
                     GUARD,
@@ -2549,8 +2592,10 @@ except guard.GuardError as error:
                 *,
                 stdout: object,
                 start_new_session: bool,
+                pass_fds: tuple[int, ...],
             ) -> FakeProcess:
                 self.assertTrue(start_new_session)
+                self.assertEqual(len(pass_fds), 1)
                 stdout.write(b"backend=kfd\n")
                 stdout.flush()
                 return FakeProcess()
@@ -2560,10 +2605,15 @@ except guard.GuardError as error:
             ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
                 nonlocal now_ns
                 now_ns += GUARD.POLL_INTERVAL_NS
-                return [(100, 0)], []
+                return (
+                    ([], []) if now_ns == GUARD.POLL_INTERVAL_NS else ([(100, 0)], [])
+                )
 
             with (
                 mock.patch.object(GUARD.subprocess, "Popen", side_effect=launch),
+                mock.patch.object(
+                    GUARD.os, "write", return_value=len(GUARD.START_GATE_TOKEN)
+                ),
                 mock.patch.object(
                     GUARD,
                     "_read_process",
@@ -2617,8 +2667,10 @@ except guard.GuardError as error:
                 *,
                 stdout: object,
                 start_new_session: bool,
+                pass_fds: tuple[int, ...],
             ) -> FakeProcess:
                 self.assertTrue(start_new_session)
+                self.assertEqual(len(pass_fds), 1)
                 stdout.write(b"backend=kfd\n")
                 stdout.flush()
                 return FakeProcess()
@@ -2628,7 +2680,9 @@ except guard.GuardError as error:
             ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
                 nonlocal now_ns
                 now_ns += GUARD.POLL_INTERVAL_NS
-                return [(100, 0)], []
+                return (
+                    ([], []) if now_ns == GUARD.POLL_INTERVAL_NS else ([(100, 0)], [])
+                )
 
             def owners(_root: pathlib.Path, _gpu_id: int) -> list[tuple[int, int]]:
                 nonlocal now_ns, owner_calls
@@ -2639,6 +2693,9 @@ except guard.GuardError as error:
 
             with (
                 mock.patch.object(GUARD.subprocess, "Popen", side_effect=launch),
+                mock.patch.object(
+                    GUARD.os, "write", return_value=len(GUARD.START_GATE_TOKEN)
+                ),
                 mock.patch.object(
                     GUARD,
                     "_read_process",
@@ -2672,9 +2729,10 @@ except guard.GuardError as error:
 
     def test_enodev_unlink_delays_compose_in_monitor_cadence(self) -> None:
         for deactivated_count, accepted in ((1, True), (6, False)):
-            with self.subTest(
-                deactivated_count=deactivated_count, accepted=accepted
-            ), tempfile.TemporaryDirectory() as temporary:
+            with (
+                self.subTest(deactivated_count=deactivated_count, accepted=accepted),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
                 root = pathlib.Path(temporary)
                 proc_root = root / "proc"
                 kfd_root = root / "kfd-proc"
@@ -2701,8 +2759,12 @@ except guard.GuardError as error:
                     *,
                     stdout: object,
                     start_new_session: bool,
+                    pass_fds: tuple[int, ...],
                 ) -> FakeProcess:
+                    nonlocal now_ns
                     self.assertTrue(start_new_session)
+                    self.assertEqual(len(pass_fds), 1)
+                    now_ns += 1
                     write_process(
                         proc_root,
                         100,
@@ -2710,27 +2772,22 @@ except guard.GuardError as error:
                         process_group=100,
                         start_time=1000,
                     )
-                    write_queue(kfd_root, 100, 0, 28851)
-                    for queue_id in range(1, deactivated_count + 1):
-                        write_queue(kfd_root, 100, queue_id, 28851)
-                        deactivated_gpuid_paths.add(
-                            kfd_root
-                            / "100"
-                            / "queues"
-                            / str(queue_id)
-                            / "gpuid"
-                        )
                     stdout.write(b"backend=kfd\n")
                     stdout.flush()
                     return FakeProcess()
 
-                def deactivated_gpuid(
-                    path: pathlib.Path, description: str
-                ) -> str:
-                    if path in deactivated_gpuid_paths:
-                        raise_guard_os_error(
-                            errno.ENODEV, "read KFD queue GPU ID"
+                def release_target(descriptor: int, payload: bytes) -> int:
+                    write_queue(kfd_root, 100, 0, 28851)
+                    for queue_id in range(1, deactivated_count + 1):
+                        write_queue(kfd_root, 100, queue_id, 28851)
+                        deactivated_gpuid_paths.add(
+                            kfd_root / "100" / "queues" / str(queue_id) / "gpuid"
                         )
+                    return len(payload)
+
+                def deactivated_gpuid(path: pathlib.Path, description: str) -> str:
+                    if path in deactivated_gpuid_paths:
+                        raise_guard_os_error(errno.ENODEV, "read KFD queue GPU ID")
                     return original_read_text(path, description)
 
                 def unlink_one_deactivated_queue(_seconds: float) -> None:
@@ -2747,6 +2804,7 @@ except guard.GuardError as error:
 
                 with (
                     mock.patch.object(GUARD.subprocess, "Popen", side_effect=launch),
+                    mock.patch.object(GUARD.os, "write", side_effect=release_target),
                     mock.patch.object(
                         GUARD, "_read_text", side_effect=deactivated_gpuid
                     ),
@@ -2773,14 +2831,10 @@ except guard.GuardError as error:
                             sleeper=unlink_one_deactivated_queue,
                         )
                         _, observed = fields(record)
-                        self.assertEqual(
-                            observed["observed_maximum_gap_us"], "1900"
-                        )
+                        self.assertEqual(observed["observed_maximum_gap_us"], "1900")
                         cleanup.assert_not_called()
                     else:
-                        with self.assertRaisesRegex(
-                            GUARD.GuardError, "gap exceeded"
-                        ):
+                        with self.assertRaisesRegex(GUARD.GuardError, "gap exceeded"):
                             GUARD.monitor_target(
                                 selected_gpu_id=28851,
                                 observer_cpu=observer_cpu,
@@ -2834,18 +2888,23 @@ except guard.GuardError as error:
                 *,
                 stdout: object,
                 start_new_session: bool,
+                pass_fds: tuple[int, ...],
             ) -> FakeProcess:
                 self.assertTrue(start_new_session)
+                self.assertEqual(len(pass_fds), 1)
                 write_process(
                     proc_root, 100, ppid=1, process_group=100, start_time=1000
                 )
                 write_process(
                     proc_root, 101, ppid=100, process_group=100, start_time=1001
                 )
-                write_queue(kfd_root, 101, 0, 28851)
                 stdout.write(b"backend=kfd\n")
                 stdout.flush()
                 return process
+
+            def release_target(descriptor: int, payload: bytes) -> int:
+                write_queue(kfd_root, 101, 0, 28851)
+                return len(payload)
 
             def clock() -> int:
                 nonlocal now_ns
@@ -2855,6 +2914,7 @@ except guard.GuardError as error:
             observer_cpu = min(os.sched_getaffinity(0))
             with (
                 mock.patch.object(GUARD.subprocess, "Popen", side_effect=launch),
+                mock.patch.object(GUARD.os, "write", side_effect=release_target),
                 mock.patch.object(GUARD.os, "sched_setaffinity"),
                 mock.patch.object(
                     GUARD.os, "sched_getaffinity", return_value={observer_cpu}
@@ -2904,8 +2964,10 @@ except guard.GuardError as error:
                 *,
                 stdout: object,
                 start_new_session: bool,
+                pass_fds: tuple[int, ...],
             ) -> FakeProcess:
                 self.assertTrue(start_new_session)
+                self.assertEqual(len(pass_fds), 1)
                 stdout.write(b"backend=kfd\n")
                 stdout.flush()
                 return process
@@ -2917,10 +2979,10 @@ except guard.GuardError as error:
                 census += 1
                 now_ns += (
                     GUARD.POLL_INTERVAL_NS
-                    if census == 1
+                    if census <= 2
                     else GUARD.MAX_OBSERVATION_GAP_NS + 1
                 )
-                return [(100, 0)], []
+                return ([], []) if census == 1 else ([(100, 0)], [])
 
             def sleep_until_deadline(seconds: float) -> None:
                 nonlocal now_ns
@@ -2942,6 +3004,9 @@ except guard.GuardError as error:
                     GUARD.os, "sched_getaffinity", return_value={observer_cpu}
                 ),
                 mock.patch.object(GUARD, "_terminate_process_group"),
+                mock.patch.object(
+                    GUARD.os, "write", return_value=len(GUARD.START_GATE_TOKEN)
+                ),
                 self.assertRaisesRegex(GUARD.GuardError, "gap exceeded"),
             ):
                 GUARD.monitor_target(
@@ -2954,7 +3019,7 @@ except guard.GuardError as error:
                     clock=lambda: now_ns,
                     sleeper=sleep_until_deadline,
                 )
-            self.assertEqual(census, 2)
+            self.assertEqual(census, 3)
             self.assertFalse(output.exists())
 
     def test_foreign_queue_fails_without_releasable_target_output(self) -> None:
