@@ -2513,6 +2513,52 @@ carrier before such an unwind could be modeled as recoverable.
 | Boundary countermodels | **Rejected** | Twenty-five pinned mutations cover all ticket coordinates, tail substitution, singleton, missing/duplicate request, unstable FIFO, native and aggregate overflow, false striped-2 relabel, publication counts, recoverable native effect, first-native indeterminate shard custody, partial commit and coordinates, fixed publication order, closing-prefix loss, timeout phase/custody, and release-roster identity. |
 | Rust-to-Verus refinement, native queue implementation, packet/atomic truth, KFD/HSA/HIP behavior, hardware concurrency, progress, parity, or performance | **Not established** | Explicitly outside the standalone R56 model and proof boundary. |
 
+## R57 three-binding persistent compute transaction
+
+`r57_three_binding_compute_v1.rs` verifies exactly 34 obligations over an
+independent finite abstraction of one bounded out-of-place elementwise compute
+transaction. The runner pins that proof and 22 standalone expected-negative
+countermodels. The executable no-std model has 26 focused tests. Neither model
+is a Rust-to-Verus or production-Rust refinement.
+
+The hostile executable boundary accepts a vector only to reject every binding
+count other than three. Successful preparation changes shape to one fixed
+three-owner array. Its ordered bindings are initialized read-only A,
+initialized read-only B, and write-only C. C may open either initialized or
+uninitialized. The three owner occurrences, allocation identities, and storage
+identities are pairwise distinct. Every allocation is persistent HBM on the
+same device and VM, and every binding covers its complete allocation. The
+bounded elementwise profile additionally requires equal A/B/C byte lengths.
+
+The abstract publication is authorized by one nonzero fixed-binder identity
+and consists of exactly one `WaitForPrior` packet at order zero followed by one
+dispatch packet at order one. Those two packets account for the exact frontier
+advance of two. Opening-currentness loss and a typed rejection before any
+native effect restore the exact three owners with publication prefix zero.
+There is no partial restoration state. Ambiguity after the wait or dispatch
+quarantines the exact fixed owner roster at prefix one or two respectively,
+and quarantine is absorbing.
+
+An exact completion authenticates queue, queue generation, dispatch,
+transaction generation, completion signal, and the two-packet frontier.
+Closing-currentness loss after publication quarantines all three owners at
+prefix two and is never modeled as restoration. Exact completion leaves A and
+B entirely unchanged, initializes C, and advances only C's content generation
+by one. Every owner occurrence, allocation, storage, allocation generation,
+device, VM, extent, and memory-kind identity remains unchanged. A substituted
+completion identity quarantines all three owners.
+
+## R57 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Binding profile | **Proved abstractly and checked** | Exactly three distinct persistent-HBM owner/allocation/storage identities; ordered initialized Read A/B and Write C; same device/VM; equal complete extents. |
+| Packet order and frontier | **Proved abstractly and checked** | One fixed-binder transaction with exactly `WaitForPrior` then dispatch and frontier `before + 2`. |
+| Atomic failure custody | **Proved abstractly and checked** | Prepublication rejection restores exactly all three owners at prefix zero; postpublication ambiguity and closing-currentness loss quarantine all three at their exact prefix; quarantine is absorbing. |
+| Completion effects | **Proved abstractly and checked** | Exact six-coordinate completion preserves A/B content and every storage identity while initializing C and advancing only C content generation once. |
+| Boundary countermodels | **Rejected** | Twenty-two pinned mutations cover cardinality, partial restore/publish, owner/storage alias, uninitialized input, output-init overconstraint, unequal/partial extents, device/binder substitution, wait omission, packet reorder, frontier error, prepublication effect, ambiguity restoration, quarantine release, completion identity substitution, input mutation, and output-generation skip. |
+| Production refinement, native execution, KFD/HSA/HIP behavior, hardware progress, parity, or performance | **Not established** | Explicitly outside the standalone R57 model and proof boundary. |
+
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
 implements that relation, nor that the adapter observed truthful kernel data.
