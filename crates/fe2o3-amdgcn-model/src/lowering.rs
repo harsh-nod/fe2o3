@@ -2803,15 +2803,45 @@ fn collect_intrinsic_declarations<'a>(
         let body = lowerer.body("function body is missing during intrinsic declaration scan")?;
         for operation in body.blocks.iter().flat_map(|block| &block.operations) {
             if let OperationKind::Intrinsic(intrinsic) = &operation.kind
-                && let IntrinsicKind::InvocationIndex {
-                    kind: IndexKind::WorkgroupCount,
-                    ..
-                } = intrinsic.kind
+                && (matches!(
+                    intrinsic.kind,
+                    IntrinsicKind::InvocationIndex {
+                        kind: IndexKind::WorkgroupCount,
+                        ..
+                    }
+                ) || (lowerer.kernel.is_none()
+                    && matches!(
+                        intrinsic.kind,
+                        IntrinsicKind::InvocationIndex {
+                            kind: IndexKind::WorkgroupSize,
+                            ..
+                        }
+                    )))
             {
                 insert_intrinsic(
                     &mut declarations,
                     AmdgcnIntrinsic::DispatchPtr,
                     "ptr addrspace(4)",
+                    "",
+                    IntrinsicAttribute::ReadNone,
+                );
+            }
+            if lowerer.kernel.is_none()
+                && let OperationKind::Intrinsic(intrinsic) = &operation.kind
+                && let IntrinsicKind::InvocationIndex {
+                    kind: IndexKind::Workgroup,
+                    axis,
+                } = intrinsic.kind
+            {
+                let dim = match axis {
+                    Axis::X => Dim::X,
+                    Axis::Y => Dim::Y,
+                    Axis::Z => Dim::Z,
+                };
+                insert_intrinsic(
+                    &mut declarations,
+                    AmdgcnIntrinsic::WorkGroupId(dim),
+                    "i32",
                     "",
                     IntrinsicAttribute::ReadNone,
                 );
@@ -4444,7 +4474,9 @@ impl<'a> FunctionLowerer<'a> {
                         && matches!(
                             intrinsic.kind,
                             IntrinsicKind::InvocationIndex {
-                                kind: IndexKind::WorkgroupCount,
+                                kind: IndexKind::Workgroup
+                                    | IndexKind::WorkgroupSize
+                                    | IndexKind::WorkgroupCount,
                                 ..
                             }
                         )) => {}
@@ -6166,12 +6198,17 @@ impl<'a> FunctionLowerer<'a> {
                     }
                     IntrinsicKind::InvocationIndex {
                         kind: IndexKind::Workgroup,
-                        axis: Axis::X,
+                        axis,
                     } => {
+                        let dim = match axis {
+                            Axis::X => Dim::X,
+                            Axis::Y => Dim::Y,
+                            Axis::Z => Dim::Z,
+                        };
                         writeln!(
                             output,
                             "  {result}.group.i32 = call i32 @{}()",
-                            AmdgcnIntrinsic::WorkGroupId(Dim::X).llvm_name()
+                            AmdgcnIntrinsic::WorkGroupId(dim).llvm_name()
                         )
                         .unwrap();
                         writeln!(
@@ -6183,13 +6220,43 @@ impl<'a> FunctionLowerer<'a> {
                     }
                     IntrinsicKind::InvocationIndex {
                         kind: IndexKind::WorkgroupSize,
-                        axis: Axis::X,
+                        axis,
                     } => {
-                        let extent = self
-                            .workgroup_size
-                            .expect("validated workgroup-size intrinsic")
-                            .x;
-                        writeln!(output, "  {result} = add i64 {extent}, 0").unwrap();
+                        if let Some(size) = self.workgroup_size {
+                            let extent = match axis {
+                                Axis::X => size.x,
+                                Axis::Y => size.y,
+                                Axis::Z => size.z,
+                            };
+                            writeln!(output, "  {result} = add i64 {extent}, 0").unwrap();
+                        } else {
+                            let workgroup_offset = match axis {
+                                Axis::X => 4,
+                                Axis::Y => 6,
+                                Axis::Z => 8,
+                            };
+                            writeln!(
+                                output,
+                                "  {result}.dispatch = call ptr addrspace(4) @{}()",
+                                AmdgcnIntrinsic::DispatchPtr.llvm_name()
+                            )
+                            .unwrap();
+                            writeln!(
+                                output,
+                                "  {result}.workgroup.ptr = getelementptr inbounds i8, ptr addrspace(4) {result}.dispatch, i64 {workgroup_offset}"
+                            )
+                            .unwrap();
+                            writeln!(
+                                output,
+                                "  {result}.workgroup.i16 = load i16, ptr addrspace(4) {result}.workgroup.ptr, align 2"
+                            )
+                            .unwrap();
+                            writeln!(
+                                output,
+                                "  {result} = zext i16 {result}.workgroup.i16 to i64"
+                            )
+                            .unwrap();
+                        }
                     }
                     IntrinsicKind::InvocationIndex {
                         kind: IndexKind::WorkgroupCount,
