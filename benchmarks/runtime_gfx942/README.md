@@ -259,6 +259,19 @@ manifest, and a separately SHA-256-sealed archive. Temporary and verification
 trees use unique `fe2o3-r40-striped-*` paths and are removed by traps; the
 runner never resets the GPU or signals foreign processes.
 
+An unrelated KFD process can disappear while the monitor is binding a census
+entry on a shared host, and host scheduling can delay an observation beyond the
+fixed 10 ms maximum. Neither census is accepted. The guard returns a distinct
+typed status only after it terminates the target process group, reaps the direct
+child leader, proves that the process group is absent, and deletes its buffered
+output. The runner then requires the selected GPU to be idle before relaunching
+the whole phase, up to eight times. Every discarded census is retained as a
+canonical record, and its count and transcript digest are bound into the
+subsequent admitted phase marker. Cleanup uncertainty and all other guard
+failures still abort immediately. The observation bound is not relaxed: a
+process never continues across a gap, and a missed census is not converted into
+clean evidence.
+
 The pre-registered bounded comparison uses the median of the three paired
 slotwise KFD/reference ratios. It reports parity only when median latency is at
 most 1.10, median bandwidth is at least 0.90, and every slot latency ratio is

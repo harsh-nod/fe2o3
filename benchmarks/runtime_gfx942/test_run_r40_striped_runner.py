@@ -82,7 +82,9 @@ class R40StripedRunnerContractTests(unittest.TestCase):
             self.assertEqual(source.count("continuation_cursor("), 2)
             self.assertNotIn("submission_ordinal", source)
 
-    def test_native_comparators_reuse_and_poison_one_host_buffer_per_request(self) -> None:
+    def test_native_comparators_reuse_and_poison_one_host_buffer_per_request(
+        self,
+    ) -> None:
         for source_name in ("striped_copy_hip.cpp", "striped_copy_hsa.cpp"):
             source = RUNNER.with_name(source_name).read_text(encoding="utf-8")
             self.assertIn("std::vector<std::uint8_t *> host(config.depth)", source)
@@ -106,6 +108,45 @@ class R40StripedRunnerContractTests(unittest.TestCase):
         self.assertIn(
             "R40 target must emit exactly one LF-terminated text row", self.source
         )
+
+    def test_retryable_census_discards_and_relaunches_the_whole_phase(self) -> None:
+        guard = RUNNER.with_name("r26-host-guard.py").read_text(encoding="utf-8")
+        checker = RUNNER.with_name("check-r40-striped.py").read_text(encoding="utf-8")
+        self.assertIn("readonly max_guard_census_retries=8", self.source)
+        self.assertIn("if ((monitor_status != 75)); then", self.source)
+        self.assertIn(
+            "retryable-census schema=fe2o3.r55-kfd-census-retry.v1", self.source
+        )
+        self.assertIn("RETRYABLE_CENSUS_EXIT = 75", guard)
+        self.assertIn(
+            'RETRYABLE_CENSUS_SCHEMA = "fe2o3.r55-kfd-census-retry.v1"', guard
+        )
+        self.assertIn(
+            'RETRYABLE_CENSUS_SCHEMA = "fe2o3.r55-kfd-census-retry.v1"', checker
+        )
+        self.assertIn("reason=observation-gap-exceeded", self.source)
+        self.assertIn('"observation-gap-exceeded"', checker)
+        self.assertIn("discard-target-process-and-relaunch-phase-v1", self.source)
+        self.assertIn("discarded-census slot=%s sequence=%s", self.source)
+        self.assertIn("discarded_guard_census_sha256=%s", self.source)
+        self.assertIn(
+            '[[ ! -e "${target_output}" && ! -s "${monitor_output}" ]]',
+            self.source,
+        )
+        self.assertIn(
+            "retryable census must be one bounded LF-terminated record", self.source
+        )
+        self.assertIn('[[ "$(require_gpu_load_at_most 0)" == 0 ]]', self.source)
+
+    def test_retryable_census_never_reuses_the_rejected_target_process(self) -> None:
+        loop = self.source.index("while true; do", self.source.index("run_phase()"))
+        launch = self.source.index('"${host_guard}" monitor', loop)
+        retry = self.source.index("monitor_status != 75", launch)
+        continuation = self.source.index("done", retry)
+        self.assertLess(launch, retry)
+        self.assertLess(retry, continuation)
+        self.assertIn("start_topology=", self.source[loop:launch])
+        self.assertIn("start_telemetry=", self.source[loop:launch])
 
     def test_environment_and_topology_are_fail_closed(self) -> None:
         self.assertIn("/usr/bin/env -i", self.source)

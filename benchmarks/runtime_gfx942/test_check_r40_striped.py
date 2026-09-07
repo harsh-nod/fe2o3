@@ -180,6 +180,8 @@ def valid_context(slot: int) -> dict[str, str]:
             "interference_monitor": "selected-kfd-gpu-process-tree-census-v2",
             "monitor_interval_us": "2000",
             "monitor_maximum_gap_us": "10000",
+            "max_guard_census_retries": "8",
+            "guard_census_retry_policy": "discard-target-process-and-relaunch-phase-v1",
             "counterbalance_design": "cyclic-latin-square-3-backends-workload-forward-reverse-rotate5-v1",
             "counterbalance_slots": "3",
             "counterbalance_slot": str(slot),
@@ -263,9 +265,12 @@ def valid_slot_lines(slot: int) -> list[str]:
     for workload_id in CHECKER.WORKLOAD_ORDERS[slot]:
         for backend in CHECKER.BACKEND_ORDERS[slot]:
             phase_id = f"{workload_id}.{backend}"
+            empty_census_sha256 = hashlib.sha256(b"").hexdigest()
             lines.append(
                 f"phase slot={slot} sequence={sequence} workload_id={workload_id} "
-                f"backend={backend} phase_id={phase_id}"
+                f"backend={backend} phase_id={phase_id} "
+                "discarded_guard_censuses=0 "
+                f"discarded_guard_census_sha256={empty_census_sha256}"
             )
             topologies = []
             for edge in ("start", "end"):
@@ -352,6 +357,7 @@ class R40StripedCheckerTests(unittest.TestCase):
         with mock.patch.object(CHECKER, "load_r26_checker", return_value=fake_r26()):
             output = CHECKER.check_set(valid_slot_lines(slot) for slot in range(3))
         self.assertIn("phases=90", output[-1])
+        self.assertIn("discarded_guard_censuses=0", output[-1])
         self.assertIn("set_validation_status=pass", output[-1])
 
     def test_monitor_target_digest_mutation_is_rejected(self) -> None:
@@ -363,6 +369,53 @@ class R40StripedCheckerTests(unittest.TestCase):
             "target_output_sha256=", "target_output_sha256=0", 1
         )
         with self.assertRaisesRegex(CHECKER.CheckError, "monitor seal mismatch"):
+            CHECKER.validate_slot(lines, fake_r26())
+
+    def test_binds_a_discarded_census_transcript_to_the_admitted_phase(self) -> None:
+        lines = valid_slot_lines(0)
+        phase_index = next(
+            index for index, line in enumerate(lines) if line.startswith("phase ")
+        )
+        discarded = (
+            "discarded-census slot=0 sequence=0 "
+            "workload_id=bytes4096-q2-combined backend=kfd attempt=1 "
+            "schema=fe2o3.r55-kfd-census-retry.v1 "
+            "reason=observation-gap-exceeded pid=12345\n"
+        )
+        digest = hashlib.sha256(discarded.encode()).hexdigest()
+        lines.insert(phase_index, discarded)
+        lines[phase_index + 1] = lines[phase_index + 1].replace(
+            "discarded_guard_censuses=0 "
+            f"discarded_guard_census_sha256={hashlib.sha256(b'').hexdigest()}",
+            f"discarded_guard_censuses=1 discarded_guard_census_sha256={digest}",
+        )
+        CHECKER.validate_slot(lines, fake_r26())
+        with mock.patch.object(CHECKER, "load_r26_checker", return_value=fake_r26()):
+            output = CHECKER.check_set(
+                [lines, valid_slot_lines(1), valid_slot_lines(2)]
+            )
+        self.assertIn("discarded_guard_censuses=1", output[-1])
+
+        lines[phase_index] = discarded.replace("pid=12345", "pid=12346")
+        with self.assertRaisesRegex(CHECKER.CheckError, "phase marker mismatch"):
+            CHECKER.validate_slot(lines, fake_r26())
+
+    def test_rejects_more_than_eight_discarded_censuses(self) -> None:
+        lines = valid_slot_lines(0)
+        phase_index = next(
+            index for index, line in enumerate(lines) if line.startswith("phase ")
+        )
+        discarded = [
+            (
+                "discarded-census slot=0 sequence=0 "
+                "workload_id=bytes4096-q2-combined backend=kfd "
+                f"attempt={attempt} schema=fe2o3.r55-kfd-census-retry.v1 "
+                f"reason=process-identity-unreadable pid={12000 + attempt}\n"
+            )
+            for attempt in range(1, 10)
+        ]
+        lines[phase_index:phase_index] = discarded
+        with self.assertRaisesRegex(CHECKER.CheckError, "too many discarded"):
             CHECKER.validate_slot(lines, fake_r26())
 
     def test_kfd_nonzero_post_busy_is_rejected(self) -> None:

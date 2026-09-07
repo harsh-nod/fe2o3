@@ -16,8 +16,18 @@ from typing import Iterable
 
 
 ROW_SCHEMA = "fe2o3.async-copy-striped-benchmark.v3"
-EVIDENCE_SCHEMA = "fe2o3.r40-striped-evidence.v1"
-MANIFEST_SCHEMA = "fe2o3.r40-striped-evidence-manifest.v1"
+EVIDENCE_SCHEMA = "fe2o3.r40-striped-evidence.v2"
+MANIFEST_SCHEMA = "fe2o3.r40-striped-evidence-manifest.v2"
+RETRYABLE_CENSUS_SCHEMA = "fe2o3.r55-kfd-census-retry.v1"
+MAX_GUARD_CENSUS_RETRIES = 8
+GUARD_CENSUS_REASONS = frozenset(
+    {
+        "process-identity-unreadable",
+        "process-identity-invalid",
+        "process-directory-disappeared-before-authentication",
+        "observation-gap-exceeded",
+    }
+)
 BACKEND_ORDERS = {
     0: ("kfd", "hsa", "hip"),
     1: ("hsa", "hip", "kfd"),
@@ -147,6 +157,8 @@ CONTEXT_FIELDS = frozenset(
         "interference_monitor",
         "monitor_interval_us",
         "monitor_maximum_gap_us",
+        "max_guard_census_retries",
+        "guard_census_retry_policy",
         "topology_sha256",
         "counterbalance_design",
         "counterbalance_slots",
@@ -179,7 +191,15 @@ def parse_fields(line: str, line_number: int) -> dict[str, str]:
     first_field = (
         1
         if tokens
-        and tokens[0] in {"context", "phase", "topology", "telemetry", "monitor"}
+        and tokens[0]
+        in {
+            "context",
+            "discarded-census",
+            "phase",
+            "topology",
+            "telemetry",
+            "monitor",
+        }
         else 0
     )
     if any("=" not in token for token in tokens[first_field:]):
@@ -350,9 +370,7 @@ def validate_row(row: dict[str, str]) -> dict[str, dict[str, list[int]]]:
         expected_kfd = {
             "directional_queue_count": "0" if kind == "standalone" else "2",
             "striped_queue_count": str(queue_count),
-            "directional_smoke": (
-                "not-applicable" if kind == "standalone" else "pass"
-            ),
+            "directional_smoke": ("not-applicable" if kind == "standalone" else "pass"),
             "aggregate_poll_smoke": "pass",
             "blocking_wait": "exact-striped-tail-v1",
             "destroy": "pass",
@@ -525,6 +543,7 @@ def validate_slot(
     str,
     dict[str, str],
     str,
+    int,
 ]:
     materialized = list(lines)
     if not materialized or any(
@@ -558,6 +577,8 @@ def validate_slot(
         "interference_monitor": "selected-kfd-gpu-process-tree-census-v2",
         "monitor_interval_us": "2000",
         "monitor_maximum_gap_us": "10000",
+        "max_guard_census_retries": "8",
+        "guard_census_retry_policy": "discard-target-process-and-relaunch-phase-v1",
         "counterbalance_design": "cyclic-latin-square-3-backends-workload-forward-reverse-rotate5-v1",
         "counterbalance_slots": "3",
         "claim_scope": "single-mi300x-gpu2-striped-copy-only",
@@ -605,6 +626,7 @@ def validate_slot(
 
     rows: dict[tuple[int, str, str], dict[str, str]] = {}
     topology_identity: str | None = None
+    discarded_census_count = 0
     phase_sequence = [
         (workload_id, backend)
         for workload_id in WORKLOAD_ORDERS[slot]
@@ -612,17 +634,70 @@ def validate_slot(
     ]
     for sequence, (workload_id, backend) in enumerate(phase_sequence):
         phase_id = f"{workload_id}.{backend}"
+        discarded_censuses: list[str] = []
+        while index < len(stripped) and stripped[index].startswith("discarded-census "):
+            line = stripped[index]
+            record = parse_fields(line, index + 1)
+            expected_record = {
+                "slot": str(slot),
+                "sequence": str(sequence),
+                "workload_id": workload_id,
+                "backend": backend,
+                "attempt": str(len(discarded_censuses) + 1),
+                "schema": RETRYABLE_CENSUS_SCHEMA,
+            }
+            for field, expected in expected_record.items():
+                if record.get(field) != expected:
+                    raise CheckError(
+                        f"discarded guard census binding mismatch for {phase_id}"
+                    )
+            if set(record) != set(expected_record) | {"reason", "pid"}:
+                raise CheckError(
+                    f"discarded guard census field mismatch for {phase_id}"
+                )
+            if record["reason"] not in GUARD_CENSUS_REASONS:
+                raise CheckError(
+                    f"discarded guard census reason mismatch for {phase_id}"
+                )
+            canonical_positive_integer(record["pid"], "discarded census PID")
+            canonical = (
+                f"discarded-census slot={slot} sequence={sequence} "
+                f"workload_id={workload_id} backend={backend} "
+                f"attempt={len(discarded_censuses) + 1} "
+                f"schema={RETRYABLE_CENSUS_SCHEMA} "
+                f"reason={record['reason']} pid={record['pid']}"
+            )
+            if line != canonical:
+                raise CheckError(
+                    f"discarded guard census is noncanonical for {phase_id}"
+                )
+            discarded_censuses.append(line + "\n")
+            if len(discarded_censuses) > MAX_GUARD_CENSUS_RETRIES:
+                raise CheckError(f"too many discarded guard censuses for {phase_id}")
+            index += 1
+        discarded_census_count += len(discarded_censuses)
         if index >= len(stripped):
             raise CheckError(f"slot log omits phase {phase_id}")
         marker = parse_fields(stripped[index], index + 1)
+        discarded_digest = hashlib.sha256(
+            "".join(discarded_censuses).encode("utf-8")
+        ).hexdigest()
         expected_marker = {
             "slot": str(slot),
             "sequence": str(sequence),
             "workload_id": workload_id,
             "backend": backend,
             "phase_id": phase_id,
+            "discarded_guard_censuses": str(len(discarded_censuses)),
+            "discarded_guard_census_sha256": discarded_digest,
         }
-        if not stripped[index].startswith("phase ") or marker != expected_marker:
+        canonical_marker = (
+            f"phase slot={slot} sequence={sequence} workload_id={workload_id} "
+            f"backend={backend} phase_id={phase_id} "
+            f"discarded_guard_censuses={len(discarded_censuses)} "
+            f"discarded_guard_census_sha256={discarded_digest}"
+        )
+        if stripped[index] != canonical_marker or marker != expected_marker:
             raise CheckError(f"slot phase marker mismatch for {phase_id}")
         index += 1
         phase_records: list[tuple[str, dict[str, str], str, int]] = []
@@ -847,6 +922,7 @@ def validate_slot(
         hashlib.sha256(exact_bytes).hexdigest(),
         {"start": identities[0][1], "end": identities[1][1]},
         topology_identity,
+        discarded_census_count,
     )
 
 
@@ -859,8 +935,16 @@ def check_set(
     hashes: dict[int, str] = {}
     identities: dict[int, dict[str, str]] = {}
     topologies: dict[int, str] = {}
+    discarded_censuses: dict[int, int] = {}
     for log in logs:
-        context, slot_rows, digest, slot_identities, topology = validate_slot(log, r26)
+        (
+            context,
+            slot_rows,
+            digest,
+            slot_identities,
+            topology,
+            discarded_census_count,
+        ) = validate_slot(log, r26)
         slot = int(context["counterbalance_slot"])
         if slot in contexts:
             raise CheckError(f"duplicate counterbalance slot {slot}")
@@ -869,6 +953,7 @@ def check_set(
         hashes[slot] = digest
         identities[slot] = slot_identities
         topologies[slot] = topology
+        discarded_censuses[slot] = discarded_census_count
     if set(contexts) != {0, 1, 2}:
         raise CheckError("evidence set requires exact slots 0, 1, and 2")
     baseline = contexts[0]
@@ -897,7 +982,9 @@ def check_set(
         f"slot_0_sha256={hashes[0]} slot_1_sha256={hashes[1]} "
         f"slot_2_sha256={hashes[2]} manifest_schema={MANIFEST_SCHEMA} "
         f"manifest_sha256={hashlib.sha256(manifest).hexdigest()} phases=90 "
-        "raw_samples_per-phase=30 functional_status=pass "
+        "raw_samples_per-phase=30 "
+        f"discarded_guard_censuses={sum(discarded_censuses.values())} "
+        "functional_status=pass "
         f"bounded_parity_status={'demonstrated' if bounded_parity else 'not-demonstrated'} "
         "set_validation_status=pass"
     )

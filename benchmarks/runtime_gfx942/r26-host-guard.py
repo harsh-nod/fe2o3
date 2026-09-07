@@ -39,6 +39,8 @@ START_GATE_TOKEN = b"fe2o3-r26-start\n"
 EXPECTED_AMD_VENDOR = 0x1002
 EXPECTED_GFX_TARGET_VERSION = 90_402
 MANAGED_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT, signal.SIGTERM)
+RETRYABLE_CENSUS_SCHEMA = "fe2o3.r55-kfd-census-retry.v1"
+RETRYABLE_CENSUS_EXIT = 75
 
 BDF_PATTERN = re.compile(
     r"(?P<domain>[0-9a-f]{4}):(?P<bus>[0-9a-f]{2}):"
@@ -51,6 +53,25 @@ HEX_PATTERN = re.compile(r"0x[0-9a-f]+")
 
 class GuardError(Exception):
     pass
+
+
+class ObservationGapError(GuardError):
+    """A census interval that is too sparse to qualify the target run."""
+
+
+class RetryableCensusError(GuardError):
+    """An invalid census that requires discarding and relaunching the target."""
+
+    def __init__(self, reason: str, pid: int, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.pid = pid
+
+    def record(self) -> str:
+        return (
+            f"retryable-census schema={RETRYABLE_CENSUS_SCHEMA} "
+            f"reason={self.reason} pid={self.pid}"
+        )
 
 
 @dataclass(frozen=True)
@@ -99,7 +120,7 @@ class ObservationCadence:
                 raise GuardError("queue census clock did not advance")
             self.observed_maximum_gap_ns = max(self.observed_maximum_gap_ns, gap)
             if gap > self.maximum_gap_ns:
-                raise GuardError(
+                raise ObservationGapError(
                     f"queue census observation {self.observations + 1} gap exceeded: "
                     f"observed_ns={gap} maximum_ns={self.maximum_gap_ns}"
                 )
@@ -377,23 +398,41 @@ def _read_process(proc_root: pathlib.Path, pid: int) -> ProcessObservation | Non
     except (FileNotFoundError, ProcessLookupError):
         return None
     except (OSError, UnicodeError) as error:
-        raise GuardError(
-            f"cannot read process identity for PID {pid}: {error}"
+        raise RetryableCensusError(
+            "process-identity-unreadable",
+            pid,
+            f"cannot read process identity for PID {pid}: {error}",
         ) from error
     closing = text.rfind(")")
     if closing < 2 or closing + 2 >= len(text):
-        raise GuardError(f"malformed process identity for PID {pid}")
+        raise RetryableCensusError(
+            "process-identity-invalid",
+            pid,
+            f"malformed process identity for PID {pid}",
+        )
     fields = text[closing + 2 :].split()
     if len(fields) < 20:
-        raise GuardError(f"truncated process identity for PID {pid}")
+        raise RetryableCensusError(
+            "process-identity-invalid",
+            pid,
+            f"truncated process identity for PID {pid}",
+        )
     try:
         ppid = int(fields[1])
         process_group = int(fields[2])
         start_time = int(fields[19])
     except ValueError as error:
-        raise GuardError(f"nonnumeric process identity for PID {pid}") from error
+        raise RetryableCensusError(
+            "process-identity-invalid",
+            pid,
+            f"nonnumeric process identity for PID {pid}",
+        ) from error
     if min(ppid, process_group, start_time) < 0:
-        raise GuardError(f"negative process identity for PID {pid}")
+        raise RetryableCensusError(
+            "process-identity-invalid",
+            pid,
+            f"negative process identity for PID {pid}",
+        )
     return ProcessObservation(ppid, process_group, start_time)
 
 
@@ -788,8 +827,10 @@ def classify_selected_gpu_queues(
             process_path, f"KFD process directory for PID {pid}"
         )
         if process_binding is None:
-            raise GuardError(
-                f"KFD process directory disappeared before authentication: PID {pid}"
+            raise RetryableCensusError(
+                "process-directory-disappeared-before-authentication",
+                pid,
+                f"KFD process directory disappeared before authentication: PID {pid}",
             )
         with process_binding, ExitStack() as queue_bindings:
             authentication = _target_process_identity(
@@ -1277,6 +1318,12 @@ def monitor_target(
             raise GuardError(
                 f"target cleanup failed after {original_error}: {cleanup_error}"
             ) from cleanup_error
+        if isinstance(original_error, ObservationGapError) and process is not None:
+            raise RetryableCensusError(
+                "observation-gap-exceeded",
+                process.pid,
+                str(original_error),
+            ) from original_error
         raise
 
 
@@ -1360,6 +1407,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             signal.signal(signum, _raise_signal_error)
         arguments = _build_parser().parse_args(argv)
         print(_run(arguments))
+    except RetryableCensusError as error:
+        print(error.record(), file=sys.stderr)
+        return RETRYABLE_CENSUS_EXIT
     except GuardError as error:
         print(f"r26-host-guard: {error}", file=sys.stderr)
         return 2

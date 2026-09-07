@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import importlib.util
+import io
 import os
 import pathlib
 import signal
@@ -13,7 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
-from contextlib import ExitStack
+from contextlib import ExitStack, redirect_stderr
 from unittest import mock
 
 
@@ -336,6 +337,46 @@ class QueueCensusTests(unittest.TestCase):
                 ),
             ):
                 GUARD._target_process_identity(pathlib.Path("/proc"), 100, 100, 1000)
+
+    def test_invalid_process_identity_requires_discarding_the_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            proc_root = pathlib.Path(temporary) / "proc"
+            write_process(
+                proc_root,
+                100,
+                ppid=1,
+                process_group=-1,
+                start_time=1000,
+            )
+            with self.assertRaises(GUARD.RetryableCensusError) as failure:
+                GUARD._read_process(proc_root, 100)
+        self.assertEqual(failure.exception.reason, "process-identity-invalid")
+        self.assertEqual(failure.exception.pid, 100)
+        self.assertIn("negative process identity", str(failure.exception))
+
+    def test_retryable_census_has_a_canonical_record_and_distinct_exit(self) -> None:
+        failure = GUARD.RetryableCensusError(
+            "process-directory-disappeared-before-authentication",
+            123,
+            "discard this process attempt",
+        )
+        parser = mock.Mock()
+        parser.parse_args.return_value = mock.Mock()
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(GUARD, "_build_parser", return_value=parser),
+            mock.patch.object(GUARD, "_run", side_effect=failure),
+            mock.patch.object(GUARD.signal, "signal"),
+            redirect_stderr(stderr),
+        ):
+            status = GUARD.main([])
+        self.assertEqual(status, 75)
+        self.assertEqual(status, GUARD.RETRYABLE_CENSUS_EXIT)
+        self.assertEqual(
+            stderr.getvalue(),
+            "retryable-census schema=fe2o3.r55-kfd-census-retry.v1 "
+            "reason=process-directory-disappeared-before-authentication pid=123\n",
+        )
 
     def test_final_departure_confirmation_accepts_esrch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1552,9 +1593,7 @@ class QueueCensusTests(unittest.TestCase):
                 mock.patch.object(
                     GUARD, "_numeric_directories", side_effect=enumerate_then_remove
                 ),
-                self.assertRaisesRegex(
-                    GUARD.GuardError, "disappeared before authentication"
-                ),
+                self.assertRaises(GUARD.RetryableCensusError) as failure,
             ):
                 GUARD.classify_selected_gpu_queues(
                     kfd_proc_root=kfd_root,
@@ -1563,6 +1602,11 @@ class QueueCensusTests(unittest.TestCase):
                     root_pid=100,
                     root_start_time=1000,
                 )
+            self.assertEqual(
+                failure.exception.reason,
+                "process-directory-disappeared-before-authentication",
+            )
+            self.assertEqual(failure.exception.pid, 100)
 
     def test_vanished_foreign_kfd_owner_cannot_be_laundered_by_pid_reuse(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2343,11 +2387,11 @@ except guard.GuardError as error:
                 mock.patch.object(
                     GUARD.os, "sched_getaffinity", return_value={observer_cpu}
                 ),
-                mock.patch.object(GUARD, "_terminate_process_group"),
+                mock.patch.object(GUARD, "_terminate_process_group") as cleanup,
                 self.assertRaisesRegex(
-                    GUARD.GuardError,
+                    GUARD.RetryableCensusError,
                     r"observation 2 gap exceeded: observed_ns=10000001 maximum_ns=10000000",
-                ),
+                ) as failure,
             ):
                 GUARD.monitor_target(
                     selected_gpu_id=28851,
@@ -2359,6 +2403,9 @@ except guard.GuardError as error:
                     clock=lambda: now_ns,
                     sleeper=lambda _seconds: None,
                 )
+            self.assertEqual(failure.exception.reason, "observation-gap-exceeded")
+            self.assertEqual(failure.exception.pid, process.pid)
+            cleanup.assert_called_once_with(process)
             self.assertFalse(output.exists())
 
     def test_target_process_group_must_match_its_root_pid(self) -> None:
@@ -2708,12 +2755,14 @@ except guard.GuardError as error:
                     GUARD, "selected_gpu_queue_owners", side_effect=owners
                 ),
                 mock.patch.object(GUARD, "_process_group_exists", return_value=False),
-                mock.patch.object(GUARD, "_terminate_process_group"),
+                mock.patch.object(GUARD, "_terminate_process_group") as cleanup,
                 mock.patch.object(GUARD.os, "sched_setaffinity"),
                 mock.patch.object(
                     GUARD.os, "sched_getaffinity", return_value={observer_cpu}
                 ),
-                self.assertRaisesRegex(GUARD.GuardError, "gap exceeded"),
+                self.assertRaisesRegex(
+                    GUARD.RetryableCensusError, "gap exceeded"
+                ) as failure,
             ):
                 GUARD.monitor_target(
                     selected_gpu_id=28851,
@@ -2725,6 +2774,9 @@ except guard.GuardError as error:
                     clock=lambda: now_ns,
                     sleeper=lambda _seconds: None,
                 )
+            self.assertEqual(failure.exception.reason, "observation-gap-exceeded")
+            self.assertEqual(failure.exception.pid, 100)
+            cleanup.assert_not_called()
             self.assertFalse(output.exists())
 
     def test_enodev_unlink_delays_compose_in_monitor_cadence(self) -> None:
@@ -3077,10 +3129,17 @@ except guard.GuardError as error:
                 text=True,
             )
             deadline = time.monotonic() + 2
-            while not pid_file.exists() and time.monotonic() < deadline:
+            target_pid_text = ""
+            while time.monotonic() < deadline:
+                try:
+                    target_pid_text = pid_file.read_text(encoding="ascii")
+                except FileNotFoundError:
+                    pass
+                if target_pid_text:
+                    break
                 time.sleep(0.005)
-            self.assertTrue(pid_file.exists())
-            target_pid = int(pid_file.read_text(encoding="ascii"))
+            self.assertRegex(target_pid_text, r"^[1-9][0-9]*$")
+            target_pid = int(target_pid_text)
             monitor.terminate()
             time.sleep(0.02)
             monitor.terminate()

@@ -13,6 +13,7 @@ readonly max_busy=5
 readonly phase_timeout=180
 readonly monitor_interval_us=2000
 readonly monitor_maximum_gap_us=10000
+readonly max_guard_census_retries=8
 readonly execution_environment=env-i-lang-c-lc-all-c-path-usr-sbin-usr-bin-sbin-bin-v1
 readonly build_environment=env-i-explicit-home-toolchain-path-cargo-incremental-0-private-target-v1
 readonly system_path=/usr/sbin:/usr/bin:/sbin:/bin
@@ -463,7 +464,7 @@ print_context() {
   local slot="$1"
   local backend_order="$2"
   local workload_order="$3"
-  printf 'context schema=fe2o3.r40-striped-evidence.v1 git_commit=%s target=gfx942:xnack- gpu_index=2 unique_id=%s uuid=%s depth=112 warmups=10 samples=30 bytes_set=4096,1048576 logical_queue_counts=2,4,8,14,16 profiles=combined-striped2,combined-striped4,combined-striped8,combined-striped14,striped16 max_busy_percent=5 phase_timeout_seconds=180 rocm_version=%s rustc=%s cargo=%s hipcc=%s cxx=%s kfd_binary_sha256=%s hsa_binary_sha256=%s hip_binary_sha256=%s hsa_source_sha256=%s hip_source_sha256=%s common_header_sha256=%s checker_sha256=%s runner_sha256=%s host_guard_sha256=%s system_identity_collector_sha256=%s build_environment=%s execution_environment=%s telemetry_command=rocm-smi-showuse-showclocks-showpower placement=taskset-cpulist-then-numactl-physcpubind-membind-v1 interference_monitor=selected-kfd-gpu-process-tree-census-v2 monitor_interval_us=%s monitor_maximum_gap_us=%s topology_sha256=%s counterbalance_design=cyclic-latin-square-3-backends-workload-forward-reverse-rotate5-v1 counterbalance_slots=3 counterbalance_slot=%s counterbalance_set_id=%s backend_order=%s workload_order=%s claim_scope=single-mi300x-gpu2-striped-copy-only\n' \
+  printf 'context schema=fe2o3.r40-striped-evidence.v2 git_commit=%s target=gfx942:xnack- gpu_index=2 unique_id=%s uuid=%s depth=112 warmups=10 samples=30 bytes_set=4096,1048576 logical_queue_counts=2,4,8,14,16 profiles=combined-striped2,combined-striped4,combined-striped8,combined-striped14,striped16 max_busy_percent=5 phase_timeout_seconds=180 rocm_version=%s rustc=%s cargo=%s hipcc=%s cxx=%s kfd_binary_sha256=%s hsa_binary_sha256=%s hip_binary_sha256=%s hsa_source_sha256=%s hip_source_sha256=%s common_header_sha256=%s checker_sha256=%s runner_sha256=%s host_guard_sha256=%s system_identity_collector_sha256=%s build_environment=%s execution_environment=%s telemetry_command=rocm-smi-showuse-showclocks-showpower placement=taskset-cpulist-then-numactl-physcpubind-membind-v1 interference_monitor=selected-kfd-gpu-process-tree-census-v2 monitor_interval_us=%s monitor_maximum_gap_us=%s max_guard_census_retries=8 guard_census_retry_policy=discard-target-process-and-relaunch-phase-v1 topology_sha256=%s counterbalance_design=cyclic-latin-square-3-backends-workload-forward-reverse-rotate5-v1 counterbalance_slots=3 counterbalance_slot=%s counterbalance_set_id=%s backend_order=%s workload_order=%s claim_scope=single-mi300x-gpu2-striped-copy-only\n' \
     "${git_commit}" "${unique_id}" "${uuid}" "${rocm_version}" \
     "${rustc_version}" "${cargo_version}" "${hipcc_version}" \
     "${cxx_version}" "${kfd_binary_sha256}" "${hsa_binary_sha256}" \
@@ -494,12 +495,21 @@ run_phase() {
   local end_telemetry
   local end_topology
   local monitor_record
+  local retry_record
+  local retry_prefix
+  local retry_schema
+  local retry_reason
+  local retry_pid
+  local retry_extra
+  local retry_digest
   local busy
   local monitor_status
+  local retry_count=0
+  local retry_error="${build_dir}/guard-retry-slot-${slot}-sequence-${sequence}.err"
+  local retry_transcript="${build_dir}/guard-retry-slot-${slot}-sequence-${sequence}.log"
   local -a command
-  start_topology="$(capture_topology "${slot}" "${phase_id}" start)"
-  busy="$(require_gpu_load_at_most "${max_busy}")"
-  start_telemetry="$(capture_telemetry "${phase_id}" start "${busy}")"
+  : >"${retry_transcript}"
+  "${qualification_env[@]}" /usr/bin/chmod 0600 -- "${retry_transcript}"
   case "${backend}" in
     kfd)
       command=("${qualification_env[@]}"
@@ -533,17 +543,92 @@ run_phase() {
       exit 2
       ;;
   esac
-  "${qualification_env[@]}" /usr/bin/python3 "${host_guard}" monitor \
-    --gpu-id "${kfd_gpu_id}" --observer-cpu "${observer_cpu}" \
-    --target-output "${target_output}" -- "${command[@]}" >"${monitor_output}" &
-  active_monitor_pid=$!
-  if wait "${active_monitor_pid}"; then
-    monitor_status=0
-  else
-    monitor_status=$?
-  fi
-  active_monitor_pid=""
-  ((monitor_status == 0)) || return "${monitor_status}"
+  while true; do
+    [[ ! -e "${target_output}" ]] || {
+      printf 'rejected target output survived guard cleanup\n' >&2
+      return 2
+    }
+    start_topology="$(capture_topology "${slot}" "${phase_id}" start)"
+    busy="$(require_gpu_load_at_most "${max_busy}")"
+    start_telemetry="$(capture_telemetry "${phase_id}" start "${busy}")"
+    "${qualification_env[@]}" /usr/bin/python3 "${host_guard}" monitor \
+      --gpu-id "${kfd_gpu_id}" --observer-cpu "${observer_cpu}" \
+      --target-output "${target_output}" -- "${command[@]}" \
+      >"${monitor_output}" 2>"${retry_error}" &
+    active_monitor_pid=$!
+    if wait "${active_monitor_pid}"; then
+      monitor_status=0
+    else
+      monitor_status=$?
+    fi
+    active_monitor_pid=""
+    if ((monitor_status == 0)); then
+      [[ ! -s "${retry_error}" ]] || {
+        printf 'host guard emitted stderr on success\n' >&2
+        return 2
+      }
+      break
+    fi
+    if ((monitor_status != 75)); then
+      "${qualification_env[@]}" /usr/bin/cat -- "${retry_error}" >&2
+      return "${monitor_status}"
+    fi
+    [[ ! -e "${target_output}" && ! -s "${monitor_output}" ]] || {
+      printf 'retryable guard census exposed rejected target output\n' >&2
+      return 2
+    }
+    "${qualification_env[@]}" /usr/bin/python3 - "${retry_error}" <<'PY'
+import pathlib
+import sys
+
+data = pathlib.Path(sys.argv[1]).read_bytes()
+if (
+    not data.endswith(b"\n")
+    or data.count(b"\n") != 1
+    or b"\0" in data
+    or len(data) > 512
+):
+    raise SystemExit("retryable census must be one bounded LF-terminated record")
+PY
+    retry_record="$("${qualification_env[@]}" /usr/bin/cat -- "${retry_error}")"
+    [[ "${retry_record}" == 'retryable-census schema=fe2o3.r55-kfd-census-retry.v1 reason='* && \
+      "${retry_record}" != *$'\n'* ]] || {
+      printf 'host guard emitted malformed retryable census record\n' >&2
+      return 2
+    }
+    read -r retry_prefix retry_schema retry_reason retry_pid retry_extra \
+      <<<"${retry_record}"
+    [[ "${retry_prefix}" == retryable-census && \
+      "${retry_schema}" == schema=fe2o3.r55-kfd-census-retry.v1 ]] || {
+      printf 'host guard emitted malformed retryable census schema\n' >&2
+      return 2
+    }
+    case "${retry_reason}" in
+      reason=process-identity-unreadable | \
+        reason=process-identity-invalid | \
+        reason=process-directory-disappeared-before-authentication | \
+        reason=observation-gap-exceeded) ;;
+      *)
+        printf 'host guard emitted an unknown retryable census reason\n' >&2
+        return 2
+        ;;
+    esac
+    [[ "${retry_pid}" =~ ^pid=[1-9][0-9]*$ && -z "${retry_extra}" ]] || {
+      printf 'host guard emitted malformed retryable census identity\n' >&2
+      return 2
+    }
+    ((retry_count += 1))
+    ((retry_count <= max_guard_census_retries)) || {
+      printf 'phase exceeded %s discarded guard censuses\n' \
+        "${max_guard_census_retries}" >&2
+      return 2
+    }
+    printf 'discarded-census slot=%s sequence=%s workload_id=%s backend=%s attempt=%s %s\n' \
+      "${slot}" "${sequence}" "${workload_id}" "${backend}" \
+      "${retry_count}" "${retry_record#retryable-census }" \
+      >>"${retry_transcript}"
+    [[ "$(require_gpu_load_at_most 0)" == 0 ]] || return 2
+  done
   monitor_record="$("${qualification_env[@]}" /usr/bin/cat -- "${monitor_output}")"
   [[ "${monitor_record}" == 'monitor schema=fe2o3.r26-kfd-queue-monitor.v2 '* && \
     "${monitor_record}" != *$'\n'* ]] || {
@@ -565,8 +650,11 @@ data = pathlib.Path(sys.argv[1]).read_bytes()
 if not data.endswith(b"\n") or data.count(b"\n") != 1 or b"\0" in data:
     raise SystemExit("R40 target must emit exactly one LF-terminated text row")
 PY
-  printf 'phase slot=%s sequence=%s workload_id=%s backend=%s phase_id=%s\n' \
-    "${slot}" "${sequence}" "${workload_id}" "${backend}" "${phase_id}"
+  retry_digest="$(sha256_file "${retry_transcript}")"
+  "${qualification_env[@]}" /usr/bin/cat -- "${retry_transcript}"
+  printf 'phase slot=%s sequence=%s workload_id=%s backend=%s phase_id=%s discarded_guard_censuses=%s discarded_guard_census_sha256=%s\n' \
+    "${slot}" "${sequence}" "${workload_id}" "${backend}" "${phase_id}" \
+    "${retry_count}" "${retry_digest}"
   printf '%s\n%s\n' "${start_topology}" "${start_telemetry}"
   printf 'monitor slot=%s phase=%s %s\n' \
     "${slot}" "${phase_id}" "${monitor_record#monitor }"
