@@ -344,7 +344,7 @@ def topology_record(
 
     nonlocal_allowed_cpus = allowed_cpus - device_local_cpus
     if nonlocal_allowed_cpus:
-        observer_cpu = min(nonlocal_allowed_cpus)
+        observer_cpu = max(nonlocal_allowed_cpus)
         measurement_cpus = local_allowed_cpus
     else:
         if len(local_allowed_cpus) < 2:

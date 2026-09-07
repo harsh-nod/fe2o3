@@ -141,7 +141,7 @@ class TopologyTests(unittest.TestCase):
         self.assertEqual(observed["pci_bdf"], fixture.bdf)
         self.assertEqual(observed["unique_id"], fixture.unique_id)
         self.assertEqual(observed["measurement_cpu_list"], "0-7")
-        self.assertEqual(observed["observer_cpu"], "48")
+        self.assertEqual(observed["observer_cpu"], "55")
         self.assertEqual(observed["kfd_node"], "2")
         self.assertEqual(observed["kfd_gpu_id"], "28851")
         digest = observed.pop("topology_sha256")
