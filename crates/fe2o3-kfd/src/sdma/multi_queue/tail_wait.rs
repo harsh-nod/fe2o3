@@ -12,9 +12,13 @@
 
 use std::time::{Duration, Instant};
 
+use super::tail_wait_cpu::{
+    ThreadWaitCpuMeasurementV1, finish_tail_cpu_measurement_v1, profile_tail_cpu_snapshot_v1,
+};
 use super::{
     Gfx942SdmaMultiQueueCompletedV1, Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaQueueSetV1,
-    Gfx942SdmaStripedWaitDiagnosticsV1, ValidatedMultiQueueCompletionEntryV1,
+    Gfx942SdmaStripedWaitCpuMeasurementStatusV1, Gfx942SdmaStripedWaitDiagnosticsV1,
+    ValidatedMultiQueueCompletionEntryV1,
 };
 use crate::sdma::{
     GFX942_SDMA_MAX_STRIPED_QUEUES_V1, Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1,
@@ -249,6 +253,36 @@ fn profile_elapsed_ns_v1<const PROFILE: bool>(started: Option<Instant>) -> u64 {
     }
 }
 
+fn record_thread_wait_cpu_measurement_v1(
+    diagnostics: &mut Gfx942SdmaStripedWaitDiagnosticsV1,
+    measurement: ThreadWaitCpuMeasurementV1,
+) {
+    diagnostics.tail_scan_thread_cpu_ns = None;
+    diagnostics.tail_scan_voluntary_context_switches = None;
+    diagnostics.tail_scan_involuntary_context_switches = None;
+    match measurement {
+        ThreadWaitCpuMeasurementV1::Available {
+            thread_cpu_ns,
+            voluntary_context_switches,
+            involuntary_context_switches,
+        } => {
+            diagnostics.tail_scan_cpu_measurement_status =
+                Gfx942SdmaStripedWaitCpuMeasurementStatusV1::Available;
+            diagnostics.tail_scan_thread_cpu_ns = Some(thread_cpu_ns);
+            diagnostics.tail_scan_voluntary_context_switches = Some(voluntary_context_switches);
+            diagnostics.tail_scan_involuntary_context_switches = Some(involuntary_context_switches);
+        }
+        ThreadWaitCpuMeasurementV1::Unavailable => {
+            diagnostics.tail_scan_cpu_measurement_status =
+                Gfx942SdmaStripedWaitCpuMeasurementStatusV1::Unavailable;
+        }
+        ThreadWaitCpuMeasurementV1::Invalid => {
+            diagnostics.tail_scan_cpu_measurement_status =
+                Gfx942SdmaStripedWaitCpuMeasurementStatusV1::Invalid;
+        }
+    }
+}
+
 fn observe_tail_rounds_profiled_until_v1<const PROFILE: bool, T, E, W: TailWaitCursorV1>(
     tails: &[T],
     mut tail_queue_bit: impl FnMut(&T) -> u16,
@@ -474,6 +508,7 @@ impl Gfx942SdmaQueueSetV1 {
             MonotonicWaitV1::until_with_sleep_ceiling(deadline, GFX942_STRIPED_SDMA_MAX_SLEEP_V1);
         let active_queues = &prepared.active_queues[..usize::from(prepared.tail_count)];
         let tail_scan_started = profile_start_v1::<PROFILE>();
+        let tail_scan_cpu_started = profile_tail_cpu_snapshot_v1::<PROFILE>();
         let ready_tail_queue_mask = observe_tail_rounds_profiled_until_v1::<PROFILE, _, _, _>(
             active_queues,
             |active_queue| active_queue.queue_bit,
@@ -501,6 +536,10 @@ impl Gfx942SdmaQueueSetV1 {
             tail_scan_started,
         );
         if PROFILE {
+            record_thread_wait_cpu_measurement_v1(
+                diagnostics,
+                finish_tail_cpu_measurement_v1(tail_scan_cpu_started),
+            );
             diagnostics.tail_scan_ns = profile_elapsed_ns_v1::<PROFILE>(tail_scan_started);
         }
         let ready_tail_queue_mask = ready_tail_queue_mask?;
@@ -849,6 +888,63 @@ mod tests {
         let first = diagnostics.first_tail_ready_ns().unwrap();
         let all = diagnostics.all_tails_ready_ns().unwrap();
         assert!(all >= first);
+    }
+
+    #[test]
+    fn compile_time_disabled_tail_scan_does_not_update_diagnostics() {
+        let mut wait = InjectedTailWaitCursorV1 {
+            expire_after_pauses: usize::MAX,
+            pauses: 0,
+        };
+        let mut diagnostics = Gfx942SdmaStripedWaitDiagnosticsV1::default();
+        let ready_mask = observe_tail_rounds_profiled_until_v1::<false, _, _, _>(
+            &[0_u8, 1],
+            |tail| 1_u16 << *tail,
+            |_| Ok::<bool, ()>(true),
+            &mut wait,
+            &mut diagnostics,
+            None,
+        )
+        .unwrap();
+        assert_eq!(ready_mask, 0b11);
+        assert_eq!(diagnostics, Gfx942SdmaStripedWaitDiagnosticsV1::default());
+    }
+
+    #[test]
+    fn cpu_measurement_status_never_substitutes_missing_or_invalid_values() {
+        let mut diagnostics = Gfx942SdmaStripedWaitDiagnosticsV1::default();
+        record_thread_wait_cpu_measurement_v1(
+            &mut diagnostics,
+            ThreadWaitCpuMeasurementV1::Available {
+                thread_cpu_ns: 17,
+                voluntary_context_switches: 2,
+                involuntary_context_switches: 3,
+            },
+        );
+        assert_eq!(
+            diagnostics.tail_scan_cpu_measurement_status(),
+            Gfx942SdmaStripedWaitCpuMeasurementStatusV1::Available
+        );
+        assert!(diagnostics.tail_scan_cpu_measurement_available());
+        assert_eq!(diagnostics.tail_scan_thread_cpu_ns(), Some(17));
+        assert_eq!(diagnostics.tail_scan_voluntary_context_switches(), Some(2));
+        assert_eq!(
+            diagnostics.tail_scan_involuntary_context_switches(),
+            Some(3)
+        );
+
+        record_thread_wait_cpu_measurement_v1(
+            &mut diagnostics,
+            ThreadWaitCpuMeasurementV1::Invalid,
+        );
+        assert_eq!(
+            diagnostics.tail_scan_cpu_measurement_status(),
+            Gfx942SdmaStripedWaitCpuMeasurementStatusV1::Invalid
+        );
+        assert!(!diagnostics.tail_scan_cpu_measurement_available());
+        assert_eq!(diagnostics.tail_scan_thread_cpu_ns(), None);
+        assert_eq!(diagnostics.tail_scan_voluntary_context_switches(), None);
+        assert_eq!(diagnostics.tail_scan_involuntary_context_switches(), None);
     }
 
     #[test]

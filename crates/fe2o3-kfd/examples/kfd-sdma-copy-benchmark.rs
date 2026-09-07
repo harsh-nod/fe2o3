@@ -7,7 +7,7 @@ use fe2o3_kfd::{
     ComputeAqlQueueSessionV1, DeviceSelector, Gfx942CombinedSdmaCapacityV1, Gfx942SdmaBufferV1,
     Gfx942SdmaCopyRequestV1, Gfx942SdmaMultiQueueCompletedV1, Gfx942SdmaMultiQueuePollV1,
     Gfx942SdmaMultiQueueSubmissionV1, Gfx942SdmaQueueObservationV1,
-    Gfx942SdmaStripedWaitDiagnosticsV1, OpenedKfd,
+    Gfx942SdmaStripedWaitCpuMeasurementStatusV1, Gfx942SdmaStripedWaitDiagnosticsV1, OpenedKfd,
 };
 use sha2::{Digest, Sha256};
 
@@ -118,6 +118,21 @@ impl AggregateDiagnosticSamples {
         expected_queue_count: usize,
         expected_request_count: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let cpu_fields_available = diagnostics.tail_scan_thread_cpu_ns().is_some()
+            && diagnostics.tail_scan_voluntary_context_switches().is_some()
+            && diagnostics
+                .tail_scan_involuntary_context_switches()
+                .is_some();
+        let cpu_fields_absent = diagnostics.tail_scan_thread_cpu_ns().is_none()
+            && diagnostics.tail_scan_voluntary_context_switches().is_none()
+            && diagnostics
+                .tail_scan_involuntary_context_switches()
+                .is_none();
+        let cpu_status_consistent = match diagnostics.tail_scan_cpu_measurement_status() {
+            Gfx942SdmaStripedWaitCpuMeasurementStatusV1::Available => cpu_fields_available,
+            Gfx942SdmaStripedWaitCpuMeasurementStatusV1::Unavailable
+            | Gfx942SdmaStripedWaitCpuMeasurementStatusV1::Invalid => cpu_fields_absent,
+        };
         if usize::from(diagnostics.active_queue_count()) != expected_queue_count
             || usize::from(diagnostics.request_count()) != expected_request_count
             || diagnostics.tail_scan_rounds() == 0
@@ -134,6 +149,7 @@ impl AggregateDiagnosticSamples {
             || diagnostics.first_tail_ready_ns().is_none()
             || diagnostics.all_tails_ready_ns().is_none()
             || diagnostics.first_tail_ready_ns() > diagnostics.all_tails_ready_ns()
+            || !cpu_status_consistent
         {
             return Err("profiled striped wait diagnostics are internally inconsistent".into());
         }
@@ -902,6 +918,7 @@ fn append_aggregate_wait_diagnostics(
         let mut ordered = values.clone();
         ordered.sort_unstable();
         let p50 = ordered[(ordered.len() - 1) / 2];
+        let p95 = percentile_u64(&ordered, 19, 20);
         let csv = values
             .iter()
             .map(u64::to_string)
@@ -909,10 +926,116 @@ fn append_aggregate_wait_diagnostics(
             .join(",");
         write!(
             row,
-            " {direction}_{field}_samples={csv} {direction}_{field}_p50={p50}"
+            " {direction}_{field}_samples={csv} {direction}_{field}_p50={p50} {direction}_{field}_p95={p95}"
         )
         .expect("writing to a String cannot fail");
     }
+    let statuses = samples
+        .waits
+        .iter()
+        .map(|diagnostics| {
+            cpu_measurement_status_label(diagnostics.tail_scan_cpu_measurement_status())
+        })
+        .collect::<Vec<_>>();
+    write!(
+        row,
+        " {direction}_tail_scan_cpu_status_samples={}",
+        statuses.join(",")
+    )
+    .expect("writing to a String cannot fail");
+    for (field, getter) in [
+        (
+            "tail_scan_thread_cpu_ns",
+            Gfx942SdmaStripedWaitDiagnosticsV1::tail_scan_thread_cpu_ns
+                as fn(Gfx942SdmaStripedWaitDiagnosticsV1) -> Option<u64>,
+        ),
+        (
+            "tail_scan_voluntary_context_switches",
+            Gfx942SdmaStripedWaitDiagnosticsV1::tail_scan_voluntary_context_switches,
+        ),
+        (
+            "tail_scan_involuntary_context_switches",
+            Gfx942SdmaStripedWaitDiagnosticsV1::tail_scan_involuntary_context_switches,
+        ),
+    ] {
+        append_optional_wait_diagnostic_field(row, direction, field, samples, getter);
+    }
+}
+
+fn percentile_u64(samples: &[u64], numerator: usize, denominator: usize) -> u64 {
+    let rank = samples
+        .len()
+        .checked_mul(numerator)
+        .and_then(|value| value.checked_add(denominator - 1))
+        .expect("bounded diagnostic percentile rank")
+        / denominator;
+    samples[rank.saturating_sub(1)]
+}
+
+const fn cpu_measurement_status_label(
+    status: Gfx942SdmaStripedWaitCpuMeasurementStatusV1,
+) -> &'static str {
+    match status {
+        Gfx942SdmaStripedWaitCpuMeasurementStatusV1::Available => "available",
+        Gfx942SdmaStripedWaitCpuMeasurementStatusV1::Unavailable => "unavailable",
+        Gfx942SdmaStripedWaitCpuMeasurementStatusV1::Invalid => "invalid",
+    }
+}
+
+fn append_optional_wait_diagnostic_field(
+    row: &mut String,
+    direction: &str,
+    field: &str,
+    samples: &AggregateDiagnosticSamples,
+    getter: fn(Gfx942SdmaStripedWaitDiagnosticsV1) -> Option<u64>,
+) {
+    let mut all_available = true;
+    let mut any_invalid = false;
+    let rendered = samples
+        .waits
+        .iter()
+        .copied()
+        .map(|diagnostics| {
+            getter(diagnostics).map_or_else(
+                || {
+                    all_available = false;
+                    any_invalid |= matches!(
+                        diagnostics.tail_scan_cpu_measurement_status(),
+                        Gfx942SdmaStripedWaitCpuMeasurementStatusV1::Invalid
+                    );
+                    cpu_measurement_status_label(diagnostics.tail_scan_cpu_measurement_status())
+                        .to_owned()
+                },
+                |value| value.to_string(),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let (p50, p95) = if all_available {
+        let mut values = samples
+            .waits
+            .iter()
+            .copied()
+            .map(|diagnostics| getter(diagnostics).expect("all CPU-cost samples are available"))
+            .collect::<Vec<_>>();
+        values.sort_unstable();
+        (
+            percentile_u64(&values, 1, 2).to_string(),
+            percentile_u64(&values, 19, 20).to_string(),
+        )
+    } else {
+        let status = if any_invalid {
+            "invalid"
+        } else {
+            "unavailable"
+        };
+        (status.to_owned(), status.to_owned())
+    };
+    write!(
+        row,
+        " {direction}_{field}_samples={rendered} {direction}_{field}_p50={p50} {direction}_{field}_p95={p95}"
+    )
+    .expect("writing to a String cannot fail");
 }
 
 fn run_aggregate_benchmark<const PROFILE: bool>(
@@ -1033,7 +1156,7 @@ fn run_aggregate_benchmark<const PROFILE: bool>(
         profile.workload_kind()
     );
     let schema = if PROFILE {
-        "fe2o3.kfd-striped-wait-diagnostics.v1"
+        "fe2o3.kfd-striped-wait-diagnostics.v2"
     } else {
         "fe2o3.async-copy-striped-benchmark.v3"
     };
@@ -1245,9 +1368,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AggregateProfile, AggregateResourceBudget, AggregateSamples, PhaseTiming,
-        admitted_aggregate_profile, admitted_striped_queue_count, aggregate_resource_budget,
-        aggregate_resource_budget_is_admitted, balanced_batch_lengths, sha256_ascii,
+        AggregateDiagnosticSamples, AggregateProfile, AggregateResourceBudget, AggregateSamples,
+        PhaseTiming, admitted_aggregate_profile, admitted_striped_queue_count,
+        aggregate_resource_budget, aggregate_resource_budget_is_admitted,
+        append_aggregate_wait_diagnostics, balanced_batch_lengths, sha256_ascii,
     };
 
     #[test]
@@ -1318,6 +1442,24 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+
+    #[test]
+    fn unavailable_cpu_cost_samples_remain_explicit_in_diagnostic_output() {
+        let samples = AggregateDiagnosticSamples {
+            waits: vec![fe2o3_kfd::Gfx942SdmaStripedWaitDiagnosticsV1::default()],
+        };
+        let mut row = String::new();
+        append_aggregate_wait_diagnostics(&mut row, "h2d", &samples);
+        assert!(row.contains("h2d_tail_rounds_samples=0"));
+        assert!(row.contains("h2d_tail_rounds_p50=0"));
+        assert!(row.contains("h2d_tail_rounds_p95=0"));
+        assert!(row.contains("h2d_tail_scan_cpu_status_samples=unavailable"));
+        assert!(row.contains("h2d_tail_scan_thread_cpu_ns_samples=unavailable"));
+        assert!(row.contains("h2d_tail_scan_thread_cpu_ns_p50=unavailable"));
+        assert!(row.contains("h2d_tail_scan_thread_cpu_ns_p95=unavailable"));
+        assert!(row.contains("h2d_tail_scan_voluntary_context_switches_samples=unavailable"));
+        assert!(row.contains("h2d_tail_scan_involuntary_context_switches_samples=unavailable"));
     }
 
     #[test]

@@ -98,7 +98,7 @@ g++ -std=c++17 -O3 -Wall -Wextra -Werror \
 
 rocm_version=unknown
 [[ ! -r "${rocm_path}/.info/version" ]] || IFS= read -r rocm_version < "${rocm_path}/.info/version"
-printf 'context schema=fe2o3.async-copy-benchmark.v1 git_commit=%s target=gfx942:xnack- gpu_indices=%s,%s unique_ids=%s,%s bytes=%s depths=1 warmups=%s samples=%s kfd_profile=directional kfd_multi_profile=directional max_busy_percent=%s phase_timeout_seconds=%s rocm_version=%s rustc=%s sdma_manifest_sha256=289b2b362333d5e6b37903d38e82a2c4eda5adb83d34d053f966acc77adfb17c directional_window_manifest_sha256=44821351a14664f9be3db9fc406ee9f4961d4f40a4346fdb085886ecfc84c2aa measurement=runtime-facade-r22-directional-window\n' \
+printf 'context schema=fe2o3.async-copy-benchmark.v1 git_commit=%s target=gfx942:xnack- gpu_indices=%s,%s unique_ids=%s,%s bytes=%s depths=1 warmups=%s samples=%s kfd_profile=directional kfd_multi_profile=directional max_busy_percent=%s phase_timeout_seconds=%s rocm_version=%s rustc=%s sdma_manifest_sha256=5abb6d5fb9dcf321d82dfadf2ffcdd310d197b5ddb42ec3d88658ab26f1451e9 directional_window_manifest_sha256=44821351a14664f9be3db9fc406ee9f4961d4f40a4346fdb085886ecfc84c2aa measurement=runtime-facade-r22-directional-window\n' \
   "$(git rev-parse HEAD)" "${gpu_index}" "${second_gpu_index}" \
   "${unique_id}" "${second_unique_id}" "${bytes}" "${warmups}" "${samples}" \
   "${max_busy}" "${phase_timeout}" "${rocm_version}" "$(rustc --version | tr ' ' '_')"

@@ -13,14 +13,32 @@ use super::{
 };
 use crate::shared_memory::SharedGttMemorySessionV1;
 mod tail_wait;
+#[allow(unsafe_code)]
+mod tail_wait_cpu;
 pub(crate) use tail_wait::Gfx942SdmaStripedTailWaitOutcomeV1;
+
+/// Availability and validity of one profiled tail-scan CPU-cost observation.
+///
+/// This status describes optional measurement data only. It is never a queue
+/// completion result, a custody disposition, or an admission input.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Gfx942SdmaStripedWaitCpuMeasurementStatusV1 {
+    /// One or both Linux thread observations were unavailable.
+    #[default]
+    Unavailable,
+    /// An observed clock, counter, or delta was outside the admitted numeric domain.
+    Invalid,
+    /// All three deltas were observed and validated.
+    Available,
+}
 
 /// Host-side decomposition of one successful profiled striped-tail wait.
 ///
-/// These counters and monotonic durations are diagnostic observations. They
-/// are not GPU timestamps, physical-engine counters, completion evidence, or
-/// an admission input. Collecting them adds host timestamp reads to the
-/// explicitly profiled path; the ordinary wait does not collect them.
+/// These counters, monotonic durations, and best-effort Linux thread-cost
+/// deltas are diagnostic observations. They are not GPU timestamps,
+/// physical-engine counters, completion evidence, or an admission input.
+/// Collecting them adds host timestamp, CPU-clock, and rusage observations to
+/// the explicitly profiled path; the ordinary wait does not collect them.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Gfx942SdmaStripedWaitDiagnosticsV1 {
     pub(crate) active_queue_count: u8,
@@ -39,6 +57,10 @@ pub struct Gfx942SdmaStripedWaitDiagnosticsV1 {
     pub(crate) final_audit_ns: u64,
     pub(crate) closing_currentness_ns: u64,
     pub(crate) retirement_ns: u64,
+    pub(crate) tail_scan_cpu_measurement_status: Gfx942SdmaStripedWaitCpuMeasurementStatusV1,
+    pub(crate) tail_scan_thread_cpu_ns: Option<u64>,
+    pub(crate) tail_scan_voluntary_context_switches: Option<u64>,
+    pub(crate) tail_scan_involuntary_context_switches: Option<u64>,
 }
 
 impl Gfx942SdmaStripedWaitDiagnosticsV1 {
@@ -107,6 +129,36 @@ impl Gfx942SdmaStripedWaitDiagnosticsV1 {
 
     pub const fn retirement_ns(self) -> u64 {
         self.retirement_ns
+    }
+
+    /// Availability and validity of the tail-scan CPU-cost fields.
+    pub const fn tail_scan_cpu_measurement_status(
+        self,
+    ) -> Gfx942SdmaStripedWaitCpuMeasurementStatusV1 {
+        self.tail_scan_cpu_measurement_status
+    }
+
+    /// Whether every tail-scan CPU-cost delta is available and valid.
+    pub const fn tail_scan_cpu_measurement_available(self) -> bool {
+        matches!(
+            self.tail_scan_cpu_measurement_status,
+            Gfx942SdmaStripedWaitCpuMeasurementStatusV1::Available
+        )
+    }
+
+    /// Calling-thread CPU time consumed while the tail-scan/wait loop ran.
+    pub const fn tail_scan_thread_cpu_ns(self) -> Option<u64> {
+        self.tail_scan_thread_cpu_ns
+    }
+
+    /// Voluntary context-switch delta across the tail-scan/wait loop.
+    pub const fn tail_scan_voluntary_context_switches(self) -> Option<u64> {
+        self.tail_scan_voluntary_context_switches
+    }
+
+    /// Involuntary context-switch delta across the tail-scan/wait loop.
+    pub const fn tail_scan_involuntary_context_switches(self) -> Option<u64> {
+        self.tail_scan_involuntary_context_switches
     }
 }
 

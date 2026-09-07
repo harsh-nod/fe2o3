@@ -605,10 +605,11 @@ impl ComputeAqlQueueSessionV1 {
 
     /// Runs the same retained striped-tail wait while recording host-side diagnostics.
     ///
-    /// The diagnostic path adds host timestamp reads and counters. Its observations
-    /// are not device timestamps or execution authority, and benchmark comparisons
-    /// must use this method consistently rather than comparing it to the unprofiled
-    /// path as though their host overhead were identical.
+    /// The diagnostic path adds host timestamp reads, Linux thread CPU/rusage
+    /// observations, and counters. Measurement failure or invalidity remains
+    /// diagnostic-only. These observations are not device timestamps or execution
+    /// authority, and benchmark comparisons must use this method consistently rather
+    /// than comparing it to the unprofiled path as though host overhead were identical.
     #[allow(clippy::result_large_err)]
     pub fn wait_gfx942_striped_sdma_copy_batch_profiled_for_v1(
         &mut self,
