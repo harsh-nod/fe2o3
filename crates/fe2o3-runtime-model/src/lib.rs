@@ -60,6 +60,7 @@ mod r42_compute_event_signal_custody;
 mod r44_live_foundation_invariant_certificate;
 mod r45_compute_dependency_publisher;
 mod r46_gfx942_striped_sdma_tail_wait;
+mod r48_retryable_striped_sdma_tail_wait;
 mod r9_native_evidence;
 mod typed_async;
 
@@ -107,6 +108,7 @@ pub use r42_compute_event_signal_custody::*;
 pub use r44_live_foundation_invariant_certificate::*;
 pub use r45_compute_dependency_publisher::*;
 pub use r46_gfx942_striped_sdma_tail_wait::*;
+pub use r48_retryable_striped_sdma_tail_wait::*;
 pub use typed_async::*;
 
 #[cfg(test)]
@@ -191,6 +193,8 @@ mod r44_live_foundation_invariant_certificate_tests;
 mod r45_compute_dependency_publisher_tests;
 #[cfg(test)]
 mod r46_gfx942_striped_sdma_tail_wait_tests;
+#[cfg(test)]
+mod r48_retryable_striped_sdma_tail_wait_tests;
 #[cfg(test)]
 mod r9_native_evidence_tests;
 #[cfg(test)]

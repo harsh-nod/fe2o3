@@ -18,8 +18,9 @@ bounded-persistent-compute-wait/recycle, R39 scoped-persistent-SDMA-wait
 policy, R40 gfx942 striped-SDMA aggregate, R41 persistent striped-SDMA
 aggregate, R42 compute-event signal-custody, R44 live-foundation
 invariant-certificate, R45 compute-dependency-publisher, and R46 gfx942
-striped-SDMA tail-wait models. The authenticated runner proves 1064 obligations
-and rejects 461 expected-negative mutations over finite
+striped-SDMA tail-wait, and R48 retryable striped-SDMA tail-wait models. The
+authenticated runner proves 1107 obligations and rejects 496
+expected-negative mutations over finite
 abstract values and traces. The
 materialization input and image sequences are
 capped at 64 MiB and its phase trace has exactly four entries. The
@@ -2332,6 +2333,78 @@ accounting, and a forged all-ready audit witness.
 | Observation work | **Proved arithmetically** | Admitted final observation work is `rounds*S + N`, not `rounds*N`; malformed identity-validation prefixes and the separate `N` retirement move are excluded, so this establishes no CPU or wall-clock gain. |
 | Executable bounded model | **Checked** | Eleven Rust tests cover active partitions through 882 requests/14 shards, hostile early/late identity and roster inputs, Pending rounds, final success/error/timeout, no partial retirement, exact order, and observation counts. |
 | Production refinement, panic/allocator behavior, native fence validation, hardware, KFD/HSA/HIP behavior, parity, or performance | **Not established** | Explicitly outside the R46 proof boundary. |
+
+## R48 retryable striped-SDMA tail wait
+
+`r48_retryable_striped_sdma_tail_wait_v1.rs` verifies exactly 43 obligations
+over an independent finite wait model. The runner pins that proof and 35
+standalone expected-negative countermodels. They are independent rejected
+boundary examples, not transformations of the positive proof source. The
+executable no-std model has twenty-two focused
+tests. R48 supersedes R46 only for the production-shaped domains named here;
+R46 remains a separately authenticated abstract tranche.
+
+Admission covers even striped queue counts from 2 through 16, with combined
+directional-plus-striped mode capped at 14 and standalone striped mode admitting
+16. One nonzero owner/session occurrence and a nonzero submission epoch at or
+below the single modeled issuer's burned high-water bind the submission. The
+model retains the rotating `first_queue`, assigns actual queue ordinal
+`(first_queue + request_index) % Q`, and normalizes a tail slot relative to that
+cursor. Exact `Engine0` and `Engine1` labels remain derived from the actual
+physical queue ordinal, not the normalized slot.
+
+Each request carries an exact addressless signal identity and packet occurrence,
+ring slot, queue identity/generation, fence header, payload identity, and explicit
+publication premises. The physical ring has slots `0..=63`; a shard admits at
+most 63 in-flight requests, and same-queue requests cannot alias a slot or packet
+occurrence. Separate premises state that the complete packet and retained record
+precede release publication of the write pointer, and that write-pointer release
+precedes doorbell release. The engine and system+snoop fence are admitted, the
+signal read names the fence, and fence completion makes preceding shard work
+visible. These are mathematical inputs. R48 does not establish that production
+Rust captured them or that KFD, firmware, hardware, or coherence makes them true.
+
+Every completed tail round records exactly `S` loads. After `r` completed rounds,
+an early tail observation error at prefix `k` records exactly `r*S + k`. A final
+path first completes one whole tail round, then performs one ordered `N` audit;
+an audit observation error at prefix `k` records only that prefix, while every
+non-error audit outcome records exactly `N`. Audit classification retains
+per-physical-queue pending state and intersects it with the union of tails ready
+in the final tail round and tails observed ready during the audit. A pending
+predecessor on any such queue is terminal even when another queue's tail remains
+pending; pending work confined to queues whose tails remain pending is retryable.
+No result partially retires the roster. Success retires all `N` requests in
+original order; a modeled retake failure after retirement is terminal opaque
+custody, not reusable authority.
+
+Timeout is retryable only after the exact audit, closing-currentness check, and
+zero retirement. It returns the unchanged publication roster. Consuming that
+timeout for retry strictly increments and burns the wait epoch, resets only
+per-epoch round/audit counters, and preserves cumulative work. The panic-guard
+transition retains the whole source roster and zero retirement at before-load,
+tail-prefix, audit-prefix, and post-close stages, with the same prefix formulas;
+an invalid panic coordinate is terminal. The formal retry theorems require an
+exact timeout receipt with one full `N` audit, rather than accepting an arbitrary
+waiting owner. Opening or closing currentness mismatch, malformed roster or prefix coordinates,
+tail-ready/pending-prefix contradiction, and failed complete retirement preflight
+are terminal custody states.
+
+The model's `post_bind_allocation_events == 0` field is an explicit abstract
+state premise preserved by its pure transitions. The use of mathematical
+sequences and executable `Vec` construction establishes no Rust allocator,
+instruction-count, wall-clock, or performance property.
+
+## R48 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Queue domain and rotating placement | **Proved abstractly** | Even `Q=2..16`, combined `Q<=14`, standalone `Q<=16`; cursor-relative normalized shards retain actual physical engine labels. |
+| Submission and publication identity | **Explicit premises checked and modeled** | Nonzero single-issuer burned submission epoch; exact packet, signal, queue, 64-slot ring identity, generation, system+snoop fence, record, pointer, and doorbell facts; same-queue slots and packet occurrences are distinct. |
+| Tail rounds and final audit | **Proved abstractly** | Completed rounds cost `S`; tail and audit errors preserve exact prefixes; each non-error final path has one ordered `N` audit; per-queue pending/ready-tail intersection matches the production classifier. |
+| Timeout, panic, and retirement custody | **Proved abstractly** | Timeout is retryable whole custody with a strictly advanced wait epoch; panic retains the whole roster; retirement is zero or `N`; retake failure is completed opaque. |
+| Executable bounded model | **Checked** | Twenty-two Rust tests cover all queue domains, rotating engines/tails, all 64 ring slots, publication substitutions, per-queue classification, prefix formulas, authentic retry, currentness, valid/invalid panic stages, retirement, and retake. |
+| Boundary countermodels | **Rejected** | Thirty-five pinned standalone countermodels fail profile, cursor, engine, epoch, packet, signal, ring-slot, mixed-ready queue, final-tail union, tail, audit, authentic timeout-retry, currentness, panic, retirement, or retake postconditions; they are not source transformations. |
+| Production Rust refinement, allocator behavior, native fence/coherence/currentness truth, hardware, KFD/HSA/HIP behavior, parity, or performance | **Not established** | Explicitly outside the R48 proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust

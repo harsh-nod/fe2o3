@@ -47,6 +47,7 @@ r42_compute_event_signal_custody_proof="$script_dir/r42_compute_event_signal_cus
 r44_live_foundation_invariant_certificate_proof="$script_dir/r44_live_foundation_invariant_certificate_v1.rs"
 r45_compute_dependency_publisher_proof="$script_dir/r45_compute_dependency_publisher_v1.rs"
 r46_gfx942_striped_sdma_tail_wait_proof="$script_dir/r46_gfx942_striped_sdma_tail_wait_v1.rs"
+r48_retryable_striped_sdma_tail_wait_proof="$script_dir/r48_retryable_striped_sdma_tail_wait_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -508,6 +509,41 @@ negative_r46_currentness_omission="$script_dir/negative/r46_gfx942_striped_sdma_
 negative_r46_custody_loss="$script_dir/negative/r46_gfx942_striped_sdma_tail_wait_v1_custody_loss.rs"
 negative_r46_false_complexity="$script_dir/negative/r46_gfx942_striped_sdma_tail_wait_v1_false_complexity.rs"
 negative_r46_forged_audit_witness="$script_dir/negative/r46_gfx942_striped_sdma_tail_wait_v1_forged_audit_witness.rs"
+negative_r48_audit_error_prefix="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_audit_error_prefix.rs"
+negative_r48_closing_currentness="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_closing_currentness.rs"
+negative_r48_completed_round_work="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_completed_round_work.rs"
+negative_r48_cursor_not_normalized="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_cursor_not_normalized.rs"
+negative_r48_cursor_not_rotated="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_cursor_not_rotated.rs"
+negative_r48_duplicate_packet_occurrence="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_duplicate_packet_occurrence.rs"
+negative_r48_duplicate_ring_slot="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_duplicate_ring_slot.rs"
+negative_r48_duplicate_signal="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_duplicate_signal.rs"
+negative_r48_engine_from_normalized_slot="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_engine_from_normalized_slot.rs"
+negative_r48_final_audit_omission="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_final_audit_omission.rs"
+negative_r48_final_ready_tail_union="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_final_ready_tail_union.rs"
+negative_r48_forged_timeout_retry="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_forged_timeout_retry.rs"
+negative_r48_invalid_panic_stage="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_invalid_panic_stage.rs"
+negative_r48_mixed_ready_queue="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_mixed_ready_queue.rs"
+negative_r48_packet_before_release="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_packet_before_release.rs"
+negative_r48_packet_body_omission="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_packet_body_omission.rs"
+negative_r48_packet_fence_header="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_packet_fence_header.rs"
+negative_r48_packet_release_order="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_packet_release_order.rs"
+negative_r48_packet_signal_substitution="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_packet_signal_substitution.rs"
+negative_r48_panic_audit_tail_round="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_panic_audit_tail_round.rs"
+negative_r48_panic_partial_retirement="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_panic_partial_retirement.rs"
+negative_r48_panic_roster_loss="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_panic_roster_loss.rs"
+negative_r48_profile_combined_16="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_profile_combined_16.rs"
+negative_r48_profile_odd_count="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_profile_odd_count.rs"
+negative_r48_retake_failure_reusable="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_retake_failure_reusable.rs"
+negative_r48_tail_error_prefix="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_tail_error_prefix.rs"
+negative_r48_tail_last_request="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_tail_last_request.rs"
+negative_r48_timeout_custody_loss="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_timeout_custody_loss.rs"
+negative_r48_timeout_partial_retirement="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_timeout_partial_retirement.rs"
+negative_r48_timeout_retry_cumulative="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_timeout_retry_cumulative.rs"
+negative_r48_timeout_retry_epoch="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_timeout_retry_epoch.rs"
+negative_r48_timeout_retry_repeat="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_timeout_retry_repeat.rs"
+negative_r48_unburned_submission_epoch="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_unburned_submission_epoch.rs"
+negative_r48_wait_epoch_currentness="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_wait_epoch_currentness.rs"
+negative_r48_zero_submission_epoch="$script_dir/negative/r48_retryable_striped_sdma_tail_wait_v1_zero_submission_epoch.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -576,6 +612,7 @@ expected_r42_compute_event_signal_custody=$(read_pin "$pin_dir/R42_COMPUTE_EVENT
 expected_r44_live_foundation_invariant_certificate=$(read_pin "$pin_dir/R44_LIVE_FOUNDATION_INVARIANT_CERTIFICATE_SHA256")
 expected_r45_compute_dependency_publisher=$(read_pin "$pin_dir/R45_COMPUTE_DEPENDENCY_PUBLISHER_SHA256")
 expected_r46_gfx942_striped_sdma_tail_wait=$(read_pin "$pin_dir/R46_GFX942_STRIPED_SDMA_TAIL_WAIT_SHA256")
+expected_r48_retryable_striped_sdma_tail_wait=$(read_pin "$pin_dir/R48_RETRYABLE_STRIPED_SDMA_TAIL_WAIT_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -1037,6 +1074,41 @@ expected_negative_r46_currentness_omission=$(read_pin "$pin_dir/NEGATIVE_R46_CUR
 expected_negative_r46_custody_loss=$(read_pin "$pin_dir/NEGATIVE_R46_CUSTODY_LOSS_SHA256")
 expected_negative_r46_false_complexity=$(read_pin "$pin_dir/NEGATIVE_R46_FALSE_COMPLEXITY_SHA256")
 expected_negative_r46_forged_audit_witness=$(read_pin "$pin_dir/NEGATIVE_R46_FORGED_AUDIT_WITNESS_SHA256")
+expected_negative_r48_audit_error_prefix=$(read_pin "$pin_dir/NEGATIVE_R48_AUDIT_ERROR_PREFIX_SHA256")
+expected_negative_r48_closing_currentness=$(read_pin "$pin_dir/NEGATIVE_R48_CLOSING_CURRENTNESS_SHA256")
+expected_negative_r48_completed_round_work=$(read_pin "$pin_dir/NEGATIVE_R48_COMPLETED_ROUND_WORK_SHA256")
+expected_negative_r48_cursor_not_normalized=$(read_pin "$pin_dir/NEGATIVE_R48_CURSOR_NOT_NORMALIZED_SHA256")
+expected_negative_r48_cursor_not_rotated=$(read_pin "$pin_dir/NEGATIVE_R48_CURSOR_NOT_ROTATED_SHA256")
+expected_negative_r48_duplicate_packet_occurrence=$(read_pin "$pin_dir/NEGATIVE_R48_DUPLICATE_PACKET_OCCURRENCE_SHA256")
+expected_negative_r48_duplicate_ring_slot=$(read_pin "$pin_dir/NEGATIVE_R48_DUPLICATE_RING_SLOT_SHA256")
+expected_negative_r48_duplicate_signal=$(read_pin "$pin_dir/NEGATIVE_R48_DUPLICATE_SIGNAL_SHA256")
+expected_negative_r48_engine_from_normalized_slot=$(read_pin "$pin_dir/NEGATIVE_R48_ENGINE_FROM_NORMALIZED_SLOT_SHA256")
+expected_negative_r48_final_audit_omission=$(read_pin "$pin_dir/NEGATIVE_R48_FINAL_AUDIT_OMISSION_SHA256")
+expected_negative_r48_final_ready_tail_union=$(read_pin "$pin_dir/NEGATIVE_R48_FINAL_READY_TAIL_UNION_SHA256")
+expected_negative_r48_forged_timeout_retry=$(read_pin "$pin_dir/NEGATIVE_R48_FORGED_TIMEOUT_RETRY_SHA256")
+expected_negative_r48_invalid_panic_stage=$(read_pin "$pin_dir/NEGATIVE_R48_INVALID_PANIC_STAGE_SHA256")
+expected_negative_r48_mixed_ready_queue=$(read_pin "$pin_dir/NEGATIVE_R48_MIXED_READY_QUEUE_SHA256")
+expected_negative_r48_packet_before_release=$(read_pin "$pin_dir/NEGATIVE_R48_PACKET_BEFORE_RELEASE_SHA256")
+expected_negative_r48_packet_body_omission=$(read_pin "$pin_dir/NEGATIVE_R48_PACKET_BODY_OMISSION_SHA256")
+expected_negative_r48_packet_fence_header=$(read_pin "$pin_dir/NEGATIVE_R48_PACKET_FENCE_HEADER_SHA256")
+expected_negative_r48_packet_release_order=$(read_pin "$pin_dir/NEGATIVE_R48_PACKET_RELEASE_ORDER_SHA256")
+expected_negative_r48_packet_signal_substitution=$(read_pin "$pin_dir/NEGATIVE_R48_PACKET_SIGNAL_SUBSTITUTION_SHA256")
+expected_negative_r48_panic_audit_tail_round=$(read_pin "$pin_dir/NEGATIVE_R48_PANIC_AUDIT_TAIL_ROUND_SHA256")
+expected_negative_r48_panic_partial_retirement=$(read_pin "$pin_dir/NEGATIVE_R48_PANIC_PARTIAL_RETIREMENT_SHA256")
+expected_negative_r48_panic_roster_loss=$(read_pin "$pin_dir/NEGATIVE_R48_PANIC_ROSTER_LOSS_SHA256")
+expected_negative_r48_profile_combined_16=$(read_pin "$pin_dir/NEGATIVE_R48_PROFILE_COMBINED_16_SHA256")
+expected_negative_r48_profile_odd_count=$(read_pin "$pin_dir/NEGATIVE_R48_PROFILE_ODD_COUNT_SHA256")
+expected_negative_r48_retake_failure_reusable=$(read_pin "$pin_dir/NEGATIVE_R48_RETAKE_FAILURE_REUSABLE_SHA256")
+expected_negative_r48_tail_error_prefix=$(read_pin "$pin_dir/NEGATIVE_R48_TAIL_ERROR_PREFIX_SHA256")
+expected_negative_r48_tail_last_request=$(read_pin "$pin_dir/NEGATIVE_R48_TAIL_LAST_REQUEST_SHA256")
+expected_negative_r48_timeout_custody_loss=$(read_pin "$pin_dir/NEGATIVE_R48_TIMEOUT_CUSTODY_LOSS_SHA256")
+expected_negative_r48_timeout_partial_retirement=$(read_pin "$pin_dir/NEGATIVE_R48_TIMEOUT_PARTIAL_RETIREMENT_SHA256")
+expected_negative_r48_timeout_retry_cumulative=$(read_pin "$pin_dir/NEGATIVE_R48_TIMEOUT_RETRY_CUMULATIVE_SHA256")
+expected_negative_r48_timeout_retry_epoch=$(read_pin "$pin_dir/NEGATIVE_R48_TIMEOUT_RETRY_EPOCH_SHA256")
+expected_negative_r48_timeout_retry_repeat=$(read_pin "$pin_dir/NEGATIVE_R48_TIMEOUT_RETRY_REPEAT_SHA256")
+expected_negative_r48_unburned_submission_epoch=$(read_pin "$pin_dir/NEGATIVE_R48_UNBURNED_SUBMISSION_EPOCH_SHA256")
+expected_negative_r48_wait_epoch_currentness=$(read_pin "$pin_dir/NEGATIVE_R48_WAIT_EPOCH_CURRENTNESS_SHA256")
+expected_negative_r48_zero_submission_epoch=$(read_pin "$pin_dir/NEGATIVE_R48_ZERO_SUBMISSION_EPOCH_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -1108,6 +1180,7 @@ check_sources() {
     check_digest "$expected_r44_live_foundation_invariant_certificate" "$r44_live_foundation_invariant_certificate_proof"
     check_digest "$expected_r45_compute_dependency_publisher" "$r45_compute_dependency_publisher_proof"
     check_digest "$expected_r46_gfx942_striped_sdma_tail_wait" "$r46_gfx942_striped_sdma_tail_wait_proof"
+    check_digest "$expected_r48_retryable_striped_sdma_tail_wait" "$r48_retryable_striped_sdma_tail_wait_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -1569,6 +1642,41 @@ check_sources() {
     check_digest "$expected_negative_r46_custody_loss" "$negative_r46_custody_loss"
     check_digest "$expected_negative_r46_false_complexity" "$negative_r46_false_complexity"
     check_digest "$expected_negative_r46_forged_audit_witness" "$negative_r46_forged_audit_witness"
+    check_digest "$expected_negative_r48_audit_error_prefix" "$negative_r48_audit_error_prefix"
+    check_digest "$expected_negative_r48_closing_currentness" "$negative_r48_closing_currentness"
+    check_digest "$expected_negative_r48_completed_round_work" "$negative_r48_completed_round_work"
+    check_digest "$expected_negative_r48_cursor_not_normalized" "$negative_r48_cursor_not_normalized"
+    check_digest "$expected_negative_r48_cursor_not_rotated" "$negative_r48_cursor_not_rotated"
+    check_digest "$expected_negative_r48_duplicate_packet_occurrence" "$negative_r48_duplicate_packet_occurrence"
+    check_digest "$expected_negative_r48_duplicate_ring_slot" "$negative_r48_duplicate_ring_slot"
+    check_digest "$expected_negative_r48_duplicate_signal" "$negative_r48_duplicate_signal"
+    check_digest "$expected_negative_r48_engine_from_normalized_slot" "$negative_r48_engine_from_normalized_slot"
+    check_digest "$expected_negative_r48_final_audit_omission" "$negative_r48_final_audit_omission"
+    check_digest "$expected_negative_r48_final_ready_tail_union" "$negative_r48_final_ready_tail_union"
+    check_digest "$expected_negative_r48_forged_timeout_retry" "$negative_r48_forged_timeout_retry"
+    check_digest "$expected_negative_r48_invalid_panic_stage" "$negative_r48_invalid_panic_stage"
+    check_digest "$expected_negative_r48_mixed_ready_queue" "$negative_r48_mixed_ready_queue"
+    check_digest "$expected_negative_r48_packet_before_release" "$negative_r48_packet_before_release"
+    check_digest "$expected_negative_r48_packet_body_omission" "$negative_r48_packet_body_omission"
+    check_digest "$expected_negative_r48_packet_fence_header" "$negative_r48_packet_fence_header"
+    check_digest "$expected_negative_r48_packet_release_order" "$negative_r48_packet_release_order"
+    check_digest "$expected_negative_r48_packet_signal_substitution" "$negative_r48_packet_signal_substitution"
+    check_digest "$expected_negative_r48_panic_audit_tail_round" "$negative_r48_panic_audit_tail_round"
+    check_digest "$expected_negative_r48_panic_partial_retirement" "$negative_r48_panic_partial_retirement"
+    check_digest "$expected_negative_r48_panic_roster_loss" "$negative_r48_panic_roster_loss"
+    check_digest "$expected_negative_r48_profile_combined_16" "$negative_r48_profile_combined_16"
+    check_digest "$expected_negative_r48_profile_odd_count" "$negative_r48_profile_odd_count"
+    check_digest "$expected_negative_r48_retake_failure_reusable" "$negative_r48_retake_failure_reusable"
+    check_digest "$expected_negative_r48_tail_error_prefix" "$negative_r48_tail_error_prefix"
+    check_digest "$expected_negative_r48_tail_last_request" "$negative_r48_tail_last_request"
+    check_digest "$expected_negative_r48_timeout_custody_loss" "$negative_r48_timeout_custody_loss"
+    check_digest "$expected_negative_r48_timeout_partial_retirement" "$negative_r48_timeout_partial_retirement"
+    check_digest "$expected_negative_r48_timeout_retry_cumulative" "$negative_r48_timeout_retry_cumulative"
+    check_digest "$expected_negative_r48_timeout_retry_epoch" "$negative_r48_timeout_retry_epoch"
+    check_digest "$expected_negative_r48_timeout_retry_repeat" "$negative_r48_timeout_retry_repeat"
+    check_digest "$expected_negative_r48_unburned_submission_epoch" "$negative_r48_unburned_submission_epoch"
+    check_digest "$expected_negative_r48_wait_epoch_currentness" "$negative_r48_wait_epoch_currentness"
+    check_digest "$expected_negative_r48_zero_submission_epoch" "$negative_r48_zero_submission_epoch"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -1621,6 +1729,7 @@ check_sources
     "$r44_live_foundation_invariant_certificate_proof" \
     "$r45_compute_dependency_publisher_proof" \
     "$r46_gfx942_striped_sdma_tail_wait_proof" \
+    "$r48_retryable_striped_sdma_tail_wait_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -2078,7 +2187,42 @@ check_sources
     "$negative_r46_currentness_omission" \
     "$negative_r46_custody_loss" \
     "$negative_r46_false_complexity" \
-    "$negative_r46_forged_audit_witness"
+    "$negative_r46_forged_audit_witness" \
+    "$negative_r48_audit_error_prefix" \
+    "$negative_r48_closing_currentness" \
+    "$negative_r48_completed_round_work" \
+    "$negative_r48_cursor_not_normalized" \
+    "$negative_r48_cursor_not_rotated" \
+    "$negative_r48_duplicate_packet_occurrence" \
+    "$negative_r48_duplicate_ring_slot" \
+    "$negative_r48_duplicate_signal" \
+    "$negative_r48_engine_from_normalized_slot" \
+    "$negative_r48_final_audit_omission" \
+    "$negative_r48_final_ready_tail_union" \
+    "$negative_r48_forged_timeout_retry" \
+    "$negative_r48_invalid_panic_stage" \
+    "$negative_r48_mixed_ready_queue" \
+    "$negative_r48_packet_before_release" \
+    "$negative_r48_packet_body_omission" \
+    "$negative_r48_packet_fence_header" \
+    "$negative_r48_packet_release_order" \
+    "$negative_r48_packet_signal_substitution" \
+    "$negative_r48_panic_audit_tail_round" \
+    "$negative_r48_panic_partial_retirement" \
+    "$negative_r48_panic_roster_loss" \
+    "$negative_r48_profile_combined_16" \
+    "$negative_r48_profile_odd_count" \
+    "$negative_r48_retake_failure_reusable" \
+    "$negative_r48_tail_error_prefix" \
+    "$negative_r48_tail_last_request" \
+    "$negative_r48_timeout_custody_loss" \
+    "$negative_r48_timeout_partial_retirement" \
+    "$negative_r48_timeout_retry_cumulative" \
+    "$negative_r48_timeout_retry_epoch" \
+    "$negative_r48_timeout_retry_repeat" \
+    "$negative_r48_unburned_submission_epoch" \
+    "$negative_r48_wait_epoch_currentness" \
+    "$negative_r48_zero_submission_epoch"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -2221,6 +2365,7 @@ check_positive "$r42_compute_event_signal_custody_proof" 'verification results::
 check_positive "$r44_live_foundation_invariant_certificate_proof" 'verification results:: 27 verified, 0 errors' r44-live-foundation-invariant-certificate
 check_positive "$r45_compute_dependency_publisher_proof" 'verification results:: 39 verified, 0 errors' r45-compute-dependency-publisher
 check_positive "$r46_gfx942_striped_sdma_tail_wait_proof" 'verification results:: 32 verified, 0 errors' r46-gfx942-striped-sdma-tail-wait
+check_positive "$r48_retryable_striped_sdma_tail_wait_proof" 'verification results:: 43 verified, 0 errors' r48-retryable-striped-sdma-tail-wait
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -2682,13 +2827,48 @@ check_negative "$negative_r46_currentness_omission" mutated_currentness_omission
 check_negative "$negative_r46_custody_loss" mutated_noncompleted_custody_is_retained_v1 r46-custody-loss
 check_negative "$negative_r46_false_complexity" mutated_false_complexity_count_is_exact_v1 r46-false-complexity
 check_negative "$negative_r46_forged_audit_witness" mutated_forged_audit_witness_is_rejected_v1 r46-forged-audit-witness
+check_negative "$negative_r48_audit_error_prefix" audit_error_stops_at_prefix_v1 r48-audit-error-prefix
+check_negative "$negative_r48_closing_currentness" failed_close_is_terminal_v1 r48-closing-currentness
+check_negative "$negative_r48_completed_round_work" completed_rounds_have_rounds_times_s_work_v1 r48-completed-round-work
+check_negative "$negative_r48_cursor_not_normalized" rotated_queue_is_normalized_v1 r48-cursor-not-normalized
+check_negative "$negative_r48_cursor_not_rotated" first_request_uses_rotating_cursor_v1 r48-cursor-not-rotated
+check_negative "$negative_r48_duplicate_packet_occurrence" same_queue_duplicate_packet_is_rejected_v1 r48-duplicate-packet-occurrence
+check_negative "$negative_r48_duplicate_ring_slot" same_queue_duplicate_ring_slot_is_rejected_v1 r48-duplicate-ring-slot
+check_negative "$negative_r48_duplicate_signal" equal_signals_are_rejected_v1 r48-duplicate-signal
+check_negative "$negative_r48_engine_from_normalized_slot" actual_queue_three_has_engine_one_v1 r48-engine-from-normalized-slot
+check_negative "$negative_r48_final_audit_omission" timeout_audits_exact_n_v1 r48-final-audit-omission
+check_negative "$negative_r48_final_ready_tail_union" final_ready_tail_participates_in_ordering_v1 r48-final-ready-tail-union
+check_negative "$negative_r48_forged_timeout_retry" unaudited_owner_cannot_retry_as_timeout_v1 r48-forged-timeout-retry
+check_negative "$negative_r48_invalid_panic_stage" invalid_panic_stage_is_terminal_v1 r48-invalid-panic-stage
+check_negative "$negative_r48_mixed_ready_queue" mixed_ready_queue_pending_prefix_is_terminal_v1 r48-mixed-ready-queue
+check_negative "$negative_r48_packet_before_release" packet_body_precedes_pointer_release_v1 r48-packet-before-release
+check_negative "$negative_r48_packet_body_omission" complete_packet_body_precedes_publication_v1 r48-packet-body-omission
+check_negative "$negative_r48_packet_fence_header" fence_header_is_exact_v1 r48-packet-fence-header
+check_negative "$negative_r48_packet_release_order" doorbell_requires_pointer_release_v1 r48-packet-release-order
+check_negative "$negative_r48_packet_signal_substitution" packet_signal_is_ticket_signal_v1 r48-packet-signal-substitution
+check_negative "$negative_r48_panic_audit_tail_round" audit_panic_includes_completed_tail_round_v1 r48-panic-audit-tail-round
+check_negative "$negative_r48_panic_partial_retirement" panic_guard_retires_nothing_v1 r48-panic-partial-retirement
+check_negative "$negative_r48_panic_roster_loss" panic_guard_preserves_whole_roster_v1 r48-panic-roster-loss
+check_negative "$negative_r48_profile_combined_16" combined_sixteen_is_rejected_v1 r48-profile-combined-16
+check_negative "$negative_r48_profile_odd_count" odd_queue_count_is_rejected_v1 r48-profile-odd-count
+check_negative "$negative_r48_retake_failure_reusable" retake_failure_is_completed_opaque_v1 r48-retake-failure-reusable
+check_negative "$negative_r48_tail_error_prefix" tail_error_has_rounds_s_plus_prefix_v1 r48-tail-error-prefix
+check_negative "$negative_r48_tail_last_request" ten_over_eight_tail_zero_is_request_eight_v1 r48-tail-last-request
+check_negative "$negative_r48_timeout_custody_loss" timeout_returns_exact_owner_v1 r48-timeout-custody-loss
+check_negative "$negative_r48_timeout_partial_retirement" timeout_has_zero_partial_retirement_v1 r48-timeout-partial-retirement
+check_negative "$negative_r48_timeout_retry_cumulative" retry_preserves_cumulative_work_v1 r48-timeout-retry-cumulative
+check_negative "$negative_r48_timeout_retry_epoch" retry_strictly_advances_wait_epoch_v1 r48-timeout-retry-epoch
+check_negative "$negative_r48_timeout_retry_repeat" repeated_retry_epochs_are_strictly_monotonic_v1 r48-timeout-retry-repeat
+check_negative "$negative_r48_unburned_submission_epoch" unburned_epoch_is_rejected_v1 r48-unburned-submission-epoch
+check_negative "$negative_r48_wait_epoch_currentness" stale_wait_epoch_is_rejected_v1 r48-wait-epoch-currentness
+check_negative "$negative_r48_zero_submission_epoch" zero_epoch_is_rejected_v1 r48-zero-submission-epoch
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 mutations=461'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 mutations=496'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2
