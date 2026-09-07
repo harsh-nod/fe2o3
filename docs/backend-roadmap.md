@@ -653,10 +653,15 @@ post-publication structure, and both unwind boundary structures.
 
 The `logical-mux{2,4,8,14,16}` benchmark profiles use the separate
 `fe2o3.async-copy-logical-mux-benchmark.v1` schema and are designed for a first
-depth-112 comparison with the corresponding N-native profiles. No hardware run
-is part of this tranche. The mux adds ordering between logical lanes sharing a
-native queue and therefore does not establish HIP stream independence,
-independent progress, scheduling, priorities, events, capture, or per-stream
-synchronization. There is no Rust-to-model refinement, hardware correctness,
-performance, HIP/HSA parity, workload-general speedup, or typed panic-recovery
-claim.
+depth-112 comparison with the corresponding N-native profiles. The retained
+[R56 MI300X engineering screen](evidence/mi300x-r56-two-native-logical-mux-screen-2026-09-07.md)
+observed higher host-wall effective throughput for the mux at workload-matched
+lane counts 4, 8, and 14, but lower H2D throughput at lane 2. The compared
+profiles have different native queue topology and ordering semantics, and each
+configuration has only one process-level replicate on a shared host. The
+result is observational and does not establish a causal or general speedup.
+The mux adds ordering between logical lanes sharing a native queue and
+therefore does not establish HIP stream independence, independent progress,
+scheduling, priorities, events, capture, or per-stream synchronization. There
+is no Rust-to-model refinement, general hardware correctness, HIP/HSA parity,
+workload-general performance, or typed panic-recovery claim.
