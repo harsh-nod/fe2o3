@@ -21,6 +21,18 @@ use fe2o3_runtime_model::{MemoryMappingKeyV1, QueueKeyV1};
 use crate::shared_memory::SharedGttMappedResourceFactsV1;
 use crate::wait::MonotonicWaitV1;
 
+#[path = "queue_completion/dependency_event.rs"]
+mod dependency_event;
+
+use dependency_event::CompletionDependencyLedgerV1;
+pub use dependency_event::{
+    GFX942_COMPUTE_EVENT_CUSTODY_MANIFEST_SHA256_V1, GFX942_COMPUTE_EVENT_CUSTODY_MANIFEST_V1,
+    GFX942_MAX_COMPUTE_DEPENDENCY_READERS_V1, GFX942_MAX_COMPUTE_EVENT_OCCURRENCES_V1,
+    Gfx942ComputeDependencyReaderLeaseV1, Gfx942ComputeDependencyReaderReleaseObservationV1,
+    Gfx942ComputeEventBindingStateV1, Gfx942ComputeEventOccurrenceV1,
+    Gfx942ComputeEventReleaseObservationV1,
+};
+
 pub(crate) const COMPLETION_SIGNAL_CAPACITY_V1: usize = AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize;
 pub(crate) const COMPLETION_SIGNAL_ARENA_BYTES_V1: usize =
     COMPLETION_SIGNAL_CAPACITY_V1 * AMD_SIGNAL_BYTES_V1;
@@ -28,26 +40,28 @@ pub(super) const MAX_COMPLETION_POLL_ATTEMPTS_V1: u32 = 1_000_000;
 
 /// Canonical claim boundary for the private completion-signal slice.
 pub const GFX942_AQL_COMPLETION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-aql-completion-r8-v1\n",
+    "profile=fe2o3-mi300x-gfx942-aql-completion-r42-v1\n",
     "aql_dispatch_schema_sha256=82fbd7cf0b6c8647dce3f9b11e4f13a2dadfe3423509f769a4bc6cc87bb7acd0\n",
     "aql_barrier_and_schema_sha256=bdca900cd5c6eaccbddfc5a854e956382a08ce87bec4ccd5284baacf932cdfb5\n",
     "aql_fixed_batch_schema_sha256=a3c74fe4aa26a62772253de267812f2fb1626247685d8c4e8ed8bbb2a5a9e34a\n",
+    "compute_event_custody_schema_sha256=f8ecd29fabba9c6dd924cf8a0c41272f313d87115f41aeb7a7bd38f2b0acf0cd\n",
     "arena=one-host-visible-coherent-gtt-allocation,524288-bytes,8192-distinct-64-byte-aligned-user-signals\n",
     "batch=1-through-8192,heap-owned-fixed-cardinality-state,one-unique-signal-per-packet,no-aggregate-alias\n",
     "initialization=typed-amd-busy-signal-construction,kind-user-1,value-pending-1,event-fields-zero,before-gpu-map\n",
     "fixed-batch-binding=crate-private-packet-construction,per-packet-independent-or-wait-for-prior-ordering-retained,no-public-signal-address,exact-queue-vm-signal-code-kernarg-and-nonzero-dispatch-generations-retained,actual-resource-lifetimes-owned-by-private-c5-queue-owner\n",
     "observation=monotonic-deadline-or-legacy-bounded-poll,short-spin-then-yield-and-bounded-exponential-sleep,one-pre-post-currentness-envelope-around-one-exact-retained-signal-set-of-atomic-i64-acquire-loads,same-scan-redacted-packet-completed-pending-and-first-pending-index-progress,all-retained-signals-zero-before-ready,unexpected-value-is-fault,timeout-retains-linear-operation-privately-until-addressless-counter-first-retained-packet-first-retained-signal-exception-currentness-snapshot\n",
-    "recycle=fixed-batch-only-after-exact-all-signal-completion-or-barrier-probe-only-after-exact-one-signal-completion,atomic-i64-release-reset-to-pending,checked-slot-generation-increment\n",
+    "event-custody=addressless-exact-occurrence-and-native-reader-ledgers,bounded-8192-each,independent-checked-event-and-reader-pin-counts,drop-inert\n",
+    "recycle=fixed-batch-only-after-exact-all-signal-completion-and-zero-event-and-reader-pins-or-barrier-probe-only-after-exact-one-signal-completion,atomic-i64-release-reset-to-pending,checked-slot-generation-increment\n",
     "barrier-probe=isolated-owner-phase,exact-one-slot,queue-and-signal-generations-only,no-code-kernarg-or-dispatch-generation,bound-published-completed-recycled-linear-custody,zero-dependency-system-scope-header-0x1403\n",
     "failure=currentness-native-observation-unexpected-value-timeout-invalid-poll-bound-generation-exhaustion-or-reset-ambiguity-poisons-owner-and-queue;timeout-snapshot-precedes-poison-and-grants-no-native-authority;teardown-required\n",
-    "release=queue-destroy-first,only-when-every-batch-was-completed-and-recycled,explicit-unmap-and-free,no-drop-native-effects\n",
+    "release=queue-destroy-first,only-when-every-batch-was-completed-and-recycled-and-event-reader-ledgers-are-empty,explicit-unmap-and-free,no-drop-native-effects\n",
     "proof=host-state-machine-and-mock-fault-tests-only,cpu-gpu-atomic-coherence-device-write-visibility-firmware-signal-and-quiescence-refinement-contracted\n",
-    "excluded=public-safe-launch,resource-lifetime-mint,copy,alias-proof,hardware-execution,ioctl-validation\n",
+    "excluded=public-safe-launch,dependency-packet-publication,resource-lifetime-mint,copy,alias-proof,hardware-execution,ioctl-validation\n",
 );
 
 /// SHA-256 of [`GFX942_AQL_COMPLETION_MANIFEST_V1`].
 pub const GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1: &str =
-    "4b7e1090eccbae41ea09ce7d5147470eb665ee295cb0f4526f5584225c86369a";
+    "ae6076e1d964f90ad74eb9a02ac14d1702ba9782d2df03a80b8cb9014be9167b";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CompletionOwnerPhaseV1 {
@@ -68,6 +82,8 @@ enum CompletionSlotPhaseV1 {
 struct CompletionSlotRecordV1 {
     generation: u64,
     phase: CompletionSlotPhaseV1,
+    event_pins: u32,
+    native_reader_pins: u32,
 }
 
 fn allocate_completion_slot_records_v1()
@@ -81,6 +97,8 @@ fn allocate_completion_slot_records_v1()
         CompletionSlotRecordV1 {
             generation: 1,
             phase: CompletionSlotPhaseV1::Available,
+            event_pins: 0,
+            native_reader_pins: 0,
         },
     );
     slots
@@ -170,7 +188,7 @@ impl CompletionPacketTemplateV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct CompletionSlotLeaseV1 {
     index: u32,
     generation: u64,
@@ -629,6 +647,27 @@ pub enum Gfx942CompletionErrorV1 {
     InsufficientSignals,
     BatchIdentityExhausted,
     SignalGenerationExhausted,
+    EventIdentityExhausted,
+    EventCapacityExhausted,
+    DependencyReaderIdentityExhausted,
+    DependencyReaderCapacityExhausted,
+    SignalPinCountExhausted,
+    InvalidSessionOccurrence,
+    InvalidAcceptanceEpoch,
+    EventAlreadyBound,
+    EventNotPublished,
+    CrossSessionEvent,
+    SelfDependency,
+    DependencyCycle,
+    DuplicateDependency,
+    DependencyLedgerAllocation,
+    StaleEventOccurrence,
+    StaleDependencyReader,
+    SignalPinned {
+        slot: u32,
+        event_pins: u32,
+        native_reader_pins: u32,
+    },
     WrongQueueGeneration,
     WrongVmGeneration,
     StaleBatchGeneration,
@@ -705,6 +744,7 @@ pub(super) struct CompletionSignalArenaOwnerV1 {
     gpu_base: u64,
     next_batch_id: u64,
     slots: Box<[CompletionSlotRecordV1; COMPLETION_SIGNAL_CAPACITY_V1]>,
+    dependency_ledger: Box<CompletionDependencyLedgerV1>,
     phase: CompletionOwnerPhaseV1,
 }
 
@@ -734,6 +774,7 @@ impl CompletionSignalArenaOwnerV1 {
             gpu_base: facts.gpu_va(),
             next_batch_id: 1,
             slots: allocate_completion_slot_records_v1()?,
+            dependency_ledger: Box::new(CompletionDependencyLedgerV1::new()),
             phase: CompletionOwnerPhaseV1::Ready,
         })
     }
@@ -754,6 +795,7 @@ impl CompletionSignalArenaOwnerV1 {
             next_batch_id: 1,
             slots: allocate_completion_slot_records_v1()
                 .expect("fixed completion test roster is allocatable"),
+            dependency_ledger: Box::new(CompletionDependencyLedgerV1::new()),
             phase: CompletionOwnerPhaseV1::Ready,
         }
     }
@@ -1090,7 +1132,23 @@ impl CompletionSignalArenaOwnerV1 {
         &mut self,
         retention: CompletionBatchRetentionV1<N>,
     ) -> Result<(), Gfx942CompletionErrorV1> {
-        self.validate_bound(&retention)?;
+        self.cancel_bound_retaining(retention)
+            .map_err(|(error, _retention)| error)
+    }
+
+    /// Owner-preserving cancellation used when a prepublication event pin may
+    /// make the otherwise no-effect batch temporarily unreleasable.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn cancel_bound_retaining<const N: usize>(
+        &mut self,
+        retention: CompletionBatchRetentionV1<N>,
+    ) -> Result<(), (Gfx942CompletionErrorV1, CompletionBatchRetentionV1<N>)> {
+        if let Err(error) = self.validate_bound(&retention) {
+            return Err((error, retention));
+        }
+        if let Err(error) = self.require_unpinned(&retention.slots) {
+            return Err((error, retention));
+        }
         for slot in retention.slots.iter() {
             self.slots[slot.index as usize].phase = CompletionSlotPhaseV1::Available;
         }
@@ -1332,6 +1390,9 @@ impl CompletionSignalArenaOwnerV1 {
         if let Err(error) = self.validate_completed(&completed.retention) {
             return Err((error, CompletionCurrentnessHandoffV1 { completed }));
         }
+        if let Err(error) = self.require_unpinned(&completed.retention.slots) {
+            return Err((error, CompletionCurrentnessHandoffV1 { completed }));
+        }
         if completed.retention.slots.iter().any(|slot| {
             self.slots[slot.index as usize]
                 .generation
@@ -1467,6 +1528,9 @@ impl CompletionSignalArenaOwnerV1 {
         if let Err(error) = self.validate_completed(&completed.retention) {
             return Err((error, completed));
         }
+        if let Err(error) = self.require_unpinned(&completed.retention.slots) {
+            return Err((error, completed));
+        }
         if completed.retention.slots.iter().any(|slot| {
             self.slots[slot.index as usize]
                 .generation
@@ -1503,10 +1567,12 @@ impl CompletionSignalArenaOwnerV1 {
 
     pub(super) fn ensure_releasable(&self) -> Result<(), Gfx942CompletionErrorV1> {
         self.require_ready()?;
-        if self
-            .slots
-            .iter()
-            .any(|record| record.phase != CompletionSlotPhaseV1::Available)
+        if !self.dependency_ledger.is_empty()
+            || self.slots.iter().any(|record| {
+                record.phase != CompletionSlotPhaseV1::Available
+                    || record.event_pins != 0
+                    || record.native_reader_pins != 0
+            })
         {
             return Err(Gfx942CompletionErrorV1::BatchStillRetained);
         }
@@ -1529,6 +1595,23 @@ impl CompletionSignalArenaOwnerV1 {
             || binding.kernarg.allocation.vm != self.queue.vm
         {
             return Err(Gfx942CompletionErrorV1::WrongVmGeneration);
+        }
+        Ok(())
+    }
+
+    fn require_unpinned<const N: usize>(
+        &self,
+        slots: &[CompletionSlotLeaseV1; N],
+    ) -> Result<(), Gfx942CompletionErrorV1> {
+        for slot in slots {
+            let record = &self.slots[slot.index as usize];
+            if record.event_pins != 0 || record.native_reader_pins != 0 {
+                return Err(Gfx942CompletionErrorV1::SignalPinned {
+                    slot: slot.index,
+                    event_pins: record.event_pins,
+                    native_reader_pins: record.native_reader_pins,
+                });
+            }
         }
         Ok(())
     }
@@ -1868,6 +1951,7 @@ mod tests {
             gpu_base: 0x20_0000,
             next_batch_id: 1,
             slots: allocate_completion_slot_records_v1().unwrap(),
+            dependency_ledger: Box::new(CompletionDependencyLedgerV1::new()),
             phase: CompletionOwnerPhaseV1::Ready,
         }
     }
