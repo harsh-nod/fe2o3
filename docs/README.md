@@ -102,6 +102,8 @@ replacement for the support matrix.
   evidence](evidence/mi300x-r54-r55-striped-sdma-qualification-2026-09-07.md)
 - [MI300X R55 striped-wait CPU diagnostic
   evidence](evidence/mi300x-r55-striped-wait-cpu-diagnostics-2026-09-07.md)
+- [MI300X R56 striped-tail spin engineering
+  screen](evidence/mi300x-r56-striped-spin-screen-2026-09-07.md)
 
 Evidence documents describe exact qualified observations. They do not silently
 upgrade an experimental target or path into a supported public interface.
