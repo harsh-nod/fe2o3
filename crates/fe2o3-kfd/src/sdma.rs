@@ -6980,20 +6980,31 @@ mod tests {
             .split("#[cfg(test)]\nmod tests")
             .next()
             .unwrap();
-        let method =
-            |start: &str, end: &str| live.split(start).nth(1).unwrap().split(end).next().unwrap();
+        let fixed = include_str!("queue_live/fixed_dispatch.rs");
+        fn method<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+            source
+                .split(start)
+                .nth(1)
+                .unwrap()
+                .split(end)
+                .next()
+                .unwrap()
+        }
         let elapsed_profile = "SdmaWaitProfileV1::PersistentElapsedSpinFloor";
 
         for body in [
             method(
+                live,
                 "pub fn wait_directional_persistent_sdma_copy_for_v1(",
                 "pub fn submit_directional_persistent_sdma_window_v1(",
             ),
             method(
+                live,
                 "pub fn wait_directional_persistent_sdma_window_for_v1(",
                 "pub fn submit_same_device_persistent_sdma_window_v1(",
             ),
             method(
+                live,
                 "pub fn wait_same_device_persistent_sdma_window_for_v1(",
                 "pub fn recycle_sdma_buffer(",
             ),
@@ -7003,10 +7014,12 @@ mod tests {
         assert_eq!(live.matches(elapsed_profile).count(), 3);
 
         let generic_persistent = method(
+            live,
             "pub fn wait_persistent_sdma_copy_for_v1(",
             "pub fn promote_sdma_device_buffer_to_directional_persistent_allocation_v1(",
         );
         let ordinary = method(
+            live,
             "pub fn wait_sdma_copy_for(",
             "pub fn wait_sdma_copy_batch_for(",
         );
@@ -7017,10 +7030,12 @@ mod tests {
             generic_persistent,
             ordinary,
             method(
+                live,
                 "pub fn execute_synchronous_directional_persistent_sdma_copy_for_v1(",
                 "pub fn poll_directional_persistent_sdma_copy_v1(",
             ),
             method(
+                fixed,
                 "pub fn wait_and_recycle_directional_persistent_fixed_dispatch_until_v1(",
                 "pub fn recycle_directional_persistent_fixed_dispatch_v1(",
             ),
@@ -7070,7 +7085,7 @@ mod tests {
             assert!(body.contains("MonotonicWaitV1::until(deadline)"));
         }
 
-        let persistent_compute = live
+        let persistent_compute = fixed
             .split("pub fn wait_and_recycle_directional_persistent_fixed_dispatch_until_v1(")
             .nth(1)
             .unwrap()
