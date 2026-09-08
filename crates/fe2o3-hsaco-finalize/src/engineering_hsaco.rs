@@ -488,8 +488,8 @@ mod tests {
     #[test]
     fn request_domains_separate_bootstrap_and_exact_replay() {
         assert_ne!(
-            EngineeringPhaseV1::Bootstrap.as_phase_tag(),
-            EngineeringPhaseV1::Replay(ContentIdentityV1::from_parts([1; 32], 1)).as_phase_tag(),
+            EngineeringPhaseV1::Bootstrap.phase_tag(),
+            EngineeringPhaseV1::Replay(ContentIdentityV1::from_parts([1; 32], 1)).phase_tag(),
         );
     }
 
@@ -553,11 +553,11 @@ mod tests {
     }
 
     trait PhaseTag {
-        fn as_phase_tag(self) -> u8;
+        fn phase_tag(self) -> u8;
     }
 
     impl PhaseTag for EngineeringPhaseV1 {
-        fn as_phase_tag(self) -> u8 {
+        fn phase_tag(self) -> u8 {
             match self {
                 EngineeringPhaseV1::Bootstrap => 1,
                 EngineeringPhaseV1::Replay(_) => 2,
