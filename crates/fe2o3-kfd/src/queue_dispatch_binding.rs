@@ -1527,13 +1527,12 @@ fn validate_completed_read_request(
             range.byte_len,
             request.offset,
             request.byte_len,
-        ) {
-            if matching_range.replace(range).is_some() {
-                return Err(Gfx942DispatchBindingErrorV1::InvalidData {
-                    index: request.data_index,
-                    detail: "completed read requires one inspected writable range",
-                });
-            }
+        ) && matching_range.replace(range).is_some()
+        {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "completed read requires one inspected writable range",
+            });
         }
     }
     let Some(matching_range) = matching_range else {
