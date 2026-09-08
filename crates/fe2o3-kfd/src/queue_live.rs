@@ -1342,6 +1342,38 @@ enum FixedDispatchSubmissionFailureV1 {
     Terminal(ComputeAqlQueueSessionErrorV1),
 }
 
+/// Classified result of publishing an already-bound ordinary fixed dispatch.
+///
+/// A rejected or retryable failure proves that no packet became visible. A
+/// retryable failure additionally proves that the immutable binding was
+/// restored after a transient reservation failure. A terminal failure means
+/// the queue and process-global KFD gate were poisoned; callers must retain all
+/// logical custody until process teardown.
+#[derive(Debug)]
+pub enum Gfx942FixedDispatchSubmissionFailureV1 {
+    RejectedBeforeSideEffect(ComputeAqlQueueSessionErrorV1),
+    RetryableBeforeSideEffect(ComputeAqlQueueSessionErrorV1),
+    Terminal(ComputeAqlQueueSessionErrorV1),
+}
+
+impl Gfx942FixedDispatchSubmissionFailureV1 {
+    pub const fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        match self {
+            Self::RejectedBeforeSideEffect(error)
+            | Self::RetryableBeforeSideEffect(error)
+            | Self::Terminal(error) => error,
+        }
+    }
+
+    pub fn into_error(self) -> ComputeAqlQueueSessionErrorV1 {
+        match self {
+            Self::RejectedBeforeSideEffect(error)
+            | Self::RetryableBeforeSideEffect(error)
+            | Self::Terminal(error) => error,
+        }
+    }
+}
+
 impl FixedDispatchSubmissionFailureV1 {
     fn into_error(self) -> ComputeAqlQueueSessionErrorV1 {
         match self {
@@ -4284,6 +4316,12 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
         &mut self,
     ) -> Result<Gfx942DispatchBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
         self.session.submit_fixed_dispatch::<N>()
+    }
+
+    pub fn submit_fixed_dispatch_classified_v1<const N: usize>(
+        &mut self,
+    ) -> Result<Gfx942DispatchBatchV1<N>, Gfx942FixedDispatchSubmissionFailureV1> {
+        self.session.submit_fixed_dispatch_classified_v1::<N>()
     }
 
     /// Publishes a real fixed batch and records one addressless source event
@@ -16202,23 +16240,54 @@ impl ComputeAqlQueueSessionV1 {
     pub fn submit_fixed_dispatch<const N: usize>(
         &mut self,
     ) -> Result<Gfx942DispatchBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
+        self.submit_fixed_dispatch_classified_v1::<N>()
+            .map_err(Gfx942FixedDispatchSubmissionFailureV1::into_error)
+    }
+
+    /// Publishes one epoch of the retained immutable ordinary recipe while
+    /// preserving the pre-side-effect retry boundary for a bounded scheduler.
+    pub fn submit_fixed_dispatch_classified_v1<const N: usize>(
+        &mut self,
+    ) -> Result<Gfx942DispatchBatchV1<N>, Gfx942FixedDispatchSubmissionFailureV1> {
         if self.terminal_poisoned {
-            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+            return Err(Gfx942FixedDispatchSubmissionFailureV1::Terminal(
+                Gfx942DispatchBindingErrorV1::Poisoned.into(),
+            ));
         }
         if self.has_any_persistent_compute_attachment_v1() {
-            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+            return Err(
+                Gfx942FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(
+                    Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+                ),
+            );
         }
         let operation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.submit_fixed_dispatch_inner::<N>()
+            self.submit_fixed_dispatch_inner_classified::<N>(FixedDispatchBindingModeV1::Ordinary)
         }));
         match operation {
-            Ok(result) => result,
+            Ok(Ok(batch)) => Ok(batch),
+            Ok(Err(FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(error))) => {
+                Err(Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(error))
+            }
+            Ok(Err(FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(error))) => {
+                Err(Gfx942FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(error))
+            }
+            Ok(Err(FixedDispatchSubmissionFailureV1::Terminal(error))) => {
+                Err(Gfx942FixedDispatchSubmissionFailureV1::Terminal(error))
+            }
             Err(payload) => {
                 self.poison_terminal();
                 permanently_poison_process_global_kfd_runtime_gate_v1();
                 std::panic::resume_unwind(payload)
             }
         }
+    }
+
+    /// Permanently quarantines this queue after an upper-layer owner or
+    /// currentness invariant becomes indeterminate while native work is live.
+    pub fn poison_after_runtime_owner_failure_v1(&mut self) {
+        self.poison_terminal();
+        permanently_poison_process_global_kfd_runtime_gate_v1();
     }
 
     fn submit_fixed_dispatch_with_dependency_events_inner_v1<const N: usize>(
@@ -16386,13 +16455,6 @@ impl ComputeAqlQueueSessionV1 {
                 FixedDispatchSubmissionFailureV1::Terminal(map_submission(error)),
             ),
         }
-    }
-
-    fn submit_fixed_dispatch_inner<const N: usize>(
-        &mut self,
-    ) -> Result<Gfx942DispatchBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
-        self.submit_fixed_dispatch_inner_classified::<N>(FixedDispatchBindingModeV1::Ordinary)
-            .map_err(FixedDispatchSubmissionFailureV1::into_error)
     }
 
     fn submit_fixed_dispatch_inner_classified<const N: usize>(
@@ -21656,6 +21718,17 @@ mod tests {
                     Gfx942DispatchBindingErrorV1::ResourcePhase
                 ))
             ));
+            assert!(matches!(
+                session.submit_fixed_dispatch_classified_v1::<1>(),
+                Err(
+                    Gfx942FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(
+                        ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                            Gfx942DispatchBindingErrorV1::ResourcePhase
+                        )
+                    )
+                )
+            ));
+            assert!(!session.terminal_poisoned);
             assert!(matches!(
                 session.detach_recycled_fixed_dispatch(),
                 Err(ComputeAqlQueueSessionErrorV1::DispatchBinding(

@@ -36,14 +36,14 @@ use fe2o3_kfd::{
     Gfx942DirectionalPersistentSdmaTerminalCustodyV1,
     Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1, Gfx942DispatchBatchV1,
     Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1, Gfx942FixedDispatchDataV1,
-    Gfx942FixedDispatchPacketV1, Gfx942NativeXgmiSdmaQueueV1,
-    Gfx942PersistentComputeBindFailureCustodyV1, Gfx942PersistentComputeBindTerminalCustodyV1,
-    Gfx942PersistentComputeDispatchV1, Gfx942PersistentComputeEffectV1,
-    Gfx942PersistentComputeInputV1, Gfx942PersistentComputePollAndRecycleFailureV1,
-    Gfx942PersistentComputePollAndRecycleV1, Gfx942PersistentComputeReadyTerminalCustodyV1,
-    Gfx942PersistentComputeTerminalCustodyV1, Gfx942PersistentComputeTransitionFailureCustodyV1,
-    Gfx942PersistentComputeWaitAndRecycleV1, Gfx942PersistentSdmaDirectionV1,
-    Gfx942PreparedPersistentComputeDispatchV1,
+    Gfx942FixedDispatchPacketV1, Gfx942FixedDispatchSubmissionFailureV1,
+    Gfx942NativeXgmiSdmaQueueV1, Gfx942PersistentComputeBindFailureCustodyV1,
+    Gfx942PersistentComputeBindTerminalCustodyV1, Gfx942PersistentComputeDispatchV1,
+    Gfx942PersistentComputeEffectV1, Gfx942PersistentComputeInputV1,
+    Gfx942PersistentComputePollAndRecycleFailureV1, Gfx942PersistentComputePollAndRecycleV1,
+    Gfx942PersistentComputeReadyTerminalCustodyV1, Gfx942PersistentComputeTerminalCustodyV1,
+    Gfx942PersistentComputeTransitionFailureCustodyV1, Gfx942PersistentComputeWaitAndRecycleV1,
+    Gfx942PersistentSdmaDirectionV1, Gfx942PreparedPersistentComputeDispatchV1,
     Gfx942PreparedThreeBindingPersistentComputeDispatchV1, Gfx942RecycledDispatchWriteRequestV1,
     Gfx942RecycledPersistentComputeDispatchV1,
     Gfx942RecycledThreeBindingPersistentComputeDispatchV1, Gfx942SdmaBufferV1,
@@ -1086,8 +1086,13 @@ struct StagingBudgetsV1 {
 /// storage, and same-device asynchronous copies can wait on explicit event
 /// dependencies. One compute dispatch and SDMA copies may overlap only when
 /// their allocation sets are disjoint. Accepted compute work remains in an owned
-/// per-stream FIFO until its predecessor and explicit dependencies complete and
-/// one native lane can be leased without reordering overlapping cross-stream work.
+/// per-stream FIFO until its explicit success dependencies complete and one
+/// native lane can be leased without reordering overlapping cross-stream work.
+/// An ordinary immutable recipe may retain up to 64 ordered physical epochs on
+/// that lane. Only the immediate same-stream predecessor supplies ordering;
+/// explicit event dependencies remain separately success-gated. Physical
+/// completion may be observed out of order, while status, effects, and custody
+/// commit only at the contiguous logical stream frontier.
 /// Persistent buffers are leased from a queue-owned pool, scrubbed as required
 /// before recycle, and the pool is trimmed during explicit shutdown. One narrow
 /// ordinary-compute path rebinds an authenticated, full-range H2D destination
@@ -1122,6 +1127,7 @@ pub struct KfdRuntimeBackendV1 {
     events: HashMap<u64, EventRecordV1>,
     event_submission_retain_counts: HashMap<u64, usize>,
     active: Option<ActiveSubmissionV1>,
+    compute_pipeline: RuntimeComputePipelineV1,
     resident_data: Option<ResidentDataRosterV1>,
     recycled_dispatch: Option<RecycledDispatchV1>,
     retained_persistent_dispatch: Option<RetainedPersistentDispatchV1>,
@@ -1205,6 +1211,7 @@ impl fmt::Debug for KfdRuntimeBackendV1 {
                     .count()
                     + usize::from(self.active.is_some())),
             )
+            .field("pipelined_compute", &self.compute_pipeline.len())
             .field("active_sdma", &self.active_sdma.len())
             .field("published_sdma", &self.published_sdma_submissions.len())
             .field("active_sdma_streams", &self.active_sdma_streams.len())
@@ -1438,6 +1445,7 @@ impl KfdRuntimeBackendV1 {
             events: HashMap::new(),
             event_submission_retain_counts: HashMap::new(),
             active: None,
+            compute_pipeline: RuntimeComputePipelineV1::vacant(),
             resident_data: None,
             recycled_dispatch: None,
             retained_persistent_dispatch: None,
@@ -1755,6 +1763,13 @@ impl KfdRuntimeBackendV1 {
         detail: impl Into<String>,
     ) -> RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1> {
         self.terminal = true;
+        if let Some(queue) = self.queue.as_mut() {
+            queue.poison_after_runtime_owner_failure_v1();
+        }
+        self.compute_pipeline.quarantine_all();
+        for lane in &mut self.auxiliary_compute_lanes {
+            lane.pipeline.quarantine_all();
+        }
         RuntimeBackendFailureV1::Terminal(KfdRuntimeBackendErrorV1::new(
             KfdRuntimeBackendErrorKindV1::Terminal,
             detail,
@@ -2194,7 +2209,9 @@ impl KfdRuntimeBackendV1 {
                 ActiveComputeExecutionV1::ScriptedPersistent { .. }
                 | ActiveComputeExecutionV1::ScriptedPersistentPrepared { .. }
                 | ActiveComputeExecutionV1::ScriptedThreeBindingPersistent { .. } => true,
-                ActiveComputeExecutionV1::Materialized(_) => false,
+                ActiveComputeExecutionV1::MaterializedPrepared { .. }
+                | ActiveComputeExecutionV1::Materialized(_)
+                | ActiveComputeExecutionV1::MaterializedCompleted(_) => false,
                 #[cfg(test)]
                 ActiveComputeExecutionV1::ScriptedMaterialized => false,
             })
@@ -2202,10 +2219,11 @@ impl KfdRuntimeBackendV1 {
 
     fn any_compute_active_v1(&self) -> bool {
         self.active.is_some()
+            || !self.compute_pipeline.is_empty()
             || self
                 .auxiliary_compute_lanes
                 .iter()
-                .any(|lane| lane.active.is_some())
+                .any(|lane| lane.active.is_some() || !lane.pipeline.is_empty())
     }
 
     fn active_compute_lane_v1(&self, submission: u64) -> Option<usize> {
@@ -2216,12 +2234,16 @@ impl KfdRuntimeBackendV1 {
         {
             return Some(0);
         }
+        if self.compute_pipeline.contains(submission) {
+            return Some(0);
+        }
         self.auxiliary_compute_lanes
             .iter()
             .position(|lane| {
                 lane.active
                     .as_ref()
                     .is_some_and(|active| active.id == submission)
+                    || lane.pipeline.contains(submission)
             })
             .map(|index| index + 1)
     }
@@ -2230,10 +2252,11 @@ impl KfdRuntimeBackendV1 {
         self.active
             .as_ref()
             .filter(|active| active.id == submission)
+            .or_else(|| self.compute_pipeline.get(submission))
             .or_else(|| {
                 self.auxiliary_compute_lanes
                     .iter()
-                    .filter_map(|lane| lane.active.as_ref())
+                    .flat_map(|lane| lane.active.iter().chain(lane.pipeline.iter()))
                     .find(|active| active.id == submission)
             })
     }
@@ -2265,21 +2288,22 @@ impl KfdRuntimeBackendV1 {
 
     fn next_dependency_depth_v1(
         &self,
-        dependencies: &[u64],
+        _ordered_predecessor: Option<u64>,
+        explicit_success_dependencies: &[u64],
     ) -> Result<usize, DirectSdmaDependencyDepthErrorV1> {
         let mut depth = 1_usize;
-        for dependency in dependencies {
+        for dependency in explicit_success_dependencies.iter().copied() {
             let dependency_depth = self
                 .pending_compute
-                .get(dependency)
+                .get(&dependency)
                 .map(|pending| pending.dependency_depth)
                 .or_else(|| {
-                    self.active_compute_submission_v1(*dependency)
+                    self.active_compute_submission_v1(dependency)
                         .map(|active| active.dependency_depth)
                 })
                 .or_else(|| {
                     self.active_sdma
-                        .get(dependency)
+                        .get(&dependency)
                         .map(|copy| copy.dependency_depth)
                 });
             if let Some(dependency_depth) = dependency_depth {
@@ -2300,9 +2324,10 @@ impl KfdRuntimeBackendV1 {
     fn free_compute_lane_v1(&self) -> Option<usize> {
         (0..self.native_compute_lanes.len()).find(|lane| {
             let active = if *lane == 0 {
-                self.active.is_some()
+                self.active.is_some() || !self.compute_pipeline.is_empty()
             } else {
-                self.auxiliary_compute_lanes[*lane - 1].active.is_some()
+                let lane = &self.auxiliary_compute_lanes[*lane - 1];
+                lane.active.is_some() || !lane.pipeline.is_empty()
             };
             !active
                 && !self
@@ -2318,8 +2343,9 @@ impl KfdRuntimeBackendV1 {
             KFD_RUNTIME_MAX_COMPUTE_QUEUES_V1
         );
         [
-            self.active.is_some(),
-            self.auxiliary_compute_lanes[0].active.is_some(),
+            self.active.is_some() || !self.compute_pipeline.is_empty(),
+            self.auxiliary_compute_lanes[0].active.is_some()
+                || !self.auxiliary_compute_lanes[0].pipeline.is_empty(),
         ]
     }
 
@@ -2358,6 +2384,18 @@ impl KfdRuntimeBackendV1 {
             if remove {
                 self.compute_dependency_retain_counts.remove(dependency);
             }
+        }
+    }
+
+    fn release_pending_compute_dependency_retains_v1(
+        &mut self,
+        pending: &PendingComputeSubmissionV1,
+    ) {
+        self.release_compute_dependency_retains_v1(&pending.explicit_success_dependencies);
+        if let Some(predecessor) = pending.ordered_predecessor
+            && !pending.explicit_success_dependencies.contains(&predecessor)
+        {
+            self.release_compute_dependency_retains_v1(core::slice::from_ref(&predecessor));
         }
     }
 
@@ -2408,7 +2446,7 @@ impl KfdRuntimeBackendV1 {
         status: BackendPollV1,
     ) -> BackendPollV1 {
         self.remove_pending_compute_from_stream_v1(pending.launch.stream, pending.id);
-        self.release_compute_dependency_retains_v1(&pending.dependencies);
+        self.release_pending_compute_dependency_retains_v1(&pending);
         self.release_compute_custody_v1(
             pending.id,
             pending.module,
@@ -2456,11 +2494,7 @@ impl KfdRuntimeBackendV1 {
             .checked_sub(1)
             .expect("accepted prepared compute reserves one completion slot");
         self.release_compute_lane_lease_v1(active.stream, 0);
-        self.restore_stream_tail_before_v1(
-            active.stream,
-            active.id,
-            active.prior_stream_submission,
-        );
+        self.restore_stream_tail_before_v1(active.stream, active.id, active.ordered_predecessor);
         active.execution = None;
         crate::BackendCancellationV1::Cancelled
     }
@@ -2581,6 +2615,7 @@ impl KfdRuntimeBackendV1 {
         let index = lane - 1;
         let auxiliary = &mut self.auxiliary_compute_lanes[index];
         core::mem::swap(&mut self.active, &mut auxiliary.active);
+        core::mem::swap(&mut self.compute_pipeline, &mut auxiliary.pipeline);
         core::mem::swap(&mut self.resident_data, &mut auxiliary.resident_data);
         core::mem::swap(
             &mut self.recycled_dispatch,
@@ -2591,6 +2626,7 @@ impl KfdRuntimeBackendV1 {
         self.selected_compute_lane = prior;
         let auxiliary = &mut self.auxiliary_compute_lanes[index];
         core::mem::swap(&mut self.active, &mut auxiliary.active);
+        core::mem::swap(&mut self.compute_pipeline, &mut auxiliary.pipeline);
         core::mem::swap(&mut self.resident_data, &mut auxiliary.resident_data);
         core::mem::swap(
             &mut self.recycled_dispatch,
@@ -6233,11 +6269,11 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         }
         self.validate_semantic_launch_v1(launch.semantic_launch, launch.geometry)?;
         self.require_submission_capacity_v1()?;
-        let prior_stream_submission = self.stream_submission_tails.get(&launch.stream).copied();
-        let dependencies =
-            self.collect_compute_dependencies_v1(launch.stream, launch.dependencies)?;
+        let ordered_predecessor = self.stream_submission_tails.get(&launch.stream).copied();
+        let explicit_success_dependencies =
+            self.collect_compute_dependencies_v1(launch.dependencies)?;
         let dependency_depth = self
-            .next_dependency_depth_v1(&dependencies)
+            .next_dependency_depth_v1(ordered_predecessor, &explicit_success_dependencies)
             .map_err(|error| {
                 let detail = match error {
                     DirectSdmaDependencyDepthErrorV1::Overflow => {
@@ -6249,7 +6285,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 };
                 Self::capacity(detail)
             })?;
-        self.validate_compute_launch_v1(&launch, &dependencies)?;
+        self.validate_compute_launch_v1(&launch, &explicit_success_dependencies)?;
 
         let explicit_kernarg = try_copy_vec_v1(
             launch.explicit_kernarg,
@@ -6316,8 +6352,12 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 .try_reserve(1)
                 .map_err(|_| Self::capacity("KFD compute-lane lease index growth failed"))?;
         }
-        let new_dependency_entries = dependencies
-            .iter()
+        let retained_dependencies = explicit_success_dependencies.iter().copied().chain(
+            ordered_predecessor
+                .filter(|predecessor| !explicit_success_dependencies.contains(predecessor)),
+        );
+        let new_dependency_entries = retained_dependencies
+            .clone()
             .filter(|submission| {
                 !self
                     .compute_dependency_retain_counts
@@ -6327,9 +6367,9 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         self.compute_dependency_retain_counts
             .try_reserve(new_dependency_entries)
             .map_err(|_| Self::capacity("KFD compute dependency-retain growth failed"))?;
-        if dependencies.iter().any(|submission| {
+        if retained_dependencies.clone().any(|submission| {
             self.compute_dependency_retain_counts
-                .get(submission)
+                .get(&submission)
                 .is_some_and(|count| *count == usize::MAX)
         }) {
             return Err(Self::capacity(
@@ -6362,10 +6402,10 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             new_allocation_custody,
         );
         *self.compute_module_retain_counts.entry(module).or_insert(0) += 1;
-        for dependency in &dependencies {
+        for dependency in retained_dependencies {
             *self
                 .compute_dependency_retain_counts
-                .entry(*dependency)
+                .entry(dependency)
                 .or_insert(0) += 1;
         }
         self.compute_completion_reservations = next_completion_reservations;
@@ -6385,18 +6425,18 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             PendingComputeSubmissionV1 {
                 id,
                 module,
-                launch: OwnedComputeLaunchV1 {
+                launch: Arc::new(OwnedComputeLaunchV1 {
                     stream: launch.stream,
                     kernel: launch.kernel,
                     explicit_kernarg,
                     bindings: bindings.into_boxed_slice(),
                     geometry: launch.geometry,
                     semantic_launch: launch.semantic_launch,
-                },
+                }),
                 retained_allocations: retained_allocations.into_boxed_slice(),
-                prior_stream_submission,
-                dependencies,
-                dependency_cursor: 0,
+                ordered_predecessor,
+                explicit_success_dependencies,
+                explicit_dependency_cursor: 0,
                 dependency_depth,
             },
         );
@@ -6550,7 +6590,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 "unknown KFD submission",
             )
         })?;
-        self.poll_compute_lane_v1(lane)
+        self.poll_compute_submission_v1(lane, submission)
     }
 
     fn wait_v1(
@@ -11576,7 +11616,7 @@ impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
             dependency_submissions.push(tail);
         }
         let dependency_depth = self
-            .next_dependency_depth_v1(&dependency_submissions)
+            .next_dependency_depth_v1(None, &dependency_submissions)
             .map_err(|error| {
                 let detail = match error {
                     DirectSdmaDependencyDepthErrorV1::Overflow => {
@@ -11809,23 +11849,42 @@ impl RuntimeFlushBackendV1 for KfdRuntimeBackendV1 {
             }
             return Ok(());
         }
-        if self.free_compute_lane_v1().is_none() {
+        let pending = self
+            .pending_compute
+            .get(&submission)
+            .expect("compute stream FIFO head remains pending");
+        let ordered_predecessor_lane = pending.ordered_predecessor.and_then(|predecessor| {
+            let lane = self.active_compute_lane_v1(predecessor)?;
+            ordered_successor_lane_matches_v1(
+                self.stream_compute_lanes
+                    .get(&pending.launch.stream)
+                    .copied(),
+                lane,
+            )
+            .then_some(lane)
+        });
+        if self.free_compute_lane_v1().is_none() && ordered_predecessor_lane.is_none() {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "KFD compute stream head has no mutation-free publication slot",
             ));
         }
-        let pending = self
-            .pending_compute
-            .get(&submission)
-            .expect("compute stream FIFO head remains pending");
         let overlaps_published_compute = (0..self.native_compute_lanes.len()).any(|lane| {
-            let active = if lane == 0 {
-                self.active.as_ref()
+            if ordered_predecessor_lane == Some(lane) {
+                return false;
+            }
+            if lane == 0 {
+                launch_overlaps_active_compute_v1(
+                    &pending.launch.bindings,
+                    self.active.iter().chain(self.compute_pipeline.iter()),
+                )
             } else {
-                self.auxiliary_compute_lanes[lane - 1].active.as_ref()
-            };
-            launch_overlaps_active_compute_v1(&pending.launch.bindings, active.into_iter())
+                let state = &self.auxiliary_compute_lanes[lane - 1];
+                launch_overlaps_active_compute_v1(
+                    &pending.launch.bindings,
+                    state.active.iter().chain(state.pipeline.iter()),
+                )
+            }
         });
         let overlaps_published_sdma = self
             .published_sdma_conflict_v1(pending.id, pending.launch.stream, &pending.launch.bindings)
@@ -11850,7 +11909,14 @@ impl RuntimeFlushBackendV1 for KfdRuntimeBackendV1 {
         if self
             .pending_compute
             .get(&submission)
-            .is_some_and(|pending| pending.dependency_cursor == pending.dependencies.len())
+            .is_some_and(|pending| {
+                pending.explicit_dependency_cursor == pending.explicit_success_dependencies.len()
+                    && pending.ordered_predecessor.is_none_or(|predecessor| {
+                        self.submissions
+                            .get(&predecessor)
+                            .is_some_and(|record| record.status != BackendPollV1::Pending)
+                    })
+            })
         {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
@@ -12032,9 +12098,28 @@ impl RuntimeCancellationBackendV1 for KfdRuntimeBackendV1 {
             // completed records are likewise conclusive.
             return Ok(crate::BackendCancellationV1::TooLate);
         }
-        if let Some(pending) = self.pending_compute.remove(&submission) {
+        if self.pending_compute.contains_key(&submission) {
+            let is_stream_tail = self
+                .pending_compute
+                .get(&submission)
+                .is_some_and(|pending| {
+                    self.pending_compute_streams
+                        .get(&pending.launch.stream)
+                        .and_then(|queue| queue.back())
+                        == Some(&submission)
+                });
+            if !is_stream_tail {
+                // Removing an interior node would let its ordered successor
+                // observe a terminal predecessor before the earlier stream
+                // prefix has completed.
+                return Ok(crate::BackendCancellationV1::TooLate);
+            }
+            let pending = self
+                .pending_compute
+                .remove(&submission)
+                .expect("validated pending compute remains indexed");
             let stream = pending.launch.stream;
-            let prior = pending.prior_stream_submission;
+            let prior = pending.ordered_predecessor;
             self.settle_unpublished_compute_v1(pending, BackendPollV1::Failed { code: -2 });
             self.restore_stream_tail_before_v1(stream, submission, prior);
             return Ok(crate::BackendCancellationV1::Cancelled);
@@ -14266,6 +14351,7 @@ mod tests {
         }
         let all_ready_snapshot =
             three_binding_prelaunch_snapshot_v1(context.backend(), backend_allocations);
+        assert_runtime_compute_pipeline_empty_v1(context.backend());
 
         let c_witness = {
             let c = context
@@ -14310,6 +14396,7 @@ mod tests {
             assert!(context.backend().pending_compute.is_empty());
             assert!(context.backend().active.is_none());
             assert_eq!(context.backend().compute_completion_reservations, 0);
+            assert_runtime_compute_pipeline_empty_v1(context.backend());
         }
 
         {
@@ -14359,6 +14446,7 @@ mod tests {
             assert!(context.backend().pending_compute.is_empty());
             assert!(context.backend().active.is_none());
             assert_eq!(context.backend().compute_completion_reservations, 0);
+            assert_runtime_compute_pipeline_empty_v1(context.backend());
             restore_three_binding_ready_witness_v1(
                 context
                     .backend_mut_for_test_v1()
@@ -14413,6 +14501,7 @@ mod tests {
                     .live_owner_count(),
                 3
             );
+            assert_runtime_compute_pipeline_empty_v1(context.backend());
         }
         for index in 0..2 {
             context
@@ -14432,6 +14521,7 @@ mod tests {
                 three_binding_prelaunch_snapshot_v1(context.backend(), backend_allocations,),
                 uninitialized_snapshot
             );
+            assert_runtime_compute_pipeline_empty_v1(context.backend());
             context
                 .backend_mut_for_test_v1()
                 .allocations
@@ -14459,6 +14549,7 @@ mod tests {
             KfdRuntimeLaunchDataPathV1::PersistentDeviceReused
         );
         assert_eq!(performance.user_data_materializations(), 0);
+        assert_runtime_compute_pipeline_empty_v1(context.backend());
 
         context.release_submission(submission).unwrap();
         context.unload_module(module).unwrap();
@@ -14641,6 +14732,7 @@ mod tests {
         assert_eq!(backend.allocations[&allocations[2]].content_sha256, None);
         assert!(backend.allocations[&allocations[2]].sdma_shadow_dirty);
         assert!(backend.allocations[&allocations[2]].sdma_initialized);
+        assert_runtime_compute_pipeline_empty_v1(&backend);
 
         let second_allocations = [allocations[2], allocations[1], allocations[0]];
         let second = submit_scripted_three_binding_v1(
@@ -14667,6 +14759,7 @@ mod tests {
         assert_eq!(backend.allocations[&allocations[0]].content_sha256, None);
         assert!(backend.allocations[&allocations[0]].sdma_shadow_dirty);
         assert!(backend.allocations[&allocations[0]].sdma_initialized);
+        assert_runtime_compute_pipeline_empty_v1(&backend);
 
         backend.release_submission_v1(first).unwrap();
         backend.release_submission_v1(second).unwrap();
@@ -15490,7 +15583,7 @@ mod tests {
         backend.flush_stream_v1(stream).unwrap();
         let active = backend.active.as_ref().unwrap();
         assert_eq!(active.id, compute);
-        assert_eq!(active.prior_stream_submission, Some(copy));
+        assert_eq!(active.ordered_predecessor, Some(copy));
         assert!(matches!(
             active.execution,
             Some(ActiveComputeExecutionV1::ScriptedPersistentPrepared { .. })
@@ -15902,7 +15995,7 @@ mod tests {
         let active_identity = (
             active.id,
             active.stream,
-            active.prior_stream_submission,
+            active.ordered_predecessor,
             active.kernel,
             active.dependency_depth,
             active.allocations.clone(),
@@ -15938,7 +16031,7 @@ mod tests {
             (
                 active.id,
                 active.stream,
-                active.prior_stream_submission,
+                active.ordered_predecessor,
                 active.kernel,
                 active.dependency_depth,
                 active.allocations.clone(),
@@ -19056,6 +19149,226 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_pipeline_recipe_digest_rejects_every_mutable_launch_axis() {
+        let geometry = crate::RuntimeLaunchGeometryV1 {
+            grid: [8, 1, 1],
+            workgroup: [4, 1, 1],
+            dynamic_shared_bytes: 16,
+        };
+        let binding = BackendBindingV1 {
+            region: BackendMemoryRegionV1 {
+                allocation: 3,
+                access: RuntimeAccessV1::Read,
+                byte_offset: 8,
+                byte_len: 16,
+            },
+            kernarg_byte_offset: 24,
+        };
+        let digest = |kernel, kernarg: &[u8], binding, geometry| {
+            let bindings = [binding];
+            let launch = BackendLaunchV1 {
+                stream: 1,
+                kernel,
+                explicit_kernarg: kernarg,
+                bindings: &bindings,
+                dependencies: &[],
+                geometry,
+                semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
+            };
+            dispatch_shape_sha256_v1(&launch, launch.semantic_launch)
+        };
+        let expected = digest(2, &[1, 2], binding, geometry);
+        assert_ne!(expected, digest(9, &[1, 2], binding, geometry));
+        assert_ne!(expected, digest(2, &[1, 3], binding, geometry));
+        for changed in [
+            BackendBindingV1 {
+                region: BackendMemoryRegionV1 {
+                    allocation: 4,
+                    ..binding.region
+                },
+                ..binding
+            },
+            BackendBindingV1 {
+                region: BackendMemoryRegionV1 {
+                    access: RuntimeAccessV1::Write,
+                    ..binding.region
+                },
+                ..binding
+            },
+            BackendBindingV1 {
+                region: BackendMemoryRegionV1 {
+                    byte_offset: 9,
+                    ..binding.region
+                },
+                ..binding
+            },
+            BackendBindingV1 {
+                region: BackendMemoryRegionV1 {
+                    byte_len: 17,
+                    ..binding.region
+                },
+                ..binding
+            },
+            BackendBindingV1 {
+                kernarg_byte_offset: 25,
+                ..binding
+            },
+        ] {
+            assert_ne!(expected, digest(2, &[1, 2], changed, geometry));
+        }
+        for changed in [
+            crate::RuntimeLaunchGeometryV1 {
+                grid: [9, 1, 1],
+                ..geometry
+            },
+            crate::RuntimeLaunchGeometryV1 {
+                workgroup: [2, 1, 1],
+                ..geometry
+            },
+            crate::RuntimeLaunchGeometryV1 {
+                dynamic_shared_bytes: 17,
+                ..geometry
+            },
+        ] {
+            assert_ne!(expected, digest(2, &[1, 2], binding, changed));
+        }
+
+        let descriptor = ResidentDataDescriptorV1 {
+            allocation: 3,
+            kind: RuntimeMemoryKindV1::HostVisible,
+            alignment: 8,
+            allocation_offset: 0,
+            byte_len: 32,
+            host_content_sha256: None,
+            device_may_have_modified: false,
+        };
+        for changed in [
+            ResidentDataDescriptorV1 {
+                allocation: 4,
+                ..descriptor
+            },
+            ResidentDataDescriptorV1 {
+                kind: RuntimeMemoryKindV1::DeviceLocal,
+                ..descriptor
+            },
+            ResidentDataDescriptorV1 {
+                alignment: 16,
+                ..descriptor
+            },
+            ResidentDataDescriptorV1 {
+                allocation_offset: 8,
+                ..descriptor
+            },
+            ResidentDataDescriptorV1 {
+                byte_len: 64,
+                ..descriptor
+            },
+        ] {
+            assert!(!same_resident_storage_shape_v1(&[descriptor], &[changed]));
+        }
+    }
+
+    #[test]
+    fn ordinary_pipeline_recipe_requires_exact_field_equality_not_only_a_digest() {
+        let base = OwnedComputeLaunchV1 {
+            stream: 1,
+            kernel: 2,
+            explicit_kernarg: vec![3, 4].into_boxed_slice(),
+            bindings: vec![BackendBindingV1 {
+                region: BackendMemoryRegionV1 {
+                    allocation: 5,
+                    access: RuntimeAccessV1::Read,
+                    byte_offset: 8,
+                    byte_len: 16,
+                },
+                kernarg_byte_offset: 24,
+            }]
+            .into_boxed_slice(),
+            geometry: crate::RuntimeLaunchGeometryV1 {
+                grid: [8, 1, 1],
+                workgroup: [4, 1, 1],
+                dynamic_shared_bytes: 16,
+            },
+            semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
+        };
+        assert!(ordinary_compute_recipes_match_v1(&base, &base));
+        let mut changed = Vec::new();
+        let mut recipe = base.clone();
+        recipe.stream = 9;
+        changed.push(recipe);
+        let mut recipe = base.clone();
+        recipe.kernel = 9;
+        changed.push(recipe);
+        let mut recipe = base.clone();
+        recipe.explicit_kernarg[1] = 9;
+        changed.push(recipe);
+        for binding in [
+            BackendBindingV1 {
+                region: BackendMemoryRegionV1 {
+                    allocation: 9,
+                    ..base.bindings[0].region
+                },
+                ..base.bindings[0]
+            },
+            BackendBindingV1 {
+                region: BackendMemoryRegionV1 {
+                    access: RuntimeAccessV1::Write,
+                    ..base.bindings[0].region
+                },
+                ..base.bindings[0]
+            },
+            BackendBindingV1 {
+                region: BackendMemoryRegionV1 {
+                    byte_offset: 9,
+                    ..base.bindings[0].region
+                },
+                ..base.bindings[0]
+            },
+            BackendBindingV1 {
+                region: BackendMemoryRegionV1 {
+                    byte_len: 17,
+                    ..base.bindings[0].region
+                },
+                ..base.bindings[0]
+            },
+            BackendBindingV1 {
+                kernarg_byte_offset: 25,
+                ..base.bindings[0]
+            },
+        ] {
+            let mut recipe = base.clone();
+            recipe.bindings[0] = binding;
+            changed.push(recipe);
+        }
+        for geometry in [
+            crate::RuntimeLaunchGeometryV1 {
+                grid: [9, 1, 1],
+                ..base.geometry
+            },
+            crate::RuntimeLaunchGeometryV1 {
+                workgroup: [2, 1, 1],
+                ..base.geometry
+            },
+            crate::RuntimeLaunchGeometryV1 {
+                dynamic_shared_bytes: 17,
+                ..base.geometry
+            },
+        ] {
+            let mut recipe = base.clone();
+            recipe.geometry = geometry;
+            changed.push(recipe);
+        }
+        let mut recipe = base.clone();
+        recipe.semantic_launch = KfdRuntimeSemanticLaunchV1::Atomic(atomic_contract_v1());
+        changed.push(recipe);
+        assert!(
+            changed
+                .iter()
+                .all(|changed| !ordinary_compute_recipes_match_v1(&base, changed))
+        );
+    }
+
+    #[test]
     fn later_chunk_rejection_is_quiescent_after_prior_device_publication() {
         let rejected = || {
             RuntimeBackendFailureV1::Rejected(KfdRuntimeBackendErrorV1::new(
@@ -19083,7 +19396,7 @@ mod tests {
         PendingComputeSubmissionV1 {
             id,
             module: 9,
-            launch: OwnedComputeLaunchV1 {
+            launch: Arc::new(OwnedComputeLaunchV1 {
                 stream,
                 kernel: 9,
                 explicit_kernarg: Box::new([]),
@@ -19103,13 +19416,449 @@ mod tests {
                     dynamic_shared_bytes: 0,
                 },
                 semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
-            },
+            }),
             retained_allocations: vec![allocation].into_boxed_slice(),
-            prior_stream_submission: dependencies.last().copied(),
-            dependencies,
-            dependency_cursor: 0,
+            ordered_predecessor: None,
+            explicit_success_dependencies: dependencies.into_boxed_slice(),
+            explicit_dependency_cursor: 0,
             dependency_depth,
         }
+    }
+
+    fn pipelined_active_for_test_v1(id: u64) -> ActiveSubmissionV1 {
+        ActiveSubmissionV1 {
+            id,
+            stream: 7,
+            ordered_predecessor: id.checked_sub(1),
+            deferred_ordered_predecessor_retain: true,
+            kernel: 9,
+            dependency_depth: 1,
+            allocations: HashSet::new(),
+            writebacks: Vec::new(),
+            resident_descriptors: Vec::new(),
+            ordinary_recipe: None,
+            dispatch_shape_sha256: [0x5a; 32],
+            published_at: Instant::now(),
+            performance: KfdRuntimeLaunchPerformanceV1::default(),
+            execution: None,
+        }
+    }
+
+    #[test]
+    fn runtime_compute_pipeline_capacity_is_fixed_and_slot_identity_is_aba_safe() {
+        let mut pipeline = RuntimeComputePipelineV1::vacant();
+        for id in 2..=RUNTIME_COMPUTE_PIPELINE_CAPACITY_V1 as u64 {
+            assert!(
+                pipeline
+                    .insert_published(pipelined_active_for_test_v1(id))
+                    .is_ok()
+            );
+        }
+        assert_eq!(pipeline.len(), RUNTIME_COMPUTE_PIPELINE_CAPACITY_V1 - 1);
+        assert!(!pipeline.has_successor_capacity());
+        assert!(
+            pipeline
+                .insert_published(pipelined_active_for_test_v1(65))
+                .is_err()
+        );
+
+        let stale = pipeline.identity_for_submission_v1(2).unwrap();
+        let (phase, retired) = pipeline.take_commit_frontier().unwrap();
+        assert_eq!(phase, RuntimeComputePipelinePhaseV1::Published);
+        assert_eq!(retired.id, 2);
+        let fresh = pipeline
+            .insert_published(pipelined_active_for_test_v1(66))
+            .unwrap();
+        assert_ne!(stale, fresh);
+        assert!(
+            pipeline
+                .restore(
+                    stale,
+                    RuntimeComputePipelinePhaseV1::PhysicallyRetired,
+                    pipelined_active_for_test_v1(67),
+                )
+                .is_err()
+        );
+        let (fresh, owner) = pipeline.take_physical_owner(66).unwrap();
+        let substituted = pipeline
+            .restore(
+                fresh,
+                RuntimeComputePipelinePhaseV1::Published,
+                pipelined_active_for_test_v1(67),
+            )
+            .expect_err("a fresh slot capability is bound to one submission");
+        assert_eq!(substituted.id, 67);
+        pipeline
+            .restore(fresh, RuntimeComputePipelinePhaseV1::Published, owner)
+            .unwrap();
+
+        let mut duplicate = RuntimeComputePipelineV1::vacant();
+        duplicate
+            .insert_published(pipelined_active_for_test_v1(2))
+            .unwrap();
+        assert!(
+            duplicate
+                .insert_published(pipelined_active_for_test_v1(2))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn runtime_compute_pipeline_identity_exhaustion_never_wraps() {
+        let mut exhausted_slots = RuntimeComputePipelineV1::vacant();
+        exhausted_slots.exhaust_vacant_identities_for_test_v1();
+        assert!(!exhausted_slots.has_successor_capacity());
+        assert!(
+            exhausted_slots
+                .insert_published(pipelined_active_for_test_v1(2))
+                .is_err()
+        );
+
+        let mut exhausted_epochs = RuntimeComputePipelineV1::vacant();
+        exhausted_epochs.exhaust_logical_epochs_for_test_v1();
+        assert!(!exhausted_epochs.has_successor_capacity());
+        assert!(
+            exhausted_epochs
+                .insert_published(pipelined_active_for_test_v1(2))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn runtime_compute_pipeline_recycles_out_of_order_but_commits_contiguously() {
+        let mut pipeline = RuntimeComputePipelineV1::vacant();
+        for id in 2..=4 {
+            pipeline
+                .insert_published(pipelined_active_for_test_v1(id))
+                .unwrap();
+        }
+        let (four, active) = pipeline.take_physical_owner(4).unwrap();
+        pipeline
+            .restore(
+                four,
+                RuntimeComputePipelinePhaseV1::PhysicallyRetired,
+                active,
+            )
+            .unwrap();
+
+        let (phase, active) = pipeline.take_commit_frontier().unwrap();
+        assert_eq!(phase, RuntimeComputePipelinePhaseV1::Published);
+        assert_eq!(active.id, 2);
+        let (three, active) = pipeline.take_physical_owner(3).unwrap();
+        pipeline
+            .restore(
+                three,
+                RuntimeComputePipelinePhaseV1::PhysicallyRetired,
+                active,
+            )
+            .unwrap();
+        let (phase, active) = pipeline.take_commit_frontier().unwrap();
+        assert_eq!(phase, RuntimeComputePipelinePhaseV1::PhysicallyRetired);
+        assert_eq!(active.id, 3);
+        let (phase, active) = pipeline.take_commit_frontier().unwrap();
+        assert_eq!(phase, RuntimeComputePipelinePhaseV1::PhysicallyRetired);
+        assert_eq!(active.id, 4);
+        assert!(pipeline.is_empty());
+    }
+
+    #[test]
+    fn runtime_compute_pipeline_quarantine_is_lane_wide_and_custody_preserving() {
+        let mut pipeline = RuntimeComputePipelineV1::vacant();
+        pipeline
+            .insert_published(pipelined_active_for_test_v1(2))
+            .unwrap();
+        pipeline
+            .insert_published(pipelined_active_for_test_v1(3))
+            .unwrap();
+        pipeline.quarantine_all();
+        assert_eq!(
+            pipeline.phase(2),
+            Some(RuntimeComputePipelinePhaseV1::Quarantined)
+        );
+        assert_eq!(
+            pipeline.phase(3),
+            Some(RuntimeComputePipelinePhaseV1::Quarantined)
+        );
+        assert_eq!(pipeline.len(), 2);
+        assert!(pipeline.contains(2));
+        assert!(pipeline.contains(3));
+    }
+
+    #[test]
+    fn runtime_compute_pipeline_drop_aborts_for_every_live_logical_phase() {
+        use std::os::unix::process::ExitStatusExt;
+
+        const CHILD: &str = "FE2O3_TEST_RUNTIME_PIPELINE_ABORT_CHILD";
+        if let Some(case) = std::env::var_os(CHILD) {
+            let mut backend = KfdRuntimeBackendV1::mock();
+            match case.to_str().expect("test case is ASCII") {
+                "queued" => {
+                    backend
+                        .pending_compute
+                        .insert(2, pending_compute_for_test_v1(2, 7, 100, vec![]));
+                }
+                "published" => {
+                    backend
+                        .compute_pipeline
+                        .insert_published(pipelined_active_for_test_v1(2))
+                        .unwrap();
+                }
+                "recycled" => {
+                    backend
+                        .compute_pipeline
+                        .insert_published(pipelined_active_for_test_v1(2))
+                        .unwrap();
+                    let (identity, active) =
+                        backend.compute_pipeline.take_physical_owner(2).unwrap();
+                    backend
+                        .compute_pipeline
+                        .restore(
+                            identity,
+                            RuntimeComputePipelinePhaseV1::PhysicallyRetired,
+                            active,
+                        )
+                        .unwrap();
+                }
+                "completed" => {
+                    backend
+                        .compute_pipeline
+                        .insert_published(pipelined_active_for_test_v1(2))
+                        .unwrap();
+                    let (identity, active) =
+                        backend.compute_pipeline.take_physical_owner(2).unwrap();
+                    backend
+                        .compute_pipeline
+                        .restore(identity, RuntimeComputePipelinePhaseV1::Completed, active)
+                        .unwrap();
+                }
+                "quarantined" => {
+                    backend
+                        .compute_pipeline
+                        .insert_published(pipelined_active_for_test_v1(2))
+                        .unwrap();
+                    backend.compute_pipeline.quarantine_all();
+                }
+                _ => unreachable!("known runtime pipeline Drop case"),
+            }
+            drop(backend);
+            std::process::exit(97);
+        }
+        for case in [
+            "queued",
+            "published",
+            "completed",
+            "recycled",
+            "quarantined",
+        ] {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "kfd_backend::tests::runtime_compute_pipeline_drop_aborts_for_every_live_logical_phase",
+                    "--nocapture",
+                ])
+                .env(CHILD, case)
+                .status()
+                .unwrap();
+            assert_eq!(
+                status.signal(),
+                Some(6),
+                "runtime pipeline Drop case {case} did not terminate through SIGABRT"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_compute_pipeline_rejects_stale_read_after_write_authority_shapes() {
+        let binding = |allocation, access| BackendBindingV1 {
+            region: BackendMemoryRegionV1 {
+                allocation,
+                access,
+                byte_offset: 0,
+                byte_len: 8,
+            },
+            kernarg_byte_offset: 0,
+        };
+        assert!(early_pipeline_access_is_admitted_v1(&[
+            binding(1, RuntimeAccessV1::Read),
+            binding(2, RuntimeAccessV1::Write),
+        ]));
+        assert!(!early_pipeline_access_is_admitted_v1(&[binding(
+            1,
+            RuntimeAccessV1::ReadWrite,
+        )]));
+        assert!(!early_pipeline_access_is_admitted_v1(&[
+            binding(1, RuntimeAccessV1::Read),
+            binding(1, RuntimeAccessV1::Write),
+        ]));
+        assert!(ordered_successor_lane_matches_v1(Some(1), 1));
+        assert!(!ordered_successor_lane_matches_v1(Some(0), 1));
+        assert!(!ordered_successor_lane_matches_v1(None, 1));
+    }
+
+    #[test]
+    fn runtime_compute_pipeline_coalesces_repeated_exact_dirty_extents() {
+        let extent = NativeDirtyExtentV1 {
+            compute_lane: 1,
+            data_index: 2,
+            allocation_offset: 8,
+            data_offset: 16,
+            byte_len: 32,
+        };
+        let mut dirty = Vec::new();
+        assert!(retain_unique_native_dirty_extent_v1(&mut dirty, extent));
+        assert!(!retain_unique_native_dirty_extent_v1(&mut dirty, extent));
+        assert_eq!(dirty, [extent]);
+        assert!(retain_unique_native_dirty_extent_v1(
+            &mut dirty,
+            NativeDirtyExtentV1 {
+                allocation_offset: 9,
+                ..extent
+            }
+        ));
+        assert_eq!(dirty.len(), 2);
+    }
+
+    #[test]
+    fn runtime_compute_early_publication_is_ordinary_only_and_zero_materialization() {
+        let source = include_str!("kfd_backend/compute_dispatch.rs");
+        let body = source
+            .split("pub(super) fn try_publish_ordered_successor_v1(")
+            .nth(1)
+            .unwrap()
+            .split("pub(super) fn pending_compute_can_publish_under_deadline_v1(")
+            .next()
+            .unwrap();
+        assert!(body.contains("persistent_full_range_admission_for_launch_v1"));
+        assert!(body.contains("three_binding_persistent_admission_for_launch_v1"));
+        assert!(body.contains("submit_fixed_dispatch_classified_v1::<1>()"));
+        assert!(body.contains("performance.user_data_materializations = 0"));
+        assert!(!body.contains("materialize_initial_data_v1"));
+        assert!(!body.contains("publish_persistent_full_range_v1"));
+        assert!(!body.contains("publish_three_binding_persistent_v1"));
+    }
+
+    #[test]
+    fn runtime_compute_ordering_does_not_turn_wait_for_prior_into_success_gating() {
+        assert!(ordered_predecessor_completed_v1(BackendPollV1::Succeeded));
+        assert!(ordered_predecessor_completed_v1(BackendPollV1::Failed {
+            code: -7
+        }));
+        assert!(!ordered_predecessor_completed_v1(BackendPollV1::Pending));
+        assert!(explicit_dependency_succeeded_v1(BackendPollV1::Succeeded));
+        assert!(!explicit_dependency_succeeded_v1(BackendPollV1::Failed {
+            code: -7
+        }));
+
+        let mut backend = KfdRuntimeBackendV1::mock();
+        let mut predecessor = pending_compute_for_test_v1(40, 1, 100, vec![]);
+        predecessor.dependency_depth = MAX_DIRECT_SDMA_COPY_DEPENDENCY_DEPTH_V1;
+        backend.pending_compute.insert(40, predecessor);
+        assert_eq!(backend.next_dependency_depth_v1(Some(40), &[]), Ok(1));
+        assert_eq!(
+            backend.next_dependency_depth_v1(Some(40), &[40]),
+            Err(DirectSdmaDependencyDepthErrorV1::LimitExceeded)
+        );
+        backend.pending_compute.clear();
+        for id in 1..=512 {
+            let mut pending = pending_compute_for_test_v1(id, 1, 100, vec![]);
+            pending.ordered_predecessor = id.checked_sub(1);
+            assert_eq!(
+                backend.next_dependency_depth_v1(pending.ordered_predecessor, &[]),
+                Ok(1)
+            );
+            backend.pending_compute.insert(id, pending);
+        }
+        backend.pending_compute.clear();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn runtime_compute_failed_ordered_predecessor_is_not_an_explicit_failure() {
+        let make_backend = || {
+            let mut backend = KfdRuntimeBackendV1::mock();
+            let stream = backend.create_stream_v1(7).unwrap();
+            let allocation = backend
+                .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+                .unwrap();
+            backend.submissions.insert(
+                40,
+                SubmissionRecordV1 {
+                    stream,
+                    status: BackendPollV1::Failed { code: -9 },
+                    profile_dispatch_published: false,
+                },
+            );
+            (backend, stream, allocation)
+        };
+
+        let (mut ordered, stream, allocation) = make_backend();
+        let mut pending = pending_compute_for_test_v1(41, stream, allocation, vec![]);
+        pending.ordered_predecessor = Some(40);
+        ordered
+            .pending_compute_streams
+            .insert(stream, VecDeque::from([41]));
+        ordered.pending_compute.insert(41, pending);
+        index_pending_compute_custody_for_test_v1(&mut ordered, 41);
+        ordered.compute_completion_reservations = 1;
+        ordered.compute_dependency_retain_counts.insert(40, 1);
+        ordered.stream_submission_tails.insert(stream, 41);
+        let pending = ordered.pending_compute.remove(&41).unwrap();
+        assert_eq!(
+            ordered.observe_pending_compute_v1(pending).unwrap(),
+            BackendPollV1::Pending
+        );
+        assert!(ordered.pending_compute.contains_key(&41));
+        assert_eq!(
+            ordered.cancel_v1(41).unwrap(),
+            crate::BackendCancellationV1::Cancelled
+        );
+        ordered.release_submission_v1(40).unwrap();
+        ordered.release_submission_v1(41).unwrap();
+        ordered.release_allocation_v1(allocation).unwrap();
+        ordered.destroy_stream_v1(stream).unwrap();
+        ordered.shutdown_native_v1().unwrap();
+
+        let (mut explicit, stream, allocation) = make_backend();
+        let mut pending = pending_compute_for_test_v1(41, stream, allocation, vec![40]);
+        pending.ordered_predecessor = Some(40);
+        explicit
+            .pending_compute_streams
+            .insert(stream, VecDeque::from([41]));
+        explicit.pending_compute.insert(41, pending);
+        index_pending_compute_custody_for_test_v1(&mut explicit, 41);
+        explicit.compute_completion_reservations = 1;
+        explicit.compute_dependency_retain_counts.insert(40, 1);
+        explicit.stream_submission_tails.insert(stream, 41);
+        let pending = explicit.pending_compute.remove(&41).unwrap();
+        assert_eq!(
+            explicit.observe_pending_compute_v1(pending).unwrap(),
+            BackendPollV1::Failed { code: -1 }
+        );
+        assert_eq!(
+            explicit.submissions[&41].status,
+            BackendPollV1::Failed { code: -1 }
+        );
+        explicit.release_submission_v1(40).unwrap();
+        explicit.release_submission_v1(41).unwrap();
+        explicit.release_allocation_v1(allocation).unwrap();
+        explicit.destroy_stream_v1(stream).unwrap();
+        explicit.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn runtime_compute_pipeline_publication_is_too_late_to_cancel() {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        backend
+            .compute_pipeline
+            .insert_published(pipelined_active_for_test_v1(2))
+            .unwrap();
+        assert_eq!(
+            backend.cancel_v1(2).unwrap(),
+            crate::BackendCancellationV1::TooLate
+        );
+        let (_, active) = backend.compute_pipeline.take_commit_frontier().unwrap();
+        assert_eq!(active.id, 2);
+        backend.shutdown_native_v1().unwrap();
     }
 
     fn index_pending_compute_custody_for_test_v1(
@@ -19159,6 +19908,16 @@ mod tests {
                 backend.compute_completion_reservations + backend.sdma_completion_reservations,
             )
             .unwrap();
+    }
+
+    fn assert_runtime_compute_pipeline_empty_v1(backend: &KfdRuntimeBackendV1) {
+        assert!(backend.compute_pipeline.is_empty());
+        assert!(
+            backend
+                .auxiliary_compute_lanes
+                .iter()
+                .all(|lane| lane.pipeline.is_empty())
+        );
     }
 
     #[test]
@@ -19305,12 +20064,12 @@ mod tests {
         backend.active_sdma.get_mut(&100).unwrap().dependency_depth =
             MAX_DIRECT_SDMA_COPY_DEPENDENCY_DEPTH_V1 - 1;
         assert_eq!(
-            backend.next_dependency_depth_v1(&[100]),
+            backend.next_dependency_depth_v1(None, &[100]),
             Ok(MAX_DIRECT_SDMA_COPY_DEPENDENCY_DEPTH_V1)
         );
         backend.active_sdma.get_mut(&100).unwrap().dependency_depth = usize::MAX;
         assert_eq!(
-            backend.next_dependency_depth_v1(&[100]),
+            backend.next_dependency_depth_v1(None, &[100]),
             Err(DirectSdmaDependencyDepthErrorV1::Overflow)
         );
 
@@ -21227,6 +21986,7 @@ mod tests {
                     semantic_launch: KfdRuntimeSemanticLaunchV1::Atomic(atomic_contract_v1()),
                 },
                 false,
+                false,
             )
             .unwrap();
         let PreparedLaunchStorageV1::Materialized(data) = &prepared.storage else {
@@ -21403,10 +22163,8 @@ mod tests {
         );
         let event = backend.record_event_v1(left, 99).unwrap();
         assert_eq!(
-            backend
-                .collect_compute_dependencies_v1(left, &[event])
-                .unwrap(),
-            vec![99]
+            backend.collect_compute_dependencies_v1(&[event]).unwrap(),
+            vec![99].into_boxed_slice()
         );
         assert!(matches!(
             backend.record_event_v1(right, 99),
@@ -21812,12 +22570,14 @@ mod tests {
         backend.children[source_route.child].active = Some(ActiveSubmissionV1 {
             id: 99,
             stream: 1,
-            prior_stream_submission: None,
+            ordered_predecessor: None,
+            deferred_ordered_predecessor_retain: false,
             kernel: 1,
             dependency_depth: 1,
             allocations: active_allocations,
             writebacks: Vec::new(),
             resident_descriptors: Vec::new(),
+            ordinary_recipe: None,
             dispatch_shape_sha256: [0; 32],
             published_at: Instant::now(),
             performance: KfdRuntimeLaunchPerformanceV1::default(),
@@ -22164,9 +22924,9 @@ mod tests {
         backend
             .pending_compute
             .insert(40, pending_compute_for_test_v1(40, stream, 100, vec![]));
-        backend
-            .pending_compute
-            .insert(41, pending_compute_for_test_v1(41, stream, 101, vec![40]));
+        let mut second = pending_compute_for_test_v1(41, stream, 101, vec![]);
+        second.ordered_predecessor = Some(40);
+        backend.pending_compute.insert(41, second);
         index_pending_compute_custody_for_test_v1(&mut backend, 40);
         index_pending_compute_custody_for_test_v1(&mut backend, 41);
         backend.compute_dependency_retain_counts.insert(40, 1);
@@ -22200,17 +22960,66 @@ mod tests {
     }
 
     #[test]
+    fn direct_kfd_interior_compute_cancellation_preserves_ordering_chain() {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        let stream = backend.create_stream_v1(7).unwrap();
+        backend.compute_completion_reservations = 3;
+        backend
+            .pending_compute_streams
+            .insert(stream, VecDeque::from([40, 41, 42]));
+        backend
+            .pending_compute
+            .insert(40, pending_compute_for_test_v1(40, stream, 100, vec![]));
+        let mut second = pending_compute_for_test_v1(41, stream, 101, vec![]);
+        second.ordered_predecessor = Some(40);
+        backend.pending_compute.insert(41, second);
+        let mut third = pending_compute_for_test_v1(42, stream, 102, vec![]);
+        third.ordered_predecessor = Some(41);
+        backend.pending_compute.insert(42, third);
+        for submission in [40, 41, 42] {
+            index_pending_compute_custody_for_test_v1(&mut backend, submission);
+        }
+        backend.compute_dependency_retain_counts.insert(40, 1);
+        backend.compute_dependency_retain_counts.insert(41, 1);
+        backend.stream_submission_tails.insert(stream, 42);
+
+        assert_eq!(
+            backend.cancel_v1(41).unwrap(),
+            crate::BackendCancellationV1::TooLate
+        );
+        assert_eq!(
+            backend.pending_compute_streams[&stream],
+            VecDeque::from([40, 41, 42])
+        );
+        assert_eq!(backend.compute_completion_reservations, 3);
+        assert!(!backend.submissions.contains_key(&41));
+        assert_eq!(backend.stream_submission_tails.get(&stream), Some(&42));
+
+        for submission in [42, 41, 40] {
+            assert_eq!(
+                backend.cancel_v1(submission).unwrap(),
+                crate::BackendCancellationV1::Cancelled
+            );
+            backend.release_submission_v1(submission).unwrap();
+        }
+        backend.destroy_stream_v1(stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
     fn direct_kfd_blocked_target_progress_roster_includes_both_lanes() {
         fn active(id: u64, stream: u64) -> ActiveSubmissionV1 {
             ActiveSubmissionV1 {
                 id,
                 stream,
-                prior_stream_submission: None,
+                ordered_predecessor: None,
+                deferred_ordered_predecessor_retain: false,
                 kernel: 9,
                 dependency_depth: 1,
                 allocations: HashSet::new(),
                 writebacks: Vec::new(),
                 resident_descriptors: Vec::new(),
+                ordinary_recipe: None,
                 dispatch_shape_sha256: [0; 32],
                 published_at: Instant::now(),
                 performance: KfdRuntimeLaunchPerformanceV1::default(),
@@ -22272,7 +23081,7 @@ mod tests {
             pending_compute_for_test_v1(40, producer_stream, 100, vec![]),
         );
         let mut consumer = pending_compute_for_test_v1(41, consumer_stream, 101, vec![40]);
-        consumer.prior_stream_submission = None;
+        consumer.ordered_predecessor = None;
         backend.pending_compute.insert(41, consumer);
         index_pending_compute_custody_for_test_v1(&mut backend, 40);
         index_pending_compute_custody_for_test_v1(&mut backend, 41);
@@ -22406,7 +23215,7 @@ mod tests {
         deepest.dependency_depth = MAX_DIRECT_SDMA_COPY_DEPENDENCY_DEPTH_V1 - 1;
         backend.pending_compute.insert(40, deepest);
         assert_eq!(
-            backend.next_dependency_depth_v1(&[40]),
+            backend.next_dependency_depth_v1(None, &[40]),
             Ok(MAX_DIRECT_SDMA_COPY_DEPENDENCY_DEPTH_V1)
         );
         backend.active_sdma.insert(
@@ -22430,7 +23239,7 @@ mod tests {
             },
         );
         assert_eq!(
-            backend.next_dependency_depth_v1(&[41]),
+            backend.next_dependency_depth_v1(None, &[41]),
             Err(DirectSdmaDependencyDepthErrorV1::LimitExceeded)
         );
         backend.pending_compute.clear();
@@ -22552,7 +23361,7 @@ mod tests {
             pending_compute_for_test_v1(40, stream, allocation, vec![]),
         );
         let mut second = pending_compute_for_test_v1(41, stream, allocation, vec![40]);
-        second.prior_stream_submission = Some(40);
+        second.ordered_predecessor = Some(40);
         backend.pending_compute.insert(41, second);
         index_pending_compute_custody_for_test_v1(&mut backend, 40);
         index_pending_compute_custody_for_test_v1(&mut backend, 41);
@@ -22584,12 +23393,14 @@ mod tests {
         backend.active = Some(ActiveSubmissionV1 {
             id: 50,
             stream: 2,
-            prior_stream_submission: None,
+            ordered_predecessor: None,
+            deferred_ordered_predecessor_retain: false,
             kernel: 9,
             dependency_depth: 1,
             allocations: HashSet::from([allocation]),
             writebacks: Vec::new(),
             resident_descriptors: Vec::new(),
+            ordinary_recipe: None,
             dispatch_shape_sha256: [0; 32],
             published_at: Instant::now(),
             performance: KfdRuntimeLaunchPerformanceV1::default(),
@@ -22789,7 +23600,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_kfd_stream_tail_cannot_exceed_dependency_bound() {
+    fn direct_kfd_stream_tail_does_not_consume_explicit_dependency_capacity() {
         let mut backend = KfdRuntimeBackendV1::mock();
         let stream = backend.create_stream_v1(7).unwrap();
         let mut events = Vec::new();
@@ -22817,11 +23628,9 @@ mod tests {
             },
         );
 
-        assert!(matches!(
-            backend.collect_compute_dependencies_v1(stream, &events),
-            Err(RuntimeBackendFailureV1::Rejected(error))
-                if error.kind() == KfdRuntimeBackendErrorKindV1::Capacity
-        ));
+        let explicit = backend.collect_compute_dependencies_v1(&events).unwrap();
+        assert_eq!(explicit.len(), MAX_RUNTIME_DEPENDENCIES_V1);
+        assert!(!explicit.contains(&9_999));
 
         backend.events.clear();
         backend.submissions.clear();
@@ -22968,12 +23777,14 @@ mod tests {
             ActiveSubmissionV1 {
                 id,
                 stream,
-                prior_stream_submission: None,
+                ordered_predecessor: None,
+                deferred_ordered_predecessor_retain: false,
                 kernel: 9,
                 dependency_depth: 1,
                 allocations: HashSet::from([allocation]),
                 writebacks: Vec::new(),
                 resident_descriptors: Vec::new(),
+                ordinary_recipe: None,
                 dispatch_shape_sha256: [0; 32],
                 published_at: Instant::now(),
                 performance: KfdRuntimeLaunchPerformanceV1::default(),
