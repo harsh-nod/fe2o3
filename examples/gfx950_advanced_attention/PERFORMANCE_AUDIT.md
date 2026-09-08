@@ -61,15 +61,15 @@ in `perf-evidence/mi350x-bound-inputs-v1.json`. It assumes whole-device peak
 resources, perfect overlap, and no dispatch overhead. It is a resource lower
 bound, not a prediction for these four-workgroup launches.
 
-| Kernel | Touched bytes | Floor | Fastest measured / floor |
+| Kernel | Touched bytes | Floor | Canonical measured / floor |
 |---|---:|---:|---:|
 | KDA decode | 13,328 | 1.666 ns | 4,154x |
 | KDA prefill | 24,704 | 3.088 ns | 4,585x |
-| Content sparse | 71,872 | 8.984 ns | 3,330x |
-| DeepSeek sparse | 192,512 | 24.064 ns | 540x |
-| Compressed hybrid | 71,680 | 8.960 ns | 3,080x |
+| Content sparse | 71,872 | 8.984 ns | 3,348x |
+| DeepSeek sparse | 192,512 | 24.064 ns | 560x |
+| Compressed hybrid | 71,680 | 8.960 ns | 3,125x |
 | AttnRes | 36,864 | 4.608 ns | 1,207x |
-| Four-branch residual | 40,960 | 5.120 ns | 1,102x |
+| Four-branch residual | 40,960 | 5.120 ns | 1,117x |
 | mHC Sinkhorn | 9,216 | 1.152 ns | 5,972x |
 
 The gap is dominated by launch and small-problem underutilization, which this
