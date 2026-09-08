@@ -9,8 +9,11 @@ mod authenticated_service_queue;
 #[cfg(target_os = "linux")]
 mod compiler_execution_current_record_audit;
 mod compiler_generated_contract;
+mod completed_capability_result_admission;
+mod generated_application;
 mod generated_argument_borrow;
 mod generated_argument_plan;
+mod generated_host_contract_v2;
 mod generated_kfd_arguments;
 mod generated_kfd_invocation;
 #[cfg(feature = "qualification-legacy-hip-hsa")]
@@ -21,6 +24,8 @@ mod hsa_executable_lifecycle;
 mod prepared_launch;
 #[cfg(target_os = "linux")]
 mod production_application;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod production_worker_v3_verifier;
 #[cfg(feature = "qualification-legacy-hip-hsa")]
 mod published_direct_link;
 #[cfg(feature = "qualification-legacy-hip-hsa")]
@@ -33,6 +38,8 @@ mod recovered_worker_v3_admission;
 mod test_currentness_retry;
 #[cfg(feature = "qualification-legacy-hip-hsa")]
 mod tile_interop;
+#[cfg(target_os = "linux")]
+mod tutorial_runtime_semantic_observation_v1;
 mod worker_v3_verification_admission;
 
 #[cfg(feature = "hardware-test-hooks")]
@@ -164,7 +171,19 @@ pub use compiler_generated_contract::{
     CompilerGeneratedKernelExpectationRosterEntryV1, CompilerGeneratedKernelExpectationRosterV1,
     CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
     CompilerGeneratedSemanticWitnessErrorV1, ValidatedCompilerGeneratedSemanticWitnessV1,
-    semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
+    canonicalize_generated_kernel_roster_v1, semantic_witness_from_backend_v1,
+    validate_compiler_generated_semantic_witness_v1,
+};
+pub use completed_capability_result_admission::{
+    AuthenticatedWorkerV3CapabilityApplicationV1, AuthenticatedWorkerV3CapabilityRosterV1,
+    CapabilityGeneratedHostAdmissionErrorV1,
+    RecoveredWorkerV3CapabilityApplicationAdmissionErrorV1,
+    RecoveredWorkerV3CapabilityApplicationV1, RecoveredWorkerV3CapabilityRosterV1,
+    WorkerV3CapabilityResultEvidenceViewV1, WorkerV3CapabilityResultRosterAdmissionFailureV1,
+    WorkerV3CapabilityResultRosterBindingErrorV1, WorkerV3CapabilityRosterAuthenticationFailureV1,
+    WorkerV3ProtectedCapabilityRosterEvidenceV1,
+    WorkerV3ProtectedCapabilityRosterVerifierBackendV1,
+    WorkerV3ProtectedCapabilityRosterVerifierErrorV1,
 };
 pub use fe2o3_aql::{AqlDispatchGeometryV1, AqlGeometryError};
 #[cfg(target_os = "linux")]
@@ -175,11 +194,35 @@ pub use fe2o3_kfd::{
     KfdWithAdmittedUapi, OpenedKfd,
 };
 #[doc(hidden)]
+pub use generated_application::CompilerGeneratedApplicationArgumentsV1;
+pub use generated_application::{
+    GeneratedApplicationBackendV1, GeneratedApplicationDispatchResultV1,
+    GeneratedApplicationExecutionErrorV1, GeneratedApplicationInvocation,
+    GeneratedApplicationPrepareErrorV1, GeneratedApplicationProviderErrorV1,
+};
+#[doc(hidden)]
 pub use generated_argument_plan::{
     CompilerGeneratedArgumentLayoutV1, GeneratedArgumentFieldProperty,
     GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
     GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedPackingComponentKindV1,
     GeneratedPackingComponentV1,
+};
+#[doc(hidden)]
+pub use generated_host_contract_v2::{
+    AdmittedGeneratedHostContractV2, CompilerGeneratedHostArgumentsV2,
+    CompilerGeneratedHostContractV2, CompilerGeneratedKernelExpectationV2,
+    GeneratedHostAsyncProgressV2, GeneratedHostAxisConstraintV2, GeneratedHostContractErrorV2,
+    GeneratedHostDispatchEvidenceV2, GeneratedHostExecutionSubjectV2,
+    GeneratedHostLaunchGeometryV2, GeneratedHostMemoryArgumentV2, GeneratedHostMemoryBindingV2,
+    GeneratedHostMemoryConstraintV2, GeneratedHostMemoryRoleV2, GeneratedHostPrepareErrorV2,
+    GeneratedHostRuntimeCoordinatesV2, GeneratedHostTensorLayoutErrorV2,
+    MAX_GENERATED_HOST_MEMORY_ARGUMENTS_V2, MAX_GENERATED_HOST_TENSOR_RANK_V2,
+    ProductionGeneratedHostFactsV2, ReviewedGeneratedHostAsyncBackendV2,
+    ReviewedGeneratedHostAsyncStatusV2, admit_generated_host_contract_v2,
+};
+pub use generated_host_contract_v2::{
+    CompletedGeneratedHostInvocationV2, PendingGeneratedHostInvocationV2,
+    PreparedGeneratedHostInvocationV2,
 };
 #[doc(hidden)]
 pub use generated_kfd_arguments::{
@@ -188,6 +231,9 @@ pub use generated_kfd_arguments::{
     GeneratedKfdPackedArguments, GeneratedKfdPackingObservationV1, GeneratedKfdPrepareError,
     GeneratedKfdReadSlice, GeneratedKfdReadWriteSlice, GeneratedKfdSliceBinding,
     GeneratedKfdWriteSlice,
+};
+pub use generated_kfd_arguments::{
+    GeneratedHostReadSliceV1, GeneratedHostReadWriteSliceV1, GeneratedHostWriteSliceV1,
 };
 pub use generated_kfd_invocation::{
     GENERATED_KFD_DIFFERENTIAL_OBSERVATION_SCHEMA_V1,
@@ -226,10 +272,28 @@ pub use prepared_launch::{
 pub use production_application::{
     ProductionWorkerV3ApplicationLoadErrorV1, load_inherited_worker_v3_application_v1,
 };
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use production_application::{
+    ProductionWorkerV3CapabilityApplicationErrorV1, run_generated_application_v1,
+};
 #[cfg(target_os = "linux")]
 pub use production_application::{
     ProductionWorkerV3KfdApplicationErrorV1, ProductionWorkerV3KfdPreparationErrorV1,
     prepare_inherited_worker_v3_kfd_application_v1,
+};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use production_worker_v3_verifier::{
+    PRODUCTION_WORKER_V3_VERIFICATION_SERVICE_RESPONSE_BYTES_V1,
+    PRODUCTION_WORKER_V3_VERIFIER_SOCKET_PATH_V1, PRODUCTION_WORKER_V3_VERIFIER_TIMEOUT_V1,
+    ProductionWorkerV3CapabilityRosterVerifierV1, ProductionWorkerV3ProtectedVerifierBackendV1,
+    ProductionWorkerV3ProtectedVerifierErrorV1,
+    ProductionWorkerV3SemanticMachineRefinementBackendV1,
+    ProductionWorkerV3SemanticMachineRefinementErrorV1,
+    ProductionWorkerV3VerificationServiceResponseErrorV1,
+    ProductionWorkerV3VerificationServiceResponseV1, ProductionWorkerV3VerifierDeploymentErrorV1,
+    ProductionWorkerV3VerifierErrorV1, ProductionWorkerV3VerifierV1,
+    production_worker_v3_subject_identity_v1,
+    production_worker_v3_verifier_measurement_identity_v1,
 };
 #[cfg(feature = "qualification-legacy-hip-hsa")]
 pub use published_direct_link::{
@@ -256,19 +320,27 @@ pub use tile_interop::{
     GFX942_XOR4_BF16_TILE_ROWS_V1, GFX942_XOR4_BF16_TILE_WAVE_LANES_V1, Gfx942TileInteropErrorV1,
     Gfx942Xor4Bf16TileAllocationV1, Gfx942Xor4Bf16TileLeaseV1,
 };
+#[cfg(target_os = "linux")]
+pub use tutorial_runtime_semantic_observation_v1::{
+    MAX_TUTORIAL_RUNTIME_SEMANTIC_BYTES_V1, MAX_TUTORIAL_RUNTIME_SEMANTIC_REGIONS_V1,
+    TUTORIAL_RUNTIME_SEMANTIC_OBSERVATION_SCHEMA_V1, TutorialRuntimeLaunchIdentityV1,
+    TutorialRuntimeSemanticObservationErrorV1, TutorialRuntimeSemanticRegionsV1,
+    TutorialRuntimeSemanticScalarV1, publish_tutorial_runtime_semantic_observation_v1,
+    tutorial_runtime_semantic_bytes_v1,
+};
 
 pub use worker_v3_verification_admission::{
     AuthenticatedWorkerV3ExecutableV1, AuthenticatedWorkerV3RosterEntryV1,
     AuthenticatedWorkerV3RosterV1, MAX_WORKER_V3_MACHINE_EFFECT_EVIDENCE_BYTES_V1,
     MAX_WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_PROOF_BYTES_V1, WorkerV3AuditorV1,
-    WorkerV3CompilerExecutionEvidenceErrorV1, WorkerV3CompilerExecutionVerificationV1,
-    WorkerV3ProtectedRosterEntryEvidenceV1, WorkerV3ProtectedRosterVerificationEvidenceV1,
-    WorkerV3ProtectedRosterVerifierAdapterV1, WorkerV3ProtectedRosterVerifierBackendV1,
-    WorkerV3ProtectedSemanticMachineRefinementEvidenceV1, WorkerV3ProtectedVerificationEvidenceV1,
-    WorkerV3ProtectedVerifierAdapterV1, WorkerV3ProtectedVerifierBackendV1,
-    WorkerV3RefiningProtectedVerifierAdapterV1, WorkerV3RefiningProtectedVerifierErrorV1,
-    WorkerV3RosterEntryErrorV1, WorkerV3RosterLoadEnvelopeEvidenceViewV1,
-    WorkerV3RosterVerificationAuthenticationErrorV1,
+    WorkerV3CapabilityMachineOwnerErrorV1, WorkerV3CompilerExecutionEvidenceErrorV1,
+    WorkerV3CompilerExecutionVerificationV1, WorkerV3ProtectedRosterEntryEvidenceV1,
+    WorkerV3ProtectedRosterVerificationEvidenceV1, WorkerV3ProtectedRosterVerifierAdapterV1,
+    WorkerV3ProtectedRosterVerifierBackendV1, WorkerV3ProtectedSemanticMachineRefinementEvidenceV1,
+    WorkerV3ProtectedVerificationEvidenceV1, WorkerV3ProtectedVerifierAdapterV1,
+    WorkerV3ProtectedVerifierBackendV1, WorkerV3RefiningProtectedVerifierAdapterV1,
+    WorkerV3RefiningProtectedVerifierErrorV1, WorkerV3RosterEntryErrorV1,
+    WorkerV3RosterLoadEnvelopeEvidenceViewV1, WorkerV3RosterVerificationAuthenticationErrorV1,
     WorkerV3RosterVerificationAuthenticationFailureV1,
     WorkerV3RosterVerificationChallengeIdentityV1, WorkerV3RosterVerificationDecisionErrorV1,
     WorkerV3RosterVerificationDecisionV1, WorkerV3RosterVerificationRequestV1,
@@ -291,25 +363,32 @@ pub use worker_v3_verification_admission::{
 /// not an application extension point.
 #[doc(hidden)]
 pub mod __generated {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub use crate::production_application::authenticate_inherited_worker_v3_capability_application_v1;
     #[cfg(all(target_os = "linux", feature = "qualification-legacy-hip-hsa"))]
     pub use crate::production_application::load_admitted_worker_v3_application_v1;
     #[cfg(target_os = "linux")]
     pub use crate::production_application::prepare_admitted_worker_v3_kfd_application_v1;
 
     pub use crate::{
-        CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationRosterEntryV1,
+        CompilerGeneratedApplicationArgumentsV1, CompilerGeneratedArgumentLayoutV1,
+        CompilerGeneratedHostArgumentsV2, CompilerGeneratedHostContractV2,
+        CompilerGeneratedKernelExpectationRosterEntryV1,
         CompilerGeneratedKernelExpectationRosterV1, CompilerGeneratedKernelExpectationV1,
-        CompilerGeneratedKernelProfileV1, CompilerGeneratedKfdArguments,
-        CompilerGeneratedSemanticWitnessErrorV1, GeneratedArgumentFieldProperty,
-        GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
-        GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedKfdArgumentBinding,
-        GeneratedKfdArgumentError, GeneratedKfdCompletion, GeneratedKfdCompletionError,
-        GeneratedKfdPackedArguments, GeneratedKfdPrepareError, GeneratedKfdReadSlice,
-        GeneratedKfdReadWriteSlice, GeneratedKfdSliceBinding, GeneratedKfdWriteSlice,
-        GeneratedPackingComponentKindV1, GeneratedPackingComponentV1,
-        GeneratedWorkerV3KfdExecutionError, GeneratedWorkerV3KfdInvocation,
-        GeneratedWorkerV3KfdInvocationError, ValidatedCompilerGeneratedSemanticWitnessV1,
-        semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
+        CompilerGeneratedKernelExpectationV2, CompilerGeneratedKernelProfileV1,
+        CompilerGeneratedKfdArguments, CompilerGeneratedSemanticWitnessErrorV1,
+        GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
+        GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1,
+        GeneratedHostMemoryArgumentV2, GeneratedHostMemoryBindingV2, GeneratedHostMemoryRoleV2,
+        GeneratedHostReadSliceV1, GeneratedHostReadWriteSliceV1, GeneratedHostTensorLayoutErrorV2,
+        GeneratedHostWriteSliceV1, GeneratedKfdArgumentBinding, GeneratedKfdArgumentError,
+        GeneratedKfdCompletion, GeneratedKfdCompletionError, GeneratedKfdPackedArguments,
+        GeneratedKfdPrepareError, GeneratedKfdReadSlice, GeneratedKfdReadWriteSlice,
+        GeneratedKfdSliceBinding, GeneratedKfdWriteSlice, GeneratedPackingComponentKindV1,
+        GeneratedPackingComponentV1, GeneratedWorkerV3KfdExecutionError,
+        GeneratedWorkerV3KfdInvocation, GeneratedWorkerV3KfdInvocationError,
+        ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
+        validate_compiler_generated_semantic_witness_v1,
     };
     #[cfg(feature = "qualification-legacy-hip-hsa")]
     pub use crate::{
@@ -320,7 +399,8 @@ pub mod __generated {
         GeneratedWriteDeviceSlice,
     };
     pub use fe2o3_artifacts::{
-        AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, Mutability, Name,
-        PointerWidth, RustDisjointIndexSpaceV1, ScalarType,
+        AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
+        Dimensions, LaunchContract, Mutability, Name, PointerWidth, RustDisjointIndexSpaceV1,
+        ScalarType,
     };
 }

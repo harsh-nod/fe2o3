@@ -20,9 +20,11 @@ use crate::generated_argument_plan::{
 };
 use crate::{
     AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedKernelExpectationV1,
+    GeneratedHostMemoryArgumentV2, GeneratedHostMemoryBindingV2, GeneratedHostMemoryRoleV2,
+    GeneratedHostTensorLayoutErrorV2, MAX_GENERATED_HOST_TENSOR_RANK_V2,
     RecoveredWorkerV3AdmissionErrorV1,
 };
-use fe2o3_artifacts::RustDisjointIndexSpaceV1;
+use fe2o3_artifacts::{AliasClass, RustDisjointIndexSpaceV1};
 
 const PACKING_OBSERVATION_DOMAIN_V1: &[u8] = b"FE2O3/HOST/GENERATED-KFD-PACKING-OBSERVATION/V1\0";
 
@@ -113,11 +115,29 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
 #[doc(hidden)]
 pub struct GeneratedKfdReadSlice<'allocation, T: GeneratedDeviceScalarV1> {
     values: &'allocation [T],
+    tensor_layout: Option<GeneratedKfdTensorLayoutV2>,
 }
+
+/// Target-neutral name for a compiler-generated shared input capability.
+pub type GeneratedHostReadSliceV1<'allocation, T> = GeneratedKfdReadSlice<'allocation, T>;
 
 impl<'allocation, T: GeneratedDeviceScalarV1> GeneratedKfdReadSlice<'allocation, T> {
     pub const fn new(values: &'allocation [T]) -> Self {
-        Self { values }
+        Self {
+            values,
+            tensor_layout: None,
+        }
+    }
+
+    /// Attaches the exact dynamic tensor extents and element strides checked during W7
+    /// preparation. This changes no physical slice ABI.
+    pub fn with_tensor_layout<const RANK: usize>(
+        mut self,
+        extents: [u64; RANK],
+        strides: [u64; RANK],
+    ) -> Result<Self, GeneratedHostTensorLayoutErrorV2> {
+        self.tensor_layout = Some(GeneratedKfdTensorLayoutV2::new(extents, strides)?);
+        Ok(self)
     }
 
     pub const fn len(&self) -> usize {
@@ -170,11 +190,29 @@ impl<'allocation, T: GeneratedDeviceScalarV1> GeneratedKfdReadSlice<'allocation,
 #[doc(hidden)]
 pub struct GeneratedKfdWriteSlice<'allocation, T: GeneratedDeviceScalarV1> {
     values: &'allocation mut [T],
+    tensor_layout: Option<GeneratedKfdTensorLayoutV2>,
 }
+
+/// Target-neutral name for a compiler-generated exclusive output capability.
+pub type GeneratedHostWriteSliceV1<'allocation, T> = GeneratedKfdWriteSlice<'allocation, T>;
 
 impl<'allocation, T: GeneratedDeviceScalarV1> GeneratedKfdWriteSlice<'allocation, T> {
     pub fn new(values: &'allocation mut [T]) -> Self {
-        Self { values }
+        Self {
+            values,
+            tensor_layout: None,
+        }
+    }
+
+    /// Attaches the exact dynamic tensor extents and element strides checked during W7
+    /// preparation. This changes no physical slice ABI.
+    pub fn with_tensor_layout<const RANK: usize>(
+        mut self,
+        extents: [u64; RANK],
+        strides: [u64; RANK],
+    ) -> Result<Self, GeneratedHostTensorLayoutErrorV2> {
+        self.tensor_layout = Some(GeneratedKfdTensorLayoutV2::new(extents, strides)?);
+        Ok(self)
     }
 
     pub const fn len(&self) -> usize {
@@ -260,11 +298,40 @@ impl<'allocation, T: GeneratedDeviceScalarV1> GeneratedKfdWriteSlice<'allocation
 #[doc(hidden)]
 pub struct GeneratedKfdReadWriteSlice<'allocation, T: GeneratedDeviceScalarV1> {
     values: &'allocation mut [T],
+    tensor_layout: Option<GeneratedKfdTensorLayoutV2>,
+    host_role: GeneratedHostMemoryRoleV2,
 }
+
+/// Target-neutral name for a compiler-generated exclusive input/output capability.
+pub type GeneratedHostReadWriteSliceV1<'allocation, T> = GeneratedKfdReadWriteSlice<'allocation, T>;
 
 impl<'allocation, T: GeneratedDeviceScalarV1> GeneratedKfdReadWriteSlice<'allocation, T> {
     pub fn new(values: &'allocation mut [T]) -> Self {
-        Self { values }
+        Self {
+            values,
+            tensor_layout: None,
+            host_role: GeneratedHostMemoryRoleV2::InputOutput,
+        }
+    }
+
+    /// Retains an exclusive scratch allocation whose descriptor access remains read-write.
+    pub fn workspace(values: &'allocation mut [T]) -> Self {
+        Self {
+            values,
+            tensor_layout: None,
+            host_role: GeneratedHostMemoryRoleV2::Workspace,
+        }
+    }
+
+    /// Attaches the exact dynamic tensor extents and element strides checked during W7
+    /// preparation. This changes no physical slice ABI.
+    pub fn with_tensor_layout<const RANK: usize>(
+        mut self,
+        extents: [u64; RANK],
+        strides: [u64; RANK],
+    ) -> Result<Self, GeneratedHostTensorLayoutErrorV2> {
+        self.tensor_layout = Some(GeneratedKfdTensorLayoutV2::new(extents, strides)?);
+        Ok(self)
     }
 
     pub const fn len(&self) -> usize {
@@ -337,6 +404,113 @@ impl<'allocation, T: GeneratedDeviceScalarV1> GeneratedKfdReadWriteSlice<'alloca
             required_alignment: T::RUST_SCALAR_TYPE.size_bytes(),
             writeback: Some(writeback),
         })
+    }
+}
+
+struct GeneratedKfdTensorLayoutV2 {
+    extents: Box<[u64]>,
+    strides: Box<[u64]>,
+}
+
+impl GeneratedKfdTensorLayoutV2 {
+    fn new<const RANK: usize>(
+        extents: [u64; RANK],
+        strides: [u64; RANK],
+    ) -> Result<Self, GeneratedHostTensorLayoutErrorV2> {
+        if RANK == 0 || RANK > MAX_GENERATED_HOST_TENSOR_RANK_V2 {
+            return Err(GeneratedHostTensorLayoutErrorV2::Rank);
+        }
+        Ok(Self {
+            extents: Box::new(extents),
+            strides: Box::new(strides),
+        })
+    }
+}
+
+fn generated_kfd_host_binding_v2<T: GeneratedDeviceScalarV1>(
+    argument_index: usize,
+    address: usize,
+    len: usize,
+    layout: Option<&GeneratedKfdTensorLayoutV2>,
+    role: GeneratedHostMemoryRoleV2,
+    alias: AliasClass,
+) -> GeneratedHostMemoryBindingV2 {
+    let (extents, strides) = layout.map_or_else(
+        || {
+            (
+                vec![u64::try_from(len).expect("slice length fits the generated u64 ABI")],
+                vec![1],
+            )
+        },
+        |layout| (layout.extents.to_vec(), layout.strides.to_vec()),
+    );
+    GeneratedHostMemoryBindingV2::from_compiler_generated_argument_v2(
+        argument_index,
+        address,
+        u64::try_from(len).expect("slice length fits the generated u64 ABI"),
+        u64::try_from(size_of::<T>()).expect("supported scalar size fits u64"),
+        role,
+        alias,
+        extents,
+        strides,
+    )
+}
+
+// SAFETY: every observation is derived directly from the retained shared slice.
+unsafe impl<'allocation, T: GeneratedDeviceScalarV1> GeneratedHostMemoryArgumentV2<'allocation>
+    for GeneratedKfdReadSlice<'allocation, T>
+{
+    fn generated_host_memory_binding_v2(
+        &self,
+        argument_index: usize,
+    ) -> GeneratedHostMemoryBindingV2 {
+        generated_kfd_host_binding_v2::<T>(
+            argument_index,
+            self.values.as_ptr().addr(),
+            self.values.len(),
+            self.tensor_layout.as_ref(),
+            GeneratedHostMemoryRoleV2::Input,
+            AliasClass::SharedReadOnly,
+        )
+    }
+}
+
+// SAFETY: every observation is derived directly from the retained exclusive output slice.
+unsafe impl<'allocation, T: GeneratedDeviceScalarV1> GeneratedHostMemoryArgumentV2<'allocation>
+    for GeneratedKfdWriteSlice<'allocation, T>
+{
+    fn generated_host_memory_binding_v2(
+        &self,
+        argument_index: usize,
+    ) -> GeneratedHostMemoryBindingV2 {
+        generated_kfd_host_binding_v2::<T>(
+            argument_index,
+            self.values.as_ptr().addr(),
+            self.values.len(),
+            self.tensor_layout.as_ref(),
+            GeneratedHostMemoryRoleV2::Output,
+            AliasClass::Exclusive,
+        )
+    }
+}
+
+// SAFETY: every observation is derived directly from the retained exclusive read-write slice;
+// the host-only workspace distinction does not weaken its descriptor access or alias class.
+unsafe impl<'allocation, T: GeneratedDeviceScalarV1> GeneratedHostMemoryArgumentV2<'allocation>
+    for GeneratedKfdReadWriteSlice<'allocation, T>
+{
+    fn generated_host_memory_binding_v2(
+        &self,
+        argument_index: usize,
+    ) -> GeneratedHostMemoryBindingV2 {
+        generated_kfd_host_binding_v2::<T>(
+            argument_index,
+            self.values.as_ptr().addr(),
+            self.values.len(),
+            self.tensor_layout.as_ref(),
+            self.host_role,
+            AliasClass::Exclusive,
+        )
     }
 }
 
@@ -490,6 +664,16 @@ pub struct GeneratedKfdPackedArguments<'allocation> {
     completion: GeneratedKfdCompletion<'allocation>,
 }
 
+/// Target-backend inputs extracted from the common generated ABI packer.
+#[cfg(feature = "generated-gfx950-hip-provider")]
+pub(crate) struct GeneratedTargetBackendArgumentsV1<'allocation> {
+    pub(crate) alignment: u32,
+    pub(crate) explicit_kernarg: Vec<u8>,
+    pub(crate) buffers: Vec<Gfx942RuntimeDispatchBufferV1>,
+    pub(crate) pointer_fixups: Vec<Gfx942KfdDispatchPointerFixupV1>,
+    pub(crate) completion: GeneratedKfdCompletion<'allocation>,
+}
+
 impl<'allocation> GeneratedKfdPackedArguments<'allocation> {
     pub const fn kernel_id(&self) -> KernelId {
         self.kernel_id
@@ -535,6 +719,19 @@ impl<'allocation> GeneratedKfdPackedArguments<'allocation> {
             ),
             self.completion,
         )
+    }
+
+    #[cfg(feature = "generated-gfx950-hip-provider")]
+    pub(crate) fn into_target_backend_arguments_v1(
+        self,
+    ) -> GeneratedTargetBackendArgumentsV1<'allocation> {
+        GeneratedTargetBackendArgumentsV1 {
+            alignment: self.alignment,
+            explicit_kernarg: self.explicit_kernarg,
+            buffers: self.buffers,
+            pointer_fixups: self.pointer_fixups,
+            completion: self.completion,
+        }
     }
 }
 
@@ -713,7 +910,7 @@ impl GeneratedKfdCompletion<'_> {
         Ok(result)
     }
 
-    fn apply_completed_buffers(
+    pub(crate) fn apply_completed_buffers(
         self,
         completed: &[(Gfx942RuntimeBufferAccessV1, &[u8])],
     ) -> Result<(), GeneratedKfdCompletionError> {

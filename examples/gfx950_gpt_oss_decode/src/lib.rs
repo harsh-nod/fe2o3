@@ -27,38 +27,81 @@
 ))]
 compile_error!("an AMDGPU build must select one GPT-OSS kernel feature");
 
+#[cfg(any(
+    all(
+        feature = "kernel-gpt-oss-decode",
+        any(
+            feature = "kernel-gpt-oss-decode-router-serial",
+            feature = "kernel-gpt-oss-decode-held-fragments",
+            feature = "kernel-gpt-oss-decode-scalar-attention",
+            feature = "kernel-gpt-oss-decode-pipelined-attention",
+            feature = "kernel-gpt-oss-decode-interleaved-stores",
+        )
+    ),
+    all(
+        feature = "kernel-gpt-oss-decode-router-serial",
+        any(
+            feature = "kernel-gpt-oss-decode-held-fragments",
+            feature = "kernel-gpt-oss-decode-scalar-attention",
+            feature = "kernel-gpt-oss-decode-pipelined-attention",
+            feature = "kernel-gpt-oss-decode-interleaved-stores",
+        )
+    ),
+    all(
+        feature = "kernel-gpt-oss-decode-held-fragments",
+        any(
+            feature = "kernel-gpt-oss-decode-scalar-attention",
+            feature = "kernel-gpt-oss-decode-pipelined-attention",
+            feature = "kernel-gpt-oss-decode-interleaved-stores",
+        )
+    ),
+    all(
+        feature = "kernel-gpt-oss-decode-scalar-attention",
+        any(
+            feature = "kernel-gpt-oss-decode-pipelined-attention",
+            feature = "kernel-gpt-oss-decode-interleaved-stores",
+        )
+    ),
+    all(
+        feature = "kernel-gpt-oss-decode-pipelined-attention",
+        feature = "kernel-gpt-oss-decode-interleaved-stores",
+    ),
+))]
+compile_error!("GPT-OSS full-kernel features are mutually exclusive; select exactly one variant");
+
+mod capability_views;
+#[cfg(any(
+    feature = "kernel-gpt-oss-decode",
+    all(
+        not(target_arch = "amdgpu"),
+        not(any(
+            feature = "kernel-gpt-oss-decode-router-serial",
+            feature = "kernel-gpt-oss-decode-held-fragments",
+            feature = "kernel-gpt-oss-decode-scalar-attention",
+            feature = "kernel-gpt-oss-decode-pipelined-attention",
+            feature = "kernel-gpt-oss-decode-interleaved-stores",
+            feature = "kernel-gpt-oss-router-component",
+            feature = "kernel-gpt-oss-attention-component",
+            feature = "kernel-gpt-oss-expert-component",
+        ))
+    )
+))]
 pub mod kernel;
 #[cfg(any(
-    target_arch = "amdgpu",
     feature = "kernel-gpt-oss-router-component",
     feature = "kernel-gpt-oss-attention-component",
     feature = "kernel-gpt-oss-expert-component"
 ))]
 pub mod kernel_components;
-#[cfg(any(
-    target_arch = "amdgpu",
-    feature = "kernel-gpt-oss-decode-held-fragments"
-))]
+#[cfg(feature = "kernel-gpt-oss-decode-held-fragments")]
 pub mod kernel_held_fragments;
-#[cfg(any(
-    target_arch = "amdgpu",
-    feature = "kernel-gpt-oss-decode-interleaved-stores"
-))]
+#[cfg(feature = "kernel-gpt-oss-decode-interleaved-stores")]
 pub mod kernel_interleaved_stores;
-#[cfg(any(
-    target_arch = "amdgpu",
-    feature = "kernel-gpt-oss-decode-pipelined-attention"
-))]
+#[cfg(feature = "kernel-gpt-oss-decode-pipelined-attention")]
 pub mod kernel_pipelined_attention;
-#[cfg(any(
-    target_arch = "amdgpu",
-    feature = "kernel-gpt-oss-decode-router-serial"
-))]
+#[cfg(feature = "kernel-gpt-oss-decode-router-serial")]
 pub mod kernel_router_serial;
-#[cfg(any(
-    target_arch = "amdgpu",
-    feature = "kernel-gpt-oss-decode-scalar-attention"
-))]
+#[cfg(feature = "kernel-gpt-oss-decode-scalar-attention")]
 pub mod kernel_scalar_attention;
 #[cfg(not(target_arch = "amdgpu"))]
 pub mod reference;

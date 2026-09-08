@@ -1,9 +1,9 @@
 use fe2o3_device::{
-    Bf16, Bf16x2, DeviceMath, F16, Fp8E4M3Fnuz, Fp8E4M3Fnuzx4, Fp8E5M2Fnuz,
-    Fp8E5M2Fnuzx4,
+    Bf16, Bf16x2, F16, Fp8E4M3Fnuz, Fp8E4M3Fnuzx4, Fp8E5M2Fnuz, Fp8E5M2Fnuzx4, PolicyDeviceMath,
+    StrictIeee,
 };
 
-fn type_check_device_intrinsics(math: &DeviceMath) {
+fn type_check_device_intrinsics(math: &PolicyDeviceMath<'_, (), StrictIeee>) {
     let _: f32 = math.sqrt_f32(4.0);
     let _: f32 = math.mul_add_f32(2.0, 3.0, 4.0);
     let lanes = Bf16x2::new(Bf16::ONE, Bf16::ONE);
@@ -27,5 +27,5 @@ fn main() {
     let _: f32 = bf8.to_f32();
     let _: u32 = fp8x4.to_bits();
     let _: [Fp8E5M2Fnuz; 4] = bf8x4.to_array();
-    let _: fn(&DeviceMath) = type_check_device_intrinsics;
+    let _ = type_check_device_intrinsics;
 }

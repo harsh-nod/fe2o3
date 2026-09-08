@@ -18,6 +18,7 @@ use core::fmt;
 use core::marker::PhantomData;
 use core::mem::align_of;
 
+use crate::context::UnbrandedCapability;
 use crate::{DynamicLds, Group, LdsUninitialized, SubgroupTile, Workgroup};
 
 /// Version of the bounded gfx942 collective contract.
@@ -172,8 +173,9 @@ collective_element!(
 /// to the authenticated current workgroup and to one of the closed gfx942 or
 /// gfx950 target profiles.
 #[rustc_diagnostic_item = "fe2o3_device_workgroup_collectives_context_v1"]
-pub struct WorkgroupCollectives {
+pub struct WorkgroupCollectives<Brand = UnbrandedCapability> {
     _private: (),
+    _brand: PhantomData<fn(Brand) -> Brand>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 collective_element!(
@@ -359,14 +361,18 @@ pub enum WorkgroupCollectiveScratchError {
 /// exposed as a Rust reference because every work-item names the shared LDS
 /// allocation concurrently.
 #[rustc_diagnostic_item = "fe2o3_device_workgroup_collective_scratch_v1"]
-pub struct WorkgroupCollectiveScratch<'group, T: WorkgroupCollectiveElement> {
+pub struct WorkgroupCollectiveScratch<
+    'group,
+    T: WorkgroupCollectiveElement,
+    Brand = UnbrandedCapability,
+> {
     base: *mut T,
     slots: u32,
-    _group: PhantomData<&'group Workgroup<'group>>,
+    _group: PhantomData<&'group Workgroup<'group, Brand>>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
-impl<'group, T: WorkgroupCollectiveElement> WorkgroupCollectiveScratch<'group, T> {
+impl<'group, T: WorkgroupCollectiveElement, Brand> WorkgroupCollectiveScratch<'group, T, Brand> {
     /// Consumes one typed LDS root capability as collective scratch.
     ///
     /// The dynamic allocation must contain exactly one slot per invocation in
@@ -374,8 +380,8 @@ impl<'group, T: WorkgroupCollectiveElement> WorkgroupCollectiveScratch<'group, T
     /// collective owns the shared region; no pointer is exposed to callers.
     #[inline(always)]
     pub fn from_dynamic_lds(
-        group: &'group Workgroup<'group>,
-        lds: DynamicLds<'group, T, LdsUninitialized>,
+        group: &'group Workgroup<'group, Brand>,
+        lds: DynamicLds<'group, T, LdsUninitialized, Brand>,
     ) -> Result<Self, WorkgroupCollectiveScratchError> {
         let size = group.size();
         if !supported_workgroup_collective_size(size) {
@@ -409,7 +415,7 @@ impl<'group, T: WorkgroupCollectiveElement> WorkgroupCollectiveScratch<'group, T
     /// Invalid null, alignment, size, and slot-count inputs may be supplied for
     /// validation and return `Err` without requiring pointer validity.
     pub unsafe fn from_raw_parts(
-        group: &'group Workgroup<'group>,
+        group: &'group Workgroup<'group, Brand>,
         base: *mut T,
         slots: u32,
     ) -> Result<Self, WorkgroupCollectiveScratchError> {
@@ -445,7 +451,7 @@ impl<'group, T: WorkgroupCollectiveElement> WorkgroupCollectiveScratch<'group, T
     }
 }
 
-impl<T: WorkgroupCollectiveElement> fmt::Debug for WorkgroupCollectiveScratch<'_, T> {
+impl<T: WorkgroupCollectiveElement, Brand> fmt::Debug for WorkgroupCollectiveScratch<'_, T, Brand> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("WorkgroupCollectiveScratch")
@@ -454,7 +460,7 @@ impl<T: WorkgroupCollectiveElement> fmt::Debug for WorkgroupCollectiveScratch<'_
     }
 }
 
-impl SubgroupTile<'_, 64> {
+impl<Brand> SubgroupTile<'_, 64, Brand> {
     /// Returns the wave64 sum to every lane using a fixed XOR shuffle tree.
     ///
     /// The compiler proves that the context and tile describe the current
@@ -525,7 +531,7 @@ unsafe fn wave64_inclusive_scan<T: Gfx942CollectiveElement>(
     result
 }
 
-impl Workgroup<'_> {
+impl<Brand> Workgroup<'_, Brand> {
     /// Returns the workgroup sum to every invocation through LDS scratch.
     ///
     /// The compiler proves that the context, workgroup, and scratch binding
@@ -535,7 +541,7 @@ impl Workgroup<'_> {
     pub fn reduce_sum<T: Gfx942CollectiveElement>(
         &self,
         context: &Gfx942Collectives,
-        scratch: &mut WorkgroupCollectiveScratch<'_, T>,
+        scratch: &mut WorkgroupCollectiveScratch<'_, T, Brand>,
         value: T,
     ) -> T {
         let rank = self.thread_rank() as u32;
@@ -573,7 +579,7 @@ impl Workgroup<'_> {
     pub fn inclusive_scan_sum<T: Gfx942CollectiveElement>(
         &self,
         context: &Gfx942Collectives,
-        scratch: &mut WorkgroupCollectiveScratch<'_, T>,
+        scratch: &mut WorkgroupCollectiveScratch<'_, T, Brand>,
         value: T,
     ) -> T {
         unsafe { workgroup_inclusive_scan(self, context, scratch, value) }
@@ -588,7 +594,7 @@ impl Workgroup<'_> {
     pub fn exclusive_scan_sum<T: Gfx942CollectiveElement>(
         &self,
         context: &Gfx942Collectives,
-        scratch: &mut WorkgroupCollectiveScratch<'_, T>,
+        scratch: &mut WorkgroupCollectiveScratch<'_, T, Brand>,
         value: T,
     ) -> T {
         let rank = self.thread_rank() as u32;
@@ -604,7 +610,7 @@ impl Workgroup<'_> {
     }
 }
 
-impl WorkgroupCollectives {
+impl<Brand> WorkgroupCollectives<Brand> {
     /// Returns the target-neutral workgroup sum to every invocation.
     ///
     /// The only admitted operation is sum over `u32`, `i32`, or `f32`. The
@@ -624,7 +630,7 @@ impl WorkgroupCollectives {
     #[rustc_diagnostic_item = "fe2o3_device_workgroup_reduce_sum_v1"]
     pub fn reduce_sum_portable<T: WorkgroupCollectiveElement>(
         &self,
-        scratch: DynamicLds<'_, T, LdsUninitialized>,
+        scratch: DynamicLds<'_, T, LdsUninitialized, Brand>,
         value: T,
     ) -> T {
         let _ = (scratch, value);
@@ -644,7 +650,7 @@ impl WorkgroupCollectives {
     #[rustc_diagnostic_item = "fe2o3_device_workgroup_inclusive_scan_sum_v1"]
     pub fn inclusive_scan_sum<T: WorkgroupCollectiveElement>(
         &self,
-        scratch: DynamicLds<'_, T, LdsUninitialized>,
+        scratch: DynamicLds<'_, T, LdsUninitialized, Brand>,
         value: T,
     ) -> T {
         let _ = (scratch, value);
@@ -660,18 +666,30 @@ impl WorkgroupCollectives {
     #[rustc_diagnostic_item = "fe2o3_device_workgroup_exclusive_scan_sum_v1"]
     pub fn exclusive_scan_sum<T: WorkgroupCollectiveElement>(
         &self,
-        scratch: DynamicLds<'_, T, LdsUninitialized>,
+        scratch: DynamicLds<'_, T, LdsUninitialized, Brand>,
         value: T,
     ) -> T {
         let _ = (scratch, value);
         unreachable!("workgroup exclusive scan must be lowered by the authenticated fe2o3 backend")
     }
 
+    pub(crate) fn current_branded() -> Self {
+        let _ = WorkgroupCollectives::current();
+        Self {
+            _private: (),
+            _brand: PhantomData,
+            _not_send_sync: PhantomData,
+        }
+    }
+}
+
+impl WorkgroupCollectives {
     /// Returns compiler-authenticated authority for the current workgroup.
     ///
     /// The compiler proves the exact launch geometry, target support, uniform
-    /// execution, LDS ownership, scalar type, and reduction operation. Host
-    /// execution and unsupported lowering trap.
+    /// execution, LDS ownership, scalar type, target binding, and operation.
+    /// This compatibility acquisition is unbranded; new kernels should derive
+    /// the branded capability from [`crate::KernelContext`].
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_workgroup_collectives_current_v1"]
     pub fn current() -> Self {
@@ -682,15 +700,16 @@ impl WorkgroupCollectives {
     fn for_host_test() -> Self {
         Self {
             _private: (),
+            _brand: PhantomData,
             _not_send_sync: PhantomData,
         }
     }
 }
 
-unsafe fn workgroup_inclusive_scan<T: Gfx942CollectiveElement>(
-    group: &Workgroup<'_>,
+unsafe fn workgroup_inclusive_scan<T: Gfx942CollectiveElement, Brand>(
+    group: &Workgroup<'_, Brand>,
     context: &Gfx942Collectives,
-    scratch: &mut WorkgroupCollectiveScratch<'_, T>,
+    scratch: &mut WorkgroupCollectiveScratch<'_, T, Brand>,
     value: T,
 ) -> T {
     let rank = group.thread_rank() as u32;

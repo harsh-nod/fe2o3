@@ -1,0 +1,5 @@
+error[E0599]: no method named `gfx950_wave16` found for reference `&fe2o3_device::Subgroup<'a, SubgroupWidth32, (), InitialEpoch>` in the current scope
+ --> tests/ui/fail/gfx950_capability_wrong_width.rs:7:22
+  |
+7 |     let _ = subgroup.gfx950_wave16(epoch);
+  |                      ^^^^^^^^^^^^^ method not found in `&fe2o3_device::Subgroup<'a, SubgroupWidth32, (), InitialEpoch>`

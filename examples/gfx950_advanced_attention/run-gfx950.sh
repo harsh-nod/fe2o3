@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+if ! source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)/scripts/tutorial-hardware-runner.sh"; then
+    exit 1
+fi
+fe2o3_tutorial_hardware_entry "$0" "$@" || exit
 set -euo pipefail
 
 # Production Rust -> gfx950 HSACO -> deprecated HSA qualification-oracle
@@ -53,20 +57,20 @@ case "$SUITE:$FEATURE" in
         SYMBOL=gfx950_kda_chunkwise_prefill; KERNARG=144; WG=256; LDS=0; OCML=0
         TEST=gfx950_kda_chunkwise_prefill_rust_cov6_matches_cpu_reference; ISA=kda_matrix ;;
     attention:kernel-content-sparse-attention)
-        SYMBOL=gfx950_content_sparse_attention; KERNARG=96; WG=256; LDS=8192; OCML=1
-        TEST=gfx950_content_sparse_attention_rust_cov6_matches_cpu_reference; ISA=fp8_attention ;;
+        SYMBOL=gfx950_content_sparse_attention; KERNARG=96; WG=256; LDS=0; OCML=1
+        TEST=gfx950_content_sparse_attention_rust_cov6_matches_cpu_reference; ISA=scalar ;;
     attention:kernel-content-sparse-attention-reciprocal-reuse-v1)
-        SYMBOL=gfx950_content_sparse_attention; KERNARG=96; WG=256; LDS=8192; OCML=1
-        TEST=gfx950_content_sparse_attention_rust_cov6_matches_cpu_reference; ISA=fp8_attention ;;
+        SYMBOL=gfx950_content_sparse_attention; KERNARG=96; WG=256; LDS=0; OCML=1
+        TEST=gfx950_content_sparse_attention_rust_cov6_matches_cpu_reference; ISA=scalar ;;
     attention:kernel-deepseek-sparse-attention)
         SYMBOL=gfx950_deepseek_sparse_attention; KERNARG=112; WG=256; LDS=0; OCML=1
         TEST=gfx950_deepseek_sparse_attention_rust_cov6_matches_cpu_reference; ISA=scalar ;;
     attention:kernel-compressed-hybrid-attention)
-        SYMBOL=gfx950_compressed_hybrid_attention; KERNARG=80; WG=256; LDS=8192; OCML=1
-        TEST=gfx950_compressed_hybrid_attention_rust_cov6_matches_cpu_reference; ISA=fp8_attention ;;
+        SYMBOL=gfx950_compressed_hybrid_attention; KERNARG=80; WG=256; LDS=0; OCML=1
+        TEST=gfx950_compressed_hybrid_attention_rust_cov6_matches_cpu_reference; ISA=scalar ;;
     attention:kernel-compressed-hybrid-attention-division-baseline-v1)
-        SYMBOL=gfx950_compressed_hybrid_attention; KERNARG=80; WG=256; LDS=8192; OCML=1
-        TEST=gfx950_compressed_hybrid_attention_rust_cov6_matches_cpu_reference; ISA=fp8_attention ;;
+        SYMBOL=gfx950_compressed_hybrid_attention; KERNARG=80; WG=256; LDS=0; OCML=1
+        TEST=gfx950_compressed_hybrid_attention_rust_cov6_matches_cpu_reference; ISA=scalar ;;
     attention:kernel-attnres-aggregate)
         SYMBOL=gfx950_attnres_aggregate; KERNARG=48; WG=256; LDS=0; OCML=1
         TEST=gfx950_attnres_aggregate_rust_cov6_matches_cpu_reference; ISA=scalar ;;
@@ -439,6 +443,7 @@ LLVM_SHA256=$("$SHA256SUM" -- "$LLVM_IR" | awk '{ print $1 }')
 ISA_SHA256=$("$SHA256SUM" -- "$DISASSEMBLY" | awk '{ print $1 }')
 SOURCE_COMMIT=$("$GIT" -C "$REPO_ROOT" rev-parse --verify 'HEAD^{commit}')
 SOURCE_TREE=$("$GIT" -C "$REPO_ROOT" rev-parse --verify 'HEAD^{tree}')
+fe2o3_tutorial_hardware_begin
 (
     cd -- "$REPO_ROOT"
     FE2O3_RUN_GFX950_ADVANCED_HARDWARE=1 \
@@ -455,6 +460,7 @@ SOURCE_TREE=$("$GIT" -C "$REPO_ROOT" rev-parse --verify 'HEAD^{tree}')
         -p fe2o3-hsa-runtime --features hardware-qualification \
         --test gfx950_advanced_hardware "$TEST" -- --ignored --exact --nocapture
 )
+fe2o3_tutorial_hardware_finish gfx950 "$HSACO" "$LLVM_IR"
 
 printf 'PASS %s production Rust gfx950 build and qualification-oracle numerical run\n' "$SYMBOL"
 printf 'Binding: %s\nLLVM:   %s\nHSACO:  %s\nSHA256: %s\nISA:    %s\n' \

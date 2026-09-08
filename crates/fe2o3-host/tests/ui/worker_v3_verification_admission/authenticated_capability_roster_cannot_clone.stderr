@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `AuthenticatedWorkerV3CapabilityRosterV1<R>` in the current scope
+ --> tests/ui/worker_v3_verification_admission/authenticated_capability_roster_cannot_clone.rs:4:28
+  |
+4 |     let _duplicate = value.clone();
+  |                            ^^^^^ method not found in `AuthenticatedWorkerV3CapabilityRosterV1<R>`

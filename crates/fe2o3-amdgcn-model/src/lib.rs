@@ -9,19 +9,25 @@
 //! target-checked low-precision scaled MFMA and LDS transpose-load fragments.
 
 mod device_math;
+mod gfx942_machine_refinement_v1;
 mod gfx950;
 mod lowering;
+mod post_llvm_stage_custody_v1;
 mod production_kir_to_llvm_replay_v1;
 mod production_limits_v1;
 mod production_refinement_v1;
+mod production_target_capabilities_v1;
 mod scalar_v2;
 
 pub use device_math::*;
+pub use gfx942_machine_refinement_v1::*;
 pub use gfx950::*;
 pub use lowering::*;
+pub use post_llvm_stage_custody_v1::*;
 pub use production_kir_to_llvm_replay_v1::*;
 pub use production_limits_v1::*;
 pub use production_refinement_v1::*;
+pub use production_target_capabilities_v1::*;
 pub use scalar_v2::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

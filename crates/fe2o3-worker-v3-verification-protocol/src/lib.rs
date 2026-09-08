@@ -3,10 +3,12 @@
 
 mod protocol;
 mod protocol_v2;
+mod protocol_v5;
 
 pub use protocol::{
     MAX_WORKER_V3_VERIFICATION_ENTRIES_V1, MAX_WORKER_V3_VERIFICATION_ENTRY_NAME_BYTES_V1,
     MAX_WORKER_V3_VERIFICATION_ENVELOPE_FD_BYTES_V1, MAX_WORKER_V3_VERIFICATION_HSACO_FD_BYTES_V1,
+    MAX_WORKER_V3_VERIFICATION_PROTECTED_EVIDENCE_FD_BYTES_V5,
     MAX_WORKER_V3_VERIFICATION_REQUEST_BYTES_V1, MIN_WORKER_V3_VERIFICATION_REQUEST_BYTES_V1,
     WORKER_V3_VERIFICATION_FD_PAYLOADS_V1, WORKER_V3_VERIFICATION_REQUEST_MAGIC_V1,
     WORKER_V3_VERIFICATION_REQUEST_VERSION_V1, WORKER_V3_VERIFICATION_RESPONSE_BYTES_V1,
@@ -28,4 +30,19 @@ pub use protocol_v2::{
     WorkerV3VerificationChallengeReservationV2, WorkerV3VerificationCurrentRecordFrameV2,
     WorkerV3VerificationProtocolErrorV2, WorkerV3VerificationTerminalDispositionV2,
     WorkerV3VerificationTerminalFrameV2,
+};
+pub use protocol_v5::{
+    ExactIdentityCoordinateV5, InertWorkerV3ProtectedCompilerInputV5,
+    MAX_WORKER_V3_PROTECTED_COMPILER_INPUT_BYTES_V5,
+    MAX_WORKER_V3_VERIFICATION_CAPABILITY_REQUEST_BYTES_V5,
+    MAX_WORKER_V3_VERIFICATION_CAPABILITY_RESPONSE_BYTES_V5,
+    WORKER_V3_VERIFICATION_CAPABILITY_VERSION_V5, WorkerV3VerificationCapabilityCarriageIdentityV5,
+    WorkerV3VerificationCapabilityCarriageV5, WorkerV3VerificationCapabilityCompletionV5,
+    WorkerV3VerificationCapabilityProtocolErrorV5, WorkerV3VerificationCapabilityRequestIdentityV5,
+    WorkerV3VerificationCapabilityRequestV5, WorkerV3VerificationCapabilityResponseDispositionV5,
+    WorkerV3VerificationCapabilityResponseIdentityV5, WorkerV3VerificationCapabilityResponseV5,
+    WorkerV3VerificationProductionAttemptV5,
+    WorkerV3VerificationProtectedEvidenceBindingIdentityV5,
+    derive_worker_v3_protected_evidence_binding_v5, worker_v3_protected_compiler_input_name_v5,
+    worker_v3_protected_compiler_input_redo_name_v5,
 };

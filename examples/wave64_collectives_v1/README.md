@@ -63,9 +63,9 @@ bit exact.
 
 The content binding carries exact SHA-256 identities:
 
-- attributed source: `7c6ead1e7c01a61a8f31a010c9e8cb9bd1c21a905ba61e9d90c6c077c748ffd4`;
+- attributed source: `a007fce33c6f61c886427af116a5d8359c95124fec3111b7d31f6ee61102dddf`;
 - CPU oracle: `837aae894e5c04da4b598e45f344f2e5df0aa8bc6155acf0bf05809ecd86d407`;
-- reviewed correspondence: `d1c8630a5e534fe559db0b669ca55a6f9dda5454a50d57feb67eb3b969941e87`.
+- reviewed correspondence: `29d892974d4d60f6a7a2d50a6bdd921a8731c108195d8fb98bbebd2996d963f9`.
 
 Those identities are domain-separated with an outer 20-byte Git commit. The
 formal profile pins public base
@@ -88,27 +88,28 @@ Rust syntax an operational semantics and connects that semantics to the model.
 
 ## Source-model-to-Kernel-IR refinement
 
-`src/source_kir_refinement.rs` is an executable relation between the existing
-CPU source model and an independent interpreter of the exact canonical
-semantic Kernel IR. It binds both checked-in files by SHA-256:
+`src/source_kir_refinement.rs` consumes exact verified canonical KIR V13 bytes
+from a genuine compiler-produced Bundle V8. It binds the complete V13 byte
+identity to the attributed source identity, then observes the target-neutral
+subgroup reduction, workgroup scans, width/extent, and three disjoint global
+publications. It does not accept the retired gfx942-specific profile model.
 
-- attributed source: `7c6ead1e7c01a61a8f31a010c9e8cb9bd1c21a905ba61e9d90c6c077c748ffd4`;
-- Kernel-IR schema: `da2722bd3ce349228644300b13bb45d4683d1ebd60f8b7749e7764ec6569e894`.
-
-The checker first requires the exact gfx942:xnack-, COV6, Wave64, WG64,
-one-workgroup profile and canonical KIR structure. It then compares all 192
-output/lane contributor sets and lane owners. Because each contributor set is a
-symbolic `u64` bitset intersected with the supplied active mask, this check
-covers every possible mask rather than claiming exhaustive enumeration of
-`2^64` values. Concrete tests additionally cover empty/full masks, every
-singleton and single-inactive mask, every prefix and suffix, 4,096 deterministic
-hostile masks, and finite-F32 endpoint and signed-zero vectors.
+The adapter compares all 192 output/lane contributor sets over the finite
+integral-F32 corpus. This remains structural observation, not a source-to-KIR
+proof: canonical V13 verifies graph well-formedness but does not by itself prove
+compiler causality or discharge convergence, ownership, and refinement
+obligations. In particular, unresolved proof obligations are not discharged.
+The positive test is therefore ignored unless
+`FE2O3_M2_WAVE64_BUNDLE_V8` names a genuine compiler-produced bundle and
+`FE2O3_M2_EXPECTED_TARGET` names its bound target. Synthetic receipts are not
+accepted as production evidence.
 
 `verus/wave64_source_kir_refinement_v1.rs` proves the corresponding relation for
 an arbitrary explicit `u64` mask, output lane, contributor lane, collective
-kind, and finite integral input sequence. Its 10 verified obligations bind the
-same source/schema identities and exact KIR profile, contributor predicates,
-integer value recurrences, and injective lane ownership. Three expected-negative
+kind, and finite integral input sequence. Its 10 verified obligations bind its
+pinned mathematical model, contributor predicates, integer value recurrences,
+and injective lane ownership. They are not a substitute for the compiler's V13
+refinement receipt. Three expected-negative
 fixtures reject identity drift, an inclusive substitution for exclusive-scan
 contributors, and colliding output owners.
 

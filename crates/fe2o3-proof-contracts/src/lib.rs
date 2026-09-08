@@ -9,10 +9,26 @@
 
 extern crate alloc;
 
+mod capability;
 mod identity;
 mod model;
 mod validation;
 
+pub use capability::{
+    CAPABILITY_DIAGNOSTIC_NAMESPACE_V1, CAPABILITY_OBLIGATION_SET_VERSION_V1,
+    CAPABILITY_PROPERTY_NAMESPACE_V1, CAPABILITY_RESULT_SET_VERSION_V1, CapabilityCodecErrorV1,
+    CapabilityCompositionErrorV1, CapabilityDiagnosticIdV1, CapabilityIdentityFieldV1,
+    CapabilityObligationIdentityV1, CapabilityObligationSpecV1, CapabilityObligationV1,
+    CapabilityOutcomeKindV1, CapabilityOutcomeV1, CapabilityPropertyIdV1, CapabilityRecordKindV1,
+    CapabilityResourceV1, CapabilityResultIdentityV1, CapabilityResultSpecV1, CapabilityResultV1,
+    CapabilitySubjectFieldV1, CapabilitySubjectV1, ExecutableKirIdentityV1,
+    InertCapabilityObligationSetIdentityV1, InertCapabilityObligationSetV1,
+    InertCapabilityResultSetIdentityV1, InertCapabilityResultSetV1, KernelIdentityV1,
+    KernelRootIdentityV1, LaunchContractIdentityV1, MAX_CAPABILITY_OBLIGATION_SET_BYTES_V1,
+    MAX_CAPABILITY_OBLIGATIONS_V1, MAX_CAPABILITY_REJECTED_WITNESS_BYTES_V1,
+    MAX_CAPABILITY_RESULT_SET_BYTES_V1, MAX_CAPABILITY_WITNESS_BYTES_V1, TargetModelIdentityV1,
+    validate_capability_composition_v1,
+};
 pub use identity::{
     ArtifactIdentityV1, CorrespondenceIdentityV1, DIGEST_BYTES_V1, DigestV1, EvidenceIdentityV1,
     ExactInputIdentityV1, ExactModelIdentityV1, ExactToolIdentityV1, ObligationIdentityV1,

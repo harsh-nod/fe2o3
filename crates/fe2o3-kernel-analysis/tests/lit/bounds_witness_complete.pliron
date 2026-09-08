@@ -2,8 +2,15 @@
 // EXPECT: PASS
 // CHECK-WITNESSES
 // CHECK: PASS
+// CHECK: WITNESS TensorLayout Clean obligations=8
 // CHECK: WITNESS MemoryBounds Clean obligations=1
-// CHECK: WITNESS TensorLayout Incomplete obligations=0
+// CHECK: WITNESS AtomicLegality Clean obligations=8
+// CHECK: WITNESS RaceFreedom Clean obligations=8
+// CHECK: WITNESS HierarchicalOwnership Clean obligations=8
+// CHECK: WITNESS BarrierConvergence Clean obligations=8
+// CHECK: WITNESS PipelineProtocol Clean obligations=8
+// CHECK: WITNESS WorkgroupMemory Clean obligations=8
+// CHECK: WITNESS SemanticRefinement Clean obligations=8
 builtin.func @bounds_witness_complete: builtin.function <() -> ()>
 {
   ^entry_block1v1():

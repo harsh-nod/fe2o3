@@ -1,0 +1,14 @@
+{
+  "schema": "fe2o3-tutorial-semantic-expectation-v1",
+  "assertions": [
+    {
+      "path": [
+        "arguments",
+        0,
+        "value",
+        "bytes"
+      ],
+      "equals": "0x00002a4200002a4200002a4200002a42"
+    }
+  ]
+}

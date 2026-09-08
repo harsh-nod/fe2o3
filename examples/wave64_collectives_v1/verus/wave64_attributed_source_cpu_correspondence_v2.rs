@@ -21,10 +21,10 @@ pub struct GitCommit160V2 {
 
 pub open spec fn attributed_source_identity_v2() -> Digest256V2 {
     Digest256V2 {
-        word0: 0x7c6ead1e7c01a61a,
-        word1: 0x8f31a010c9e8cb9b,
-        word2: 0xd1c21a905ba61e9d,
-        word3: 0x90c6c077c748ffd4,
+        word0: 0xa007fce33c6f61c8,
+        word1: 0x86427af116a5d835,
+        word2: 0x9c95124fec3111b7,
+        word3: 0xd31f6ee61102dddf,
     }
 }
 
@@ -39,10 +39,10 @@ pub open spec fn cpu_oracle_identity_v2() -> Digest256V2 {
 
 pub open spec fn reviewed_correspondence_identity_v2() -> Digest256V2 {
     Digest256V2 {
-        word0: 0xd1c8630a5e534fe5,
-        word1: 0x59db0b669ca55a6f,
-        word2: 0x9dda5454a50d57fe,
-        word3: 0xb67eb3b969941e87,
+        word0: 0x29d892974d4d60f6,
+        word1: 0xa7a2d50a6bdd921a,
+        word2: 0x8731c108195d8fb9,
+        word3: 0x8bbebd2996d963f9,
     }
 }
 

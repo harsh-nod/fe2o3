@@ -60,6 +60,13 @@ pub mod __generated {
         fn disjoint_slice_type_identity_v1(_width: PointerWidth) -> TypeIdentity {
             TypeIdentity
         }
+
+        fn disjoint_slice_type_identity_for_index_space_v1(
+            _width: PointerWidth,
+            _index_space: RustDisjointIndexSpaceV1,
+        ) -> TypeIdentity {
+            TypeIdentity
+        }
     }
 
     impl GeneratedDeviceScalarV1 for u32 {}
@@ -99,6 +106,7 @@ pub mod __generated {
     pub enum Access {
         ByValue,
         ReadOnly,
+        WriteOnly,
         ReadWrite,
     }
 
@@ -117,6 +125,28 @@ pub mod __generated {
         Value,
         SharedReadOnly,
         Exclusive,
+    }
+
+    #[derive(Clone, Copy)]
+    pub enum RustDisjointIndexSpaceV1 {
+        Index1D,
+        ShiftedIndex1D {
+            offset: u64,
+        },
+        GridExclusive,
+        BlockedIndex1D {
+            lanes_per_block: u64,
+            elements_per_lane: u64,
+        },
+    }
+
+    impl RustDisjointIndexSpaceV1 {
+        pub fn blocked_index_1d(lanes_per_block: u64, elements_per_lane: u64) -> Option<Self> {
+            (lanes_per_block != 0 && elements_per_lane != 0).then_some(Self::BlockedIndex1D {
+                lanes_per_block,
+                elements_per_lane,
+            })
+        }
     }
 
     pub struct Name;
@@ -170,6 +200,91 @@ pub mod __generated {
         ) -> Result<Self, GeneratedArgumentLayoutError> {
             Ok(Self)
         }
+
+        pub fn new_with_disjoint_index_spaces_v1(
+            _size: u64,
+            _alignment: u32,
+            _pointer_width: PointerWidth,
+            _fields: Vec<AbiField>,
+            _index_spaces: Vec<Option<RustDisjointIndexSpaceV1>>,
+        ) -> Result<Self, GeneratedArgumentLayoutError> {
+            Ok(Self)
+        }
+    }
+
+    pub struct Dimensions;
+
+    impl Dimensions {
+        pub fn new(_x: u32, _y: u32, _z: u32) -> Result<Self, GeneratedArgumentLayoutError> {
+            Ok(Self)
+        }
+    }
+
+    pub enum BlockSize {
+        Any,
+        Exact(Dimensions),
+        AtMost(Dimensions),
+    }
+
+    pub struct LaunchContract;
+
+    impl LaunchContract {
+        pub fn new(
+            _rank: u8,
+            _block: BlockSize,
+            _maximum: Dimensions,
+            _static_lds: u32,
+            _dynamic_lds: u32,
+        ) -> Result<Self, GeneratedArgumentLayoutError> {
+            Ok(Self)
+        }
+    }
+
+    pub struct CompilerGeneratedHostContractV2;
+
+    impl CompilerGeneratedHostContractV2 {
+        pub fn new(_arguments: CompilerGeneratedArgumentLayoutV1, _launch: LaunchContract) -> Self {
+            Self
+        }
+    }
+
+    /// Minimal fixture copy of the side-by-side generated host expectation.
+    ///
+    /// # Safety
+    ///
+    /// Implementations must describe the exact marker ABI and launch contract.
+    pub unsafe trait CompilerGeneratedKernelExpectationV2:
+        CompilerGeneratedKernelExpectationV1
+    {
+        fn generated_host_contract_v2()
+        -> Result<CompilerGeneratedHostContractV2, GeneratedArgumentLayoutError>;
+    }
+
+    pub struct GeneratedHostMemoryBindingV2;
+
+    /// Minimal fixture copy of one generated memory observation.
+    ///
+    /// # Safety
+    ///
+    /// Implementations must observe the exact retained allocation.
+    pub unsafe trait GeneratedHostMemoryArgumentV2<'allocation>: 'allocation {
+        fn generated_host_memory_binding_v2(
+            &self,
+            _argument_index: usize,
+        ) -> GeneratedHostMemoryBindingV2;
+    }
+
+    /// Minimal fixture copy of complete generated memory observations.
+    ///
+    /// # Safety
+    ///
+    /// Implementations must visit every generated memory field exactly once.
+    pub unsafe trait CompilerGeneratedHostArgumentsV2<
+        'allocation,
+        K: CompilerGeneratedKernelExpectationV2,
+    >
+    {
+        fn generated_host_memory_bindings_v2(&self) -> Vec<GeneratedHostMemoryBindingV2>;
     }
 
     pub struct GeneratedArgumentInputV1<'allocation>(PhantomData<&'allocation ()>);
@@ -205,6 +320,17 @@ pub mod __generated {
         }
     }
 
+    unsafe impl<'allocation, T: 'allocation> GeneratedHostMemoryArgumentV2<'allocation>
+        for GeneratedKfdReadSlice<'allocation, T>
+    {
+        fn generated_host_memory_binding_v2(
+            &self,
+            _argument_index: usize,
+        ) -> GeneratedHostMemoryBindingV2 {
+            GeneratedHostMemoryBindingV2
+        }
+    }
+
     pub struct GeneratedKfdReadWriteSlice<'allocation, T> {
         _values: &'allocation mut [T],
     }
@@ -225,6 +351,26 @@ pub mod __generated {
         ) -> Result<GeneratedKfdSliceBinding<'allocation>, GeneratedKfdArgumentError> {
             Ok(GeneratedKfdSliceBinding(PhantomData))
         }
+
+        pub fn bind_mapped_argument(
+            self,
+            _plan: &GeneratedArgumentPackingPlanV1,
+            _argument_index: usize,
+            _index_space: RustDisjointIndexSpaceV1,
+        ) -> Result<GeneratedKfdSliceBinding<'allocation>, GeneratedKfdArgumentError> {
+            Ok(GeneratedKfdSliceBinding(PhantomData))
+        }
+    }
+
+    unsafe impl<'allocation, T: 'allocation> GeneratedHostMemoryArgumentV2<'allocation>
+        for GeneratedKfdReadWriteSlice<'allocation, T>
+    {
+        fn generated_host_memory_binding_v2(
+            &self,
+            _argument_index: usize,
+        ) -> GeneratedHostMemoryBindingV2 {
+            GeneratedHostMemoryBindingV2
+        }
     }
 
     pub struct GeneratedKfdWriteSlice<'allocation, T> {
@@ -242,6 +388,26 @@ pub mod __generated {
             _argument_index: usize,
         ) -> Result<GeneratedKfdSliceBinding<'allocation>, GeneratedKfdArgumentError> {
             Ok(GeneratedKfdSliceBinding(PhantomData))
+        }
+
+        pub fn bind_mapped_argument(
+            self,
+            _plan: &GeneratedArgumentPackingPlanV1,
+            _argument_index: usize,
+            _index_space: RustDisjointIndexSpaceV1,
+        ) -> Result<GeneratedKfdSliceBinding<'allocation>, GeneratedKfdArgumentError> {
+            Ok(GeneratedKfdSliceBinding(PhantomData))
+        }
+    }
+
+    unsafe impl<'allocation, T: 'allocation> GeneratedHostMemoryArgumentV2<'allocation>
+        for GeneratedKfdWriteSlice<'allocation, T>
+    {
+        fn generated_host_memory_binding_v2(
+            &self,
+            _argument_index: usize,
+        ) -> GeneratedHostMemoryBindingV2 {
+            GeneratedHostMemoryBindingV2
         }
     }
 
@@ -264,9 +430,10 @@ pub mod __generated {
     pub unsafe trait CompilerGeneratedKfdArguments<
         'allocation,
         K: CompilerGeneratedKernelExpectationV1,
-    > {
-        fn generated_argument_layout(
-        ) -> Result<CompilerGeneratedArgumentLayoutV1, GeneratedArgumentLayoutError>;
+    >
+    {
+        fn generated_argument_layout()
+        -> Result<CompilerGeneratedArgumentLayoutV1, GeneratedArgumentLayoutError>;
 
         fn bind_kfd_arguments(
             self,

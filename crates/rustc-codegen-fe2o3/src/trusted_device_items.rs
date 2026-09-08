@@ -17,12 +17,15 @@ use std::sync::OnceLock;
 
 use rustc_abi::ExternAbi;
 use rustc_hir::Safety;
+use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_hir::lang_items::LangItem;
 use rustc_middle::mir::{
     BinOp, Body, Operand, Rvalue, StatementKind, TerminatorKind, UnwindAction,
 };
-use rustc_middle::ty::{FloatTy, Instance, InstanceKind, TyCtxt, TyKind, TypingEnv, UintTy};
+use rustc_middle::ty::{
+    FloatTy, GenericParamDefKind, Instance, InstanceKind, Ty, TyCtxt, TyKind, TypingEnv, UintTy,
+};
 use rustc_span::{SourceFileHash, Symbol};
 use sha2::{Digest as _, Sha256};
 
@@ -37,8 +40,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x96, 0x24, 0x84, 0x97, 0x93, 0x27, 0x54, 0xc7, 0x54, 0x57, 0x48, 0xb4, 0xeb, 0xc8, 0xab, 0x8c,
-    0x2e, 0xc8, 0xf6, 0x47, 0x7a, 0x63, 0x81, 0x1c, 0x13, 0x3f, 0x04, 0x67, 0xb3, 0xad, 0x6b, 0x74,
+    0x87, 0xa0, 0x9c, 0xf2, 0xa2, 0x37, 0xdd, 0x0f, 0x6a, 0x8e, 0x72, 0xba, 0x16, 0xad, 0x89, 0x3c,
+    0xb8, 0x3c, 0xa1, 0xb9, 0xfe, 0x38, 0x8b, 0xf7, 0x7d, 0xac, 0x4d, 0x69, 0x1d, 0xe2, 0x67, 0xec,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -48,6 +51,12 @@ const PINNED_CORE_SEMANTIC_TERMINAL_TRANSCRIPT_DOMAIN_V1: &[u8] =
     b"FE2O3/PINNED-CORE-SEMANTIC-TERMINAL-TRANSCRIPT/V1\0";
 const STRUCTURAL_LOCAL_DEFINITION_COMPONENT_DOMAIN_V1: &[u8] =
     b"FE2O3/STRUCTURAL-LOCAL-DEFINITION-COMPONENT/V1\0";
+const STABLE_PROVIDER_OWNER_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/STABLE-PROVIDER-OWNER-IDENTITY/V1\0";
+const STABLE_PROVIDER_GENERIC_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/STABLE-PROVIDER-GENERIC-IDENTITY/V1\0";
+const STABLE_PROVIDER_STRUCTURE_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/STABLE-PROVIDER-STRUCTURE-IDENTITY/V1\0";
 #[cfg(test)]
 const REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../fe2o3-device");
@@ -179,13 +188,104 @@ pub(crate) enum TrustedAmdGpuDiagnosticOperation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TrustedGfx942CollectiveOperation {
+    Wave64ShuffleU32,
+    LdsStoreU32,
+    LdsLoadU32,
+    Wave64ShuffleI32,
+    LdsStoreI32,
+    LdsLoadI32,
+    Wave64ShuffleF32,
+    LdsStoreF32,
+    LdsLoadF32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TrustedDeviceItem {
     KernelError,
+    KernelContext,
+    KernelContextIssue,
+    CapabilityMemoryView,
+    UnsafeRawMemoryObligation,
+    CapabilityGlobalAddressSpace,
+    CapabilityWorkgroupAddressSpace,
+    CapabilityPrivateAddressSpace,
+    CapabilityReadOnly,
+    CapabilityDisjointWrite,
+    CapabilityExclusiveReadWrite,
+    CapabilityAtomicReadWrite,
+    WorkgroupMemoryBrand,
+    WorkgroupMemoryIndexSpace1D,
+    PrivateMemoryFromRawParts,
+    WorkgroupMemoryFromRawParts,
+    PrivateMemoryAllocate,
+    WorkgroupMemoryIndex1D,
+    WorkgroupMemoryAllocate,
+    WorkgroupMemoryPublish,
+    PrivateMemoryLoad,
+    PrivateMemoryExclusiveLoad,
+    PrivateMemoryExclusiveStore,
+    PrivateMemoryDisjointStore,
+    WorkgroupMemoryLoad,
+    WorkgroupMemoryExclusiveLoad,
+    WorkgroupMemoryExclusiveStore,
+    WorkgroupMemoryDisjointStore,
+    CapabilityGlobalBindReadOnly,
+    CapabilityGlobalBindDisjointWrite,
+    CapabilityGlobalBindExclusiveReadWrite,
+    CapabilityGlobalLoad,
+    CapabilityGlobalStore,
+    CapabilityGlobalExclusiveLoad,
+    CapabilityGlobalExclusiveStore,
+    CapabilityGlobalStoreBlock,
+    CapabilityGlobalBindAtomic,
+    StrictIeeeNumericalPolicy,
+    NumericalPolicyCapability,
+    NumericalPolicyIssue,
+    PolicyMathCapability,
+    PolicyMathBind,
+    PolicyMatrixCapability,
+    PolicyMatrixBind,
+    ExecutionWorkgroupCapability,
+    ExecutionSubgroupCapability,
+    ExecutionWorkgroupLds,
+    ExecutionPendingAsyncCopy,
+    ExecutionWorkgroupCurrent,
+    ExecutionSubgroupCurrent,
+    ExecutionLdsAllocate,
+    ExecutionWorkgroupBarrier,
+    ExecutionSubgroupBarrier,
+    ExecutionWorkgroupFence,
+    ExecutionLdsPublish,
+    ExecutionAsyncCopy,
+    ExecutionAsyncWait,
+    ExecutionWorkgroupReduceSum,
+    ExecutionWorkgroupInclusiveScanSum,
+    ExecutionWorkgroupExclusiveScanSum,
+    ExecutionGlobalAtomic,
+    ExecutionAtomicLoad,
+    ExecutionAtomicStore,
+    ExecutionAtomicFetchAdd,
+    ExecutionAtomicCompareExchange,
+    ExecutionSubgroupFence,
+    ExecutionSubgroupReduceSum,
+    ExecutionSubgroupInclusiveScanSum,
+    ExecutionMatrixAccess,
+    ExecutionLdsInitializeByInvocation,
+    ExecutionLdsReadPublished,
     DisjointSlice,
     WriteOnlyDisjointSlice,
     DeviceGlobalMutPtr,
+    DeviceGlobalConstPtr,
+    DeviceConstantPtr,
+    DeviceWorkgroupConstPtr,
+    DeviceWorkgroupMutPtr,
+    DevicePrivateConstPtr,
+    DevicePrivateMutPtr,
     WorkgroupLdsScope,
     WorkgroupLdsScopeCurrent,
+    DynamicLds,
+    DynamicLdsFromRawParts,
     DynamicLdsExactCurrent,
     DynamicLdsIntoCollectiveRawParts,
     LdsUninitialized,
@@ -201,6 +301,17 @@ pub(crate) enum TrustedDeviceItem {
     WorkgroupPipelineRelease,
     Invocation3D,
     Invocation3DCurrent,
+    Invocation3DFromRawParts,
+    Invocation3DIndex1D,
+    Grid,
+    Group,
+    GridSize3D,
+    WorkgroupId3D,
+    WorkgroupSize3D,
+    WorkitemId3D,
+    GridFromInvocationSnapshot,
+    WorkgroupFromInvocationSnapshot,
+    WorkgroupSynchronize,
     ThreadIndexX,
     ThreadIndexY,
     ThreadIndexZ,
@@ -288,11 +399,18 @@ pub(crate) enum TrustedDeviceItem {
     Gfx942WorkgroupReduceSum,
     Gfx942WorkgroupInclusiveScanSum,
     Gfx942WorkgroupExclusiveScanSum,
+    Gfx942Collective(TrustedGfx942CollectiveOperation),
     Gfx942BarrierArrive,
     Gfx942BarrierWait,
     WaveLane,
     Wave64,
     WaveLaneCurrent,
+    WaveLaneFromRaw,
+    ActiveLaneGroup,
+    ActiveLaneGroupFromSnapshot,
+    SubgroupTile,
+    SubgroupTileFromWave64,
+    MfmaLdsTile16x16,
     LdsTile16x16WriteMfmaBf16,
     LdsTile16x16ReadMfmaBf16,
     WorkgroupSyncthreads,
@@ -314,6 +432,13 @@ pub(crate) enum TrustedDeviceItem {
     Bf16MfmaMatrixBRowMajor,
     Bf16MfmaMatrixALoadZeroFilledV2,
     Bf16MfmaMatrixBLoadZeroFilledV2,
+    Bf16MfmaGlobalMatrixView,
+    Bf16MfmaGlobalMatrixALoadZeroFilled,
+    Bf16MfmaGlobalMatrixBLoadZeroFilled,
+    F32AccumulatorGlobalMatrixViewError,
+    F32AccumulatorGlobalMatrixView,
+    F32AccumulatorGlobalMatrixLoadLane,
+    F32AccumulatorGlobalMatrixStoreLane,
     DeviceMatrixMultiplyAccumulate,
     Gfx950Fp4E2M1Format,
     Gfx950Fp8E4M3Format,
@@ -336,7 +461,18 @@ pub(crate) enum TrustedDeviceItem {
     Gfx950MfmaMatrixBFp8LoadK128N16,
     Gfx950MfmaMatrixAFp4LoadM16K128,
     Gfx950MfmaMatrixBFp4LoadK128N16,
+    Gfx950MfmaGlobalMatrixView,
+    Gfx950MfmaGlobalMatrixAFp4RowMajor,
+    Gfx950MfmaGlobalMatrixBFp4RowMajor,
+    Gfx950MfmaGlobalMatrixAFp8RowMajor,
+    Gfx950MfmaGlobalMatrixBFp8RowMajor,
+    Gfx950MfmaGlobalMatrixAFp4LoadM16K128,
+    Gfx950MfmaGlobalMatrixBFp4LoadK128N16,
+    Gfx950MfmaGlobalMatrixAFp8LoadM16K128,
+    Gfx950MfmaGlobalMatrixBFp8LoadK128N16,
     Gfx950Matrix,
+    PolicyGfx950MatrixCapability,
+    PolicyGfx950MatrixIssue,
     Gfx950MatrixCurrent,
     Gfx950MatrixMultiplyAccumulateFp4,
     Gfx950MatrixMultiplyAccumulateFp4Fp8,
@@ -346,13 +482,23 @@ pub(crate) enum TrustedDeviceItem {
     Gfx950SubgroupReduceMaxF32,
     Gfx950SubgroupReduceSumF32,
     Gfx950SubgroupBroadcastF32,
+    Gfx950SubgroupWave16,
+    Gfx950SubgroupReduceMaxF32Wave16,
+    Gfx950SubgroupReduceSumF32Wave16,
+    Gfx950SubgroupBroadcastF32Wave16,
     Gfx950LdsTransposeTile,
+    Gfx950LdsTransposeTileIssue,
     Gfx950LdsTransposeTileCurrent,
     Gfx950LdsTransposeStageB4,
     Gfx950LdsTransposeStageB8,
     Gfx950LdsTransposePublish,
     Gfx950LdsTransposeReadB4,
     Gfx950LdsTransposeReadB8,
+    DynamicPhaseEpoch,
+    ReusableWorkgroupBrand,
+    ReusableWorkgroup,
+    ReusableWorkgroupLds,
+    ReusablePhaseCompletion,
     DeviceValue(DeviceValueDiagnosticItem),
     DeviceMath(DeviceMathDiagnosticItem),
     HalfOperation(TrustedHalfOperation),
@@ -365,6 +511,356 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::KernelError,
         "fe2o3_device_kernel_error_v1",
         "fe2o3_device::KernelError",
+    ),
+    (
+        TrustedDeviceItem::KernelContext,
+        "fe2o3_device_kernel_context_v1",
+        "fe2o3_device::KernelContext",
+    ),
+    (
+        TrustedDeviceItem::KernelContextIssue,
+        "fe2o3_device_kernel_context_issue_v1",
+        "fe2o3_device::KernelContext::__compiler_issue",
+    ),
+    (
+        TrustedDeviceItem::CapabilityMemoryView,
+        "fe2o3_device_capability_memory_view_v1",
+        "fe2o3_device::capability_memory::CapabilityMemoryView",
+    ),
+    (
+        TrustedDeviceItem::UnsafeRawMemoryObligation,
+        "fe2o3_device_unsafe_raw_memory_obligation_v1",
+        "fe2o3_device::capability_memory::UnsafeRawMemoryObligationV1",
+    ),
+    (
+        TrustedDeviceItem::CapabilityGlobalAddressSpace,
+        "fe2o3_device_capability_global_address_space_v1",
+        "fe2o3_device::capability_memory::GlobalAddressSpace",
+    ),
+    (
+        TrustedDeviceItem::CapabilityWorkgroupAddressSpace,
+        "fe2o3_device_capability_workgroup_address_space_v1",
+        "fe2o3_device::capability_memory::WorkgroupAddressSpace",
+    ),
+    (
+        TrustedDeviceItem::CapabilityPrivateAddressSpace,
+        "fe2o3_device_capability_private_address_space_v1",
+        "fe2o3_device::capability_memory::PrivateAddressSpace",
+    ),
+    (
+        TrustedDeviceItem::CapabilityReadOnly,
+        "fe2o3_device_capability_read_only_v1",
+        "fe2o3_device::capability_memory::ReadOnly",
+    ),
+    (
+        TrustedDeviceItem::CapabilityDisjointWrite,
+        "fe2o3_device_capability_disjoint_write_v1",
+        "fe2o3_device::capability_memory::DisjointWrite",
+    ),
+    (
+        TrustedDeviceItem::CapabilityExclusiveReadWrite,
+        "fe2o3_device_capability_exclusive_read_write_v1",
+        "fe2o3_device::capability_memory::ExclusiveReadWrite",
+    ),
+    (
+        TrustedDeviceItem::CapabilityAtomicReadWrite,
+        "fe2o3_device_capability_atomic_read_write_v1",
+        "fe2o3_device::capability_memory::AtomicReadWrite",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupMemoryBrand,
+        "fe2o3_device_workgroup_memory_brand_v1",
+        "fe2o3_device::capability_memory::WorkgroupMemoryBrand",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupMemoryIndexSpace1D,
+        "fe2o3_device_workgroup_memory_index_space_1d_v1",
+        "fe2o3_device::capability_memory::WorkgroupIndex1D",
+    ),
+    (
+        TrustedDeviceItem::PrivateMemoryFromRawParts,
+        "fe2o3_device_private_memory_from_raw_parts_v1",
+        "fe2o3_device::PrivateMemoryView::from_raw_parts",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupMemoryFromRawParts,
+        "fe2o3_device_workgroup_memory_from_raw_parts_v1",
+        "fe2o3_device::WorkgroupMemoryView::from_raw_parts",
+    ),
+    (
+        TrustedDeviceItem::PrivateMemoryAllocate,
+        "fe2o3_device_private_memory_allocate_v1",
+        "fe2o3_device::KernelContext::private_memory",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupMemoryIndex1D,
+        "fe2o3_device_workgroup_memory_index_1d_v1",
+        "fe2o3_device::execution::WorkgroupCapability::memory_index_1d",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupMemoryAllocate,
+        "fe2o3_device_workgroup_memory_allocate_v1",
+        "fe2o3_device::execution::WorkgroupCapability::allocate_memory",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupMemoryPublish,
+        "fe2o3_device_workgroup_memory_publish_v1",
+        "fe2o3_device::execution::WorkgroupCapability::publish_memory",
+    ),
+    (
+        TrustedDeviceItem::PrivateMemoryLoad,
+        "fe2o3_device_private_memory_load_v1",
+        "fe2o3_device::PrivateMemoryView::<ReadOnly>::load",
+    ),
+    (
+        TrustedDeviceItem::PrivateMemoryExclusiveLoad,
+        "fe2o3_device_private_memory_exclusive_load_v1",
+        "fe2o3_device::PrivateMemoryView::<ExclusiveReadWrite>::load",
+    ),
+    (
+        TrustedDeviceItem::PrivateMemoryExclusiveStore,
+        "fe2o3_device_private_memory_exclusive_store_v1",
+        "fe2o3_device::PrivateMemoryView::<ExclusiveReadWrite>::store",
+    ),
+    (
+        TrustedDeviceItem::PrivateMemoryDisjointStore,
+        "fe2o3_device_private_memory_disjoint_store_v1",
+        "fe2o3_device::PrivateMemoryView::<DisjointWrite>::store",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupMemoryLoad,
+        "fe2o3_device_workgroup_memory_load_v1",
+        "fe2o3_device::WorkgroupMemoryView::<ReadOnly>::load",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupMemoryExclusiveLoad,
+        "fe2o3_device_workgroup_memory_exclusive_load_v1",
+        "fe2o3_device::WorkgroupMemoryView::<ExclusiveReadWrite>::load",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupMemoryExclusiveStore,
+        "fe2o3_device_workgroup_memory_exclusive_store_v1",
+        "fe2o3_device::WorkgroupMemoryView::<ExclusiveReadWrite>::store",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupMemoryDisjointStore,
+        "fe2o3_device_workgroup_memory_disjoint_store_v1",
+        "fe2o3_device::WorkgroupMemoryView::<DisjointWrite>::store",
+    ),
+    (
+        TrustedDeviceItem::CapabilityGlobalBindReadOnly,
+        "fe2o3_device_capability_global_bind_read_only_v1",
+        "fe2o3_device::capability_memory::CapabilityMemoryView::__compiler_bind_read_only",
+    ),
+    (
+        TrustedDeviceItem::CapabilityGlobalBindDisjointWrite,
+        "fe2o3_device_capability_global_bind_disjoint_write_v1",
+        "fe2o3_device::capability_memory::CapabilityMemoryView::__compiler_bind_disjoint_write",
+    ),
+    (
+        TrustedDeviceItem::CapabilityGlobalBindExclusiveReadWrite,
+        "fe2o3_device_capability_global_bind_exclusive_read_write_v1",
+        "fe2o3_device::capability_memory::CapabilityMemoryView::__compiler_bind_exclusive_read_write",
+    ),
+    (
+        TrustedDeviceItem::CapabilityGlobalLoad,
+        "fe2o3_device_capability_global_load_v1",
+        "fe2o3_device::Global::<ReadOnly>::load",
+    ),
+    (
+        TrustedDeviceItem::CapabilityGlobalStore,
+        "fe2o3_device_capability_global_store_v1",
+        "fe2o3_device::Global::<DisjointWrite>::store",
+    ),
+    (
+        TrustedDeviceItem::CapabilityGlobalExclusiveLoad,
+        "fe2o3_device_capability_global_exclusive_load_v1",
+        "fe2o3_device::Global::<ExclusiveReadWrite>::load",
+    ),
+    (
+        TrustedDeviceItem::CapabilityGlobalExclusiveStore,
+        "fe2o3_device_capability_global_exclusive_store_v1",
+        "fe2o3_device::Global::<ExclusiveReadWrite>::store",
+    ),
+    (
+        TrustedDeviceItem::CapabilityGlobalStoreBlock,
+        "fe2o3_device_capability_global_store_block_v1",
+        "fe2o3_device::capability_memory::CapabilityMemoryView::store_block",
+    ),
+    (
+        TrustedDeviceItem::CapabilityGlobalBindAtomic,
+        "fe2o3_device_capability_global_bind_atomic_v1",
+        "fe2o3_device::capability_memory::CapabilityMemoryView::__compiler_bind_atomic",
+    ),
+    (
+        TrustedDeviceItem::StrictIeeeNumericalPolicy,
+        "fe2o3_device_strict_ieee_numerical_policy_v1",
+        "fe2o3_device::StrictIeee",
+    ),
+    (
+        TrustedDeviceItem::NumericalPolicyCapability,
+        "fe2o3_device_numerical_policy_capability_v1",
+        "fe2o3_device::NumericalPolicyCapability",
+    ),
+    (
+        TrustedDeviceItem::NumericalPolicyIssue,
+        "fe2o3_device_numerical_policy_issue_v1",
+        "fe2o3_device::KernelContext::numerical_policy",
+    ),
+    (
+        TrustedDeviceItem::PolicyMathCapability,
+        "fe2o3_device_policy_math_capability_v1",
+        "fe2o3_device::PolicyDeviceMath",
+    ),
+    (
+        TrustedDeviceItem::PolicyMathBind,
+        "fe2o3_device_policy_math_bind_v1",
+        "fe2o3_device::DeviceMath::with_numerical_policy",
+    ),
+    (
+        TrustedDeviceItem::PolicyMatrixCapability,
+        "fe2o3_device_policy_matrix_capability_v1",
+        "fe2o3_device::PolicyMatrixCapability",
+    ),
+    (
+        TrustedDeviceItem::PolicyMatrixBind,
+        "fe2o3_device_policy_matrix_bind_v1",
+        "fe2o3_device::MatrixCapability::with_numerical_policy",
+    ),
+    (
+        TrustedDeviceItem::ExecutionWorkgroupCapability,
+        "fe2o3_device_workgroup_capability_v1",
+        "fe2o3_device::execution::WorkgroupCapability",
+    ),
+    (
+        TrustedDeviceItem::ExecutionSubgroupCapability,
+        "fe2o3_device_subgroup_capability_v1",
+        "fe2o3_device::execution::Subgroup",
+    ),
+    (
+        TrustedDeviceItem::ExecutionWorkgroupLds,
+        "fe2o3_device_epoch_workgroup_lds_v1",
+        "fe2o3_device::execution::WorkgroupLds",
+    ),
+    (
+        TrustedDeviceItem::ExecutionPendingAsyncCopy,
+        "fe2o3_device_pending_async_copy_v1",
+        "fe2o3_device::execution::PendingAsyncCopy",
+    ),
+    (
+        TrustedDeviceItem::ExecutionWorkgroupCurrent,
+        "fe2o3_device_workgroup_capability_current_v1",
+        "fe2o3_device::KernelContext::__compiler_workgroup_capability_current",
+    ),
+    (
+        TrustedDeviceItem::ExecutionSubgroupCurrent,
+        "fe2o3_device_subgroup_current_v1",
+        "fe2o3_device::execution::WorkgroupCapability::subgroup",
+    ),
+    (
+        TrustedDeviceItem::ExecutionLdsAllocate,
+        "fe2o3_device_workgroup_lds_allocate_v1",
+        "fe2o3_device::execution::WorkgroupCapability::allocate_lds",
+    ),
+    (
+        TrustedDeviceItem::ExecutionWorkgroupBarrier,
+        "fe2o3_device_typed_workgroup_barrier_v1",
+        "fe2o3_device::execution::WorkgroupCapability::barrier",
+    ),
+    (
+        TrustedDeviceItem::ExecutionSubgroupBarrier,
+        "fe2o3_device_typed_subgroup_barrier_v1",
+        "fe2o3_device::execution::WorkgroupCapability::subgroup_barrier",
+    ),
+    (
+        TrustedDeviceItem::ExecutionWorkgroupFence,
+        "fe2o3_device_typed_workgroup_fence_v1",
+        "fe2o3_device::execution::WorkgroupCapability::fence",
+    ),
+    (
+        TrustedDeviceItem::ExecutionLdsPublish,
+        "fe2o3_device_workgroup_lds_publish_v1",
+        "fe2o3_device::execution::WorkgroupCapability::publish_lds",
+    ),
+    (
+        TrustedDeviceItem::ExecutionAsyncCopy,
+        "fe2o3_device_workgroup_async_copy_v1",
+        "fe2o3_device::execution::WorkgroupCapability::async_copy_from_global",
+    ),
+    (
+        TrustedDeviceItem::ExecutionAsyncWait,
+        "fe2o3_device_workgroup_async_wait_v1",
+        "fe2o3_device::execution::WorkgroupCapability::wait_for",
+    ),
+    (
+        TrustedDeviceItem::ExecutionWorkgroupReduceSum,
+        "fe2o3_device_typed_workgroup_reduce_sum_v1",
+        "fe2o3_device::execution::WorkgroupCapability::reduce_sum",
+    ),
+    (
+        TrustedDeviceItem::ExecutionWorkgroupInclusiveScanSum,
+        "fe2o3_device_typed_workgroup_inclusive_scan_sum_v1",
+        "fe2o3_device::execution::WorkgroupCapability::inclusive_scan_sum",
+    ),
+    (
+        TrustedDeviceItem::ExecutionWorkgroupExclusiveScanSum,
+        "fe2o3_device_typed_workgroup_exclusive_scan_sum_v1",
+        "fe2o3_device::execution::WorkgroupCapability::exclusive_scan_sum",
+    ),
+    (
+        TrustedDeviceItem::ExecutionGlobalAtomic,
+        "fe2o3_device_scoped_global_atomic_v1",
+        "fe2o3_device::execution::WorkgroupCapability::global_atomic",
+    ),
+    (
+        TrustedDeviceItem::ExecutionAtomicLoad,
+        "fe2o3_device_scoped_atomic_load_v1",
+        "fe2o3_device::execution::WorkgroupCapability::atomic_load",
+    ),
+    (
+        TrustedDeviceItem::ExecutionAtomicStore,
+        "fe2o3_device_scoped_atomic_store_v1",
+        "fe2o3_device::execution::WorkgroupCapability::atomic_store",
+    ),
+    (
+        TrustedDeviceItem::ExecutionAtomicFetchAdd,
+        "fe2o3_device_scoped_atomic_fetch_add_v1",
+        "fe2o3_device::execution::WorkgroupCapability::atomic_fetch_add",
+    ),
+    (
+        TrustedDeviceItem::ExecutionAtomicCompareExchange,
+        "fe2o3_device_scoped_atomic_compare_exchange_v1",
+        "fe2o3_device::execution::WorkgroupCapability::atomic_compare_exchange",
+    ),
+    (
+        TrustedDeviceItem::ExecutionSubgroupFence,
+        "fe2o3_device_typed_subgroup_fence_v1",
+        "fe2o3_device::execution::Subgroup::fence",
+    ),
+    (
+        TrustedDeviceItem::ExecutionSubgroupReduceSum,
+        "fe2o3_device_subgroup_reduce_sum_v1",
+        "fe2o3_device::execution::Subgroup::reduce_sum",
+    ),
+    (
+        TrustedDeviceItem::ExecutionSubgroupInclusiveScanSum,
+        "fe2o3_device_subgroup_inclusive_scan_sum_v1",
+        "fe2o3_device::execution::Subgroup::inclusive_scan_sum",
+    ),
+    (
+        TrustedDeviceItem::ExecutionMatrixAccess,
+        "fe2o3_device_subgroup_matrix_access_v1",
+        "fe2o3_device::execution::Subgroup::__compiler_matrix_access",
+    ),
+    (
+        TrustedDeviceItem::ExecutionLdsInitializeByInvocation,
+        "fe2o3_device_workgroup_lds_initialize_by_invocation_v1",
+        "fe2o3_device::execution::WorkgroupLds::initialize_by_invocation",
+    ),
+    (
+        TrustedDeviceItem::ExecutionLdsReadPublished,
+        "fe2o3_device_workgroup_lds_read_published_v1",
+        "fe2o3_device::execution::WorkgroupLds::read",
     ),
     (
         TrustedDeviceItem::DisjointSlice,
@@ -402,6 +898,36 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::DeviceGlobalMutPtr",
     ),
     (
+        TrustedDeviceItem::DeviceGlobalConstPtr,
+        "fe2o3_device_ffi_global_const_ptr_v1",
+        "fe2o3_device::DeviceGlobalConstPtr",
+    ),
+    (
+        TrustedDeviceItem::DeviceConstantPtr,
+        "fe2o3_device_ffi_constant_ptr_v1",
+        "fe2o3_device::DeviceConstantPtr",
+    ),
+    (
+        TrustedDeviceItem::DeviceWorkgroupConstPtr,
+        "fe2o3_device_ffi_workgroup_const_ptr_v1",
+        "fe2o3_device::DeviceWorkgroupConstPtr",
+    ),
+    (
+        TrustedDeviceItem::DeviceWorkgroupMutPtr,
+        "fe2o3_device_ffi_workgroup_mut_ptr_v1",
+        "fe2o3_device::DeviceWorkgroupMutPtr",
+    ),
+    (
+        TrustedDeviceItem::DevicePrivateConstPtr,
+        "fe2o3_device_ffi_private_const_ptr_v1",
+        "fe2o3_device::DevicePrivateConstPtr",
+    ),
+    (
+        TrustedDeviceItem::DevicePrivateMutPtr,
+        "fe2o3_device_ffi_private_mut_ptr_v1",
+        "fe2o3_device::DevicePrivateMutPtr",
+    ),
+    (
         TrustedDeviceItem::WorkgroupLdsScope,
         "fe2o3_device_workgroup_lds_scope",
         "fe2o3_device::WorkgroupLdsScope",
@@ -410,6 +936,16 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::WorkgroupLdsScopeCurrent,
         "fe2o3_device_workgroup_lds_scope_current",
         "fe2o3_device::WorkgroupLdsScope::current",
+    ),
+    (
+        TrustedDeviceItem::DynamicLds,
+        "fe2o3_device_dynamic_lds",
+        "fe2o3_device::DynamicLds",
+    ),
+    (
+        TrustedDeviceItem::DynamicLdsFromRawParts,
+        "fe2o3_device_dynamic_lds_from_raw_parts",
+        "fe2o3_device::DynamicLds::from_raw_parts",
     ),
     (
         TrustedDeviceItem::DynamicLdsExactCurrent,
@@ -485,6 +1021,61 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::Invocation3DCurrent,
         "fe2o3_device_invocation_3d_current",
         "fe2o3_device::Invocation3D::current",
+    ),
+    (
+        TrustedDeviceItem::Invocation3DFromRawParts,
+        "fe2o3_device_invocation_3d_from_raw_parts",
+        "fe2o3_device::Invocation3D::from_raw_parts",
+    ),
+    (
+        TrustedDeviceItem::Invocation3DIndex1D,
+        "fe2o3_device_invocation_3d_index_1d_v1",
+        "fe2o3_device::Invocation3D::index_1d",
+    ),
+    (
+        TrustedDeviceItem::Grid,
+        "fe2o3_device_grid_group_v1",
+        "fe2o3_device::Grid",
+    ),
+    (
+        TrustedDeviceItem::Group,
+        "fe2o3_device_group_v1",
+        "fe2o3_device::Group",
+    ),
+    (
+        TrustedDeviceItem::GridSize3D,
+        "fe2o3_device_grid_size_3d",
+        "fe2o3_device::GridSize",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupId3D,
+        "fe2o3_device_workgroup_id_3d",
+        "fe2o3_device::WorkgroupId",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupSize3D,
+        "fe2o3_device_workgroup_size_3d",
+        "fe2o3_device::WorkgroupSize",
+    ),
+    (
+        TrustedDeviceItem::WorkitemId3D,
+        "fe2o3_device_workitem_id_3d",
+        "fe2o3_device::WorkitemId",
+    ),
+    (
+        TrustedDeviceItem::GridFromInvocationSnapshot,
+        "fe2o3_device_grid_from_invocation_snapshot_v1",
+        "fe2o3_device::Grid::from_invocation_snapshot",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupFromInvocationSnapshot,
+        "fe2o3_device_workgroup_from_invocation_snapshot_v1",
+        "fe2o3_device::Workgroup::from_invocation_snapshot",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupSynchronize,
+        "fe2o3_device_workgroup_synchronize_v1",
+        "fe2o3_device::Workgroup::synchronize",
     ),
     (
         TrustedDeviceItem::ThreadIndexX,
@@ -902,6 +1493,51 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::Workgroup::exclusive_scan_sum",
     ),
     (
+        TrustedDeviceItem::Gfx942Collective(TrustedGfx942CollectiveOperation::Wave64ShuffleU32),
+        "fe2o3_device_gfx942_wave64_shuffle_u32_v1",
+        "<u32 as fe2o3_device::Gfx942CollectiveElement>::__fe2o3_wave64_shuffle_index",
+    ),
+    (
+        TrustedDeviceItem::Gfx942Collective(TrustedGfx942CollectiveOperation::LdsStoreU32),
+        "fe2o3_device_gfx942_lds_store_u32_v1",
+        "<u32 as fe2o3_device::Gfx942CollectiveElement>::__fe2o3_lds_store",
+    ),
+    (
+        TrustedDeviceItem::Gfx942Collective(TrustedGfx942CollectiveOperation::LdsLoadU32),
+        "fe2o3_device_gfx942_lds_load_u32_v1",
+        "<u32 as fe2o3_device::Gfx942CollectiveElement>::__fe2o3_lds_load",
+    ),
+    (
+        TrustedDeviceItem::Gfx942Collective(TrustedGfx942CollectiveOperation::Wave64ShuffleI32),
+        "fe2o3_device_gfx942_wave64_shuffle_i32_v1",
+        "<i32 as fe2o3_device::Gfx942CollectiveElement>::__fe2o3_wave64_shuffle_index",
+    ),
+    (
+        TrustedDeviceItem::Gfx942Collective(TrustedGfx942CollectiveOperation::LdsStoreI32),
+        "fe2o3_device_gfx942_lds_store_i32_v1",
+        "<i32 as fe2o3_device::Gfx942CollectiveElement>::__fe2o3_lds_store",
+    ),
+    (
+        TrustedDeviceItem::Gfx942Collective(TrustedGfx942CollectiveOperation::LdsLoadI32),
+        "fe2o3_device_gfx942_lds_load_i32_v1",
+        "<i32 as fe2o3_device::Gfx942CollectiveElement>::__fe2o3_lds_load",
+    ),
+    (
+        TrustedDeviceItem::Gfx942Collective(TrustedGfx942CollectiveOperation::Wave64ShuffleF32),
+        "fe2o3_device_gfx942_wave64_shuffle_f32_v1",
+        "<f32 as fe2o3_device::Gfx942CollectiveElement>::__fe2o3_wave64_shuffle_index",
+    ),
+    (
+        TrustedDeviceItem::Gfx942Collective(TrustedGfx942CollectiveOperation::LdsStoreF32),
+        "fe2o3_device_gfx942_lds_store_f32_v1",
+        "<f32 as fe2o3_device::Gfx942CollectiveElement>::__fe2o3_lds_store",
+    ),
+    (
+        TrustedDeviceItem::Gfx942Collective(TrustedGfx942CollectiveOperation::LdsLoadF32),
+        "fe2o3_device_gfx942_lds_load_f32_v1",
+        "<f32 as fe2o3_device::Gfx942CollectiveElement>::__fe2o3_lds_load",
+    ),
+    (
         TrustedDeviceItem::Gfx942BarrierArrive,
         "fe2o3_device_gfx942_barrier_arrive_v1",
         "fe2o3_device::sync::gfx942_barrier_arrive",
@@ -925,6 +1561,36 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::WaveLaneCurrent,
         "fe2o3_device_wave_lane_current",
         "fe2o3_device::WaveLane::current",
+    ),
+    (
+        TrustedDeviceItem::WaveLaneFromRaw,
+        "fe2o3_device_wave_lane_from_raw",
+        "fe2o3_device::WaveLane::from_raw",
+    ),
+    (
+        TrustedDeviceItem::ActiveLaneGroup,
+        "fe2o3_device_active_lane_group_v1",
+        "fe2o3_device::ActiveLaneGroup",
+    ),
+    (
+        TrustedDeviceItem::ActiveLaneGroupFromSnapshot,
+        "fe2o3_device_active_lane_group_from_snapshot_v1",
+        "fe2o3_device::ActiveLaneGroup::from_caller_asserted_snapshot",
+    ),
+    (
+        TrustedDeviceItem::SubgroupTile,
+        "fe2o3_device_subgroup_tile_v1",
+        "fe2o3_device::SubgroupTile",
+    ),
+    (
+        TrustedDeviceItem::SubgroupTileFromWave64,
+        "fe2o3_device_subgroup_tile_from_wave64_v1",
+        "fe2o3_device::SubgroupTile::from_wave64_snapshot",
+    ),
+    (
+        TrustedDeviceItem::MfmaLdsTile16x16,
+        "fe2o3_device_mfma_lds_tile16x16_v1",
+        "fe2o3_device::MfmaLdsTile16x16",
     ),
     (
         TrustedDeviceItem::LdsTile16x16WriteMfmaBf16,
@@ -1030,6 +1696,41 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2,
         "fe2o3_device_bf16_mfma_matrix_b_load_zero_filled_v2",
         "fe2o3_device::Bf16MfmaBMatrix::load_k16n16",
+    ),
+    (
+        TrustedDeviceItem::Bf16MfmaGlobalMatrixView,
+        "fe2o3_device_bf16_mfma_global_matrix_view_v1",
+        "fe2o3_device::GlobalBf16MfmaMatrix",
+    ),
+    (
+        TrustedDeviceItem::Bf16MfmaGlobalMatrixALoadZeroFilled,
+        "fe2o3_device_bf16_mfma_global_matrix_a_load_zero_filled_v1",
+        "fe2o3_device::GlobalBf16MfmaAMatrix::load_m16k16",
+    ),
+    (
+        TrustedDeviceItem::Bf16MfmaGlobalMatrixBLoadZeroFilled,
+        "fe2o3_device_bf16_mfma_global_matrix_b_load_zero_filled_v1",
+        "fe2o3_device::GlobalBf16MfmaBMatrix::load_k16n16",
+    ),
+    (
+        TrustedDeviceItem::F32AccumulatorGlobalMatrixViewError,
+        "fe2o3_device_f32_accumulator_global_matrix_view_error_v1",
+        "fe2o3_device::F32AccumulatorMatrixViewError",
+    ),
+    (
+        TrustedDeviceItem::F32AccumulatorGlobalMatrixView,
+        "fe2o3_device_f32_accumulator_global_matrix_view_v1",
+        "fe2o3_device::GlobalF32AccumulatorMatrix",
+    ),
+    (
+        TrustedDeviceItem::F32AccumulatorGlobalMatrixLoadLane,
+        "fe2o3_device_f32_accumulator_global_matrix_load_lane_v1",
+        "fe2o3_device::GlobalF32AccumulatorMatrix::load_lane_values",
+    ),
+    (
+        TrustedDeviceItem::F32AccumulatorGlobalMatrixStoreLane,
+        "fe2o3_device_f32_accumulator_global_matrix_store_lane_v1",
+        "fe2o3_device::GlobalF32AccumulatorMatrix::store_lane_values",
     ),
     (
         TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
@@ -1142,9 +1843,64 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::Gfx950Fp8MfmaBMatrix::load_k128n16",
     ),
     (
+        TrustedDeviceItem::Gfx950MfmaGlobalMatrixView,
+        "fe2o3_device_gfx950_mfma_global_matrix_view_v1",
+        "fe2o3_device::GlobalGfx950MfmaMatrix",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp4RowMajor,
+        "fe2o3_device_gfx950_mfma_global_matrix_a_fp4_row_major_v1",
+        "fe2o3_device::PolicyGfx950Matrix::fp4_a_global_row_major",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp4RowMajor,
+        "fe2o3_device_gfx950_mfma_global_matrix_b_fp4_row_major_v1",
+        "fe2o3_device::PolicyGfx950Matrix::fp4_b_global_row_major",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp8RowMajor,
+        "fe2o3_device_gfx950_mfma_global_matrix_a_fp8_row_major_v1",
+        "fe2o3_device::PolicyGfx950Matrix::fp8_a_global_row_major",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp8RowMajor,
+        "fe2o3_device_gfx950_mfma_global_matrix_b_fp8_row_major_v1",
+        "fe2o3_device::PolicyGfx950Matrix::fp8_b_global_row_major",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp4LoadM16K128,
+        "fe2o3_device_gfx950_mfma_global_matrix_a_fp4_load_m16k128_v1",
+        "fe2o3_device::GlobalGfx950Fp4MfmaAMatrix::load_m16k128",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp4LoadK128N16,
+        "fe2o3_device_gfx950_mfma_global_matrix_b_fp4_load_k128n16_v1",
+        "fe2o3_device::GlobalGfx950Fp4MfmaBMatrix::load_k128n16",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp8LoadM16K128,
+        "fe2o3_device_gfx950_mfma_global_matrix_a_fp8_load_m16k128_v1",
+        "fe2o3_device::GlobalGfx950Fp8MfmaAMatrix::load_m16k128",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp8LoadK128N16,
+        "fe2o3_device_gfx950_mfma_global_matrix_b_fp8_load_k128n16_v1",
+        "fe2o3_device::GlobalGfx950Fp8MfmaBMatrix::load_k128n16",
+    ),
+    (
         TrustedDeviceItem::Gfx950Matrix,
         "fe2o3_device_gfx950_matrix_context_v1",
         "fe2o3_device::Gfx950Matrix",
+    ),
+    (
+        TrustedDeviceItem::PolicyGfx950MatrixCapability,
+        "fe2o3_device_policy_gfx950_matrix_capability_v1",
+        "fe2o3_device::PolicyGfx950Matrix",
+    ),
+    (
+        TrustedDeviceItem::PolicyGfx950MatrixIssue,
+        "fe2o3_device_policy_gfx950_matrix_issue_v1",
+        "fe2o3_device::PolicyMatrixCapability::gfx950",
     ),
     (
         TrustedDeviceItem::Gfx950MatrixCurrent,
@@ -1154,17 +1910,17 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
     (
         TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4,
         "fe2o3_device_gfx950_mfma_fp4_f32_m16n16k128_v1",
-        "fe2o3_device::Gfx950Matrix::multiply_accumulate_fp4",
+        "fe2o3_device::PolicyGfx950Matrix::multiply_accumulate_fp4",
     ),
     (
         TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8,
         "fe2o3_device_gfx950_mfma_fp4_fp8_f32_m16n16k128_v1",
-        "fe2o3_device::Gfx950Matrix::multiply_accumulate_fp4_fp8",
+        "fe2o3_device::PolicyGfx950Matrix::multiply_accumulate_fp4_fp8",
     ),
     (
         TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8,
         "fe2o3_device_gfx950_mfma_fp8_f32_m16n16k128_v1",
-        "fe2o3_device::Gfx950Matrix::multiply_accumulate_fp8",
+        "fe2o3_device::PolicyGfx950Matrix::multiply_accumulate_fp8",
     ),
     (
         TrustedDeviceItem::Gfx950SubgroupContext,
@@ -1192,9 +1948,34 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::Gfx950Subgroup::broadcast_f32",
     ),
     (
+        TrustedDeviceItem::Gfx950SubgroupWave16,
+        "fe2o3_device_gfx950_subgroup_wave16_v1",
+        "fe2o3_device::Subgroup::wave16",
+    ),
+    (
+        TrustedDeviceItem::Gfx950SubgroupReduceMaxF32Wave16,
+        "fe2o3_device_gfx950_subgroup_reduce_max_f32_wave16_v1",
+        "fe2o3_device::Gfx950Wave16::reduce_max_f32",
+    ),
+    (
+        TrustedDeviceItem::Gfx950SubgroupReduceSumF32Wave16,
+        "fe2o3_device_gfx950_subgroup_reduce_sum_f32_wave16_v1",
+        "fe2o3_device::Gfx950Wave16::reduce_sum_f32",
+    ),
+    (
+        TrustedDeviceItem::Gfx950SubgroupBroadcastF32Wave16,
+        "fe2o3_device_gfx950_subgroup_broadcast_f32_wave16_v1",
+        "fe2o3_device::Gfx950Wave16::broadcast_f32",
+    ),
+    (
         TrustedDeviceItem::Gfx950LdsTransposeTile,
         "fe2o3_device_gfx950_lds_transpose_tile_v1",
         "fe2o3_device::Gfx950LdsTransposeTile",
+    ),
+    (
+        TrustedDeviceItem::Gfx950LdsTransposeTileIssue,
+        "fe2o3_device_gfx950_lds_transpose_tile_issue_v1",
+        "fe2o3_device::Subgroup::transpose_tile",
     ),
     (
         TrustedDeviceItem::Gfx950LdsTransposeTileCurrent,
@@ -1225,6 +2006,31 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::Gfx950LdsTransposeReadB8,
         "fe2o3_device_gfx950_lds_transpose_read_b8_v1",
         "fe2o3_device::Gfx950LdsTransposeTile<Gfx950Fp8E4M3>::read_mfma_fragment",
+    ),
+    (
+        TrustedDeviceItem::DynamicPhaseEpoch,
+        "fe2o3_device_dynamic_phase_epoch_v1",
+        "fe2o3_device::execution::DynamicPhaseEpoch",
+    ),
+    (
+        TrustedDeviceItem::ReusableWorkgroupBrand,
+        "fe2o3_device_reusable_workgroup_brand_v1",
+        "fe2o3_device::execution::ReusableWorkgroupBrand",
+    ),
+    (
+        TrustedDeviceItem::ReusableWorkgroup,
+        "fe2o3_device_reusable_workgroup_v1",
+        "fe2o3_device::execution::ReusableWorkgroup",
+    ),
+    (
+        TrustedDeviceItem::ReusableWorkgroupLds,
+        "fe2o3_device_reusable_workgroup_lds_v1",
+        "fe2o3_device::execution::ReusableWorkgroupLds",
+    ),
+    (
+        TrustedDeviceItem::ReusablePhaseCompletion,
+        "fe2o3_device_reusable_phase_completion_v1",
+        "fe2o3_device::execution::ReusablePhaseCompletion",
     ),
     (
         TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32),
@@ -1309,59 +2115,59 @@ const HALF_MATH_DIAGNOSTIC_ITEMS: &[(&str, &str)] = &[
     ),
     (
         "fe2o3_device_math_sqrt_f32_v1",
-        "fe2o3_device::DeviceMath::sqrt_f32",
+        "fe2o3_device::PolicyDeviceMath::sqrt_f32",
     ),
     (
         "fe2o3_device_math_fma_f32_v1",
-        "fe2o3_device::DeviceMath::mul_add_f32",
+        "fe2o3_device::PolicyDeviceMath::mul_add_f32",
     ),
     (
         "fe2o3_device_math_floor_f32_v1",
-        "fe2o3_device::DeviceMath::floor_f32",
+        "fe2o3_device::PolicyDeviceMath::floor_f32",
     ),
     (
         "fe2o3_device_math_ceil_f32_v1",
-        "fe2o3_device::DeviceMath::ceil_f32",
+        "fe2o3_device::PolicyDeviceMath::ceil_f32",
     ),
     (
         "fe2o3_device_math_trunc_f32_v1",
-        "fe2o3_device::DeviceMath::trunc_f32",
+        "fe2o3_device::PolicyDeviceMath::trunc_f32",
     ),
     (
         "fe2o3_device_math_roundeven_f32_v1",
-        "fe2o3_device::DeviceMath::round_ties_even_f32",
+        "fe2o3_device::PolicyDeviceMath::round_ties_even_f32",
     ),
     (
         "fe2o3_device_math_sin_f32_v1",
-        "fe2o3_device::DeviceMath::sin_f32",
+        "fe2o3_device::PolicyDeviceMath::sin_f32",
     ),
     (
         "fe2o3_device_math_cos_f32_v1",
-        "fe2o3_device::DeviceMath::cos_f32",
+        "fe2o3_device::PolicyDeviceMath::cos_f32",
     ),
     (
         "fe2o3_device_math_exp_f32_v1",
-        "fe2o3_device::DeviceMath::exp_f32",
+        "fe2o3_device::PolicyDeviceMath::exp_f32",
     ),
     (
         "fe2o3_device_math_exp2_f32_v1",
-        "fe2o3_device::DeviceMath::exp2_f32",
+        "fe2o3_device::PolicyDeviceMath::exp2_f32",
     ),
     (
         "fe2o3_device_math_log_f32_v1",
-        "fe2o3_device::DeviceMath::ln_f32",
+        "fe2o3_device::PolicyDeviceMath::ln_f32",
     ),
     (
         "fe2o3_device_math_log2_f32_v1",
-        "fe2o3_device::DeviceMath::log2_f32",
+        "fe2o3_device::PolicyDeviceMath::log2_f32",
     ),
     (
         "fe2o3_device_math_log10_f32_v1",
-        "fe2o3_device::DeviceMath::log10_f32",
+        "fe2o3_device::PolicyDeviceMath::log10_f32",
     ),
     (
         "fe2o3_device_math_fma_bf16x2_v1",
-        "fe2o3_device::DeviceMath::mul_add_bf16x2",
+        "fe2o3_device::PolicyDeviceMath::mul_add_bf16x2",
     ),
 ];
 
@@ -1420,8 +2226,9 @@ pub(crate) fn authenticated_compiler_definition_observation_v1(
     })?;
     let observation = reviewed_provider_semantic_definition_v1(tcx, definition)?;
     validate_reviewed_fe2o3_device_provider_definition_v1(item, &observation)?;
+    validate_authenticated_provider_structure_v1(tcx, definition, &observation)?;
     Ok((
-        observation.canonical_definition_path,
+        item.canonical_path().to_owned(),
         observation.source_closure_identity,
     ))
 }
@@ -1451,6 +2258,27 @@ pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TrustedDeviceIt
         return provider_rule(tcx, def_id, item).is_ok().then_some(item);
     }
     classify_half_operation(tcx, def_id).map(TrustedDeviceItem::HalfOperation)
+}
+
+/// Authenticates the identity-mapped one-dimensional invocation index space.
+///
+/// `Index1D` is derived from the authenticated return type of the reviewed
+/// identity-mapped index terminal. No source path or caller-provided identity
+/// participates in this relation.
+pub(crate) fn is_authenticated_index_space_1d_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    let Some(function) = definition(tcx, TrustedDeviceItem::ThreadIndex1d) else {
+        return false;
+    };
+    let signature =
+        tcx.instantiate_bound_regions_with_erased(tcx.fn_sig(function).instantiate_identity());
+    let TyKind::Adt(index, arguments) = *signature.output().kind() else {
+        return false;
+    };
+    if classify(tcx, index.did()) != Some(TrustedDeviceItem::ThreadIndex) {
+        return false;
+    }
+    let arguments = arguments.types().collect::<Vec<_>>();
+    matches!(arguments.as_slice(), [index_space, _brand] if *index_space == ty)
 }
 
 pub(crate) fn rejected_provider(tcx: TyCtxt<'_>, def_id: DefId) -> Option<RejectedTrustedProvider> {
@@ -1486,7 +2314,33 @@ pub(crate) fn rejected_provider(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Reject
 
 fn provider_rule(tcx: TyCtxt<'_>, def_id: DefId, item: TrustedDeviceItem) -> Result<(), String> {
     let definition = reviewed_provider_semantic_definition_v1(tcx, def_id)?;
-    validate_reviewed_fe2o3_device_provider_definition_v1(item, &definition)
+    validate_reviewed_fe2o3_device_provider_definition_v1(item, &definition)?;
+    validate_authenticated_provider_structure_v1(tcx, def_id, &definition)
+}
+
+fn validate_authenticated_provider_structure_v1(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    definition: &ReviewedProviderSemanticDefinitionV1,
+) -> Result<(), String> {
+    let structure = stable_provider_structure_v1(tcx, def_id)?;
+    if structure.canonical_definition_path != definition.canonical_definition_path {
+        return Err(format!(
+            "stable provider path is `{}`, but reviewed observation recorded `{}`",
+            structure.canonical_definition_path, definition.canonical_definition_path,
+        ));
+    }
+    if structural_local_definition_component_v1(
+        structure
+            .canonical_definition_path
+            .strip_prefix("fe2o3_device::")
+            .ok_or_else(|| "stable provider path names another crate".to_owned())?,
+    )? != definition.structural_local_definition_component
+    {
+        return Err("stable provider structural component changed".to_owned());
+    }
+    structure.identity()?;
+    Ok(())
 }
 
 fn validate_reviewed_fe2o3_device_provider_definition_v1(
@@ -1494,118 +2348,17 @@ fn validate_reviewed_fe2o3_device_provider_definition_v1(
     definition: &ReviewedProviderSemanticDefinitionV1,
 ) -> Result<(), String> {
     validate_safe_execution_provider_definition_v1(definition)?;
-    if let Some(expected_definition_path) = exact_provider_compiler_definition_path_v1(item)
-        && definition.canonical_definition_path != expected_definition_path
-    {
-        return Err(format!(
-            "provider definition path is `{}`, expected `{expected_definition_path}` for `{}`",
-            definition.canonical_definition_path,
-            item.canonical_path()
-        ));
-    }
     definition.durable_semantic_identity(item.canonical_path())?;
     Ok(())
 }
+#[cfg(test)]
 fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option<&'static str> {
     match item {
-        TrustedDeviceItem::KernelError => Some("fe2o3_device::kernel_result::KernelError"),
-        TrustedDeviceItem::DisjointSlice => Some("fe2o3_device::DisjointSlice"),
-        TrustedDeviceItem::WriteOnlyDisjointSlice => Some("fe2o3_device::WriteOnlyDisjointSlice"),
-        TrustedDeviceItem::StridedReadView2D => Some("fe2o3_device::views::StridedReadView2D"),
-        TrustedDeviceItem::StridedReadView2DError => {
-            Some("fe2o3_device::views::StridedReadView2DError")
-        }
-        TrustedDeviceItem::StridedReadView2DFromSharedSlice => {
-            Some("fe2o3_device::views::{impl#4}::from_shared_slice")
-        }
-        TrustedDeviceItem::StridedReadView2DLoadOr => {
-            Some("fe2o3_device::views::{impl#4}::load_or")
-        }
-        TrustedDeviceItem::ThreadIndex => Some("fe2o3_device::thread::ThreadIndex"),
-        TrustedDeviceItem::DisjointIndex => Some("fe2o3_device::thread::DisjointIndex"),
-        TrustedDeviceItem::ShiftedIndexSpace => Some("fe2o3_device::thread::Shifted"),
-        TrustedDeviceItem::BlockedIndexSpace => Some("fe2o3_device::thread::Blocked"),
-        TrustedDeviceItem::Tiled2DIndexSpace => Some("fe2o3_device::thread::Tiled2D"),
-        TrustedDeviceItem::RowStriped2DIndexSpace => Some("fe2o3_device::thread::RowStriped2D"),
-        TrustedDeviceItem::GridExclusiveIndexSpace => Some("fe2o3_device::thread::GridExclusive"),
-        TrustedDeviceItem::GridLeader => Some("fe2o3_device::thread::GridLeader"),
-        TrustedDeviceItem::DisjointBlock => Some("fe2o3_device::thread::DisjointBlock"),
-        TrustedDeviceItem::DisjointTile2D => Some("fe2o3_device::thread::DisjointTile2D"),
-        TrustedDeviceItem::DisjointRowStripe2D => Some("fe2o3_device::thread::DisjointRowStripe2D"),
-        TrustedDeviceItem::ThreadIndex1d => Some("fe2o3_device::thread::index_1d"),
-        TrustedDeviceItem::ThreadIndexGet => Some("fe2o3_device::thread::{impl#7}::get"),
-        TrustedDeviceItem::ThreadIndexIntoDisjoint => {
-            Some("fe2o3_device::thread::{impl#7}::into_disjoint")
-        }
-        TrustedDeviceItem::ThreadIndexCheckedShift => {
-            Some("fe2o3_device::thread::{impl#7}::checked_shift")
-        }
-        TrustedDeviceItem::ThreadIndexCheckedBlock => {
-            Some("fe2o3_device::thread::{impl#7}::checked_block")
-        }
-        TrustedDeviceItem::ThreadIndexCheckedTiled2D => {
-            Some("fe2o3_device::thread::{impl#7}::checked_tiled_2d")
-        }
-        TrustedDeviceItem::ThreadIndexCheckedRowStriped2D => {
-            Some("fe2o3_device::thread::{impl#7}::checked_row_striped_2d")
-        }
-        TrustedDeviceItem::DisjointIndexGet => Some("fe2o3_device::thread::{impl#9}::get"),
-        TrustedDeviceItem::DisjointIndexCheckedShift => {
-            Some("fe2o3_device::thread::{impl#9}::checked_shift")
-        }
-        TrustedDeviceItem::DisjointBlockComponentIndex => {
-            Some("fe2o3_device::thread::{impl#11}::component_index")
-        }
-        TrustedDeviceItem::GridLeaderCurrent => Some("fe2o3_device::thread::grid_leader"),
-        TrustedDeviceItem::DisjointSliceGetMut => Some("fe2o3_device::{impl#0}::get_mut"),
-        TrustedDeviceItem::DisjointSliceGetDisjointMut => {
-            Some("fe2o3_device::{impl#0}::get_disjoint_mut")
-        }
-        TrustedDeviceItem::DisjointSliceGetMutExclusive => {
-            Some("fe2o3_device::{impl#1}::get_mut_exclusive")
-        }
-        TrustedDeviceItem::DisjointSliceGetBlockMut => {
-            Some("fe2o3_device::{impl#2}::get_block_mut")
-        }
-        TrustedDeviceItem::DisjointSliceGetTiled2DMut => {
-            Some("fe2o3_device::{impl#3}::get_tiled_2d_mut")
-        }
-        TrustedDeviceItem::DisjointSliceGetRowStriped2DMut => {
-            Some("fe2o3_device::{impl#4}::get_row_striped_2d_mut")
-        }
-        TrustedDeviceItem::WriteOnlyDisjointSliceLen => Some("fe2o3_device::{impl#5}::len"),
-        TrustedDeviceItem::WriteOnlyDisjointSliceWrite => Some("fe2o3_device::{impl#5}::write"),
-        TrustedDeviceItem::WriteOnlyDisjointSliceWriteDisjoint => {
-            Some("fe2o3_device::{impl#5}::write_disjoint")
-        }
-        TrustedDeviceItem::WriteOnlyDisjointSliceWriteExclusive => {
-            Some("fe2o3_device::{impl#6}::write_exclusive")
-        }
-        TrustedDeviceItem::WriteOnlyDisjointSliceWriteBlock => {
-            Some("fe2o3_device::{impl#7}::write_block")
-        }
-        TrustedDeviceItem::WriteOnlyDisjointSliceWriteTiled2D => {
-            Some("fe2o3_device::{impl#8}::write_tiled_2d")
-        }
-        TrustedDeviceItem::WriteOnlyDisjointSliceWriteRowStriped2D => {
-            Some("fe2o3_device::{impl#9}::write_row_striped_2d")
-        }
-        TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic => {
-            Some("fe2o3_device::atomic::{impl#0}::as_atomic")
-        }
-        TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic => {
-            Some("fe2o3_device::atomic::{impl#1}::as_atomic")
-        }
-        TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic => {
-            Some("fe2o3_device::atomic::{impl#2}::as_atomic")
-        }
-        TrustedDeviceItem::DeviceGlobalMutPtrI64AsAtomic => {
-            Some("fe2o3_device::atomic::{impl#3}::as_atomic")
-        }
-        _ if safe_execution_provider_bound_item(item) => {
-            Some(safe_execution_compiler_definition_path(item))
-        }
-        _ => None,
+        TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::F32(
+            fe2o3_kernel_ir::F32MathFunction::Abs,
+        ))
+        | TrustedDeviceItem::HalfOperation(_) => None,
+        _ => Some(item.canonical_path()),
     }
 }
 fn validate_safe_execution_provider_definition_v1(
@@ -1621,223 +2374,26 @@ fn validate_safe_execution_provider_definition_v1(
     Ok(())
 }
 
+#[cfg(test)]
 fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static str {
-    match item {
-        TrustedDeviceItem::WorkgroupLdsScope => "fe2o3_device::lds::WorkgroupLdsScope",
-        TrustedDeviceItem::WorkgroupLdsScopeCurrent => "fe2o3_device::lds::{impl#2}::current",
-        TrustedDeviceItem::DynamicLdsExactCurrent => "fe2o3_device::lds::{impl#4}::exact_current",
-        TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts => {
-            "fe2o3_device::lds::{impl#4}::into_collective_raw_parts"
-        }
-        TrustedDeviceItem::LdsUninitialized => "fe2o3_device::lds::LdsUninitialized",
-        TrustedDeviceItem::WorkgroupPipeline => "fe2o3_device::lds::WorkgroupPipeline",
-        TrustedDeviceItem::WorkgroupPipelineCurrent => "fe2o3_device::lds::{impl#10}::current",
-        TrustedDeviceItem::WorkgroupPipelineStage => "fe2o3_device::lds::{impl#10}::stage",
-        TrustedDeviceItem::WorkgroupPipelineWrite => "fe2o3_device::lds::{impl#10}::write",
-        TrustedDeviceItem::WorkgroupPipelineCommit => "fe2o3_device::lds::{impl#10}::commit",
-        TrustedDeviceItem::WorkgroupPipelineWait => "fe2o3_device::lds::{impl#10}::wait",
-        TrustedDeviceItem::WorkgroupPipelineConsume => "fe2o3_device::lds::{impl#10}::consume",
-        TrustedDeviceItem::WorkgroupPipelineRead => "fe2o3_device::lds::{impl#10}::read",
-        TrustedDeviceItem::WorkgroupPipelineDiscard => "fe2o3_device::lds::{impl#10}::discard",
-        TrustedDeviceItem::WorkgroupPipelineRelease => "fe2o3_device::lds::{impl#10}::release",
-        TrustedDeviceItem::Invocation3D => "fe2o3_device::thread::Invocation3D",
-        TrustedDeviceItem::Invocation3DCurrent => "fe2o3_device::thread::{impl#6}::current",
-        TrustedDeviceItem::WorkgroupGroup => "fe2o3_device::group::Workgroup",
-        TrustedDeviceItem::WorkgroupCollectiveScratch => {
-            "fe2o3_device::collective::WorkgroupCollectiveScratch"
-        }
-        TrustedDeviceItem::Gfx942CollectivesContext => {
-            "fe2o3_device::collective::Gfx942Collectives"
-        }
-        TrustedDeviceItem::WorkgroupCollectivesContext => {
-            "fe2o3_device::collective::WorkgroupCollectives"
-        }
-        TrustedDeviceItem::WorkgroupCollectivesCurrent => {
-            "fe2o3_device::collective::{impl#7}::current"
-        }
-        TrustedDeviceItem::WorkgroupReduceSum => {
-            "fe2o3_device::collective::{impl#7}::reduce_sum_portable"
-        }
-        TrustedDeviceItem::WorkgroupInclusiveScanSum => {
-            "fe2o3_device::collective::{impl#7}::inclusive_scan_sum"
-        }
-        TrustedDeviceItem::WorkgroupExclusiveScanSum => {
-            "fe2o3_device::collective::{impl#7}::exclusive_scan_sum"
-        }
-        TrustedDeviceItem::Gfx942CollectivesCurrent => {
-            "fe2o3_device::collective::{impl#0}::current"
-        }
-        TrustedDeviceItem::Gfx942SubgroupReduceSumF32 => {
-            "fe2o3_device::collective::{impl#0}::subgroup_reduce_sum_f32"
-        }
-        TrustedDeviceItem::Gfx942SubgroupReduceMaxF32 => {
-            "fe2o3_device::collective::{impl#0}::subgroup_reduce_max_f32"
-        }
-        TrustedDeviceItem::Gfx942StaticLdsU32x256 => {
-            "fe2o3_device::collective::{impl#0}::static_lds_u32x256"
-        }
-        TrustedDeviceItem::Gfx942StaticLdsU32x256Type => {
-            "fe2o3_device::collective::Gfx942StaticLdsU32x256"
-        }
-        TrustedDeviceItem::Gfx942Wave64ReduceActiveU32 => {
-            "fe2o3_device::collective::{impl#0}::wave64_reduce_sum_active_u32"
-        }
-        TrustedDeviceItem::Gfx942Workgroup256ReduceActiveU32 => {
-            "fe2o3_device::collective::{impl#0}::workgroup256_reduce_sum_active_u32"
-        }
-        TrustedDeviceItem::Gfx942Wave64ReduceSum => {
-            "fe2o3_device::collective::{impl#5}::reduce_sum"
-        }
-        TrustedDeviceItem::Gfx942Wave64InclusiveScanSum => {
-            "fe2o3_device::collective::{impl#5}::inclusive_scan_sum"
-        }
-        TrustedDeviceItem::Gfx942Wave64ExclusiveScanSum => {
-            "fe2o3_device::collective::{impl#5}::exclusive_scan_sum"
-        }
-        TrustedDeviceItem::Gfx942WorkgroupReduceSum => {
-            "fe2o3_device::collective::{impl#6}::reduce_sum"
-        }
-        TrustedDeviceItem::Gfx942WorkgroupInclusiveScanSum => {
-            "fe2o3_device::collective::{impl#6}::inclusive_scan_sum"
-        }
-        TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum => {
-            "fe2o3_device::collective::{impl#6}::exclusive_scan_sum"
-        }
-        TrustedDeviceItem::WaveLane => "fe2o3_device::wave::WaveLane",
-        TrustedDeviceItem::Wave64 => "fe2o3_device::wave::Wave64",
-        TrustedDeviceItem::WaveLaneCurrent => "fe2o3_device::wave::{impl#4}::current",
-        TrustedDeviceItem::LdsTile16x16WriteMfmaBf16 => {
-            "fe2o3_device::tensor::{impl#16}::write_mfma_fragment"
-        }
-        TrustedDeviceItem::LdsTile16x16ReadMfmaBf16 => {
-            "fe2o3_device::tensor::{impl#17}::read_mfma_fragment"
-        }
-        TrustedDeviceItem::WorkgroupSyncthreads => "fe2o3_device::sync::syncthreads",
-        TrustedDeviceItem::DeviceMatrix => "fe2o3_device::tensor::DeviceMatrix",
-        TrustedDeviceItem::DeviceMatrixCurrent => "fe2o3_device::tensor::{impl#9}::current",
-        TrustedDeviceItem::Bf16MfmaProfile => "fe2o3_device::tensor::Bf16F32M16N16K16",
-        TrustedDeviceItem::MfmaOperandA => "fe2o3_device::tensor::MfmaOperandA",
-        TrustedDeviceItem::MfmaOperandB => "fe2o3_device::tensor::MfmaOperandB",
-        TrustedDeviceItem::MfmaRegisterTile16x16 => "fe2o3_device::tensor::MfmaRegisterTile16x16",
-        TrustedDeviceItem::MfmaLdsXor4Storage => "fe2o3_device::tensor::MfmaLdsXor4",
-        TrustedDeviceItem::MfmaAccumulatorRowMajor => {
-            "fe2o3_device::tensor::MfmaAccumulatorRowMajor"
-        }
-        TrustedDeviceItem::Bf16MfmaFragment => "fe2o3_device::tensor::Bf16MfmaFragment",
-        TrustedDeviceItem::F32AccumulatorFragment => "fe2o3_device::tensor::F32AccumulatorFragment",
-        TrustedDeviceItem::F32AccumulatorFragmentZero => "fe2o3_device::tensor::{impl#4}::zero",
-        TrustedDeviceItem::F32AccumulatorFragmentIntoValues => {
-            "fe2o3_device::tensor::{impl#5}::into_values"
-        }
-        TrustedDeviceItem::Bf16MfmaMatrixView => "fe2o3_device::tensor::Bf16MfmaMatrix",
-        TrustedDeviceItem::Bf16MfmaMatrixViewError => "fe2o3_device::tensor::Bf16MatrixViewError",
-        TrustedDeviceItem::Bf16MfmaMatrixARowMajor => "fe2o3_device::tensor::{impl#7}::row_major",
-        TrustedDeviceItem::Bf16MfmaMatrixBRowMajor => "fe2o3_device::tensor::{impl#8}::row_major",
-        TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2 => {
-            "fe2o3_device::tensor::{impl#7}::load_m16k16"
-        }
-        TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2 => {
-            "fe2o3_device::tensor::{impl#8}::load_k16n16"
-        }
-        TrustedDeviceItem::DeviceMatrixMultiplyAccumulate => {
-            "fe2o3_device::tensor::{impl#9}::multiply_accumulate"
-        }
-        TrustedDeviceItem::Gfx950Fp4E2M1Format => "fe2o3_device::gfx950::Gfx950Fp4E2M1",
-        TrustedDeviceItem::Gfx950Fp8E4M3Format => "fe2o3_device::gfx950::Gfx950Fp8E4M3",
-        TrustedDeviceItem::Gfx950MfmaOperandA => "fe2o3_device::gfx950::Gfx950MfmaOperandA",
-        TrustedDeviceItem::Gfx950MfmaOperandB => "fe2o3_device::gfx950::Gfx950MfmaOperandB",
-        TrustedDeviceItem::Gfx950MfmaFragment => "fe2o3_device::gfx950::Gfx950MfmaFragment",
-        TrustedDeviceItem::Gfx950F32AccumulatorFragment => {
-            "fe2o3_device::gfx950::Gfx950F32AccumulatorFragment"
-        }
-        TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentZero => {
-            "fe2o3_device::gfx950::{impl#8}::zero"
-        }
-        TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentIntoValues => {
-            "fe2o3_device::gfx950::{impl#8}::into_values"
-        }
-        TrustedDeviceItem::Gfx950F32AccumulatorFragmentZero => {
-            "fe2o3_device::gfx950::{impl#9}::zero"
-        }
-        TrustedDeviceItem::Gfx950F32AccumulatorFragmentIntoValues => {
-            "fe2o3_device::gfx950::{impl#9}::into_values"
-        }
-        TrustedDeviceItem::Gfx950MfmaMatrixViewError => {
-            "fe2o3_device::gfx950::Gfx950MatrixViewError"
-        }
-        TrustedDeviceItem::Gfx950MfmaMatrixAView => "fe2o3_device::gfx950::Gfx950MfmaAMatrix",
-        TrustedDeviceItem::Gfx950MfmaMatrixBView => "fe2o3_device::gfx950::Gfx950MfmaBMatrix",
-        TrustedDeviceItem::Gfx950MfmaMatrixAFp4RowMajor => {
-            "fe2o3_device::gfx950::{impl#13}::row_major"
-        }
-        TrustedDeviceItem::Gfx950MfmaMatrixBFp4RowMajor => {
-            "fe2o3_device::gfx950::{impl#16}::row_major"
-        }
-        TrustedDeviceItem::Gfx950MfmaMatrixARowMajor => {
-            "fe2o3_device::gfx950::{impl#14}::row_major"
-        }
-        TrustedDeviceItem::Gfx950MfmaMatrixBRowMajor => {
-            "fe2o3_device::gfx950::{impl#17}::row_major"
-        }
-        TrustedDeviceItem::Gfx950MfmaMatrixAFp4LoadM16K128 => {
-            "fe2o3_device::gfx950::{impl#13}::load_m16k128"
-        }
-        TrustedDeviceItem::Gfx950MfmaMatrixBFp4LoadK128N16 => {
-            "fe2o3_device::gfx950::{impl#16}::load_k128n16"
-        }
-        TrustedDeviceItem::Gfx950MfmaMatrixAFp8LoadM16K128 => {
-            "fe2o3_device::gfx950::{impl#14}::load_m16k128"
-        }
-        TrustedDeviceItem::Gfx950MfmaMatrixBFp8LoadK128N16 => {
-            "fe2o3_device::gfx950::{impl#17}::load_k128n16"
-        }
-        TrustedDeviceItem::Gfx950Matrix => "fe2o3_device::gfx950::Gfx950Matrix",
-        TrustedDeviceItem::Gfx950MatrixCurrent => "fe2o3_device::gfx950::{impl#18}::current",
-        TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4 => {
-            "fe2o3_device::gfx950::{impl#18}::multiply_accumulate_fp4"
-        }
-        TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8 => {
-            "fe2o3_device::gfx950::{impl#18}::multiply_accumulate_fp4_fp8"
-        }
-        TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8 => {
-            "fe2o3_device::gfx950::{impl#18}::multiply_accumulate_fp8"
-        }
-        TrustedDeviceItem::Gfx950SubgroupContext => "fe2o3_device::gfx950::Gfx950Subgroup",
-        TrustedDeviceItem::Gfx950SubgroupCurrent => "fe2o3_device::gfx950::{impl#19}::current",
-        TrustedDeviceItem::Gfx950SubgroupReduceMaxF32 => {
-            "fe2o3_device::gfx950::{impl#19}::reduce_max_f32"
-        }
-        TrustedDeviceItem::Gfx950SubgroupReduceSumF32 => {
-            "fe2o3_device::gfx950::{impl#19}::reduce_sum_f32"
-        }
-        TrustedDeviceItem::Gfx950SubgroupBroadcastF32 => {
-            "fe2o3_device::gfx950::{impl#19}::broadcast_f32"
-        }
-        TrustedDeviceItem::Gfx950LdsTransposeTile => "fe2o3_device::gfx950::Gfx950LdsTransposeTile",
-        TrustedDeviceItem::Gfx950LdsTransposeTileCurrent => {
-            "fe2o3_device::gfx950::{impl#23}::current"
-        }
-        TrustedDeviceItem::Gfx950LdsTransposeStageB4 => {
-            "fe2o3_device::gfx950::{impl#24}::stage_k_transposed"
-        }
-        TrustedDeviceItem::Gfx950LdsTransposeStageB8 => {
-            "fe2o3_device::gfx950::{impl#25}::stage_k_transposed"
-        }
-        TrustedDeviceItem::Gfx950LdsTransposePublish => "fe2o3_device::gfx950::{impl#26}::publish",
-        TrustedDeviceItem::Gfx950LdsTransposeReadB4 => {
-            "fe2o3_device::gfx950::{impl#27}::read_mfma_fragment"
-        }
-        TrustedDeviceItem::Gfx950LdsTransposeReadB8 => {
-            "fe2o3_device::gfx950::{impl#28}::read_mfma_fragment"
-        }
-        _ => item.canonical_path(),
-    }
+    item.canonical_path()
 }
 
+#[cfg(test)]
 const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
     matches!(
         item,
-        TrustedDeviceItem::WorkgroupLdsScope
+        TrustedDeviceItem::KernelContext
+            | TrustedDeviceItem::KernelContextIssue
+            | TrustedDeviceItem::DynamicLdsFromRawParts
+            | TrustedDeviceItem::CapabilityGlobalBindExclusiveReadWrite
+            | TrustedDeviceItem::CapabilityGlobalExclusiveLoad
+            | TrustedDeviceItem::CapabilityGlobalExclusiveStore
+            | TrustedDeviceItem::CapabilityGlobalStoreBlock
+            | TrustedDeviceItem::NumericalPolicyIssue
+            | TrustedDeviceItem::PolicyMathBind
+            | TrustedDeviceItem::PolicyMatrixBind
+            | TrustedDeviceItem::WorkgroupLdsScope
             | TrustedDeviceItem::WorkgroupLdsScopeCurrent
             | TrustedDeviceItem::DynamicLdsExactCurrent
             | TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts
@@ -1854,6 +2410,14 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::WorkgroupPipelineRelease
             | TrustedDeviceItem::Invocation3D
             | TrustedDeviceItem::Invocation3DCurrent
+            | TrustedDeviceItem::Invocation3DFromRawParts
+            | TrustedDeviceItem::Invocation3DIndex1D
+            | TrustedDeviceItem::GridFromInvocationSnapshot
+            | TrustedDeviceItem::WorkgroupFromInvocationSnapshot
+            | TrustedDeviceItem::WorkgroupSynchronize
+            | TrustedDeviceItem::WaveLaneFromRaw
+            | TrustedDeviceItem::ActiveLaneGroupFromSnapshot
+            | TrustedDeviceItem::SubgroupTileFromWave64
             | TrustedDeviceItem::ThreadIndexX
             | TrustedDeviceItem::ThreadIndexY
             | TrustedDeviceItem::ThreadIndexZ
@@ -1887,6 +2451,7 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::Gfx942WorkgroupReduceSum
             | TrustedDeviceItem::Gfx942WorkgroupInclusiveScanSum
             | TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum
+            | TrustedDeviceItem::Gfx942Collective(_)
             | TrustedDeviceItem::WaveLane
             | TrustedDeviceItem::Wave64
             | TrustedDeviceItem::WaveLaneCurrent
@@ -1911,6 +2476,10 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::Bf16MfmaMatrixBRowMajor
             | TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2
             | TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2
+            | TrustedDeviceItem::Bf16MfmaGlobalMatrixALoadZeroFilled
+            | TrustedDeviceItem::Bf16MfmaGlobalMatrixBLoadZeroFilled
+            | TrustedDeviceItem::F32AccumulatorGlobalMatrixLoadLane
+            | TrustedDeviceItem::F32AccumulatorGlobalMatrixStoreLane
             | TrustedDeviceItem::DeviceMatrixMultiplyAccumulate
             | TrustedDeviceItem::Gfx950Fp4E2M1Format
             | TrustedDeviceItem::Gfx950Fp8E4M3Format
@@ -1933,6 +2502,15 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::Gfx950MfmaMatrixBFp8LoadK128N16
             | TrustedDeviceItem::Gfx950MfmaMatrixAFp4LoadM16K128
             | TrustedDeviceItem::Gfx950MfmaMatrixBFp4LoadK128N16
+            | TrustedDeviceItem::PolicyGfx950MatrixIssue
+            | TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp4RowMajor
+            | TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp4RowMajor
+            | TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp8RowMajor
+            | TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp8RowMajor
+            | TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp4LoadM16K128
+            | TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp4LoadK128N16
+            | TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp8LoadM16K128
+            | TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp8LoadK128N16
             | TrustedDeviceItem::Gfx950Matrix
             | TrustedDeviceItem::Gfx950MatrixCurrent
             | TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4
@@ -1943,7 +2521,12 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::Gfx950SubgroupReduceMaxF32
             | TrustedDeviceItem::Gfx950SubgroupReduceSumF32
             | TrustedDeviceItem::Gfx950SubgroupBroadcastF32
+            | TrustedDeviceItem::Gfx950SubgroupWave16
+            | TrustedDeviceItem::Gfx950SubgroupReduceMaxF32Wave16
+            | TrustedDeviceItem::Gfx950SubgroupReduceSumF32Wave16
+            | TrustedDeviceItem::Gfx950SubgroupBroadcastF32Wave16
             | TrustedDeviceItem::Gfx950LdsTransposeTile
+            | TrustedDeviceItem::Gfx950LdsTransposeTileIssue
             | TrustedDeviceItem::Gfx950LdsTransposeTileCurrent
             | TrustedDeviceItem::Gfx950LdsTransposeStageB4
             | TrustedDeviceItem::Gfx950LdsTransposeStageB8
@@ -2012,6 +2595,24 @@ pub(crate) fn reviewed_provider_semantic_definition_v1(
     )
 }
 
+/// Authenticates an unmarked structural type from the reviewed device source.
+/// Diagnostic terminals use [`classify`]; this is only for exact generic
+/// arguments and brands that deliberately have no diagnostic namespace entry.
+pub(crate) fn is_exact_reviewed_provider_definition_v1(
+    tcx: TyCtxt<'_>,
+    provider_definition: DefId,
+    expected_definition_path: &str,
+) -> bool {
+    let Ok(definition) = reviewed_provider_semantic_definition_v1(tcx, provider_definition) else {
+        return false;
+    };
+    validate_safe_execution_provider_definition_v1(&definition).is_ok()
+        && definition.canonical_definition_path == expected_definition_path
+        && definition
+            .durable_semantic_identity(expected_definition_path)
+            .is_ok()
+}
+
 /// Authenticates a safe-signature external helper from the exact reviewed
 /// `fe2o3-device` source closure while leaving its MIR available for traversal.
 pub(crate) fn authenticate_reviewed_safe_external_helper_v1(
@@ -2025,6 +2626,7 @@ pub(crate) fn authenticate_reviewed_safe_external_helper_v1(
     }
     let definition = reviewed_provider_semantic_definition_v1(tcx, provider_definition)?;
     validate_safe_execution_provider_definition_v1(&definition)?;
+    validate_authenticated_provider_structure_v1(tcx, provider_definition, &definition)?;
     Ok(true)
 }
 
@@ -2461,6 +3063,177 @@ fn reviewed_safe_core_f32_is_finite_optimized_body_v1<'tcx>(
     )
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct StableProviderStructureV1 {
+    canonical_definition_path: String,
+    owner_identity: [u8; 32],
+    signature_identity: [u8; 32],
+    generic_identity: [u8; 32],
+}
+
+impl StableProviderStructureV1 {
+    fn identity(&self) -> Result<[u8; 32], String> {
+        if self.canonical_definition_path.is_empty()
+            || self.canonical_definition_path.contains("{impl#")
+            || self.owner_identity == [0; 32]
+            || self.signature_identity == [0; 32]
+            || self.generic_identity == [0; 32]
+        {
+            return Err("stable provider structure is incomplete".to_owned());
+        }
+        Ok(crate::rustc_semantic_adapter_v1::domain_digest(
+            STABLE_PROVIDER_STRUCTURE_IDENTITY_DOMAIN_V1,
+            &[
+                self.canonical_definition_path.as_bytes(),
+                &self.owner_identity,
+                &self.signature_identity,
+                &self.generic_identity,
+            ],
+        ))
+    }
+}
+
+fn stable_provider_structure_v1(
+    tcx: TyCtxt<'_>,
+    provider_definition: DefId,
+) -> Result<StableProviderStructureV1, String> {
+    let crate_name = named_external_provider(tcx, provider_definition.krate)?;
+    let (canonical_definition_path, owner_identity) = if let Some(associated) =
+        tcx.opt_associated_item(provider_definition)
+    {
+        if !associated.is_fn() {
+            return Err("associated provider identity is not a function".to_owned());
+        }
+        let impl_id = tcx.impl_of_assoc(provider_definition).ok_or_else(|| {
+            "associated provider identity has no concrete implementation owner".to_owned()
+        })?;
+        let self_ty = tcx.erase_and_anonymize_regions(tcx.type_of(impl_id).instantiate_identity());
+        let TyKind::Adt(owner, _) = self_ty.kind() else {
+            return Err("associated provider implementation owner is not an ADT".to_owned());
+        };
+        let owner_path = stable_nominal_provider_path_v1(tcx, owner.did())?;
+        let trait_path = if tcx.impl_is_of_trait(impl_id) {
+            stable_nominal_provider_path_v1(tcx, tcx.impl_trait_id(impl_id))?
+        } else {
+            String::new()
+        };
+        let mut owner_hasher = Sha256::new();
+        hash_source_identity_field(&mut owner_hasher, STABLE_PROVIDER_OWNER_IDENTITY_DOMAIN_V1);
+        hash_source_identity_field(&mut owner_hasher, owner_path.as_bytes());
+        hash_source_identity_field(
+            &mut owner_hasher,
+            crate::rustc_semantic_adapter_v1::rustc_type_identity_v1(tcx, self_ty).as_bytes(),
+        );
+        hash_source_identity_field(&mut owner_hasher, trait_path.as_bytes());
+        hash_source_identity_field(&mut owner_hasher, associated.name().as_str().as_bytes());
+        (
+            stable_associated_provider_path_v1(&owner_path, associated.name().as_str())?,
+            owner_hasher.finalize().into(),
+        )
+    } else {
+        let path = stable_nominal_provider_path_v1(tcx, provider_definition)?;
+        let owner_path = path
+            .rsplit_once("::")
+            .map(|(owner, _)| owner)
+            .unwrap_or(crate_name.as_str());
+        let item_name = tcx
+            .def_key(provider_definition)
+            .get_opt_name()
+            .ok_or_else(|| "provider definition has no stable item name".to_owned())?;
+        let mut owner_hasher = Sha256::new();
+        hash_source_identity_field(&mut owner_hasher, STABLE_PROVIDER_OWNER_IDENTITY_DOMAIN_V1);
+        hash_source_identity_field(&mut owner_hasher, owner_path.as_bytes());
+        hash_source_identity_field(&mut owner_hasher, item_name.as_str().as_bytes());
+        (path, owner_hasher.finalize().into())
+    };
+
+    let signature_identity = match tcx.def_kind(provider_definition) {
+        DefKind::Fn | DefKind::AssocFn => {
+            let signature = tcx.instantiate_bound_regions_with_erased(
+                tcx.fn_sig(provider_definition).instantiate_identity(),
+            );
+            crate::rustc_semantic_adapter_v1::rustc_fn_signature_sha256_v1(tcx, signature)
+        }
+        _ => crate::rustc_semantic_adapter_v1::domain_digest(
+            STABLE_PROVIDER_STRUCTURE_IDENTITY_DOMAIN_V1,
+            &[b"non-function", canonical_definition_path.as_bytes()],
+        ),
+    };
+    let generic_identity = stable_provider_generic_identity_v1(tcx, provider_definition);
+    Ok(StableProviderStructureV1 {
+        canonical_definition_path,
+        owner_identity,
+        signature_identity,
+        generic_identity,
+    })
+}
+
+fn stable_nominal_provider_path_v1(
+    tcx: TyCtxt<'_>,
+    provider_definition: DefId,
+) -> Result<String, String> {
+    let crate_name = named_external_provider(tcx, provider_definition.krate)?;
+    let local_path = tcx
+        .def_path(provider_definition)
+        .to_string_no_crate_verbose();
+    if local_path.is_empty()
+        || !local_path.starts_with("::")
+        || local_path.contains('{')
+        || local_path.contains('}')
+    {
+        return Err("provider has no stable nominal definition path".to_owned());
+    }
+    Ok(format!("{crate_name}{local_path}"))
+}
+
+fn stable_associated_provider_path_v1(owner_path: &str, item_name: &str) -> Result<String, String> {
+    if owner_path.is_empty()
+        || item_name.is_empty()
+        || owner_path.contains("{impl#")
+        || item_name.contains("::")
+    {
+        return Err("associated provider path components are not canonical".to_owned());
+    }
+    Ok(format!("{owner_path}::{item_name}"))
+}
+
+fn stable_provider_generic_identity_v1(tcx: TyCtxt<'_>, definition: DefId) -> [u8; 32] {
+    let mut owners = Vec::new();
+    let mut cursor = Some(definition);
+    while let Some(owner) = cursor {
+        owners.push(owner);
+        cursor = tcx.generics_of(owner).parent;
+    }
+    owners.reverse();
+
+    let mut hasher = Sha256::new();
+    hash_source_identity_field(&mut hasher, STABLE_PROVIDER_GENERIC_IDENTITY_DOMAIN_V1);
+    for owner in owners {
+        let generics = tcx.generics_of(owner);
+        hash_source_identity_field(&mut hasher, &(generics.parent_count as u64).to_le_bytes());
+        hash_source_identity_field(&mut hasher, &[u8::from(generics.has_self)]);
+        hash_source_identity_field(
+            &mut hasher,
+            &[u8::from(generics.has_late_bound_regions.is_some())],
+        );
+        for parameter in &generics.own_params {
+            hash_source_identity_field(&mut hasher, &parameter.index.to_le_bytes());
+            hash_source_identity_field(&mut hasher, parameter.name.as_str().as_bytes());
+            hash_source_identity_field(&mut hasher, &[u8::from(parameter.pure_wrt_drop)]);
+            let kind = match parameter.kind {
+                GenericParamDefKind::Lifetime => [0, 0, 0],
+                GenericParamDefKind::Type {
+                    has_default,
+                    synthetic,
+                } => [1, u8::from(has_default), u8::from(synthetic)],
+                GenericParamDefKind::Const { has_default } => [2, u8::from(has_default), 0],
+            };
+            hash_source_identity_field(&mut hasher, &kind);
+        }
+    }
+    hasher.finalize().into()
+}
+
 fn reviewed_provider_semantic_definition_from_source_v1(
     tcx: TyCtxt<'_>,
     provider_definition: DefId,
@@ -2491,13 +3264,14 @@ fn reviewed_provider_semantic_definition_from_source_v1(
     if provider.crate_name != crate_name {
         return Err("reviewed provider crate-name observation changed within the session".into());
     }
-    let structural_local_definition_path = tcx
-        .def_path(provider_definition)
-        .to_string_no_crate_verbose();
-    let canonical_definition_path =
-        canonical_compiler_definition_path(&crate_name, &structural_local_definition_path)?;
+    let structure = stable_provider_structure_v1(tcx, provider_definition)?;
+    structure.identity()?;
+    let canonical_definition_path = structure.canonical_definition_path;
+    let structural_local_definition_path = canonical_definition_path
+        .strip_prefix(&format!("{crate_name}::"))
+        .ok_or_else(|| "stable provider definition path names another crate".to_owned())?;
     let structural_local_definition_component =
-        structural_local_definition_component_v1(&structural_local_definition_path)?;
+        structural_local_definition_component_v1(structural_local_definition_path)?;
     Ok(ReviewedProviderSemanticDefinitionV1 {
         provider,
         canonical_definition_path,
@@ -2510,6 +3284,7 @@ fn reviewed_provider_semantic_definition_from_source_v1(
     })
 }
 
+#[cfg(test)]
 fn canonical_compiler_definition_path(
     authenticated_crate_name: &str,
     structural_local_path: &str,
@@ -3018,7 +3793,7 @@ const fn narrow_format(value: DeviceValueDiagnosticItem) -> Option<NarrowFloatFo
 mod tests {
     include!("trusted_device_items/core_01_tests.rs");
     #[test]
-    fn exact_device_provider_rejects_same_name_path_and_source_substitution() {
+    fn reviewed_device_provider_rejects_crate_and_source_substitution() {
         let item = TrustedDeviceItem::ThreadIndexCheckedBlock;
         let structural = exact_provider_compiler_definition_path_v1(item).unwrap();
         let local = structural.strip_prefix("fe2o3_device::").unwrap();
@@ -3030,12 +3805,6 @@ mod tests {
         validate_reviewed_fe2o3_device_provider_definition_v1(item, &exact)
             .expect("exact reviewed provider");
 
-        let wrong_path = semantic_definition(
-            "thread::{impl#99}::checked_block",
-            super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
-            [6; 32],
-        );
-        assert!(validate_reviewed_fe2o3_device_provider_definition_v1(item, &wrong_path).is_err());
         let mut impostor = exact.clone();
         impostor.provider.crate_name = "same_name_impostor".into();
         assert!(validate_reviewed_fe2o3_device_provider_definition_v1(item, &impostor).is_err());
@@ -3045,7 +3814,7 @@ mod tests {
     }
 
     #[test]
-    fn neutral_workgroup_terminals_reject_legacy_and_stale_provider_identities() {
+    fn neutral_workgroup_terminals_reject_stale_provider_source() {
         let neutral = [
             TrustedDeviceItem::WorkgroupGroup,
             TrustedDeviceItem::WorkgroupCollectiveScratch,
@@ -3064,13 +3833,6 @@ mod tests {
                 [6; 32],
             );
             validate_reviewed_fe2o3_device_provider_definition_v1(item, &exact).unwrap();
-
-            let legacy = semantic_definition(
-                "collective::{impl#6}::reduce_sum",
-                super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
-                [6; 32],
-            );
-            assert!(validate_reviewed_fe2o3_device_provider_definition_v1(item, &legacy).is_err());
 
             let mut stale = exact.clone();
             stale.source_closure_identity[0] ^= 1;
@@ -3102,16 +3864,6 @@ mod tests {
             validate_reviewed_fe2o3_device_provider_definition_v1(item, &exact)
                 .expect("exact checked read-view capability");
 
-            let lookalike = semantic_definition(
-                &format!("lookalike::{local}"),
-                super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
-                [6; 32],
-            );
-            assert!(
-                validate_reviewed_fe2o3_device_provider_definition_v1(item, &lookalike).is_err(),
-                "same-signature lookalike authenticated as {item:?}"
-            );
-
             let mut wrong_crate = exact.clone();
             wrong_crate.provider.crate_name = "fe2o3_device_lookalike".into();
             assert!(
@@ -3122,7 +3874,7 @@ mod tests {
     }
 
     #[test]
-    fn every_production_safety_terminal_has_an_exact_structural_path() {
+    fn every_production_safety_terminal_has_a_stable_canonical_role() {
         for item in [
             TrustedDeviceItem::DisjointSlice,
             TrustedDeviceItem::WriteOnlyDisjointSlice,
@@ -3143,7 +3895,6 @@ mod tests {
             TrustedDeviceItem::DisjointRowStripe2D,
             TrustedDeviceItem::ThreadIndex1d,
             TrustedDeviceItem::ThreadIndexGet,
-            TrustedDeviceItem::ThreadIndexIntoDisjoint,
             TrustedDeviceItem::ThreadIndexCheckedShift,
             TrustedDeviceItem::ThreadIndexCheckedBlock,
             TrustedDeviceItem::ThreadIndexCheckedTiled2D,
@@ -3173,7 +3924,30 @@ mod tests {
             let path = exact_provider_compiler_definition_path_v1(item)
                 .unwrap_or_else(|| panic!("{item:?} lacks exact provider authentication"));
             assert!(path.starts_with("fe2o3_device::"));
+            assert!(!path.contains("{impl#"));
         }
+    }
+
+    #[test]
+    fn unrelated_impl_reordering_cannot_change_associated_provider_identity() {
+        fn observed_identity(untrusted_ordinal: u32) -> [u8; 32] {
+            let _rustc_printer_observation =
+                format!("fe2o3_device::thread::{{impl#{untrusted_ordinal}}}::checked_block");
+            super::StableProviderStructureV1 {
+                canonical_definition_path: super::stable_associated_provider_path_v1(
+                    "fe2o3_device::thread::ThreadIndex",
+                    "checked_block",
+                )
+                .unwrap(),
+                owner_identity: [1; 32],
+                signature_identity: [2; 32],
+                generic_identity: [3; 32],
+            }
+            .identity()
+            .unwrap()
+        }
+
+        assert_eq!(observed_identity(0), observed_identity(99));
     }
 
     #[test]
@@ -3192,6 +3966,57 @@ mod tests {
                 .unwrap(),
             digest("36349edbdabe77499ba36d983bf758f7c00e982d7fbd930397042192af1e7416")
         );
+    }
+
+    #[test]
+    fn safe_execution_source_closure_includes_collective_implementation() {
+        let source_root = Path::new(super::REVIEWED_FE2O3_DEVICE_SOURCE_ROOT);
+        let collective = fs::canonicalize(source_root.join("collective.rs")).unwrap();
+        let mut reviewed = Vec::new();
+        super::collect_reviewed_source_files(source_root, &mut reviewed).unwrap();
+
+        assert!(reviewed.into_iter().any(|path| {
+            fs::canonicalize(path)
+                .map(|path| path == collective)
+                .unwrap_or(false)
+        }));
+    }
+
+    #[test]
+    fn every_device_diagnostic_marker_literal_is_registered() {
+        let registered = super::TRUSTED_ITEMS
+            .iter()
+            .map(|(_, marker, _)| *marker)
+            .chain(HALF_MATH_DIAGNOSTIC_ITEMS.iter().map(|(marker, _)| *marker))
+            .collect::<BTreeSet<_>>();
+        let source_root = Path::new(super::REVIEWED_FE2O3_DEVICE_SOURCE_ROOT);
+        let mut reviewed = Vec::new();
+        super::collect_reviewed_source_files(source_root, &mut reviewed).unwrap();
+
+        for path in reviewed {
+            let source = fs::read_to_string(&path).unwrap();
+            let mut remaining = source.as_str();
+            while let Some(start) = remaining.find("\"fe2o3_device_") {
+                let marker = &remaining[start + 1..];
+                let end = marker.find('"').unwrap();
+                let marker = &marker[..end];
+                assert!(
+                    registered.contains(marker),
+                    "device diagnostic marker `{marker}` in `{}` is not audited",
+                    path.display()
+                );
+                remaining = &remaining[start + end + 2..];
+            }
+        }
+    }
+
+    #[test]
+    fn f32_abs_has_no_unreviewed_device_math_terminal() {
+        let abs = TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::F32(
+            fe2o3_kernel_ir::F32MathFunction::Abs,
+        ));
+        assert_eq!(exact_provider_compiler_definition_path_v1(abs), None);
+        assert!(!safe_execution_provider_bound_item(abs));
     }
 
     #[test]
@@ -3228,7 +4053,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("96248497932754c7545748b4ebc8ab8c2ec8f6477a63811c133f0467b3ad6b74")
+            digest("87a09cf2a237dd0f6a8e72ba16ad893cb83ca1b9fe388bf77dac4d691de267ec")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
@@ -3288,7 +4113,7 @@ mod tests {
         );
         assert!(
             slice_source.contains(
-                "#[inline(never)]\n    #[rustc_diagnostic_item = \"fe2o3_device_disjoint_slice_get_block_mut\"]\n    pub fn get_block_mut("
+                "#[inline(never)]\n    #[rustc_diagnostic_item = \"fe2o3_device_disjoint_slice_get_block_mut\"]\n    pub fn get_block_mut<"
             ),
             "reviewed blocked access terminal may inline into optimized external MIR"
         );
@@ -3320,7 +4145,7 @@ mod tests {
     #[test]
     fn safe_execution_provider_validation_rejects_source_substitution() {
         let exact = semantic_definition(
-            "wave::{impl#4}::current",
+            "wave::WaveLane::current",
             super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
             [6; 32],
         );
@@ -3634,6 +4459,76 @@ mod tests {
     fn semantic_registry_is_complete_and_unique() {
         let items = [
             TrustedDeviceItem::KernelError,
+            TrustedDeviceItem::KernelContext,
+            TrustedDeviceItem::KernelContextIssue,
+            TrustedDeviceItem::CapabilityMemoryView,
+            TrustedDeviceItem::UnsafeRawMemoryObligation,
+            TrustedDeviceItem::CapabilityGlobalAddressSpace,
+            TrustedDeviceItem::CapabilityWorkgroupAddressSpace,
+            TrustedDeviceItem::CapabilityPrivateAddressSpace,
+            TrustedDeviceItem::CapabilityReadOnly,
+            TrustedDeviceItem::CapabilityDisjointWrite,
+            TrustedDeviceItem::CapabilityExclusiveReadWrite,
+            TrustedDeviceItem::CapabilityAtomicReadWrite,
+            TrustedDeviceItem::WorkgroupMemoryBrand,
+            TrustedDeviceItem::WorkgroupMemoryIndexSpace1D,
+            TrustedDeviceItem::PrivateMemoryFromRawParts,
+            TrustedDeviceItem::WorkgroupMemoryFromRawParts,
+            TrustedDeviceItem::PrivateMemoryAllocate,
+            TrustedDeviceItem::WorkgroupMemoryIndex1D,
+            TrustedDeviceItem::WorkgroupMemoryAllocate,
+            TrustedDeviceItem::WorkgroupMemoryPublish,
+            TrustedDeviceItem::PrivateMemoryLoad,
+            TrustedDeviceItem::PrivateMemoryExclusiveLoad,
+            TrustedDeviceItem::PrivateMemoryExclusiveStore,
+            TrustedDeviceItem::PrivateMemoryDisjointStore,
+            TrustedDeviceItem::WorkgroupMemoryLoad,
+            TrustedDeviceItem::WorkgroupMemoryExclusiveLoad,
+            TrustedDeviceItem::WorkgroupMemoryExclusiveStore,
+            TrustedDeviceItem::WorkgroupMemoryDisjointStore,
+            TrustedDeviceItem::CapabilityGlobalBindReadOnly,
+            TrustedDeviceItem::CapabilityGlobalBindDisjointWrite,
+            TrustedDeviceItem::CapabilityGlobalBindExclusiveReadWrite,
+            TrustedDeviceItem::CapabilityGlobalLoad,
+            TrustedDeviceItem::CapabilityGlobalStore,
+            TrustedDeviceItem::CapabilityGlobalExclusiveLoad,
+            TrustedDeviceItem::CapabilityGlobalExclusiveStore,
+            TrustedDeviceItem::CapabilityGlobalStoreBlock,
+            TrustedDeviceItem::CapabilityGlobalBindAtomic,
+            TrustedDeviceItem::StrictIeeeNumericalPolicy,
+            TrustedDeviceItem::NumericalPolicyCapability,
+            TrustedDeviceItem::NumericalPolicyIssue,
+            TrustedDeviceItem::PolicyMathCapability,
+            TrustedDeviceItem::PolicyMathBind,
+            TrustedDeviceItem::PolicyMatrixCapability,
+            TrustedDeviceItem::PolicyMatrixBind,
+            TrustedDeviceItem::ExecutionWorkgroupCapability,
+            TrustedDeviceItem::ExecutionSubgroupCapability,
+            TrustedDeviceItem::ExecutionWorkgroupLds,
+            TrustedDeviceItem::ExecutionPendingAsyncCopy,
+            TrustedDeviceItem::ExecutionWorkgroupCurrent,
+            TrustedDeviceItem::ExecutionSubgroupCurrent,
+            TrustedDeviceItem::ExecutionLdsAllocate,
+            TrustedDeviceItem::ExecutionWorkgroupBarrier,
+            TrustedDeviceItem::ExecutionSubgroupBarrier,
+            TrustedDeviceItem::ExecutionWorkgroupFence,
+            TrustedDeviceItem::ExecutionLdsPublish,
+            TrustedDeviceItem::ExecutionAsyncCopy,
+            TrustedDeviceItem::ExecutionAsyncWait,
+            TrustedDeviceItem::ExecutionWorkgroupReduceSum,
+            TrustedDeviceItem::ExecutionWorkgroupInclusiveScanSum,
+            TrustedDeviceItem::ExecutionWorkgroupExclusiveScanSum,
+            TrustedDeviceItem::ExecutionGlobalAtomic,
+            TrustedDeviceItem::ExecutionAtomicLoad,
+            TrustedDeviceItem::ExecutionAtomicStore,
+            TrustedDeviceItem::ExecutionAtomicFetchAdd,
+            TrustedDeviceItem::ExecutionAtomicCompareExchange,
+            TrustedDeviceItem::ExecutionSubgroupFence,
+            TrustedDeviceItem::ExecutionSubgroupReduceSum,
+            TrustedDeviceItem::ExecutionSubgroupInclusiveScanSum,
+            TrustedDeviceItem::ExecutionMatrixAccess,
+            TrustedDeviceItem::ExecutionLdsInitializeByInvocation,
+            TrustedDeviceItem::ExecutionLdsReadPublished,
             TrustedDeviceItem::DisjointSlice,
             TrustedDeviceItem::WriteOnlyDisjointSlice,
             TrustedDeviceItem::StridedReadView2D,
@@ -3641,8 +4536,16 @@ mod tests {
             TrustedDeviceItem::StridedReadView2DFromSharedSlice,
             TrustedDeviceItem::StridedReadView2DLoadOr,
             TrustedDeviceItem::DeviceGlobalMutPtr,
+            TrustedDeviceItem::DeviceGlobalConstPtr,
+            TrustedDeviceItem::DeviceConstantPtr,
+            TrustedDeviceItem::DeviceWorkgroupConstPtr,
+            TrustedDeviceItem::DeviceWorkgroupMutPtr,
+            TrustedDeviceItem::DevicePrivateConstPtr,
+            TrustedDeviceItem::DevicePrivateMutPtr,
             TrustedDeviceItem::WorkgroupLdsScope,
             TrustedDeviceItem::WorkgroupLdsScopeCurrent,
+            TrustedDeviceItem::DynamicLds,
+            TrustedDeviceItem::DynamicLdsFromRawParts,
             TrustedDeviceItem::DynamicLdsExactCurrent,
             TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts,
             TrustedDeviceItem::LdsUninitialized,
@@ -3658,6 +4561,17 @@ mod tests {
             TrustedDeviceItem::WorkgroupPipelineRelease,
             TrustedDeviceItem::Invocation3D,
             TrustedDeviceItem::Invocation3DCurrent,
+            TrustedDeviceItem::Invocation3DFromRawParts,
+            TrustedDeviceItem::Invocation3DIndex1D,
+            TrustedDeviceItem::Grid,
+            TrustedDeviceItem::Group,
+            TrustedDeviceItem::GridSize3D,
+            TrustedDeviceItem::WorkgroupId3D,
+            TrustedDeviceItem::WorkgroupSize3D,
+            TrustedDeviceItem::WorkitemId3D,
+            TrustedDeviceItem::GridFromInvocationSnapshot,
+            TrustedDeviceItem::WorkgroupFromInvocationSnapshot,
+            TrustedDeviceItem::WorkgroupSynchronize,
             TrustedDeviceItem::ThreadIndexX,
             TrustedDeviceItem::ThreadIndexY,
             TrustedDeviceItem::ThreadIndexZ,
@@ -3741,11 +4655,44 @@ mod tests {
             TrustedDeviceItem::Gfx942WorkgroupReduceSum,
             TrustedDeviceItem::Gfx942WorkgroupInclusiveScanSum,
             TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum,
+            TrustedDeviceItem::Gfx942Collective(
+                super::TrustedGfx942CollectiveOperation::Wave64ShuffleU32,
+            ),
+            TrustedDeviceItem::Gfx942Collective(
+                super::TrustedGfx942CollectiveOperation::LdsStoreU32,
+            ),
+            TrustedDeviceItem::Gfx942Collective(
+                super::TrustedGfx942CollectiveOperation::LdsLoadU32,
+            ),
+            TrustedDeviceItem::Gfx942Collective(
+                super::TrustedGfx942CollectiveOperation::Wave64ShuffleI32,
+            ),
+            TrustedDeviceItem::Gfx942Collective(
+                super::TrustedGfx942CollectiveOperation::LdsStoreI32,
+            ),
+            TrustedDeviceItem::Gfx942Collective(
+                super::TrustedGfx942CollectiveOperation::LdsLoadI32,
+            ),
+            TrustedDeviceItem::Gfx942Collective(
+                super::TrustedGfx942CollectiveOperation::Wave64ShuffleF32,
+            ),
+            TrustedDeviceItem::Gfx942Collective(
+                super::TrustedGfx942CollectiveOperation::LdsStoreF32,
+            ),
+            TrustedDeviceItem::Gfx942Collective(
+                super::TrustedGfx942CollectiveOperation::LdsLoadF32,
+            ),
             TrustedDeviceItem::Gfx942BarrierArrive,
             TrustedDeviceItem::Gfx942BarrierWait,
             TrustedDeviceItem::WaveLane,
             TrustedDeviceItem::Wave64,
             TrustedDeviceItem::WaveLaneCurrent,
+            TrustedDeviceItem::WaveLaneFromRaw,
+            TrustedDeviceItem::ActiveLaneGroup,
+            TrustedDeviceItem::ActiveLaneGroupFromSnapshot,
+            TrustedDeviceItem::SubgroupTile,
+            TrustedDeviceItem::SubgroupTileFromWave64,
+            TrustedDeviceItem::MfmaLdsTile16x16,
             TrustedDeviceItem::LdsTile16x16WriteMfmaBf16,
             TrustedDeviceItem::LdsTile16x16ReadMfmaBf16,
             TrustedDeviceItem::WorkgroupSyncthreads,
@@ -3767,6 +4714,13 @@ mod tests {
             TrustedDeviceItem::Bf16MfmaMatrixBRowMajor,
             TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2,
             TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2,
+            TrustedDeviceItem::Bf16MfmaGlobalMatrixView,
+            TrustedDeviceItem::Bf16MfmaGlobalMatrixALoadZeroFilled,
+            TrustedDeviceItem::Bf16MfmaGlobalMatrixBLoadZeroFilled,
+            TrustedDeviceItem::F32AccumulatorGlobalMatrixViewError,
+            TrustedDeviceItem::F32AccumulatorGlobalMatrixView,
+            TrustedDeviceItem::F32AccumulatorGlobalMatrixLoadLane,
+            TrustedDeviceItem::F32AccumulatorGlobalMatrixStoreLane,
             TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
             TrustedDeviceItem::Gfx950Fp4E2M1Format,
             TrustedDeviceItem::Gfx950Fp8E4M3Format,
@@ -3789,7 +4743,18 @@ mod tests {
             TrustedDeviceItem::Gfx950MfmaMatrixBFp8LoadK128N16,
             TrustedDeviceItem::Gfx950MfmaMatrixAFp4LoadM16K128,
             TrustedDeviceItem::Gfx950MfmaMatrixBFp4LoadK128N16,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixView,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp4RowMajor,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp4RowMajor,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp8RowMajor,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp8RowMajor,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp4LoadM16K128,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp4LoadK128N16,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixAFp8LoadM16K128,
+            TrustedDeviceItem::Gfx950MfmaGlobalMatrixBFp8LoadK128N16,
             TrustedDeviceItem::Gfx950Matrix,
+            TrustedDeviceItem::PolicyGfx950MatrixCapability,
+            TrustedDeviceItem::PolicyGfx950MatrixIssue,
             TrustedDeviceItem::Gfx950MatrixCurrent,
             TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4,
             TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8,
@@ -3799,13 +4764,23 @@ mod tests {
             TrustedDeviceItem::Gfx950SubgroupReduceMaxF32,
             TrustedDeviceItem::Gfx950SubgroupReduceSumF32,
             TrustedDeviceItem::Gfx950SubgroupBroadcastF32,
+            TrustedDeviceItem::Gfx950SubgroupWave16,
+            TrustedDeviceItem::Gfx950SubgroupReduceMaxF32Wave16,
+            TrustedDeviceItem::Gfx950SubgroupReduceSumF32Wave16,
+            TrustedDeviceItem::Gfx950SubgroupBroadcastF32Wave16,
             TrustedDeviceItem::Gfx950LdsTransposeTile,
+            TrustedDeviceItem::Gfx950LdsTransposeTileIssue,
             TrustedDeviceItem::Gfx950LdsTransposeTileCurrent,
             TrustedDeviceItem::Gfx950LdsTransposeStageB4,
             TrustedDeviceItem::Gfx950LdsTransposeStageB8,
             TrustedDeviceItem::Gfx950LdsTransposePublish,
             TrustedDeviceItem::Gfx950LdsTransposeReadB4,
             TrustedDeviceItem::Gfx950LdsTransposeReadB8,
+            TrustedDeviceItem::DynamicPhaseEpoch,
+            TrustedDeviceItem::ReusableWorkgroupBrand,
+            TrustedDeviceItem::ReusableWorkgroup,
+            TrustedDeviceItem::ReusableWorkgroupLds,
+            TrustedDeviceItem::ReusablePhaseCompletion,
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VAddU32),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VSubU32),
@@ -3881,8 +4856,22 @@ mod tests {
     }
 
     #[test]
-    fn safe_execution_items_have_exact_structural_provider_paths() {
+    fn thread_index_into_disjoint_does_not_pin_a_rustc_impl_ordinal() {
+        assert_eq!(
+            exact_provider_compiler_definition_path_v1(TrustedDeviceItem::ThreadIndexIntoDisjoint),
+            Some("fe2o3_device::ThreadIndex::into_disjoint")
+        );
+        assert_eq!(
+            TrustedDeviceItem::ThreadIndexIntoDisjoint.canonical_path(),
+            "fe2o3_device::ThreadIndex::into_disjoint"
+        );
+    }
+
+    #[test]
+    fn safe_execution_items_have_stable_canonical_roles() {
         let items = [
+            TrustedDeviceItem::KernelContext,
+            TrustedDeviceItem::KernelContextIssue,
             TrustedDeviceItem::WorkgroupLdsScope,
             TrustedDeviceItem::WorkgroupLdsScopeCurrent,
             TrustedDeviceItem::DynamicLdsExactCurrent,
@@ -3967,18 +4956,8 @@ mod tests {
             assert!(safe_execution_provider_bound_item(item));
             let path = safe_execution_compiler_definition_path(item);
             assert!(path.starts_with("fe2o3_device::"));
-            assert!(
-                path.contains("::collective::")
-                    || path.contains("::group::")
-                    || path.contains("::lds::")
-                    || path.contains("::gfx950::")
-                    || path.contains("::sync::")
-                    || path.contains("::tensor::")
-                    || path.contains("::thread::")
-                    || path.contains("::wave::"),
-                "safe execution item retained only a public re-export path: {path}"
-            );
-            assert!(paths.insert(path), "duplicate provider DefPath: {path}");
+            assert!(!path.contains("{impl#"));
+            assert!(paths.insert(path), "duplicate provider role: {path}");
         }
     }
 }

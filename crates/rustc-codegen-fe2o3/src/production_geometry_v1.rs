@@ -408,7 +408,11 @@ fn type_size_bytes(value: &Type) -> Result<u32, ProductionGeometryErrorV1> {
         Type::Scalar(ScalarType::I64 | ScalarType::U64 | ScalarType::Index | ScalarType::F64)
         | Type::Pointer(_) => Ok(8),
         Type::Scalar(ScalarType::I128 | ScalarType::U128) => Ok(16),
-        Type::Unit | Type::Slice(_) => Err(ProductionGeometryErrorV1::UnsizedWorkgroupType),
+        Type::Unit
+        | Type::Slice(_)
+        | Type::KernelContext(_)
+        | Type::GlobalCapability(_)
+        | Type::ExecutionCapability(_) => Err(ProductionGeometryErrorV1::UnsizedWorkgroupType),
     }
 }
 

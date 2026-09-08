@@ -1,13 +1,57 @@
+warning: use of deprecated type alias `fe2o3_device::Wave32`: use SubgroupWidth32; target legalization still checks the exact width
+ --> tests/ui/fail/wave_width_mismatch.rs:1:20
+  |
+1 | use fe2o3_device::{Wave32, Wave64, WaveLane};
+  |                    ^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/wave_width_mismatch.rs:1:28
+  |
+1 | use fe2o3_device::{Wave32, Wave64, WaveLane};
+  |                            ^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/wave_width_mismatch.rs:1:36
+  |
+1 | use fe2o3_device::{Wave32, Wave64, WaveLane};
+  |                                    ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/wave_width_mismatch.rs:3:23
+  |
+3 | fn requires_wave32(_: WaveLane<Wave32>) {}
+  |                       ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::Wave32`: use SubgroupWidth32; target legalization still checks the exact width
+ --> tests/ui/fail/wave_width_mismatch.rs:3:32
+  |
+3 | fn requires_wave32(_: WaveLane<Wave32>) {}
+  |                                ^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/wave_width_mismatch.rs:5:22
+  |
+5 | fn wrong_width(lane: WaveLane<Wave64>) {
+  |                      ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/wave_width_mismatch.rs:5:31
+  |
+5 | fn wrong_width(lane: WaveLane<Wave64>) {
+  |                               ^^^^^^
+
 error[E0308]: mismatched types
  --> tests/ui/fail/wave_width_mismatch.rs:6:21
   |
 6 |     requires_wave32(lane);
-  |     --------------- ^^^^ expected `WaveLane<Wave32>`, found `WaveLane<Wave64>`
+  |     --------------- ^^^^ expected `SubgroupLane<SubgroupWidth32>`, found `SubgroupLane<SubgroupWidth64>`
   |     |
   |     arguments to this function are incorrect
   |
-  = note: expected struct `WaveLane<Wave32>`
-             found struct `WaveLane<Wave64>`
+  = note: expected struct `SubgroupLane<SubgroupWidth32>`
+             found struct `SubgroupLane<SubgroupWidth64>`
 note: function defined here
  --> tests/ui/fail/wave_width_mismatch.rs:3:4
   |

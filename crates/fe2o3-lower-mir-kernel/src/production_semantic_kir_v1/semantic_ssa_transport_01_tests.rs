@@ -11,7 +11,7 @@
 
         assert_eq!(
             transport
-                .transport_types(&[], semantic_type, &direct_parameters)
+                .transport_types(&[], semantic_type, &direct_parameters, None)
                 .unwrap(),
             vec![slice.clone()]
         );
@@ -192,7 +192,7 @@
             ValueDef::new(ValueId(21), Type::INDEX),
         ];
         assert_eq!(
-            component.transport_types(&[], semantic_type).unwrap(),
+            component.transport_types(&[], semantic_type, None).unwrap(),
             vec![Type::BOOL, Type::INDEX]
         );
         assert!(matches!(
@@ -424,7 +424,7 @@
         );
         assert_eq!(
             binding
-                .transport_types(&types, transport_type, &BTreeMap::new())
+                .transport_types(&types, transport_type, &BTreeMap::new(), None)
                 .unwrap(),
             vec![Type::Scalar(ScalarType::U64), Type::Scalar(ScalarType::U64),],
         );
@@ -991,6 +991,7 @@
             &semantic_ssa,
             &option_dominance,
             &BTreeMap::new(),
+            None,
             usize::MAX,
             usize::MAX,
         )

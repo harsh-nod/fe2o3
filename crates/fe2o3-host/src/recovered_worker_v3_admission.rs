@@ -510,6 +510,12 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
         self.artifact.finalizer_replay()
     }
 
+    pub(crate) fn load_envelope_evidence_view(
+        &self,
+    ) -> fe2o3_runtime_protocol::WorkerV3LoadEnvelopeEvidenceViewV2<'_> {
+        self.artifact.load_envelope_evidence_view()
+    }
+
     pub fn target(&self) -> fe2o3_amd_target::AmdTargetId {
         self.artifact.target()
     }

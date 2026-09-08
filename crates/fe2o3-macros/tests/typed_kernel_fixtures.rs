@@ -18,11 +18,18 @@ fn cargo_check(manifest: &Path, target_dir: &Path, bin: Option<&str>) -> Output 
     command.output().expect("failed to run cargo check fixture")
 }
 
+fn fixture_target(manifest_dir: &Path, name: &str) -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest_dir.join("../../target"))
+        .join(name)
+}
+
 #[test]
 fn typed_kernel_resolves_renamed_host_dependency() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/renamed-typed-host/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/renamed-typed-host-test");
+    let target_dir = fixture_target(&manifest_dir, "renamed-typed-host-test");
     let output = cargo_check(&manifest, &target_dir, Some("renamed-typed-host-fixture"));
 
     assert!(
@@ -33,10 +40,100 @@ fn typed_kernel_resolves_renamed_host_dependency() {
 }
 
 #[test]
+fn typed_kernel_authenticates_logical_kernel_context_types() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = manifest_dir.join("tests/fixtures/renamed-typed-host/Cargo.toml");
+    let target_dir = fixture_target(&manifest_dir, "renamed-typed-host-test");
+
+    let output = cargo_check(&manifest, &target_dir, Some("kernel_context"));
+    assert!(
+        output.status.success(),
+        "genuine renamed KernelContext fixture failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = cargo_check(&manifest, &target_dir, Some("kernel_context_lookalike"));
+    assert!(!output.status.success(), "KernelContext lookalike compiled");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("KernelContextTypeV1"),
+        "lookalike rejection omitted the sealed context diagnostic:\n{stderr}"
+    );
+
+    let cases: &[(&str, &str)] = &[
+        (
+            "kernel_context_explicit_brands",
+            "kernel, target, and launch brands are compiler-issued",
+        ),
+        (
+            "kernel_context_named_lifetime",
+            "KernelContext's lifetime is compiler-bound and must be written as '_",
+        ),
+    ];
+    for (bin, expected) in cases {
+        let output = cargo_check(&manifest, &target_dir, Some(bin));
+        assert!(!output.status.success(), "{bin} unexpectedly compiled");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "{bin} omitted diagnostic `{expected}`:\n{stderr}",
+        );
+    }
+}
+
+#[test]
+fn typed_global_keeps_physical_abi_and_rejects_source_substitution() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = manifest_dir.join("tests/fixtures/renamed-typed-host/Cargo.toml");
+    let target_dir = fixture_target(&manifest_dir, "renamed-typed-host-test");
+
+    let output = cargo_check(&manifest, &target_dir, Some("capability_global"));
+    assert!(
+        output.status.success(),
+        "typed Global fixture failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let cases: &[(&str, &str)] = &[
+        (
+            "capability_global_explicit_brand",
+            "Brand is compiler-bound and must not be written explicitly",
+        ),
+        ("capability_global_lookalike", "CapabilityMemoryViewTypeV1"),
+        (
+            "capability_global_missing_context",
+            "require KernelContext<'_> as the first parameter",
+        ),
+        (
+            "capability_global_unsupported_element",
+            "Global supports only i8/u8/i16/u16/i32/u32/i64/u64/f32/f64",
+        ),
+        (
+            "capability_global_wrong_role",
+            "Global's role must be ReadOnly, DisjointWrite<IndexSpace>, ExclusiveReadWrite, or AtomicReadWrite<Scope>",
+        ),
+        ("capability_global_role_substitution", "ExclusiveReadWrite"),
+        (
+            "capability_global_wrong_space",
+            "support only global address space in V1",
+        ),
+    ];
+    for (bin, expected) in cases {
+        let output = cargo_check(&manifest, &target_dir, Some(bin));
+        assert!(!output.status.success(), "{bin} unexpectedly compiled");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "{bin} omitted diagnostic `{expected}`:\n{stderr}",
+        );
+    }
+}
+
+#[test]
 fn generated_arguments_retain_source_borrows() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/renamed-typed-host/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/renamed-typed-host-test");
+    let target_dir = fixture_target(&manifest_dir, "renamed-typed-host-test");
     let cases: &[(&str, &str)] = &[
         (
             "arguments_lifetime_escape",
@@ -63,7 +160,7 @@ fn generated_arguments_retain_source_borrows() {
 fn generated_global_mut_arguments_reject_forgery_and_substitution() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/renamed-typed-host/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/renamed-typed-host-test");
+    let target_dir = fixture_target(&manifest_dir, "renamed-typed-host-test");
     let cases: &[(&str, &[&str])] = &[
         (
             "global_mut_alias",
@@ -108,7 +205,7 @@ fn generated_global_mut_arguments_reject_forgery_and_substitution() {
 fn generated_worker_v3_adapter_compiles_downstream() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/generic-worker-v3-adapter/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/generic-worker-v3-adapter-test");
+    let target_dir = fixture_target(&manifest_dir, "generic-worker-v3-adapter-test");
     let output = cargo_check(&manifest, &target_dir, Some("pass"));
 
     assert!(
@@ -122,7 +219,7 @@ fn generated_worker_v3_adapter_compiles_downstream() {
 fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/generic-worker-v3-adapter/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/generic-worker-v3-adapter-test");
+    let target_dir = fixture_target(&manifest_dir, "generic-worker-v3-adapter-test");
     let cases: &[(&str, &[&str])] = &[
         ("lifetime_escape", &["lifetime may not live long enough"]),
         ("private_fields", &["private"]),
@@ -177,7 +274,7 @@ fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
 fn typed_kernel_compile_fail_diagnostics_are_stable() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/typed-invalid/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/typed-kernel-invalid-test");
+    let target_dir = fixture_target(&manifest_dir, "typed-kernel-invalid-test");
     let cases: &[(&str, &[&str])] = &[
         (
             "invalid_safe_kernel",
@@ -255,6 +352,7 @@ fn typed_kernel_compile_fail_diagnostics_are_stable() {
                 "range patterns are unsupported in V1",
                 "guarded match arms are unsupported",
                 "break with a value is unsupported",
+                "async expressions are unsupported by the V1 kernel sidecar",
                 "unsafe assembly with control_flow effects cannot participate",
             ],
         ),
@@ -281,7 +379,7 @@ fn typed_kernel_compile_fail_diagnostics_are_stable() {
 fn ordinary_kernel_profile_accepts_safe_only_source() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/typed-invalid/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/typed-kernel-invalid-test");
+    let target_dir = fixture_target(&manifest_dir, "typed-kernel-invalid-test");
     let output = cargo_check(&manifest, &target_dir, Some("safe_kernel"));
 
     assert!(

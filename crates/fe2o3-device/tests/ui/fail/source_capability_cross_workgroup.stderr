@@ -1,0 +1,12 @@
+error: lifetime may not live long enough
+  --> tests/ui/fail/source_capability_cross_workgroup.rs:13:40
+   |
+13 |     context.with_workgroup(|workgroup| workgroup)
+   |                             ---------- ^^^^^^^^^ returning this value requires that `'1` must outlive `'2`
+   |                             |        |
+   |                             |        return type of closure is WorkgroupCapability<'2, fe2o3_device::KernelCapabilityBrand<'_, Kernel, CurrentTarget, RegisteredLaunch>>
+   |                             has type `WorkgroupCapability<'1, fe2o3_device::KernelCapabilityBrand<'_, Kernel, CurrentTarget, RegisteredLaunch>>`
+   |
+   = note: requirement occurs because of the type `WorkgroupCapability<'_, fe2o3_device::KernelCapabilityBrand<'_, Kernel, CurrentTarget, RegisteredLaunch>>`, which makes the generic argument `'_` invariant
+   = note: the struct `WorkgroupCapability<'workgroup, KernelBrand, Epoch>` is invariant over the parameter `'workgroup`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance

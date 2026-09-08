@@ -1,0 +1,27 @@
+error[E0432]: unresolved imports `fe2o3_host::GeneratedGfx942ApplicationPrepareErrorV1`, `fe2o3_host::GeneratedWorkerV3CapabilityKfdInvocation`, `fe2o3_host::open_default_gfx942_device_v1`, `fe2o3_host::run_generated_gfx942_application_v1`
+ --> tests/ui/generated_host_contract_v2/target_specific_normal_api_is_private.rs:2:5
+  |
+2 |     GeneratedGfx942ApplicationPrepareErrorV1, GeneratedWorkerV3CapabilityKfdInvocation,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `GeneratedWorkerV3CapabilityKfdInvocation` in the root
+  |     |
+  |     no `GeneratedGfx942ApplicationPrepareErrorV1` in the root
+3 |     open_default_gfx942_device_v1, run_generated_gfx942_application_v1,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `run_generated_gfx942_application_v1` in the root
+  |     |
+  |     no `open_default_gfx942_device_v1` in the root
+  |
+help: a similar name exists in the module
+  |
+2 -     GeneratedGfx942ApplicationPrepareErrorV1, GeneratedWorkerV3CapabilityKfdInvocation,
+2 +     GeneratedApplicationPrepareErrorV1, GeneratedWorkerV3CapabilityKfdInvocation,
+  |
+help: a similar name exists in the module
+  |
+2 -     GeneratedGfx942ApplicationPrepareErrorV1, GeneratedWorkerV3CapabilityKfdInvocation,
+2 +     GeneratedGfx942ApplicationPrepareErrorV1, GeneratedWorkerV3KfdInvocation,
+  |
+help: a similar name exists in the module
+  |
+3 -     open_default_gfx942_device_v1, run_generated_gfx942_application_v1,
+3 +     open_default_gfx942_device_v1, run_generated_application_v1,
+  |

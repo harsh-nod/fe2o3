@@ -878,6 +878,26 @@ pub(crate) struct AuthenticatedRankedVerificationRosterV1 {
     canonical_kernel_order: Box<[usize]>,
 }
 
+/// Per-root proof custody released only after semantic-lineage preparation has
+/// borrowed the complete ranked roster.
+pub(crate) struct AuthenticatedFinalGraphFunctionalRootV1 {
+    logical_name: String,
+    export_symbol: Box<[u8]>,
+    semantic_root: SemanticFunctionIdV1,
+    semantic_root_identity: SemanticFunctionIdentityV1,
+    kernel_binding: [u8; 32],
+    source_rank: u8,
+    verified: fe2o3_verifier::ProductionEffectIrDerivedVerusVerifiedMirPlironKernelV3,
+}
+
+/// Complete move-only roster of exact per-root proofs accepted by Hilbert's
+/// final-graph functional-refinement boundary.
+pub(crate) struct AuthenticatedFinalGraphFunctionalRosterV1 {
+    roots: Box<[AuthenticatedFinalGraphFunctionalRootV1]>,
+    canonical_roster_identity: ProductionRankedKernelRosterIdentityV1,
+    canonical_kernel_order: Box<[usize]>,
+}
+
 impl AuthenticatedRankedVerificationRosterV1 {
     pub(crate) fn roots(&self) -> &[AuthenticatedRankedVerificationRootV1] {
         &self.roots
@@ -925,6 +945,114 @@ impl AuthenticatedRankedVerificationRosterV1 {
     pub(crate) fn canonical_kernel_order(&self) -> &[usize] {
         &self.canonical_kernel_order
     }
+
+    pub(crate) fn into_final_graph_functional_roster(
+        self,
+    ) -> Result<AuthenticatedFinalGraphFunctionalRosterV1, ProductionRankedVerificationErrorV1>
+    {
+        if self.roots.is_empty()
+            || self.roots.len() != self.canonical_kernel_order.len()
+            || !self.every_functional_verification_is_coherent()
+        {
+            return Err(ProductionRankedVerificationErrorV1::RosterMetadata(
+                "final-graph functional roster is incomplete or incoherent",
+            ));
+        }
+        let Self {
+            roots,
+            canonical_roster_identity,
+            canonical_kernel_order,
+        } = self;
+        let mut final_roots = Vec::with_capacity(roots.len());
+        for root in roots.into_vec() {
+            let AuthenticatedRankedVerificationRootV1 {
+                logical_name,
+                export_symbol,
+                semantic_root,
+                semantic_root_identity,
+                kernel_binding,
+                source_rank,
+                verification,
+            } = root;
+            let AuthenticatedRankedVerificationV5 {
+                middle_end_evidence: _,
+                functional,
+                semantic_u32_induction: _,
+            } = verification;
+            let functional =
+                functional.ok_or(ProductionRankedVerificationErrorV1::RosterMetadata(
+                    "final-graph functional roster has an unproved root",
+                ))?;
+            final_roots.push(AuthenticatedFinalGraphFunctionalRootV1 {
+                logical_name,
+                export_symbol,
+                semantic_root,
+                semantic_root_identity,
+                kernel_binding,
+                source_rank,
+                verified: functional.aggregate.into_verified(),
+            });
+        }
+        Ok(AuthenticatedFinalGraphFunctionalRosterV1 {
+            roots: final_roots.into_boxed_slice(),
+            canonical_roster_identity,
+            canonical_kernel_order,
+        })
+    }
+}
+
+impl AuthenticatedFinalGraphFunctionalRosterV1 {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Box<[AuthenticatedFinalGraphFunctionalRootV1]>,
+        ProductionRankedKernelRosterIdentityV1,
+        Box<[usize]>,
+    ) {
+        (
+            self.roots,
+            self.canonical_roster_identity,
+            self.canonical_kernel_order,
+        )
+    }
+}
+
+impl AuthenticatedFinalGraphFunctionalRootV1 {
+    pub(crate) fn logical_name(&self) -> &str {
+        &self.logical_name
+    }
+
+    pub(crate) fn export_symbol(&self) -> &[u8] {
+        &self.export_symbol
+    }
+
+    pub(crate) const fn semantic_root(&self) -> SemanticFunctionIdV1 {
+        self.semantic_root
+    }
+
+    pub(crate) const fn semantic_root_identity(&self) -> SemanticFunctionIdentityV1 {
+        self.semantic_root_identity
+    }
+
+    pub(crate) const fn kernel_binding(&self) -> &[u8; 32] {
+        &self.kernel_binding
+    }
+
+    pub(crate) const fn source_rank(&self) -> u8 {
+        self.source_rank
+    }
+
+    pub(crate) const fn verified(
+        &self,
+    ) -> &fe2o3_verifier::ProductionEffectIrDerivedVerusVerifiedMirPlironKernelV3 {
+        &self.verified
+    }
+
+    pub(crate) fn into_verified(
+        self,
+    ) -> fe2o3_verifier::ProductionEffectIrDerivedVerusVerifiedMirPlironKernelV3 {
+        self.verified
+    }
 }
 
 impl AuthenticatedRankedVerificationRootV1 {
@@ -962,7 +1090,7 @@ struct AuthenticatedFunctionalVerificationV1 {
     parallel_contract: fe2o3_functional_proof::ParallelReferenceContractV1,
     parallel_report: fe2o3_pliron::ProductionParallelReferenceContractReportV1,
     aggregate:
-        crate::production_mir_pliron_verus_join_v1::AuthenticatedMirPlironPerCompilationVerificationV1,
+        crate::production_mir_pliron_verus_join_v1::AuthenticatedMirPlironPerCompilationVerificationV2,
 }
 
 impl AuthenticatedRankedVerificationV5 {
@@ -988,9 +1116,12 @@ impl AuthenticatedRankedVerificationV5 {
     pub(crate) fn aggregate_verus_execution(
         &self,
     ) -> Option<&fe2o3_verifier::ProductionMirPlironPerCompilationVerusExecutionV1> {
-        self.functional
-            .as_ref()
-            .map(|functional| functional.aggregate.execution())
+        self.functional.as_ref().map(|functional| {
+            functional
+                .aggregate
+                .verified()
+                .per_compilation_verus_execution()
+        })
     }
 
     pub(crate) const fn semantic_u32_induction(
@@ -1288,7 +1419,7 @@ fn authenticate_ranked_root_v5(
             )
             .map_err(ProductionRankedVerificationErrorV1::ParallelContract)?;
         let aggregate =
-            crate::production_mir_pliron_verus_join_v1::authenticate_mir_pliron_contract_per_compilation_v1(
+            crate::production_mir_pliron_verus_join_v1::authenticate_mir_pliron_contract_per_compilation_v2(
                 lowering,
                 &middle_end_evidence,
                 semantics.contract(),
@@ -3362,7 +3493,7 @@ fn project_and_verify_ranked_root_v1(
         let ranked_ir = format_ranked_cfg(function_name(root_function)?, kernel.blocks())?;
         let construction = ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, kernel)
             .map_err(ProductionRankedProjectionErrorV1::Construction)?;
-        compile_ranked_kernel_for_gfx942_lowering_v1(
+        let lowering = compile_ranked_kernel_for_gfx942_lowering_v1(
             construction,
             ProductionSessionLimitsV1::default(),
             system_coherent_allocations,
@@ -3371,7 +3502,8 @@ fn project_and_verify_ranked_root_v1(
             error,
             ranked_ir,
             access_sources: sources,
-        })?
+        })?;
+        lowering
     } else {
         let reserved_reference_values =
             reserved_reference_values.ok_or(ProductionRankedProjectionErrorV1::Unsupported(

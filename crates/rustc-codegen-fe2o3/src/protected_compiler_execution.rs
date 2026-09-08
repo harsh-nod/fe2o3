@@ -29,6 +29,11 @@ pub(crate) struct AdmittedProtectedCompilerExecutionV1 {
 }
 
 impl AdmittedProtectedCompilerExecutionV1 {
+    /// Returns the exact caller-pinned compiler policy identity carried into V5.
+    pub(crate) fn policy_identity(&self) -> [u8; 32] {
+        *self.policy.policy().identity().as_bytes()
+    }
+
     /// Acquires and independently revalidates the receipt for one exact published subject.
     pub(crate) fn acquire(
         self,

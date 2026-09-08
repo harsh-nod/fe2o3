@@ -1,0 +1,50 @@
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/kernel_context_brand_cannot_escape.rs:2:76
+  |
+2 |     CurrentTarget, KernelCapabilityBrand, KernelContext, RegisteredLaunch, Wave64, WaveLane,
+  |                                                                            ^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/kernel_context_brand_cannot_escape.rs:2:84
+  |
+2 |     CurrentTarget, KernelCapabilityBrand, KernelContext, RegisteredLaunch, Wave64, WaveLane,
+  |                                                                                    ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+  --> tests/ui/fail/kernel_context_brand_cannot_escape.rs:12:6
+   |
+12 | ) -> WaveLane<Wave64, Brand<'static>> {
+   |      ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+  --> tests/ui/fail/kernel_context_brand_cannot_escape.rs:12:15
+   |
+12 | ) -> WaveLane<Wave64, Brand<'static>> {
+   |               ^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+  --> tests/ui/fail/kernel_context_brand_cannot_escape.rs:13:20
+   |
+13 |     context.lane::<Wave64>()
+   |                    ^^^^^^
+
+warning: use of deprecated method `fe2o3_device::KernelContext::<'kernel, Kernel, Target, Launch>::lane`: use subgroup_lane or with_workgroup(...).subgroup()
+  --> tests/ui/fail/kernel_context_brand_cannot_escape.rs:13:13
+   |
+13 |     context.lane::<Wave64>()
+   |             ^^^^
+
+error: lifetime may not live long enough
+  --> tests/ui/fail/kernel_context_brand_cannot_escape.rs:13:5
+   |
+10 | fn escape<'kernel>(
+   |           ------- lifetime `'kernel` defined here
+...
+13 |     context.lane::<Wave64>()
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'kernel` must outlive `'static`
+   |
+   = note: requirement occurs because of the type `SubgroupLane<SubgroupWidth64, fe2o3_device::KernelCapabilityBrand<'_, KernelA, CurrentTarget, RegisteredLaunch>>`, which makes the generic argument `fe2o3_device::KernelCapabilityBrand<'_, KernelA, CurrentTarget, RegisteredLaunch>` invariant
+   = note: the struct `SubgroupLane<Width, Brand>` is invariant over the parameter `Brand`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance

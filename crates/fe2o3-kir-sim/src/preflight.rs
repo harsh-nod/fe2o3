@@ -1,3 +1,7 @@
+// The public error preserves complete typed preflight diagnostics for callers.
+// Boxing those diagnostics would change the stable inspection contract.
+#![allow(clippy::result_large_err)]
+
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt;
@@ -297,6 +301,7 @@ impl Error for DynamicWorkgroupMemoryUnavailableV1 {}
 
 /// Fail-closed launch and reachable-program preflight failure.
 #[derive(Debug, Eq, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum SimulationPreflightErrorV1 {
     InvalidLimits(SimulationLimitsErrorV1),
     UnknownKernel(fe2o3_kernel_ir::KernelId),
@@ -452,6 +457,7 @@ impl AdmittedSimulationModuleV1 {
         preflight(
             &self.module,
             self.admitted_resident_bytes,
+            self.identity.wire_version() == 13,
             request,
             None,
             target,
@@ -470,6 +476,7 @@ impl AdmittedSimulationModuleV1 {
         preflight(
             &self.module,
             self.admitted_resident_bytes,
+            self.identity.wire_version() == 13,
             request,
             Some(dynamic),
             target,
@@ -481,6 +488,7 @@ impl AdmittedSimulationModuleV1 {
 pub(crate) fn preflight(
     module: &Module,
     admitted_resident_bytes: usize,
+    v13_matrix_numerical: bool,
     request: &SimulationRequestV1,
     dynamic: Option<DynamicWorkgroupMemoryRequestV1>,
     target: SimulationTargetV1,
@@ -531,7 +539,14 @@ pub(crate) fn preflight(
     let (grid, workgroup, workgroup_count, invocations, workgroups, scheduled_slots) =
         validate_launch(kernel, request, target, limits)?;
     let (unsupported, reachable_function_indices, reachable_operations, reachable_ssa_values) =
-        scan_reachable(module, entry, dynamic.is_some(), target, limits)?;
+        scan_reachable(
+            module,
+            entry,
+            dynamic.is_some(),
+            v13_matrix_numerical,
+            target,
+            limits,
+        )?;
     if unsupported.total_findings() != 0 {
         return Err(SimulationPreflightErrorV1::Unsupported(unsupported));
     }
@@ -573,6 +588,23 @@ pub(crate) fn preflight(
         .map(|function| function.id.retained_capacity_bytes())
         .max()
         .unwrap_or(0);
+    let numerical_matrix_reachable = reachable_function_indices.iter().any(|index| {
+        module.functions.get(*index).is_some_and(|function| {
+            function.body.iter().flat_map(|body| &body.blocks).any(|block| {
+                block.operations.iter().any(|operation| {
+                    matches!(
+                        &operation.kind,
+                        OperationKind::Matrix(matrix)
+                            if matches!(
+                                matrix.kind,
+                                fe2o3_kernel_ir::MatrixOperationKind::MultiplyAccumulate { .. }
+                                    | fe2o3_kernel_ir::MatrixOperationKind::ScaledMultiplyAccumulate { .. }
+                            )
+                    )
+                })
+            })
+        })
+    });
     let execution_peak = crate::execute::conservative_execution_resident_bytes(
         admitted_resident_bytes,
         request,
@@ -586,6 +618,7 @@ pub(crate) fn preflight(
         workgroup_resources.participants,
         workgroup_resources.allocation_sites,
         workgroup_resources.static_bytes,
+        numerical_matrix_reachable,
     )
     .ok_or(SimulationPreflightErrorV1::ResourceLimit {
         resource: "resident bytes",
@@ -1114,6 +1147,7 @@ fn scan_reachable(
     module: &Module,
     entry: &Function,
     allow_dynamic_workgroup_memory: bool,
+    v13_matrix_numerical: bool,
     target: SimulationTargetV1,
     limits: SimulationLimitsV1,
 ) -> Result<(UnsupportedSimulationReportV1, Vec<usize>, usize, usize), SimulationPreflightErrorV1> {
@@ -1191,6 +1225,7 @@ fn scan_reachable(
                     limits.max_reachable_functions,
                     &mut findings,
                     allow_dynamic_workgroup_memory,
+                    v13_matrix_numerical,
                     target,
                 )?;
             }
@@ -1594,6 +1629,7 @@ fn scan_operation(
     max_reachable_functions: usize,
     findings: &mut UnsupportedCollectorV1,
     allow_dynamic_workgroup_memory: bool,
+    v13_matrix_numerical: bool,
     target: SimulationTargetV1,
 ) -> Result<(), SimulationPreflightErrorV1> {
     let _surface = crate::capability::operation_surface_v1(&operation.kind);
@@ -1801,17 +1837,26 @@ fn scan_operation(
                 reject!(UnsupportedFeatureV1::NonScalarMemory);
             }
         }
-        OperationKind::Matrix(matrix) => match matrix.kind {
-            fe2o3_kernel_ir::MatrixOperationKind::LdsLoad { .. }
-            | fe2o3_kernel_ir::MatrixOperationKind::LdsStore { .. } => {}
-            fe2o3_kernel_ir::MatrixOperationKind::MultiplyAccumulate { .. }
-            | fe2o3_kernel_ir::MatrixOperationKind::ScaledMultiplyAccumulate { .. } => {
-                reject!(UnsupportedFeatureV1::UnsupportedNumericalContract)
+        OperationKind::Matrix(matrix) => {
+            if !v13_matrix_numerical
+                && matches!(
+                    matrix.kind,
+                    fe2o3_kernel_ir::MatrixOperationKind::MultiplyAccumulate { .. }
+                        | fe2o3_kernel_ir::MatrixOperationKind::ScaledMultiplyAccumulate { .. }
+                )
+            {
+                reject!(UnsupportedFeatureV1::UnsupportedNumericalContract);
             }
-        },
+        }
         OperationKind::Wave(_) => {}
         OperationKind::Gfx950LdsTranspose(_) => {}
         OperationKind::InlineAssembly(_) => reject!(UnsupportedFeatureV1::InlineAssembly),
+        OperationKind::KernelContextIssue(_)
+        | OperationKind::GlobalCapabilityBind(_)
+        | OperationKind::GlobalCapabilityIndex(_)
+        | OperationKind::ExecutionCapability(_) => {
+            unreachable!("logical capability is erased during V12/V13 admission")
+        }
     }
     Ok(())
 }
@@ -1955,7 +2000,7 @@ fn scan_terminator(
 
 fn unsupported_type(ty: &Type, target: SimulationTargetV1) -> Option<UnsupportedFeatureV1> {
     match ty {
-        Type::Unit => Some(UnsupportedFeatureV1::UnsupportedType),
+        Type::Unit | Type::KernelContext(_) => Some(UnsupportedFeatureV1::UnsupportedType),
         Type::Scalar(scalar) if target.scalar_bits(*scalar).is_some() => None,
         Type::Pointer(pointer) => {
             if !matches!(
@@ -2473,6 +2518,7 @@ mod tests {
             1,
             &mut findings,
             false,
+            false,
             SimulationTargetV1::amdgpu_64(),
         )
         .unwrap();
@@ -2524,6 +2570,7 @@ mod tests {
             &mut discovered_count,
             1,
             &mut findings,
+            false,
             false,
             SimulationTargetV1::amdgpu_64(),
         )
@@ -2582,6 +2629,7 @@ mod tests {
             1,
             &mut findings,
             false,
+            false,
             SimulationTargetV1::amdgpu_64(),
         )
         .unwrap();
@@ -2592,7 +2640,7 @@ mod tests {
     }
 
     #[test]
-    fn matrix_multiply_has_a_precise_numerical_contract_rejection() {
+    fn numerical_matrix_is_v13_additive() {
         let function = Function::kernel_entry(
             "matrix_multiply",
             fe2o3_kernel_ir::Signature::new(vec![], vec![]),
@@ -2622,10 +2670,34 @@ mod tests {
             1,
             &mut findings,
             false,
+            true,
             SimulationTargetV1::amdgpu_64(),
         )
         .unwrap();
         let report = findings.finish().unwrap();
+        assert_eq!(report.total_findings(), 0);
+        assert!(report.findings().is_empty());
+
+        let mut legacy_findings = UnsupportedCollectorV1::new().unwrap();
+        scan_operation(
+            &function,
+            BlockId(0),
+            0,
+            &operation,
+            &HashMap::new(),
+            &Module::new("matrix_multiply"),
+            &HashMap::new(),
+            &mut Vec::new(),
+            &mut [true],
+            &mut 1,
+            1,
+            &mut legacy_findings,
+            false,
+            false,
+            SimulationTargetV1::amdgpu_64(),
+        )
+        .unwrap();
+        let report = legacy_findings.finish().unwrap();
         assert_eq!(report.total_findings(), 1);
         assert_eq!(
             report.findings()[0].feature,

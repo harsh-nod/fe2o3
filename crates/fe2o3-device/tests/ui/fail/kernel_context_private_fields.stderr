@@ -1,0 +1,15 @@
+error[E0451]: fields `_kernel`, `_kernel_identity`, `_target`, `_launch` and `_not_send_sync` of struct `KernelContext` are private
+  --> tests/ui/fail/kernel_context_private_fields.rs:6:9
+   |
+ 5 |     let _: KernelContext<'static> = KernelContext {
+   |                                     ------------- in this type
+ 6 |         _kernel: PhantomData,
+   |         ^^^^^^^ private field
+ 7 |         _kernel_identity: PhantomData,
+   |         ^^^^^^^^^^^^^^^^ private field
+ 8 |         _target: PhantomData,
+   |         ^^^^^^^ private field
+ 9 |         _launch: PhantomData,
+   |         ^^^^^^^ private field
+10 |         _not_send_sync: PhantomData,
+   |         ^^^^^^^^^^^^^^ private field

@@ -1,0 +1,32 @@
+error[E0308]: arguments to this method are incorrect
+  --> tests/ui/fail/gfx950_capability_wrong_profile.rs:21:20
+   |
+21 |     let _ = gfx950.multiply_accumulate_fp4(lhs, rhs, accumulator);
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: expected `Gfx950MfmaFragment<'_, ..., ..., ...>`, found `Bf16MfmaFragment<'_, ..., ..., ..., ..., ...>`
+  --> tests/ui/fail/gfx950_capability_wrong_profile.rs:21:44
+   |
+21 |     let _ = gfx950.multiply_accumulate_fp4(lhs, rhs, accumulator);
+   |                                            ^^^
+   = note: expected struct `Gfx950MfmaFragment<'_, Gfx950Fp4E2M1, Gfx950MfmaOperandA, MatrixBrand>`
+              found struct `Bf16MfmaFragment<'a, MfmaOperandA, Bf16F32M16N16K16, MfmaRegisterTile16x16, SubgroupWidth64, MatrixBrand>`
+note: expected `Gfx950MfmaFragment<'_, ..., ..., ...>`, found `Bf16MfmaFragment<'_, ..., ..., ..., ..., ...>`
+  --> tests/ui/fail/gfx950_capability_wrong_profile.rs:21:49
+   |
+21 |     let _ = gfx950.multiply_accumulate_fp4(lhs, rhs, accumulator);
+   |                                                 ^^^
+   = note: expected struct `Gfx950MfmaFragment<'_, Gfx950Fp4E2M1, Gfx950MfmaOperandB, MatrixBrand>`
+              found struct `Bf16MfmaFragment<'a, MfmaOperandB, Bf16F32M16N16K16, MfmaRegisterTile16x16, SubgroupWidth64, MatrixBrand>`
+note: expected `Gfx950F32AccumulatorFragment<'_, ..., ...>`, found `F32AccumulatorFragment<'_, ..., ..., ..., ...>`
+  --> tests/ui/fail/gfx950_capability_wrong_profile.rs:21:54
+   |
+21 |     let _ = gfx950.multiply_accumulate_fp4(lhs, rhs, accumulator);
+   |                                                      ^^^^^^^^^^^
+   = note: expected struct `Gfx950F32AccumulatorFragment<'_, Gfx950Fp4E2M1, MatrixBrand>`
+              found struct `F32AccumulatorFragment<'a, Bf16F32M16N16K16, MfmaAccumulatorRowMajor, SubgroupWidth64, MatrixBrand>`
+note: method defined here
+  --> src/gfx950.rs
+   |
+   |     pub fn multiply_accumulate_fp4<'wave>(
+   |            ^^^^^^^^^^^^^^^^^^^^^^^

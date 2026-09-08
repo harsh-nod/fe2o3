@@ -34,6 +34,20 @@ CUDA, or a serialization framework.
   `Function::effective_capabilities` close explicit declarations over all
   operation-derived requirements. Backends decide whether a target satisfies
   that closure.
+- `KernelContextIssue` retains compiler-issued execution authority as an
+  opaque logical SSA value. Its type binds the kernel root, source marker,
+  target, and launch brands; its operation binds exact source provenance.
+  Physical kernel ABIs never contain the value. Internal helper edges may
+  carry it without translating the body into a second graph. In a
+  context-enabled kernel, issuance must dominate every root capability
+  operation. Any reachable helper that performs a capability operation must
+  accept the same context type as parameter zero, and helper calls may not
+  omit or substitute its exact brand.
+- `ExecutionCapabilityRequirementV1` retains closed portable target records
+  for address-space access, atomics, barriers, collectives, matrices,
+  asynchronous copy and completion, numerical behavior, and resource bounds.
+  These records are requirements only. Target support and legalization must be
+  established by an exact target adapter and later evidence stages.
 
 ## Initial Intrinsic Set
 
@@ -72,6 +86,12 @@ axes outside the declared launch domain. Callers that know a target's
 capability set can use `verify_module_with_capabilities` to reject unsupported
 requirements.
 
+For a context-enabled root, verification also follows the complete reachable
+call graph. Context values may flow only as direct internal-helper parameters
+or matching CFG block arguments, never through memory, aggregates, results, or
+unrelated operations. This is a structural authority-flow invariant; it does
+not replace the whole-program safety and semantic analyses below.
+
 Synchronization verification rejects relaxed fences/barriers, private or
 constant synchronization, scopes that cannot observe the selected address
 space, malformed atomic orderings and operands, unsupported atomic widths,
@@ -91,6 +111,13 @@ convergence claim,
 functional correctness, or target support. Those require later analyses and
 Verus proof artifacts. Keeping those concerns separate lets this verifier
 remain deterministic, fast, and usable after every transformation pass.
+
+Kernel-context source digests are likewise not proof or authority by
+themselves. The production importer must derive them from authenticated
+frontend metadata and bind the MIR issuance correspondence. Optimization must
+preserve the context value and capability attributes or replay affected
+analyses. Those production correspondence, invalidation, target-legalization,
+and receipt checks are deliberately outside this schema crate.
 
 ## Extension Rules
 

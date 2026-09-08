@@ -1,9 +1,28 @@
 # GPT-OSS-120B multi-wave layer-tile megakernel
 
-This tutorial is a production-compiler-generated safe-Rust-to-gfx950
-qualification example for a bounded piece of one GPT-OSS-120B decode layer. It
-is not a whole-model megakernel and does not claim to run an entire transformer
-layer in one dispatch.
+This tutorial is a production-compiler qualification candidate for a bounded
+piece of one GPT-OSS-120B decode layer. It is not a whole-model megakernel and
+does not claim to run an entire transformer layer in one dispatch.
+
+## Issue #272 capability status
+
+All nine attributed fused, ablation, and component entry points now use one
+ordinary logical Rust body with a compiler-issued `KernelContext`. Every kernel
+memory argument has a branded `Global` role, context is absent from the physical
+ABI, full-wave routing uses epoch-published LDS, Wave16 collectives are derived
+from the matching workgroup epoch, and BF16/FP4 matrix plus transcendental math
+operations retain `StrictIeee` policy authority.
+
+This source migration is **not yet production-qualified**. The production
+importer must authenticate the new branded Global bind/load/store terminals,
+including identity and blocked disjoint-write witnesses, plus Global BF16/FP4
+matrix, numerical-policy, and reusable-phase terminals before these kernels can
+receive clean V13/Bundle V8/final-graph receipts. The pipelined
+attention ablation is currently a functional capability-safe control: the
+device API cannot yet connect reusable async Global-to-LDS phases to branded
+BF16 matrix fragments, so it does not claim the former double-buffered pipeline
+optimization. The performance and hardware records below predate this
+capability source and are historical only.
 
 The architecture contract is pinned to OpenAI's official `gpt-oss` repository
 at commit
@@ -54,17 +73,18 @@ write contract.
 `gfx950_gpt_oss_120b_decode_megakernel_v1` kernel. It keeps router state,
 attention, and one selected expert tile in the same dispatch:
 
-1. Two router rows per lane stream through authenticated `StridedReadView2D`
-   views. Bounded Wave64 broadcasts merge the 128 candidates into a stable
-   top-4.
+1. Two router rows per lane stream through bounds-checked branded Global views.
+   One epoch-published LDS table merges the 128 candidates into a stable top-4.
 2. Four BF16 `16x16x16` MFMAs form the `16x16` QK score tile. Wave16 reductions
    implement sink-aware stable softmax, and the probabilities are consumed
    directly by the value accumulation instead of materializing them.
 3. Four scale-separated MXFP4 `16x16x128` MFMAs compute the selected expert
    tile. Each block is scaled and accumulated before the next fragment is
    created, reducing live accumulator state.
-4. Attention output, expert output, and the packed four seven-bit expert IDs
-   are committed through disjoint output capabilities.
+4. Attention and expert values are committed through
+   `DisjointWrite<Blocked<Index1D, 16, 4>>`: every Wave16 column lane owns four
+   rows in the row-major `16x16` tile. Packed routes use
+   `DisjointWrite<Index1D>`, so every write is tied to the issuing invocation.
 
 The compiler-qualification runner requires exactly four
 `v_mfma_f32_16x16x16_bf16` sites and four
@@ -108,7 +128,7 @@ the LLVM, HSACO, and symbol-scoped ISA SHA-256 digests are respectively
 `d6b2f1b54b0398cceb751d4e4a70a42b74efe368e9fbc892283a72952013daec`,
 and `f52d49e23917bc11ac4b2ea1f3d8205d200b9d6ed7365350fc1189392ee837d5`.
 
-| Current admitted kernel | Compiler binding | HSACO SHA-256 | Numerical result |
+| Historical pre-capability kernel | Compiler binding | HSACO SHA-256 | Numerical result |
 | --- | --- | --- | --- |
 | Fused canonical | `7194a44ee0231763c5f1e345dcb682beb0922ede14a8ce1899d41b44b2b053d0` | `d6b2f1b54b0398cceb751d4e4a70a42b74efe368e9fbc892283a72952013daec` | attention 4,096, max abs `1.192092896e-7`; expert 4,096 exact; route 1,024 exact |
 | Serial router | `0d3dd5be58c3fc42b575a9028359d3be63f5f86dffd8261a24564c09ec8c77f7` | `26515f0bd0539030f076efaf88bf52c11c13fcb6acd13997bf822a207d559722` | attention 4,096, max abs `1.192092896e-7`; expert 4,096 exact; route 1,024 exact |

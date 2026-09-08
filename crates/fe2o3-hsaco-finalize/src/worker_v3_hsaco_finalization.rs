@@ -7,13 +7,22 @@
 
 use std::{error::Error, fmt};
 
+use fe2o3_amdgcn_model::{
+    AmdMachineRefinementIdentityV1, AmdMachineRefinementTargetV1, CheckedAmdMachineRefinementV1,
+    CheckedGfx942MachineRefinementV1, CheckedGfx950MachineRefinementV1,
+};
 use fe2o3_artifact_transaction::{
-    BuildAttempt, CompilerModuleHandoffSlotV3, CompilerModuleHandoffTransactionIdentityV3,
+    AuthenticatedCompilerCapabilityCompletionV5, BuildAttempt, CompilerModuleHandoffSlotV3,
+    CompilerModuleHandoffTransactionIdentityV3,
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
     CompilerDescriptorSourceErrorV1, CompilerDescriptorSourceV1,
     InertSemanticCompilerModuleHandoffIdentityV3, InertSemanticCompilerModuleHandoffV3,
+};
+use fe2o3_compiler_lineage::{
+    CheckedTargetMachineRefinementReceiptV1, TargetMachineRefinementReceiptErrorV1,
+    check_target_machine_refinement_receipt_v1,
 };
 use fe2o3_hsaco::CodeObjectVersion as InspectedCodeObjectVersion;
 use fe2o3_kernel_descriptor::{
@@ -170,12 +179,13 @@ impl MissingAuthenticatedProtectedDescriptorSourceEvidenceV3 {
     }
 }
 
-/// Opaque native-V3 HSACO after structural canonical descriptor finalization.
+/// Opaque native-V3 HSACO after checked machine refinement and canonical finalization.
 ///
 /// This move-only owner retains the exact V3 inspection and the independently verified canonical
-/// finalizer output. Its identity binds every retained transaction, semantic, compiler, worker,
-/// plan, raw-output, descriptor, ABI, resource, and finalized-output axis. It remains descriptive
-/// evidence and grants no compiler, publication, load, or launch authority.
+/// finalizer output beside the target machine-refinement owner and the coordinate-checked receipt
+/// derived by borrowing a verifier-signed compiler completion. Its identity binds the signed
+/// response without consuming the broader completion authority needed by the existing artifact
+/// gate. It remains descriptive evidence and grants no publication, load, or launch authority.
 #[derive(Debug)]
 pub struct PreparedFinalizedProtectedWorkerV3HsacoV1 {
     identity: FinalizedProtectedWorkerV3HsacoIdentityV1,
@@ -183,6 +193,112 @@ pub struct PreparedFinalizedProtectedWorkerV3HsacoV1 {
     finalized: FinalizedHsaco,
     finalized_output: ContentIdentityV1,
     canonical_descriptor_evidence: ContentIdentityV1,
+    machine_refinement: CheckedAmdMachineRefinementV1,
+    machine_refinement_receipt: CheckedTargetMachineRefinementReceiptV1,
+    authenticated_compiler_completion_identity: [u8; 32],
+}
+
+/// Canonically finalized AMD bytes awaiting a matching verifier-signed completion.
+///
+/// This move-only value lets the signed completion bind the deterministic finalized bytes without
+/// allowing those bytes to enter publication as [`PreparedFinalizedProtectedWorkerV3HsacoV1`].
+#[derive(Debug)]
+#[must_use = "pending finalized bytes cannot be published without authenticated completion"]
+pub struct MachineRefinementPendingFinalizedProtectedWorkerV3HsacoV1 {
+    raw: InspectedProtectedWorkerV3HsacoV1,
+    finalized: FinalizedHsaco,
+    finalized_output: ContentIdentityV1,
+    canonical_descriptor_evidence: ContentIdentityV1,
+    canonical_descriptor_bytes: Box<[u8]>,
+    machine_refinement: CheckedAmdMachineRefinementV1,
+}
+
+impl MachineRefinementPendingFinalizedProtectedWorkerV3HsacoV1 {
+    /// Returns the deterministic finalized bytes that the verifier response must bind.
+    pub fn exact_finalized_bytes(&self) -> &[u8] {
+        self.finalized.as_bytes()
+    }
+
+    /// Returns the exact finalized content identity.
+    pub const fn finalized_output_identity(&self) -> ContentIdentityV1 {
+        self.finalized_output
+    }
+
+    /// Returns the independently checked machine-refinement identity.
+    pub const fn machine_refinement_identity(&self) -> AmdMachineRefinementIdentityV1 {
+        self.machine_refinement.identity()
+    }
+
+    /// Returns the build attempt retained by the inspected Worker V3 output.
+    pub const fn attempt(&self) -> BuildAttempt {
+        self.raw.attempt()
+    }
+
+    /// Returns the exact outer compiler handoff retained by the inspected output.
+    pub const fn outer_handoff(&self) -> &InertSemanticCompilerModuleHandoffV3 {
+        self.raw.outer_handoff()
+    }
+
+    /// Returns the compiler closure retained by the inspected output.
+    pub const fn compiler_closure(&self) -> CompilerClosureV2 {
+        self.raw.compiler_closure()
+    }
+
+    /// Completes preparation only when the signed checker evidence is the exact typed receipt for
+    /// the retained target-specific machine refinement.
+    pub fn complete_with_authenticated_compiler_completion_v1(
+        self,
+        compiler_completion: &AuthenticatedCompilerCapabilityCompletionV5,
+    ) -> Result<PreparedFinalizedProtectedWorkerV3HsacoV1, WorkerV3HsacoFinalizationError> {
+        if !compiler_completion.authenticates_exact_object_bytes(self.exact_finalized_bytes()) {
+            return Err(WorkerV3HsacoFinalizationError::AuthenticatedCompletionObjectMismatch);
+        }
+        let expected_receipt = self
+            .machine_refinement
+            .target_machine_refinement_receipt_parts_v1()
+            .map_err(WorkerV3HsacoFinalizationError::MachineRefinementReceipt)?;
+        let machine_refinement_receipt = check_target_machine_refinement_receipt_v1(
+            compiler_completion.checker_evidence_bytes(),
+            expected_receipt,
+        )
+        .map_err(WorkerV3HsacoFinalizationError::MachineRefinementReceipt)?;
+        let identity = calculate_protected_v3_finalized_identity(
+            &self.raw,
+            &self.finalized,
+            self.finalized_output,
+            &self.canonical_descriptor_bytes,
+            self.canonical_descriptor_evidence,
+            &self.machine_refinement,
+            &machine_refinement_receipt,
+            compiler_completion,
+        );
+        Ok(PreparedFinalizedProtectedWorkerV3HsacoV1 {
+            identity,
+            raw: self.raw,
+            finalized: self.finalized,
+            finalized_output: self.finalized_output,
+            canonical_descriptor_evidence: self.canonical_descriptor_evidence,
+            machine_refinement: self.machine_refinement,
+            machine_refinement_receipt,
+            authenticated_compiler_completion_identity: compiler_completion
+                .signed_response_identity(),
+        })
+    }
+
+    /// Pending bytes carry no publication authority.
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    /// Pending bytes carry no load authority.
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    /// Pending bytes carry no launch authority.
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
 }
 
 pub(crate) struct OwnedPreparedFinalizedProtectedWorkerV3ReplayPartsV1 {
@@ -192,6 +308,63 @@ pub(crate) struct OwnedPreparedFinalizedProtectedWorkerV3ReplayPartsV1 {
 }
 
 impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
+    /// Runs checked gfx942 machine refinement and canonical finalization without creating a
+    /// publication-prepared owner. The returned bytes can be supplied to the protected verifier.
+    pub fn begin_gfx942_machine_refined_finalization_v1(
+        raw: InspectedProtectedWorkerV3HsacoV1,
+        machine_refinement: CheckedGfx942MachineRefinementV1,
+    ) -> Result<
+        MachineRefinementPendingFinalizedProtectedWorkerV3HsacoV1,
+        WorkerV3HsacoFinalizationError,
+    > {
+        begin_machine_refined_amd_hsaco_v1(raw, machine_refinement.into())
+    }
+
+    /// Runs checked gfx950 machine refinement and canonical finalization without creating a
+    /// publication-prepared owner. The returned bytes can be supplied to the protected verifier.
+    pub fn begin_gfx950_machine_refined_finalization_v1(
+        raw: InspectedProtectedWorkerV3HsacoV1,
+        machine_refinement: CheckedGfx950MachineRefinementV1,
+    ) -> Result<
+        MachineRefinementPendingFinalizedProtectedWorkerV3HsacoV1,
+        WorkerV3HsacoFinalizationError,
+    > {
+        begin_machine_refined_amd_hsaco_v1(raw, machine_refinement.into())
+    }
+
+    /// Runs target-selected checked AMD refinement before exposing deterministic finalized bytes.
+    pub fn begin_amd_machine_refined_finalization_v1(
+        raw: InspectedProtectedWorkerV3HsacoV1,
+        machine_refinement: CheckedAmdMachineRefinementV1,
+    ) -> Result<
+        MachineRefinementPendingFinalizedProtectedWorkerV3HsacoV1,
+        WorkerV3HsacoFinalizationError,
+    > {
+        begin_machine_refined_amd_hsaco_v1(raw, machine_refinement)
+    }
+
+    /// Prepares a finalized gfx942 HSACO only after target-specific machine refinement and
+    /// coordinate equality with the receipt retained by the verifier-signed owner.
+    pub fn prepare_with_gfx942_machine_refinement_v1(
+        raw: InspectedProtectedWorkerV3HsacoV1,
+        machine_refinement: CheckedGfx942MachineRefinementV1,
+        compiler_completion: &AuthenticatedCompilerCapabilityCompletionV5,
+    ) -> Result<Self, WorkerV3HsacoFinalizationError> {
+        Self::begin_gfx942_machine_refined_finalization_v1(raw, machine_refinement)?
+            .complete_with_authenticated_compiler_completion_v1(compiler_completion)
+    }
+
+    /// Prepares a finalized gfx950 HSACO only after target-specific machine refinement and
+    /// coordinate equality with the verifier-signed receipt.
+    pub fn prepare_with_gfx950_machine_refinement_v1(
+        raw: InspectedProtectedWorkerV3HsacoV1,
+        machine_refinement: CheckedGfx950MachineRefinementV1,
+        compiler_completion: &AuthenticatedCompilerCapabilityCompletionV5,
+    ) -> Result<Self, WorkerV3HsacoFinalizationError> {
+        Self::begin_gfx950_machine_refined_finalization_v1(raw, machine_refinement)?
+            .complete_with_authenticated_compiler_completion_v1(compiler_completion)
+    }
+
     pub const fn identity(&self) -> FinalizedProtectedWorkerV3HsacoIdentityV1 {
         self.identity
     }
@@ -275,6 +448,21 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
         self.canonical_descriptor_evidence
     }
 
+    /// Returns the independently checked target machine-refinement identity.
+    pub const fn machine_refinement_identity(&self) -> AmdMachineRefinementIdentityV1 {
+        self.machine_refinement.identity()
+    }
+
+    /// Returns the receipt checked coordinate-for-coordinate against the retained target owner.
+    pub const fn machine_refinement_receipt(&self) -> &CheckedTargetMachineRefinementReceiptV1 {
+        &self.machine_refinement_receipt
+    }
+
+    /// Returns the authenticated signed-response identity that supplied the checked receipt.
+    pub const fn authenticated_compiler_completion_identity(&self) -> [u8; 32] {
+        self.authenticated_compiler_completion_identity
+    }
+
     pub const fn policy_identity(&self) -> WorkerV3HsacoPolicyIdentityV1 {
         self.raw.policy().identity()
     }
@@ -304,6 +492,11 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
     }
 
     pub const fn is_structural_only(&self) -> bool {
+        false
+    }
+
+    /// Reports that target machine semantics were checked before this owner was constructed.
+    pub const fn has_independently_checked_machine_refinement(&self) -> bool {
         true
     }
 
@@ -336,6 +529,9 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
             finalized,
             finalized_output: _,
             canonical_descriptor_evidence: _,
+            machine_refinement: _,
+            machine_refinement_receipt: _,
+            authenticated_compiler_completion_identity: _,
         } = self;
         OwnedPreparedFinalizedProtectedWorkerV3ReplayPartsV1 {
             identity,
@@ -350,9 +546,14 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
 #[non_exhaustive]
 pub enum WorkerV3HsacoFinalizationError {
     RawOutputIdentityMismatch,
+    MissingMachineRefinementEvidence(Box<InspectedProtectedWorkerV3HsacoV1>),
     MissingAuthenticatedProtectedDescriptorSourceEvidenceV3(
         Box<MissingAuthenticatedProtectedDescriptorSourceEvidenceV3>,
     ),
+    UnsupportedMachineRefinementTarget,
+    MachineRefinementArtifactMismatch,
+    AuthenticatedCompletionObjectMismatch,
+    MachineRefinementReceipt(TargetMachineRefinementReceiptErrorV1),
     CanonicalFinalization(FinalizationError),
     FinalizedVerification(FinalizationError),
     CanonicalDescriptorEvidence(fe2o3_kernel_descriptor::ValidationError),
@@ -374,6 +575,10 @@ impl fmt::Display for WorkerV3HsacoFinalizationError {
         match self {
             Self::RawOutputIdentityMismatch => formatter
                 .write_str("retained raw HSACO bytes do not match their admitted output identity"),
+            Self::MissingMachineRefinementEvidence(_) => formatter.write_str(
+                "protected Worker V3 HSACO preparation requires independently checked target \
+                 machine refinement and its authenticated compiler-completion owner",
+            ),
             Self::MissingAuthenticatedProtectedDescriptorSourceEvidenceV3(_) => write!(
                 formatter,
                 "strict-V3 protected raw Worker HSACO has no {DEVICE_DESCRIPTOR_SECTION_NAME}; \
@@ -381,6 +586,18 @@ impl fmt::Display for WorkerV3HsacoFinalizationError {
                  will not infer Rust ABI, layout, effect, or build-evidence claims from \
                  executable metadata"
             ),
+            Self::UnsupportedMachineRefinementTarget => formatter.write_str(
+                "raw Worker target has no matching production machine-refinement checker",
+            ),
+            Self::MachineRefinementArtifactMismatch => formatter.write_str(
+                "independently checked machine refinement names a different raw HSACO",
+            ),
+            Self::AuthenticatedCompletionObjectMismatch => formatter.write_str(
+                "verifier-signed completion names different finalized object bytes",
+            ),
+            Self::MachineRefinementReceipt(error) => {
+                write!(formatter, "machine-refinement receipt rejected: {error}")
+            }
             Self::CanonicalFinalization(error) => {
                 write!(
                     formatter,
@@ -431,15 +648,18 @@ impl Error for WorkerV3HsacoFinalizationError {
             Self::CanonicalFinalization(error) | Self::FinalizedVerification(error) => Some(error),
             Self::CanonicalDescriptorEvidence(error) => Some(error),
             Self::CompilerDescriptorSource(error) => Some(error),
+            Self::MachineRefinementReceipt(error) => Some(error),
             _ => None,
         }
     }
 }
 
-/// Consumes native strict-V3 inspection exactly once and runs canonical descriptor finalization.
+/// Rejects the legacy one-input finalization route before a prepared owner can exist.
 ///
-/// The complete V3 transaction, outer semantic handoff, compiler closure, measured worker, and
-/// link execution remain retained by the result. This route has no legacy finalization fallback.
+/// A missing descriptor still returns the existing descriptor-source blocker. Otherwise the raw
+/// inspection is returned in [`WorkerV3HsacoFinalizationError::MissingMachineRefinementEvidence`]
+/// so a caller can migrate to
+/// [`PreparedFinalizedProtectedWorkerV3HsacoV1::begin_gfx942_machine_refined_finalization_v1`].
 pub fn finalize_protected_worker_v3_hsaco_v1(
     raw: InspectedProtectedWorkerV3HsacoV1,
 ) -> Result<PreparedFinalizedProtectedWorkerV3HsacoV1, WorkerV3HsacoFinalizationError> {
@@ -449,6 +669,33 @@ pub fn finalize_protected_worker_v3_hsaco_v1(
                 Box::new(MissingAuthenticatedProtectedDescriptorSourceEvidenceV3 { raw }),
             ),
         );
+    }
+    Err(WorkerV3HsacoFinalizationError::MissingMachineRefinementEvidence(Box::new(raw)))
+}
+
+fn begin_machine_refined_amd_hsaco_v1(
+    raw: InspectedProtectedWorkerV3HsacoV1,
+    machine_refinement: CheckedAmdMachineRefinementV1,
+) -> Result<MachineRefinementPendingFinalizedProtectedWorkerV3HsacoV1, WorkerV3HsacoFinalizationError>
+{
+    if raw.canonical_descriptor_section() == CanonicalDescriptorSectionObservationV1::Missing {
+        return Err(
+            WorkerV3HsacoFinalizationError::MissingAuthenticatedProtectedDescriptorSourceEvidenceV3(
+                Box::new(MissingAuthenticatedProtectedDescriptorSourceEvidenceV3 { raw }),
+            ),
+        );
+    }
+    let target =
+        AmdMachineRefinementTargetV1::from_authenticated_target(raw.target().as_amd_target_id())
+            .map_err(|_| WorkerV3HsacoFinalizationError::UnsupportedMachineRefinementTarget)?;
+    if target != machine_refinement.target() {
+        return Err(WorkerV3HsacoFinalizationError::UnsupportedMachineRefinementTarget);
+    }
+    if !machine_refinement
+        .final_code_object()
+        .matches(raw.exact_bytes())
+    {
+        return Err(WorkerV3HsacoFinalizationError::MachineRefinementArtifactMismatch);
     }
     let outer = raw.outer_handoff();
     let descriptor_source =
@@ -475,19 +722,13 @@ pub fn finalize_protected_worker_v3_hsaco_v1(
         return Err(WorkerV3HsacoFinalizationError::CompilerDescriptorSourceMismatch);
     }
     let canonical_descriptor_evidence = ContentIdentityV1::calculate(&descriptor_bytes);
-    let identity = calculate_protected_v3_finalized_identity(
-        &raw,
-        &core.finalized,
-        core.finalized_output,
-        &descriptor_bytes,
-        canonical_descriptor_evidence,
-    );
-    Ok(PreparedFinalizedProtectedWorkerV3HsacoV1 {
-        identity,
+    Ok(MachineRefinementPendingFinalizedProtectedWorkerV3HsacoV1 {
         raw,
         finalized: core.finalized,
         finalized_output: core.finalized_output,
         canonical_descriptor_evidence,
+        canonical_descriptor_bytes: descriptor_bytes.into_boxed_slice(),
+        machine_refinement,
     })
 }
 
@@ -631,6 +872,12 @@ struct ProtectedFinalizationIdentityPreimageV3<'a> {
     response_identity: [u8; 32],
     raw_output: ContentIdentityV1,
     exact_raw_bytes: &'a [u8],
+    machine_refinement_identity: [u8; 32],
+    machine_required_families: u64,
+    machine_established_families: u64,
+    machine_receipt_identity: [u8; 32],
+    exact_machine_receipt_bytes: &'a [u8],
+    authenticated_compiler_completion_identity: [u8; 32],
     policy_identity: [u8; 32],
     descriptor_observation_identity: [u8; 32],
     abi_observation_identity: [u8; 32],
@@ -654,6 +901,9 @@ fn calculate_protected_v3_finalized_identity(
     finalized_output: ContentIdentityV1,
     descriptor_bytes: &[u8],
     canonical_descriptor_evidence: ContentIdentityV1,
+    machine_refinement: &CheckedAmdMachineRefinementV1,
+    machine_refinement_receipt: &CheckedTargetMachineRefinementReceiptV1,
+    compiler_completion: &AuthenticatedCompilerCapabilityCompletionV5,
 ) -> FinalizedProtectedWorkerV3HsacoIdentityV1 {
     let expectation = raw.binding_expectation();
     let outer_identity = expectation.outer_handoff_identity();
@@ -698,6 +948,12 @@ fn calculate_protected_v3_finalized_identity(
         response_identity: *raw.response_identity().as_bytes(),
         raw_output: raw.linked_output_identity(),
         exact_raw_bytes: raw.exact_bytes(),
+        machine_refinement_identity: machine_refinement.identity().sha256(),
+        machine_required_families: machine_refinement.required_families(),
+        machine_established_families: machine_refinement.established_families(),
+        machine_receipt_identity: machine_refinement_receipt.terminal_sha256(),
+        exact_machine_receipt_bytes: machine_refinement_receipt.receipt().canonical_bytes(),
+        authenticated_compiler_completion_identity: compiler_completion.signed_response_identity(),
         policy_identity: *raw.policy().identity().as_bytes(),
         descriptor_observation_identity: observation_identities.0,
         abi_observation_identity: observation_identities.1,
@@ -765,6 +1021,12 @@ fn calculate_protected_finalized_identity_v3(
     hasher.update(preimage.response_identity);
     hash_content(&mut hasher, preimage.raw_output);
     hash_blob_v3(&mut hasher, preimage.exact_raw_bytes);
+    hasher.update(preimage.machine_refinement_identity);
+    hasher.update(preimage.machine_required_families.to_le_bytes());
+    hasher.update(preimage.machine_established_families.to_le_bytes());
+    hasher.update(preimage.machine_receipt_identity);
+    hash_blob_v3(&mut hasher, preimage.exact_machine_receipt_bytes);
+    hasher.update(preimage.authenticated_compiler_completion_identity);
     hasher.update(preimage.policy_identity);
     hasher.update(preimage.descriptor_observation_identity);
     hasher.update(preimage.abi_observation_identity);
@@ -862,6 +1124,8 @@ mod v3_tests {
     const OTHER_PLAN_BYTES: &[u8] = b"canonical-link-plan-mutated";
     const RAW_BYTES: &[u8] = b"raw-hsaco";
     const OTHER_RAW_BYTES: &[u8] = b"raw-hsaco-mutated";
+    const MACHINE_RECEIPT_BYTES: &[u8] = b"typed-machine-receipt";
+    const OTHER_MACHINE_RECEIPT_BYTES: &[u8] = b"typed-machine-receipt-mutated";
     const FINAL_BYTES: &[u8] = b"finalized-hsaco";
     const OTHER_FINAL_BYTES: &[u8] = b"finalized-hsaco-mutated";
     const DESCRIPTOR_BYTES: &[u8] = b"canonical-descriptor-table";
@@ -929,6 +1193,12 @@ mod v3_tests {
         assert_axis!(response_identity, digest(14));
         assert_axis!(raw_output, ContentIdentityV1::calculate(OTHER_RAW_BYTES));
         assert_axis!(exact_raw_bytes, OTHER_RAW_BYTES);
+        assert_axis!(machine_refinement_identity, digest(0x41));
+        assert_axis!(machine_required_families, 0x21);
+        assert_axis!(machine_established_families, 0x31);
+        assert_axis!(machine_receipt_identity, digest(0x42));
+        assert_axis!(exact_machine_receipt_bytes, OTHER_MACHINE_RECEIPT_BYTES);
+        assert_axis!(authenticated_compiler_completion_identity, digest(0x43));
         assert_axis!(policy_identity, digest(15));
         assert_axis!(descriptor_observation_identity, digest(16));
         assert_axis!(abi_observation_identity, digest(17));
@@ -1012,6 +1282,12 @@ mod v3_tests {
             response_identity: digest(0x0d),
             raw_output: ContentIdentityV1::calculate(RAW_BYTES),
             exact_raw_bytes: RAW_BYTES,
+            machine_refinement_identity: digest(0x40),
+            machine_required_families: 0x11,
+            machine_established_families: 0x11,
+            machine_receipt_identity: digest(0x41),
+            exact_machine_receipt_bytes: MACHINE_RECEIPT_BYTES,
+            authenticated_compiler_completion_identity: digest(0x42),
             policy_identity: digest(0x0e),
             descriptor_observation_identity: digest(0x0f),
             abi_observation_identity: digest(0x10),

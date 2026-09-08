@@ -34,6 +34,11 @@ documentation.
   do not establish.
 - [GPU safety contract](gpu-safety-contract-v1.md): memory, launch, artifact,
   and runtime safety obligations.
+- [GPU execution capabilities](gpu-execution-capabilities-v1.md): the
+  normative #272 contract for compiler-issued argument capabilities,
+  exact closure, production ownership/evidence boundaries, stable identifiers,
+  and milestone dependencies. It is a completion specification, not an
+  implementation-complete claim.
 
 ## Compile and execute
 

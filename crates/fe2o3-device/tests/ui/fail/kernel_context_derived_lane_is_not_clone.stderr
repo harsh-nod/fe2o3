@@ -1,0 +1,25 @@
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/kernel_context_derived_lane_is_not_clone.rs:1:35
+  |
+1 | use fe2o3_device::{KernelContext, Wave64};
+  |                                   ^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/kernel_context_derived_lane_is_not_clone.rs:6:31
+  |
+6 |     let lane = context.lane::<Wave64>();
+  |                               ^^^^^^
+
+warning: use of deprecated method `fe2o3_device::KernelContext::<'kernel, Kernel, Target, Launch>::lane`: use subgroup_lane or with_workgroup(...).subgroup()
+ --> tests/ui/fail/kernel_context_derived_lane_is_not_clone.rs:6:24
+  |
+6 |     let lane = context.lane::<Wave64>();
+  |                        ^^^^
+
+error[E0599]: no method named `clone` found for struct `SubgroupLane<Width, Brand>` in the current scope
+ --> tests/ui/fail/kernel_context_derived_lane_is_not_clone.rs:7:18
+  |
+7 |     let _ = lane.clone();
+  |                  ^^^^^ method not found in `SubgroupLane<SubgroupWidth64, fe2o3_device::KernelCapabilityBrand<'_, KernelA, CurrentTarget, RegisteredLaunch>>`

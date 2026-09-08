@@ -197,6 +197,67 @@ fn attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn simulation_bundle_v8_cli_round_trip_uses_the_production_v13_extractor() {
+    let target = ScratchTarget::new();
+    let bundle_path = target.path().join("multi-root.bundle-v8");
+    let output = Command::new(env!("CARGO_BIN_EXE_fe2o3-export-sim"))
+        .current_dir(workspace())
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS")
+        .args(["--crate", "fe2o3_production_extraction_fixture", "--output"])
+        .arg(&bundle_path)
+        .args([
+            "--target",
+            "gfx942",
+            "--bundle-version",
+            "8",
+            "--target-dir",
+        ])
+        .arg(target.path().join("cargo"))
+        .args([
+            "--",
+            "-p",
+            "fe2o3-production-extraction-fixture",
+            "--features",
+            "multi-root-ownership",
+            "--lib",
+        ])
+        .output()
+        .expect("run Bundle V8 exporter through fe2o3-rustc-extract");
+    let stderr = String::from_utf8(output.stderr).expect("V8 extraction diagnostic is UTF-8");
+    assert!(
+        output.status.success(),
+        "Bundle V8 CLI extraction failed:\n{stderr}",
+    );
+    assert!(
+        stderr.contains("final target KIR V13 with retained W4 result and target closure")
+            && stderr.contains("simulation bundle V8")
+            && stderr.contains("compiler_execution=extraction_only_unavailable")
+            && stderr.contains("authority false"),
+        "Bundle V8 extraction omitted its production-custody receipt:\n{stderr}",
+    );
+
+    let bytes = std::fs::read(&bundle_path).expect("read published Bundle V8");
+    let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV8::from_canonical_bytes(bytes)
+        .expect("decode and authenticate published Bundle V8");
+    assert_eq!(bundle.production_kir_identity().version(), 13);
+    assert_eq!(bundle.kernel_count(), 2);
+    assert_eq!(bundle.target(), "gfx942:xnack-");
+    assert!(bundle.final_graph_epoch() > 0);
+    assert!(!bundle.canonical_kir_v13().is_empty());
+    assert!(!bundle.debug_map().is_empty());
+    assert!(!bundle.semantic_mir().is_empty());
+    assert!(!bundle.storage_map().is_empty());
+    assert!(!bundle.aggregate_storage_map().is_empty());
+    assert!(!bundle.grants_compiler_authority());
+    assert!(!bundle.grants_artifact_authority());
+    assert!(!bundle.grants_hardware_authority());
+    bundle.revalidate().expect("revalidate decoded Bundle V8");
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn safe_scalar_from_bits_reaches_complete_semantic_import() {
     let target = ScratchTarget::new();
     let output = run_extraction_command(&target, Some("scalar-transmute"), true);

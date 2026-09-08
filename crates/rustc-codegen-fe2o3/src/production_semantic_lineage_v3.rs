@@ -10,18 +10,22 @@ use fe2o3_compiler_ffi::{
 };
 use fe2o3_compiler_lineage::{
     DataLayoutTranscriptInputsV3, DataLayoutTranscriptV3, InertAbiReceiptV3,
-    InertAmdgpuLoweringReceiptV3, InertCanonicalSemanticMirReceiptV3, InertDataLayoutReceiptV3,
-    InertExportManifestReceiptV3, InertFinalCompilerModuleCommitmentReceiptV3,
-    InertFormalMemoryReceiptV3, InertKernelIrReceiptV3, InertLineageContentIdentityV3,
-    InertMiddleEndReceiptV3, InertMirToKirCorrespondenceReceiptV3,
+    InertCanonicalSemanticMirReceiptV3, InertCapabilityRefinementReceiptV1,
+    InertDataLayoutReceiptV3, InertExportManifestReceiptV3,
+    InertFinalCompilerModuleCommitmentReceiptV3, InertFormalMemoryReceiptV3,
+    InertKernelIrReceiptV3, InertLineageContentIdentityV3, InertMiddleEndReceiptV3,
+    InertMirToKirCorrespondenceReceiptV3, InertMultiRootProofLineageV3,
     InertProductionSemanticCapsuleV3, InertProofBindingAssociationErrorV3,
     InertProofBindingAssociationErrorV4, InertProofBindingAssociationInputsV4,
     InertProofBindingAssociationV4, InertProofBindingReceiptV3,
     InertRustcIdentityInventoryReceiptV3, InertRustcPreflightPlanReceiptV3,
     InertSemanticToLlvmAssociationV3, InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3,
-    LineageErrorV3, MultiRootCanonicalKirVersionV2, MultiRootCorrespondencePayloadV2,
-    MultiRootNeutralKirIdentityV2, MultiRootProofRosterErrorV2, MultiRootProofRosterInputsV2,
-    MultiRootProofRosterKindV2, MultiRootProofRosterRootInputV2, MultiRootProofRosterTranscriptV2,
+    LineageErrorV3, MultiRootCanonicalKirVersionV2, MultiRootCanonicalKirVersionV3,
+    MultiRootCorrespondencePayloadV2, MultiRootNeutralKirIdentityV2, MultiRootNeutralKirIdentityV3,
+    MultiRootProofLineageErrorV3, MultiRootProofRosterErrorV2, MultiRootProofRosterErrorV3,
+    MultiRootProofRosterInputsV2, MultiRootProofRosterInputsV3, MultiRootProofRosterKindV2,
+    MultiRootProofRosterKindV3, MultiRootProofRosterRootInputV2, MultiRootProofRosterRootInputV3,
+    MultiRootProofRosterTranscriptV2, MultiRootProofRosterTranscriptV3,
     MultiRootTargetBindingInputsV2, MultiRootTargetBindingTranscriptV2,
     MultiRootTargetWorkgroupInputV2, OrderedInertSemanticLineageReceiptsV3,
     ProductionTargetLineageErrorV3, SemanticToLlvmAssociationInputsV3,
@@ -41,6 +45,7 @@ use fe2o3_lower_mir_kernel::{
     ProductionCanonicalKernelIrIdentityV1, ProductionCanonicalKernelIrVersionV1,
     ProductionCorrespondenceEvidenceErrorV4, ProductionCorrespondenceEvidenceErrorV5,
     ProductionFormalMemoryEvidenceErrorV4, ProductionFormalMemoryOwnerV1,
+    ProductionSourceRefinementEvidenceV1,
 };
 use fe2o3_mir_model::InertCanonicalSemanticU32InductionEvidenceV1;
 use fe2o3_pliron::InertProductionMiddleEndEvidenceV5;
@@ -48,25 +53,28 @@ use fe2o3_rustc_invocation::{
     InvocationDigestV3, RustcInvocationDescriptorV3, encode_descriptor_v3,
 };
 use fe2o3_verifier::{
-    CanonicalProductionMirPlironVerusExecutionEvidenceV1, CompilerKirToLlvmReplayValidationErrorV1,
-    CompilerMultiRootProofValidationErrorV1, CompilerTargetLineageValidationErrorV1,
-    ProductionMirPlironVerusExecutionEvidenceErrorV1, validate_compiler_multi_root_proof_inputs_v1,
-    validate_compiler_multi_root_target_lineage_v1,
+    CanonicalProductionMirPlironVerusExecutionEvidenceV1, CompilerMultiRootProofValidationErrorV1,
+    CompilerTargetLineageValidationErrorV1, ProductionMirPlironVerusExecutionEvidenceErrorV1,
+    validate_compiler_multi_root_proof_inputs_v1, validate_compiler_multi_root_target_lineage_v1,
 };
 use sha2::{Digest, Sha256};
 
+use crate::production_backend_v1::{
+    ProductionBackendLineageReplayV1, ProductionBackendTargetContractV1,
+};
 use crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1;
-use crate::production_target_v1::PRODUCTION_WORKER_DATA_LAYOUT_V1;
 use crate::protected_rustc_invocation::{
     FinishedProtectedRustcInvocationV3, ProtectedRustcInvocationErrorV1,
 };
 
-const CODE_OBJECT_VERSION_V3: u16 = 6;
-const WAVE_WIDTH_BITS_V3: u16 = 64;
-
-fn validate_final_llvm_layout(llvm: &str) -> Result<(), ProductionSemanticLineageErrorV3> {
+fn validate_final_llvm_layout(
+    llvm: &str,
+    target: ProductionBackendTargetContractV1,
+) -> Result<(), ProductionSemanticLineageErrorV3> {
     let expected_header = format!(
-        "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{PRODUCTION_WORKER_DATA_LAYOUT_V1}\"\n"
+        "target triple = \"{}\"\ntarget datalayout = \"{}\"\n",
+        target.rustc_target(),
+        target.worker_data_layout(),
     );
     if !llvm.starts_with(&expected_header)
         || llvm.matches("target triple =").count() != 1
@@ -77,6 +85,54 @@ fn validate_final_llvm_layout(llvm: &str) -> Result<(), ProductionSemanticLineag
         ));
     }
     Ok(())
+}
+
+/// Authority-free target facts retained by the semantic-lineage core.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PreparedProductionSemanticLineageTargetV1 {
+    contract: ProductionBackendTargetContractV1,
+    rustc_layout: crate::semantic_layout_bridge::SemanticLayoutTargetV1,
+}
+
+impl PreparedProductionSemanticLineageTargetV1 {
+    pub(crate) fn try_prepare(
+        contract: ProductionBackendTargetContractV1,
+        rustc_layout: crate::semantic_layout_bridge::SemanticLayoutTargetV1,
+    ) -> Result<Self, ProductionSemanticLineageErrorV3> {
+        contract
+            .neutral_profile()
+            .validate()
+            .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
+        if contract.backend_family().is_empty()
+            || contract.canonical_target().is_empty()
+            || contract.worker_data_layout().is_empty()
+            || contract.code_object_version() == 0
+            || contract.wave_width_bits() == 0
+            || rustc_layout.llvm_target() != contract.rustc_target()
+            || rustc_layout.data_layout() != contract.rustc_data_layout()
+            || rustc_layout.default_pointer_width_bits() != contract.pointer_width_bits()
+            || rustc_layout.active_cpu() != Some(contract.cpu())
+            || rustc_layout.active_features() != Some(contract.rustc_features())
+        {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "neutral backend target contract differs from the authenticated rustc layout",
+            ));
+        }
+        Ok(Self {
+            contract,
+            rustc_layout,
+        })
+    }
+
+    pub(crate) const fn contract(&self) -> ProductionBackendTargetContractV1 {
+        self.contract
+    }
+
+    pub(crate) const fn rustc_layout(
+        &self,
+    ) -> &crate::semantic_layout_bridge::SemanticLayoutTargetV1 {
+        &self.rustc_layout
+    }
 }
 
 /// Move-only canonical evidence prepared while the live semantic and formal
@@ -91,15 +147,55 @@ pub(crate) struct PreparedProductionSemanticLineageV3 {
     formal_memory: InertFormalMemoryReceiptV3,
     proof_verus_evidence: Box<[u8]>,
     roster_custody: PreparedLineageRosterCustodyV1,
-    amdgpu_lowering_replay: dialect_amdgcn::CanonicalProductionKirToLlvmReplayEvidenceV1,
+    backend_lowering_replay: Option<ProductionBackendLineageReplayV1>,
+    v6_structural_replay: fe2o3_kernel_opt::KernelIrTargetNeutralStructuralReplayAdmissionV6,
+    pre_descriptor_llvm: Box<str>,
     semantic_debug: crate::production_semantic_debug_v1::PreparedProductionSemanticDebugV1,
     neutral_kir_custody: ProductionCanonicalKernelIrIdentityV1,
     neutral_kir_identity: TargetLineageIdentityV3,
     bound_kir_identity: TargetLineageIdentityV3,
     semantic_layout_identity: TargetLineageIdentityV3,
     expected_exports: BTreeSet<(CompilerModuleSymbolRoleV1, String)>,
-    rustc_layout: crate::semantic_layout_bridge::SemanticLayoutTargetV1,
+    target: PreparedProductionSemanticLineageTargetV1,
     workgroups: Box<[(String, [u32; 3])]>,
+}
+
+/// Source-side result for the native V13 handoff path.
+///
+/// The frozen V3 handoff remains embedded unchanged. Native lineage is additional exact custody
+/// consumed by the V5 carrier; neither grants publication authority.
+pub(crate) struct FinishedProductionSemanticLineageV5 {
+    legacy_handoff: InertSemanticCompilerModuleHandoffV3,
+    proof_lineage: InertMultiRootProofLineageV3,
+    semantic_mir_identity: [u8; 32],
+    source_refinement: InertCapabilityRefinementReceiptV1,
+}
+
+impl FinishedProductionSemanticLineageV5 {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        InertSemanticCompilerModuleHandoffV3,
+        InertMultiRootProofLineageV3,
+        [u8; 32],
+        InertCapabilityRefinementReceiptV1,
+    ) {
+        (
+            self.legacy_handoff,
+            self.proof_lineage,
+            self.semantic_mir_identity,
+            self.source_refinement,
+        )
+    }
+}
+
+struct FinishedProductionSemanticLineageV1 {
+    legacy_handoff: InertSemanticCompilerModuleHandoffV3,
+    native_v13: Option<(
+        InertMultiRootProofLineageV3,
+        [u8; 32],
+        InertCapabilityRefinementReceiptV1,
+    )>,
 }
 
 enum PreparedLineageRosterCustodyV1 {
@@ -110,6 +206,10 @@ enum PreparedLineageRosterCustodyV1 {
         correspondence_sha256: [u8; 32],
         formal_memory_sha256: [u8; 32],
         verus_sha256: [u8; 32],
+    },
+    NativeV13 {
+        proof_lineage: InertMultiRootProofLineageV3,
+        source_refinement_evidence: Box<[u8]>,
     },
 }
 
@@ -154,6 +254,15 @@ impl LineageRosterPayloadV1 {
             Self::VerusExecution => MultiRootProofRosterKindV2::VerusExecution,
         }
     }
+
+    const fn native_kind(self) -> MultiRootProofRosterKindV3 {
+        match self {
+            Self::MiddleEnd => MultiRootProofRosterKindV3::MiddleEnd,
+            Self::Correspondence => MultiRootProofRosterKindV3::Correspondence,
+            Self::FormalMemory => MultiRootProofRosterKindV3::FormalMemory,
+            Self::VerusExecution => MultiRootProofRosterKindV3::VerusExecution,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -174,24 +283,26 @@ impl From<ProductionCanonicalKernelIrIdentityV1> for LineageNeutralKirIdentityV1
 }
 
 impl LineageNeutralKirIdentityV1 {
-    fn shared(self) -> Result<MultiRootNeutralKirIdentityV2, MultiRootProofRosterErrorV2> {
-        MultiRootNeutralKirIdentityV2::new(
-            match self.version {
-                ProductionCanonicalKernelIrVersionV1::V8 => MultiRootCanonicalKirVersionV2::V8,
-                ProductionCanonicalKernelIrVersionV1::V9 => MultiRootCanonicalKirVersionV2::V9,
-                ProductionCanonicalKernelIrVersionV1::V11 => MultiRootCanonicalKirVersionV2::V11,
-            },
-            self.canonical_length,
-            self.digest,
-        )
+    fn legacy_v2(
+        self,
+    ) -> Result<Option<MultiRootNeutralKirIdentityV2>, MultiRootProofRosterErrorV2> {
+        let version = match self.version {
+            ProductionCanonicalKernelIrVersionV1::V8 => MultiRootCanonicalKirVersionV2::V8,
+            ProductionCanonicalKernelIrVersionV1::V9 => MultiRootCanonicalKirVersionV2::V9,
+            ProductionCanonicalKernelIrVersionV1::V11 => MultiRootCanonicalKirVersionV2::V11,
+            ProductionCanonicalKernelIrVersionV1::V12
+            | ProductionCanonicalKernelIrVersionV1::V13 => return Ok(None),
+        };
+        MultiRootNeutralKirIdentityV2::new(version, self.canonical_length, self.digest).map(Some)
     }
 }
 
 fn prepare_lineage_evidence_v1(
-    ranked: AuthenticatedRankedVerificationRosterV1,
+    ranked: &AuthenticatedRankedVerificationRosterV1,
     admitted: &ProductionFormalMemoryOwnerV1,
     target_module: &Module,
     neutral_kir: ProductionCanonicalKernelIrIdentityV1,
+    final_v13: Option<(fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV13, u64)>,
 ) -> Result<PreparedLineageEvidenceV1, ProductionSemanticLineageErrorV3> {
     let semantic = admitted.semantic_kir().semantic().semantic();
     if ranked.root_count() == 0
@@ -312,6 +423,101 @@ fn prepare_lineage_evidence_v1(
         .map(|root| (root.kernel_id.clone(), root.workgroup))
         .collect::<Vec<_>>()
         .into_boxed_slice();
+    if neutral_kir.version() == ProductionCanonicalKernelIrVersionV1::V13 {
+        let (final_kir, final_epoch) =
+            final_v13.ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "native V13 lineage lost the exact final graph or epoch",
+            ))?;
+        let induction = ranked
+            .roots()
+            .first()
+            .ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "native V13 lineage has no authenticated semantic root",
+            ))?
+            .verification()
+            .semantic_u32_induction();
+        let source_refinement_evidence = ProductionSourceRefinementEvidenceV1::from_live_owner(
+            admitted.semantic_kir(),
+            induction,
+        )
+        .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
+        let native_kir = MultiRootNeutralKirIdentityV3::new(
+            MultiRootCanonicalKirVersionV3::V13,
+            final_kir.canonical_length(),
+            *final_kir.digest(),
+            final_epoch,
+        )?;
+        let middle_end = build_lineage_roster_v3(
+            semantic.semantic_sha256().as_bytes(),
+            native_kir,
+            roster_identity,
+            &canonical_kernel_order,
+            &roots,
+            LineageRosterPayloadV1::MiddleEnd,
+        )?;
+        let correspondence = build_lineage_roster_v3(
+            semantic.semantic_sha256().as_bytes(),
+            native_kir,
+            roster_identity,
+            &canonical_kernel_order,
+            &roots,
+            LineageRosterPayloadV1::Correspondence,
+        )?;
+        let formal_memory = build_lineage_roster_v3(
+            semantic.semantic_sha256().as_bytes(),
+            native_kir,
+            roster_identity,
+            &canonical_kernel_order,
+            &roots,
+            LineageRosterPayloadV1::FormalMemory,
+        )?;
+        let verus = build_lineage_roster_v3(
+            semantic.semantic_sha256().as_bytes(),
+            native_kir,
+            roster_identity,
+            &canonical_kernel_order,
+            &roots,
+            LineageRosterPayloadV1::VerusExecution,
+        )?;
+        let proof_lineage =
+            InertMultiRootProofLineageV3::new(middle_end, correspondence, formal_memory, verus)?;
+        return Ok(PreparedLineageEvidenceV1 {
+            middle_end: InertMiddleEndReceiptV3::from_canonical_preimage(
+                proof_lineage
+                    .roster(MultiRootProofRosterKindV3::MiddleEnd)
+                    .canonical_bytes(),
+            )?,
+            mir_to_kir_correspondence:
+                InertMirToKirCorrespondenceReceiptV3::from_canonical_preimage(
+                    proof_lineage
+                        .roster(MultiRootProofRosterKindV3::Correspondence)
+                        .canonical_bytes(),
+                )?,
+            formal_memory: InertFormalMemoryReceiptV3::from_canonical_preimage(
+                proof_lineage
+                    .roster(MultiRootProofRosterKindV3::FormalMemory)
+                    .canonical_bytes(),
+            )?,
+            proof_verus_evidence: proof_lineage
+                .roster(MultiRootProofRosterKindV3::VerusExecution)
+                .canonical_bytes()
+                .to_vec()
+                .into_boxed_slice(),
+            roster_custody: PreparedLineageRosterCustodyV1::NativeV13 {
+                proof_lineage,
+                source_refinement_evidence: source_refinement_evidence
+                    .canonical_bytes()
+                    .to_vec()
+                    .into_boxed_slice(),
+            },
+            workgroups,
+        });
+    }
+    if final_v13.is_some() {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "legacy lineage unexpectedly retained V13 final-graph custody",
+        ));
+    }
     if let [root] = roots.as_slice() {
         let verification = ranked
             .roots()
@@ -573,12 +779,69 @@ fn build_lineage_roster_v2(
     MultiRootProofRosterTranscriptV2::new(MultiRootProofRosterInputsV2 {
         kind: payload_kind.shared_kind(),
         semantic_mir_sha256: *semantic_sha256,
-        neutral_kir: neutral_kir.shared()?,
+        neutral_kir: neutral_kir.legacy_v2()?.ok_or(
+            ProductionSemanticLineageErrorV3::AxisMismatch(
+                "canonical KIR V12 cannot enter the frozen V2 proof roster",
+            ),
+        )?,
         roster_identity,
         canonical_kernel_order: &canonical_kernel_order,
         roots: &roots,
     })
     .map(MultiRootProofRosterTranscriptV2::into_canonical_bytes)
+    .map_err(Into::into)
+}
+
+fn build_lineage_roster_v3(
+    semantic_sha256: &[u8; 32],
+    final_kir: MultiRootNeutralKirIdentityV3,
+    roster_identity: [u8; 32],
+    canonical_kernel_order: &[usize],
+    roots: &[PreparedLineageRootV1],
+    payload_kind: LineageRosterPayloadV1,
+) -> Result<MultiRootProofRosterTranscriptV3, ProductionSemanticLineageErrorV3> {
+    let canonical_kernel_order = canonical_kernel_order
+        .iter()
+        .copied()
+        .map(|index| {
+            u32::try_from(index).map_err(|_| {
+                ProductionSemanticLineageErrorV3::AxisMismatch("lineage index overflow")
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let roots = roots
+        .iter()
+        .map(|root| {
+            let export_symbol = std::str::from_utf8(&root.export_symbol).map_err(|_| {
+                ProductionSemanticLineageErrorV3::AxisMismatch("lineage export symbol is not UTF-8")
+            })?;
+            let payload = match payload_kind {
+                LineageRosterPayloadV1::MiddleEnd => root.middle_end.as_ref(),
+                LineageRosterPayloadV1::Correspondence => root.correspondence.as_ref(),
+                LineageRosterPayloadV1::FormalMemory => root.formal_memory.as_ref(),
+                LineageRosterPayloadV1::VerusExecution => root.verus_execution.as_ref(),
+            };
+            Ok(MultiRootProofRosterRootInputV3 {
+                semantic_root: root.semantic_root,
+                semantic_root_identity: root.semantic_root_identity,
+                kernel_binding: root.kernel_binding,
+                source_rank: root.source_rank,
+                workgroup: root.workgroup,
+                logical_name: &root.logical_name,
+                export_symbol,
+                kernel_id: &root.kernel_id,
+                payload,
+            })
+        })
+        .collect::<Result<Vec<_>, ProductionSemanticLineageErrorV3>>()?;
+    MultiRootProofRosterTranscriptV3::new(MultiRootProofRosterInputsV3 {
+        kind: payload_kind.native_kind(),
+        semantic_mir_sha256: *semantic_sha256,
+        neutral_kir: final_kir,
+        roster_identity,
+        canonical_kernel_order: &canonical_kernel_order,
+        roots: &roots,
+    })
     .map_err(Into::into)
 }
 
@@ -789,7 +1052,12 @@ fn validate_lineage_roster_envelope_v1(
     let roster = MultiRootProofRosterTranscriptV2::decode(bytes)?;
     if roster.kind() != payload_kind.shared_kind()
         || roster.semantic_mir_sha256() != *semantic_sha256
-        || roster.neutral_kir() != neutral_kir.shared()?
+        || roster.neutral_kir()
+            != neutral_kir
+                .legacy_v2()?
+                .ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
+                    "legacy lineage cannot encode this canonical KIR version",
+                ))?
         || roster.roster_identity() != roster_identity
     {
         return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
@@ -849,16 +1117,22 @@ impl PreparedProductionSemanticLineageV3 {
         rustc_identity_inventory: &crate::collector::AuthenticatedRustcIdentityInventoryV3,
         rustc_preflight_plan: &crate::collector::AuthenticatedRustcPreflightPlanV3,
         rustc_target: &crate::production_target_v1::AuthenticatedProductionTargetV1,
-        ranked_verification: AuthenticatedRankedVerificationRosterV1,
+        ranked_verification: &AuthenticatedRankedVerificationRosterV1,
         admitted: &ProductionFormalMemoryOwnerV1,
         target_module: &Module,
-        target_optimization: &fe2o3_kernel_opt::KernelIrPlironOptimizationReportV2,
+        target_optimization: &fe2o3_kernel_opt::KernelIrTargetNeutralOptimizationReportV6,
+        final_v13_epoch: Option<u64>,
         pre_descriptor_llvm: &str,
         semantic_debug_inputs: crate::production_semantic_debug_v1::ProductionSemanticDebugInputsV1,
     ) -> Result<Self, ProductionSemanticLineageErrorV3> {
         admitted
             .verify_equivalence()
             .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
+
+        let target = PreparedProductionSemanticLineageTargetV1::try_prepare(
+            rustc_target.contract(),
+            rustc_target.rustc_layout().clone(),
+        )?;
 
         let semantic = admitted.semantic_kir().semantic().semantic();
         let rustc_identity_inventory =
@@ -874,13 +1148,16 @@ impl PreparedProductionSemanticLineageV3 {
 
         let neutral_kir_custody = admitted.semantic_kir().canonical_kernel_ir_identity();
         let neutral_kir = admitted.semantic_kir().canonical_kernel_ir_bytes();
-        let (bound_kir_digest, bound_kir_length) = match neutral_kir_custody.version() {
+        let (bound_kir_digest, bound_kir_length, final_v13_identity) = match neutral_kir_custody
+            .version()
+        {
             ProductionCanonicalKernelIrVersionV1::V8 => {
                 let bound_kir = VerifiedCanonicalKernelIrV8::from_module(target_module.clone())?;
                 bound_kir.revalidate()?;
                 (
                     *bound_kir.identity().digest(),
                     bound_kir.canonical_bytes().len() as u64,
+                    None,
                 )
             }
             ProductionCanonicalKernelIrVersionV1::V9 => {
@@ -889,6 +1166,7 @@ impl PreparedProductionSemanticLineageV3 {
                 (
                     *bound_kir.identity().digest(),
                     bound_kir.canonical_bytes().len() as u64,
+                    None,
                 )
             }
             ProductionCanonicalKernelIrVersionV1::V11 => {
@@ -897,7 +1175,45 @@ impl PreparedProductionSemanticLineageV3 {
                 (
                     *bound_kir.identity().digest(),
                     bound_kir.canonical_bytes().len() as u64,
+                    None,
                 )
+            }
+            ProductionCanonicalKernelIrVersionV1::V12 => {
+                let bound_kir = fe2o3_kernel_ir::VerifiedCanonicalKernelIrV12::from_module(
+                    target_module.clone(),
+                )
+                .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
+                bound_kir.revalidate().map_err(|error| {
+                    ProductionSemanticLineageErrorV3::LiveOwner(error.to_string())
+                })?;
+                (
+                    *bound_kir.identity().digest(),
+                    bound_kir.canonical_bytes().len() as u64,
+                    None,
+                )
+            }
+            ProductionCanonicalKernelIrVersionV1::V13 => {
+                let bound_kir = fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13::from_module(
+                    target_module.clone(),
+                )
+                .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
+                bound_kir.revalidate().map_err(|error| {
+                    ProductionSemanticLineageErrorV3::LiveOwner(error.to_string())
+                })?;
+                (
+                    *bound_kir.identity().digest(),
+                    bound_kir.canonical_bytes().len() as u64,
+                    Some(*bound_kir.identity()),
+                )
+            }
+        };
+        let final_v13 = match (final_v13_identity, final_v13_epoch) {
+            (Some(identity), Some(epoch)) => Some((identity, epoch)),
+            (None, None) => None,
+            _ => {
+                return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                    "canonical KIR version and final optimization epoch custody differ",
+                ));
             }
         };
         let neutral_kir_identity = TargetLineageIdentityV3::new(
@@ -906,14 +1222,29 @@ impl PreparedProductionSemanticLineageV3 {
         )?;
         let bound_kir_identity = TargetLineageIdentityV3::new(bound_kir_digest, bound_kir_length)?;
         let kernel_ir = InertKernelIrReceiptV3::from_canonical_preimage(neutral_kir)?;
-        let amdgpu_lowering_replay =
-            dialect_amdgcn::CanonicalProductionKirToLlvmReplayEvidenceV1::from_optimized_live_inputs_v4(
-                neutral_kir,
+        let source_v13 = admitted.semantic_kir().canonical_kernel_ir_v13().ok_or(
+            ProductionSemanticLineageErrorV3::AxisMismatch(
+                "production semantic lineage requires canonical KIR V13",
+            ),
+        )?;
+        let v6_structural_replay =
+            fe2o3_kernel_opt::admit_production_kernel_ir_structural_replay_v6(
+                admitted.semantic_kir().module(),
                 target_module,
                 target_optimization,
-                rustc_target.profile(),
-                pre_descriptor_llvm,
             )?;
+        if v6_structural_replay.input_identity() != source_v13.identity()
+            || v6_structural_replay.output_identity().digest() != &bound_kir_digest
+            || v6_structural_replay.output_identity().canonical_length() != bound_kir_length
+            || final_v13_epoch != Some(v6_structural_replay.report().final_epoch())
+            || !v6_structural_replay.establishes_exact_closed_replay()
+            || v6_structural_replay.establishes_semantic_preservation()
+        {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "semantic lineage V6 replay changed the exact source/final graph or epoch",
+            ));
+        }
+        let backend_lowering_replay = None;
 
         let PreparedLineageEvidenceV1 {
             middle_end,
@@ -927,6 +1258,7 @@ impl PreparedProductionSemanticLineageV3 {
             admitted,
             target_module,
             neutral_kir_custody,
+            final_v13,
         )?;
         let semantic_debug = match semantic_debug_inputs {
             crate::production_semantic_debug_v1::ProductionSemanticDebugInputsV1::Unavailable(
@@ -968,18 +1300,20 @@ impl PreparedProductionSemanticLineageV3 {
                         ),
                     }
                 }
+                PreparedLineageRosterCustodyV1::NativeV13 { .. } => {
+                    crate::production_semantic_debug_v1::PreparedProductionSemanticDebugV1::Unavailable(
+                        ProductionSemanticDebugProducerGapV1::CorrespondenceValidationUnavailable,
+                    )
+                }
             },
         };
 
         let semantic_layout_identity = derive_semantic_target_layout_identity_v1(
-            rustc_target.rustc_layout().llvm_target(),
-            rustc_target.rustc_layout().data_layout(),
-            rustc_target.rustc_layout().default_pointer_width_bits(),
-            rustc_target.rustc_layout().active_cpu().unwrap_or_default(),
-            rustc_target
-                .rustc_layout()
-                .active_features()
-                .unwrap_or_default(),
+            target.rustc_layout().llvm_target(),
+            target.rustc_layout().data_layout(),
+            target.rustc_layout().default_pointer_width_bits(),
+            target.rustc_layout().active_cpu().unwrap_or_default(),
+            target.rustc_layout().active_features().unwrap_or_default(),
         )?;
         if semantic.target_layout_identity().as_bytes() != &semantic_layout_identity.sha256() {
             return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
@@ -987,7 +1321,7 @@ impl PreparedProductionSemanticLineageV3 {
             ));
         }
 
-        validate_final_llvm_layout(pre_descriptor_llvm)?;
+        validate_final_llvm_layout(pre_descriptor_llvm, target.contract())?;
 
         let expected_exports = exact_source_and_kir_exports(semantic, target_module)?;
         Ok(Self {
@@ -1000,18 +1334,24 @@ impl PreparedProductionSemanticLineageV3 {
             formal_memory,
             proof_verus_evidence,
             roster_custody,
-            amdgpu_lowering_replay,
+            backend_lowering_replay,
+            v6_structural_replay,
+            pre_descriptor_llvm: pre_descriptor_llvm.into(),
             semantic_debug,
             neutral_kir_custody,
             neutral_kir_identity,
             bound_kir_identity,
             semantic_layout_identity,
             expected_exports,
-            rustc_layout: rustc_target.rustc_layout().clone(),
+            target,
             workgroups,
         })
     }
 
+    #[allow(
+        dead_code,
+        reason = "retained as the explicit fail-closed legacy publication boundary"
+    )]
     pub(crate) fn finish(
         self,
         invocation_custody: &FinishedProtectedRustcInvocationV3,
@@ -1023,7 +1363,50 @@ impl PreparedProductionSemanticLineageV3 {
             .revalidate_for_publication()
             .map_err(ProductionSemanticLineageErrorV3::ProtectedRustcInvocation)?;
         let invocation = invocation_custody.descriptor().clone();
-        self.finish_with_inert_invocation(invocation, target, descriptor_source, module_handoff)
+        let finished = self.finish_with_inert_invocation(
+            invocation,
+            target,
+            descriptor_source,
+            module_handoff,
+        )?;
+        if finished.native_v13.is_some() {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "native V13 lineage cannot be discarded into the legacy publication path",
+            ));
+        }
+        Ok(finished.legacy_handoff)
+    }
+
+    /// Finishes the native V13 source owner without projecting it through a frozen V2 roster.
+    pub(crate) fn finish_capability_v5(
+        self,
+        invocation_custody: &FinishedProtectedRustcInvocationV3,
+        target: fe2o3_compiler_ffi::DeviceTargetV1,
+        descriptor_source: &CompilerDescriptorSourceV1,
+        module_handoff: CompilerModuleHandoffV2,
+    ) -> Result<FinishedProductionSemanticLineageV5, ProductionSemanticLineageErrorV3> {
+        invocation_custody
+            .revalidate_for_publication()
+            .map_err(ProductionSemanticLineageErrorV3::ProtectedRustcInvocation)?;
+        let invocation = invocation_custody.descriptor().clone();
+        let finished = self.finish_with_inert_invocation(
+            invocation,
+            target,
+            descriptor_source,
+            module_handoff,
+        )?;
+        let (proof_lineage, semantic_mir_identity, source_refinement) =
+            finished
+                .native_v13
+                .ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
+                    "V5 publication requires native canonical KIR V13 lineage",
+                ))?;
+        Ok(FinishedProductionSemanticLineageV5 {
+            legacy_handoff: finished.legacy_handoff,
+            proof_lineage,
+            semantic_mir_identity,
+            source_refinement,
+        })
     }
 
     /// Builds the same authority-free V3 handoff for an explicit extraction descriptor.
@@ -1039,6 +1422,7 @@ impl PreparedProductionSemanticLineageV3 {
         module_handoff: CompilerModuleHandoffV2,
     ) -> Result<InertSemanticCompilerModuleHandoffV3, ProductionSemanticLineageErrorV3> {
         self.finish_with_inert_invocation(invocation, target, descriptor_source, module_handoff)
+            .map(|finished| finished.legacy_handoff)
     }
 
     fn finish_with_inert_invocation(
@@ -1047,12 +1431,15 @@ impl PreparedProductionSemanticLineageV3 {
         target: fe2o3_compiler_ffi::DeviceTargetV1,
         descriptor_source: &CompilerDescriptorSourceV1,
         module_handoff: CompilerModuleHandoffV2,
-    ) -> Result<InertSemanticCompilerModuleHandoffV3, ProductionSemanticLineageErrorV3> {
-        if invocation.amd_target() != target.to_string()
+    ) -> Result<FinishedProductionSemanticLineageV1, ProductionSemanticLineageErrorV3> {
+        let target_contract = self.target.contract();
+        if target.to_string() != target_contract.canonical_target()
+            || invocation.amd_target() != target.to_string()
             || descriptor_source.table().device_target() != target
             || module_handoff.target() != target
             || descriptor_source.table().code_object_version() != CodeObjectVersion::V6
             || module_handoff.code_object_version() != CodeObjectVersion::V6
+            || target_contract.code_object_version() != 6
         {
             return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
                 "invocation, descriptor, and module targets or code-object versions differ",
@@ -1068,7 +1455,31 @@ impl PreparedProductionSemanticLineageV3 {
                 "final compiler module is not canonical textual LLVM",
             )
         })?;
-        validate_final_llvm_layout(final_llvm)?;
+        validate_final_llvm_layout(final_llvm, target_contract)?;
+        validate_final_llvm_layout(&self.pre_descriptor_llvm, target_contract)?;
+        if *self.v6_structural_replay.input_identity().digest()
+            != self.neutral_kir_identity.sha256()
+            || self
+                .v6_structural_replay
+                .input_identity()
+                .canonical_length()
+                != self.neutral_kir_identity.byte_len()
+            || *self.v6_structural_replay.output_identity().digest()
+                != self.bound_kir_identity.sha256()
+            || self
+                .v6_structural_replay
+                .output_identity()
+                .canonical_length()
+                != self.bound_kir_identity.byte_len()
+            || !self.v6_structural_replay.establishes_exact_closed_replay()
+            || self
+                .v6_structural_replay
+                .establishes_semantic_preservation()
+        {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "retained V6 replay changed its exact source/final graph custody",
+            ));
+        }
         match &self.roster_custody {
             PreparedLineageRosterCustodyV1::Singleton => {
                 let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(
@@ -1140,6 +1551,53 @@ impl PreparedProductionSemanticLineageV3 {
                     &self.workgroups,
                     LineageRosterPayloadV1::VerusExecution,
                 )?;
+            }
+            PreparedLineageRosterCustodyV1::NativeV13 { proof_lineage, .. } => {
+                let decoded =
+                    InertMultiRootProofLineageV3::decode(proof_lineage.canonical_bytes())?;
+                if decoded.identity() != proof_lineage.identity()
+                    || decoded.neutral_kir() != proof_lineage.neutral_kir()
+                    || proof_lineage
+                        .roster(MultiRootProofRosterKindV3::MiddleEnd)
+                        .canonical_bytes()
+                        != self.middle_end.canonical_preimage()
+                    || proof_lineage
+                        .roster(MultiRootProofRosterKindV3::Correspondence)
+                        .canonical_bytes()
+                        != self.mir_to_kir_correspondence.canonical_preimage()
+                    || proof_lineage
+                        .roster(MultiRootProofRosterKindV3::FormalMemory)
+                        .canonical_bytes()
+                        != self.formal_memory.canonical_preimage()
+                    || proof_lineage
+                        .roster(MultiRootProofRosterKindV3::VerusExecution)
+                        .canonical_bytes()
+                        != self.proof_verus_evidence.as_ref()
+                {
+                    return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                        "native V13 proof lineage changed before final handoff",
+                    ));
+                }
+                let roster = proof_lineage.roster(MultiRootProofRosterKindV3::MiddleEnd);
+                if roster.semantic_mir_sha256() != *self.semantic_mir.identity().sha256()
+                    || roster.root_count() != self.workgroups.len()
+                {
+                    return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                        "native V13 source or root roster changed before final handoff",
+                    ));
+                }
+                for (index, (kernel, workgroup)) in self.workgroups.iter().enumerate() {
+                    let root = roster.root(index).ok_or(
+                        ProductionSemanticLineageErrorV3::AxisMismatch(
+                            "native V13 proof root disappeared",
+                        ),
+                    )?;
+                    if root.kernel_id() != kernel || root.workgroup() != *workgroup {
+                        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                            "native V13 proof root was reordered or substituted",
+                        ));
+                    }
+                }
             }
         }
 
@@ -1229,12 +1687,14 @@ impl PreparedProductionSemanticLineageV3 {
             None
         };
 
-        let rustc_cpu = self.rustc_layout.active_cpu().ok_or(
-            ProductionSemanticLineageErrorV3::AxisMismatch(
-                "authenticated rustc target has no active CPU",
-            ),
-        )?;
-        let rustc_features = self.rustc_layout.active_features().ok_or(
+        let rustc_layout = self.target.rustc_layout();
+        let rustc_cpu =
+            rustc_layout
+                .active_cpu()
+                .ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
+                    "authenticated rustc target has no active CPU",
+                ))?;
+        let rustc_features = rustc_layout.active_features().ok_or(
             ProductionSemanticLineageErrorV3::AxisMismatch(
                 "authenticated rustc target has no active features",
             ),
@@ -1253,11 +1713,11 @@ impl PreparedProductionSemanticLineageV3 {
                     target_neutral_kir: self.neutral_kir_identity,
                     target_bound_kir: self.bound_kir_identity,
                     configured_target: &configured_target,
-                    rustc_llvm_target: self.rustc_layout.llvm_target(),
+                    rustc_llvm_target: rustc_layout.llvm_target(),
                     target_cpu: rustc_cpu,
                     target_features: rustc_features,
-                    code_object_version: CODE_OBJECT_VERSION_V3,
-                    wave_width_bits: WAVE_WIDTH_BITS_V3,
+                    code_object_version: target_contract.code_object_version(),
+                    wave_width_bits: target_contract.wave_width_bits(),
                     default_workgroup: *workgroup,
                 })?
                 .canonical_bytes()
@@ -1280,12 +1740,39 @@ impl PreparedProductionSemanticLineageV3 {
                     target_neutral_kir: self.neutral_kir_identity,
                     target_bound_kir: self.bound_kir_identity,
                     configured_target: &configured_target,
-                    rustc_llvm_target: self.rustc_layout.llvm_target(),
+                    rustc_llvm_target: rustc_layout.llvm_target(),
                     target_cpu: rustc_cpu,
                     target_features: rustc_features,
                     roster_identity: *roster_identity,
-                    code_object_version: CODE_OBJECT_VERSION_V3,
-                    wave_width_bits: WAVE_WIDTH_BITS_V3,
+                    code_object_version: target_contract.code_object_version(),
+                    wave_width_bits: target_contract.wave_width_bits(),
+                    workgroups: &workgroups,
+                })?
+                .into_canonical_bytes()
+            }
+            PreparedLineageRosterCustodyV1::NativeV13 { proof_lineage, .. } => {
+                let workgroups = self
+                    .workgroups
+                    .iter()
+                    .map(|(kernel, workgroup)| MultiRootTargetWorkgroupInputV2 {
+                        kernel,
+                        workgroup: *workgroup,
+                    })
+                    .collect::<Vec<_>>();
+                MultiRootTargetBindingTranscriptV2::new(MultiRootTargetBindingInputsV2 {
+                    protected_rustc_invocation: invocation_identity,
+                    semantic_mir: semantic_identity,
+                    target_neutral_kir: self.neutral_kir_identity,
+                    target_bound_kir: self.bound_kir_identity,
+                    configured_target: &configured_target,
+                    rustc_llvm_target: rustc_layout.llvm_target(),
+                    target_cpu: rustc_cpu,
+                    target_features: rustc_features,
+                    roster_identity: proof_lineage
+                        .roster(MultiRootProofRosterKindV3::MiddleEnd)
+                        .roster_identity(),
+                    code_object_version: target_contract.code_object_version(),
+                    wave_width_bits: target_contract.wave_width_bits(),
                     workgroups: &workgroups,
                 })?
                 .into_canonical_bytes()
@@ -1302,11 +1789,11 @@ impl PreparedProductionSemanticLineageV3 {
             semantic_mir: semantic_identity,
             target_binding: target_binding_identity,
             semantic_layout: self.semantic_layout_identity,
-            rustc_llvm_target: self.rustc_layout.llvm_target(),
-            live_rustc_data_layout: self.rustc_layout.data_layout(),
-            final_llvm_target: self.rustc_layout.llvm_target(),
-            final_llvm_data_layout: PRODUCTION_WORKER_DATA_LAYOUT_V1,
-            default_pointer_width_bits: self.rustc_layout.default_pointer_width_bits(),
+            rustc_llvm_target: rustc_layout.llvm_target(),
+            live_rustc_data_layout: rustc_layout.data_layout(),
+            final_llvm_target: target_contract.rustc_target(),
+            final_llvm_data_layout: target_contract.worker_data_layout(),
+            default_pointer_width_bits: rustc_layout.default_pointer_width_bits(),
         })?;
         let data_layout =
             InertDataLayoutReceiptV3::from_canonical_preimage(data_layout.canonical_bytes())?;
@@ -1328,28 +1815,14 @@ impl PreparedProductionSemanticLineageV3 {
             export_manifest.identity().byte_len(),
         )?;
 
-        let amdgpu_lowering = InertAmdgpuLoweringReceiptV3::from_canonical_preimage(
-            self.amdgpu_lowering_replay.canonical_bytes(),
-        )?;
-        let validated_lowering = fe2o3_verifier::validate_compiler_kir_to_llvm_replay_v1(
-            &self.kernel_ir,
-            &amdgpu_lowering,
-        )?;
-        let replay_evidence = validated_lowering.replay().evidence();
-        let replay_target_identity = TargetLineageIdentityV3::new(
-            replay_evidence.target_bound_kernel_ir_identity().sha256(),
-            replay_evidence.target_bound_kernel_ir_identity().byte_len(),
-        )?;
-        if replay_target_identity != self.bound_kir_identity
-            || replay_evidence.profile().device_target() != configured_target
-        {
-            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
-                "independently replayed AMDGPU lowering changed target-bound KIR or target profile",
-            ));
-        }
-        let amdgpu_lowering_identity = receipt_identity(
-            amdgpu_lowering.identity().sha256(),
-            amdgpu_lowering.identity().byte_len(),
+        let backend_lowering = self
+            .backend_lowering_replay
+            .ok_or(ProductionSemanticLineageErrorV3::NativeV13TargetLoweringReceiptUnavailable)?
+            .validate_frozen_v3(&self.kernel_ir, self.bound_kir_identity, target_contract)
+            .map_err(ProductionSemanticLineageErrorV3::Backend)?;
+        let backend_lowering_identity = receipt_identity(
+            &backend_lowering.identity_sha256(),
+            backend_lowering.identity_byte_len(),
         )?;
 
         let final_commitment = InertFinalCompilerModuleCommitmentV3::from_handoff(&module_handoff)?;
@@ -1377,7 +1850,7 @@ impl PreparedProductionSemanticLineageV3 {
                 data_layout: data_layout_identity,
                 abi: abi_identity,
                 export_manifest: export_manifest_identity,
-                amdgpu_lowering: amdgpu_lowering_identity,
+                amdgpu_lowering: backend_lowering_identity,
                 final_llvm: final_llvm_identity,
                 final_compiler_module_commitment: final_commitment_identity,
             })?;
@@ -1396,6 +1869,26 @@ impl PreparedProductionSemanticLineageV3 {
             semantic_debug,
         )?;
 
+        let semantic_mir_identity = *self.semantic_mir.identity().sha256();
+        let native_v13 = match self.roster_custody {
+            PreparedLineageRosterCustodyV1::NativeV13 {
+                proof_lineage,
+                source_refinement_evidence,
+            } => {
+                let source_refinement =
+                    InertCapabilityRefinementReceiptV1::from_checked_source_evidence_v1(
+                        &source_refinement_evidence,
+                        &proof_lineage,
+                    )
+                    .map_err(|error| {
+                        ProductionSemanticLineageErrorV3::LiveOwner(error.to_string())
+                    })?;
+                Some((proof_lineage, semantic_mir_identity, source_refinement))
+            }
+            PreparedLineageRosterCustodyV1::Singleton
+            | PreparedLineageRosterCustodyV1::MultiRoot { .. } => None,
+        };
+
         let receipts = OrderedInertSemanticLineageReceiptsV3::new(
             self.rustc_identity_inventory,
             self.rustc_preflight_plan,
@@ -1409,7 +1902,7 @@ impl PreparedProductionSemanticLineageV3 {
             data_layout,
             abi,
             export_manifest,
-            amdgpu_lowering,
+            backend_lowering.into_frozen_v3_receipt(),
             semantic_to_llvm,
             final_compiler_module_commitment,
         );
@@ -1429,7 +1922,11 @@ impl PreparedProductionSemanticLineageV3 {
                 ));
             }
         }
-        InertSemanticCompilerModuleHandoffV3::new(capsule, module_handoff).map_err(Into::into)
+        let legacy_handoff = InertSemanticCompilerModuleHandoffV3::new(capsule, module_handoff)?;
+        Ok(FinishedProductionSemanticLineageV1 {
+            legacy_handoff,
+            native_v13,
+        })
     }
 }
 
@@ -1707,14 +2204,17 @@ pub(crate) enum ProductionSemanticLineageErrorV3 {
     CorrespondenceV5(ProductionCorrespondenceEvidenceErrorV5),
     FormalMemory(ProductionFormalMemoryEvidenceErrorV4),
     VerusEvidence(ProductionMirPlironVerusExecutionEvidenceErrorV1),
-    KirToLlvmReplay(dialect_amdgcn::ProductionKirToLlvmReplayErrorV1),
-    KirToLlvmReplayValidation(CompilerKirToLlvmReplayValidationErrorV1),
+    Backend(crate::production_backend_v1::ProductionBackendErrorV1),
+    V6StructuralReplay(fe2o3_kernel_opt::KernelIrTargetNeutralStructuralReplayAdmissionErrorV6),
+    NativeV13TargetLoweringReceiptUnavailable,
     MultiRootProofValidation(CompilerMultiRootProofValidationErrorV1),
     MultiRootTargetLineageValidation(CompilerTargetLineageValidationErrorV1),
     Receipt(LineageErrorV3),
     ProofIdentity(InertProofBindingAssociationErrorV3),
     ProofBinding(InertProofBindingAssociationErrorV4),
     MultiRootRoster(MultiRootProofRosterErrorV2),
+    NativeMultiRootRoster(MultiRootProofRosterErrorV3),
+    NativeMultiRootLineage(MultiRootProofLineageErrorV3),
     Transcript(ProductionTargetLineageErrorV3),
     FinalCommitment(FinalCompilerModuleCommitmentErrorV3),
     Capsule(InertSemanticCompilerModuleHandoffErrorV3),
@@ -1769,12 +2269,13 @@ impl fmt::Display for ProductionSemanticLineageErrorV3 {
                     "production V3 aggregate Verus evidence failed: {error}"
                 )
             }
-            Self::KirToLlvmReplay(error) => {
-                write!(formatter, "production KIR-to-LLVM replay failed: {error}")
-            }
-            Self::KirToLlvmReplayValidation(error) => write!(
+            Self::Backend(error) => write!(formatter, "production backend lineage failed: {error}"),
+            Self::V6StructuralReplay(error) => write!(
                 formatter,
-                "production independent KIR-to-LLVM validation failed: {error}"
+                "production native V13/V6 structural replay failed: {error}"
+            ),
+            Self::NativeV13TargetLoweringReceiptUnavailable => formatter.write_str(
+                "production native V13/V6 lowering has no exact receipt slot in the frozen V3 semantic capsule",
             ),
             Self::MultiRootProofValidation(error) => write!(
                 formatter,
@@ -1797,6 +2298,18 @@ impl fmt::Display for ProductionSemanticLineageErrorV3 {
                     "production multi-root proof roster failed: {error}"
                 )
             }
+            Self::NativeMultiRootRoster(error) => {
+                write!(
+                    formatter,
+                    "production native V13 proof roster failed: {error}"
+                )
+            }
+            Self::NativeMultiRootLineage(error) => {
+                write!(
+                    formatter,
+                    "production native V13 proof lineage failed: {error}"
+                )
+            }
             Self::Transcript(error) => {
                 write!(formatter, "production V3 transcript failed: {error}")
             }
@@ -1809,6 +2322,16 @@ impl fmt::Display for ProductionSemanticLineageErrorV3 {
 }
 
 impl Error for ProductionSemanticLineageErrorV3 {}
+
+impl From<fe2o3_kernel_opt::KernelIrTargetNeutralStructuralReplayAdmissionErrorV6>
+    for ProductionSemanticLineageErrorV3
+{
+    fn from(
+        error: fe2o3_kernel_opt::KernelIrTargetNeutralStructuralReplayAdmissionErrorV6,
+    ) -> Self {
+        Self::V6StructuralReplay(error)
+    }
+}
 
 impl From<VerifiedCanonicalKernelIrErrorV8> for ProductionSemanticLineageErrorV3 {
     fn from(error: VerifiedCanonicalKernelIrErrorV8) -> Self {
@@ -1858,18 +2381,6 @@ impl From<ProductionMirPlironVerusExecutionEvidenceErrorV1> for ProductionSemant
     }
 }
 
-impl From<dialect_amdgcn::ProductionKirToLlvmReplayErrorV1> for ProductionSemanticLineageErrorV3 {
-    fn from(error: dialect_amdgcn::ProductionKirToLlvmReplayErrorV1) -> Self {
-        Self::KirToLlvmReplay(error)
-    }
-}
-
-impl From<CompilerKirToLlvmReplayValidationErrorV1> for ProductionSemanticLineageErrorV3 {
-    fn from(error: CompilerKirToLlvmReplayValidationErrorV1) -> Self {
-        Self::KirToLlvmReplayValidation(error)
-    }
-}
-
 impl From<CompilerMultiRootProofValidationErrorV1> for ProductionSemanticLineageErrorV3 {
     fn from(error: CompilerMultiRootProofValidationErrorV1) -> Self {
         Self::MultiRootProofValidation(error)
@@ -1900,6 +2411,18 @@ impl From<MultiRootProofRosterErrorV2> for ProductionSemanticLineageErrorV3 {
     }
 }
 
+impl From<MultiRootProofRosterErrorV3> for ProductionSemanticLineageErrorV3 {
+    fn from(error: MultiRootProofRosterErrorV3) -> Self {
+        Self::NativeMultiRootRoster(error)
+    }
+}
+
+impl From<MultiRootProofLineageErrorV3> for ProductionSemanticLineageErrorV3 {
+    fn from(error: MultiRootProofLineageErrorV3) -> Self {
+        Self::NativeMultiRootLineage(error)
+    }
+}
+
 impl From<ProductionTargetLineageErrorV3> for ProductionSemanticLineageErrorV3 {
     fn from(error: ProductionTargetLineageErrorV3) -> Self {
         Self::Transcript(error)
@@ -1927,9 +2450,18 @@ mod layout_tests {
         derive_kernel_memory_obligations_for_launch,
     };
 
-    fn llvm_with_layout(layout: &str) -> String {
+    fn test_target_contract() -> ProductionBackendTargetContractV1 {
+        crate::production_backend_v1::ProductionBackendTargetV1::from_configured_target(
+            "gfx942:xnack-",
+        )
+        .unwrap()
+        .contract()
+    }
+
+    fn llvm_with_layout(target: ProductionBackendTargetContractV1, layout: &str) -> String {
         format!(
-            "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{layout}\"\n\ndefine void @body() {{ ret void }}\n"
+            "target triple = \"{}\"\ntarget datalayout = \"{layout}\"\n\ndefine void @body() {{ ret void }}\n",
+            target.rustc_target(),
         )
     }
 
@@ -2042,30 +2574,45 @@ mod layout_tests {
 
     #[test]
     fn final_llvm_requires_one_exact_measured_worker_layout() {
-        let exact = llvm_with_layout(PRODUCTION_WORKER_DATA_LAYOUT_V1);
-        validate_final_llvm_layout(&exact).unwrap();
+        let target = test_target_contract();
+        let exact = llvm_with_layout(target, target.worker_data_layout());
+        validate_final_llvm_layout(&exact, target).unwrap();
 
-        let stale_layout = format!("e-m:e-{}", &PRODUCTION_WORKER_DATA_LAYOUT_V1[2..]);
-        assert!(validate_final_llvm_layout(&llvm_with_layout(&stale_layout)).is_err());
+        let stale_layout = format!("e-m:e-{}", &target.worker_data_layout()[2..]);
         assert!(
-            validate_final_llvm_layout(&format!(
-                "{exact}target datalayout = \"{PRODUCTION_WORKER_DATA_LAYOUT_V1}\"\n"
-            ))
+            validate_final_llvm_layout(&llvm_with_layout(target, &stale_layout), target).is_err()
+        );
+        assert!(
+            validate_final_llvm_layout(
+                &format!(
+                    "{exact}target datalayout = \"{}\"\n",
+                    target.worker_data_layout(),
+                ),
+                target
+            )
             .is_err()
         );
     }
 
     #[test]
-    fn production_capsule_requires_shared_independent_kir_to_llvm_replay() {
+    fn production_capsule_retains_exact_v6_replay_and_rejects_missing_native_lowering_receipt() {
         let source = include_str!("production_semantic_lineage_v3.rs");
-        assert!(source.contains(
-            "CanonicalProductionKirToLlvmReplayEvidenceV1::from_optimized_live_inputs_v4"
-        ));
-        assert!(source.contains(
-            "target_optimization: &fe2o3_kernel_opt::KernelIrPlironOptimizationReportV2"
-        ));
-        assert!(source.contains("target_module,\n                target_optimization,"));
-        assert!(source.contains("validate_compiler_kir_to_llvm_replay_v1"));
+        assert!(source.contains("admit_production_kernel_ir_structural_replay_v6("));
+        assert!(source.contains("KernelIrTargetNeutralStructuralReplayAdmissionV6"));
+        assert!(source.contains("NativeV13TargetLoweringReceiptUnavailable"));
+        assert!(source.contains(".validate_frozen_v3("));
+        assert!(!source.contains("KernelIrPlironOptimizationReportV2"));
+        for backend_private in [
+            concat!("ProductionAmd", "TargetProfileV1"),
+            concat!("ProductionTarget", "CapabilityClosureV13"),
+            concat!("CanonicalProduction", "KirToLlvmReplayEvidenceV1"),
+            concat!("dialect_", "amdgcn::"),
+        ] {
+            assert!(
+                !source.contains(backend_private),
+                "semantic-lineage core leaked backend-private type {backend_private}",
+            );
+        }
         assert!(source.contains("MultiRootProofRosterTranscriptV2::new"));
         assert!(source.contains("MultiRootProofRosterTranscriptV2::decode"));
         assert!(source.contains("validate_compiler_multi_root_proof_inputs_v1"));

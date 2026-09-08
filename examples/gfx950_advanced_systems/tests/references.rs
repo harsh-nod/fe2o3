@@ -1,10 +1,10 @@
 use fe2o3_gfx950_advanced_systems::{
-    ALL_EXPERTS, CANDIDATES, DRAFT_STEPS, EXPERTS, GRADIENT_SHARDS, HIDDEN, MUON_ELEMENTS, NGRAM,
-    OUTPUT, QUERIES, STATE_WIDTH, SYSTEM_BATCHES, TABLE_SIZE, TOKENS, TOP_K,
+    ALL_EXPERTS, CANDIDATES, COMBINE_BATCHES, DRAFT_STEPS, EXPERTS, GRADIENT_SHARDS, HIDDEN,
+    MUON_ELEMENTS, NGRAM, OUTPUT, QUERIES, STATE_WIDTH, SYSTEM_BATCHES, TABLE_SIZE, TOKENS, TOP_K,
     reference::{
         batched_moe_rank_reference, batched_moe_routing_reference, batched_muon_reference,
-        decode_fp8, moe_rank_reference, moe_routing_reference, muon_reference, ngram_reference,
-        speculative_reference,
+        combine_expert_ranks_reference, decode_fp8, moe_rank_reference, moe_routing_reference,
+        muon_reference, ngram_reference, speculative_reference, stage_gradient_shard_reference,
     },
 };
 
@@ -178,4 +178,33 @@ fn batched_references_keep_all_sixteen_wave_instances_disjoint() {
     let muon = batched_muon_reference(&shards);
     assert_eq!(muon.update.len(), SYSTEM_BATCHES * MUON_ELEMENTS);
     assert_eq!(muon.norms.len(), SYSTEM_BATCHES);
+}
+
+#[test]
+fn combine_and_staging_references_preserve_order_and_exact_bits() {
+    let rank0 = (0..COMBINE_BATCHES * TOKENS * OUTPUT)
+        .map(|index| index as f32 * 0.25)
+        .collect::<Vec<_>>();
+    let rank1 = (0..rank0.len())
+        .map(|index| -(index as f32) * 0.125)
+        .collect::<Vec<_>>();
+    let combined = combine_expert_ranks_reference(&rank0, &rank1);
+    for index in 0..combined.len() {
+        assert_eq!(combined[index], rank0[index] + rank1[index]);
+    }
+
+    let staged = (0..SYSTEM_BATCHES * MUON_ELEMENTS)
+        .map(|index| f32::from_bits(0x3f00_0000_u32.wrapping_add(index as u32)))
+        .collect::<Vec<_>>();
+    let copied = stage_gradient_shard_reference(&staged);
+    assert_eq!(
+        copied
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+        staged
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>()
+    );
 }

@@ -1,0 +1,41 @@
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/kernel_context_tensor_cross_kernel_view.rs:2:78
+  |
+2 |     Bf16MfmaAMatrix, CurrentTarget, KernelCapabilityBrand, RegisteredLaunch, Wave64, WaveLane,
+  |                                                                              ^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/kernel_context_tensor_cross_kernel_view.rs:2:86
+  |
+2 |     Bf16MfmaAMatrix, CurrentTarget, KernelCapabilityBrand, RegisteredLaunch, Wave64, WaveLane,
+  |                                                                                      ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+  --> tests/ui/fail/kernel_context_tensor_cross_kernel_view.rs:13:18
+   |
+13 |     lane: &'wave WaveLane<Wave64, BrandB<'wave>>,
+   |                  ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+  --> tests/ui/fail/kernel_context_tensor_cross_kernel_view.rs:13:27
+   |
+13 |     lane: &'wave WaveLane<Wave64, BrandB<'wave>>,
+   |                           ^^^^^^
+
+error[E0308]: mismatched types
+  --> tests/ui/fail/kernel_context_tensor_cross_kernel_view.rs:15:30
+   |
+15 |     let _ = view.load_m16k16(lane, 0, 0);
+   |                  ----------- ^^^^ expected `KernelA`, found `KernelB`
+   |                  |
+   |                  arguments to this method are incorrect
+   |
+   = note: expected reference `&SubgroupLane<SubgroupWidth64, fe2o3_device::KernelCapabilityBrand<'wave, KernelA, CurrentTarget, RegisteredLaunch>>`
+              found reference `&'wave SubgroupLane<SubgroupWidth64, fe2o3_device::KernelCapabilityBrand<'wave, KernelB, CurrentTarget, RegisteredLaunch>>`
+note: method defined here
+  --> src/tensor.rs
+   |
+   |     pub fn load_m16k16<'wave>(
+   |            ^^^^^^^^^^^

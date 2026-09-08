@@ -1,4 +1,4 @@
-use fe2o3_device::{DisjointSlice, Index1D, KernelMarkerV1, Tiled2D};
+use fe2o3_device::KernelMarkerV1;
 use fe2o3_tiled_gemm_general_v1::{
     GENERAL_TILED_GEMM_PROTECTED_EXECUTION_BLOCKER_V1,
     GENERAL_TILED_GEMM_PROTECTED_EXECUTION_SUPPORTED_V1,
@@ -12,19 +12,7 @@ use syn::visit::Visit;
 const LIB_SOURCE: &str = include_str!("../src/lib.rs");
 const KERNEL_SOURCE: &str = include_str!("../src/kernel.rs");
 
-type GeneralKernelFn = fn(
-    &[u16],
-    &[u16],
-    DisjointSlice<f32, Tiled2D<Index1D, 64, 16, 16, 4>>,
-    u32,
-    u32,
-    u32,
-    u32,
-    u32,
-    u32,
-    f32,
-    f32,
-);
+type GeneralKernelFn = fn(&[u16], &[u16], &mut [f32], u32, u32, u32, u32, u32, u32, f32, f32);
 
 #[derive(Default)]
 struct SourceFacts {
@@ -34,7 +22,6 @@ struct SourceFacts {
     try_expressions: usize,
     loop_try_expressions: usize,
     loop_return_expressions: usize,
-    function_calls: Vec<String>,
     method_calls: Vec<String>,
     indexed_paths: Vec<String>,
 }
@@ -71,15 +58,6 @@ impl<'ast> Visit<'ast> for SourceFacts {
             self.loop_return_expressions += 1;
         }
         syn::visit::visit_expr_return(self, expression);
-    }
-
-    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
-        if let syn::Expr::Path(path) = call.func.as_ref()
-            && let Some(segment) = path.path.segments.last()
-        {
-            self.function_calls.push(segment.ident.to_string());
-        }
-        syn::visit::visit_expr_call(self, call);
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
@@ -125,7 +103,7 @@ fn source_forbids_unsafe_and_contains_matrix_tiling_and_epilogue() {
     assert_eq!(facts.unsafe_functions, 0);
     assert_eq!(
         facts.try_expressions, 2,
-        "only the two grid-uniform matrix-view constructors may return early"
+        "only the two uniform checked global matrix constructors may return early"
     );
     assert_eq!(
         facts.loop_try_expressions, 0,
@@ -135,35 +113,42 @@ fn source_forbids_unsafe_and_contains_matrix_tiling_and_epilogue() {
         facts.loop_return_expressions, 0,
         "every lane entering the K loop must reconverge before MFMA"
     );
-    assert!(facts.function_calls.iter().any(|call| call == "index_1d"));
     for required in [
-        "Bf16MfmaAMatrix::row_major",
-        "Bf16MfmaBMatrix::row_major",
-        "F32AccumulatorFragment::zero",
-        "WorkgroupPipeline::<Bf16MfmaAFragment<'_>, 2, 64, 1>::current",
-        "WorkgroupPipeline::<Bf16MfmaBFragment<'_>, 2, 64, 1>::current",
-        "let phase_count = (k as usize + 15) / 16",
-        "while phase_index < phase_count",
-        "let future_epoch = phase_index + 1",
-        "alpha * values[0] + beta * *output",
+        "KernelContext<'_>",
+        "a: Global<'_, u16, ReadOnly>",
+        "b: Global<'_, u16, ReadOnly>",
+        "c: Global<'_, f32, ExclusiveReadWrite>",
+        "context.invocation()",
+        "context.private_memory::<f32, 4>()",
+        "context.subgroup_lane::<SubgroupWidth64>()",
+        "context.numerical_policy::<StrictIeee>()",
+        "context.matrix()",
+        "matrix.with_numerical_policy(&policy)",
+        "matrix.bf16_a_global_row_major",
+        "matrix.bf16_b_global_row_major",
+        "let phase_count = (k as usize).div_ceil(TILE_K_V1)",
+        "while phase < phase_count",
+        "epilogue_v1(product, previous, alpha, beta)",
     ] {
         assert!(KERNEL_SOURCE.contains(required), "missing `{required}`");
     }
     for required in [
-        "checked_tiled_2d",
+        "invocation",
+        "workgroup_id",
+        "private_memory",
+        "subgroup_lane",
+        "numerical_policy",
+        "matrix",
+        "with_numerical_policy",
+        "bf16_a_global_row_major",
+        "bf16_b_global_row_major",
+        "bf16_zero_accumulator",
         "load_m16k16",
         "load_k16n16",
         "multiply_accumulate",
         "into_values",
-        "get_tiled_2d_mut",
-        "stage",
-        "write",
-        "commit",
-        "wait",
-        "consume",
-        "read",
-        "discard",
-        "release",
+        "load",
+        "store",
     ] {
         assert!(
             facts.method_calls.iter().any(|call| call == required),
@@ -172,6 +157,23 @@ fn source_forbids_unsafe_and_contains_matrix_tiling_and_epilogue() {
     }
     for forbidden in ["get_unchecked", "get_unchecked_mut", "get_mut_at"] {
         assert!(!facts.method_calls.iter().any(|call| call == forbidden));
+    }
+    for forbidden in [
+        "thread::",
+        "WaveLane::<Wave64>::current",
+        "Matrix::current",
+        "WorkgroupLdsScope::current",
+        "DeviceGlobalConstPtr",
+        "DeviceGlobalMutPtr",
+        "Gfx942",
+        "Gfx950",
+        "gfx942",
+        "gfx950",
+    ] {
+        assert!(
+            !KERNEL_SOURCE.contains(forbidden),
+            "target-neutral source contains `{forbidden}`"
+        );
     }
     assert!(
         !facts.method_calls.iter().any(|call| call == "ok_or"),
@@ -193,15 +195,8 @@ fn ordinary_host_execution_panics_before_output_mutation() {
     let b = [0x3f80_u16; 19];
     let sentinel = f32::from_bits(0x7f7f_ffff);
     let mut output = [sentinel; 19];
-    // SAFETY: the test exclusively owns `output` for the caught invocation.
-    let output_view = unsafe {
-        DisjointSlice::<f32, Tiled2D<Index1D, 64, 16, 16, 4>>::from_raw_parts(
-            output.as_mut_ptr(),
-            output.len(),
-        )
-    };
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        function(&a, &b, output_view, 1, 1, 17, 17, 1, 19, 2.0, -1.0);
+        function(&a, &b, &mut output, 1, 1, 17, 17, 1, 19, 2.0, -1.0);
     }));
     assert!(failure.is_err());
     assert!(
@@ -217,13 +212,13 @@ fn status_records_current_fail_closed_boundaries() {
     assert!(std::hint::black_box(
         GENERAL_TILED_GEMM_SAFE_SOURCE_PRESENT_V1
     ));
-    assert!(std::hint::black_box(
+    assert!(!std::hint::black_box(
         GENERAL_TILED_GEMM_SOURCE_TO_IR_SUPPORTED_V1
     ));
-    assert!(std::hint::black_box(
+    assert!(!std::hint::black_box(
         GENERAL_TILED_GEMM_SOURCE_LOWERING_SUPPORTED_V1
     ));
-    assert!(std::hint::black_box(
+    assert!(!std::hint::black_box(
         GENERAL_TILED_GEMM_QUALIFICATION_EXECUTION_SUPPORTED_V1
     ));
     assert!(!std::hint::black_box(
@@ -231,6 +226,6 @@ fn status_records_current_fail_closed_boundaries() {
     ));
     assert_eq!(
         GENERAL_TILED_GEMM_PROTECTED_EXECUTION_BLOCKER_V1,
-        "protected Worker publication and artifact-currentness admission remain separate from the qualification runner"
+        "typed Global-to-matrix, disjoint global read-modify-write, dynamic workgroup epochs, and source numerical binding are unavailable; Bundle V8 export and the sealed W6/W7 joins remain incomplete"
     );
 }

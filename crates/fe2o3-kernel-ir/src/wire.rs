@@ -4,22 +4,30 @@ use std::str;
 
 use crate::{
     AccessMode, AddressSpace, AssemblyConstraint, AssemblyEffect, AssemblyOperand,
-    AssemblyOperandKind, AssemblyOption, AssemblySourceIdentity, Atomic, AtomicKind, Axis, Barrier,
-    BarrierSemantics, BasicBlock, BinaryOp, BlockId, CastKind, CheckedBinaryOperator,
-    ComparePredicate, Constant, Convergence, Fence, Function, FunctionBody, FunctionId,
+    AssemblyOperandKind, AssemblyOption, AssemblySourceIdentity, AsyncCopyCompletionV1, Atomic,
+    AtomicKind, Axis, Barrier, BarrierSemantics, BasicBlock, BinaryOp, BlockId, CastKind,
+    CheckedBinaryOperator, CollectiveCapabilityOperationV1, ComparePredicate, Constant,
+    Convergence, ExecutionCapabilityRequirementV1, Fence, Function, FunctionBody, FunctionId,
     FunctionRole, Gfx950LdsTransposeFormatV1, Gfx950LdsTransposeOperationKindV1,
-    Gfx950LdsTransposeOperationV1, IndexKind, InlineAssembly, InlineAssemblyTarget,
-    IntegerSwitchCase, IntrinsicKind, IntrinsicOperation, Kernel, KernelId, LaunchDomain,
-    LaunchExtent, MAX_SEMANTIC_OPERATION_INSTANCE_PAYLOAD_BYTES_V1, MatrixElement, MatrixLayout,
-    MatrixLdsProfile, MatrixMultiplyProfile, MatrixOperation, MatrixOperationKind, MemoryAccess,
-    MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId, Operation, OperationKind,
-    PointerType, ScalarType, SemanticOperation, SemanticOperationInstancePayloadV1, Signature,
-    SliceType, SwitchCase, SynchronizationScope, TargetCapability, TensorCoordinateExprV1,
+    Gfx950LdsTransposeOperationV1, GlobalCapabilityBindV1, GlobalCapabilityIndexV1,
+    GlobalCapabilityRoleV1, GlobalCapabilityTypeV1, GlobalDisjointIndexContractV1,
+    GlobalDisjointIndexSpaceV1, IndexKind, InlineAssembly, InlineAssemblyTarget, IntegerSwitchCase,
+    IntrinsicKind, IntrinsicOperation, Kernel, KernelContextIssueV1, KernelContextSourceIdentityV1,
+    KernelContextTypeV1, KernelId, LaunchDomain, LaunchExtent,
+    MAX_EXECUTION_CAPABILITY_CONTRACT_BYTES_V1, MAX_EXECUTION_CAPABILITY_OPERANDS_V1,
+    MAX_EXECUTION_CAPABILITY_TYPE_BYTES_V1, MAX_SEMANTIC_OPERATION_INSTANCE_PAYLOAD_BYTES_V1,
+    MatrixElement, MatrixLayout, MatrixLdsProfile, MatrixMultiplyProfile, MatrixOperation,
+    MatrixOperationKind, MemoryAccess, MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId,
+    NumericalModeV1, Operation, OperationKind, PointerType, ResourceCapabilityRequirementV1,
+    ScalarType, SemanticOperation, SemanticOperationInstancePayloadV1, Signature, SliceType,
+    SwitchCase, SynchronizationScope, TargetCapability, TensorCoordinateExprV1,
     TensorElementPackingV1, TensorFragmentLayoutV1, TensorInstructionProfileV1,
     TensorLayoutContractV1, TensorLdsSwizzleV1, TensorMultiplicityV1, TensorOperandRoleV1,
     TensorSymbolicMapV1, TensorTailMaskV1, Terminator, Type, UnaryOp, ValueDef, ValueId,
     WaveF32ReductionKindV1, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
-    WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize, decode_semantic_operation_instance_id,
+    WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize, decode_execution_capability_contract_v1,
+    decode_execution_capability_type_v1, decode_semantic_operation_instance_id,
+    encode_execution_capability_contract_v1, encode_execution_capability_type_v1,
     encode_semantic_operation_instance_id,
 };
 
@@ -47,6 +55,10 @@ pub const KERNEL_IR_VERSION_V9: u16 = 9;
 pub const KERNEL_IR_VERSION_V10: u16 = 10;
 /// Kernel IR V11 adds one-way pointer access restriction casts.
 pub const KERNEL_IR_VERSION_V11: u16 = 11;
+/// Kernel IR V12 adds logical kernel contexts and portable execution requirements.
+pub const KERNEL_IR_VERSION_V12: u16 = 12;
+/// Kernel IR V13 adds the complete target-neutral execution-capability graph.
+pub const KERNEL_IR_VERSION_V13: u16 = 13;
 /// Domain separator for identities derived from canonical Kernel IR V5 bytes.
 pub const KERNEL_IR_DOMAIN_V5: &[u8] = b"FE2O3/KERNEL-IR/V5\0";
 /// Domain separator for identities derived from canonical Kernel IR V6 bytes.
@@ -61,6 +73,10 @@ pub const KERNEL_IR_DOMAIN_V9: &[u8] = b"FE2O3/KERNEL-IR/V9\0";
 pub const KERNEL_IR_DOMAIN_V10: &[u8] = b"FE2O3/KERNEL-IR/V10\0";
 /// Domain separator for identities derived from canonical Kernel IR V11 bytes.
 pub const KERNEL_IR_DOMAIN_V11: &[u8] = b"FE2O3/KERNEL-IR/V11\0";
+/// Domain separator for identities derived from canonical Kernel IR V12 bytes.
+pub const KERNEL_IR_DOMAIN_V12: &[u8] = b"FE2O3/KERNEL-IR/V12\0";
+/// Domain separator for identities derived from canonical Kernel IR V13 bytes.
+pub const KERNEL_IR_DOMAIN_V13: &[u8] = b"FE2O3/KERNEL-IR/V13\0";
 /// Maximum size of one encoded kernel IR module.
 pub const MAX_MODULE_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Maximum UTF-8 byte length of any identifier or extension component.
@@ -293,6 +309,16 @@ pub fn encode_module_v11(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError
     encode_module(module, KERNEL_IR_VERSION_V11)
 }
 
+/// Encodes a module in the bounded canonical Kernel IR V12 wire format.
+pub fn encode_module_v12(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V12)
+}
+
+/// Encodes a module in the bounded canonical Kernel IR V13 wire format.
+pub fn encode_module_v13(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V13)
+}
+
 fn encode_module(module: &Module, version: u16) -> Result<Vec<u8>, KernelIrEncodeError> {
     let mut writer = Writer::new(version);
     writer.bytes(&KERNEL_IR_MAGIC_V1)?;
@@ -382,6 +408,16 @@ pub fn decode_module_v10(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
 /// Decodes canonical V1 through V11 bytes using the latest bounded reader.
 pub fn decode_module_v11(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
     decode_module(bytes, KERNEL_IR_VERSION_V11, true)
+}
+
+/// Decodes canonical V1 through V12 bytes using the latest bounded reader.
+pub fn decode_module_v12(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V12, true)
+}
+
+/// Decodes canonical V1 through V13 bytes using the latest bounded reader.
+pub fn decode_module_v13(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V13, true)
 }
 
 fn decode_module(
@@ -879,6 +915,51 @@ fn encode_operation_kind(
             writer.u8(21)?;
             encode_inline_assembly(writer, assembly)?;
         }
+        OperationKind::KernelContextIssue(issue) => {
+            require_v12(writer, "compiler-issued kernel context")?;
+            writer.u8(27)?;
+            encode_kernel_context_source_identity_v1(writer, issue.source())?;
+        }
+        OperationKind::GlobalCapabilityBind(bind) => {
+            require_v12(writer, "branded global-capability binding")?;
+            writer.u8(28)?;
+            writer.u32(bind.context.0)?;
+            writer.u32(bind.physical.0)?;
+        }
+        OperationKind::GlobalCapabilityIndex(index) => {
+            require_v12(writer, "global-capability index projection")?;
+            writer.u8(29)?;
+            writer.u32(index.capability.0)?;
+            writer.u32(index.index.0)?;
+            match index.index_space {
+                None => writer.u8(0)?,
+                Some(index_space) => {
+                    writer.u8(1)?;
+                    encode_global_disjoint_index_contract_v1(writer, index_space)?;
+                }
+            }
+        }
+        OperationKind::ExecutionCapability(operation) => {
+            require_v13(writer, "target-neutral execution capability operation")?;
+            writer.u8(30)?;
+            encode_values(
+                writer,
+                "execution capability operands",
+                &operation.operands,
+                MAX_EXECUTION_CAPABILITY_OPERANDS_V1,
+            )?;
+            let contract = encode_execution_capability_contract_v1(operation).ok_or(
+                KernelIrEncodeError::NonCanonical {
+                    field: "execution capability contract",
+                },
+            )?;
+            writer.count(
+                "execution capability contract",
+                contract.len(),
+                MAX_EXECUTION_CAPABILITY_CONTRACT_BYTES_V1,
+            )?;
+            writer.bytes(&contract)?;
+        }
     }
     Ok(())
 }
@@ -989,6 +1070,42 @@ fn decode_operation_kind(reader: &mut Reader<'_>) -> Result<OperationKind, Kerne
         },
         26 if reader.version >= KERNEL_IR_VERSION_V10 => {
             OperationKind::MemoryIntrinsic(decode_memory_intrinsic(reader)?)
+        }
+        27 if reader.version >= KERNEL_IR_VERSION_V12 => OperationKind::KernelContextIssue(
+            KernelContextIssueV1::new(decode_kernel_context_source_identity_v1(reader)?),
+        ),
+        28 if reader.version >= KERNEL_IR_VERSION_V12 => {
+            OperationKind::GlobalCapabilityBind(GlobalCapabilityBindV1 {
+                context: ValueId(reader.u32()?),
+                physical: ValueId(reader.u32()?),
+            })
+        }
+        29 if reader.version >= KERNEL_IR_VERSION_V12 => {
+            OperationKind::GlobalCapabilityIndex(GlobalCapabilityIndexV1 {
+                capability: ValueId(reader.u32()?),
+                index: ValueId(reader.u32()?),
+                index_space: if reader.option("global-capability index space")? {
+                    Some(decode_global_disjoint_index_contract_v1(reader)?)
+                } else {
+                    None
+                },
+            })
+        }
+        30 if reader.version >= KERNEL_IR_VERSION_V13 => {
+            let operands = decode_values(
+                reader,
+                "execution capability operands",
+                MAX_EXECUTION_CAPABILITY_OPERANDS_V1,
+            )?;
+            let length = reader.count(
+                "execution capability contract",
+                MAX_EXECUTION_CAPABILITY_CONTRACT_BYTES_V1,
+            )?;
+            let bytes = reader.take(length)?;
+            OperationKind::ExecutionCapability(
+                decode_execution_capability_contract_v1(bytes, operands)
+                    .ok_or(KernelIrDecodeError::NonCanonical)?,
+            )
         }
         tag => {
             return Err(KernelIrDecodeError::UnknownTag {
@@ -1306,6 +1423,40 @@ fn encode_type(writer: &mut Writer, ty: &Type, depth: usize) -> Result<(), Kerne
             encode_access_mode(writer, slice.access)?;
             encode_type(writer, &slice.element, depth + 1)?;
         }
+        Type::KernelContext(context) => {
+            require_v12(writer, "logical kernel-context type")?;
+            writer.u8(5)?;
+            encode_kernel_context_type_v1(writer, context)?;
+        }
+        Type::GlobalCapability(capability) => {
+            require_v12(writer, "branded global-capability type")?;
+            writer.u8(6)?;
+            encode_type(writer, capability.element(), depth + 1)?;
+            encode_kernel_context_type_v1(writer, capability.context())?;
+            match capability.role() {
+                GlobalCapabilityRoleV1::ReadOnly => writer.u8(1)?,
+                GlobalCapabilityRoleV1::DisjointWrite(index_space) => {
+                    writer.u8(2)?;
+                    encode_global_disjoint_index_contract_v1(writer, index_space)?;
+                }
+                GlobalCapabilityRoleV1::ExclusiveReadWrite => writer.u8(3)?,
+            }
+        }
+        Type::ExecutionCapability(capability) => {
+            require_v13(writer, "target-neutral execution capability type")?;
+            writer.u8(7)?;
+            let contract = encode_execution_capability_type_v1(capability).ok_or(
+                KernelIrEncodeError::NonCanonical {
+                    field: "execution capability type",
+                },
+            )?;
+            writer.count(
+                "execution capability type",
+                contract.len(),
+                MAX_EXECUTION_CAPABILITY_TYPE_BYTES_V1,
+            )?;
+            writer.bytes(&contract)?;
+        }
     }
     Ok(())
 }
@@ -1342,8 +1493,172 @@ fn decode_type(reader: &mut Reader<'_>, depth: usize) -> Result<Type, KernelIrDe
             let element = decode_type(reader, depth + 1)?;
             Type::Slice(SliceType::new(element, address_space, access))
         }
+        5 if reader.version >= KERNEL_IR_VERSION_V12 => {
+            Type::KernelContext(decode_kernel_context_type_v1(reader)?)
+        }
+        6 if reader.version >= KERNEL_IR_VERSION_V12 => {
+            let element = decode_type(reader, depth + 1)?;
+            let context = decode_kernel_context_type_v1(reader)?;
+            let role = match reader.u8()? {
+                1 => GlobalCapabilityRoleV1::ReadOnly,
+                2 => GlobalCapabilityRoleV1::DisjointWrite(
+                    decode_global_disjoint_index_contract_v1(reader)?,
+                ),
+                3 => GlobalCapabilityRoleV1::ExclusiveReadWrite,
+                tag => {
+                    return Err(KernelIrDecodeError::UnknownTag {
+                        kind: "global capability role",
+                        tag,
+                    });
+                }
+            };
+            Type::GlobalCapability(GlobalCapabilityTypeV1::new(element, context, role))
+        }
+        7 if reader.version >= KERNEL_IR_VERSION_V13 => {
+            let length = reader.count(
+                "execution capability type",
+                MAX_EXECUTION_CAPABILITY_TYPE_BYTES_V1,
+            )?;
+            Type::ExecutionCapability(
+                decode_execution_capability_type_v1(reader.take(length)?)
+                    .ok_or(KernelIrDecodeError::NonCanonical)?,
+            )
+        }
         tag => return Err(KernelIrDecodeError::UnknownTag { kind: "type", tag }),
     })
+}
+
+fn encode_kernel_context_type_v1(
+    writer: &mut Writer,
+    context: &KernelContextTypeV1,
+) -> Result<(), KernelIrEncodeError> {
+    writer.text("kernel-context root", context.root().as_str())?;
+    writer.bytes(context.kernel_marker())?;
+    writer.bytes(context.target())?;
+    writer.bytes(context.launch())
+}
+
+fn decode_kernel_context_type_v1(
+    reader: &mut Reader<'_>,
+) -> Result<KernelContextTypeV1, KernelIrDecodeError> {
+    Ok(KernelContextTypeV1::new(
+        FunctionId::new(reader.text("kernel-context root")?),
+        reader.fixed::<32>()?,
+        reader.fixed::<32>()?,
+        reader.fixed::<32>()?,
+    ))
+}
+
+fn encode_global_disjoint_index_space_v1(
+    writer: &mut Writer,
+    index_space: GlobalDisjointIndexSpaceV1,
+) -> Result<(), KernelIrEncodeError> {
+    match index_space {
+        GlobalDisjointIndexSpaceV1::Index1d => writer.u8(1),
+        GlobalDisjointIndexSpaceV1::ShiftedIndex1d { offset } => {
+            writer.u8(2)?;
+            writer.u64(offset)
+        }
+        GlobalDisjointIndexSpaceV1::BlockedIndex1d {
+            lanes_per_block,
+            elements_per_lane,
+        } => {
+            writer.u8(3)?;
+            writer.u64(lanes_per_block)?;
+            writer.u64(elements_per_lane)
+        }
+        GlobalDisjointIndexSpaceV1::Tiled2dIndex1d {
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+        } => {
+            writer.u8(4)?;
+            writer.u64(lanes_per_tile)?;
+            writer.u64(tile_rows)?;
+            writer.u64(tile_columns)?;
+            writer.u64(elements_per_lane)
+        }
+        GlobalDisjointIndexSpaceV1::RowStriped2dIndex1d {
+            lanes_per_row,
+            elements_per_lane,
+        } => {
+            writer.u8(5)?;
+            writer.u64(lanes_per_row)?;
+            writer.u64(elements_per_lane)
+        }
+        GlobalDisjointIndexSpaceV1::GridExclusive => writer.u8(6),
+    }
+}
+
+fn encode_global_disjoint_index_contract_v1(
+    writer: &mut Writer,
+    contract: GlobalDisjointIndexContractV1,
+) -> Result<(), KernelIrEncodeError> {
+    writer.bytes(&contract.nominal_identity())?;
+    encode_global_disjoint_index_space_v1(writer, contract.mapping())
+}
+
+fn decode_global_disjoint_index_contract_v1(
+    reader: &mut Reader<'_>,
+) -> Result<GlobalDisjointIndexContractV1, KernelIrDecodeError> {
+    Ok(GlobalDisjointIndexContractV1::new(
+        reader.fixed::<32>()?,
+        decode_global_disjoint_index_space_v1(reader)?,
+    ))
+}
+
+fn decode_global_disjoint_index_space_v1(
+    reader: &mut Reader<'_>,
+) -> Result<GlobalDisjointIndexSpaceV1, KernelIrDecodeError> {
+    Ok(match reader.u8()? {
+        1 => GlobalDisjointIndexSpaceV1::Index1d,
+        2 => GlobalDisjointIndexSpaceV1::ShiftedIndex1d {
+            offset: reader.u64()?,
+        },
+        3 => GlobalDisjointIndexSpaceV1::BlockedIndex1d {
+            lanes_per_block: reader.u64()?,
+            elements_per_lane: reader.u64()?,
+        },
+        4 => GlobalDisjointIndexSpaceV1::Tiled2dIndex1d {
+            lanes_per_tile: reader.u64()?,
+            tile_rows: reader.u64()?,
+            tile_columns: reader.u64()?,
+            elements_per_lane: reader.u64()?,
+        },
+        5 => GlobalDisjointIndexSpaceV1::RowStriped2dIndex1d {
+            lanes_per_row: reader.u64()?,
+            elements_per_lane: reader.u64()?,
+        },
+        6 => GlobalDisjointIndexSpaceV1::GridExclusive,
+        tag => {
+            return Err(KernelIrDecodeError::UnknownTag {
+                kind: "global disjoint index space",
+                tag,
+            });
+        }
+    })
+}
+
+fn encode_kernel_context_source_identity_v1(
+    writer: &mut Writer,
+    source: KernelContextSourceIdentityV1,
+) -> Result<(), KernelIrEncodeError> {
+    writer.bytes(&source.frontend_unit())?;
+    writer.bytes(&source.function())?;
+    writer.bytes(&source.contract())?;
+    writer.bytes(&source.issuance())
+}
+
+fn decode_kernel_context_source_identity_v1(
+    reader: &mut Reader<'_>,
+) -> Result<KernelContextSourceIdentityV1, KernelIrDecodeError> {
+    Ok(KernelContextSourceIdentityV1::new(
+        reader.fixed::<32>()?,
+        reader.fixed::<32>()?,
+        reader.fixed::<32>()?,
+        reader.fixed::<32>()?,
+    ))
 }
 
 fn encode_intrinsic(
@@ -2690,6 +3005,11 @@ fn encode_capabilities(
                 writer.u8(12)?;
                 writer.u8(wave_width_tag(*width))?;
             }
+            TargetCapability::Execution(requirement) => {
+                require_v12(writer, "portable execution-capability requirement")?;
+                writer.u8(13)?;
+                encode_execution_capability_requirement_v1(writer, requirement)?;
+            }
         }
     }
     Ok(())
@@ -2724,6 +3044,9 @@ fn decode_capabilities(
             12 if reader.version >= KERNEL_IR_VERSION_V2 => {
                 TargetCapability::WaveWidth(decode_wave_width(reader.u8()?)?)
             }
+            13 if reader.version >= KERNEL_IR_VERSION_V12 => {
+                TargetCapability::Execution(decode_execution_capability_requirement_v1(reader)?)
+            }
             tag => {
                 return Err(KernelIrDecodeError::UnknownTag {
                     kind: "target capability",
@@ -2738,6 +3061,253 @@ fn decode_capabilities(
         capabilities.insert(capability);
     }
     Ok(capabilities)
+}
+
+fn encode_execution_capability_requirement_v1(
+    writer: &mut Writer,
+    requirement: &ExecutionCapabilityRequirementV1,
+) -> Result<(), KernelIrEncodeError> {
+    match requirement {
+        ExecutionCapabilityRequirementV1::AddressSpace {
+            address_space,
+            access,
+        } => {
+            writer.u8(1)?;
+            writer.u8(address_space_tag(*address_space))?;
+            writer.u8(access_mode_tag(*access))
+        }
+        ExecutionCapabilityRequirementV1::Atomic {
+            value_type,
+            operation,
+            ordering,
+            failure_ordering,
+            scope,
+            address_space,
+        } => {
+            writer.u8(2)?;
+            writer.u8(scalar_type_tag(*value_type))?;
+            writer.u8(atomic_kind_tag(*operation))?;
+            writer.u8(ordering_tag(*ordering))?;
+            encode_optional_ordering(writer, *failure_ordering)?;
+            writer.u8(scope_tag(*scope))?;
+            writer.u8(address_space_tag(*address_space))
+        }
+        ExecutionCapabilityRequirementV1::Barrier {
+            execution_scope,
+            memory_scope,
+            ordering,
+            address_spaces,
+        } => {
+            writer.u8(3)?;
+            writer.u8(scope_tag(*execution_scope))?;
+            writer.u8(scope_tag(*memory_scope))?;
+            writer.u8(ordering_tag(*ordering))?;
+            encode_address_spaces(writer, address_spaces)
+        }
+        ExecutionCapabilityRequirementV1::Collective {
+            execution_scope,
+            operation,
+            value_type,
+            participants,
+        } => {
+            writer.u8(4)?;
+            writer.u8(scope_tag(*execution_scope))?;
+            writer.u8(collective_capability_operation_tag(*operation))?;
+            writer.u8(scalar_type_tag(*value_type))?;
+            writer.u32(*participants)
+        }
+        ExecutionCapabilityRequirementV1::Matrix {
+            m,
+            n,
+            k,
+            input_type,
+            accumulator_type,
+        } => {
+            writer.u8(5)?;
+            writer.u16(*m)?;
+            writer.u16(*n)?;
+            writer.u16(*k)?;
+            writer.u8(scalar_type_tag(*input_type))?;
+            writer.u8(scalar_type_tag(*accumulator_type))
+        }
+        ExecutionCapabilityRequirementV1::AsyncCopy {
+            source,
+            destination,
+            bytes,
+            alignment,
+            completion,
+        } => {
+            writer.u8(6)?;
+            writer.u8(address_space_tag(*source))?;
+            writer.u8(address_space_tag(*destination))?;
+            writer.u32(*bytes)?;
+            writer.u16(*alignment)?;
+            encode_async_copy_completion_v1(writer, *completion)
+        }
+        ExecutionCapabilityRequirementV1::Numerical { value_type, mode } => {
+            writer.u8(7)?;
+            writer.u8(scalar_type_tag(*value_type))?;
+            writer.u8(numerical_mode_tag(*mode))
+        }
+        ExecutionCapabilityRequirementV1::Resource(resource) => {
+            writer.u8(8)?;
+            encode_resource_capability_requirement_v1(writer, *resource)
+        }
+    }
+}
+
+fn decode_execution_capability_requirement_v1(
+    reader: &mut Reader<'_>,
+) -> Result<ExecutionCapabilityRequirementV1, KernelIrDecodeError> {
+    Ok(match reader.u8()? {
+        1 => ExecutionCapabilityRequirementV1::AddressSpace {
+            address_space: decode_address_space(reader.u8()?)?,
+            access: decode_access_mode(reader.u8()?)?,
+        },
+        2 => ExecutionCapabilityRequirementV1::Atomic {
+            value_type: decode_scalar_type(reader.u8()?)?,
+            operation: decode_atomic_kind(reader.u8()?)?,
+            ordering: decode_ordering(reader.u8()?)?,
+            failure_ordering: decode_optional_ordering(reader)?,
+            scope: decode_scope(reader.u8()?)?,
+            address_space: decode_address_space(reader.u8()?)?,
+        },
+        3 => ExecutionCapabilityRequirementV1::Barrier {
+            execution_scope: decode_scope(reader.u8()?)?,
+            memory_scope: decode_scope(reader.u8()?)?,
+            ordering: decode_ordering(reader.u8()?)?,
+            address_spaces: decode_address_spaces(reader)?,
+        },
+        4 => ExecutionCapabilityRequirementV1::Collective {
+            execution_scope: decode_scope(reader.u8()?)?,
+            operation: decode_collective_capability_operation(reader.u8()?)?,
+            value_type: decode_scalar_type(reader.u8()?)?,
+            participants: reader.u32()?,
+        },
+        5 => ExecutionCapabilityRequirementV1::Matrix {
+            m: reader.u16()?,
+            n: reader.u16()?,
+            k: reader.u16()?,
+            input_type: decode_scalar_type(reader.u8()?)?,
+            accumulator_type: decode_scalar_type(reader.u8()?)?,
+        },
+        6 => ExecutionCapabilityRequirementV1::AsyncCopy {
+            source: decode_address_space(reader.u8()?)?,
+            destination: decode_address_space(reader.u8()?)?,
+            bytes: reader.u32()?,
+            alignment: reader.u16()?,
+            completion: decode_async_copy_completion_v1(reader)?,
+        },
+        7 => ExecutionCapabilityRequirementV1::Numerical {
+            value_type: decode_scalar_type(reader.u8()?)?,
+            mode: decode_numerical_mode(reader.u8()?)?,
+        },
+        8 => ExecutionCapabilityRequirementV1::Resource(decode_resource_capability_requirement_v1(
+            reader,
+        )?),
+        tag => {
+            return Err(KernelIrDecodeError::UnknownTag {
+                kind: "execution capability requirement",
+                tag,
+            });
+        }
+    })
+}
+
+fn encode_optional_ordering(
+    writer: &mut Writer,
+    ordering: Option<MemoryOrdering>,
+) -> Result<(), KernelIrEncodeError> {
+    match ordering {
+        None => writer.u8(0),
+        Some(ordering) => {
+            writer.u8(1)?;
+            writer.u8(ordering_tag(ordering))
+        }
+    }
+}
+
+fn decode_optional_ordering(
+    reader: &mut Reader<'_>,
+) -> Result<Option<MemoryOrdering>, KernelIrDecodeError> {
+    Ok(if reader.option("atomic failure ordering")? {
+        Some(decode_ordering(reader.u8()?)?)
+    } else {
+        None
+    })
+}
+
+fn encode_async_copy_completion_v1(
+    writer: &mut Writer,
+    completion: AsyncCopyCompletionV1,
+) -> Result<(), KernelIrEncodeError> {
+    match completion {
+        AsyncCopyCompletionV1::ExplicitWaitGroups {
+            maximum_pending_groups,
+        } => {
+            writer.u8(1)?;
+            writer.u16(maximum_pending_groups)
+        }
+        AsyncCopyCompletionV1::WorkgroupBarrier => writer.u8(2),
+    }
+}
+
+fn decode_async_copy_completion_v1(
+    reader: &mut Reader<'_>,
+) -> Result<AsyncCopyCompletionV1, KernelIrDecodeError> {
+    match reader.u8()? {
+        1 => Ok(AsyncCopyCompletionV1::ExplicitWaitGroups {
+            maximum_pending_groups: reader.u16()?,
+        }),
+        2 => Ok(AsyncCopyCompletionV1::WorkgroupBarrier),
+        tag => Err(KernelIrDecodeError::UnknownTag {
+            kind: "async-copy completion",
+            tag,
+        }),
+    }
+}
+
+fn encode_resource_capability_requirement_v1(
+    writer: &mut Writer,
+    resource: ResourceCapabilityRequirementV1,
+) -> Result<(), KernelIrEncodeError> {
+    match resource {
+        ResourceCapabilityRequirementV1::WorkgroupInvocationsAtMost(value) => {
+            writer.u8(1)?;
+            writer.u32(value)
+        }
+        ResourceCapabilityRequirementV1::StaticWorkgroupMemoryBytesAtMost(value) => {
+            writer.u8(2)?;
+            writer.u64(value)
+        }
+        ResourceCapabilityRequirementV1::DynamicWorkgroupMemoryBytesAtMost(value) => {
+            writer.u8(3)?;
+            writer.u64(value)
+        }
+        ResourceCapabilityRequirementV1::PrivateMemoryBytesPerInvocationAtMost(value) => {
+            writer.u8(4)?;
+            writer.u64(value)
+        }
+    }
+}
+
+fn decode_resource_capability_requirement_v1(
+    reader: &mut Reader<'_>,
+) -> Result<ResourceCapabilityRequirementV1, KernelIrDecodeError> {
+    match reader.u8()? {
+        1 => Ok(ResourceCapabilityRequirementV1::WorkgroupInvocationsAtMost(
+            reader.u32()?,
+        )),
+        2 => Ok(ResourceCapabilityRequirementV1::StaticWorkgroupMemoryBytesAtMost(reader.u64()?)),
+        3 => Ok(ResourceCapabilityRequirementV1::DynamicWorkgroupMemoryBytesAtMost(reader.u64()?)),
+        4 => Ok(
+            ResourceCapabilityRequirementV1::PrivateMemoryBytesPerInvocationAtMost(reader.u64()?),
+        ),
+        tag => Err(KernelIrDecodeError::UnknownTag {
+            kind: "resource capability requirement",
+            tag,
+        }),
+    }
 }
 
 fn encode_address_spaces(
@@ -2954,6 +3524,21 @@ enum_codec!(atomic_kind_tag, decode_atomic_kind, AtomicKind, "atomic kind", {
     AtomicKind::BitOr => 10,
     AtomicKind::BitXor => 11,
 });
+enum_codec!(collective_capability_operation_tag, decode_collective_capability_operation, CollectiveCapabilityOperationV1, "collective capability operation", {
+    CollectiveCapabilityOperationV1::Broadcast => 1,
+    CollectiveCapabilityOperationV1::ReduceAdd => 2,
+    CollectiveCapabilityOperationV1::ReduceMin => 3,
+    CollectiveCapabilityOperationV1::ReduceMax => 4,
+    CollectiveCapabilityOperationV1::InclusiveScanAdd => 5,
+    CollectiveCapabilityOperationV1::ExclusiveScanAdd => 6,
+    CollectiveCapabilityOperationV1::Any => 7,
+    CollectiveCapabilityOperationV1::All => 8,
+});
+enum_codec!(numerical_mode_tag, decode_numerical_mode, NumericalModeV1, "numerical mode", {
+    NumericalModeV1::StrictIeee => 1,
+    NumericalModeV1::AllowContraction => 2,
+    NumericalModeV1::AllowApproximation => 3,
+});
 enum_codec!(inline_assembly_target_tag, decode_inline_assembly_target, InlineAssemblyTarget, "inline assembly target", {
     InlineAssemblyTarget::AmdGpuGfx942 => 1,
 });
@@ -3106,6 +3691,28 @@ fn require_v10(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnc
 
 fn require_v11(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V11 {
+        Ok(())
+    } else {
+        Err(KernelIrEncodeError::UnsupportedInVersion {
+            version: writer.version,
+            feature,
+        })
+    }
+}
+
+fn require_v12(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+    if writer.version >= KERNEL_IR_VERSION_V12 {
+        Ok(())
+    } else {
+        Err(KernelIrEncodeError::UnsupportedInVersion {
+            version: writer.version,
+            feature,
+        })
+    }
+}
+
+fn require_v13(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+    if writer.version >= KERNEL_IR_VERSION_V13 {
         Ok(())
     } else {
         Err(KernelIrEncodeError::UnsupportedInVersion {

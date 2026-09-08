@@ -1,0 +1,21 @@
+error[E0308]: mismatched types
+  --> tests/ui/fail/context_2d_index_cross_kernel_substitution.rs:14:9
+   |
+13 |     let _: Option<DisjointTile2D<Index1D, 64, 16, 16, 4, BrandB<'kernel>>> =
+   |            --------------------------------------------------------------- expected due to this
+14 |         index.checked_tiled_2d::<64, 16, 16, 4>();
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `KernelB`, found `KernelA`
+   |
+   = note: expected enum `Option<DisjointTile2D<Index1D, 64, 16, 16, 4, fe2o3_device::KernelCapabilityBrand<'kernel, KernelB, CurrentTarget, RegisteredLaunch>>>`
+              found enum `Option<DisjointTile2D<Index1D, 64, 16, 16, 4, fe2o3_device::KernelCapabilityBrand<'kernel, KernelA, CurrentTarget, RegisteredLaunch>>>`
+
+error[E0308]: mismatched types
+  --> tests/ui/fail/context_2d_index_cross_kernel_substitution.rs:19:9
+   |
+18 |     let _: Option<DisjointRowStripe2D<Index1D, 64, 4, BrandB<'kernel>>> =
+   |            ------------------------------------------------------------ expected due to this
+19 |         index.checked_row_striped_2d::<64, 4>();
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `KernelB`, found `KernelA`
+   |
+   = note: expected enum `Option<DisjointRowStripe2D<Index1D, 64, 4, fe2o3_device::KernelCapabilityBrand<'kernel, KernelB, CurrentTarget, RegisteredLaunch>>>`
+              found enum `Option<DisjointRowStripe2D<Index1D, 64, 4, fe2o3_device::KernelCapabilityBrand<'kernel, KernelA, CurrentTarget, RegisteredLaunch>>>`

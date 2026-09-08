@@ -7,10 +7,14 @@
 
 use crate::{
     CompilerGeneratedKernelExpectationRosterV1, KernelId, RecoveredWorkerV3AdmissionErrorV1,
-    RecoveredWorkerV3PinnedDescriptorV1, RecoveredWorkerV3PinnedRosterV1,
-    admit_recovered_worker_v3_descriptor_v1, admit_recovered_worker_v3_roster_v1,
+    RecoveredWorkerV3CapabilityApplicationAdmissionErrorV1,
+    RecoveredWorkerV3CapabilityApplicationV1, RecoveredWorkerV3PinnedDescriptorV1,
+    RecoveredWorkerV3PinnedRosterV1, admit_recovered_worker_v3_descriptor_v1,
+    admit_recovered_worker_v3_roster_v1,
 };
-use fe2o3_artifact_transaction::WorkerV3LoadReadinessReceiptV1;
+use fe2o3_artifact_transaction::{
+    RetainedDurableDirectoryErrorV1, RetainedDurableDirectoryV1, WorkerV3LoadReadinessReceiptV1,
+};
 use fe2o3_runtime_protocol::{
     MAX_WORKER_V3_APPLICATION_OCCURRENCE_BYTES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2,
     RecoveredWorkerV3LoadEnvelopeV2, WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
@@ -22,8 +26,9 @@ use fe2o3_runtime_protocol::{
     WorkerV3ApplicationHandoffChallengeV1, WorkerV3ApplicationHandoffCommitmentV1,
     WorkerV3ApplicationHandoffExpectationV1, WorkerV3ApplicationHandoffProtocolErrorV1,
     WorkerV3ApplicationIdentityV1, WorkerV3ApplicationInputOccurrenceV1,
-    WorkerV3ApplicationOccurrenceV1, WorkerV3LoadEnvelopeErrorV2, WorkerV3LoadEnvelopeIdentityV1,
-    WorkerV3LoadEnvelopeWireV2, recover_worker_v3_load_envelope_v2,
+    WorkerV3ApplicationOccurrenceV1, WorkerV3CapabilityResultCarrierErrorV1,
+    WorkerV3LoadEnvelopeErrorV2, WorkerV3LoadEnvelopeIdentityV1, WorkerV3LoadEnvelopeWireV2,
+    recover_worker_v3_capability_result_carrier_v1, recover_worker_v3_load_envelope_v2,
 };
 use rustix::fs::{FileType, OFlags, fcntl_getfl, fcntl_setfl, fstat};
 use std::error::Error;
@@ -203,6 +208,22 @@ impl<R> WorkerV3ApplicationHandoffAdmissionV1 for RecoveredWorkerV3PinnedRosterV
     }
 }
 
+impl<R> WorkerV3ApplicationHandoffAdmissionV1 for RecoveredWorkerV3CapabilityApplicationV1<R>
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+{
+    fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+        self.revalidate_currentness()
+    }
+
+    fn retain_application_descriptors(
+        self,
+        descriptors: RetainedWorkerV3ApplicationDescriptorsV1,
+    ) -> Self {
+        self.retain_application_descriptors(descriptors)
+    }
+}
+
 struct ClaimedInheritedWorkerV3ApplicationHandoffV1 {
     envelope: OwnedFd,
     directory: OwnedFd,
@@ -274,6 +295,40 @@ where
         claimed.occurrence,
         claimed.commitment,
         claimed.challenge,
+    )
+}
+
+/// Consumes the inherited V2 envelope together with its exact durable V5 result carrier.
+///
+/// This is the application-side W6-to-W7 boundary. Missing, stale, consumed, cross-target, or
+/// cross-attempt carrier custody is rejected here rather than represented by a per-application
+/// blocker.
+///
+/// # Safety
+///
+/// The caller must invoke this operation before creating threads, installing signal handlers that
+/// can access the environment or descriptor table, spawning descendants, or allowing unrelated
+/// descriptor mutation. A hostile same-process caller violates this cooperative contract.
+pub(crate) unsafe fn consume_inherited_worker_v3_capability_application_handoff_v1<R>()
+-> Result<RecoveredWorkerV3CapabilityApplicationV1<R>, WorkerV3ApplicationDescriptorHandoffErrorV1>
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+{
+    // SAFETY: this function exposes the same cooperative startup contract as the private claim.
+    let claimed = unsafe { claim_inherited_worker_v3_application_handoff_v1()? };
+    consume_worker_v3_application_handoff_with_admission_v1(
+        claimed.envelope,
+        claimed.directory,
+        claimed.acknowledgment,
+        claimed.occurrence,
+        claimed.commitment,
+        claimed.challenge,
+        |recovered, durable| {
+            let carrier = recover_worker_v3_capability_result_carrier_v1(&durable, &recovered)
+                .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::CapabilityCarrier)?;
+            RecoveredWorkerV3CapabilityApplicationV1::admit(recovered, carrier, durable)
+                .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::CapabilityApplication)
+        },
     )
 }
 
@@ -398,7 +453,10 @@ pub(crate) fn consume_worker_v3_application_handoff_descriptors_v1(
         occurrence,
         commitment,
         challenge,
-        |recovered| admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id),
+        |recovered, _durable| {
+            admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id)
+                .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Admission)
+        },
     )
 }
 
@@ -421,7 +479,10 @@ where
         occurrence,
         commitment,
         challenge,
-        admit_recovered_worker_v3_roster_v1::<R>,
+        |recovered, _durable| {
+            admit_recovered_worker_v3_roster_v1::<R>(recovered)
+                .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Admission)
+        },
     )
 }
 
@@ -435,7 +496,8 @@ fn consume_worker_v3_application_handoff_with_admission_v1<Admission>(
     challenge: WorkerV3ApplicationHandoffChallengeV1,
     admit: impl FnOnce(
         RecoveredWorkerV3LoadEnvelopeV2,
-    ) -> Result<Admission, RecoveredWorkerV3AdmissionErrorV1>,
+        RetainedDurableDirectoryV1,
+    ) -> Result<Admission, WorkerV3ApplicationDescriptorHandoffErrorV1>,
 ) -> Result<Admission, WorkerV3ApplicationDescriptorHandoffErrorV1>
 where
     Admission: WorkerV3ApplicationHandoffAdmissionV1,
@@ -446,6 +508,12 @@ where
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)?;
     set_close_on_exec(&acknowledgment, "Worker V3 acknowledgment")
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)?;
+    let durable_descriptor = rustix::io::fcntl_dupfd_cloexec(&artifact_directory, 0)
+        .map_err(io::Error::from)
+        .map_err(RetainedDurableDirectoryErrorV1::from)
+        .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::DurableDirectory)?;
+    let durable = RetainedDurableDirectoryV1::admit_service_owned(durable_descriptor)
+        .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::DurableDirectory)?;
     let directory = File::from(artifact_directory);
     let envelope = File::from(envelope);
     let acknowledgment = File::from(acknowledgment);
@@ -502,8 +570,7 @@ where
     if recovered_envelope.as_slice() != retained.exact_envelope_bytes.as_ref() {
         return Err(WorkerV3ApplicationDescriptorHandoffErrorV1::RecoveredEnvelopeMismatch);
     }
-    let recovered =
-        admit(recovered).map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Admission)?;
+    let recovered = admit(recovered, durable)?;
     seal_descriptor_occurrences(&descriptor_identities)
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)?;
     retained.revalidate()?;
@@ -1484,6 +1551,9 @@ pub enum WorkerV3ApplicationDescriptorHandoffErrorV1 {
     Descriptor(ApplicationDescriptorHandoffErrorV1),
     Protocol(WorkerV3ApplicationHandoffProtocolErrorV1),
     Envelope(WorkerV3LoadEnvelopeErrorV2),
+    DurableDirectory(RetainedDurableDirectoryErrorV1),
+    CapabilityCarrier(WorkerV3CapabilityResultCarrierErrorV1),
+    CapabilityApplication(RecoveredWorkerV3CapabilityApplicationAdmissionErrorV1),
     EnvelopeSize { actual: i64 },
     UnsafeEnvelope,
     EnvelopeNotLinked,
@@ -1536,6 +1606,24 @@ impl fmt::Display for WorkerV3ApplicationDescriptorHandoffErrorV1 {
             Self::Envelope(error) => {
                 write!(formatter, "invalid inherited Worker V3 envelope: {error}")
             }
+            Self::DurableDirectory(error) => {
+                write!(
+                    formatter,
+                    "invalid inherited Worker V3 durable directory: {error}"
+                )
+            }
+            Self::CapabilityCarrier(error) => {
+                write!(
+                    formatter,
+                    "failed to recover inherited Worker V3 V5 carrier: {error}"
+                )
+            }
+            Self::CapabilityApplication(error) => {
+                write!(
+                    formatter,
+                    "failed to bind inherited Worker V3 capability application: {error}"
+                )
+            }
             Self::EnvelopeSize { actual } => write!(
                 formatter,
                 "inherited Worker V3 envelope size {actual} is invalid"
@@ -1583,6 +1671,9 @@ impl Error for WorkerV3ApplicationDescriptorHandoffErrorV1 {
             Self::Descriptor(error) => Some(error),
             Self::Protocol(error) => Some(error),
             Self::Envelope(error) => Some(error),
+            Self::DurableDirectory(error) => Some(error),
+            Self::CapabilityCarrier(error) => Some(error),
+            Self::CapabilityApplication(error) => Some(error),
             Self::Admission(error) => Some(error),
             _ => None,
         }

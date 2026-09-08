@@ -13,16 +13,17 @@ use std::{error::Error, fmt, fmt::Write as _};
 
 use fe2o3_functional_proof::{
     FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2,
-    FunctionalRefinementReceiptIdentityV2, FunctionalRefinementSubjectsV2,
+    FunctionalRefinementReceiptIdentityV2, FunctionalRefinementSubjectsV2, ParallelFoldOrderV1,
     ParallelNumericalPolicyV1, ParallelReferenceContractV1, ParallelScheduleRelationV1,
-    VerusToolchainIdentityV2,
+    SemanticCollectiveKindV1, VerusToolchainIdentityV2,
 };
 use fe2o3_pliron::{
     HARD_MAX_SESSION_OPERATION_TREE_ITEMS, ProductionMiddleEndEvidenceV5,
     ProductionMirPlironSemanticContractErrorV1, ProductionMirPlironSemanticContractReportV1,
     ProductionParallelReferenceContractErrorV1, ProductionParallelReferenceContractReportV1,
     ProductionRankedKernelLoweringInputV1, ProductionReconciledMirPlironKernelV1,
-    ProductionRefinementStagingPolicyV2, ProductionTotalOutputStagingErrorV2,
+    ProductionRefinementStagingPolicyV2, ProductionSemanticMirOwnerV1,
+    ProductionTotalOutputStagingErrorV2, production_ranked_value_identity_v1,
     require_mir_pliron_semantic_contract_v1, require_parallel_reference_contract_v1,
     require_total_output_staging_v2,
 };
@@ -33,9 +34,14 @@ use crate::functional_refinement_receipt_v2::{
     RetainedImportedFunctionalRefinementReceiptV2,
     execute_and_import_generated_mir_pliron_composition_locally_v1,
 };
+use crate::production_functional_semantic_derivation_v1::{
+    derive_production_functional_semantics_from_effect_ir_v1,
+    derive_production_functional_semantics_from_ir_v1,
+};
 use crate::{
     CanonicalGeneratedVerusProofInputV3, FunctionalRefinementVerusExecutionErrorV2,
-    FunctionalRefinementVerusRuntimeLeaseV1,
+    FunctionalRefinementVerusRuntimeLeaseV1, ProductionFunctionalSemanticDerivationErrorV1,
+    ProductionIrDerivedFunctionalSemanticsV1,
 };
 
 const AGGREGATE_OBLIGATION_DOMAIN_V1: &[u8] =
@@ -177,6 +183,78 @@ pub struct ProductionVerusVerifiedMirPlironKernelV1 {
     _staging_policy: ProductionRefinementStagingPolicyV2,
 }
 
+/// Move-only production result whose aggregate proof was generated only after
+/// independently normalizing the authenticated safe-reference MIR and the
+/// exact ranked graph consumed by the proof execution.
+#[derive(Debug)]
+pub struct ProductionIrDerivedVerusVerifiedMirPlironKernelV2 {
+    verified: ProductionVerusVerifiedMirPlironKernelV1,
+    derivation: ProductionIrDerivedFunctionalSemanticsV1,
+}
+
+/// Move-only exact proof owner for rustc's policy-checked bounded
+/// safe-reference effect projection and the borrowed live ranked graph.
+#[derive(Debug)]
+#[must_use = "dropping this value abandons exact reference-effect and Verus proof custody"]
+pub struct ProductionEffectIrDerivedVerusVerifiedMirPlironKernelV3 {
+    derivation: ProductionIrDerivedFunctionalSemanticsV1,
+    aggregate: ProductionMirPlironPerCompilationVerusExecutionV1,
+    _staging_policy: ProductionRefinementStagingPolicyV2,
+}
+
+impl ProductionEffectIrDerivedVerusVerifiedMirPlironKernelV3 {
+    pub const fn derivation(&self) -> &ProductionIrDerivedFunctionalSemanticsV1 {
+        &self.derivation
+    }
+
+    pub const fn per_compilation_verus_report(
+        &self,
+    ) -> ProductionMirPlironPerCompilationVerusReportV1 {
+        self.aggregate.report()
+    }
+
+    pub const fn per_compilation_verus_execution(
+        &self,
+    ) -> &ProductionMirPlironPerCompilationVerusExecutionV1 {
+        &self.aggregate
+    }
+
+    pub const fn retains_policy_checked_reference_effect_projection(&self) -> bool {
+        true
+    }
+
+    pub const fn grants_llvm_or_later_authority(&self) -> bool {
+        false
+    }
+}
+
+impl ProductionIrDerivedVerusVerifiedMirPlironKernelV2 {
+    pub const fn verified(&self) -> &ProductionVerusVerifiedMirPlironKernelV1 {
+        &self.verified
+    }
+
+    pub const fn derivation(&self) -> &ProductionIrDerivedFunctionalSemanticsV1 {
+        &self.derivation
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        ProductionVerusVerifiedMirPlironKernelV1,
+        ProductionIrDerivedFunctionalSemanticsV1,
+    ) {
+        (self.verified, self.derivation)
+    }
+
+    pub const fn caller_authored_expressions_are_accepted(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_llvm_or_later_authority(&self) -> bool {
+        false
+    }
+}
+
 impl ProductionVerusVerifiedMirPlironKernelV1 {
     pub const fn structural(&self) -> &ProductionReconciledMirPlironKernelV1 {
         &self.structural
@@ -229,6 +307,7 @@ pub enum ProductionMirPlironPerCompilationVerusErrorV1 {
     CounterOverflow,
     GeneratedSource(String),
     UnsupportedFormulaReplayRole { output: usize, role: &'static str },
+    FunctionalDerivation(ProductionFunctionalSemanticDerivationErrorV1),
     Execution(FunctionalRefinementVerusExecutionErrorV2),
 }
 
@@ -272,6 +351,7 @@ impl fmt::Display for ProductionMirPlironPerCompilationVerusErrorV1 {
                 formatter,
                 "output {output} requires unsupported formula-replay role `{role}`; no aggregate functional authority was granted",
             ),
+            Self::FunctionalDerivation(error) => error.fmt(formatter),
             Self::Execution(error) => write!(
                 formatter,
                 "authenticated per-compilation MIR/PLIRON Verus execution failed: {error}",
@@ -286,10 +366,106 @@ impl Error for ProductionMirPlironPerCompilationVerusErrorV1 {
             Self::TotalOutput(error) => Some(error),
             Self::SemanticContract(error) => Some(error),
             Self::ParallelContract(error) => Some(error),
+            Self::FunctionalDerivation(error) => Some(error),
             Self::Execution(error) => Some(error),
             _ => None,
         }
     }
+}
+
+/// Production entrypoint for an aggregate proof derived from authenticated IR.
+///
+/// This function first normalizes every safe-reference output from the retained
+/// Rust MIR owner and checks it against the exact ranked reference root and GPU
+/// write consumed by `structural`. It then consumes that same structural owner
+/// in the existing signed Verus execution/import path. No caller-authored
+/// expression plan enters either step.
+///
+/// The production compiler retains this result in its ranked proof roster and
+/// consumes it with the exact authenticated reference bindings and final V13
+/// graph before W4 publication. This entrypoint grants no independent artifact
+/// or lowering authority.
+pub fn execute_ir_derived_mir_pliron_semantic_contract_per_compilation_v2(
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
+    safe_reference: &ProductionSemanticMirOwnerV1,
+    structural: ProductionReconciledMirPlironKernelV1,
+    parallel_contract: ParallelReferenceContractV1,
+    timeout_seconds: u32,
+) -> Result<
+    ProductionIrDerivedVerusVerifiedMirPlironKernelV2,
+    ProductionMirPlironPerCompilationVerusErrorV1,
+> {
+    let parallel_report = require_parallel_reference_contract_v1(
+        structural.ranked(),
+        structural.evidence(),
+        structural.semantic_contract_report(),
+        structural.semantic_contract(),
+        &parallel_contract,
+    )
+    .map_err(ProductionMirPlironPerCompilationVerusErrorV1::ParallelContract)?;
+    let derivation = derive_production_functional_semantics_from_ir_v1(
+        safe_reference,
+        &structural,
+        structural.semantic_contract_report(),
+        &parallel_contract,
+        parallel_report,
+    )
+    .map_err(ProductionMirPlironPerCompilationVerusErrorV1::FunctionalDerivation)?;
+    let verified = execute_mir_pliron_semantic_contract_per_compilation_v1(
+        runtime,
+        structural,
+        parallel_contract,
+        timeout_seconds,
+    )?;
+    Ok(ProductionIrDerivedVerusVerifiedMirPlironKernelV2 {
+        verified,
+        derivation,
+    })
+}
+
+/// Production entrypoint when rustc retains bounded safe-reference effects in
+/// the policy-checked ranked owner. The exact typed reference expressions are
+/// reconciled before the aggregate proof is executed; no digest is interpreted
+/// as IR and no semantic expression is accepted from the caller.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_effect_ir_derived_mir_pliron_semantic_contract_per_compilation_v3(
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    evidence: &ProductionMiddleEndEvidenceV5,
+    contract: &fe2o3_functional_proof::MirPlironSemanticContractV1,
+    structural_report: ProductionMirPlironSemanticContractReportV1,
+    parallel_contract: &ParallelReferenceContractV1,
+    parallel_report: ProductionParallelReferenceContractReportV1,
+    timeout_seconds: u32,
+) -> Result<
+    ProductionEffectIrDerivedVerusVerifiedMirPlironKernelV3,
+    ProductionMirPlironPerCompilationVerusErrorV1,
+> {
+    let derivation = derive_production_functional_semantics_from_effect_ir_v1(
+        ranked,
+        evidence,
+        contract,
+        structural_report,
+        parallel_contract,
+        parallel_report,
+    )
+    .map_err(ProductionMirPlironPerCompilationVerusErrorV1::FunctionalDerivation)?;
+    let (aggregate, staging_policy) =
+        execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1(
+            runtime,
+            ranked,
+            evidence,
+            contract,
+            structural_report,
+            parallel_contract,
+            parallel_report,
+            timeout_seconds,
+        )?;
+    Ok(ProductionEffectIrDerivedVerusVerifiedMirPlironKernelV3 {
+        derivation,
+        aggregate,
+        _staging_policy: staging_policy,
+    })
 }
 
 /// Executes and imports one aggregate formula-replay program for the exact
@@ -587,30 +763,7 @@ fn append_contract_instantiations_v1(
     let mut replays = Vec::with_capacity(contract.outputs().len());
     for (index, output) in contract.outputs().iter().enumerate() {
         let relation = &parallel_contract.relations()[index];
-        if relation.tensor_refinement_identity().is_some() {
-            return Err(
-                ProductionMirPlironPerCompilationVerusErrorV1::UnsupportedFormulaReplayRole {
-                    output: index,
-                    role: "tensor-component-composition",
-                },
-            );
-        }
-        let unsupported_schedule = match relation.schedule() {
-            ParallelScheduleRelationV1::PointwiseBijection => None,
-            ParallelScheduleRelationV1::Permutation { .. } => Some("permutation-schedule-proof"),
-            ParallelScheduleRelationV1::Fold { .. } => Some("fold-schedule-proof"),
-            ParallelScheduleRelationV1::BoundedRecurrence { .. } => {
-                Some("bounded-recurrence-schedule-proof")
-            }
-        };
-        if let Some(role) = unsupported_schedule {
-            return Err(
-                ProductionMirPlironPerCompilationVerusErrorV1::UnsupportedFormulaReplayRole {
-                    output: index,
-                    role,
-                },
-            );
-        }
+        require_ir_derived_aggregate_roles_v1(kernel, contract, output, relation, index)?;
         match relation.numerical_policy() {
             ParallelNumericalPolicyV1::ExactBitVector
             | ParallelNumericalPolicyV1::IeeeOperatorCongruence { .. } => {}
@@ -714,6 +867,152 @@ fn append_contract_instantiations_v1(
         );
     }
     Ok(())
+}
+
+/// Resolves schedule and tensor roles only from the contract already
+/// reconstructed from the ranked graph. The relation selects a role; it never
+/// supplies its transition, operator, mapping, output roots, or component
+/// product as a logical premise. The generated theorem below still proves the
+/// complete output formula extensionally for every free semantic symbol.
+fn require_ir_derived_aggregate_roles_v1(
+    kernel: &fe2o3_pliron::ProductionRankedKernelV1,
+    contract: &fe2o3_functional_proof::MirPlironSemanticContractV1,
+    output: &fe2o3_functional_proof::SemanticOutputContractV1,
+    relation: &fe2o3_functional_proof::ParallelOutputRelationV1,
+    output_index: usize,
+) -> Result<(), ProductionMirPlironPerCompilationVerusErrorV1> {
+    let role_error =
+        |role| ProductionMirPlironPerCompilationVerusErrorV1::UnsupportedFormulaReplayRole {
+            output: output_index,
+            role,
+        };
+    let requested_collective = match relation.schedule() {
+        ParallelScheduleRelationV1::PointwiseBijection => {
+            if contract.collectives().iter().any(|item| {
+                item.actual() == output.actual() && item.expected() == output.reference()
+            }) {
+                return Err(role_error("pointwise-output-has-collective-role"));
+            }
+            None
+        }
+        ParallelScheduleRelationV1::Permutation { collective } => Some((
+            collective,
+            SemanticCollectiveKindV1::PermutationGather,
+            None,
+        )),
+        ParallelScheduleRelationV1::Fold {
+            collective,
+            order: ParallelFoldOrderV1::Preserved,
+            ..
+        } => Some((collective, SemanticCollectiveKindV1::FiniteFold, None)),
+        ParallelScheduleRelationV1::Fold { .. } => {
+            return Err(role_error("fold-reordering-theorem"));
+        }
+        ParallelScheduleRelationV1::BoundedRecurrence {
+            collective,
+            loop_contract,
+            ..
+        } => Some((
+            collective,
+            SemanticCollectiveKindV1::FiniteRecurrence,
+            Some(loop_contract),
+        )),
+    };
+
+    if let Some((identity, kind, loop_identity)) = requested_collective {
+        let matches = contract
+            .collectives()
+            .iter()
+            .filter(|item| {
+                item.identity() == identity
+                    && item.kind() == kind
+                    && item.view_identity() == output.view_identity()
+                    && item.target_domain() == output.output_domain()
+                    && item.actual() == output.actual()
+                    && item.expected() == output.reference()
+            })
+            .collect::<Vec<_>>();
+        let [derived] = matches.as_slice() else {
+            return Err(role_error("compiler-derived-collective-role"));
+        };
+        let live_matches = kernel
+            .blocks()
+            .iter()
+            .flat_map(|block| block.operations())
+            .filter(|operation| match operation {
+                fe2o3_pliron::ProductionRankedOperationV1::CollectiveSemantics {
+                    contract: live,
+                    view,
+                    actual,
+                    expected,
+                    witness0,
+                    witness1,
+                } => {
+                    words_digest_v1(live.contract_identity()) == derived.identity()
+                        && production_ranked_value_identity_v1(*view) == derived.view_identity()
+                        && production_ranked_value_identity_v1(*actual) == derived.actual()
+                        && production_ranked_value_identity_v1(*expected) == derived.expected()
+                        && production_ranked_value_identity_v1(*witness0) == derived.witness0()
+                        && production_ranked_value_identity_v1(*witness1) == derived.witness1()
+                        && live.domain_bound() == derived.domain_bound()
+                        && live.step_bound() == derived.step_bound()
+                }
+                _ => false,
+            })
+            .count();
+        if live_matches != 1 {
+            return Err(role_error("exact-ranked-collective-role"));
+        }
+        if let Some(loop_identity) = loop_identity {
+            let loops = contract
+                .loops()
+                .iter()
+                .filter(|item| {
+                    item.identity() == loop_identity
+                        && item.iteration_domain() == derived.source_domain()
+                        && item.maximum_steps() >= derived.step_bound()
+                })
+                .count();
+            if loops != 1 {
+                return Err(role_error("exact-ranked-bounded-recurrence-loop"));
+            }
+        }
+    }
+
+    if let Some(receipt_identity) = relation.tensor_refinement_identity() {
+        let tensor_matches = kernel
+            .blocks()
+            .iter()
+            .flat_map(|block| block.operations())
+            .filter(|operation| match operation {
+                fe2o3_pliron::ProductionRankedOperationV1::RequireTensorRefinement {
+                    contract: tensor,
+                    proof,
+                } => {
+                    proof.receipt_identity().digest() == receipt_identity
+                        && production_ranked_value_identity_v1(tensor.output_view())
+                            == output.view_identity()
+                        && production_ranked_value_identity_v1(tensor.actual()) == output.actual()
+                        && production_ranked_value_identity_v1(tensor.reference())
+                            == output.reference()
+                        && !tensor.components().is_empty()
+                }
+                _ => false,
+            })
+            .count();
+        if tensor_matches != 1 {
+            return Err(role_error("complete-ranked-tensor-component-product"));
+        }
+    }
+    Ok(())
+}
+
+fn words_digest_v1(words: [u64; 4]) -> DigestV1 {
+    let mut bytes = [0_u8; 32];
+    for (index, word) in words.into_iter().enumerate() {
+        bytes[index * 8..(index + 1) * 8].copy_from_slice(&word.to_le_bytes());
+    }
+    DigestV1::from_untrusted_bytes(bytes)
 }
 
 fn require_aggregate_output_limit_v1(
@@ -856,8 +1155,13 @@ const GENERATED_COMPOSITION_THEOREM_V1: &str =
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, process::Command};
+
     use super::*;
-    use dialect_kernel::{AccessKindAttr, OwnershipCoverageAttr, OwnershipPartitionAttr};
+    use dialect_kernel::{
+        AccessKindAttr, OwnershipCoverageAttr, OwnershipPartitionAttr, SemanticCoverageBindingAttr,
+        SemanticEvaluationOrderAttr,
+    };
     use ed25519_dalek::{Signer as _, SigningKey};
     use fe2o3_functional_proof::{
         COMPLETE_GPU_HIERARCHY_V1, FunctionalRefinementBoundaryV2,
@@ -865,17 +1169,20 @@ mod tests {
         FunctionalRefinementReceiptImporterV2, FunctionalRefinementResultV2,
         MirPlironSemanticContractV1, ParallelFoldOrderV1, ParallelNumericalPolicyV1,
         ParallelOutputRelationV1, ParallelReferenceContractV1, ParallelScheduleRelationV1,
-        SafeReferenceKindV2, SemanticEvaluationOrderV1, SemanticFiniteDomainV1,
-        SemanticFiniteExtentV1, SemanticNumericalPolicyV1, SemanticOutputContractV1,
-        SemanticScalarTypeV1, SemanticTypedRootV1, UnsignedFunctionalRefinementReceiptV2,
+        SafeReferenceKindV2, SemanticCollectiveContractV1, SemanticEvaluationOrderV1,
+        SemanticFiniteDomainV1, SemanticFiniteExtentV1, SemanticNumericalPolicyV1,
+        SemanticOutputContractV1, SemanticScalarTypeV1, SemanticTypedRootV1,
+        UnsignedFunctionalRefinementReceiptV2,
     };
     use fe2o3_pliron::{
+        ProductionCollectiveSemanticContractV1, ProductionCollectiveSemanticKindV1,
         ProductionEffectRefinementContractV2, ProductionGpuWriteSiteV2,
         ProductionNumericalContractV2, ProductionRankedBlockV1, ProductionRankedKernelV1,
         ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
         ProductionRankedValueV1, ProductionReferenceOutputSiteV2, ProductionReferenceProofV2,
-        ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2,
-        normalized_effect_refinement_hash_for_kernel_v2, production_effect_contract_identity_v1,
+        ProductionSemanticBinaryOpV2, ProductionSemanticExpressionV2,
+        ProductionSemanticScalarTypeV2, normalized_effect_refinement_hash_for_kernel_v2,
+        production_effect_contract_identity_v1,
     };
 
     fn digest(tag: u8) -> DigestV1 {
@@ -1151,6 +1458,187 @@ mod tests {
                 .unwrap(),
             proof,
         )
+    }
+
+    fn words(identity: DigestV1) -> [u64; 4] {
+        let mut words = [0_u64; 4];
+        for (word, bytes) in words.iter_mut().zip(identity.as_bytes().chunks_exact(8)) {
+            *word = u64::from_le_bytes(bytes.try_into().unwrap());
+        }
+        words
+    }
+
+    fn fold_expression(reordered: bool) -> ProductionSemanticExpressionV2 {
+        let scalar = ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 32,
+        };
+        let symbol = |symbol| ProductionSemanticExpressionV2::Symbol { symbol, scalar };
+        let subtract = |lhs, rhs| ProductionSemanticExpressionV2::Binary {
+            operation: ProductionSemanticBinaryOpV2::Subtract,
+            scalar,
+            overflow: fe2o3_pliron::ProductionOverflowContractV2::Wrapping,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        };
+        if reordered {
+            subtract(symbol(0), subtract(symbol(1), symbol(2)))
+        } else {
+            subtract(subtract(symbol(0), symbol(1)), symbol(2))
+        }
+    }
+
+    fn bound_fold_effect_kernel(reordered: bool) -> (ProductionRankedKernelV1, DigestV1) {
+        let (kernel, _) = bound_effect_kernel();
+        let mut operations = kernel.blocks()[0].operations().to_vec();
+        let ProductionRankedOperationV1::RequireEffectRefinement { contract, .. } =
+            operations[9].clone()
+        else {
+            unreachable!()
+        };
+        operations[3] = ProductionRankedOperationV1::SemanticExpression {
+            result: ProductionRankedValueIdV1::new(2),
+            expression: fold_expression(reordered),
+            numerical_contract: ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+        };
+        operations[4] = ProductionRankedOperationV1::SemanticExpression {
+            result: ProductionRankedValueIdV1::new(3),
+            expression: fold_expression(false),
+            numerical_contract: ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+        };
+        operations[9] = ProductionRankedOperationV1::RequestEffectRefinement {
+            contract,
+            subjects: replay_subjects(),
+        };
+        let collective_identity = digest(50);
+        let domain_identity = digest(21);
+        operations.push(ProductionRankedOperationV1::CollectiveSemantics {
+            contract: ProductionCollectiveSemanticContractV1::new(
+                ProductionCollectiveSemanticKindV1::FiniteFold,
+                words(collective_identity),
+                words(domain_identity),
+                words(domain_identity),
+                3,
+                3,
+                SemanticEvaluationOrderAttr::Ascending,
+                ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                SemanticCoverageBindingAttr::CollectiveContributions,
+            )
+            .unwrap(),
+            view: ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(0)),
+            actual: ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(2)),
+            expected: ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(3)),
+            witness0: ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(2)),
+            witness1: ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(3)),
+        });
+        let skeleton = ProductionRankedKernelV1::new(
+            kernel.function_name(),
+            kernel.argument_count(),
+            vec![ProductionRankedBlockV1::new(
+                operations,
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap();
+        let (request, proof) = test_effect_request(&skeleton, 9, 101);
+        (
+            skeleton
+                .bind_functional_refinement_request_v2(0, 9, request)
+                .unwrap(),
+            proof,
+        )
+    }
+
+    fn fold_contract() -> MirPlironSemanticContractV1 {
+        let local = |value| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(value));
+        let domain = digest(21);
+        let actual = production_ranked_value_identity_v1(local(2));
+        let reference = production_ranked_value_identity_v1(local(3));
+        let view = production_ranked_value_identity_v1(local(0));
+        let collective = digest(50);
+        let root = |identity| {
+            SemanticTypedRootV1::new(
+                identity,
+                digest(24),
+                domain,
+                SemanticScalarTypeV1::Unsigned(32),
+                SemanticNumericalPolicyV1::ExactBitVector,
+            )
+            .unwrap()
+        };
+        MirPlironSemanticContractV1::new(
+            digest(18),
+            digest(19),
+            digest(20),
+            vec![
+                SemanticFiniteDomainV1::new(domain, vec![SemanticFiniteExtentV1::Static(3)])
+                    .unwrap(),
+            ],
+            vec![root(actual), root(reference)],
+            vec![],
+            vec![
+                SemanticCollectiveContractV1::new(
+                    collective,
+                    SemanticCollectiveKindV1::FiniteFold,
+                    view,
+                    domain,
+                    domain,
+                    actual,
+                    reference,
+                    actual,
+                    reference,
+                    3,
+                    3,
+                    SemanticEvaluationOrderV1::SequentialAscending,
+                    fe2o3_functional_proof::SemanticCoverageBindingV1::CollectiveContributions,
+                )
+                .unwrap(),
+            ],
+            vec![
+                SemanticOutputContractV1::new(
+                    production_effect_contract_identity_v1(73),
+                    view,
+                    domain,
+                    actual,
+                    reference,
+                    vec![],
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn fold_parallel_contract(
+        contract: &MirPlironSemanticContractV1,
+        proof: DigestV1,
+    ) -> ParallelReferenceContractV1 {
+        let output = &contract.outputs()[0];
+        ParallelReferenceContractV1::new(
+            contract.canonical_sha256(),
+            digest(34),
+            vec![
+                ParallelOutputRelationV1::new(
+                    digest(27),
+                    output.identity(),
+                    output.output_domain(),
+                    output.view_identity(),
+                    digest(32),
+                    digest(33),
+                    ParallelScheduleRelationV1::Fold {
+                        collective: digest(50),
+                        order: ParallelFoldOrderV1::Preserved,
+                        reference_order: SemanticEvaluationOrderV1::SequentialAscending,
+                    },
+                    ParallelNumericalPolicyV1::ExactBitVector,
+                    COMPLETE_GPU_HIERARCHY_V1.to_vec(),
+                    None,
+                    proof,
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
     }
 
     fn bound_two_effect_kernel() -> (ProductionRankedKernelV1, [DigestV1; 2]) {
@@ -1647,6 +2135,45 @@ mod tests {
     }
 
     #[test]
+    fn pinned_rust_verify_accepts_preserved_fold_and_rejects_reordered_transition() {
+        let rust_verify = std::env::var_os("FE2O3_PINNED_RUST_VERIFY").unwrap_or_else(|| {
+            "/home/harsh/.cache/fe2o3-verus-0.2026.08.02/verus-x86-linux/verus".into()
+        });
+        assert!(
+            std::path::Path::new(&rust_verify).is_file(),
+            "the reviewed pinned rust_verify executable is mandatory: {}",
+            std::path::Path::new(&rust_verify).display(),
+        );
+        let directory = std::env::temp_dir().join(format!(
+            "fe2o3-ranked-fold-order-verus-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let contract = fold_contract();
+        for (name, reordered, expected_success) in
+            [("preserved", false, true), ("reordered", true, false)]
+        {
+            let (kernel, proof) = bound_fold_effect_kernel(reordered);
+            let parallel = fold_parallel_contract(&contract, proof);
+            let mut generated = GENERATED_COMPOSITION_THEOREM_V1.to_owned();
+            append_contract_instantiations_v1(&mut generated, &kernel, &contract, &parallel)
+                .unwrap();
+            generated.push_str("\nfn main() {}\n");
+            let path = directory.join(format!("{name}.rs"));
+            fs::write(&path, generated).unwrap();
+            let output = Command::new(&rust_verify).arg(&path).output().unwrap();
+            assert_eq!(
+                output.status.success(),
+                expected_success,
+                "{name} rust_verify result differed; stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn stale_or_swapped_effect_receipt_role_has_no_formula_to_replay() {
         let (kernel, _) = bound_effect_kernel();
         let contract = pointwise_contract(SemanticFiniteExtentV1::Static(1));
@@ -1734,7 +2261,7 @@ mod tests {
             error,
             ProductionMirPlironPerCompilationVerusErrorV1::UnsupportedFormulaReplayRole {
                 output: 0,
-                role: "tensor-component-composition",
+                role: "complete-ranked-tensor-component-product",
             }
         ));
         assert_eq!(generated, GENERATED_COMPOSITION_THEOREM_V1);

@@ -632,6 +632,18 @@ enum SemanticValueBindingV1 {
         variant: Option<u32>,
         payloads: BTreeMap<u32, Vec<SemanticValueBindingV1>>,
     },
+    KernelContext {
+        value: ValueId,
+        context: KernelContextTypeV1,
+    },
+    GlobalCapability {
+        value: ValueId,
+        semantic_view: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+        contract: SemanticCapabilityMemoryContractV1,
+        provenance: SemanticKernelCapabilityProvenanceV1,
+        capability: GlobalCapabilityTypeV1,
+    },
     MathContext,
     CollectiveContext,
     WorkgroupLdsScope,
@@ -747,6 +759,8 @@ fn semantic_binding_kind_v1(binding: &SemanticValueBindingV1) -> &'static str {
             variant: Some(_), ..
         } => "variant-refined enum",
         SemanticValueBindingV1::Enum { variant: None, .. } => "unrefined enum",
+        SemanticValueBindingV1::KernelContext { .. } => "kernel context",
+        SemanticValueBindingV1::GlobalCapability { .. } => "global capability",
         SemanticValueBindingV1::MathContext => "math context",
         SemanticValueBindingV1::CollectiveContext => "collective context",
         SemanticValueBindingV1::WorkgroupLdsScope => "workgroup LDS scope",
@@ -771,6 +785,8 @@ fn semantic_binding_kind_v1(binding: &SemanticValueBindingV1) -> &'static str {
 fn semantic_binding_can_restore_from_unique_source_v1(binding: &SemanticValueBindingV1) -> bool {
     match binding {
         SemanticValueBindingV1::Unit
+        | SemanticValueBindingV1::KernelContext { .. }
+        | SemanticValueBindingV1::GlobalCapability { .. }
         | SemanticValueBindingV1::MathContext
         | SemanticValueBindingV1::CollectiveContext
         | SemanticValueBindingV1::MatrixContext
@@ -831,6 +847,8 @@ fn reauthenticate_capabilities_from_enum_payload_v1(
         SemanticValueBindingV1::Unit
         | SemanticValueBindingV1::Unmaterialized
         | SemanticValueBindingV1::Enum { .. }
+        | SemanticValueBindingV1::KernelContext { .. }
+        | SemanticValueBindingV1::GlobalCapability { .. }
         | SemanticValueBindingV1::MathContext
         | SemanticValueBindingV1::CollectiveContext
         | SemanticValueBindingV1::WorkgroupLdsScope
@@ -856,6 +874,12 @@ impl SemanticValueBindingV1 {
     fn value(&self) -> Result<(ValueId, Type), &'static str> {
         match self {
             Self::Value { id, ty } => Ok((*id, ty.clone())),
+            Self::KernelContext { value, context } => {
+                Ok((*value, Type::KernelContext(context.clone())))
+            }
+            Self::GlobalCapability {
+                value, capability, ..
+            } => Ok((*value, Type::GlobalCapability(capability.clone()))),
             Self::IndexWitness { id, .. } => Ok((*id, Type::INDEX)),
             Self::WaveLane { value, .. } => Ok((*value, Type::Scalar(ScalarType::U32))),
             Self::Unmaterialized => {
@@ -893,6 +917,12 @@ impl SemanticValueBindingV1 {
     fn append_values(&self, values: &mut Vec<(ValueId, Type)>) -> Result<(), &'static str> {
         match self {
             Self::Value { id, ty } => values.push((*id, ty.clone())),
+            Self::KernelContext { value, context } => {
+                values.push((*value, Type::KernelContext(context.clone())))
+            }
+            Self::GlobalCapability {
+                value, capability, ..
+            } => values.push((*value, Type::GlobalCapability(capability.clone()))),
             Self::IndexWitness { id, .. } => values.push((*id, Type::INDEX)),
             Self::WaveLane { value, .. } => {
                 values.push((*value, Type::Scalar(ScalarType::U32)));

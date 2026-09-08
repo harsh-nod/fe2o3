@@ -12,6 +12,7 @@ const OUTPUT_ENV_V3: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V3";
 const OUTPUT_ENV_V4: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V4";
 const OUTPUT_ENV_V5: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V5";
 const OUTPUT_ENV_V6: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V6";
+const OUTPUT_ENV_V8: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V8";
 const CRATE_ENV: &str = "FE2O3_EXTRACT_CRATE_V1";
 const MAX_SYSROOT_OUTPUT_BYTES: u64 = 4096;
 
@@ -100,9 +101,10 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
                     "4" => 4,
                     "5" => 5,
                     "6" => 6,
+                    "8" => 8,
                     _ => {
                         return Err(
-                            "--bundle-version must be exactly 1, 2, 3, 4, 5, or 6".to_owned()
+                            "--bundle-version must be exactly 1, 2, 3, 4, 5, 6, or 8".to_owned()
                         );
                     }
                 };
@@ -220,6 +222,7 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
         .map_err(|error| format!("cannot construct extraction loader path: {error}"))?;
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let output_env = match options.bundle_version {
+        8 => OUTPUT_ENV_V8,
         6 => OUTPUT_ENV_V6,
         5 => OUTPUT_ENV_V5,
         4 => OUTPUT_ENV_V4,
@@ -259,6 +262,7 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
         .env_remove(OUTPUT_ENV_V4)
         .env_remove(OUTPUT_ENV_V5)
         .env_remove(OUTPUT_ENV_V6)
+        .env_remove(OUTPUT_ENV_V8)
         .env(CRATE_ENV, &options.crate_name)
         .env(output_env, &options.output);
     let status = command
@@ -329,7 +333,7 @@ fn reject_conflicting_environment() -> Result<(), String> {
     Ok(())
 }
 
-const fn conflicting_extraction_environment() -> [&'static str; 11] {
+const fn conflicting_extraction_environment() -> [&'static str; 12] {
     [
         OUTPUT_ENV,
         OUTPUT_ENV_V2,
@@ -337,6 +341,7 @@ const fn conflicting_extraction_environment() -> [&'static str; 11] {
         OUTPUT_ENV_V4,
         OUTPUT_ENV_V5,
         OUTPUT_ENV_V6,
+        OUTPUT_ENV_V8,
         "FE2O3_EXTRACT_RANKED_MEMORY_V1",
         "FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1",
         "FE2O3_EXTRACT_GFX942_LLVM_PATH_V1",
@@ -367,7 +372,7 @@ fn absolute_path(current_dir: &Path, path: PathBuf) -> PathBuf {
 }
 
 const fn usage() -> &'static str {
-    "usage: fe2o3-export-sim --crate <rustc-crate-name> --output <bundle.fe2sim> [--bundle-version 1|2|3|4|5|6] [--target gfx942|gfx950] [--target-dir <dir>] [-- <Cargo package/feature args>]"
+    "usage: fe2o3-export-sim --crate <rustc-crate-name> --output <bundle.fe2sim> [--bundle-version 1|2|3|4|5|6|8] [--target gfx942|gfx950] [--target-dir <dir>] [-- <Cargo package/feature args>]"
 }
 
 #[cfg(test)]
@@ -460,6 +465,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(v6.bundle_version, 6);
+        let v8 = parse(
+            vec![
+                OsString::from("--crate"),
+                OsString::from("kernel_crate"),
+                OsString::from("--output"),
+                OsString::from("kernel.fe2sim"),
+                OsString::from("--bundle-version"),
+                OsString::from("8"),
+            ],
+            &env::temp_dir(),
+        )
+        .unwrap();
+        assert_eq!(v8.bundle_version, 8);
         assert!(
             parse(
                 vec![

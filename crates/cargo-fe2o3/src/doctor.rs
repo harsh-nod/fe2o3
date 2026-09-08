@@ -7,13 +7,24 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use fe2o3_compiler_closure_capability::CompilerExecutionClientProfileCapabilityV1;
+use fe2o3_compiler_execution_protocol::{
+    COMPILER_EXECUTION_SUPERVISOR_RUNTIME_DIRECTORY_MODE_V1,
+    COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1, COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1,
+};
+
+use crate::production_capability_completion_v5::PRODUCTION_WORKER_V3_VERIFIER_SOCKET_PATH_V1;
+
 const KFD_PATH: &str = "/dev/kfd";
 const KFD_NODES_PATH: &str = "/sys/class/kfd/kfd/topology/nodes";
 const RENDER_ROOT: &str = "/dev/dri";
 const MAX_TOPOLOGY_NODES: usize = 64;
 const MAX_PROPERTIES_BYTES: u64 = 64 * 1024;
 const MAX_SCALAR_BYTES: u64 = 128;
+const MAX_SUPPLEMENTARY_GROUPS: usize = 65_536;
 const AMD_PCI_VENDOR_ID: u64 = 0x1002;
+const ROOT_ID: u32 = 0;
+const PERMISSION_AND_SPECIAL_BITS: u32 = 0o7777;
 
 const USAGE: &str = "usage: cargo fe2o3 doctor [--require-direct-kfd|--require-tools-present|--require-gfx942|--require-gfx942-and-tools-present|--require-execution]";
 
@@ -42,8 +53,54 @@ struct DoctorReport {
     kfd_status: Result<KfdObservation, String>,
     topology_status: Result<Vec<DeviceObservation>, String>,
     compiler: Option<CompilerToolchain>,
+    client_profile_status: Result<ClientProfileObservation, String>,
+    supervisor_socket_status: Result<SupervisorSocketObservation, String>,
     rocgdb: Option<PathBuf>,
     rocprofv3: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ClientProfileObservation {
+    supervisor_uid: u32,
+    supervisor_gid: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SupervisorSocketObservation {
+    owner: u32,
+    group: u32,
+    mode: u32,
+}
+
+#[derive(Clone, Copy)]
+struct SupervisorSocketPolicy {
+    runtime_owner: u32,
+    runtime_group: u32,
+    runtime_mode: u32,
+    socket_owner: u32,
+    socket_group: Option<u32>,
+    socket_mode: u32,
+    supervisor_uid: Option<u32>,
+}
+
+impl SupervisorSocketPolicy {
+    const fn production(profile: Option<ClientProfileObservation>) -> Self {
+        Self {
+            runtime_owner: ROOT_ID,
+            runtime_group: ROOT_ID,
+            runtime_mode: COMPILER_EXECUTION_SUPERVISOR_RUNTIME_DIRECTORY_MODE_V1,
+            socket_owner: ROOT_ID,
+            socket_group: match profile {
+                Some(profile) => Some(profile.supervisor_gid),
+                None => None,
+            },
+            socket_mode: COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1,
+            supervisor_uid: match profile {
+                Some(profile) => Some(profile.supervisor_uid),
+                None => None,
+            },
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -112,12 +169,23 @@ fn observe() -> DoctorReport {
     } else {
         Err("KFD topology is unavailable on this platform".to_owned())
     };
+    let client_profile_status = if platform_supported {
+        observe_client_profile()
+    } else {
+        Err("the Worker V3 application route requires Linux x86_64".to_owned())
+    };
+    let supervisor_socket_status = observe_supervisor_socket(
+        Path::new(COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1),
+        SupervisorSocketPolicy::production(client_profile_status.as_ref().ok().copied()),
+    );
     let search_path = env::var_os("PATH").unwrap_or_default();
     DoctorReport {
         platform_supported,
         kfd_status,
         topology_status,
         compiler: find_compiler_toolchain(),
+        client_profile_status,
+        supervisor_socket_status,
         rocgdb: find_program(
             &search_path,
             &["rocgdb", "rocgdb-py_3.12", "rocgdb-py_3.13"],
@@ -190,7 +258,38 @@ fn print_report(report: &DoctorReport) {
     println!(
         "cpu-source-check: available cargo-fe2o3-check-and-test; cpu-simulation: available source-export-or-exact-canonical-kir-v7; source-export: extraction-only-no-compiler-or-hardware-authority"
     );
-    println!("application-execution: unavailable worker-v3-application-route-unwired");
+    println!(
+        "worker-v3-application-route: unavailable protected-verifier-peer-and-liveness=unprobed"
+    );
+    println!(
+        "w7-v5-completion-join: unavailable path={} missing=connected-path-v5-admission,authenticated-prepared-transaction-and-live-w4-transfer,completed-owner-return-and-durable-load-carriage",
+        PRODUCTION_WORKER_V3_VERIFIER_SOCKET_PATH_V1,
+    );
+    match &report.client_profile_status {
+        Ok(profile) => println!(
+            "compiler-execution-client-profile: admitted fixed-path supervisor-uid={} supervisor-gid={}",
+            profile.supervisor_uid, profile.supervisor_gid,
+        ),
+        Err(error) => println!(
+            "compiler-execution-client-profile: unavailable {}",
+            single_line(error)
+        ),
+    }
+    match &report.supervisor_socket_status {
+        Ok(socket) => println!(
+            "compiler-execution-supervisor-socket: metadata-admitted-unconnected path={} owner={} group={} mode={:04o} peer-and-liveness=unprobed",
+            COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1, socket.owner, socket.group, socket.mode,
+        ),
+        Err(error) => println!(
+            "compiler-execution-supervisor-socket: unavailable path={} {} peer-and-liveness=unprobed",
+            COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1,
+            single_line(error),
+        ),
+    }
+    println!(
+        "application-execution: unavailable route=unverified missing={} protected-verifier-peer-and-liveness=unprobed",
+        missing_execution_prerequisites(report).join(","),
+    );
     println!("overall: diagnostics-complete");
 }
 
@@ -222,8 +321,8 @@ fn requirement_satisfied(requirement: Requirement, report: &DoctorReport) -> boo
         Requirement::Gfx942AndToolsPresent => {
             report.compiler.is_some() && requirement_satisfied(Requirement::Gfx942, report)
         }
-        // The production application handoff is not yet wired to Worker V3. Keep this closed
-        // even on a machine whose KFD and compiler observations are otherwise ready.
+        // Static filesystem and device observations cannot authenticate the protected
+        // verifier peer or prove that it can complete the sealed W7 admission join.
         Requirement::Execution => false,
     }
 }
@@ -242,9 +341,31 @@ fn requirement_failure(requirement: Requirement) -> &'static str {
             "a usable direct-KFD gfx942 Wave64 device plus executable clang and ld.lld files are required; compiler versions and target capability remain unvalidated"
         }
         Requirement::Execution => {
-            "ordinary GPU application execution is unavailable because the Worker V3 application route is not wired"
+            "ordinary GPU application execution remains unavailable until doctor authenticates a live protected-verifier peer and its sealed W7 completion route"
         }
     }
+}
+
+fn missing_execution_prerequisites(report: &DoctorReport) -> Vec<&'static str> {
+    let mut missing = Vec::new();
+    if !report.platform_supported {
+        missing.push("linux-x86_64");
+    }
+    if !direct_kfd_ready(report) {
+        missing.push("direct-kfd-render");
+    }
+    if report.compiler.is_none() {
+        missing.push("compiler-tools");
+    }
+    if report.client_profile_status.is_err() {
+        missing.push("fixed-client-profile");
+    }
+    if report.supervisor_socket_status.is_err() {
+        missing.push("fixed-supervisor-socket");
+    }
+    missing.push("authenticated-live-protected-verifier");
+    missing.push("w7-v5-completion-transfer");
+    missing
 }
 
 fn direct_kfd_ready(report: &DoctorReport) -> bool {
@@ -254,6 +375,164 @@ fn direct_kfd_ready(report: &DoctorReport) -> bool {
             .topology_status
             .as_ref()
             .is_ok_and(|devices| devices.iter().any(|device| device.render_status.is_ok()))
+}
+
+fn observe_client_profile() -> Result<ClientProfileObservation, String> {
+    let profile = CompilerExecutionClientProfileCapabilityV1::from_production_profile()?;
+    profile.revalidate()?;
+    Ok(ClientProfileObservation {
+        supervisor_uid: profile.profile().supervisor_uid(),
+        supervisor_gid: profile.profile().supervisor_gid(),
+    })
+}
+
+fn observe_supervisor_socket(
+    path: &Path,
+    policy: SupervisorSocketPolicy,
+) -> Result<SupervisorSocketObservation, String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "fixed supervisor socket has no parent directory".to_owned())?;
+    let parent_before = filesystem_snapshot(parent)?;
+    if !parent_before.file_type.is_dir()
+        || parent_before.owner != policy.runtime_owner
+        || parent_before.group != policy.runtime_group
+        || parent_before.mode != policy.runtime_mode
+        || parent_before.links == 0
+    {
+        return Err(
+            "runtime directory has the wrong type, owner, group, mode, or link count".into(),
+        );
+    }
+    require_no_privileged_path_attributes(parent)?;
+
+    let socket_before = filesystem_snapshot(path)?;
+    if !socket_before.file_type.is_socket()
+        || socket_before.owner != policy.socket_owner
+        || policy
+            .socket_group
+            .is_some_and(|group| socket_before.group != group)
+        || socket_before.mode != policy.socket_mode
+        || socket_before.links == 0
+    {
+        return Err("socket has the wrong type, owner, group, mode, or link count".into());
+    }
+    require_no_privileged_path_attributes(path)?;
+
+    if filesystem_snapshot(parent)? != parent_before || filesystem_snapshot(path)? != socket_before
+    {
+        return Err("runtime directory or socket changed while metadata was inspected".to_owned());
+    }
+
+    let (supervisor_uid, supervisor_gid) = policy
+        .supervisor_uid
+        .zip(policy.socket_group)
+        .ok_or_else(|| {
+            "fixed client profile was not admitted, so the socket GID and client enrollment cannot be authenticated"
+                .to_owned()
+        })?;
+    let identity = observe_client_identity(supervisor_gid)?;
+    if identity.effective_uid == supervisor_uid {
+        return Err("client UID must differ from the protected supervisor UID".to_owned());
+    }
+    let caller_can_connect = identity.effective_uid == ROOT_ID
+        || (identity.effective_uid == policy.socket_owner && policy.socket_mode & 0o200 != 0)
+        || ((identity.effective_gid == supervisor_gid
+            || identity.supplementary_groups_include_supervisor)
+            && policy.socket_mode & 0o020 != 0);
+    if !caller_can_connect {
+        return Err(format!(
+            "client is not enrolled for write access through supervisor group {}",
+            supervisor_gid
+        ));
+    }
+
+    Ok(SupervisorSocketObservation {
+        owner: socket_before.owner,
+        group: socket_before.group,
+        mode: socket_before.mode,
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ClientIdentityObservation {
+    effective_uid: u32,
+    effective_gid: u32,
+    supplementary_groups_include_supervisor: bool,
+}
+
+fn observe_client_identity(supervisor_gid: u32) -> Result<ClientIdentityObservation, String> {
+    let supplementary_groups = rustix::process::getgroups()
+        .map_err(|error| format!("cannot inspect client supplementary groups: {error}"))?;
+    if supplementary_groups.len() > MAX_SUPPLEMENTARY_GROUPS {
+        return Err("client supplementary group set exceeds the Linux bound".to_owned());
+    }
+    Ok(ClientIdentityObservation {
+        effective_uid: rustix::process::geteuid().as_raw(),
+        effective_gid: rustix::process::getegid().as_raw(),
+        supplementary_groups_include_supervisor: supplementary_groups
+            .iter()
+            .any(|group| group.as_raw() == supervisor_gid),
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FilesystemSnapshot {
+    file_type: fs::FileType,
+    device: u64,
+    inode: u64,
+    owner: u32,
+    group: u32,
+    mode: u32,
+    links: u64,
+    modified_seconds: i64,
+    modified_nanoseconds: i64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
+}
+
+fn filesystem_snapshot(path: &Path) -> Result<FilesystemSnapshot, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
+    Ok(FilesystemSnapshot {
+        file_type: metadata.file_type(),
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        owner: metadata.uid(),
+        group: metadata.gid(),
+        mode: metadata.mode() & PERMISSION_AND_SPECIAL_BITS,
+        links: metadata.nlink(),
+        modified_seconds: metadata.mtime(),
+        modified_nanoseconds: metadata.mtime_nsec(),
+        changed_seconds: metadata.ctime(),
+        changed_nanoseconds: metadata.ctime_nsec(),
+    })
+}
+
+fn require_no_privileged_path_attributes(path: &Path) -> Result<(), String> {
+    for attribute in [
+        "security.capability",
+        "system.posix_acl_access",
+        "system.posix_acl_default",
+    ] {
+        let mut byte = 0_u8;
+        match rustix::fs::lgetxattr(path, attribute, std::slice::from_mut(&mut byte)) {
+            Err(rustix::io::Errno::NODATA | rustix::io::Errno::OPNOTSUPP) => {}
+            Ok(_) | Err(rustix::io::Errno::RANGE) => {
+                return Err(format!(
+                    "{} carries forbidden attribute {attribute}",
+                    path.display()
+                ));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "cannot inspect {} attribute {attribute}: {error}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn admit_kfd_uapi() -> Result<KfdObservation, String> {
@@ -538,6 +817,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixListener;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static NEXT_FIXTURE: AtomicUsize = AtomicUsize::new(0);
@@ -653,9 +933,8 @@ mod tests {
         assert!(error.contains("exceeds its byte bound"), "{error}");
     }
 
-    #[test]
-    fn execution_requirement_remains_closed() {
-        let report = DoctorReport {
+    fn ready_report() -> DoctorReport {
+        DoctorReport {
             platform_supported: true,
             kfd_status: Ok(KfdObservation {
                 uapi_major: 1,
@@ -669,17 +948,90 @@ mod tests {
                 render_path: PathBuf::from("/dev/dri/renderD128"),
                 render_status: Ok(()),
             }]),
-            compiler: None,
+            compiler: Some(CompilerToolchain {
+                root: PathBuf::from("/opt/rocm"),
+                clang: PathBuf::from("/opt/rocm/lib/llvm/bin/clang"),
+                linker: PathBuf::from("/opt/rocm/lib/llvm/bin/ld.lld"),
+            }),
+            client_profile_status: Ok(ClientProfileObservation {
+                supervisor_uid: 991,
+                supervisor_gid: 991,
+            }),
+            supervisor_socket_status: Ok(SupervisorSocketObservation {
+                owner: 0,
+                group: 991,
+                mode: 0o660,
+            }),
             rocgdb: None,
             rocprofv3: None,
-        };
+        }
+    }
+
+    #[test]
+    fn execution_requirement_needs_every_observable_prerequisite() {
+        let mut report = ready_report();
         assert!(requirement_satisfied(Requirement::DirectKfd, &report));
         assert!(requirement_satisfied(Requirement::Gfx942, &report));
-        assert!(!requirement_satisfied(Requirement::ToolsPresent, &report));
-        assert!(!requirement_satisfied(
+        assert!(requirement_satisfied(Requirement::ToolsPresent, &report));
+        assert!(requirement_satisfied(
             Requirement::Gfx942AndToolsPresent,
             &report
         ));
         assert!(!requirement_satisfied(Requirement::Execution, &report));
+
+        report.client_profile_status = Err("missing".to_owned());
+        assert!(!requirement_satisfied(Requirement::Execution, &report));
+        report.client_profile_status = ready_report().client_profile_status;
+        report.supervisor_socket_status = Err("missing".to_owned());
+        assert!(!requirement_satisfied(Requirement::Execution, &report));
+        report.supervisor_socket_status = ready_report().supervisor_socket_status;
+        report.compiler = None;
+        assert!(!requirement_satisfied(Requirement::Execution, &report));
+        report.compiler = ready_report().compiler;
+        report.kfd_status = Err("missing".to_owned());
+        assert!(!requirement_satisfied(Requirement::Execution, &report));
+    }
+
+    #[test]
+    fn socket_observation_is_metadata_only_and_policy_bound() {
+        let fixture = Fixture::new();
+        let runtime = fixture.root.join("run");
+        fs::create_dir(&runtime).unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+        let socket = runtime.join("supervisor.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o660)).unwrap();
+        let uid = rustix::process::geteuid().as_raw();
+        let gid = rustix::process::getegid().as_raw();
+        let policy = SupervisorSocketPolicy {
+            runtime_owner: uid,
+            runtime_group: gid,
+            runtime_mode: 0o700,
+            socket_owner: uid,
+            socket_group: Some(gid),
+            socket_mode: 0o660,
+            supervisor_uid: Some(uid.wrapping_add(1)),
+        };
+
+        let observed = observe_supervisor_socket(&socket, policy).unwrap();
+        assert_eq!(observed.owner, uid);
+        assert_eq!(observed.group, gid);
+        assert_eq!(observed.mode, 0o660);
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+
+        let unauthenticated_policy = SupervisorSocketPolicy {
+            socket_group: None,
+            supervisor_uid: None,
+            ..policy
+        };
+        let error = observe_supervisor_socket(&socket, unauthenticated_policy).unwrap_err();
+        assert!(error.contains("client profile was not admitted"), "{error}");
+
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(observe_supervisor_socket(&socket, policy).is_err());
     }
 }

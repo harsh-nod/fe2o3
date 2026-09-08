@@ -1,0 +1,48 @@
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/kernel_context_derived_lane_is_not_send.rs:2:61
+  |
+2 |     CurrentTarget, KernelCapabilityBrand, RegisteredLaunch, Wave64, WaveLane,
+  |                                                             ^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/kernel_context_derived_lane_is_not_send.rs:2:69
+  |
+2 |     CurrentTarget, KernelCapabilityBrand, RegisteredLaunch, Wave64, WaveLane,
+  |                                                                     ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/kernel_context_derived_lane_is_not_send.rs:7:13
+  |
+7 | type Lane = WaveLane<
+  |             ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/kernel_context_derived_lane_is_not_send.rs:8:5
+  |
+8 |     Wave64,
+  |     ^^^^^^
+
+error[E0277]: `*mut ()` cannot be sent between threads safely
+  --> tests/ui/fail/kernel_context_derived_lane_is_not_send.rs:15:20
+   |
+15 |     require_send::<Lane>();
+   |                    ^^^^ `*mut ()` cannot be sent between threads safely
+   |
+   = help: within `SubgroupLane<SubgroupWidth64, fe2o3_device::KernelCapabilityBrand<'static, KernelA, CurrentTarget, RegisteredLaunch>>`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+  --> $RUST/core/src/marker.rs
+   |
+   | pub struct PhantomData<T: PointeeSized>;
+   |            ^^^^^^^^^^^
+note: required because it appears within the type `SubgroupLane<SubgroupWidth64, fe2o3_device::KernelCapabilityBrand<'static, KernelA, CurrentTarget, RegisteredLaunch>>`
+  --> src/wave.rs
+   |
+   | pub struct SubgroupLane<Width: SubgroupWidth, Brand = UnbrandedCapability> {
+   |            ^^^^^^^^^^^^
+note: required by a bound in `require_send`
+  --> tests/ui/fail/kernel_context_derived_lane_is_not_send.rs:12:20
+   |
+12 | fn require_send<T: Send>() {}
+   |                    ^^^^ required by this bound in `require_send`

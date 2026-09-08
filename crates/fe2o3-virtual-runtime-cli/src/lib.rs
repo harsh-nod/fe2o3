@@ -10,7 +10,8 @@ use std::process::ExitCode;
 use fe2o3_kernel_ir::AccessMode;
 use fe2o3_kir_sim::{SimulationArgumentV1, SimulationRequestV1};
 use fe2o3_kir_sim_cli::{
-    AdmittedSimulationInputV1, load_debug_simulation_bundle_v1, load_debug_simulation_input_v1,
+    AdmittedSimulationInputV1, load_debug_simulation_bundle_v1, load_debug_simulation_bundle_v7,
+    load_debug_simulation_bundle_v8, load_debug_simulation_input_v1,
 };
 use fe2o3_runtime_model::IdentityDigestV1;
 use fe2o3_runtime_model::TransitionErrorV1;
@@ -22,7 +23,7 @@ use fe2o3_virtual_runtime::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const USAGE: &str = "usage: fe2o3-virtual-runtime (--kir-v7 PATH [--target amdgpu64-target-neutral|gfx942:xnack-|gfx950:xnack-] | --bundle PATH) --request PATH [--repeat 1..256] [--fault early-release]";
+const USAGE: &str = "usage: fe2o3-virtual-runtime (--kir-v7 PATH [--target amdgpu64-target-neutral|gfx942:xnack-|gfx950:xnack-] | --bundle PATH | --bundle-v7 PATH | --bundle-v8 PATH) --request PATH [--repeat 1..256] [--fault early-release]";
 const MAX_REPEAT: usize = 256;
 const MAX_SNAPSHOT_BYTES_V1: usize = 16 * 1024 * 1024;
 const MAX_RESPONSE_BYTES_V1: usize = 48 * 1024 * 1024;
@@ -42,6 +43,8 @@ struct CommandV1 {
 enum InputV1 {
     Kir(PathBuf),
     Bundle(PathBuf),
+    BundleV7(PathBuf),
+    BundleV8(PathBuf),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -173,6 +176,44 @@ fn run(arguments: impl Iterator<Item = OsString>) -> Result<SuccessV1, CommandEr
                 return Err(argument_error("--target is invalid with --bundle"));
             }
             let admitted = load_debug_simulation_bundle_v1(&path, &command.request)
+                .map_err(|error| admission_error(error.stage, error.code, error.message))?;
+            let profile =
+                parse_target(admitted.bundle().target()).ok_or_else(|| CommandErrorV1 {
+                    stage: "admission".to_owned(),
+                    code: "unsupported_bundle_target".to_owned(),
+                    message: format!(
+                        "unsupported exact simulation bundle target {}",
+                        admitted.bundle().target()
+                    ),
+                })?;
+            let identity = admitted.input().simulation_bundle_identity();
+            let (input, _) = admitted.into_parts();
+            (input, profile, identity)
+        }
+        InputV1::BundleV7(path) => {
+            if command.target.is_some() {
+                return Err(argument_error("--target is invalid with --bundle-v7"));
+            }
+            let admitted = load_debug_simulation_bundle_v7(&path, &command.request)
+                .map_err(|error| admission_error(error.stage, error.code, error.message))?;
+            let profile =
+                parse_target(admitted.bundle().target()).ok_or_else(|| CommandErrorV1 {
+                    stage: "admission".to_owned(),
+                    code: "unsupported_bundle_target".to_owned(),
+                    message: format!(
+                        "unsupported exact simulation bundle target {}",
+                        admitted.bundle().target()
+                    ),
+                })?;
+            let identity = admitted.input().simulation_bundle_identity();
+            let (input, _) = admitted.into_parts();
+            (input, profile, identity)
+        }
+        InputV1::BundleV8(path) => {
+            if command.target.is_some() {
+                return Err(argument_error("--target is invalid with --bundle-v8"));
+            }
+            let admitted = load_debug_simulation_bundle_v8(&path, &command.request)
                 .map_err(|error| admission_error(error.stage, error.code, error.message))?;
             let profile =
                 parse_target(admitted.bundle().target()).ok_or_else(|| CommandErrorV1 {
@@ -458,6 +499,8 @@ fn parse(arguments: impl Iterator<Item = OsString>) -> Result<CommandV1, Command
     let mut arguments = arguments.peekable();
     let mut kir = None;
     let mut bundle = None;
+    let mut bundle_v7 = None;
+    let mut bundle_v8 = None;
     let mut request = None;
     let mut repeat = None;
     let mut target = None;
@@ -468,6 +511,10 @@ fn parse(arguments: impl Iterator<Item = OsString>) -> Result<CommandV1, Command
             assign_once(&mut kir, PathBuf::from(value), "--kir-v7")?;
         } else if argument == "--bundle" {
             assign_once(&mut bundle, PathBuf::from(value), "--bundle")?;
+        } else if argument == "--bundle-v7" {
+            assign_once(&mut bundle_v7, PathBuf::from(value), "--bundle-v7")?;
+        } else if argument == "--bundle-v8" {
+            assign_once(&mut bundle_v8, PathBuf::from(value), "--bundle-v8")?;
         } else if argument == "--request" {
             assign_once(&mut request, PathBuf::from(value), "--request")?;
         } else if argument == "--repeat" {
@@ -501,9 +548,11 @@ fn parse(arguments: impl Iterator<Item = OsString>) -> Result<CommandV1, Command
             return Err(argument_error(USAGE));
         }
     }
-    let input = match (kir, bundle) {
-        (Some(path), None) => InputV1::Kir(path),
-        (None, Some(path)) => InputV1::Bundle(path),
+    let input = match (kir, bundle, bundle_v7, bundle_v8) {
+        (Some(path), None, None, None) => InputV1::Kir(path),
+        (None, Some(path), None, None) => InputV1::Bundle(path),
+        (None, None, Some(path), None) => InputV1::BundleV7(path),
+        (None, None, None, Some(path)) => InputV1::BundleV8(path),
         _ => return Err(argument_error(USAGE)),
     };
     Ok(CommandV1 {

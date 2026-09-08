@@ -27,9 +27,14 @@ use pliron::{
 
 mod registration;
 
+mod canonical_kir_v1;
+mod execution_capability_v1;
+
 pub mod cse_v1;
 pub mod optimization_v1;
 
+pub use canonical_kir_v1::*;
+pub use execution_capability_v1::ExecutionCapabilityOp;
 pub use registration::dialect_registration;
 
 /// Pliron dialect name.
@@ -889,6 +894,8 @@ pub fn register_dialect(
     <optimization_v1::VolatileAttr as Attribute>::register::<optimization_v1::VolatileAttr>(
         context,
     );
+    <CanonicalKirOperationAttr as Attribute>::register::<CanonicalKirOperationAttr>(context);
+    <CanonicalKirTerminatorAttr as Attribute>::register::<CanonicalKirTerminatorAttr>(context);
     <optimization_v1::PreservedOperationKindAttr as Attribute>::register::<
         optimization_v1::PreservedOperationKindAttr,
     >(context);
@@ -923,6 +930,24 @@ pub fn register_dialect(
     <optimization_v1::StoreOp as Op>::register(context);
     <optimization_v1::PreservedOperationOp as Op>::register(context);
     <optimization_v1::PreservedTerminatorOp as Op>::register(context);
+    <IntrinsicOp as Op>::register(context);
+    <MemoryIntrinsicOp as Op>::register(context);
+    <AllocaOp as Op>::register(context);
+    <GuardedLoadOp as Op>::register(context);
+    <GuardedStoreOp as Op>::register(context);
+    <CanonicalBarrierOp as Op>::register(context);
+    <AtomicOp as Op>::register(context);
+    <CanonicalFenceOp as Op>::register(context);
+    <WorkgroupBarrierOp as Op>::register(context);
+    <WorkgroupMemoryOp as Op>::register(context);
+    <MatrixOp as Op>::register(context);
+    <Gfx950LdsTransposeOp as Op>::register(context);
+    <WaveOp as Op>::register(context);
+    <InlineAssemblyOp as Op>::register(context);
+    <SwitchOp as Op>::register(context);
+    <IntegerSwitchOp as Op>::register(context);
+    <UnreachableOp as Op>::register(context);
+    <ExecutionCapabilityOp as Op>::register(context);
 
     let marker = context.aux_data.insert(Box::new(RegistrationMarker));
     context

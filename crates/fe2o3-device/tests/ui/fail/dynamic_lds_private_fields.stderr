@@ -1,17 +1,31 @@
-error[E0451]: fields `ptr`, `len`, `byte_len`, `_borrow`, `_state` and `_not_send_sync` of struct `DynamicLds` are private
-  --> tests/ui/fail/dynamic_lds_private_fields.rs:7:9
+error: cannot construct `DynamicLds<'_, u32>` with struct literal syntax due to private fields
+  --> tests/ui/fail/dynamic_lds_private_fields.rs:6:13
    |
  6 |     let _ = DynamicLds::<u32, LdsUninitialized> {
-   |             ----------------------------------- in this type
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
  7 |         ptr: NonNull::dangling(),
-   |         ^^^ private field
+   |         ------------------------ private field
  8 |         len: 0,
-   |         ^^^ private field
+   |         ------ private field
  9 |         byte_len: 0,
-   |         ^^^^^^^^ private field
+   |         ----------- private field
 10 |         _borrow: PhantomData,
-   |         ^^^^^^^ private field
+   |         -------------------- private field
 11 |         _state: PhantomData,
-   |         ^^^^^^ private field
+   |         ------------------- private field
 12 |         _not_send_sync: PhantomData,
-   |         ^^^^^^^^^^^^^^ private field
+   |         --------------------------- private field
+   |
+   = note: ...and other private field `_brand` that was not provided
+help: you might have meant to use the `exact_current` associated function
+   |
+ 6 -     let _ = DynamicLds::<u32, LdsUninitialized> {
+ 7 -         ptr: NonNull::dangling(),
+ 8 -         len: 0,
+ 9 -         byte_len: 0,
+10 -         _borrow: PhantomData,
+11 -         _state: PhantomData,
+12 -         _not_send_sync: PhantomData,
+13 -     };
+ 6 +     let _ = DynamicLds::<u32, LdsUninitialized>::exact_current(_);
+   |

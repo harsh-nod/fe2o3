@@ -1,16 +1,23 @@
 use std::io;
 
 use fe2o3_core::{
-    DeviceBuffer, Event, GpuContext, GpuFunction, KernelParams, LaunchConfig, Stream,
+    DeviceBuffer, DevicePtr, Event, GpuContext, GpuFunction, KernelParams, LaunchConfig, Stream,
     launch_kernel_on_stream,
 };
 use fe2o3_device::Bf16;
 use fe2o3_gemm_autoresearch_v1::reference::{ReferenceProblemV1, evaluate_reference_v1};
+use fe2o3_host::{
+    TutorialRuntimeLaunchIdentityV1, TutorialRuntimeSemanticRegionsV1,
+    publish_tutorial_runtime_semantic_observation_v1, tutorial_runtime_semantic_bytes_v1,
+};
 
 const HSACO_ENV: &str = "FE2O3_AUTORESEARCH_GEMM_HSACO";
 const BENCHMARK_ENV: &str = "FE2O3_BENCHMARK";
 const KERNEL: &str = "gemm_autoresearch_v1";
 const BENCHMARK_SIZES: [(u32, usize); 3] = [(256, 20), (512, 10), (1024, 3)];
+const OUTPUT_CANARY_ELEMENTS: usize = 8;
+const OUTPUT_PREFIX: f32 = f32::from_bits(0x4f34_5678);
+const OUTPUT_SUFFIX: f32 = f32::from_bits(0xcf87_6543);
 
 fn invalid_input(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
@@ -19,7 +26,8 @@ fn invalid_input(message: &'static str) -> io::Error {
 fn kernel_params(
     lhs: &DeviceBuffer<u16>,
     rhs: &DeviceBuffer<u16>,
-    output: &DeviceBuffer<f32>,
+    output: DevicePtr<f32>,
+    output_len: usize,
     problem: ReferenceProblemV1,
 ) -> KernelParams {
     let mut arguments = KernelParams::new();
@@ -27,8 +35,8 @@ fn kernel_params(
     arguments.push(lhs.len());
     arguments.push(rhs.as_device_ptr());
     arguments.push(rhs.len());
-    arguments.push(output.as_device_ptr());
-    arguments.push(output.len());
+    arguments.push(output);
+    arguments.push(output_len);
     arguments.push(problem.rows);
     arguments.push(problem.columns);
     arguments.push(problem.reduction);
@@ -86,7 +94,8 @@ fn benchmark(
             product_scale: 1.0,
             output_scale: 0.0,
         };
-        let mut arguments = kernel_params(&lhs, &rhs, &output, problem);
+        let mut arguments =
+            kernel_params(&lhs, &rhs, output.as_device_ptr(), output.len(), problem);
         for _ in 0..10 {
             // SAFETY: buffers, module, function, and ABI remain live through synchronization.
             unsafe { launch(function, stream, problem, &mut arguments)? };
@@ -163,7 +172,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream = context.create_stream()?;
     let lhs_device = DeviceBuffer::from_host(&stream, &lhs)?;
     let rhs_device = DeviceBuffer::from_host(&stream, &rhs)?;
-    let output_device = DeviceBuffer::from_host(&stream, &initial_output)?;
+    let mut guarded_output = Vec::with_capacity(output_len + 2 * OUTPUT_CANARY_ELEMENTS);
+    guarded_output.extend(std::iter::repeat_n(OUTPUT_PREFIX, OUTPUT_CANARY_ELEMENTS));
+    guarded_output.extend_from_slice(&initial_output);
+    guarded_output.extend(std::iter::repeat_n(OUTPUT_SUFFIX, OUTPUT_CANARY_ELEMENTS));
+    let output_device = DeviceBuffer::from_host(&stream, &guarded_output)?;
+    let output_view =
+        output_device.view(OUTPUT_CANARY_ELEMENTS..OUTPUT_CANARY_ELEMENTS + output_len)?;
     let hsaco = std::env::var_os(HSACO_ENV).ok_or_else(|| {
         io::Error::new(io::ErrorKind::NotFound, format!("{HSACO_ENV} is not set"))
     })?;
@@ -172,12 +187,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // buffers, and exact compiler-emitted ABI remain live through synchronization.
     let module = unsafe { context.load_module_from_file_unchecked(&hsaco)? };
     let function = module.load_function(KERNEL)?;
-    let mut arguments = kernel_params(&lhs_device, &rhs_device, &output_device, problem);
+    let mut arguments = kernel_params(
+        &lhs_device,
+        &rhs_device,
+        output_view.as_device_ptr(),
+        output_view.len(),
+        problem,
+    );
     // SAFETY: the exact generated ABI and all referenced resources remain live.
     unsafe { launch(&function, &stream, problem, &mut arguments)? };
     stream.synchronize()?;
 
-    let actual = output_device.to_host_vec(&stream)?;
+    let actual_allocation = output_device.to_host_vec(&stream)?;
+    let actual = &actual_allocation[OUTPUT_CANARY_ELEMENTS..OUTPUT_CANARY_ELEMENTS + output_len];
     let mut maximum_error = 0.0_f32;
     for row in 0..problem.rows as usize {
         for column in 0..problem.output_stride as usize {
@@ -211,5 +233,74 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var_os(BENCHMARK_ENV).is_some() {
         benchmark(&context, &function, &stream)?;
     }
+    let lhs_after = lhs_device.to_host_vec(&stream)?;
+    let rhs_after = rhs_device.to_host_vec(&stream)?;
+    let mut expected_allocation = guarded_output.clone();
+    expected_allocation[OUTPUT_CANARY_ELEMENTS..OUTPUT_CANARY_ELEMENTS + output_len]
+        .copy_from_slice(&expected);
+    let padding_before = (0..problem.rows as usize)
+        .flat_map(|row| {
+            initial_output[row * problem.output_stride as usize + problem.columns as usize
+                ..(row + 1) * problem.output_stride as usize]
+                .iter()
+                .copied()
+        })
+        .collect::<Vec<_>>();
+    let padding_after = (0..problem.rows as usize)
+        .flat_map(|row| {
+            actual[row * problem.output_stride as usize + problem.columns as usize
+                ..(row + 1) * problem.output_stride as usize]
+                .iter()
+                .copied()
+        })
+        .collect::<Vec<_>>();
+    drop(arguments);
+    drop(function);
+    drop(module);
+    drop(output_view);
+    drop(output_device);
+    drop(rhs_device);
+    drop(lhs_device);
+    drop(stream);
+    drop(context);
+    publish_tutorial_runtime_semantic_observation_v1(
+        TutorialRuntimeLaunchIdentityV1 {
+            target: "gfx942",
+            kernel_symbols: &[KERNEL],
+            grid: [
+                problem.rows.div_ceil(16) * problem.columns.div_ceil(16),
+                1,
+                1,
+            ],
+            workgroup: [64, 1, 1],
+            dynamic_lds_bytes: 0,
+        },
+        TutorialRuntimeSemanticRegionsV1 {
+            inputs_before: &[
+                tutorial_runtime_semantic_bytes_v1(&lhs),
+                tutorial_runtime_semantic_bytes_v1(&rhs),
+            ],
+            inputs_after: &[
+                tutorial_runtime_semantic_bytes_v1(&lhs_after),
+                tutorial_runtime_semantic_bytes_v1(&rhs_after),
+            ],
+            canaries_before: &[
+                tutorial_runtime_semantic_bytes_v1(&guarded_output[..OUTPUT_CANARY_ELEMENTS]),
+                tutorial_runtime_semantic_bytes_v1(
+                    &guarded_output[OUTPUT_CANARY_ELEMENTS + output_len..],
+                ),
+            ],
+            canaries_after: &[
+                tutorial_runtime_semantic_bytes_v1(&actual_allocation[..OUTPUT_CANARY_ELEMENTS]),
+                tutorial_runtime_semantic_bytes_v1(
+                    &actual_allocation[OUTPUT_CANARY_ELEMENTS + output_len..],
+                ),
+            ],
+            padding_before: &[tutorial_runtime_semantic_bytes_v1(&padding_before)],
+            padding_after: &[tutorial_runtime_semantic_bytes_v1(&padding_after)],
+            expected_output: &[tutorial_runtime_semantic_bytes_v1(&expected_allocation)],
+            observed_output: &[tutorial_runtime_semantic_bytes_v1(&actual_allocation)],
+        },
+    )?;
     Ok(())
 }

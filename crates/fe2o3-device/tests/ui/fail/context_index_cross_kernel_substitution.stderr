@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/fail/context_index_cross_kernel_substitution.rs:17:26
+   |
+17 |     let _ = output.store(index, 7);
+   |                    ----- ^^^^^ expected `SecondKernel`, found `FirstKernel`
+   |                    |
+   |                    arguments to this method are incorrect
+   |
+   = note: expected struct `DisjointIndex<Index1D, fe2o3_device::KernelCapabilityBrand<'kernel, SecondKernel, CurrentTarget, RegisteredLaunch>>`
+              found struct `DisjointIndex<Index1D, fe2o3_device::KernelCapabilityBrand<'_, FirstKernel, CurrentTarget, RegisteredLaunch>>`
+note: method defined here
+  --> src/capability_memory.rs
+   |
+   |     pub fn store(&mut self, index: DisjointIndex<IndexSpace, Brand>, value: T) -> bool {
+   |            ^^^^^

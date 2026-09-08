@@ -42,22 +42,36 @@ fn workspace() -> PathBuf {
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn dynamic_matrix_kernel_reaches_gfx942_llvm() {
-    assert_workgroup_pipeline_reaches_gfx942_llvm(
+    assert_kernel_pipeline_reaches_gfx942_llvm(
         "general-matrix",
         "examples/tiled_gemm_general_v1",
         "fe2o3_tiled_gemm_general_v1",
         "tiled_gemm_general_v1",
+        &["llvm.amdgcn.mfma", "addrspace(3)"],
     );
 }
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn dynamic_attention_kernel_reaches_gfx942_llvm() {
-    assert_workgroup_pipeline_reaches_gfx942_llvm(
+    assert_kernel_pipeline_reaches_gfx942_llvm(
         "general-attention",
         "examples/flash_attention_general_v1",
         "fe2o3_flash_attention_general_v1",
         "flash_attention_general_v1",
+        &["llvm.amdgcn.mfma", "addrspace(3)"],
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn logical_context_vecadd_reaches_gfx942_llvm_without_a_context_kernarg() {
+    assert_kernel_pipeline_reaches_gfx942_llvm(
+        "logical-context-vecadd",
+        "examples/vecadd",
+        "fe2o3_vecadd",
+        "vecadd",
+        &["llvm.amdgcn.workitem.id.x"],
     );
 }
 
@@ -247,11 +261,12 @@ fn descriptor_bytes(llvm: &str) -> Vec<u8> {
         .collect()
 }
 
-fn assert_workgroup_pipeline_reaches_gfx942_llvm(
+fn assert_kernel_pipeline_reaches_gfx942_llvm(
     label: &str,
     example_path: &str,
     crate_name: &str,
     kernel_symbol: &str,
+    required_llvm: &[&str],
 ) {
     let scratch = ScratchDirectory::new(label);
     let example = workspace().join(example_path);
@@ -305,12 +320,13 @@ fn assert_workgroup_pipeline_reaches_gfx942_llvm(
     }
 
     let llvm = std::fs::read_to_string(&llvm_path).expect("production extraction emitted LLVM");
-    assert!(
-        llvm.contains(&format!("@{kernel_symbol}"))
-            && llvm.contains("llvm.amdgcn.mfma")
-            && llvm.contains("addrspace(3)"),
-        "production LLVM omitted the kernel, MFMA, or workgroup storage:\n{llvm}"
-    );
+    assert!(llvm.contains(&format!("@{kernel_symbol}")));
+    for required in required_llvm {
+        assert!(
+            llvm.contains(required),
+            "production LLVM for {kernel_symbol:?} omitted {required:?}:\n{llvm}",
+        );
+    }
     let binding = std::fs::read_to_string(&binding_path).expect("crate binding handoff");
     assert_eq!(binding.trim().len(), 64);
     assert!(binding.trim().bytes().all(|byte| byte.is_ascii_hexdigit()));

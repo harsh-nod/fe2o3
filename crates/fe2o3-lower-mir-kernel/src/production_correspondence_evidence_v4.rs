@@ -361,6 +361,8 @@ impl InertCanonicalMirToKirCorrespondenceEvidenceV4 {
             8 => ProductionCanonicalKernelIrVersionV1::V8,
             9 => ProductionCanonicalKernelIrVersionV1::V9,
             11 => ProductionCanonicalKernelIrVersionV1::V11,
+            12 => ProductionCanonicalKernelIrVersionV1::V12,
+            13 => ProductionCanonicalKernelIrVersionV1::V13,
             _ => return Err(ProductionCorrespondenceEvidenceErrorV4::InvalidHeader),
         };
         if reader.u16()? != 0 {
@@ -829,6 +831,8 @@ fn encode(
             ProductionCanonicalKernelIrVersionV1::V8 => 8,
             ProductionCanonicalKernelIrVersionV1::V9 => 9,
             ProductionCanonicalKernelIrVersionV1::V11 => 11,
+            ProductionCanonicalKernelIrVersionV1::V12 => 12,
+            ProductionCanonicalKernelIrVersionV1::V13 => 13,
         },
     );
     push_u16(&mut bytes, 0);

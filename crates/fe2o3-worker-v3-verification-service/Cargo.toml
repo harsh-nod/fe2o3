@@ -9,12 +9,18 @@ description = "Authority-free protected session boundary for Worker V3 verificat
 publish = false
 
 [dependencies]
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
+fe2o3-artifact-transaction.workspace = true
+fe2o3-compiler-ffi.workspace = true
+fe2o3-compiler-lineage.workspace = true
+fe2o3-kernel-analysis = { workspace = true, default-features = false, features = ["pliron-analysis"] }
+fe2o3-kernel-ir.workspace = true
+fe2o3-verifier.workspace = true
 fe2o3-worker-v3-verification-protocol.workspace = true
 rustix = { workspace = true, features = ["event"] }
 sha2.workspace = true
 
 [dev-dependencies]
-ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 fe2o3-artifact-transaction.workspace = true
 fe2o3-compiler-execution-protocol.workspace = true
 fe2o3-external-anchor-protocol.workspace = true

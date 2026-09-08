@@ -7,10 +7,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::fs::File;
 use std::marker::PhantomData;
-use std::path::PathBuf;
+use std::os::fd::OwnedFd;
+use std::path::{Path, PathBuf};
 
 use rustc_middle::ty::TyCtxt;
+use sha2::{Digest as _, Sha256};
 
 use crate::artifact_transaction::{BuildAttempt, ProducerIdentity};
 use crate::collector::AuthenticatedCollectedKernelClosureV1;
@@ -19,6 +22,19 @@ use crate::protected_compiler_execution::{
 };
 use crate::protected_rustc_invocation::{
     AdmittedProtectedRustcInvocationV1, ProtectedRustcInvocationErrorV1,
+};
+
+#[path = "production_bundle_transaction_v8.rs"]
+mod production_bundle_transaction_v8;
+
+#[path = "production_pipeline_tutorial_transaction_v1.rs"]
+mod tutorial_transaction_v1;
+
+pub use tutorial_transaction_v1::{
+    TutorialProductionTransactionAssemblyV1, TutorialProductionTransactionErrorCodeV1,
+    TutorialProductionTransactionErrorV1, TutorialProductionTransactionReceiptV1,
+    assemble_tutorial_capability_qualification_transaction_v1,
+    produce_tutorial_capability_qualification_transaction_v1,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,6 +50,54 @@ pub(crate) const fn disposition(device_candidate_count: usize) -> ProductionDisp
         ProductionDisposition::DeviceTransaction
     }
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ProductionFinalGraphVerificationErrorV13 {
+    MissingResult {
+        stage: &'static str,
+    },
+    NonProductionOptimizer,
+    StaleResult {
+        stage: &'static str,
+        expected_epoch: u64,
+        observed_epoch: u64,
+    },
+    SubjectMismatch {
+        stage: &'static str,
+    },
+    EmptyTargetCapabilityClosure,
+}
+
+impl fmt::Display for ProductionFinalGraphVerificationErrorV13 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingResult { stage } => {
+                write!(formatter, "missing required {stage} result")
+            }
+            Self::NonProductionOptimizer => formatter
+                .write_str("KIR V13 optimization did not use the exact fixed production V6 policy"),
+            Self::StaleResult {
+                stage,
+                expected_epoch,
+                observed_epoch,
+            } => write!(
+                formatter,
+                "{stage} names stale graph epoch {observed_epoch}; expected {expected_epoch}",
+            ),
+            Self::SubjectMismatch { stage } => {
+                write!(
+                    formatter,
+                    "{stage} does not name the exact transaction graph"
+                )
+            }
+            Self::EmptyTargetCapabilityClosure => {
+                formatter.write_str("target-capability closure contains no exact target decisions")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProductionFinalGraphVerificationErrorV13 {}
 
 #[derive(Debug)]
 pub(crate) enum ProductionPipelineError {
@@ -54,6 +118,10 @@ pub(crate) enum ProductionPipelineError {
     SimulationBundleV4(fe2o3_kernel_ir::SimulationBundleErrorV4),
     SimulationBundleV5(fe2o3_kernel_ir::SimulationBundleErrorV5),
     SimulationBundleV6(fe2o3_kernel_ir::SimulationBundleErrorV6),
+    SimulationBundleV8(fe2o3_kernel_ir::SimulationBundleErrorV8),
+    ProductionBundleTransactionV8(
+        production_bundle_transaction_v8::ProductionBundleTransactionErrorV8,
+    ),
     SimulationDebugMapV2(fe2o3_kernel_ir::DebugSourceMapErrorV2),
     SimulationDebugSourceCaptureUnavailable(fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1),
     SimulationDebugMapCorrespondence(&'static str),
@@ -62,30 +130,37 @@ pub(crate) enum ProductionPipelineError {
     SimulationSourceLineage(fe2o3_compiler_lineage::LineageErrorV3),
     SimulationProductionKirV9,
     SimulationProductionKirV11,
+    SimulationProductionKirV12,
+    SimulationProductionKirV13,
     FormalMemoryAdmission(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     Geometry(crate::production_geometry_v1::ProductionGeometryErrorV1),
-    TargetBinding(dialect_amdgcn::ProductionTargetBindingErrorV1),
-    TargetOptimization(fe2o3_kernel_opt::KernelIrPlironOptimizationErrorV2),
-    TargetOptimizationV3(fe2o3_kernel_opt::KernelIrPlironOptimizationErrorV3),
-    TargetKernelIrV8(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV8),
-    TargetKernelIrV9(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV9),
-    TargetKernelIrV11(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV11),
-    TargetLowering(dialect_amdgcn::LoweringErrors),
-    UpstreamLlvmLayoutBinding(dialect_amdgcn::ProductionLlvmLayoutBindingErrorV1),
+    TargetBackend(crate::production_backend_v1::ProductionBackendErrorV1),
+    TargetOptimizationV6(fe2o3_kernel_opt::KernelIrTargetNeutralOptimizationErrorV6),
+    TargetOptimizationReplayV6(
+        fe2o3_kernel_opt::KernelIrTargetNeutralStructuralReplayAdmissionErrorV6,
+    ),
+    TargetCapabilityAnalysis(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV13),
+    FinalGraphVerificationV13(ProductionFinalGraphVerificationErrorV13),
+    FinalGraphExecution(fe2o3_pliron::ProductionFinalGraphVerificationErrorV1),
+    FinalGraphCapabilityNonClean(Box<fe2o3_kernel_analysis::ProductionW4NonCleanResultV1>),
     DescriptorEvidence(crate::compiler_descriptor::CompilerDescriptorError),
     SemanticLineage(crate::production_semantic_lineage_v3::ProductionSemanticLineageErrorV3),
+    FunctionalRefinementCustody(&'static str),
+    FinalGraphFunctionalRuntime(fe2o3_verifier::FunctionalRefinementRuntimeErrorV1),
+    FinalGraphFunctionalRefinement(fe2o3_verifier::ProductionFinalGraphFunctionalRefinementErrorV1),
     RustcLineageMismatch,
     ProtectedRustcInvocation(ProtectedRustcInvocationErrorV1),
     ProtectedCompilerExecution(ProtectedCompilerExecutionErrorV1),
     ExtractionCannotPublish,
     WorkerHandoffExtractionRequiresExtractionCustody,
     WorkerHandoff(crate::production_worker_handoff::ProductionWorkerHandoffError),
-    StrictV3Publication(fe2o3_artifact_transaction::CompilerModuleHandoffErrorV3),
+    CapabilityV5Publication(fe2o3_artifact_transaction::CompilerCapabilityHandoffErrorV5),
     CompilerExecutionSubject(fe2o3_artifact_transaction::CompilerExecutionSubjectErrorV1),
     CompilerExecutionReceiptTransport(
         fe2o3_artifact_transaction::CompilerExecutionReceiptTransportErrorV1,
     ),
     CompilerExecutionReceiptTransportBindingMismatch,
+    ProtectedCompilerCompletionPackage(String),
 }
 
 impl fmt::Display for ProductionPipelineError {
@@ -147,6 +222,14 @@ impl fmt::Display for ProductionPipelineError {
                 formatter,
                 "production compilation simulation bundle V6 failed: {error}"
             ),
+            Self::SimulationBundleV8(error) => write!(
+                formatter,
+                "production compilation simulation bundle V8 failed: {error}"
+            ),
+            Self::ProductionBundleTransactionV8(error) => write!(
+                formatter,
+                "production compilation Bundle V8 transaction binding failed: {error}"
+            ),
             Self::SimulationDebugMapV2(error) => write!(
                 formatter,
                 "production compilation simulation debug map V2 failed: {error}"
@@ -177,45 +260,61 @@ impl fmt::Display for ProductionPipelineError {
             Self::SimulationProductionKirV11 => formatter.write_str(
                 "production Kernel IR V11 is not representable by the exact V7/V10 simulation projections; no downgrade or hardware fallback was attempted",
             ),
+            Self::SimulationProductionKirV12 => formatter.write_str(
+                "production Kernel IR V12 is not representable by a legacy simulation projection; no downgrade or hardware fallback was attempted",
+            ),
+            Self::SimulationProductionKirV13 => formatter.write_str(
+                "production Kernel IR V13 is not representable by a legacy simulation projection; no downgrade or hardware fallback was attempted",
+            ),
             Self::FormalMemoryAdmission(error) => {
                 write!(formatter, "production compilation formal memory admission failed: {error}")
             }
             Self::Geometry(error) => {
                 write!(formatter, "production compilation geometry validation failed: {error}")
             }
-            Self::TargetBinding(error) => {
-                write!(formatter, "production compilation AMDGPU target binding failed: {error}")
+            Self::TargetBackend(error) => {
+                write!(formatter, "production compilation target backend failed: {error}")
             }
-            Self::TargetOptimization(error) => write!(
+            Self::TargetOptimizationV6(error) => write!(
                 formatter,
-                "production compilation target-KIR optimization failed: {error}"
+                "production compilation canonical KIR V13 V6 optimization failed: {error}"
             ),
-            Self::TargetOptimizationV3(error) => write!(
+            Self::TargetOptimizationReplayV6(error) => write!(
                 formatter,
-                "production compilation target-KIR V11 optimization failed: {error}"
+                "production compilation canonical KIR V13 V6 structural replay failed: {error}"
             ),
-            Self::TargetKernelIrV8(error) => write!(
+            Self::TargetCapabilityAnalysis(error) => write!(
                 formatter,
-                "production compilation target-bound Kernel IR V8 identity failed: {error}"
+                "production compilation target-binding capability analysis failed: {error}"
             ),
-            Self::TargetKernelIrV9(error) => write!(
+            Self::FinalGraphVerificationV13(error) => write!(
                 formatter,
-                "production compilation target-bound Kernel IR V9 identity failed: {error}"
+                "production compilation canonical KIR V13 final-graph verification failed: {error}"
             ),
-            Self::TargetKernelIrV11(error) => write!(
+            Self::FinalGraphExecution(error) => write!(
                 formatter,
-                "production compilation target-bound Kernel IR V11 identity failed: {error}"
+                "production compilation canonical KIR V13 PLIRON verification failed: {error}"
             ),
-            Self::TargetLowering(error) => {
-                write!(formatter, "production compilation AMDGPU LLVM lowering failed: {error}")
-            }
-            Self::UpstreamLlvmLayoutBinding(error) => {
-                write!(formatter, "production compilation upstream LLVM layout binding failed: {error}")
-            }
+            Self::FinalGraphCapabilityNonClean(result) => write!(
+                formatter,
+                "production compilation W4 capability analysis failed closed: {result}"
+            ),
             Self::DescriptorEvidence(error) => {
                 write!(formatter, "production compilation descriptor evidence failed: {error}")
             }
             Self::SemanticLineage(error) => write!(formatter, "production compilation {error}"),
+            Self::FunctionalRefinementCustody(detail) => write!(
+                formatter,
+                "production functional-refinement custody is incomplete: {detail}",
+            ),
+            Self::FinalGraphFunctionalRuntime(error) => write!(
+                formatter,
+                "production final-graph functional-refinement runtime failed: {error}",
+            ),
+            Self::FinalGraphFunctionalRefinement(error) => write!(
+                formatter,
+                "production final-graph functional-refinement proof failed: {error}",
+            ),
             Self::RustcLineageMismatch => formatter.write_str(
                 "production compilation rustc preflight plan is not bound to the retained identity inventory",
             ),
@@ -236,8 +335,8 @@ impl fmt::Display for ProductionPipelineError {
             Self::WorkerHandoff(error) => {
                 write!(formatter, "production compilation compiler-module handoff failed: {error}")
             }
-            Self::StrictV3Publication(error) => {
-                write!(formatter, "production compilation strict V3 publication failed: {error}")
+            Self::CapabilityV5Publication(error) => {
+                write!(formatter, "production compilation protected V5 publication failed: {error}")
             }
             Self::CompilerExecutionSubject(error) => write!(
                 formatter,
@@ -249,6 +348,10 @@ impl fmt::Display for ProductionPipelineError {
             ),
             Self::CompilerExecutionReceiptTransportBindingMismatch => formatter.write_str(
                 "production compilation compiler-execution receipt transport changed its exact subject or byte length",
+            ),
+            Self::ProtectedCompilerCompletionPackage(error) => write!(
+                formatter,
+                "production compilation protected compiler-completion package failed: {error}",
             ),
         }
     }
@@ -271,26 +374,28 @@ impl std::error::Error for ProductionPipelineError {
             Self::SimulationBundleV4(error) => Some(error),
             Self::SimulationBundleV5(error) => Some(error),
             Self::SimulationBundleV6(error) => Some(error),
+            Self::SimulationBundleV8(error) => Some(error),
+            Self::ProductionBundleTransactionV8(error) => Some(error),
             Self::SimulationDebugMapV2(error) => Some(error),
             Self::SemanticDebugMap(error) => Some(error),
             Self::SemanticDebugFragment(error) => Some(error),
             Self::SimulationSourceLineage(error) => Some(error),
             Self::FormalMemoryAdmission(error) => Some(error),
             Self::Geometry(error) => Some(error),
-            Self::TargetBinding(error) => Some(error),
-            Self::TargetOptimization(error) => Some(error),
-            Self::TargetOptimizationV3(error) => Some(error),
-            Self::TargetKernelIrV8(error) => Some(error),
-            Self::TargetKernelIrV9(error) => Some(error),
-            Self::TargetKernelIrV11(error) => Some(error),
-            Self::TargetLowering(error) => Some(error),
-            Self::UpstreamLlvmLayoutBinding(error) => Some(error),
+            Self::TargetBackend(error) => Some(error),
+            Self::TargetOptimizationV6(error) => Some(error),
+            Self::TargetOptimizationReplayV6(error) => Some(error),
+            Self::TargetCapabilityAnalysis(error) => Some(error),
+            Self::FinalGraphVerificationV13(error) => Some(error),
+            Self::FinalGraphExecution(error) => Some(error),
             Self::DescriptorEvidence(error) => Some(error),
             Self::SemanticLineage(error) => Some(error),
+            Self::FinalGraphFunctionalRuntime(error) => Some(error),
+            Self::FinalGraphFunctionalRefinement(error) => Some(error),
             Self::ProtectedRustcInvocation(error) => Some(error),
             Self::ProtectedCompilerExecution(error) => Some(error),
             Self::WorkerHandoff(error) => Some(error),
-            Self::StrictV3Publication(error) => Some(error),
+            Self::CapabilityV5Publication(error) => Some(error),
             Self::CompilerExecutionSubject(error) => Some(error),
             Self::CompilerExecutionReceiptTransport(error) => Some(error),
             Self::CustomLlvmConfiguration
@@ -299,8 +404,13 @@ impl std::error::Error for ProductionPipelineError {
             | Self::RustcLineageMismatch
             | Self::SimulationProductionKirV9
             | Self::SimulationProductionKirV11
+            | Self::SimulationProductionKirV12
+            | Self::SimulationProductionKirV13
             | Self::SimulationDebugSourceCaptureUnavailable(_)
             | Self::SimulationDebugMapCorrespondence(_)
+            | Self::FinalGraphCapabilityNonClean(_)
+            | Self::FunctionalRefinementCustody(_)
+            | Self::ProtectedCompilerCompletionPackage(_)
             | Self::ExtractionCannotPublish
             | Self::CompilerExecutionReceiptTransportBindingMismatch
             | Self::WorkerHandoffExtractionRequiresExtractionCustody => None,
@@ -398,6 +508,7 @@ struct AuthenticatedProductionBindings {
     rustc_identity_inventory: crate::collector::AuthenticatedRustcIdentityInventoryV3,
     rustc_preflight_plan: crate::collector::AuthenticatedRustcPreflightPlanV3,
     rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
+    kernel_contexts: Option<crate::collector::AuthenticatedProductionKernelContextsV1>,
     reference_effect_bindings: crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     debug_source_files: Box<[fe2o3_kernel_ir::DebugSourceMapFileV1]>,
     debug_source_scopes: Box<[crate::rustc_semantic_plan_v1::RetainedDebugSourceScopeV2]>,
@@ -464,10 +575,313 @@ pub(crate) struct TargetLoweredProductionCompilation {
     ranked_verification:
         crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
     target_module: fe2o3_kernel_ir::Module,
-    target_optimization: fe2o3_kernel_opt::KernelIrPlironOptimizationReportV2,
+    target_optimization: fe2o3_kernel_opt::KernelIrTargetNeutralOptimizationReportV6,
+    target_verification: ProductionV13TargetVerificationCustody,
     workgroups: Box<[(String, fe2o3_kernel_ir::WorkgroupSize)]>,
     llvm_ir: String,
     bindings: AuthenticatedProductionBindings,
+}
+
+#[derive(Clone, Copy)]
+struct ProductionV13CapabilityResults<'a> {
+    optimizer: Option<&'a fe2o3_kernel_opt::KernelIrTargetNeutralOptimizationReportV6>,
+    structural_replay:
+        Option<&'a fe2o3_kernel_opt::KernelIrTargetNeutralStructuralReplayAdmissionV6>,
+    target_closure: Option<&'a crate::production_backend_v1::ProductionBackendCapabilityClosureV1>,
+}
+
+/// Move-only custody for the exact optimized V13 graph and every result needed
+/// before final-graph verification.
+struct PreparedV13FinalGraphVerification {
+    pre_optimization_canonical: fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13,
+    neutral_identity: fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV13,
+    optimized_identity: fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV13,
+    final_canonical: fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13,
+    final_epoch: u64,
+    target_module: fe2o3_kernel_ir::Module,
+    kernel_ids: Box<[fe2o3_kernel_ir::KernelId]>,
+    optimizer: fe2o3_kernel_opt::KernelIrTargetNeutralOptimizationReportV6,
+    structural_replay: fe2o3_kernel_opt::KernelIrTargetNeutralStructuralReplayAdmissionV6,
+    target_closure: crate::production_backend_v1::ProductionBackendCapabilityClosureV1,
+}
+
+struct VerifiedV13TargetLoweringInput {
+    target_module: fe2o3_kernel_ir::Module,
+    kernel_ids: Box<[fe2o3_kernel_ir::KernelId]>,
+    target_optimization: fe2o3_kernel_opt::KernelIrTargetNeutralOptimizationReportV6,
+    target_verification: ProductionV13TargetVerificationCustody,
+}
+
+const FINAL_GRAPH_FUNCTIONAL_RUNTIME_ROOT_V1: &str =
+    "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5";
+const FINAL_GRAPH_FUNCTIONAL_TIMEOUT_SECONDS_V1: u32 = 120;
+const FINAL_GRAPH_FUNCTIONAL_ROSTER_DOMAIN_V1: &[u8] =
+    b"FE2O3/RUSTC-CODEGEN/FINAL-GRAPH-FUNCTIONAL-ROSTER/V1\0";
+
+/// Exact W5 closure and W4 verification result retained as one move-only V13
+/// owner. The report is evidence only; custody grants no lowering, publication,
+/// artifact, load, or launch authority.
+struct ProductionV13TargetVerificationCustody {
+    verified_graph: fe2o3_pliron::ProductionVerifiedFinalGraphV1,
+    pre_optimization_canonical: fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13,
+    pre_optimization_epoch: u64,
+    final_epoch: u64,
+    target_closure: crate::production_backend_v1::ProductionBackendCapabilityClosureV1,
+}
+
+impl ProductionV13TargetVerificationCustody {
+    fn try_new(
+        mut verified_graph: fe2o3_pliron::ProductionVerifiedFinalGraphV1,
+        pre_optimization_canonical: fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13,
+        pre_optimization_epoch: u64,
+        final_epoch: u64,
+        target_closure: crate::production_backend_v1::ProductionBackendCapabilityClosureV1,
+    ) -> Result<Self, ProductionFinalGraphVerificationErrorV13> {
+        verified_graph.revalidate_live().map_err(|_| {
+            ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+                stage: "retained live final KIR V13 owner",
+            }
+        })?;
+        let custody = Self {
+            verified_graph,
+            pre_optimization_canonical,
+            pre_optimization_epoch,
+            final_epoch,
+            target_closure,
+        };
+        custody.validate_subject(custody.final_canonical().identity(), final_epoch)?;
+        if custody.pre_optimization_canonical.identity() == custody.final_canonical().identity()
+            && custody.pre_optimization_epoch != final_epoch
+        {
+            return Err(ProductionFinalGraphVerificationErrorV13::StaleResult {
+                stage: "retained pre-optimization canonical graph",
+                expected_epoch: final_epoch,
+                observed_epoch: custody.pre_optimization_epoch,
+            });
+        }
+        if custody.pre_optimization_epoch > final_epoch {
+            return Err(ProductionFinalGraphVerificationErrorV13::StaleResult {
+                stage: "retained pre-optimization graph",
+                expected_epoch: final_epoch,
+                observed_epoch: custody.pre_optimization_epoch,
+            });
+        }
+        Ok(custody)
+    }
+
+    fn validate_subject(
+        &self,
+        final_graph: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV13,
+        final_epoch: u64,
+    ) -> Result<(), ProductionFinalGraphVerificationErrorV13> {
+        let report = self.verified_graph.report();
+        let resources = report.resources();
+        let capability = report.capability();
+        let bridge = report.bridge();
+        let bridge_input = bridge.input();
+        let bridge_output = bridge.output();
+        let closure_subject = self.target_closure.subject();
+        if self.final_canonical().identity() != final_graph
+            || self.final_epoch != final_epoch
+            || report.final_graph() != final_graph
+            || report.final_epoch() != final_epoch
+            || resources.final_graph() != final_graph
+            || resources.final_epoch() != final_epoch
+            || resources.closure_identity() != self.target_closure().identity()
+            || closure_subject.semantic_operation_version() != 1
+            || closure_subject.canonical_graph_version() != 13
+            || closure_subject.digest() != *final_graph.digest()
+            || closure_subject.canonical_length() != final_graph.canonical_length()
+            || closure_subject.epoch() != final_epoch
+            || !self.target_closure.launch_subject_matches()
+            || capability.canonical_identity() != final_graph
+            || capability.graph_epoch() != final_epoch
+            || !bridge.is_exact()
+            || bridge_input != bridge_output
+            || bridge_input.canonical_bytes() != final_graph.canonical_length()
+            || bridge_output.canonical_bytes() != final_graph.canonical_length()
+        {
+            return Err(ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+                stage: "retained W5 closure and W4 final-graph report",
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_target_module(
+        &self,
+        target_module: &fe2o3_kernel_ir::Module,
+    ) -> Result<(), ProductionFinalGraphVerificationErrorV13> {
+        let canonical =
+            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13::from_module(target_module.clone())
+                .map_err(
+                    |_| ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+                        stage: "retained V13 final module",
+                    },
+                )?;
+        self.validate_subject(canonical.identity(), self.final_epoch)
+    }
+
+    fn validate_live_owner(&mut self) -> Result<(), ProductionFinalGraphVerificationErrorV13> {
+        self.verified_graph.revalidate_live().map_err(|_| {
+            ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+                stage: "retained live final KIR V13 owner",
+            }
+        })?;
+        self.validate_subject(self.final_canonical().identity(), self.final_epoch)
+    }
+
+    const fn final_canonical(&self) -> &fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13 {
+        self.verified_graph.canonical()
+    }
+
+    const fn target_closure(
+        &self,
+    ) -> &crate::production_backend_v1::ProductionBackendCapabilityClosureV1 {
+        &self.target_closure
+    }
+
+    const fn final_graph_report(&self) -> &fe2o3_pliron::ProductionFinalGraphVerificationReportV1 {
+        self.verified_graph.report()
+    }
+
+    const fn final_v13_epoch(&self) -> Option<u64> {
+        Some(self.final_epoch)
+    }
+
+    const fn retained_record_count(&self) -> usize {
+        3
+    }
+
+    fn validate_retained_records(
+        &mut self,
+    ) -> Result<(), ProductionFinalGraphVerificationErrorV13> {
+        self.validate_live_owner()
+    }
+
+    fn execute_w4_capability_witness(
+        &mut self,
+        subject: fe2o3_kernel_analysis::ProductionW4FinalGraphSubjectV1,
+        target_context: &fe2o3_kernel_analysis::ProductionW4TargetResourceInputV1,
+    ) -> Result<
+        fe2o3_kernel_analysis::ProductionW4FinalGraphCapabilityWitnessV1,
+        ProductionPipelineError,
+    > {
+        let target = {
+            let evidence = self
+                .target_closure
+                .validated_resource_evidence_v1()
+                .map_err(ProductionPipelineError::TargetBackend)?;
+            if subject.final_graph() != self.final_canonical().identity()
+                || subject.final_epoch() != self.final_epoch
+                || subject.target_closure_identity() != &evidence.closure_identity()
+                || target_context.final_graph() != subject.final_graph()
+                || target_context.final_epoch() != subject.final_epoch()
+                || target_context.target_identity() != subject.target_identity()
+                || target_context.launch_identity() != subject.launch_identity()
+                || target_context.closure_identity() != subject.target_closure_identity()
+            {
+                return Err(ProductionPipelineError::FinalGraphVerificationV13(
+                    ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+                        stage: "replay-validated W4 target resource context",
+                    },
+                ));
+            }
+            crate::production_worker_handoff::retain_production_w4_target_resource_input_v5(
+                *subject.final_graph(),
+                subject.final_epoch(),
+                *subject.target_identity(),
+                *subject.launch_identity(),
+                evidence.closure_identity(),
+                evidence.canonical_closure().to_vec(),
+                evidence.decisions().to_vec(),
+                target_context.atomic_target().clone(),
+                target_context.launch_contract().clone(),
+            )
+            .map_err(ProductionPipelineError::WorkerHandoff)?
+        };
+        let execution = self
+            .verified_graph
+            .execute_w4_capability_witness(subject.clone(), target)
+            .map_err(ProductionPipelineError::FinalGraphExecution)?;
+        let witness = match execution {
+            fe2o3_kernel_analysis::ProductionW4FinalGraphExecutionV1::Complete(witness) => witness,
+            fe2o3_kernel_analysis::ProductionW4FinalGraphExecutionV1::NonClean(result) => {
+                result.require_exact_subject_v1(&subject).map_err(|_| {
+                    ProductionPipelineError::FinalGraphVerificationV13(
+                        ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+                            stage: "non-clean production W4 diagnostic witness",
+                        },
+                    )
+                })?;
+                return Err(ProductionPipelineError::FinalGraphCapabilityNonClean(
+                    Box::new(result),
+                ));
+            }
+        };
+        self.validate_live_owner()
+            .map_err(ProductionPipelineError::FinalGraphVerificationV13)?;
+        Ok(witness)
+    }
+
+    fn prepare_simulation_bundle_v8_graph(
+        &mut self,
+        target_module: &fe2o3_kernel_ir::Module,
+        production_identity: fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrIdentityV1,
+        target_optimization: &fe2o3_kernel_opt::KernelIrTargetNeutralOptimizationReportV6,
+    ) -> Result<(fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13, u64), ProductionPipelineError> {
+        self.validate_live_owner()
+            .map_err(ProductionPipelineError::FinalGraphVerificationV13)?;
+        self.validate_target_module(target_module)
+            .map_err(ProductionPipelineError::FinalGraphVerificationV13)?;
+        if production_identity.version()
+            != fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V13
+            || production_identity.digest() != self.pre_optimization_canonical.identity().digest()
+            || production_identity.canonical_length()
+                != self
+                    .pre_optimization_canonical
+                    .identity()
+                    .canonical_length()
+            || target_optimization.initial_epoch() != self.pre_optimization_epoch
+            || target_optimization.final_epoch() != self.final_epoch
+        {
+            return Err(ProductionPipelineError::FinalGraphVerificationV13(
+                ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+                    stage: "V8 production graph and optimization epoch custody",
+                },
+            ));
+        }
+
+        let canonical = fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13::from_canonical_bytes(
+            self.final_canonical().canonical_bytes().to_vec(),
+        )
+        .map_err(ProductionPipelineError::TargetCapabilityAnalysis)?;
+        let report = self.verified_graph.report();
+        let resources = report.resources();
+        let closure_subject = self.target_closure.subject();
+        if self.verified_graph.module() != target_module
+            || report.final_graph() != canonical.identity()
+            || report.final_epoch() != self.final_epoch
+            || resources.final_graph() != canonical.identity()
+            || resources.final_epoch() != self.final_epoch
+            || resources.closure_identity() != self.target_closure.identity()
+            || closure_subject.semantic_operation_version() != 1
+            || closure_subject.canonical_graph_version() != 13
+            || closure_subject.digest() != *canonical.identity().digest()
+            || closure_subject.canonical_length() != canonical.identity().canonical_length()
+            || closure_subject.epoch() != self.final_epoch
+            || !self.target_closure.launch_subject_matches()
+        {
+            return Err(ProductionPipelineError::FinalGraphVerificationV13(
+                ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+                    stage: "retained V8 target closure and W4 final-graph result",
+                },
+            ));
+        }
+        self.validate_live_owner()
+            .map_err(ProductionPipelineError::FinalGraphVerificationV13)?;
+        Ok((canonical, self.final_epoch))
+    }
 }
 
 /// Private handoff input that can only be constructed by the exact production
@@ -504,6 +918,709 @@ fn exact_target_workgroup_roster_v1(
         .map(Vec::into_boxed_slice)
 }
 
+fn require_exact_v13_capability_results(
+    neutral_identity: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV13,
+    optimized_identity: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV13,
+    final_identity: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV13,
+    final_epoch: u64,
+    results: ProductionV13CapabilityResults<'_>,
+) -> Result<(), ProductionFinalGraphVerificationErrorV13> {
+    let optimizer =
+        results
+            .optimizer
+            .ok_or(ProductionFinalGraphVerificationErrorV13::MissingResult {
+                stage: "V6 optimizer preservation chain",
+            })?;
+    if !optimizer.is_exact_fixed_policy_replay()
+        || optimizer.grants_semantic_preservation_authority()
+    {
+        return Err(ProductionFinalGraphVerificationErrorV13::NonProductionOptimizer);
+    }
+    if optimizer.input_identity() != neutral_identity {
+        return Err(ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+            stage: "V6 optimizer input",
+        });
+    }
+    if optimizer.output_identity() != optimized_identity {
+        return Err(ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+            stage: "V6 optimizer output",
+        });
+    }
+    let mut expected_identity = neutral_identity;
+    let mut expected_epoch = optimizer.initial_epoch();
+    for record in optimizer.transformations() {
+        let capability = record.capability_replay();
+        let fresh = record.fresh_output_analysis();
+        if record.input_identity() != expected_identity
+            || record.input_epoch() != expected_epoch
+            || capability.input_identity() != record.input_identity()
+            || capability.output_identity() != record.output_identity()
+            || capability.input_epoch() != record.input_epoch()
+            || capability.output_epoch() != record.output_epoch()
+            || fresh.graph_identity() != record.output_identity()
+            || fresh.graph_epoch() != record.output_epoch()
+            || record.grants_semantic_preservation_authority()
+        {
+            return Err(ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+                stage: "V6 per-transform preservation record",
+            });
+        }
+        let replay_shape_is_exact = if record.changed() {
+            record.mode()
+                == fe2o3_kernel_opt::TransformationPreservationModeV1::ExactProtectedStructureReplay
+                && record.requires_complete_final_graph_analysis_replay()
+                && !record.invalidated_analyses().is_empty()
+                && !record.required_replays().is_empty()
+        } else {
+            record.mode()
+                == fe2o3_kernel_opt::TransformationPreservationModeV1::ExactCanonicalIdentity
+                && record.invalidated_analyses().is_empty()
+                && record.required_replays().is_empty()
+        };
+        if !replay_shape_is_exact {
+            return Err(ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+                stage: "V6 affected-analysis invalidation",
+            });
+        }
+        expected_identity = record.output_identity();
+        expected_epoch = record.output_epoch();
+    }
+    if expected_identity != optimized_identity || expected_epoch != optimizer.final_epoch() {
+        return Err(ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+            stage: "V6 terminal preservation record",
+        });
+    }
+
+    let structural_replay = results.structural_replay.ok_or(
+        ProductionFinalGraphVerificationErrorV13::MissingResult {
+            stage: "independent V6 structural replay",
+        },
+    )?;
+    if structural_replay.input_identity() != neutral_identity
+        || structural_replay.output_identity() != optimized_identity
+        || structural_replay.report() != optimizer
+        || !structural_replay.establishes_exact_closed_replay()
+        || structural_replay.establishes_semantic_preservation()
+    {
+        return Err(ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+            stage: "independent V6 structural replay",
+        });
+    }
+
+    let target_closure =
+        results
+            .target_closure
+            .ok_or(ProductionFinalGraphVerificationErrorV13::MissingResult {
+                stage: "V13 target-capability closure",
+            })?;
+    let subject = target_closure.subject();
+    if subject.semantic_operation_version() != 1
+        || subject.canonical_graph_version() != 13
+        || subject.digest() != *optimized_identity.digest()
+        || subject.canonical_length() != optimized_identity.canonical_length()
+        || !target_closure.launch_subject_matches()
+    {
+        return Err(ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+            stage: "target-capability closure",
+        });
+    }
+    if subject.epoch() != optimizer.final_epoch() {
+        return Err(ProductionFinalGraphVerificationErrorV13::StaleResult {
+            stage: "target-capability closure",
+            expected_epoch: optimizer.final_epoch(),
+            observed_epoch: subject.epoch(),
+        });
+    }
+    if target_closure.decision_count() == 0 {
+        return Err(ProductionFinalGraphVerificationErrorV13::EmptyTargetCapabilityClosure);
+    }
+    if final_identity != optimized_identity {
+        return Err(ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+            stage: "immutable optimized final graph",
+        });
+    }
+    if final_epoch != optimizer.final_epoch() {
+        return Err(ProductionFinalGraphVerificationErrorV13::StaleResult {
+            stage: "optimized final graph",
+            expected_epoch: optimizer.final_epoch(),
+            observed_epoch: final_epoch,
+        });
+    }
+    Ok(())
+}
+
+fn prepare_v13_final_graph_verification(
+    neutral_module: &fe2o3_kernel_ir::Module,
+    neutral_canonical: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13,
+    target_backend: &crate::production_backend_v1::ProductionBackendTargetV1,
+) -> Result<PreparedV13FinalGraphVerification, ProductionPipelineError> {
+    let reconstructed =
+        fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13::from_module(neutral_module.clone())
+            .map_err(ProductionPipelineError::TargetCapabilityAnalysis)?;
+    if reconstructed.identity() != neutral_canonical.identity() {
+        return Err(ProductionPipelineError::FinalGraphVerificationV13(
+            ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+                stage: "lowered canonical KIR V13 owner",
+            },
+        ));
+    }
+
+    let neutral_identity = *reconstructed.identity();
+    let optimized = fe2o3_kernel_opt::optimize_production_kernel_ir_module_v6(neutral_module)
+        .map_err(ProductionPipelineError::TargetOptimizationV6)?;
+    let structural_replay = fe2o3_kernel_opt::admit_production_kernel_ir_structural_replay_v6(
+        neutral_module,
+        optimized.module(),
+        optimized.report(),
+    )
+    .map_err(ProductionPipelineError::TargetOptimizationReplayV6)?;
+    let (optimized_module, optimized_canonical, optimizer) = optimized.into_parts();
+    let optimized_identity = *optimized_canonical.identity();
+    let optimizer_final_epoch = optimizer.final_epoch();
+
+    let target_closure = target_backend
+        .close_semantic_capabilities_v1(&optimized_canonical, optimizer_final_epoch)
+        .map_err(ProductionPipelineError::TargetBackend)?;
+    let final_epoch = optimizer_final_epoch;
+    let final_canonical = optimized_canonical;
+    let target_module = optimized_module;
+    let kernel_ids = target_module
+        .kernels
+        .iter()
+        .map(|kernel| kernel.id.clone())
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+
+    let prepared = PreparedV13FinalGraphVerification {
+        pre_optimization_canonical: reconstructed,
+        neutral_identity,
+        optimized_identity,
+        final_canonical,
+        final_epoch,
+        target_module,
+        kernel_ids,
+        optimizer,
+        structural_replay,
+        target_closure,
+    };
+    prepared.validate_capability_results()?;
+    Ok(prepared)
+}
+
+impl PreparedV13FinalGraphVerification {
+    fn capability_results(&self) -> ProductionV13CapabilityResults<'_> {
+        ProductionV13CapabilityResults {
+            optimizer: Some(&self.optimizer),
+            structural_replay: Some(&self.structural_replay),
+            target_closure: Some(&self.target_closure),
+        }
+    }
+
+    fn validate_capability_results(&self) -> Result<(), ProductionPipelineError> {
+        if self.kernel_ids.len() != self.target_module.kernels.len()
+            || self
+                .kernel_ids
+                .iter()
+                .zip(&self.target_module.kernels)
+                .any(|(expected, kernel)| expected != &kernel.id)
+        {
+            return Err(ProductionPipelineError::FinalGraphVerificationV13(
+                ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+                    stage: "target-bound kernel roster",
+                },
+            ));
+        }
+        require_exact_v13_capability_results(
+            &self.neutral_identity,
+            &self.optimized_identity,
+            self.final_canonical.identity(),
+            self.final_epoch,
+            self.capability_results(),
+        )
+        .map_err(ProductionPipelineError::FinalGraphVerificationV13)
+    }
+
+    fn require_final_graph_pliron_schedule(
+        self,
+    ) -> Result<VerifiedV13TargetLoweringInput, ProductionPipelineError> {
+        self.validate_capability_results()?;
+        let target_contract = self
+            .target_closure
+            .final_graph_target_contract_v1(
+                &self.final_canonical,
+                self.final_epoch,
+                self.neutral_identity,
+                self.optimizer.initial_epoch(),
+            )
+            .map_err(ProductionPipelineError::TargetBackend)?;
+        let mut verified = fe2o3_pliron::ProductionFinalGraphOwnerV1::try_new(
+            self.final_canonical,
+            self.final_epoch,
+            target_contract,
+        )
+        .map_err(ProductionPipelineError::FinalGraphExecution)?
+        .verify()
+        .map_err(ProductionPipelineError::FinalGraphExecution)?;
+        verified
+            .revalidate_live()
+            .map_err(ProductionPipelineError::FinalGraphExecution)?;
+        if verified.module() != &self.target_module
+            || self.kernel_ids.len() != verified.module().kernels.len()
+            || self
+                .kernel_ids
+                .iter()
+                .zip(&verified.module().kernels)
+                .any(|(expected, kernel)| expected != &kernel.id)
+            || verified.report().final_graph() != verified.canonical().identity()
+            || verified.report().final_epoch() != self.final_epoch
+        {
+            return Err(ProductionPipelineError::FinalGraphVerificationV13(
+                ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+                    stage: "owner-held final-graph release",
+                },
+            ));
+        }
+        let target_verification = ProductionV13TargetVerificationCustody::try_new(
+            verified,
+            self.pre_optimization_canonical,
+            self.optimizer.initial_epoch(),
+            self.final_epoch,
+            self.target_closure,
+        )
+        .map_err(ProductionPipelineError::FinalGraphVerificationV13)?;
+        Ok(VerifiedV13TargetLoweringInput {
+            target_module: self.target_module,
+            kernel_ids: self.kernel_ids,
+            target_optimization: self.optimizer,
+            target_verification,
+        })
+    }
+}
+
+struct ProductionFinalGraphFunctionalRootCustodyV1 {
+    logical_name: String,
+    export_symbol: Box<[u8]>,
+    semantic_root: u32,
+    semantic_root_identity: [u8; 32],
+    kernel_binding: [u8; 32],
+    source_rank: u8,
+    execution: fe2o3_verifier::ProductionFinalGraphFunctionalRefinementExecutionV2,
+}
+
+/// Exact final-graph functional proofs and their source reference bindings are
+/// retained beside the sole live V13/PLIRON owner. This owner grants no
+/// publication authority until W4 is executed for the same subject.
+struct ProductionFinalGraphFunctionalCustodyV1 {
+    target: ProductionV13TargetVerificationCustody,
+    reference_effect_bindings: crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    roots: Box<[ProductionFinalGraphFunctionalRootCustodyV1]>,
+    canonical_roster_identity:
+        crate::production_ranked_projection_v1::ProductionRankedKernelRosterIdentityV1,
+    canonical_kernel_order: Box<[usize]>,
+    identity: [u8; 32],
+}
+
+impl ProductionFinalGraphFunctionalCustodyV1 {
+    fn try_new(
+        admitted: &fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+        mut target: ProductionV13TargetVerificationCustody,
+        ranked: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
+        reference_effect_bindings: crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    ) -> Result<Self, ProductionPipelineError> {
+        require_exact_protected_reference_roster_v1(&reference_effect_bindings, &ranked)?;
+        target
+            .validate_live_owner()
+            .map_err(ProductionPipelineError::FinalGraphVerificationV13)?;
+        let runtime = fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1::open(
+            FINAL_GRAPH_FUNCTIONAL_RUNTIME_ROOT_V1,
+        )
+        .map_err(ProductionPipelineError::FinalGraphFunctionalRuntime)?;
+        let (ranked_roots, canonical_roster_identity, canonical_kernel_order) = ranked
+            .into_final_graph_functional_roster()
+            .map_err(ProductionPipelineError::RankedVerification)?
+            .into_parts();
+        if ranked_roots.len() != target.verified_graph.module().kernels.len()
+            || ranked_roots.len() != reference_effect_bindings.as_slice().len()
+            || canonical_kernel_order.len() != ranked_roots.len()
+        {
+            return Err(ProductionPipelineError::FunctionalRefinementCustody(
+                "final-graph proof, reference, and executable root rosters differ",
+            ));
+        }
+
+        let source_graph = *target.pre_optimization_canonical.identity();
+        let final_graph = *target.final_canonical().identity();
+        let final_epoch = target.final_epoch;
+        let target_closure = target.target_closure().identity();
+        let mut consumed_bindings = BTreeSet::new();
+        let mut roots = Vec::with_capacity(ranked_roots.len());
+        for (ordinal, root) in ranked_roots.into_vec().into_iter().enumerate() {
+            let kernel = target.verified_graph.module().kernels.get(ordinal).ok_or(
+                ProductionPipelineError::FunctionalRefinementCustody(
+                    "final executable root disappeared",
+                ),
+            )?;
+            let mut matches = reference_effect_bindings
+                .as_slice()
+                .iter()
+                .enumerate()
+                .filter(|(_, binding)| {
+                    binding.logical_kernel_name == root.logical_name()
+                        && binding.kernel.function_sha256 == *root.kernel_binding()
+                });
+            let Some((binding_ordinal, binding)) = matches.next() else {
+                return Err(ProductionPipelineError::FunctionalRefinementCustody(
+                    "final-graph proof root has no exact reference-effect binding",
+                ));
+            };
+            if matches.next().is_some()
+                || !consumed_bindings.insert(binding_ordinal)
+                || kernel.id.as_str().as_bytes() != root.export_symbol()
+                || kernel.entry.as_str().as_bytes() != root.export_symbol()
+                || kernel.domain.rank() != root.source_rank()
+            {
+                return Err(ProductionPipelineError::FunctionalRefinementCustody(
+                    "final-graph proof root was reordered or cross-wired",
+                ));
+            }
+            let expected_ranked_kernel = root.verified().derivation().ranked_kernel();
+            let logical_name = root.logical_name().to_owned();
+            let export_symbol = root.export_symbol().to_vec().into_boxed_slice();
+            let semantic_root = root.semantic_root().index();
+            let semantic_root_identity = *root.semantic_root_identity().as_bytes();
+            let kernel_binding = *root.kernel_binding();
+            let source_rank = root.source_rank();
+            let execution = fe2o3_verifier::bind_effect_ir_derived_functional_refinement_to_borrowed_final_graph_v2(
+                &runtime,
+                admitted.semantic_kir(),
+                &mut target.verified_graph,
+                root.into_verified(),
+                FINAL_GRAPH_FUNCTIONAL_TIMEOUT_SECONDS_V1,
+            )
+            .map_err(ProductionPipelineError::FinalGraphFunctionalRefinement)?;
+            validate_final_graph_functional_root_v1(
+                &execution,
+                binding,
+                expected_ranked_kernel,
+                source_graph,
+                final_graph,
+                final_epoch,
+                target_closure,
+            )?;
+            roots.push(ProductionFinalGraphFunctionalRootCustodyV1 {
+                logical_name,
+                export_symbol,
+                semantic_root,
+                semantic_root_identity,
+                kernel_binding,
+                source_rank,
+                execution,
+            });
+        }
+        if consumed_bindings.len() != reference_effect_bindings.as_slice().len() {
+            return Err(ProductionPipelineError::FunctionalRefinementCustody(
+                "reference-effect roster contains an unconsumed binding",
+            ));
+        }
+        runtime
+            .revalidate()
+            .map_err(ProductionPipelineError::FinalGraphFunctionalRuntime)?;
+        target
+            .validate_live_owner()
+            .map_err(ProductionPipelineError::FinalGraphVerificationV13)?;
+        let roots = roots.into_boxed_slice();
+        let identity = derive_final_graph_functional_roster_identity_v1(
+            source_graph,
+            final_graph,
+            final_epoch,
+            target_closure,
+            canonical_roster_identity,
+            &canonical_kernel_order,
+            &roots,
+        )?;
+        Ok(Self {
+            target,
+            reference_effect_bindings,
+            roots,
+            canonical_roster_identity,
+            canonical_kernel_order,
+            identity,
+        })
+    }
+
+    fn validate_live_owner(&mut self) -> Result<(), ProductionPipelineError> {
+        self.target
+            .validate_live_owner()
+            .map_err(ProductionPipelineError::FinalGraphVerificationV13)?;
+        if self.roots.is_empty()
+            || self.roots.len() != self.reference_effect_bindings.as_slice().len()
+            || self.roots.len() != self.canonical_kernel_order.len()
+        {
+            return Err(ProductionPipelineError::FunctionalRefinementCustody(
+                "retained final-graph functional roster changed shape",
+            ));
+        }
+        let source_graph = *self.target.pre_optimization_canonical.identity();
+        let final_graph = *self.target.final_canonical().identity();
+        let final_epoch = self.target.final_epoch;
+        let target_closure = self.target.target_closure().identity();
+        let mut seen = BTreeSet::new();
+        for root in &self.roots {
+            let mut matches = self
+                .reference_effect_bindings
+                .as_slice()
+                .iter()
+                .enumerate()
+                .filter(|(_, binding)| {
+                    binding.logical_kernel_name == root.logical_name
+                        && binding.kernel.function_sha256 == root.kernel_binding
+                });
+            let Some((ordinal, binding)) = matches.next() else {
+                return Err(ProductionPipelineError::FunctionalRefinementCustody(
+                    "retained final-graph proof lost its reference binding",
+                ));
+            };
+            if matches.next().is_some() || !seen.insert(ordinal) {
+                return Err(ProductionPipelineError::FunctionalRefinementCustody(
+                    "retained final-graph proof has ambiguous reference custody",
+                ));
+            }
+            validate_final_graph_functional_root_v1(
+                &root.execution,
+                binding,
+                root.execution.report().ranked_kernel(),
+                source_graph,
+                final_graph,
+                final_epoch,
+                target_closure,
+            )?;
+        }
+        let identity = derive_final_graph_functional_roster_identity_v1(
+            source_graph,
+            final_graph,
+            final_epoch,
+            target_closure,
+            self.canonical_roster_identity,
+            &self.canonical_kernel_order,
+            &self.roots,
+        )?;
+        if identity != self.identity {
+            return Err(ProductionPipelineError::FunctionalRefinementCustody(
+                "retained final-graph functional roster identity changed",
+            ));
+        }
+        Ok(())
+    }
+
+    const fn identity(&self) -> &[u8; 32] {
+        &self.identity
+    }
+
+    fn execute_w4_capability_witness(
+        &mut self,
+        subject: fe2o3_kernel_analysis::ProductionW4FinalGraphSubjectV1,
+        target: &fe2o3_kernel_analysis::ProductionW4TargetResourceInputV1,
+    ) -> Result<
+        fe2o3_kernel_analysis::ProductionW4FinalGraphCapabilityWitnessV1,
+        ProductionPipelineError,
+    > {
+        self.validate_live_owner()?;
+        if subject.functional_refinement_identity() != self.identity() {
+            return Err(ProductionPipelineError::FunctionalRefinementCustody(
+                "W4 subject does not retain Hilbert's exact final-graph functional roster",
+            ));
+        }
+        let witness = self.target.execute_w4_capability_witness(subject, target)?;
+        self.validate_live_owner()?;
+        Ok(witness)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_final_graph_functional_root_v1(
+    execution: &fe2o3_verifier::ProductionFinalGraphFunctionalRefinementExecutionV2,
+    binding: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1,
+    expected_ranked_kernel: fe2o3_proof_contracts::DigestV1,
+    source_graph: fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV13,
+    final_graph: fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV13,
+    final_epoch: u64,
+    target_closure: [u8; 32],
+) -> Result<(), ProductionPipelineError> {
+    let report = execution.report();
+    let proof_binding = report.binding();
+    if report.safe_reference_mir().as_bytes() != &binding.reference.rustc_mir_body_sha256
+        || report.kernel_mir().as_bytes() != &binding.kernel.rustc_mir_body_sha256
+        || report.ranked_kernel() != expected_ranked_kernel
+        || report.source_graph() != source_graph
+        || report.final_graph() != final_graph
+        || report.final_epoch() != final_epoch
+        || report.target_closure() != target_closure
+        || report.output_writes() == 0
+        || proof_binding.safe_reference_identity().as_bytes() != &binding.reference.function_sha256
+        || proof_binding.safe_reference_mir_hash() != report.safe_reference_mir()
+        || proof_binding.kernel_subject_identity().as_bytes() != final_graph.digest()
+        || proof_binding.kernel_mir_hash() != report.kernel_mir()
+        || proof_binding.normalized_obligation_effect_ir_hash() != report.obligation()
+        || execution.final_signed_receipt_wire().is_empty()
+        || execution.final_receipt_verifying_key() == &[0; 32]
+        || !execution.retains_strictly_imported_final_graph_receipt()
+        || execution.grants_llvm_or_later_authority()
+    {
+        return Err(ProductionPipelineError::FunctionalRefinementCustody(
+            "final-graph functional receipt names stale or cross-wired subjects",
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_final_graph_functional_roster_identity_v1(
+    source_graph: fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV13,
+    final_graph: fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV13,
+    final_epoch: u64,
+    target_closure: [u8; 32],
+    canonical_roster_identity:
+        crate::production_ranked_projection_v1::ProductionRankedKernelRosterIdentityV1,
+    canonical_kernel_order: &[usize],
+    roots: &[ProductionFinalGraphFunctionalRootCustodyV1],
+) -> Result<[u8; 32], ProductionPipelineError> {
+    if roots.is_empty() || roots.len() != canonical_kernel_order.len() {
+        return Err(ProductionPipelineError::FunctionalRefinementCustody(
+            "cannot identify an empty or incomplete final-graph functional roster",
+        ));
+    }
+    let mut digest = Sha256::new();
+    digest.update((FINAL_GRAPH_FUNCTIONAL_ROSTER_DOMAIN_V1.len() as u64).to_le_bytes());
+    digest.update(FINAL_GRAPH_FUNCTIONAL_ROSTER_DOMAIN_V1);
+    digest.update(source_graph.digest());
+    digest.update(source_graph.canonical_length().to_le_bytes());
+    digest.update(final_graph.digest());
+    digest.update(final_graph.canonical_length().to_le_bytes());
+    digest.update(final_epoch.to_le_bytes());
+    digest.update(target_closure);
+    digest.update(canonical_roster_identity.as_bytes());
+    digest.update((canonical_kernel_order.len() as u64).to_le_bytes());
+    for index in canonical_kernel_order {
+        let index = u64::try_from(*index).map_err(|_| {
+            ProductionPipelineError::FunctionalRefinementCustody(
+                "canonical final-graph root ordinal cannot be represented",
+            )
+        })?;
+        digest.update(index.to_le_bytes());
+    }
+    digest.update((roots.len() as u64).to_le_bytes());
+    for root in roots {
+        digest.update((root.logical_name.len() as u64).to_le_bytes());
+        digest.update(root.logical_name.as_bytes());
+        digest.update((root.export_symbol.len() as u64).to_le_bytes());
+        digest.update(&root.export_symbol);
+        digest.update(root.semantic_root.to_le_bytes());
+        digest.update(root.semantic_root_identity);
+        digest.update(root.kernel_binding);
+        digest.update([root.source_rank]);
+        let report = root.execution.report();
+        for identity in [
+            report.safe_reference_mir(),
+            report.kernel_mir(),
+            report.ranked_kernel(),
+            report.parallel_contract(),
+            report.output_expression_product(),
+            report.generated_source(),
+            report.obligation(),
+        ] {
+            digest.update(identity.as_bytes());
+        }
+        digest.update(report.output_writes().to_le_bytes());
+        digest.update(root.execution.final_receipt_verifying_key());
+        digest.update((root.execution.final_signed_receipt_wire().len() as u64).to_le_bytes());
+        digest.update(root.execution.final_signed_receipt_wire());
+    }
+    Ok(digest.finalize().into())
+}
+
+/// Producer-side W1-W6 typestate. The post-Worker #213 verifier remains the
+/// sole authority gate; this owner ensures the compiler cannot publish its
+/// input without retaining both final functional and exact W4 schedule custody.
+struct ProductionW1W6PublicationOwnerV1 {
+    functional: ProductionFinalGraphFunctionalCustodyV1,
+    w4_schedule: fe2o3_kernel_analysis::ProductionW4AnalysisScheduleWitnessV1,
+}
+
+impl ProductionW1W6PublicationOwnerV1 {
+    fn try_bind(
+        mut functional: ProductionFinalGraphFunctionalCustodyV1,
+        w4_schedule: fe2o3_kernel_analysis::ProductionW4AnalysisScheduleWitnessV1,
+    ) -> Result<Self, ProductionPipelineError> {
+        functional.validate_live_owner()?;
+        let final_graph = functional.target.final_canonical().identity();
+        let final_epoch = functional.target.final_epoch;
+        let target_closure = functional.target.target_closure().identity();
+        if w4_schedule.final_graph() != final_graph
+            || w4_schedule.final_epoch() != final_epoch
+            || w4_schedule.target_closure_identity() != &target_closure
+            || w4_schedule.identity() == &[0; 32]
+            || w4_schedule.checker_identity() == &[0; 32]
+            || w4_schedule.obligations().is_empty()
+            || w4_schedule.obligations().iter().any(|obligation| {
+                let evidence = obligation.independent_evidence();
+                evidence.final_graph() != final_graph
+                    || evidence.final_epoch() != final_epoch
+                    || evidence.pliron_epoch() != w4_schedule.pliron_epoch()
+                    || obligation.evidence_identity() == &[0; 32]
+            })
+            || w4_schedule.grants_compiler_refinement_authority()
+            || w4_schedule.grants_lowering_artifact_or_launch_authority()
+        {
+            return Err(ProductionPipelineError::FunctionalRefinementCustody(
+                "W4 schedule is stale or names a different final functional subject",
+            ));
+        }
+        Ok(Self {
+            functional,
+            w4_schedule,
+        })
+    }
+
+    fn prepare_capability_handoff(
+        &mut self,
+        legacy_handoff: fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
+        capability_inputs: crate::production_worker_handoff::ProductionCapabilityCarriageInputsV5,
+    ) -> Result<fe2o3_compiler_ffi::InertProductionCapabilityHandoffV5, ProductionPipelineError>
+    {
+        self.functional.validate_live_owner()?;
+        if self.w4_schedule.final_graph() != self.functional.target.final_canonical().identity()
+            || self.w4_schedule.final_epoch() != self.functional.target.final_epoch
+            || self.w4_schedule.target_closure_identity()
+                != &self.functional.target.target_closure().identity()
+        {
+            return Err(ProductionPipelineError::FunctionalRefinementCustody(
+                "W1-W6 publication owner changed before handoff construction",
+            ));
+        }
+        crate::production_worker_handoff::prepare_production_capability_handoff_v5(
+            legacy_handoff,
+            self.functional.target.target_closure(),
+            self.functional.target.final_graph_report(),
+            capability_inputs,
+        )
+        .map_err(ProductionPipelineError::WorkerHandoff)
+    }
+
+    fn validate_for_publication(&mut self) -> Result<(), ProductionPipelineError> {
+        self.functional.validate_live_owner()?;
+        if self.w4_schedule.final_graph() != self.functional.target.final_canonical().identity()
+            || self.w4_schedule.final_epoch() != self.functional.target.final_epoch
+            || self.w4_schedule.target_closure_identity()
+                != &self.functional.target.target_closure().identity()
+        {
+            return Err(ProductionPipelineError::FunctionalRefinementCustody(
+                "W1-W6 publication owner changed before durable publication",
+            ));
+        }
+        Ok(())
+    }
+}
+
 struct PreparedProductionWorkerPublication {
     producer: ProducerIdentity,
     output_dir: PathBuf,
@@ -512,7 +1629,61 @@ struct PreparedProductionWorkerPublication {
     compiler_execution: Box<AdmittedProtectedCompilerExecutionV1>,
     semantic_lineage: crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3,
     rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
+    final_graph_functional: ProductionFinalGraphFunctionalCustodyV1,
+    w4_diagnostic_source_map_v2: Box<[u8]>,
     prepared: crate::production_worker_handoff::PreparedProductionWorkerHandoff,
+    bundle_v8: production_bundle_transaction_v8::PreparedProductionBundleTransactionV8,
+}
+
+fn require_exact_protected_reference_roster_v1(
+    bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    ranked: &crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
+) -> Result<(), ProductionPipelineError> {
+    if bindings.as_slice().len() != ranked.root_count() {
+        return Err(ProductionPipelineError::FunctionalRefinementCustody(
+            "reference-effect and ranked-root rosters have different lengths",
+        ));
+    }
+    let mut names = BTreeSet::new();
+    for root in ranked.roots() {
+        let mut matches = bindings.as_slice().iter().filter(|binding| {
+            binding.logical_kernel_name == root.logical_name()
+                && &binding.kernel.function_sha256 == root.kernel_binding()
+        });
+        let Some(binding) = matches.next() else {
+            return Err(ProductionPipelineError::FunctionalRefinementCustody(
+                "ranked root has no exact authenticated reference-effect binding",
+            ));
+        };
+        if matches.next().is_some()
+            || !names.insert(binding.logical_kernel_name.as_str())
+            || binding.reference.rustc_mir_body_sha256 == [0; 32]
+            || binding.kernel.rustc_mir_body_sha256 == [0; 32]
+            || binding.effect_ir_sha256 == [0; 32]
+            || binding.observable_output_writes.is_empty()
+            || root.verification().aggregate_verus_execution().is_none()
+        {
+            return Err(ProductionPipelineError::FunctionalRefinementCustody(
+                "reference-effect binding or retained Verus execution is incomplete",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Complete authority-free output of the sole protected compiler publication.
+pub(crate) struct PublishedProductionWorkerTransaction {
+    subject: fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1,
+    bundle_v8: production_bundle_transaction_v8::ProductionBoundBundleV8,
+}
+
+impl PublishedProductionWorkerTransaction {
+    pub(crate) fn outer_handoff(
+        &self,
+    ) -> fe2o3_artifact_transaction::InertCompilerExecutionContentBindingV1 {
+        debug_assert!(self.bundle_v8.remains_bound_to(&self.subject));
+        self.subject.outer_handoff()
+    }
 }
 
 impl AuthenticatedProductionTargetModule {
@@ -579,6 +1750,12 @@ impl TargetNeutralProductionCompilation {
             fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V11 => {
                 return Err(ProductionPipelineError::SimulationProductionKirV11);
             }
+            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V12 => {
+                return Err(ProductionPipelineError::SimulationProductionKirV12);
+            }
+            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V13 => {
+                return Err(ProductionPipelineError::SimulationProductionKirV13);
+            }
         };
         let canonical_v7 =
             fe2o3_kernel_ir::VerifiedCanonicalKernelIrV7::from_module(lowered.module().clone())
@@ -606,7 +1783,11 @@ impl TargetNeutralProductionCompilation {
             compiler_execution_binding,
             lineage,
             production_identity,
-            bindings.rustc_target.profile().device_target(),
+            bindings
+                .rustc_target
+                .backend()
+                .contract()
+                .canonical_target(),
             canonical_v7,
         )
         .map_err(ProductionPipelineError::SimulationBundle)?;
@@ -748,6 +1929,12 @@ impl TargetNeutralProductionCompilation {
                 fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V11 => {
                     return Err(ProductionPipelineError::SimulationProductionKirV11);
                 }
+                fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V12 => {
+                    return Err(ProductionPipelineError::SimulationProductionKirV12);
+                }
+                fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V13 => {
+                    return Err(ProductionPipelineError::SimulationProductionKirV13);
+                }
             },
             *production.digest(),
             production.canonical_length(),
@@ -782,7 +1969,11 @@ impl TargetNeutralProductionCompilation {
         let prepared = fe2o3_kernel_ir::PreparedSimulationBundleV5::new(
             lineage,
             production,
-            bindings.rustc_target.profile().device_target(),
+            bindings
+                .rustc_target
+                .backend()
+                .contract()
+                .canonical_target(),
             canonical_v10,
         )
         .map_err(ProductionPipelineError::SimulationBundleV5)?;
@@ -860,6 +2051,12 @@ impl TargetNeutralProductionCompilation {
         {
             return Err(ProductionPipelineError::RustcLineageMismatch);
         }
+        if matches!(
+            lowered.canonical_kernel_ir_identity().version(),
+            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V12
+        ) {
+            return Err(ProductionPipelineError::SimulationProductionKirV12);
+        }
         let canonical_v11 =
             fe2o3_kernel_ir::VerifiedCanonicalKernelIrV11::from_module(lowered.module().clone())
                 .map_err(|error| {
@@ -895,7 +2092,11 @@ impl TargetNeutralProductionCompilation {
         let prepared = fe2o3_kernel_ir::PreparedSimulationBundleV6::new(
             lineage,
             production,
-            bindings.rustc_target.profile().device_target(),
+            bindings
+                .rustc_target
+                .backend()
+                .contract()
+                .canonical_target(),
             canonical_v11,
         )
         .map_err(ProductionPipelineError::SimulationBundleV6)?;
@@ -981,7 +2182,7 @@ impl FormalMemoryAdmittedProductionCompilation {
             ranked_verification,
             bindings,
         } = self;
-        let target_profile = bindings.rustc_target.profile();
+        let target_backend = bindings.rustc_target.backend();
         let semantic = admitted.semantic_kir().semantic().semantic();
         if semantic.roots().is_empty()
             || semantic.roots().len() != bindings.typed_descriptor_roots.len()
@@ -1032,37 +2233,36 @@ impl FormalMemoryAdmittedProductionCompilation {
                 typed_root.entry_symbol(),
                 semantic_function,
                 source_launch,
-                target_profile.device_target(),
+                target_backend.contract().canonical_target(),
             )
             .map_err(ProductionPipelineError::Geometry)?;
         }
-        let target_bound = dialect_amdgcn::bind_production_target_v1(
+        let neutral_canonical = admitted.semantic_kir().canonical_kernel_ir_v13().ok_or(
+            ProductionPipelineError::FinalGraphVerificationV13(
+                ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+                    stage: "lowered canonical KIR V13 custody",
+                },
+            ),
+        )?;
+        let prepared = prepare_v13_final_graph_verification(
             admitted.semantic_kir().module(),
-            target_profile,
-        )
-        .map_err(ProductionPipelineError::TargetBinding)?;
-        let (target_module, kernel_ids) = target_bound.into_parts();
-        let production_kir_version = admitted
-            .semantic_kir()
-            .canonical_kernel_ir_identity()
-            .version();
-        let (target_module, target_optimization) = match production_kir_version {
-            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V11 => {
-                let (module, _canonical, report) =
-                    fe2o3_kernel_opt::optimize_production_kernel_ir_module_v3(&target_module)
-                        .map_err(ProductionPipelineError::TargetOptimizationV3)?
-                        .into_parts();
-                (module, report)
-            }
-            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V8
-            | fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V9 => {
-                let (module, _canonical, report) =
-                    fe2o3_kernel_opt::optimize_production_kernel_ir_module_v2(&target_module)
-                        .map_err(ProductionPipelineError::TargetOptimization)?
-                        .into_parts();
-                (module, report)
-            }
-        };
+            neutral_canonical,
+            target_backend,
+        )?;
+        let verified = prepared.require_final_graph_pliron_schedule()?;
+        let dialect_llvm_ir = target_backend
+            .lower_v13_module_v1(
+                verified.target_verification.final_canonical(),
+                verified.target_verification.final_epoch,
+                verified.target_verification.target_closure(),
+            )
+            .map_err(ProductionPipelineError::TargetBackend)?;
+        let VerifiedV13TargetLoweringInput {
+            target_module,
+            kernel_ids,
+            target_optimization,
+            target_verification,
+        } = verified;
         if kernel_ids.len() != target_module.kernels.len()
             || kernel_ids
                 .iter()
@@ -1073,56 +2273,19 @@ impl FormalMemoryAdmittedProductionCompilation {
                 crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
             ));
         }
+        target_verification
+            .validate_target_module(&target_module)
+            .map_err(ProductionPipelineError::FinalGraphVerificationV13)?;
         let workgroups = exact_target_workgroup_roster_v1(&target_module)?;
-        let target_kir_identity = match admitted
-            .semantic_kir()
-            .canonical_kernel_ir_identity()
-            .version()
-        {
-            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V8 => {
-                let owner = fe2o3_kernel_ir::VerifiedCanonicalKernelIrV8::from_module(
-                    target_module.clone(),
-                )
-                .map_err(ProductionPipelineError::TargetKernelIrV8)?;
-                dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v8(&owner)
-            }
-            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V9 => {
-                let owner = fe2o3_kernel_ir::VerifiedCanonicalKernelIrV9::from_module(
-                    target_module.clone(),
-                )
-                .map_err(ProductionPipelineError::TargetKernelIrV9)?;
-                dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v9(&owner)
-            }
-            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V11 => {
-                let owner = fe2o3_kernel_ir::VerifiedCanonicalKernelIrV11::from_module(
-                    target_module.clone(),
-                )
-                .map_err(ProductionPipelineError::TargetKernelIrV11)?;
-                dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v11(&owner)
-            }
-        };
-        let lowering = match target_profile {
-            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942 => {
-                dialect_amdgcn::lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
-                    &target_module,
-                    target_kir_identity,
-                )
-            }
-            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950 => {
-                dialect_amdgcn::lower_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
-                    &target_module,
-                    target_kir_identity,
-                )
-            }
-        };
-        let dialect_llvm_ir = lowering.map_err(ProductionPipelineError::TargetLowering)?;
-        let llvm_ir = dialect_amdgcn::bind_production_llvm22_worker_layout_v1(&dialect_llvm_ir)
-            .map_err(ProductionPipelineError::UpstreamLlvmLayoutBinding)?;
+        let llvm_ir = target_backend
+            .bind_worker_layout_v1(&dialect_llvm_ir)
+            .map_err(ProductionPipelineError::TargetBackend)?;
         Ok(TargetLoweredProductionCompilation {
             admitted,
             ranked_verification,
             target_module,
             target_optimization,
+            target_verification,
             workgroups,
             llvm_ir,
             bindings,
@@ -1136,20 +2299,21 @@ impl TargetLoweredProductionCompilation {
     }
 
     pub(crate) fn target_name(&self) -> &'static str {
-        self.bindings.rustc_target.profile().device_target()
+        self.bindings
+            .rustc_target
+            .backend()
+            .contract()
+            .canonical_target()
     }
 
     pub(crate) fn canonical_kernel_ir_version(&self) -> u16 {
-        match self
-            .admitted
-            .semantic_kir()
-            .canonical_kernel_ir_identity()
-            .version()
-        {
-            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V8 => 8,
-            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V9 => 9,
-            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V11 => 11,
-        }
+        debug_assert!(
+            self.admitted
+                .semantic_kir()
+                .canonical_kernel_ir_v13()
+                .is_some()
+        );
+        13
     }
 
     pub(crate) fn guarded_store_count(&self) -> usize {
@@ -1263,6 +2427,7 @@ impl TargetLoweredProductionCompilation {
             .transaction
             .compiler_custody
             .retained_protected_binding_count()
+            + self.target_verification.retained_record_count()
     }
 
     pub(crate) fn grants_artifact_or_launch_authority(&self) -> bool {
@@ -1270,14 +2435,14 @@ impl TargetLoweredProductionCompilation {
     }
 
     pub(crate) fn target_optimization_pass_count(&self) -> usize {
-        self.target_optimization.passes().len()
+        self.target_optimization.transformations().len()
     }
 
     pub(crate) fn target_optimization_mutating_pass_count(&self) -> usize {
         self.target_optimization
-            .passes()
+            .transformations()
             .iter()
-            .filter(|pass| pass.pliron().changed())
+            .filter(|record| record.changed())
             .count()
     }
 
@@ -1289,6 +2454,160 @@ impl TargetLoweredProductionCompilation {
         self.target_optimization.final_epoch()
     }
 
+    pub(crate) fn v13_target_capability_closure(
+        &self,
+    ) -> Result<
+        &crate::production_backend_v1::ProductionBackendCapabilityClosureV1,
+        ProductionFinalGraphVerificationErrorV13,
+    > {
+        Ok(self.target_verification.target_closure())
+    }
+
+    pub(crate) fn v13_final_graph_verification_report(
+        &self,
+    ) -> Result<
+        &fe2o3_pliron::ProductionFinalGraphVerificationReportV1,
+        ProductionFinalGraphVerificationErrorV13,
+    > {
+        Ok(self.target_verification.final_graph_report())
+    }
+
+    fn prepare_simulation_bundle_v8(
+        &mut self,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV8, ProductionPipelineError> {
+        let Self {
+            admitted,
+            target_module,
+            target_optimization,
+            target_verification,
+            bindings,
+            ..
+        } = self;
+        let lowered = admitted.semantic_kir();
+        lowered
+            .verify_equivalence()
+            .map_err(ProductionPipelineError::TargetNeutralLowering)?;
+        require_complete_simulation_debug_source_capture_v2(bindings.debug_capture_gap)?;
+        if bindings
+            .rustc_preflight_plan
+            .rustc_identity_inventory_sha256()
+            != bindings.rustc_identity_inventory.sha256()
+        {
+            return Err(ProductionPipelineError::RustcLineageMismatch);
+        }
+        let production_identity = lowered.canonical_kernel_ir_identity();
+        let (canonical_v13, final_epoch) = target_verification.prepare_simulation_bundle_v8_graph(
+            target_module,
+            production_identity,
+            target_optimization,
+        )?;
+        let canonical_identity = *canonical_v13.identity();
+        let production = fe2o3_kernel_ir::SimulationProductionKirIdentityV8::new(
+            13,
+            *canonical_identity.digest(),
+            canonical_identity.canonical_length(),
+        )
+        .map_err(ProductionPipelineError::SimulationBundleV8)?;
+        let inventory_receipt =
+            fe2o3_compiler_lineage::InertRustcIdentityInventoryReceiptV3::from_canonical_preimage(
+                bindings.rustc_identity_inventory.canonical_transcript(),
+            )
+            .map_err(ProductionPipelineError::SimulationSourceLineage)?;
+        let preflight_receipt =
+            fe2o3_compiler_lineage::InertRustcPreflightPlanReceiptV3::from_canonical_preimage(
+                bindings.rustc_preflight_plan.canonical_transcript(),
+            )
+            .map_err(ProductionPipelineError::SimulationSourceLineage)?;
+        let inventory_identity = inventory_receipt.identity();
+        let preflight_identity = preflight_receipt.identity();
+        let lineage = fe2o3_kernel_ir::SimulationSourceLineageV1::new(
+            *inventory_identity.sha256(),
+            inventory_identity.byte_len(),
+            *preflight_identity.sha256(),
+            preflight_identity.byte_len(),
+        )
+        .map_err(ProductionPipelineError::SimulationBundle)?;
+        let prepared = fe2o3_kernel_ir::PreparedSimulationBundleV8::new(
+            lineage,
+            production,
+            final_epoch,
+            bindings
+                .rustc_target
+                .backend()
+                .contract()
+                .canonical_target(),
+            canonical_v13,
+        )
+        .map_err(ProductionPipelineError::SimulationBundleV8)?;
+        let debug_map = compiler_debug_source_map_v2(
+            lowered,
+            &bindings.debug_source_files,
+            &bindings.debug_source_scopes,
+            &bindings.debug_source_variables,
+            prepared.debug_source_map_binding(),
+        )?;
+        let semantic = lowered.semantic().semantic();
+        let mut semantic_mir = Vec::new();
+        semantic_mir
+            .try_reserve_exact(semantic.canonical_encoding().len())
+            .map_err(|_| {
+                ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "semantic MIR V8 bundle allocation failed",
+                )
+            })?;
+        semantic_mir.extend_from_slice(semantic.canonical_encoding());
+        let subject = *prepared.subject_identity();
+        let kir_digest = *prepared.canonical_kir_v13_digest();
+        let kir_bytes = prepared.canonical_kir_v13_length();
+        let legacy_storage = compiler_semantic_storage_map_v1(
+            lowered,
+            &bindings.debug_source_variables,
+            SemanticStorageMapBindingInputV1 {
+                container_identity: subject,
+                subject_identity: subject,
+                canonical_kir_digest: kir_digest,
+                canonical_kir_bytes: kir_bytes,
+            },
+        )?;
+        let storage = fe2o3_kernel_ir::SemanticStorageMapV8::new(
+            subject,
+            semantic.wire_version().as_u16(),
+            *semantic.semantic_sha256().as_bytes(),
+            semantic.canonical_encoding().len() as u64,
+            *semantic.target_layout_identity().as_bytes(),
+            kir_digest,
+            kir_bytes,
+            legacy_storage.kernels().to_vec(),
+            legacy_storage.variables().to_vec(),
+        )
+        .map_err(ProductionPipelineError::SimulationBundleV8)?;
+        let legacy_aggregate = compiler_semantic_storage_map_v2(lowered, subject)?;
+        let aggregate = fe2o3_kernel_ir::SemanticAggregateStorageMapV8::new(
+            subject,
+            kir_digest,
+            kir_bytes,
+            legacy_aggregate.kernels().to_vec(),
+        )
+        .map_err(ProductionPipelineError::SimulationBundleV8)?;
+        prepared
+            .finalize(debug_map, semantic_mir, storage, aggregate)
+            .map_err(ProductionPipelineError::SimulationBundleV8)
+    }
+
+    fn into_simulation_bundle_v8(
+        mut self,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV8, ProductionPipelineError> {
+        if !self
+            .bindings
+            .transaction
+            .compiler_custody
+            .is_extraction_only()
+        {
+            return Err(ProductionPipelineError::WorkerHandoffExtractionRequiresExtractionCustody);
+        }
+        self.prepare_simulation_bundle_v8()
+    }
+
     pub(crate) fn into_inert_worker_handoff_for_extraction(
         self,
     ) -> Result<fe2o3_compiler_ffi::CompilerModuleHandoffV2, ProductionPipelineError> {
@@ -1297,6 +2616,7 @@ impl TargetLoweredProductionCompilation {
             ranked_verification: _,
             target_module,
             target_optimization: _,
+            mut target_verification,
             workgroups: _,
             llvm_ir,
             bindings,
@@ -1305,6 +2625,7 @@ impl TargetLoweredProductionCompilation {
             rustc_identity_inventory,
             rustc_preflight_plan,
             rustc_target,
+            kernel_contexts: _,
             reference_effect_bindings: _,
             debug_source_files: _,
             debug_source_scopes: _,
@@ -1321,6 +2642,9 @@ impl TargetLoweredProductionCompilation {
         if !transaction.compiler_custody.is_extraction_only() {
             return Err(ProductionPipelineError::WorkerHandoffExtractionRequiresExtractionCustody);
         }
+        target_verification
+            .validate_target_module(&target_module)
+            .map_err(ProductionPipelineError::FinalGraphVerificationV13)?;
         let compiler_module = AuthenticatedProductionTargetModule {
             admitted,
             target: rustc_target.device_target(),
@@ -1330,11 +2654,16 @@ impl TargetLoweredProductionCompilation {
             compiler_ffi_envelope: transaction.compiler_ffi_envelope,
         };
         let prepared =
-            crate::production_worker_handoff::prepare_production_worker_handoff(compiler_module)
-                .map_err(ProductionPipelineError::WorkerHandoff)?;
-        let (handoff, _) = prepared
+            crate::production_worker_handoff::prepare_production_worker_handoff_for_extraction(
+                compiler_module,
+            )
+            .map_err(ProductionPipelineError::WorkerHandoff)?;
+        let (handoff, _, _) = prepared
             .into_validated_parts()
             .map_err(ProductionPipelineError::WorkerHandoff)?;
+        target_verification
+            .validate_retained_records()
+            .map_err(ProductionPipelineError::FinalGraphVerificationV13)?;
         Ok(handoff)
     }
 
@@ -1348,6 +2677,7 @@ impl TargetLoweredProductionCompilation {
             ranked_verification,
             target_module,
             target_optimization,
+            mut target_verification,
             workgroups: _,
             llvm_ir,
             bindings,
@@ -1356,6 +2686,7 @@ impl TargetLoweredProductionCompilation {
             rustc_identity_inventory,
             rustc_preflight_plan,
             rustc_target,
+            kernel_contexts: _,
             reference_effect_bindings: _,
             debug_source_files,
             debug_source_scopes,
@@ -1387,15 +2718,19 @@ impl TargetLoweredProductionCompilation {
                 &rustc_identity_inventory,
                 &rustc_preflight_plan,
                 &rustc_target,
-                ranked_verification,
+                &ranked_verification,
                 &admitted,
                 &target_module,
                 &target_optimization,
+                target_verification.final_v13_epoch(),
                 &llvm_ir,
                 semantic_debug_inputs,
             )
             .map_err(ProductionPipelineError::SemanticLineage)?;
         let target = rustc_target.device_target();
+        target_verification
+            .validate_target_module(&target_module)
+            .map_err(ProductionPipelineError::FinalGraphVerificationV13)?;
         let compiler_module = AuthenticatedProductionTargetModule {
             admitted,
             target,
@@ -1405,21 +2740,43 @@ impl TargetLoweredProductionCompilation {
             compiler_ffi_envelope: transaction.compiler_ffi_envelope,
         };
         let prepared =
-            crate::production_worker_handoff::prepare_production_worker_handoff(compiler_module)
-                .map_err(ProductionPipelineError::WorkerHandoff)?;
-        let (handoff, descriptor_source) = prepared
+            crate::production_worker_handoff::prepare_production_worker_handoff_for_extraction(
+                compiler_module,
+            )
+            .map_err(ProductionPipelineError::WorkerHandoff)?;
+        let (handoff, descriptor_source, _) = prepared
             .into_validated_parts()
             .map_err(ProductionPipelineError::WorkerHandoff)?;
-        semantic_lineage
+        let handoff = semantic_lineage
             .finish_for_inert_extraction(invocation, target, &descriptor_source, handoff)
-            .map_err(ProductionPipelineError::SemanticLineage)
+            .map_err(ProductionPipelineError::SemanticLineage)?;
+        target_verification
+            .validate_retained_records()
+            .map_err(ProductionPipelineError::FinalGraphVerificationV13)?;
+        Ok(handoff)
     }
 
     fn prepare_worker_handoff(
-        self,
+        mut self,
+        final_v13_symbols: crate::single_codegen_ownership_v1::FinalV13ExpectedDeviceSymbolRosterV1,
     ) -> Result<PreparedProductionWorkerPublication, ProductionPipelineError> {
+        let bundle_v8 = self.prepare_simulation_bundle_v8()?;
+        let w4_diagnostic_source_map_v2 = bundle_v8.debug_map().to_vec().into_boxed_slice();
+        let target_closure = self
+            .v13_target_capability_closure()
+            .map_err(ProductionPipelineError::FinalGraphVerificationV13)?;
+        let final_graph_report = self
+            .v13_final_graph_verification_report()
+            .map_err(ProductionPipelineError::FinalGraphVerificationV13)?;
+        if final_graph_report.resources().closure_identity() != target_closure.identity() {
+            return Err(ProductionPipelineError::FinalGraphVerificationV13(
+                ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+                    stage: "downstream W5 closure and W4 final-graph report",
+                },
+            ));
+        }
         eprintln!(
-            "[rustc-codegen-fe2o3] production compilation lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted composed formal/ranked memory evidence for a {}-invocation structural witness with {} allocation(s), {} formal access(es), {} ranked dynamic-index discharge(s), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), applied {} structurally replayed target-KIR optimization pass(es), including {} mutating pass(es), across epoch {}..={} (semantic preservation is not yet formally proved), and lowered exact target-bound KIR with ordered compiler-selected-or-retained workgroups {:?} to {} byte(s) of deterministic {} LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact compiler-module handoff",
+            "[rustc-codegen-fe2o3] production compilation lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted composed formal/ranked memory evidence for a {}-invocation structural witness with {} allocation(s), {} formal access(es), {} ranked dynamic-index discharge(s), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), applied {} structurally replayed target-KIR optimization pass(es), including {} mutating pass(es), across epoch {}..={}, and lowered exact target-bound KIR with ordered compiler-selected-or-retained workgroups {:?} to {} byte(s) of deterministic {} LLVM text while retaining {} identity/transaction binding(s); final-graph functional proof and W4 remain mandatory before publication; artifact/launch authority {}; preparing exact compiler-module handoff",
             self.semantic_function_count(),
             self.module().id,
             self.correspondence_block_count(),
@@ -1436,7 +2793,11 @@ impl TargetLoweredProductionCompilation {
             self.target_optimization_final_epoch(),
             self.workgroup_sizes(),
             self.llvm_ir().len(),
-            self.bindings.rustc_target.profile().device_target(),
+            self.bindings
+                .rustc_target
+                .backend()
+                .contract()
+                .canonical_target(),
             self.retained_identity_and_transaction_binding_count(),
             self.grants_artifact_or_launch_authority(),
         );
@@ -1445,6 +2806,7 @@ impl TargetLoweredProductionCompilation {
             ranked_verification,
             target_module,
             target_optimization,
+            target_verification,
             workgroups: _,
             llvm_ir,
             bindings,
@@ -1453,6 +2815,7 @@ impl TargetLoweredProductionCompilation {
             rustc_identity_inventory,
             rustc_preflight_plan,
             rustc_target,
+            kernel_contexts: _,
             reference_effect_bindings,
             debug_source_files,
             debug_source_scopes,
@@ -1482,24 +2845,38 @@ impl TargetLoweredProductionCompilation {
             &debug_source_variables,
             debug_capture_gap,
         );
-        drop(reference_effect_bindings);
         let ProtectedProductionPublicationCustody {
             attempt,
             invocation,
             compiler_execution,
         } = compiler_custody.into_publication_custody()?;
+        let bundle_v8 =
+            production_bundle_transaction_v8::PreparedProductionBundleTransactionV8::try_new(
+                attempt, bundle_v8,
+            )
+            .map_err(ProductionPipelineError::ProductionBundleTransactionV8)?;
         let semantic_lineage = crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3::try_prepare(
             &rustc_identity_inventory,
             &rustc_preflight_plan,
             &rustc_target,
-            ranked_verification,
+            &ranked_verification,
             &admitted,
             &target_module,
             &target_optimization,
+            target_verification.final_v13_epoch(),
             &llvm_ir,
             semantic_debug_inputs,
         )
         .map_err(ProductionPipelineError::SemanticLineage)?;
+        target_verification
+            .validate_target_module(&target_module)
+            .map_err(ProductionPipelineError::FinalGraphVerificationV13)?;
+        let final_graph_functional = ProductionFinalGraphFunctionalCustodyV1::try_new(
+            &admitted,
+            target_verification,
+            ranked_verification,
+            reference_effect_bindings,
+        )?;
         let compiler_module = AuthenticatedProductionTargetModule {
             admitted,
             target: rustc_target.device_target(),
@@ -1508,9 +2885,11 @@ impl TargetLoweredProductionCompilation {
             typed_descriptor_roots,
             compiler_ffi_envelope,
         };
-        let prepared =
-            crate::production_worker_handoff::prepare_production_worker_handoff(compiler_module)
-                .map_err(ProductionPipelineError::WorkerHandoff)?;
+        let prepared = crate::production_worker_handoff::prepare_production_worker_handoff(
+            compiler_module,
+            final_v13_symbols,
+        )
+        .map_err(ProductionPipelineError::WorkerHandoff)?;
         Ok(PreparedProductionWorkerPublication {
             producer,
             output_dir,
@@ -1519,65 +2898,236 @@ impl TargetLoweredProductionCompilation {
             compiler_execution,
             semantic_lineage,
             rustc_target,
+            final_graph_functional,
+            w4_diagnostic_source_map_v2,
             prepared,
+            bundle_v8,
         })
     }
 
     fn publish_worker_handoff(
         self,
-    ) -> Result<fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1, ProductionPipelineError>
-    {
-        let publication = self.prepare_worker_handoff()?;
+        final_v13_symbols: crate::single_codegen_ownership_v1::FinalV13ExpectedDeviceSymbolRosterV1,
+    ) -> Result<PublishedProductionWorkerTransaction, ProductionPipelineError> {
+        let publication = self.prepare_worker_handoff(final_v13_symbols)?;
         let invocation = (*publication.invocation)
             .finish_for_publication()
             .map_err(ProductionPipelineError::ProtectedRustcInvocation)?;
-        let (module_handoff, compiler_descriptor_source) = publication
-            .prepared
-            .into_validated_parts()
-            .map_err(ProductionPipelineError::WorkerHandoff)?;
-        let strict_handoff = publication
+        let (module_handoff, compiler_descriptor_source, generated_host_contract_identities) =
+            publication
+                .prepared
+                .into_validated_parts()
+                .map_err(ProductionPipelineError::WorkerHandoff)?;
+        let compiler_policy = publication.compiler_execution.policy_identity();
+        let mut functional = publication.final_graph_functional;
+        functional.validate_live_owner()?;
+        let finished = publication
             .semantic_lineage
-            .finish(
+            .finish_capability_v5(
                 &invocation,
                 publication.rustc_target.device_target(),
                 &compiler_descriptor_source,
                 module_handoff,
             )
             .map_err(ProductionPipelineError::SemanticLineage)?;
+        let (legacy_handoff, proof_lineage, semantic_mir_identity, source_refinement) =
+            finished.into_parts();
+        let final_canonical = fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13::from_canonical_bytes(
+            functional
+                .target
+                .final_canonical()
+                .canonical_bytes()
+                .to_vec(),
+        )
+        .map_err(ProductionPipelineError::TargetCapabilityAnalysis)?;
+        let prepared_capability =
+            crate::production_worker_handoff::prepare_production_w4_capability_carriage_v5(
+                final_canonical,
+                *functional.target.pre_optimization_canonical.identity(),
+                functional.target.pre_optimization_epoch,
+                functional.target.final_epoch,
+                proof_lineage,
+                semantic_mir_identity,
+                compiler_policy,
+                source_refinement,
+                functional.target.target_closure(),
+                functional.target.final_graph_report(),
+                functional.target.verified_graph.module(),
+                publication.w4_diagnostic_source_map_v2.into_vec(),
+            )
+            .map_err(ProductionPipelineError::WorkerHandoff)?;
+        let (w4_subject, w4_target_context) = prepared_capability.w4_inputs();
+        let w4 = functional.execute_w4_capability_witness(w4_subject, &w4_target_context)?;
+        let capability_inputs = prepared_capability
+            .finish(&w4)
+            .map_err(ProductionPipelineError::WorkerHandoff)?;
+        let w4_schedule = w4.into_analysis_schedule();
+        let mut publication_owner =
+            ProductionW1W6PublicationOwnerV1::try_bind(functional, w4_schedule)?;
+        let capability_handoff =
+            publication_owner.prepare_capability_handoff(legacy_handoff, capability_inputs)?;
+        let bundle_v8 = publication
+            .bundle_v8
+            .bind_capability_handoff(&capability_handoff)
+            .map_err(ProductionPipelineError::ProductionBundleTransactionV8)?;
         invocation
             .revalidate_for_publication()
             .map_err(ProductionPipelineError::ProtectedRustcInvocation)?;
-        let receipt = fe2o3_artifact_transaction::publish_compiler_module_handoff_v3(
+        publication_owner.validate_for_publication()?;
+        let simulation_bundle = bundle_v8
+            .inert_simulation_bundle()
+            .map_err(ProductionPipelineError::ProductionBundleTransactionV8)?;
+        let receipt = fe2o3_artifact_transaction::publish_compiler_capability_handoff_v5(
             &publication.output_dir,
             &publication.producer,
             publication.attempt,
-            &strict_handoff,
+            &capability_handoff,
+            &simulation_bundle,
         )
-        .map_err(ProductionPipelineError::StrictV3Publication)?;
-        let subject =
-            fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1::from_publication(
-                receipt,
-                &strict_handoff,
-            )
-            .map_err(ProductionPipelineError::CompilerExecutionSubject)?;
+        .map_err(ProductionPipelineError::CapabilityV5Publication)?;
+        persist_protected_compiler_completion_package_v5(
+            &publication.output_dir,
+            publication.attempt,
+            &receipt,
+            &capability_handoff,
+            &simulation_bundle,
+            generated_host_contract_identities.into_vec(),
+        )?;
+        let bundle_v8 = bundle_v8
+            .bind_publication(&receipt)
+            .map_err(ProductionPipelineError::ProductionBundleTransactionV8)?;
+        let subject = fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1::from_capability_publication_v5(
+            &receipt,
+            &capability_handoff,
+        )
+        .map_err(ProductionPipelineError::CompilerExecutionSubject)?;
+        let bundle_v8 = bundle_v8
+            .bind_compiler_execution_subject(&subject)
+            .map_err(ProductionPipelineError::ProductionBundleTransactionV8)?;
         let carriage = (*publication.compiler_execution)
             .acquire(subject.clone())
             .map_err(ProductionPipelineError::ProtectedCompilerExecution)?;
-        let transport =
-            fe2o3_artifact_transaction::publish_compiler_execution_receipt_transport_v1(
-                &publication.output_dir,
-                &publication.producer,
-                &subject,
-                carriage.canonical_bytes(),
-            )
-            .map_err(ProductionPipelineError::CompilerExecutionReceiptTransport)?;
+        let transport = fe2o3_artifact_transaction::publish_compiler_execution_receipt_transport_for_capability_v5(
+            &publication.output_dir,
+            &publication.producer,
+            &receipt,
+            &subject,
+            carriage.canonical_bytes(),
+        )
+        .map_err(ProductionPipelineError::CompilerExecutionReceiptTransport)?;
         if transport.subject() != subject.identity()
             || transport.length() != carriage.canonical_bytes().len()
         {
             return Err(ProductionPipelineError::CompilerExecutionReceiptTransportBindingMismatch);
         }
-        Ok(subject)
+        Ok(PublishedProductionWorkerTransaction { subject, bundle_v8 })
     }
+}
+
+fn persist_protected_compiler_completion_package_v5(
+    output_dir: &Path,
+    attempt: BuildAttempt,
+    receipt: &fe2o3_artifact_transaction::CompilerCapabilityHandoffReceiptV5,
+    handoff: &fe2o3_compiler_ffi::InertProductionCapabilityHandoffV5,
+    simulation_bundle: &fe2o3_compiler_ffi::InertSimulationBundleV8,
+    generated_host_contract_identities: Vec<[u8; 32]>,
+) -> Result<(), ProductionPipelineError> {
+    use fe2o3_artifact_transaction::{
+        NoRetainedDurableDirectoryHooksV1, RetainedDurableDirectoryV1,
+    };
+    use fe2o3_worker_v3_verification_protocol::{
+        ExactIdentityCoordinateV5, InertWorkerV3ProtectedCompilerInputV5,
+        MAX_WORKER_V3_PROTECTED_COMPILER_INPUT_BYTES_V5, WorkerV3VerificationProductionAttemptV5,
+        worker_v3_protected_compiler_input_name_v5,
+        worker_v3_protected_compiler_input_redo_name_v5,
+    };
+
+    let transaction = fe2o3_compiler_ffi::InertProductionCapabilityTransactionV5::new(
+        fe2o3_compiler_ffi::InertProductionCapabilityHandoffV5::decode(handoff.canonical_bytes())
+            .map_err(protected_compiler_completion_package_error_v5)?,
+        fe2o3_compiler_ffi::InertSimulationBundleV8::from_verified_canonical_bytes(
+            simulation_bundle.identity().sha256(),
+            simulation_bundle.canonical_bytes().to_vec(),
+        )
+        .map_err(protected_compiler_completion_package_error_v5)?,
+    )
+    .map_err(protected_compiler_completion_package_error_v5)?;
+    if transaction.identity() != receipt.payload_identity()
+        || transaction.canonical_bytes().len() != receipt.length()
+        || handoff.identity() != receipt.handoff_identity()
+        || simulation_bundle.identity() != receipt.simulation_bundle_identity()
+    {
+        return Err(ProductionPipelineError::ProtectedCompilerCompletionPackage(
+            "published V5+V8 transaction coordinates changed before compiler completion".to_owned(),
+        ));
+    }
+    let attempt = WorkerV3VerificationProductionAttemptV5::new(
+        attempt.generation(),
+        *attempt.session().as_bytes(),
+        *attempt.invocation().as_bytes(),
+    )
+    .map_err(protected_compiler_completion_package_error_v5)?;
+    let package = InertWorkerV3ProtectedCompilerInputV5::new(
+        attempt,
+        *receipt.transaction_identity().as_bytes(),
+        ExactIdentityCoordinateV5::new(handoff.identity().sha256(), handoff.identity().byte_len())
+            .map_err(protected_compiler_completion_package_error_v5)?,
+        transaction.canonical_bytes(),
+        generated_host_contract_identities,
+    )
+    .map_err(protected_compiler_completion_package_error_v5)?;
+    let descriptor = File::open(output_dir).map(OwnedFd::from).map_err(|error| {
+        ProductionPipelineError::ProtectedCompilerCompletionPackage(format!(
+            "cannot retain output root: {error}",
+        ))
+    })?;
+    let root = RetainedDurableDirectoryV1::admit_service_owned(descriptor)
+        .map_err(protected_compiler_completion_package_error_v5)?;
+    let canonical = worker_v3_protected_compiler_input_name_v5(attempt);
+    let redo = worker_v3_protected_compiler_input_redo_name_v5(attempt);
+    let bytes = package.canonical_bytes();
+    let current = root
+        .read_private(&canonical, MAX_WORKER_V3_PROTECTED_COMPILER_INPUT_BYTES_V5)
+        .map_err(protected_compiler_completion_package_error_v5)?;
+    let pending = root
+        .read_private(&redo, MAX_WORKER_V3_PROTECTED_COMPILER_INPUT_BYTES_V5)
+        .map_err(protected_compiler_completion_package_error_v5)?;
+    if current.as_deref().is_some_and(|observed| observed != bytes)
+        || pending.as_deref().is_some_and(|observed| observed != bytes)
+    {
+        return Err(ProductionPipelineError::ProtectedCompilerCompletionPackage(
+            "attempt journal contains a different compiler-completion package".to_owned(),
+        ));
+    }
+    let mut hooks = NoRetainedDurableDirectoryHooksV1;
+    match (current.as_deref(), pending.as_deref()) {
+        (Some(_), None) => Ok(()),
+        (expected, Some(_)) => root
+            .promote_validated_redo(
+                &canonical,
+                &redo,
+                expected,
+                bytes,
+                MAX_WORKER_V3_PROTECTED_COMPILER_INPUT_BYTES_V5,
+                &mut hooks,
+            )
+            .map_err(protected_compiler_completion_package_error_v5),
+        (None, None) => root
+            .commit_record(
+                &canonical,
+                &redo,
+                bytes,
+                MAX_WORKER_V3_PROTECTED_COMPILER_INPUT_BYTES_V5,
+                &mut hooks,
+            )
+            .map_err(protected_compiler_completion_package_error_v5),
+    }
+}
+
+fn protected_compiler_completion_package_error_v5(
+    error: impl fmt::Display,
+) -> ProductionPipelineError {
+    ProductionPipelineError::ProtectedCompilerCompletionPackage(error.to_string())
 }
 
 fn require_complete_simulation_debug_source_capture_v2(
@@ -1835,6 +3385,12 @@ fn compiler_production_semantic_debug_source_map_v1(
         fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V11 => {
             return Err(ProductionPipelineError::SimulationProductionKirV11);
         }
+        fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V12 => {
+            return Err(ProductionPipelineError::SimulationProductionKirV12);
+        }
+        fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V13 => {
+            return Err(ProductionPipelineError::SimulationProductionKirV13);
+        }
     };
     let canonical_kir =
         fe2o3_kernel_ir::VerifiedCanonicalKernelIrV7::from_module(lowered.module().clone())
@@ -1874,7 +3430,7 @@ fn compiler_production_semantic_debug_source_map_v1(
         fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
         lineage,
         production_identity,
-        rustc_target.profile().device_target(),
+        rustc_target.backend().contract().canonical_target(),
         prepared_kir,
     )
     .map_err(ProductionPipelineError::SimulationBundle)?;
@@ -2559,6 +4115,13 @@ fn compiler_semantic_storage_map_v2(
                     "unit KIR parameters have no physical simulator slot",
                 ));
             }
+            fe2o3_kernel_ir::Type::KernelContext(_)
+            | fe2o3_kernel_ir::Type::GlobalCapability(_)
+            | fe2o3_kernel_ir::Type::ExecutionCapability(_) => {
+                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "logical capability KIR parameters have no legacy physical simulator slot",
+                ));
+            }
         };
         next = align_up_u32_v1(next, alignment).ok_or(
             ProductionPipelineError::SimulationDebugMapCorrespondence(MAP_ERROR),
@@ -2775,7 +4338,13 @@ fn compiler_component_storage_v2(
             fe2o3_kernel_ir::SemanticKirComponentRepresentationV2::RegionSlice,
             true,
         ),
-        Some(fe2o3_kernel_ir::Type::Unit) | None => {
+        Some(
+            fe2o3_kernel_ir::Type::Unit
+            | fe2o3_kernel_ir::Type::KernelContext(_)
+            | fe2o3_kernel_ir::Type::GlobalCapability(_)
+            | fe2o3_kernel_ir::Type::ExecutionCapability(_),
+        )
+        | None => {
             return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
                 MAP_ERROR,
             ));
@@ -3209,6 +4778,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             rustc_identity_inventory,
             rustc_preflight_plan,
             rustc_target,
+            kernel_contexts,
             reference_effect_bindings,
             debug_source_files,
             debug_source_scopes,
@@ -3233,6 +4803,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                     rustc_identity_inventory,
                     rustc_preflight_plan,
                     rustc_target,
+                    kernel_contexts: Some(kernel_contexts),
                     reference_effect_bindings,
                     debug_source_files,
                     debug_source_scopes,
@@ -3369,14 +4940,24 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             .into_simulation_bundle_v6()
     }
 
+    /// Exports an authority-free V8 bundle by consuming the exact target-lowered
+    /// V13 graph together with its retained target closure and W4 verification
+    /// result. There is no projection to an older KIR or simulation schema.
+    pub(crate) fn export_simulation_bundle_v8(
+        self,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV8, ProductionPipelineError> {
+        self.lower_production_target()?.into_simulation_bundle_v8()
+    }
+
     /// Publishes the exact production compiler module into the managed,
     /// preselected attempt-scoped protocol. This grants no link, artifact, load,
     /// or launch authority.
     pub(crate) fn publish_worker_handoff(
         self,
-    ) -> Result<fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1, ProductionPipelineError>
-    {
-        self.lower_production_target()?.publish_worker_handoff()
+        final_v13_symbols: crate::single_codegen_ownership_v1::FinalV13ExpectedDeviceSymbolRosterV1,
+    ) -> Result<PublishedProductionWorkerTransaction, ProductionPipelineError> {
+        self.lower_production_target()?
+            .publish_worker_handoff(final_v13_symbols)
     }
 
     /// Retains the original extraction milestone while consuming the same
@@ -3505,7 +5086,25 @@ impl RankedVerifiedProductionCompilation {
     fn lower_target_neutral(
         self,
     ) -> Result<TargetNeutralProductionCompilation, ProductionPipelineError> {
-        let Self { ranked, bindings } = self;
+        let Self {
+            ranked,
+            mut bindings,
+        } = self;
+        let kernel_contexts = bindings
+            .kernel_contexts
+            .take()
+            .ok_or(ProductionPipelineError::SemanticImport(
+                crate::collector::ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "production bindings lost kernel-context custody",
+                ),
+            ))?
+            .into_lowering_inputs(
+                &bindings.rustc_identity_inventory,
+                &bindings.rustc_target,
+                ranked.roots(),
+                &bindings.typed_descriptor_roots,
+            )
+            .map_err(ProductionPipelineError::SemanticImport)?;
         let roster_receipt = ranked
             .into_verified_roster_receipt()
             .map_err(ProductionPipelineError::RankedVerification)?;
@@ -3519,10 +5118,10 @@ impl RankedVerifiedProductionCompilation {
             .into_module_verified_receipt()
             .map_err(ProductionPipelineError::RankedVerification)?;
         debug_assert!(ranked_verification.every_functional_verification_is_coherent());
-        let lowered =
-            fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower_after_ranked_roster_checks(
+        let lowered = fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1::try_lower_after_ranked_roster_checks_with_kernel_contexts(
                 receipt,
                 fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+                kernel_contexts,
             )
             .map_err(ProductionPipelineError::TargetNeutralLowering)?;
         let exact_translation_roster = {
@@ -3547,6 +5146,297 @@ impl RankedVerifiedProductionCompilation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_backend(target: &str) -> crate::production_backend_v1::ProductionBackendTargetV1 {
+        crate::production_backend_v1::ProductionBackendTargetV1::from_configured_target(target)
+            .expect("test production backend")
+    }
+
+    fn contextual_v13_module() -> fe2o3_kernel_ir::Module {
+        let context = fe2o3_kernel_ir::KernelContextTypeV1::new(
+            "contextual_entry",
+            [1; 32],
+            [2; 32],
+            [3; 32],
+        );
+        let source =
+            fe2o3_kernel_ir::KernelContextSourceIdentityV1::new([4; 32], [5; 32], [6; 32], [7; 32]);
+        let mut block = fe2o3_kernel_ir::BasicBlock::new(fe2o3_kernel_ir::BlockId(0));
+        block
+            .operations
+            .push(fe2o3_kernel_ir::Operation::kernel_context_issue(
+                fe2o3_kernel_ir::ValueId(0),
+                context,
+                source,
+            ));
+        block.terminator = Some(fe2o3_kernel_ir::Terminator::Return { values: vec![] });
+
+        let mut module = fe2o3_kernel_ir::Module::new("contextual-v13-transaction");
+        module
+            .functions
+            .push(fe2o3_kernel_ir::Function::kernel_entry(
+                "contextual_entry",
+                fe2o3_kernel_ir::Signature::new(vec![], vec![]),
+                vec![],
+                vec![block],
+            ));
+        let mut kernel = fe2o3_kernel_ir::Kernel::new(
+            "contextual_kernel",
+            "contextual_entry",
+            fe2o3_kernel_ir::LaunchDomain::D1 {
+                x: fe2o3_kernel_ir::LaunchExtent::Static(64),
+            },
+        );
+        kernel.workgroup_size = Some(fe2o3_kernel_ir::WorkgroupSize::new(64, 1, 1));
+        module.kernels.push(kernel);
+        module
+    }
+
+    fn contextual_v13_prepared() -> PreparedV13FinalGraphVerification {
+        let module = contextual_v13_module();
+        let canonical =
+            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13::from_module(module.clone()).unwrap();
+        prepare_v13_final_graph_verification(&module, &canonical, &test_backend("gfx942:xnack-"))
+            .unwrap()
+    }
+
+    #[test]
+    fn contextual_v13_transaction_releases_only_the_verified_final_graph() {
+        let prepared = contextual_v13_prepared();
+        assert_eq!(prepared.target_module.kernels.len(), 1);
+        assert_eq!(prepared.optimizer.final_epoch(), prepared.final_epoch);
+        assert_eq!(
+            prepared
+                .optimizer
+                .transformations()
+                .last()
+                .expect("nonempty V6 preservation chain")
+                .output_epoch(),
+            prepared.final_epoch,
+        );
+        let mut verified = prepared.require_final_graph_pliron_schedule().unwrap();
+        assert_eq!(verified.target_module.kernels.len(), 1);
+        assert_eq!(
+            &verified
+                .target_verification
+                .final_canonical()
+                .canonical_bytes()[8..10],
+            &fe2o3_kernel_ir::KERNEL_IR_VERSION_V13.to_le_bytes(),
+        );
+        verified.target_verification.validate_live_owner().unwrap();
+        assert_eq!(
+            verified.target_verification.final_canonical().identity(),
+            verified
+                .target_verification
+                .final_graph_report()
+                .final_graph(),
+        );
+    }
+
+    #[test]
+    fn v13_closure_and_final_report_survive_the_gate_and_reject_substitution() {
+        let prepared = contextual_v13_prepared();
+        let expected_final_graph = *prepared.final_canonical.identity();
+        let expected_final_epoch = prepared.final_epoch;
+        let expected_closure = prepared.target_closure.identity();
+        let verified = prepared.require_final_graph_pliron_schedule().unwrap();
+        assert_eq!(
+            verified.target_verification.target_closure().identity(),
+            expected_closure,
+        );
+        assert_eq!(
+            verified
+                .target_verification
+                .final_graph_report()
+                .final_graph(),
+            &expected_final_graph,
+        );
+        assert_eq!(
+            verified
+                .target_verification
+                .final_graph_report()
+                .final_epoch(),
+            expected_final_epoch,
+        );
+        verified
+            .target_verification
+            .validate_target_module(&verified.target_module)
+            .unwrap();
+
+        let mut substituted_module = verified.target_module.clone();
+        substituted_module.id = fe2o3_kernel_ir::ModuleId::new("substituted-final-graph");
+        assert!(matches!(
+            verified
+                .target_verification
+                .validate_target_module(&substituted_module),
+            Err(ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+                stage: "retained W5 closure and W4 final-graph report"
+            })
+        ));
+
+        let mut other_module = contextual_v13_module();
+        other_module.id = fe2o3_kernel_ir::ModuleId::new("substituted-target-closure");
+        let other_canonical =
+            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13::from_module(other_module.clone())
+                .unwrap();
+        let other = prepare_v13_final_graph_verification(
+            &other_module,
+            &other_canonical,
+            &test_backend("gfx942:xnack-"),
+        )
+        .unwrap()
+        .require_final_graph_pliron_schedule()
+        .unwrap();
+        let ProductionV13TargetVerificationCustody {
+            target_closure: substituted_closure,
+            verified_graph: _,
+            ..
+        } = other.target_verification;
+        let ProductionV13TargetVerificationCustody {
+            target_closure: _,
+            verified_graph,
+            pre_optimization_canonical,
+            pre_optimization_epoch,
+            final_epoch,
+        } = verified.target_verification;
+        assert!(matches!(
+            ProductionV13TargetVerificationCustody::try_new(
+                verified_graph,
+                pre_optimization_canonical,
+                pre_optimization_epoch,
+                final_epoch,
+                substituted_closure,
+            ),
+            Err(ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+                stage: "retained W5 closure and W4 final-graph report"
+            })
+        ));
+    }
+
+    #[test]
+    fn v13_final_graph_gate_rejects_missing_and_stale_capability_results() {
+        let prepared = contextual_v13_prepared();
+        let valid = prepared.capability_results();
+        require_exact_v13_capability_results(
+            &prepared.neutral_identity,
+            &prepared.optimized_identity,
+            prepared.final_canonical.identity(),
+            prepared.final_epoch,
+            valid,
+        )
+        .unwrap();
+
+        let missing = ProductionV13CapabilityResults {
+            optimizer: None,
+            ..valid
+        };
+        assert!(matches!(
+            require_exact_v13_capability_results(
+                &prepared.neutral_identity,
+                &prepared.optimized_identity,
+                prepared.final_canonical.identity(),
+                prepared.final_epoch,
+                missing,
+            ),
+            Err(ProductionFinalGraphVerificationErrorV13::MissingResult {
+                stage: "V6 optimizer preservation chain"
+            })
+        ));
+
+        assert!(matches!(
+            require_exact_v13_capability_results(
+                &prepared.neutral_identity,
+                &prepared.optimized_identity,
+                prepared.final_canonical.identity(),
+                prepared.final_epoch + 1,
+                valid,
+            ),
+            Err(ProductionFinalGraphVerificationErrorV13::StaleResult {
+                stage: "optimized final graph",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn v13_final_graph_gate_rejects_an_optimizer_from_another_graph() {
+        let prepared = contextual_v13_prepared();
+        let mut other_module = contextual_v13_module();
+        other_module.id = fe2o3_kernel_ir::ModuleId::new("other-v13-optimizer-input");
+        let other_canonical =
+            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13::from_module(other_module.clone())
+                .unwrap();
+        let other = prepare_v13_final_graph_verification(
+            &other_module,
+            &other_canonical,
+            &test_backend("gfx942:xnack-"),
+        )
+        .unwrap();
+        let invalid = ProductionV13CapabilityResults {
+            optimizer: Some(&other.optimizer),
+            ..prepared.capability_results()
+        };
+        assert!(matches!(
+            require_exact_v13_capability_results(
+                &prepared.neutral_identity,
+                &prepared.optimized_identity,
+                prepared.final_canonical.identity(),
+                prepared.final_epoch,
+                invalid,
+            ),
+            Err(ProductionFinalGraphVerificationErrorV13::SubjectMismatch {
+                stage: "V6 optimizer input"
+            })
+        ));
+    }
+
+    #[test]
+    fn v13_production_transaction_rejects_nonfinal_target_answers() {
+        use dialect_amdgcn::ProductionTargetCapabilityDiagnosticCodeV1 as Code;
+        use fe2o3_kernel_ir::{AddressSpace, SynchronizationScope, TargetCapability};
+
+        let cases = [(
+            TargetCapability::Atomic {
+                width_bits: 32,
+                address_space: AddressSpace::Global,
+                max_scope: SynchronizationScope::Device,
+            },
+            "gfx942:xnack-",
+            Code::OmittedAxis,
+        )];
+
+        for (capability, target, expected_code) in cases {
+            let mut module = contextual_v13_module();
+            module.required_capabilities.insert(capability);
+            let canonical =
+                fe2o3_kernel_ir::VerifiedCanonicalKernelIrV13::from_module(module.clone()).unwrap();
+            let error = match prepare_v13_final_graph_verification(
+                &module,
+                &canonical,
+                &test_backend(target),
+            ) {
+                Ok(prepared) => panic!(
+                    "nonfinal target answer entered target-bound custody for {target}: {:?}",
+                    prepared
+                        .target_closure
+                        .validated_resource_evidence_v1()
+                        .unwrap()
+                        .decisions(),
+                ),
+                Err(error) => error,
+            };
+            match error {
+                ProductionPipelineError::TargetBackend(
+                    crate::production_backend_v1::ProductionBackendErrorV1::CapabilityClosure(
+                        error,
+                    ),
+                ) => {
+                    assert_eq!(error.diagnostic_code(), expected_code);
+                }
+                error => panic!("unexpected production transaction error: {error}"),
+            }
+        }
+    }
 
     #[test]
     fn explicit_v2_simulation_export_requires_complete_source_capture() {
@@ -3664,11 +5554,12 @@ mod tests {
 
     #[test]
     fn production_layout_binding_uses_the_measured_worker_spelling() {
+        let backend = test_backend("gfx942:xnack-");
         let legacy = format!(
             "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{}\"\n\ndefine void @body() {{ ret void }}\n",
             dialect_amdgcn::GFX942_XNACK_MINUS_DATA_LAYOUT
         );
-        let bound = dialect_amdgcn::bind_production_llvm22_worker_layout_v1(&legacy).unwrap();
+        let bound = backend.bind_worker_layout_v1(&legacy).unwrap();
         assert!(bound.starts_with(&format!(
             "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{}\"\n\n",
             crate::production_target_v1::PRODUCTION_WORKER_DATA_LAYOUT_V1
@@ -3681,6 +5572,7 @@ mod tests {
 
     #[test]
     fn production_layout_binding_rejects_noncanonical_headers() {
+        let backend = test_backend("gfx942:xnack-");
         let canonical = format!(
             "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{}\"\n\ndefine void @body() {{ ret void }}\n",
             dialect_amdgcn::GFX942_XNACK_MINUS_DATA_LAYOUT
@@ -3690,12 +5582,12 @@ mod tests {
             canonical.replacen("\n\n", "\n", 1),
             format!("{canonical}target datalayout = \"e-p:64:64\"\n"),
         ] {
-            assert!(dialect_amdgcn::bind_production_llvm22_worker_layout_v1(&hostile).is_err());
+            assert!(backend.bind_worker_layout_v1(&hostile).is_err());
         }
     }
 
     #[test]
-    fn production_target_lowering_uses_shared_replayable_transforms() {
+    fn production_target_lowering_is_v13_only() {
         let source = include_str!("production_pipeline.rs");
         let transaction = source
             .split("impl FormalMemoryAdmittedProductionCompilation")
@@ -3704,37 +5596,114 @@ mod tests {
             .split("impl TargetLoweredProductionCompilation")
             .next()
             .expect("bounded target-lowering body");
-        assert!(transaction.contains("dialect_amdgcn::bind_production_target_v1("));
-        assert!(
-            transaction.contains(
-                "fe2o3_kernel_opt::optimize_production_kernel_ir_module_v2(&target_module)"
-            )
-        );
-        assert!(
-            transaction.contains(
-                "fe2o3_kernel_opt::optimize_production_kernel_ir_module_v3(&target_module)"
-            )
-        );
-        assert!(transaction.contains("dialect_amdgcn::bind_production_llvm22_worker_layout_v1("));
-        let bind = transaction
-            .find("dialect_amdgcn::bind_production_target_v1(")
-            .expect("target binding");
-        let optimize = transaction
-            .find("fe2o3_kernel_opt::optimize_production_kernel_ir_module_v2(&target_module)")
-            .expect("fixed production optimizer");
-        let optimize_v11 = transaction
-            .find("fe2o3_kernel_opt::optimize_production_kernel_ir_module_v3(&target_module)")
-            .expect("fixed V11 production optimizer");
-        let lower = transaction
-            .find("lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(")
-            .expect("AMDGPU LLVM lowering");
-        assert!(bind < optimize && bind < optimize_v11 && optimize < lower && optimize_v11 < lower);
+        assert!(transaction.contains("prepare_v13_final_graph_verification("));
+        assert!(transaction.contains(".lower_v13_module_v1("));
+        assert!(transaction.contains(".bind_worker_layout_v1("));
         let implementation = source
             .split("#[cfg(test)]")
             .next()
             .expect("production implementation");
-        assert_eq!(implementation.matches("&target_optimization,").count(), 2);
+        for forbidden in [
+            "dialect_amdgcn",
+            "fe2o3_amd_target",
+            "ProductionAmdTargetProfileV1",
+            "gfx942",
+            "gfx950",
+            ".bind_legacy_target_v1(",
+            ".lower_legacy_module_v1(",
+            "ProductionTargetVerificationCustody",
+        ] {
+            assert!(
+                !implementation.contains(forbidden),
+                "production core bypasses its target-neutral backend boundary with {forbidden}",
+            );
+        }
         assert!(!transaction.contains("required_capabilities.insert"));
+    }
+
+    #[test]
+    fn w4_resource_input_uses_only_replay_validated_closure_payload() {
+        let source = include_str!("production_pipeline.rs");
+        let adapter = source
+            .split("fn execute_w4_capability_witness(")
+            .nth(1)
+            .expect("W4 resource adapter")
+            .split("fn prepare_simulation_bundle_v8_graph(")
+            .next()
+            .expect("bounded W4 resource adapter");
+        let validate = adapter
+            .find(".validated_resource_evidence_v1()")
+            .expect("replay-validated W5 evidence");
+        let construct = adapter
+            .find("retain_production_w4_target_resource_input_v5(")
+            .expect("typed W4 target resource");
+        let execute = adapter
+            .find(".execute_w4_capability_witness(subject.clone(), target)")
+            .expect("W4 execution");
+        assert!(validate < construct && construct < execute);
+        assert!(adapter.contains("result.require_exact_subject_v1(&subject)"));
+        assert!(adapter.contains("evidence.canonical_closure().to_vec()"));
+        assert!(adapter.contains("evidence.decisions().to_vec()"));
+        assert!(!adapter.contains("target_context.canonical_closure()"));
+        assert!(!adapter.contains("target_context.decisions()"));
+    }
+
+    #[test]
+    fn contextual_v13_path_verifies_before_llvm_and_publication() {
+        let source = include_str!("production_pipeline.rs");
+        let prepare = source
+            .split("fn prepare_v13_final_graph_verification(")
+            .nth(1)
+            .expect("V13 transaction preparation")
+            .split("impl PreparedV13FinalGraphVerification")
+            .next()
+            .expect("bounded V13 preparation");
+        let optimize = prepare
+            .find("optimize_production_kernel_ir_module_v6")
+            .expect("closed V6 optimizer");
+        let structural = prepare
+            .find("admit_production_kernel_ir_structural_replay_v6")
+            .expect("independent V6 replay");
+        let target = prepare
+            .find("close_semantic_capabilities_v1")
+            .expect("exact V13 target capability closure");
+        assert!(optimize < structural && structural < target);
+
+        let final_gate = source
+            .split("fn require_final_graph_pliron_schedule(")
+            .nth(1)
+            .expect("terminal final-graph gate")
+            .split("struct PreparedProductionWorkerPublication")
+            .next()
+            .expect("bounded final-graph gate");
+        assert!(final_gate.contains("ProductionFinalGraphOwnerV1::try_new"));
+        assert!(final_gate.contains(".verify()"));
+        assert!(!final_gate.contains("FinalGraphPlironExecutorUnavailable"));
+        for forbidden in [
+            "lower_compiler_module_to_",
+            "prepare_production_worker_handoff",
+            "publish_compiler_module_handoff",
+        ] {
+            assert!(
+                !final_gate.contains(forbidden),
+                "unverified V13 final graph reached {forbidden}",
+            );
+        }
+
+        let transaction = source
+            .split("impl FormalMemoryAdmittedProductionCompilation")
+            .nth(1)
+            .expect("target-lowering stage")
+            .split("impl TargetLoweredProductionCompilation")
+            .next()
+            .expect("bounded target-lowering body");
+        let verify = transaction
+            .find("require_final_graph_pliron_schedule()")
+            .expect("owner-held final-graph verification");
+        let lower = transaction
+            .find(".lower_v13_module_v1(")
+            .expect("exact verified V13 backend lowering");
+        assert!(verify < lower);
     }
 
     #[test]
@@ -3743,7 +5712,7 @@ mod tests {
         let transaction = source
             .split("pub(crate) fn lower_production_target(")
             .nth(1)
-            .expect("AMDGPU production transaction")
+            .expect("production target transaction")
             .split("pub(crate) fn publish_worker_handoff(")
             .next()
             .expect("bounded transaction body");
@@ -3776,8 +5745,8 @@ mod tests {
             .find("derive_and_require_parallel_reference_contract_v1")
             .expect("compiler-owned parallel-contract derivation");
         let aggregate = projection
-            .find("authenticate_mir_pliron_contract_per_compilation_v1")
-            .expect("aggregate per-compilation Verus gate");
+            .find("authenticate_mir_pliron_contract_per_compilation_v2")
+            .expect("effect-IR-derived aggregate per-compilation Verus gate");
         assert!(semantic < parallel && parallel < aggregate);
 
         let pipeline = include_str!("production_pipeline.rs");
@@ -3839,11 +5808,6 @@ mod tests {
         }
         assert!(pipeline.contains("ProductionCompilerCustody::protected("));
         assert!(pipeline.contains("compiler_execution"));
-        assert!(pipeline.contains(concat!("publish_compiler_module_handoff", "_v3")));
-        assert!(pipeline.contains(concat!(
-            "publish_compiler_execution_receipt_transport",
-            "_v1"
-        )));
         assert!(!pipeline.contains(concat!(
             "let invocation_",
             "descriptor = invocation.descriptor().clone()"
@@ -3924,11 +5888,12 @@ mod tests {
         }
         assert_eq!(
             pipeline
-                .matches(concat!("publish_compiler_module_handoff", "_v3"))
+                .matches(concat!("publish_compiler_capability_handoff", "_v5"))
                 .count(),
             1,
-            "production retains one durable compiler-module publication path",
+            "production retains one durable native V5 publication path",
         );
+        assert!(!pipeline.contains(concat!("publish_compiler_module_handoff", "_v3")));
 
         let protected_pipeline = pipeline[protected_prepare..]
             .find("fn publish_worker_handoff(")
@@ -3942,20 +5907,20 @@ mod tests {
         assert!(!protected_pipeline.contains("finish_for_inert_extraction"));
         assert!(!protected_pipeline.contains("RustcInvocationDescriptorV3"));
         let lineage_finish = protected_pipeline
-            .find(".semantic_lineage\n            .finish(\n                &invocation,")
+            .find(".semantic_lineage\n            .finish_capability_v5(")
             .expect("semantic lineage consumes live protected invocation custody");
         let final_revalidation = protected_pipeline[lineage_finish..]
             .find("invocation\n            .revalidate_for_publication()")
             .map(|offset| lineage_finish + offset)
             .expect("protected invocation is revalidated after lineage construction");
         let durable_publication = protected_pipeline[lineage_finish..]
-            .find(concat!("publish_compiler_module_handoff", "_v3"))
+            .find(concat!("publish_compiler_capability_handoff", "_v5"))
             .map(|offset| lineage_finish + offset)
-            .expect("strict V3 handoff publication remains present");
+            .expect("native V5 handoff publication remains present");
         let execution_subject = protected_pipeline[lineage_finish..]
-            .find("InertCompilerExecutionSubjectV1::from_publication")
+            .find("InertCompilerExecutionSubjectV1::from_capability_publication_v5")
             .map(|offset| lineage_finish + offset)
-            .expect("strict publication derives one canonical compiler-execution subject");
+            .expect("native V5 publication derives one canonical compiler-execution subject");
         assert!(lineage_finish < final_revalidation && final_revalidation < durable_publication);
         assert!(durable_publication < execution_subject);
         let receipt_acquisition = protected_pipeline[execution_subject..]
@@ -3964,11 +5929,11 @@ mod tests {
             .expect("exact execution subject is sent to the protected issuer");
         let receipt_transport = protected_pipeline[receipt_acquisition..]
             .find(concat!(
-                "publish_compiler_execution_receipt_transport",
-                "_v1"
+                "publish_compiler_execution_receipt_transport_for_capability",
+                "_v5"
             ))
             .map(|offset| receipt_acquisition + offset)
-            .expect("issuer receipt is published beside the exact V3 handoff");
+            .expect("issuer receipt is published beside the exact V5 handoff");
         assert!(execution_subject < receipt_acquisition && receipt_acquisition < receipt_transport);
     }
 

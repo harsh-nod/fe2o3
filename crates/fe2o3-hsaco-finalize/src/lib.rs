@@ -235,6 +235,7 @@ pub use worker_v3_hsaco_admission::{
 };
 pub use worker_v3_hsaco_finalization::{
     DescriptorSourceEvidenceRequirementV1, FinalizedProtectedWorkerV3HsacoIdentityV1,
+    MachineRefinementPendingFinalizedProtectedWorkerV3HsacoV1,
     MissingAuthenticatedProtectedDescriptorSourceEvidenceV3,
     PreparedFinalizedProtectedWorkerV3HsacoV1, WorkerV3HsacoFinalizationError,
     finalize_protected_worker_v3_hsaco_v1,

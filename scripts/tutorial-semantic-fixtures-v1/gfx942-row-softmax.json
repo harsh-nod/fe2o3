@@ -1,0 +1,191 @@
+{
+  "argumentRoles": [
+    "input",
+    "output",
+    "scalar",
+    "scalar",
+    "scalar",
+    "scalar"
+  ],
+  "canaries": [
+    {
+      "argument": 1,
+      "bytes": "0x00e4404600e44046",
+      "offset": 16
+    }
+  ],
+  "checkApplicability": {
+    "canaries": {
+      "reason": null,
+      "status": "checked"
+    },
+    "padding": {
+      "reason": null,
+      "status": "checked"
+    }
+  },
+  "compilerInputContractSha256": "6b93c7886aed3771e088e4a083e874e58dba1bed2fe69c6cfb8cad0299b90d5f",
+  "expectedArguments": [
+    {
+      "bytes": "0x000000000000000000000000000000000000b6420000b842",
+      "element": "f32",
+      "kind": "buffer"
+    },
+    {
+      "bytes": "0x0000803e0000803e0000803e0000803e00e4404600e44046",
+      "element": "f32",
+      "kind": "buffer"
+    },
+    {
+      "bits": "0x01000000",
+      "kind": "scalar",
+      "type": "u32"
+    },
+    {
+      "bits": "0x04000000",
+      "kind": "scalar",
+      "type": "u32"
+    },
+    {
+      "bits": "0x06000000",
+      "kind": "scalar",
+      "type": "u32"
+    },
+    {
+      "bits": "0x06000000",
+      "kind": "scalar",
+      "type": "u32"
+    }
+  ],
+  "fixtureId": "gfx942-row-softmax",
+  "kernelSymbol": "row_softmax_general_v1",
+  "numericalPolicy": {
+    "absoluteTolerance": 1e-06,
+    "allowNaN": false,
+    "mode": "f32-tolerance",
+    "relativeTolerance": 1e-06
+  },
+  "oracle": {
+    "function": "fe2o3_row_softmax_general_v1::reference::row_softmax_reference_v1",
+    "inputSha256": "0e1dfa0df8fe93396313c821166748501c0ef6a5364bfa56749ace93c3e2bb77",
+    "kind": "existing-rust-cpu-reference-v1"
+  },
+  "oracleSuiteId": "cpu-reference-row-softmax",
+  "padding": [
+    {
+      "argument": 1,
+      "bytes": "0x00e4404600e44046",
+      "offset": 16
+    }
+  ],
+  "physicalAbi": {
+    "arguments": [
+      {
+        "access": "read_only",
+        "element": "f32",
+        "kind": "buffer",
+        "name": "input"
+      },
+      {
+        "access": "read_write",
+        "element": "f32",
+        "kind": "buffer",
+        "name": "output"
+      },
+      {
+        "kind": "scalar",
+        "name": "rows",
+        "type": "u32"
+      },
+      {
+        "kind": "scalar",
+        "name": "columns",
+        "type": "u32"
+      },
+      {
+        "kind": "scalar",
+        "name": "input_stride",
+        "type": "u32"
+      },
+      {
+        "kind": "scalar",
+        "name": "output_stride",
+        "type": "u32"
+      }
+    ],
+    "schema": "fe2o3-physical-kernel-abi-v1",
+    "signatureSha256": "1dcd47851b0312d33048fbe0fc7d7a1c310b6b945ad1a33d02d70f1ded70820b",
+    "sourcePath": "examples/row_softmax_general_v1/src/kernel.rs"
+  },
+  "productionExport": {
+    "coordinates": null,
+    "diagnostic": "FE2O3-TUTORIAL-PROBE-001: production exporter failed: crates/fe2o3-verifier/src/production_final_graph_functional_refinement_v1.rs:77:5: error[E0277]: `ProductionVerifiedFinalGraphV1` doesn't implement `std::fmt::Debug`: the trait `std::fmt::Debug` is not implemented for `ProductionVerifiedFinalGraphV1`",
+    "diagnosticCode": "FE2O3-TUTORIAL-PROBE-001",
+    "diagnosticIdentitySha256": "e3b883e9ac0982f8e0b3acb740211ebbe5080e814f77f2168d6de075336b6fe8",
+    "identityContract": {
+      "rawContentField": "evidenceFiles[optimized-kir-v13].sha256",
+      "rawContentIdentity": "SHA-256(raw optimized KIR V13 bytes)",
+      "verifiedCanonicalKernelIrV13Fields": [
+        "productionEvidence.finalOptimizedKirSha256",
+        "graph.productionKirIdentitySha256",
+        "simulator.subjectSha256"
+      ],
+      "verifiedCanonicalKernelIrV13Identity": "domain-separated VerifiedCanonicalKernelIrV13 identity"
+    },
+    "stage": "exporter-build",
+    "status": "blocked"
+  },
+  "request": {
+    "arguments": [
+      {
+        "access": "read_only",
+        "alignment": 4,
+        "bytes": "0x000000000000000000000000000000000000b6420000b842",
+        "element": "f32",
+        "kind": "buffer"
+      },
+      {
+        "access": "read_write",
+        "alignment": 4,
+        "bytes": "0x00e4404600e4404600e4404600e4404600e4404600e44046",
+        "element": "f32",
+        "kind": "buffer"
+      },
+      {
+        "bits": "0x01000000",
+        "kind": "scalar",
+        "type": "u32"
+      },
+      {
+        "bits": "0x04000000",
+        "kind": "scalar",
+        "type": "u32"
+      },
+      {
+        "bits": "0x06000000",
+        "kind": "scalar",
+        "type": "u32"
+      },
+      {
+        "bits": "0x06000000",
+        "kind": "scalar",
+        "type": "u32"
+      }
+    ],
+    "grid": [
+      64,
+      1,
+      1
+    ],
+    "kernel": "row_softmax_general_v1",
+    "schema": "fe2o3-simulation-request-v1",
+    "workgroup": [
+      64,
+      1,
+      1
+    ]
+  },
+  "schema": "fe2o3-tutorial-capability-simulation-fixture-v1",
+  "sourceClosureSha256": "060a7dec6225362d63605204894d7821d916de6a1e4d4daadbe822e45734d7b3",
+  "target": "gfx942"
+}

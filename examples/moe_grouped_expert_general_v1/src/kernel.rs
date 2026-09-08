@@ -6,8 +6,8 @@
 #![allow(missing_docs)]
 
 use fe2o3_device::{
-    Bf16MfmaAMatrix, Bf16MfmaBMatrix, DisjointSlice, F32AccumulatorFragment, Index1D, KernelError,
-    KernelResult, Matrix, StridedReadView2D, Tiled2D, Wave64, WaveLane, kernel, thread,
+    ExclusiveReadWrite, Global, KernelContext, KernelError, KernelResult, ReadOnly, StrictIeee,
+    SubgroupWidth64, kernel,
 };
 
 pub const MOE_EXPERT_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
@@ -20,6 +20,22 @@ fn matrix_extent(rows: u32, columns: u32, stride: u32) -> usize {
     }
 }
 
+#[inline(always)]
+fn load_2d_or<T: fe2o3_device::CapabilityMemoryElementV1, Brand>(
+    values: &Global<'_, T, ReadOnly, Brand>,
+    base: usize,
+    row: usize,
+    column: usize,
+    stride: usize,
+    fallback: T,
+) -> T {
+    row.checked_mul(stride)
+        .and_then(|offset| base.checked_add(offset))
+        .and_then(|offset| offset.checked_add(column))
+        .and_then(|index| values.load(index))
+        .unwrap_or(fallback)
+}
+
 /// Computes one routed expert group with a gated bias epilogue.
 ///
 /// Routing packs each expert's selected tokens into a separate padded matrix.
@@ -28,15 +44,16 @@ fn matrix_extent(rows: u32, columns: u32, stride: u32) -> usize {
 #[kernel(
     typed,
     launch(required = [64, 1, 1], max = [64, 1, 1]),
-    control_flow(loop_bounds(4294967295))
+    control_flow(loop_bounds(4294967295, 4))
 )]
 #[allow(clippy::too_many_arguments)]
 pub fn moe_grouped_expert_general_v1(
-    routed_tokens: &[u16],
-    expert_weights: &[u16],
-    route_gates: &[f32],
-    expert_bias: &[f32],
-    mut routed_output: DisjointSlice<f32, Tiled2D<Index1D, 64, 16, 16, 4>>,
+    context: KernelContext<'_>,
+    routed_tokens: Global<'_, u16, ReadOnly>,
+    expert_weights: Global<'_, u16, ReadOnly>,
+    route_gates: Global<'_, f32, ReadOnly>,
+    expert_bias: Global<'_, f32, ReadOnly>,
+    mut routed_output: Global<'_, f32, ExclusiveReadWrite>,
     rows_padded: u32,
     output_columns: u32,
     reduction: u32,
@@ -78,18 +95,8 @@ pub fn moe_grouped_expert_general_v1(
     {
         return Err(KernelError::InvalidArgument);
     }
-    // Checked views separate route metadata from the quantized matrix operands.
-    let gates = StridedReadView2D::from_shared_slice(route_gates, 0, rows_padded as usize, 1, 1)?;
-    let biases = StridedReadView2D::from_shared_slice(
-        expert_bias,
-        expert as usize * bias_stride as usize,
-        1,
-        output_columns as usize,
-        bias_stride as usize,
-    )?;
-
     // One Wave64 owns one 16x16 routed-output tile.
-    let thread_index = thread::index_1d();
+    let thread_index = context.invocation().index_1d();
     let raw = thread_index.get();
     let lane = raw % 64;
     let lane_column = lane % 16;
@@ -98,28 +105,28 @@ pub fn moe_grouped_expert_general_v1(
     let tile_row = tile / tiles_per_row;
     let tile_column = tile % tiles_per_row;
     let output_column = tile_column * 16 + lane_column;
-    let output_tile = thread_index
-        .checked_tiled_2d::<64, 16, 16, 4>()
-        .ok_or(KernelError::OutOfBounds)?;
-    let token_matrix = Bf16MfmaAMatrix::row_major(
-        routed_tokens,
+    let weight_base = expert as usize * expert_weight_stride as usize;
+    let policy = context.numerical_policy::<StrictIeee>();
+    let wave_lane = context.subgroup_lane::<SubgroupWidth64>();
+    #[allow(deprecated)]
+    let matrix = context.matrix();
+    let matrix = matrix.with_numerical_policy(&policy);
+    let token_matrix = matrix.bf16_a_global_row_major(
+        &routed_tokens,
         0,
         rows_padded as usize,
         reduction as usize,
         token_stride as usize,
     )?;
-    let weight_base = expert as usize * expert_weight_stride as usize;
-    let weight_matrix = Bf16MfmaBMatrix::row_major(
-        expert_weights,
+    let weight_matrix = matrix.bf16_b_global_row_major(
+        &expert_weights,
         weight_base,
         reduction as usize,
         output_columns as usize,
         weight_stride as usize,
     )?;
-    let wave_lane = WaveLane::<Wave64>::current();
-    let matrix = Matrix::current();
     // All lanes traverse the same K phases and retain accumulation in FP32.
-    let mut accumulator = F32AccumulatorFragment::zero(&wave_lane);
+    let mut accumulator = matrix.bf16_zero_accumulator(&wave_lane);
     let mut phase = 0_usize;
     while phase < reduction as usize {
         let lhs = token_matrix.load_m16k16(&wave_lane, tile_row * 16, phase);
@@ -127,46 +134,34 @@ pub fn moe_grouped_expert_general_v1(
         accumulator = matrix.multiply_accumulate(lhs, rhs, accumulator);
         phase += 16;
     }
+    let values = accumulator.into_values();
 
     // Fuse route gating and expert bias before capability-checked edge stores.
-    let values = accumulator.into_values();
     let row_base = tile_row * 16 + (lane / 16) * 4;
-    let bias = biases.load_or(0, output_column, 0.0);
-    if let Some(element) = routed_output.get_tiled_2d_mut(
-        &output_tile,
+    let bias = load_2d_or(
+        &expert_bias,
+        expert as usize * bias_stride as usize,
         0,
-        rows_padded as usize,
-        output_columns as usize,
-        output_stride as usize,
-    ) {
-        *element = gates.load_or(row_base, 0, 0.0) * (values[0] + bias);
-    }
-    if let Some(element) = routed_output.get_tiled_2d_mut(
-        &output_tile,
-        1,
-        rows_padded as usize,
-        output_columns as usize,
-        output_stride as usize,
-    ) {
-        *element = gates.load_or(row_base + 1, 0, 0.0) * (values[1] + bias);
-    }
-    if let Some(element) = routed_output.get_tiled_2d_mut(
-        &output_tile,
-        2,
-        rows_padded as usize,
-        output_columns as usize,
-        output_stride as usize,
-    ) {
-        *element = gates.load_or(row_base + 2, 0, 0.0) * (values[2] + bias);
-    }
-    if let Some(element) = routed_output.get_tiled_2d_mut(
-        &output_tile,
-        3,
-        rows_padded as usize,
-        output_columns as usize,
-        output_stride as usize,
-    ) {
-        *element = gates.load_or(row_base + 3, 0, 0.0) * (values[3] + bias);
+        output_column,
+        bias_stride as usize,
+        0.0,
+    );
+    let mut component = 0_usize;
+    while component < values.len() {
+        let row = row_base + component;
+        if row < rows_padded as usize && output_column < output_columns as usize {
+            let Some(index) = row
+                .checked_mul(output_stride as usize)
+                .and_then(|offset| offset.checked_add(output_column))
+            else {
+                fe2o3_device::trap();
+            };
+            let gate = load_2d_or(&route_gates, 0, row, 0, 1, 0.0);
+            if !routed_output.store(index, gate * (values[component] + bias)) {
+                fe2o3_device::trap();
+            }
+        }
+        component += 1;
     }
     Ok(())
 }

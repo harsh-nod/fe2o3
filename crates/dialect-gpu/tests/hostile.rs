@@ -1,11 +1,22 @@
 use dialect_gpu::{
-    AddressSpaceAttr, BarrierOp, ExecutionDomainAttr, ExecutionLayoutOp, FenceOp, HierarchyAttr,
-    HierarchyIdOp, HierarchyIndexType, MemoryOrderAttr, MemoryScopeAttr, MemorySpaceOp,
-    MemorySpaceType, RegistrationError, RegistrationOutcome, SynchronizationOpInterface,
-    TargetNeutralGpuOpInterface, barrier_op_attr_names, register_dialect,
+    AddressSpaceAttr, BarrierOp, CanonicalKirOperationAttr, CanonicalKirTerminatorAttr,
+    ExecutionDomainAttr, ExecutionExtentAttr, ExecutionLayoutOp, FenceOp, GridIdentityAttr,
+    HierarchyAttr, HierarchyIdOp, HierarchyIndexType, MemoryOrderAttr, MemoryScopeAttr,
+    MemorySpaceOp, MemorySpaceType, RegistrationError, RegistrationOutcome, SubgroupSizeAttr,
+    SynchronizationOpInterface, TargetNeutralGpuOpInterface, barrier_op_attr_names,
+    optimization_v1::{
+        AccessModeAttr, BFloat16Attr, BFloat16Type, IndexAttr, IndexType, MemoryAlignmentAttr,
+        PointerType, PreservedOperationKindAttr, PreservedOperationOp, PreservedTerminatorOp,
+        SliceType, VolatileAttr,
+    },
+    register_dialect,
+};
+use fe2o3_kernel_ir::{
+    IntrinsicOperation, Operation as KirOperation, OperationKind, Terminator, Type as KirType,
+    ValueDef, ValueId,
 };
 use pliron::{
-    attribute::AttrObj,
+    attribute::{AttrObj, verify_attr},
     builtin::{
         attributes::{BytesAttr, UnitAttr},
         op_interfaces::SingleBlockRegionInterface,
@@ -19,8 +30,38 @@ use pliron::{
     operation::{Operation, OperationParserConfig, verify_operation},
     parsable::{Parsable, parse_from_str},
     printable::Printable,
-    r#type::TypeHandle,
+    r#type::{TypeHandle, verify_type},
 };
+
+fn round_trip_attribute(source: AttrObj) {
+    let mut source_context = Context::new();
+    register_dialect(&mut source_context).expect("source gpu registration");
+    let text = source.disp(&source_context).to_string();
+
+    for _ in 0..2 {
+        let mut fresh = Context::new();
+        register_dialect(&mut fresh).expect("fresh gpu registration");
+        let parsed = parse_from_str(AttrObj::parser(()).skip(eof()), &mut fresh, &text)
+            .expect("registered capability attribute must parse");
+        verify_attr(&*parsed, &fresh).expect("parsed capability attribute must verify");
+        assert_eq!(parsed.disp(&fresh).to_string(), text);
+    }
+}
+
+fn round_trip_type(build: impl Fn(&Context) -> TypeHandle) {
+    let mut source = Context::new();
+    register_dialect(&mut source).expect("source gpu registration");
+    let text = build(&source).disp(&source).to_string();
+
+    for _ in 0..2 {
+        let mut fresh = Context::new();
+        register_dialect(&mut fresh).expect("fresh gpu registration");
+        let parsed = parse_from_str(TypeHandle::parser(()).skip(eof()), &mut fresh, &text)
+            .expect("registered capability type must parse");
+        verify_type(&*parsed.deref(&fresh), &fresh).expect("parsed capability type must verify");
+        assert_eq!(parsed.disp(&fresh).to_string(), text);
+    }
+}
 
 #[test]
 fn registration_is_real_duplicate_safe_and_round_trips_entities() {
@@ -98,6 +139,110 @@ fn registration_is_real_duplicate_safe_and_round_trips_entities() {
 }
 
 #[test]
+fn every_capability_attribute_and_type_family_round_trips_in_fresh_contexts() {
+    let operation = KirOperation::effect_free(
+        ValueDef::new(ValueId(0), KirType::INDEX),
+        OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+    );
+    let attributes: Vec<AttrObj> = vec![
+        Box::new(HierarchyAttr::Workgroup),
+        Box::new(AddressSpaceAttr::Workgroup),
+        Box::new(MemoryScopeAttr::Device),
+        Box::new(MemoryOrderAttr::AcquireRelease),
+        Box::new(GridIdentityAttr(17)),
+        Box::new(ExecutionExtentAttr(257)),
+        Box::new(ExecutionDomainAttr::FullPhysicalWorkgroups),
+        Box::new(SubgroupSizeAttr(64)),
+        Box::new(AccessModeAttr::ReadWrite),
+        Box::new(MemoryAlignmentAttr(16)),
+        Box::new(VolatileAttr(true)),
+        Box::new(IndexAttr(31)),
+        Box::new(BFloat16Attr(0x3f80)),
+        Box::new(CanonicalKirOperationAttr::new(&operation).expect("canonical operation")),
+        Box::new(
+            CanonicalKirTerminatorAttr::new(&Terminator::Unreachable)
+                .expect("canonical terminator"),
+        ),
+    ];
+    for attribute in attributes {
+        round_trip_attribute(attribute);
+    }
+
+    round_trip_type(|context| HierarchyIndexType::get(context, HierarchyAttr::Subgroup).into());
+    round_trip_type(|context| MemorySpaceType::get(context, AddressSpaceAttr::Global).into());
+    round_trip_type(|context| IndexType::get(context).into());
+    round_trip_type(|context| BFloat16Type::get(context).into());
+    round_trip_type(|context| {
+        PointerType::get(
+            context,
+            UnitType::get(context).into(),
+            AddressSpaceAttr::Global,
+            AccessModeAttr::ReadOnly,
+        )
+        .into()
+    });
+    round_trip_type(|context| {
+        SliceType::get(
+            context,
+            UnitType::get(context).into(),
+            AddressSpaceAttr::Workgroup,
+            AccessModeAttr::ReadWrite,
+        )
+        .into()
+    });
+}
+
+#[test]
+fn every_target_neutral_capability_shell_op_round_trips_in_a_fresh_context() {
+    let text = {
+        let mut source = Context::new();
+        register_dialect(&mut source).expect("source gpu registration");
+        let module = ModuleOp::new(
+            &mut source,
+            Identifier::try_from("gpu_capability_shell").unwrap(),
+        );
+        for operation in [
+            HierarchyIdOp::new(&mut source, HierarchyAttr::Lane).get_operation(),
+            ExecutionLayoutOp::new(&mut source, 19, [256, 1, 1], [64, 1, 1], 64).get_operation(),
+            MemorySpaceOp::new(&mut source, AddressSpaceAttr::Workgroup).get_operation(),
+            BarrierOp::new(
+                &mut source,
+                HierarchyAttr::Workgroup,
+                MemoryScopeAttr::Workgroup,
+                AddressSpaceAttr::Workgroup,
+                MemoryOrderAttr::AcquireRelease,
+            )
+            .get_operation(),
+            FenceOp::new(
+                &mut source,
+                MemoryScopeAttr::Device,
+                AddressSpaceAttr::Global,
+                MemoryOrderAttr::Release,
+            )
+            .get_operation(),
+        ] {
+            module.append_operation(&mut source, operation, 0);
+        }
+        module.get_operation().disp(&source).to_string()
+    };
+
+    let mut canonical_text = None;
+    for _ in 0..2 {
+        let mut fresh = Context::new();
+        register_dialect(&mut fresh).expect("fresh gpu registration");
+        let parsed = parse_from_str(Operation::top_level_parser(), &mut fresh, &text)
+            .expect("registered capability shell must parse");
+        verify_operation(parsed, &fresh).expect("parsed capability shell must verify");
+        let parsed_text = parsed.disp(&fresh).to_string();
+        if let Some(canonical_text) = &canonical_text {
+            assert_eq!(&parsed_text, canonical_text);
+        } else {
+            canonical_text = Some(parsed_text);
+        }
+    }
+}
+
+#[test]
 fn hostile_registration_marker_is_rejected() {
     let mut context = Context::new();
     let key =
@@ -113,6 +258,65 @@ fn hostile_registration_marker_is_rejected() {
         register_dialect(&mut context),
         Err(RegistrationError::CorruptMarker)
     );
+}
+
+#[test]
+fn analysis_incomplete_legacy_ops_stay_rejected_after_fresh_context_round_trip() {
+    let families = [
+        PreservedOperationKindAttr::Intrinsic,
+        PreservedOperationKindAttr::MemoryIntrinsic,
+        PreservedOperationKindAttr::Alloca,
+        PreservedOperationKindAttr::GuardedLoad,
+        PreservedOperationKindAttr::GuardedStore,
+        PreservedOperationKindAttr::Barrier,
+        PreservedOperationKindAttr::Atomic,
+        PreservedOperationKindAttr::Fence,
+        PreservedOperationKindAttr::WorkgroupBarrier,
+        PreservedOperationKindAttr::WorkgroupMemory,
+        PreservedOperationKindAttr::Matrix,
+        PreservedOperationKindAttr::Gfx950LdsTranspose,
+        PreservedOperationKindAttr::Wave,
+        PreservedOperationKindAttr::InlineAssembly,
+    ];
+
+    for family in families {
+        let text = {
+            let mut source = Context::new();
+            register_dialect(&mut source).expect("source gpu registration");
+            let module = ModuleOp::new(
+                &mut source,
+                Identifier::try_from("legacy_operation").unwrap(),
+            );
+            let operation = PreservedOperationOp::new(&mut source, family, vec![], vec![]);
+            module.append_operation(&mut source, operation.get_operation(), 0);
+            module.get_operation().disp(&source).to_string()
+        };
+        let mut fresh = Context::new();
+        register_dialect(&mut fresh).expect("fresh gpu registration");
+        let decoded = parse_from_str(Operation::top_level_parser(), &mut fresh, &text)
+            .expect("legacy syntax remains bounded and parseable");
+        assert!(
+            verify_operation(decoded, &fresh).is_err(),
+            "analysis-incomplete family {family:?} entered a verified fresh graph"
+        );
+    }
+
+    let text = {
+        let mut source = Context::new();
+        register_dialect(&mut source).expect("source gpu registration");
+        let module = ModuleOp::new(
+            &mut source,
+            Identifier::try_from("legacy_terminator").unwrap(),
+        );
+        let operation = PreservedTerminatorOp::new_unreachable(&mut source);
+        module.append_operation(&mut source, operation.get_operation(), 0);
+        module.get_operation().disp(&source).to_string()
+    };
+    let mut fresh = Context::new();
+    register_dialect(&mut fresh).expect("fresh gpu registration");
+    let decoded = parse_from_str(Operation::top_level_parser(), &mut fresh, &text)
+        .expect("legacy terminator syntax remains parseable");
+    assert!(verify_operation(decoded, &fresh).is_err());
 }
 
 #[test]

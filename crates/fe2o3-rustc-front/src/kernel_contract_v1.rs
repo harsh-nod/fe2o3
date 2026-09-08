@@ -14,6 +14,7 @@ pub const KERNEL_FRONTEND_REGISTRATION_KIND_V1: u16 = 1;
 const HEADER_BYTES_V1: usize = 20;
 const FLAG_LAUNCH: u16 = 0x0001;
 const FLAG_UNSAFE_ASSEMBLY: u16 = 0x0002;
+const FLAG_UNSAFE_RAW_MEMORY_PROVIDER: u16 = 0x0004;
 const LAUNCH_FLAG_REQUIRED: u16 = 0x0001;
 const LAUNCH_FLAG_MAXIMUM: u16 = 0x0002;
 const LAUNCH_FLAG_OCCUPANCY: u16 = 0x0004;
@@ -58,6 +59,7 @@ pub enum KernelFrontendContractValidationErrorV1 {
     UnsupportedAssemblyEffects(u16),
     ConflictingAssemblyOptions,
     AssemblyEffectsConflictWithOptions,
+    ConflictingUnsafeBoundaries,
 }
 
 impl fmt::Display for KernelFrontendContractValidationErrorV1 {
@@ -98,6 +100,9 @@ impl fmt::Display for KernelFrontendContractValidationErrorV1 {
             Self::AssemblyEffectsConflictWithOptions => {
                 formatter.write_str("unsafe assembly effects conflict with options")
             }
+            Self::ConflictingUnsafeBoundaries => formatter.write_str(
+                "unsafe assembly and unsafe raw-memory provider boundaries are mutually exclusive",
+            ),
         }
     }
 }
@@ -389,6 +394,7 @@ impl FrontendUnsafeAssemblyDeclarationV1 {
 pub struct KernelFrontendContractV1 {
     launch: Option<FrontendLaunchBoundsV1>,
     unsafe_assembly: Option<FrontendUnsafeAssemblyDeclarationV1>,
+    unsafe_raw_memory_provider: bool,
 }
 
 impl KernelFrontendContractV1 {
@@ -396,12 +402,24 @@ impl KernelFrontendContractV1 {
         launch: Option<FrontendLaunchBoundsV1>,
         unsafe_assembly: Option<FrontendUnsafeAssemblyDeclarationV1>,
     ) -> Result<Self, KernelFrontendContractValidationErrorV1> {
-        if launch.is_none() && unsafe_assembly.is_none() {
+        Self::new_with_raw_memory_provider(launch, unsafe_assembly, false)
+    }
+
+    pub fn new_with_raw_memory_provider(
+        launch: Option<FrontendLaunchBoundsV1>,
+        unsafe_assembly: Option<FrontendUnsafeAssemblyDeclarationV1>,
+        unsafe_raw_memory_provider: bool,
+    ) -> Result<Self, KernelFrontendContractValidationErrorV1> {
+        if launch.is_none() && unsafe_assembly.is_none() && !unsafe_raw_memory_provider {
             return Err(KernelFrontendContractValidationErrorV1::Empty);
+        }
+        if unsafe_assembly.is_some() && unsafe_raw_memory_provider {
+            return Err(KernelFrontendContractValidationErrorV1::ConflictingUnsafeBoundaries);
         }
         Ok(Self {
             launch,
             unsafe_assembly,
+            unsafe_raw_memory_provider,
         })
     }
 
@@ -412,6 +430,10 @@ impl KernelFrontendContractV1 {
     pub const fn unsafe_assembly(self) -> Option<FrontendUnsafeAssemblyDeclarationV1> {
         self.unsafe_assembly
     }
+
+    pub const fn unsafe_raw_memory_provider(self) -> bool {
+        self.unsafe_raw_memory_provider
+    }
 }
 
 pub fn encode_kernel_frontend_contract_v1(contract: KernelFrontendContractV1) -> Vec<u8> {
@@ -419,7 +441,8 @@ pub fn encode_kernel_frontend_contract_v1(contract: KernelFrontendContractV1) ->
     bytes.extend_from_slice(&FRONTEND_KERNEL_CONTRACT_MAGIC_V1);
     push_u16(&mut bytes, FRONTEND_KERNEL_CONTRACT_VERSION_V1);
     let flags = (u16::from(contract.launch.is_some()) * FLAG_LAUNCH)
-        | (u16::from(contract.unsafe_assembly.is_some()) * FLAG_UNSAFE_ASSEMBLY);
+        | (u16::from(contract.unsafe_assembly.is_some()) * FLAG_UNSAFE_ASSEMBLY)
+        | (u16::from(contract.unsafe_raw_memory_provider) * FLAG_UNSAFE_RAW_MEMORY_PROVIDER);
     push_u16(&mut bytes, flags);
     push_u32(&mut bytes, 0);
     push_u32(&mut bytes, 0);
@@ -469,7 +492,9 @@ pub fn decode_kernel_frontend_contract_v1(
         return Err(KernelFrontendContractDecodeErrorV1::UnknownVersion(version));
     }
     let flags = reader.u16()?;
-    if flags == 0 || flags & !(FLAG_LAUNCH | FLAG_UNSAFE_ASSEMBLY) != 0 {
+    if flags == 0
+        || flags & !(FLAG_LAUNCH | FLAG_UNSAFE_ASSEMBLY | FLAG_UNSAFE_RAW_MEMORY_PROVIDER) != 0
+    {
         return Err(KernelFrontendContractDecodeErrorV1::UnsupportedFlags(flags));
     }
     let declared = reader.u32()?;
@@ -499,7 +524,11 @@ pub fn decode_kernel_frontend_contract_v1(
     if !reader.finished() {
         return Err(KernelFrontendContractDecodeErrorV1::TrailingBytes);
     }
-    let contract = KernelFrontendContractV1::new(launch, unsafe_assembly)?;
+    let contract = KernelFrontendContractV1::new_with_raw_memory_provider(
+        launch,
+        unsafe_assembly,
+        flags & FLAG_UNSAFE_RAW_MEMORY_PROVIDER != 0,
+    )?;
     if encode_kernel_frontend_contract_v1(contract) != bytes {
         return Err(KernelFrontendContractDecodeErrorV1::NonCanonical);
     }

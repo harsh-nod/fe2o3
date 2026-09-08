@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/fail/gfx950_capability_transpose_read_wrong_brand.rs:26:37
+   |
+26 |     let _ = tile.read_mfma_fragment(other_kernel_lane);
+   |                  ------------------ ^^^^^^^^^^^^^^^^^ expected `KernelA`, found `KernelB`
+   |                  |
+   |                  arguments to this method are incorrect
+   |
+   = note: expected reference `&SubgroupLane<SubgroupWidth64, SubgroupBrand<'_, SubgroupWidth64, fe2o3_device::KernelCapabilityBrand<'workgroup, KernelA, CurrentTarget, RegisteredLaunch>, NextEpoch<InitialEpoch>>>`
+              found reference `&SubgroupLane<SubgroupWidth64, SubgroupBrand<'workgroup, SubgroupWidth64, fe2o3_device::KernelCapabilityBrand<'workgroup, KernelB, CurrentTarget, RegisteredLaunch>, NextEpoch<InitialEpoch>>>`
+note: method defined here
+  --> src/gfx950.rs
+   |
+   |     pub fn read_mfma_fragment<'operation>(
+   |            ^^^^^^^^^^^^^^^^^^

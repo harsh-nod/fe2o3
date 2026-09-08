@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail/capability_local_memory_wrong_role.rs:8:21
+  |
+8 |     read_write_only(read_only);
+  |     --------------- ^^^^^^^^^ expected `fe2o3_device::ExclusiveReadWrite`, found `fe2o3_device::ReadOnly`
+  |     |
+  |     arguments to this function are incorrect
+  |
+  = note: expected reference `&CapabilityMemoryView<'_, u32, PrivateAddressSpace, fe2o3_device::ExclusiveReadWrite, Brand>`
+             found reference `&CapabilityMemoryView<'_, u32, PrivateAddressSpace, fe2o3_device::ReadOnly, Brand>`
+note: function defined here
+ --> tests/ui/fail/capability_local_memory_wrong_role.rs:5:4
+  |
+5 | fn read_write_only(_: &PrivateMemoryView<'_, u32, ExclusiveReadWrite, Brand>) {}
+  |    ^^^^^^^^^^^^^^^ ---------------------------------------------------------

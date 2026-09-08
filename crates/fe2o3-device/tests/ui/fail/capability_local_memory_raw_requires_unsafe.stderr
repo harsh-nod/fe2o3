@@ -1,0 +1,12 @@
+error[E0133]: call to unsafe function `CapabilityMemoryView::<'memory, T, PrivateAddressSpace, Role, fe2o3_device::KernelCapabilityBrand<'kernel, Kernel, Target, Launch>>::from_raw_parts` is unsafe and requires unsafe block
+  --> tests/ui/fail/capability_local_memory_raw_requires_unsafe.rs:12:5
+   |
+12 | /     PrivateMemoryView::from_raw_parts(
+13 | |         context,
+14 | |         pointer,
+15 | |         4,
+16 | |         PrivateMemoryView::<u32, ExclusiveReadWrite, Brand<'kernel>>::UNSAFE_RAW_OBLIGATION_V1,
+17 | |     )
+   | |_____^ call to unsafe function
+   |
+   = note: consult the function's documentation for information on how to avoid undefined behavior

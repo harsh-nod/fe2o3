@@ -250,6 +250,80 @@ fn source_isa_observer_lifecycle_is_one_shot_and_prepublication() {
 }
 
 #[test]
+fn native_v5_result_journal_precedes_readiness_carrier_and_retirement() {
+    let source = include_str!("../src/binding_wrapper.rs");
+    let published = source
+        .split("fn complete_published_production_artifact(")
+        .nth(1)
+        .expect("published completion exists")
+        .split("fn complete_ready_production_artifact(")
+        .next()
+        .expect("published completion has a bounded body");
+    let pending = published
+        .find("persist_durable_journal_v1")
+        .expect("native V5 pending result is persisted");
+    let readiness = published
+        .find("persist_durable_replay_custody_v2")
+        .expect("load readiness is persisted");
+    let carrier = published
+        .find("persist_durable_sidecar_v1")
+        .expect("native V5 final carrier is persisted");
+    let retirement = published
+        .find("retire_worker_v3_publication_intent_after_load_readiness_v1")
+        .expect("publication intent retirement exists");
+    let finish = published
+        .find("finish_build_attempt")
+        .expect("attempt completion exists");
+    assert!(
+        pending < readiness && readiness < carrier && carrier < retirement && retirement < finish
+    );
+    assert!(published.contains("recover_worker_v3_pending_capability_result_for_live_v1"));
+    assert!(published.contains("retain_capability_output_root_v5"));
+    assert!(source.contains("RetainedDurableDirectoryV1::admit_service_owned"));
+
+    let ready = source
+        .split("fn complete_ready_production_artifact(")
+        .nth(1)
+        .expect("ready recovery exists");
+    assert!(ready.contains("recover_worker_v3_capability_result_carrier_v1"));
+    assert!(ready.contains("recover_worker_v3_pending_capability_result_v1"));
+    assert!(ready.contains("finish_recovered"));
+    assert!(ready.contains("persist_durable_sidecar_v1"));
+}
+
+#[test]
+fn native_v5_failure_tombstones_before_any_publication_or_gpu_path() {
+    let binding = include_str!("../src/binding_wrapper.rs");
+    let fresh = binding
+        .split("fn complete_fresh_production_artifact(")
+        .nth(1)
+        .unwrap()
+        .split("fn complete_recovered_production_artifact(")
+        .next()
+        .unwrap();
+    let v5 = fresh
+        .find("if let Some(capability) = capability_v5")
+        .unwrap();
+    assert!(v5 < fresh.find("emit_finalized_source_isa_observation").unwrap());
+    assert!(
+        v5 < fresh
+            .find("prepare_protected_worker_v3_hsaco_publication_v1")
+            .unwrap()
+    );
+    assert!(!fresh[v5..].contains("fe2o3_hsa_runtime"));
+
+    let revoke = binding
+        .split("fn revoke(&mut self)")
+        .nth(1)
+        .unwrap()
+        .split("impl Drop for ManagedAttemptRevocationGuard")
+        .next()
+        .unwrap();
+    assert!(revoke.contains("fail_build_attempt"));
+    assert!(revoke.contains("purge_failed_compiler_handoff_attempt_v5"));
+}
+
+#[test]
 fn cargo_finishes_and_exposes_observer_collection_nonfatally() {
     let source = include_str!("../src/main.rs");
     let run = source

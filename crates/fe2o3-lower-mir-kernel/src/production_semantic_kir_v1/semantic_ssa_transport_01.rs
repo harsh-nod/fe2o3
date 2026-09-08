@@ -15,6 +15,12 @@ enum SemanticPromotedTransportV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SemanticPromotedBindingV1 {
     Ordinary,
+    KernelContext,
+    GlobalCapability {
+        element: SemanticTypeIdV1,
+        contract: SemanticCapabilityMemoryContractV1,
+        provenance: SemanticKernelCapabilityProvenanceV1,
+    },
     MathContext,
     CollectiveContext,
     WorkgroupLdsScope,
@@ -157,9 +163,37 @@ impl SemanticPromotedBindingV1 {
         self,
         types: &[SemanticTypeDeclV1],
         semantic_type: SemanticTypeIdV1,
+        kernel_context_type: Option<&KernelContextTypeV1>,
     ) -> Result<Vec<Type>, ProductionSemanticKirErrorV1> {
         let transport = match self {
             Self::Ordinary => lower_ssa_value_types(types, semantic_type)?,
+            Self::KernelContext => vec![Type::KernelContext(
+                kernel_context_type
+                    .ok_or_else(|| {
+                        unsupported(
+                            0,
+                            None,
+                            None,
+                            "kernel-context SSA transport lacks authenticated root identity",
+                        )
+                    })?
+                    .clone(),
+            )],
+            Self::GlobalCapability {
+                element, contract, ..
+            } => vec![Type::GlobalCapability(lower_global_capability_type_v1(
+                types,
+                element,
+                contract,
+                kernel_context_type.ok_or_else(|| {
+                    unsupported(
+                        0,
+                        None,
+                        None,
+                        "global-capability SSA transport lacks authenticated root identity",
+                    )
+                })?,
+            )?)],
             Self::MathContext
             | Self::CollectiveContext
             | Self::WorkgroupLdsScope
@@ -257,6 +291,8 @@ impl SemanticPromotedBindingV1 {
     const fn current_wave(self) -> Option<SemanticCurrentWaveV1> {
         match self {
             Self::Ordinary
+            | Self::KernelContext
+            | Self::GlobalCapability { .. }
             | Self::MathContext
             | Self::CollectiveContext
             | Self::WorkgroupLdsScope
@@ -288,6 +324,29 @@ impl SemanticPromotedBindingV1 {
     ) -> Result<Vec<(ValueId, Type)>, &'static str> {
         match (self, binding) {
             (Self::Ordinary, binding) => binding.values(),
+            (Self::KernelContext, SemanticValueBindingV1::KernelContext { value, context }) => {
+                Ok(vec![(*value, Type::KernelContext(context.clone()))])
+            }
+            (
+                Self::GlobalCapability {
+                    element,
+                    contract,
+                    provenance,
+                },
+                SemanticValueBindingV1::GlobalCapability {
+                    value,
+                    element: actual_element,
+                    contract: actual_contract,
+                    provenance: actual_provenance,
+                    capability,
+                    ..
+                },
+            ) if element == *actual_element
+                && contract == *actual_contract
+                && provenance == *actual_provenance =>
+            {
+                Ok(vec![(*value, Type::GlobalCapability(capability.clone()))])
+            }
             (Self::MathContext, SemanticValueBindingV1::MathContext)
             | (Self::CollectiveContext, SemanticValueBindingV1::CollectiveContext)
             | (Self::WorkgroupLdsScope, SemanticValueBindingV1::WorkgroupLdsScope)
@@ -505,8 +564,7 @@ impl SemanticPromotedBindingV1 {
                     pointer_ty,
                     availability: actual_availability,
                 },
-            ) if *pointer_ty
-                == Type::pointer(Type::Scalar(element), address_space, access)
+            ) if *pointer_ty == Type::pointer(Type::Scalar(element), address_space, access)
                 && availability == *actual_availability =>
             {
                 Ok(vec![(*present, Type::BOOL), (*pointer, pointer_ty.clone())])
@@ -535,9 +593,9 @@ impl SemanticPromotedBindingV1 {
             (Self::OptionGridLeader { .. }, _) => {
                 Err("promoted optional grid leader lacks its authenticated availability")
             }
-            (Self::OptionComponentWitness { .. }, _) => Err(
-                "promoted optional component witness lacks its authenticated producer metadata",
-            ),
+            (Self::OptionComponentWitness { .. }, _) => {
+                Err("promoted optional component witness lacks its authenticated producer metadata")
+            }
             (Self::OptionPointer { .. }, _) => {
                 Err("promoted optional pointer lacks its authenticated producer contract")
             }
@@ -549,6 +607,12 @@ impl SemanticPromotedBindingV1 {
             }
             (Self::WorkgroupPipeline { .. }, _) => {
                 Err("promoted workgroup pipeline lacks its compiler-issued storage contract")
+            }
+            (Self::KernelContext, _) => {
+                Err("promoted kernel context lacks compiler-issued authority")
+            }
+            (Self::GlobalCapability { .. }, _) => {
+                Err("promoted global capability lacks its authenticated bind contract")
             }
             (Self::MathContext, _) => Err("promoted math context lacks compiler-issued authority"),
             (Self::CollectiveContext, _) => {
@@ -573,7 +637,12 @@ impl SemanticPromotedBindingV1 {
         if matches!(self, Self::Ordinary) {
             return binding_from_value_defs(types, semantic_type, values);
         }
-        let expected = self.transport_types(types, semantic_type)?;
+        let kernel_context_type = values.first().and_then(|value| match &value.ty {
+            Type::KernelContext(context) => Some(context),
+            Type::GlobalCapability(capability) => Some(capability.context()),
+            _ => None,
+        });
+        let expected = self.transport_types(types, semantic_type, kernel_context_type)?;
         if values.len() != expected.len()
             || values
                 .iter()
@@ -593,6 +662,54 @@ impl SemanticPromotedBindingV1 {
             .collect();
         match self {
             Self::Ordinary => binding_from_value_defs(types, semantic_type, values),
+            Self::KernelContext => {
+                let [
+                    ValueDef {
+                        id,
+                        ty: Type::KernelContext(context),
+                    },
+                ] = values
+                else {
+                    return Err(unsupported(
+                        0,
+                        None,
+                        None,
+                        "kernel-context SSA transport changed its logical KIR type",
+                    ));
+                };
+                Ok(SemanticValueBindingV1::KernelContext {
+                    value: *id,
+                    context: context.clone(),
+                })
+            }
+            Self::GlobalCapability {
+                element,
+                contract,
+                provenance,
+            } => {
+                let [
+                    ValueDef {
+                        id,
+                        ty: Type::GlobalCapability(capability),
+                    },
+                ] = values
+                else {
+                    return Err(unsupported(
+                        0,
+                        None,
+                        None,
+                        "global-capability SSA transport changed its logical KIR type",
+                    ));
+                };
+                Ok(SemanticValueBindingV1::GlobalCapability {
+                    value: *id,
+                    semantic_view: semantic_type,
+                    element,
+                    contract,
+                    provenance,
+                    capability: capability.clone(),
+                })
+            }
             Self::MathContext => Ok(SemanticValueBindingV1::MathContext),
             Self::CollectiveContext => Ok(SemanticValueBindingV1::CollectiveContext),
             Self::WorkgroupLdsScope => Ok(SemanticValueBindingV1::WorkgroupLdsScope),
@@ -608,7 +725,7 @@ impl SemanticPromotedBindingV1 {
             } => {
                 let payload_binding = payload_binding.promoted();
                 let component_types = payload_binding
-                    .transport_types(types, element)?
+                    .transport_types(types, element, None)?
                     .into_boxed_slice();
                 let packed_type = pipeline_packed_type_v1(packed_bits).ok_or_else(|| {
                     unsupported(
@@ -751,10 +868,7 @@ impl SemanticPromotedBindingV1 {
 
 impl SemanticPromotedTransportV1 {
     const fn uses_structural_enum_transport(self) -> bool {
-        matches!(
-            self,
-            Self::Semantic(SemanticPromotedBindingV1::Ordinary)
-        )
+        matches!(self, Self::Semantic(SemanticPromotedBindingV1::Ordinary))
     }
 
     fn transport_types(
@@ -762,9 +876,12 @@ impl SemanticPromotedTransportV1 {
         types: &[SemanticTypeDeclV1],
         semantic_type: SemanticTypeIdV1,
         direct_parameters: &BTreeMap<u32, Type>,
+        kernel_context_type: Option<&KernelContextTypeV1>,
     ) -> Result<Vec<Type>, ProductionSemanticKirErrorV1> {
         match self {
-            Self::Semantic(binding) => binding.transport_types(types, semantic_type),
+            Self::Semantic(binding) => {
+                binding.transport_types(types, semantic_type, kernel_context_type)
+            }
             Self::DirectParameter { parameter_local } => direct_parameters
                 .get(&parameter_local)
                 .cloned()
@@ -784,6 +901,12 @@ impl SemanticPromotedTransportV1 {
                 (SemanticValueBindingV1::Value { id, ty }, [expected]) if ty == expected => {
                     Ok(vec![(*id, ty.clone())])
                 }
+                (
+                    SemanticValueBindingV1::KernelContext { value, context },
+                    [Type::KernelContext(expected)],
+                ) if context == expected => {
+                    Ok(vec![(*value, Type::KernelContext(context.clone()))])
+                }
                 _ => Err("promoted direct parameter changed its authenticated ABI carrier"),
             },
         }
@@ -801,9 +924,7 @@ impl SemanticPromotedTransportV1 {
                 semantic.binding_from_transport(types, semantic_type, values)
             }
             Self::DirectParameter { .. }
-                if values.len() == 1
-                    && expected.len() == 1
-                    && values[0].ty == expected[0] =>
+                if values.len() == 1 && expected.len() == 1 && values[0].ty == expected[0] =>
             {
                 Ok(SemanticValueBindingV1::Value {
                     id: values[0].id,

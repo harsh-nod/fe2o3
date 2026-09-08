@@ -360,6 +360,7 @@ pub(crate) struct TerminalExpansionRecipeV1<'tcx> {
     pub(crate) instance: Instance<'tcx>,
     pub(crate) identities: CanonicalFunctionIdentitiesV1,
     pub(crate) terminal: u32,
+    pub(crate) span: Span,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -601,6 +602,7 @@ struct BodyPreflightV1<'a, 'tcx> {
     limits: SemanticMirLimitsV1,
     counts: &'a mut RawMirPreflightCountsV1,
     types: &'a mut BTreeMap<SemanticTypeIdentityV1, Ty<'tcx>>,
+    authenticated_closure_types: &'a BTreeSet<SemanticTypeIdentityV1>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -662,6 +664,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
     functions: Box<[RetainedSemanticFunctionProducerV1<'tcx>]>,
     roots: Box<[SemanticFunctionIdV1]>,
     identity_inventory_sha256: [u8; 32],
+    authenticated_closure_types: &BTreeSet<SemanticTypeIdentityV1>,
     debug_source_capture: DebugSourceCaptureRequestV2,
 ) -> Result<ProductionSemanticPreflightPlanV1<'tcx>, ProductionSemanticPreflightErrorV1> {
     let limits = SemanticMirLimitsV1::default();
@@ -764,6 +767,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
                                 instance: resolved,
                                 identities: canonical_function_identities_v1(tcx, resolved),
                                 terminal: u32::MAX,
+                                span: terminator.source_info.span,
                             });
                         }
                         Some(ProductionSemanticTerminalRuleV1::Reject(item)) => {
@@ -797,6 +801,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
                                                 tcx, resolved,
                                             ),
                                             terminal: u32::MAX,
+                                            span: terminator.source_info.span,
                                         });
                                         continue;
                                     }
@@ -933,6 +938,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
             limits,
             counts: &mut counts,
             types: &mut types,
+            authenticated_closure_types,
         };
         if let Err(rejection) = preflight.inspect_body() {
             return Err(materialize_rejection_v1(
@@ -982,6 +988,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
             limits,
             counts: &mut counts,
             types: &mut types,
+            authenticated_closure_types,
         };
         let site = RejectionSiteV1 {
             function: recipe.caller,
@@ -1175,7 +1182,18 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 match &**kind {
                     AggregateKind::Array(_) | AggregateKind::Tuple | AggregateKind::Adt(..) => {}
                     AggregateKind::Closure(..) => {
-                        return Err(reject("closure aggregate rvalue", site));
+                        let closure_ty = normalize_type_v1(
+                            self.tcx,
+                            self.instance,
+                            value.ty(&self.body.local_decls, self.tcx),
+                        )
+                        .map_err(|_| reject("closure aggregate type normalization", site))?;
+                        if !self
+                            .authenticated_closure_types
+                            .contains(&rustc_type_identity_v1(self.tcx, closure_ty))
+                        {
+                            return Err(reject("unauthenticated closure aggregate rvalue", site));
+                        }
                     }
                     AggregateKind::CoroutineClosure(..) => {
                         return Err(reject("coroutine-closure aggregate rvalue", site));
@@ -1495,7 +1513,16 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 }
                 TyKind::UnsafeBinder(..) => return Err(reject("unsafe-binder type", site)),
                 TyKind::Dynamic(..) => return Err(reject("dynamic trait-object type", site)),
-                TyKind::Closure(..) => return Err(reject("closure type", site)),
+                TyKind::Closure(_, arguments) => {
+                    if !self.authenticated_closure_types.contains(&identity) {
+                        return Err(reject("unauthenticated closure type", site));
+                    }
+                    let upvars = arguments.as_closure().upvar_tys();
+                    self.require_type_cardinality(upvars.len())?;
+                    for upvar in upvars {
+                        self.queue_type(&mut pending, upvar)?;
+                    }
+                }
                 TyKind::CoroutineClosure(..) => {
                     return Err(reject("coroutine-closure type", site));
                 }
@@ -2350,13 +2377,29 @@ fn build_terminal_producers_v1<'tcx>(
 }
 
 fn source_signature_v1<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> ty::FnSig<'tcx> {
-    tcx.normalize_erasing_regions(
-        TypingEnv::fully_monomorphized(),
-        tcx.instantiate_bound_regions_with_erased(
+    let typing_env = TypingEnv::fully_monomorphized();
+    let signature = match *instance.ty(tcx, typing_env).kind() {
+        ty::Closure(def_id, args) => {
+            let signature = tcx.instantiate_bound_regions_with_erased(args.as_closure().sig());
+            let environment = tcx.closure_env_ty(
+                Ty::new_closure(tcx, def_id, args),
+                args.as_closure().kind(),
+                tcx.lifetimes.re_erased,
+            );
+            tcx.mk_fn_sig(
+                std::iter::once(environment).chain(signature.inputs().iter().copied()),
+                signature.output(),
+                signature.c_variadic,
+                signature.safety,
+                signature.abi,
+            )
+        }
+        _ => tcx.instantiate_bound_regions_with_erased(
             tcx.fn_sig(instance.def_id())
                 .instantiate(tcx, instance.args),
         ),
-    )
+    };
+    tcx.normalize_erasing_regions(typing_env, signature)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3501,6 +3544,12 @@ const fn terminal_expansion_tag_for_schema_v1(
     schema: TerminalIdentitySchemaV1,
 ) -> u8 {
     match expansion {
+        ProductionTerminalExpansionV1::KernelContextIssue => 120,
+        ProductionTerminalExpansionV1::CapabilityGlobalBindReadOnly => 121,
+        ProductionTerminalExpansionV1::CapabilityGlobalBindDisjointWrite => 122,
+        ProductionTerminalExpansionV1::CapabilityGlobalLoad => 123,
+        ProductionTerminalExpansionV1::CapabilityGlobalStore => 124,
+        ProductionTerminalExpansionV1::Execution(terminal) => 125 + terminal.identity_tag(),
         ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::X) => 13,
         ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::Y) => 14,
         ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::Z) => 15,
@@ -3515,6 +3564,7 @@ const fn terminal_expansion_tag_for_schema_v1(
         ProductionTerminalExpansionV1::GridDimension(SemanticAxisV1::Z) => 24,
         ProductionTerminalExpansionV1::DisjointSliceLen => 25,
         ProductionTerminalExpansionV1::ThreadIndex1d => 0,
+        ProductionTerminalExpansionV1::Invocation3DIndex1D => 167,
         ProductionTerminalExpansionV1::ThreadIndexGet => 1,
         ProductionTerminalExpansionV1::DisjointSliceGetMut => 2,
         ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint => 3,

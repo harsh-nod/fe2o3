@@ -7,8 +7,8 @@
 #![allow(missing_docs)] // Generated typed-kernel modules lack rustdoc in V1.
 
 use fe2o3_device::{
-    Bf16MfmaAMatrix, Bf16MfmaBMatrix, DisjointSlice, F32AccumulatorFragment, Index1D, KernelError,
-    KernelResult, Matrix, Tiled2D, Wave64, WaveLane, kernel, thread,
+    ExclusiveReadWrite, Global, KernelContext, KernelError, KernelResult, ReadOnly, StrictIeee,
+    SubgroupWidth64, kernel,
 };
 
 /// Exact workgroup dimensions required by the wave64 matrix profile.
@@ -29,13 +29,14 @@ fn accessed_extent(rows: u32, columns: u32, stride: u32) -> u64 {
 #[kernel(
     typed,
     launch(required = [64, 1, 1], max = [64, 1, 1]),
-    control_flow(loop_bounds(4294967295))
+    control_flow(loop_bounds(4294967295, 4))
 )]
 #[allow(clippy::too_many_arguments)]
 pub fn gemm_autoresearch_v1(
-    a: &[u16],
-    b: &[u16],
-    mut c: DisjointSlice<f32, Tiled2D<Index1D, 64, 16, 16, 4>>,
+    context: KernelContext<'_>,
+    a: Global<'_, u16, ReadOnly>,
+    b: Global<'_, u16, ReadOnly>,
+    mut c: Global<'_, f32, ExclusiveReadWrite>,
     m: u32,
     n: u32,
     k: u32,
@@ -60,56 +61,71 @@ pub fn gemm_autoresearch_v1(
         return Err(KernelError::InvalidArgument);
     }
 
-    // Grid coordinates assign one Wave64 to one 16x16 output tile.
-    let thread_index = thread::index_1d();
-    let raw_index = thread_index.get();
-    let tiles_per_row = (n as usize + 15) / 16;
+    // Grid coordinates assign one 64-lane subgroup to one 16x16 output tile.
+    let invocation = context.invocation();
+    let workgroup_size = invocation.workgroup_size();
+    let grid_size = invocation.grid_size();
+    if workgroup_size.x() != 64
+        || workgroup_size.y() != 1
+        || workgroup_size.z() != 1
+        || grid_size.y() != 1
+        || grid_size.z() != 1
+    {
+        fe2o3_device::trap();
+    }
+    let tiles_per_row = (n as usize).div_ceil(16);
     if tiles_per_row == 0 {
         return Ok(());
     }
-    let tile = raw_index / 64;
+    let tile = invocation.workgroup_id().x() as usize;
     let tile_row = tile / tiles_per_row;
     let tile_column = tile % tiles_per_row;
+    let tile_rows = (m as usize).div_ceil(16);
+    let Some(tile_count) = tile_rows.checked_mul(tiles_per_row) else {
+        fe2o3_device::trap();
+    };
+    if tile >= tile_count {
+        return Ok(());
+    }
+    drop(invocation);
 
-    // Typed views centralize layout and padding; the output witness captures ownership.
-    let output_tile = thread_index.checked_tiled_2d::<64, 16, 16, 4>();
-    let a_matrix = Bf16MfmaAMatrix::row_major(a, 0, m as usize, k as usize, lda as usize)?;
-    let b_matrix = Bf16MfmaBMatrix::row_major(b, 0, k as usize, n as usize, ldb as usize)?;
-    let wave_lane = WaveLane::<Wave64>::current();
-    let matrix = Matrix::current();
+    let policy = context.numerical_policy::<StrictIeee>();
+    let lane = context.subgroup_lane::<SubgroupWidth64>();
+    let lane_index = lane.get() as usize;
+    #[allow(deprecated)]
+    let matrix = context.matrix();
+    let matrix = matrix.with_numerical_policy(&policy);
+    let a_matrix = matrix.bf16_a_global_row_major(&a, 0, m as usize, k as usize, lda as usize)?;
+    let b_matrix = matrix.bf16_b_global_row_major(&b, 0, k as usize, n as usize, ldb as usize)?;
     // All lanes traverse identical K tiles and keep the FP32 accumulator in registers.
-    let mut accumulator = F32AccumulatorFragment::zero(&wave_lane);
+    let mut accumulator = matrix.bf16_zero_accumulator(&lane);
     let mut phase = 0_usize;
     while phase < k as usize {
-        let lhs = a_matrix.load_m16k16(&wave_lane, tile_row * 16, phase);
-        let rhs = b_matrix.load_k16n16(&wave_lane, phase, tile_column * 16);
+        let lhs = a_matrix.load_m16k16(&lane, tile_row * 16, phase);
+        let rhs = b_matrix.load_k16n16(&lane, phase, tile_column * 16);
         accumulator = matrix.multiply_accumulate(lhs, rhs, accumulator);
         phase += 16;
     }
 
-    // The tiled capability clips M/N edges while proving unique ownership of valid C.
+    // The exact lane-to-element map is checked by the final output-injectivity analysis.
     let values = accumulator.into_values();
-    if let Some(output_tile) = output_tile {
-        if let Some(output) =
-            c.get_tiled_2d_mut(&output_tile, 0, m as usize, n as usize, ldc as usize)
-        {
-            *output = alpha * values[0] + beta * *output;
+    let output_column = tile_column * 16 + lane_index % 16;
+    let mut component = 0;
+    while component < 4 {
+        let output_row = tile_row * 16 + (lane_index / 16) * 4 + component;
+        if output_row < m as usize && output_column < n as usize {
+            let Some(index) = output_row
+                .checked_mul(ldc as usize)
+                .and_then(|offset| offset.checked_add(output_column))
+            else {
+                fe2o3_device::trap();
+            };
+            let previous = c.load(index).unwrap_or(0.0);
+            if !c.store(index, alpha * values[component] + beta * previous) {
+                fe2o3_device::trap();
+            }
         }
-        if let Some(output) =
-            c.get_tiled_2d_mut(&output_tile, 1, m as usize, n as usize, ldc as usize)
-        {
-            *output = alpha * values[1] + beta * *output;
-        }
-        if let Some(output) =
-            c.get_tiled_2d_mut(&output_tile, 2, m as usize, n as usize, ldc as usize)
-        {
-            *output = alpha * values[2] + beta * *output;
-        }
-        if let Some(output) =
-            c.get_tiled_2d_mut(&output_tile, 3, m as usize, n as usize, ldc as usize)
-        {
-            *output = alpha * values[3] + beta * *output;
-        }
+        component += 1;
     }
     Ok(())
 }

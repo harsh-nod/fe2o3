@@ -1,0 +1,19 @@
+error[E0451]: fields `physical`, `_lifetime`, `_element`, `_space`, `_role`, `_brand` and `_not_send_sync` of struct `CapabilityMemoryView` are private
+  --> tests/ui/fail/capability_memory_private_fields.rs:7:9
+   |
+ 6 |     CapabilityMemoryView {
+   |     -------------------- in this type
+ 7 |         physical,
+   |         ^^^^^^^^ private field
+ 8 |         _lifetime: Default::default(),
+   |         ^^^^^^^^^ private field
+ 9 |         _element: Default::default(),
+   |         ^^^^^^^^ private field
+10 |         _space: Default::default(),
+   |         ^^^^^^ private field
+11 |         _role: Default::default(),
+   |         ^^^^^ private field
+12 |         _brand: Default::default(),
+   |         ^^^^^^ private field
+13 |         _not_send_sync: Default::default(),
+   |         ^^^^^^^^^^^^^^ private field

@@ -1,0 +1,137 @@
+{
+  "argumentRoles": [
+    "input",
+    "input",
+    "output"
+  ],
+  "canaries": [
+    {
+      "argument": 2,
+      "bytes": "0x00e4404600e44046",
+      "offset": 16
+    }
+  ],
+  "checkApplicability": {
+    "canaries": {
+      "reason": null,
+      "status": "checked"
+    },
+    "padding": {
+      "reason": "physical ABI has no logical padding region",
+      "status": "not-applicable"
+    }
+  },
+  "compilerInputContractSha256": "321b1a80def8b27349b01703d9598c356ca679f786564432532a2de3d71e8bd9",
+  "expectedArguments": [
+    {
+      "bytes": "0x0000803f000000c000006040000080400000b6420000b842",
+      "element": "f32",
+      "kind": "buffer"
+    },
+    {
+      "bytes": "0x0000003f00000040000000bf000080400000a2420000a442",
+      "element": "f32",
+      "kind": "buffer"
+    },
+    {
+      "bytes": "0x0000c03f00000000000040400000004100e4404600e44046",
+      "element": "f32",
+      "kind": "buffer"
+    }
+  ],
+  "fixtureId": "gfx942-typed-vecadd-source",
+  "kernelSymbol": "vecadd",
+  "numericalPolicy": {
+    "mode": "exact-bits"
+  },
+  "oracle": {
+    "function": "fe2o3_vecadd::vecadd_cpu_oracle",
+    "inputSha256": "a6876aec0e91a8080cbc0d0652bebdd4fd4c39f0b79131a9bfd3d4eb4986ed86",
+    "kind": "existing-rust-cpu-reference-v1"
+  },
+  "oracleSuiteId": "cpu-reference-typed-vecadd",
+  "padding": [],
+  "physicalAbi": {
+    "arguments": [
+      {
+        "access": "read_only",
+        "element": "f32",
+        "kind": "buffer",
+        "name": "a"
+      },
+      {
+        "access": "read_only",
+        "element": "f32",
+        "kind": "buffer",
+        "name": "b"
+      },
+      {
+        "access": "read_write",
+        "element": "f32",
+        "kind": "buffer",
+        "name": "c"
+      }
+    ],
+    "schema": "fe2o3-physical-kernel-abi-v1",
+    "signatureSha256": "0a74b042fbe5753a65b789e953d280ebe48497d2acd0d1b27869b2f6e47366db",
+    "sourcePath": "examples/vecadd/src/lib.rs"
+  },
+  "productionExport": {
+    "coordinates": null,
+    "diagnostic": "FE2O3-TUTORIAL-PROBE-001: production exporter failed: crates/fe2o3-verifier/src/production_final_graph_functional_refinement_v1.rs:77:5: error[E0277]: `ProductionVerifiedFinalGraphV1` doesn't implement `std::fmt::Debug`: the trait `std::fmt::Debug` is not implemented for `ProductionVerifiedFinalGraphV1`",
+    "diagnosticCode": "FE2O3-TUTORIAL-PROBE-001",
+    "diagnosticIdentitySha256": "922f8aebc3ebd56ef760a1a0f6d271bbbf63f35cf4f6e2cd42b0f72096d6b938",
+    "identityContract": {
+      "rawContentField": "evidenceFiles[optimized-kir-v13].sha256",
+      "rawContentIdentity": "SHA-256(raw optimized KIR V13 bytes)",
+      "verifiedCanonicalKernelIrV13Fields": [
+        "productionEvidence.finalOptimizedKirSha256",
+        "graph.productionKirIdentitySha256",
+        "simulator.subjectSha256"
+      ],
+      "verifiedCanonicalKernelIrV13Identity": "domain-separated VerifiedCanonicalKernelIrV13 identity"
+    },
+    "stage": "exporter-build",
+    "status": "blocked"
+  },
+  "request": {
+    "arguments": [
+      {
+        "access": "read_only",
+        "alignment": 4,
+        "bytes": "0x0000803f000000c000006040000080400000b6420000b842",
+        "element": "f32",
+        "kind": "buffer"
+      },
+      {
+        "access": "read_only",
+        "alignment": 4,
+        "bytes": "0x0000003f00000040000000bf000080400000a2420000a442",
+        "element": "f32",
+        "kind": "buffer"
+      },
+      {
+        "access": "read_write",
+        "alignment": 4,
+        "bytes": "0x00e4404600e4404600e4404600e4404600e4404600e44046",
+        "element": "f32",
+        "kind": "buffer"
+      }
+    ],
+    "grid": [
+      4,
+      1,
+      1
+    ],
+    "kernel": "vecadd",
+    "schema": "fe2o3-simulation-request-v1",
+    "workgroup": [
+      64,
+      1,
+      1
+    ]
+  },
+  "schema": "fe2o3-tutorial-capability-simulation-fixture-v1",
+  "sourceClosureSha256": "698f7019da4de48c64e77b1eaf5398c668fb7820c2759826465601a5513b7f92",
+  "target": "gfx942"
+}

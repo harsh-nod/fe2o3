@@ -59,6 +59,37 @@ matches, canonical target agreement, a valid pair-binding identity, a valid term
 identity, and byte-for-byte canonical reconstruction. Truncation, trailing bytes, substitutions,
 and noncanonical encodings are rejected.
 
+`InertProductionCapabilityHandoffV5` is a separate exact-V13 carrier rather
+than a reinterpretation of V3. It retains the frozen V3 handoff, exact
+canonical KIR V13 bytes and native multi-root lineage, final graph epoch,
+kernel/root/target/launch subject, compiler policy, source-refinement receipt,
+capability obligations, target closure decisions, and final graph report.
+The final-graph report contains `InertProductionW4WitnessV5`, which validates
+and retains the exact bounded W4 domain, version, checksum, bytes, and native
+identity. This frozen payload is evidence only and cannot recreate the live
+move-only W4 witness.
+
+`InertSimulationBundleV8` is dependency-neutral custody of the exact canonical
+bytes and native content identity obtained from an already validated
+`VerifiedSimulationBundleV8`. It duplicates only the closed outer V8 envelope,
+section bounds, version, reserved-field, target, length, and native digest
+checks needed to retain those bytes safely without introducing a
+`fe2o3-kernel-ir` dependency. It does not claim to re-run KIR, source-map,
+semantic-MIR, or storage-map validation. The downstream sealed verifier must
+strictly decode the retained bytes as `VerifiedSimulationBundleV8` again and
+compare its native identity before admitting evidence.
+
+`InertProductionCapabilityTransactionV5` move-owns exactly one V5 handoff and
+one inert Bundle V8. Its distinct magic, domain, terminal identity, and fixed
+five-field canonical record reject omission, reordering, child substitution,
+downgrade, malformed lengths, and trailing bytes. This composite is the only
+input accepted by V5 completion. `InertProductionCapabilityResultV5` retains
+the complete composite while adding exact LLVM and object measurements, the
+established machine-refinement receipt, the complete capability-result
+association, and the native V5 proof owner. Thus completion cannot shed or
+replace Bundle V8 or the strict inert W4 payload. All carriers grant no
+authority by construction.
+
 The `Inert` prefix is a security boundary. Public construction can fully rehash any internally
 valid target-compatible capsule/module pair, including a cross-producer splice. Therefore this
 object establishes content identity only: it does not authenticate a producer, prove semantic

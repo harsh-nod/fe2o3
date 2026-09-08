@@ -623,7 +623,8 @@ fn first_retained_local_cause_v1(
             && matches!(
                 compiler_issued_bindings.get(&place.ty()),
                 Some(
-                    SemanticPromotedBindingV1::MathContext
+                    SemanticPromotedBindingV1::KernelContext
+                        | SemanticPromotedBindingV1::MathContext
                         | SemanticPromotedBindingV1::CollectiveContext
                         | SemanticPromotedBindingV1::MatrixContext
                         | SemanticPromotedBindingV1::WaveLane { .. }

@@ -49,6 +49,7 @@ pub(crate) struct TypedDescriptorRootV1 {
     logical_name: String,
     export_name: String,
     kernel_binding: KernelBindingIdV1,
+    generated_host_contract_identity: [u8; 32],
     arguments: TypedArgumentListV1<TypedDescriptorArgumentV1>,
     explicit_argument_bytes: u32,
     kernarg_alignment_bytes: u32,
@@ -66,6 +67,10 @@ impl TypedDescriptorRootV1 {
 
     pub(crate) const fn kernel_binding_bytes(&self) -> [u8; 32] {
         self.kernel_binding.as_bytes()
+    }
+
+    pub(crate) const fn generated_host_contract_identity(&self) -> [u8; 32] {
+        self.generated_host_contract_identity
     }
 
     pub(crate) const fn source_launch(&self) -> Option<&LaunchContract> {
@@ -238,6 +243,7 @@ pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
                         logical_name,
                         export_name: function.export_name.clone(),
                         kernel_binding,
+                        generated_host_contract_identity: generated_identity.as_bytes(),
                         arguments,
                         explicit_argument_bytes: u32::try_from(contract.abi().size()).map_err(
                             |_| {
@@ -1796,6 +1802,7 @@ mod tests {
             logical_name: "fixture".to_owned(),
             export_name: "kernel".to_owned(),
             kernel_binding: KernelBindingIdV1::from_bytes([binding; 32]),
+            generated_host_contract_identity: [binding.wrapping_add(1); 32],
             arguments: TypedArgumentListV1::new(arguments).unwrap(),
             explicit_argument_bytes,
             kernarg_alignment_bytes: 8,
@@ -1909,6 +1916,7 @@ mod tests {
             logical_name: logical_name.to_owned(),
             export_name: logical_name.to_owned(),
             kernel_binding: KernelBindingIdV1::from_bytes([binding; 32]),
+            generated_host_contract_identity: [binding.wrapping_add(1); 32],
             arguments: TypedArgumentListV1::new(arguments).unwrap(),
             explicit_argument_bytes,
             kernarg_alignment_bytes: 8,

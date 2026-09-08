@@ -28,6 +28,11 @@ readonly HYGIENE_DELTA_POLICY_TESTS="${REPO_ROOT}/scripts/tests/hygiene_delta_po
 readonly WORKSPACE_DEPENDENCY_POLICY_CHECKER="${REPO_ROOT}/scripts/workspace_dependency_policy.py"
 readonly WORKSPACE_DEPENDENCY_POLICY="${REPO_ROOT}/scripts/workspace-dependency-policy.json"
 readonly WORKSPACE_DEPENDENCY_POLICY_TESTS="${REPO_ROOT}/scripts/tests/workspace_dependency_policy.py"
+readonly TUTORIAL_KERNEL_MANIFEST_CHECKER="${REPO_ROOT}/scripts/tutorial_kernel_manifest.py"
+readonly TUTORIAL_KERNEL_MANIFEST_TESTS="${REPO_ROOT}/scripts/tests/tutorial_kernel_manifest.py"
+readonly TUTORIAL_CPU_REFERENCE_TESTS="${REPO_ROOT}/scripts/tests/tutorial-cpu-reference.sh"
+readonly TUTORIAL_SEMANTIC_SIMULATION_TESTS="${REPO_ROOT}/scripts/tests/tutorial_semantic_simulation.py"
+readonly TUTORIAL_SEMANTIC_QUALIFICATION_TESTS="${REPO_ROOT}/scripts/tests/tutorial_semantic_qualification.py"
 readonly PLIRON_DEPENDENCY_POLICY_CHECKER="${REPO_ROOT}/scripts/pliron_dependency_policy.py"
 readonly PLIRON_DEPENDENCY_POLICY_TESTS="${REPO_ROOT}/scripts/tests/pliron_dependency_policy.py"
 readonly STANDALONE_LOCKFILE_CHECKER="${REPO_ROOT}/scripts/check-standalone-lockfiles.sh"
@@ -1203,6 +1208,16 @@ run_parity_matrix_checks() {
 }
 
 run_generic_core() {
+  run_step tutorial-kernel-manifest \
+    python3 "${TUTORIAL_KERNEL_MANIFEST_CHECKER}"
+  run_step tutorial-kernel-manifest-tests \
+    python3 "${TUTORIAL_KERNEL_MANIFEST_TESTS}"
+  run_step tutorial-cpu-reference-tests \
+    bash "${TUTORIAL_CPU_REFERENCE_TESTS}"
+  run_step tutorial-semantic-simulation-tests \
+    python3 "${TUTORIAL_SEMANTIC_SIMULATION_TESTS}"
+  run_step tutorial-semantic-qualification-tests \
+    python3 "${TUTORIAL_SEMANTIC_QUALIFICATION_TESTS}"
   run_workspace_dependency_policy
   run_standalone_lockfiles
   run_runtime_pure_rust_policy

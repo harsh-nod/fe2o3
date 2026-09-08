@@ -27,7 +27,13 @@ fn default_doctor_is_a_host_independent_kfd_first_diagnostic() {
         "compiler-tools:",
         "runtime-libraries: HIP/HSA not-required-or-loaded",
         "source-export: extraction-only-no-compiler-or-hardware-authority",
-        "application-execution: unavailable worker-v3-application-route-unwired",
+        "worker-v3-application-route: unavailable",
+        "w7-v5-completion-join: unavailable",
+        "missing=connected-path-v5-admission,authenticated-prepared-transaction-and-live-w4-transfer,completed-owner-return-and-durable-load-carriage",
+        "compiler-execution-client-profile:",
+        "compiler-execution-supervisor-socket:",
+        "application-execution:",
+        "protected-verifier-peer-and-liveness=unprobed",
         "overall: diagnostics-complete",
     ] {
         assert!(stdout.contains(required), "missing `{required}`:\n{stdout}");
@@ -45,15 +51,17 @@ fn default_doctor_is_a_host_independent_kfd_first_diagnostic() {
 }
 
 #[test]
-fn execution_requirement_fails_at_the_worker_v3_boundary() {
+fn execution_requirement_rejects_until_the_protected_verifier_is_live() {
     let output = doctor(&["--require-execution"]);
-    assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("UTF-8 doctor report");
     let stderr = String::from_utf8(output.stderr).expect("UTF-8 doctor error");
-    assert!(
-        stdout.contains("application-execution: unavailable worker-v3-application-route-unwired")
-    );
-    assert!(stderr.contains("Worker V3 application route is not wired"));
+    assert!(!output.status.success(), "{stdout}");
+    assert!(stdout.contains("worker-v3-application-route: unavailable"));
+    assert!(stdout.contains("protected-verifier-peer-and-liveness=unprobed"));
+    assert!(stdout.contains("application-execution: unavailable route=unverified missing="));
+    assert!(stdout.contains("authenticated-live-protected-verifier"));
+    assert!(stdout.contains("w7-v5-completion-transfer"));
+    assert!(stderr.contains("execution remains unavailable"));
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use fe2o3_device::{Bf16, Bf16x2, DeviceMath, F16};
+use fe2o3_device::{Bf16, Bf16x2, F16, KernelContext, StrictIeee};
 use fe2o3_macros::kernel;
 
 #[inline(never)]
@@ -8,6 +8,7 @@ fn f16_add(lhs: F16, rhs: F16) -> F16 {
 
 #[kernel]
 pub fn half_math_kernel(
+    context: KernelContext<'_>,
     f16_lhs: F16,
     f16_rhs: F16,
     bf16_lhs: Bf16,
@@ -23,7 +24,9 @@ pub fn half_math_kernel(
     let f16_from_scalar = F16::from_f32(scalar);
     let _scalar_round_trip = f16_from_scalar.to_f32();
 
-    let math = DeviceMath::current();
+    let math = context.math();
+    let policy = context.numerical_policy::<StrictIeee>();
+    let math = math.with_numerical_policy(&policy);
     let _root = math.sqrt_f32(scalar);
     let _sine = math.sin_f32(scalar);
     let _packed_fma = math.mul_add_bf16x2(packed, packed, packed);

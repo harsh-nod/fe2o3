@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_779_513;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_846_425;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -115,10 +115,19 @@ pub enum SimulationKirWireVersionV1 {
     V9,
     V10,
     V11,
+    V12,
+    V13,
 }
 
 impl SimulationKirWireVersionV1 {
-    const ALL: [Self; 4] = [Self::V7, Self::V9, Self::V10, Self::V11];
+    const ALL: [Self; 6] = [
+        Self::V7,
+        Self::V9,
+        Self::V10,
+        Self::V11,
+        Self::V12,
+        Self::V13,
+    ];
     const COUNT: usize = Self::ALL.len();
 }
 
@@ -160,10 +169,14 @@ pub enum SimulationOperationSurfaceV1 {
     Unreachable = 31,
     /// Additive launch surface for one exact reachable dynamic LDS base.
     DynamicWorkgroupMemoryRequest = 32,
+    KernelContextIssue = 33,
+    GlobalCapabilityBind = 34,
+    GlobalCapabilityIndex = 35,
+    ExecutionCapability = 36,
 }
 
 impl SimulationOperationSurfaceV1 {
-    const ALL: [Self; 33] = [
+    const ALL: [Self; 37] = [
         Self::Constant,
         Self::Intrinsic,
         Self::MemoryIntrinsic,
@@ -197,8 +210,12 @@ impl SimulationOperationSurfaceV1 {
         Self::Return,
         Self::Unreachable,
         Self::DynamicWorkgroupMemoryRequest,
+        Self::KernelContextIssue,
+        Self::GlobalCapabilityBind,
+        Self::GlobalCapabilityIndex,
+        Self::ExecutionCapability,
     ];
-    const COUNT: usize = Self::DynamicWorkgroupMemoryRequest as usize + 1;
+    const COUNT: usize = Self::ExecutionCapability as usize + 1;
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -214,6 +231,7 @@ pub enum SimulationSemanticOwnerV1 {
     WorkgroupCooperative,
     WaveCooperative,
     ControlFlow,
+    CapabilityProjection,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -251,6 +269,7 @@ pub enum SimulationUnsupportedReasonCodeV1 {
     DynamicWorkgroupMemoryAmbiguousBases,
     DynamicWorkgroupMemoryAuthenticatedMinimum,
     DynamicWorkgroupMemoryExtentLayout,
+    LogicalCapabilityWireVersion,
 }
 
 impl UnsupportedFeatureV1 {
@@ -391,7 +410,12 @@ pub fn semantic_capability_matrix_v1() -> SimulationCapabilityMatrixV1 {
                 operation: "restrict_pointer_access",
                 from_access: "read_write",
                 to_access: "read_only",
-                capability: if kir_wire_version == SimulationKirWireVersionV1::V11 {
+                capability: if matches!(
+                    kir_wire_version,
+                    SimulationKirWireVersionV1::V11
+                        | SimulationKirWireVersionV1::V12
+                        | SimulationKirWireVersionV1::V13
+                ) {
                     SimulationCapabilityDispositionV1::Owned {
                         owner: SimulationSemanticOwnerV1::TypedMemory,
                         typed_rejections: &[
@@ -614,6 +638,26 @@ fn top_level_capability(
                 Reason::NonScalarMemory,
             ],
         ),
+        Surface::KernelContextIssue
+        | Surface::GlobalCapabilityBind
+        | Surface::GlobalCapabilityIndex
+            if matches!(
+                kir_wire_version,
+                SimulationKirWireVersionV1::V12 | SimulationKirWireVersionV1::V13
+            ) =>
+        {
+            owned(Owner::CapabilityProjection, &[])
+        }
+        Surface::ExecutionCapability if kir_wire_version == SimulationKirWireVersionV1::V13 => {
+            owned(Owner::CapabilityProjection, &[])
+        }
+        Surface::KernelContextIssue
+        | Surface::GlobalCapabilityBind
+        | Surface::GlobalCapabilityIndex
+        | Surface::ExecutionCapability => unsupported(Reason::LogicalCapabilityWireVersion),
+        Surface::Matrix if kir_wire_version == SimulationKirWireVersionV1::V13 => {
+            owned(Owner::WaveCooperative, &[])
+        }
         Surface::Matrix => owned(
             Owner::WaveCooperative,
             &[Reason::UnsupportedNumericalContract],
@@ -666,6 +710,14 @@ pub(crate) fn operation_surface_v1(operation: &OperationKind) -> SimulationOpera
         OperationKind::Gfx950LdsTranspose(_) => SimulationOperationSurfaceV1::Gfx950LdsTranspose,
         OperationKind::Wave(_) => SimulationOperationSurfaceV1::Wave,
         OperationKind::InlineAssembly(_) => SimulationOperationSurfaceV1::InlineAssembly,
+        OperationKind::KernelContextIssue(_) => SimulationOperationSurfaceV1::KernelContextIssue,
+        OperationKind::GlobalCapabilityBind(_) => {
+            SimulationOperationSurfaceV1::GlobalCapabilityBind
+        }
+        OperationKind::GlobalCapabilityIndex(_) => {
+            SimulationOperationSurfaceV1::GlobalCapabilityIndex
+        }
+        OperationKind::ExecutionCapability(_) => SimulationOperationSurfaceV1::ExecutionCapability,
     }
 }
 

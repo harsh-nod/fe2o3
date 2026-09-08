@@ -45,3 +45,17 @@ The only final frame is either an empty generic rejection or at most 64 KiB of o
 application-owned response bytes. Those bytes are hashed and session-bound, but the protocol does
 not interpret or authenticate them. No V2 frame is verification evidence by itself, and no frame
 grants theorem, load, launch, currentness, key-custody, or application authority.
+
+## Exact production capability carriage V5
+
+V5 is an additive outer protocol and does not reinterpret V1 or V2. Its Begin request embeds the
+complete frozen V1 request and binds the native V5 handoff, paired V3 handoff, transaction,
+attempt, sole slot, canonical KIR V13 graph and epoch, kernel/root/target/launch, target closure,
+W4 report, source-refinement receipt, compiler policy, and exact object measurement. Tagged fields,
+strict bounds, and a terminal domain-separated identity reject omission, reordering, downgrade,
+and truncation.
+
+A completed response additionally binds the genuine V5 result, machine-refinement receipt, object
+receipt, static association, and proof-owner identities. These records remain inert. A service
+must re-admit the transaction from local custody, and only a genuine completed transaction can
+construct the normal service completion response.

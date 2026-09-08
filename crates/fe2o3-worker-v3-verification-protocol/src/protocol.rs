@@ -41,6 +41,8 @@ pub const MAX_WORKER_V3_VERIFICATION_ENTRY_NAME_BYTES_V1: usize = MAX_NAME_BYTES
 /// Maximum exact V2 load-envelope payload length accepted by a request descriptor.
 pub const MAX_WORKER_V3_VERIFICATION_ENVELOPE_FD_BYTES_V1: u64 =
     MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2 as u64;
+/// Maximum exact prepublication proof package accepted by the V5 protected verifier.
+pub const MAX_WORKER_V3_VERIFICATION_PROTECTED_EVIDENCE_FD_BYTES_V5: u64 = 1024 * 1024 * 1024;
 /// Maximum exact finalized-HSACO payload length accepted by a request descriptor.
 pub const MAX_WORKER_V3_VERIFICATION_HSACO_FD_BYTES_V1: u64 = MAX_HSACO_BYTES as u64;
 /// Maximum canonical request frame length.
@@ -100,6 +102,8 @@ pub enum WorkerV3VerificationFdPayloadKindV1 {
     LoadEnvelopeV2,
     /// Exact finalized HSACO bytes at descriptor ordinal one.
     FinalizedHsaco,
+    /// Canonical prepublication handoff, Bundle V8, #213 owner, and #214 checker evidence.
+    ProtectedCompletionEvidenceV5,
 }
 
 impl WorkerV3VerificationFdPayloadKindV1 {
@@ -107,6 +111,7 @@ impl WorkerV3VerificationFdPayloadKindV1 {
         match self {
             Self::LoadEnvelopeV2 => 1,
             Self::FinalizedHsaco => 2,
+            Self::ProtectedCompletionEvidenceV5 => 3,
         }
     }
 
@@ -114,6 +119,7 @@ impl WorkerV3VerificationFdPayloadKindV1 {
         match tag {
             1 => Some(Self::LoadEnvelopeV2),
             2 => Some(Self::FinalizedHsaco),
+            3 => Some(Self::ProtectedCompletionEvidenceV5),
             _ => None,
         }
     }
@@ -123,6 +129,7 @@ impl WorkerV3VerificationFdPayloadKindV1 {
         match self {
             Self::LoadEnvelopeV2 => 0,
             Self::FinalizedHsaco => 1,
+            Self::ProtectedCompletionEvidenceV5 => 0,
         }
     }
 
@@ -131,6 +138,9 @@ impl WorkerV3VerificationFdPayloadKindV1 {
         match self {
             Self::LoadEnvelopeV2 => MAX_WORKER_V3_VERIFICATION_ENVELOPE_FD_BYTES_V1,
             Self::FinalizedHsaco => MAX_WORKER_V3_VERIFICATION_HSACO_FD_BYTES_V1,
+            Self::ProtectedCompletionEvidenceV5 => {
+                MAX_WORKER_V3_VERIFICATION_PROTECTED_EVIDENCE_FD_BYTES_V5
+            }
         }
     }
 }
@@ -288,6 +298,19 @@ impl WorkerV3VerificationFdPayloadDescriptorV1 {
         Self::new(
             WorkerV3VerificationFdPayloadKindV1::FinalizedHsaco,
             1,
+            byte_len,
+            sha256,
+        )
+    }
+
+    /// Constructs a V5 prepublication evidence descriptor at fd ordinal zero.
+    pub fn protected_completion_evidence_v5(
+        byte_len: u64,
+        sha256: [u8; SHA256_BYTES],
+    ) -> Result<Self, WorkerV3VerificationProtocolErrorV1> {
+        Self::new(
+            WorkerV3VerificationFdPayloadKindV1::ProtectedCompletionEvidenceV5,
+            0,
             byte_len,
             sha256,
         )

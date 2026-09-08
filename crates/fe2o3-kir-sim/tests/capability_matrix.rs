@@ -62,7 +62,7 @@ fn matrix_is_complete_unique_bounded_and_authority_free() {
 }
 
 #[test]
-fn pointer_access_restriction_is_typed_memory_owned_only_in_v11() {
+fn pointer_access_restriction_is_typed_memory_owned_from_v11() {
     let matrix = semantic_capability_matrix_v1();
     for profile in matrix
         .pointer_rows
@@ -94,6 +94,30 @@ fn pointer_access_restriction_is_typed_memory_owned_only_in_v11() {
                 .find(|row| {
                     row.profile == profile
                         && row.kir_wire_version == SimulationKirWireVersionV1::V11
+                })
+                .unwrap()
+                .capability,
+            SimulationCapabilityDispositionV1::Owned { .. }
+        ));
+        assert!(matches!(
+            matrix
+                .pointer_rows
+                .iter()
+                .find(|row| {
+                    row.profile == profile
+                        && row.kir_wire_version == SimulationKirWireVersionV1::V12
+                })
+                .unwrap()
+                .capability,
+            SimulationCapabilityDispositionV1::Owned { .. }
+        ));
+        assert!(matches!(
+            matrix
+                .pointer_rows
+                .iter()
+                .find(|row| {
+                    row.profile == profile
+                        && row.kir_wire_version == SimulationKirWireVersionV1::V13
                 })
                 .unwrap()
                 .capability,
@@ -186,7 +210,7 @@ fn f32_wave_ownership_is_explicitly_additive_v9_and_v10() {
 }
 
 #[test]
-fn matrix_lds_and_v9_transpose_ownership_keep_numerical_rejection_explicit() {
+fn matrix_and_v9_transpose_ownership_are_explicit() {
     let matrix = semantic_capability_matrix_v1();
     for profile in matrix
         .top_level_rows
@@ -210,6 +234,8 @@ fn matrix_lds_and_v9_transpose_ownership_keep_numerical_rejection_explicit() {
             SimulationKirWireVersionV1::V7,
             SimulationKirWireVersionV1::V9,
             SimulationKirWireVersionV1::V10,
+            SimulationKirWireVersionV1::V11,
+            SimulationKirWireVersionV1::V12,
         ] {
             assert!(matches!(
                 capability(version, SimulationOperationSurfaceV1::Matrix),
@@ -222,6 +248,16 @@ fn matrix_lds_and_v9_transpose_ownership_keep_numerical_rejection_explicit() {
         }
         assert!(matches!(
             capability(
+                SimulationKirWireVersionV1::V13,
+                SimulationOperationSurfaceV1::Matrix
+            ),
+            SimulationCapabilityDispositionV1::Owned {
+                typed_rejections,
+                ..
+            } if typed_rejections.is_empty()
+        ));
+        assert!(matches!(
+            capability(
                 SimulationKirWireVersionV1::V7,
                 SimulationOperationSurfaceV1::Gfx950LdsTranspose
             ),
@@ -232,6 +268,9 @@ fn matrix_lds_and_v9_transpose_ownership_keep_numerical_rejection_explicit() {
         for version in [
             SimulationKirWireVersionV1::V9,
             SimulationKirWireVersionV1::V10,
+            SimulationKirWireVersionV1::V11,
+            SimulationKirWireVersionV1::V12,
+            SimulationKirWireVersionV1::V13,
         ] {
             assert!(matches!(
                 capability(version, SimulationOperationSurfaceV1::Gfx950LdsTranspose),
@@ -241,6 +280,100 @@ fn matrix_lds_and_v9_transpose_ownership_keep_numerical_rejection_explicit() {
                 } if typed_rejections.is_empty()
             ));
         }
+    }
+}
+
+#[test]
+fn logical_capability_projection_is_owned_only_by_its_exact_wire_versions() {
+    let matrix = semantic_capability_matrix_v1();
+    for profile in matrix
+        .top_level_rows
+        .iter()
+        .map(|row| row.profile)
+        .collect::<BTreeSet<_>>()
+    {
+        for operation in [
+            SimulationOperationSurfaceV1::KernelContextIssue,
+            SimulationOperationSurfaceV1::GlobalCapabilityBind,
+            SimulationOperationSurfaceV1::GlobalCapabilityIndex,
+        ] {
+            for version in [
+                SimulationKirWireVersionV1::V7,
+                SimulationKirWireVersionV1::V9,
+                SimulationKirWireVersionV1::V10,
+                SimulationKirWireVersionV1::V11,
+            ] {
+                assert!(matches!(
+                    matrix
+                        .top_level_rows
+                        .iter()
+                        .find(|row| {
+                            row.profile == profile
+                                && row.kir_wire_version == version
+                                && row.operation == operation
+                        })
+                        .unwrap()
+                        .capability,
+                    SimulationCapabilityDispositionV1::Unsupported {
+                        reason: SimulationUnsupportedReasonCodeV1::LogicalCapabilityWireVersion,
+                    }
+                ));
+            }
+            for version in [
+                SimulationKirWireVersionV1::V12,
+                SimulationKirWireVersionV1::V13,
+            ] {
+                assert!(matches!(
+                    matrix
+                        .top_level_rows
+                        .iter()
+                        .find(|row| {
+                            row.profile == profile
+                                && row.kir_wire_version == version
+                                && row.operation == operation
+                        })
+                        .unwrap()
+                        .capability,
+                    SimulationCapabilityDispositionV1::Owned { .. }
+                ));
+            }
+        }
+        for version in [
+            SimulationKirWireVersionV1::V7,
+            SimulationKirWireVersionV1::V9,
+            SimulationKirWireVersionV1::V10,
+            SimulationKirWireVersionV1::V11,
+            SimulationKirWireVersionV1::V12,
+        ] {
+            assert!(matches!(
+                matrix
+                    .top_level_rows
+                    .iter()
+                    .find(|row| {
+                        row.profile == profile
+                            && row.kir_wire_version == version
+                            && row.operation == SimulationOperationSurfaceV1::ExecutionCapability
+                    })
+                    .unwrap()
+                    .capability,
+                SimulationCapabilityDispositionV1::Unsupported {
+                    reason: SimulationUnsupportedReasonCodeV1::LogicalCapabilityWireVersion,
+                }
+            ));
+        }
+        assert!(matches!(
+            matrix
+                .top_level_rows
+                .iter()
+                .find(|row| {
+                    row.profile == profile
+                        && row.kir_wire_version == SimulationKirWireVersionV1::V13
+                        && row.operation == SimulationOperationSurfaceV1::ExecutionCapability
+                })
+                .unwrap()
+                .capability,
+            SimulationCapabilityDispositionV1::Owned { .. }
+        ));
     }
 }
 

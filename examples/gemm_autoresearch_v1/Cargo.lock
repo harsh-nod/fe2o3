@@ -272,8 +272,11 @@ dependencies = [
 name = "dialect-gpu"
 version = "0.1.0"
 dependencies = [
+ "dialect-kernel",
+ "fe2o3-kernel-ir",
  "fe2o3-pliron-owner-core",
  "pliron",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -389,11 +392,13 @@ name = "fe2o3-amdgcn-model"
 version = "0.1.0"
 dependencies = [
  "fe2o3-amd-target",
+ "fe2o3-compiler-lineage",
  "fe2o3-kernel-analysis",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
  "fe2o3-kernel-opt",
  "fe2o3-llvm-handoff",
+ "fe2o3-target-spec",
  "sha2 0.11.0",
 ]
 
@@ -413,8 +418,10 @@ version = "0.1.0"
 name = "fe2o3-artifact-transaction"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "fe2o3-build-authority",
  "fe2o3-compiler-ffi",
+ "fe2o3-compiler-lineage",
  "fe2o3-rustc-invocation",
  "libc",
  "rustix",
@@ -479,6 +486,7 @@ dependencies = [
  "fe2o3-amd-target",
  "fe2o3-compiler-lineage",
  "fe2o3-kernel-descriptor",
+ "fe2o3-proof-contracts",
  "reserved-fe2o3-symbols",
  "sha2 0.11.0",
 ]
@@ -490,6 +498,7 @@ dependencies = [
  "fe2o3-amd-target",
  "fe2o3-build-authority",
  "fe2o3-kernel-descriptor",
+ "fe2o3-proof-contracts",
  "fe2o3-rustc-invocation",
  "sha2 0.11.0",
 ]
@@ -568,18 +577,24 @@ dependencies = [
  "fe2o3-aql",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
+ "fe2o3-compiler-closure-capability",
  "fe2o3-compiler-execution-client",
+ "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-ffi",
+ "fe2o3-compiler-lineage",
  "fe2o3-device",
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
  "fe2o3-kfd",
+ "fe2o3-proof-contracts",
  "fe2o3-runtime",
  "fe2o3-runtime-protocol",
  "fe2o3-service-host",
  "fe2o3-verifier",
+ "fe2o3-worker-v3-verification-client",
+ "fe2o3-worker-v3-verification-protocol",
  "libc",
  "reserved-fe2o3-symbols",
  "rustix",
@@ -629,8 +644,10 @@ dependencies = [
  "dialect-gpu",
  "dialect-kernel",
  "dialect-proof",
+ "fe2o3-compiler-lineage",
  "fe2o3-kernel-ir",
  "fe2o3-pliron-owner-core",
+ "fe2o3-target-spec",
  "pliron",
  "sha2 0.11.0",
 ]
@@ -657,6 +674,7 @@ name = "fe2o3-kernel-opt"
 version = "0.1.0"
 dependencies = [
  "dialect-gpu",
+ "fe2o3-kernel-analysis",
  "fe2o3-kernel-ir",
  "fe2o3-pliron",
 ]
@@ -716,6 +734,7 @@ name = "fe2o3-macros"
 version = "0.1.0"
 dependencies = [
  "fe2o3-artifacts",
+ "fe2o3-rustc-front",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
@@ -747,6 +766,7 @@ dependencies = [
  "fe2o3-mir-model",
  "fe2o3-pliron-owner-core",
  "fe2o3-proof-contracts",
+ "fe2o3-target-spec",
  "pliron",
  "sha2 0.11.0",
 ]
@@ -782,6 +802,9 @@ dependencies = [
 [[package]]
 name = "fe2o3-proof-contracts"
 version = "0.1.0"
+dependencies = [
+ "sha2 0.11.0",
+]
 
 [[package]]
 name = "fe2o3-runtime"
@@ -871,6 +894,7 @@ dependencies = [
  "fe2o3-amd-target",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
+ "fe2o3-compiler-ffi",
  "fe2o3-compiler-lineage",
  "fe2o3-contracts",
  "fe2o3-functional-proof",
@@ -886,6 +910,29 @@ dependencies = [
  "sha2 0.11.0",
  "syn 2.0.119",
  "toml",
+]
+
+[[package]]
+name = "fe2o3-worker-v3-verification-client"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-artifact-transaction",
+ "fe2o3-compiler-execution-client",
+ "fe2o3-kernel-ir",
+ "fe2o3-runtime-protocol",
+ "fe2o3-worker-v3-verification-protocol",
+ "rustix",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-worker-v3-verification-protocol"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-hsaco",
+ "fe2o3-kernel-descriptor",
+ "fe2o3-runtime-protocol",
+ "sha2 0.11.0",
 ]
 
 [[package]]

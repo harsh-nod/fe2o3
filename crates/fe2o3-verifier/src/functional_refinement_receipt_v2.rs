@@ -1376,6 +1376,8 @@ impl Error for FunctionalRefinementVerusExecutionErrorV2 {}
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, process::Command};
+
     use super::*;
     use dialect_kernel::SemanticBinaryKindAttr;
     use fe2o3_functional_proof::SafeReferenceKindV2;
@@ -1542,6 +1544,73 @@ mod tests {
         .unwrap()
     }
 
+    fn kda_delta_transition_kernel(wrong_sign: bool) -> ProductionRankedKernelV1 {
+        let scalar = ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 32,
+        };
+        let symbol = |symbol| ProductionSemanticExpressionV2::Symbol { symbol, scalar };
+        let binary = |operation, lhs, rhs| ProductionSemanticExpressionV2::Binary {
+            operation,
+            scalar,
+            overflow: ProductionOverflowContractV2::Wrapping,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        };
+        let state = symbol(0);
+        let delta = symbol(1);
+        let correction = symbol(2);
+        let expanded = binary(
+            ProductionSemanticBinaryOpV2::Add,
+            state.clone(),
+            delta.clone(),
+        );
+        let actual = binary(
+            if wrong_sign {
+                ProductionSemanticBinaryOpV2::Add
+            } else {
+                ProductionSemanticBinaryOpV2::Subtract
+            },
+            expanded,
+            correction.clone(),
+        );
+        let reference = binary(
+            ProductionSemanticBinaryOpV2::Add,
+            state,
+            binary(ProductionSemanticBinaryOpV2::Subtract, delta, correction),
+        );
+        let actual_id = ProductionRankedValueIdV1::new(0);
+        let reference_id = ProductionRankedValueIdV1::new(1);
+        let local = ProductionRankedValueV1::Local;
+        ProductionRankedKernelV1::new(
+            "kda_delta_transition",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: actual_id,
+                        expression: actual,
+                        numerical_contract:
+                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                    },
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: reference_id,
+                        expression: reference,
+                        numerical_contract:
+                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                    },
+                    ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+                        actual: local(actual_id),
+                        expected: local(reference_id),
+                        subjects: subjects(),
+                    },
+                ],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap()
+    }
+
     fn wrapping_bitvector_kernel(expected_bits: u64) -> ProductionRankedKernelV1 {
         let scalar = ProductionSemanticScalarTypeV2::Integer {
             signed: false,
@@ -1639,6 +1708,39 @@ mod tests {
             positive_binding.normalized_obligation_effect_ir_hash(),
             mutated_binding.normalized_obligation_effect_ir_hash(),
         );
+    }
+
+    #[test]
+    fn pinned_rust_verify_accepts_ir_derived_kda_transition_and_rejects_wrong_sign() {
+        let rust_verify = std::env::var_os("FE2O3_PINNED_RUST_VERIFY").unwrap_or_else(|| {
+            "/home/harsh/.cache/fe2o3-verus-0.2026.08.02/verus-x86-linux/verus".into()
+        });
+        assert!(
+            std::path::Path::new(&rust_verify).is_file(),
+            "the reviewed pinned rust_verify executable is mandatory: {}",
+            std::path::Path::new(&rust_verify).display(),
+        );
+        let directory =
+            std::env::temp_dir().join(format!("fe2o3-ir-derived-kda-verus-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        for (name, kernel, expected_success) in [
+            ("correct", kda_delta_transition_kernel(false), true),
+            ("wrong-sign", kda_delta_transition_kernel(true), false),
+        ] {
+            let (_, source) =
+                generate_ranked_functional_refinement_proof_v2(&kernel, 0, 2, subjects()).unwrap();
+            let path = directory.join(format!("{name}.rs"));
+            fs::write(&path, source.source()).unwrap();
+            let output = Command::new(&rust_verify).arg(&path).output().unwrap();
+            assert_eq!(
+                output.status.success(),
+                expected_success,
+                "{name} rust_verify result differed; stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

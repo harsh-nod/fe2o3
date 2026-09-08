@@ -1,4 +1,30 @@
-error[E0133]: call to unsafe function `WaveLane::<Width>::from_raw` is unsafe and requires unsafe block
+warning: use of deprecated type alias `fe2o3_device::Wave32`: use SubgroupWidth32; target legalization still checks the exact width
+ --> tests/ui/fail/wave_lane_safe_forgery.rs:1:20
+  |
+1 | use fe2o3_device::{Wave32, WaveLane};
+  |                    ^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/wave_lane_safe_forgery.rs:1:28
+  |
+1 | use fe2o3_device::{Wave32, WaveLane};
+  |                            ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/wave_lane_safe_forgery.rs:4:13
+  |
+4 |     let _ = WaveLane::<Wave32>::from_raw(0);
+  |             ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::Wave32`: use SubgroupWidth32; target legalization still checks the exact width
+ --> tests/ui/fail/wave_lane_safe_forgery.rs:4:24
+  |
+4 |     let _ = WaveLane::<Wave32>::from_raw(0);
+  |                        ^^^^^^
+
+error[E0133]: call to unsafe function `SubgroupLane::<Width>::from_raw` is unsafe and requires unsafe block
  --> tests/ui/fail/wave_lane_safe_forgery.rs:4:13
   |
 4 |     let _ = WaveLane::<Wave32>::from_raw(0);

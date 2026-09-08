@@ -1,11 +1,10 @@
-//! Ordinary-Rust `u32` acceptance entry for the neutral reduction contract.
+//! Attributed `u32` reduction using the shared capability source shape.
 
-use fe2o3_device::{
-    DisjointSlice, DynamicLds, GridExclusive, WorkgroupCollectives, WorkgroupLdsScope, kernel,
-    thread,
-};
+use fe2o3_device::{DisjointWrite, Global, Index1D, KernelContext, ReadOnly, kernel};
 
-/// Reduces one exact 64-element `u32` row through target-neutral LDS lowering.
+use crate::capability_collectives::execute_workgroup_collectives_v1;
+
+/// Reduces one exact 64-element `u32` row.
 #[kernel(
     typed,
     launch(
@@ -15,37 +14,27 @@ use fe2o3_device::{
     )
 )]
 pub fn lds_publish_read_reduce_u32_v1(
-    values: &[u32],
-    mut output: DisjointSlice<u32, GridExclusive>,
+    mut context: KernelContext<'_>,
+    values: Global<'_, u32, ReadOnly>,
+    mut output: Global<'_, u32, DisjointWrite<Index1D>>,
 ) {
-    let lane = thread::thread_idx_x();
-    let launch_extent = thread::launch_extent_1d();
-    if values.len() != 64
-        || output.len() != 1
-        || launch_extent != 64
-        || thread::block_dim_x() != 64
-        || thread::block_dim_y() != 1
-        || thread::block_dim_z() != 1
-        || thread::thread_idx_y() != 0
-        || thread::thread_idx_z() != 0
-        || thread::block_idx_x() != 0
-        || thread::block_idx_y() != 0
-        || thread::block_idx_z() != 0
-    {
+    let invocation = context.invocation();
+    let lane = invocation.index_1d().get();
+    if values.len() != 64 || output.len() != 1 {
         fe2o3_device::trap();
     }
-    let mut lds_scope = WorkgroupLdsScope::current();
-    let lds = DynamicLds::<u32>::exact_current::<64>(&mut lds_scope);
-    let context = WorkgroupCollectives::current();
-    let sum = context.reduce_sum_portable(lds, values[lane as usize]);
-    if lane == 0 {
-        let Some(leader) = thread::grid_leader() else {
-            fe2o3_device::trap();
-        };
-        if let Some(slot) = output.get_mut_exclusive(&leader, 0) {
-            *slot = sum;
-        } else {
-            fe2o3_device::trap();
-        }
+    let Some(value) = values.load(lane) else {
+        fe2o3_device::trap();
+    };
+    let result = context.with_workgroup(|workgroup| {
+        execute_workgroup_collectives_v1::<u32, 64, _>(workgroup, value)
+    });
+    if lane == 0
+        && !output.store(
+            context.invocation().index_1d().into_disjoint(),
+            result.reduction,
+        )
+    {
+        fe2o3_device::trap();
     }
 }

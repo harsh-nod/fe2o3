@@ -208,7 +208,17 @@ pub(crate) enum PointerKind {
 pub(crate) struct PointerLayoutFacts {
     pub(crate) kind: PointerKind,
     pub(crate) address_space: u32,
-    pub(crate) pointee: Box<TypeLayoutFacts>,
+    pub(crate) pointee: PointeeLayoutFacts,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PointeeLayoutFacts {
+    Sized(Box<TypeLayoutFacts>),
+    Slice {
+        rust_type: String,
+        abi_alignment_bytes: u64,
+        element: Box<TypeLayoutFacts>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -691,12 +701,69 @@ impl<'tcx> Extractor<'tcx> {
             (false, Mutability::Not) => PointerKind::ConstRaw,
             (false, Mutability::Mut) => PointerKind::MutRaw,
         };
-        let pointee =
-            self.extract_type(pointee, format!("{path}.pointee"), depth.saturating_add(1))?;
+        let pointee_path = format!("{path}.pointee");
+        let pointee = match *pointee.kind() {
+            TyKind::Slice(element) => {
+                let pointee_depth = depth.saturating_add(1);
+                self.reserve(
+                    &pointee_path,
+                    LimitKind::Depth,
+                    pointee_depth,
+                    self.limits.max_depth,
+                )?;
+                self.nodes = self.nodes.checked_add(1).ok_or_else(|| {
+                    GeneralLayoutExtractError::BoundExceeded {
+                        path: pointee_path.clone(),
+                        kind: LimitKind::Nodes,
+                        actual: u64::MAX,
+                        limit: self.limits.max_nodes as u64,
+                    }
+                })?;
+                self.reserve(
+                    &pointee_path,
+                    LimitKind::Nodes,
+                    self.nodes,
+                    self.limits.max_nodes,
+                )?;
+                let slice_layout = self.layout_cx.layout_of(pointee).map_err(|error| {
+                    GeneralLayoutExtractError::Layout {
+                        path: pointee_path.clone(),
+                        rust_type: type_name(pointee),
+                        detail: error.to_string(),
+                    }
+                })?;
+                if !slice_layout.backend_repr.is_unsized() {
+                    return Err(GeneralLayoutExtractError::InconsistentLayout {
+                        path: pointee_path,
+                        detail: "slice pointee has a sized backend representation".to_owned(),
+                    });
+                }
+                PointeeLayoutFacts::Slice {
+                    rust_type: type_name(pointee),
+                    abi_alignment_bytes: slice_layout.align.abi.bytes(),
+                    element: Box::new(self.extract_type(
+                        element,
+                        format!("{path}.pointee.element"),
+                        pointee_depth.saturating_add(1),
+                    )?),
+                }
+            }
+            TyKind::Str | TyKind::Dynamic(..) | TyKind::Foreign(..) => {
+                return Err(GeneralLayoutExtractError::Unsized {
+                    path: pointee_path,
+                    rust_type: type_name(pointee),
+                });
+            }
+            _ => PointeeLayoutFacts::Sized(Box::new(self.extract_type(
+                pointee,
+                pointee_path,
+                depth.saturating_add(1),
+            )?)),
+        };
         Ok(PointerLayoutFacts {
             kind,
             address_space,
-            pointee: Box::new(pointee),
+            pointee,
         })
     }
 
@@ -1092,9 +1159,9 @@ mod tests {
 
     use super::{
         AdtKind, EnumTagEncodingFacts, ExtractionLimits, GeneralLayoutExtractError, LimitKind,
-        RelocationKind, SourceScalarKind, TypeLayoutFacts, TypeLayoutKind, extract_general_layout,
-        extract_general_layout_with_limits, memory_order_from_source_indices,
-        validate_array_extent, validate_field_extent,
+        PointeeLayoutFacts, RelocationKind, SourceScalarKind, TypeLayoutFacts, TypeLayoutKind,
+        extract_general_layout, extract_general_layout_with_limits,
+        memory_order_from_source_indices, validate_array_extent, validate_field_extent,
     };
 
     const FIXTURE_SOURCE: &str = r#"
@@ -1134,6 +1201,7 @@ struct Node {
 }
 
 static BYTE: u8 = 7;
+static SLICE: &[u8] = &[];
 const ROOT: Root = Root {
     pair: Pair { byte: 1, word: 2 },
     values: [3, 4, 5],
@@ -1154,6 +1222,7 @@ const FUNCTION: fn() = target;
         relocation: Result<TypeLayoutFacts, GeneralLayoutExtractError>,
         function_item: Result<TypeLayoutFacts, GeneralLayoutExtractError>,
         unsized_value: Result<TypeLayoutFacts, GeneralLayoutExtractError>,
+        slice_reference: Result<TypeLayoutFacts, GeneralLayoutExtractError>,
         unmonomorphized: Result<TypeLayoutFacts, GeneralLayoutExtractError>,
         unit: Result<TypeLayoutFacts, GeneralLayoutExtractError>,
         bounded: Result<TypeLayoutFacts, GeneralLayoutExtractError>,
@@ -1171,6 +1240,7 @@ const FUNCTION: fn() = target;
             let relocation = local_item_type(tcx, "FUNCTION");
             let function_item = local_item_type(tcx, "target");
             let slice = Ty::new_slice(tcx, tcx.types.u8);
+            let slice_reference = local_item_type(tcx, "SLICE");
             let parameter = Ty::new_param(tcx, 0, Symbol::intern("T"));
             self.results = Some(DriverResults {
                 root: extract_general_layout(tcx, root),
@@ -1178,6 +1248,7 @@ const FUNCTION: fn() = target;
                 relocation: extract_general_layout(tcx, relocation),
                 function_item: extract_general_layout(tcx, function_item),
                 unsized_value: extract_general_layout(tcx, slice),
+                slice_reference: extract_general_layout(tcx, slice_reference),
                 unmonomorphized: extract_general_layout(tcx, parameter),
                 unit: extract_general_layout(tcx, tcx.types.unit),
                 bounded: extract_general_layout_with_limits(
@@ -1418,6 +1489,23 @@ const FUNCTION: fn() = target;
         assert!(matches!(
             results.unsized_value,
             Err(GeneralLayoutExtractError::Unsized { .. })
+        ));
+        let slice_reference = results.slice_reference.unwrap();
+        let TypeLayoutKind::Pointer(pointer) = slice_reference.kind else {
+            panic!("slice reference was not a pointer");
+        };
+        let PointeeLayoutFacts::Slice {
+            abi_alignment_bytes,
+            element,
+            ..
+        } = pointer.pointee
+        else {
+            panic!("slice reference did not retain a DST slice pointee");
+        };
+        assert_eq!(abi_alignment_bytes, 1);
+        assert!(matches!(
+            element.kind,
+            TypeLayoutKind::Scalar(SourceScalarKind::UnsignedInteger { bits: 8 })
         ));
         assert!(matches!(
             results.unmonomorphized,

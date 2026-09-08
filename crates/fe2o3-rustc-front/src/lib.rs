@@ -5,6 +5,7 @@ mod control_flow_v1;
 mod decode;
 mod encode;
 mod error;
+mod kernel_context_contract_v1;
 mod kernel_contract_v1;
 mod kernel_resource_contract_v1;
 mod model;
@@ -25,6 +26,22 @@ pub use control_flow_v1::{
 pub use decode::decode_frontend_unit_v1;
 pub use encode::{FRONTEND_UNIT_MAGIC_V1, FRONTEND_UNIT_VERSION_V1, encode_frontend_unit_v1};
 pub use error::{DecodeError, ValidationError};
+pub use kernel_context_contract_v1::{
+    KERNEL_CONTEXT_FRONTEND_CONTRACT_MAGIC_V1, KERNEL_CONTEXT_FRONTEND_CONTRACT_VERSION_V1,
+    KERNEL_CONTEXT_FRONTEND_REGISTRATION_KIND_V1, KERNEL_CONTEXT_FRONTEND_REGISTRATION_MAGIC_V1,
+    KERNEL_CONTEXT_FRONTEND_REGISTRATION_PREFIX_V1,
+    KERNEL_CONTEXT_FRONTEND_REGISTRATION_VERSION_V1,
+    KERNEL_CONTEXT_ISSUANCE_DIAGNOSTIC_IDENTITY_V1, KERNEL_CONTEXT_ISSUANCE_DIAGNOSTIC_VERSION_V1,
+    KERNEL_CONTEXT_REQUIRED_ISSUANCE_COUNT_V1, KERNEL_CONTEXT_SOURCE_ORDINAL_V1,
+    KernelContextFrontendContractDecodeErrorV1, KernelContextFrontendContractV1,
+    KernelContextFrontendContractValidationErrorV1, KernelContextGeneratedItemIdentityV1,
+    KernelContextGeneratedItemRoleV1, KernelContextGeneratedItemV1,
+    KernelContextIssuanceDiagnosticV1, MAX_KERNEL_CONTEXT_FRONTEND_CONTRACT_BYTES_V1,
+    MAX_KERNEL_CONTEXT_GENERATED_ITEM_NAME_BYTES_V1, decode_kernel_context_frontend_contract_v1,
+    derive_kernel_context_generated_item_identity_v1,
+    encode_generated_kernel_context_frontend_contract_v1,
+    encode_kernel_context_frontend_contract_v1,
+};
 pub use kernel_contract_v1::{
     ASSEMBLY_EFFECT_ATOMIC_V1, ASSEMBLY_EFFECT_BARRIER_V1, ASSEMBLY_EFFECT_CONTROL_FLOW_V1,
     ASSEMBLY_EFFECT_READ_GLOBAL_V1, ASSEMBLY_EFFECT_READ_WORKGROUP_V1,

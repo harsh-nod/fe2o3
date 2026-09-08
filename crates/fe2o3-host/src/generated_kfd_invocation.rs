@@ -11,17 +11,26 @@ use fe2o3_runtime::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::generated_argument_plan::validate_worker_v3_argument_packing;
+use crate::generated_host_contract_v2::CheckedGeneratedHostDispatchV2;
 use crate::worker_v3_verification_admission::AdmittedWorkerV3SemanticMachineRefinementV1;
 use crate::{
-    AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedKernelExpectationV1,
-    CompilerGeneratedKfdArguments, GeneratedKfdCompletion, GeneratedKfdCompletionError,
-    GeneratedKfdPackingObservationV1, GeneratedKfdPrepareError, RecoveredWorkerV3AdmissionErrorV1,
+    AdmittedGeneratedHostContractV2, AuthenticatedWorkerV3CapabilityApplicationV1,
+    AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedHostArgumentsV2,
+    CompilerGeneratedKernelExpectationRosterV1, CompilerGeneratedKernelExpectationV1,
+    CompilerGeneratedKernelExpectationV2, CompilerGeneratedKfdArguments,
+    GeneratedHostContractErrorV2, GeneratedHostDispatchEvidenceV2, GeneratedHostLaunchGeometryV2,
+    GeneratedHostPrepareErrorV2, GeneratedHostRuntimeCoordinatesV2, GeneratedKfdCompletion,
+    GeneratedKfdCompletionError, GeneratedKfdPackingObservationV1, GeneratedKfdPrepareError,
+    RecoveredWorkerV3AdmissionErrorV1,
 };
 
 const DIFFERENTIAL_BINDING_DOMAIN_V1: &[u8] = b"FE2O3/HOST/GENERATED-KFD-DIFFERENTIAL-BINDING/V1\0";
 const APPLICATION_EXECUTION_BINDING_DOMAIN_V1: &[u8] =
     b"FE2O3/HOST/WORKER-V3-APPLICATION-EXECUTION-BINDING/V1\0";
 const DEVICE_TOPOLOGY_BINDING_DOMAIN_V1: &[u8] = b"FE2O3/HOST/DIRECT-KFD-DEVICE-TOPOLOGY/V1\0";
+const GENERATED_HOST_KFD_CONTEXT_DOMAIN_V2: &[u8] = b"FE2O3/HOST/GENERATED-KFD-CONTEXT/V2\0";
+const GENERATED_HOST_KFD_STREAM_DOMAIN_V2: &[u8] = b"FE2O3/HOST/GENERATED-KFD-STREAM/V2\0";
 
 /// Stable schema for the generated-host/direct-KFD observation boundary.
 pub const GENERATED_KFD_DIFFERENTIAL_OBSERVATION_SCHEMA_V1: &str =
@@ -51,6 +60,63 @@ pub struct GeneratedWorkerV3KfdInvocation<'allocation, K> {
     prepared: PreparedGfx942RuntimeDispatchV1,
     completion: GeneratedKfdCompletion<'allocation>,
     differential: Option<GeneratedWorkerV3KfdDifferentialBindingV1>,
+    generated_host: Option<CheckedGeneratedHostDispatchV2<K>>,
+}
+
+/// One typed direct-KFD invocation borrowed from authenticated aggregate application custody.
+///
+/// The application borrow permits sequential launches of distinct generated marker types while
+/// preventing carrier, artifact, and currentness custody from being released during a launch.
+#[must_use = "a prepared capability invocation retains every allocation borrow until completion"]
+pub(crate) struct GeneratedWorkerV3CapabilityKfdInvocation<'application, 'allocation, R, K> {
+    authority: GeneratedWorkerV3CapabilityKfdExecutionAuthority<'application, R, K>,
+    device: CheckedGfx942XnackMinusDevice,
+    prepared: PreparedGfx942RuntimeDispatchV1,
+    completion: GeneratedKfdCompletion<'allocation>,
+    generated_host: CheckedGeneratedHostDispatchV2<K>,
+}
+
+impl<R, K> fmt::Debug for GeneratedWorkerV3CapabilityKfdInvocation<'_, '_, R, K> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GeneratedWorkerV3CapabilityKfdInvocation")
+            .field("kernel_name", &self.prepared.kernel_name())
+            .field(
+                "dispatch_contract_sha256",
+                &self.prepared.dispatch_contract_sha256(),
+            )
+            .field("device_unique_id", &self.device.observation().unique_id())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<R, K> GeneratedWorkerV3CapabilityKfdInvocation<'_, '_, R, K>
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    pub(crate) fn kernel_name(&self) -> &str {
+        self.prepared.kernel_name()
+    }
+
+    /// Executes through the internal authorized KFD boundary and releases borrows only after
+    /// checked device completion and post-completion publication-currentness revalidation.
+    pub(crate) fn execute(
+        self,
+    ) -> Result<Gfx942AuthorizedRuntimeDispatchResultV1, GeneratedWorkerV3KfdExecutionError> {
+        let Self {
+            authority,
+            device,
+            prepared,
+            completion,
+            generated_host: _generated_host,
+        } = self;
+        let result = execute_authorized_gfx942_runtime_dispatch_v1(authority, device, prepared)
+            .map_err(GeneratedWorkerV3KfdExecutionError::Runtime)?;
+        completion
+            .apply(result)
+            .map_err(GeneratedWorkerV3KfdExecutionError::Completion)
+    }
 }
 
 impl<K> fmt::Debug for GeneratedWorkerV3KfdInvocation<'_, K> {
@@ -99,6 +165,51 @@ impl<K: CompilerGeneratedKernelExpectationV1> GeneratedWorkerV3KfdInvocation<'_,
         self.differential.as_ref()
     }
 
+    /// Returns the exact V2 runtime coordinates retained by side-by-side host preparation.
+    pub fn generated_host_runtime_coordinates(&self) -> Option<GeneratedHostRuntimeCoordinatesV2> {
+        self.generated_host
+            .as_ref()
+            .map(|checked| checked.runtime())
+    }
+
+    /// Returns the exact capability association retained by side-by-side host preparation.
+    pub fn generated_host_capability_association_identity(&self) -> Option<([u8; 32], u64)> {
+        self.generated_host
+            .as_ref()
+            .map(|checked| checked.capability_association_identity())
+    }
+
+    /// Returns the exact V13 static-association identity retained through KFD completion.
+    pub fn generated_host_v13_static_association_identity(&self) -> Option<[u8; 32]> {
+        self.generated_host
+            .as_ref()
+            .map(|checked| checked.static_association_identity())
+    }
+
+    /// Returns the exact V13 final-graph subject retained through KFD completion.
+    pub fn generated_host_v13_subject(&self) -> Option<crate::GeneratedHostExecutionSubjectV2> {
+        self.generated_host
+            .as_ref()
+            .map(|checked| checked.subject())
+    }
+
+    /// Returns the exact artifact and kernel ordinal retained by V2 preparation.
+    pub fn generated_host_artifact_binding(
+        &self,
+    ) -> Option<(
+        fe2o3_kernel_descriptor::CanonicalCodeObjectDigest,
+        usize,
+        &str,
+    )> {
+        self.generated_host.as_ref().map(|checked| {
+            (
+                checked.artifact_identity(),
+                checked.kernel_ordinal(),
+                checked.entry_name(),
+            )
+        })
+    }
+
     /// Reports the exact generated-host availability boundary without launching the device.
     pub const fn differential_availability(
         &self,
@@ -121,6 +232,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> GeneratedWorkerV3KfdInvocation<'_,
             prepared,
             completion,
             differential: _,
+            generated_host: _generated_host,
         } = self;
         let authority = authority
             .into_production()
@@ -147,6 +259,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> GeneratedWorkerV3KfdInvocation<'_,
             prepared,
             completion,
             differential,
+            generated_host: _generated_host,
         } = self;
         let binding = differential
             .ok_or(GeneratedWorkerV3KfdExecutionError::DifferentialEvidenceUnavailable)?;
@@ -181,6 +294,10 @@ pub struct GeneratedWorkerV3KfdDifferentialBindingV1 {
     finalizer_derivation_identity: [u8; 32],
     production_kir_v8_sha256: [u8; 32],
     production_kir_v8_bytes: u64,
+    compiler_capability_association_sha256: [u8; 32],
+    compiler_capability_association_bytes: u64,
+    production_capability_result_sha256: [u8; 32],
+    production_capability_result_bytes: u64,
     finalized_hsaco_sha256: [u8; 32],
     finalized_hsaco_bytes: u64,
     target: String,
@@ -235,6 +352,18 @@ impl GeneratedWorkerV3KfdDifferentialBindingV1 {
     }
     pub const fn production_kir_v8_bytes(&self) -> u64 {
         self.production_kir_v8_bytes
+    }
+    pub const fn compiler_capability_association_identity(&self) -> (&[u8; 32], u64) {
+        (
+            &self.compiler_capability_association_sha256,
+            self.compiler_capability_association_bytes,
+        )
+    }
+    pub const fn production_capability_result_identity(&self) -> (&[u8; 32], u64) {
+        (
+            &self.production_capability_result_sha256,
+            self.production_capability_result_bytes,
+        )
     }
     pub const fn finalized_hsaco_sha256(&self) -> &[u8; 32] {
         &self.finalized_hsaco_sha256
@@ -406,6 +535,20 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3ApplicationExecutionBindin
         true
     }
 
+    /// Returns the exact side-by-side capability association retained through completion.
+    ///
+    /// `None` is possible only in the explicitly feature-gated legacy integration-test lane.
+    pub fn compiler_capability_association_identity(&self) -> Option<([u8; 32], u64)> {
+        self.semantic_machine_refinement
+            .compiler_capability_association_identity()
+    }
+
+    /// Returns the exact completed V5 result retained through application execution.
+    pub fn production_capability_result_identity(&self) -> Option<([u8; 32], u64)> {
+        self.semantic_machine_refinement
+            .production_capability_result_identity()
+    }
+
     pub const fn dispatch_contract_sha256(&self) -> &[u8; 32] {
         &self.coordinates.dispatch_contract_sha256
     }
@@ -512,6 +655,10 @@ struct WorkerV3ApplicationExecutionCoordinatesV1 {
     rust_type_layout_contract_sha256: [u8; 32],
     rust_effect_contract_sha256: [u8; 32],
     semantic_machine_refinement_receipt_identity: [u8; 32],
+    compiler_capability_association_sha256: [u8; 32],
+    compiler_capability_association_bytes: u64,
+    production_capability_result_sha256: [u8; 32],
+    production_capability_result_bytes: u64,
     safety_properties: u8,
     dispatch_contract_sha256: [u8; 32],
     grid: [u32; 3],
@@ -573,6 +720,53 @@ struct GeneratedWorkerV3KfdExecutionAuthority<K> {
     device_unique_id: u64,
 }
 
+struct GeneratedWorkerV3CapabilityKfdExecutionAuthority<'application, R, K> {
+    application: &'application AuthenticatedWorkerV3CapabilityApplicationV1<R>,
+    finalized_hsaco_sha256: [u8; 32],
+    finalized_hsaco_length: u64,
+    dispatch_contract_sha256: [u8; 32],
+    device_unique_id: u64,
+    _marker: std::marker::PhantomData<fn() -> K>,
+}
+
+// SAFETY: construction is private to `prepare_capability_direct_kfd_invocation_v2`, which checks
+// the exact authenticated roster entry, V5-derived generated host contract, inspected descriptor,
+// generated argument packing, target, device, geometry, dynamic memory facts, and runtime request.
+// The authority borrows aggregate custody through completion and revalidates it on both sides of
+// the native dispatch.
+unsafe impl<R, K> WorkerV3Gfx942ExecutionAuthorityV1
+    for GeneratedWorkerV3CapabilityKfdExecutionAuthority<'_, R, K>
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    type CurrentnessError = RecoveredWorkerV3AdmissionErrorV1;
+
+    fn finalized_hsaco_sha256(&self) -> [u8; 32] {
+        self.finalized_hsaco_sha256
+    }
+
+    fn finalized_hsaco_length(&self) -> u64 {
+        self.finalized_hsaco_length
+    }
+
+    fn kernel_name(&self) -> &str {
+        K::EXPORT_NAME
+    }
+
+    fn dispatch_contract_sha256(&self) -> [u8; 32] {
+        self.dispatch_contract_sha256
+    }
+
+    fn device_unique_id(&self) -> u64 {
+        self.device_unique_id
+    }
+
+    fn revalidate_currentness(&self) -> Result<(), Self::CurrentnessError> {
+        self.application.revalidate_currentness()
+    }
+}
+
 // SAFETY: this private implementation is constructed only by
 // `prepare_generated_kfd_invocation`. That transition retains the exact authenticated Worker V3
 // decision and its current-publication token, admits only compiler-generated argument capabilities,
@@ -617,6 +811,7 @@ unsafe impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3Gfx942ExecutionAuth
 impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<K> {
     /// Joins this authenticated executable with one generated host-memory invocation and checked
     /// gfx942 device. No caller-created digest or raw pointer enters the transition.
+    #[doc(hidden)]
     pub fn prepare_generated_kfd_invocation<'allocation, Arguments>(
         mut self,
         arguments: Arguments,
@@ -718,8 +913,284 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
             prepared,
             completion,
             differential,
+            generated_host: None,
         })
     }
+}
+
+impl<K: CompilerGeneratedKernelExpectationV2> AdmittedGeneratedHostContractV2<K> {
+    /// Derives the exact logical direct-KFD context and stream selected for one checked device and
+    /// launch. The physical-device observation and topology custody are independent of caller
+    /// dispatch evidence.
+    #[doc(hidden)]
+    pub fn direct_kfd_runtime_coordinates_v2(
+        &self,
+        device: &CheckedGfx942XnackMinusDevice,
+        geometry: AqlDispatchGeometryV1,
+        dynamic_group_segment_bytes: u32,
+    ) -> Result<GeneratedHostRuntimeCoordinatesV2, GeneratedHostContractErrorV2> {
+        let target = self.subject().target_model_identity();
+        let context = generated_host_kfd_context_identity(target, device);
+        let stream =
+            generated_host_kfd_stream_identity::<K>(context, geometry, dynamic_group_segment_bytes);
+        GeneratedHostRuntimeCoordinatesV2::new(target, context, stream)
+    }
+
+    /// Checks the complete V2 host contract before entering the existing real direct-KFD prepared
+    /// invocation boundary. The returned invocation retains both the original KFD authority and the
+    /// inert checked-host receipt until synchronous completion.
+    #[allow(clippy::too_many_arguments)]
+    #[doc(hidden)]
+    pub fn prepare_direct_kfd_invocation_v2<'allocation, Arguments>(
+        &self,
+        authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
+        evidence: GeneratedHostDispatchEvidenceV2,
+        arguments: Arguments,
+        device: CheckedGfx942XnackMinusDevice,
+        geometry: AqlDispatchGeometryV1,
+        dynamic_group_segment_bytes: u32,
+        timeout_milliseconds: u32,
+    ) -> Result<GeneratedWorkerV3KfdInvocation<'allocation, K>, GeneratedWorkerV3KfdInvocationError>
+    where
+        Arguments: CompilerGeneratedKfdArguments<'allocation, K>
+            + CompilerGeneratedHostArgumentsV2<'allocation, K>
+            + 'allocation,
+    {
+        if !authenticated
+            .verification()
+            .retains_protected_application_execution_evidence()
+        {
+            return Err(
+                GeneratedWorkerV3KfdInvocationError::ProtectedProductionEvidenceUnavailable,
+            );
+        }
+        let capability_source = authenticated
+            .verification()
+            .compiler_capability_source()
+            .ok_or(GeneratedWorkerV3KfdInvocationError::ProtectedProductionEvidenceUnavailable)?;
+        self.validate_sealed_v13_source_v2(capability_source)
+            .map_err(GeneratedWorkerV3KfdInvocationError::HostContractCoordinates)?;
+
+        let observed = self
+            .direct_kfd_runtime_coordinates_v2(&device, geometry, dynamic_group_segment_bytes)
+            .map_err(GeneratedWorkerV3KfdInvocationError::HostContractCoordinates)?;
+        let host_geometry = GeneratedHostLaunchGeometryV2::new(
+            geometry.grid(),
+            geometry.workgroup().map(u32::from),
+            dynamic_group_segment_bytes,
+        );
+        let checked = self
+            .check_dispatch_v2(evidence, observed, host_geometry, &arguments)
+            .map_err(GeneratedWorkerV3KfdInvocationError::HostContract)?;
+
+        let authenticated_plan = validate_worker_v3_argument_packing(
+            authenticated.admission().descriptor_table(),
+            authenticated.admission().descriptor(),
+            K::generated_host_contract_v2()
+                .map_err(GeneratedKfdPrepareError::GeneratedLayout)
+                .map_err(GeneratedWorkerV3KfdInvocationError::Arguments)?
+                .arguments(),
+        )
+        .map_err(GeneratedKfdPrepareError::PackingPlan)
+        .map_err(GeneratedWorkerV3KfdInvocationError::Arguments)?;
+        if &authenticated_plan != checked.packing_plan() {
+            return Err(GeneratedWorkerV3KfdInvocationError::HostDescriptorSubstitution);
+        }
+        let authenticated_table = authenticated.admission().descriptor_table();
+        let authenticated_descriptor = authenticated.admission().descriptor();
+        if authenticated_table.canonical_code_object_digest() != checked.artifact_identity()
+            || fe2o3_kernel_descriptor::DeviceDescriptorTableDigest::calculate(authenticated_table)
+                .map_err(|_| GeneratedWorkerV3KfdInvocationError::HostDescriptorSubstitution)?
+                != checked.descriptor_table_identity()
+            || fe2o3_kernel_descriptor::KernelDescriptorDigest::calculate(authenticated_descriptor)
+                != checked.descriptor_identity()
+            || authenticated_descriptor.entry_name().as_str() != checked.entry_name()
+            || authenticated_table.kernels().get(checked.kernel_ordinal())
+                != Some(authenticated_descriptor)
+        {
+            return Err(GeneratedWorkerV3KfdInvocationError::HostDescriptorSubstitution);
+        }
+
+        let mut invocation = authenticated.prepare_generated_kfd_invocation(
+            arguments,
+            device,
+            geometry,
+            dynamic_group_segment_bytes,
+            timeout_milliseconds,
+        )?;
+        invocation.generated_host = Some(checked);
+        Ok(invocation)
+    }
+
+    /// Checks and prepares one marker selected by type from an authenticated aggregate roster.
+    ///
+    /// The application can be borrowed again after this invocation completes, which supports
+    /// multiple kernels without a source name, profile, or ordinal selector at the API boundary.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_capability_direct_kfd_invocation_v2<
+        'application,
+        'allocation,
+        R,
+        Arguments,
+    >(
+        &self,
+        authenticated: &'application AuthenticatedWorkerV3CapabilityApplicationV1<R>,
+        arguments: Arguments,
+        mut device: CheckedGfx942XnackMinusDevice,
+        geometry: AqlDispatchGeometryV1,
+        dynamic_group_segment_bytes: u32,
+        timeout_milliseconds: u32,
+    ) -> Result<
+        GeneratedWorkerV3CapabilityKfdInvocation<'application, 'allocation, R, K>,
+        GeneratedWorkerV3KfdInvocationError,
+    >
+    where
+        R: CompilerGeneratedKernelExpectationRosterV1,
+        Arguments: CompilerGeneratedKfdArguments<'allocation, K>
+            + CompilerGeneratedHostArgumentsV2<'allocation, K>
+            + 'allocation,
+    {
+        device
+            .check_observable_currentness()
+            .map_err(GeneratedWorkerV3KfdInvocationError::DeviceCurrentness)?;
+        let expected = AmdTargetId::parse(PRODUCTION_GFX942_DEVICE_TARGET_V1)
+            .expect("the canonical production gfx942 target is valid");
+        let artifact_target = authenticated.roster().target();
+        if artifact_target != expected {
+            return Err(GeneratedWorkerV3KfdInvocationError::TargetMismatch {
+                artifact: artifact_target,
+            });
+        }
+
+        let observed = self
+            .direct_kfd_runtime_coordinates_v2(&device, geometry, dynamic_group_segment_bytes)
+            .map_err(GeneratedWorkerV3KfdInvocationError::HostContractCoordinates)?;
+        let (checked, packed) = prepare_capability_target_arguments_v2(
+            self,
+            authenticated,
+            arguments,
+            observed,
+            geometry,
+            dynamic_group_segment_bytes,
+        )?;
+        let (inputs, completion) =
+            packed.into_runtime_inputs(geometry, dynamic_group_segment_bytes, timeout_milliseconds);
+        let prepared = prepare_gfx942_runtime_dispatch_v1(
+            authenticated.roster().exact_current_hsaco_bytes(),
+            K::EXPORT_NAME,
+            inputs,
+        )
+        .map_err(GeneratedWorkerV3KfdInvocationError::RuntimePreparation)?;
+        let verification = authenticated.roster().verification();
+        validate_runtime_identity_fields(
+            verification.finalized_hsaco_sha256(),
+            verification.finalized_hsaco_length(),
+            K::EXPORT_NAME,
+            prepared.identity().object_sha256(),
+            prepared.finalized_hsaco_length(),
+            prepared.kernel_name(),
+        )?;
+        device
+            .check_observable_currentness()
+            .map_err(GeneratedWorkerV3KfdInvocationError::DeviceCurrentness)?;
+        authenticated
+            .revalidate_currentness()
+            .map_err(GeneratedWorkerV3KfdInvocationError::CurrentPublication)?;
+
+        Ok(GeneratedWorkerV3CapabilityKfdInvocation {
+            authority: GeneratedWorkerV3CapabilityKfdExecutionAuthority {
+                application: authenticated,
+                finalized_hsaco_sha256: verification.finalized_hsaco_sha256(),
+                finalized_hsaco_length: verification.finalized_hsaco_length(),
+                dispatch_contract_sha256: prepared.dispatch_contract_sha256(),
+                device_unique_id: device.observation().unique_id(),
+                _marker: std::marker::PhantomData,
+            },
+            device,
+            prepared,
+            completion,
+            generated_host: checked,
+        })
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_capability_target_arguments_v2<'allocation, R, K, Arguments>(
+    contract: &AdmittedGeneratedHostContractV2<K>,
+    authenticated: &AuthenticatedWorkerV3CapabilityApplicationV1<R>,
+    arguments: Arguments,
+    observed: GeneratedHostRuntimeCoordinatesV2,
+    geometry: AqlDispatchGeometryV1,
+    dynamic_group_segment_bytes: u32,
+) -> Result<
+    (
+        CheckedGeneratedHostDispatchV2<K>,
+        crate::GeneratedKfdPackedArguments<'allocation>,
+    ),
+    GeneratedWorkerV3KfdInvocationError,
+>
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+    K: CompilerGeneratedKernelExpectationV2,
+    Arguments: CompilerGeneratedKfdArguments<'allocation, K>
+        + CompilerGeneratedHostArgumentsV2<'allocation, K>
+        + 'allocation,
+{
+    authenticated
+        .revalidate_currentness()
+        .map_err(GeneratedWorkerV3KfdInvocationError::CurrentPublication)?;
+    let entry = authenticated
+        .roster()
+        .entry::<K>()
+        .map_err(|_| GeneratedWorkerV3KfdInvocationError::HostDescriptorSubstitution)?;
+    let table = authenticated.roster().descriptor_table();
+    let descriptor = entry.descriptor();
+    let evidence = contract.bind_dispatch_evidence_v2(observed);
+    let host_geometry = GeneratedHostLaunchGeometryV2::new(
+        geometry.grid(),
+        geometry.workgroup().map(u32::from),
+        dynamic_group_segment_bytes,
+    );
+    let checked = contract
+        .check_dispatch_v2(evidence, observed, host_geometry, &arguments)
+        .map_err(GeneratedWorkerV3KfdInvocationError::HostContract)?;
+    let generated = Arguments::generated_argument_layout()
+        .map_err(GeneratedKfdPrepareError::GeneratedLayout)
+        .map_err(GeneratedWorkerV3KfdInvocationError::Arguments)?;
+    let plan = validate_worker_v3_argument_packing(table, descriptor, &generated)
+        .map_err(GeneratedKfdPrepareError::PackingPlan)
+        .map_err(GeneratedWorkerV3KfdInvocationError::Arguments)?;
+    if &plan != checked.packing_plan()
+        || table.canonical_code_object_digest() != checked.artifact_identity()
+        || fe2o3_kernel_descriptor::DeviceDescriptorTableDigest::calculate(table)
+            .map_err(|_| GeneratedWorkerV3KfdInvocationError::HostDescriptorSubstitution)?
+            != checked.descriptor_table_identity()
+        || fe2o3_kernel_descriptor::KernelDescriptorDigest::calculate(descriptor)
+            != checked.descriptor_identity()
+        || descriptor.entry_name().as_str() != checked.entry_name()
+        || table.kernels().get(checked.kernel_ordinal()) != Some(descriptor)
+    {
+        return Err(GeneratedWorkerV3KfdInvocationError::HostDescriptorSubstitution);
+    }
+    let packed = arguments
+        .bind_kfd_arguments(&plan)
+        .map_err(GeneratedKfdPrepareError::Bind)
+        .and_then(|binding| binding.pack(&plan).map_err(GeneratedKfdPrepareError::Bind))
+        .map_err(GeneratedWorkerV3KfdInvocationError::Arguments)?;
+    if packed.kernel_id() != descriptor.kernel_id()
+        || packed.explicit_kernarg().len()
+            != usize::try_from(descriptor.abi_layout().explicit_argument_size())
+                .unwrap_or(usize::MAX)
+        || packed.alignment() != descriptor.abi_layout().kernarg_segment_alignment()
+    {
+        return Err(GeneratedWorkerV3KfdInvocationError::Arguments(
+            GeneratedKfdPrepareError::PackedSubstitution,
+        ));
+    }
+    authenticated
+        .revalidate_currentness()
+        .map_err(GeneratedWorkerV3KfdInvocationError::CurrentPublication)?;
+    Ok((checked, packed))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -734,6 +1205,20 @@ fn application_execution_admission<K: CompilerGeneratedKernelExpectationV1>(
     dispatch_contract_sha256: [u8; 32],
 ) -> Option<WorkerV3ApplicationExecutionAdmissionV1> {
     let refinement = authenticated.take_application_semantic_machine_refinement()?;
+    let compiler_capability_association = refinement.compiler_capability_association_identity();
+    let production_capability_result = refinement.production_capability_result_identity();
+    #[cfg(not(feature = "worker-v3-verifier-test-support"))]
+    let (compiler_capability_association_sha256, compiler_capability_association_bytes) =
+        compiler_capability_association?;
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    let (compiler_capability_association_sha256, compiler_capability_association_bytes) =
+        compiler_capability_association.unwrap_or(([0; 32], 0));
+    #[cfg(not(feature = "worker-v3-verifier-test-support"))]
+    let (production_capability_result_sha256, production_capability_result_bytes) =
+        production_capability_result?;
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    let (production_capability_result_sha256, production_capability_result_bytes) =
+        production_capability_result.unwrap_or(([0; 32], 0));
     let verification = authenticated.verification();
     let proof = verification.validated_compiler_proof_inputs()?;
     let target_lineage = verification.validated_compiler_target_lineage()?;
@@ -807,6 +1292,10 @@ fn application_execution_admission<K: CompilerGeneratedKernelExpectationV1>(
         rust_type_layout_contract_sha256: verification.rust_type_layout_contract_sha256(),
         rust_effect_contract_sha256: verification.rust_effect_contract_sha256(),
         semantic_machine_refinement_receipt_identity: *refinement.receipt().identity(),
+        compiler_capability_association_sha256,
+        compiler_capability_association_bytes,
+        production_capability_result_sha256,
+        production_capability_result_bytes,
         safety_properties: verification.safety_properties().bits(),
         dispatch_contract_sha256,
         grid: geometry.grid(),
@@ -927,6 +1416,16 @@ fn application_execution_binding_identity(
     hasher.update(coordinates.rust_type_layout_contract_sha256);
     hasher.update(coordinates.rust_effect_contract_sha256);
     hasher.update(coordinates.semantic_machine_refinement_receipt_identity);
+    hash_identity(
+        &mut hasher,
+        coordinates.compiler_capability_association_sha256,
+        coordinates.compiler_capability_association_bytes,
+    );
+    hash_identity(
+        &mut hasher,
+        coordinates.production_capability_result_sha256,
+        coordinates.production_capability_result_bytes,
+    );
     hasher.update([coordinates.safety_properties]);
     hasher.update(coordinates.dispatch_contract_sha256);
     for value in coordinates.grid {
@@ -967,6 +1466,65 @@ fn device_topology_identity(device: &CheckedGfx942XnackMinusDevice) -> [u8; 32] 
     hasher.finalize().into()
 }
 
+fn generated_host_kfd_context_identity(
+    target_model_identity: [u8; 32],
+    device: &CheckedGfx942XnackMinusDevice,
+) -> [u8; 32] {
+    generated_host_kfd_context_identity_from_parts(
+        target_model_identity,
+        device.observation().unique_id(),
+        device_topology_identity(device),
+    )
+}
+
+fn generated_host_kfd_context_identity_from_parts(
+    target_model_identity: [u8; 32],
+    device_unique_id: u64,
+    device_topology_identity: [u8; 32],
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(GENERATED_HOST_KFD_CONTEXT_DOMAIN_V2);
+    hasher.update(target_model_identity);
+    hasher.update(device_unique_id.to_le_bytes());
+    hasher.update(device_topology_identity);
+    hasher.finalize().into()
+}
+
+fn generated_host_kfd_stream_identity<K: CompilerGeneratedKernelExpectationV2>(
+    context_identity: [u8; 32],
+    geometry: AqlDispatchGeometryV1,
+    dynamic_group_segment_bytes: u32,
+) -> [u8; 32] {
+    generated_host_kfd_stream_identity_from_parts(
+        context_identity,
+        K::KERNEL_BINDING_ID_V1,
+        geometry.grid(),
+        geometry.workgroup(),
+        dynamic_group_segment_bytes,
+    )
+}
+
+fn generated_host_kfd_stream_identity_from_parts(
+    context_identity: [u8; 32],
+    kernel_binding_identity: [u8; 32],
+    grid: [u32; 3],
+    workgroup: [u16; 3],
+    dynamic_group_segment_bytes: u32,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(GENERATED_HOST_KFD_STREAM_DOMAIN_V2);
+    hasher.update(context_identity);
+    hasher.update(kernel_binding_identity);
+    for value in grid {
+        hasher.update(value.to_le_bytes());
+    }
+    for value in workgroup {
+        hasher.update(value.to_le_bytes());
+    }
+    hasher.update(dynamic_group_segment_bytes.to_le_bytes());
+    hasher.finalize().into()
+}
+
 fn differential_binding<K: CompilerGeneratedKernelExpectationV1>(
     authenticated: &AuthenticatedWorkerV3ExecutableV1<K>,
     device: &CheckedGfx942XnackMinusDevice,
@@ -977,6 +1535,39 @@ fn differential_binding<K: CompilerGeneratedKernelExpectationV1>(
     let verification = authenticated.verification();
     let proof = verification.validated_compiler_proof_inputs()?;
     let production_kir = proof.kernel_ir().identity();
+    let compiler_capability = verification.compiler_capability_source();
+    #[cfg(not(feature = "worker-v3-verifier-test-support"))]
+    let compiler_capability = compiler_capability?;
+    #[cfg(not(feature = "worker-v3-verifier-test-support"))]
+    let compiler_capability_identity = compiler_capability.capability().association().identity();
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    let compiler_capability_identity =
+        compiler_capability.map(|source| source.capability().association().identity());
+    #[cfg(not(feature = "worker-v3-verifier-test-support"))]
+    let (compiler_capability_association_sha256, compiler_capability_association_bytes) = (
+        compiler_capability_identity.sha256(),
+        compiler_capability_identity.byte_len(),
+    );
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    let (compiler_capability_association_sha256, compiler_capability_association_bytes) =
+        compiler_capability_identity
+            .map(|identity| (identity.sha256(), identity.byte_len()))
+            .unwrap_or(([0; 32], 0));
+    #[cfg(not(feature = "worker-v3-verifier-test-support"))]
+    let production_capability_result_identity = compiler_capability.production_result_identity();
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    let production_capability_result_identity =
+        compiler_capability.map(|source| source.production_result_identity());
+    #[cfg(not(feature = "worker-v3-verifier-test-support"))]
+    let (production_capability_result_sha256, production_capability_result_bytes) = (
+        production_capability_result_identity.sha256(),
+        production_capability_result_identity.byte_len(),
+    );
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    let (production_capability_result_sha256, production_capability_result_bytes) =
+        production_capability_result_identity
+            .map(|identity| (identity.sha256(), identity.byte_len()))
+            .unwrap_or(([0; 32], 0));
     let compiler_subject = authenticated
         .admission()
         .compiler_execution_subject()
@@ -1000,6 +1591,10 @@ fn differential_binding<K: CompilerGeneratedKernelExpectationV1>(
         finalizer_derivation_identity: *finalizer.as_bytes(),
         production_kir_v8_sha256: *production_kir.digest(),
         production_kir_v8_bytes: production_kir.canonical_length(),
+        compiler_capability_association_sha256,
+        compiler_capability_association_bytes,
+        production_capability_result_sha256,
+        production_capability_result_bytes,
         finalized_hsaco_sha256: verification.finalized_hsaco_sha256(),
         finalized_hsaco_bytes: verification.finalized_hsaco_length(),
         target: authenticated.target().to_string(),
@@ -1031,6 +1626,16 @@ fn differential_binding_identity(binding: &GeneratedWorkerV3KfdDifferentialBindi
     hasher.update(binding.finalizer_derivation_identity);
     hasher.update(binding.production_kir_v8_sha256);
     hasher.update(binding.production_kir_v8_bytes.to_le_bytes());
+    hash_identity(
+        &mut hasher,
+        binding.compiler_capability_association_sha256,
+        binding.compiler_capability_association_bytes,
+    );
+    hash_identity(
+        &mut hasher,
+        binding.production_capability_result_sha256,
+        binding.production_capability_result_bytes,
+    );
     hasher.update(binding.finalized_hsaco_sha256);
     hasher.update(binding.finalized_hsaco_bytes.to_le_bytes());
     hash_bytes(&mut hasher, binding.target.as_bytes());
@@ -1112,6 +1717,9 @@ pub enum GeneratedWorkerV3KfdInvocationError {
     TargetMismatch { artifact: AmdTargetId },
     Arguments(GeneratedKfdPrepareError),
     RuntimePreparation(Gfx942RuntimePreparationErrorV1),
+    HostContractCoordinates(GeneratedHostContractErrorV2),
+    HostContract(GeneratedHostPrepareErrorV2),
+    HostDescriptorSubstitution,
     ProtectedProductionEvidenceUnavailable,
     ArtifactIdentityMismatch,
     ArtifactLengthMismatch,
@@ -1135,6 +1743,15 @@ impl fmt::Display for GeneratedWorkerV3KfdInvocationError {
             Self::RuntimePreparation(error) => {
                 write!(formatter, "pure-KFD runtime preparation failed: {error}")
             }
+            Self::HostContractCoordinates(error) => {
+                write!(formatter, "direct-KFD host coordinates are invalid: {error}")
+            }
+            Self::HostContract(error) => {
+                write!(formatter, "direct-KFD host contract rejected: {error}")
+            }
+            Self::HostDescriptorSubstitution => formatter.write_str(
+                "direct-KFD authenticated descriptor disagrees with the checked host contract",
+            ),
             Self::ProtectedProductionEvidenceUnavailable => formatter.write_str(
                 "an admitted Worker V3 semantic-to-machine refinement receipt is unavailable for application release",
             ),
@@ -1158,7 +1775,10 @@ impl Error for GeneratedWorkerV3KfdInvocationError {
             Self::DeviceCurrentness(error) => Some(error),
             Self::Arguments(error) => Some(error),
             Self::RuntimePreparation(error) => Some(error),
+            Self::HostContractCoordinates(error) => Some(error),
+            Self::HostContract(error) => Some(error),
             Self::TargetMismatch { .. }
+            | Self::HostDescriptorSubstitution
             | Self::ProtectedProductionEvidenceUnavailable
             | Self::ArtifactIdentityMismatch
             | Self::ArtifactLengthMismatch
@@ -1261,6 +1881,10 @@ mod tests {
             rust_type_layout_contract_sha256: [43; 32],
             rust_effect_contract_sha256: [44; 32],
             semantic_machine_refinement_receipt_identity: [49; 32],
+            compiler_capability_association_sha256: [50; 32],
+            compiler_capability_association_bytes: 51,
+            production_capability_result_sha256: [52; 32],
+            production_capability_result_bytes: 53,
             safety_properties: u8::MAX,
             dispatch_contract_sha256: [45; 32],
             grid: [64, 2, 1],
@@ -1389,6 +2013,10 @@ mod tests {
             semantic_machine_refinement_receipt_identity,
             [67; 32]
         );
+        assert_substitution_changes_identity!(compiler_capability_association_sha256, [68; 32]);
+        assert_substitution_changes_identity!(compiler_capability_association_bytes, 69);
+        assert_substitution_changes_identity!(production_capability_result_sha256, [70; 32]);
+        assert_substitution_changes_identity!(production_capability_result_bytes, 71);
         assert_substitution_changes_identity!(safety_properties, 0x7f);
         assert_substitution_changes_identity!(dispatch_contract_sha256, [63; 32]);
         assert_substitution_changes_identity!(grid, [65, 2, 1]);
@@ -1450,5 +2078,83 @@ mod tests {
             ),
             Err(GeneratedWorkerV3KfdInvocationError::KernelNameMismatch)
         ));
+    }
+
+    #[test]
+    fn generated_host_kfd_coordinates_bind_target_device_kernel_stream_and_launch() {
+        let context = generated_host_kfd_context_identity_from_parts([1; 32], 2, [3; 32]);
+        assert_eq!(
+            context,
+            generated_host_kfd_context_identity_from_parts([1; 32], 2, [3; 32])
+        );
+        assert_ne!(
+            context,
+            generated_host_kfd_context_identity_from_parts([4; 32], 2, [3; 32])
+        );
+        assert_ne!(
+            context,
+            generated_host_kfd_context_identity_from_parts([1; 32], 5, [3; 32])
+        );
+        assert_ne!(
+            context,
+            generated_host_kfd_context_identity_from_parts([1; 32], 2, [6; 32])
+        );
+
+        let stream = generated_host_kfd_stream_identity_from_parts(
+            context,
+            [7; 32],
+            [256, 1, 1],
+            [64, 1, 1],
+            128,
+        );
+        assert_eq!(
+            stream,
+            generated_host_kfd_stream_identity_from_parts(
+                context,
+                [7; 32],
+                [256, 1, 1],
+                [64, 1, 1],
+                128,
+            )
+        );
+        for substituted in [
+            generated_host_kfd_stream_identity_from_parts(
+                [8; 32],
+                [7; 32],
+                [256, 1, 1],
+                [64, 1, 1],
+                128,
+            ),
+            generated_host_kfd_stream_identity_from_parts(
+                context,
+                [9; 32],
+                [256, 1, 1],
+                [64, 1, 1],
+                128,
+            ),
+            generated_host_kfd_stream_identity_from_parts(
+                context,
+                [7; 32],
+                [257, 1, 1],
+                [64, 1, 1],
+                128,
+            ),
+            generated_host_kfd_stream_identity_from_parts(
+                context,
+                [7; 32],
+                [256, 1, 1],
+                [32, 1, 1],
+                128,
+            ),
+            generated_host_kfd_stream_identity_from_parts(
+                context,
+                [7; 32],
+                [256, 1, 1],
+                [64, 1, 1],
+                129,
+            ),
+        ] {
+            assert_ne!(stream, substituted);
+        }
     }
 }

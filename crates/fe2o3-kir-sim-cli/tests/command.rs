@@ -10,14 +10,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BlockId, CastKind, Constant, DebugSourceMapDocumentV1,
     DebugSourceMapDocumentV2, DebugSourceMapFileV1, DebugSourceMapSpanV1, Function, Kernel,
-    LaunchDomain, LaunchExtent, MAX_SIMULATION_BUNDLE_BYTES_V1, MemoryAccess, Module, Operation,
-    OperationKind, PreparedSimulationBundleV1, PreparedSimulationBundleV6, ScalarType,
-    SemanticAggregateStorageMapV6, SemanticKernelStorageV1, SemanticKernelStorageV2,
-    SemanticStorageMapV6, Signature, SimulationCompilerExecutionBindingV1,
-    SimulationProductionKirIdentityV1, SimulationProductionKirIdentityV6,
-    SimulationSourceLineageV1, TargetCapability, Terminator, Type, ValueDef, ValueId,
-    VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV11,
-    WaveOperation, WaveOperationKind, WaveWidth,
+    KernelContextSourceIdentityV1, KernelContextTypeV1, LaunchDomain, LaunchExtent,
+    MAX_SIMULATION_BUNDLE_BYTES_V1, MemoryAccess, Module, Operation, OperationKind,
+    PreparedSimulationBundleV1, PreparedSimulationBundleV6, PreparedSimulationBundleV7,
+    PreparedSimulationBundleV8, ScalarType, SemanticAggregateStorageMapV6,
+    SemanticAggregateStorageMapV7, SemanticAggregateStorageMapV8, SemanticKernelStorageV1,
+    SemanticKernelStorageV2, SemanticStorageMapV6, SemanticStorageMapV7, SemanticStorageMapV8,
+    Signature, SimulationCompilerExecutionBindingV1, SimulationProductionKirIdentityV1,
+    SimulationProductionKirIdentityV6, SimulationProductionKirIdentityV7,
+    SimulationProductionKirIdentityV8, SimulationSourceLineageV1, TargetCapability, Terminator,
+    Type, ValueDef, ValueId, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV8,
+    VerifiedCanonicalKernelIrV11, VerifiedCanonicalKernelIrV12, VerifiedCanonicalKernelIrV13,
+    WaveOperation, WaveOperationKind, WaveWidth, decode_module_v12,
 };
 use fe2o3_kir_sim::{MAX_PERSISTED_SCHEDULE_BYTES_V1, MAX_SCHEDULE_DECISIONS_V1};
 use sha2::{Digest, Sha256};
@@ -85,6 +89,50 @@ fn canonical_noop_with_buffer_variant() -> Vec<u8> {
     let mut module = noop_with_buffer_module();
     module.id = "cli-command-test-variant".into();
     VerifiedCanonicalKernelIrV7::from_module(module)
+        .unwrap()
+        .into_canonical_bytes()
+}
+
+fn contextual_noop_v12() -> Vec<u8> {
+    let context = KernelContextTypeV1::new("entry_v12", [1; 32], [2; 32], [3; 32]);
+    let mut helper_block = BasicBlock::new(BlockId(0));
+    helper_block.terminator = Some(Terminator::Return { values: vec![] });
+    let helper = Function::internal_helper(
+        "helper_v12",
+        Signature::new(vec![Type::KernelContext(context.clone())], vec![]),
+        vec![ValueId(0)],
+        vec![helper_block],
+    );
+    let mut entry_block = BasicBlock::new(BlockId(0));
+    entry_block.operations.push(Operation::kernel_context_issue(
+        ValueId(0),
+        context,
+        KernelContextSourceIdentityV1::new([4; 32], [5; 32], [6; 32], [7; 32]),
+    ));
+    entry_block.operations.push(Operation::new(
+        vec![],
+        OperationKind::Call {
+            callee: "helper_v12".into(),
+            arguments: vec![ValueId(0)],
+        },
+    ));
+    entry_block.terminator = Some(Terminator::Return { values: vec![] });
+    let entry = Function::kernel_entry(
+        "entry_v12",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![entry_block],
+    );
+    let mut module = Module::new("cli-context-v12");
+    module.functions = vec![entry, helper];
+    module.kernels.push(Kernel::new(
+        "context_v12",
+        "entry_v12",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    ));
+    VerifiedCanonicalKernelIrV12::from_module(module)
         .unwrap()
         .into_canonical_bytes()
 }
@@ -244,6 +292,102 @@ fn simulation_bundle_v6() -> fe2o3_kernel_ir::VerifiedSimulationBundleV6 {
         .unwrap()
 }
 
+fn simulation_bundle_v7(epoch: u64) -> fe2o3_kernel_ir::VerifiedSimulationBundleV7 {
+    let canonical =
+        VerifiedCanonicalKernelIrV12::from_canonical_bytes(contextual_noop_v12()).unwrap();
+    let production_digest = *canonical.identity().digest();
+    let production_length = canonical.identity().canonical_length();
+    let prepared = PreparedSimulationBundleV7::new(
+        SimulationSourceLineageV1::new([0x71; 32], 201, [0x72; 32], 202).unwrap(),
+        SimulationProductionKirIdentityV7::new(12, production_digest, production_length).unwrap(),
+        epoch,
+        "gfx942:xnack-",
+        canonical,
+    )
+    .unwrap();
+    let source_map = DebugSourceMapDocumentV2::new(
+        prepared.debug_source_map_binding(),
+        vec![DebugSourceMapFileV1::new([0x74; 32], 16, "bundle-v7.rs".into()).unwrap()],
+        vec![],
+        vec![DebugSourceMapSpanV1::new([0x74; 32], 1, 2, 1, 2).unwrap()],
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    let semantic = b"cli-command-bundle-v7-semantic-fixture".to_vec();
+    let semantic_digest = <[u8; 32]>::from(Sha256::digest(&semantic));
+    let storage = SemanticStorageMapV7::new(
+        *prepared.subject_identity(),
+        1,
+        semantic_digest,
+        semantic.len() as u64,
+        [0x73; 32],
+        *prepared.canonical_kir_v12_digest(),
+        prepared.canonical_kir_v12_length(),
+        vec![SemanticKernelStorageV1::new(0, 0, 0, vec![])],
+        vec![],
+    )
+    .unwrap();
+    let aggregate = SemanticAggregateStorageMapV7::new(
+        *prepared.subject_identity(),
+        *prepared.canonical_kir_v12_digest(),
+        prepared.canonical_kir_v12_length(),
+        vec![SemanticKernelStorageV2::new(0, 0, 0, 0, 1, vec![])],
+    )
+    .unwrap();
+    prepared
+        .finalize(source_map, semantic, storage, aggregate)
+        .unwrap()
+}
+
+fn simulation_bundle_v8(epoch: u64, target: &str) -> fe2o3_kernel_ir::VerifiedSimulationBundleV8 {
+    let module = decode_module_v12(&contextual_noop_v12()).unwrap();
+    let canonical = VerifiedCanonicalKernelIrV13::from_module(module).unwrap();
+    let production_digest = *canonical.identity().digest();
+    let production_length = canonical.identity().canonical_length();
+    let prepared = PreparedSimulationBundleV8::new(
+        SimulationSourceLineageV1::new([0x81; 32], 301, [0x82; 32], 302).unwrap(),
+        SimulationProductionKirIdentityV8::new(13, production_digest, production_length).unwrap(),
+        epoch,
+        target,
+        canonical,
+    )
+    .unwrap();
+    let source_map = DebugSourceMapDocumentV2::new(
+        prepared.debug_source_map_binding(),
+        vec![DebugSourceMapFileV1::new([0x84; 32], 16, "bundle-v8.rs".into()).unwrap()],
+        vec![],
+        vec![DebugSourceMapSpanV1::new([0x84; 32], 1, 2, 1, 2).unwrap()],
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    let semantic = b"cli-command-bundle-v8-semantic-fixture".to_vec();
+    let semantic_digest = <[u8; 32]>::from(Sha256::digest(&semantic));
+    let storage = SemanticStorageMapV8::new(
+        *prepared.subject_identity(),
+        1,
+        semantic_digest,
+        semantic.len() as u64,
+        [0x83; 32],
+        *prepared.canonical_kir_v13_digest(),
+        prepared.canonical_kir_v13_length(),
+        vec![SemanticKernelStorageV1::new(0, 0, 0, vec![])],
+        vec![],
+    )
+    .unwrap();
+    let aggregate = SemanticAggregateStorageMapV8::new(
+        *prepared.subject_identity(),
+        *prepared.canonical_kir_v13_digest(),
+        prepared.canonical_kir_v13_length(),
+        vec![SemanticKernelStorageV2::new(0, 0, 0, 0, 1, vec![])],
+    )
+    .unwrap();
+    prepared
+        .finalize(source_map, semantic, storage, aggregate)
+        .unwrap()
+}
+
 fn hex_identity(identity: &[u8; 32]) -> String {
     let mut result = String::with_capacity(64);
     for byte in identity {
@@ -347,7 +491,7 @@ fn help_is_a_successful_input_free_command() {
         assert!(output.status.success());
         assert_eq!(
             String::from_utf8(output.stdout).unwrap(),
-            "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH | --bundle-v5 PATH | --bundle-v6 PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT] | --reduce-failure [--schedule-seed U64] [--schedule-max-decisions COUNT] | --replay-failure-reduction PATH]\n"
+            "usage: fe2o3-kir-sim (--kir-v7 PATH | --kir-v12 PATH | --bundle PATH | --bundle-v5 PATH | --bundle-v6 PATH | --bundle-v7 PATH | --bundle-v8 PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT] | --reduce-failure [--schedule-seed U64] [--schedule-max-decisions COUNT] | --replay-failure-reduction PATH]\n"
         );
         assert!(output.stderr.is_empty());
     }
@@ -423,6 +567,194 @@ fn bundle_v6_executes_and_records_an_exact_replayable_schedule() {
         result["schedule"]["transcript_sha256"]
     );
     assert_eq!(replayed["arguments"], result["arguments"]);
+}
+
+#[test]
+fn bundle_v7_executes_exact_v12_and_replay_rejects_a_stale_epoch() {
+    let directory = TestDirectory::new();
+    let bundle_path = directory.path().join("kernel-v7.fe2sim");
+    let stale_path = directory.path().join("kernel-v7-stale.fe2sim");
+    let request = directory.path().join("request-v7.json");
+    let schedule = directory.path().join("schedule-v7.json");
+    let bundle = simulation_bundle_v7(37);
+    let stale = simulation_bundle_v7(38);
+    fs::write(&bundle_path, bundle.canonical_bytes()).unwrap();
+    fs::write(&stale_path, stale.canonical_bytes()).unwrap();
+    fs::write(
+        &request,
+        br#"{"schema":"fe2o3-simulation-request-v1","kernel":"context_v12","grid":[2,1,1],"workgroup":[1,1,1],"arguments":[]}"#,
+    )
+    .unwrap();
+
+    let recorded = binary()
+        .arg("--bundle-v7")
+        .arg(&bundle_path)
+        .arg("--request")
+        .arg(&request)
+        .arg("--record-canonical-schedule")
+        .arg(&schedule)
+        .args(["--schedule-max-decisions", "8"])
+        .output()
+        .unwrap();
+    assert!(
+        recorded.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recorded.stderr)
+    );
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&fs::read(&schedule).unwrap()).unwrap();
+    assert_eq!(persisted["artifact"]["kind"], "simulation_bundle_v7");
+    assert_eq!(persisted["artifact"]["final_graph_epoch"], 37);
+    assert_eq!(
+        persisted["artifact"]["kir_sha256"],
+        hex_identity(bundle.canonical_kir_v12_digest())
+    );
+
+    let replayed = binary()
+        .arg("--bundle-v7")
+        .arg(&bundle_path)
+        .arg("--request")
+        .arg(&request)
+        .arg("--replay-schedule")
+        .arg(&schedule)
+        .output()
+        .unwrap();
+    assert!(
+        replayed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replayed.stderr)
+    );
+
+    let rejected = binary()
+        .arg("--bundle-v7")
+        .arg(&stale_path)
+        .arg("--request")
+        .arg(&request)
+        .arg("--replay-schedule")
+        .arg(&schedule)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&rejected.stderr).unwrap();
+    assert_eq!(error["kind"], "schedule_binding_mismatch");
+}
+
+#[test]
+fn bundle_v8_executes_exact_v13_and_replay_rejects_substitution() {
+    let directory = TestDirectory::new();
+    let bundle_path = directory.path().join("kernel-v8.fe2sim");
+    let stale_path = directory.path().join("kernel-v8-stale.fe2sim");
+    let cross_target_path = directory.path().join("kernel-v8-cross-target.fe2sim");
+    let request = directory.path().join("request-v8.json");
+    let cross_request = directory.path().join("request-v8-cross-launch.json");
+    let schedule = directory.path().join("schedule-v8.json");
+    let bundle = simulation_bundle_v8(47, "gfx942:xnack-");
+    let stale = simulation_bundle_v8(48, "gfx942:xnack-");
+    let cross_target = simulation_bundle_v8(47, "gfx950:xnack-");
+    fs::write(&bundle_path, bundle.canonical_bytes()).unwrap();
+    fs::write(&stale_path, stale.canonical_bytes()).unwrap();
+    fs::write(&cross_target_path, cross_target.canonical_bytes()).unwrap();
+    fs::write(
+        &request,
+        br#"{"schema":"fe2o3-simulation-request-v1","kernel":"context_v12","grid":[2,1,1],"workgroup":[1,1,1],"arguments":[]}"#,
+    )
+    .unwrap();
+    fs::write(
+        &cross_request,
+        br#"{"schema":"fe2o3-simulation-request-v1","kernel":"context_v12","grid":[3,1,1],"workgroup":[1,1,1],"arguments":[]}"#,
+    )
+    .unwrap();
+
+    let recorded = binary()
+        .arg("--bundle-v8")
+        .arg(&bundle_path)
+        .arg("--request")
+        .arg(&request)
+        .arg("--record-canonical-schedule")
+        .arg(&schedule)
+        .args(["--schedule-max-decisions", "8"])
+        .output()
+        .unwrap();
+    assert!(
+        recorded.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recorded.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&recorded.stdout).unwrap();
+    assert_eq!(result["schema"], "fe2o3-simulation-result-v1");
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["authority"], "observation_only");
+    assert_eq!(result["simulated"], true);
+    assert_eq!(result["hardware_observed"], false);
+    assert_eq!(result["hardware_validation"], false);
+    assert_eq!(result["performance_prediction"], false);
+    assert_eq!(
+        result["kir"]["canonical_bytes"],
+        bundle.canonical_kir_v13_length()
+    );
+    assert_eq!(result["counts"]["invocations_executed"], 2);
+
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&fs::read(&schedule).unwrap()).unwrap();
+    assert_eq!(persisted["artifact"]["kind"], "simulation_bundle_v8");
+    assert_eq!(persisted["artifact"]["final_graph_epoch"], 47);
+    assert_eq!(
+        persisted["artifact"]["bundle_sha256"],
+        hex_identity(bundle.identity().as_bytes())
+    );
+    assert_eq!(
+        persisted["artifact"]["subject_sha256"],
+        hex_identity(bundle.subject_identity())
+    );
+    assert_eq!(
+        persisted["artifact"]["kir_sha256"],
+        hex_identity(bundle.canonical_kir_v13_digest())
+    );
+
+    let replayed = binary()
+        .arg("--bundle-v8")
+        .arg(&bundle_path)
+        .arg("--request")
+        .arg(&request)
+        .arg("--replay-schedule")
+        .arg(&schedule)
+        .output()
+        .unwrap();
+    assert!(
+        replayed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replayed.stderr)
+    );
+
+    for (path, request_path) in [
+        (&stale_path, &request),
+        (&cross_target_path, &request),
+        (&bundle_path, &cross_request),
+    ] {
+        let rejected = binary()
+            .arg("--bundle-v8")
+            .arg(path)
+            .arg("--request")
+            .arg(request_path)
+            .arg("--replay-schedule")
+            .arg(&schedule)
+            .output()
+            .unwrap();
+        assert!(!rejected.status.success());
+        let error: serde_json::Value = serde_json::from_slice(&rejected.stderr).unwrap();
+        assert_eq!(error["kind"], "schedule_binding_mismatch");
+    }
+
+    let downgraded = binary()
+        .arg("--bundle-v7")
+        .arg(&bundle_path)
+        .arg("--request")
+        .arg(&request)
+        .output()
+        .unwrap();
+    assert!(!downgraded.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&downgraded.stderr).unwrap();
+    assert_eq!(error["kind"], "simulation_bundle_rejected");
 }
 
 #[test]
@@ -717,6 +1049,90 @@ fn successful_stdout_is_complete_machine_readable_json() {
     assert_eq!(value["counts"]["scheduled_slots_visited"], 2);
     assert_eq!(value["arguments"][0]["value"]["bytes"], "0x2a");
     assert!(value.get("race_assessment").is_none());
+}
+
+#[test]
+fn direct_v12_context_input_uses_exact_admission_and_schedule_custody() {
+    let directory = TestDirectory::new();
+    let kir = directory.path().join("context-v12.kir");
+    let request = directory.path().join("context-v12-request.json");
+    let schedule = directory.path().join("context-v12-schedule.json");
+    fs::write(&kir, contextual_noop_v12()).unwrap();
+    fs::write(
+        &request,
+        br#"{"schema":"fe2o3-simulation-request-v1","kernel":"context_v12","grid":[1,1,1],"workgroup":[1,1,1],"arguments":[]}"#,
+    )
+    .unwrap();
+
+    let output = binary()
+        .arg("--kir-v12")
+        .arg(&kir)
+        .arg("--request")
+        .arg(&request)
+        .arg("--record-canonical-schedule")
+        .arg(&schedule)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["status"], "ok");
+    let schedule_bytes = fs::read(&schedule).unwrap();
+    let schedule_text = std::str::from_utf8(&schedule_bytes).unwrap();
+    assert!(schedule_text.contains("\"kind\":\"canonical_kir_v12\""));
+    let replayed = binary()
+        .arg("--kir-v12")
+        .arg(&kir)
+        .arg("--request")
+        .arg(&request)
+        .arg("--replay-schedule")
+        .arg(&schedule)
+        .output()
+        .unwrap();
+    assert!(
+        replayed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replayed.stderr)
+    );
+
+    let older = directory.path().join("older-v11.kir");
+    fs::write(
+        &older,
+        VerifiedCanonicalKernelIrV11::from_module(Module::new("older"))
+            .unwrap()
+            .into_canonical_bytes(),
+    )
+    .unwrap();
+    let rejected = binary()
+        .arg("--kir-v12")
+        .arg(older)
+        .arg("--request")
+        .arg(&request)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&rejected.stderr).unwrap();
+    assert_eq!(error["stage"], "kir_admission");
+    assert_eq!(error["kind"], "kir_v12_wrong_version");
+
+    let malformed = directory.path().join("malformed-v12.kir");
+    let mut malformed_bytes = contextual_noop_v12();
+    malformed_bytes.push(0);
+    fs::write(&malformed, malformed_bytes).unwrap();
+    let rejected = binary()
+        .arg("--kir-v12")
+        .arg(malformed)
+        .arg("--request")
+        .arg(request)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&rejected.stderr).unwrap();
+    assert_eq!(error["stage"], "kir_admission");
+    assert_eq!(error["kind"], "kir_v12_decode_failed");
 }
 
 #[test]

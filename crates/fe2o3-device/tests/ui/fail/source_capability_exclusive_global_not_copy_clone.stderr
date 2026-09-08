@@ -1,0 +1,69 @@
+error[E0277]: the trait bound `CapabilityMemoryView<'static, f32, GlobalAddressSpace, ExclusiveReadWrite, ()>: Copy` is not satisfied
+ --> tests/ui/fail/source_capability_exclusive_global_not_copy_clone.rs:9:19
+  |
+9 |     assert_copy::<Global<'static, f32, ExclusiveReadWrite, ()>>();
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Copy` is not implemented for `CapabilityMemoryView<'static, f32, GlobalAddressSpace, ExclusiveReadWrite, ()>`
+  |
+note: required by a bound in `assert_copy`
+ --> tests/ui/fail/source_capability_exclusive_global_not_copy_clone.rs:3:19
+  |
+3 | fn assert_copy<T: Copy>() {}
+  |                   ^^^^ required by this bound in `assert_copy`
+
+error[E0277]: the trait bound `CapabilityMemoryView<'static, f32, GlobalAddressSpace, ExclusiveReadWrite, ()>: Clone` is not satisfied
+  --> tests/ui/fail/source_capability_exclusive_global_not_copy_clone.rs:10:20
+   |
+10 |     assert_clone::<Global<'static, f32, ExclusiveReadWrite, ()>>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `CapabilityMemoryView<'static, f32, GlobalAddressSpace, ExclusiveReadWrite, ()>`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/ui/fail/source_capability_exclusive_global_not_copy_clone.rs:4:20
+   |
+ 4 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: `*mut ()` cannot be sent between threads safely
+  --> tests/ui/fail/source_capability_exclusive_global_not_copy_clone.rs:11:19
+   |
+11 |     assert_send::<Global<'static, f32, ExclusiveReadWrite, ()>>();
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+   |
+   = help: within `CapabilityMemoryView<'static, f32, GlobalAddressSpace, ExclusiveReadWrite, ()>`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+  --> $RUST/core/src/marker.rs
+   |
+   | pub struct PhantomData<T: PointeeSized>;
+   |            ^^^^^^^^^^^
+note: required because it appears within the type `CapabilityMemoryView<'static, f32, GlobalAddressSpace, ExclusiveReadWrite, ()>`
+  --> src/capability_memory.rs
+   |
+   | pub struct CapabilityMemoryView<'kernel, T: 'kernel, Space, Role, Brand>
+   |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+  --> tests/ui/fail/source_capability_exclusive_global_not_copy_clone.rs:5:19
+   |
+ 5 | fn assert_send<T: Send>() {}
+   |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `*mut ()` cannot be shared between threads safely
+  --> tests/ui/fail/source_capability_exclusive_global_not_copy_clone.rs:12:19
+   |
+12 |     assert_sync::<Global<'static, f32, ExclusiveReadWrite, ()>>();
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be shared between threads safely
+   |
+   = help: within `CapabilityMemoryView<'static, f32, GlobalAddressSpace, ExclusiveReadWrite, ()>`, the trait `Sync` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+  --> $RUST/core/src/marker.rs
+   |
+   | pub struct PhantomData<T: PointeeSized>;
+   |            ^^^^^^^^^^^
+note: required because it appears within the type `CapabilityMemoryView<'static, f32, GlobalAddressSpace, ExclusiveReadWrite, ()>`
+  --> src/capability_memory.rs
+   |
+   | pub struct CapabilityMemoryView<'kernel, T: 'kernel, Space, Role, Brand>
+   |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_sync`
+  --> tests/ui/fail/source_capability_exclusive_global_not_copy_clone.rs:6:19
+   |
+ 6 | fn assert_sync<T: Sync>() {}
+   |                   ^^^^ required by this bound in `assert_sync`

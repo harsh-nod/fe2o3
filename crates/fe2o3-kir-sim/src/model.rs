@@ -2,12 +2,16 @@ use std::error::Error;
 use std::fmt;
 
 use fe2o3_kernel_ir::{
-    AccessMode, KernelId, KernelIrDecodeError, KernelIrEncodeError, Module, ScalarType,
+    AccessMode, ExecutionCapabilityRequirementV1, KernelId, KernelIrDecodeError,
+    KernelIrEncodeError, Module, ScalarType, VerificationErrors,
     VerifiedCanonicalKernelIrIdentityV7, VerifiedCanonicalKernelIrIdentityV9,
     VerifiedCanonicalKernelIrIdentityV10, VerifiedCanonicalKernelIrIdentityV11,
+    VerifiedCanonicalKernelIrIdentityV12, VerifiedCanonicalKernelIrIdentityV13,
     VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV10,
-    VerifiedCanonicalKernelIrV11, decode_module_v7, decode_module_v9, decode_module_v10,
-    decode_module_v11, encode_module_v7, encode_module_v9, encode_module_v10, encode_module_v11,
+    VerifiedCanonicalKernelIrV11, VerifiedCanonicalKernelIrV12, VerifiedCanonicalKernelIrV13,
+    decode_module_v7, decode_module_v9, decode_module_v10, decode_module_v11, decode_module_v12,
+    decode_module_v13, encode_module_v7, encode_module_v9, encode_module_v10, encode_module_v11,
+    encode_module_v12, encode_module_v13, verify_module,
 };
 
 const HARD_MAX_CANONICAL_BYTES_V1: usize = 16 * 1024 * 1024;
@@ -780,11 +784,40 @@ impl From<VerifiedCanonicalKernelIrIdentityV11> for SimulationKernelIrIdentityV1
     }
 }
 
+impl From<VerifiedCanonicalKernelIrIdentityV12> for SimulationKernelIrIdentityV1 {
+    fn from(identity: VerifiedCanonicalKernelIrIdentityV12) -> Self {
+        Self {
+            wire_version: fe2o3_kernel_ir::KERNEL_IR_VERSION_V12,
+            digest: *identity.digest(),
+            canonical_length: identity.canonical_length(),
+        }
+    }
+}
+
+impl From<VerifiedCanonicalKernelIrIdentityV13> for SimulationKernelIrIdentityV1 {
+    fn from(identity: VerifiedCanonicalKernelIrIdentityV13) -> Self {
+        Self {
+            wire_version: fe2o3_kernel_ir::KERNEL_IR_VERSION_V13,
+            digest: *identity.digest(),
+            canonical_length: identity.canonical_length(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AdmissionProjectionV1 {
+    Identity,
+    EraseLogicalCapabilitiesV12,
+    EraseLogicalCapabilitiesV13,
+}
+
 /// Exact canonical KIR owner admitted for simulation. This owner is intentionally not `Clone`.
 #[derive(Debug)]
 pub struct AdmittedSimulationModuleV1 {
     pub(crate) identity: SimulationKernelIrIdentityV1,
     pub(crate) module: Module,
+    pub(crate) capability_projection_v13:
+        Option<crate::execution_capability_v13::SimulationCapabilityProjectionReceiptV13>,
     pub(crate) admitted_resident_bytes: usize,
 }
 
@@ -806,6 +839,7 @@ impl AdmittedSimulationModuleV1 {
             limits,
             decode_module_v7,
             encode_module_v7,
+            AdmissionProjectionV1::Identity,
         )
     }
 
@@ -822,6 +856,7 @@ impl AdmittedSimulationModuleV1 {
             limits,
             decode_module_v9,
             encode_module_v9,
+            AdmissionProjectionV1::Identity,
         )
     }
 
@@ -838,6 +873,7 @@ impl AdmittedSimulationModuleV1 {
             limits,
             decode_module_v10,
             encode_module_v10,
+            AdmissionProjectionV1::Identity,
         )
     }
 
@@ -854,6 +890,42 @@ impl AdmittedSimulationModuleV1 {
             limits,
             decode_module_v11,
             encode_module_v11,
+            AdmissionProjectionV1::Identity,
+        )
+    }
+
+    /// Consumes exact verified V12 custody and erases logical authority before
+    /// reusing the single simulator preflight/execution path.
+    pub fn admit_v12(
+        canonical: VerifiedCanonicalKernelIrV12,
+        limits: SimulationLimitsV1,
+    ) -> Result<Self, SimulationAdmissionErrorV1> {
+        let identity = SimulationKernelIrIdentityV1::from(*canonical.identity());
+        Self::admit_canonical(
+            identity,
+            canonical.into_canonical_bytes(),
+            limits,
+            decode_module_v12,
+            encode_module_v12,
+            AdmissionProjectionV1::EraseLogicalCapabilitiesV12,
+        )
+    }
+
+    /// Consumes exact verified V13 custody. The exact V13 bytes and identity are
+    /// retained as admission evidence; unsupported execution-capability
+    /// operations fail closed before the shared executable projection is built.
+    pub fn admit_v13(
+        canonical: VerifiedCanonicalKernelIrV13,
+        limits: SimulationLimitsV1,
+    ) -> Result<Self, SimulationAdmissionErrorV1> {
+        let identity = SimulationKernelIrIdentityV1::from(*canonical.identity());
+        Self::admit_canonical(
+            identity,
+            canonical.into_canonical_bytes(),
+            limits,
+            decode_module_v13,
+            encode_module_v13,
+            AdmissionProjectionV1::EraseLogicalCapabilitiesV13,
         )
     }
 
@@ -863,6 +935,7 @@ impl AdmittedSimulationModuleV1 {
         limits: SimulationLimitsV1,
         decode: fn(&[u8]) -> Result<Module, KernelIrDecodeError>,
         encode: fn(&Module) -> Result<Vec<u8>, KernelIrEncodeError>,
+        projection: AdmissionProjectionV1,
     ) -> Result<Self, SimulationAdmissionErrorV1> {
         let limits = limits
             .validate()
@@ -873,17 +946,81 @@ impl AdmittedSimulationModuleV1 {
                 limit: limits.max_canonical_bytes,
             });
         }
+        let canonical_capacity = bytes.capacity();
         let module = decode(&bytes).map_err(SimulationAdmissionErrorV1::DecodeAfterAdmission)?;
         let reencoded =
             encode(&module).map_err(SimulationAdmissionErrorV1::EncodeAfterAdmission)?;
-        let admitted_resident_bytes = std::mem::size_of::<Self>()
+        if reencoded != bytes {
+            return Err(SimulationAdmissionErrorV1::NonCanonicalAfterAdmission);
+        }
+        let decoded_resident_bytes = std::mem::size_of::<Self>()
             .checked_add(
                 crate::resident::module_retained_heap_bytes(&module)
                     .ok_or(SimulationAdmissionErrorV1::ResidentBytesOverflow)?,
             )
             .ok_or(SimulationAdmissionErrorV1::ResidentBytesOverflow)?;
-        let decode_peak = admitted_resident_bytes
-            .checked_add(bytes.capacity())
+        let (module, projection_scratch_bytes, capability_projection_v13) = match projection {
+            AdmissionProjectionV1::Identity => (module, 0, None),
+            AdmissionProjectionV1::EraseLogicalCapabilitiesV12
+            | AdmissionProjectionV1::EraseLogicalCapabilitiesV13 => {
+                verify_module(&module)
+                    .map_err(SimulationAdmissionErrorV1::LogicalCapabilityErasureVerification)?;
+                let retain_v13_receipt = matches!(
+                    projection,
+                    AdmissionProjectionV1::EraseLogicalCapabilitiesV13
+                );
+                if retain_v13_receipt
+                    && let Some(operation) =
+                        crate::context::first_incomplete_execution_capability_v13(&module)
+                {
+                    return Err(
+                        SimulationAdmissionErrorV1::IncompleteExecutionCapabilityV13(operation),
+                    );
+                }
+                if let Some(requirement) = crate::context::first_unsupported_execution_requirement(
+                    &module,
+                    retain_v13_receipt,
+                ) {
+                    return Err(SimulationAdmissionErrorV1::UnsupportedExecutionCapability(
+                        requirement,
+                    ));
+                }
+                let (module, scratch, receipt) =
+                    crate::context::erase_logical_capabilities(module, retain_v13_receipt).map_err(
+                        |error| match error {
+                        crate::context::LogicalCapabilityErasureError::AllocationFailure => {
+                            SimulationAdmissionErrorV1::LogicalCapabilityErasureAllocationFailure
+                        }
+                        crate::context::LogicalCapabilityErasureError::IncompleteExecutionCapability(
+                            operation,
+                        ) => {
+                            SimulationAdmissionErrorV1::IncompleteExecutionCapabilityV13(operation)
+                        }
+                        crate::context::LogicalCapabilityErasureError::InvalidProjection(
+                            reason,
+                        ) => SimulationAdmissionErrorV1::InvalidLogicalCapabilityProjection(reason),
+                    },
+                    )?;
+                verify_module(&module)
+                    .map_err(SimulationAdmissionErrorV1::LogicalCapabilityErasureVerification)?;
+                (module, scratch, receipt)
+            }
+        };
+        let capability_receipt_bytes = capability_projection_v13
+            .as_ref()
+            .map_or(Some(0), |receipt| receipt.retained_heap_bytes())
+            .ok_or(SimulationAdmissionErrorV1::ResidentBytesOverflow)?;
+        let admitted_resident_bytes = std::mem::size_of::<Self>()
+            .checked_add(
+                crate::resident::module_retained_heap_bytes(&module)
+                    .ok_or(SimulationAdmissionErrorV1::ResidentBytesOverflow)?,
+            )
+            .and_then(|bytes| bytes.checked_add(capability_receipt_bytes))
+            .ok_or(SimulationAdmissionErrorV1::ResidentBytesOverflow)?;
+        let decode_peak = decoded_resident_bytes
+            .max(admitted_resident_bytes)
+            .checked_add(projection_scratch_bytes)
+            .and_then(|bytes| bytes.checked_add(canonical_capacity))
             .and_then(|bytes| bytes.checked_add(reencoded.capacity()))
             .and_then(|bytes| bytes.checked_add(2 * std::mem::size_of::<Vec<u8>>()))
             .ok_or(SimulationAdmissionErrorV1::ResidentBytesOverflow)?;
@@ -897,6 +1034,7 @@ impl AdmittedSimulationModuleV1 {
         Ok(Self {
             identity,
             module,
+            capability_projection_v13,
             admitted_resident_bytes,
         })
     }
@@ -920,6 +1058,14 @@ impl AdmittedSimulationModuleV1 {
         self.admitted_resident_bytes
     }
 
+    /// Returns the exact logical definition/use coordinates consumed by V13
+    /// projection. Older wire versions do not produce a V13 receipt.
+    pub fn capability_projection_receipt_v13(
+        &self,
+    ) -> Option<&crate::execution_capability_v13::SimulationCapabilityProjectionReceiptV13> {
+        self.capability_projection_v13.as_ref()
+    }
+
     /// Simulation admission never grants compiler, proof, artifact, load, or launch authority.
     pub const fn grants_execution_authority(&self) -> bool {
         false
@@ -936,6 +1082,12 @@ pub enum SimulationAdmissionErrorV1 {
     },
     DecodeAfterAdmission(KernelIrDecodeError),
     EncodeAfterAdmission(KernelIrEncodeError),
+    NonCanonicalAfterAdmission,
+    UnsupportedExecutionCapability(ExecutionCapabilityRequirementV1),
+    IncompleteExecutionCapabilityV13(IncompleteExecutionCapabilityOperationV13),
+    LogicalCapabilityErasureAllocationFailure,
+    InvalidLogicalCapabilityProjection(&'static str),
+    LogicalCapabilityErasureVerification(VerificationErrors),
     ResidentBytesOverflow,
     /// The fully measured admission peak exceeded the successful-admission cap.
     ///
@@ -970,6 +1122,27 @@ impl fmt::Display for SimulationAdmissionErrorV1 {
                     "admitted decoded KIR failed canonical re-encoding: {error}"
                 )
             }
+            Self::NonCanonicalAfterAdmission => {
+                formatter.write_str("admitted KIR bytes are not their canonical re-encoding")
+            }
+            Self::UnsupportedExecutionCapability(requirement) => write!(
+                formatter,
+                "simulator does not support execution capability requirement {requirement:?}",
+            ),
+            Self::IncompleteExecutionCapabilityV13(operation) => write!(
+                formatter,
+                "KIR V13 execution-capability operation {operation} is incomplete in the simulator",
+            ),
+            Self::LogicalCapabilityErasureAllocationFailure => {
+                formatter.write_str("logical-capability erasure scratch allocation failed")
+            }
+            Self::InvalidLogicalCapabilityProjection(reason) => {
+                write!(formatter, "invalid logical-capability projection: {reason}")
+            }
+            Self::LogicalCapabilityErasureVerification(error) => write!(
+                formatter,
+                "logical-capability erasure produced invalid executable KIR: {error}",
+            ),
             Self::ResidentBytesOverflow => {
                 write!(
                     formatter,
@@ -994,10 +1167,76 @@ impl Error for SimulationAdmissionErrorV1 {
             Self::InvalidLimits(error) => Some(error),
             Self::DecodeAfterAdmission(error) => Some(error),
             Self::EncodeAfterAdmission(error) => Some(error),
+            Self::LogicalCapabilityErasureVerification(error) => Some(error),
             Self::CanonicalBytesLimit { .. }
+            | Self::NonCanonicalAfterAdmission
+            | Self::UnsupportedExecutionCapability(_)
+            | Self::IncompleteExecutionCapabilityV13(_)
+            | Self::LogicalCapabilityErasureAllocationFailure
+            | Self::InvalidLogicalCapabilityProjection(_)
             | Self::ResidentBytesOverflow
             | Self::ResidentBytesLimit { .. } => None,
         }
+    }
+}
+
+/// A verified KIR V13 operation whose deterministic simulator semantics are not
+/// implemented. Every V13 execution-capability family has a distinct value so
+/// admission cannot silently erase or reinterpret an unsupported operation.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum IncompleteExecutionCapabilityOperationV13 {
+    WorkgroupDerive,
+    SubgroupDerive,
+    LdsAllocate,
+    LdsInitializeByInvocation,
+    LdsPublish,
+    LdsReadPublished,
+    WorkgroupBarrier,
+    SubgroupBarrier,
+    WorkgroupFence,
+    SubgroupFence,
+    Atomic,
+    WorkgroupCollective,
+    SubgroupCollective,
+    MatrixAccess,
+    AsyncCopy,
+    AsyncWait,
+    RawMemoryBind,
+    PrivateMemoryAllocate,
+    WorkgroupMemoryIndex,
+    WorkgroupMemoryAllocate,
+    WorkgroupMemoryPublish,
+    MemoryLoad,
+    MemoryStore,
+}
+
+impl fmt::Display for IncompleteExecutionCapabilityOperationV13 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::WorkgroupDerive => "workgroup_derive",
+            Self::SubgroupDerive => "subgroup_derive",
+            Self::LdsAllocate => "lds_allocate",
+            Self::LdsInitializeByInvocation => "lds_initialize_by_invocation",
+            Self::LdsPublish => "lds_publish",
+            Self::LdsReadPublished => "lds_read_published",
+            Self::WorkgroupBarrier => "workgroup_barrier",
+            Self::SubgroupBarrier => "subgroup_barrier",
+            Self::WorkgroupFence => "workgroup_fence",
+            Self::SubgroupFence => "subgroup_fence",
+            Self::Atomic => "atomic",
+            Self::WorkgroupCollective => "workgroup_collective",
+            Self::SubgroupCollective => "subgroup_collective",
+            Self::MatrixAccess => "matrix_access",
+            Self::AsyncCopy => "async_copy",
+            Self::AsyncWait => "async_wait",
+            Self::RawMemoryBind => "raw_memory_bind",
+            Self::PrivateMemoryAllocate => "private_memory_allocate",
+            Self::WorkgroupMemoryIndex => "workgroup_memory_index",
+            Self::WorkgroupMemoryAllocate => "workgroup_memory_allocate",
+            Self::WorkgroupMemoryPublish => "workgroup_memory_publish",
+            Self::MemoryLoad => "memory_load",
+            Self::MemoryStore => "memory_store",
+        })
     }
 }
 

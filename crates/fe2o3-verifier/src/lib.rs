@@ -16,12 +16,17 @@ mod artifact_record;
 mod authenticated_execution;
 mod authenticated_proof_binding;
 mod authenticated_verus_execution_v2;
+#[cfg(test)]
+mod bounded_semantic_refinement_verus_v1;
+mod compiler_capability_evidence_v1;
 mod compiler_multi_root_proof_v1;
 mod compiler_multi_root_target_lineage_v1;
 mod compiler_proof_binding_v3;
+mod compiler_proof_owner_v5;
 mod compiler_target_lineage_v1;
 mod control_flow_binding;
 mod executor;
+mod final_kir_output_equivalence_v1;
 mod functional_refinement_receipt_v2;
 mod functional_refinement_runtime_v1;
 mod generated_verus_proof_input_v3;
@@ -32,8 +37,11 @@ mod monomorphization_dead_binding;
 mod multi_kernel_proof;
 mod persistent_freshness;
 mod plan;
+mod production_final_graph_functional_refinement_v1;
+mod production_functional_semantic_derivation_v1;
 mod production_kir_to_llvm_replay_v1;
 mod proof_capsule;
+mod protected_compiler_completion_v5;
 mod result;
 mod retained_functional_refinement_runtime_v1;
 mod static_view_proof;
@@ -56,6 +64,11 @@ pub use authenticated_verus_execution_v2::{
     BoundExecutionPayloadV2, ProcessFailureV2, RuntimeClosureMeasurementV2,
     RuntimeExecutableBaselineV2, VerusExecutionRoleV2, execute_authenticated_verus_v2,
 };
+pub use compiler_capability_evidence_v1::{
+    CompilerCapabilityEvidenceValidationErrorV1, CompilerCapabilitySourceOwnerErrorV1,
+    ValidatedCompilerCapabilityEvidenceV1, ValidatedCompilerCapabilitySourceOwnerV1,
+    validate_compiler_capability_evidence_v1, validate_compiler_capability_source_owner_v1,
+};
 pub use compiler_multi_root_proof_v1::{
     CompilerMultiRootProofValidationErrorV1, ValidatedCompilerMultiRootKernelIrV1,
     ValidatedCompilerMultiRootProofInputsV1, ValidatedCompilerMultiRootProofRootV1,
@@ -69,6 +82,11 @@ pub use compiler_proof_binding_v3::{
     ValidatedCompilerProofInputsV3, ValidatedCompilerProofInputsV4,
     VerifiedSemanticU32InductionKirAnchorV1, validate_compiler_proof_inputs_v3,
     validate_compiler_proof_inputs_v4,
+};
+pub use compiler_proof_owner_v5::{
+    CompilerProofInputValidationErrorV5, ValidatedCompilerMultiRootProofInputsV5,
+    ValidatedCompilerProofInputsV5, validate_compiler_multi_root_proof_inputs_v5,
+    validate_compiler_proof_inputs_v5,
 };
 // Deprecated compatibility exports. Despite their Verus-oriented names, these
 // authenticate and execute only the recorder; they do not show that Verus or a
@@ -110,6 +128,9 @@ pub use executor::{
     ExecutionError, ExecutionErrorKind, ExecutionLimits, ExecutionPath, ExecutionStage,
     ExecutionSuccess, MAX_CAPTURE_BYTES, OutputStream, ProcessOutput, execute_recorder,
 };
+pub use final_kir_output_equivalence_v1::{
+    FinalKirNumericalModelV1, FinalKirOutputEquivalenceErrorV1,
+};
 pub use functional_refinement_receipt_v2::{
     FunctionalRefinementVerusExecutionErrorKindV2, FunctionalRefinementVerusExecutionErrorV2,
     PreparedFunctionalRefinementReceiptV2,
@@ -127,9 +148,13 @@ pub use generated_verus_proof_input_v3::{
 };
 pub use mir_pliron_per_compilation_verus_v1::{
     MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1,
+    ProductionEffectIrDerivedVerusVerifiedMirPlironKernelV3,
+    ProductionIrDerivedVerusVerifiedMirPlironKernelV2,
     ProductionMirPlironPerCompilationVerusErrorV1,
     ProductionMirPlironPerCompilationVerusExecutionV1,
     ProductionMirPlironPerCompilationVerusReportV1, ProductionVerusVerifiedMirPlironKernelV1,
+    execute_effect_ir_derived_mir_pliron_semantic_contract_per_compilation_v3,
+    execute_ir_derived_mir_pliron_semantic_contract_per_compilation_v2,
     execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1,
     execute_mir_pliron_semantic_contract_per_compilation_v1,
 };
@@ -177,6 +202,16 @@ pub use plan::{
     CommandSpec, InvocationPaths, InvocationPlan, MAX_PATH_BYTES, MAX_TIMEOUT_SECONDS, PlanError,
     VerifierPolicy, build_invocation_plan,
 };
+pub use production_final_graph_functional_refinement_v1::{
+    ProductionFinalGraphFunctionalRefinementErrorV1,
+    ProductionFinalGraphFunctionalRefinementExecutionV2,
+    ProductionFinalGraphFunctionalRefinementV1, ProductionFinalGraphFunctionalReportV1,
+    bind_effect_ir_derived_functional_refinement_to_borrowed_final_graph_v2,
+    bind_ir_derived_functional_refinement_to_final_graph_v1,
+};
+pub use production_functional_semantic_derivation_v1::{
+    ProductionFunctionalSemanticDerivationErrorV1, ProductionIrDerivedFunctionalSemanticsV1,
+};
 pub use production_kir_to_llvm_replay_v1::{
     CompilerKirToLlvmReplayValidationErrorV1, ValidatedCompilerKirToLlvmReplayV1,
     validate_compiler_kir_to_llvm_replay_v1,
@@ -190,6 +225,9 @@ pub use proof_capsule::{
     ProofCapsuleExecutionV1, ProofCapsuleExpectationV1, ProofCapsuleFreshnessExpectationV1,
     ProofCapsuleFreshnessIdentityV1, ProofCapsuleIdentityFieldV1, ProofCapsulePayloadIdentityV1,
     ProofCapsulePolicyV1, ProofCapsuleResultV1, ProofCapsuleTargetV1, ProofCapsuleV1,
+};
+pub use protected_compiler_completion_v5::{
+    ProtectedCompilerCompletionInputErrorV5, validate_protected_compiler_completion_inputs_v5,
 };
 pub use result::{
     MAX_RESULT_BYTES, ProofResultV1, RecorderTermination, ResultError, parse_recorder_result,

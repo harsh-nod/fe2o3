@@ -156,6 +156,20 @@ fn analyze_as_kernel(function: &Function) -> fe2o3_kernel_analysis::AnalysisRepo
     analyze_kernel_entry(&module, function)
 }
 
+#[test]
+fn kernel_context_issuance_does_not_grant_uniformity() {
+    let context = fe2o3_kernel_ir::KernelContextTypeV1::new("test", [1; 32], [2; 32], [3; 32]);
+    let mut entry = returning(0);
+    entry.operations.push(Operation::kernel_context_issue(
+        ValueId(0),
+        context,
+        fe2o3_kernel_ir::KernelContextSourceIdentityV1::new([4; 32], [5; 32], [6; 32], [7; 32]),
+    ));
+
+    let report = analyze_function(&function(vec![], vec![entry]));
+    assert_eq!(report.value(ValueId(0)), Variation::Varying);
+}
+
 fn workgroup_barrier() -> Operation {
     Operation::new(
         vec![],

@@ -10,3 +10,6 @@ publish = false
 
 [lib]
 name = "fe2o3_proof_contracts"
+
+[dependencies]
+sha2.workspace = true

@@ -1,0 +1,11 @@
+error[E0451]: fields `_phase`, `_workgroup` and `_not_send_sync` of struct `ReusablePhaseCompletion` are private
+ --> tests/ui/fail/source_capability_reusable_phase_completion_private.rs:7:9
+  |
+6 |     let _ = ReusablePhaseCompletion::<'static, 'static, ()> {
+  |             ----------------------------------------------- in this type
+7 |         _phase: PhantomData,
+  |         ^^^^^^ private field
+8 |         _workgroup: PhantomData,
+  |         ^^^^^^^^^^ private field
+9 |         _not_send_sync: PhantomData,
+  |         ^^^^^^^^^^^^^^ private field

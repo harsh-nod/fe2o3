@@ -67,6 +67,42 @@ pub fn literal_for_unroll(mut value: u32) -> u32 {
     value
 }
 
+fn apply<T, F: FnOnce(T) -> T>(value: T, body: F) -> T {
+    body(value)
+}
+
+fn bump<const STEP: u32>(value: u32) -> u32 {
+    value + STEP
+}
+
+#[kernel(control_flow(loop_bounds(3, 2, 2)))]
+pub fn nested_closure_control_flow(value: u32) -> u32 {
+    apply(value, |mut current| {
+        let mut outer = 0u32;
+        while outer < 3 {
+            current = if outer.is_multiple_of(2) {
+                let mut branch = current;
+                for lane in 0u32..2u32 {
+                    if lane == 1 {
+                        branch = bump::<2>(branch);
+                    }
+                }
+                branch
+            } else {
+                bump::<1>(current)
+            };
+            let _ = apply(outer, |mut inner| {
+                while inner < 2 {
+                    inner += 1;
+                }
+                inner
+            });
+            outer += 1;
+        }
+        current
+    })
+}
+
 fn assert_marker<T: KernelMarkerV1>() {}
 
 fn main() {
@@ -97,6 +133,22 @@ fn main() {
         12
     );
     assert!(!__fe2o3_control_flow_contract_v1_literal_for_unroll.4.is_empty());
+    assert_marker::<__fe2o3_kernel_marker_nested_closure_control_flow>();
+    assert_eq!(
+        <__fe2o3_kernel_marker_nested_closure_control_flow as KernelMarkerV1>::FUNCTION(1),
+        6
+    );
+
+    let nested_sidecar = __fe2o3_control_flow_contract_v1_nested_closure_control_flow.4;
+    let nested_contract = frontend::decode_control_flow_contract_v1(nested_sidecar).unwrap();
+    assert_eq!(
+        nested_contract
+            .nodes()
+            .iter()
+            .filter(|node| matches!(node.kind(), frontend::ControlFlowNodeKindV1::Loop { .. }))
+            .count(),
+        3
+    );
 
     let sidecar = __fe2o3_control_flow_contract_v1_structured_control_flow.4;
     let contract = frontend::decode_control_flow_contract_v1(sidecar).unwrap();

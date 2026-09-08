@@ -133,6 +133,11 @@ impl CompilerOwnedReferenceEffectRequestV2 {
     pub(crate) fn prove_and_compile(
         self,
     ) -> Result<ProductionRankedKernelLoweringInputV1, ProductionReferenceEffectJoinErrorV2> {
+        let Self {
+            kernel,
+            requests,
+            proof_timeout_seconds,
+        } = self;
         let runtime = fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1::open(
             RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
         )
@@ -142,19 +147,19 @@ impl CompilerOwnedReferenceEffectRequestV2 {
                 detail: error.to_string(),
             }
         })?;
-        let mut imported_proofs = Vec::with_capacity(self.requests.len());
-        let mut bindings = Vec::with_capacity(self.requests.len());
-        let mut signers = Vec::with_capacity(self.requests.len());
+        let mut imported_proofs = Vec::with_capacity(requests.len());
+        let mut bindings = Vec::with_capacity(requests.len());
+        let mut signers = Vec::with_capacity(requests.len());
         let mut toolchain = None;
-        for request in &self.requests {
+        for request in &requests {
             let (binding, imported, _single_receipt_policy) =
                 fe2o3_verifier::execute_and_import_ranked_functional_refinement_locally_v2(
                     &runtime,
-                    &self.kernel,
+                    &kernel,
                     request.block,
                     request.operation,
                     request.subjects,
-                    self.proof_timeout_seconds,
+                    proof_timeout_seconds,
                 )
                 .map_err(|error| {
                     ProductionReferenceEffectJoinErrorV2::ProofExecution(error.to_string())
@@ -180,7 +185,7 @@ impl CompilerOwnedReferenceEffectRequestV2 {
         })?;
         let policy = ProductionRefinementStagingPolicyV2::new(signers, toolchain)
             .map_err(ProductionReferenceEffectJoinErrorV2::Recipe)?;
-        let mut bound = self.kernel;
+        let mut bound = kernel;
         for (block, operation, request) in bindings {
             bound = bound
                 .bind_functional_refinement_request_v2(block, operation, request)
@@ -190,13 +195,14 @@ impl CompilerOwnedReferenceEffectRequestV2 {
             ProductionConstructionV1::ranked_kernel(ROOT_NAME_V2, bound).map_err(|error| {
                 ProductionReferenceEffectJoinErrorV2::Construction(format!("{error:?}"))
             })?;
-        compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
+        let lowering = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
             construction,
             ProductionSessionLimitsV1::default(),
             imported_proofs,
             policy,
         )
-        .map_err(ProductionReferenceEffectJoinErrorV2::Compile)
+        .map_err(ProductionReferenceEffectJoinErrorV2::Compile)?;
+        Ok(lowering)
     }
 }
 
@@ -275,8 +281,11 @@ pub(crate) fn prepare_reference_effect_request_v2(
     }
     let mut output_relations = BTreeMap::new();
     for relation in &binding.effect_ir.relations {
-        if let ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, element } =
-            relation
+        if let ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, element }
+        | ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D {
+            argument,
+            element,
+        } = relation
             && output_relations.insert(*argument, *element).is_some()
         {
             return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
@@ -387,7 +396,6 @@ pub(crate) fn prepare_reference_effect_request_v2(
         DigestV1::from_untrusted_bytes(binding.kernel.rustc_mir_body_sha256),
     )
     .map_err(|error| ProductionReferenceEffectJoinErrorV2::Subjects(error.to_string()))?;
-
     let mut blocks = kernel.blocks().to_vec();
     let mut owned_views = BTreeSet::new();
     let existing_ownership = blocks
@@ -929,10 +937,10 @@ fn compiler_extracted_gpu_effect_v1(
         .iter()
         .find_map(|relation| match relation {
             ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, element }
-                if *argument == output_argument =>
-            {
-                Some(*element)
-            }
+            | ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D {
+                argument,
+                element,
+            } if *argument == output_argument => Some(*element),
             _ => None,
         })
         .ok_or(ProductionReferenceEffectJoinErrorV2::UnmodeledGlobalWrite {

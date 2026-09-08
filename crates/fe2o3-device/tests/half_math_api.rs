@@ -1,4 +1,7 @@
-use fe2o3_device::{Bf16, Bf16x2, DEVICE_MATH_CONTRACT_VERSION_V1, DeviceMath, F16, LdsElement};
+use fe2o3_device::{
+    Bf16, Bf16x2, DEVICE_MATH_CONTRACT_VERSION_V1, F16, LdsElement, PolicyDeviceMath, StrictIeee,
+    UnbrandedCapability,
+};
 
 fn assert_lds_element<T: LdsElement>() {}
 
@@ -30,7 +33,8 @@ fn public_conversion_and_packing_api_is_bit_exact() {
 fn device_math_api_is_versioned_and_requires_a_capability() {
     assert_eq!(DEVICE_MATH_CONTRACT_VERSION_V1, 1);
 
-    let _: fn(&DeviceMath, f32) -> f32 = DeviceMath::sqrt_f32;
-    let _: fn(&DeviceMath, f32, f32, f32) -> f32 = DeviceMath::mul_add_f32;
-    let _: fn(&DeviceMath, Bf16x2, Bf16x2, Bf16x2) -> Bf16x2 = DeviceMath::mul_add_bf16x2;
+    type PolicyMath = PolicyDeviceMath<'static, UnbrandedCapability, StrictIeee>;
+    let _: fn(&PolicyMath, f32) -> f32 = PolicyMath::sqrt_f32;
+    let _: fn(&PolicyMath, f32, f32, f32) -> f32 = PolicyMath::mul_add_f32;
+    let _: fn(&PolicyMath, Bf16x2, Bf16x2, Bf16x2) -> Bf16x2 = PolicyMath::mul_add_bf16x2;
 }

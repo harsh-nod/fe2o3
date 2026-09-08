@@ -1,0 +1,29 @@
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/kernel_context_derived_lane_is_not_copy.rs:1:35
+  |
+1 | use fe2o3_device::{KernelContext, Wave64};
+  |                                   ^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/kernel_context_derived_lane_is_not_copy.rs:6:31
+  |
+6 |     let lane = context.lane::<Wave64>();
+  |                               ^^^^^^
+
+warning: use of deprecated method `fe2o3_device::KernelContext::<'kernel, Kernel, Target, Launch>::lane`: use subgroup_lane or with_workgroup(...).subgroup()
+ --> tests/ui/fail/kernel_context_derived_lane_is_not_copy.rs:6:24
+  |
+6 |     let lane = context.lane::<Wave64>();
+  |                        ^^^^
+
+error[E0382]: use of moved value: `lane`
+ --> tests/ui/fail/kernel_context_derived_lane_is_not_copy.rs:8:18
+  |
+6 |     let lane = context.lane::<Wave64>();
+  |         ---- move occurs because `lane` has type `SubgroupLane<SubgroupWidth64, fe2o3_device::KernelCapabilityBrand<'_, KernelA, CurrentTarget, RegisteredLaunch>>`, which does not implement the `Copy` trait
+7 |     let first = lane;
+  |                 ---- value moved here
+8 |     let second = lane;
+  |                  ^^^^ value used here after move

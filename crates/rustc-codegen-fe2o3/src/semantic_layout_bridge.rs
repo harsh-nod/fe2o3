@@ -18,8 +18,9 @@ use rustc_middle::ty::{Ty, TyCtxt, TypingEnv};
 
 use crate::rust_type_layout_general::{
     AdtKind, AdtLayoutFacts, BackendRepresentationFacts, EnumTagEncodingFacts, FieldLayoutFacts,
-    GeneralLayoutExtractError, PointerKind, ScalarLayoutFacts, ScalarPrimitiveFacts,
-    SourceScalarKind, TypeLayoutFacts, TypeLayoutKind, VariantLayoutFacts, extract_general_layout,
+    GeneralLayoutExtractError, PointeeLayoutFacts, PointerKind, PointerLayoutFacts,
+    ScalarLayoutFacts, ScalarPrimitiveFacts, SourceScalarKind, TypeLayoutFacts, TypeLayoutKind,
+    VariantLayoutFacts, extract_general_layout,
 };
 
 /// Schema identity included in every canonical semantic-layout record.
@@ -714,8 +715,8 @@ fn bridge_type(
             MirTypeKind::Scalar(source_scalar(*source, path)?)
         }
         TypeLayoutKind::Pointer(pointer) => {
-            verify_pointer(facts, pointer.address_space, target, path)?;
-            let pointee = Box::new(bridge_type(
+            verify_pointer(facts, pointer, target, path)?;
+            let pointee = Box::new(bridge_pointee(
                 &pointer.pointee,
                 target,
                 &format!("{path}.pointee"),
@@ -793,6 +794,33 @@ fn bridge_type(
         .validate()
         .map_err(SemanticLayoutBridgeError::DialectValidation)?;
     Ok(semantic)
+}
+
+fn bridge_pointee(
+    facts: &PointeeLayoutFacts,
+    target: &SemanticLayoutTargetV1,
+    path: &str,
+) -> Result<MirSemanticType, SemanticLayoutBridgeError> {
+    match facts {
+        PointeeLayoutFacts::Sized(facts) => bridge_type(facts, target, path),
+        PointeeLayoutFacts::Slice {
+            abi_alignment_bytes,
+            element,
+            ..
+        } => {
+            let element = bridge_type(element, target, &format!("{path}.element"))?;
+            let slice = MirSemanticType {
+                layout: MirLayout::dynamically_sized(*abi_alignment_bytes),
+                kind: MirTypeKind::Slice {
+                    element: Box::new(element),
+                },
+            };
+            slice
+                .validate()
+                .map_err(SemanticLayoutBridgeError::DialectValidation)?;
+            Ok(slice)
+        }
+    }
 }
 
 fn bridge_adt(
@@ -1291,27 +1319,75 @@ fn verify_source_scalar(
 
 fn verify_pointer(
     facts: &TypeLayoutFacts,
-    address_space: u32,
+    pointer: &PointerLayoutFacts,
     target: &SemanticLayoutTargetV1,
     path: &str,
 ) -> Result<(), SemanticLayoutBridgeError> {
-    let BackendRepresentationFacts::Scalar(scalar) = facts.backend_representation else {
-        return Err(inconsistent(
-            path,
-            "thin pointer lacks a scalar backend representation",
-        ));
+    let (data, metadata) = match (&facts.backend_representation, &pointer.pointee) {
+        (BackendRepresentationFacts::Scalar(data), PointeeLayoutFacts::Sized(_)) => (*data, None),
+        (
+            BackendRepresentationFacts::ScalarPair {
+                first,
+                second,
+                second_offset_bytes,
+            },
+            PointeeLayoutFacts::Slice { .. },
+        ) => {
+            let metadata_bits = scalar_width_bits(*second, &format!("{path}.metadata"))?;
+            if second.primitive
+                != (ScalarPrimitiveFacts::Integer {
+                    bits: u64::from(metadata_bits),
+                    signed: false,
+                })
+                || !second.initialized
+                || metadata_bits != target.default_pointer_width_bits
+                || *second_offset_bytes
+                    != first
+                        .size_bytes
+                        .next_multiple_of(second.abi_alignment_bytes)
+                || second_offset_bytes
+                    .checked_add(second.size_bytes)
+                    .is_none_or(|size| size != facts.size_bytes)
+            {
+                return Err(inconsistent(
+                    path,
+                    "slice pointer metadata is not one exact initialized usize length",
+                ));
+            }
+            (*first, Some(*second))
+        }
+        (BackendRepresentationFacts::Scalar(_), PointeeLayoutFacts::Slice { .. }) => {
+            return Err(inconsistent(path, "slice pointer lacks length metadata"));
+        }
+        (BackendRepresentationFacts::ScalarPair { .. }, PointeeLayoutFacts::Sized(_)) => {
+            return Err(inconsistent(
+                path,
+                "sized pointee unexpectedly carries pointer metadata",
+            ));
+        }
+        (BackendRepresentationFacts::Memory, _) => {
+            return Err(inconsistent(
+                path,
+                "pointer source type has a memory backend representation",
+            ));
+        }
     };
-    if scalar.primitive != (ScalarPrimitiveFacts::Pointer { address_space })
-        || scalar.size_bytes != facts.size_bytes
-        || scalar.abi_alignment_bytes != facts.abi_alignment_bytes
+    if data.primitive
+        != (ScalarPrimitiveFacts::Pointer {
+            address_space: pointer.address_space,
+        })
+        || (metadata.is_none() && data.size_bytes != facts.size_bytes)
+        || data.abi_alignment_bytes != facts.abi_alignment_bytes
     {
         return Err(inconsistent(
             path,
             "pointer provenance and backend layout disagree",
         ));
     }
-    let bits = scalar_width_bits(scalar, path)?;
-    if address_space == MirAddressSpace::DEFAULT.0 && bits != target.default_pointer_width_bits {
+    let bits = scalar_width_bits(data, path)?;
+    if pointer.address_space == MirAddressSpace::DEFAULT.0
+        && bits != target.default_pointer_width_bits
+    {
         return Err(inconsistent(
             path,
             format!(
@@ -2150,7 +2226,7 @@ mod tests {
             kind: TypeLayoutKind::Pointer(PointerLayoutFacts {
                 kind: PointerKind::MutRaw,
                 address_space,
-                pointee: Box::new(pointee),
+                pointee: PointeeLayoutFacts::Sized(Box::new(pointee)),
             }),
         }
     }
@@ -2417,6 +2493,58 @@ mod tests {
 
         let non_default = pointer_facts(3, 4, 4, u8_facts());
         assert!(bridge_type(&non_default, &target(), "root").is_ok());
+    }
+
+    #[test]
+    fn slice_reference_preserves_exact_fat_pointer_metadata() {
+        let pointer = TypeLayoutFacts {
+            rust_type: "&[u8]".to_owned(),
+            size_bytes: 16,
+            abi_alignment_bytes: 8,
+            unadjusted_abi_alignment_bytes: 8,
+            maximum_requested_alignment_bytes: None,
+            uninhabited: false,
+            backend_representation: BackendRepresentationFacts::ScalarPair {
+                first: ScalarLayoutFacts {
+                    primitive: ScalarPrimitiveFacts::Pointer { address_space: 0 },
+                    size_bytes: 8,
+                    abi_alignment_bytes: 8,
+                    initialized: true,
+                    valid_range_start: 1,
+                    valid_range_end: u64::MAX.into(),
+                },
+                second: ScalarLayoutFacts {
+                    primitive: ScalarPrimitiveFacts::Integer {
+                        bits: 64,
+                        signed: false,
+                    },
+                    size_bytes: 8,
+                    abi_alignment_bytes: 8,
+                    initialized: true,
+                    valid_range_start: 0,
+                    valid_range_end: u64::MAX.into(),
+                },
+                second_offset_bytes: 8,
+            },
+            largest_niche: None,
+            kind: TypeLayoutKind::Pointer(PointerLayoutFacts {
+                kind: PointerKind::SharedReference,
+                address_space: 0,
+                pointee: PointeeLayoutFacts::Slice {
+                    rust_type: "[u8]".to_owned(),
+                    abi_alignment_bytes: 1,
+                    element: Box::new(u8_facts()),
+                },
+            }),
+        };
+
+        let bridged = bridge_type(&pointer, &target(), "root").unwrap();
+        let MirTypeKind::Reference { referent, .. } = bridged.kind else {
+            panic!("fat pointer did not bridge as a reference");
+        };
+        assert_eq!(bridged.layout, MirLayout::sized(16, 8));
+        assert_eq!(referent.layout, MirLayout::dynamically_sized(1));
+        assert!(matches!(referent.kind, MirTypeKind::Slice { .. }));
     }
 
     #[test]

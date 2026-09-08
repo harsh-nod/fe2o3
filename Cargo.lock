@@ -333,6 +333,9 @@ dependencies = [
  "fe2o3-semantic-trace",
  "fe2o3-source-isa-observation",
  "fe2o3-verifier",
+ "fe2o3-worker-v3-verification-client",
+ "fe2o3-worker-v3-verification-protocol",
+ "fe2o3-worker-v3-verification-service",
  "libc",
  "object 0.39.1",
  "proc-macro2",
@@ -560,8 +563,11 @@ dependencies = [
 name = "dialect-gpu"
 version = "0.1.0"
 dependencies = [
+ "dialect-kernel",
+ "fe2o3-kernel-ir",
  "fe2o3-pliron-owner-core",
  "pliron",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -726,11 +732,13 @@ name = "fe2o3-amdgcn-model"
 version = "0.1.0"
 dependencies = [
  "fe2o3-amd-target",
+ "fe2o3-compiler-lineage",
  "fe2o3-kernel-analysis",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
  "fe2o3-kernel-opt",
  "fe2o3-llvm-handoff",
+ "fe2o3-target-spec",
  "sha2 0.11.0",
 ]
 
@@ -753,9 +761,11 @@ dependencies = [
 name = "fe2o3-artifact-transaction"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "fe2o3-build-authority",
  "fe2o3-compiler-ffi",
  "fe2o3-compiler-lineage",
+ "fe2o3-proof-contracts",
  "fe2o3-rustc-invocation",
  "libc",
  "rustix",
@@ -938,6 +948,7 @@ dependencies = [
  "fe2o3-build-authority",
  "fe2o3-compiler-lineage",
  "fe2o3-kernel-descriptor",
+ "fe2o3-proof-contracts",
  "fe2o3-rustc-invocation",
  "reserved-fe2o3-symbols",
  "sha2 0.11.0",
@@ -950,6 +961,7 @@ dependencies = [
  "fe2o3-amd-target",
  "fe2o3-build-authority",
  "fe2o3-kernel-descriptor",
+ "fe2o3-proof-contracts",
  "fe2o3-rustc-invocation",
  "sha2 0.11.0",
 ]
@@ -1116,6 +1128,8 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-device",
  "fe2o3-host",
+ "fe2o3-kernel-ir",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1159,21 +1173,28 @@ dependencies = [
  "fe2o3-aql",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
+ "fe2o3-compiler-closure-capability",
  "fe2o3-compiler-execution-client",
+ "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-ffi",
+ "fe2o3-compiler-lineage",
  "fe2o3-core",
  "fe2o3-device",
  "fe2o3-external-anchor-protocol",
+ "fe2o3-hip-sys",
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
  "fe2o3-kfd",
+ "fe2o3-proof-contracts",
  "fe2o3-runtime",
  "fe2o3-runtime-protocol",
  "fe2o3-rustc-invocation",
  "fe2o3-service-host",
  "fe2o3-verifier",
+ "fe2o3-worker-v3-verification-client",
+ "fe2o3-worker-v3-verification-protocol",
  "libc",
  "reserved-fe2o3-symbols",
  "rmpv",
@@ -1242,6 +1263,7 @@ dependencies = [
  "dialect-amdgcn",
  "ed25519-dalek",
  "fe2o3-amd-target",
+ "fe2o3-amdgcn-model",
  "fe2o3-artifact-transaction",
  "fe2o3-build-authority",
  "fe2o3-compiler-api",
@@ -1275,9 +1297,13 @@ dependencies = [
  "dialect-gpu",
  "dialect-kernel",
  "dialect-proof",
+ "fe2o3-amd-target",
+ "fe2o3-amdgcn-model",
  "fe2o3-artifact-transaction",
+ "fe2o3-compiler-lineage",
  "fe2o3-kernel-ir",
  "fe2o3-pliron-owner-core",
+ "fe2o3-target-spec",
  "pliron",
  "rustc_apfloat",
  "rustix",
@@ -1306,6 +1332,7 @@ name = "fe2o3-kernel-opt"
 version = "0.1.0"
 dependencies = [
  "dialect-gpu",
+ "fe2o3-kernel-analysis",
  "fe2o3-kernel-ir",
  "fe2o3-pliron",
 ]
@@ -1418,6 +1445,7 @@ name = "fe2o3-macros"
 version = "0.1.0"
 dependencies = [
  "fe2o3-artifacts",
+ "fe2o3-rustc-front",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
@@ -1480,6 +1508,7 @@ dependencies = [
  "fe2o3-mir-model",
  "fe2o3-pliron-owner-core",
  "fe2o3-proof-contracts",
+ "fe2o3-target-spec",
  "pliron",
  "sha2 0.11.0",
  "trybuild",
@@ -1574,6 +1603,9 @@ dependencies = [
 [[package]]
 name = "fe2o3-proof-contracts"
 version = "0.1.0"
+dependencies = [
+ "sha2 0.11.0",
+]
 
 [[package]]
 name = "fe2o3-protected-publisher"
@@ -1949,6 +1981,9 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-device",
  "fe2o3-host",
+ "fe2o3-kernel-descriptor",
+ "fe2o3-kir-sim",
+ "fe2o3-kir-sim-cli",
 ]
 
 [[package]]
@@ -1968,9 +2003,12 @@ dependencies = [
  "fe2o3-amd-target",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
+ "fe2o3-build-authority",
+ "fe2o3-compiler-ffi",
  "fe2o3-compiler-lineage",
  "fe2o3-contracts",
  "fe2o3-functional-proof",
+ "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
  "fe2o3-lower-mir-kernel",
  "fe2o3-mir-model",
@@ -2015,7 +2053,10 @@ dependencies = [
 name = "fe2o3-worker-v3-verification-client"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-artifact-transaction",
  "fe2o3-compiler-execution-client",
+ "fe2o3-compiler-execution-protocol",
+ "fe2o3-kernel-ir",
  "fe2o3-runtime-protocol",
  "fe2o3-worker-v3-verification-protocol",
  "rustix",
@@ -2040,7 +2081,12 @@ dependencies = [
  "ed25519-dalek",
  "fe2o3-artifact-transaction",
  "fe2o3-compiler-execution-protocol",
+ "fe2o3-compiler-ffi",
+ "fe2o3-compiler-lineage",
  "fe2o3-external-anchor-protocol",
+ "fe2o3-kernel-analysis",
+ "fe2o3-kernel-ir",
+ "fe2o3-verifier",
  "fe2o3-worker-v3-verification-client",
  "fe2o3-worker-v3-verification-protocol",
  "rustix",
@@ -2481,6 +2527,10 @@ name = "ipnet"
 version = "2.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a756c3fac73139e83f14c2d742155dd2b78d3ee56597b419a0579b7bdd6dd78"
+
+[[package]]
+name = "issue272-device-helper"
+version = "0.1.0"
 
 [[package]]
 name = "itoa"
@@ -3057,6 +3107,7 @@ dependencies = [
  "dialect-gpu",
  "dialect-kernel",
  "dialect-mir",
+ "ed25519-dalek",
  "fe2o3-amd-target",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
@@ -3067,6 +3118,7 @@ dependencies = [
  "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-ffi",
  "fe2o3-compiler-lineage",
+ "fe2o3-device",
  "fe2o3-functional-proof",
  "fe2o3-host",
  "fe2o3-hsaco",
@@ -3084,12 +3136,16 @@ dependencies = [
  "fe2o3-process-identity",
  "fe2o3-proof-contracts",
  "fe2o3-runtime",
+ "fe2o3-runtime-protocol",
  "fe2o3-rustc-front",
  "fe2o3-rustc-invocation",
  "fe2o3-semantic-trace",
  "fe2o3-sim-differential",
  "fe2o3-sim-runtime",
+ "fe2o3-target-spec",
  "fe2o3-verifier",
+ "fe2o3-worker-v3-verification-protocol",
+ "issue272-device-helper",
  "libc",
  "object 0.39.1",
  "pliron",

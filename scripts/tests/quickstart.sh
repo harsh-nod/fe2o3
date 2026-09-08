@@ -116,6 +116,14 @@ run_quickstart simulate-source --crate fe2o3_fill \
 grep -F -- '--bundle-version 5' "${LOG}" >/dev/null
 grep -F -- '--bundle-v5' "${LOG}" >/dev/null
 
+: >"${LOG}"
+run_quickstart simulate-source --crate fe2o3_fill \
+  --request "${REPO_ROOT}/scripts/quickstart/fill-request.json" \
+  --bundle-version 8 -- --package fe2o3-fill --lib \
+  >"${FIXTURE}/v8.stdout" 2>"${FIXTURE}/v8.stderr"
+grep -F -- '--bundle-version 8' "${LOG}" >/dev/null
+grep -F -- '--bundle-v8' "${LOG}" >/dev/null
+
 set +e
 run_quickstart simulate-source --crate fe2o3_fill \
   --request "${REPO_ROOT}/scripts/quickstart/fill-request.json" \
@@ -124,7 +132,7 @@ run_quickstart simulate-source --crate fe2o3_fill \
 status=$?
 set -e
 [[ "${status}" -eq 2 ]]
-grep -F -- '--bundle-version must be exactly 1 or 5' \
+grep -F -- '--bundle-version must be exactly 1, 5, or 8' \
   "${FIXTURE}/invalid-version.stderr" >/dev/null
 
 printf '%s\n' 'quickstart shell tests passed'

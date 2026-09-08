@@ -8,6 +8,7 @@ rust-version = "1.94"
 publish = false
 
 [features]
+bundle-v8-simulator = ["dep:fe2o3-kir-sim-cli"]
 kernel-fp4-gemm = []
 kernel-fp8-gemm = []
 kernel-fp4-attention = []
@@ -22,6 +23,10 @@ fe2o3-device = { path = "../../crates/fe2o3-device" }
 
 [target.'cfg(not(target_arch = "amdgpu"))'.dependencies]
 fe2o3-host = { path = "../../crates/fe2o3-host" }
+fe2o3-kir-sim-cli = { path = "../../crates/fe2o3-kir-sim-cli", optional = true }
+
+[dev-dependencies]
+serde_json = "1"
 
 [lib]
 name = "fe2o3_gfx950_low_precision"

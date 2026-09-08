@@ -186,7 +186,30 @@ pub const GFX950_ADVANCED_ATTENTION_WORKGROUP_V1: [u32; 3] = [256, 1, 1];
 pub const GFX950_KDA_WORKGROUP_V2: [u32; 3] = [256, 1, 1];
 /// Exact grid dimensions declared by every teaching kernel.
 pub const GFX950_ADVANCED_ATTENTION_GRID_V1: [u32; 3] = [4, 1, 1];
-/// Whether the eight source roots use the production semantic lowering surface.
-pub const GFX950_ADVANCED_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1: bool = true;
-/// Boundary not established by the production source-lowering and runtime suite.
-pub const GFX950_ADVANCED_ATTENTION_SOURCE_BLOCKER_V1: &str = "the retained production extraction, finalization, ISA inspection, and gfx950 numerical runs do not establish formal compiler refinement, protected publication authority, performance, or full-model behavior";
+
+/// Derives independent item count from the authenticated one-dimensional launch.
+///
+/// `invocations_per_item` is the ownership granularity of the algorithm: 256
+/// for one item per workgroup, 64 for one item per wave, or 16 for one item per
+/// Wave16 partition. Invalid or overflowing launch shapes fail closed.
+pub const fn batch_count_for_launch_v1(grid_x: u32, invocations_per_item: u32) -> Option<usize> {
+    if grid_x == 0
+        || grid_x > GFX950_ADVANCED_ATTENTION_GRID_V1[0]
+        || invocations_per_item == 0
+        || invocations_per_item > GFX950_ADVANCED_ATTENTION_WORKGROUP_V1[0]
+        || GFX950_ADVANCED_ATTENTION_WORKGROUP_V1[0] % invocations_per_item != 0
+    {
+        return None;
+    }
+    (grid_x as usize)
+        .checked_mul((GFX950_ADVANCED_ATTENTION_WORKGROUP_V1[0] / invocations_per_item) as usize)
+}
+
+/// Whether every advanced-attention root completes production V13 extraction.
+pub const GFX950_ADVANCED_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1: bool = false;
+/// Whether every physical memory argument has a typed source capability.
+pub const GFX950_ADVANCED_ATTENTION_FULLY_TYPED_MEMORY_V1: bool = true;
+/// Whether an exact compiler-produced Bundle V8 is available for this package.
+pub const GFX950_ADVANCED_ATTENTION_BUNDLE_V8_SUPPORTED_V1: bool = false;
+/// Boundary not established by the current source and qualification suite.
+pub const GFX950_ADVANCED_ATTENTION_SOURCE_BLOCKER_V1: &str = "the typed FP8 transpose-to-next-epoch-MFMA source path now composes in safe Rust; production V13 extraction, Bundle V8 simulation, protected publication, and current hardware qualification remain required";

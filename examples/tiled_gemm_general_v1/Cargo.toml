@@ -7,6 +7,9 @@ repository = "https://github.com/harsh-nod/fe2o3"
 rust-version = "1.94"
 publish = false
 
+[features]
+bundle-v8-simulator = ["dep:fe2o3-kir-sim-cli"]
+
 [workspace]
 members = []
 resolver = "3"
@@ -15,12 +18,14 @@ resolver = "3"
 fe2o3-device = { path = "../../crates/fe2o3-device" }
 
 [target.'cfg(not(target_arch = "amdgpu"))'.dependencies]
-fe2o3-core = { path = "../../crates/fe2o3-core", features = ["qualification-unsafe-launch"] }
-fe2o3-host = { path = "../../crates/fe2o3-host" }
+fe2o3-host = { path = "../../crates/fe2o3-host", features = ["generated-gfx950-hip-provider"] }
+fe2o3-kir-sim-cli = { path = "../../crates/fe2o3-kir-sim-cli", optional = true }
 
 [dev-dependencies]
 fe2o3-gemm-device-v1 = { path = "device-api" }
+fe2o3-kernel-ir = { path = "../../crates/fe2o3-kernel-ir" }
 syn = { version = "2", features = ["full", "visit"] }
+serde_json = "1"
 trybuild = "1"
 
 [[bin]]

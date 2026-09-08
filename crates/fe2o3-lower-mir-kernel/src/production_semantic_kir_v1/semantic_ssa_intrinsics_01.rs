@@ -11,6 +11,42 @@ fn compiler_issued_ssa_bindings_v1(
         };
         require_current_production_intrinsic_v1(operation)?;
         match operation {
+            SemanticCompilerIntrinsicOperationV1::KernelContextIssue { context } => {
+                insert_compiler_issued_ssa_binding_v1(
+                    &mut bindings,
+                    *context,
+                    SemanticPromotedBindingV1::KernelContext,
+                )?
+            }
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindReadOnly {
+                view,
+                element,
+                contract,
+                provenance,
+                ..
+            }
+            | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindExclusiveReadWrite {
+                view,
+                element,
+                contract,
+                provenance,
+                ..
+            }
+            | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindDisjointWrite {
+                view,
+                element,
+                contract,
+                provenance,
+                ..
+            } => insert_compiler_issued_ssa_binding_v1(
+                &mut bindings,
+                *view,
+                SemanticPromotedBindingV1::GlobalCapability {
+                    element: *element,
+                    contract: *contract,
+                    provenance: *provenance,
+                },
+            )?,
             SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope } => {
                 insert_compiler_issued_ssa_binding_v1(
                     &mut bindings,
@@ -509,7 +545,7 @@ fn workgroup_pipeline_type_contracts_v1(
             .get(&element)
             .copied()
             .unwrap_or(SemanticPromotedBindingV1::Ordinary);
-        let component_types = payload_binding.transport_types(types, element)?;
+        let component_types = payload_binding.transport_types(types, element, None)?;
         if component_types.is_empty() {
             return Err(unsupported(
                 0,

@@ -15,8 +15,18 @@
 //! LLVM/ISA correspondence, artifact integrity, loading, launch, runtime behavior, or hardware
 //! execution.
 
+mod bounded_semantic_refinement_v1;
 mod mir_pliron_semantic_contract_v1;
 mod parallel_reference_contract_v1;
+
+pub use bounded_semantic_refinement_v1::{
+    BoundedSemanticRefinementErrorV1, BoundedSemanticRefinementPlanV1, FunctionalFoldOperatorV1,
+    FunctionalNumericalProofV1, FunctionalOutputProofV1, FunctionalScalarExpressionV1,
+    FunctionalScalarVariableV1, FunctionalScheduleProofV1, FunctionalSemanticContextV1,
+    HARD_MAX_FUNCTIONAL_EXPRESSION_DEPTH_V1, HARD_MAX_FUNCTIONAL_EXPRESSION_NODES_V1,
+    HARD_MAX_FUNCTIONAL_PROOF_ARITY_V1, HARD_MAX_FUNCTIONAL_PROOF_OUTPUTS_V1,
+    HARD_MAX_FUNCTIONAL_PROOF_STEPS_V1,
+};
 
 pub use mir_pliron_semantic_contract_v1::{
     HARD_MAX_SEMANTIC_COLLECTIVES_V1, HARD_MAX_SEMANTIC_DOMAINS_V1, HARD_MAX_SEMANTIC_LOOPS_V1,

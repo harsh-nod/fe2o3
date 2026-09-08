@@ -321,6 +321,45 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Decodes bytes canonical specifically under the closed V15 schema that
+    /// adds compiler-issued kernel-context acquisition.
+    pub fn decode_exact_v15_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V15),
+        )
+    }
+
+    /// Decodes bytes canonical specifically under the closed V16 schema that
+    /// adds root-bound typed global-memory capability operations.
+    pub fn decode_exact_v16_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V16),
+        )
+    }
+
+    /// Decodes bytes canonical specifically under the closed V17 schema that
+    /// adds branded target-neutral execution-capability operations.
+    pub fn decode_exact_v17_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V17),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -360,6 +399,9 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V12
                         | SemanticMirWireVersionV1::V13
                         | SemanticMirWireVersionV1::V14
+                        | SemanticMirWireVersionV1::V15
+                        | SemanticMirWireVersionV1::V16
+                        | SemanticMirWireVersionV1::V17
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
@@ -1607,7 +1649,13 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V14 {
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V17 {
+            77
+        } else if self.wire_version == SemanticMirWireVersionV1::V16 {
+            72
+        } else if self.wire_version == SemanticMirWireVersionV1::V15 {
+            68
+        } else if self.wire_version == SemanticMirWireVersionV1::V14 {
             67
         } else if self.wire_version == SemanticMirWireVersionV1::V13 {
             66
@@ -2041,8 +2089,482 @@ impl<'a> CanonicalDecoderV1<'a> {
                 lanes_per_block: self.u64()?,
                 elements_per_lane: self.u64()?,
             },
+            68 => SemanticCompilerIntrinsicOperationV1::KernelContextIssue {
+                context: SemanticTypeIdV1(self.u32()?),
+            },
+            69 => SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindReadOnly {
+                context: SemanticTypeIdV1(self.u32()?),
+                physical: SemanticTypeIdV1(self.u32()?),
+                view: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                contract: self.capability_memory_contract()?,
+                provenance: self.kernel_capability_provenance()?,
+                source_identity: SemanticFunctionIdentityV1(self.identity()?),
+            },
+            70 => SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindDisjointWrite {
+                context: SemanticTypeIdV1(self.u32()?),
+                physical: SemanticTypeIdV1(self.u32()?),
+                view: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                contract: self.capability_memory_contract()?,
+                provenance: self.kernel_capability_provenance()?,
+                source_identity: SemanticFunctionIdentityV1(self.identity()?),
+            },
+            71 => SemanticCompilerIntrinsicOperationV1::CapabilityGlobalLoad {
+                view: SemanticTypeIdV1(self.u32()?),
+                option: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                contract: self.capability_memory_contract()?,
+                provenance: self.kernel_capability_provenance()?,
+                source_identity: SemanticFunctionIdentityV1(self.identity()?),
+            },
+            72 => SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStore {
+                view: SemanticTypeIdV1(self.u32()?),
+                witness: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                result: SemanticTypeIdV1(self.u32()?),
+                contract: self.capability_memory_contract()?,
+                provenance: self.kernel_capability_provenance()?,
+                source_identity: SemanticFunctionIdentityV1(self.identity()?),
+            },
+            73 => SemanticCompilerIntrinsicOperationV1::ExecutionCapability {
+                contract: self.execution_capability_contract()?,
+            },
+            74 => SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindExclusiveReadWrite {
+                context: SemanticTypeIdV1(self.u32()?),
+                physical: SemanticTypeIdV1(self.u32()?),
+                view: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                contract: self.capability_memory_contract()?,
+                provenance: self.kernel_capability_provenance()?,
+                source_identity: SemanticFunctionIdentityV1(self.identity()?),
+            },
+            75 => SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveLoad {
+                view: SemanticTypeIdV1(self.u32()?),
+                option: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                contract: self.capability_memory_contract()?,
+                provenance: self.kernel_capability_provenance()?,
+                source_identity: SemanticFunctionIdentityV1(self.identity()?),
+            },
+            76 => SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveStore {
+                view: SemanticTypeIdV1(self.u32()?),
+                index: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                result: SemanticTypeIdV1(self.u32()?),
+                contract: self.capability_memory_contract()?,
+                provenance: self.kernel_capability_provenance()?,
+                source_identity: SemanticFunctionIdentityV1(self.identity()?),
+            },
+            77 => SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStoreBlock {
+                view: SemanticTypeIdV1(self.u32()?),
+                witness: SemanticTypeIdV1(self.u32()?),
+                component: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                result: SemanticTypeIdV1(self.u32()?),
+                contract: self.capability_memory_contract()?,
+                lanes_per_block: self.u64()?,
+                elements_per_lane: self.u64()?,
+                provenance: self.kernel_capability_provenance()?,
+                source_identity: SemanticFunctionIdentityV1(self.identity()?),
+            },
             _ => unreachable!(),
         })
+    }
+
+    fn execution_capability_contract(
+        &mut self,
+    ) -> Result<SemanticExecutionCapabilityContractV1, SemanticMirDecodeErrorV1> {
+        let operation = self.execution_capability_operation()?;
+        let argument_count = usize::from(self.tagged("execution capability argument count", 4)?);
+        let mut arguments = Vec::new();
+        arguments.try_reserve_exact(argument_count).map_err(|_| {
+            SemanticMirDecodeErrorV1::AllocationFailed {
+                context: "execution capability arguments",
+            }
+        })?;
+        for _ in 0..argument_count {
+            arguments.push(SemanticTypeIdV1(self.u32()?));
+        }
+        let signature =
+            SemanticExecutionCapabilitySignatureV1::new(&arguments, SemanticTypeIdV1(self.u32()?))?;
+        let provenance = self.kernel_capability_provenance()?;
+        let workgroup_brand = self.option("execution workgroup brand", |decoder| {
+            Ok(SemanticTypeIdentityV1(decoder.identity()?))
+        })?;
+        let epoch_before = self.option("execution input epoch", |decoder| {
+            Ok(SemanticTypeIdentityV1(decoder.identity()?))
+        })?;
+        let epoch_after = self.option("execution capability output epoch", |decoder| {
+            Ok(SemanticTypeIdentityV1(decoder.identity()?))
+        })?;
+        let encoded_obligations = self.u16()?;
+        let source_identity = SemanticFunctionIdentityV1(self.identity()?);
+        let contract = match (workgroup_brand, epoch_before) {
+            (Some(workgroup_brand), Some(epoch_before)) => {
+                SemanticExecutionCapabilityContractV1::new(
+                    operation,
+                    signature,
+                    provenance,
+                    workgroup_brand,
+                    epoch_before,
+                    epoch_after,
+                    source_identity,
+                )?
+            }
+            (None, None) if epoch_after.is_none() => {
+                SemanticExecutionCapabilityContractV1::new_kernel_scoped(
+                    operation,
+                    signature,
+                    provenance,
+                    source_identity,
+                )?
+            }
+            _ => return Err(SemanticMirErrorV1::InvalidFunctionAbi.into()),
+        };
+        if encoded_obligations != contract.obligations().bits() {
+            return Err(SemanticMirErrorV1::InvalidFunctionAbi.into());
+        }
+        Ok(contract)
+    }
+
+    fn execution_capability_operation(
+        &mut self,
+    ) -> Result<SemanticExecutionCapabilityOperationV1, SemanticMirDecodeErrorV1> {
+        Ok(match self.tagged("execution capability operation", 22)? {
+            0 => SemanticExecutionCapabilityOperationV1::SubgroupDerive {
+                workgroup: SemanticTypeIdV1(self.u32()?),
+                subgroup: SemanticTypeIdV1(self.u32()?),
+                width: self.u32()?,
+            },
+            1 => SemanticExecutionCapabilityOperationV1::LdsAllocate {
+                workgroup: SemanticTypeIdV1(self.u32()?),
+                lds: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                elements: self.u64()?,
+            },
+            2 => SemanticExecutionCapabilityOperationV1::LdsInitializeByInvocation {
+                input_lds: SemanticTypeIdV1(self.u32()?),
+                workgroup: SemanticTypeIdV1(self.u32()?),
+                output_lds: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                elements: self.u64()?,
+            },
+            3 => SemanticExecutionCapabilityOperationV1::LdsPublish {
+                input_workgroup: SemanticTypeIdV1(self.u32()?),
+                input_lds: SemanticTypeIdV1(self.u32()?),
+                output_lds: SemanticTypeIdV1(self.u32()?),
+                transition: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                elements: self.u64()?,
+            },
+            4 => SemanticExecutionCapabilityOperationV1::LdsReadPublished {
+                lds_reference: SemanticTypeIdV1(self.u32()?),
+                lds: SemanticTypeIdV1(self.u32()?),
+                workgroup: SemanticTypeIdV1(self.u32()?),
+                index: SemanticTypeIdV1(self.u32()?),
+                option: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                elements: self.u64()?,
+            },
+            5 => SemanticExecutionCapabilityOperationV1::WorkgroupBarrier {
+                input_workgroup: SemanticTypeIdV1(self.u32()?),
+                output_workgroup: SemanticTypeIdV1(self.u32()?),
+                semantics: self.execution_memory_semantics()?,
+            },
+            6 => SemanticExecutionCapabilityOperationV1::SubgroupBarrier {
+                input_workgroup: SemanticTypeIdV1(self.u32()?),
+                semantics: self.execution_memory_semantics()?,
+                subgroup: SemanticTypeIdV1(self.u32()?),
+                transition: SemanticTypeIdV1(self.u32()?),
+                width: self.u32()?,
+            },
+            7 => SemanticExecutionCapabilityOperationV1::WorkgroupFence {
+                workgroup: SemanticTypeIdV1(self.u32()?),
+                result: SemanticTypeIdV1(self.u32()?),
+                semantics: self.execution_memory_semantics()?,
+            },
+            8 => SemanticExecutionCapabilityOperationV1::SubgroupFence {
+                semantics: self.execution_memory_semantics()?,
+                subgroup_reference: SemanticTypeIdV1(self.u32()?),
+                subgroup: SemanticTypeIdV1(self.u32()?),
+                epoch: SemanticTypeIdV1(self.u32()?),
+                result: SemanticTypeIdV1(self.u32()?),
+                width: self.u32()?,
+            },
+            9 => SemanticExecutionCapabilityOperationV1::Atomic {
+                kind: match self.tagged("execution atomic operation", 5)? {
+                    0 => SemanticExecutionAtomicKindV1::BindGlobalLocation,
+                    1 => SemanticExecutionAtomicKindV1::Load,
+                    2 => SemanticExecutionAtomicKindV1::Store,
+                    3 => SemanticExecutionAtomicKindV1::FetchAdd,
+                    4 => SemanticExecutionAtomicKindV1::CompareExchange,
+                    5 => SemanticExecutionAtomicKindV1::BindGlobalView,
+                    _ => unreachable!(),
+                },
+                authority: SemanticTypeIdV1(self.u32()?),
+                location_input: SemanticTypeIdV1(self.u32()?),
+                location: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                operand: self.option("execution atomic operand type", |decoder| {
+                    Ok(SemanticTypeIdV1(decoder.u32()?))
+                })?,
+                replacement: self.option("execution atomic replacement type", |decoder| {
+                    Ok(SemanticTypeIdV1(decoder.u32()?))
+                })?,
+                result: SemanticTypeIdV1(self.u32()?),
+                address_space: self.execution_memory_address_space()?,
+                scope: self.execution_memory_scope()?,
+                success: self.option("execution atomic success ordering", |decoder| {
+                    decoder.execution_memory_ordering()
+                })?,
+                failure: self.option("execution atomic failure ordering", |decoder| {
+                    decoder.execution_memory_ordering()
+                })?,
+            },
+            10 => SemanticExecutionCapabilityOperationV1::WorkgroupCollective {
+                kind: self.execution_collective_kind()?,
+                input_workgroup: SemanticTypeIdV1(self.u32()?),
+                scratch: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                transition: SemanticTypeIdV1(self.u32()?),
+                elements: self.u64()?,
+            },
+            11 => SemanticExecutionCapabilityOperationV1::SubgroupCollective {
+                kind: self.execution_collective_kind()?,
+                subgroup_reference: SemanticTypeIdV1(self.u32()?),
+                subgroup: SemanticTypeIdV1(self.u32()?),
+                epoch: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                width: self.u32()?,
+            },
+            12 => SemanticExecutionCapabilityOperationV1::MatrixAccess {
+                subgroup: SemanticTypeIdV1(self.u32()?),
+                epoch: SemanticTypeIdV1(self.u32()?),
+                matrix: SemanticTypeIdV1(self.u32()?),
+                subgroup_brand: SemanticTypeIdentityV1(self.identity()?),
+                width: self.u32()?,
+            },
+            13 => SemanticExecutionCapabilityOperationV1::AsyncCopy {
+                workgroup: SemanticTypeIdV1(self.u32()?),
+                source_reference: SemanticTypeIdV1(self.u32()?),
+                source: SemanticTypeIdV1(self.u32()?),
+                index: SemanticTypeIdV1(self.u32()?),
+                destination: SemanticTypeIdV1(self.u32()?),
+                pending: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                elements: self.u64()?,
+            },
+            14 => SemanticExecutionCapabilityOperationV1::AsyncWait {
+                input_workgroup: SemanticTypeIdV1(self.u32()?),
+                pending: SemanticTypeIdV1(self.u32()?),
+                output_lds: SemanticTypeIdV1(self.u32()?),
+                transition: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                elements: self.u64()?,
+            },
+            15 => SemanticExecutionCapabilityOperationV1::WorkgroupDerive {
+                context: SemanticTypeIdV1(self.u32()?),
+                workgroup: SemanticTypeIdV1(self.u32()?),
+            },
+            16 => SemanticExecutionCapabilityOperationV1::RawMemoryBind {
+                authority: SemanticTypeIdV1(self.u32()?),
+                pointer: SemanticTypeIdV1(self.u32()?),
+                length: SemanticTypeIdV1(self.u32()?),
+                view: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                space: self.execution_memory_address_space()?,
+                access: self.execution_memory_access()?,
+                index_space: self.option("execution memory index space", |decoder| {
+                    Ok(SemanticTypeIdV1(decoder.u32()?))
+                })?,
+                atomic_scope: self.option("execution memory atomic scope", |decoder| {
+                    decoder.execution_memory_scope()
+                })?,
+                unsafe_obligation: SemanticTypeIdV1(self.u32()?),
+            },
+            17 => SemanticExecutionCapabilityOperationV1::PrivateMemoryAllocate {
+                context: SemanticTypeIdV1(self.u32()?),
+                view: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                elements: self.u64()?,
+            },
+            18 => SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndex {
+                workgroup: SemanticTypeIdV1(self.u32()?),
+                witness: SemanticTypeIdV1(self.u32()?),
+            },
+            19 => SemanticExecutionCapabilityOperationV1::WorkgroupMemoryAllocate {
+                workgroup: SemanticTypeIdV1(self.u32()?),
+                view: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                elements: self.u64()?,
+                index_space: SemanticTypeIdV1(self.u32()?),
+            },
+            20 => SemanticExecutionCapabilityOperationV1::WorkgroupMemoryPublish {
+                input_workgroup: SemanticTypeIdV1(self.u32()?),
+                input_view: SemanticTypeIdV1(self.u32()?),
+                output_view: SemanticTypeIdV1(self.u32()?),
+                transition: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+            },
+            21 => SemanticExecutionCapabilityOperationV1::MemoryLoad {
+                view: SemanticTypeIdV1(self.u32()?),
+                workgroup: self.option("execution memory workgroup", |decoder| {
+                    Ok(SemanticTypeIdV1(decoder.u32()?))
+                })?,
+                index: SemanticTypeIdV1(self.u32()?),
+                option: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                space: self.execution_memory_address_space()?,
+                access: self.execution_memory_access()?,
+            },
+            22 => SemanticExecutionCapabilityOperationV1::MemoryStore {
+                view: SemanticTypeIdV1(self.u32()?),
+                workgroup: self.option("execution memory workgroup", |decoder| {
+                    Ok(SemanticTypeIdV1(decoder.u32()?))
+                })?,
+                index: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+                result: SemanticTypeIdV1(self.u32()?),
+                space: self.execution_memory_address_space()?,
+                access: self.execution_memory_access()?,
+            },
+            _ => unreachable!(),
+        })
+    }
+
+    fn execution_memory_address_space(
+        &mut self,
+    ) -> Result<SemanticExecutionMemoryAddressSpaceV1, SemanticMirDecodeErrorV1> {
+        Ok(match self.tagged("execution memory address space", 2)? {
+            0 => SemanticExecutionMemoryAddressSpaceV1::Private,
+            1 => SemanticExecutionMemoryAddressSpaceV1::Workgroup,
+            2 => SemanticExecutionMemoryAddressSpaceV1::Global,
+            _ => unreachable!(),
+        })
+    }
+
+    fn execution_memory_access(
+        &mut self,
+    ) -> Result<SemanticExecutionMemoryAccessV1, SemanticMirDecodeErrorV1> {
+        Ok(match self.tagged("execution memory access", 3)? {
+            0 => SemanticExecutionMemoryAccessV1::ReadOnly,
+            1 => SemanticExecutionMemoryAccessV1::ExclusiveReadWrite,
+            2 => SemanticExecutionMemoryAccessV1::DisjointWrite,
+            3 => SemanticExecutionMemoryAccessV1::AtomicReadWrite,
+            _ => unreachable!(),
+        })
+    }
+
+    fn execution_memory_semantics(
+        &mut self,
+    ) -> Result<SemanticExecutionMemorySemanticsV1, SemanticMirDecodeErrorV1> {
+        Ok(SemanticExecutionMemorySemanticsV1::new(
+            self.execution_memory_scope()?,
+            self.execution_memory_ordering()?,
+            match self.tagged("execution memory spaces", 2)? {
+                0 => SemanticExecutionMemorySpacesV1::Global,
+                1 => SemanticExecutionMemorySpacesV1::Workgroup,
+                2 => SemanticExecutionMemorySpacesV1::GlobalAndWorkgroup,
+                _ => unreachable!(),
+            },
+        ))
+    }
+
+    fn execution_memory_scope(
+        &mut self,
+    ) -> Result<SemanticExecutionMemoryScopeV1, SemanticMirDecodeErrorV1> {
+        Ok(match self.tagged("execution memory scope", 3)? {
+            0 => SemanticExecutionMemoryScopeV1::System,
+            1 => SemanticExecutionMemoryScopeV1::Device,
+            2 => SemanticExecutionMemoryScopeV1::Workgroup,
+            3 => SemanticExecutionMemoryScopeV1::Subgroup,
+            _ => unreachable!(),
+        })
+    }
+
+    fn execution_memory_ordering(
+        &mut self,
+    ) -> Result<SemanticExecutionMemoryOrderingV1, SemanticMirDecodeErrorV1> {
+        Ok(match self.tagged("execution memory ordering", 4)? {
+            0 => SemanticExecutionMemoryOrderingV1::Relaxed,
+            1 => SemanticExecutionMemoryOrderingV1::Acquire,
+            2 => SemanticExecutionMemoryOrderingV1::Release,
+            3 => SemanticExecutionMemoryOrderingV1::AcquireRelease,
+            4 => SemanticExecutionMemoryOrderingV1::SequentiallyConsistent,
+            _ => unreachable!(),
+        })
+    }
+
+    fn execution_collective_kind(
+        &mut self,
+    ) -> Result<SemanticExecutionCollectiveKindV1, SemanticMirDecodeErrorV1> {
+        Ok(match self.tagged("execution collective operation", 2)? {
+            0 => SemanticExecutionCollectiveKindV1::ReduceSum,
+            1 => SemanticExecutionCollectiveKindV1::InclusiveScanSum,
+            2 => SemanticExecutionCollectiveKindV1::ExclusiveScanSum,
+            _ => unreachable!(),
+        })
+    }
+
+    fn capability_memory_contract(
+        &mut self,
+    ) -> Result<SemanticCapabilityMemoryContractV1, SemanticMirDecodeErrorV1> {
+        let address_space = match self.tag("capability memory address space")? {
+            0 => SemanticCapabilityMemoryAddressSpaceV1::Global,
+            _ => unreachable!(),
+        };
+        let extended = self.wire_version == SemanticMirWireVersionV1::V17;
+        let access = match self.tagged("capability memory access", if extended { 2 } else { 1 })? {
+            0 => SemanticCapabilityMemoryAccessV1::ReadOnly,
+            1 => SemanticCapabilityMemoryAccessV1::WriteOnly,
+            2 => SemanticCapabilityMemoryAccessV1::ReadWrite,
+            _ => unreachable!(),
+        };
+        let aliasing =
+            match self.tagged("capability memory aliasing", if extended { 2 } else { 1 })? {
+                0 => SemanticCapabilityMemoryAliasingV1::SharedImmutable,
+                1 => SemanticCapabilityMemoryAliasingV1::Disjoint(self.disjoint_index_space()?),
+                2 => SemanticCapabilityMemoryAliasingV1::Exclusive,
+                _ => unreachable!(),
+            };
+        let initialization = match self.tagged("capability memory initialization", 1)? {
+            0 => SemanticCapabilityMemoryInitializationV1::FullyInitialized,
+            1 => SemanticCapabilityMemoryInitializationV1::SelectedWriteInitializes,
+            _ => unreachable!(),
+        };
+        let index_space_type = self.option("capability memory index-space type", |decoder| {
+            Ok(SemanticTypeIdV1(decoder.u32()?))
+        })?;
+        let contract = SemanticCapabilityMemoryContractV1 {
+            address_space,
+            access,
+            aliasing,
+            initialization,
+            index_space_type,
+        };
+        if !contract.is_read_only()
+            && !contract.is_exclusive_read_write()
+            && contract.disjoint_mapping().is_none()
+        {
+            return Err(SemanticMirErrorV1::InvalidFunctionAbi.into());
+        }
+        Ok(contract)
+    }
+
+    fn kernel_capability_provenance(
+        &mut self,
+    ) -> Result<SemanticKernelCapabilityProvenanceV1, SemanticMirDecodeErrorV1> {
+        SemanticKernelCapabilityProvenanceV1::new(
+            SemanticFunctionIdV1(self.u32()?),
+            SemanticKernelBindingIdentityV1(self.identity()?),
+            SemanticKernelCapabilityFrontendUnitIdentityV1(self.identity()?),
+            SemanticTypeIdentityV1(self.identity()?),
+            SemanticKernelCapabilityTargetBrandIdentityV1(self.identity()?),
+            SemanticKernelCapabilityLaunchBrandIdentityV1(self.identity()?),
+            SemanticKernelCapabilityIssuanceIdentityV1(self.identity()?),
+        )
+        .map_err(Into::into)
     }
 
     fn bf16_conversion(
@@ -2909,7 +3431,7 @@ mod tests {
     }
 
     #[test]
-    fn current_production_decoder_preserves_exact_v5_through_v14_custody() {
+    fn current_production_decoder_preserves_exact_v5_through_v16_custody() {
         let limits = SemanticMirLimitsV1::default();
         let admitted = [
             minimal_request().admit_exact_v5(limits).unwrap(),
@@ -2922,6 +3444,8 @@ mod tests {
             minimal_request().admit_exact_v12(limits).unwrap(),
             minimal_request().admit_exact_v13(limits).unwrap(),
             minimal_request().admit_exact_v14(limits).unwrap(),
+            minimal_request().admit_exact_v15(limits).unwrap(),
+            minimal_request().admit_exact_v16(limits).unwrap(),
         ];
         for original in admitted {
             let decoded = AdmittedInertSemanticMirV1::decode_current_production_canonical(
@@ -4158,6 +4682,976 @@ mod tests {
     }
 
     #[test]
+    fn kernel_context_issue_is_exactly_v15_tag_68() {
+        let operation = SemanticCompilerIntrinsicOperationV1::KernelContextIssue {
+            context: SemanticTypeIdV1::from_index(7),
+        };
+        let encoded = compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V15);
+        assert_eq!(encoded, [68, 7, 0, 0, 0]);
+        assert_eq!(
+            minimum_wire_version(&version_selection_request([operation])),
+            SemanticMirWireVersionV1::V15
+        );
+
+        for wire_version in [
+            SemanticMirWireVersionV1::V2,
+            SemanticMirWireVersionV1::V3,
+            SemanticMirWireVersionV1::V4,
+            SemanticMirWireVersionV1::V5,
+            SemanticMirWireVersionV1::V6,
+            SemanticMirWireVersionV1::V7,
+            SemanticMirWireVersionV1::V8,
+            SemanticMirWireVersionV1::V9,
+            SemanticMirWireVersionV1::V10,
+            SemanticMirWireVersionV1::V11,
+            SemanticMirWireVersionV1::V12,
+            SemanticMirWireVersionV1::V13,
+            SemanticMirWireVersionV1::V14,
+        ] {
+            let mut writer = CanonicalWriterV1::new(128);
+            assert_eq!(
+                encode_compiler_intrinsic_operation(&mut writer, operation, wire_version),
+                Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: wire_version,
+                    required: SemanticMirWireVersionV1::V15,
+                })
+            );
+            assert!(writer.finish().is_empty());
+
+            let mut legacy = CanonicalDecoderV1::new(&encoded, SemanticMirLimitsV1::default());
+            legacy.wire_version = wire_version;
+            assert!(matches!(
+                legacy.compiler_intrinsic(),
+                Err(SemanticMirDecodeErrorV1::InvalidTag {
+                    context: "compiler intrinsic",
+                    value: 68,
+                    ..
+                })
+            ));
+        }
+
+        for end in 1..encoded.len() {
+            let mut truncated =
+                CanonicalDecoderV1::new(&encoded[..end], SemanticMirLimitsV1::default());
+            truncated.wire_version = SemanticMirWireVersionV1::V15;
+            assert!(matches!(
+                truncated.compiler_intrinsic(),
+                Err(SemanticMirDecodeErrorV1::UnexpectedEnd { .. })
+            ));
+        }
+
+        let mut malformed = CanonicalDecoderV1::new(&[69], SemanticMirLimitsV1::default());
+        malformed.wire_version = SemanticMirWireVersionV1::V15;
+        assert!(matches!(
+            malformed.compiler_intrinsic(),
+            Err(SemanticMirDecodeErrorV1::InvalidTag {
+                context: "compiler intrinsic",
+                value: 69,
+                ..
+            })
+        ));
+
+        assert_eq!(
+            compiler_intrinsic_round_trip(
+                SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex {
+                    block_witness: SemanticTypeIdV1::from_index(7),
+                    raw_index: SemanticTypeIdV1::from_index(8),
+                    index_space: SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                        lanes_per_block: 16,
+                        elements_per_lane: 4,
+                    },
+                    lanes_per_block: 16,
+                    elements_per_lane: 4,
+                },
+                SemanticMirWireVersionV1::V15,
+            )[0],
+            67
+        );
+    }
+
+    #[test]
+    fn typed_global_capabilities_are_exactly_v16_and_reject_malformed_contracts() {
+        let ty = |index| SemanticTypeIdV1::from_index(index);
+        let source_identity = SemanticFunctionIdentityV1(identity(90));
+        let provenance = SemanticKernelCapabilityProvenanceV1::new(
+            SemanticFunctionIdV1::from_index(0),
+            SemanticKernelBindingIdentityV1(identity(91)),
+            SemanticKernelCapabilityFrontendUnitIdentityV1(identity(92)),
+            SemanticTypeIdentityV1(identity(93)),
+            SemanticKernelCapabilityTargetBrandIdentityV1(identity(94)),
+            SemanticKernelCapabilityLaunchBrandIdentityV1(identity(95)),
+            SemanticKernelCapabilityIssuanceIdentityV1(identity(96)),
+        )
+        .unwrap();
+        let read = SemanticCapabilityMemoryContractV1::global_read_only();
+        let write = SemanticCapabilityMemoryContractV1::global_disjoint_write(
+            ty(6),
+            SemanticDisjointIndexSpaceV1::Index1d,
+        );
+        let operations = [
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindReadOnly {
+                context: ty(1),
+                physical: ty(2),
+                view: ty(3),
+                element: ty(4),
+                contract: read,
+                provenance,
+                source_identity,
+            },
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindDisjointWrite {
+                context: ty(1),
+                physical: ty(5),
+                view: ty(7),
+                element: ty(4),
+                contract: write,
+                provenance,
+                source_identity,
+            },
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalLoad {
+                view: ty(3),
+                option: ty(8),
+                element: ty(4),
+                contract: read,
+                provenance,
+                source_identity,
+            },
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStore {
+                view: ty(7),
+                witness: ty(9),
+                element: ty(4),
+                result: ty(10),
+                contract: write,
+                provenance,
+                source_identity,
+            },
+        ];
+        for (operation, tag) in operations.into_iter().zip(69_u8..=72) {
+            let encoded = compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V16);
+            assert_eq!(encoded[0], tag);
+            assert_eq!(
+                compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V17),
+                encoded,
+                "V17 must inherit the exact V16 typed-global encoding",
+            );
+            let mut legacy = CanonicalDecoderV1::new(&encoded, SemanticMirLimitsV1::default());
+            legacy.wire_version = SemanticMirWireVersionV1::V15;
+            assert!(matches!(
+                legacy.compiler_intrinsic(),
+                Err(SemanticMirDecodeErrorV1::InvalidTag {
+                    context: "compiler intrinsic",
+                    value,
+                    ..
+                }) if value == tag
+            ));
+            let mut writer = CanonicalWriterV1::new(HARD_MAX_CANONICAL_BYTES_V1);
+            assert_eq!(
+                encode_compiler_intrinsic_operation(
+                    &mut writer,
+                    operation,
+                    SemanticMirWireVersionV1::V15,
+                ),
+                Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: SemanticMirWireVersionV1::V15,
+                    required: SemanticMirWireVersionV1::V16,
+                })
+            );
+            assert!(writer.finish().is_empty());
+        }
+
+        let operation = operations[2];
+        let encoded = compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V16);
+        let mut malformed_role = encoded.clone();
+        malformed_role[14] = 1;
+        let mut decoder = CanonicalDecoderV1::new(&malformed_role, SemanticMirLimitsV1::default());
+        decoder.wire_version = SemanticMirWireVersionV1::V16;
+        assert!(matches!(
+            decoder.compiler_intrinsic(),
+            Err(SemanticMirDecodeErrorV1::Validation(
+                SemanticMirErrorV1::InvalidFunctionAbi
+            ))
+        ));
+
+        let mut zero_binding = encoded;
+        zero_binding[22..54].fill(0);
+        let mut decoder = CanonicalDecoderV1::new(&zero_binding, SemanticMirLimitsV1::default());
+        decoder.wire_version = SemanticMirWireVersionV1::V16;
+        assert!(matches!(
+            decoder.compiler_intrinsic(),
+            Err(SemanticMirDecodeErrorV1::Validation(
+                SemanticMirErrorV1::InvalidFunctionAbi
+            ))
+        ));
+        assert_eq!(
+            minimum_wire_version(&version_selection_request(operations)),
+            SemanticMirWireVersionV1::V16,
+        );
+    }
+
+    #[test]
+    fn exclusive_and_blocked_typed_global_terminals_are_exactly_v17() {
+        let ty = |index| SemanticTypeIdV1::from_index(index);
+        let source_identity = SemanticFunctionIdentityV1(identity(110));
+        let provenance = SemanticKernelCapabilityProvenanceV1::new(
+            SemanticFunctionIdV1::from_index(0),
+            SemanticKernelBindingIdentityV1(identity(111)),
+            SemanticKernelCapabilityFrontendUnitIdentityV1(identity(112)),
+            SemanticTypeIdentityV1(identity(113)),
+            SemanticKernelCapabilityTargetBrandIdentityV1(identity(114)),
+            SemanticKernelCapabilityLaunchBrandIdentityV1(identity(115)),
+            SemanticKernelCapabilityIssuanceIdentityV1(identity(116)),
+        )
+        .unwrap();
+        let exclusive = SemanticCapabilityMemoryContractV1::global_exclusive_read_write();
+        let blocked = SemanticCapabilityMemoryContractV1::global_disjoint_write(
+            ty(6),
+            SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+                lanes_per_block: 64,
+                elements_per_lane: 2,
+            },
+        );
+        let operations = [
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindExclusiveReadWrite {
+                context: ty(1),
+                physical: ty(2),
+                view: ty(3),
+                element: ty(4),
+                contract: exclusive,
+                provenance,
+                source_identity,
+            },
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveLoad {
+                view: ty(3),
+                option: ty(5),
+                element: ty(4),
+                contract: exclusive,
+                provenance,
+                source_identity,
+            },
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveStore {
+                view: ty(3),
+                index: ty(7),
+                element: ty(4),
+                result: ty(8),
+                contract: exclusive,
+                provenance,
+                source_identity,
+            },
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStoreBlock {
+                view: ty(9),
+                witness: ty(10),
+                component: ty(7),
+                element: ty(4),
+                result: ty(8),
+                contract: blocked,
+                lanes_per_block: 64,
+                elements_per_lane: 2,
+                provenance,
+                source_identity,
+            },
+        ];
+        for (operation, tag) in operations.into_iter().zip(74_u8..=77) {
+            let encoded = compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V17);
+            assert_eq!(encoded[0], tag);
+            let mut writer = CanonicalWriterV1::new(HARD_MAX_CANONICAL_BYTES_V1);
+            assert_eq!(
+                encode_compiler_intrinsic_operation(
+                    &mut writer,
+                    operation,
+                    SemanticMirWireVersionV1::V16,
+                ),
+                Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: SemanticMirWireVersionV1::V16,
+                    required: SemanticMirWireVersionV1::V17,
+                })
+            );
+            assert!(writer.finish().is_empty());
+        }
+        assert_eq!(
+            minimum_wire_version(&version_selection_request(operations)),
+            SemanticMirWireVersionV1::V17,
+        );
+
+        let mut malformed =
+            compiler_intrinsic_round_trip(operations[0], SemanticMirWireVersionV1::V17);
+        malformed[19] = 0;
+        let mut decoder = CanonicalDecoderV1::new(&malformed, SemanticMirLimitsV1::default());
+        decoder.wire_version = SemanticMirWireVersionV1::V17;
+        assert!(matches!(
+            decoder.compiler_intrinsic(),
+            Err(SemanticMirDecodeErrorV1::Validation(
+                SemanticMirErrorV1::InvalidFunctionAbi
+            ))
+        ));
+    }
+
+    fn execution_contract(
+        operation: SemanticExecutionCapabilityOperationV1,
+    ) -> Result<SemanticExecutionCapabilityContractV1, SemanticMirErrorV1> {
+        let provenance = SemanticKernelCapabilityProvenanceV1::new(
+            SemanticFunctionIdV1::from_index(0),
+            SemanticKernelBindingIdentityV1(identity(101)),
+            SemanticKernelCapabilityFrontendUnitIdentityV1(identity(102)),
+            SemanticTypeIdentityV1(identity(103)),
+            SemanticKernelCapabilityTargetBrandIdentityV1(identity(104)),
+            SemanticKernelCapabilityLaunchBrandIdentityV1(identity(105)),
+            SemanticKernelCapabilityIssuanceIdentityV1(identity(106)),
+        )
+        .unwrap();
+        let (arguments, output): (Vec<_>, _) = match operation {
+            SemanticExecutionCapabilityOperationV1::WorkgroupDerive { context, workgroup } => {
+                (vec![context], workgroup)
+            }
+            SemanticExecutionCapabilityOperationV1::SubgroupDerive {
+                workgroup,
+                subgroup,
+                ..
+            } => (vec![workgroup], subgroup),
+            SemanticExecutionCapabilityOperationV1::LdsAllocate { workgroup, lds, .. } => {
+                (vec![workgroup], lds)
+            }
+            SemanticExecutionCapabilityOperationV1::LdsInitializeByInvocation {
+                input_lds,
+                workgroup,
+                output_lds,
+                element,
+                ..
+            } => (vec![input_lds, workgroup, element], output_lds),
+            SemanticExecutionCapabilityOperationV1::LdsPublish {
+                input_workgroup,
+                input_lds,
+                transition,
+                ..
+            } => (vec![input_workgroup, input_lds], transition),
+            SemanticExecutionCapabilityOperationV1::LdsReadPublished {
+                lds_reference,
+                workgroup,
+                index,
+                option,
+                ..
+            } => (vec![lds_reference, workgroup, index], option),
+            SemanticExecutionCapabilityOperationV1::WorkgroupBarrier {
+                input_workgroup,
+                output_workgroup,
+                ..
+            } => (vec![input_workgroup], output_workgroup),
+            SemanticExecutionCapabilityOperationV1::SubgroupBarrier {
+                input_workgroup,
+                subgroup,
+                transition,
+                ..
+            } => (vec![input_workgroup, subgroup], transition),
+            SemanticExecutionCapabilityOperationV1::WorkgroupFence {
+                workgroup, result, ..
+            } => (vec![workgroup], result),
+            SemanticExecutionCapabilityOperationV1::SubgroupFence {
+                subgroup_reference,
+                epoch,
+                result,
+                ..
+            } => (vec![subgroup_reference, epoch], result),
+            SemanticExecutionCapabilityOperationV1::Atomic {
+                kind,
+                authority,
+                location_input,
+                operand,
+                replacement,
+                result,
+                ..
+            } => {
+                let mut arguments = vec![authority, location_input];
+                if !matches!(kind, SemanticExecutionAtomicKindV1::BindGlobalView) {
+                    arguments.extend(operand);
+                    arguments.extend(replacement);
+                }
+                (arguments, result)
+            }
+            SemanticExecutionCapabilityOperationV1::WorkgroupCollective {
+                input_workgroup,
+                scratch,
+                element,
+                transition,
+                ..
+            } => (vec![input_workgroup, scratch, element], transition),
+            SemanticExecutionCapabilityOperationV1::SubgroupCollective {
+                subgroup_reference,
+                epoch,
+                element,
+                ..
+            } => (vec![subgroup_reference, epoch, element], element),
+            SemanticExecutionCapabilityOperationV1::MatrixAccess {
+                subgroup,
+                epoch,
+                matrix,
+                ..
+            } => (vec![subgroup, epoch], matrix),
+            SemanticExecutionCapabilityOperationV1::AsyncCopy {
+                workgroup,
+                source_reference,
+                index,
+                destination,
+                pending,
+                ..
+            } => (
+                vec![workgroup, source_reference, index, destination],
+                pending,
+            ),
+            SemanticExecutionCapabilityOperationV1::AsyncWait {
+                input_workgroup,
+                pending,
+                transition,
+                ..
+            } => (vec![input_workgroup, pending], transition),
+            SemanticExecutionCapabilityOperationV1::RawMemoryBind {
+                authority,
+                pointer,
+                length,
+                view,
+                unsafe_obligation,
+                ..
+            } => (vec![authority, pointer, length, unsafe_obligation], view),
+            SemanticExecutionCapabilityOperationV1::PrivateMemoryAllocate {
+                context, view, ..
+            } => (vec![context], view),
+            SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndex { workgroup, witness } => {
+                (vec![workgroup], witness)
+            }
+            SemanticExecutionCapabilityOperationV1::WorkgroupMemoryAllocate {
+                workgroup,
+                view,
+                ..
+            } => (vec![workgroup], view),
+            SemanticExecutionCapabilityOperationV1::WorkgroupMemoryPublish {
+                input_workgroup,
+                input_view,
+                transition,
+                ..
+            } => (vec![input_workgroup, input_view], transition),
+            SemanticExecutionCapabilityOperationV1::MemoryLoad {
+                view,
+                workgroup,
+                index,
+                option,
+                ..
+            } => {
+                let mut arguments = vec![view];
+                arguments.extend(workgroup);
+                arguments.push(index);
+                (arguments, option)
+            }
+            SemanticExecutionCapabilityOperationV1::MemoryStore {
+                view,
+                workgroup,
+                index,
+                element,
+                result,
+                ..
+            } => {
+                let mut arguments = vec![view];
+                arguments.extend(workgroup);
+                arguments.extend([index, element]);
+                (arguments, result)
+            }
+        };
+        let signature = SemanticExecutionCapabilitySignatureV1::new(&arguments, output).unwrap();
+        if operation_is_kernel_scoped(operation) {
+            SemanticExecutionCapabilityContractV1::new_kernel_scoped(
+                operation,
+                signature,
+                provenance,
+                SemanticFunctionIdentityV1(identity(110)),
+            )
+        } else {
+            SemanticExecutionCapabilityContractV1::new(
+                operation,
+                signature,
+                provenance,
+                SemanticTypeIdentityV1(identity(107)),
+                SemanticTypeIdentityV1(identity(108)),
+                operation_requires_epoch_transition(operation)
+                    .then_some(SemanticTypeIdentityV1(identity(109))),
+                SemanticFunctionIdentityV1(identity(110)),
+            )
+        }
+    }
+
+    fn assert_forged_execution_contract_decode_rejected(
+        valid: SemanticExecutionCapabilityContractV1,
+        forged_operation: SemanticExecutionCapabilityOperationV1,
+    ) {
+        let forged = SemanticExecutionCapabilityContractV1 {
+            operation: forged_operation,
+            obligations: SemanticExecutionSafetyObligationsV1(execution_operation_obligations(
+                forged_operation,
+            )),
+            ..valid
+        };
+        let mut writer = CanonicalWriterV1::new(HARD_MAX_CANONICAL_BYTES_V1);
+        encode_compiler_intrinsic_operation(
+            &mut writer,
+            SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract: forged },
+            SemanticMirWireVersionV1::V17,
+        )
+        .unwrap();
+        let encoded = writer.finish();
+        let mut decoder = CanonicalDecoderV1::new(&encoded, SemanticMirLimitsV1::default());
+        decoder.wire_version = SemanticMirWireVersionV1::V17;
+        assert!(matches!(
+            decoder.compiler_intrinsic(),
+            Err(SemanticMirDecodeErrorV1::Validation(
+                SemanticMirErrorV1::InvalidFunctionAbi
+            ))
+        ));
+    }
+
+    #[test]
+    fn execution_capabilities_are_exactly_v17_and_keep_obligations_unresolved() {
+        let operations = [
+            (
+                SemanticExecutionCapabilityOperationV1::SubgroupDerive {
+                    workgroup: SemanticTypeIdV1::from_index(1),
+                    subgroup: SemanticTypeIdV1::from_index(2),
+                    width: 64,
+                },
+                0,
+            ),
+            (
+                SemanticExecutionCapabilityOperationV1::WorkgroupDerive {
+                    context: SemanticTypeIdV1::from_index(1),
+                    workgroup: SemanticTypeIdV1::from_index(2),
+                },
+                15,
+            ),
+        ];
+        for (operation, nested_tag) in operations {
+            let contract = execution_contract(operation).unwrap();
+            assert_eq!(
+                contract.obligations().bits(),
+                SemanticExecutionSafetyObligationsV1::TARGET_SUPPORT
+                    | SemanticExecutionSafetyObligationsV1::DYNAMIC_WORKGROUP_IDENTITY,
+            );
+            let intrinsic = SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract };
+            let encoded = compiler_intrinsic_round_trip(intrinsic, SemanticMirWireVersionV1::V17);
+            assert_eq!(encoded[..2], [73, nested_tag]);
+
+            let mut writer = CanonicalWriterV1::new(HARD_MAX_CANONICAL_BYTES_V1);
+            assert_eq!(
+                encode_compiler_intrinsic_operation(
+                    &mut writer,
+                    intrinsic,
+                    SemanticMirWireVersionV1::V16,
+                ),
+                Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: SemanticMirWireVersionV1::V16,
+                    required: SemanticMirWireVersionV1::V17,
+                })
+            );
+            assert!(writer.finish().is_empty());
+        }
+
+        let forged_context = SemanticExecutionCapabilityOperationV1::WorkgroupDerive {
+            context: SemanticTypeIdV1::from_index(4),
+            workgroup: SemanticTypeIdV1::from_index(2),
+        };
+        let valid = execution_contract(SemanticExecutionCapabilityOperationV1::WorkgroupDerive {
+            context: SemanticTypeIdV1::from_index(1),
+            workgroup: SemanticTypeIdV1::from_index(2),
+        })
+        .unwrap();
+        assert!(
+            SemanticExecutionCapabilityContractV1::new(
+                forged_context,
+                valid.signature,
+                valid.provenance,
+                valid.workgroup_brand.unwrap(),
+                valid.epoch_before.unwrap(),
+                valid.epoch_after,
+                valid.source_identity,
+            )
+            .is_err()
+        );
+        assert_forged_execution_contract_decode_rejected(valid, forged_context);
+    }
+
+    #[test]
+    fn execution_memory_operations_are_canonical_v17_and_keep_unsafe_obligations() {
+        use SemanticExecutionMemoryAccessV1 as Access;
+        use SemanticExecutionMemoryAddressSpaceV1 as Space;
+        let id = SemanticTypeIdV1::from_index;
+        let operations = [
+            (
+                SemanticExecutionCapabilityOperationV1::RawMemoryBind {
+                    authority: id(1),
+                    pointer: id(2),
+                    length: id(3),
+                    view: id(4),
+                    element: id(5),
+                    space: Space::Private,
+                    access: Access::ReadOnly,
+                    index_space: None,
+                    atomic_scope: None,
+                    unsafe_obligation: id(6),
+                },
+                16,
+            ),
+            (
+                SemanticExecutionCapabilityOperationV1::PrivateMemoryAllocate {
+                    context: id(1),
+                    view: id(4),
+                    element: id(5),
+                    elements: 32,
+                },
+                17,
+            ),
+            (
+                SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndex {
+                    workgroup: id(1),
+                    witness: id(4),
+                },
+                18,
+            ),
+            (
+                SemanticExecutionCapabilityOperationV1::WorkgroupMemoryAllocate {
+                    workgroup: id(1),
+                    view: id(4),
+                    element: id(5),
+                    elements: 64,
+                    index_space: id(6),
+                },
+                19,
+            ),
+            (
+                SemanticExecutionCapabilityOperationV1::WorkgroupMemoryPublish {
+                    input_workgroup: id(1),
+                    input_view: id(2),
+                    output_view: id(3),
+                    transition: id(4),
+                    element: id(5),
+                },
+                20,
+            ),
+            (
+                SemanticExecutionCapabilityOperationV1::MemoryLoad {
+                    view: id(1),
+                    workgroup: None,
+                    index: id(2),
+                    option: id(3),
+                    element: id(4),
+                    space: Space::Private,
+                    access: Access::ExclusiveReadWrite,
+                },
+                21,
+            ),
+            (
+                SemanticExecutionCapabilityOperationV1::MemoryStore {
+                    view: id(1),
+                    workgroup: Some(id(2)),
+                    index: id(3),
+                    element: id(4),
+                    result: id(5),
+                    space: Space::Workgroup,
+                    access: Access::DisjointWrite,
+                },
+                22,
+            ),
+        ];
+        for (operation, nested_tag) in operations {
+            let contract = execution_contract(operation).unwrap();
+            let encoded = compiler_intrinsic_round_trip(
+                SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract },
+                SemanticMirWireVersionV1::V17,
+            );
+            assert_eq!(encoded[..2], [73, nested_tag]);
+        }
+
+        let raw = execution_contract(operations[0].0).unwrap();
+        let required = SemanticExecutionSafetyObligationsV1::TARGET_SUPPORT
+            | SemanticExecutionSafetyObligationsV1::BOUNDS
+            | SemanticExecutionSafetyObligationsV1::INITIALIZATION
+            | SemanticExecutionSafetyObligationsV1::RACE_FREEDOM
+            | SemanticExecutionSafetyObligationsV1::RAW_POINTER_VALIDITY
+            | SemanticExecutionSafetyObligationsV1::LIFETIME_VALIDITY
+            | SemanticExecutionSafetyObligationsV1::ADDRESS_SPACE_VALIDITY
+            | SemanticExecutionSafetyObligationsV1::ALIASING_VALIDITY;
+        assert_eq!(raw.obligations().bits(), required);
+        assert!(raw.workgroup_brand().is_none());
+        assert!(raw.epoch_before().is_none());
+    }
+
+    #[test]
+    fn execution_memory_constructor_and_decoder_reject_hostile_substitutions() {
+        use SemanticExecutionMemoryAccessV1 as Access;
+        use SemanticExecutionMemoryAddressSpaceV1 as Space;
+        let id = SemanticTypeIdV1::from_index;
+        let valid_raw = SemanticExecutionCapabilityOperationV1::RawMemoryBind {
+            authority: id(1),
+            pointer: id(2),
+            length: id(3),
+            view: id(4),
+            element: id(5),
+            space: Space::Private,
+            access: Access::DisjointWrite,
+            index_space: Some(id(6)),
+            atomic_scope: None,
+            unsafe_obligation: id(7),
+        };
+        let invalid_raw = SemanticExecutionCapabilityOperationV1::RawMemoryBind {
+            authority: id(1),
+            pointer: id(2),
+            length: id(3),
+            view: id(4),
+            element: id(5),
+            space: Space::Private,
+            access: Access::DisjointWrite,
+            index_space: None,
+            atomic_scope: None,
+            unsafe_obligation: id(7),
+        };
+        assert!(execution_contract(invalid_raw).is_err());
+        assert_forged_execution_contract_decode_rejected(
+            execution_contract(valid_raw).unwrap(),
+            invalid_raw,
+        );
+
+        let invalid = [
+            SemanticExecutionCapabilityOperationV1::PrivateMemoryAllocate {
+                context: id(1),
+                view: id(2),
+                element: id(3),
+                elements: 0,
+            },
+            SemanticExecutionCapabilityOperationV1::MemoryLoad {
+                view: id(1),
+                workgroup: None,
+                index: id(2),
+                option: id(3),
+                element: id(4),
+                space: Space::Workgroup,
+                access: Access::ReadOnly,
+            },
+            SemanticExecutionCapabilityOperationV1::MemoryLoad {
+                view: id(1),
+                workgroup: Some(id(2)),
+                index: id(3),
+                option: id(4),
+                element: id(5),
+                space: Space::Workgroup,
+                access: Access::DisjointWrite,
+            },
+            SemanticExecutionCapabilityOperationV1::MemoryStore {
+                view: id(1),
+                workgroup: None,
+                index: id(2),
+                element: id(3),
+                result: id(4),
+                space: Space::Private,
+                access: Access::ReadOnly,
+            },
+        ];
+        for operation in invalid {
+            assert!(execution_contract(operation).is_err());
+        }
+
+        let valid_load = SemanticExecutionCapabilityOperationV1::MemoryLoad {
+            view: id(1),
+            workgroup: None,
+            index: id(2),
+            option: id(3),
+            element: id(4),
+            space: Space::Private,
+            access: Access::ReadOnly,
+        };
+        let forged_load = SemanticExecutionCapabilityOperationV1::MemoryLoad {
+            view: id(1),
+            workgroup: None,
+            index: id(6),
+            option: id(3),
+            element: id(4),
+            space: Space::Private,
+            access: Access::ReadOnly,
+        };
+        assert_forged_execution_contract_decode_rejected(
+            execution_contract(valid_load).unwrap(),
+            forged_load,
+        );
+    }
+
+    #[test]
+    fn execution_constructor_and_decoder_reject_invalid_barrier_and_fence_matrices() {
+        use SemanticExecutionMemoryOrderingV1 as Ordering;
+        use SemanticExecutionMemoryScopeV1 as Scope;
+        let semantics = |scope, ordering| {
+            SemanticExecutionMemorySemanticsV1::new(
+                scope,
+                ordering,
+                SemanticExecutionMemorySpacesV1::GlobalAndWorkgroup,
+            )
+        };
+        let valid_workgroup = SemanticExecutionCapabilityOperationV1::WorkgroupBarrier {
+            input_workgroup: SemanticTypeIdV1::from_index(1),
+            output_workgroup: SemanticTypeIdV1::from_index(2),
+            semantics: semantics(Scope::Workgroup, Ordering::AcquireRelease),
+        };
+        let valid_subgroup = SemanticExecutionCapabilityOperationV1::SubgroupBarrier {
+            input_workgroup: SemanticTypeIdV1::from_index(1),
+            semantics: semantics(Scope::Subgroup, Ordering::AcquireRelease),
+            subgroup: SemanticTypeIdV1::from_index(3),
+            transition: SemanticTypeIdV1::from_index(2),
+            width: 64,
+        };
+        let valid_workgroup_fence = SemanticExecutionCapabilityOperationV1::WorkgroupFence {
+            workgroup: SemanticTypeIdV1::from_index(1),
+            result: SemanticTypeIdV1::from_index(2),
+            semantics: semantics(Scope::Workgroup, Ordering::Acquire),
+        };
+        let valid_subgroup_fence = SemanticExecutionCapabilityOperationV1::SubgroupFence {
+            semantics: semantics(Scope::Subgroup, Ordering::Release),
+            subgroup_reference: SemanticTypeIdV1::from_index(1),
+            subgroup: SemanticTypeIdV1::from_index(3),
+            epoch: SemanticTypeIdV1::from_index(2),
+            result: SemanticTypeIdV1::from_index(4),
+            width: 32,
+        };
+        let invalid = [
+            SemanticExecutionCapabilityOperationV1::WorkgroupBarrier {
+                input_workgroup: SemanticTypeIdV1::from_index(1),
+                output_workgroup: SemanticTypeIdV1::from_index(2),
+                semantics: semantics(Scope::Subgroup, Ordering::AcquireRelease),
+            },
+            SemanticExecutionCapabilityOperationV1::WorkgroupBarrier {
+                input_workgroup: SemanticTypeIdV1::from_index(1),
+                output_workgroup: SemanticTypeIdV1::from_index(2),
+                semantics: semantics(Scope::Workgroup, Ordering::Acquire),
+            },
+            SemanticExecutionCapabilityOperationV1::SubgroupBarrier {
+                input_workgroup: SemanticTypeIdV1::from_index(1),
+                semantics: semantics(Scope::Workgroup, Ordering::AcquireRelease),
+                subgroup: SemanticTypeIdV1::from_index(3),
+                transition: SemanticTypeIdV1::from_index(2),
+                width: 64,
+            },
+            SemanticExecutionCapabilityOperationV1::SubgroupBarrier {
+                input_workgroup: SemanticTypeIdV1::from_index(1),
+                semantics: semantics(Scope::Subgroup, Ordering::Release),
+                subgroup: SemanticTypeIdV1::from_index(3),
+                transition: SemanticTypeIdV1::from_index(2),
+                width: 64,
+            },
+            SemanticExecutionCapabilityOperationV1::WorkgroupFence {
+                workgroup: SemanticTypeIdV1::from_index(1),
+                result: SemanticTypeIdV1::from_index(2),
+                semantics: semantics(Scope::Workgroup, Ordering::Relaxed),
+            },
+            SemanticExecutionCapabilityOperationV1::SubgroupFence {
+                semantics: semantics(Scope::Workgroup, Ordering::Acquire),
+                subgroup_reference: SemanticTypeIdV1::from_index(1),
+                subgroup: SemanticTypeIdV1::from_index(3),
+                epoch: SemanticTypeIdV1::from_index(2),
+                result: SemanticTypeIdV1::from_index(4),
+                width: 32,
+            },
+            SemanticExecutionCapabilityOperationV1::SubgroupFence {
+                semantics: semantics(Scope::Subgroup, Ordering::Relaxed),
+                subgroup_reference: SemanticTypeIdV1::from_index(1),
+                subgroup: SemanticTypeIdV1::from_index(3),
+                epoch: SemanticTypeIdV1::from_index(2),
+                result: SemanticTypeIdV1::from_index(4),
+                width: 32,
+            },
+        ];
+        for operation in invalid {
+            assert!(execution_contract(operation).is_err());
+        }
+        for (valid, forged) in [
+            (valid_workgroup, invalid[0]),
+            (valid_workgroup, invalid[1]),
+            (valid_subgroup, invalid[2]),
+            (valid_subgroup, invalid[3]),
+            (valid_workgroup_fence, invalid[4]),
+            (valid_subgroup_fence, invalid[5]),
+            (valid_subgroup_fence, invalid[6]),
+        ] {
+            assert_forged_execution_contract_decode_rejected(
+                execution_contract(valid).unwrap(),
+                forged,
+            );
+        }
+    }
+
+    #[test]
+    fn execution_constructor_and_decoder_reject_invalid_atomic_order_matrices() {
+        use SemanticExecutionAtomicKindV1 as Kind;
+        use SemanticExecutionMemoryOrderingV1 as Ordering;
+        let atomic = |kind, success, failure| SemanticExecutionCapabilityOperationV1::Atomic {
+            kind,
+            authority: SemanticTypeIdV1::from_index(1),
+            location_input: SemanticTypeIdV1::from_index(2),
+            location: SemanticTypeIdV1::from_index(3),
+            element: SemanticTypeIdV1::from_index(4),
+            operand: match kind {
+                Kind::BindGlobalView | Kind::Load => None,
+                Kind::BindGlobalLocation => Some(SemanticTypeIdV1::from_index(5)),
+                Kind::Store | Kind::FetchAdd | Kind::CompareExchange => {
+                    Some(SemanticTypeIdV1::from_index(4))
+                }
+            },
+            replacement: matches!(kind, Kind::CompareExchange)
+                .then_some(SemanticTypeIdV1::from_index(4)),
+            result: match kind {
+                Kind::BindGlobalView => SemanticTypeIdV1::from_index(3),
+                Kind::Load | Kind::FetchAdd => SemanticTypeIdV1::from_index(4),
+                Kind::BindGlobalLocation | Kind::Store | Kind::CompareExchange => {
+                    SemanticTypeIdV1::from_index(5)
+                }
+            },
+            address_space: if matches!(kind, Kind::BindGlobalLocation | Kind::BindGlobalView) {
+                SemanticExecutionMemoryAddressSpaceV1::Global
+            } else {
+                SemanticExecutionMemoryAddressSpaceV1::Workgroup
+            },
+            scope: SemanticExecutionMemoryScopeV1::Workgroup,
+            success,
+            failure,
+        };
+        let cases = [
+            (
+                atomic(Kind::Load, Some(Ordering::Acquire), None),
+                atomic(Kind::Load, Some(Ordering::Release), None),
+            ),
+            (
+                atomic(Kind::Store, Some(Ordering::Release), None),
+                atomic(Kind::Store, Some(Ordering::Acquire), None),
+            ),
+            (
+                atomic(Kind::FetchAdd, Some(Ordering::AcquireRelease), None),
+                atomic(Kind::FetchAdd, None, None),
+            ),
+            (
+                atomic(
+                    Kind::CompareExchange,
+                    Some(Ordering::AcquireRelease),
+                    Some(Ordering::Acquire),
+                ),
+                atomic(
+                    Kind::CompareExchange,
+                    Some(Ordering::Release),
+                    Some(Ordering::Acquire),
+                ),
+            ),
+            (
+                atomic(Kind::BindGlobalLocation, None, None),
+                atomic(Kind::BindGlobalLocation, Some(Ordering::Relaxed), None),
+            ),
+        ];
+        for (valid, invalid) in cases {
+            assert!(execution_contract(invalid).is_err());
+            assert_forged_execution_contract_decode_rejected(
+                execution_contract(valid).unwrap(),
+                invalid,
+            );
+        }
+    }
+
+    #[test]
     fn trap_round_trips_only_at_its_unique_v11_tag() {
         let operation = SemanticCompilerIntrinsicOperationV1::Trap;
         let encoded = compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V11);
@@ -4494,12 +5988,19 @@ mod tests {
         let v12 = minimal_request().admit_exact_v12(limits).unwrap();
         let v13 = minimal_request().admit_exact_v13(limits).unwrap();
         let v14 = minimal_request().admit_exact_v14(limits).unwrap();
+        let v15 = minimal_request().admit_exact_v15(limits).unwrap();
         let decoded_v14 = AdmittedInertSemanticMirV1::decode_exact_v14_canonical(
             v14.canonical_encoding(),
             limits,
         )
         .unwrap();
         assert_eq!(decoded_v14.canonical_encoding(), v14.canonical_encoding());
+        let decoded_v15 = AdmittedInertSemanticMirV1::decode_exact_v15_canonical(
+            v15.canonical_encoding(),
+            limits,
+        )
+        .unwrap();
+        assert_eq!(decoded_v15.canonical_encoding(), v15.canonical_encoding());
         assert!(matches!(
             AdmittedInertSemanticMirV1::decode_exact_v12_canonical(
                 v11.canonical_encoding(),
@@ -4558,6 +6059,26 @@ mod tests {
             Err(SemanticMirDecodeErrorV1::WireVersionMismatch {
                 expected: SemanticMirWireVersionV1::V13,
                 actual: SemanticMirWireVersionV1::V14,
+            })
+        ));
+        assert!(matches!(
+            AdmittedInertSemanticMirV1::decode_exact_v15_canonical(
+                v14.canonical_encoding(),
+                limits,
+            ),
+            Err(SemanticMirDecodeErrorV1::WireVersionMismatch {
+                expected: SemanticMirWireVersionV1::V15,
+                actual: SemanticMirWireVersionV1::V14,
+            })
+        ));
+        assert!(matches!(
+            AdmittedInertSemanticMirV1::decode_exact_v14_canonical(
+                v15.canonical_encoding(),
+                limits,
+            ),
+            Err(SemanticMirDecodeErrorV1::WireVersionMismatch {
+                expected: SemanticMirWireVersionV1::V14,
+                actual: SemanticMirWireVersionV1::V15,
             })
         ));
     }

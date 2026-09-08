@@ -76,6 +76,49 @@ projections. This is distinct from `unsupported`, which is a reviewed negative
 fact for a specific target. The older broad target queries retain their
 existing behavior.
 
+`ProductionAmdTargetCapabilityModelV1` adapts the exact `gfx942` and `gfx950`
+production profiles to `TargetCapabilityQueryV1`. Construction derives the AMD
+facts and validates the complete neutral model identity before any decision can
+be emitted. The adapter uses complete advanced atomic tuples instead of the
+legacy independent width, scope, and ordering projections. Missing tuple facts
+remain `incomplete`; reviewed-but-undecided gfx950 facts remain `unreviewed`.
+Compare-exchange carries both success and failure ordering. Invalid ordering
+tuples are rejected by the neutral boundary before target facts are consulted.
+The exact profile and adapter revision are bound into every decision receipt by
+an opaque profile fingerprint, so neutral canonical decisions and closures do
+not expose AMD, processor, runtime, object-container, or address-space-number
+spellings.
+
+The adapter answers only from reviewed target facts. Single-axis substitutions
+of subgroup width, atomic type/address space, workgroup limit or dimension,
+pointer width, and profile-relative object class do not inherit a neighboring
+positive answer. A target family, instruction-family bit, or broad projection
+is never combined with unrelated axes to manufacture support.
+
+The neutral V1 model keeps asynchronous transfer and wait/completion as
+distinct requirements. The existing AMD instruction-family table establishes
+only broad transfer availability: it does not review exact transfer sizes and
+alignments, wait-group limits, completion scope, ordering, or post-wait
+visibility. Consequently, the adapter can reject impossible transfer shapes
+but returns `incomplete` for otherwise plausible transfers and every wait
+contract. A transfer decision never authorizes completion semantics.
+
+The production adapter supports only tuples with a reviewed production owner:
+scalar and address-space memory lowering, exact atomic lowering,
+synchronization lowering, subgroup collective lowering, matrix lowering,
+resource admission, kernel ABI, or the loadable-object emitter. Capability
+closure construction records one of these owners beside every admitted tuple
+and fails if a final target decision lacks an owner. The inventory is a handoff
+contract; it does not itself grant lowering or launch authority.
+
+The current production gaps remain explicit. Workgroup scans, asynchronous
+copy and wait, private-memory and register maxima, f16/bf16 numerical behavior,
+and gfx942 floating-point collectives are `incomplete` because the repository
+does not contain both a reviewed target fact and a production lowering/test
+path for those exact contracts. Plausible asynchronous transfers remain
+`incomplete`, while impossible transfer shapes are `unsupported`. Closure
+admission rejects all incomplete or unreviewed answers.
+
 The advanced queries do not add fields to the V1 canonical text encoding. The
 encoding remains byte-for-byte compatible and identifies the exact target from
 which these deterministic queries are derived. The separate
@@ -107,11 +150,12 @@ require runtime evidence. These facts do not authorize a source operation:
 exact matrix shapes/layouts, linked device libraries, and launch admission
 remain separate checks.
 
-The partial `gfx950` profile admits OCP E4M3/E5M2 FP8, MXFP8/MXBF8/MXFP4,
-scaled `f8f6f4` MFMA, and the format-specific `ds_read_b64_tr_b4`,
-`ds_read_b64_tr_b8`, and `ds_read_b64_tr_b16` transpose loads. Other advanced
-gfx950 areas remain `unreviewed`; this profile does not inherit unrelated
-gfx942 atomic, diagnostic, launch-bound, or workgroup-limit decisions.
+The partial `gfx950` profile admits reviewed 1024-invocation workgroup limits,
+OCP E4M3/E5M2 FP8, MXFP8/MXBF8/MXFP4, scaled `f8f6f4` MFMA, and the
+format-specific `ds_read_b64_tr_b4`, `ds_read_b64_tr_b8`, and
+`ds_read_b64_tr_b16` transpose loads. Other advanced gfx950 areas remain
+`unreviewed`; this profile does not inherit unrelated gfx942 atomic,
+diagnostic, or launch-bound decisions.
 
 ```rust
 use fe2o3_amd_target::{AmdTargetId, CapabilitySupport, WavefrontWidth};

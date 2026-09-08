@@ -1,10 +1,10 @@
 use fe2o3_kernel_ir::{
     BinaryOp, BlockId, CheckedBinaryOperator, Operation, OperationKind, ScalarType, Terminator,
-    Type, decode_module_v8, verify_module,
+    Type, decode_module_v13, verify_module,
 };
 use fe2o3_lower_mir_kernel::{
-    ProductionSemanticKirErrorV1, ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
-    ProductionSemanticKirResourceV1,
+    ProductionCanonicalKernelIrVersionV1, ProductionSemanticKirErrorV1,
+    ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1, ProductionSemanticKirResourceV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::{ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1};
@@ -701,16 +701,28 @@ fn checked_lowering_is_deterministic_in_module_and_correspondence_order() {
     .unwrap();
     assert_eq!(first.module(), second.module());
     assert_eq!(first.correspondence(), second.correspondence());
+    let first_canonical = first
+        .canonical_kernel_ir_v13()
+        .expect("production lowering must retain canonical KIR V13");
+    let second_canonical = second
+        .canonical_kernel_ir_v13()
+        .expect("production lowering must retain canonical KIR V13");
+    first_canonical.revalidate().unwrap();
+    second_canonical.revalidate().unwrap();
     assert_eq!(
-        first.canonical_kernel_ir_v8().unwrap().canonical_bytes(),
-        second.canonical_kernel_ir_v8().unwrap().canonical_bytes(),
+        first_canonical.canonical_bytes(),
+        second_canonical.canonical_bytes(),
+    );
+    assert_eq!(first_canonical.identity(), second_canonical.identity());
+    assert_eq!(
+        first.canonical_kernel_ir_identity(),
+        second.canonical_kernel_ir_identity(),
     );
     assert_eq!(
-        first.canonical_kernel_ir_v8_identity(),
-        second.canonical_kernel_ir_v8_identity(),
+        first.canonical_kernel_ir_identity().version(),
+        ProductionCanonicalKernelIrVersionV1::V13,
     );
-    let decoded =
-        decode_module_v8(first.canonical_kernel_ir_v8().unwrap().canonical_bytes()).unwrap();
+    let decoded = decode_module_v13(first_canonical.canonical_bytes()).unwrap();
     assert_eq!(decoded, *first.module());
     assert!(
         decoded.functions[0]

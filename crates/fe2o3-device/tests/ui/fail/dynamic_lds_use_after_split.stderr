@@ -8,7 +8,7 @@ error[E0382]: borrow of moved value: `view`
 5 |     let _ = view.len();
   |             ^^^^ value borrowed here after move
   |
-note: `DynamicLds::<'_, T, State>::split_at` takes ownership of the receiver `self`, which moves `view`
+note: `DynamicLds::<'_, T, State, Brand>::split_at` takes ownership of the receiver `self`, which moves `view`
  --> src/lds.rs
   |
   |     pub fn split_at(self, mid: usize) -> Result<(Self, Self), Self> {

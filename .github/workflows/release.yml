@@ -95,6 +95,9 @@ jobs:
             exit 2
           fi
 
+      - name: Require a fully qualified tutorial capability manifest
+        run: python3 scripts/tutorial_kernel_manifest.py --require-qualified
+
       - name: Require successful full CI for exact commit
         shell: bash
         run: |

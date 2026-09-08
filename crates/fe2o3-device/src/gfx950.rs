@@ -9,12 +9,33 @@
 use core::marker::PhantomData;
 
 use crate::{
-    Wave64, WaveLane,
+    Global, MatrixCapability, MatrixGlobalAccess, NextEpoch, NumericalPolicy,
+    PolicyMatrixCapability, ReadOnly, Subgroup, SubgroupBrand, SubgroupWidth64,
+    SynchronizationEpoch, Wave64, WaveLane, WorkgroupCapability, WorkgroupEpoch,
+    context::UnbrandedCapability,
     views::{CheckedStridedExtentError, check_strided_2d_extent},
 };
 
-type Gfx950WaveContract<'wave, Association> =
-    PhantomData<fn(&'wave WaveLane<Wave64>, Association) -> &'wave WaveLane<Wave64>>;
+/// Canonical imports for kernels that explicitly select gfx950 operations.
+///
+/// Every item is a direct re-export of its branded capability type. This
+/// module defines no compatibility aliases and is intentionally separate from
+/// the target-neutral [`crate::prelude`].
+pub mod prelude;
+
+type Invariant<T> = fn(T) -> T;
+type InvariantLifetime<'scope> = fn(&'scope mut ()) -> &'scope mut ();
+type Gfx950WaveContract<'wave, Association, Brand> =
+    PhantomData<(InvariantLifetime<'wave>, Invariant<(Association, Brand)>)>;
+type Gfx950SubgroupBorrow<'operation, 'workgroup, KernelBrand, Epoch> = (
+    &'operation Subgroup<'workgroup, SubgroupWidth64, KernelBrand, Epoch>,
+    &'operation WorkgroupEpoch<'workgroup, KernelBrand, Epoch>,
+);
+type Gfx950SubgroupContract<'operation, 'workgroup, KernelBrand, Epoch> = PhantomData<
+    fn(
+        Gfx950SubgroupBorrow<'operation, 'workgroup, KernelBrand, Epoch>,
+    ) -> Gfx950SubgroupBorrow<'operation, 'workgroup, KernelBrand, Epoch>,
+>;
 
 /// Version of the bounded gfx950 low-precision source contract.
 pub const GFX950_LOW_PRECISION_CONTRACT_VERSION_V1: u16 = 1;
@@ -28,7 +49,10 @@ pub const GFX950_MFMA_K: usize = 128;
 pub const GFX950_MFMA_WAVE_LANES: usize = 64;
 /// VGPR dwords consumed by each LLVM scaled-MFMA operand.
 pub const GFX950_MFMA_OPERAND_DWORDS: usize = 8;
-/// Largest contiguous power-of-two subgroup admitted by gfx950 V1 terminals.
+/// Exact contiguous subgroup partition admitted by gfx950 V1 terminals.
+pub const GFX950_WAVE16_WIDTH: u32 = 16;
+/// Legacy maximum used by the retired const-generic subgroup surface.
+#[deprecated(note = "gfx950 capability operations use the exact GFX950_WAVE16_WIDTH")]
 pub const GFX950_SUBGROUP_MAX_WIDTH: u32 = 64;
 
 mod sealed {
@@ -39,9 +63,11 @@ mod sealed {
 }
 
 /// Type-level gfx950 subgroup width used to reject unsupported widths.
+#[deprecated(note = "gfx950 capability operations have an exact Wave16 partition")]
 pub struct Gfx950SubgroupWidth<const WIDTH: u32>;
 
 /// A sealed power-of-two subgroup width in `1..=64`.
+#[deprecated(note = "gfx950 capability operations have an exact Wave16 partition")]
 pub trait Gfx950ValidSubgroupWidth: sealed::SubgroupWidth {}
 
 macro_rules! impl_valid_subgroup_width {
@@ -109,15 +135,17 @@ impl sealed::OperandRole for Gfx950MfmaOperandB {}
 /// exchange A and B roles.
 #[repr(C)]
 #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_fragment_v1"]
-pub struct Gfx950MfmaFragment<'wave, Format, Role> {
+pub struct Gfx950MfmaFragment<'wave, Format, Role, Brand = UnbrandedCapability> {
     registers: [u32; GFX950_MFMA_OPERAND_DWORDS],
-    _contract: Gfx950WaveContract<'wave, (Format, Role)>,
+    _contract: Gfx950WaveContract<'wave, (Format, Role), Brand>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
-impl<'wave, Format, Role: sealed::OperandRole> Gfx950MfmaFragment<'wave, Format, Role> {
+impl<'wave, Format, Role: sealed::OperandRole, Brand>
+    Gfx950MfmaFragment<'wave, Format, Role, Brand>
+{
     fn from_registers(
-        _lane: &'wave WaveLane<Wave64>,
+        _lane: &'wave WaveLane<Wave64, Brand>,
         registers: [u32; GFX950_MFMA_OPERAND_DWORDS],
     ) -> Self {
         Self {
@@ -133,29 +161,29 @@ impl<'wave, Format, Role: sealed::OperandRole> Gfx950MfmaFragment<'wave, Format,
 }
 
 /// Canonical FP4 A operand fragment.
-pub type Gfx950Fp4MfmaAFragment<'wave> =
-    Gfx950MfmaFragment<'wave, Gfx950Fp4E2M1, Gfx950MfmaOperandA>;
+pub type Gfx950Fp4MfmaAFragment<'wave, Brand = UnbrandedCapability> =
+    Gfx950MfmaFragment<'wave, Gfx950Fp4E2M1, Gfx950MfmaOperandA, Brand>;
 /// Canonical FP4 B operand fragment.
-pub type Gfx950Fp4MfmaBFragment<'wave> =
-    Gfx950MfmaFragment<'wave, Gfx950Fp4E2M1, Gfx950MfmaOperandB>;
+pub type Gfx950Fp4MfmaBFragment<'wave, Brand = UnbrandedCapability> =
+    Gfx950MfmaFragment<'wave, Gfx950Fp4E2M1, Gfx950MfmaOperandB, Brand>;
 /// Canonical FP8 A operand fragment.
-pub type Gfx950Fp8MfmaAFragment<'wave> =
-    Gfx950MfmaFragment<'wave, Gfx950Fp8E4M3, Gfx950MfmaOperandA>;
+pub type Gfx950Fp8MfmaAFragment<'wave, Brand = UnbrandedCapability> =
+    Gfx950MfmaFragment<'wave, Gfx950Fp8E4M3, Gfx950MfmaOperandA, Brand>;
 /// Canonical FP8 B operand fragment.
-pub type Gfx950Fp8MfmaBFragment<'wave> =
-    Gfx950MfmaFragment<'wave, Gfx950Fp8E4M3, Gfx950MfmaOperandB>;
+pub type Gfx950Fp8MfmaBFragment<'wave, Brand = UnbrandedCapability> =
+    Gfx950MfmaFragment<'wave, Gfx950Fp8E4M3, Gfx950MfmaOperandB, Brand>;
 
 /// Four FP32 accumulator values associated with one gfx950 input format.
 #[repr(C)]
 #[rustc_diagnostic_item = "fe2o3_device_gfx950_f32_accumulator_fragment_v1"]
-pub struct Gfx950F32AccumulatorFragment<'wave, Format> {
+pub struct Gfx950F32AccumulatorFragment<'wave, Format, Brand = UnbrandedCapability> {
     values: [f32; 4],
-    _contract: Gfx950WaveContract<'wave, Format>,
+    _contract: Gfx950WaveContract<'wave, Format, Brand>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
-impl<'wave, Format: Gfx950MfmaFormat> Gfx950F32AccumulatorFragment<'wave, Format> {
-    fn zero_inner(_lane: &'wave WaveLane<Wave64>) -> Self {
+impl<'wave, Format: Gfx950MfmaFormat, Brand> Gfx950F32AccumulatorFragment<'wave, Format, Brand> {
+    fn zero_inner(_lane: &'wave WaveLane<Wave64, Brand>) -> Self {
         Self {
             values: [0.0; 4],
             _contract: PhantomData,
@@ -168,7 +196,7 @@ impl<'wave, Format: Gfx950MfmaFormat> Gfx950F32AccumulatorFragment<'wave, Format
     }
 
     #[cfg(test)]
-    fn from_values(_lane: &'wave WaveLane<Wave64>, values: [f32; 4]) -> Self {
+    fn from_values(_lane: &'wave WaveLane<Wave64, Brand>, values: [f32; 4]) -> Self {
         Self {
             values,
             _contract: PhantomData,
@@ -177,11 +205,11 @@ impl<'wave, Format: Gfx950MfmaFormat> Gfx950F32AccumulatorFragment<'wave, Format
     }
 }
 
-impl<'wave> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1> {
+impl<'wave, Brand> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1, Brand> {
     /// Creates the all-zero FP4 accumulator for one authenticated Wave64 lane.
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_gfx950_fp4_f32_accumulator_zero_v1"]
-    pub fn zero(lane: &'wave WaveLane<Wave64>) -> Self {
+    pub fn zero(lane: &'wave WaveLane<Wave64, Brand>) -> Self {
         Self::zero_inner(lane)
     }
 
@@ -193,11 +221,11 @@ impl<'wave> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1> {
     }
 }
 
-impl<'wave> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp8E4M3> {
+impl<'wave, Brand> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp8E4M3, Brand> {
     /// Creates the all-zero FP8 accumulator for one authenticated Wave64 lane.
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_gfx950_f32_accumulator_zero_v1"]
-    pub fn zero(lane: &'wave WaveLane<Wave64>) -> Self {
+    pub fn zero(lane: &'wave WaveLane<Wave64, Brand>) -> Self {
         Self::zero_inner(lane)
     }
 
@@ -241,6 +269,10 @@ struct CheckedByteMatrix<'data> {
     stride: usize,
 }
 
+trait ByteMatrix {
+    fn value_or_zero(&self, row: Option<usize>, column: Option<usize>) -> u8;
+}
+
 impl<'data> CheckedByteMatrix<'data> {
     fn row_major(
         bits: &'data [u8],
@@ -266,7 +298,9 @@ impl<'data> CheckedByteMatrix<'data> {
             stride,
         })
     }
+}
 
+impl ByteMatrix for CheckedByteMatrix<'_> {
     fn value_or_zero(&self, row: Option<usize>, column: Option<usize>) -> u8 {
         let Some((row, column)) = row.zip(column) else {
             return 0;
@@ -283,17 +317,130 @@ impl<'data> CheckedByteMatrix<'data> {
     }
 }
 
+/// A checked low-precision matrix view backed by branded Global memory.
+///
+/// `MatrixBrand` retains the issuing subgroup and synchronization epoch while
+/// `GlobalBrand` retains the allocation's kernel identity. The only public
+/// constructors are policy-bound and require their sealed brand relation.
+#[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_global_matrix_view_v1"]
+pub struct GlobalGfx950MfmaMatrix<'view, 'kernel: 'view, Format, Role, MatrixBrand, GlobalBrand> {
+    bits: &'view Global<'kernel, u8, ReadOnly, GlobalBrand>,
+    offset: usize,
+    rows: usize,
+    columns: usize,
+    stride: usize,
+    _format: PhantomData<fn(Format) -> Format>,
+    _role: PhantomData<fn(Role) -> Role>,
+    _matrix_brand: PhantomData<fn(MatrixBrand) -> MatrixBrand>,
+    _not_send_sync: PhantomData<*mut ()>,
+}
+
+pub type GlobalGfx950Fp4MfmaAMatrix<'view, 'kernel, MatrixBrand, GlobalBrand> =
+    GlobalGfx950MfmaMatrix<
+        'view,
+        'kernel,
+        Gfx950Fp4E2M1,
+        Gfx950MfmaOperandA,
+        MatrixBrand,
+        GlobalBrand,
+    >;
+pub type GlobalGfx950Fp4MfmaBMatrix<'view, 'kernel, MatrixBrand, GlobalBrand> =
+    GlobalGfx950MfmaMatrix<
+        'view,
+        'kernel,
+        Gfx950Fp4E2M1,
+        Gfx950MfmaOperandB,
+        MatrixBrand,
+        GlobalBrand,
+    >;
+pub type GlobalGfx950Fp8MfmaAMatrix<'view, 'kernel, MatrixBrand, GlobalBrand> =
+    GlobalGfx950MfmaMatrix<
+        'view,
+        'kernel,
+        Gfx950Fp8E4M3,
+        Gfx950MfmaOperandA,
+        MatrixBrand,
+        GlobalBrand,
+    >;
+pub type GlobalGfx950Fp8MfmaBMatrix<'view, 'kernel, MatrixBrand, GlobalBrand> =
+    GlobalGfx950MfmaMatrix<
+        'view,
+        'kernel,
+        Gfx950Fp8E4M3,
+        Gfx950MfmaOperandB,
+        MatrixBrand,
+        GlobalBrand,
+    >;
+
+impl<'view, 'kernel, Format, Role, MatrixBrand, GlobalBrand>
+    GlobalGfx950MfmaMatrix<'view, 'kernel, Format, Role, MatrixBrand, GlobalBrand>
+where
+    Format: Gfx950MfmaFormat,
+    Role: sealed::OperandRole,
+{
+    fn checked(
+        bits: &'view Global<'kernel, u8, ReadOnly, GlobalBrand>,
+        offset: usize,
+        rows: usize,
+        columns: usize,
+        stride: usize,
+    ) -> Result<Self, Gfx950MatrixViewError> {
+        check_strided_2d_extent(offset, rows, columns, stride, bits.len()).map_err(|error| {
+            match error {
+                CheckedStridedExtentError::InvalidStride => Gfx950MatrixViewError::InvalidStride,
+                CheckedStridedExtentError::ExtentOverflow => Gfx950MatrixViewError::ExtentOverflow,
+                CheckedStridedExtentError::OutOfBounds { required, actual } => {
+                    Gfx950MatrixViewError::OutOfBounds { required, actual }
+                }
+            }
+        })?;
+        Ok(Self {
+            bits,
+            offset,
+            rows,
+            columns,
+            stride,
+            _format: PhantomData,
+            _role: PhantomData,
+            _matrix_brand: PhantomData,
+            _not_send_sync: PhantomData,
+        })
+    }
+}
+
+impl<Format, Role, MatrixBrand, GlobalBrand> ByteMatrix
+    for GlobalGfx950MfmaMatrix<'_, '_, Format, Role, MatrixBrand, GlobalBrand>
+where
+    Format: Gfx950MfmaFormat,
+    Role: sealed::OperandRole,
+{
+    fn value_or_zero(&self, row: Option<usize>, column: Option<usize>) -> u8 {
+        let Some((row, column)) = row.zip(column) else {
+            return 0;
+        };
+        if row >= self.rows || column >= self.columns {
+            return 0;
+        }
+        row.checked_mul(self.stride)
+            .and_then(|index| self.offset.checked_add(index))
+            .and_then(|index| index.checked_add(column))
+            .and_then(|index| self.bits.load(index))
+            .unwrap_or(0)
+    }
+}
+
 /// Checked row-major A matrix carrying its gfx950 low-precision format.
 ///
 /// Each logical value occupies one source byte. FP4 values use the low nibble;
 /// fragment loads perform the hardware's dense two-values-per-byte packing.
 #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_matrix_a_view_v1"]
-pub struct Gfx950MfmaAMatrix<'data, Format> {
+pub struct Gfx950MfmaAMatrix<'data, Format, Brand = UnbrandedCapability> {
     matrix: CheckedByteMatrix<'data>,
     _format: PhantomData<Format>,
+    _brand: PhantomData<fn(Brand) -> Brand>,
 }
 
-impl<'data, Format: Gfx950MfmaFormat> Gfx950MfmaAMatrix<'data, Format> {
+impl<'data, Format: Gfx950MfmaFormat, Brand> Gfx950MfmaAMatrix<'data, Format, Brand> {
     fn row_major_inner(
         bits: &'data [u8],
         offset: usize,
@@ -304,15 +451,16 @@ impl<'data, Format: Gfx950MfmaFormat> Gfx950MfmaAMatrix<'data, Format> {
         Ok(Self {
             matrix: CheckedByteMatrix::row_major(bits, offset, rows, reduction, stride)?,
             _format: PhantomData,
+            _brand: PhantomData,
         })
     }
 }
 
-impl<'data> Gfx950MfmaAMatrix<'data, Gfx950Fp4E2M1> {
+impl<'data> Gfx950MfmaAMatrix<'data, Gfx950Fp4E2M1, UnbrandedCapability> {
     /// Validates row-major FP4 `rows x reduction` byte storage.
-    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_matrix_a_fp4_row_major_v1"]
     #[inline(never)]
-    pub fn row_major(
+    #[deprecated(note = "use PolicyGfx950Matrix with branded Global storage")]
+    pub unsafe fn row_major(
         bits: &'data [u8],
         offset: usize,
         rows: usize,
@@ -321,16 +469,18 @@ impl<'data> Gfx950MfmaAMatrix<'data, Gfx950Fp4E2M1> {
     ) -> Result<Self, Gfx950MatrixViewError> {
         Self::row_major_inner(bits, offset, rows, reduction, stride)
     }
+}
 
+impl<'data, Brand> Gfx950MfmaAMatrix<'data, Gfx950Fp4E2M1, Brand> {
     /// Loads this lane's FP4 values from one logical M16xK128 A tile.
-    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_matrix_a_fp4_load_m16k128_v1"]
     #[inline(never)]
+    #[deprecated(note = "use the Global-backed gfx950 matrix load")]
     pub fn load_m16k128<'wave>(
         &self,
-        lane: &'wave WaveLane<Wave64>,
+        lane: &'wave WaveLane<Wave64, Brand>,
         row_base: usize,
         reduction_base: usize,
-    ) -> Gfx950Fp4MfmaAFragment<'wave> {
+    ) -> Gfx950Fp4MfmaAFragment<'wave, Brand> {
         Gfx950MfmaFragment::from_registers(
             lane,
             pack_fp4_a(&self.matrix, lane.get() as usize, row_base, reduction_base),
@@ -338,11 +488,11 @@ impl<'data> Gfx950MfmaAMatrix<'data, Gfx950Fp4E2M1> {
     }
 }
 
-impl<'data> Gfx950MfmaAMatrix<'data, Gfx950Fp8E4M3> {
+impl<'data> Gfx950MfmaAMatrix<'data, Gfx950Fp8E4M3, UnbrandedCapability> {
     /// Validates row-major FP8 `rows x reduction` byte storage.
-    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_matrix_a_row_major_v1"]
     #[inline(never)]
-    pub fn row_major(
+    #[deprecated(note = "use PolicyGfx950Matrix with branded Global storage")]
+    pub unsafe fn row_major(
         bits: &'data [u8],
         offset: usize,
         rows: usize,
@@ -351,16 +501,18 @@ impl<'data> Gfx950MfmaAMatrix<'data, Gfx950Fp8E4M3> {
     ) -> Result<Self, Gfx950MatrixViewError> {
         Self::row_major_inner(bits, offset, rows, reduction, stride)
     }
+}
 
+impl<'data, Brand> Gfx950MfmaAMatrix<'data, Gfx950Fp8E4M3, Brand> {
     /// Loads this lane's FP8 values from one logical M16xK128 A tile.
-    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_matrix_a_fp8_load_m16k128_v1"]
     #[inline(never)]
+    #[deprecated(note = "use the Global-backed gfx950 matrix load")]
     pub fn load_m16k128<'wave>(
         &self,
-        lane: &'wave WaveLane<Wave64>,
+        lane: &'wave WaveLane<Wave64, Brand>,
         row_base: usize,
         reduction_base: usize,
-    ) -> Gfx950Fp8MfmaAFragment<'wave> {
+    ) -> Gfx950Fp8MfmaAFragment<'wave, Brand> {
         Gfx950MfmaFragment::from_registers(
             lane,
             pack_fp8_a(&self.matrix, lane.get() as usize, row_base, reduction_base),
@@ -373,12 +525,13 @@ impl<'data> Gfx950MfmaAMatrix<'data, Gfx950Fp8E4M3> {
 /// Each logical value occupies one source byte. FP4 values use the low nibble;
 /// fragment loads perform the hardware's dense two-values-per-byte packing.
 #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_matrix_b_view_v1"]
-pub struct Gfx950MfmaBMatrix<'data, Format> {
+pub struct Gfx950MfmaBMatrix<'data, Format, Brand = UnbrandedCapability> {
     matrix: CheckedByteMatrix<'data>,
     _format: PhantomData<Format>,
+    _brand: PhantomData<fn(Brand) -> Brand>,
 }
 
-impl<'data, Format: Gfx950MfmaFormat> Gfx950MfmaBMatrix<'data, Format> {
+impl<'data, Format: Gfx950MfmaFormat, Brand> Gfx950MfmaBMatrix<'data, Format, Brand> {
     fn row_major_inner(
         bits: &'data [u8],
         offset: usize,
@@ -389,15 +542,16 @@ impl<'data, Format: Gfx950MfmaFormat> Gfx950MfmaBMatrix<'data, Format> {
         Ok(Self {
             matrix: CheckedByteMatrix::row_major(bits, offset, reduction, columns, stride)?,
             _format: PhantomData,
+            _brand: PhantomData,
         })
     }
 }
 
-impl<'data> Gfx950MfmaBMatrix<'data, Gfx950Fp4E2M1> {
+impl<'data> Gfx950MfmaBMatrix<'data, Gfx950Fp4E2M1, UnbrandedCapability> {
     /// Validates row-major FP4 `reduction x columns` byte storage.
-    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_matrix_b_fp4_row_major_v1"]
     #[inline(never)]
-    pub fn row_major(
+    #[deprecated(note = "use PolicyGfx950Matrix with branded Global storage")]
+    pub unsafe fn row_major(
         bits: &'data [u8],
         offset: usize,
         reduction: usize,
@@ -406,16 +560,18 @@ impl<'data> Gfx950MfmaBMatrix<'data, Gfx950Fp4E2M1> {
     ) -> Result<Self, Gfx950MatrixViewError> {
         Self::row_major_inner(bits, offset, reduction, columns, stride)
     }
+}
 
+impl<'data, Brand> Gfx950MfmaBMatrix<'data, Gfx950Fp4E2M1, Brand> {
     /// Loads this lane's FP4 values from one logical K128xN16 B tile.
-    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_matrix_b_fp4_load_k128n16_v1"]
     #[inline(never)]
+    #[deprecated(note = "use the Global-backed gfx950 matrix load")]
     pub fn load_k128n16<'wave>(
         &self,
-        lane: &'wave WaveLane<Wave64>,
+        lane: &'wave WaveLane<Wave64, Brand>,
         reduction_base: usize,
         column_base: usize,
-    ) -> Gfx950Fp4MfmaBFragment<'wave> {
+    ) -> Gfx950Fp4MfmaBFragment<'wave, Brand> {
         Gfx950MfmaFragment::from_registers(
             lane,
             pack_fp4_b(
@@ -428,11 +584,11 @@ impl<'data> Gfx950MfmaBMatrix<'data, Gfx950Fp4E2M1> {
     }
 }
 
-impl<'data> Gfx950MfmaBMatrix<'data, Gfx950Fp8E4M3> {
+impl<'data> Gfx950MfmaBMatrix<'data, Gfx950Fp8E4M3, UnbrandedCapability> {
     /// Validates row-major FP8 `reduction x columns` byte storage.
-    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_matrix_b_row_major_v1"]
     #[inline(never)]
-    pub fn row_major(
+    #[deprecated(note = "use PolicyGfx950Matrix with branded Global storage")]
+    pub unsafe fn row_major(
         bits: &'data [u8],
         offset: usize,
         reduction: usize,
@@ -441,16 +597,18 @@ impl<'data> Gfx950MfmaBMatrix<'data, Gfx950Fp8E4M3> {
     ) -> Result<Self, Gfx950MatrixViewError> {
         Self::row_major_inner(bits, offset, reduction, columns, stride)
     }
+}
 
+impl<'data, Brand> Gfx950MfmaBMatrix<'data, Gfx950Fp8E4M3, Brand> {
     /// Loads this lane's FP8 values from one logical K128xN16 B tile.
-    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_matrix_b_fp8_load_k128n16_v1"]
     #[inline(never)]
+    #[deprecated(note = "use the Global-backed gfx950 matrix load")]
     pub fn load_k128n16<'wave>(
         &self,
-        lane: &'wave WaveLane<Wave64>,
+        lane: &'wave WaveLane<Wave64, Brand>,
         reduction_base: usize,
         column_base: usize,
-    ) -> Gfx950Fp8MfmaBFragment<'wave> {
+    ) -> Gfx950Fp8MfmaBFragment<'wave, Brand> {
         Gfx950MfmaFragment::from_registers(
             lane,
             pack_fp8_b(
@@ -464,39 +622,396 @@ impl<'data> Gfx950MfmaBMatrix<'data, Gfx950Fp8E4M3> {
 }
 
 /// Checked row-major FP4 A matrix.
-pub type Gfx950Fp4MfmaAMatrix<'data> = Gfx950MfmaAMatrix<'data, Gfx950Fp4E2M1>;
+pub type Gfx950Fp4MfmaAMatrix<'data, Brand = UnbrandedCapability> =
+    Gfx950MfmaAMatrix<'data, Gfx950Fp4E2M1, Brand>;
 /// Checked row-major FP4 B matrix.
-pub type Gfx950Fp4MfmaBMatrix<'data> = Gfx950MfmaBMatrix<'data, Gfx950Fp4E2M1>;
+pub type Gfx950Fp4MfmaBMatrix<'data, Brand = UnbrandedCapability> =
+    Gfx950MfmaBMatrix<'data, Gfx950Fp4E2M1, Brand>;
 /// Checked row-major FP8 A matrix.
-pub type Gfx950Fp8MfmaAMatrix<'data> = Gfx950MfmaAMatrix<'data, Gfx950Fp8E4M3>;
+pub type Gfx950Fp8MfmaAMatrix<'data, Brand = UnbrandedCapability> =
+    Gfx950MfmaAMatrix<'data, Gfx950Fp8E4M3, Brand>;
 /// Checked row-major FP8 B matrix.
-pub type Gfx950Fp8MfmaBMatrix<'data> = Gfx950MfmaBMatrix<'data, Gfx950Fp8E4M3>;
+pub type Gfx950Fp8MfmaBMatrix<'data, Brand = UnbrandedCapability> =
+    Gfx950MfmaBMatrix<'data, Gfx950Fp8E4M3, Brand>;
+
+impl<MatrixBrand, GlobalBrand>
+    GlobalGfx950MfmaMatrix<'_, '_, Gfx950Fp4E2M1, Gfx950MfmaOperandA, MatrixBrand, GlobalBrand>
+{
+    /// Loads one lane's FP4 A fragment from branded Global storage.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_global_matrix_a_fp4_load_m16k128_v1"]
+    pub fn load_m16k128<'wave>(
+        &self,
+        lane: &'wave WaveLane<Wave64, MatrixBrand>,
+        row_base: usize,
+        reduction_base: usize,
+    ) -> Gfx950Fp4MfmaAFragment<'wave, MatrixBrand> {
+        Gfx950MfmaFragment::from_registers(
+            lane,
+            pack_fp4_a(self, lane.get() as usize, row_base, reduction_base),
+        )
+    }
+}
+
+impl<MatrixBrand, GlobalBrand>
+    GlobalGfx950MfmaMatrix<'_, '_, Gfx950Fp4E2M1, Gfx950MfmaOperandB, MatrixBrand, GlobalBrand>
+{
+    /// Loads one lane's FP4 B fragment from branded Global storage.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_global_matrix_b_fp4_load_k128n16_v1"]
+    pub fn load_k128n16<'wave>(
+        &self,
+        lane: &'wave WaveLane<Wave64, MatrixBrand>,
+        reduction_base: usize,
+        column_base: usize,
+    ) -> Gfx950Fp4MfmaBFragment<'wave, MatrixBrand> {
+        Gfx950MfmaFragment::from_registers(
+            lane,
+            pack_fp4_b(self, lane.get() as usize, reduction_base, column_base),
+        )
+    }
+}
+
+impl<MatrixBrand, GlobalBrand>
+    GlobalGfx950MfmaMatrix<'_, '_, Gfx950Fp8E4M3, Gfx950MfmaOperandA, MatrixBrand, GlobalBrand>
+{
+    /// Loads one lane's FP8 A fragment from branded Global storage.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_global_matrix_a_fp8_load_m16k128_v1"]
+    pub fn load_m16k128<'wave>(
+        &self,
+        lane: &'wave WaveLane<Wave64, MatrixBrand>,
+        row_base: usize,
+        reduction_base: usize,
+    ) -> Gfx950Fp8MfmaAFragment<'wave, MatrixBrand> {
+        Gfx950MfmaFragment::from_registers(
+            lane,
+            pack_fp8_a(self, lane.get() as usize, row_base, reduction_base),
+        )
+    }
+}
+
+impl<MatrixBrand, GlobalBrand>
+    GlobalGfx950MfmaMatrix<'_, '_, Gfx950Fp8E4M3, Gfx950MfmaOperandB, MatrixBrand, GlobalBrand>
+{
+    /// Loads one lane's FP8 B fragment from branded Global storage.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_global_matrix_b_fp8_load_k128n16_v1"]
+    pub fn load_k128n16<'wave>(
+        &self,
+        lane: &'wave WaveLane<Wave64, MatrixBrand>,
+        reduction_base: usize,
+        column_base: usize,
+    ) -> Gfx950Fp8MfmaBFragment<'wave, MatrixBrand> {
+        Gfx950MfmaFragment::from_registers(
+            lane,
+            pack_fp8_b(self, lane.get() as usize, reduction_base, column_base),
+        )
+    }
+}
 
 /// Compiler-created authority for the exact gfx950 scaled-MFMA profile.
 #[rustc_diagnostic_item = "fe2o3_device_gfx950_matrix_context_v1"]
-pub struct Gfx950Matrix {
+#[deprecated(note = "use PolicyGfx950Matrix for admitted gfx950 operations")]
+pub struct Gfx950Matrix<Brand = UnbrandedCapability> {
     _private: (),
+    _brand: PhantomData<fn(Brand) -> Brand>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
-impl Gfx950Matrix {
+/// Policy-bound authority for the exact gfx950 low-precision MFMA profile.
+///
+/// The wrapper retains the matrix/subgroup brand, root Global brand, and the
+/// compiler-issued numerical policy. Only operations on this type carry the
+/// diagnostic identities accepted by production import.
+#[must_use = "gfx950 matrix authority must retain its numerical policy"]
+#[rustc_diagnostic_item = "fe2o3_device_policy_gfx950_matrix_capability_v1"]
+pub struct PolicyGfx950Matrix<'capability, MatrixBrand, GlobalBrand, Policy>
+where
+    Policy: NumericalPolicy,
+    MatrixBrand: MatrixGlobalAccess<GlobalBrand>,
+{
+    policy_matrix:
+        &'capability PolicyMatrixCapability<'capability, MatrixBrand, GlobalBrand, Policy>,
+    _not_send_sync: PhantomData<*mut ()>,
+}
+
+impl<'capability, MatrixBrand, GlobalBrand, Policy>
+    PolicyMatrixCapability<'capability, MatrixBrand, GlobalBrand, Policy>
+where
+    Policy: NumericalPolicy,
+    MatrixBrand: MatrixGlobalAccess<GlobalBrand>,
+{
+    /// Narrows policy-bound matrix authority to the gfx950 profile.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_policy_gfx950_matrix_issue_v1"]
+    pub fn gfx950(
+        &'capability self,
+    ) -> PolicyGfx950Matrix<'capability, MatrixBrand, GlobalBrand, Policy> {
+        let _ = self.matrix();
+        PolicyGfx950Matrix {
+            policy_matrix: self,
+            _not_send_sync: PhantomData,
+        }
+    }
+}
+
+impl<MatrixBrand, GlobalBrand, Policy> PolicyGfx950Matrix<'_, MatrixBrand, GlobalBrand, Policy>
+where
+    Policy: NumericalPolicy,
+    MatrixBrand: MatrixGlobalAccess<GlobalBrand>,
+{
+    /// Validates a Global-backed row-major FP4 A matrix.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_global_matrix_a_fp4_row_major_v1"]
+    pub fn fp4_a_global_row_major<'view, 'kernel>(
+        &self,
+        bits: &'view Global<'kernel, u8, ReadOnly, GlobalBrand>,
+        offset: usize,
+        rows: usize,
+        reduction: usize,
+        stride: usize,
+    ) -> Result<
+        GlobalGfx950Fp4MfmaAMatrix<'view, 'kernel, MatrixBrand, GlobalBrand>,
+        Gfx950MatrixViewError,
+    >
+    where
+        'kernel: 'view,
+    {
+        let _ = self.policy_matrix;
+        GlobalGfx950MfmaMatrix::checked(bits, offset, rows, reduction, stride)
+    }
+
+    /// Validates a Global-backed row-major FP4 B matrix.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_global_matrix_b_fp4_row_major_v1"]
+    pub fn fp4_b_global_row_major<'view, 'kernel>(
+        &self,
+        bits: &'view Global<'kernel, u8, ReadOnly, GlobalBrand>,
+        offset: usize,
+        reduction: usize,
+        columns: usize,
+        stride: usize,
+    ) -> Result<
+        GlobalGfx950Fp4MfmaBMatrix<'view, 'kernel, MatrixBrand, GlobalBrand>,
+        Gfx950MatrixViewError,
+    >
+    where
+        'kernel: 'view,
+    {
+        let _ = self.policy_matrix;
+        GlobalGfx950MfmaMatrix::checked(bits, offset, reduction, columns, stride)
+    }
+
+    /// Validates a Global-backed row-major FP8 A matrix.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_global_matrix_a_fp8_row_major_v1"]
+    pub fn fp8_a_global_row_major<'view, 'kernel>(
+        &self,
+        bits: &'view Global<'kernel, u8, ReadOnly, GlobalBrand>,
+        offset: usize,
+        rows: usize,
+        reduction: usize,
+        stride: usize,
+    ) -> Result<
+        GlobalGfx950Fp8MfmaAMatrix<'view, 'kernel, MatrixBrand, GlobalBrand>,
+        Gfx950MatrixViewError,
+    >
+    where
+        'kernel: 'view,
+    {
+        let _ = self.policy_matrix;
+        GlobalGfx950MfmaMatrix::checked(bits, offset, rows, reduction, stride)
+    }
+
+    /// Validates a Global-backed row-major FP8 B matrix.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_global_matrix_b_fp8_row_major_v1"]
+    pub fn fp8_b_global_row_major<'view, 'kernel>(
+        &self,
+        bits: &'view Global<'kernel, u8, ReadOnly, GlobalBrand>,
+        offset: usize,
+        reduction: usize,
+        columns: usize,
+        stride: usize,
+    ) -> Result<
+        GlobalGfx950Fp8MfmaBMatrix<'view, 'kernel, MatrixBrand, GlobalBrand>,
+        Gfx950MatrixViewError,
+    >
+    where
+        'kernel: 'view,
+    {
+        let _ = self.policy_matrix;
+        GlobalGfx950MfmaMatrix::checked(bits, offset, reduction, columns, stride)
+    }
+
+    /// Creates an all-zero FP4 accumulator under this exact policy owner.
+    pub fn fp4_zero_accumulator<'wave>(
+        &self,
+        lane: &'wave WaveLane<Wave64, MatrixBrand>,
+    ) -> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1, MatrixBrand> {
+        let _ = self.policy_matrix;
+        Gfx950F32AccumulatorFragment::zero_inner(lane)
+    }
+
+    /// Creates an all-zero FP8 accumulator under this exact policy owner.
+    pub fn fp8_zero_accumulator<'wave>(
+        &self,
+        lane: &'wave WaveLane<Wave64, MatrixBrand>,
+    ) -> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp8E4M3, MatrixBrand> {
+        let _ = self.policy_matrix;
+        Gfx950F32AccumulatorFragment::zero_inner(lane)
+    }
+
+    /// Performs one policy-bound full-wave FP4 scaled MFMA.
+    #[must_use]
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_fp4_f32_m16n16k128_v1"]
+    pub fn multiply_accumulate_fp4<'wave>(
+        &self,
+        lhs: Gfx950Fp4MfmaAFragment<'wave, MatrixBrand>,
+        rhs: Gfx950Fp4MfmaBFragment<'wave, MatrixBrand>,
+        accumulator: Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1, MatrixBrand>,
+    ) -> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1, MatrixBrand> {
+        let _ = (
+            self.policy_matrix,
+            lhs.into_registers(),
+            rhs.into_registers(),
+            accumulator.values,
+        );
+        unreachable!("policy-bound gfx950 FP4 MFMA requires authenticated lowering")
+    }
+
+    /// Performs one policy-bound full-wave mixed FP4xFP8 scaled MFMA.
+    #[must_use]
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_fp4_fp8_f32_m16n16k128_v1"]
+    pub fn multiply_accumulate_fp4_fp8<'wave>(
+        &self,
+        lhs: Gfx950Fp4MfmaAFragment<'wave, MatrixBrand>,
+        rhs: Gfx950Fp8MfmaBFragment<'wave, MatrixBrand>,
+        accumulator: Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1, MatrixBrand>,
+    ) -> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1, MatrixBrand> {
+        let _ = (
+            self.policy_matrix,
+            lhs.into_registers(),
+            rhs.into_registers(),
+            accumulator.values,
+        );
+        unreachable!("policy-bound mixed gfx950 MFMA requires authenticated lowering")
+    }
+
+    /// Performs one policy-bound full-wave FP8 scaled MFMA.
+    #[must_use]
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_fp8_f32_m16n16k128_v1"]
+    pub fn multiply_accumulate_fp8<'wave>(
+        &self,
+        lhs: Gfx950Fp8MfmaAFragment<'wave, MatrixBrand>,
+        rhs: Gfx950Fp8MfmaBFragment<'wave, MatrixBrand>,
+        accumulator: Gfx950F32AccumulatorFragment<'wave, Gfx950Fp8E4M3, MatrixBrand>,
+    ) -> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp8E4M3, MatrixBrand> {
+        let _ = (
+            self.policy_matrix,
+            lhs.into_registers(),
+            rhs.into_registers(),
+            accumulator.values,
+        );
+        unreachable!("policy-bound gfx950 FP8 MFMA requires authenticated lowering")
+    }
+}
+
+impl Gfx950Matrix<UnbrandedCapability> {
     /// Acquires gfx950 matrix authority from authenticated compiler lowering.
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_gfx950_matrix_context_current_v1"]
     pub fn current() -> Self {
         unreachable!("Gfx950Matrix must be created by authenticated gfx950 device lowering")
     }
+}
+
+impl<Brand> MatrixCapability<Brand> {
+    /// Narrows the target-neutral matrix root to the exact gfx950 profile.
+    ///
+    /// Production target legalization must prove gfx950 support before calls on
+    /// the returned capability can lower.
+    #[deprecated(note = "use PolicyMatrixCapability::gfx950 for admitted operations")]
+    pub unsafe fn gfx950(&self) -> Gfx950Matrix<Brand> {
+        Gfx950Matrix::from_matrix_capability(self)
+    }
+}
+
+impl<Brand> Gfx950Matrix<Brand> {
+    fn from_matrix_capability(_matrix: &MatrixCapability<Brand>) -> Self {
+        Self {
+            _private: (),
+            _brand: PhantomData,
+            _not_send_sync: PhantomData,
+        }
+    }
+
+    /// Validates branded row-major FP4 A storage.
+    #[deprecated(note = "use PolicyGfx950Matrix with branded Global storage")]
+    pub unsafe fn fp4_a_row_major<'data>(
+        &self,
+        bits: &'data [u8],
+        offset: usize,
+        rows: usize,
+        reduction: usize,
+        stride: usize,
+    ) -> Result<Gfx950Fp4MfmaAMatrix<'data, Brand>, Gfx950MatrixViewError> {
+        Gfx950MfmaAMatrix::row_major_inner(bits, offset, rows, reduction, stride)
+    }
+
+    /// Validates branded row-major FP4 B storage.
+    #[deprecated(note = "use PolicyGfx950Matrix with branded Global storage")]
+    pub unsafe fn fp4_b_row_major<'data>(
+        &self,
+        bits: &'data [u8],
+        offset: usize,
+        reduction: usize,
+        columns: usize,
+        stride: usize,
+    ) -> Result<Gfx950Fp4MfmaBMatrix<'data, Brand>, Gfx950MatrixViewError> {
+        Gfx950MfmaBMatrix::row_major_inner(bits, offset, reduction, columns, stride)
+    }
+
+    /// Validates branded row-major FP8 A storage.
+    #[deprecated(note = "use PolicyGfx950Matrix with branded Global storage")]
+    pub unsafe fn fp8_a_row_major<'data>(
+        &self,
+        bits: &'data [u8],
+        offset: usize,
+        rows: usize,
+        reduction: usize,
+        stride: usize,
+    ) -> Result<Gfx950Fp8MfmaAMatrix<'data, Brand>, Gfx950MatrixViewError> {
+        Gfx950MfmaAMatrix::row_major_inner(bits, offset, rows, reduction, stride)
+    }
+
+    /// Validates branded row-major FP8 B storage.
+    #[deprecated(note = "use PolicyGfx950Matrix with branded Global storage")]
+    pub unsafe fn fp8_b_row_major<'data>(
+        &self,
+        bits: &'data [u8],
+        offset: usize,
+        reduction: usize,
+        columns: usize,
+        stride: usize,
+    ) -> Result<Gfx950Fp8MfmaBMatrix<'data, Brand>, Gfx950MatrixViewError> {
+        Gfx950MfmaBMatrix::row_major_inner(bits, offset, reduction, columns, stride)
+    }
 
     /// Performs one full-wave FP4 scaled MFMA with identity scales.
     #[must_use]
     #[inline(never)]
-    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_fp4_f32_m16n16k128_v1"]
-    pub fn multiply_accumulate_fp4<'wave>(
+    #[deprecated(note = "use PolicyGfx950Matrix; bare MFMA has no admitted numerical policy")]
+    pub unsafe fn multiply_accumulate_fp4<'wave>(
         &self,
-        lhs: Gfx950Fp4MfmaAFragment<'wave>,
-        rhs: Gfx950Fp4MfmaBFragment<'wave>,
-        accumulator: Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1>,
-    ) -> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1> {
+        lhs: Gfx950Fp4MfmaAFragment<'wave, Brand>,
+        rhs: Gfx950Fp4MfmaBFragment<'wave, Brand>,
+        accumulator: Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1, Brand>,
+    ) -> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1, Brand> {
         let _ = (
             self,
             lhs.into_registers(),
@@ -509,13 +1024,13 @@ impl Gfx950Matrix {
     /// Performs one full-wave scaled MFMA with FP4 A and FP8 B operands.
     #[must_use]
     #[inline(never)]
-    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_fp4_fp8_f32_m16n16k128_v1"]
-    pub fn multiply_accumulate_fp4_fp8<'wave>(
+    #[deprecated(note = "use PolicyGfx950Matrix; bare MFMA has no admitted numerical policy")]
+    pub unsafe fn multiply_accumulate_fp4_fp8<'wave>(
         &self,
-        lhs: Gfx950Fp4MfmaAFragment<'wave>,
-        rhs: Gfx950Fp8MfmaBFragment<'wave>,
-        accumulator: Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1>,
-    ) -> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1> {
+        lhs: Gfx950Fp4MfmaAFragment<'wave, Brand>,
+        rhs: Gfx950Fp8MfmaBFragment<'wave, Brand>,
+        accumulator: Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1, Brand>,
+    ) -> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1, Brand> {
         let _ = (
             self,
             lhs.into_registers(),
@@ -528,13 +1043,13 @@ impl Gfx950Matrix {
     /// Performs one full-wave FP8 scaled MFMA with identity scales.
     #[must_use]
     #[inline(never)]
-    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_fp8_f32_m16n16k128_v1"]
-    pub fn multiply_accumulate_fp8<'wave>(
+    #[deprecated(note = "use PolicyGfx950Matrix; bare MFMA has no admitted numerical policy")]
+    pub unsafe fn multiply_accumulate_fp8<'wave>(
         &self,
-        lhs: Gfx950Fp8MfmaAFragment<'wave>,
-        rhs: Gfx950Fp8MfmaBFragment<'wave>,
-        accumulator: Gfx950F32AccumulatorFragment<'wave, Gfx950Fp8E4M3>,
-    ) -> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp8E4M3> {
+        lhs: Gfx950Fp8MfmaAFragment<'wave, Brand>,
+        rhs: Gfx950Fp8MfmaBFragment<'wave, Brand>,
+        accumulator: Gfx950F32AccumulatorFragment<'wave, Gfx950Fp8E4M3, Brand>,
+    ) -> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp8E4M3, Brand> {
         let _ = (
             self,
             lhs.into_registers(),
@@ -545,76 +1060,92 @@ impl Gfx950Matrix {
     }
 }
 
-/// Compiler-created authority for bounded gfx950 Wave64 subgroup operations.
+/// A gfx950 Wave16 operation view derived from one exact Wave64 subgroup epoch.
 ///
-/// The capability is move-only and cannot be constructed from caller-provided
-/// identity. The sealed width witness admits only powers of two in `1..=64`;
-/// authenticated lowering must also prove convergent execution and a native
-/// Wave64 target. This source contract does not claim current backend support.
-///
-/// Unsupported subgroup widths are rejected during type checking:
-///
-/// ```compile_fail
-/// use fe2o3_device::gfx950::Gfx950Subgroup;
-///
-/// fn invalid_width(subgroup: &Gfx950Subgroup) {
-///     let _ = subgroup.reduce_sum_f32::<3>(1.0);
-/// }
-/// ```
+/// Wave16 is fixed in the type and the private value retains borrows of both
+/// the subgroup and its matching workgroup epoch. Safe source cannot acquire
+/// this authority independently or use it after the enclosing epoch advances.
 #[rustc_diagnostic_item = "fe2o3_device_gfx950_subgroup_context_v1"]
-pub struct Gfx950Subgroup {
-    _private: (),
+pub struct Gfx950Subgroup<'operation, 'workgroup, KernelBrand, Epoch>
+where
+    Epoch: SynchronizationEpoch,
+{
+    _subgroup: Gfx950SubgroupContract<'operation, 'workgroup, KernelBrand, Epoch>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
-impl Gfx950Subgroup {
-    /// Acquires subgroup authority from authenticated gfx950 device lowering.
+impl<'workgroup, KernelBrand, Epoch> Subgroup<'workgroup, SubgroupWidth64, KernelBrand, Epoch>
+where
+    Epoch: SynchronizationEpoch,
+{
+    /// Narrows this exact subgroup epoch to gfx950 Wave16 collectives.
     #[inline(never)]
-    #[rustc_diagnostic_item = "fe2o3_device_gfx950_subgroup_current_v1"]
-    pub fn current() -> Self {
-        unreachable!("gfx950 subgroup authority requires authenticated compiler lowering")
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_subgroup_wave16_v1"]
+    pub fn gfx950_wave16<'operation>(
+        &'operation self,
+        _epoch: &'operation WorkgroupEpoch<'workgroup, KernelBrand, Epoch>,
+    ) -> Gfx950Subgroup<'operation, 'workgroup, KernelBrand, Epoch> {
+        Gfx950Subgroup {
+            _subgroup: PhantomData,
+            _not_send_sync: PhantomData,
+        }
     }
+}
 
+impl<'operation, 'workgroup, KernelBrand, Epoch>
+    Gfx950Subgroup<'operation, 'workgroup, KernelBrand, Epoch>
+where
+    Epoch: SynchronizationEpoch,
+{
     /// Returns the ordered maximum to every lane in each contiguous subgroup.
     #[inline(never)]
-    #[rustc_diagnostic_item = "fe2o3_device_gfx950_subgroup_reduce_max_f32_v1"]
-    pub fn reduce_max_f32<const WIDTH: u32>(&self, value: f32) -> f32
-    where
-        Gfx950SubgroupWidth<WIDTH>: Gfx950ValidSubgroupWidth,
-    {
-        let _ = (self, value, WIDTH);
-        unreachable!("gfx950 subgroup maximum requires authenticated compiler lowering")
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_subgroup_reduce_max_f32_wave16_v1"]
+    pub fn reduce_max_f32(&self, value: f32) -> f32 {
+        let _ = (self, value);
+        unreachable!("gfx950 Wave16 maximum requires authenticated compiler lowering")
     }
 
     /// Returns the FP32 sum to every lane in each contiguous subgroup.
     #[inline(never)]
-    #[rustc_diagnostic_item = "fe2o3_device_gfx950_subgroup_reduce_sum_f32_v1"]
-    pub fn reduce_sum_f32<const WIDTH: u32>(&self, value: f32) -> f32
-    where
-        Gfx950SubgroupWidth<WIDTH>: Gfx950ValidSubgroupWidth,
-    {
-        let _ = (self, value, WIDTH);
-        unreachable!("gfx950 subgroup sum requires authenticated compiler lowering")
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_subgroup_reduce_sum_f32_wave16_v1"]
+    pub fn reduce_sum_f32(&self, value: f32) -> f32 {
+        let _ = (self, value);
+        unreachable!("gfx950 Wave16 sum requires authenticated compiler lowering")
     }
 
-    /// Broadcasts one value from `source_lane` within each contiguous subgroup.
+    /// Broadcasts from `source_lane` within each contiguous Wave16 partition.
     ///
-    /// Authenticated lowering rejects `source_lane >= WIDTH` and any unsupported
-    /// `WIDTH`; it must not silently wrap or clamp either value.
+    /// Authenticated lowering rejects `source_lane >= 16`; it must not silently
+    /// wrap or clamp the source lane.
     #[inline(never)]
-    #[rustc_diagnostic_item = "fe2o3_device_gfx950_subgroup_broadcast_f32_v1"]
-    pub fn broadcast_f32<const WIDTH: u32>(&self, value: f32, source_lane: u32) -> f32
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_subgroup_broadcast_f32_wave16_v1"]
+    pub fn broadcast_f32(&self, value: f32, source_lane: u32) -> f32 {
+        let _ = (self, value, source_lane);
+        unreachable!("gfx950 Wave16 broadcast requires authenticated compiler lowering")
+    }
+
+    /// Issues one transpose tile for this exact Wave64 subgroup and epoch.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_lds_transpose_tile_issue_v1"]
+    pub fn transpose_tile<Format>(
+        &self,
+    ) -> Gfx950LdsTransposeTile<
+        'workgroup,
+        Format,
+        Gfx950TransposeUninitialized,
+        SubgroupBrand<'workgroup, SubgroupWidth64, KernelBrand, Epoch>,
+    >
     where
-        Gfx950SubgroupWidth<WIDTH>: Gfx950ValidSubgroupWidth,
+        Format: Gfx950MfmaFormat,
     {
-        let _ = (self, value, source_lane, WIDTH);
-        unreachable!("gfx950 subgroup broadcast requires authenticated compiler lowering")
+        let _ = self;
+        unreachable!("gfx950 LDS transpose issuance requires authenticated lowering")
     }
 
     #[cfg(test)]
     fn for_host_test() -> Self {
         Self {
-            _private: (),
+            _subgroup: PhantomData,
             _not_send_sync: PhantomData,
         }
     }
@@ -642,8 +1173,10 @@ impl sealed::TransposeState for Gfx950TransposePublished {}
 /// inverse staging permutation, a uniform barrier, and format-specific
 /// `ds_read_b64_tr_b4` or `ds_read_b64_tr_b8` instructions.
 ///
-/// The lane lifetime is invariant, so a tile cannot outlive the authenticated
-/// wave witness that issued it.
+/// The workgroup lifetime and execution brand are independently invariant. A
+/// tile therefore cannot leave its generative workgroup scope or be relabeled,
+/// while the kernel brand does not acquire a false `KernelBrand: 'workgroup`
+/// requirement merely because it is nested inside the execution brand.
 ///
 /// ```compile_fail
 /// use fe2o3_device::{
@@ -675,82 +1208,164 @@ impl sealed::TransposeState for Gfx950TransposePublished {}
 /// lowerer assigns every wave a disjoint format-sized LDS tile; `publish` remains a workgroup-wide
 /// barrier and therefore must be reached uniformly by every wave in the workgroup.
 #[rustc_diagnostic_item = "fe2o3_device_gfx950_lds_transpose_tile_v1"]
-pub struct Gfx950LdsTransposeTile<'wave, Format, State>
+pub struct Gfx950LdsTransposeTile<'wave, Format, State, Brand = UnbrandedCapability>
 where
     Format: Gfx950MfmaFormat,
     State: sealed::TransposeState,
 {
-    _contract: Gfx950WaveContract<'wave, (Format, State)>,
+    _contract: Gfx950WaveContract<'wave, (Format, State), Brand>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
-impl<'wave, Format: Gfx950MfmaFormat>
-    Gfx950LdsTransposeTile<'wave, Format, Gfx950TransposeUninitialized>
+impl<'wave, Format: Gfx950MfmaFormat, Brand>
+    Gfx950LdsTransposeTile<'wave, Format, Gfx950TransposeUninitialized, Brand>
 {
     /// Acquires one compiler-owned transpose tile for the current wave.
     #[inline(never)]
-    #[rustc_diagnostic_item = "fe2o3_device_gfx950_lds_transpose_tile_current_v1"]
-    pub fn current(_lane: &'wave WaveLane<Wave64>) -> Self {
+    #[deprecated(note = "derive a transpose tile from Subgroup::gfx950_wave16")]
+    pub unsafe fn current(_lane: &'wave WaveLane<Wave64, Brand>) -> Self {
         unreachable!("gfx950 LDS transpose storage requires authenticated compiler lowering")
     }
 }
 
-impl<'wave> Gfx950LdsTransposeTile<'wave, Gfx950Fp4E2M1, Gfx950TransposeUninitialized> {
+impl<'wave, Brand>
+    Gfx950LdsTransposeTile<'wave, Gfx950Fp4E2M1, Gfx950TransposeUninitialized, Brand>
+{
     /// Stages one token-major FP4 K tile using the inverse B4 permutation.
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_gfx950_lds_transpose_stage_b4_v1"]
-    pub fn stage_k_transposed(
+    pub fn stage_k_transposed<GlobalBrand>(
         self,
-        matrix: &Gfx950Fp4MfmaAMatrix<'_>,
+        matrix: &GlobalGfx950Fp4MfmaAMatrix<'_, '_, Brand, GlobalBrand>,
         token_base: usize,
         reduction_base: usize,
-    ) -> Gfx950LdsTransposeTile<'wave, Gfx950Fp4E2M1, Gfx950TransposeStaged> {
+    ) -> Gfx950LdsTransposeTile<'wave, Gfx950Fp4E2M1, Gfx950TransposeStaged, Brand>
+    where
+        Brand: MatrixGlobalAccess<GlobalBrand>,
+    {
         let _ = (self, matrix, token_base, reduction_base);
         unreachable!("gfx950 B4 inverse transpose staging requires authenticated lowering")
     }
 }
 
-impl<'wave> Gfx950LdsTransposeTile<'wave, Gfx950Fp8E4M3, Gfx950TransposeUninitialized> {
+impl<'wave, Brand>
+    Gfx950LdsTransposeTile<'wave, Gfx950Fp8E4M3, Gfx950TransposeUninitialized, Brand>
+{
     /// Stages one token-major FP8 K tile using the inverse B8 permutation.
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_gfx950_lds_transpose_stage_b8_v1"]
-    pub fn stage_k_transposed(
+    pub fn stage_k_transposed<GlobalBrand>(
         self,
-        matrix: &Gfx950Fp8MfmaAMatrix<'_>,
+        matrix: &GlobalGfx950Fp8MfmaAMatrix<'_, '_, Brand, GlobalBrand>,
         token_base: usize,
         reduction_base: usize,
-    ) -> Gfx950LdsTransposeTile<'wave, Gfx950Fp8E4M3, Gfx950TransposeStaged> {
+    ) -> Gfx950LdsTransposeTile<'wave, Gfx950Fp8E4M3, Gfx950TransposeStaged, Brand>
+    where
+        Brand: MatrixGlobalAccess<GlobalBrand>,
+    {
         let _ = (self, matrix, token_base, reduction_base);
         unreachable!("gfx950 B8 inverse transpose staging requires authenticated lowering")
     }
 }
 
-impl<'wave, Format: Gfx950MfmaFormat> Gfx950LdsTransposeTile<'wave, Format, Gfx950TransposeStaged> {
-    /// Publishes all staged values through one uniform workgroup barrier.
+/// Result of publishing one staged gfx950 transpose tile.
+pub type Gfx950TransposePublishTransition<'workgroup, Format, KernelBrand, Epoch> = (
+    WorkgroupCapability<'workgroup, KernelBrand, NextEpoch<Epoch>>,
+    Gfx950LdsTransposeTile<
+        'workgroup,
+        Format,
+        Gfx950TransposePublished,
+        SubgroupBrand<'workgroup, SubgroupWidth64, KernelBrand, NextEpoch<Epoch>>,
+    >,
+);
+
+impl<'workgroup, Format, KernelBrand, Epoch>
+    Gfx950LdsTransposeTile<
+        'workgroup,
+        Format,
+        Gfx950TransposeStaged,
+        SubgroupBrand<'workgroup, SubgroupWidth64, KernelBrand, Epoch>,
+    >
+where
+    Format: Gfx950MfmaFormat,
+    Epoch: SynchronizationEpoch,
+{
+    /// Publishes all staged values and advances the owning workgroup epoch.
+    ///
+    /// Both inputs are consumed. The returned tile carries the same next epoch
+    /// as the workgroup, so stale subgroup, matrix, and transpose capabilities
+    /// cannot be substituted at later operations.
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_gfx950_lds_transpose_publish_v1"]
-    pub fn publish(self) -> Gfx950LdsTransposeTile<'wave, Format, Gfx950TransposePublished> {
-        let _ = self;
+    pub fn publish(
+        self,
+        workgroup: WorkgroupCapability<'workgroup, KernelBrand, Epoch>,
+    ) -> Gfx950TransposePublishTransition<'workgroup, Format, KernelBrand, Epoch> {
+        let _ = (self, workgroup);
         unreachable!("gfx950 LDS transpose publish requires authenticated compiler lowering")
     }
 }
 
-impl<'wave> Gfx950LdsTransposeTile<'wave, Gfx950Fp4E2M1, Gfx950TransposePublished> {
+impl<'workgroup, KernelBrand, Epoch>
+    Gfx950LdsTransposeTile<
+        'workgroup,
+        Gfx950Fp4E2M1,
+        Gfx950TransposePublished,
+        SubgroupBrand<'workgroup, SubgroupWidth64, KernelBrand, NextEpoch<Epoch>>,
+    >
+where
+    Epoch: SynchronizationEpoch,
+{
     /// Reads the published tile with two B4 transpose loads.
+    ///
+    /// The matching next-epoch lane reborrows the published tile for one
+    /// operation. The fragment therefore cannot outlive that lane borrow or
+    /// be relabeled with another kernel, workgroup, width, or epoch.
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_gfx950_lds_transpose_read_b4_v1"]
-    pub fn read_mfma_fragment(self) -> Gfx950Fp4MfmaBFragment<'wave> {
-        let _ = self;
+    pub fn read_mfma_fragment<'operation>(
+        self,
+        lane: &'operation WaveLane<
+            Wave64,
+            SubgroupBrand<'workgroup, SubgroupWidth64, KernelBrand, NextEpoch<Epoch>>,
+        >,
+    ) -> Gfx950Fp4MfmaBFragment<
+        'operation,
+        SubgroupBrand<'workgroup, SubgroupWidth64, KernelBrand, NextEpoch<Epoch>>,
+    > {
+        let _ = (self, lane);
         unreachable!("gfx950 B4 transpose reads require authenticated compiler lowering")
     }
 }
 
-impl<'wave> Gfx950LdsTransposeTile<'wave, Gfx950Fp8E4M3, Gfx950TransposePublished> {
+impl<'workgroup, KernelBrand, Epoch>
+    Gfx950LdsTransposeTile<
+        'workgroup,
+        Gfx950Fp8E4M3,
+        Gfx950TransposePublished,
+        SubgroupBrand<'workgroup, SubgroupWidth64, KernelBrand, NextEpoch<Epoch>>,
+    >
+where
+    Epoch: SynchronizationEpoch,
+{
     /// Reads the published tile with four B8 transpose loads.
+    ///
+    /// The matching next-epoch lane reborrows the published tile for one
+    /// operation. The fragment therefore cannot outlive that lane borrow or
+    /// be relabeled with another kernel, workgroup, width, or epoch.
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_gfx950_lds_transpose_read_b8_v1"]
-    pub fn read_mfma_fragment(self) -> Gfx950Fp8MfmaBFragment<'wave> {
-        let _ = self;
+    pub fn read_mfma_fragment<'operation>(
+        self,
+        lane: &'operation WaveLane<
+            Wave64,
+            SubgroupBrand<'workgroup, SubgroupWidth64, KernelBrand, NextEpoch<Epoch>>,
+        >,
+    ) -> Gfx950Fp8MfmaBFragment<
+        'operation,
+        SubgroupBrand<'workgroup, SubgroupWidth64, KernelBrand, NextEpoch<Epoch>>,
+    > {
+        let _ = (self, lane);
         unreachable!("gfx950 B8 transpose reads require authenticated compiler lowering")
     }
 }
@@ -764,7 +1379,7 @@ fn fp8_depth(group: usize, item: usize) -> usize {
 }
 
 fn pack_fp4_a(
-    matrix: &CheckedByteMatrix<'_>,
+    matrix: &impl ByteMatrix,
     lane: usize,
     row_base: usize,
     reduction_base: usize,
@@ -783,7 +1398,7 @@ fn pack_fp4_a(
 }
 
 fn pack_fp4_b(
-    matrix: &CheckedByteMatrix<'_>,
+    matrix: &impl ByteMatrix,
     lane: usize,
     reduction_base: usize,
     column_base: usize,
@@ -802,7 +1417,7 @@ fn pack_fp4_b(
 }
 
 fn pack_fp8_a(
-    matrix: &CheckedByteMatrix<'_>,
+    matrix: &impl ByteMatrix,
     lane: usize,
     row_base: usize,
     reduction_base: usize,
@@ -821,7 +1436,7 @@ fn pack_fp8_a(
 }
 
 fn pack_fp8_b(
-    matrix: &CheckedByteMatrix<'_>,
+    matrix: &impl ByteMatrix,
     lane: usize,
     reduction_base: usize,
     column_base: usize,
@@ -857,12 +1472,26 @@ mod tests {
 
     #[test]
     fn fragments_have_the_compiler_observed_v8i32_layout() {
+        enum TestBrand {}
+
         assert_eq!(size_of::<Gfx950Fp4MfmaAFragment<'_>>(), 32);
         assert_eq!(size_of::<Gfx950Fp8MfmaAFragment<'_>>(), 32);
         assert_eq!(align_of::<Gfx950Fp4MfmaAFragment<'_>>(), 4);
         assert_eq!(
             size_of::<Gfx950F32AccumulatorFragment<'_, Gfx950Fp4E2M1>>(),
             16
+        );
+        assert_eq!(
+            size_of::<Gfx950Fp4MfmaAFragment<'_, TestBrand>>(),
+            size_of::<Gfx950Fp4MfmaAFragment<'_>>()
+        );
+        assert_eq!(
+            size_of::<Gfx950F32AccumulatorFragment<'_, Gfx950Fp4E2M1, TestBrand>>(),
+            size_of::<Gfx950F32AccumulatorFragment<'_, Gfx950Fp4E2M1>>()
+        );
+        assert_eq!(
+            size_of::<Gfx950Fp4MfmaAMatrix<'_, TestBrand>>(),
+            size_of::<Gfx950Fp4MfmaAMatrix<'_>>()
         );
         assert_eq!(Gfx950Fp4E2M1::MEANINGFUL_DWORDS, 4);
         assert_eq!(Gfx950Fp8E4M3::MEANINGFUL_DWORDS, 8);
@@ -935,20 +1564,79 @@ mod tests {
     #[test]
     fn checked_views_reject_stride_overflow_and_short_storage() {
         assert!(matches!(
-            Gfx950Fp8MfmaAMatrix::row_major(&[0; 16], 0, 2, 8, 7),
+            unsafe { Gfx950Fp8MfmaAMatrix::row_major(&[0; 16], 0, 2, 8, 7) },
             Err(Gfx950MatrixViewError::InvalidStride)
         ));
         assert!(matches!(
-            Gfx950Fp8MfmaAMatrix::row_major(&[0; 16], usize::MAX, 1, 1, 1),
+            unsafe { Gfx950Fp8MfmaAMatrix::row_major(&[0; 16], usize::MAX, 1, 1, 1) },
             Err(Gfx950MatrixViewError::ExtentOverflow)
         ));
         assert!(matches!(
-            Gfx950Fp4MfmaBMatrix::row_major(&[0; 15], 0, 2, 8, 8),
+            unsafe { Gfx950Fp4MfmaBMatrix::row_major(&[0; 15], 0, 2, 8, 8) },
             Err(Gfx950MatrixViewError::OutOfBounds {
                 required: 16,
                 actual: 15
             })
         ));
+    }
+
+    #[test]
+    fn global_backed_views_preserve_packing_and_zero_fill() {
+        let data: [u8; 128] = core::array::from_fn(|index| index as u8);
+        let global: Global<'_, u8, ReadOnly> = crate::capability_memory::fields(&data[..]);
+        let matrix = GlobalGfx950Fp8MfmaAMatrix::checked(&global, 0, 1, 128, 128).unwrap();
+        let lane = WaveLane::<Wave64>::from_model_snapshot(32).unwrap();
+        let packed = bytes(matrix.load_m16k128(&lane, 0, 0).into_registers());
+        let expected: [u8; 32] = core::array::from_fn(|item| {
+            if item < 16 {
+                32 + item as u8
+            } else {
+                96 + (item - 16) as u8
+            }
+        });
+        assert_eq!(packed, expected);
+
+        let short_global: Global<'_, u8, ReadOnly> = crate::capability_memory::fields(&data[..100]);
+        assert!(matches!(
+            GlobalGfx950Fp8MfmaAMatrix::<UnbrandedCapability, UnbrandedCapability>::checked(
+                &short_global,
+                0,
+                1,
+                128,
+                128,
+            ),
+            Err(Gfx950MatrixViewError::OutOfBounds { .. })
+        ));
+    }
+
+    #[test]
+    fn policy_bound_gfx950_mfma_fails_closed_on_host() {
+        let data = [1_u8; 128 * 16];
+        let a_global: Global<'_, u8, ReadOnly> = crate::capability_memory::fields(&data[..]);
+        let b_global: Global<'_, u8, ReadOnly> = crate::capability_memory::fields(&data[..]);
+        let matrix = MatrixCapability::for_host_test();
+        let policy = crate::NumericalPolicyCapability::<
+            UnbrandedCapability,
+            crate::StrictIeee,
+        >::for_host_test();
+        let policy_matrix = matrix.with_numerical_policy(&policy);
+        let gfx950 = policy_matrix.gfx950();
+        let lane = WaveLane::<Wave64>::from_model_snapshot(0).unwrap();
+        let a = gfx950
+            .fp4_a_global_row_major(&a_global, 0, 16, 128, 128)
+            .unwrap();
+        let b = gfx950
+            .fp4_b_global_row_major(&b_global, 0, 128, 16, 16)
+            .unwrap();
+        let lhs = a.load_m16k128(&lane, 0, 0);
+        let rhs = b.load_k128n16(&lane, 0, 0);
+        let accumulator = gfx950.fp4_zero_accumulator(&lane);
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                gfx950.multiply_accumulate_fp4(lhs, rhs, accumulator)
+            }))
+            .is_err()
+        );
     }
 
     #[test]
@@ -968,11 +1656,10 @@ mod tests {
 
     #[test]
     fn gfx950_subgroup_terminals_fail_closed_on_host() {
-        assert_eq!(GFX950_SUBGROUP_MAX_WIDTH, 64);
-        assert!(catch_unwind(Gfx950Subgroup::current).is_err());
-        let subgroup = Gfx950Subgroup::for_host_test();
-        assert!(catch_unwind(AssertUnwindSafe(|| subgroup.reduce_max_f32::<16>(1.0))).is_err());
-        assert!(catch_unwind(AssertUnwindSafe(|| subgroup.reduce_sum_f32::<16>(1.0))).is_err());
-        assert!(catch_unwind(AssertUnwindSafe(|| subgroup.broadcast_f32::<16>(1.0, 3))).is_err());
+        assert_eq!(GFX950_WAVE16_WIDTH, 16);
+        let subgroup = Gfx950Subgroup::<'static, 'static, (), crate::InitialEpoch>::for_host_test();
+        assert!(catch_unwind(AssertUnwindSafe(|| subgroup.reduce_max_f32(1.0))).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| subgroup.reduce_sum_f32(1.0))).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| subgroup.broadcast_f32(1.0, 3))).is_err());
     }
 }

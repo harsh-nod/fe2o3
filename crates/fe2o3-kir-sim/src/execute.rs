@@ -15,9 +15,10 @@ use fe2o3_kernel_ir::{
     Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1, IndexKind, IntrinsicKind,
     MatrixElement, MatrixLdsProfile, MatrixOperation, MatrixOperationKind, MemoryAccess,
     MemoryIntrinsicOperation, MemoryOrdering, Module, Operation, OperationKind,
-    PointerDistanceKind, PointerDistanceUnit, ScalarType, SynchronizationScope, Terminator, Type,
-    UnaryOp, ValueDef, ValueId, WaveF32ReductionKindV1, WaveOperation, WaveOperationKind,
-    WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
+    PointerDistanceKind, PointerDistanceUnit, ScalarType, SynchronizationScope,
+    TensorFragmentLayoutV1, Terminator, Type, UnaryOp, ValueDef, ValueId, WaveF32ReductionKindV1,
+    WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupMemory,
+    WorkgroupMemoryExtent,
 };
 
 use crate::model::mask;
@@ -2054,6 +2055,7 @@ pub(crate) fn conservative_execution_resident_bytes(
     workgroup_participants: usize,
     workgroup_allocation_sites: usize,
     workgroup_static_bytes: usize,
+    numerical_matrix_reachable: bool,
 ) -> Option<usize> {
     let arguments = request.arguments.len();
     let shared = request.shared_buffers.len();
@@ -2159,6 +2161,19 @@ pub(crate) fn conservative_execution_resident_bytes(
     resident.add_bytes(reserved_hash_map_bytes::<(u64, usize), AccessFrontier>(
         limits.max_memory_access_records,
     )?)?;
+    if numerical_matrix_reachable {
+        resident.add_bytes(numerical_matrix_scratch_bytes()?)?;
+    }
+    Some(resident.bytes())
+}
+
+fn numerical_matrix_scratch_bytes() -> Option<usize> {
+    let mut resident = ResidentLedger::new(0);
+    resident.add_product(reserved_vec_bytes::<ScalarBitsV1>(16 * 128)?, 2)?;
+    resident.add_product(reserved_bool_vec_bytes(16 * 128)?, 2)?;
+    resident.add_bytes(reserved_vec_bytes::<ScalarBitsV1>(16 * 16)?)?;
+    resident.add_bytes(reserved_bool_vec_bytes(16 * 16)?)?;
+    resident.add_bytes(reserved_vec_bytes::<[ScalarBitsV1; 4]>(64)?)?;
     Some(resident.bytes())
 }
 
@@ -2192,6 +2207,7 @@ mod execution_resident_tests {
                 1,
                 0,
                 0,
+                false,
             )
             .expect("bounded resident accounting")
         };
@@ -4190,6 +4206,26 @@ fn resolve_ready_collectives<'a>(
             })?;
         }
 
+        let matrix_results = match arrival.operation {
+            OperationKind::Matrix(matrix)
+                if matches!(
+                    matrix.kind,
+                    MatrixOperationKind::MultiplyAccumulate { .. }
+                        | MatrixOperationKind::ScaledMultiplyAccumulate { .. }
+                ) =>
+            {
+                Some(execute_matrix_numerical_wave(
+                    engine,
+                    machines,
+                    start,
+                    width,
+                    &arrival.site,
+                    matrix,
+                )?)
+            }
+            _ => None,
+        };
+
         for lane in 0..width {
             let index = wave_member_index(machines, start, lane).ok_or_else(|| {
                 engine.at(
@@ -4199,20 +4235,446 @@ fn resolve_ready_collectives<'a>(
                     ),
                 )
             })?;
-            let input = machines[index].collective_input().cloned().ok_or_else(|| {
-                engine.at(
-                    arrival.site,
-                    SimulationExecutionErrorKindV1::InternalInvariant(
-                        "cooperative operation input",
-                    ),
-                )
-            })?;
             engine.invocation = Some(machines[index].invocation);
-            complete_collective_lane(engine, &mut machines[index], arrival, lane as u32, input)?;
+            if let Some(results) = &matrix_results {
+                let values = results[lane as usize].map(RuntimeValue::Scalar);
+                machines[index].complete_collective(engine, &values)?;
+            } else {
+                let input = machines[index].collective_input().cloned().ok_or_else(|| {
+                    engine.at(
+                        arrival.site,
+                        SimulationExecutionErrorKindV1::InternalInvariant(
+                            "cooperative operation input",
+                        ),
+                    )
+                })?;
+                complete_collective_lane(
+                    engine,
+                    &mut machines[index],
+                    arrival,
+                    lane as u32,
+                    input,
+                )?;
+            }
         }
         resolved += 1;
     }
     Ok(resolved)
+}
+
+fn execute_matrix_numerical_wave(
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+    machines: &[InvocationMachine<'_>],
+    start: u64,
+    width: u64,
+    site: &CompactSite,
+    matrix: &MatrixOperation,
+) -> Result<Vec<[ScalarBitsV1; 4]>, SimulationExecutionErrorV1> {
+    if width != 64 {
+        return Err(engine.at(
+            *site,
+            SimulationExecutionErrorKindV1::RuntimeType {
+                value: None,
+                expected: "matrix operation with exactly 64 participating lanes",
+            },
+        ));
+    }
+    let layout = matrix.tensor_layout.as_ref().ok_or_else(|| {
+        engine.at(
+            *site,
+            SimulationExecutionErrorKindV1::RuntimeType {
+                value: None,
+                expected: "verified matrix tensor layout",
+            },
+        )
+    })?;
+    let zero = f32_scalar(0, engine.target).map_err(|kind| engine.at(*site, kind))?;
+    let mut lhs = try_filled_vec(16 * 128, zero)
+        .map_err(|()| engine.at(*site, SimulationExecutionErrorKindV1::AllocationFailure))?;
+    let mut rhs = try_filled_vec(128 * 16, zero)
+        .map_err(|()| engine.at(*site, SimulationExecutionErrorKindV1::AllocationFailure))?;
+    let mut accumulator = try_filled_vec(16 * 16, zero)
+        .map_err(|()| engine.at(*site, SimulationExecutionErrorKindV1::AllocationFailure))?;
+    let mut lhs_written = try_filled_vec(16 * 128, false)
+        .map_err(|()| engine.at(*site, SimulationExecutionErrorKindV1::AllocationFailure))?;
+    let mut rhs_written = try_filled_vec(128 * 16, false)
+        .map_err(|()| engine.at(*site, SimulationExecutionErrorKindV1::AllocationFailure))?;
+    let mut accumulator_written = try_filled_vec(16 * 16, false)
+        .map_err(|()| engine.at(*site, SimulationExecutionErrorKindV1::AllocationFailure))?;
+    let depth = match &matrix.kind {
+        MatrixOperationKind::MultiplyAccumulate { .. } => 16_usize,
+        MatrixOperationKind::ScaledMultiplyAccumulate { .. } => 128,
+        MatrixOperationKind::LdsLoad { .. } | MatrixOperationKind::LdsStore { .. } => {
+            return Err(engine.at(
+                *site,
+                SimulationExecutionErrorKindV1::InternalInvariant(
+                    "non-numerical matrix operation reached numerical execution",
+                ),
+            ));
+        }
+    };
+
+    for lane in 0..64_u64 {
+        let machine = wave_member_index(machines, start, lane).ok_or_else(|| {
+            engine.at(
+                *site,
+                SimulationExecutionErrorKindV1::InternalInvariant("validated matrix wave member"),
+            )
+        })?;
+        let input = machines[machine].collective_input().ok_or_else(|| {
+            engine.at(
+                *site,
+                SimulationExecutionErrorKindV1::InternalInvariant("matrix collective input"),
+            )
+        })?;
+        match (&matrix.kind, input) {
+            (
+                MatrixOperationKind::MultiplyAccumulate { .. },
+                CollectiveInput::MatrixMultiply {
+                    lhs: lane_lhs,
+                    rhs: lane_rhs,
+                    accumulator: lane_accumulator,
+                },
+            ) => {
+                for component in 0..4_u8 {
+                    let lhs_value = widen_bf16(lane_lhs[usize::from(component)], engine.target)
+                        .map_err(|kind| engine.at(*site, kind))?;
+                    let rhs_value = widen_bf16(lane_rhs[usize::from(component)], engine.target)
+                        .map_err(|kind| engine.at(*site, kind))?;
+                    write_matrix_fragment(
+                        &mut lhs,
+                        &mut lhs_written,
+                        128,
+                        layout.a,
+                        lane as u16,
+                        component,
+                        lhs_value,
+                        site,
+                        engine,
+                    )?;
+                    write_matrix_fragment(
+                        &mut rhs,
+                        &mut rhs_written,
+                        16,
+                        layout.b,
+                        lane as u16,
+                        component,
+                        rhs_value,
+                        site,
+                        engine,
+                    )?;
+                    write_matrix_fragment(
+                        &mut accumulator,
+                        &mut accumulator_written,
+                        16,
+                        layout.accumulator,
+                        lane as u16,
+                        component,
+                        lane_accumulator[usize::from(component)],
+                        site,
+                        engine,
+                    )?;
+                }
+            }
+            (
+                MatrixOperationKind::ScaledMultiplyAccumulate { .. },
+                CollectiveInput::MatrixScaledMultiply {
+                    lhs: lane_lhs,
+                    rhs: lane_rhs,
+                    accumulator: lane_accumulator,
+                },
+            ) => {
+                validate_scaled_register_padding(lane_lhs, layout.a.element)
+                    .and_then(|()| validate_scaled_register_padding(lane_rhs, layout.b.element))
+                    .map_err(|expected| {
+                        engine.at(
+                            *site,
+                            SimulationExecutionErrorKindV1::RuntimeType {
+                                value: None,
+                                expected,
+                            },
+                        )
+                    })?;
+                for component in 0..layout.a.fragment_elements {
+                    let value = decode_scaled_fragment(
+                        lane_lhs,
+                        layout.a.element,
+                        component,
+                        engine.target,
+                    )
+                    .map_err(|kind| engine.at(*site, kind))?;
+                    write_matrix_fragment(
+                        &mut lhs,
+                        &mut lhs_written,
+                        128,
+                        layout.a,
+                        lane as u16,
+                        component,
+                        value,
+                        site,
+                        engine,
+                    )?;
+                }
+                for component in 0..layout.b.fragment_elements {
+                    let value = decode_scaled_fragment(
+                        lane_rhs,
+                        layout.b.element,
+                        component,
+                        engine.target,
+                    )
+                    .map_err(|kind| engine.at(*site, kind))?;
+                    write_matrix_fragment(
+                        &mut rhs,
+                        &mut rhs_written,
+                        16,
+                        layout.b,
+                        lane as u16,
+                        component,
+                        value,
+                        site,
+                        engine,
+                    )?;
+                }
+                for component in 0..4_u8 {
+                    write_matrix_fragment(
+                        &mut accumulator,
+                        &mut accumulator_written,
+                        16,
+                        layout.accumulator,
+                        lane as u16,
+                        component,
+                        lane_accumulator[usize::from(component)],
+                        site,
+                        engine,
+                    )?;
+                }
+            }
+            _ => {
+                return Err(engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::InternalInvariant(
+                        "matrix operation and collective input differ",
+                    ),
+                ));
+            }
+        }
+    }
+    let rhs_size = depth * 16;
+    if !(0..16).all(|row| {
+        lhs_written[row * 128..row * 128 + depth]
+            .iter()
+            .all(|written| *written)
+    }) || !rhs_written[..rhs_size].iter().all(|written| *written)
+        || !accumulator_written.iter().all(|written| *written)
+    {
+        return Err(engine.at(
+            *site,
+            SimulationExecutionErrorKindV1::RuntimeType {
+                value: None,
+                expected: "matrix layout with exact non-aliased fragment coverage",
+            },
+        ));
+    }
+
+    // The observation contract rounds every f32 product and every depth-ordered
+    // accumulation independently with software IEEE round-to-nearest-even.
+    for row in 0..16 {
+        for column in 0..16 {
+            let output = &mut accumulator[row * 16 + column];
+            for k in 0..depth {
+                let product = crate::soft_float::execute_binary_v1(
+                    BinaryOp::Multiply,
+                    lhs[row * 128 + k],
+                    rhs[k * 16 + column],
+                    engine.target,
+                )
+                .map_err(|error| engine.at(*site, map_soft_float_error(error)))?;
+                *output = crate::soft_float::execute_binary_v1(
+                    BinaryOp::Add,
+                    *output,
+                    product,
+                    engine.target,
+                )
+                .map_err(|error| engine.at(*site, map_soft_float_error(error)))?;
+            }
+        }
+    }
+
+    let mut results = try_filled_vec(64, [zero; 4])
+        .map_err(|()| engine.at(*site, SimulationExecutionErrorKindV1::AllocationFailure))?;
+    for lane in 0..64_u16 {
+        for component in 0..4_u8 {
+            let coordinate = layout
+                .accumulator
+                .logical_coordinate(lane, component)
+                .ok_or_else(|| {
+                    engine.at(
+                        *site,
+                        SimulationExecutionErrorKindV1::RuntimeType {
+                            value: None,
+                            expected: "matrix accumulator coordinate",
+                        },
+                    )
+                })?;
+            let row = usize::try_from(coordinate[0]).unwrap();
+            let column = usize::try_from(coordinate[1]).unwrap();
+            results[usize::from(lane)][usize::from(component)] = accumulator[row * 16 + column];
+        }
+    }
+    Ok(results)
+}
+
+fn try_filled_vec<T: Clone>(len: usize, value: T) -> Result<Vec<T>, ()> {
+    let mut values = Vec::new();
+    values.try_reserve_exact(len).map_err(|_| ())?;
+    values.resize(len, value);
+    Ok(values)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_matrix_fragment(
+    storage: &mut [ScalarBitsV1],
+    written: &mut [bool],
+    stride: usize,
+    layout: TensorFragmentLayoutV1,
+    lane: u16,
+    component: u8,
+    value: ScalarBitsV1,
+    site: &CompactSite,
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+) -> Result<(), SimulationExecutionErrorV1> {
+    let coordinate = layout.logical_coordinate(lane, component).ok_or_else(|| {
+        engine.at(
+            *site,
+            SimulationExecutionErrorKindV1::RuntimeType {
+                value: None,
+                expected: "matrix fragment coordinate",
+            },
+        )
+    })?;
+    let row = usize::try_from(coordinate[0]).ok();
+    let column = usize::try_from(coordinate[1]).ok();
+    let index = row
+        .zip(column)
+        .and_then(|(row, column)| row.checked_mul(stride)?.checked_add(column))
+        .filter(|index| *index < storage.len())
+        .ok_or_else(|| {
+            engine.at(
+                *site,
+                SimulationExecutionErrorKindV1::RuntimeType {
+                    value: None,
+                    expected: "in-bounds matrix fragment coordinate",
+                },
+            )
+        })?;
+    if std::mem::replace(&mut written[index], true) {
+        return Err(engine.at(
+            *site,
+            SimulationExecutionErrorKindV1::RuntimeType {
+                value: None,
+                expected: "non-aliased matrix fragment coordinate",
+            },
+        ));
+    }
+    storage[index] = value;
+    Ok(())
+}
+
+fn widen_bf16(
+    value: ScalarBitsV1,
+    target: SimulationTargetV1,
+) -> Result<ScalarBitsV1, SimulationExecutionErrorKindV1> {
+    if value.ty() != ScalarType::Bf16 {
+        return Err(SimulationExecutionErrorKindV1::RuntimeType {
+            value: None,
+            expected: "bf16 matrix operand",
+        });
+    }
+    f32_scalar((value.bits() as u32) << 16, target)
+}
+
+fn validate_scaled_register_padding(
+    values: &[ScalarBitsV1; 8],
+    element: MatrixElement,
+) -> Result<(), &'static str> {
+    if element == MatrixElement::Fp4E2M1 && values[4..].iter().any(|value| value.bits() != 0) {
+        Err("zero high dwords for fp4 matrix operands")
+    } else {
+        Ok(())
+    }
+}
+
+fn decode_scaled_fragment(
+    values: &[ScalarBitsV1; 8],
+    element: MatrixElement,
+    component: u8,
+    target: SimulationTargetV1,
+) -> Result<ScalarBitsV1, SimulationExecutionErrorKindV1> {
+    if values.iter().any(|value| value.ty() != ScalarType::U32) {
+        return Err(SimulationExecutionErrorKindV1::RuntimeType {
+            value: None,
+            expected: "u32-packed scaled matrix operand",
+        });
+    }
+    let component = usize::from(component);
+    let bits =
+        match element {
+            MatrixElement::Fp8E4M3 => {
+                let word = values.get(component / 4).ok_or(
+                    SimulationExecutionErrorKindV1::RuntimeType {
+                        value: None,
+                        expected: "32-element fp8 matrix fragment",
+                    },
+                )?;
+                ((word.bits() >> ((component % 4) * 8)) & 0xff) as u8
+            }
+            MatrixElement::Fp4E2M1 => {
+                let word = values.get(component / 8).ok_or(
+                    SimulationExecutionErrorKindV1::RuntimeType {
+                        value: None,
+                        expected: "32-element fp4 matrix fragment",
+                    },
+                )?;
+                ((word.bits() >> ((component % 8) * 4)) & 0xf) as u8
+            }
+            MatrixElement::Bf16 | MatrixElement::F32 => {
+                return Err(SimulationExecutionErrorKindV1::RuntimeType {
+                    value: None,
+                    expected: "fp4 or fp8 scaled matrix format",
+                });
+            }
+        };
+    let decoded = match element {
+        MatrixElement::Fp4E2M1 => {
+            const MAGNITUDES: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
+            let magnitude = MAGNITUDES[usize::from(bits & 7)];
+            if bits & 8 == 0 { magnitude } else { -magnitude }
+        }
+        MatrixElement::Fp8E4M3 => {
+            let sign = if bits & 0x80 == 0 { 1.0 } else { -1.0 };
+            let exponent = (bits >> 3) & 0xf;
+            let mantissa = bits & 7;
+            if exponent == 15 && mantissa == 7 {
+                return f32_scalar(0x7fc0_0000, target);
+            }
+            if exponent == 0 {
+                sign * f32::from(mantissa) / 512.0
+            } else {
+                let magnitude = f32::from(8 + mantissa) * 2.0_f32.powi(i32::from(exponent) - 10);
+                sign * magnitude
+            }
+        }
+        MatrixElement::Bf16 | MatrixElement::F32 => unreachable!(),
+    };
+    f32_scalar(decoded.to_bits(), target)
+}
+
+fn f32_scalar(
+    bits: u32,
+    target: SimulationTargetV1,
+) -> Result<ScalarBitsV1, SimulationExecutionErrorKindV1> {
+    ScalarBitsV1::new(ScalarType::F32, u128::from(bits), target)
+        .map_err(|_| SimulationExecutionErrorKindV1::IntegerOutOfRange)
 }
 
 fn complete_collective_lane<'a>(
@@ -4887,7 +5349,20 @@ struct WaveArrival<'a> {
 }
 
 #[derive(Clone)]
+// Inline matrix arrivals are fixed-size resident simulator state. Boxing them
+// would move that state outside the existing resident-memory accounting.
+#[allow(clippy::large_enum_variant)]
 enum CollectiveInput {
+    MatrixMultiply {
+        lhs: [ScalarBitsV1; 4],
+        rhs: [ScalarBitsV1; 4],
+        accumulator: [ScalarBitsV1; 4],
+    },
+    MatrixScaledMultiply {
+        lhs: [ScalarBitsV1; 8],
+        rhs: [ScalarBitsV1; 8],
+        accumulator: [ScalarBitsV1; 4],
+    },
     MatrixLdsLoad {
         base: PointerValue,
     },
@@ -5905,6 +6380,26 @@ fn prepare_collective_wait(
         OperationKind::Matrix(matrix) => (
             matrix_wave_width(matrix),
             match &matrix.kind {
+                MatrixOperationKind::MultiplyAccumulate {
+                    lhs,
+                    rhs,
+                    accumulator,
+                    ..
+                } => CollectiveInput::MatrixMultiply {
+                    lhs: resolve_scalar_array(engine, &frame.values, lhs, &site)?,
+                    rhs: resolve_scalar_array(engine, &frame.values, rhs, &site)?,
+                    accumulator: resolve_scalar_array(engine, &frame.values, accumulator, &site)?,
+                },
+                MatrixOperationKind::ScaledMultiplyAccumulate {
+                    lhs,
+                    rhs,
+                    accumulator,
+                    ..
+                } => CollectiveInput::MatrixScaledMultiply {
+                    lhs: resolve_scalar_array(engine, &frame.values, lhs, &site)?,
+                    rhs: resolve_scalar_array(engine, &frame.values, rhs, &site)?,
+                    accumulator: resolve_scalar_array(engine, &frame.values, accumulator, &site)?,
+                },
                 MatrixOperationKind::LdsLoad { base, .. } => CollectiveInput::MatrixLdsLoad {
                     base: pointer_value(engine, &frame.values, *base, &site)?.clone(),
                 },
@@ -5917,15 +6412,6 @@ fn prepare_collective_wait(
                         base: pointer_value(engine, &frame.values, *base, &site)?.clone(),
                         values: resolved,
                     }
-                }
-                MatrixOperationKind::MultiplyAccumulate { .. }
-                | MatrixOperationKind::ScaledMultiplyAccumulate { .. } => {
-                    return Err(engine.at(
-                        site,
-                        SimulationExecutionErrorKindV1::InternalInvariant(
-                            "matrix numerical operation passed preflight",
-                        ),
-                    ));
                 }
             },
         ),
@@ -6016,6 +6502,19 @@ fn prepare_collective_wait(
     };
     *pending = Some(input);
     Ok(width)
+}
+
+fn resolve_scalar_array<const N: usize>(
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+    values: &HashMap<ValueId, RuntimeValue>,
+    ids: &[ValueId; N],
+    site: &CompactSite,
+) -> Result<[ScalarBitsV1; N], SimulationExecutionErrorV1> {
+    let mut resolved = [ScalarBitsV1::boolean(false); N];
+    for (output, value) in resolved.iter_mut().zip(ids) {
+        *output = scalar_value(engine, values, *value, site)?;
+    }
+    Ok(resolved)
 }
 
 const fn matrix_wave_width(matrix: &MatrixOperation) -> WaveWidth {
@@ -6804,7 +7303,11 @@ fn execute_operation(
         | OperationKind::Matrix(_)
         | OperationKind::Wave(_)
         | OperationKind::Gfx950LdsTranspose(_)
-        | OperationKind::InlineAssembly(_) => Err(engine.at(
+        | OperationKind::InlineAssembly(_)
+        | OperationKind::KernelContextIssue(_)
+        | OperationKind::GlobalCapabilityBind(_)
+        | OperationKind::GlobalCapabilityIndex(_)
+        | OperationKind::ExecutionCapability(_) => Err(engine.at(
             site,
             SimulationExecutionErrorKindV1::InternalInvariant(
                 "unsupported operation passed preflight",
@@ -8695,6 +9198,47 @@ mod tests {
             std::mem::size_of::<SmallResults<RuntimeValue>>()
                 <= 2 * std::mem::size_of::<RuntimeValue>() + std::mem::align_of::<RuntimeValue>()
         );
+    }
+
+    #[test]
+    fn scaled_matrix_decoders_cover_every_encoding() {
+        let target = SimulationTargetV1::amdgpu_64();
+        for bits in 0_u8..16 {
+            let mut packed = [ScalarBitsV1::u32(0); 8];
+            packed[0] = ScalarBitsV1::u32(u32::from(bits));
+            let actual =
+                decode_scaled_fragment(&packed, MatrixElement::Fp4E2M1, 0, target).unwrap();
+            const MAGNITUDES: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
+            let magnitude = MAGNITUDES[usize::from(bits & 7)];
+            let expected = if bits & 8 == 0 { magnitude } else { -magnitude };
+            assert_eq!(
+                actual.bits(),
+                u128::from(expected.to_bits()),
+                "fp4 {bits:#x}"
+            );
+        }
+
+        for bits in 0_u8..=u8::MAX {
+            let mut packed = [ScalarBitsV1::u32(0); 8];
+            packed[0] = ScalarBitsV1::u32(u32::from(bits));
+            let actual =
+                decode_scaled_fragment(&packed, MatrixElement::Fp8E4M3, 0, target).unwrap();
+            let sign = if bits & 0x80 == 0 { 1.0 } else { -1.0 };
+            let exponent = i32::from((bits >> 3) & 0xf);
+            let mantissa = u32::from(bits & 7);
+            let expected = if exponent == 15 && mantissa == 7 {
+                f32::from_bits(0x7fc0_0000)
+            } else if exponent == 0 {
+                sign * (mantissa as f32) * 2.0_f32.powi(-9)
+            } else {
+                sign * (1.0 + (mantissa as f32) / 8.0) * 2.0_f32.powi(exponent - 7)
+            };
+            assert_eq!(
+                actual.bits(),
+                u128::from(expected.to_bits()),
+                "fp8 {bits:#x}"
+            );
+        }
     }
 
     #[test]

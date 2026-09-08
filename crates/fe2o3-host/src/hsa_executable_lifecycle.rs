@@ -715,6 +715,14 @@ impl WorkerV3HsaSemanticMachineRefinementCustodyV1 {
     const fn receipt_identity(&self) -> &[u8; 32] {
         self.refinement.receipt().identity()
     }
+
+    fn compiler_capability_association_identity(&self) -> Option<([u8; 32], u64)> {
+        self.refinement.compiler_capability_association_identity()
+    }
+
+    fn production_capability_result_identity(&self) -> Option<([u8; 32], u64)> {
+        self.refinement.production_capability_result_identity()
+    }
 }
 
 pub(crate) fn authorize_worker_v3_hsa_load_v1<
@@ -770,6 +778,18 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> AuthorizedWorkerV3HsaLoadV1<
     /// Reports ownership of the unique receipt consumed by this HSA lifecycle.
     pub const fn retains_semantic_machine_refinement_receipt(&self) -> bool {
         true
+    }
+
+    /// Returns the exact side-by-side capability association retained through HSA unload.
+    pub fn compiler_capability_association_identity(&self) -> Option<([u8; 32], u64)> {
+        self.semantic_machine_refinement
+            .compiler_capability_association_identity()
+    }
+
+    /// Returns the exact sealed V5 production-result identity retained through HSA unload.
+    pub fn production_capability_result_identity(&self) -> Option<([u8; 32], u64)> {
+        self.semantic_machine_refinement
+            .production_capability_result_identity()
     }
 }
 
@@ -1009,6 +1029,18 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleA
     /// Reports ownership of the unique receipt retained by this loaded HSA lifecycle.
     pub const fn retains_semantic_machine_refinement_receipt(&self) -> bool {
         true
+    }
+
+    /// Returns the exact side-by-side capability association retained by the loaded executable.
+    pub fn compiler_capability_association_identity(&self) -> Option<([u8; 32], u64)> {
+        self.semantic_machine_refinement
+            .compiler_capability_association_identity()
+    }
+
+    /// Returns the exact sealed V5 production-result identity retained by the loaded executable.
+    pub fn production_capability_result_identity(&self) -> Option<([u8; 32], u64)> {
+        self.semantic_machine_refinement
+            .production_capability_result_identity()
     }
 
     pub const fn grants_load_authority(&self) -> bool {

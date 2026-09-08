@@ -215,7 +215,8 @@ fn optional_pointer_binding_v1(
         } => (*disjoint_slice, *element),
         _ => return None,
     };
-    let (authenticated_element, _, access) = disjoint_slice_descriptor(callables, disjoint_slice)?;
+    let (authenticated_element, _, access) =
+        disjoint_slice_descriptor(types, callables, disjoint_slice)?;
     if authenticated_element != element {
         return None;
     }

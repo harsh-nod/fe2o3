@@ -6,6 +6,7 @@
 //! MIR V2 lowering.
 
 use crate::rust_type_layout_general::{TypeLayoutFacts, extract_general_layout};
+use rustc_abi::ExternAbi;
 use rustc_hir::Mutability;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{
@@ -14,8 +15,10 @@ use rustc_middle::mir::{
 };
 use rustc_middle::ty::layout::{LayoutCx, LayoutOf};
 use rustc_middle::ty::{
-    ClosureKind, EarlyBinder, Instance, InstanceKind, Ty, TyCtxt, TyKind, TypingEnv,
+    self, ClosureKind, EarlyBinder, Instance, InstanceKind, Ty, TyCtxt, TyKind, TypeVisitableExt,
+    TypingEnv,
 };
+use rustc_span::{Span, Spanned};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -26,6 +29,7 @@ const MAX_ENVIRONMENT_BYTES: u64 = 256;
 const MAX_ENVIRONMENT_ALIGNMENT: u64 = 16;
 const MAX_CALL_ARGUMENTS: usize = 8;
 const MAX_STATIC_CALLS: usize = 64;
+const MAX_MACRO_EXPANSION_DEPTH: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ClosureOriginPolicyV1 {
@@ -40,6 +44,7 @@ pub(crate) enum ClosureOriginPolicyV1 {
 pub(crate) enum ClosureOriginV1 {
     HostArgument,
     DeviceInternal,
+    InvocationReceiver,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,6 +76,7 @@ pub(crate) struct ClosureEnvironmentV1 {
     pub(crate) origin: ClosureOriginV1,
     pub(crate) call_kind: ClosureCallKindV1,
     pub(crate) definition_hash: [u8; 16],
+    pub(crate) closure_type_identity: [u8; 32],
     pub(crate) size_bytes: u64,
     pub(crate) alignment_bytes: u64,
     pub(crate) captures: Vec<ClosureCaptureLayoutV1>,
@@ -85,11 +91,43 @@ pub(crate) struct StaticClosureCallV1 {
     pub(crate) target_definition_hash: [u8; 16],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HigherOrderCapabilityTerminalV1 {
+    WithWorkgroup,
+    WithMatrix,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum HigherOrderClosureCustodyV1 {
+    EnvironmentLocal(usize),
+    ZeroSizedConstant {
+        definition_hash: [u8; 16],
+        closure_type_identity: [u8; 32],
+        operand_source_identity: [u8; 32],
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HigherOrderCapabilityCallV1 {
+    pub(crate) block: usize,
+    pub(crate) closure_custody: HigherOrderClosureCustodyV1,
+    pub(crate) terminal: HigherOrderCapabilityTerminalV1,
+    pub(crate) target_definition_hash: [u8; 16],
+    pub(crate) target_function_identity: [u8; 32],
+    pub(crate) target_monomorphization_identity: [u8; 32],
+    pub(crate) target_generic_types_identity: [u8; 32],
+    pub(crate) target_const_generics_identity: [u8; 32],
+    pub(crate) target_mir_identity: [u8; 32],
+    pub(crate) target_fn_abi_identity: [u8; 32],
+    pub(crate) call_source_identity: [u8; 32],
+}
+
 /// Compiler-sealed plan for direct environment reconstruction and static call.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Gfx942ClosureLoweringV1 {
     environments: Vec<ClosureEnvironmentV1>,
     calls: Vec<StaticClosureCallV1>,
+    higher_order_calls: Vec<HigherOrderCapabilityCallV1>,
     identity: [u8; 32],
 }
 
@@ -100,6 +138,29 @@ impl Gfx942ClosureLoweringV1 {
 
     pub(crate) fn calls(&self) -> &[StaticClosureCallV1] {
         &self.calls
+    }
+
+    pub(crate) fn higher_order_calls(&self) -> &[HigherOrderCapabilityCallV1] {
+        &self.higher_order_calls
+    }
+
+    pub(crate) fn authenticated_closure_type_identities(
+        &self,
+    ) -> impl Iterator<Item = [u8; 32]> + '_ {
+        self.environments
+            .iter()
+            .map(|environment| environment.closure_type_identity)
+            .chain(
+                self.higher_order_calls
+                    .iter()
+                    .filter_map(|call| match &call.closure_custody {
+                        HigherOrderClosureCustodyV1::ZeroSizedConstant {
+                            closure_type_identity,
+                            ..
+                        } => Some(*closure_type_identity),
+                        HigherOrderClosureCustodyV1::EnvironmentLocal(_) => None,
+                    }),
+            )
     }
 
     pub(crate) const fn identity(&self) -> [u8; 32] {
@@ -177,7 +238,9 @@ pub(crate) fn analyze_gfx942_closures_v1<'tcx>(
                 "closure count exceeds {MAX_CLOSURES}"
             )));
         }
-        let origin = if local.as_usize() != 0 && local.as_usize() <= body.arg_count {
+        let origin = if local.as_usize() == 1 && *def_id == instance.def_id() {
+            ClosureOriginV1::InvocationReceiver
+        } else if local.as_usize() != 0 && local.as_usize() <= body.arg_count {
             ClosureOriginV1::HostArgument
         } else if creations.contains_key(&local) {
             ClosureOriginV1::DeviceInternal
@@ -252,7 +315,10 @@ pub(crate) fn analyze_gfx942_closures_v1<'tcx>(
                 }
                 _ => ClosureCaptureModeV1::ByValue,
             };
-            if origin == ClosureOriginV1::HostArgument && mode != ClosureCaptureModeV1::ByValue {
+            if origin == ClosureOriginV1::HostArgument
+                && mode != ClosureCaptureModeV1::ByValue
+                && !authenticated_higher_order_argument_borrow_v1(tcx, instance, local, ty)?
+            {
                 return Err(ClosureProfileErrorV1::new(
                     "host closure references require an eligible allocation/completion token; none is present in V1",
                 ));
@@ -288,6 +354,10 @@ pub(crate) fn analyze_gfx942_closures_v1<'tcx>(
             origin,
             call_kind,
             definition_hash: tcx.def_path_hash(*def_id).0.to_le_bytes(),
+            closure_type_identity: *crate::rustc_semantic_adapter_v1::rustc_type_identity_v1(
+                tcx, ty,
+            )
+            .as_bytes(),
             size_bytes,
             alignment_bytes,
             captures,
@@ -301,7 +371,7 @@ pub(crate) fn analyze_gfx942_closures_v1<'tcx>(
     }
     environments.sort_by_key(|environment| environment.local);
     let aliases = closure_reference_aliases(body, &closure_locals, &value_aliases)?;
-    let calls = validate_uses_and_calls(
+    let (calls, higher_order_calls) = validate_uses_and_calls(
         tcx,
         instance,
         body,
@@ -309,10 +379,11 @@ pub(crate) fn analyze_gfx942_closures_v1<'tcx>(
         &closure_locals,
         &aliases,
     )?;
-    let identity = lowering_identity(&environments, &calls);
+    let identity = lowering_identity(&environments, &calls, &higher_order_calls);
     Ok(Gfx942ClosureLoweringV1 {
         environments,
         calls,
+        higher_order_calls,
         identity,
     })
 }
@@ -359,6 +430,74 @@ fn closure_kind(kind: Option<ClosureKind>) -> Result<ClosureCallKindV1, ClosureP
             "closure kind is not fully monomorphized",
         )),
     }
+}
+
+fn authenticated_higher_order_argument_borrow_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    local: Local,
+    closure_ty: Ty<'tcx>,
+) -> Result<bool, ClosureProfileErrorV1> {
+    let expected_self = match tcx.item_name(instance.def_id()).as_str() {
+        "with_workgroup" => crate::trusted_device_items::TrustedDeviceItem::KernelContext,
+        "with_matrix" => {
+            crate::trusted_device_items::TrustedDeviceItem::ExecutionSubgroupCapability
+        }
+        _ => return Ok(false),
+    };
+    if !crate::trusted_device_items::authenticate_reviewed_safe_external_helper_v1(
+        tcx,
+        instance.def_id(),
+    )
+    .map_err(|detail| {
+        ClosureProfileErrorV1::new(format!(
+            "higher-order closure argument provider authentication failed: {detail}"
+        ))
+    })? {
+        return Ok(false);
+    }
+    let Some(self_ty) = inherent_impl_self_ty(tcx, instance.def_id()) else {
+        return Err(ClosureProfileErrorV1::new(
+            "higher-order closure argument provider has no inherent receiver type",
+        ));
+    };
+    let TyKind::Adt(self_adt, _) = self_ty.kind() else {
+        return Err(ClosureProfileErrorV1::new(
+            "higher-order closure argument provider receiver is not a concrete device type",
+        ));
+    };
+    if crate::trusted_device_items::classify(tcx, self_adt.did()) != Some(expected_self) {
+        return Ok(false);
+    }
+
+    let signature = tcx.normalize_erasing_regions(
+        TypingEnv::fully_monomorphized(),
+        tcx.instantiate_bound_regions_with_erased(
+            tcx.fn_sig(instance.def_id())
+                .instantiate(tcx, instance.args),
+        ),
+    );
+    if signature.safety != rustc_hir::Safety::Safe
+        || signature.abi != ExternAbi::Rust
+        || signature.c_variadic
+    {
+        return Err(ClosureProfileErrorV1::new(
+            "authenticated higher-order closure argument provider changed its Rust ABI",
+        ));
+    }
+    let closure_inputs = signature
+        .inputs()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, input)| matches!(input.kind(), TyKind::Closure(..)).then_some(index))
+        .collect::<Vec<_>>();
+    let [closure_input] = closure_inputs.as_slice() else {
+        return Err(ClosureProfileErrorV1::new(
+            "authenticated higher-order closure argument provider must have one concrete closure input",
+        ));
+    };
+    Ok(local.as_usize().checked_sub(1) == Some(*closure_input)
+        && signature.inputs()[*closure_input] == closure_ty)
 }
 
 fn normalized_ty<'tcx>(
@@ -515,12 +654,13 @@ fn validate_uses_and_calls<'tcx>(
     environments: &[ClosureEnvironmentV1],
     closure_locals: &BTreeSet<Local>,
     aliases: &BTreeMap<Local, Local>,
-) -> Result<Vec<StaticClosureCallV1>, ClosureProfileErrorV1> {
+) -> Result<(Vec<StaticClosureCallV1>, Vec<HigherOrderCapabilityCallV1>), ClosureProfileErrorV1> {
     let by_local = environments
         .iter()
         .map(|environment| (Local::from_usize(environment.local), environment))
         .collect::<BTreeMap<_, _>>();
     let mut calls = Vec::new();
+    let mut higher_order_calls = Vec::new();
     let mut call_counts = BTreeMap::<Local, usize>::new();
     for (block_index, block) in body.basic_blocks.iter_enumerated() {
         for statement in &block.statements {
@@ -550,6 +690,30 @@ fn validate_uses_and_calls<'tcx>(
                     return Err(ClosureProfileErrorV1::new(
                         "closure value escapes through an indirect call target",
                     ));
+                }
+                if let Some(call) = authenticate_higher_order_capability_call(
+                    tcx,
+                    instance,
+                    body,
+                    block_index.as_usize(),
+                    terminator.source_info.span,
+                    func,
+                    args,
+                    closure_locals,
+                    aliases,
+                )? {
+                    if let HigherOrderClosureCustodyV1::EnvironmentLocal(local) =
+                        &call.closure_custody
+                    {
+                        *call_counts.entry(Local::from_usize(*local)).or_default() += 1;
+                    }
+                    higher_order_calls.push(call);
+                    if calls.len() + higher_order_calls.len() > MAX_STATIC_CALLS {
+                        return Err(ClosureProfileErrorV1::new(format!(
+                            "closure call count exceeds {MAX_STATIC_CALLS}"
+                        )));
+                    }
+                    continue;
                 }
                 let receiver = args
                     .first()
@@ -673,7 +837,11 @@ fn validate_uses_and_calls<'tcx>(
     for environment in environments {
         let local = Local::from_usize(environment.local);
         let count = call_counts.get(&local).copied().unwrap_or(0);
-        if count == 0 || (environment.call_kind == ClosureCallKindV1::FnOnce && count != 1) {
+        if (environment.origin != ClosureOriginV1::InvocationReceiver && count == 0)
+            || (environment.origin != ClosureOriginV1::InvocationReceiver
+                && environment.call_kind == ClosureCallKindV1::FnOnce
+                && count != 1)
+        {
             return Err(ClosureProfileErrorV1::new(format!(
                 "closure local{} has invalid call count {count} for {:?}",
                 environment.local, environment.call_kind
@@ -681,7 +849,291 @@ fn validate_uses_and_calls<'tcx>(
         }
     }
     calls.sort_by_key(|call| (call.block, call.closure_local));
-    Ok(calls)
+    higher_order_calls.sort_by_key(|call| call.block);
+    Ok((calls, higher_order_calls))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_higher_order_capability_call<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    caller: Instance<'tcx>,
+    body: &Body<'tcx>,
+    block: usize,
+    span: Span,
+    func: &Operand<'tcx>,
+    args: &[Spanned<Operand<'tcx>>],
+    closure_locals: &BTreeSet<Local>,
+    aliases: &BTreeMap<Local, Local>,
+) -> Result<Option<HigherOrderCapabilityCallV1>, ClosureProfileErrorV1> {
+    let Some((terminal, expected_self)) = higher_order_capability_candidate(tcx, func)? else {
+        return Ok(None);
+    };
+    let target = resolve_direct_call(tcx, caller, func)?;
+    if target.args.has_param() || target.args.has_escaping_bound_vars() {
+        return Err(ClosureProfileErrorV1::new(
+            "higher-order capability terminal did not resolve to one monomorphic instance",
+        ));
+    }
+    if !crate::trusted_device_items::authenticate_reviewed_safe_external_helper_v1(
+        tcx,
+        target.def_id(),
+    )
+    .map_err(|detail| {
+        ClosureProfileErrorV1::new(format!(
+            "higher-order capability terminal provider authentication failed: {detail}"
+        ))
+    })? {
+        return Ok(None);
+    }
+    let self_ty = inherent_impl_self_ty(tcx, target.def_id()).ok_or_else(|| {
+        ClosureProfileErrorV1::new(
+            "higher-order capability terminal is not an inherent method on a concrete device type",
+        )
+    })?;
+    let TyKind::Adt(self_adt, _) = self_ty.kind() else {
+        return Err(ClosureProfileErrorV1::new(
+            "higher-order capability terminal receiver is not a concrete device type",
+        ));
+    };
+    if crate::trusted_device_items::classify(tcx, self_adt.did()) != Some(expected_self) {
+        return Ok(None);
+    }
+    let signature = tcx.normalize_erasing_regions(
+        TypingEnv::fully_monomorphized(),
+        tcx.instantiate_bound_regions_with_erased(
+            tcx.fn_sig(target.def_id()).instantiate(tcx, target.args),
+        ),
+    );
+    if signature.safety != rustc_hir::Safety::Safe
+        || signature.abi != ExternAbi::Rust
+        || signature.c_variadic
+        || signature.inputs().len() != args.len()
+    {
+        return Err(ClosureProfileErrorV1::new(format!(
+            "authenticated {terminal:?} source signature or Rust ABI changed"
+        )));
+    }
+    let mut closure_inputs = signature
+        .inputs()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, input)| matches!(input.kind(), TyKind::Closure(..)).then_some(index));
+    let closure_argument = closure_inputs.next().ok_or_else(|| {
+        ClosureProfileErrorV1::new(format!(
+            "authenticated {terminal:?} source signature has no concrete closure input"
+        ))
+    })?;
+    if closure_inputs.next().is_some() {
+        return Err(ClosureProfileErrorV1::new(format!(
+            "authenticated {terminal:?} source signature has multiple closure inputs"
+        )));
+    }
+    let closure_ty = normalized_ty(
+        tcx,
+        caller,
+        args[closure_argument].node.ty(body, tcx),
+        "higher-order capability closure argument",
+    )?;
+    if closure_ty != signature.inputs()[closure_argument]
+        || !matches!(closure_ty.kind(), TyKind::Closure(..))
+    {
+        return Err(ClosureProfileErrorV1::new(format!(
+            "authenticated {terminal:?} closure type disagrees with its monomorphic source signature"
+        )));
+    }
+    for (index, argument) in args.iter().enumerate() {
+        if index != closure_argument
+            && operand_mentions_closure(&argument.node, closure_locals, aliases)
+        {
+            return Err(ClosureProfileErrorV1::new(format!(
+                "closure value reached a non-operation argument of authenticated {terminal:?}"
+            )));
+        }
+    }
+    let closure_custody = resolve_operand_closure_custody(
+        tcx,
+        caller,
+        &args[closure_argument],
+        closure_ty,
+        closure_locals,
+        aliases,
+    )?;
+    let TyKind::Closure(_, closure_arguments) = closure_ty.kind() else {
+        unreachable!("the monomorphic closure input was checked above");
+    };
+    let environment = closure_arguments.as_closure();
+    let actual_kind = closure_kind(environment.kind_ty().to_opt_closure_kind())?;
+    if !call_kind_allowed(actual_kind, ClosureCallKindV1::FnOnce) {
+        return Err(ClosureProfileErrorV1::new(format!(
+            "authenticated {terminal:?} requires a closure consumable as FnOnce"
+        )));
+    }
+    if !tcx.is_mir_available(target.def_id()) {
+        return Err(ClosureProfileErrorV1::new(format!(
+            "authenticated {terminal:?} helper MIR is unavailable for recursive collection"
+        )));
+    }
+    let query = TypingEnv::fully_monomorphized().as_query_input((target, ty::List::empty()));
+    let fn_abi = tcx.fn_abi_of_instance(query).map_err(|error| {
+        ClosureProfileErrorV1::new(format!(
+            "authenticated {terminal:?} FnAbi is unavailable: {error:?}"
+        ))
+    })?;
+    let identities =
+        crate::rustc_semantic_adapter_v1::canonical_function_identities_v1(tcx, target);
+    let source = crate::rustc_semantic_adapter_v1::canonical_source_provenance_v1(
+        tcx,
+        span,
+        MAX_MACRO_EXPANSION_DEPTH,
+    )
+    .map_err(|error| {
+        ClosureProfileErrorV1::new(format!(
+            "authenticated {terminal:?} call has invalid source provenance: {error}"
+        ))
+    })?;
+    Ok(Some(HigherOrderCapabilityCallV1 {
+        block,
+        closure_custody,
+        terminal,
+        target_definition_hash: tcx.def_path_hash(target.def_id()).0.to_le_bytes(),
+        target_function_identity: *identities.function().as_bytes(),
+        target_monomorphization_identity: *identities.monomorphization().as_bytes(),
+        target_generic_types_identity: *identities.generic_type_arguments().as_bytes(),
+        target_const_generics_identity: *identities.const_generic_arguments().as_bytes(),
+        target_mir_identity: crate::rustc_semantic_adapter_v1::rustc_mir_body_sha256_v1(
+            tcx, target,
+        ),
+        target_fn_abi_identity: crate::rustc_semantic_adapter_v1::rustc_fn_abi_sha256_v1(
+            tcx, fn_abi,
+        ),
+        call_source_identity: source.expansion_chain_sha256(),
+    }))
+}
+
+fn resolve_operand_closure_custody<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    operand: &Spanned<Operand<'tcx>>,
+    closure_ty: Ty<'tcx>,
+    closure_locals: &BTreeSet<Local>,
+    aliases: &BTreeMap<Local, Local>,
+) -> Result<HigherOrderClosureCustodyV1, ClosureProfileErrorV1> {
+    if let Some(root) = operand_local(&operand.node)
+        .and_then(|local| resolve_alias_root(local, closure_locals, aliases))
+    {
+        return Ok(HigherOrderClosureCustodyV1::EnvironmentLocal(
+            root.as_usize(),
+        ));
+    }
+    let Operand::Constant(constant) = &operand.node else {
+        return Err(ClosureProfileErrorV1::new(
+            "higher-order capability closure operand has no tracked environment custody",
+        ));
+    };
+    let constant_ty = normalized_ty(
+        tcx,
+        instance,
+        constant.const_.ty(),
+        "zero-sized higher-order capability closure constant",
+    )?;
+    if constant_ty != closure_ty {
+        return Err(ClosureProfileErrorV1::new(
+            "higher-order capability closure constant type disagrees with its call operand",
+        ));
+    }
+    let TyKind::Closure(definition, arguments) = closure_ty.kind() else {
+        return Err(ClosureProfileErrorV1::new(
+            "higher-order capability constant is not a concrete closure",
+        ));
+    };
+    if !arguments.as_closure().upvar_tys().is_empty()
+        || closure_ty.needs_drop(tcx, TypingEnv::fully_monomorphized())
+    {
+        return Err(ClosureProfileErrorV1::new(
+            "only a zero-capture, no-drop closure may use constant custody",
+        ));
+    }
+    let layout = LayoutCx::new(tcx, TypingEnv::fully_monomorphized())
+        .layout_of(closure_ty)
+        .map_err(|error| {
+            ClosureProfileErrorV1::new(format!(
+                "zero-capture closure constant layout failed: {error}"
+            ))
+        })?;
+    if layout.size.bytes() != 0 || layout.fields.count() != 0 {
+        return Err(ClosureProfileErrorV1::new(
+            "constant closure custody requires an exact zero-sized, zero-field environment",
+        ));
+    }
+    let source = crate::rustc_semantic_adapter_v1::canonical_source_provenance_v1(
+        tcx,
+        tcx.def_span(*definition),
+        MAX_MACRO_EXPANSION_DEPTH,
+    )
+    .map_err(|error| {
+        ClosureProfileErrorV1::new(format!(
+            "zero-sized closure constant has invalid source provenance: {error}"
+        ))
+    })?;
+    Ok(HigherOrderClosureCustodyV1::ZeroSizedConstant {
+        definition_hash: tcx.def_path_hash(*definition).0.to_le_bytes(),
+        closure_type_identity: *crate::rustc_semantic_adapter_v1::rustc_type_identity_v1(
+            tcx, closure_ty,
+        )
+        .as_bytes(),
+        operand_source_identity: source.expansion_chain_sha256(),
+    })
+}
+
+fn higher_order_capability_candidate(
+    tcx: TyCtxt<'_>,
+    func: &Operand<'_>,
+) -> Result<
+    Option<(
+        HigherOrderCapabilityTerminalV1,
+        crate::trusted_device_items::TrustedDeviceItem,
+    )>,
+    ClosureProfileErrorV1,
+> {
+    let Operand::Constant(constant) = func else {
+        return Ok(None);
+    };
+    let TyKind::FnDef(def_id, _) = constant.const_.ty().kind() else {
+        return Ok(None);
+    };
+    let candidate = match tcx.item_name(*def_id).as_str() {
+        "with_workgroup" => (
+            HigherOrderCapabilityTerminalV1::WithWorkgroup,
+            crate::trusted_device_items::TrustedDeviceItem::KernelContext,
+        ),
+        "with_matrix" => (
+            HigherOrderCapabilityTerminalV1::WithMatrix,
+            crate::trusted_device_items::TrustedDeviceItem::ExecutionSubgroupCapability,
+        ),
+        _ => return Ok(None),
+    };
+    let Some(self_ty) = inherent_impl_self_ty(tcx, *def_id) else {
+        return Ok(None);
+    };
+    let TyKind::Adt(self_adt, _) = self_ty.kind() else {
+        return Ok(None);
+    };
+    if crate::trusted_device_items::classify(tcx, self_adt.did()) != Some(candidate.1) {
+        return Ok(None);
+    }
+    Ok(Some(candidate))
+}
+
+fn inherent_impl_self_ty<'tcx>(tcx: TyCtxt<'tcx>, method: DefId) -> Option<Ty<'tcx>> {
+    let associated = tcx.opt_associated_item(method)?;
+    if !associated.is_fn() {
+        return None;
+    }
+    let impl_id = tcx.impl_of_assoc(method)?;
+    if tcx.impl_is_of_trait(impl_id) {
+        return None;
+    }
+    Some(tcx.type_of(impl_id).instantiate_identity())
 }
 
 fn allowed_closure_assignment(
@@ -926,14 +1378,16 @@ fn tuple_argument_count<'tcx>(
 fn lowering_identity(
     environments: &[ClosureEnvironmentV1],
     calls: &[StaticClosureCallV1],
+    higher_order_calls: &[HigherOrderCapabilityCallV1],
 ) -> [u8; 32] {
     let mut hash = Sha256::new();
-    hash.update(b"fe2o3.gfx942-closure-lowering.v1\0");
+    hash.update(b"fe2o3.gfx942-closure-lowering.v2\0");
     hash.update((environments.len() as u64).to_le_bytes());
     for environment in environments {
         hash.update((environment.local as u64).to_le_bytes());
         hash.update([environment.origin as u8, environment.call_kind as u8]);
         hash.update(environment.definition_hash);
+        hash.update(environment.closure_type_identity);
         hash.update(environment.size_bytes.to_le_bytes());
         hash.update(environment.alignment_bytes.to_le_bytes());
         hash.update((environment.captures.len() as u64).to_le_bytes());
@@ -953,6 +1407,35 @@ fn lowering_identity(
         hash.update([call.call_kind as u8]);
         hash.update((call.argument_count as u64).to_le_bytes());
         hash.update(call.target_definition_hash);
+    }
+    hash.update((higher_order_calls.len() as u64).to_le_bytes());
+    for call in higher_order_calls {
+        hash.update((call.block as u64).to_le_bytes());
+        match &call.closure_custody {
+            HigherOrderClosureCustodyV1::EnvironmentLocal(local) => {
+                hash.update([0]);
+                hash.update((*local as u64).to_le_bytes());
+            }
+            HigherOrderClosureCustodyV1::ZeroSizedConstant {
+                definition_hash,
+                closure_type_identity,
+                operand_source_identity,
+            } => {
+                hash.update([1]);
+                hash.update(definition_hash);
+                hash.update(closure_type_identity);
+                hash.update(operand_source_identity);
+            }
+        }
+        hash.update([call.terminal as u8]);
+        hash.update(call.target_definition_hash);
+        hash.update(call.target_function_identity);
+        hash.update(call.target_monomorphization_identity);
+        hash.update(call.target_generic_types_identity);
+        hash.update(call.target_const_generics_identity);
+        hash.update(call.target_mir_identity);
+        hash.update(call.target_fn_abi_identity);
+        hash.update(call.call_source_identity);
     }
     hash.finalize().into()
 }

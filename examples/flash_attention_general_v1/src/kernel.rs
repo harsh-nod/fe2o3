@@ -1,4 +1,4 @@
-//! Safe Rust, memory-bounded attention with double-buffered workgroup staging.
+//! Safe Rust, memory-bounded attention with epoch-branded workgroup staging.
 //!
 //! The kernel follows five visible phases: validate shape/stride extents, map a
 //! wave to a query tile, construct checked views, advance the uniform MFMA and
@@ -7,9 +7,9 @@
 #![allow(missing_docs)]
 
 use fe2o3_device::{
-    Bf16MfmaAFragment, Bf16MfmaAMatrix, Bf16MfmaBFragment, Bf16MfmaBMatrix, DisjointSlice,
-    F32AccumulatorFragment, Index1D, KernelError, KernelResult, Math, Matrix, StridedReadView2D,
-    Subgroup, Tiled2D, Wave64, WaveLane, WorkgroupLdsScope, WorkgroupPipeline, kernel, thread,
+    CapabilityMemoryElementV1, ExclusiveReadWrite, Global, KernelContext, KernelError,
+    KernelResult, ReadOnly, ReusableWorkgroup, ReusableWorkgroupLds, StrictIeee, SubgroupWidth64,
+    kernel,
 };
 
 pub const FLASH_ATTENTION_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
@@ -25,6 +25,73 @@ fn matrix_extent(rows: u32, columns: u32, stride: u32) -> usize {
     }
 }
 
+#[inline(always)]
+fn load_2d_or<T: CapabilityMemoryElementV1, Brand>(
+    values: &Global<'_, T, ReadOnly, Brand>,
+    base: usize,
+    row: usize,
+    column: usize,
+    stride: usize,
+    fallback: T,
+) -> T {
+    row.checked_mul(stride)
+        .and_then(|offset| base.checked_add(offset))
+        .and_then(|offset| offset.checked_add(column))
+        .and_then(|index| values.load(index))
+        .unwrap_or(fallback)
+}
+
+#[inline(always)]
+fn partition16_sum<'workgroup, KernelBrand>(
+    phases: &mut ReusableWorkgroup<'workgroup, KernelBrand>,
+    scratch: &mut ReusableWorkgroupLds<'workgroup, f32, 64, KernelBrand>,
+    value: f32,
+) -> f32 {
+    phases.with_phase(|phase| {
+        let rank = phase.invocation_rank() as usize;
+        let staged = phase.bind_reusable_lds(scratch);
+        let staged = staged.initialize_by_invocation(&phase, value);
+        let (phase, staged) = phase.publish_lds(staged);
+        let base = (rank / 16) * 16;
+        let mut sum = 0.0_f32;
+        let mut offset = 0_usize;
+        while offset < 16 {
+            sum += staged.read(&phase, base + offset).unwrap_or(0.0);
+            offset += 1;
+        }
+        let completion = phase.finish_reusable_phase();
+        (completion, sum)
+    })
+}
+
+#[inline(always)]
+fn partition16_max<'workgroup, KernelBrand>(
+    phases: &mut ReusableWorkgroup<'workgroup, KernelBrand>,
+    scratch: &mut ReusableWorkgroupLds<'workgroup, f32, 64, KernelBrand>,
+    value: f32,
+) -> f32 {
+    phases.with_phase(|phase| {
+        let rank = phase.invocation_rank() as usize;
+        let staged = phase.bind_reusable_lds(scratch);
+        let staged = staged.initialize_by_invocation(&phase, value);
+        let (phase, staged) = phase.publish_lds(staged);
+        let base = (rank / 16) * 16;
+        let mut maximum = f32::NEG_INFINITY;
+        let mut offset = 0_usize;
+        while offset < 16 {
+            let candidate = staged
+                .read(&phase, base + offset)
+                .unwrap_or(f32::NEG_INFINITY);
+            if candidate > maximum {
+                maximum = candidate;
+            }
+            offset += 1;
+        }
+        let completion = phase.finish_reusable_phase();
+        (completion, maximum)
+    })
+}
+
 /// Computes fused scaled dot-product attention without materializing scores.
 ///
 /// Q and transposed K are BF16. V, the additive mask, and output are FP32.
@@ -38,15 +105,16 @@ fn matrix_extent(rows: u32, columns: u32, stride: u32) -> usize {
         max = [64, 1, 1],
         static_shared_memory_bytes = 2048
     ),
-    control_flow(loop_bounds(256, 64, 16))
+    control_flow(loop_bounds(256, 64, 16, 4))
 )]
 #[allow(clippy::too_many_arguments)]
 pub fn flash_attention_general_v1(
-    q: &[u16],
-    k_transposed: &[u16],
-    v: &[f32],
-    additive_mask: &[f32],
-    mut output: DisjointSlice<f32, Tiled2D<Index1D, 64, 16, 16, 4>>,
+    mut context: KernelContext<'_>,
+    q: Global<'_, u16, ReadOnly>,
+    k_transposed: Global<'_, u16, ReadOnly>,
+    v: Global<'_, f32, ReadOnly>,
+    additive_mask: Global<'_, f32, ReadOnly>,
+    mut output: Global<'_, f32, ExclusiveReadWrite>,
     batch_heads: u32,
     query_rows: u32,
     query_rows_padded: u32,
@@ -119,7 +187,7 @@ pub fn flash_attention_general_v1(
     }
 
     // One Wave64 owns one 16-row query tile; Wave16 quarters own four rows each.
-    let thread_index = thread::index_1d();
+    let thread_index = context.invocation().index_1d();
     let raw = thread_index.get();
     let lane = raw % 64;
     let lane_column = lane % 16;
@@ -137,42 +205,9 @@ pub fn flash_attention_general_v1(
     let score_row_base = query_tile * 16 + (lane / 16) * 4;
     // The checked head quotient makes this subtraction nonnegative.
     let score_row_in_head = score_row_base - head_row_base;
-    let output_tile = thread_index
-        .checked_tiled_2d::<64, 16, 16, 4>()
-        .ok_or(KernelError::OutOfBounds)?;
-    // Checked views name each logical layout and keep stride arithmetic out of the loop.
-    let mask = StridedReadView2D::from_shared_slice(
-        additive_mask,
-        head_row_base * mask_stride as usize,
-        query_rows as usize,
-        keys as usize,
-        mask_stride as usize,
-    )?;
-    let v_view = StridedReadView2D::from_shared_slice(
-        v,
-        head * v_head_stride as usize,
-        keys_padded as usize,
-        value_dimension as usize,
-        v_stride as usize,
-    )?;
-    let q_matrix = Bf16MfmaAMatrix::row_major(
-        q,
-        0,
-        output_rows as usize,
-        depth as usize,
-        q_stride as usize,
-    )?;
-    let k_matrix = Bf16MfmaBMatrix::row_major(
-        k_transposed,
-        head * k_head_stride as usize,
-        depth as usize,
-        keys_padded as usize,
-        k_depth_stride as usize,
-    )?;
-    let wave_lane = WaveLane::<Wave64>::current();
-    let matrix = Matrix::current();
-    let subgroup = Subgroup::current();
-    let math = Math::current();
+    let policy = context.numerical_policy::<StrictIeee>();
+    let math = context.math();
+    let math = math.with_numerical_policy(&policy);
 
     // Keep the online-softmax maximum, denominator, and numerator in FP32.
     let mut maximum0 = f32::NEG_INFINITY;
@@ -187,220 +222,222 @@ pub fn flash_attention_general_v1(
     let mut numerator1 = 0.0_f32;
     let mut numerator2 = 0.0_f32;
     let mut numerator3 = 0.0_f32;
-    let mut pipeline_scope = WorkgroupLdsScope::current();
-    let mut q_pipeline =
-        WorkgroupPipeline::<Bf16MfmaAFragment<'_>, 2, 64, 1>::current(&mut pipeline_scope);
-    let mut k_pipeline =
-        WorkgroupPipeline::<Bf16MfmaBFragment<'_>, 2, 64, 1>::current(&mut pipeline_scope);
-    let mut key_base = 0_usize;
-    // Each key tile advances the stable online (maximum, sum, numerator) state.
-    while key_base < keys_padded as usize {
-        let key_column = key_base + lane_column;
-        let mut scores = F32AccumulatorFragment::zero(&wave_lane);
-        // Double-buffer Q/K fragments so staging of phase n+1 overlaps MFMA for phase n.
-        let phase_count = (depth as usize + 15) / 16;
-        let lhs = q_matrix.load_m16k16(&wave_lane, query_row_base, 0);
-        let rhs = k_matrix.load_k16n16(&wave_lane, 0, key_base);
-        q_pipeline.stage(0);
-        q_pipeline.write(0, lane, lhs);
-        q_pipeline.commit(0);
-        k_pipeline.stage(0);
-        k_pipeline.write(0, lane, rhs);
-        k_pipeline.commit(0);
+    context.with_workgroup(|workgroup| -> KernelResult {
+        let mut reduction_scratch = workgroup.allocate_lds::<f32, 64>().into_reusable();
+        let mut phases = workgroup.into_reusable();
+        let mut key_base = 0_usize;
+        // Each key tile advances the stable online (maximum, sum, numerator) state.
+        while key_base < keys_padded as usize {
+            let key_column = key_base + lane_column;
+            let values = phases.with_phase(|phase| {
+                let values = {
+                    let subgroup = phase.subgroup::<SubgroupWidth64>();
+                    subgroup.with_matrix(phase.epoch(), |matrix, wave_lane| {
+                        let matrix = matrix.with_numerical_policy(&policy);
+                        let q_matrix = matrix.bf16_a_global_row_major(
+                            &q,
+                            0,
+                            output_rows as usize,
+                            depth as usize,
+                            q_stride as usize,
+                        )?;
+                        let k_matrix = matrix.bf16_b_global_row_major(
+                            &k_transposed,
+                            head * k_head_stride as usize,
+                            depth as usize,
+                            keys_padded as usize,
+                            k_depth_stride as usize,
+                        )?;
+                        let mut scores = matrix.bf16_zero_accumulator(wave_lane);
+                        let phase_count = (depth as usize).div_ceil(16);
+                        let mut phase_index = 0_usize;
+                        while phase_index < phase_count {
+                            let reduction_base = phase_index * 16;
+                            let lhs =
+                                q_matrix.load_m16k16(wave_lane, query_row_base, reduction_base);
+                            let rhs = k_matrix.load_k16n16(wave_lane, reduction_base, key_base);
+                            scores = matrix.multiply_accumulate(lhs, rhs, scores);
+                            phase_index += 1;
+                        }
+                        Ok::<[f32; 4], KernelError>(scores.into_values())
+                    })
+                };
+                let completion = phase.finish_reusable_phase();
+                (completion, values)
+            })?;
+            let score0 = values[0] * scale
+                + load_2d_or(
+                    &additive_mask,
+                    head_row_base * mask_stride as usize,
+                    score_row_in_head,
+                    key_column,
+                    mask_stride as usize,
+                    f32::NEG_INFINITY,
+                );
+            let score1 = values[1] * scale
+                + load_2d_or(
+                    &additive_mask,
+                    head_row_base * mask_stride as usize,
+                    score_row_in_head + 1,
+                    key_column,
+                    mask_stride as usize,
+                    f32::NEG_INFINITY,
+                );
+            let score2 = values[2] * scale
+                + load_2d_or(
+                    &additive_mask,
+                    head_row_base * mask_stride as usize,
+                    score_row_in_head + 2,
+                    key_column,
+                    mask_stride as usize,
+                    f32::NEG_INFINITY,
+                );
+            let score3 = values[3] * scale
+                + load_2d_or(
+                    &additive_mask,
+                    head_row_base * mask_stride as usize,
+                    score_row_in_head + 3,
+                    key_column,
+                    mask_stride as usize,
+                    f32::NEG_INFINITY,
+                );
+            let tile_maximum0 = partition16_max(&mut phases, &mut reduction_scratch, score0);
+            let tile_maximum1 = partition16_max(&mut phases, &mut reduction_scratch, score1);
+            let tile_maximum2 = partition16_max(&mut phases, &mut reduction_scratch, score2);
+            let tile_maximum3 = partition16_max(&mut phases, &mut reduction_scratch, score3);
+            let next_maximum0 = if tile_maximum0 > maximum0 {
+                tile_maximum0
+            } else {
+                maximum0
+            };
+            let next_maximum1 = if tile_maximum1 > maximum1 {
+                tile_maximum1
+            } else {
+                maximum1
+            };
+            let next_maximum2 = if tile_maximum2 > maximum2 {
+                tile_maximum2
+            } else {
+                maximum2
+            };
+            let next_maximum3 = if tile_maximum3 > maximum3 {
+                tile_maximum3
+            } else {
+                maximum3
+            };
+            let rescale0 = if next_maximum0 == f32::NEG_INFINITY {
+                0.0
+            } else {
+                math.exp_f32(maximum0 - next_maximum0)
+            };
+            let rescale1 = if next_maximum1 == f32::NEG_INFINITY {
+                0.0
+            } else {
+                math.exp_f32(maximum1 - next_maximum1)
+            };
+            let rescale2 = if next_maximum2 == f32::NEG_INFINITY {
+                0.0
+            } else {
+                math.exp_f32(maximum2 - next_maximum2)
+            };
+            let rescale3 = if next_maximum3 == f32::NEG_INFINITY {
+                0.0
+            } else {
+                math.exp_f32(maximum3 - next_maximum3)
+            };
+            let probability0 = if next_maximum0 == f32::NEG_INFINITY {
+                0.0
+            } else {
+                math.exp_f32(score0 - next_maximum0)
+            };
+            let probability1 = if next_maximum1 == f32::NEG_INFINITY {
+                0.0
+            } else {
+                math.exp_f32(score1 - next_maximum1)
+            };
+            let probability2 = if next_maximum2 == f32::NEG_INFINITY {
+                0.0
+            } else {
+                math.exp_f32(score2 - next_maximum2)
+            };
+            let probability3 = if next_maximum3 == f32::NEG_INFINITY {
+                0.0
+            } else {
+                math.exp_f32(score3 - next_maximum3)
+            };
+            denominator0 = denominator0 * rescale0
+                + partition16_sum(&mut phases, &mut reduction_scratch, probability0);
+            denominator1 = denominator1 * rescale1
+                + partition16_sum(&mut phases, &mut reduction_scratch, probability1);
+            denominator2 = denominator2 * rescale2
+                + partition16_sum(&mut phases, &mut reduction_scratch, probability2);
+            denominator3 = denominator3 * rescale3
+                + partition16_sum(&mut phases, &mut reduction_scratch, probability3);
+            numerator0 *= rescale0;
+            numerator1 *= rescale1;
+            numerator2 *= rescale2;
+            numerator3 *= rescale3;
 
-        let mut phase_index = 0_usize;
-        while phase_index < phase_count {
-            let future_epoch = phase_index + 1;
-            let next_phase = future_epoch * 16;
-            let next_lhs = q_matrix.load_m16k16(&wave_lane, query_row_base, next_phase);
-            let next_rhs = k_matrix.load_k16n16(&wave_lane, next_phase, key_base);
-
-            q_pipeline.stage(future_epoch);
-            q_pipeline.write(future_epoch, lane, next_lhs);
-            q_pipeline.commit(future_epoch);
-            k_pipeline.stage(future_epoch);
-            k_pipeline.write(future_epoch, lane, next_rhs);
-            k_pipeline.commit(future_epoch);
-
-            q_pipeline.wait(phase_index);
-            q_pipeline.consume(phase_index);
-            let lhs = q_pipeline.read(phase_index, lane);
-            k_pipeline.wait(phase_index);
-            k_pipeline.consume(phase_index);
-            let rhs = k_pipeline.read(phase_index, lane);
-            scores = matrix.multiply_accumulate(lhs, rhs, scores);
-            q_pipeline.release(phase_index);
-            k_pipeline.release(phase_index);
-            phase_index += 1;
-        }
-        q_pipeline.wait(phase_count);
-        q_pipeline.discard(phase_count);
-        q_pipeline.release(phase_count);
-        k_pipeline.wait(phase_count);
-        k_pipeline.discard(phase_count);
-        k_pipeline.release(phase_count);
-        let values = scores.into_values();
-        let score0 =
-            values[0] * scale + mask.load_or(score_row_in_head, key_column, f32::NEG_INFINITY);
-        let score1 =
-            values[1] * scale + mask.load_or(score_row_in_head + 1, key_column, f32::NEG_INFINITY);
-        let score2 =
-            values[2] * scale + mask.load_or(score_row_in_head + 2, key_column, f32::NEG_INFINITY);
-        let score3 =
-            values[3] * scale + mask.load_or(score_row_in_head + 3, key_column, f32::NEG_INFINITY);
-        let tile_maximum0 = subgroup.subgroup_reduce_max_f32::<16>(score0);
-        let tile_maximum1 = subgroup.subgroup_reduce_max_f32::<16>(score1);
-        let tile_maximum2 = subgroup.subgroup_reduce_max_f32::<16>(score2);
-        let tile_maximum3 = subgroup.subgroup_reduce_max_f32::<16>(score3);
-        let next_maximum0 = if tile_maximum0 > maximum0 {
-            tile_maximum0
-        } else {
-            maximum0
-        };
-        let next_maximum1 = if tile_maximum1 > maximum1 {
-            tile_maximum1
-        } else {
-            maximum1
-        };
-        let next_maximum2 = if tile_maximum2 > maximum2 {
-            tile_maximum2
-        } else {
-            maximum2
-        };
-        let next_maximum3 = if tile_maximum3 > maximum3 {
-            tile_maximum3
-        } else {
-            maximum3
-        };
-        let rescale0 = if next_maximum0 == f32::NEG_INFINITY {
-            0.0
-        } else {
-            math.exp_f32(maximum0 - next_maximum0)
-        };
-        let rescale1 = if next_maximum1 == f32::NEG_INFINITY {
-            0.0
-        } else {
-            math.exp_f32(maximum1 - next_maximum1)
-        };
-        let rescale2 = if next_maximum2 == f32::NEG_INFINITY {
-            0.0
-        } else {
-            math.exp_f32(maximum2 - next_maximum2)
-        };
-        let rescale3 = if next_maximum3 == f32::NEG_INFINITY {
-            0.0
-        } else {
-            math.exp_f32(maximum3 - next_maximum3)
-        };
-        let probability0 = if next_maximum0 == f32::NEG_INFINITY {
-            0.0
-        } else {
-            math.exp_f32(score0 - next_maximum0)
-        };
-        let probability1 = if next_maximum1 == f32::NEG_INFINITY {
-            0.0
-        } else {
-            math.exp_f32(score1 - next_maximum1)
-        };
-        let probability2 = if next_maximum2 == f32::NEG_INFINITY {
-            0.0
-        } else {
-            math.exp_f32(score2 - next_maximum2)
-        };
-        let probability3 = if next_maximum3 == f32::NEG_INFINITY {
-            0.0
-        } else {
-            math.exp_f32(score3 - next_maximum3)
-        };
-        denominator0 =
-            denominator0 * rescale0 + subgroup.subgroup_reduce_sum_f32::<16>(probability0);
-        denominator1 =
-            denominator1 * rescale1 + subgroup.subgroup_reduce_sum_f32::<16>(probability1);
-        denominator2 =
-            denominator2 * rescale2 + subgroup.subgroup_reduce_sum_f32::<16>(probability2);
-        denominator3 =
-            denominator3 * rescale3 + subgroup.subgroup_reduce_sum_f32::<16>(probability3);
-        numerator0 *= rescale0;
-        numerator1 *= rescale1;
-        numerator2 *= rescale2;
-        numerator3 *= rescale3;
-
-        let mut dimension = 0_usize;
-        while dimension < value_dimension as usize {
-            let value = v_view.load_or(key_column, dimension, 0.0);
-            let contribution0 = subgroup.subgroup_reduce_sum_f32::<16>(probability0 * value);
-            let contribution1 = subgroup.subgroup_reduce_sum_f32::<16>(probability1 * value);
-            let contribution2 = subgroup.subgroup_reduce_sum_f32::<16>(probability2 * value);
-            let contribution3 = subgroup.subgroup_reduce_sum_f32::<16>(probability3 * value);
-            if lane_column == dimension {
-                numerator0 += contribution0;
-                numerator1 += contribution1;
-                numerator2 += contribution2;
-                numerator3 += contribution3;
+            let mut dimension = 0_usize;
+            while dimension < value_dimension as usize {
+                let value = load_2d_or(
+                    &v,
+                    head * v_head_stride as usize,
+                    key_column,
+                    dimension,
+                    v_stride as usize,
+                    0.0,
+                );
+                let contribution0 =
+                    partition16_sum(&mut phases, &mut reduction_scratch, probability0 * value);
+                let contribution1 =
+                    partition16_sum(&mut phases, &mut reduction_scratch, probability1 * value);
+                let contribution2 =
+                    partition16_sum(&mut phases, &mut reduction_scratch, probability2 * value);
+                let contribution3 =
+                    partition16_sum(&mut phases, &mut reduction_scratch, probability3 * value);
+                if lane_column == dimension {
+                    numerator0 += contribution0;
+                    numerator1 += contribution1;
+                    numerator2 += contribution2;
+                    numerator3 += contribution3;
+                }
+                dimension += 1;
             }
-            dimension += 1;
+            maximum0 = next_maximum0;
+            maximum1 = next_maximum1;
+            maximum2 = next_maximum2;
+            maximum3 = next_maximum3;
+            key_base += 16;
         }
-        maximum0 = next_maximum0;
-        maximum1 = next_maximum1;
-        maximum2 = next_maximum2;
-        maximum3 = next_maximum3;
-        key_base += 16;
-    }
 
-    // Tiled ownership suppresses padded rows/columns and makes valid stores disjoint.
-    if let Some(element) = output.get_tiled_2d_mut(
-        &output_tile,
-        0,
-        output_rows as usize,
-        value_dimension as usize,
-        output_stride as usize,
-    ) {
-        *element = if denominator0 > 0.0 {
-            numerator0 / denominator0
-        } else {
-            0.0
-        };
-    }
-    if let Some(element) = output.get_tiled_2d_mut(
-        &output_tile,
-        1,
-        output_rows as usize,
-        value_dimension as usize,
-        output_stride as usize,
-    ) {
-        *element = if denominator1 > 0.0 {
-            numerator1 / denominator1
-        } else {
-            0.0
-        };
-    }
-    if let Some(element) = output.get_tiled_2d_mut(
-        &output_tile,
-        2,
-        output_rows as usize,
-        value_dimension as usize,
-        output_stride as usize,
-    ) {
-        *element = if denominator2 > 0.0 {
-            numerator2 / denominator2
-        } else {
-            0.0
-        };
-    }
-    if let Some(element) = output.get_tiled_2d_mut(
-        &output_tile,
-        3,
-        output_rows as usize,
-        value_dimension as usize,
-        output_stride as usize,
-    ) {
-        *element = if denominator3 > 0.0 {
-            numerator3 / denominator3
-        } else {
-            0.0
-        };
-    }
-    Ok(())
+        // The lane/tile mapping is injective; final-graph ownership analysis
+        // must prove it before admitting these exclusive-allocation stores.
+        let numerators = [numerator0, numerator1, numerator2, numerator3];
+        let denominators = [denominator0, denominator1, denominator2, denominator3];
+        let mut component = 0_usize;
+        while component < numerators.len() {
+            let row = score_row_base + component;
+            if row < output_rows as usize && lane_column < value_dimension as usize {
+                let Some(index) = row
+                    .checked_mul(output_stride as usize)
+                    .and_then(|offset| offset.checked_add(lane_column))
+                else {
+                    fe2o3_device::trap();
+                };
+                let value = if denominators[component] > 0.0 {
+                    numerators[component] / denominators[component]
+                } else {
+                    0.0
+                };
+                if !output.store(index, value) {
+                    fe2o3_device::trap();
+                }
+            }
+            component += 1;
+        }
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -414,16 +451,16 @@ mod tests {
     }
 
     #[test]
-    fn score_mfma_uses_workgroup_double_buffering() {
+    fn score_mfma_and_softmax_use_branded_workgroup_phases() {
         let source = include_str!("kernel.rs");
         let key_loop = ["while key_base <", " keys_padded"].concat();
         let mfma = ["matrix.multiply", "_accumulate"].concat();
         assert_eq!(source.matches(&key_loop).count(), 1);
         assert_eq!(source.matches(&mfma).count(), 1);
-        assert!(source.contains("WorkgroupPipeline::<Bf16MfmaAFragment<'_>, 2, 64, 1>"));
-        assert!(source.contains("WorkgroupPipeline::<Bf16MfmaBFragment<'_>, 2, 64, 1>"));
-        assert!(source.contains("q_pipeline.read(phase_index, lane)"));
-        assert!(source.contains("k_pipeline.read(phase_index, lane)"));
-        assert!(source.contains("q_pipeline.discard(phase_count)"));
+        assert!(source.contains("context.with_workgroup"));
+        assert!(source.contains("workgroup.allocate_lds::<f32, 64>()"));
+        assert!(source.contains("phases.with_phase"));
+        assert!(source.contains("phase.publish_lds"));
+        assert!(source.contains("phase.finish_reusable_phase"));
     }
 }

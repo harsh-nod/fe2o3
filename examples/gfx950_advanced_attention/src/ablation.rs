@@ -5,17 +5,15 @@
 //! single-variable rule keeps an ablation interpretable and reviewable.
 
 use fe2o3_device::{
-    DeviceMath, DisjointSlice, Index1D, KernelError, KernelResult, StridedReadView2D, kernel,
-    thread,
+    DisjointWrite, Global, Index1D, KernelContext, KernelError, KernelResult, ReadOnly, StrictIeee,
+    kernel,
 };
 
+use crate::kernel::GlobalReadView2DF32V1;
 use crate::{
     ATTENTION_TOKENS_V1, CHANNELS_V1, HEAD_DIMENSION_V1, MIXING_STREAMS_V1, SELECTED_TOKENS_V1,
+    batch_count_for_launch_v1,
 };
-
-const ATTENTION_SCALE_V1: f32 = 0.088_388_346;
-const MULTIGRID_SUBGROUP_BATCHES_V1: usize = 64;
-const MULTIGRID_WAVE_BATCHES_V1: usize = 16;
 
 /// The scalar selected-score attention experiments are retained in the ablation manifest.
 /// The V1 control-flow sidecar rejects their bounded loop plus selection macro.
@@ -27,12 +25,25 @@ const MULTIGRID_WAVE_BATCHES_V1: usize = 16;
     launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
 )]
 pub fn gfx950_attnres_aggregate(
-    depth_values: &[f32],
-    depth_logits: &[f32],
-    mut output: DisjointSlice<f32, Index1D>,
+    context: KernelContext<'_>,
+    depth_values: Global<'_, f32, ReadOnly>,
+    depth_logits: Global<'_, f32, ReadOnly>,
+    mut output: Global<'_, f32, DisjointWrite<Index1D>>,
 ) -> KernelResult {
     // Preserve production shape validation so only reuse strategy changes.
-    let batches = MULTIGRID_SUBGROUP_BATCHES_V1;
+    let invocation = context.invocation();
+    let grid = invocation.grid_size();
+    if invocation.workgroup_size().x() != 256
+        || invocation.workgroup_size().y() != 1
+        || invocation.workgroup_size().z() != 1
+        || grid.y() != 1
+        || grid.z() != 1
+    {
+        fe2o3_device::trap();
+    }
+    let Some(batches) = batch_count_for_launch_v1(grid.x(), 16) else {
+        fe2o3_device::trap();
+    };
     if depth_values.len() != batches * MIXING_STREAMS_V1 * CHANNELS_V1
         || depth_logits.len() != batches * MIXING_STREAMS_V1 * CHANNELS_V1
         || output.len() != batches * CHANNELS_V1
@@ -40,21 +51,23 @@ pub fn gfx950_attnres_aggregate(
         return Err(KernelError::InvalidArgument);
     }
     // One thread owns one (batch, channel) result.
-    let index = thread::index_1d();
+    let index = invocation.index_1d();
     let linear = index.get();
     let batch = linear / CHANNELS_V1;
     let channel = linear % CHANNELS_V1;
     let batch_offset = batch.wrapping_mul(MIXING_STREAMS_V1 * CHANNELS_V1);
-    let Ok(values) = StridedReadView2D::from_shared_slice(depth_values, batch_offset, 4, 16, 16)
+    let Some(values) = GlobalReadView2DF32V1::checked(&depth_values, batch_offset, 4, 16, 16)
     else {
         return Err(KernelError::InvalidArgument);
     };
-    let Ok(logits) = StridedReadView2D::from_shared_slice(depth_logits, batch_offset, 4, 16, 16)
+    let Some(logits) = GlobalReadView2DF32V1::checked(&depth_logits, batch_offset, 4, 16, 16)
     else {
         return Err(KernelError::InvalidArgument);
     };
     // Hoist each logit and exponential exactly once for this reuse experiment.
-    let math = DeviceMath::current();
+    let policy = context.numerical_policy::<StrictIeee>();
+    let device_math = context.math();
+    let math = device_math.with_numerical_policy(&policy);
     let logit0 = logits.load_or(0, channel, f32::NEG_INFINITY);
     let logit1 = logits.load_or(1, channel, f32::NEG_INFINITY);
     let logit2 = logits.load_or(2, channel, f32::NEG_INFINITY);
@@ -79,8 +92,8 @@ pub fn gfx950_attnres_aggregate(
         + weight2 * values.load_or(2, channel, 0.0)
         + weight3 * values.load_or(3, channel, 0.0);
     // Publish through the same disjoint output capability as production.
-    if let Some(slot) = output.get_mut(thread::index_1d()) {
-        *slot = value / denominator;
+    if !output.store(index.into_disjoint(), value / denominator) {
+        fe2o3_device::trap();
     }
     Ok(())
 }
@@ -92,13 +105,26 @@ pub fn gfx950_attnres_aggregate(
     launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
 )]
 pub fn gfx950_four_branch_residual(
-    residual: &[f32],
-    branches: &[f32],
-    gate_logits: &[f32],
-    mut output: DisjointSlice<f32, Index1D>,
+    context: KernelContext<'_>,
+    residual: Global<'_, f32, ReadOnly>,
+    branches: Global<'_, f32, ReadOnly>,
+    gate_logits: Global<'_, f32, ReadOnly>,
+    mut output: Global<'_, f32, DisjointWrite<Index1D>>,
 ) {
     // Preserve production validation and ownership while making branches explicit.
-    let batches = MULTIGRID_SUBGROUP_BATCHES_V1;
+    let invocation = context.invocation();
+    let grid = invocation.grid_size();
+    if invocation.workgroup_size().x() != 256
+        || invocation.workgroup_size().y() != 1
+        || invocation.workgroup_size().z() != 1
+        || grid.y() != 1
+        || grid.z() != 1
+    {
+        fe2o3_device::trap();
+    }
+    let Some(batches) = batch_count_for_launch_v1(grid.x(), 16) else {
+        fe2o3_device::trap();
+    };
     if residual.len() != batches * CHANNELS_V1
         || branches.len() != batches * MIXING_STREAMS_V1 * CHANNELS_V1
         || gate_logits.len() != batches * MIXING_STREAMS_V1 * CHANNELS_V1
@@ -106,13 +132,15 @@ pub fn gfx950_four_branch_residual(
     {
         return;
     }
-    let index = thread::index_1d();
+    let index = invocation.index_1d();
     let linear = index.get();
     let batch = linear / CHANNELS_V1;
     let channel = linear % CHANNELS_V1;
     let batch_offset = batch.wrapping_mul(MIXING_STREAMS_V1 * CHANNELS_V1);
     // Evaluate four fixed gates without changing their accumulation order.
-    let math = DeviceMath::current();
+    let policy = context.numerical_policy::<StrictIeee>();
+    let device_math = context.math();
+    let math = device_math.with_numerical_policy(&policy);
     let branch0 = batch_offset.wrapping_add(channel);
     let offset1 = batch_offset.wrapping_add(CHANNELS_V1).wrapping_add(channel);
     let offset2 = batch_offset
@@ -121,18 +149,38 @@ pub fn gfx950_four_branch_residual(
     let offset3 = batch_offset
         .wrapping_add(3 * CHANNELS_V1)
         .wrapping_add(channel);
-    let gate0 = 1.0 / (1.0 + math.exp_f32(-gate_logits[branch0]));
-    let gate1 = 1.0 / (1.0 + math.exp_f32(-gate_logits[offset1]));
-    let gate2 = 1.0 / (1.0 + math.exp_f32(-gate_logits[offset2]));
-    let gate3 = 1.0 / (1.0 + math.exp_f32(-gate_logits[offset3]));
-    let value = residual[batch.wrapping_mul(CHANNELS_V1).wrapping_add(channel)]
-        + 0.25 * gate0 * branches[branch0]
-        + 0.25 * gate1 * branches[offset1]
-        + 0.25 * gate2 * branches[offset2]
-        + 0.25 * gate3 * branches[offset3];
+    let (Some(logit0), Some(logit1), Some(logit2), Some(logit3)) = (
+        gate_logits.load(branch0),
+        gate_logits.load(offset1),
+        gate_logits.load(offset2),
+        gate_logits.load(offset3),
+    ) else {
+        fe2o3_device::trap();
+    };
+    let (Some(branch_value0), Some(branch_value1), Some(branch_value2), Some(branch_value3)) = (
+        branches.load(branch0),
+        branches.load(offset1),
+        branches.load(offset2),
+        branches.load(offset3),
+    ) else {
+        fe2o3_device::trap();
+    };
+    let Some(residual_value) = residual.load(batch.wrapping_mul(CHANNELS_V1).wrapping_add(channel))
+    else {
+        fe2o3_device::trap();
+    };
+    let gate0 = 1.0 / (1.0 + math.exp_f32(-logit0));
+    let gate1 = 1.0 / (1.0 + math.exp_f32(-logit1));
+    let gate2 = 1.0 / (1.0 + math.exp_f32(-logit2));
+    let gate3 = 1.0 / (1.0 + math.exp_f32(-logit3));
+    let value = residual_value
+        + 0.25 * gate0 * branch_value0
+        + 0.25 * gate1 * branch_value1
+        + 0.25 * gate2 * branch_value2
+        + 0.25 * gate3 * branch_value3;
     // One linear thread index owns one channel store.
-    if let Some(slot) = output.get_mut(thread::index_1d()) {
-        *slot = value;
+    if !output.store(index.into_disjoint(), value) {
+        fe2o3_device::trap();
     }
 }
 
@@ -144,25 +192,40 @@ pub fn gfx950_four_branch_residual(
     control_flow(loop_bounds(3))
 )]
 pub fn gfx950_mhc_sinkhorn_mix(
-    streams: &[f32],
-    mixing_logits: &[f32],
-    mut output: DisjointSlice<f32, Index1D>,
+    context: KernelContext<'_>,
+    streams: Global<'_, f32, ReadOnly>,
+    mixing_logits: Global<'_, f32, ReadOnly>,
+    mut output: Global<'_, f32, DisjointWrite<Index1D>>,
 ) -> KernelResult {
     // Preserve the WG256/grid4 contract while replacing subgroup Sinkhorn.
-    let batches = MULTIGRID_WAVE_BATCHES_V1;
+    let invocation = context.invocation();
+    let grid = invocation.grid_size();
+    if invocation.workgroup_size().x() != 256
+        || invocation.workgroup_size().y() != 1
+        || invocation.workgroup_size().z() != 1
+        || grid.y() != 1
+        || grid.z() != 1
+    {
+        fe2o3_device::trap();
+    }
+    let Some(batches) = batch_count_for_launch_v1(grid.x(), 64) else {
+        fe2o3_device::trap();
+    };
     if streams.len() != batches * MIXING_STREAMS_V1 * CHANNELS_V1
         || mixing_logits.len() != batches * MIXING_STREAMS_V1 * MIXING_STREAMS_V1
         || output.len() != batches * MIXING_STREAMS_V1 * CHANNELS_V1
     {
         return Err(KernelError::InvalidArgument);
     }
-    let index = thread::index_1d();
+    let index = invocation.index_1d();
     let linear = index.get();
     let batch = linear / 64;
-    let local = thread::thread_idx_x() as usize % 64;
-    let math = DeviceMath::current();
-    let Ok(logits) = StridedReadView2D::from_shared_slice(
-        mixing_logits,
+    let local = invocation.workitem_id().x() as usize % 64;
+    let policy = context.numerical_policy::<StrictIeee>();
+    let device_math = context.math();
+    let math = device_math.with_numerical_policy(&policy);
+    let Some(logits) = GlobalReadView2DF32V1::checked(
+        &mixing_logits,
         batch.wrapping_mul(MIXING_STREAMS_V1 * MIXING_STREAMS_V1),
         1,
         16,
@@ -170,8 +233,8 @@ pub fn gfx950_mhc_sinkhorn_mix(
     ) else {
         return Err(KernelError::InvalidArgument);
     };
-    let Ok(streams) = StridedReadView2D::from_shared_slice(
-        streams,
+    let Some(streams) = GlobalReadView2DF32V1::checked(
+        &streams,
         batch.wrapping_mul(MIXING_STREAMS_V1 * CHANNELS_V1),
         4,
         16,
@@ -263,8 +326,8 @@ pub fn gfx950_mhc_sinkhorn_mix(
             + m33 * streams.load_or(3, channel, 0.0)
     };
     // Each lane publishes its one stream/channel result exactly once.
-    if let Some(slot) = output.get_mut(thread::index_1d()) {
-        *slot = value;
+    if !output.store(index.into_disjoint(), value) {
+        fe2o3_device::trap();
     }
     Ok(())
 }

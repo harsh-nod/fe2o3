@@ -1,10 +1,10 @@
-error[E0599]: no associated function or constant named `from_compiler` found for struct `WorkgroupLdsScope<'workgroup>` in the current scope
+error[E0599]: no associated function or constant named `from_compiler` found for struct `WorkgroupLdsScope<'workgroup, Brand>` in the current scope
  --> tests/ui/fail/dynamic_lds_safe_scope_forgery.rs:4:32
   |
 4 |     let _ = WorkgroupLdsScope::from_compiler();
-  |                                ^^^^^^^^^^^^^ associated function or constant not found in `WorkgroupLdsScope<'_>`
+  |                                ^^^^^^^^^^^^^ associated function or constant not found in `WorkgroupLdsScope<'_, _>`
   |
-note: if you're trying to build a new `WorkgroupLdsScope<'_>`, consider using `WorkgroupLdsScope::<'workgroup>::current` which returns `WorkgroupLdsScope<'_>`
+note: if you're trying to build a new `WorkgroupLdsScope<'_, _>`, consider using `WorkgroupLdsScope::<'workgroup>::current` which returns `WorkgroupLdsScope<'_>`
  --> src/lds.rs
   |
   |     pub fn current() -> Self {

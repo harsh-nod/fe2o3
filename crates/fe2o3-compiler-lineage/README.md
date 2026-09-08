@@ -8,6 +8,20 @@ commitment. The capsule does not duplicate exact final LLVM bytes; the nested
 That association is data, not proof that the inputs share a producer or
 derivation.
 
+`InertStaticCapabilityEvidenceAssociationV1` separately binds canonical
+capability obligations and results to exact frozen-lineage coordinates and an
+exact kernel/root/optimized-KIR epoch/target/launch subject. It does not change
+the frozen V3 capsule grammar, authenticate an analysis producer, or grant
+publication, load, or launch authority.
+
+`InertCanonicalKernelIrV13ReceiptV5` gives the side-by-side V13 bytes a domain
+distinct from the frozen V3 KIR receipt. `InertCompilerProofOwnerV5` binds that
+exact V13 receipt and byte length, optimization
+epoch, semantic MIR identity and receipt, frozen V4 proof-binding receipt,
+kernel/root/target/launch subject, compiler policy, source and machine
+refinement receipts, and capability association. V3/V4 codecs remain exact:
+their KIR V8 receipt cannot be decoded or projected as V13 authority.
+
 `InertProductionSemanticCapsuleV3` is deliberately inert. Its name is an API
 boundary: it must never be accepted where an authenticated producer-owned
 capsule is required. Its hashes detect accidental corruption and byte

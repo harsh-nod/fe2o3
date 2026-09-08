@@ -1,0 +1,20 @@
+[package]
+name = "fe2o3-single-codegen-ownership-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[features]
+device-global-asm = []
+multiple-kernels = []
+
+[dependencies]
+fe2o3-device = { path = "../../../../fe2o3-device" }
+issue272-device-helper = { path = "device-helper" }
+
+[lib]
+name = "fe2o3_single_codegen_ownership_fixture"
+path = "src/lib.rs"
+crate-type = ["rlib"]

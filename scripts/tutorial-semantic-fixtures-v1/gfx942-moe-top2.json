@@ -1,0 +1,226 @@
+{
+  "argumentRoles": [
+    "input",
+    "output",
+    "output",
+    "output",
+    "output",
+    "output",
+    "output",
+    "output"
+  ],
+  "canaries": [],
+  "checkApplicability": {
+    "canaries": {
+      "reason": "kernel requires an exact output extent with no admissible tail",
+      "status": "not-applicable"
+    },
+    "padding": {
+      "reason": "physical ABI has no logical padding region",
+      "status": "not-applicable"
+    }
+  },
+  "compilerInputContractSha256": "49ff19c52565e5c16b92a482a64bd7d5f07b3b74de01e2ca9fe2196ef7fc0032",
+  "expectedArguments": [
+    {
+      "bytes": "0x000000000000e04000000000000080bf0000803f0000c0400000803f000080bf000000400000a04000000040000080bf000040400000804000000000000080bf00008040000040400000803f000080bf0000a0400000004000000040000080bf0000c0400000803f00000000000080bf0000e040000000000000803f000080bf",
+      "element": "f32",
+      "kind": "buffer"
+    },
+    {
+      "bytes": "0x01000000000000000100000000000000010000000000000001000000000000000000000001000000000000000100000000000000010000000000000002000000",
+      "element": "u32",
+      "kind": "buffer"
+    },
+    {
+      "bytes": "0x08000000070000000100000000000000",
+      "element": "u32",
+      "kind": "buffer"
+    },
+    {
+      "bytes": "0x04000000040000000100000000000000",
+      "element": "u32",
+      "kind": "buffer"
+    },
+    {
+      "bytes": "0x0000000004000000080000000900000009000000",
+      "element": "u32",
+      "kind": "buffer"
+    },
+    {
+      "bytes": "0x0400000000000000050000000100000006000000020000000700000003000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff08000000",
+      "element": "u32",
+      "kind": "buffer"
+    },
+    {
+      "bytes": "0x01000000030000000500000007000000000000000200000004000000060000000f000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "element": "u32",
+      "kind": "buffer"
+    },
+    {
+      "bytes": "0x0400000000000000050000000100000006000000020000000700000003000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff08000000",
+      "element": "u32",
+      "kind": "buffer"
+    }
+  ],
+  "fixtureId": "gfx942-moe-top2",
+  "kernelSymbol": "moe_top2_route_f32_t8_e4_k2_c4_v1",
+  "numericalPolicy": {
+    "mode": "exact-bits"
+  },
+  "oracle": {
+    "function": "moe_top2_oracle_v1",
+    "inputSha256": "e0013ee3c76963bb5a65a0c4c2f51e04cdcd920b2ccafb7615462dd0ebc305e8",
+    "kind": "existing-rust-cpu-reference-v1"
+  },
+  "oracleSuiteId": "cpu-reference-moe-top2",
+  "padding": [],
+  "physicalAbi": {
+    "arguments": [
+      {
+        "access": "read_only",
+        "element": "f32",
+        "kind": "buffer",
+        "name": "logits"
+      },
+      {
+        "access": "read_write",
+        "element": "u32",
+        "kind": "buffer",
+        "name": "top2_experts"
+      },
+      {
+        "access": "read_write",
+        "element": "u32",
+        "kind": "buffer",
+        "name": "requested_counts"
+      },
+      {
+        "access": "read_write",
+        "element": "u32",
+        "kind": "buffer",
+        "name": "admitted_counts"
+      },
+      {
+        "access": "read_write",
+        "element": "u32",
+        "kind": "buffer",
+        "name": "expert_offsets"
+      },
+      {
+        "access": "read_write",
+        "element": "u32",
+        "kind": "buffer",
+        "name": "route_slots"
+      },
+      {
+        "access": "read_write",
+        "element": "u32",
+        "kind": "buffer",
+        "name": "permutation"
+      },
+      {
+        "access": "read_write",
+        "element": "u32",
+        "kind": "buffer",
+        "name": "inverse"
+      }
+    ],
+    "schema": "fe2o3-physical-kernel-abi-v1",
+    "signatureSha256": "ba2ca7f658b83ff6acb01eed468e2697c473a99cb7cd1f6282ffbec222c31afd",
+    "sourcePath": "examples/moe_top2_v1/src/kernel.rs"
+  },
+  "productionExport": {
+    "coordinates": null,
+    "diagnostic": "FE2O3-TUTORIAL-PROBE-001: production exporter failed: crates/fe2o3-verifier/src/production_final_graph_functional_refinement_v1.rs:77:5: error[E0277]: `ProductionVerifiedFinalGraphV1` doesn't implement `std::fmt::Debug`: the trait `std::fmt::Debug` is not implemented for `ProductionVerifiedFinalGraphV1`",
+    "diagnosticCode": "FE2O3-TUTORIAL-PROBE-001",
+    "diagnosticIdentitySha256": "2bbae07782c3bc843cb51806a1bb09be56f4955c4c12e7b5c756c10378fa5a9d",
+    "identityContract": {
+      "rawContentField": "evidenceFiles[optimized-kir-v13].sha256",
+      "rawContentIdentity": "SHA-256(raw optimized KIR V13 bytes)",
+      "verifiedCanonicalKernelIrV13Fields": [
+        "productionEvidence.finalOptimizedKirSha256",
+        "graph.productionKirIdentitySha256",
+        "simulator.subjectSha256"
+      ],
+      "verifiedCanonicalKernelIrV13Identity": "domain-separated VerifiedCanonicalKernelIrV13 identity"
+    },
+    "stage": "exporter-build",
+    "status": "blocked"
+  },
+  "request": {
+    "arguments": [
+      {
+        "access": "read_only",
+        "alignment": 4,
+        "bytes": "0x000000000000e04000000000000080bf0000803f0000c0400000803f000080bf000000400000a04000000040000080bf000040400000804000000000000080bf00008040000040400000803f000080bf0000a0400000004000000040000080bf0000c0400000803f00000000000080bf0000e040000000000000803f000080bf",
+        "element": "f32",
+        "kind": "buffer"
+      },
+      {
+        "access": "read_write",
+        "alignment": 4,
+        "bytes": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+        "element": "u32",
+        "kind": "buffer"
+      },
+      {
+        "access": "read_write",
+        "alignment": 4,
+        "bytes": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+        "element": "u32",
+        "kind": "buffer"
+      },
+      {
+        "access": "read_write",
+        "alignment": 4,
+        "bytes": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+        "element": "u32",
+        "kind": "buffer"
+      },
+      {
+        "access": "read_write",
+        "alignment": 4,
+        "bytes": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+        "element": "u32",
+        "kind": "buffer"
+      },
+      {
+        "access": "read_write",
+        "alignment": 4,
+        "bytes": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+        "element": "u32",
+        "kind": "buffer"
+      },
+      {
+        "access": "read_write",
+        "alignment": 4,
+        "bytes": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+        "element": "u32",
+        "kind": "buffer"
+      },
+      {
+        "access": "read_write",
+        "alignment": 4,
+        "bytes": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+        "element": "u32",
+        "kind": "buffer"
+      }
+    ],
+    "grid": [
+      64,
+      1,
+      1
+    ],
+    "kernel": "moe_top2_route_f32_t8_e4_k2_c4_v1",
+    "schema": "fe2o3-simulation-request-v1",
+    "workgroup": [
+      64,
+      1,
+      1
+    ]
+  },
+  "schema": "fe2o3-tutorial-capability-simulation-fixture-v1",
+  "sourceClosureSha256": "e5c552ab3a24d3e25f3fa0b9ea7e6271bb574282e7057985492711c1310d9d04",
+  "target": "gfx942"
+}

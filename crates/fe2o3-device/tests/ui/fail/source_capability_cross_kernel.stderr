@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail/source_capability_cross_kernel.rs:9:13
+  |
+9 |     needs_a(group);
+  |     ------- ^^^^^ expected `&WorkgroupCapability<'_, KernelA>`, found `&WorkgroupCapability<'_, KernelB>`
+  |     |
+  |     arguments to this function are incorrect
+  |
+  = note: expected reference `&WorkgroupCapability<'_, KernelA>`
+             found reference `&WorkgroupCapability<'_, KernelB>`
+note: function defined here
+ --> tests/ui/fail/source_capability_cross_kernel.rs:6:4
+  |
+6 | fn needs_a(_: &WorkgroupCapability<'_, KernelA, InitialEpoch>) {}
+  |    ^^^^^^^ --------------------------------------------------

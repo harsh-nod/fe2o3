@@ -20,6 +20,7 @@ mod final_compiler_module_commitment_v3;
 mod inert_semantic_module_handoff_v3;
 mod module_handoff;
 mod module_handoff_v2;
+mod production_capability_carriage_v5;
 mod production_gfx942_ocml;
 mod production_gfx950_ocml;
 mod symbol_manifest;
@@ -72,6 +73,24 @@ pub use module_handoff::{
 pub use module_handoff_v2::{
     CompilerModuleHandoffErrorV2, CompilerModuleHandoffIdentityV2, CompilerModuleHandoffPartsV2,
     CompilerModuleHandoffV2, MAX_COMPILER_MODULE_HANDOFF_BYTES_V2,
+};
+pub use production_capability_carriage_v5::{
+    INERT_PRODUCTION_CAPABILITY_HANDOFF_MAGIC_V5, INERT_PRODUCTION_CAPABILITY_HANDOFF_VERSION_V5,
+    INERT_PRODUCTION_CAPABILITY_RESULT_MAGIC_V5, INERT_PRODUCTION_CAPABILITY_RESULT_VERSION_V5,
+    INERT_PRODUCTION_CAPABILITY_TRANSACTION_MAGIC_V5,
+    INERT_PRODUCTION_CAPABILITY_TRANSACTION_VERSION_V5, InertCompilerStageOutputReceiptIdentityV5,
+    InertCompilerStageOutputReceiptV5, InertProductionCapabilityHandoffErrorV5,
+    InertProductionCapabilityHandoffIdentityV5, InertProductionCapabilityHandoffInputsV5,
+    InertProductionCapabilityHandoffV5, InertProductionCapabilityResultIdentityV5,
+    InertProductionCapabilityResultV5, InertProductionCapabilityTransactionIdentityV5,
+    InertProductionCapabilityTransactionV5, InertProductionFinalGraphReportV5,
+    InertProductionTargetCapabilityClosureV5, InertProductionW4WitnessErrorV5,
+    InertProductionW4WitnessIdentityV5, InertProductionW4WitnessV5, InertSimulationBundleErrorV8,
+    InertSimulationBundleIdentityV8, InertSimulationBundleV8,
+    MAX_INERT_PRODUCTION_CAPABILITY_HANDOFF_BYTES_V5,
+    MAX_INERT_PRODUCTION_CAPABILITY_RESULT_BYTES_V5,
+    MAX_INERT_PRODUCTION_CAPABILITY_TRANSACTION_BYTES_V5, MAX_INERT_PRODUCTION_W4_WITNESS_BYTES_V5,
+    MAX_INERT_SIMULATION_BUNDLE_BYTES_V8, ProductionCompilerOutputStageV5,
 };
 pub use production_gfx942_ocml::{
     PRODUCTION_GFX942_OCML_EXP_F32_ABI_V1, PRODUCTION_GFX942_OCML_EXP_F32_EFFECTS_V1,

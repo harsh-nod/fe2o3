@@ -7,6 +7,29 @@ contains independent safe CPU references, and
 their bounded numerical and transactional contracts. The HIP program remains
 a separate compiler, ISA, and MI350 hardware-validation companion.
 
+All seven Rust roots now receive a compiler-issued `KernelContext`.
+Context-derived indices replace independent thread acquisition, compatible
+read-only buffers use `Global<_, ReadOnly>`, identity outputs use
+`Global<_, DisjointWrite<Index1D>>`, and compact irregular outputs use
+`Global<_, ExclusiveReadWrite>` pending mandatory W4 ownership/race proof.
+Cross-lane exchange uses context-scoped LDS publication with typed epochs; no
+unbranded `current()` operation remains in a kernel body.
+
+This is not yet a complete source migration or qualification claim. The shared
+device surface still lacks Global-backed gfx950 FP4/FP8 matrix views, so the
+expert root's two packed MFMA inputs retain raw slice arguments. Package-local
+protected-driver tests require every actual root to pass the W4 final-graph
+gate and require constant-index collision variants to fail before publication.
+They are ignored without protected compiler authority, and no clean receipt is
+claimed on the current branch.
+
+The shared final-graph crate currently fails to compile, and production V13
+extraction and compiler-exported Bundle V8 are unavailable on this integration
+branch. Consequently this package has CPU-reference, source/type boundary, and
+fail-closed protected-driver tests, but no compiler-produced V13 differential
+receipt, clean W4 receipt, protected publication authority, or fresh hardware
+qualification for the migrated source.
+
 Each `run-*-gfx950.sh` entry point selects exactly one kernel feature, invokes
 the production fe2o3 extractor, checks the compiler-published crate binding,
 links an exact gfx950:xnack- COV6 HSACO, validates its single-kernel metadata

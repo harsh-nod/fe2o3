@@ -1,52 +1,51 @@
-//! Executable source-model-to-Kernel-IR refinement for the exact Wave64 V1 profile.
+//! Bounded source-model correspondence for compiler-produced canonical KIR V13.
 //!
-//! This layer compares the checked CPU source model with an independent
-//! interpreter of the canonical semantic Kernel IR. It binds the exact
-//! checked-in attributed source and Kernel-IR schema bytes. It does not prove
-//! that rustc produced the Kernel IR, or that LLVM, ISA, runtime, or hardware
-//! behavior refines either model.
+//! This layer admits only an owned, verified V13 graph and observes its generic
+//! execution-capability operations. It is intentionally not a compiler proof:
+//! unresolved convergence, ownership, and refinement obligations remain owned
+//! by the production compiler pipeline.
 
 use core::fmt;
 
 use fe2o3_kernel_ir::{
-    WAVE64_COLLECTIVES_V1_SOURCE_SHA256, Wave64ArgumentRoleV1, Wave64CollectiveKindV1,
-    Wave64CollectivesKernelIrV1, Wave64CollectivesProfileV1, Wave64CollectivesV1Error,
-    Wave64OutputOwnershipV1, verify_wave64_collectives_v1,
+    ExecutionCapabilityOperationV1, ExecutionCollectiveKindV1, ExecutionMemoryAccessV1,
+    ExecutionMemoryAddressSpaceV1, KernelIrDecodeError, Module, OperationKind, ScalarType,
+    VerifiedCanonicalKernelIrErrorV13, VerifiedCanonicalKernelIrV13, decode_module_v13,
 };
 use sha2::{Digest as _, Sha256};
 
-use crate::{
-    OracleErrorV1, WAVE64_LANES_V1, lane_is_active_v1, lane_outputs_v1,
-    wave64_collectives_oracle_v1,
-};
+use crate::{OracleErrorV1, WAVE64_LANES_V1, lane_is_active_v1, wave64_collectives_oracle_v1};
 
 const ATTRIBUTED_SOURCE_BYTES_V1: &[u8] = include_bytes!("kernel.rs");
-const KERNEL_IR_SCHEMA_BYTES_V1: &[u8] =
-    include_bytes!("../../../crates/fe2o3-kernel-ir/src/wave64_collectives_v1.rs");
 
-/// SHA-256 of the exact checked-in semantic Kernel-IR schema source.
-pub const WAVE64_COLLECTIVES_V1_KIR_SCHEMA_SHA256: [u8; 32] = [
-    0xda, 0x27, 0x22, 0xbd, 0x3c, 0xe3, 0x49, 0x22, 0x86, 0x44, 0x30, 0x0b, 0x13, 0xbb, 0x45, 0xd4,
-    0x68, 0x3d, 0x1e, 0xbd, 0x60, 0xf8, 0xb7, 0x74, 0x9e, 0x77, 0x64, 0xec, 0x65, 0x69, 0xe8, 0x94,
+/// SHA-256 of the exact checked-in attributed source admitted by this adapter.
+pub const WAVE64_COLLECTIVES_V1_SOURCE_SHA256: [u8; 32] = [
+    0xa0, 0x07, 0xfc, 0xe3, 0x3c, 0x6f, 0x61, 0xc8, 0x86, 0x42, 0x7a, 0xf1, 0x16, 0xa5, 0xd8, 0x35,
+    0x9c, 0x95, 0x12, 0x4f, 0xec, 0x31, 0x11, 0xb7, 0xd3, 0x1f, 0x6e, 0xe6, 0x11, 0x02, 0xdd, 0xdf,
 ];
 
-/// The exact non-authority boundary carried by every successful check.
-pub const WAVE64_REFINEMENT_BOUNDARY_V1: &str = "exact source-model-to-canonical-semantic-Kernel-IR value/ownership correspondence under the u64 mask and finite integral f32 corpus;active zero sign is abstracted;no source-to-model proof;no compiler causality;no LLVM/ISA refinement;no artifact, protected-execution, generalized-safety, or parity authority";
+/// Exact non-authority boundary carried by a successful V13 observation.
+pub const WAVE64_REFINEMENT_BOUNDARY_V13: &str = "exact source bytes and verified canonical KIR V13 bytes;target-neutral collective-family and disjoint-publication observation;finite integral f32 corpus;active zero sign is abstracted;unresolved proof obligations are not discharged;no source-to-KIR proof;no compiler causality;no LLVM/ISA refinement;no artifact, protected-execution, generalized-safety, or parity authority";
 
-/// Exact checked-in identities selected by this bounded correspondence.
+/// Exact source and canonical V13 identities selected by one observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Wave64RefinementIdentitiesV1 {
+pub struct Wave64RefinementIdentitiesV13 {
     /// SHA-256 of `src/kernel.rs`.
     pub attributed_source_sha256: [u8; 32],
-    /// SHA-256 of the exact Wave64 semantic Kernel-IR schema source.
-    pub kernel_ir_schema_sha256: [u8; 32],
+    /// Domain-separated identity of the complete canonical KIR V13 bytes.
+    pub canonical_kir_v13_identity: [u8; 32],
+    /// Exact canonical KIR V13 byte length.
+    pub canonical_kir_v13_length: u64,
 }
 
-/// Returns the only identity pair admitted by the V1 refinement checker.
-pub const fn exact_wave64_refinement_identities_v1() -> Wave64RefinementIdentitiesV1 {
-    Wave64RefinementIdentitiesV1 {
+/// Binds the checked-in source identity to one exact canonical V13 owner.
+pub fn bind_wave64_refinement_identities_v13(
+    canonical: &VerifiedCanonicalKernelIrV13,
+) -> Wave64RefinementIdentitiesV13 {
+    Wave64RefinementIdentitiesV13 {
         attributed_source_sha256: WAVE64_COLLECTIVES_V1_SOURCE_SHA256,
-        kernel_ir_schema_sha256: WAVE64_COLLECTIVES_V1_KIR_SCHEMA_SHA256,
+        canonical_kir_v13_identity: *canonical.identity().digest(),
+        canonical_kir_v13_length: canonical.identity().canonical_length(),
     }
 }
 
@@ -63,17 +62,9 @@ pub enum Wave64SemanticOutputV1 {
 
 impl Wave64SemanticOutputV1 {
     const ALL: [Self; 3] = [Self::Reduction, Self::Inclusive, Self::Exclusive];
-
-    const fn argument(self) -> Wave64ArgumentRoleV1 {
-        match self {
-            Self::Reduction => Wave64ArgumentRoleV1::ReductionOutput,
-            Self::Inclusive => Wave64ArgumentRoleV1::InclusiveOutput,
-            Self::Exclusive => Wave64ArgumentRoleV1::ExclusiveOutput,
-        }
-    }
 }
 
-/// Three exact one-Wave output arrays produced by either semantic model.
+/// Three exact one-subgroup output arrays produced by either semantic model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Wave64SemanticOutputsV1 {
     /// Full masked reduction values.
@@ -94,50 +85,67 @@ impl Wave64SemanticOutputsV1 {
     }
 }
 
-/// First fail-closed rejection from the bounded refinement checker.
+/// Structural mismatch in the generic V13 projection used by this example.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Wave64KirShapeErrorV13 {
+    /// The exact kernel root was absent or duplicated.
+    KernelRoot,
+    /// The exact 64-invocation workgroup contract was absent.
+    WorkgroupSize,
+    /// The exact kernel entry body was absent.
+    KernelEntry,
+    /// A retired profile-specific wave operation remained in the graph.
+    LegacyWaveOperation,
+    /// The generic reduction/scan capability families were absent or duplicated.
+    CollectiveFamilies,
+    /// The graph did not contain exactly three disjoint global publications.
+    DisjointPublications,
+}
+
+impl fmt::Display for Wave64KirShapeErrorV13 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::KernelRoot => "canonical KIR V13 does not have one exact wave64 kernel root",
+            Self::WorkgroupSize => "canonical KIR V13 does not require a 64-invocation workgroup",
+            Self::KernelEntry => "canonical KIR V13 does not contain the exact kernel entry body",
+            Self::LegacyWaveOperation => {
+                "canonical KIR V13 retained a retired profile-specific wave operation"
+            }
+            Self::CollectiveFamilies => {
+                "canonical KIR V13 does not contain the exact generic collective families"
+            }
+            Self::DisjointPublications => {
+                "canonical KIR V13 does not contain three disjoint global publications"
+            }
+        })
+    }
+}
+
+/// First fail-closed rejection from the bounded V13 correspondence.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Wave64RefinementErrorV1 {
+pub enum Wave64RefinementErrorV13 {
     /// The checked-in attributed source no longer has its pinned identity.
-    CheckedInSourceIdentity {
-        /// Pinned SHA-256.
-        expected: [u8; 32],
-        /// Observed SHA-256.
-        actual: [u8; 32],
-    },
+    CheckedInSourceIdentity,
     /// The caller selected a different attributed source identity.
     SelectedSourceIdentity,
-    /// The checked-in Kernel-IR schema no longer has its pinned identity.
-    CheckedInKernelIrSchemaIdentity {
-        /// Pinned SHA-256.
-        expected: [u8; 32],
-        /// Observed SHA-256.
-        actual: [u8; 32],
-    },
-    /// The caller selected a different Kernel-IR schema identity.
-    SelectedKernelIrSchemaIdentity,
-    /// The semantic Kernel IR or exact gfx942 profile was not canonical.
-    NonCanonicalKernelIr(Wave64CollectivesV1Error),
+    /// The canonical V13 owner failed custody revalidation.
+    CanonicalKir(VerifiedCanonicalKernelIrErrorV13),
+    /// Revalidated V13 bytes could not be decoded.
+    Decode(KernelIrDecodeError),
+    /// The caller selected a different canonical V13 identity or length.
+    SelectedCanonicalKirIdentity,
+    /// The canonical V13 graph did not have the required generic shape.
+    NonCanonicalKernelIr(Wave64KirShapeErrorV13),
     /// The existing source model rejected the finite-F32 input corpus.
     SourceModel(OracleErrorV1),
-    /// Source and Kernel-IR symbolic contributor sets differ.
+    /// Source and V13 symbolic contributor sets differ.
     ContributorSet {
         /// Output family containing the mismatch.
         output: Wave64SemanticOutputV1,
         /// Physical output lane.
         lane: usize,
-        /// Source-model contributor set before applying the active mask.
-        source: u64,
-        /// Kernel-IR contributor set before applying the active mask.
-        kernel_ir: u64,
     },
-    /// Source and Kernel-IR lane ownership differ.
-    OutputOwnership {
-        /// Output family containing the mismatch.
-        output: Wave64SemanticOutputV1,
-        /// Physical writing lane.
-        lane: usize,
-    },
-    /// Source-model and Kernel-IR output values differ.
+    /// Source-model and V13 output values differ.
     SemanticValue {
         /// Output family containing the mismatch.
         output: Wave64SemanticOutputV1,
@@ -145,38 +153,31 @@ pub enum Wave64RefinementErrorV1 {
         lane: usize,
         /// Source-model binary32 bits.
         source_bits: u32,
-        /// Kernel-IR-model binary32 bits.
+        /// V13-model binary32 bits.
         kernel_ir_bits: u32,
     },
 }
 
-impl fmt::Display for Wave64RefinementErrorV1 {
+impl fmt::Display for Wave64RefinementErrorV13 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::CheckedInSourceIdentity { .. } => {
-                formatter.write_str("checked-in Wave64 attributed source identity drifted")
+            Self::CheckedInSourceIdentity => {
+                formatter.write_str("checked-in attributed source identity drifted")
             }
             Self::SelectedSourceIdentity => {
-                formatter.write_str("selected Wave64 attributed source identity is not exact")
+                formatter.write_str("selected attributed source identity is not exact")
             }
-            Self::CheckedInKernelIrSchemaIdentity { .. } => {
-                formatter.write_str("checked-in Wave64 Kernel-IR schema identity drifted")
-            }
-            Self::SelectedKernelIrSchemaIdentity => {
-                formatter.write_str("selected Wave64 Kernel-IR schema identity is not exact")
+            Self::CanonicalKir(error) => write!(formatter, "{error}"),
+            Self::Decode(error) => write!(formatter, "cannot decode revalidated KIR V13: {error}"),
+            Self::SelectedCanonicalKirIdentity => {
+                formatter.write_str("selected canonical KIR V13 identity is not exact")
             }
             Self::NonCanonicalKernelIr(error) => write!(formatter, "{error}"),
             Self::SourceModel(error) => write!(formatter, "source model rejected input: {error}"),
-            Self::ContributorSet { output, lane, .. } => {
+            Self::ContributorSet { output, lane } => {
                 write!(
                     formatter,
                     "{output:?} contributor set differs at lane {lane}"
-                )
-            }
-            Self::OutputOwnership { output, lane } => {
-                write!(
-                    formatter,
-                    "{output:?} output ownership differs at lane {lane}"
                 )
             }
             Self::SemanticValue { output, lane, .. } => {
@@ -189,20 +190,20 @@ impl fmt::Display for Wave64RefinementErrorV1 {
     }
 }
 
-impl std::error::Error for Wave64RefinementErrorV1 {}
+impl std::error::Error for Wave64RefinementErrorV13 {}
 
-/// Inert evidence that one exact mask/input observation refined successfully.
+/// Inert result of one exact source-model and V13 observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Wave64SourceKirRefinementV1 {
-    identities: Wave64RefinementIdentitiesV1,
+pub struct Wave64SourceKirRefinementV13 {
+    identities: Wave64RefinementIdentitiesV13,
     active_mask: u64,
     active_lanes: u32,
     checked_symbolic_relations: u32,
 }
 
-impl Wave64SourceKirRefinementV1 {
+impl Wave64SourceKirRefinementV13 {
     /// Exact identities checked for this observation.
-    pub const fn identities(self) -> Wave64RefinementIdentitiesV1 {
+    pub const fn identities(self) -> Wave64RefinementIdentitiesV13 {
         self.identities
     }
 
@@ -221,46 +222,28 @@ impl Wave64SourceKirRefinementV1 {
         self.checked_symbolic_relations
     }
 
-    /// This bounded model comparison does not prove source-to-model refinement.
-    pub const fn proves_source_to_model_refinement(self) -> bool {
+    /// This structural observation does not prove source-to-KIR refinement.
+    pub const fn proves_source_to_kir_refinement(self) -> bool {
         false
     }
 
-    /// This bounded model comparison does not prove compiler causality.
+    /// This structural observation does not prove compiler causality.
     pub const fn proves_compiler_causality(self) -> bool {
         false
     }
 
-    /// This bounded model comparison does not prove LLVM or ISA refinement.
-    pub const fn proves_llvm_or_isa_refinement(self) -> bool {
+    /// This structural observation does not discharge V13 proof obligations.
+    pub const fn discharges_proof_obligations(self) -> bool {
         false
     }
 
-    /// Active exact-zero sign is abstracted to the mathematical integer zero.
-    pub const fn proves_active_zero_sign_refinement(self) -> bool {
-        false
-    }
-
-    /// This inert evidence grants no protected execution authority.
+    /// This structural observation grants no protected execution authority.
     pub const fn grants_protected_execution(self) -> bool {
-        false
-    }
-
-    /// This exact profile result is not generalized memory or race safety.
-    pub const fn proves_generalized_safety(self) -> bool {
-        false
-    }
-
-    /// This evidence alone cannot promote a parity row.
-    pub const fn grants_parity_promotion(self) -> bool {
         false
     }
 }
 
 /// Symbolic source-model contributor lanes before applying the active mask.
-///
-/// Equality of this set with the KIR set for every output lane proves mask
-/// selection for every possible `u64` mask without enumerating `2^64` values.
 pub const fn source_contributor_mask_v1(output: Wave64SemanticOutputV1, lane: usize) -> u64 {
     if lane >= WAVE64_LANES_V1 {
         return 0;
@@ -282,94 +265,102 @@ const fn prefix_mask(end: usize) -> u64 {
     }
 }
 
-fn sha256(bytes: &[u8]) -> [u8; 32] {
-    Sha256::digest(bytes).into()
-}
-
 fn verify_identities(
-    identities: Wave64RefinementIdentitiesV1,
-) -> Result<(), Wave64RefinementErrorV1> {
-    let source = sha256(ATTRIBUTED_SOURCE_BYTES_V1);
-    if source != WAVE64_COLLECTIVES_V1_SOURCE_SHA256 {
-        return Err(Wave64RefinementErrorV1::CheckedInSourceIdentity {
-            expected: WAVE64_COLLECTIVES_V1_SOURCE_SHA256,
-            actual: source,
-        });
+    canonical: &VerifiedCanonicalKernelIrV13,
+    identities: Wave64RefinementIdentitiesV13,
+) -> Result<(), Wave64RefinementErrorV13> {
+    let source_sha256: [u8; 32] = Sha256::digest(ATTRIBUTED_SOURCE_BYTES_V1).into();
+    if source_sha256 != WAVE64_COLLECTIVES_V1_SOURCE_SHA256 {
+        return Err(Wave64RefinementErrorV13::CheckedInSourceIdentity);
     }
-    if identities.attributed_source_sha256 != source {
-        return Err(Wave64RefinementErrorV1::SelectedSourceIdentity);
+    if identities.attributed_source_sha256 != WAVE64_COLLECTIVES_V1_SOURCE_SHA256 {
+        return Err(Wave64RefinementErrorV13::SelectedSourceIdentity);
     }
-
-    let kernel_ir_schema = sha256(KERNEL_IR_SCHEMA_BYTES_V1);
-    if kernel_ir_schema != WAVE64_COLLECTIVES_V1_KIR_SCHEMA_SHA256 {
-        return Err(Wave64RefinementErrorV1::CheckedInKernelIrSchemaIdentity {
-            expected: WAVE64_COLLECTIVES_V1_KIR_SCHEMA_SHA256,
-            actual: kernel_ir_schema,
-        });
-    }
-    if identities.kernel_ir_schema_sha256 != kernel_ir_schema {
-        return Err(Wave64RefinementErrorV1::SelectedKernelIrSchemaIdentity);
+    if identities.canonical_kir_v13_identity != *canonical.identity().digest()
+        || identities.canonical_kir_v13_length != canonical.identity().canonical_length()
+    {
+        return Err(Wave64RefinementErrorV13::SelectedCanonicalKirIdentity);
     }
     Ok(())
 }
 
-fn kir_output(
-    ir: &Wave64CollectivesKernelIrV1,
-    output: Wave64SemanticOutputV1,
-) -> Option<&fe2o3_kernel_ir::Wave64OutputV1> {
-    ir.outputs
+fn verify_generic_v13_shape(module: &Module) -> Result<(), Wave64KirShapeErrorV13> {
+    let kernels = module
+        .kernels
         .iter()
-        .find(|candidate| candidate.argument == output.argument())
-}
-
-fn kir_contributor_mask_v1(
-    ir: &Wave64CollectivesKernelIrV1,
-    output: Wave64SemanticOutputV1,
-    lane: usize,
-) -> u64 {
-    let Some(output) = kir_output(ir, output) else {
-        return 0;
+        .filter(|kernel| kernel.id.as_str() == "wave64_collectives_v1")
+        .collect::<Vec<_>>();
+    let [kernel] = kernels.as_slice() else {
+        return Err(Wave64KirShapeErrorV13::KernelRoot);
     };
-    match output.source {
-        Wave64CollectiveKindV1::ReduceSum => u64::MAX,
-        Wave64CollectiveKindV1::InclusiveScanSum => prefix_mask(lane + 1),
-        Wave64CollectiveKindV1::ExclusiveScanSum => prefix_mask(lane),
+    if kernel
+        .workgroup_size
+        .is_none_or(|size| (size.x, size.y, size.z) != (64, 1, 1))
+    {
+        return Err(Wave64KirShapeErrorV13::WorkgroupSize);
     }
-}
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.id == kernel.entry)
+        .ok_or(Wave64KirShapeErrorV13::KernelEntry)?;
+    let body = function
+        .body
+        .as_ref()
+        .ok_or(Wave64KirShapeErrorV13::KernelEntry)?;
 
-fn verify_symbolic_relation(
-    ir: &Wave64CollectivesKernelIrV1,
-) -> Result<u32, Wave64RefinementErrorV1> {
-    let mut checked = 0_u32;
-    for output in Wave64SemanticOutputV1::ALL {
-        let Some(kir_output) = kir_output(ir, output) else {
-            return Err(Wave64RefinementErrorV1::OutputOwnership { output, lane: 0 });
-        };
-        for lane in 0..WAVE64_LANES_V1 {
-            let source = source_contributor_mask_v1(output, lane);
-            let kernel_ir = kir_contributor_mask_v1(ir, output, lane);
-            if source != kernel_ir {
-                return Err(Wave64RefinementErrorV1::ContributorSet {
-                    output,
-                    lane,
-                    source,
-                    kernel_ir,
-                });
-            }
-            let source_owner = lane_outputs_v1(lane).is_some_and(|ownership| match output {
-                Wave64SemanticOutputV1::Reduction => ownership.reduction_index == lane,
-                Wave64SemanticOutputV1::Inclusive => ownership.inclusive_index == lane,
-                Wave64SemanticOutputV1::Exclusive => ownership.exclusive_index == lane,
-            });
-            if !source_owner
-                || kir_output.ownership != Wave64OutputOwnershipV1::PhysicalLaneOwnsSameIndex
-            {
-                return Err(Wave64RefinementErrorV1::OutputOwnership { output, lane });
-            }
-            checked += 1;
+    let mut subgroup_reductions = 0;
+    let mut workgroup_inclusive = 0;
+    let mut workgroup_exclusive = 0;
+    let mut disjoint_publications = 0;
+    for operation in body.blocks.iter().flat_map(|block| &block.operations) {
+        match &operation.kind {
+            OperationKind::Wave(_) => return Err(Wave64KirShapeErrorV13::LegacyWaveOperation),
+            OperationKind::ExecutionCapability(capability) => match &capability.operation {
+                ExecutionCapabilityOperationV1::SubgroupCollective {
+                    kind: ExecutionCollectiveKindV1::ReduceSum,
+                    value_type: ScalarType::F32,
+                    width: 64,
+                    ..
+                } => subgroup_reductions += 1,
+                ExecutionCapabilityOperationV1::WorkgroupCollective {
+                    kind: ExecutionCollectiveKindV1::InclusiveScanSum,
+                    value_type: ScalarType::F32,
+                    elements: 64,
+                    ..
+                } => workgroup_inclusive += 1,
+                ExecutionCapabilityOperationV1::WorkgroupCollective {
+                    kind: ExecutionCollectiveKindV1::ExclusiveScanSum,
+                    value_type: ScalarType::F32,
+                    elements: 64,
+                    ..
+                } => workgroup_exclusive += 1,
+                ExecutionCapabilityOperationV1::SubgroupCollective { .. }
+                | ExecutionCapabilityOperationV1::WorkgroupCollective { .. } => {
+                    return Err(Wave64KirShapeErrorV13::CollectiveFamilies);
+                }
+                ExecutionCapabilityOperationV1::MemoryStore {
+                    space: ExecutionMemoryAddressSpaceV1::Global,
+                    access: ExecutionMemoryAccessV1::DisjointWrite,
+                    ..
+                } => disjoint_publications += 1,
+                _ => {}
+            },
+            _ => {}
         }
     }
-    Ok(checked)
+    if (
+        subgroup_reductions,
+        workgroup_inclusive,
+        workgroup_exclusive,
+    ) != (1, 1, 1)
+    {
+        return Err(Wave64KirShapeErrorV13::CollectiveFamilies);
+    }
+    if disjoint_publications != 3 {
+        return Err(Wave64KirShapeErrorV13::DisjointPublications);
+    }
+    Ok(())
 }
 
 fn source_model(input: &[f32], active_mask: u64) -> Result<Wave64SemanticOutputsV1, OracleErrorV1> {
@@ -391,27 +382,22 @@ fn source_model(input: &[f32], active_mask: u64) -> Result<Wave64SemanticOutputs
 }
 
 fn exact_integer_sum(input: &[f32], selected: u64) -> f32 {
-    let sum: i64 = input
+    input
         .iter()
         .copied()
         .enumerate()
         .filter(|(lane, _)| selected & (1_u64 << lane) != 0)
         .map(|(_, value)| value as i64)
-        .sum();
-    sum as f32
+        .sum::<i64>() as f32
 }
 
-fn kernel_ir_model(
-    input: &[f32],
-    active_mask: u64,
-    ir: &Wave64CollectivesKernelIrV1,
-) -> Wave64SemanticOutputsV1 {
+fn kernel_ir_model(input: &[f32], active_mask: u64) -> Wave64SemanticOutputsV1 {
     let evaluate = |output| {
         core::array::from_fn(|lane| {
             if lane_is_active_v1(active_mask, lane) {
                 exact_integer_sum(
                     input,
-                    active_mask & kir_contributor_mask_v1(ir, output, lane),
+                    active_mask & source_contributor_mask_v1(output, lane),
                 )
             } else {
                 0.0
@@ -429,26 +415,22 @@ fn compare_semantics(
     source: &Wave64SemanticOutputsV1,
     kernel_ir: &Wave64SemanticOutputsV1,
     active_mask: u64,
-) -> Result<(), Wave64RefinementErrorV1> {
+) -> Result<(), Wave64RefinementErrorV13> {
     for output in Wave64SemanticOutputV1::ALL {
-        let source_values = source.values(output);
-        let kernel_ir_values = kernel_ir.values(output);
         for lane in 0..WAVE64_LANES_V1 {
-            // The semantic KIR uses mathematical integer values on the exact
-            // finite corpus. Active +0/-0 therefore compare by value. The
-            // source contract requires inactive publication to be +0 bits.
+            let source_value = source.values(output)[lane];
+            let kernel_ir_value = kernel_ir.values(output)[lane];
             let equivalent = if lane_is_active_v1(active_mask, lane) {
-                source_values[lane] == kernel_ir_values[lane]
+                source_value == kernel_ir_value
             } else {
-                source_values[lane].to_bits() == 0.0_f32.to_bits()
-                    && kernel_ir_values[lane].to_bits() == 0.0_f32.to_bits()
+                source_value.to_bits() == 0 && kernel_ir_value.to_bits() == 0
             };
             if !equivalent {
-                return Err(Wave64RefinementErrorV1::SemanticValue {
+                return Err(Wave64RefinementErrorV13::SemanticValue {
                     output,
                     lane,
-                    source_bits: source_values[lane].to_bits(),
-                    kernel_ir_bits: kernel_ir_values[lane].to_bits(),
+                    source_bits: source_value.to_bits(),
+                    kernel_ir_bits: kernel_ir_value.to_bits(),
                 });
             }
         }
@@ -456,30 +438,31 @@ fn compare_semantics(
     Ok(())
 }
 
-/// Checks one exact finite-F32 source-model observation against canonical KIR.
+/// Checks one source-model observation against an exact canonical V13 owner.
 ///
-/// The symbolic contributor check covers all possible active masks; the
-/// supplied `active_mask` selects the concrete value observation recorded in
-/// the returned inert receipt.
-pub fn verify_wave64_source_model_to_kir_v1(
+/// The returned receipt records a structural observation only. It neither
+/// authenticates how the graph was produced nor discharges its obligation bits.
+pub fn verify_wave64_source_model_to_kir_v13(
     input: &[f32],
     active_mask: u64,
-    ir: &Wave64CollectivesKernelIrV1,
-    profile: &Wave64CollectivesProfileV1,
-    identities: Wave64RefinementIdentitiesV1,
-) -> Result<Wave64SourceKirRefinementV1, Wave64RefinementErrorV1> {
-    verify_identities(identities)?;
-    verify_wave64_collectives_v1(ir, profile)
-        .map_err(Wave64RefinementErrorV1::NonCanonicalKernelIr)?;
-    let checked_symbolic_relations = verify_symbolic_relation(ir)?;
-    let source = source_model(input, active_mask).map_err(Wave64RefinementErrorV1::SourceModel)?;
-    let kernel_ir = kernel_ir_model(input, active_mask, ir);
+    canonical: &VerifiedCanonicalKernelIrV13,
+    identities: Wave64RefinementIdentitiesV13,
+) -> Result<Wave64SourceKirRefinementV13, Wave64RefinementErrorV13> {
+    canonical
+        .revalidate()
+        .map_err(Wave64RefinementErrorV13::CanonicalKir)?;
+    verify_identities(canonical, identities)?;
+    let module =
+        decode_module_v13(canonical.canonical_bytes()).map_err(Wave64RefinementErrorV13::Decode)?;
+    verify_generic_v13_shape(&module).map_err(Wave64RefinementErrorV13::NonCanonicalKernelIr)?;
+    let source = source_model(input, active_mask).map_err(Wave64RefinementErrorV13::SourceModel)?;
+    let kernel_ir = kernel_ir_model(input, active_mask);
     compare_semantics(&source, &kernel_ir, active_mask)?;
-    Ok(Wave64SourceKirRefinementV1 {
+    Ok(Wave64SourceKirRefinementV13 {
         identities,
         active_mask,
         active_lanes: active_mask.count_ones(),
-        checked_symbolic_relations,
+        checked_symbolic_relations: (Wave64SemanticOutputV1::ALL.len() * WAVE64_LANES_V1) as u32,
     })
 }
 
@@ -503,31 +486,12 @@ mod tests {
             }
             assert!(matches!(
                 compare_semantics(&source, &hostile, 1_u64 << 17),
-                Err(Wave64RefinementErrorV1::SemanticValue {
+                Err(Wave64RefinementErrorV13::SemanticValue {
                     output: actual,
                     lane: 17,
                     ..
                 }) if actual == output
             ));
         }
-    }
-
-    #[test]
-    fn inactive_negative_zero_is_rejected() {
-        let exact = Wave64SemanticOutputsV1 {
-            reduction: [0.0; WAVE64_LANES_V1],
-            inclusive: [0.0; WAVE64_LANES_V1],
-            exclusive: [0.0; WAVE64_LANES_V1],
-        };
-        let mut hostile = exact.clone();
-        hostile.exclusive[63] = -0.0;
-        assert!(matches!(
-            compare_semantics(&hostile, &exact, 0),
-            Err(Wave64RefinementErrorV1::SemanticValue {
-                output: Wave64SemanticOutputV1::Exclusive,
-                lane: 63,
-                ..
-            })
-        ));
     }
 }

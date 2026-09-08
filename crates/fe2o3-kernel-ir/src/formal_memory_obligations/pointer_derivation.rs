@@ -234,7 +234,7 @@ fn derive_pointer_allocation_cached(
             if let Some(allocation) = allocation_by_value.get(&current).copied()
                 && matches!(
                     value_types.get(&current),
-                    Some(Type::Pointer(_) | Type::Slice(_))
+                    Some(Type::Pointer(_) | Type::Slice(_) | Type::GlobalCapability(_))
                 )
             {
                 allocations.insert(allocation);
@@ -267,6 +267,13 @@ fn derive_pointer_allocation_cached(
                         .or_default()
                         .push(current);
                     pending.push(*slice);
+                }
+                OperationKind::GlobalCapabilityBind(bind) => {
+                    reverse_dependencies
+                        .entry(bind.physical)
+                        .or_default()
+                        .push(current);
+                    pending.push(bind.physical);
                 }
                 OperationKind::GetElementPointer { base, .. } => {
                     reverse_dependencies.entry(*base).or_default().push(current);
@@ -458,6 +465,13 @@ fn derive_pointer_expression_cached(
                             byte_offset: AffineExpression::ZERO,
                         });
                         cache.expressions.insert(value, expression);
+                    }
+                    OperationKind::GlobalCapabilityBind(bind) => {
+                        work.push(PointerWork::Alias {
+                            value,
+                            source: bind.physical,
+                        });
+                        work.push(PointerWork::Enter(bind.physical));
                     }
                     OperationKind::GetElementPointer { base, offset } => {
                         work.push(PointerWork::Gep {

@@ -57,6 +57,7 @@
 
 mod attempt;
 mod attempt_scoped_hsaco_publication;
+mod authenticated_compiler_completion_v5;
 mod compiler_artifact_generation_v1;
 mod compiler_execution_subject;
 mod compiler_module_handoff;
@@ -104,6 +105,12 @@ pub use attempt_scoped_hsaco_publication::{
     publish_exact_hsaco_evidence_for_attempt_v3_with_options, read_backend_publication_receipt_v3,
     recover_published_hsaco_claim_for_attempt_v3, validate_backend_publication_receipt_v3,
 };
+pub use authenticated_compiler_completion_v5::{
+    AuthenticatedCompilerCapabilityCompletionErrorV5, AuthenticatedCompilerCapabilityCompletionV5,
+    AuthenticatedCompilerCapabilityEvidenceIdentityV5, InertCompilerCapabilityVerifierResponseV5,
+    MAX_COMPILER_CAPABILITY_VERIFIER_RESPONSE_BYTES_V5,
+    authenticated_compiler_capability_evidence_identity_v5,
+};
 pub use compiler_artifact_generation_v1::{
     CompilerArtifactGenerationErrorV1, CompilerArtifactGenerationFaultPointV1,
     CompilerArtifactGenerationFaultTimingV1, CompilerArtifactGenerationLeaseV1,
@@ -129,30 +136,46 @@ pub use compiler_execution_subject::{
     InertCompilerExecutionSubjectV1,
 };
 pub use compiler_module_handoff::{
-    CompilerExecutionReceiptTransportErrorV1, CompilerExecutionReceiptTransportIdentityV1,
-    CompilerExecutionReceiptTransportReceiptV1, CompilerModuleHandoffConsumptionTokenV3,
-    CompilerModuleHandoffCurrentnessLeaseV3, CompilerModuleHandoffErrorV1,
-    CompilerModuleHandoffErrorV2, CompilerModuleHandoffErrorV3, CompilerModuleHandoffIdentityV1,
-    CompilerModuleHandoffIdentityV2, CompilerModuleHandoffPublicationV3,
-    CompilerModuleHandoffReceiptV1, CompilerModuleHandoffReceiptV2, CompilerModuleHandoffReceiptV3,
-    CompilerModuleHandoffSlotV1, CompilerModuleHandoffSlotV2, CompilerModuleHandoffSlotV3,
-    CompilerModuleHandoffTransactionIdentityV3, ConsumedCompilerModuleHandoffV1,
+    CompilerCapabilityCompletionErrorV5, CompilerCapabilityHandoffErrorV5,
+    CompilerCapabilityHandoffReceiptV5, CompilerCapabilityHandoffSlotV5,
+    CompilerCapabilityHandoffTransactionIdentityV5, CompilerExecutionReceiptTransportErrorV1,
+    CompilerExecutionReceiptTransportIdentityV1, CompilerExecutionReceiptTransportReceiptV1,
+    CompilerModuleHandoffConsumptionTokenV3, CompilerModuleHandoffCurrentnessLeaseV3,
+    CompilerModuleHandoffErrorV1, CompilerModuleHandoffErrorV2, CompilerModuleHandoffErrorV3,
+    CompilerModuleHandoffIdentityV1, CompilerModuleHandoffIdentityV2,
+    CompilerModuleHandoffPublicationV3, CompilerModuleHandoffReceiptV1,
+    CompilerModuleHandoffReceiptV2, CompilerModuleHandoffReceiptV3, CompilerModuleHandoffSlotV1,
+    CompilerModuleHandoffSlotV2, CompilerModuleHandoffSlotV3,
+    CompilerModuleHandoffTransactionIdentityV3, CompletedCompilerCapabilityTransactionV5,
+    ConsumedCompilerCapabilityHandoffV5, ConsumedCompilerModuleHandoffV1,
     ConsumedCompilerModuleHandoffV2, ConsumedCompilerModuleHandoffV3,
-    ConsumedSimulationKernelIrHandoffV1, MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V1,
-    MAX_COMPILER_MODULE_HANDOFF_BYTES, MAX_COMPILER_MODULE_HANDOFF_BYTES_V3,
-    RecoveredCompilerExecutionReceiptTransportV1, SimulationKernelIrHandoffIdentityV1,
-    SimulationKernelIrHandoffReceiptV1, SimulationKernelIrHandoffSlotV1,
+    ConsumedSimulationKernelIrHandoffV1, MAX_COMPILER_CAPABILITY_TRANSACTION_BYTES_V5,
+    MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V1, MAX_COMPILER_MODULE_HANDOFF_BYTES,
+    MAX_COMPILER_MODULE_HANDOFF_BYTES_V3, PreparedCompilerCapabilityCompletionV5,
+    RecoverableCompilerCapabilityCompletionErrorV5, RecoveredCompilerCapabilityHandoffV5,
+    RecoveredCompilerExecutionReceiptTransportV1,
+    RejectedAuthenticatedCompilerCapabilityCompletionCustodyV5, RejectedW4WitnessBindingCustodyV5,
+    SimulationKernelIrHandoffIdentityV1, SimulationKernelIrHandoffReceiptV1,
+    SimulationKernelIrHandoffSlotV1, W4BoundCompilerCapabilityCompletionV5,
     acquire_compiler_module_handoff_currentness_lease_v3, complete_simulation_kernel_ir_attempt_v1,
+    consume_compiler_capability_handoff_v5, consume_compiler_capability_transaction_v5,
     consume_compiler_module_handoff_in_slot_v1, consume_compiler_module_handoff_in_slot_v2,
     consume_compiler_module_handoff_in_slot_v3, consume_compiler_module_handoff_v1,
     consume_compiler_module_handoff_v2, consume_compiler_module_handoff_v3,
     consume_compiler_module_handoff_with_currentness_v3, consume_simulation_kernel_ir_handoff_v1,
+    publish_compiler_capability_handoff_v5, publish_compiler_capability_transaction_v5,
+    publish_compiler_execution_receipt_transport_for_capability_v5,
     publish_compiler_execution_receipt_transport_v1, publish_compiler_module_handoff_in_slot_v1,
     publish_compiler_module_handoff_in_slot_v2, publish_compiler_module_handoff_in_slot_v3,
     publish_compiler_module_handoff_in_slot_with_currentness_v3,
     publish_compiler_module_handoff_v1, publish_compiler_module_handoff_v2,
     publish_compiler_module_handoff_v3, publish_compiler_module_handoff_with_currentness_v3,
-    publish_simulation_kernel_ir_handoff_v1, recover_compiler_execution_receipt_transport_v1,
+    publish_simulation_kernel_ir_handoff_v1, purge_failed_compiler_capability_transaction_v5,
+    purge_failed_compiler_handoff_attempt_v5, recover_compiler_capability_handoff_receipt_v5,
+    recover_compiler_capability_handoff_v5, recover_compiler_capability_transaction_receipt_v5,
+    recover_compiler_capability_transaction_v5,
+    recover_compiler_execution_receipt_transport_for_capability_v5,
+    recover_compiler_execution_receipt_transport_v1,
     recover_compiler_execution_receipt_transport_with_currentness_v1,
     recover_compiler_module_handoff_receipt_in_slot_v3, recover_compiler_module_handoff_receipt_v3,
 };

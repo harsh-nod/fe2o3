@@ -6,13 +6,12 @@ use fe2o3_functional_proof::{MirPlironSemanticContractV1, ParallelReferenceContr
 use fe2o3_pliron::{
     ProductionMiddleEndEvidenceV5, ProductionMirPlironSemanticContractReportV1,
     ProductionParallelReferenceContractReportV1, ProductionRankedKernelLoweringInputV1,
-    ProductionRefinementStagingPolicyV2,
 };
 use fe2o3_verifier::{
-    FunctionalRefinementVerusRuntimeLeaseV1, ProductionMirPlironPerCompilationVerusErrorV1,
-    ProductionMirPlironPerCompilationVerusExecutionV1,
-    ProductionMirPlironPerCompilationVerusReportV1,
-    execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1,
+    FunctionalRefinementVerusRuntimeLeaseV1,
+    ProductionEffectIrDerivedVerusVerifiedMirPlironKernelV3,
+    ProductionMirPlironPerCompilationVerusErrorV1, ProductionMirPlironPerCompilationVerusReportV1,
+    execute_effect_ir_derived_mir_pliron_semantic_contract_per_compilation_v3,
 };
 
 const RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1: &str =
@@ -21,31 +20,36 @@ const PER_COMPILATION_PROOF_TIMEOUT_SECONDS_V1: u32 = 120;
 
 /// Compiler-owned aggregate proof and its ephemeral import policy.
 #[must_use = "dropping this value abandons authenticated conditional-composition evidence"]
-pub(crate) struct AuthenticatedMirPlironPerCompilationVerificationV1 {
-    execution: ProductionMirPlironPerCompilationVerusExecutionV1,
-    _staging_policy: ProductionRefinementStagingPolicyV2,
+pub(crate) struct AuthenticatedMirPlironPerCompilationVerificationV2 {
+    verified: ProductionEffectIrDerivedVerusVerifiedMirPlironKernelV3,
 }
 
-impl AuthenticatedMirPlironPerCompilationVerificationV1 {
+impl AuthenticatedMirPlironPerCompilationVerificationV2 {
     pub(crate) const fn report(&self) -> ProductionMirPlironPerCompilationVerusReportV1 {
-        self.execution.report()
+        self.verified.per_compilation_verus_report()
     }
 
-    pub(crate) const fn execution(&self) -> &ProductionMirPlironPerCompilationVerusExecutionV1 {
-        &self.execution
+    pub(crate) const fn verified(
+        &self,
+    ) -> &ProductionEffectIrDerivedVerusVerifiedMirPlironKernelV3 {
+        &self.verified
+    }
+
+    pub(crate) fn into_verified(self) -> ProductionEffectIrDerivedVerusVerifiedMirPlironKernelV3 {
+        self.verified
     }
 }
 
 /// Production integration point after mandatory middle-end evidence and exact
 /// semantic-contract reconciliation, and before target-neutral lowering.
-pub(crate) fn authenticate_mir_pliron_contract_per_compilation_v1(
+pub(crate) fn authenticate_mir_pliron_contract_per_compilation_v2(
     ranked: &ProductionRankedKernelLoweringInputV1,
     evidence: &ProductionMiddleEndEvidenceV5,
     contract: &MirPlironSemanticContractV1,
     structural_report: ProductionMirPlironSemanticContractReportV1,
     parallel_contract: &ParallelReferenceContractV1,
     parallel_report: ProductionParallelReferenceContractReportV1,
-) -> Result<AuthenticatedMirPlironPerCompilationVerificationV1, ProductionMirPlironVerusJoinErrorV1>
+) -> Result<AuthenticatedMirPlironPerCompilationVerificationV2, ProductionMirPlironVerusJoinErrorV1>
 {
     let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(
         RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
@@ -56,7 +60,7 @@ pub(crate) fn authenticate_mir_pliron_contract_per_compilation_v1(
             detail: error.to_string(),
         },
     )?;
-    let (execution, policy) = execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1(
+    let verified = execute_effect_ir_derived_mir_pliron_semantic_contract_per_compilation_v3(
         &runtime,
         ranked,
         evidence,
@@ -67,10 +71,7 @@ pub(crate) fn authenticate_mir_pliron_contract_per_compilation_v1(
         PER_COMPILATION_PROOF_TIMEOUT_SECONDS_V1,
     )
     .map_err(ProductionMirPlironVerusJoinErrorV1::Verification)?;
-    Ok(AuthenticatedMirPlironPerCompilationVerificationV1 {
-        execution,
-        _staging_policy: policy,
-    })
+    Ok(AuthenticatedMirPlironPerCompilationVerificationV2 { verified })
 }
 
 #[derive(Debug)]

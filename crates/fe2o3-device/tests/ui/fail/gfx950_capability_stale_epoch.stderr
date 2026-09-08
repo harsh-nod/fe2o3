@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/fail/gfx950_capability_stale_epoch.rs:19:26
+   |
+19 |     let _ = tile.publish(next);
+   |                  ------- ^^^^ expected `WorkgroupCapability<'_, ...>`, found `WorkgroupCapability<'_, ..., ...>`
+   |                  |
+   |                  arguments to this method are incorrect
+   |
+   = note: expected struct `WorkgroupCapability<'_, fe2o3_device::KernelCapabilityBrand<'a, KernelA, CurrentTarget, RegisteredLaunch>, InitialEpoch>`
+              found struct `WorkgroupCapability<'a, fe2o3_device::KernelCapabilityBrand<'a, KernelA, CurrentTarget, RegisteredLaunch>, NextEpoch<InitialEpoch>>`
+note: method defined here
+  --> src/gfx950.rs
+   |
+   |     pub fn publish(
+   |            ^^^^^^^

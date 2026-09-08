@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+if ! source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)/scripts/tutorial-hardware-runner.sh"; then
+    exit 1
+fi
 set -euo pipefail
 
 # Builds one ordinary Rust GEMM kernel through the production extractor, proves
@@ -186,8 +189,8 @@ for required in \
 done
 for required in \
     "^[[:space:]]*amdhsa.target:[[:space:]]+'amdgcn-amd-amdhsa--gfx950:xnack-'[[:space:]]*$" \
-    "^[[:space:]]*\\.name:[[:space:]]+$SYMBOL[[:space:]]*$" \
-    "^[[:space:]]*\\.symbol:[[:space:]]+$SYMBOL[.]kd[[:space:]]*$"; do
+    "^[[:space:]]*\\.name:[[:space:]]+${SYMBOL}[[:space:]]*$" \
+    "^[[:space:]]*\\.symbol:[[:space:]]+${SYMBOL}[.]kd[[:space:]]*$"; do
     if ! grep -Eq -- "$required" "$NOTES"; then
         printf 'HSACO metadata validation failed: missing exact pattern %s\n' "$required" >&2
         exit 1
@@ -234,6 +237,7 @@ if [[ $COMPILE_ONLY == 1 ]]; then
     exit 0
 fi
 HSACO_SHA256=$("$SHA256SUM" -- "$HSACO" | awk '{ print $1 }')
+fe2o3_tutorial_hardware_begin
 (
     cd -- "$REPO_ROOT"
     env \
@@ -247,6 +251,7 @@ HSACO_SHA256=$("$SHA256SUM" -- "$HSACO" | awk '{ print $1 }')
             "$HARDWARE_TEST" \
             -- --ignored --exact --nocapture
 )
+fe2o3_tutorial_hardware_finish gfx950 "$HSACO" "$LLVM_IR"
 
 printf 'PASS fe2o3 gfx950 %s production build and numerical run\n' "$LABEL"
 printf 'LLVM:  %s\n' "$LLVM_IR"

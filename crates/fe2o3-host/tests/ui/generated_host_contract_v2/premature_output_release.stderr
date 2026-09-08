@@ -1,0 +1,21 @@
+error[E0503]: cannot use `*output` because it was mutably borrowed
+   --> tests/ui/generated_host_contract_v2/premature_output_release.rs:124:5
+    |
+109 |         output: GeneratedKfdWriteSlice::new(output),
+    |                                             ------ `*output` is borrowed here
+...
+124 |     output[0] = 1.0;
+    |     ^^^^^^^^^ use of borrowed `*output`
+125 |     drop(pending);
+    |          ------- borrow later used here
+
+error[E0506]: cannot assign to `output[_]` because it is borrowed
+   --> tests/ui/generated_host_contract_v2/premature_output_release.rs:124:5
+    |
+109 |         output: GeneratedKfdWriteSlice::new(output),
+    |                                             ------ `output[_]` is borrowed here
+...
+124 |     output[0] = 1.0;
+    |     ^^^^^^^^^^^^^^^ `output[_]` is assigned to here but it was already borrowed
+125 |     drop(pending);
+    |          ------- borrow later used here

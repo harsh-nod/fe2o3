@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/fail/capability_memory_rejects_wrong_mapping.rs:12:26
+   |
+12 |     let _ = output.store(index, 7);
+   |                    ----- ^^^^^ expected `DisjointIndex<ExpectedMapping, ...>`, found `DisjointIndex<OtherMapping>`
+   |                    |
+   |                    arguments to this method are incorrect
+   |
+   = note: expected struct `DisjointIndex<ExpectedMapping, KernelBrand>`
+              found struct `DisjointIndex<OtherMapping, fe2o3_device::UnbrandedCapability>`
+note: method defined here
+  --> src/capability_memory.rs
+   |
+   |     pub fn store(&mut self, index: DisjointIndex<IndexSpace, Brand>, value: T) -> bool {
+   |            ^^^^^

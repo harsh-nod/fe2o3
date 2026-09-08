@@ -2,9 +2,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::{
-    AccessMode, AddressSpace, Axis, BarrierSemantics, Gfx950LdsTransposeOperationV1, LaunchDomain,
-    MatrixOperation, MemoryIntrinsicOperation, MemoryOrdering, ScalarType, SemanticOperation,
-    SynchronizationScope, TargetCapability, Type, WaveF32ReductionKindV1, WaveWidth, WorkgroupSize,
+    AccessMode, AddressSpace, Axis, BarrierSemantics, ExecutionCapabilityOpV1,
+    Gfx950LdsTransposeOperationV1, GlobalCapabilityTypeV1, GlobalDisjointIndexContractV1,
+    KernelContextTypeV1, LaunchDomain, MatrixOperation, MemoryIntrinsicOperation, MemoryOrdering,
+    ScalarType, SemanticOperation, SynchronizationScope, TargetCapability, Type,
+    WaveF32ReductionKindV1, WaveWidth, WorkgroupSize,
 };
 
 macro_rules! string_id {
@@ -388,6 +390,48 @@ impl Operation {
         )
     }
 
+    /// Constructs one authenticated logical kernel-context issuance.
+    pub fn kernel_context_issue(
+        result: ValueId,
+        context: KernelContextTypeV1,
+        source: KernelContextSourceIdentityV1,
+    ) -> Self {
+        Self::effect_free(
+            ValueDef::new(result, Type::KernelContext(context)),
+            OperationKind::KernelContextIssue(KernelContextIssueV1::new(source)),
+        )
+    }
+
+    /// Binds one physical global slice to an authenticated logical capability.
+    pub fn global_capability_bind(
+        result: ValueId,
+        capability: GlobalCapabilityTypeV1,
+        context: ValueId,
+        physical: ValueId,
+    ) -> Self {
+        Self::effect_free(
+            ValueDef::new(result, Type::GlobalCapability(capability)),
+            OperationKind::GlobalCapabilityBind(GlobalCapabilityBindV1 { context, physical }),
+        )
+    }
+
+    /// Projects a capability-authenticated raw index for a guarded access.
+    pub fn global_capability_index(
+        result: ValueId,
+        capability: ValueId,
+        index: ValueId,
+        index_space: Option<GlobalDisjointIndexContractV1>,
+    ) -> Self {
+        Self::effect_free(
+            ValueDef::new(result, Type::INDEX),
+            OperationKind::GlobalCapabilityIndex(GlobalCapabilityIndexV1 {
+                capability,
+                index,
+                index_space,
+            }),
+        )
+    }
+
     /// Returns every SSA operand in stable semantic order.
     pub fn operands(&self) -> Vec<ValueId> {
         self.kind.operands()
@@ -445,6 +489,7 @@ impl Operation {
             OperationKind::Matrix(matrix) => matrix.memory_effects(),
             OperationKind::Gfx950LdsTranspose(transpose) => transpose.memory_effects(),
             OperationKind::InlineAssembly(assembly) => assembly.memory_effects(),
+            OperationKind::ExecutionCapability(operation) => operation.operation.memory_effects(),
             OperationKind::Wave(_) => Vec::new(),
             _ => Vec::new(),
         }
@@ -530,6 +575,10 @@ impl Operation {
             OperationKind::Gfx950LdsTranspose(transpose) => transpose.required_capabilities(),
             OperationKind::Wave(wave) => wave.required_capabilities(),
             OperationKind::InlineAssembly(assembly) => assembly.required_capabilities(),
+            OperationKind::KernelContextIssue(_) => BTreeSet::new(),
+            OperationKind::ExecutionCapability(operation) => {
+                operation.operation.required_capabilities()
+            }
             OperationKind::Call { callee, arguments } => {
                 if let Some(diagnostic) =
                     AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
@@ -647,6 +696,14 @@ pub enum OperationKind {
     Wave(WaveOperation),
     /// Source-bound target assembly whose authority was established by the frontend.
     InlineAssembly(InlineAssembly),
+    /// Authenticated creation of the logical context for one physical kernel root.
+    KernelContextIssue(KernelContextIssueV1),
+    /// Logical binding of physical global slice storage to one branded capability.
+    GlobalCapabilityBind(GlobalCapabilityBindV1),
+    /// Index projection retaining the capability's exact role and index space.
+    GlobalCapabilityIndex(GlobalCapabilityIndexV1),
+    /// One exact target-neutral execution capability operation.
+    ExecutionCapability(ExecutionCapabilityOpV1),
 }
 
 impl OperationKind {
@@ -667,6 +724,7 @@ impl OperationKind {
             | Self::Fence(_)
             | Self::WorkgroupBarrier(_)
             | Self::WorkgroupMemory(_)
+            | Self::KernelContextIssue(_)
             | Self::Wave(WaveOperation {
                 kind: WaveOperationKind::LaneId,
                 ..
@@ -700,11 +758,104 @@ impl OperationKind {
                 ..
             } => vec![*pointer, *predicate, *value],
             Self::Store { pointer, value, .. } => vec![*pointer, *value],
+            Self::GlobalCapabilityBind(bind) => vec![bind.context, bind.physical],
+            Self::GlobalCapabilityIndex(index) => vec![index.capability, index.index],
+            Self::ExecutionCapability(operation) => operation.operands.clone(),
             Self::Atomic(atomic) => atomic.operands(),
             Self::Wave(wave) => wave.operands(),
             Self::InlineAssembly(assembly) => assembly.operands(),
         }
     }
+}
+
+/// Exact source identities that bind one compiler-issued kernel context.
+///
+/// These are inert provenance coordinates. Their authority comes from the
+/// authenticated frontend/importer correspondence, not from nonzero bytes.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct KernelContextSourceIdentityV1 {
+    frontend_unit: [u8; 32],
+    function: [u8; 32],
+    contract: [u8; 32],
+    issuance: [u8; 32],
+}
+
+impl KernelContextSourceIdentityV1 {
+    pub const fn new(
+        frontend_unit: [u8; 32],
+        function: [u8; 32],
+        contract: [u8; 32],
+        issuance: [u8; 32],
+    ) -> Self {
+        Self {
+            frontend_unit,
+            function,
+            contract,
+            issuance,
+        }
+    }
+
+    pub const fn frontend_unit(self) -> [u8; 32] {
+        self.frontend_unit
+    }
+
+    pub const fn function(self) -> [u8; 32] {
+        self.function
+    }
+
+    pub const fn contract(self) -> [u8; 32] {
+        self.contract
+    }
+
+    pub const fn issuance(self) -> [u8; 32] {
+        self.issuance
+    }
+
+    pub fn is_complete(self) -> bool {
+        [
+            self.frontend_unit,
+            self.function,
+            self.contract,
+            self.issuance,
+        ]
+        .into_iter()
+        .all(|identity| identity != [0; 32])
+    }
+}
+
+/// One provenance-bearing issuance of a logical context in a kernel root.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct KernelContextIssueV1 {
+    source: KernelContextSourceIdentityV1,
+}
+
+impl KernelContextIssueV1 {
+    pub const fn new(source: KernelContextSourceIdentityV1) -> Self {
+        Self { source }
+    }
+
+    pub const fn source(self) -> KernelContextSourceIdentityV1 {
+        self.source
+    }
+}
+
+/// One V12-only logical binding from physical slice storage to branded authority.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct GlobalCapabilityBindV1 {
+    pub context: ValueId,
+    pub physical: ValueId,
+}
+
+/// One V12-only projection of a raw index through global-memory authority.
+///
+/// Read-only accesses carry `None`. Disjoint writes carry the exact mapping
+/// from their capability type so it cannot decay into an unauthenticated
+/// integer during optimization.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct GlobalCapabilityIndexV1 {
+    pub capability: ValueId,
+    pub index: ValueId,
+    pub index_space: Option<GlobalDisjointIndexContractV1>,
 }
 
 /// Target capability required by the first authenticated gfx942 assembly profile.

@@ -103,6 +103,7 @@ pub(crate) enum CompilerModuleConstructionError {
     DescriptorSourceAlreadyBound,
     DescriptorKernelEntryClosureMismatch,
     DescriptorSymbolClosureMismatch,
+    LogicalExecutionCapabilityInPhysicalAbi,
     #[cfg(test)]
     UnsupportedFloatTarget(String),
     #[cfg(test)]
@@ -126,6 +127,8 @@ impl fmt::Display for CompilerModuleConstructionError {
             Self::DescriptorSymbolClosureMismatch => {
                 formatter.write_str("compiler descriptor symbols do not match the module closure")
             }
+            Self::LogicalExecutionCapabilityInPhysicalAbi => formatter
+                .write_str("logical execution capability reached the physical compiler-module ABI"),
             #[cfg(test)]
             Self::UnsupportedFloatTarget(target) => write!(
                 formatter,
@@ -475,6 +478,15 @@ fn enforce_compiler_module_bounds(module: &Module) -> Result<(), CompilerModuleC
             function.signature.parameters.len(),
             MAX_COMPILER_MODULE_PARAMETERS,
         )?;
+        if function
+            .signature
+            .parameters
+            .iter()
+            .chain(&function.signature.results)
+            .any(|ty| matches!(ty, Type::ExecutionCapability(_)))
+        {
+            return Err(CompilerModuleConstructionError::LogicalExecutionCapabilityInPhysicalAbi);
+        }
         check_compiler_module_limit(
             "compiler-module function results",
             function.signature.results.len(),
@@ -643,7 +655,10 @@ fn check_type_depth(ty: &Type, depth: usize) -> Result<(), CompilerModuleConstru
     match ty {
         Type::Pointer(pointer) => check_type_depth(&pointer.pointee, depth + 1),
         Type::Slice(slice) => check_type_depth(&slice.element, depth + 1),
-        Type::Unit | Type::Scalar(_) => Ok(()),
+        Type::GlobalCapability(capability) => check_type_depth(capability.element(), depth + 1),
+        Type::Unit | Type::Scalar(_) | Type::KernelContext(_) | Type::ExecutionCapability(_) => {
+            Ok(())
+        }
     }
 }
 

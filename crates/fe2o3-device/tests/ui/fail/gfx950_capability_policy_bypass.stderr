@@ -1,0 +1,41 @@
+warning: use of deprecated struct `fe2o3_device::Gfx950Matrix`: use PolicyGfx950Matrix for admitted gfx950 operations
+ --> tests/ui/fail/gfx950_capability_policy_bypass.rs:1:32
+  |
+1 | use fe2o3_device::{DeviceMath, Gfx950Matrix};
+  |                                ^^^^^^^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated struct `fe2o3_device::Gfx950Matrix`: use PolicyGfx950Matrix for admitted gfx950 operations
+ --> tests/ui/fail/gfx950_capability_policy_bypass.rs:7:27
+  |
+7 | fn reject_matrix(matrix: &Gfx950Matrix<()>) {
+  |                           ^^^^^^^^^^^^
+
+warning: use of deprecated method `fe2o3_device::Math::<Brand>::exp_f32`: use PolicyDeviceMath; bare math has no admitted numerical policy
+ --> tests/ui/fail/gfx950_capability_policy_bypass.rs:4:18
+  |
+4 |     let _ = math.exp_f32(1.0);
+  |                  ^^^^^^^
+
+warning: use of deprecated method `fe2o3_device::Gfx950Matrix::<Brand>::fp4_a_row_major`: use PolicyGfx950Matrix with branded Global storage
+ --> tests/ui/fail/gfx950_capability_policy_bypass.rs:8:20
+  |
+8 |     let _ = matrix.fp4_a_row_major(&[], 0, 0, 0, 0);
+  |                    ^^^^^^^^^^^^^^^
+
+error[E0133]: call to unsafe function `DeviceMath::<Brand>::exp_f32` is unsafe and requires unsafe block
+ --> tests/ui/fail/gfx950_capability_policy_bypass.rs:4:13
+  |
+4 |     let _ = math.exp_f32(1.0);
+  |             ^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior
+
+error[E0133]: call to unsafe function `Gfx950Matrix::<Brand>::fp4_a_row_major` is unsafe and requires unsafe block
+ --> tests/ui/fail/gfx950_capability_policy_bypass.rs:8:13
+  |
+8 |     let _ = matrix.fp4_a_row_major(&[], 0, 0, 0, 0);
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior

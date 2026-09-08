@@ -3,6 +3,14 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::Write as _;
 
+use fe2o3_amd_target::{ProductionAmdCapabilityOwnerV1, ProductionAmdTargetProfileV1};
+use fe2o3_compiler_lineage::{
+    StructuredKirBlockLoweringV1, StructuredKirControlEdgeLoweringV1, StructuredKirOperationKindV1,
+    StructuredKirOperationLoweringV1, StructuredKirToLlvmDerivationErrorV1,
+    StructuredKirToLlvmDerivationV1, StructuredKirValueCarrierV1, StructuredKirValueLoweringV1,
+    StructuredKirValueTypeV1, StructuredLlvmNumericalPolicyV1, StructuredLlvmOpcodeV1,
+    StructuredLlvmTargetV1,
+};
 use fe2o3_kernel_descriptor::Gfx942LaunchBoundsV1;
 use fe2o3_kernel_ir::{
     AMDGPU_DIAGNOSTICS_CAPABILITY_NAME, AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE,
@@ -18,7 +26,7 @@ use fe2o3_kernel_ir::{
     FloatConversionKind, FloatOperation, Function, FunctionBody, FunctionId, FunctionRole,
     Gfx950LdsTransposeFormatV1, Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1,
     IndexKind, IndexedControlFlow, InlineAssembly, InlineAssemblyTarget, IntrinsicKind, Kernel,
-    KernelId, LDS_TILE_16X16_XOR4_CAPABILITY, LaunchDomain, LaunchExtent,
+    KernelId, KernelIrDecodeError, LDS_TILE_16X16_XOR4_CAPABILITY, LaunchDomain, LaunchExtent,
     MATRIX_CAPABILITY_NAMESPACE, MATRIX_PROJECTED_KERNARG_POLICY_NAMESPACE_V1,
     MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2, MatrixElement, MatrixFrontendBindingV2,
     MatrixMultiplyProfile, MatrixOperation, MatrixOperationKind, MatrixProjectedKernargPolicyV1,
@@ -28,15 +36,29 @@ use fe2o3_kernel_ir::{
     SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY, SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY,
     ScalarType, Signature, SynchronizationScope, TargetCapability, TensorInstructionProfileV1,
     Terminator, Type, UnaryOp, ValueId, VerificationErrors, VerifiedCanonicalKernelIrV8,
-    VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV11, WaveF32ReductionKindV1,
-    WaveOperation, WaveOperationKind, WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent,
-    WorkgroupSize, analyze_control_flow, verify_module,
+    VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV11, VerifiedCanonicalKernelIrV12,
+    VerifiedCanonicalKernelIrV13, WaveF32ReductionKindV1, WaveOperation, WaveOperationKind,
+    WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent, WorkgroupSize, analyze_control_flow,
+    decode_module_v13, verify_module,
 };
+use fe2o3_target_spec::{TargetCapabilityDecisionV1, TargetCapabilityRequirementV1};
 use sha2::{Digest, Sha256};
 
 use crate::{
     AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim, MAX_PRODUCTION_LEGACY_REPLAY_LLVM_TEXT_BYTES_V1,
     MAX_PRODUCTION_SEMANTIC_ANCHOR_LLVM_TEXT_BYTES_V1, MAX_PRODUCTION_SEMANTIC_ANCHORS_V1,
+    ProductionTargetCapabilityClosureV13, ProductionTargetCapabilityErrorV1,
+    ProductionTargetLaunchEvidenceV13, legalize_production_target_capabilities_v13,
+    target_requirements_for_execution_operation_v1,
+};
+
+mod operational_translation_v1;
+mod v13;
+
+use operational_translation_v1::collect_unsupported_operational_translation_v1;
+pub use operational_translation_v1::{
+    ProductionV13ExecutionCapabilityOperationKindV1, ProductionV13KirOperationFamilyV1,
+    ProductionV13OperationalTranslationUnsupportedV1,
 };
 
 const MAX_G1_FLAT_WORKGROUP_SIZE: u32 = 1024;
@@ -189,6 +211,8 @@ pub enum LoweringDiagnosticCode {
     UnsupportedWorkgroupSize,
     InvalidLaunchPolicy,
     UnsupportedCapability,
+    MissingCapabilityClosure,
+    CapabilityClosureMismatch,
     KernelEntryDeclaration,
     UnsupportedResults,
     UnsupportedParameter,
@@ -196,6 +220,7 @@ pub enum LoweringDiagnosticCode {
     UnsupportedAddressSpace,
     UnsupportedBlockArguments,
     UnsupportedOperation,
+    IncompleteOperation,
     UnsupportedAtomic,
     UnsupportedBarrier,
     UnprovenBarrierConvergence,
@@ -212,6 +237,708 @@ pub enum LoweringDiagnosticCode {
     UnsupportedConstant,
     UnsupportedTerminator,
     IrreducibleControlFlow,
+}
+
+/// Failure at the checked canonical-V13 capability/lowering boundary.
+#[derive(Debug)]
+pub enum ProductionV13AmdLoweringErrorV1 {
+    Capability(ProductionTargetCapabilityErrorV1),
+    Decode(KernelIrDecodeError),
+    Lowering(LoweringErrors),
+    StructuredDerivation(StructuredKirToLlvmDerivationErrorV1),
+}
+
+impl fmt::Display for ProductionV13AmdLoweringErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Capability(error) => {
+                write!(formatter, "target capability closure failed: {error}")
+            }
+            Self::Decode(error) => write!(formatter, "canonical KIR V13 decode failed: {error}"),
+            Self::Lowering(error) => write!(formatter, "AMDGPU lowering failed: {error}"),
+            Self::StructuredDerivation(error) => {
+                write!(
+                    formatter,
+                    "structured KIR-to-LLVM derivation failed: {error}"
+                )
+            }
+        }
+    }
+}
+
+impl Error for ProductionV13AmdLoweringErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Capability(error) => Some(error),
+            Self::Decode(error) => Some(error),
+            Self::Lowering(error) => Some(error),
+            Self::StructuredDerivation(error) => Some(error),
+        }
+    }
+}
+
+/// Lowers one exact canonical V13 graph only after its complete target
+/// requirement closure has been admitted by the selected AMD profile.
+///
+/// The returned closure is the same identity-bound value that authorized
+/// lowering. LLVM text remains inert and grants neither load nor launch
+/// authority.
+pub fn lower_verified_canonical_kir_v13_to_amd_llvm_ir_v1(
+    neutral: &VerifiedCanonicalKernelIrV13,
+    neutral_epoch: u64,
+    launch_evidence: &ProductionTargetLaunchEvidenceV13,
+    profile: ProductionAmdTargetProfileV1,
+) -> Result<ProductionV13AmdLoweredModuleV1, ProductionV13AmdLoweringErrorV1> {
+    let capability_closure = legalize_production_target_capabilities_v13(
+        neutral,
+        neutral_epoch,
+        launch_evidence,
+        profile,
+    )
+    .map_err(ProductionV13AmdLoweringErrorV1::Capability)?;
+    let module = decode_module_v13(neutral.canonical_bytes())
+        .map_err(ProductionV13AmdLoweringErrorV1::Decode)?;
+    let authority = V13LoweringAuthorityV1::from_closure(&module, &capability_closure)
+        .map_err(ProductionV13AmdLoweringErrorV1::Lowering)?;
+    let lowered_module = v13::lower_execution_capabilities_v1(&module, profile, &authority)
+        .map_err(ProductionV13AmdLoweringErrorV1::Lowering)?;
+    let target = match profile {
+        ProductionAmdTargetProfileV1::Gfx942 => LoweringTarget::Gfx942XnackMinusV1,
+        ProductionAmdTargetProfileV1::Gfx950 => LoweringTarget::Gfx950XnackMinusV1,
+    };
+    let llvm_ir =
+        lower_compiler_module_to_llvm_ir_for_target(&lowered_module, target, None, None, true)
+            .map_err(ProductionV13AmdLoweringErrorV1::Lowering)?;
+    let structured_derivation =
+        structured_scalar_f32_derivation_v1(neutral, &module, llvm_ir.as_bytes(), profile)
+            .map_err(ProductionV13AmdLoweringErrorV1::StructuredDerivation)?;
+    let unsupported_operational_translation = if structured_derivation.is_some() {
+        Box::new([])
+    } else {
+        collect_unsupported_operational_translation_v1(&module)
+    };
+    Ok(ProductionV13AmdLoweredModuleV1 {
+        llvm_ir,
+        capability_closure,
+        structured_derivation,
+        unsupported_operational_translation,
+    })
+}
+
+/// LLVM text plus the exact capability closure that authorized its construction.
+#[derive(Debug)]
+pub struct ProductionV13AmdLoweredModuleV1 {
+    llvm_ir: String,
+    capability_closure: ProductionTargetCapabilityClosureV13,
+    structured_derivation: Option<StructuredKirToLlvmDerivationV1>,
+    unsupported_operational_translation: Box<[ProductionV13OperationalTranslationUnsupportedV1]>,
+}
+
+impl ProductionV13AmdLoweredModuleV1 {
+    pub fn llvm_ir(&self) -> &str {
+        &self.llvm_ir
+    }
+
+    pub const fn capability_closure(&self) -> &ProductionTargetCapabilityClosureV13 {
+        &self.capability_closure
+    }
+
+    pub const fn capability_closure_identity(&self) -> [u8; 32] {
+        self.capability_closure.identity()
+    }
+
+    pub fn decisions(&self) -> &[TargetCapabilityDecisionV1] {
+        self.capability_closure.decisions()
+    }
+
+    /// Returns a complete structured derivation for a supported closed lowering slice.
+    ///
+    /// `None` means this lowering succeeded through the general path but no complete structured
+    /// derivation exists for its operation vocabulary. Partial derivations are never returned.
+    pub const fn structured_derivation(&self) -> Option<&StructuredKirToLlvmDerivationV1> {
+        self.structured_derivation.as_ref()
+    }
+
+    /// Returns every source operation lacking a complete operational translation derivation.
+    ///
+    /// The roster is empty exactly when `structured_derivation` is present. Successful LLVM text
+    /// generation alone never removes an operation from this fail-closed roster.
+    pub fn unsupported_operational_translation(
+        &self,
+    ) -> &[ProductionV13OperationalTranslationUnsupportedV1] {
+        &self.unsupported_operational_translation
+    }
+
+    /// Reports whether this result carries a complete structured operational derivation.
+    pub const fn has_complete_operational_translation_derivation(&self) -> bool {
+        self.structured_derivation.is_some() && self.unsupported_operational_translation.is_empty()
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+fn structured_scalar_f32_derivation_v1(
+    neutral: &VerifiedCanonicalKernelIrV13,
+    module: &Module,
+    llvm_bytes: &[u8],
+    profile: ProductionAmdTargetProfileV1,
+) -> Result<Option<StructuredKirToLlvmDerivationV1>, StructuredKirToLlvmDerivationErrorV1> {
+    if !matches!(profile, ProductionAmdTargetProfileV1::Gfx942) {
+        return Ok(None);
+    }
+    let [kernel] = module.kernels.as_slice() else {
+        return Ok(None);
+    };
+    let [function] = module.functions.as_slice() else {
+        return Ok(None);
+    };
+    let Some(body) = &function.body else {
+        return Ok(None);
+    };
+    if kernel.entry != function.id
+        || kernel.id.as_str() != function.id.as_str()
+        || kernel.workgroup_size != Some(WorkgroupSize::new(256, 1, 1))
+    {
+        return Ok(None);
+    }
+
+    let mut blocks = Vec::with_capacity(body.blocks.len());
+    let mut operations = Vec::new();
+    let mut values = Vec::new();
+    let mut llvm_argument = 0_u16;
+    for (parameter_index, (value, ty)) in body
+        .parameters
+        .iter()
+        .zip(&function.signature.parameters)
+        .enumerate()
+    {
+        let Some(ty) = structured_scalar_value_type_v1(ty) else {
+            return Ok(None);
+        };
+        let count = if matches!(
+            ty,
+            StructuredKirValueTypeV1::GlobalReadSliceF32
+                | StructuredKirValueTypeV1::GlobalWriteSliceF32
+        ) {
+            2
+        } else {
+            1
+        };
+        let first = llvm_argument;
+        llvm_argument = llvm_argument
+            .checked_add(count)
+            .ok_or(StructuredKirToLlvmDerivationErrorV1::LengthOverflow)?;
+        let _ = parameter_index;
+        values.push(StructuredKirValueLoweringV1::new(
+            0,
+            value.0,
+            ty,
+            StructuredKirValueCarrierV1::Argument {
+                first,
+                count: count as u8,
+            },
+        ));
+    }
+
+    for (block_ordinal, block) in body.blocks.iter().enumerate() {
+        let block_ordinal = u32::try_from(block_ordinal)
+            .map_err(|_| StructuredKirToLlvmDerivationErrorV1::LengthOverflow)?;
+        blocks.push(StructuredKirBlockLoweringV1::new(
+            0,
+            block.id.0,
+            block_ordinal,
+        ));
+        for (parameter_ordinal, parameter) in block.parameters.iter().enumerate() {
+            let Some(ty) = structured_scalar_value_type_v1(&parameter.ty) else {
+                return Ok(None);
+            };
+            let parameter_ordinal = u16::try_from(parameter_ordinal)
+                .map_err(|_| StructuredKirToLlvmDerivationErrorV1::LengthOverflow)?;
+            values.push(StructuredKirValueLoweringV1::new(
+                0,
+                parameter.id.0,
+                ty,
+                StructuredKirValueCarrierV1::Phi {
+                    block: block.id.0,
+                    ordinal: parameter_ordinal,
+                },
+            ));
+        }
+        for (operation_index, operation) in block.operations.iter().enumerate() {
+            let Some((kind, llvm_opcodes)) = structured_scalar_operation_kind_v1(operation) else {
+                return Ok(None);
+            };
+            let instruction_count = u16::try_from(llvm_opcodes.len())
+                .map_err(|_| StructuredKirToLlvmDerivationErrorV1::LengthOverflow)?;
+            let operation_index = u32::try_from(operation_index)
+                .map_err(|_| StructuredKirToLlvmDerivationErrorV1::LengthOverflow)?;
+            let mut result_types = Vec::with_capacity(operation.results.len());
+            for result in &operation.results {
+                let Some(ty) = structured_scalar_value_type_v1(&result.ty) else {
+                    return Ok(None);
+                };
+                result_types.push(ty);
+                let carrier = match &operation.kind {
+                    OperationKind::KernelContextIssue(_) => StructuredKirValueCarrierV1::Erased,
+                    OperationKind::GlobalCapabilityBind(binding) => {
+                        StructuredKirValueCarrierV1::Alias {
+                            value: binding.physical.0,
+                        }
+                    }
+                    OperationKind::GlobalCapabilityIndex(index) => {
+                        StructuredKirValueCarrierV1::Alias {
+                            value: index.index.0,
+                        }
+                    }
+                    OperationKind::Constant(_) => StructuredKirValueCarrierV1::Immediate,
+                    _ => StructuredKirValueCarrierV1::Instruction {
+                        block: block.id.0,
+                        operation: operation_index,
+                        ordinal: instruction_count.saturating_sub(1),
+                    },
+                };
+                values.push(StructuredKirValueLoweringV1::new(
+                    0,
+                    result.id.0,
+                    ty,
+                    carrier,
+                ));
+            }
+            operations.push(StructuredKirOperationLoweringV1::new(
+                0,
+                block.id.0,
+                operation_index,
+                kind,
+                operation
+                    .kind
+                    .operands()
+                    .into_iter()
+                    .map(|value| value.0)
+                    .collect::<Vec<_>>(),
+                operation
+                    .results
+                    .iter()
+                    .map(|result| result.id.0)
+                    .collect::<Vec<_>>(),
+                result_types,
+                llvm_opcodes,
+            )?);
+        }
+    }
+
+    let edges = structured_scalar_control_edges_v1(body)?;
+    let identity = neutral.identity();
+    StructuredKirToLlvmDerivationV1::new(
+        *identity.digest(),
+        identity.canonical_length(),
+        llvm_bytes,
+        StructuredLlvmTargetV1::AmdGfx942XnackMinus,
+        StructuredLlvmNumericalPolicyV1::IeeeBinary32SeparateMulAdd,
+        function.id.as_str(),
+        256,
+        blocks,
+        operations,
+        values,
+        edges,
+    )
+    .map(Some)
+}
+
+fn structured_scalar_value_type_v1(ty: &Type) -> Option<StructuredKirValueTypeV1> {
+    match ty {
+        Type::KernelContext(_) => Some(StructuredKirValueTypeV1::KernelContext),
+        Type::Scalar(ScalarType::Bool) => Some(StructuredKirValueTypeV1::Bool),
+        Type::Scalar(ScalarType::Index) => Some(StructuredKirValueTypeV1::Index),
+        Type::Scalar(ScalarType::F32) => Some(StructuredKirValueTypeV1::F32),
+        Type::Slice(slice)
+            if slice.element.as_ref() == &Type::F32
+                && slice.address_space == KernelAddressSpace::Global
+                && slice.access == AccessMode::ReadOnly =>
+        {
+            Some(StructuredKirValueTypeV1::GlobalReadSliceF32)
+        }
+        Type::Slice(slice)
+            if slice.element.as_ref() == &Type::F32
+                && slice.address_space == KernelAddressSpace::Global
+                && slice.access == AccessMode::WriteOnly =>
+        {
+            Some(StructuredKirValueTypeV1::GlobalWriteSliceF32)
+        }
+        Type::GlobalCapability(capability)
+            if capability.element() == &Type::F32
+                && capability.role() == fe2o3_kernel_ir::GlobalCapabilityRoleV1::ReadOnly =>
+        {
+            Some(StructuredKirValueTypeV1::GlobalReadCapabilityF32)
+        }
+        Type::GlobalCapability(capability)
+            if capability.element() == &Type::F32
+                && matches!(
+                    capability.role(),
+                    fe2o3_kernel_ir::GlobalCapabilityRoleV1::DisjointWrite(_)
+                ) =>
+        {
+            Some(StructuredKirValueTypeV1::GlobalWriteCapabilityF32)
+        }
+        Type::Pointer(pointer)
+            if pointer.pointee.as_ref() == &Type::F32
+                && pointer.address_space == KernelAddressSpace::Global
+                && pointer.access == AccessMode::ReadOnly =>
+        {
+            Some(StructuredKirValueTypeV1::GlobalReadPointerF32)
+        }
+        Type::Pointer(pointer)
+            if pointer.pointee.as_ref() == &Type::F32
+                && pointer.address_space == KernelAddressSpace::Global
+                && pointer.access == AccessMode::WriteOnly =>
+        {
+            Some(StructuredKirValueTypeV1::GlobalWritePointerF32)
+        }
+        _ => None,
+    }
+}
+
+fn structured_scalar_operation_kind_v1(
+    operation: &Operation,
+) -> Option<(StructuredKirOperationKindV1, Vec<StructuredLlvmOpcodeV1>)> {
+    let kind = match &operation.kind {
+        OperationKind::KernelContextIssue(_) => {
+            (StructuredKirOperationKindV1::KernelContextIssue, vec![])
+        }
+        OperationKind::GlobalCapabilityBind(_) => {
+            (StructuredKirOperationKindV1::GlobalCapabilityBind, vec![])
+        }
+        OperationKind::GlobalCapabilityIndex(_) => {
+            (StructuredKirOperationKindV1::GlobalCapabilityIndex, vec![])
+        }
+        OperationKind::Intrinsic(intrinsic)
+            if matches!(
+                intrinsic.kind,
+                IntrinsicKind::InvocationIndex {
+                    kind: IndexKind::Global,
+                    axis: Axis::X
+                }
+            ) =>
+        {
+            (
+                StructuredKirOperationKindV1::GlobalId1d,
+                vec![
+                    StructuredLlvmOpcodeV1::CallWorkitemIdX,
+                    StructuredLlvmOpcodeV1::CallWorkgroupIdX,
+                    StructuredLlvmOpcodeV1::ZeroExtendI32ToI64,
+                    StructuredLlvmOpcodeV1::ZeroExtendI32ToI64,
+                    StructuredLlvmOpcodeV1::MultiplyI64,
+                    StructuredLlvmOpcodeV1::AddI64,
+                ],
+            )
+        }
+        OperationKind::Constant(Constant::Index(_)) => {
+            (StructuredKirOperationKindV1::ConstantIndex, vec![])
+        }
+        OperationKind::Constant(Constant::F32Bits(_)) => {
+            (StructuredKirOperationKindV1::ConstantF32, vec![])
+        }
+        OperationKind::Compare {
+            predicate: ComparePredicate::NotEqual,
+            ..
+        } => (
+            StructuredKirOperationKindV1::IntegerNotEqual,
+            vec![StructuredLlvmOpcodeV1::CompareNotEqualI64],
+        ),
+        OperationKind::Compare {
+            predicate: ComparePredicate::LessThan,
+            ..
+        } => (
+            StructuredKirOperationKindV1::IntegerLessThan,
+            vec![StructuredLlvmOpcodeV1::CompareUnsignedLessThanI64],
+        ),
+        OperationKind::Select { .. } => (
+            StructuredKirOperationKindV1::Select,
+            vec![StructuredLlvmOpcodeV1::Select],
+        ),
+        OperationKind::Binary {
+            op: BinaryOp::Multiply,
+            lhs,
+            ..
+        } if structured_operation_operand_type_v1(operation, *lhs)
+            == Some(StructuredKirValueTypeV1::F32) =>
+        {
+            (
+                StructuredKirOperationKindV1::F32Multiply,
+                vec![StructuredLlvmOpcodeV1::MultiplyF32],
+            )
+        }
+        OperationKind::Binary {
+            op: BinaryOp::Add,
+            lhs,
+            ..
+        } if structured_operation_operand_type_v1(operation, *lhs)
+            == Some(StructuredKirValueTypeV1::F32) =>
+        {
+            (
+                StructuredKirOperationKindV1::F32Add,
+                vec![StructuredLlvmOpcodeV1::AddF32],
+            )
+        }
+        OperationKind::Binary {
+            op: BinaryOp::Multiply,
+            ..
+        } => (
+            StructuredKirOperationKindV1::IntegerMultiply,
+            vec![StructuredLlvmOpcodeV1::MultiplyI64],
+        ),
+        OperationKind::Binary {
+            op: BinaryOp::Add, ..
+        } => (
+            StructuredKirOperationKindV1::IntegerAdd,
+            vec![StructuredLlvmOpcodeV1::AddI64],
+        ),
+        OperationKind::Binary {
+            op: BinaryOp::BitAnd,
+            ..
+        } => (
+            StructuredKirOperationKindV1::BooleanAnd,
+            vec![StructuredLlvmOpcodeV1::AndI1],
+        ),
+        OperationKind::Binary {
+            op: BinaryOp::Divide,
+            ..
+        } => (
+            StructuredKirOperationKindV1::IntegerDivide,
+            vec![StructuredLlvmOpcodeV1::DivideUnsignedI64],
+        ),
+        OperationKind::Binary {
+            op: BinaryOp::Remainder,
+            ..
+        } => (
+            StructuredKirOperationKindV1::IntegerRemainder,
+            vec![StructuredLlvmOpcodeV1::RemainderUnsignedI64],
+        ),
+        OperationKind::SliceLength { .. } => (
+            StructuredKirOperationKindV1::SliceLength,
+            vec![StructuredLlvmOpcodeV1::CopySliceLengthI64],
+        ),
+        OperationKind::SliceData { .. } => (
+            StructuredKirOperationKindV1::SliceData,
+            vec![StructuredLlvmOpcodeV1::ProjectSliceDataGlobal],
+        ),
+        OperationKind::GetElementPointer { .. } => (
+            StructuredKirOperationKindV1::GlobalGetElementPointer,
+            vec![StructuredLlvmOpcodeV1::GetElementPointerGlobalF32],
+        ),
+        OperationKind::GuardedLoad { access, .. }
+            if access.address_space == KernelAddressSpace::Global && access.alignment == 4 =>
+        {
+            (
+                StructuredKirOperationKindV1::GuardedLoadF32,
+                vec![
+                    StructuredLlvmOpcodeV1::ConditionalBranch,
+                    StructuredLlvmOpcodeV1::LoadGlobalF32,
+                    StructuredLlvmOpcodeV1::Branch,
+                    StructuredLlvmOpcodeV1::Branch,
+                    StructuredLlvmOpcodeV1::PhiF32,
+                ],
+            )
+        }
+        OperationKind::GuardedStore { access, .. }
+            if access.address_space == KernelAddressSpace::Global && access.alignment == 4 =>
+        {
+            (
+                StructuredKirOperationKindV1::GuardedStoreF32,
+                vec![
+                    StructuredLlvmOpcodeV1::ConditionalBranch,
+                    StructuredLlvmOpcodeV1::StoreGlobalF32,
+                    StructuredLlvmOpcodeV1::Branch,
+                ],
+            )
+        }
+        _ => return None,
+    };
+    Some(kind)
+}
+
+fn structured_operation_operand_type_v1(
+    operation: &Operation,
+    _operand: ValueId,
+) -> Option<StructuredKirValueTypeV1> {
+    operation
+        .results
+        .first()
+        .and_then(|result| structured_scalar_value_type_v1(&result.ty))
+}
+
+fn structured_scalar_control_edges_v1(
+    body: &FunctionBody,
+) -> Result<Vec<StructuredKirControlEdgeLoweringV1>, StructuredKirToLlvmDerivationErrorV1> {
+    let mut raw = Vec::<(u32, u16, u32, Vec<u32>)>::new();
+    for block in &body.blocks {
+        match block.terminator.as_ref() {
+            Some(Terminator::Branch { target, arguments }) => raw.push((
+                block.id.0,
+                0,
+                target.0,
+                arguments.iter().map(|value| value.0).collect(),
+            )),
+            Some(Terminator::ConditionalBranch {
+                then_target,
+                then_arguments,
+                else_target,
+                else_arguments,
+                ..
+            }) => {
+                raw.push((
+                    block.id.0,
+                    0,
+                    then_target.0,
+                    then_arguments.iter().map(|value| value.0).collect(),
+                ));
+                raw.push((
+                    block.id.0,
+                    1,
+                    else_target.0,
+                    else_arguments.iter().map(|value| value.0).collect(),
+                ));
+            }
+            Some(Terminator::Return { values }) if values.is_empty() => {}
+            _ => return Ok(Vec::new()),
+        }
+    }
+    let mut edges = Vec::with_capacity(raw.len());
+    for (predecessor, ordinal, successor, arguments) in &raw {
+        let outgoing = raw.iter().filter(|edge| edge.0 == *predecessor).count();
+        let incoming = raw.iter().filter(|edge| edge.2 == *successor).count();
+        let duplicate = raw
+            .iter()
+            .filter(|edge| edge.0 == *predecessor && edge.2 == *successor)
+            .count()
+            > 1;
+        let target_has_phi = body
+            .blocks
+            .iter()
+            .find(|block| block.id.0 == *successor)
+            .is_some_and(|block| !block.parameters.is_empty());
+        edges.push(StructuredKirControlEdgeLoweringV1::new(
+            0,
+            *predecessor,
+            *ordinal,
+            *successor,
+            arguments.clone(),
+            target_has_phi && (duplicate || (outgoing > 1 && incoming > 1)),
+        )?);
+    }
+    Ok(edges)
+}
+
+struct V13LoweringAuthorityV1 {
+    closure_identity: [u8; 32],
+    owners: BTreeMap<TargetCapabilityRequirementV1, ProductionAmdCapabilityOwnerV1>,
+}
+
+impl V13LoweringAuthorityV1 {
+    fn from_closure(
+        module: &Module,
+        closure: &ProductionTargetCapabilityClosureV13,
+    ) -> Result<Self, LoweringErrors> {
+        if closure.decisions().len() != closure.capability_owners().len() {
+            return Err(LoweringErrors::one(
+                LoweringLocation::module(module),
+                LoweringDiagnosticCode::CapabilityClosureMismatch,
+                "target capability decisions and lowering owners are not aligned",
+            ));
+        }
+        let mut owners = BTreeMap::new();
+        for (decision, observed_owner) in
+            closure.decisions().iter().zip(closure.capability_owners())
+        {
+            let requirement = decision.requirement();
+            let expected_owner =
+                lowering_owner_for_requirement_v1(requirement).ok_or_else(|| {
+                    LoweringErrors::one(
+                        LoweringLocation::module(module),
+                        LoweringDiagnosticCode::CapabilityClosureMismatch,
+                        format!(
+                            "no AMD lowering owner exists for admitted requirement {requirement}"
+                        ),
+                    )
+                })?;
+            if *observed_owner != expected_owner
+                || owners.insert(requirement, expected_owner).is_some()
+            {
+                return Err(LoweringErrors::one(
+                    LoweringLocation::module(module),
+                    LoweringDiagnosticCode::CapabilityClosureMismatch,
+                    format!("capability/lowering owner mismatch for {requirement}"),
+                ));
+            }
+        }
+        Ok(Self {
+            closure_identity: closure.identity(),
+            owners,
+        })
+    }
+
+    fn require(
+        &self,
+        requirement: TargetCapabilityRequirementV1,
+        location: &LoweringLocation,
+    ) -> Result<(), LoweringErrors> {
+        let expected = lowering_owner_for_requirement_v1(requirement).ok_or_else(|| {
+            LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::CapabilityClosureMismatch,
+                format!("lowering has no owner for {requirement}"),
+            )
+        })?;
+        if self.owners.get(&requirement) != Some(&expected) {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::CapabilityClosureMismatch,
+                format!(
+                    "exact closure decision for {requirement} is absent or has the wrong owner"
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    const fn identity(&self) -> [u8; 32] {
+        self.closure_identity
+    }
+}
+
+const fn lowering_owner_for_requirement_v1(
+    requirement: TargetCapabilityRequirementV1,
+) -> Option<ProductionAmdCapabilityOwnerV1> {
+    use ProductionAmdCapabilityOwnerV1 as Owner;
+    match requirement {
+        TargetCapabilityRequirementV1::ScalarType(_)
+        | TargetCapabilityRequirementV1::AddressSpace(_, _)
+        | TargetCapabilityRequirementV1::Numerical(_) => Some(Owner::ScalarMemoryLowering),
+        TargetCapabilityRequirementV1::SubgroupSize(_) => Some(Owner::WaveLowering),
+        TargetCapabilityRequirementV1::Collective(collective) => match collective.execution_scope()
+        {
+            fe2o3_target_spec::TargetExecutionScopeV1::Subgroup => Some(Owner::WaveLowering),
+            fe2o3_target_spec::TargetExecutionScopeV1::Workgroup => {
+                Some(Owner::WorkgroupCollectiveLowering)
+            }
+            fe2o3_target_spec::TargetExecutionScopeV1::Grid => None,
+        },
+        TargetCapabilityRequirementV1::Atomic(_) => Some(Owner::AtomicLowering),
+        TargetCapabilityRequirementV1::Barrier(_) | TargetCapabilityRequirementV1::Fence(_) => {
+            Some(Owner::SynchronizationLowering)
+        }
+        TargetCapabilityRequirementV1::Matrix(_) => Some(Owner::MatrixLowering),
+        TargetCapabilityRequirementV1::Resource(_) => Some(Owner::ResourceAdmission),
+        TargetCapabilityRequirementV1::Abi(_) => Some(Owner::KernelAbi),
+        TargetCapabilityRequirementV1::Object(_) => Some(Owner::LoadableObjectEmitter),
+        TargetCapabilityRequirementV1::AsyncCopy(_)
+        | TargetCapabilityRequirementV1::AsyncWait(_) => Some(Owner::AsyncCopyLowering),
+    }
 }
 
 /// Exact version-bound target KIR identity retained by semantic-anchor lowering.
@@ -242,6 +969,14 @@ impl ProductionSemanticAnchorKirIdentityV1 {
     pub fn from_v11(owner: &VerifiedCanonicalKernelIrV11) -> Self {
         Self {
             version: 11,
+            sha256: *owner.identity().digest(),
+            byte_len: owner.identity().canonical_length(),
+        }
+    }
+
+    pub fn from_v12(owner: &VerifiedCanonicalKernelIrV12) -> Self {
+        Self {
+            version: 12,
             sha256: *owner.identity().digest(),
             byte_len: owner.identity().canonical_length(),
         }
@@ -866,6 +1601,8 @@ fn validate_semantic_anchor_identity_v1(
             .is_ok_and(|owner| ProductionSemanticAnchorKirIdentityV1::from_v9(&owner) == expected),
         11 => VerifiedCanonicalKernelIrV11::from_module(module.clone())
             .is_ok_and(|owner| ProductionSemanticAnchorKirIdentityV1::from_v11(&owner) == expected),
+        12 => VerifiedCanonicalKernelIrV12::from_module(module.clone())
+            .is_ok_and(|owner| ProductionSemanticAnchorKirIdentityV1::from_v12(&owner) == expected),
         _ => unreachable!("semantic anchor identities have a closed version constructor"),
     };
     if !matches {
@@ -1391,6 +2128,12 @@ fn validate_device_signature(
 ) -> Result<(), LoweringErrors> {
     let location = LoweringLocation::device_function(module, function);
     for (index, ty) in function.signature.parameters.iter().enumerate() {
+        if index == 0
+            && function.role == FunctionRole::InternalHelper
+            && matches!(ty, Type::KernelContext(_))
+        {
+            continue;
+        }
         validate_device_abi_type(ty, &location, target).map_err(|error| {
             LoweringErrors::one(
                 location.clone(),
@@ -1425,6 +2168,11 @@ fn validate_device_abi_type(
 ) -> Result<(), String> {
     match ty {
         Type::Scalar(scalar) if supported_scalar(*scalar, target) => Ok(()),
+        Type::GlobalCapability(capability)
+            if capability.is_complete() && supported_memory_type(capability.element(), target) =>
+        {
+            Ok(())
+        }
         Type::Pointer(_) => {
             validate_device_pointer(ty, location, target).map_err(|error| error.to_string())
         }
@@ -3388,14 +4136,29 @@ enum ValueBinding {
         length_name: String,
         ty: Type,
     },
+    LogicalKernelContext {
+        ty: Type,
+    },
 }
 
 impl ValueBinding {
     fn value(&self) -> Option<(&str, &Type)> {
         match self {
             Self::Value { llvm_name, ty } => Some((llvm_name, ty)),
-            Self::Slice { .. } => None,
+            Self::Slice { .. } | Self::LogicalKernelContext { .. } => None,
         }
+    }
+
+    fn ty(&self) -> &Type {
+        match self {
+            Self::Value { ty, .. } | Self::Slice { ty, .. } | Self::LogicalKernelContext { ty } => {
+                ty
+            }
+        }
+    }
+
+    fn is_logical_kernel_context(&self) -> bool {
+        matches!(self, Self::LogicalKernelContext { .. })
     }
 }
 
@@ -4152,6 +4915,14 @@ impl<'a> FunctionLowerer<'a> {
             let location = self.function_location();
             self.validate_narrow_type_capability(ty, &location)?;
             match ty {
+                Type::KernelContext(_)
+                    if self.kernel.is_none()
+                        && self.function.role == FunctionRole::InternalHelper
+                        && index == 0 =>
+                {
+                    self.bindings
+                        .insert(value, ValueBinding::LogicalKernelContext { ty: ty.clone() });
+                }
                 Type::Scalar(scalar) => {
                     if !supported_scalar(*scalar, self.target) {
                         return Err(LoweringErrors::one(
@@ -4229,6 +5000,20 @@ impl<'a> FunctionLowerer<'a> {
                         format!("unsupported kernel parameter {index}: {ty:?}"),
                     ));
                 }
+                Type::GlobalCapability(capability)
+                    if self.kernel.is_none()
+                        && self.function.role == FunctionRole::InternalHelper
+                        && supported_memory_type(capability.element(), self.target) =>
+                {
+                    self.bindings.insert(
+                        value,
+                        ValueBinding::Slice {
+                            data_name: format!("%arg{index}.data"),
+                            length_name: format!("%arg{index}.len"),
+                            ty: ty.clone(),
+                        },
+                    );
+                }
                 _ => {
                     return Err(LoweringErrors::one(
                         location,
@@ -4243,6 +5028,14 @@ impl<'a> FunctionLowerer<'a> {
                 let location = self.block_location(block.id);
                 self.validate_narrow_type_capability(&parameter.ty, &location)?;
                 match &parameter.ty {
+                    Type::KernelContext(_) => {
+                        self.bindings.insert(
+                            parameter.id,
+                            ValueBinding::LogicalKernelContext {
+                                ty: parameter.ty.clone(),
+                            },
+                        );
+                    }
                     Type::Scalar(scalar) if supported_scalar(*scalar, self.target) => {
                         self.bindings.insert(
                             parameter.id,
@@ -4291,6 +5084,18 @@ impl<'a> FunctionLowerer<'a> {
                             ),
                         ));
                     }
+                    Type::GlobalCapability(capability)
+                        if supported_memory_type(capability.element(), self.target) =>
+                    {
+                        self.bindings.insert(
+                            parameter.id,
+                            ValueBinding::Slice {
+                                data_name: format!("{}.data", value_name(parameter.id)),
+                                length_name: format!("{}.len", value_name(parameter.id)),
+                                ty: parameter.ty.clone(),
+                            },
+                        );
+                    }
                     _ => {
                         return Err(LoweringErrors::one(
                             location,
@@ -4305,25 +5110,72 @@ impl<'a> FunctionLowerer<'a> {
             }
         }
         for block in &body.blocks {
-            for operation in &block.operations {
+            for (operation_index, operation) in block.operations.iter().enumerate() {
                 for result in &operation.results {
                     self.validate_narrow_type_capability(
                         &result.ty,
                         &self.block_location(block.id),
                     )?;
-                    let llvm_name = match &operation.kind {
-                        OperationKind::Constant(constant) => {
-                            constant_value(constant).unwrap_or_else(|| value_name(result.id))
+                    let binding = if matches!(result.ty, Type::KernelContext(_)) {
+                        if !matches!(operation.kind, OperationKind::KernelContextIssue(_)) {
+                            return Err(LoweringErrors::one(
+                                self.operation_location(block.id, operation_index),
+                                LoweringDiagnosticCode::UnsupportedOperation,
+                                "only a verified KernelContextIssue may define a logical kernel context",
+                            ));
                         }
-                        _ => value_name(result.id),
-                    };
-                    self.bindings.insert(
-                        result.id,
+                        ValueBinding::LogicalKernelContext {
+                            ty: result.ty.clone(),
+                        }
+                    } else if matches!(result.ty, Type::GlobalCapability(_)) {
+                        let OperationKind::GlobalCapabilityBind(bind) = &operation.kind else {
+                            return Err(LoweringErrors::one(
+                                self.operation_location(block.id, operation_index),
+                                LoweringDiagnosticCode::UnsupportedOperation,
+                                "only a verified GlobalCapabilityBind may define global authority",
+                            ));
+                        };
+                        let ValueBinding::Slice {
+                            data_name,
+                            length_name,
+                            ..
+                        } = self
+                            .bindings
+                            .get(&bind.physical)
+                            .expect("verified physical slice")
+                        else {
+                            unreachable!("verify_module checked global bind")
+                        };
+                        ValueBinding::Slice {
+                            data_name: data_name.clone(),
+                            length_name: length_name.clone(),
+                            ty: result.ty.clone(),
+                        }
+                    } else if let OperationKind::GlobalCapabilityIndex(index) = &operation.kind {
+                        let ValueBinding::Value { llvm_name, .. } = self
+                            .bindings
+                            .get(&index.index)
+                            .expect("verified global index")
+                        else {
+                            unreachable!("verify_module checked global index")
+                        };
+                        ValueBinding::Value {
+                            llvm_name: llvm_name.clone(),
+                            ty: result.ty.clone(),
+                        }
+                    } else {
+                        let llvm_name = match &operation.kind {
+                            OperationKind::Constant(constant) => {
+                                constant_value(constant).unwrap_or_else(|| value_name(result.id))
+                            }
+                            _ => value_name(result.id),
+                        };
                         ValueBinding::Value {
                             llvm_name,
                             ty: result.ty.clone(),
-                        },
-                    );
+                        }
+                    };
+                    self.bindings.insert(result.id, binding);
                 }
             }
         }
@@ -4339,7 +5191,8 @@ impl<'a> FunctionLowerer<'a> {
             Type::Scalar(scalar) => Some(*scalar),
             Type::Pointer(pointer) => pointer.pointee.as_scalar(),
             Type::Slice(slice) => slice.element.as_scalar(),
-            Type::Unit => None,
+            Type::GlobalCapability(capability) => capability.element().as_scalar(),
+            Type::Unit | Type::KernelContext(_) | Type::ExecutionCapability(_) => None,
         };
         let required = match scalar {
             Some(ScalarType::F16) => Some(TargetCapability::Float16),
@@ -4416,6 +5269,26 @@ impl<'a> FunctionLowerer<'a> {
         let location = self.operation_location(block, index);
         self.validate_operation_capability_declarations(operation, &location)?;
         match &operation.kind {
+            OperationKind::KernelContextIssue(_) => {
+                let [result] = operation.results.as_slice() else {
+                    return Err(LoweringErrors::one(
+                        location,
+                        LoweringDiagnosticCode::UnsupportedOperation,
+                        "logical KernelContextIssue must define exactly one result",
+                    ));
+                };
+                if !self
+                    .bindings
+                    .get(&result.id)
+                    .is_some_and(ValueBinding::is_logical_kernel_context)
+                {
+                    return Err(LoweringErrors::one(
+                        location,
+                        LoweringDiagnosticCode::UnsupportedOperation,
+                        "logical KernelContextIssue result is not an erasable context binding",
+                    ));
+                }
+            }
             OperationKind::Constant(constant) => {
                 validate_constant(constant, self.target).map_err(|message| {
                     LoweringErrors::one(
@@ -4426,8 +5299,8 @@ impl<'a> FunctionLowerer<'a> {
                 })?;
             }
             OperationKind::Intrinsic(intrinsic)
-                if self.kernel.is_some()
-                    && (matches!(
+                if (self.kernel.is_some()
+                    && matches!(
                         intrinsic.kind,
                         IntrinsicKind::InvocationIndex {
                             kind: IndexKind::Global,
@@ -4439,7 +5312,15 @@ impl<'a> FunctionLowerer<'a> {
                                 | IndexKind::WorkgroupCount,
                             axis: Axis::X,
                         }
-                    )) => {}
+                    ))
+                    || (self.kernel.is_none()
+                        && matches!(
+                            intrinsic.kind,
+                            IntrinsicKind::InvocationIndex {
+                                kind: IndexKind::WorkgroupCount,
+                                ..
+                            }
+                        )) => {}
             OperationKind::MemoryIntrinsic(intrinsic) => {
                 validate_memory_intrinsic(intrinsic, &location, self.target)?;
             }
@@ -4534,6 +5415,7 @@ impl<'a> FunctionLowerer<'a> {
                     unreachable!("verify_module checked slice_data")
                 };
             }
+            OperationKind::GlobalCapabilityBind(_) | OperationKind::GlobalCapabilityIndex(_) => {}
             OperationKind::GetElementPointer { base, .. } => {
                 validate_pointer(self.value_type(*base), &location, self.target)?;
             }
@@ -4645,7 +5527,7 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Alloca {
                 element,
-                count: None,
+                count,
                 address_space: KernelAddressSpace::Private,
                 alignment,
             } => {
@@ -4665,6 +5547,16 @@ impl<'a> FunctionLowerer<'a> {
                         format!(
                             "private allocation element {element:?} requires alignment {natural_alignment}, found {alignment}"
                         ),
+                    ));
+                }
+                if count.is_some_and(|count| {
+                    self.constant_index(count)
+                        .is_none_or(|elements| elements == 0)
+                }) {
+                    return Err(LoweringErrors::one(
+                        location,
+                        LoweringDiagnosticCode::UnsupportedOperation,
+                        "private allocation count must be a nonzero compile-time index constant",
                     ));
                 }
             }
@@ -4690,6 +5582,13 @@ impl<'a> FunctionLowerer<'a> {
                     location,
                     LoweringDiagnosticCode::UnsupportedOperation,
                     format!("G1 does not lower {:?}", operation.kind),
+                ));
+            }
+            OperationKind::ExecutionCapability(_) => {
+                return Err(LoweringErrors::one(
+                    location,
+                    LoweringDiagnosticCode::MissingCapabilityClosure,
+                    "canonical V13 execution operations require the identity-bound V13 lowering entry point",
                 ));
             }
         }
@@ -4897,6 +5796,21 @@ impl<'a> FunctionLowerer<'a> {
         }
     }
 
+    fn constant_index(&self, value: ValueId) -> Option<u64> {
+        let operation = self
+            .function
+            .body
+            .as_ref()?
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .find(|operation| operation.results.iter().any(|result| result.id == value))?;
+        match operation.kind {
+            OperationKind::Constant(Constant::Index(value)) => Some(value),
+            _ => None,
+        }
+    }
+
     fn bounded_u32_source_lane(&self, value: ValueId, width: u32) -> bool {
         if width == 0 || !width.is_power_of_two() || width > 64 {
             return false;
@@ -5025,7 +5939,7 @@ impl<'a> FunctionLowerer<'a> {
     fn validate_call(
         &self,
         callee: &FunctionId,
-        _arguments: &[ValueId],
+        arguments: &[ValueId],
         _operation: &Operation,
         location: &LoweringLocation,
     ) -> Result<(), LoweringErrors> {
@@ -5033,6 +5947,34 @@ impl<'a> FunctionLowerer<'a> {
             .call_symbols
             .expect("compiler-module call validation requires a symbol table");
         if call_symbols.contains_key(callee) {
+            let callee = self
+                .module
+                .function(callee)
+                .expect("verified compiler-module call target");
+            for (argument, parameter) in arguments.iter().zip(&callee.signature.parameters) {
+                let logical_argument = self
+                    .bindings
+                    .get(argument)
+                    .is_some_and(ValueBinding::is_logical_kernel_context);
+                if logical_argument != matches!(parameter, Type::KernelContext(_)) {
+                    return Err(LoweringErrors::one(
+                        location.clone(),
+                        LoweringDiagnosticCode::UnsupportedOperation,
+                        "logical kernel-context call arguments must correspond exactly to logical callee parameters",
+                    ));
+                }
+                let global_argument = self
+                    .bindings
+                    .get(argument)
+                    .is_some_and(|binding| matches!(binding.ty(), Type::GlobalCapability(_)));
+                if global_argument != matches!(parameter, Type::GlobalCapability(_)) {
+                    return Err(LoweringErrors::one(
+                        location.clone(),
+                        LoweringDiagnosticCode::UnsupportedOperation,
+                        "logical global-capability call arguments must correspond exactly to logical callee parameters",
+                    ));
+                }
+            }
             return Ok(());
         }
 
@@ -5187,13 +6129,10 @@ impl<'a> FunctionLowerer<'a> {
     }
 
     fn value_type(&self, value: ValueId) -> &Type {
-        match self
-            .bindings
+        self.bindings
             .get(&value)
             .expect("verify_module checked value")
-        {
-            ValueBinding::Value { ty, .. } | ValueBinding::Slice { ty, .. } => ty,
-        }
+            .ty()
     }
 
     fn value(&self, value: ValueId) -> (&str, &Type) {
@@ -6051,6 +6990,13 @@ impl<'a> FunctionLowerer<'a> {
                     )
                     .unwrap();
                 }
+                ValueBinding::LogicalKernelContext { .. } => {
+                    debug_assert!(incomings.iter().all(|(_, _, arguments)| {
+                        self.bindings
+                            .get(&arguments[parameter_index])
+                            .is_some_and(ValueBinding::is_logical_kernel_context)
+                    }));
+                }
             }
         }
     }
@@ -6061,26 +7007,34 @@ impl<'a> FunctionLowerer<'a> {
             .parameters
             .iter()
             .enumerate()
-            .map(|(index, ty)| match ty {
-                Type::Scalar(scalar) => Ok(format!("{} %arg{index}", llvm_scalar(*scalar))),
-                Type::Pointer(_) if self.kernel.is_none() => {
-                    Ok(format!("{} %arg{index}", llvm_type(ty)))
+            .filter_map(|(index, ty)| {
+                if matches!(ty, Type::KernelContext(_)) {
+                    return None;
                 }
-                Type::Pointer(pointer)
-                    if self.kernel.is_some()
-                        && pointer.address_space == KernelAddressSpace::Global
-                        && supported_memory_type(&pointer.pointee, self.target) =>
-                {
-                    Ok(format!("{} %arg{index}", llvm_type(ty)))
-                }
-                Type::Slice(_) => Ok(format!(
-                    "ptr addrspace(1) %arg{index}.data, i64 %arg{index}.len"
-                )),
-                _ => Err(LoweringErrors::one(
-                    self.function_location(),
-                    LoweringDiagnosticCode::UnsupportedParameter,
-                    format!("unsupported kernel parameter {index}: {ty:?}"),
-                )),
+                Some(match ty {
+                    Type::Scalar(scalar) => Ok(format!("{} %arg{index}", llvm_scalar(*scalar))),
+                    Type::Pointer(_) if self.kernel.is_none() => {
+                        Ok(format!("{} %arg{index}", llvm_type(ty)))
+                    }
+                    Type::Pointer(pointer)
+                        if self.kernel.is_some()
+                            && pointer.address_space == KernelAddressSpace::Global
+                            && supported_memory_type(&pointer.pointee, self.target) =>
+                    {
+                        Ok(format!("{} %arg{index}", llvm_type(ty)))
+                    }
+                    Type::Slice(_) => Ok(format!(
+                        "ptr addrspace(1) %arg{index}.data, i64 %arg{index}.len"
+                    )),
+                    Type::GlobalCapability(_) => Ok(format!(
+                        "ptr addrspace(1) %arg{index}.data, i64 %arg{index}.len"
+                    )),
+                    _ => Err(LoweringErrors::one(
+                        self.function_location(),
+                        LoweringDiagnosticCode::UnsupportedParameter,
+                        format!("unsupported kernel parameter {index}: {ty:?}"),
+                    )),
+                })
             })
             .collect()
     }
@@ -6097,6 +7051,8 @@ impl<'a> FunctionLowerer<'a> {
             .first()
             .map(|result| value_name(result.id));
         match &operation.kind {
+            OperationKind::KernelContextIssue(_) => {}
+            OperationKind::GlobalCapabilityBind(_) | OperationKind::GlobalCapabilityIndex(_) => {}
             OperationKind::Constant(_) => {}
             OperationKind::SliceLength { slice } => {
                 let ValueBinding::Slice { length_name, .. } =
@@ -6185,12 +7141,13 @@ impl<'a> FunctionLowerer<'a> {
                     }
                     IntrinsicKind::InvocationIndex {
                         kind: IndexKind::WorkgroupCount,
-                        axis: Axis::X,
+                        axis,
                     } => {
-                        let extent = self
-                            .workgroup_size
-                            .expect("validated workgroup-count intrinsic")
-                            .x;
+                        let (workgroup_offset, grid_offset, static_extent) = match axis {
+                            Axis::X => (4, 12, self.workgroup_size.map(|size| size.x)),
+                            Axis::Y => (6, 16, self.workgroup_size.map(|size| size.y)),
+                            Axis::Z => (8, 20, self.workgroup_size.map(|size| size.z)),
+                        };
                         writeln!(
                             output,
                             "  {result}.dispatch = call ptr addrspace(4) @{}()",
@@ -6199,7 +7156,7 @@ impl<'a> FunctionLowerer<'a> {
                         .unwrap();
                         writeln!(
                             output,
-                            "  {result}.grid.ptr = getelementptr inbounds i8, ptr addrspace(4) {result}.dispatch, i64 12"
+                            "  {result}.grid.ptr = getelementptr inbounds i8, ptr addrspace(4) {result}.dispatch, i64 {grid_offset}"
                         )
                         .unwrap();
                         writeln!(
@@ -6212,14 +7169,47 @@ impl<'a> FunctionLowerer<'a> {
                             "  {result}.grid = zext i32 {result}.grid.i32 to i64"
                         )
                         .unwrap();
-                        writeln!(
-                            output,
-                            "  {result}.rounded = add i64 {result}.grid, {}",
-                            extent - 1
-                        )
-                        .unwrap();
-                        writeln!(output, "  {result} = udiv i64 {result}.rounded, {extent}")
+                        if let Some(extent) = static_extent {
+                            writeln!(
+                                output,
+                                "  {result}.rounded = add i64 {result}.grid, {}",
+                                extent - 1
+                            )
                             .unwrap();
+                            writeln!(output, "  {result} = udiv i64 {result}.rounded, {extent}")
+                                .unwrap();
+                        } else {
+                            writeln!(
+                                output,
+                                "  {result}.workgroup.ptr = getelementptr inbounds i8, ptr addrspace(4) {result}.dispatch, i64 {workgroup_offset}"
+                            )
+                            .unwrap();
+                            writeln!(
+                                output,
+                                "  {result}.workgroup.i16 = load i16, ptr addrspace(4) {result}.workgroup.ptr, align 2"
+                            )
+                            .unwrap();
+                            writeln!(
+                                output,
+                                "  {result}.workgroup = zext i16 {result}.workgroup.i16 to i64"
+                            )
+                            .unwrap();
+                            writeln!(
+                                output,
+                                "  {result}.workgroup.minus_one = sub i64 {result}.workgroup, 1"
+                            )
+                            .unwrap();
+                            writeln!(
+                                output,
+                                "  {result}.rounded = add i64 {result}.grid, {result}.workgroup.minus_one"
+                            )
+                            .unwrap();
+                            writeln!(
+                                output,
+                                "  {result} = udiv i64 {result}.rounded, {result}.workgroup"
+                            )
+                            .unwrap();
+                        }
                     }
                     _ => unreachable!("preflight rejected unsupported intrinsic"),
                 }
@@ -6484,15 +7474,23 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Alloca {
                 element,
-                count: None,
+                count,
                 address_space: KernelAddressSpace::Private,
                 alignment,
             } => {
+                let count = count.map_or_else(
+                    || "".to_owned(),
+                    |count| {
+                        let (count, count_ty) = self.value(count);
+                        format!(", {} {count}", llvm_type(count_ty))
+                    },
+                );
                 writeln!(
                     output,
-                    "  {} = alloca {}, align {}, addrspace(5)",
+                    "  {} = alloca {}{}, align {}, addrspace(5)",
                     result_name.expect("validated private allocation result"),
                     llvm_type(element),
+                    count,
                     alignment
                 )
                 .unwrap();
@@ -6523,9 +7521,35 @@ impl<'a> FunctionLowerer<'a> {
                     .expect("compiler-module preflight rejected kernel-entry calls");
                 let arguments = arguments
                     .iter()
-                    .map(|argument| {
+                    .zip(&callee_function.signature.parameters)
+                    .flat_map(|(argument, parameter)| {
+                        if matches!(parameter, Type::KernelContext(_)) {
+                            debug_assert!(
+                                self.bindings
+                                    .get(argument)
+                                    .is_some_and(ValueBinding::is_logical_kernel_context)
+                            );
+                            return Vec::new();
+                        }
+                        if matches!(parameter, Type::GlobalCapability(_)) {
+                            let ValueBinding::Slice {
+                                data_name,
+                                length_name,
+                                ..
+                            } = self
+                                .bindings
+                                .get(argument)
+                                .expect("verified capability binding")
+                            else {
+                                unreachable!("verify_module checked global capability call")
+                            };
+                            return vec![
+                                format!("ptr addrspace(1) {data_name}"),
+                                format!("i64 {length_name}"),
+                            ];
+                        }
                         let (name, ty) = self.value(*argument);
-                        format!("{} {name}", llvm_type(ty))
+                        vec![format!("{} {name}", llvm_type(ty))]
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -7240,7 +8264,9 @@ impl<'a> FunctionLowerer<'a> {
                 length_name,
                 ..
             } => (data_name.as_str(), length_name.as_str()),
-            ValueBinding::Value { .. } => unreachable!("verified transpose source is a slice"),
+            ValueBinding::Value { .. } | ValueBinding::LogicalKernelContext { .. } => {
+                unreachable!("verified transpose source is a slice")
+            }
         };
         let offset = self.value(offset).0;
         let rows = self.value(rows).0;
@@ -8985,7 +10011,13 @@ fn llvm_type(ty: &Type) -> &'static str {
             "ptr addrspace(5)"
         }
         Type::Pointer(_) => unreachable!("preflight rejected unsupported address space"),
-        Type::Unit | Type::Slice(_) => unreachable!("type is not a first-class G1 LLVM value"),
+        Type::Unit
+        | Type::Slice(_)
+        | Type::KernelContext(_)
+        | Type::GlobalCapability(_)
+        | Type::ExecutionCapability(_) => {
+            unreachable!("type is not a first-class G1 LLVM value")
+        }
     }
 }
 

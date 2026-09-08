@@ -22,7 +22,8 @@ the path guard.
 ## Compiler provenance records
 
 The compiler-module handoff protocol exposes V1 compatibility records,
-closure-bound V2 records, and strict semantic V3 records. The Worker V2
+closure-bound V2 records, strict semantic V3 records, and a side-by-side native
+V13 capability V5 transaction. The Worker V2
 publication-intent protocol exposes V1 and closure-bound V2 records. These
 implementations use shared internal engines for slot ownership, bounded
 filesystem operations, recovery, and fault boundaries; version-specific
@@ -33,16 +34,49 @@ surfaces.
 |---|---|---|
 | Compiler module handoff V2 | The complete canonical `CompilerClosureV2`, attempt, producer, slot, and exact module bytes are committed by V2 publish/consume APIs. | Existing protected backend and wrapper/finalizer call sites have not been migrated by this crate-only change. |
 | Compiler module handoff V3 | The native terminal identity and exact canonical bytes of `InertSemanticCompilerModuleHandoffV3` are bound to the attempt, producer, slot, and transaction identity in a separate V3 namespace. Cross-process receipt recovery validates the exact durable ready record and payload under the cooperative lock; additive currentness APIs retain pinned output/namespace/slot/record/payload descriptors in a move-only lease, mint a single-use token under the lock, and consume that token when committing the existing one-shot tombstone. | The sole production rustc backend publishes this strict V3 handoff after final protected-process revalidation. |
+| Compiler capability transaction V5+V8 | A distinct one-slot namespace atomically binds one complete `InertProductionCapabilityHandoffV5` and the native digest, length, and exact canonical bytes of one simulation Bundle V8 to the producer, attempt, slot, composite payload identity, and durable transaction identity. The receipt is move-only. Strict bounded recovery returns both children from one ready record; consumption takes the receipt by value, revalidates currentness and its exact durable identity under the lock, and commits one tombstone. Prepared completion projects the handoff and Bundle V8 from the same owner, and only `bind_w4_witness` can advance it to proof completion. Completion additionally consumes a move-only Ed25519-authenticated verifier response binding the exact request, handoff, bundle, object, #213 proof owner, association roster, and #214 evidence. Bind or completion validation failures return one complete custody owner for quarantine or retry. | The transaction, crash recovery, currentness, W4 typestate, signed completion boundary, and result-carriage APIs are complete in this crate. A production build must provision `FE2O3_COMPILER_CAPABILITY_VERIFIER_V5_PUBLIC_KEY` at compile time; without that fixed trust anchor, completion fails closed. |
 | Compiler execution subject V1 | One fixed 690-byte canonical record binds the build attempt, V3 transaction, canonical rustc invocation, complete six-pin compiler closure, rustc inventory and preflight, semantic capsule, final module commitment, native module handoff, pair binding, and exact outer V3 handoff. | The sole production backend derives it immediately after strict V3 publication, and strict consumption reconstructs identical bytes. It remains inert pending the protected issuer and runtime verification join tracked by issue #218. |
 | Worker V2 publication intent | The complete closure is committed with the attempt, producer, durable plan, upstream evidence, output identity, length, and exact retained bytes; V2 persist/recover/clear APIs reject closure mismatch. | Protected publication and restart-marker paths still persist, recover, and clear V1 intents. |
 | Worker V3 publication intent V1 | A side-by-side namespace commits one outer handoff entry, an ordered provider archive with one entry per supplied external payload, compact opaque replay metadata, one finalized output entry, the complete durable plan, and the producer occurrence. The record is committed last. Current-generation inputs remain protected pending exact load-envelope custody; successor-authorized scavenge uses a restartable retirement marker. | Exact restart recovery, strict V3 pending/final receipts, durable claims, currentness reacquisition, completed-state reconstruction, receipt-bound current retirement, and successor retirement are implemented. Safe publication requires a move-only verified-finalizer authority supplied by `fe2o3-hsaco-finalize`; V1/V2 wires are unchanged. |
 | Worker V3 load readiness V1 | A claim-bound audited authority permits one exact opaque envelope, canonical durable claim, and fixed terminal receipt to be published under the same pinned output lock. The receipt binds the attempt, backend receipt, envelope and claim digests and lengths, output directory, file inodes, and timestamps. | Exact retry, output-directory-only attempt discovery, process-restart recovery, abrupt-crash reconciliation at every durability boundary, and registry-rooted cleanup of superseded custody are implemented. The result is inert and grants no descriptor authentication, semantic admission, HSA readiness, load, or launch authority. |
 
-V1 and V2 APIs, wire formats, and byte maxima remain unchanged and are not
-silently upgraded. V3 uses the compiler-FFI V3 maximum only in its own schema
-and never falls back to V1 or V2 decoding. None of these versions authenticates
+V1, V2, and V3 APIs, wire formats, and byte maxima remain unchanged and are not
+silently upgraded. V3 uses the compiler-FFI V3 maximum only in its own schema.
+V5+V8 has its own magic, domains, composite byte ceiling, durable namespace,
+and strict compiler-FFI decoder; it never reinterprets a handoff-only V5 record
+or projects or falls back to V1, V2, or V3. None of these versions authenticates
 compiler authorship or grants publication, linking, loading, launch, or
 execution authority.
+
+The V5+V8 payload is one canonical file. Publication syncs that file before
+renaming and syncing its ready record; recovery never returns either child
+without validating the record, pinned payload metadata, complete composite
+identity, both strict child encodings, and current attempt again. Consumption
+requires the non-`Clone`, non-`Copy` receipt itself and checks its producer,
+attempt, slot, composite identity, and durable transaction identity before the
+ready-to-consumed rename. A stale or cross-producer receipt therefore cannot
+consume a newer transaction. Failures before the tombstone rename are
+recoverable; failures after it are durably exactly once.
+
+The retained Bundle V8 value is dependency-neutral and authority-free because
+this filesystem crate cannot depend on `fe2o3-kernel-ir`. It verifies the
+closed V8 envelope, hard section bounds, exact native content digest, and byte
+continuity. Production must construct it from an already verified bundle. A
+downstream sealed verifier must still call
+`VerifiedSimulationBundleV8::from_canonical_bytes` on the recovered bytes and
+compare the native identity before admitting W7 evidence. Rehashing arbitrary
+bytes or possessing a transaction receipt cannot fabricate that authority.
+
+The protected verifier constructs `InertCompilerCapabilityVerifierResponseV5`
+from the transaction identity, exact handoff and Bundle V8, object bytes,
+consumed multi-root #213 proof owner, complete capability-association roster,
+and checked #214 evidence. It signs `signing_message()` with the private key
+corresponding to the public key compiled into this crate, then calls
+`AuthenticatedCompilerCapabilityCompletionV5::from_signed_verifier_response`.
+The constructor strictly decodes every nested canonical record, requires
+multi-root proof lineage and the exact selected association, verifies the fixed
+policy and signature, and rederives all content identities. There is no unsafe
+or caller-key-selected authority constructor.
 
 The V3 receipt, consumed value, and compiler-execution subject remain inert. A
 `CompilerModuleHandoffCurrentnessLeaseV3` is private local custody rather than

@@ -304,6 +304,9 @@ fn construct_type_v1<'tcx>(
         },
         TyKind::Str => SemanticTypeShapeV1::Opaque,
         TyKind::FnDef(..) => SemanticTypeShapeV1::Opaque,
+        TyKind::Closure(_, arguments) => {
+            SemanticTypeShapeV1::Aggregate(context.aggregate(arguments.as_closure().upvar_tys())?)
+        }
         TyKind::FnPtr(signature, header) => {
             if header.abi != ExternAbi::Rust || header.c_variadic {
                 return Err(context.unsupported("non-Rust function pointer ABI"));
@@ -333,7 +336,6 @@ fn construct_type_v1<'tcx>(
         | TyKind::Foreign(..)
         | TyKind::UnsafeBinder(..)
         | TyKind::Dynamic(..)
-        | TyKind::Closure(..)
         | TyKind::CoroutineClosure(..)
         | TyKind::Coroutine(..)
         | TyKind::CoroutineWitness(..)

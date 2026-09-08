@@ -1527,10 +1527,10 @@ fn validate_executable_mappings(
         let permissions = fields
             .next()
             .ok_or_else(|| process_failure("malformed process map"))?;
-        if !permissions
+        if permissions
             .as_bytes()
             .get(2)
-            .is_some_and(|value| *value == b'x')
+            .is_none_or(|value| *value != b'x')
         {
             continue;
         }
@@ -2049,11 +2049,11 @@ mod tests {
 
     #[test]
     fn limits_cover_cpu_processes_descriptors_and_memory() {
-        assert!(CPU_LIMIT_MAX_SECONDS > 0);
+        const { assert!(CPU_LIMIT_MAX_SECONDS > 0) };
         assert!((2..=4096).contains(&PROCESS_LIMIT));
         assert!(DESCRIPTOR_LIMIT > GENERATED_PROOF_SOURCE_FD as u64);
-        assert!(ADDRESS_SPACE_LIMIT_V2 > 0);
-        assert!(DATA_LIMIT_V2 > 0);
+        const { assert!(ADDRESS_SPACE_LIMIT_V2 > 0) };
+        const { assert!(DATA_LIMIT_V2 > 0) };
         assert_eq!(CORE_LIMIT_V2, 0);
     }
 

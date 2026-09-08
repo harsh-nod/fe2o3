@@ -34,10 +34,10 @@ const LINUX_SA_FAMILY_BYTES: u32 = 2;
 const LINUX_MAX_CANONICAL_FILESYSTEM_SOCKET_PATH_BYTES: usize = 107;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct PeerCredentialsV2 {
-    pid: u32,
-    uid: u32,
-    gid: u32,
+pub(crate) struct PeerCredentialsV2 {
+    pub(crate) pid: u32,
+    pub(crate) uid: u32,
+    pub(crate) gid: u32,
 }
 
 /// One owned V2 connection whose absolute deadline covers every protocol phase.
@@ -643,7 +643,7 @@ fn validate_peer(peer: &OwnedFd) -> Result<(), WorkerV3VerificationClientErrorV2
     Ok(())
 }
 
-fn validate_connected_path_peer(
+pub(crate) fn validate_connected_path_peer(
     peer: &OwnedFd,
     expected_service_address: &SocketAddrAny,
 ) -> Result<(), WorkerV3VerificationClientErrorV2> {
@@ -689,7 +689,7 @@ fn is_unnamed_unix_address(address: &SocketAddrAny) -> bool {
         && *address == SocketAddrAny::from(SocketAddrUnix::new_unnamed())
 }
 
-fn canonical_filesystem_unix_address(path: &Path) -> Option<SocketAddrAny> {
+pub(crate) fn canonical_filesystem_unix_address(path: &Path) -> Option<SocketAddrAny> {
     let path_bytes = path.as_os_str().as_bytes();
     if path_bytes.is_empty()
         || path_bytes.len() > LINUX_MAX_CANONICAL_FILESYSTEM_SOCKET_PATH_BYTES
@@ -708,7 +708,7 @@ fn canonical_filesystem_unix_address(path: &Path) -> Option<SocketAddrAny> {
     SocketAddrUnix::new(path).ok().map(SocketAddrAny::from)
 }
 
-fn enable_passcred(peer: &OwnedFd) -> Result<(), WorkerV3VerificationClientErrorV2> {
+pub(crate) fn enable_passcred(peer: &OwnedFd) -> Result<(), WorkerV3VerificationClientErrorV2> {
     rustix::net::sockopt::set_socket_passcred(peer, true).map_err(|source| {
         descriptor_error("enable connected-path peer SO_PASSCRED", source.into())
     })?;
@@ -723,7 +723,7 @@ fn enable_passcred(peer: &OwnedFd) -> Result<(), WorkerV3VerificationClientError
     Ok(())
 }
 
-fn peer_credentials(
+pub(crate) fn peer_credentials(
     peer: &OwnedFd,
 ) -> Result<PeerCredentialsV2, WorkerV3VerificationClientErrorV2> {
     let credentials = rustix::net::sockopt::socket_peercred(peer).map_err(|source| {
@@ -742,7 +742,7 @@ fn peer_credentials(
     })
 }
 
-fn set_close_on_exec(peer: &OwnedFd) -> Result<(), WorkerV3VerificationClientErrorV2> {
+pub(crate) fn set_close_on_exec(peer: &OwnedFd) -> Result<(), WorkerV3VerificationClientErrorV2> {
     rustix::io::fcntl_setfd(peer, rustix::io::FdFlags::CLOEXEC)
         .map_err(|source| descriptor_error("set peer close-on-exec", source.into()))?;
     let actual = rustix::io::fcntl_getfd(peer)
@@ -759,7 +759,7 @@ fn set_close_on_exec(peer: &OwnedFd) -> Result<(), WorkerV3VerificationClientErr
     Ok(())
 }
 
-fn send_begin(
+pub(crate) fn send_begin(
     peer: &OwnedFd,
     bytes: &[u8],
     descriptors: [std::os::fd::BorrowedFd<'_>; 2],
@@ -815,7 +815,7 @@ fn send_packet(
     }
 }
 
-fn receive_packet(
+pub(crate) fn receive_packet(
     peer: &OwnedFd,
     minimum: usize,
     maximum: usize,
@@ -891,7 +891,7 @@ fn receive_packet(
     }
 }
 
-fn require_peer_eof(
+pub(crate) fn require_peer_eof(
     peer: &OwnedFd,
     deadline: Instant,
 ) -> Result<(), WorkerV3VerificationClientErrorV2> {
@@ -925,7 +925,7 @@ fn require_peer_eof(
     }
 }
 
-fn wait_for_peer(
+pub(crate) fn wait_for_peer(
     peer: &OwnedFd,
     wanted: PollFlags,
     deadline: Instant,
@@ -961,7 +961,7 @@ fn wait_for_peer(
     }
 }
 
-fn require_deadline(deadline: Instant) -> Result<(), WorkerV3VerificationClientErrorV2> {
+pub(crate) fn require_deadline(deadline: Instant) -> Result<(), WorkerV3VerificationClientErrorV2> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
         return Err(WorkerV3VerificationClientErrorV2::Timeout);

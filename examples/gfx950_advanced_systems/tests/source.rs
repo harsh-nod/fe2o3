@@ -1,11 +1,13 @@
 use fe2o3_gfx950_advanced_systems::{
-    COMBINE_BATCHES, DISPATCH_CAPACITY, GFX950_ADVANCED_SYSTEMS_RUST_SOURCE_PRESENT_V1,
-    GFX950_ADVANCED_SYSTEMS_SOURCE_BLOCKER, GFX950_ADVANCED_SYSTEMS_SOURCE_LOWERING_SUPPORTED,
+    COMBINE_BATCHES, DISPATCH_CAPACITY, GFX950_ADVANCED_SYSTEMS_BUNDLE_V8_SUPPORTED,
+    GFX950_ADVANCED_SYSTEMS_FINAL_GRAPH_W4_CLEAN, GFX950_ADVANCED_SYSTEMS_KERNEL_CONTEXT_V1,
+    GFX950_ADVANCED_SYSTEMS_RUST_SOURCE_PRESENT_V1, GFX950_ADVANCED_SYSTEMS_SOURCE_BLOCKER,
+    GFX950_ADVANCED_SYSTEMS_SOURCE_LOWERING_SUPPORTED, GFX950_ADVANCED_SYSTEMS_TYPED_GLOBALS_V1,
     MUON_ELEMENTS, OUTPUT, STATE_WIDTH, SYSTEM_BATCHES, TABLE_SIZE, TOKENS, TOP_K,
 };
 
 #[test]
-fn rust_source_is_primary_and_uses_production_lowering() {
+fn rust_source_is_primary_and_uses_compiler_issued_capabilities() {
     let source = include_str!("../src/kernel.rs");
     for symbol in [
         "gfx950_moe_route_fp4_t16_e4_k2_v1",
@@ -20,9 +22,24 @@ fn rust_source_is_primary_and_uses_production_lowering() {
     }
     assert_eq!(source.matches("pub fn gfx950_").count(), 7);
     assert!(GFX950_ADVANCED_SYSTEMS_RUST_SOURCE_PRESENT_V1);
-    assert!(GFX950_ADVANCED_SYSTEMS_SOURCE_LOWERING_SUPPORTED);
-    assert!(GFX950_ADVANCED_SYSTEMS_SOURCE_BLOCKER.contains("formal compiler refinement"));
-    assert!(GFX950_ADVANCED_SYSTEMS_SOURCE_BLOCKER.contains("protected publication"));
+    assert!(GFX950_ADVANCED_SYSTEMS_KERNEL_CONTEXT_V1);
+    assert!(GFX950_ADVANCED_SYSTEMS_TYPED_GLOBALS_V1);
+    assert!(!GFX950_ADVANCED_SYSTEMS_SOURCE_LOWERING_SUPPORTED);
+    assert!(!GFX950_ADVANCED_SYSTEMS_FINAL_GRAPH_W4_CLEAN);
+    assert!(!GFX950_ADVANCED_SYSTEMS_BUNDLE_V8_SUPPORTED);
+    for boundary in [
+        "production V13 extraction",
+        "genuine Bundle V8 export",
+        "differential simulation",
+        "final-graph W4 Clean receipts",
+        "protected publication",
+        "hardware qualification",
+    ] {
+        assert!(
+            GFX950_ADVANCED_SYSTEMS_SOURCE_BLOCKER.contains(boundary),
+            "missing boundary `{boundary}`"
+        );
+    }
     let manifest = include_str!("../Cargo.toml");
     for feature in [
         "kernel-moe-route",
@@ -53,11 +70,77 @@ fn rust_source_is_primary_and_uses_production_lowering() {
     assert!(crate_root.contains("ablation-route-owner-only is rejected"));
     assert!(crate_root.contains("ablation-route-unpacked is retained only"));
     assert!(!source.contains("namespace ="));
+    assert_eq!(source.matches("context: KernelContext<'_>").count(), 7);
+    assert!(source.matches("Global<'_,").count() >= 20);
+    assert!(!source.contains("thread::"));
+    assert!(!source.contains("::current()"));
+    assert!(!source.contains("Gfx950Subgroup"));
+    assert!(!source.contains("DisjointSlice"));
+    assert!(source.contains("context.invocation().index_1d()"));
+    assert!(!source.contains("context.subgroup_lane"));
+    assert!(!source.contains("context.matrix()"));
+    assert!(source.contains("subgroup.with_matrix(workgroup.epoch()"));
+    assert!(source.contains("matrix.with_numerical_policy(&policy)"));
+    assert!(source.contains("policy_matrix.gfx950()"));
+    assert!(source.contains("fp4_a_global_row_major"));
+    assert!(source.contains("fp8_b_global_row_major"));
+    assert!(source.contains("context.with_workgroup(|workgroup|"));
+    assert!(source.contains("subgroup.reduce_sum(workgroup.epoch()"));
+    assert!(source.contains("initialize_by_invocation"));
+    assert!(source.contains("publish_lds"));
+    assert!(source.contains("finish_reusable_phase"));
+    assert!(source.contains("context.math()"));
+    assert_eq!(
+        source
+            .matches("context.numerical_policy::<StrictIeee>()")
+            .count(),
+        3
+    );
+    assert_eq!(
+        source
+            .matches("math_capability.with_numerical_policy(&policy)")
+            .count(),
+        3
+    );
+    assert!(source.contains("global_load_2d_or"));
+    assert!(source.contains("fn global_load_2d_or<T: CapabilityMemoryElementV1, Brand>"));
+    assert!(source.contains("output.store(index.into_disjoint(), result)"));
+    assert!(source.contains("output_state.store(context.invocation().index_1d().into_disjoint()"));
+    assert!(!source.contains(": &["));
+    assert!(source.matches("ExclusiveReadWrite").count() >= 10);
+    assert!(source.contains("workgroup_subgroup_slot::<64>"));
+    for input in [
+        "activations",
+        "expert_weights",
+        "router_weights",
+        "top_experts",
+        "top_weights",
+        "rank0",
+        "rank1",
+        "draft_tokens",
+        "target_tokens",
+        "draft_scores",
+        "thresholds",
+        "base_state",
+        "proposed_deltas",
+        "queries",
+        "table_hashes",
+        "table_grams",
+        "table_values",
+        "priorities",
+        "input",
+        "shards",
+    ] {
+        assert!(
+            !source.contains(&format!("{input}[")),
+            "typed global `{input}` retained unchecked indexing"
+        );
+    }
     assert_eq!(source.matches("max_grid = [4, 1, 1]").count(), 13);
     assert_eq!(source.matches("launch(required = [256, 1, 1]").count(), 13);
     assert!(!source.contains("launch(required = [64, 1, 1]"));
     assert!(source.contains("let batch = global_index / 64;"));
-    assert!(source.contains("RowStriped2D<Index1D, 64"));
+    assert!(!source.contains("RowStriped2D"));
 
     assert_eq!(OUTPUT, 16);
     assert!(OUTPUT.is_power_of_two());

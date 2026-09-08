@@ -1,0 +1,5 @@
+error[E0599]: no method named `load` found for reference `&CapabilityMemoryView<'_, u32, GlobalAddressSpace, DisjointWrite<Mapping>, KernelBrand>` in the current scope
+ --> tests/ui/fail/capability_memory_write_only_has_no_load.rs:7:20
+  |
+7 |     let _ = output.load(0);
+  |                    ^^^^ method not found in `&CapabilityMemoryView<'_, u32, GlobalAddressSpace, DisjointWrite<Mapping>, KernelBrand>`

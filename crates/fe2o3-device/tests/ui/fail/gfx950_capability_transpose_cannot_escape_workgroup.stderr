@@ -1,0 +1,16 @@
+error: lifetime may not live long enough
+  --> tests/ui/fail/gfx950_capability_transpose_cannot_escape_workgroup.rs:21:9
+   |
+19 |       context.with_workgroup(|workgroup| {
+   |                               ---------- return type of closure is Gfx950LdsTransposeTile<'2, Gfx950Fp4E2M1, Gfx950TransposeUninitialized, SubgroupBrand<'_, SubgroupWidth64, fe2o3_device::KernelCapabilityBrand<'_, Kernel, CurrentTarget, RegisteredLaunch>, InitialEpoch>>
+   |                               |
+   |                               has type `WorkgroupCapability<'1, fe2o3_device::KernelCapabilityBrand<'_, Kernel, CurrentTarget, RegisteredLaunch>>`
+20 |           let subgroup = workgroup.subgroup::<SubgroupWidth64>();
+21 | /         subgroup
+22 | |             .gfx950_wave16(workgroup.epoch())
+23 | |             .transpose_tile::<Gfx950Fp4E2M1>()
+   | |______________________________________________^ returning this value requires that `'1` must outlive `'2`
+   |
+   = note: requirement occurs because of the type `Gfx950LdsTransposeTile<'_, Gfx950Fp4E2M1, Gfx950TransposeUninitialized, SubgroupBrand<'_, SubgroupWidth64, fe2o3_device::KernelCapabilityBrand<'_, Kernel, CurrentTarget, RegisteredLaunch>, InitialEpoch>>`, which makes the generic argument `'_` invariant
+   = note: the struct `Gfx950LdsTransposeTile<'wave, Format, State, Brand>` is invariant over the parameter `'wave`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance

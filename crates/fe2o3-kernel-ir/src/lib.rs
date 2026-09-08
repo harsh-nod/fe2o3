@@ -20,6 +20,8 @@
 //! [`encode_module_v9`] adds gfx950 collectives and LDS transpose operations;
 //! [`encode_module_v10`] adds exact typed memory intrinsics without changing V1-V9;
 //! [`encode_module_v11`] adds one-way pointer access restriction casts without changing V1-V10.
+//! [`encode_module_v12`] adds compiler-issued kernel-context values and closed
+//! portable execution-capability requirements without changing V1-V11.
 //! Decoding establishes wire well-formedness only.
 //! Consumers must call [`verify_module`] before relying on semantic invariants. V1-V10
 //! reconstruct kernel-entry and import roles from their legacy records; they
@@ -39,6 +41,8 @@
 //! no V1-V4 bytes and grants no compiler, load, launch, or hardware authority.
 //! [`VerifiedSimulationBundleV6`] applies the same authority-free contract to
 //! exact same-module KIR V11 without changing any V1-V5 bytes.
+//! [`VerifiedSimulationBundleV7`] carries exact canonical KIR V12 and its final
+//! graph epoch without changing any V1-V6 bytes.
 //!
 //! [`SemanticDebugMapDocumentV1`] is a separate, finalized-artifact-bound sidecar for exact
 //! bidirectional source/MIR/KIR/schedule/LLVM/ISA correlation. It represents optimization shape
@@ -52,6 +56,8 @@
 
 mod canonical_kir_v10;
 mod canonical_kir_v11;
+mod canonical_kir_v12;
+mod canonical_kir_v13;
 mod canonical_kir_v5;
 mod canonical_kir_v6;
 mod canonical_kir_v7;
@@ -61,6 +67,7 @@ mod control_flow;
 mod debug_source_map_v1;
 mod debug_source_map_v2;
 mod effect_extraction;
+mod execution_capability_v1;
 mod formal_memory_obligations;
 mod integer_semantic_oracle_v1;
 mod interprocedural_effects;
@@ -81,6 +88,8 @@ mod simulation_bundle_v3;
 mod simulation_bundle_v4;
 mod simulation_bundle_v5;
 mod simulation_bundle_v6;
+mod simulation_bundle_v7;
+mod simulation_bundle_v8;
 mod standard_atomics;
 mod types;
 mod verify;
@@ -94,10 +103,13 @@ pub use canonical_kir_v8::*;
 pub use canonical_kir_v9::*;
 pub use canonical_kir_v10::*;
 pub use canonical_kir_v11::*;
+pub use canonical_kir_v12::*;
+pub use canonical_kir_v13::*;
 pub use control_flow::*;
 pub use debug_source_map_v1::*;
 pub use debug_source_map_v2::*;
 pub use effect_extraction::*;
+pub use execution_capability_v1::*;
 pub use formal_memory_obligations::*;
 pub use integer_semantic_oracle_v1::*;
 pub use interprocedural_effects::{
@@ -132,6 +144,8 @@ pub use simulation_bundle_v3::*;
 pub use simulation_bundle_v4::*;
 pub use simulation_bundle_v5::*;
 pub use simulation_bundle_v6::*;
+pub use simulation_bundle_v7::*;
+pub use simulation_bundle_v8::*;
 pub use standard_atomics::*;
 pub use types::*;
 pub use verify::*;

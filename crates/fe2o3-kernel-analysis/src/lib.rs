@@ -8,6 +8,8 @@
 #[cfg(feature = "authenticated-machine-effect")]
 mod authenticated_machine_effect;
 mod control_flow;
+mod execution_capability_atomic_scope;
+mod execution_capability_semantics;
 #[cfg(feature = "authenticated-machine-effect")]
 mod gfx942_atomic_collective_structure;
 #[cfg(feature = "authenticated-machine-effect")]
@@ -19,6 +21,7 @@ mod gfx942_machine_register;
 #[cfg(feature = "authenticated-machine-effect")]
 mod gfx942_scalar_f32_recurrence;
 mod kernel_check_model;
+mod kernel_context_capability;
 #[cfg(feature = "authenticated-machine-effect")]
 mod physical_machine_analysis;
 #[cfg(feature = "authenticated-machine-effect")]
@@ -77,6 +80,9 @@ mod pliron_tensor_layout;
 mod pliron_workgroup_memory;
 #[cfg(feature = "authenticated-machine-effect")]
 mod process_execution;
+mod production_capability_schedule;
+#[cfg(feature = "pliron-analysis")]
+mod production_final_graph_capability_witness;
 mod ssa;
 mod uniformity;
 
@@ -90,6 +96,8 @@ pub use control_flow::{
     MAX_CONTROL_FLOW_NATURAL_LOOPS, MAX_CONTROL_FLOW_STORAGE_ITEMS, MAX_CONTROL_FLOW_WORK_UNITS,
     MAX_SSA_PLACEMENT_OUTPUT_ITEMS, analyze_control_flow,
 };
+pub use execution_capability_atomic_scope::*;
+pub use execution_capability_semantics::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use gfx942_atomic_collective_structure::*;
 #[cfg(feature = "authenticated-machine-effect")]
@@ -101,6 +109,7 @@ pub use gfx942_machine_register::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use gfx942_scalar_f32_recurrence::*;
 pub use kernel_check_model::*;
+pub use kernel_context_capability::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use physical_machine_analysis::*;
 #[cfg(feature = "authenticated-machine-effect")]
@@ -151,6 +160,9 @@ pub use pliron_sparse_index::*;
 pub use pliron_tensor_layout::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_workgroup_memory::*;
+pub use production_capability_schedule::*;
+#[cfg(feature = "pliron-analysis")]
+pub use production_final_graph_capability_witness::*;
 pub use ssa::{
     SsaPlacement, SsaPlacementDiagnostic, SsaPlacementErrors, SsaVariable, SsaVariablePlacement,
     place_pruned_ssa_parameters,

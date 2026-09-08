@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
+use std::fs::File;
 use std::os::fd::BorrowedFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -9,13 +10,15 @@ use std::process::{Child, Command, ExitStatus};
 use std::time::{Duration, Instant};
 
 use fe2o3_artifact_transaction::{
-    BuildAttempt, BuildInvocation, BuildSession, EmitError, ProducerIdentity,
-    WorkerV3PublicationIntentErrorV1, begin_build_attempt, fail_build_attempt,
-    finish_build_attempt, recover_compiler_execution_receipt_transport_v1,
+    BuildAttempt, BuildInvocation, BuildSession, CompletedCompilerCapabilityTransactionV5,
+    EmitError, ProducerIdentity, RetainedDurableDirectoryV1, WorkerV3PublicationIntentErrorV1,
+    begin_build_attempt, fail_build_attempt, finish_build_attempt,
+    purge_failed_compiler_handoff_attempt_v5, recover_compiler_execution_receipt_transport_v1,
     retire_worker_v3_publication_intent_after_load_readiness_v1,
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_execution_protocol::CompilerExecutionReceiptCarriageV1;
+use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3;
 use fe2o3_hsaco_finalize::{
     PublishedProtectedWorkerV3HsacoV1, RecoveredProtectedWorkerV3HsacoPublicationV1,
     WorkerV3HsacoPublicationErrorV1, finalize_protected_worker_v3_hsaco_v1,
@@ -27,8 +30,13 @@ use fe2o3_hsaco_finalize::{
 };
 use fe2o3_process_identity::PinnedWorkingDirectoryV3;
 use fe2o3_runtime_protocol::{
-    RecoveredWorkerV3LoadEnvelopeV2, WorkerV3LoadEnvelopeErrorV2, WorkerV3LoadEnvelopeV2,
-    recover_worker_v3_load_envelope_v2,
+    RecoveredWorkerV3LoadEnvelopeV2, WorkerV3CapabilityResultCarrierErrorV1,
+    WorkerV3LoadEnvelopeErrorV2, WorkerV3LoadEnvelopeV2, WorkerV3LoadEnvelopeWireV2,
+    recover_worker_v3_capability_ancillary_evidence_for_live_v1,
+    recover_worker_v3_capability_ancillary_evidence_v1,
+    recover_worker_v3_capability_result_carrier_v1, recover_worker_v3_load_envelope_v2,
+    recover_worker_v3_pending_capability_result_for_live_v1,
+    recover_worker_v3_pending_capability_result_v1,
 };
 use fe2o3_rustc_invocation::{
     CARGO_METADATA_BUILD_OBSERVATION_ENV_V2, CargoMetadataBuildObservationV2, RustcArgsErrorV2,
@@ -59,9 +67,14 @@ use crate::inert_rustc_invocation_capture::{
 };
 use crate::pinned_codegen_backend::PinnedCodegenBackend;
 use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
+use crate::production_capability_completion_v5::{
+    CompletedProductionCapabilityCompletionJoinV5, PendingProductionCapabilityCompletionJoinV5,
+    ProductionCapabilityCompletionExecutorV5, prepare_pending_capability_result_v1,
+};
 use crate::project::PinnedDirectory;
 use crate::protected_compiler_handoff_v3::{
     ParentRustcInvocationCustody, ProductionCompilerModuleHandoffIntake,
+    handoff_contains_native_v13,
 };
 use crate::source_isa_observation::{
     finalized_source_isa_characteristic_observation_v1, finalized_source_isa_observation_frame_v1,
@@ -745,8 +758,21 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             return Err(BindingWrapperError::Spawn(error));
         }
     };
-    if let Some(managed) = managed_attempt {
+    if let Some(mut managed) = managed_attempt {
         if status.success() {
+            let capabilities = compiler_capabilities.as_ref().ok_or_else(|| {
+                BindingWrapperError::BuildObservation(
+                    "successful managed rustc invocation lost protected compiler capabilities"
+                        .to_owned(),
+                )
+            })?;
+            let authority = ProductionCapabilityCompletionExecutorV5::from_protected_build(
+                &managed.output_dir,
+                managed.attempt,
+                capabilities.protected_compiler_execution_profile()?,
+            )
+            .map_err(BindingWrapperError::CapabilityBroker)?;
+            managed.install_capability_completion_authority_v5(authority)?;
             complete_managed_attempt(
                 managed,
                 parent_rustc_invocation_custody,
@@ -1886,15 +1912,25 @@ impl ManagedAttemptRevocationGuard {
     }
 
     fn revoke(&mut self) -> Result<(), EmitError> {
+        let tombstone = fail_build_attempt(&self.output_dir, &self.producer, self.attempt);
+        let purge = purge_failed_compiler_handoff_attempt_v5(
+            &self.output_dir,
+            &self.producer,
+            self.attempt,
+        )
+        .map_err(|error| EmitError::BuildAttempt {
+            reason: format!("failed compiler handoff cleanup did not complete: {error}"),
+        });
         self.armed = false;
-        fail_build_attempt(&self.output_dir, &self.producer, self.attempt)
+        tombstone?;
+        purge
     }
 }
 
 impl Drop for ManagedAttemptRevocationGuard {
     fn drop(&mut self) {
         if self.armed
-            && let Err(error) = fail_build_attempt(&self.output_dir, &self.producer, self.attempt)
+            && let Err(error) = self.revoke()
         {
             crate::observer_telemetry::write_line(format_args!(
                 "[cargo-fe2o3] failed to revoke managed build attempt after pre-spawn error: {error}"
@@ -1929,10 +1965,38 @@ fn worker_v3_readiness_is_absent(error: &WorkerV3LoadEnvelopeErrorV2) -> bool {
     )
 }
 
+fn worker_v3_load_envelope_requires_capability_v5(
+    envelope: &WorkerV3LoadEnvelopeWireV2,
+) -> Result<bool, CompletionFailure> {
+    let handoff = InertSemanticCompilerModuleHandoffV3::decode(envelope.replay().outer_handoff())
+        .map_err(|error| {
+        CompletionFailure::Uncommitted(format!(
+            "production load envelope contains an invalid compiler handoff: {error}"
+        ))
+    })?;
+    Ok(handoff_contains_native_v13(&handoff))
+}
+
+fn retain_capability_output_root_v5(
+    output_dir: &Path,
+) -> Result<RetainedDurableDirectoryV1, CompletionFailure> {
+    let directory = File::open(output_dir).map_err(|error| {
+        CompletionFailure::Uncommitted(format!(
+            "native V5 durable output root could not be retained: {error}"
+        ))
+    })?;
+    RetainedDurableDirectoryV1::admit_service_owned(directory.into()).map_err(|error| {
+        CompletionFailure::Uncommitted(format!(
+            "native V5 durable output root admission failed: {error}"
+        ))
+    })
+}
+
 enum ManagedProductionBuild {
     Fresh {
         config: Box<PreparedProductionBuildConfig>,
         compiler_closure: CompilerClosureV2,
+        capability_completion: Option<ProductionCapabilityCompletionExecutorV5>,
     },
     Recovered {
         recovered: Box<RecoveredProtectedWorkerV3HsacoPublicationV1>,
@@ -1962,6 +2026,35 @@ impl ManagedAttempt {
 
     const fn compile_environment_profile(&self) -> Option<BuildCompileEnvironmentProfileV1> {
         self.compile_environment_profile
+    }
+
+    /// Installs the one-shot W6 continuation recovered after the protected rustc child exits.
+    ///
+    /// The continuation is installed only after rustc exits successfully and before compiler
+    /// completion consumes the handoff. It either acquires the remaining authenticated proof
+    /// custody or fails the exact attempt before publication.
+    fn install_capability_completion_authority_v5(
+        &mut self,
+        authority: ProductionCapabilityCompletionExecutorV5,
+    ) -> Result<(), BindingWrapperError> {
+        match &mut self.production_build {
+            ManagedProductionBuild::Fresh {
+                capability_completion,
+                ..
+            } if capability_completion.is_none() => {
+                *capability_completion = Some(authority);
+                Ok(())
+            }
+            ManagedProductionBuild::Fresh { .. } => Err(BindingWrapperError::BuildObservation(
+                "duplicate native V5 completion authority for one build attempt".to_owned(),
+            )),
+            ManagedProductionBuild::Recovered { .. } | ManagedProductionBuild::Ready { .. } => {
+                Err(BindingWrapperError::BuildObservation(
+                    "fresh native V5 completion authority cannot be attached to recovered production state"
+                        .to_owned(),
+                ))
+            }
+        }
     }
 }
 
@@ -2054,6 +2147,7 @@ fn prepare_managed_production_build(
             ManagedProductionBuild::Fresh {
                 config: Box::new(config),
                 compiler_closure,
+                capability_completion: None,
             },
             true,
         )),
@@ -2231,10 +2325,12 @@ fn complete_managed_production_build(
         ManagedProductionBuild::Fresh {
             config,
             compiler_closure,
+            capability_completion,
         } => complete_fresh_production_artifact(
             managed,
             &config,
             compiler_closure,
+            capability_completion,
             parent_invocation.ok_or_else(|| {
                 CompletionFailure::Uncommitted(
                     "production V3 completion lost exact parent rustc invocation custody"
@@ -2258,6 +2354,7 @@ fn complete_managed_production_build(
                 *recovered,
                 compiler_closure,
                 *compiler_execution,
+                None,
             )
         }
         ManagedProductionBuild::Ready { envelope }
@@ -2278,6 +2375,7 @@ fn complete_fresh_production_artifact(
     managed: &mut ManagedProductionAttempt,
     worker: &PreparedProductionBuildConfig,
     compiler_closure: CompilerClosureV2,
+    capability_completion: Option<ProductionCapabilityCompletionExecutorV5>,
     parent_invocation: &ParentRustcInvocationCustody,
     execution_readiness: &ParentCompilerExecutionReadinessCustodyV1,
 ) -> Result<(), CompletionFailure> {
@@ -2316,7 +2414,7 @@ fn complete_fresh_production_artifact(
                 "strict V3 compiler-module preflight/consumption failed: {error}"
             ))
         })?;
-    let (evidence, compiler_execution) = worker
+    let (evidence, compiler_execution, capability_v5) = worker
         .execute_preflighted_production(consumed, preflight)
         .map_err(|error| {
             CompletionFailure::Uncommitted(format!(
@@ -2333,6 +2431,39 @@ fn complete_fresh_production_artifact(
             "strict V3 canonical HSACO finalization failed: {error}"
         ))
     })?;
+    if let Some(capability) = capability_v5 {
+        let prepared = capability
+            .begin_completion(finalized.exact_finalized_bytes().to_vec())
+            .map_err(|error| {
+                CompletionFailure::Uncommitted(format!(
+                    "native V5 object completion preparation failed before publication: {error}"
+                ))
+            })?;
+        let join = PendingProductionCapabilityCompletionJoinV5::new(
+            prepared,
+            finalized,
+            compiler_execution,
+        )
+        .map_err(|error| {
+            CompletionFailure::Uncommitted(format!(
+                "native V5 pre-publication custody validation failed: {error}"
+            ))
+        })?;
+        let completed = join
+            .complete_with_available_authority(capability_completion)
+            .map_err(|error| {
+                CompletionFailure::Uncommitted(format!(
+                    "native V5 protected authority completion failed before publication: {error}"
+                ))
+            })?;
+        return complete_fresh_capability_artifact(managed, compiler_closure, completed);
+    }
+    if capability_completion.is_some() {
+        return Err(CompletionFailure::Uncommitted(
+            "protected V5 completion authority was supplied without a native V5 compiler transaction"
+                .to_owned(),
+        ));
+    }
     managed.emit_finalized_source_isa_observation(&finalized);
     let prepared = prepare_protected_worker_v3_hsaco_publication_v1(&managed.producer, finalized)
         .map_err(|error| {
@@ -2350,7 +2481,45 @@ fn complete_fresh_production_artifact(
             "strict V3 durable publication persistence failed: {error}"
         ))
     })?;
-    complete_recovered_production_artifact(managed, recovered, compiler_closure, compiler_execution)
+    complete_recovered_production_artifact(
+        managed,
+        recovered,
+        compiler_closure,
+        compiler_execution,
+        None,
+    )
+}
+
+fn complete_fresh_capability_artifact(
+    managed: &mut ManagedProductionAttempt,
+    compiler_closure: CompilerClosureV2,
+    completed: CompletedProductionCapabilityCompletionJoinV5,
+) -> Result<(), CompletionFailure> {
+    let (completed, finalized, compiler_execution) = completed.into_parts();
+    managed.emit_finalized_source_isa_observation(&finalized);
+    let prepared = prepare_protected_worker_v3_hsaco_publication_v1(&managed.producer, finalized)
+        .map_err(|error| {
+        CompletionFailure::Uncommitted(format!(
+            "native V5 durable publication preparation failed: {error}"
+        ))
+    })?;
+    let recovered = persist_prepared_protected_worker_v3_hsaco_publication_v1(
+        &managed.output_dir,
+        &managed.producer,
+        prepared,
+    )
+    .map_err(|error| {
+        CompletionFailure::PreserveAttempt(format!(
+            "native V5 durable publication persistence failed: {error}"
+        ))
+    })?;
+    complete_recovered_production_artifact(
+        managed,
+        recovered,
+        compiler_closure,
+        compiler_execution,
+        Some(completed),
+    )
 }
 
 fn complete_recovered_production_artifact(
@@ -2358,6 +2527,7 @@ fn complete_recovered_production_artifact(
     recovered: RecoveredProtectedWorkerV3HsacoPublicationV1,
     compiler_closure: CompilerClosureV2,
     compiler_execution: CompilerExecutionReceiptCarriageV1,
+    capability_completion: Option<CompletedCompilerCapabilityTransactionV5>,
 ) -> Result<(), CompletionFailure> {
     managed.emit_finalized_source_isa_observation(recovered.finalized_evidence());
     let published = publish_recovered_protected_worker_v3_hsaco_v1(
@@ -2371,13 +2541,19 @@ fn complete_recovered_production_artifact(
             "strict V3 finalized-HSACO publication failed: {error}"
         ))
     })?;
-    complete_published_production_artifact(managed, published, compiler_execution)
+    complete_published_production_artifact(
+        managed,
+        published,
+        compiler_execution,
+        capability_completion,
+    )
 }
 
 fn complete_published_production_artifact(
     managed: &ManagedProductionAttempt,
     published: PublishedProtectedWorkerV3HsacoV1,
     compiler_execution: CompilerExecutionReceiptCarriageV1,
+    capability_completion: Option<CompletedCompilerCapabilityTransactionV5>,
 ) -> Result<(), CompletionFailure> {
     let intent_identity = published.recovered_evidence().storage_record().identity();
     let envelope = WorkerV3LoadEnvelopeV2::from_published_hsaco_v1(published, compiler_execution)
@@ -2386,6 +2562,75 @@ fn complete_published_production_artifact(
             "receipt-bearing strict V3 load-envelope custody construction failed: {error}"
         ))
     })?;
+    let requires_capability = worker_v3_load_envelope_requires_capability_v5(envelope.wire())?;
+    let pending_capability = match (requires_capability, capability_completion) {
+        (true, Some(completed)) => {
+            let directory = retain_capability_output_root_v5(&managed.output_dir)?;
+            let pending = prepare_pending_capability_result_v1(completed, &envelope)
+                .and_then(|prepared| prepared.persist_before_readiness(&directory))
+                .map_err(|error| {
+                    CompletionFailure::Uncommitted(format!(
+                        "native V5 result and ancillary-evidence persistence failed before readiness: {error}"
+                    ))
+                })?;
+            Some((pending, directory))
+        }
+        (true, None) => {
+            let directory = retain_capability_output_root_v5(&managed.output_dir)?;
+            let pending = match recover_worker_v3_pending_capability_result_for_live_v1(
+                &directory, &envelope,
+            ) {
+                Ok(pending) => pending,
+                Err(WorkerV3CapabilityResultCarrierErrorV1::MissingDurablePendingResult) => {
+                    let ancillary =
+                        recover_worker_v3_capability_ancillary_evidence_for_live_v1(
+                            &directory,
+                            &envelope,
+                        )
+                        .map_err(|error| {
+                            CompletionFailure::Uncommitted(format!(
+                                "native V5 completion recovery lost both pending result and exact ancillary package: {error}"
+                            ))
+                        })?;
+                    let pending = ancillary.into_pending_result(&envelope).map_err(|error| {
+                        CompletionFailure::Uncommitted(format!(
+                            "native V5 pending result reconstruction from ancillary package failed: {error}"
+                        ))
+                    })?;
+                    pending
+                        .persist_durable_journal_v1(&directory)
+                        .map_err(|error| {
+                            CompletionFailure::Uncommitted(format!(
+                                "native V5 reconstructed pending result persistence failed: {error}"
+                            ))
+                        })?;
+                    pending
+                }
+                Err(error) => {
+                    return Err(CompletionFailure::Uncommitted(format!(
+                        "native V5 publication has no matching recoverable completion result: {error}"
+                    )));
+                }
+            };
+            recover_worker_v3_capability_ancillary_evidence_v1(
+                &directory,
+                &envelope,
+                pending.production_result(),
+            )
+            .map_err(|error| {
+                CompletionFailure::Uncommitted(format!(
+                    "native V5 recoverable result lacks matching exact ancillary evidence: {error}"
+                ))
+            })?;
+            Some((pending, directory))
+        }
+        (false, Some(_)) => {
+            return Err(CompletionFailure::Uncommitted(
+                "native V5 completion result was supplied for a non-V5 compiler handoff".to_owned(),
+            ));
+        }
+        (false, None) => None,
+    };
     let readiness = envelope
         .persist_durable_replay_custody_v2(&managed.output_dir)
         .map_err(|error| {
@@ -2393,6 +2638,20 @@ fn complete_published_production_artifact(
                 "receipt-bearing strict V3 load-envelope custody persistence failed: {error}"
             ))
         })?;
+    if let Some((pending, directory)) = pending_capability {
+        let carrier = pending.finish_live(&envelope, &readiness).map_err(|error| {
+            CompletionFailure::PreserveAttempt(format!(
+                "native V5 completed-result carrier construction failed after readiness: {error}"
+            ))
+        })?;
+        carrier
+            .persist_durable_sidecar_v1(&directory)
+            .map_err(|error| {
+                CompletionFailure::PreserveAttempt(format!(
+                    "native V5 completed-result carrier persistence failed after readiness: {error}"
+                ))
+            })?;
+    }
     retire_worker_v3_publication_intent_after_load_readiness_v1(
         &managed.output_dir,
         &managed.producer,
@@ -2423,6 +2682,40 @@ fn complete_ready_production_artifact(
         record.attempt(),
         *record.plan().finalization().as_bytes(),
     );
+    if worker_v3_load_envelope_requires_capability_v5(envelope.wire())? {
+        let directory = retain_capability_output_root_v5(&managed.output_dir)?;
+        match recover_worker_v3_capability_result_carrier_v1(&directory, &envelope) {
+            Ok(carrier) => drop(carrier),
+            Err(WorkerV3CapabilityResultCarrierErrorV1::AlreadyConsumed) => {}
+            Err(WorkerV3CapabilityResultCarrierErrorV1::MissingDurableCarrier) => {
+                let pending =
+                    recover_worker_v3_pending_capability_result_v1(&directory, &envelope).map_err(
+                        |error| {
+                            CompletionFailure::Uncommitted(format!(
+                                "recovered native V5 readiness has neither a matching carrier nor pending result: {error}"
+                            ))
+                        },
+                    )?;
+                let carrier = pending.finish_recovered(&envelope).map_err(|error| {
+                    CompletionFailure::Uncommitted(format!(
+                        "recovered native V5 pending result does not match readiness: {error}"
+                    ))
+                })?;
+                carrier
+                    .persist_durable_sidecar_v1(&directory)
+                    .map_err(|error| {
+                        CompletionFailure::PreserveAttempt(format!(
+                            "recovered native V5 completed-result carrier persistence failed: {error}"
+                        ))
+                    })?;
+            }
+            Err(error) => {
+                return Err(CompletionFailure::Uncommitted(format!(
+                    "recovered native V5 completed-result carrier failed exact admission: {error}"
+                )));
+            }
+        }
+    }
     match retire_worker_v3_publication_intent_after_load_readiness_v1(
         &managed.output_dir,
         &managed.producer,

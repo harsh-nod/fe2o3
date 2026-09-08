@@ -79,6 +79,15 @@ fn valued_break() {
     };
 }
 
+#[kernel(control_flow(loop_bounds(1)))]
+fn async_control_flow() {
+    let _future = async {
+        loop {
+            break;
+        }
+    };
+}
+
 #[kernel(
     control_flow(loop_bounds(1)),
     unsafe_asm(

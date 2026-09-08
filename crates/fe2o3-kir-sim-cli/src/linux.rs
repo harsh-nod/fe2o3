@@ -12,11 +12,14 @@ use std::process::ExitCode;
 use fe2o3_kernel_ir::{
     AccessMode, FunctionId, MAX_SIMULATION_BUNDLE_BYTES_V1, MAX_SIMULATION_BUNDLE_BYTES_V2,
     MAX_SIMULATION_BUNDLE_BYTES_V3, MAX_SIMULATION_BUNDLE_BYTES_V4, MAX_SIMULATION_BUNDLE_BYTES_V5,
-    MAX_SIMULATION_BUNDLE_BYTES_V6, ScalarType, VerifiedCanonicalKernelIrErrorV7,
-    VerifiedCanonicalKernelIrErrorV10, VerifiedCanonicalKernelIrErrorV11,
+    MAX_SIMULATION_BUNDLE_BYTES_V6, MAX_SIMULATION_BUNDLE_BYTES_V7, MAX_SIMULATION_BUNDLE_BYTES_V8,
+    ScalarType, VerifiedCanonicalKernelIrErrorV7, VerifiedCanonicalKernelIrErrorV10,
+    VerifiedCanonicalKernelIrErrorV11, VerifiedCanonicalKernelIrErrorV12,
     VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV10, VerifiedCanonicalKernelIrV11,
-    VerifiedSimulationBundleV1, VerifiedSimulationBundleV2, VerifiedSimulationBundleV3,
-    VerifiedSimulationBundleV4, VerifiedSimulationBundleV5, VerifiedSimulationBundleV6, WaveWidth,
+    VerifiedCanonicalKernelIrV12, VerifiedCanonicalKernelIrV13, VerifiedSimulationBundleV1,
+    VerifiedSimulationBundleV2, VerifiedSimulationBundleV3, VerifiedSimulationBundleV4,
+    VerifiedSimulationBundleV5, VerifiedSimulationBundleV6, VerifiedSimulationBundleV7,
+    VerifiedSimulationBundleV8, WaveWidth,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, BufferViewArgumentV1,
@@ -47,7 +50,7 @@ use sha2::{Digest, Sha256};
 
 use crate::schema::{ErrorKind, Stage};
 
-const USAGE: &str = "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH | --bundle-v5 PATH | --bundle-v6 PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT] | --reduce-failure [--schedule-seed U64] [--schedule-max-decisions COUNT] | --replay-failure-reduction PATH]";
+const USAGE: &str = "usage: fe2o3-kir-sim (--kir-v7 PATH | --kir-v12 PATH | --bundle PATH | --bundle-v5 PATH | --bundle-v6 PATH | --bundle-v7 PATH | --bundle-v8 PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT] | --reduce-failure [--schedule-seed U64] [--schedule-max-decisions COUNT] | --replay-failure-reduction PATH]";
 const REQUEST_SCHEMA: &str = "fe2o3-simulation-request-v1";
 const RESULT_SCHEMA: &str = "fe2o3-simulation-result-v1";
 const EXPLORATION_SCHEMA: &str = "fe2o3-simulation-exploration-v1";
@@ -127,6 +130,7 @@ enum UnsupportedFeatureCode {
 #[serde(rename_all = "snake_case")]
 enum InputCode {
     KirV7,
+    KirV12,
     SimulationBundle,
     Request,
     DebugSidecar,
@@ -505,9 +509,12 @@ enum ScheduleOption {
 #[derive(Debug, Eq, PartialEq)]
 enum ProgramInput {
     KirV7(OsString),
+    KirV12(OsString),
     Bundle(OsString),
     BundleV5(OsString),
     BundleV6(OsString),
+    BundleV7(OsString),
+    BundleV8(OsString),
 }
 
 #[derive(Debug)]
@@ -1149,6 +1156,32 @@ pub(crate) fn load_debug_simulation_bundle_v6(
     })
 }
 
+pub(crate) fn load_debug_simulation_bundle_v7(
+    bundle: OsString,
+    request: OsString,
+) -> Result<crate::AdmittedSimulationBundleInputV7, crate::SimulationInputErrorV1> {
+    load_admitted_bundle_v7(Path::new(&bundle), Path::new(&request)).map_err(|failure: Failure| {
+        crate::SimulationInputErrorV1 {
+            stage: serialized_tag(failure.0.stage),
+            code: serialized_tag(failure.0.kind),
+            message: failure.0.message.clone(),
+        }
+    })
+}
+
+pub(crate) fn load_debug_simulation_bundle_v8(
+    bundle: OsString,
+    request: OsString,
+) -> Result<crate::AdmittedSimulationBundleInputV8, crate::SimulationInputErrorV1> {
+    load_admitted_bundle_v8(Path::new(&bundle), Path::new(&request)).map_err(|failure: Failure| {
+        crate::SimulationInputErrorV1 {
+            stage: serialized_tag(failure.0.stage),
+            code: serialized_tag(failure.0.kind),
+            message: failure.0.message.clone(),
+        }
+    })
+}
+
 pub(crate) fn load_debug_sidecar_v1(
     path: OsString,
     maximum: usize,
@@ -1216,6 +1249,21 @@ fn run(arguments: impl Iterator<Item = OsString>) -> Result<(), Failure> {
                 None,
             )
         }
+        ProgramInput::KirV12(path) => {
+            let kir = secure_read(
+                Path::new(&path),
+                MAX_KIR_BYTES,
+                InputCode::KirV12,
+                "canonical KIR V12",
+            )?;
+            run_with_captured_kir_v12(
+                &kir,
+                Path::new(&request),
+                None,
+                policy,
+                SimulationTargetV1::amdgpu_64(),
+            )
+        }
         ProgramInput::Bundle(path) => {
             let admitted = load_admitted_bundle(Path::new(&path), Path::new(&request))?;
             run_with_admitted_input(admitted.input, policy)
@@ -1226,6 +1274,14 @@ fn run(arguments: impl Iterator<Item = OsString>) -> Result<(), Failure> {
         }
         ProgramInput::BundleV6(path) => {
             let admitted = load_admitted_bundle_v6(Path::new(&path), Path::new(&request))?;
+            run_with_admitted_input(admitted.input, policy)
+        }
+        ProgramInput::BundleV7(path) => {
+            let admitted = load_admitted_bundle_v7(Path::new(&path), Path::new(&request))?;
+            run_with_admitted_input(admitted.input, policy)
+        }
+        ProgramInput::BundleV8(path) => {
+            let admitted = load_admitted_bundle_v8(Path::new(&path), Path::new(&request))?;
             run_with_admitted_input(admitted.input, policy)
         }
     }
@@ -1247,6 +1303,24 @@ fn run_with_captured_kir(
         bundle_identity,
         None,
     )?;
+    run_with_admitted_input(input, policy)
+}
+
+fn run_with_captured_kir_v12(
+    kir: &[u8],
+    request: &Path,
+    expected_request: Option<crate::SimulationRequestIdentityV1>,
+    policy: RunPolicy,
+    target: SimulationTargetV1,
+) -> Result<(), Failure> {
+    let request_bytes = secure_read(
+        request,
+        MAX_REQUEST_BYTES,
+        InputCode::Request,
+        "simulation request",
+    )?;
+    let input =
+        load_admitted_input_bytes_v12(kir, &request_bytes, expected_request, target, None, None)?;
     run_with_admitted_input(input, policy)
 }
 
@@ -1971,6 +2045,130 @@ fn load_admitted_bundle_v6(
     Ok(crate::AdmittedSimulationBundleInputV6 { input, bundle })
 }
 
+fn load_admitted_bundle_v7(
+    bundle_path: &Path,
+    request: &Path,
+) -> Result<crate::AdmittedSimulationBundleInputV7, Failure> {
+    let bytes = secure_read(
+        bundle_path,
+        MAX_SIMULATION_BUNDLE_BYTES_V7,
+        InputCode::SimulationBundle,
+        "simulation bundle V7",
+    )?;
+    let bundle = VerifiedSimulationBundleV7::from_canonical_bytes(bytes).map_err(|error| {
+        Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            format!(
+                "simulation bundle V7 is invalid: {}",
+                bounded_display(&error)
+            ),
+        )
+    })?;
+    bundle.revalidate().map_err(|error| {
+        Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            format!(
+                "simulation bundle V7 failed revalidation: {}",
+                bounded_display(&error)
+            ),
+        )
+    })?;
+    let target = simulation_target_for_bundle(bundle.target())?;
+    let request_bytes = secure_read(
+        request,
+        MAX_REQUEST_BYTES,
+        InputCode::Request,
+        "simulation request",
+    )?;
+    let input = load_admitted_input_bytes_v12(
+        bundle.canonical_kir_v12(),
+        &request_bytes,
+        None,
+        target,
+        Some((*bundle.identity().as_bytes(), *bundle.subject_identity())),
+        Some(bundle_evidence_v7(&bundle)),
+    )?;
+    if input.kir_sha256 != *bundle.canonical_kir_v12_digest()
+        || u64::try_from(bundle.canonical_kir_v12().len()).ok()
+            != Some(bundle.canonical_kir_v12_length())
+        || input
+            .simulation_bundle_evidence()
+            .and_then(|evidence| evidence.final_graph_epoch)
+            != Some(bundle.final_graph_epoch())
+    {
+        return Err(Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            "simulation bundle V7 KIR identity or graph epoch changed during admission",
+        ));
+    }
+    Ok(crate::AdmittedSimulationBundleInputV7 { input, bundle })
+}
+
+fn load_admitted_bundle_v8(
+    bundle_path: &Path,
+    request: &Path,
+) -> Result<crate::AdmittedSimulationBundleInputV8, Failure> {
+    let bytes = secure_read(
+        bundle_path,
+        MAX_SIMULATION_BUNDLE_BYTES_V8,
+        InputCode::SimulationBundle,
+        "simulation bundle V8",
+    )?;
+    let bundle = VerifiedSimulationBundleV8::from_canonical_bytes(bytes).map_err(|error| {
+        Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            format!(
+                "simulation bundle V8 is invalid: {}",
+                bounded_display(&error)
+            ),
+        )
+    })?;
+    bundle.revalidate().map_err(|error| {
+        Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            format!(
+                "simulation bundle V8 failed revalidation: {}",
+                bounded_display(&error)
+            ),
+        )
+    })?;
+    let target = simulation_target_for_bundle(bundle.target())?;
+    let request_bytes = secure_read(
+        request,
+        MAX_REQUEST_BYTES,
+        InputCode::Request,
+        "simulation request",
+    )?;
+    let input = load_admitted_input_bytes_v13(
+        bundle.canonical_kir_v13(),
+        &request_bytes,
+        None,
+        target,
+        Some((*bundle.identity().as_bytes(), *bundle.subject_identity())),
+        Some(bundle_evidence_v8(&bundle)),
+    )?;
+    if input.kir_sha256 != *bundle.canonical_kir_v13_digest()
+        || u64::try_from(bundle.canonical_kir_v13().len()).ok()
+            != Some(bundle.canonical_kir_v13_length())
+        || input
+            .simulation_bundle_evidence()
+            .and_then(|evidence| evidence.final_graph_epoch)
+            != Some(bundle.final_graph_epoch())
+    {
+        return Err(Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            "simulation bundle V8 KIR identity or graph epoch changed during admission",
+        ));
+    }
+    Ok(crate::AdmittedSimulationBundleInputV8 { input, bundle })
+}
+
 fn simulation_target_for_bundle(target: &str) -> Result<SimulationTargetV1, Failure> {
     match target {
         "gfx942:xnack-" | "gfx950:xnack-" => Ok(SimulationTargetV1::amdgpu_64()),
@@ -2141,6 +2339,96 @@ fn load_admitted_input_bytes_v11(
     )
 }
 
+fn load_admitted_input_bytes_v12(
+    kir: &[u8],
+    request_bytes: &[u8],
+    expected_request: Option<crate::SimulationRequestIdentityV1>,
+    target: SimulationTargetV1,
+    bundle_identity: Option<([u8; 32], [u8; 32])>,
+    bundle_evidence: Option<crate::AdmittedSimulationBundleEvidenceV1>,
+) -> Result<crate::AdmittedSimulationInputV1, Failure> {
+    if kir.len() > MAX_KIR_BYTES {
+        return Err(Failure::input(
+            InputCode::KirV12,
+            ErrorKind::InputTooLarge,
+            format!(
+                "canonical KIR V12 input is {} bytes; maximum is {MAX_KIR_BYTES}",
+                kir.len()
+            ),
+        ));
+    }
+    let limits = cli_simulation_limits();
+    let canonical =
+        VerifiedCanonicalKernelIrV12::from_canonical_bytes(kir.to_vec()).map_err(|error| {
+            Failure::new(
+                Stage::KirAdmission,
+                kir_v12_error_kind(&error),
+                bounded_display(&error),
+            )
+        })?;
+    let admitted = AdmittedSimulationModuleV1::admit_v12(canonical, limits).map_err(|error| {
+        Failure::new(
+            Stage::SimulatorAdmission,
+            admission_error_kind(&error),
+            bounded_display(&error),
+        )
+    })?;
+    finish_admitted_input(
+        admitted,
+        limits,
+        request_bytes,
+        expected_request,
+        target,
+        bundle_identity,
+        bundle_evidence,
+    )
+}
+
+fn load_admitted_input_bytes_v13(
+    kir: &[u8],
+    request_bytes: &[u8],
+    expected_request: Option<crate::SimulationRequestIdentityV1>,
+    target: SimulationTargetV1,
+    bundle_identity: Option<([u8; 32], [u8; 32])>,
+    bundle_evidence: Option<crate::AdmittedSimulationBundleEvidenceV1>,
+) -> Result<crate::AdmittedSimulationInputV1, Failure> {
+    if kir.len() > MAX_KIR_BYTES {
+        return Err(Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::InputTooLarge,
+            format!(
+                "canonical KIR V13 input is {} bytes; maximum is {MAX_KIR_BYTES}",
+                kir.len()
+            ),
+        ));
+    }
+    let limits = cli_simulation_limits();
+    let canonical =
+        VerifiedCanonicalKernelIrV13::from_canonical_bytes(kir.to_vec()).map_err(|error| {
+            Failure::new(
+                Stage::KirAdmission,
+                ErrorKind::SimulationBundleRejected,
+                bounded_display(&error),
+            )
+        })?;
+    let admitted = AdmittedSimulationModuleV1::admit_v13(canonical, limits).map_err(|error| {
+        Failure::new(
+            Stage::SimulatorAdmission,
+            admission_error_kind(&error),
+            bounded_display(&error),
+        )
+    })?;
+    finish_admitted_input(
+        admitted,
+        limits,
+        request_bytes,
+        expected_request,
+        target,
+        bundle_identity,
+        bundle_evidence,
+    )
+}
+
 fn finish_admitted_input(
     admitted: AdmittedSimulationModuleV1,
     limits: SimulationLimitsV1,
@@ -2220,6 +2508,7 @@ fn bundle_evidence_v1(
         production_kir_version: production.version(),
         production_kir_sha256: production.digest(),
         production_kir_bytes: production.canonical_length(),
+        final_graph_epoch: None,
         kernel_abi_identity: *bundle.kernel_abi_identity(),
         identity_inventory_receipt_sha256: lineage.rustc_identity_inventory_receipt_sha256(),
         identity_inventory_receipt_bytes: lineage.rustc_identity_inventory_receipt_bytes(),
@@ -2240,6 +2529,7 @@ fn bundle_evidence_v5(
         production_kir_version: production.version(),
         production_kir_sha256: production.digest(),
         production_kir_bytes: production.canonical_length(),
+        final_graph_epoch: None,
         kernel_abi_identity: *bundle.kernel_abi_identity(),
         identity_inventory_receipt_sha256: lineage.rustc_identity_inventory_receipt_sha256(),
         identity_inventory_receipt_bytes: lineage.rustc_identity_inventory_receipt_bytes(),
@@ -2260,6 +2550,49 @@ fn bundle_evidence_v6(
         production_kir_version: production.version(),
         production_kir_sha256: production.digest(),
         production_kir_bytes: production.canonical_length(),
+        final_graph_epoch: None,
+        kernel_abi_identity: *bundle.kernel_abi_identity(),
+        identity_inventory_receipt_sha256: lineage.rustc_identity_inventory_receipt_sha256(),
+        identity_inventory_receipt_bytes: lineage.rustc_identity_inventory_receipt_bytes(),
+        preflight_plan_receipt_sha256: lineage.rustc_preflight_plan_receipt_sha256(),
+        preflight_plan_receipt_bytes: lineage.rustc_preflight_plan_receipt_bytes(),
+    }
+}
+
+fn bundle_evidence_v7(
+    bundle: &VerifiedSimulationBundleV7,
+) -> crate::AdmittedSimulationBundleEvidenceV1 {
+    let production = bundle.production_kir_identity();
+    let lineage = bundle.source_lineage();
+    crate::AdmittedSimulationBundleEvidenceV1 {
+        envelope_version: 7,
+        envelope_identity: *bundle.identity().as_bytes(),
+        subject_identity: *bundle.subject_identity(),
+        production_kir_version: production.version(),
+        production_kir_sha256: production.digest(),
+        production_kir_bytes: production.canonical_length(),
+        final_graph_epoch: Some(bundle.final_graph_epoch()),
+        kernel_abi_identity: *bundle.kernel_abi_identity(),
+        identity_inventory_receipt_sha256: lineage.rustc_identity_inventory_receipt_sha256(),
+        identity_inventory_receipt_bytes: lineage.rustc_identity_inventory_receipt_bytes(),
+        preflight_plan_receipt_sha256: lineage.rustc_preflight_plan_receipt_sha256(),
+        preflight_plan_receipt_bytes: lineage.rustc_preflight_plan_receipt_bytes(),
+    }
+}
+
+fn bundle_evidence_v8(
+    bundle: &VerifiedSimulationBundleV8,
+) -> crate::AdmittedSimulationBundleEvidenceV1 {
+    let production = bundle.production_kir_identity();
+    let lineage = bundle.source_lineage();
+    crate::AdmittedSimulationBundleEvidenceV1 {
+        envelope_version: 8,
+        envelope_identity: *bundle.identity().as_bytes(),
+        subject_identity: *bundle.subject_identity(),
+        production_kir_version: production.version(),
+        production_kir_sha256: production.digest(),
+        production_kir_bytes: production.canonical_length(),
+        final_graph_epoch: Some(bundle.final_graph_epoch()),
         kernel_abi_identity: *bundle.kernel_abi_identity(),
         identity_inventory_receipt_sha256: lineage.rustc_identity_inventory_receipt_sha256(),
         identity_inventory_receipt_bytes: lineage.rustc_identity_inventory_receipt_bytes(),
@@ -2290,9 +2623,12 @@ const fn cli_simulation_limits() -> SimulationLimitsV1 {
 
 fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, Failure> {
     let mut kir_v7 = None;
+    let mut kir_v12 = None;
     let mut bundle = None;
     let mut bundle_v5 = None;
     let mut bundle_v6 = None;
+    let mut bundle_v7 = None;
+    let mut bundle_v8 = None;
     let mut request = None;
     let mut output = None;
     let mut record_canonical_schedule = None;
@@ -2331,12 +2667,18 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
         }
         let (slot, name) = if argument == OsStr::new("--kir-v7") {
             (&mut kir_v7, "--kir-v7")
+        } else if argument == OsStr::new("--kir-v12") {
+            (&mut kir_v12, "--kir-v12")
         } else if argument == OsStr::new("--bundle") {
             (&mut bundle, "--bundle")
         } else if argument == OsStr::new("--bundle-v5") {
             (&mut bundle_v5, "--bundle-v5")
         } else if argument == OsStr::new("--bundle-v6") {
             (&mut bundle_v6, "--bundle-v6")
+        } else if argument == OsStr::new("--bundle-v7") {
+            (&mut bundle_v7, "--bundle-v7")
+        } else if argument == OsStr::new("--bundle-v8") {
+            (&mut bundle_v8, "--bundle-v8")
         } else if argument == OsStr::new("--request") {
             (&mut request, "--request")
         } else if argument == OsStr::new("--output") {
@@ -2385,17 +2727,22 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
             ));
         }
     }
-    let program = match (kir_v7, bundle, bundle_v5, bundle_v6) {
-        (Some(path), None, None, None) => ProgramInput::KirV7(path),
-        (None, Some(path), None, None) => ProgramInput::Bundle(path),
-        (None, None, Some(path), None) => ProgramInput::BundleV5(path),
-        (None, None, None, Some(path)) => ProgramInput::BundleV6(path),
-        (None, None, None, None) => {
+    let program = match (
+        kir_v7, kir_v12, bundle, bundle_v5, bundle_v6, bundle_v7, bundle_v8,
+    ) {
+        (Some(path), None, None, None, None, None, None) => ProgramInput::KirV7(path),
+        (None, Some(path), None, None, None, None, None) => ProgramInput::KirV12(path),
+        (None, None, Some(path), None, None, None, None) => ProgramInput::Bundle(path),
+        (None, None, None, Some(path), None, None, None) => ProgramInput::BundleV5(path),
+        (None, None, None, None, Some(path), None, None) => ProgramInput::BundleV6(path),
+        (None, None, None, None, None, Some(path), None) => ProgramInput::BundleV7(path),
+        (None, None, None, None, None, None, Some(path)) => ProgramInput::BundleV8(path),
+        (None, None, None, None, None, None, None) => {
             return Err(Failure::new(
                 Stage::Arguments,
                 ErrorKind::InvalidCommandLine,
                 format!(
-                    "exactly one of --kir-v7, --bundle, --bundle-v5, or --bundle-v6 is required; {USAGE}"
+                    "exactly one of --kir-v7, --kir-v12, --bundle, --bundle-v5, --bundle-v6, --bundle-v7, or --bundle-v8 is required; {USAGE}"
                 ),
             ));
         }
@@ -2404,7 +2751,7 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
                 Stage::Arguments,
                 ErrorKind::InvalidCommandLine,
                 format!(
-                    "--kir-v7, --bundle, --bundle-v5, and --bundle-v6 are mutually exclusive; {USAGE}"
+                    "--kir-v7, --kir-v12, --bundle, --bundle-v5, --bundle-v6, --bundle-v7, and --bundle-v8 are mutually exclusive; {USAGE}"
                 ),
             ));
         }
@@ -3172,6 +3519,17 @@ fn kir_v11_error_kind(error: &VerifiedCanonicalKernelIrErrorV11) -> ErrorKind {
     }
 }
 
+fn kir_v12_error_kind(error: &VerifiedCanonicalKernelIrErrorV12) -> ErrorKind {
+    match error {
+        VerifiedCanonicalKernelIrErrorV12::Encode(_) => ErrorKind::KirV12EncodeFailed,
+        VerifiedCanonicalKernelIrErrorV12::Decode(_) => ErrorKind::KirV12DecodeFailed,
+        VerifiedCanonicalKernelIrErrorV12::Verification(_) => ErrorKind::KirV12VerificationFailed,
+        VerifiedCanonicalKernelIrErrorV12::NotExactV12 { .. } => ErrorKind::KirV12WrongVersion,
+        VerifiedCanonicalKernelIrErrorV12::RoundTripMismatch => ErrorKind::KirV12RoundTripMismatch,
+        VerifiedCanonicalKernelIrErrorV12::IdentityMismatch => ErrorKind::KirV12IdentityMismatch,
+    }
+}
+
 fn admission_error_kind(error: &SimulationAdmissionErrorV1) -> ErrorKind {
     match error {
         SimulationAdmissionErrorV1::InvalidLimits(_) => ErrorKind::SimulatorAdmissionInvalidLimits,
@@ -3183,6 +3541,24 @@ fn admission_error_kind(error: &SimulationAdmissionErrorV1) -> ErrorKind {
         }
         SimulationAdmissionErrorV1::EncodeAfterAdmission(_) => {
             ErrorKind::SimulatorAdmissionEncodeFailed
+        }
+        SimulationAdmissionErrorV1::NonCanonicalAfterAdmission => {
+            ErrorKind::SimulatorAdmissionNonCanonical
+        }
+        SimulationAdmissionErrorV1::UnsupportedExecutionCapability(_) => {
+            ErrorKind::SimulatorAdmissionUnsupportedCapability
+        }
+        SimulationAdmissionErrorV1::IncompleteExecutionCapabilityV13(_) => {
+            ErrorKind::SimulatorAdmissionUnsupportedCapability
+        }
+        SimulationAdmissionErrorV1::LogicalCapabilityErasureAllocationFailure => {
+            ErrorKind::SimulatorAdmissionLogicalCapabilityErasureFailed
+        }
+        SimulationAdmissionErrorV1::InvalidLogicalCapabilityProjection(_) => {
+            ErrorKind::SimulatorAdmissionLogicalCapabilityErasureFailed
+        }
+        SimulationAdmissionErrorV1::LogicalCapabilityErasureVerification(_) => {
+            ErrorKind::SimulatorAdmissionLogicalCapabilityErasureFailed
         }
         SimulationAdmissionErrorV1::ResidentBytesOverflow => {
             ErrorKind::SimulatorAdmissionResidentBytesOverflow
@@ -3612,6 +3988,9 @@ fn write_exploration_input<W: Write + ?Sized>(
         PersistedSimulationScheduleArtifactV1::CanonicalKirV11 => {
             writer.write_all(b"{\"kind\":\"canonical_kir_v11\",\"kir_sha256\":\"")?;
         }
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV12 => {
+            writer.write_all(b"{\"kind\":\"canonical_kir_v12\",\"kir_sha256\":\"")?;
+        }
         PersistedSimulationScheduleArtifactV1::SimulationBundleV1 {
             bundle_sha256,
             subject_sha256,
@@ -3641,6 +4020,34 @@ fn write_exploration_input<W: Write + ?Sized>(
             writer.write_all(b"\",\"subject_sha256\":\"")?;
             write_lower_hex(writer, &subject_sha256, false)?;
             writer.write_all(b"\",\"kir_sha256\":\"")?;
+        }
+        PersistedSimulationScheduleArtifactV1::SimulationBundleV7 {
+            bundle_sha256,
+            subject_sha256,
+            final_graph_epoch,
+        } => {
+            writer.write_all(b"{\"kind\":\"simulation_bundle_v7\",\"bundle_sha256\":\"")?;
+            write_lower_hex(writer, &bundle_sha256, false)?;
+            writer.write_all(b"\",\"subject_sha256\":\"")?;
+            write_lower_hex(writer, &subject_sha256, false)?;
+            write!(
+                writer,
+                "\",\"final_graph_epoch\":{final_graph_epoch},\"kir_sha256\":\""
+            )?;
+        }
+        PersistedSimulationScheduleArtifactV1::SimulationBundleV8 {
+            bundle_sha256,
+            subject_sha256,
+            final_graph_epoch,
+        } => {
+            writer.write_all(b"{\"kind\":\"simulation_bundle_v8\",\"bundle_sha256\":\"")?;
+            write_lower_hex(writer, &bundle_sha256, false)?;
+            writer.write_all(b"\",\"subject_sha256\":\"")?;
+            write_lower_hex(writer, &subject_sha256, false)?;
+            write!(
+                writer,
+                "\",\"final_graph_epoch\":{final_graph_epoch},\"kir_sha256\":\""
+            )?;
         }
     }
     write_lower_hex(writer, &binding.kir_sha256(), false)?;

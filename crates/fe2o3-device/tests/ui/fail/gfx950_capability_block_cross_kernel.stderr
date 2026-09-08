@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/fail/gfx950_capability_block_cross_kernel.rs:15:32
+   |
+15 |     let _ = output.store_block(block, 0, 1.0);
+   |                    ----------- ^^^^^ expected `KernelA`, found `KernelB`
+   |                    |
+   |                    arguments to this method are incorrect
+   |
+   = note: expected reference `&DisjointBlock<Index1D, 64, 4, fe2o3_device::KernelCapabilityBrand<'a, KernelA, CurrentTarget, RegisteredLaunch>>`
+              found reference `&DisjointBlock<Index1D, 64, 4, fe2o3_device::KernelCapabilityBrand<'a, KernelB, CurrentTarget, RegisteredLaunch>>`
+note: method defined here
+  --> src/capability_memory.rs
+   |
+   |     pub fn store_block(
+   |            ^^^^^^^^^^^

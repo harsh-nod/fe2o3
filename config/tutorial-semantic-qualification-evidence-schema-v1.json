@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://harsh-nod.github.io/fe2o3-kernels/schema/tutorial-semantic-qualification-evidence-v1.json",
+  "title": "fe2o3 tutorial semantic qualification evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "authority",
+    "candidate",
+    "manifest",
+    "roadmapIssue",
+    "schema",
+    "suites"
+  ],
+  "properties": {
+    "schema": {
+      "const": "fe2o3-tutorial-semantic-qualification-evidence-v1"
+    },
+    "roadmapIssue": {
+      "const": "https://github.com/harsh-nod/fe2o3/issues/272"
+    },
+    "authority": {
+      "$ref": "#/$defs/authority"
+    },
+    "candidate": {
+      "$ref": "#/$defs/candidate"
+    },
+    "manifest": {
+      "$ref": "#/$defs/manifest"
+    },
+    "suites": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/suite"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "gitIdentity": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compilerAuthority",
+        "hardwareAuthority",
+        "launchAuthority",
+        "loadAuthority",
+        "publicationAuthority"
+      ],
+      "properties": {
+        "compilerAuthority": {
+          "const": false
+        },
+        "hardwareAuthority": {
+          "const": false
+        },
+        "launchAuthority": {
+          "const": false
+        },
+        "loadAuthority": {
+          "const": false
+        },
+        "publicationAuthority": {
+          "const": false
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commit",
+        "tree",
+        "worktreeClean"
+      ],
+      "properties": {
+        "commit": {
+          "$ref": "#/$defs/gitIdentity"
+        },
+        "tree": {
+          "$ref": "#/$defs/gitIdentity"
+        },
+        "worktreeClean": {
+          "const": true
+        }
+      }
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "corpusContractSha256",
+        "path",
+        "rawSha256"
+      ],
+      "properties": {
+        "path": {
+          "const": "config/tutorial-kernel-manifest-v1.json"
+        },
+        "rawSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "corpusContractSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fixtureIds",
+        "lessonId"
+      ],
+      "properties": {
+        "lessonId": {
+          "$ref": "#/$defs/slug"
+        },
+        "fixtureIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/slug"
+          }
+        }
+      }
+    },
+    "suite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commandSha256",
+        "coverage",
+        "exitStatus",
+        "gate",
+        "stderrBytes",
+        "stderrSha256",
+        "stdoutBytes",
+        "stdoutSha256",
+        "status",
+        "suiteId"
+      ],
+      "properties": {
+        "suiteId": {
+          "$ref": "#/$defs/slug"
+        },
+        "gate": {
+          "enum": [
+            "cpu-reference",
+            "semantic-simulation"
+          ]
+        },
+        "status": {
+          "const": "passed"
+        },
+        "exitStatus": {
+          "const": 0
+        },
+        "commandSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "stdoutSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "stderrSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "stdoutBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 67108864
+        },
+        "stderrBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8388608
+        },
+        "coverage": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/coverage"
+          }
+        }
+      }
+    }
+  }
+}

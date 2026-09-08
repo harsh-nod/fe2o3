@@ -24,9 +24,10 @@ mod kernel_ir_codegen;
 mod monomorphization_dead;
 #[cfg(test)]
 mod process_execution;
+mod production_backend_v1;
 mod production_geometry_v1;
 mod production_mir_pliron_verus_join_v1;
-mod production_pipeline;
+pub mod production_pipeline;
 mod production_policy;
 mod production_ranked_projection_v1;
 mod production_reference_bounds_v2;
@@ -51,10 +52,18 @@ mod rust_type_layout_v3;
 mod rustc_semantic_adapter_v1;
 mod rustc_semantic_plan_v1;
 pub mod semantic_layout_bridge;
+mod single_codegen_ownership_v1;
 mod static_registration;
 #[cfg(test)]
 mod test_temp_dir;
 mod trusted_device_items;
+mod tutorial_hardware_qualification_v1;
+
+pub use tutorial_hardware_qualification_v1::{
+    TutorialHardwareQualificationErrorV1, TutorialHardwareQualificationReceiptInputV1,
+    TutorialHardwareReceiptReplayLedgerV1, VerifiedTutorialHardwareQualificationReceiptV1,
+    verify_tutorial_hardware_qualification_receipt_v1,
+};
 
 /// Opaque move-only custody for an exact compiler-ranked root roster.
 ///
@@ -93,6 +102,7 @@ pub use production_rustc_driver_v1::{
     run_production_simulation_bundle_extraction_driver_v4,
     run_production_simulation_bundle_extraction_driver_v5,
     run_production_simulation_bundle_extraction_driver_v6,
+    run_production_simulation_bundle_extraction_driver_v8,
 };
 
 use fe2o3_artifact_transaction as artifact_transaction;
@@ -182,7 +192,7 @@ pub struct BackendConfig {
     production_environment_rejection: Option<String>,
     build_attempt: BuildAttemptSelection,
     pub hsaco_output_dir: Option<PathBuf>,
-    pub target: AmdGpuTarget,
+    pub target: ProductionDeviceTarget,
 }
 
 impl BackendConfig {
@@ -194,7 +204,7 @@ impl BackendConfig {
             production_environment_rejection: production_policy::environment_rejection(),
             build_attempt: BuildAttemptSelection::from_env(),
             hsaco_output_dir: env::var(HSACO_DIR_ENV).ok().map(PathBuf::from),
-            target: AmdGpuTarget::from_env_or_default(),
+            target: ProductionDeviceTarget::from_env_or_default(),
         }
     }
 }
@@ -230,6 +240,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
 
     fn provide(&self, providers: &mut rustc_middle::util::Providers) {
         self.llvm_backend.provide(providers);
+        single_codegen_ownership_v1::install_codegen_unit_provider_v1(providers);
     }
 
     fn codegen_crate(&self, tcx: TyCtxt<'_>, crate_info: &CrateInfo) -> Box<dyn Any> {
@@ -254,6 +265,14 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             let production_root_count =
                 collector::count_production_roots_before_monomorphization_v1(tcx);
             let mut production_device_admission = if production_root_count > 0 {
+                self.config
+                    .target
+                    .require_explicit_for_production()
+                    .unwrap_or_else(|error| {
+                        tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] production target selection failed: {error}"
+                        ))
+                    });
                 let build_attempt = build_attempt.unwrap_or_else(|| {
                     tcx.dcx().fatal(format!(
                         "[rustc-codegen-fe2o3] production compilation requires a managed {BUILD_ATTEMPT_ENV} before monomorphization"
@@ -292,6 +311,17 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     "[rustc-codegen-fe2o3] production root custody changed across monomorphization: {reason}; compilation failed closed"
                 ));
             }
+            if kernel_count == 0 {
+                single_codegen_ownership_v1::reject_unclaimed_reserved_roots_v1(
+                    tcx,
+                    mono_partitions.codegen_units,
+                )
+                .unwrap_or_else(|error| {
+                    tcx.dcx().fatal(format!(
+                        "[rustc-codegen-fe2o3] single-code-generation ownership failed: {error}"
+                    ))
+                });
+            }
             let crate_name = tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE);
             let output_dir = match managed_artifact_output(&self.config, kernel_count) {
                 Ok(output_dir) => output_dir,
@@ -300,14 +330,19 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 )),
             };
             if self.config.verbose || kernel_count > 0 {
+                let reported_target = production_device_admission
+                    .as_ref()
+                    .map(|admission| admission.target.canonical_name())
+                    .unwrap_or_else(|| self.config.target.non_authoritative_name());
                 eprintln!(
                     "[rustc-codegen-fe2o3] crate `{crate_name}`: {} CGU(s), {kernel_count} kernel candidate(s), target {}",
                     mono_partitions.codegen_units.len(),
-                    self.config.target,
+                    reported_target,
                 );
             }
 
             let mut production_device_transaction_complete = false;
+            let mut ownership_occurrence = None;
             match production_pipeline::disposition(kernel_count) {
                 production_pipeline::ProductionDisposition::HostOnly => {}
                 production_pipeline::ProductionDisposition::DeviceTransaction => {
@@ -318,6 +353,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     } = production_device_admission
                         .take()
                         .expect("device admission presence was validated after monomorphization");
+                    let authenticated_target_name = target.canonical_name();
                     let has_custom_llvm_configuration = has_custom_llvm_configuration(tcx.sess);
                     if let Err(error) = production_pipeline::reject_custom_llvm_configuration(
                         has_custom_llvm_configuration,
@@ -335,6 +371,48 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 "[rustc-codegen-fe2o3] production collection failed without fallback: {error}"
                             )),
                         };
+                    let typed_roots =
+                        closure
+                            .rederive_typed_descriptor_roots(tcx)
+                            .unwrap_or_else(|error| {
+                                tcx.dcx().fatal(format!(
+                                    "[rustc-codegen-fe2o3] ownership root custody failed: {error}"
+                                ))
+                            });
+                    let typed_claims = typed_roots
+                        .iter()
+                        .map(|root| {
+                            single_codegen_ownership_v1::AuthenticatedTypedRootClaimV1::new(
+                                root.logical_name(),
+                                root.entry_symbol(),
+                                root.kernel_binding_bytes(),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let authenticated_roots =
+                        single_codegen_ownership_v1::rederive_roots_from_collector_custody_v1(
+                            tcx,
+                            mono_partitions.codegen_units,
+                            &closure,
+                            kernel_count,
+                            &typed_claims,
+                        )
+                        .unwrap_or_else(|error| {
+                            tcx.dcx().fatal(format!(
+                                "[rustc-codegen-fe2o3] exact ownership root custody failed: {error}"
+                            ))
+                        });
+                    let ownership = single_codegen_ownership_v1::build_receipt_v1(
+                        tcx,
+                        mono_partitions.codegen_units,
+                        &authenticated_roots,
+                        &closure,
+                    )
+                    .unwrap_or_else(|error| {
+                        tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] single-code-generation ownership failed: {error}"
+                        ))
+                    });
                     let output_dir = output_dir
                         .expect("device output was required above")
                         .to_path_buf();
@@ -351,6 +429,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             "[rustc-codegen-fe2o3] protected rustc producer identity failed: {error}"
                         )),
                     };
+                    let (ownership, final_v13_symbols) = ownership.into_parts();
                     let publication =
                         production_pipeline::ProductionCompilation::from_collected_device_closure(
                             tcx,
@@ -361,14 +440,31 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             invocation,
                             compiler_execution,
                         )
-                        .and_then(|transaction| transaction.publish_worker_handoff())
+                        .and_then(|transaction| {
+                            transaction.publish_worker_handoff(final_v13_symbols)
+                        })
                         .map(|subject| subject.outer_handoff().byte_len());
                     match publication {
                         Ok(publication_length) => {
+                            let occurrence =
+                                single_codegen_ownership_v1::install_receipt_v1(tcx, ownership)
+                                    .unwrap_or_else(|error| {
+                                        tcx.dcx().fatal(format!(
+                                            "[rustc-codegen-fe2o3] single-code-generation ownership installation failed: {error}"
+                                        ))
+                                    });
+                            occurrence
+                                .preflight_delegated_codegen_units(tcx)
+                                .unwrap_or_else(|error| {
+                                    tcx.dcx().fatal(format!(
+                                        "[rustc-codegen-fe2o3] single-code-generation preflight failed: {error}"
+                                    ))
+                                });
+                            ownership_occurrence = Some(occurrence);
                             production_device_transaction_complete = true;
                             eprintln!(
-                                "[rustc-codegen-fe2o3] production compilation published {} canonical byte(s) of inert exact gfx942:xnack- LLVM handoff into the preselected managed compiler-module transaction; link, artifact, load, and launch authority remain false",
-                                publication_length,
+                                "[rustc-codegen-fe2o3] production compilation published {} canonical byte(s) of inert exact {} LLVM handoff into the preselected managed compiler-module transaction; link, artifact, load, and launch authority remain false",
+                                publication_length, authenticated_target_name,
                             );
                         }
                         Err(error) => tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")),
@@ -380,7 +476,14 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     "[rustc-codegen-fe2o3] production compilation did not complete its device transaction; qualification fallback is forbidden",
                 );
             }
-            self.llvm_backend.codegen_crate(tcx, crate_info)
+            // The delegated backend sees only the host partition through the
+            // codegen-unit provider installed above. Device roots, helpers,
+            // and compiler-only registrations remain owned by final V13.
+            let delegated = self.llvm_backend.codegen_crate(tcx, crate_info);
+            Box::new(single_codegen_ownership_v1::DelegatedCodegenV1::new(
+                delegated,
+                ownership_occurrence,
+            ))
         })
     }
 
@@ -390,8 +493,23 @@ impl CodegenBackend for Fe2o3CodegenBackend {
         sess: &Session,
         outputs: &OutputFilenames,
     ) -> (CompiledModules, FxIndexMap<WorkProductId, WorkProduct>) {
-        self.llvm_backend
-            .join_codegen(ongoing_codegen, sess, outputs)
+        let mut delegated = ongoing_codegen
+            .downcast::<single_codegen_ownership_v1::DelegatedCodegenV1>()
+            .unwrap_or_else(|_| {
+                panic!("join_codegen received state not returned by fe2o3 codegen_crate")
+            });
+        let result = self
+            .llvm_backend
+            .join_codegen(delegated.take_inner(), sess, outputs);
+        delegated
+            .verify_delegated_objects(&result.0)
+            .unwrap_or_else(|error| {
+                panic!("single-code-generation object verification failed: {error}")
+            });
+        delegated.retire().unwrap_or_else(|error| {
+            panic!("single-code-generation ownership retirement failed: {error}")
+        });
+        result
     }
 
     fn link(
@@ -419,21 +537,47 @@ pub fn __rustc_codegen_backend() -> Box<dyn CodegenBackend> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AmdGpuTarget {
+pub struct ProductionDeviceTarget {
     name: String,
+    explicit: bool,
 }
 
-impl AmdGpuTarget {
+impl ProductionDeviceTarget {
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into() }
+        Self {
+            name: name.into(),
+            explicit: true,
+        }
     }
 
     pub fn from_env_or_default() -> Self {
-        env::var(TARGET_ENV)
-            .ok()
+        Self::from_optional_value(env::var(TARGET_ENV).ok())
+    }
+
+    fn from_optional_value(value: Option<String>) -> Self {
+        value
             .filter(|value| !value.trim().is_empty())
             .map(Self::new)
-            .unwrap_or_else(|| Self::new("gfx1100"))
+            .unwrap_or_else(Self::host_only_unselected)
+    }
+
+    fn host_only_unselected() -> Self {
+        Self {
+            name: "<host-only:no-production-target>".to_owned(),
+            explicit: false,
+        }
+    }
+
+    fn require_explicit_for_production(&self) -> Result<&str, &'static str> {
+        (self.explicit && !self.name.trim().is_empty())
+            .then_some(self.name.as_str())
+            .ok_or(
+            "FE2O3_TARGET must explicitly select a supported production target; the host-only placeholder has no device authority",
+        )
+    }
+
+    fn non_authoritative_name(&self) -> &str {
+        "<host-only:production-target-not-authenticated>"
     }
 
     pub fn as_str(&self) -> &str {
@@ -441,17 +585,21 @@ impl AmdGpuTarget {
     }
 }
 
-impl Default for AmdGpuTarget {
+impl Default for ProductionDeviceTarget {
     fn default() -> Self {
         Self::from_env_or_default()
     }
 }
 
-impl fmt::Display for AmdGpuTarget {
+impl fmt::Display for ProductionDeviceTarget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.name)
     }
 }
+
+/// Source-compatible name for callers written before production target
+/// selection moved behind the target-neutral backend boundary.
+pub type AmdGpuTarget = ProductionDeviceTarget;
 
 fn env_flag(name: &str) -> bool {
     matches!(
@@ -474,7 +622,9 @@ fn managed_artifact_output(
 
 #[cfg(test)]
 mod tests {
-    use super::{BackendConfig, BuildAttemptSelection, managed_artifact_output};
+    use super::{
+        BackendConfig, BuildAttemptSelection, ProductionDeviceTarget, managed_artifact_output,
+    };
     use std::path::{Path, PathBuf};
     #[test]
     fn admitted_protected_modules_publish_only_through_strict_v3() {
@@ -497,7 +647,7 @@ mod tests {
         assert!(production.contains(".take()"));
         assert!(!production.contains("build_attempt.unwrap_or_else"));
         assert!(production.contains("from_collected_device_closure("));
-        assert!(production.contains("publish_worker_handoff()"));
+        assert!(production.contains("publish_worker_handoff(final_v13_symbols)"));
         assert!(!production.contains("from_collected_device_closure_with_protected_invocation_v3"));
         assert!(!production.contains("publish_worker_handoff_v3"));
         assert!(!production.contains("None =>"));
@@ -529,6 +679,34 @@ mod tests {
         assert!(configuration.contains("production_policy::environment_rejection()"));
         assert!(!configuration.contains("QualificationSelection"));
         assert!(!configuration.contains("qualification_selection"));
+    }
+
+    #[test]
+    fn production_target_is_explicit_and_substitution_is_not_authoritative() {
+        let absent = ProductionDeviceTarget::from_optional_value(None);
+        assert_eq!(absent.as_str(), "<host-only:no-production-target>");
+        assert!(absent.require_explicit_for_production().is_err());
+
+        let empty = ProductionDeviceTarget::from_optional_value(Some("  ".to_owned()));
+        assert!(empty.require_explicit_for_production().is_err());
+
+        let configured = ProductionDeviceTarget::from_optional_value(Some("gfx950".to_owned()));
+        assert_eq!(configured.require_explicit_for_production(), Ok("gfx950"));
+        assert!(
+            ProductionDeviceTarget::new(" ")
+                .require_explicit_for_production()
+                .is_err()
+        );
+        assert_eq!(
+            configured.non_authoritative_name(),
+            "<host-only:production-target-not-authenticated>"
+        );
+
+        let backend = include_str!("lib.rs");
+        assert!(!backend.contains("Self::new(\"gfx1100\")"));
+        assert!(!backend.contains("inert exact gfx942:xnack- LLVM handoff"));
+        assert!(backend.contains("let authenticated_target_name = target.canonical_name()"));
+        assert!(backend.contains("publication_length, authenticated_target_name"));
     }
 
     #[test]

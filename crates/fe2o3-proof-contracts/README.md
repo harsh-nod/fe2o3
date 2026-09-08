@@ -5,6 +5,18 @@ contract layer shared by the issue #134 compiler pipeline and the issue #135
 persistent-execution work. It records what a producer says about a property
 without executing a verifier or granting runtime authority.
 
+The side-by-side capability V1 wire family supports issue #272 W6. It binds a
+bounded obligation set and its result set to one exact kernel, physical root,
+executable KIR identity and epoch, target model, and launch contract. Every
+obligation and result has a domain-separated identity. Exact composition
+rejects missing or duplicate results and kernel/root/KIR/epoch/target/launch
+substitution.
+
+Capability results distinguish `Proven`, `Rejected` with a bounded witness,
+`Incomplete`, `Unsupported`, and `Unreviewed`. These are analysis dispositions,
+not an authority lattice. In particular, an all-`Proven` result set is still
+caller-constructible inert content.
+
 ## Authority model
 
 Each property has its own identity, exact statement, status, evidence identity,
@@ -55,6 +67,11 @@ authorize GPU execution. Authority-bearing integration must authenticate the
 exact external identities and revalidate the complete set immediately before
 use.
 
+The capability codecs accept only their exact V1 magic and version, reject
+flags, reserved values, trailing bytes, noncanonical order, duplicate semantic
+keys, identity mutations, and resource-limit violations. Existing
+`ContractSetV1` records and behavior are unchanged and remain a closed format.
+
 The crate contains no process runner, solver adapter, Pliron type, LLVM type,
 HSA handle, filesystem access, networking, unsafe code, or target-specific
 logic. Process supervision remains owned by fe2o3-verifier. Proof production,
@@ -65,3 +82,11 @@ artifact authentication, and runtime admission remain outside this crate.
 Adapters belong in verifier, compiler, Pliron, and runtime crates rather than
 in this contract layer. Integrators must authenticate identities outside this
 crate and treat validation success as structural consistency only.
+
+The compiler-lineage V5 owner carries the exact capability association beside
+the frozen V3/V4 formats. Its compiler producer must emit that association and
+the separate canonical KIR V12 receipt; it may not mutate or reinterpret the
+older formats. The Worker verifier must independently reacquire, authenticate,
+and compose those records with source/MIR-to-KIR, machine-refinement, and
+dynamic launch receipts. This crate intentionally provides no capsule adapter,
+publication receipt, verifier decision, load token, or launch gate.

@@ -1,0 +1,93 @@
+error[E0277]: the trait bound `ReusableWorkgroup<'static, ()>: Copy` is not satisfied
+ --> tests/ui/fail/source_capability_reusable_workgroup_not_copy_send.rs:9:19
+  |
+9 |     assert_copy::<ReusableWorkgroup<'static, ()>>();
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Copy` is not implemented for `ReusableWorkgroup<'static, ()>`
+  |
+note: required by a bound in `assert_copy`
+ --> tests/ui/fail/source_capability_reusable_workgroup_not_copy_send.rs:3:19
+  |
+3 | fn assert_copy<T: Copy>() {}
+  |                   ^^^^ required by this bound in `assert_copy`
+
+error[E0277]: the trait bound `ReusableWorkgroup<'static, ()>: Clone` is not satisfied
+  --> tests/ui/fail/source_capability_reusable_workgroup_not_copy_send.rs:10:20
+   |
+10 |     assert_clone::<ReusableWorkgroup<'static, ()>>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ReusableWorkgroup<'static, ()>`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/ui/fail/source_capability_reusable_workgroup_not_copy_send.rs:4:20
+   |
+ 4 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: `*mut ()` cannot be sent between threads safely
+  --> tests/ui/fail/source_capability_reusable_workgroup_not_copy_send.rs:11:19
+   |
+11 |     assert_send::<ReusableWorkgroup<'static, ()>>();
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+   |
+   = help: within `ReusableWorkgroup<'static, ()>`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+  --> $RUST/core/src/marker.rs
+   |
+   | pub struct PhantomData<T: PointeeSized>;
+   |            ^^^^^^^^^^^
+note: required because it appears within the type `ReusableWorkgroup<'static, ()>`
+  --> src/execution.rs
+   |
+   | pub struct ReusableWorkgroup<'workgroup, KernelBrand> {
+   |            ^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+  --> tests/ui/fail/source_capability_reusable_workgroup_not_copy_send.rs:5:19
+   |
+ 5 | fn assert_send<T: Send>() {}
+   |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `*mut ()` cannot be shared between threads safely
+  --> tests/ui/fail/source_capability_reusable_workgroup_not_copy_send.rs:12:19
+   |
+12 |     assert_sync::<ReusableWorkgroup<'static, ()>>();
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be shared between threads safely
+   |
+   = help: within `ReusableWorkgroup<'static, ()>`, the trait `Sync` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+  --> $RUST/core/src/marker.rs
+   |
+   | pub struct PhantomData<T: PointeeSized>;
+   |            ^^^^^^^^^^^
+note: required because it appears within the type `ReusableWorkgroup<'static, ()>`
+  --> src/execution.rs
+   |
+   | pub struct ReusableWorkgroup<'workgroup, KernelBrand> {
+   |            ^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_sync`
+  --> tests/ui/fail/source_capability_reusable_workgroup_not_copy_send.rs:6:19
+   |
+ 6 | fn assert_sync<T: Sync>() {}
+   |                   ^^^^ required by this bound in `assert_sync`
+
+error[E0277]: the trait bound `ReusableWorkgroupLds<'static, u32, 64, ()>: Copy` is not satisfied
+  --> tests/ui/fail/source_capability_reusable_workgroup_not_copy_send.rs:13:19
+   |
+13 |     assert_copy::<ReusableWorkgroupLds<'static, u32, 64, ()>>();
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Copy` is not implemented for `ReusableWorkgroupLds<'static, u32, 64, ()>`
+   |
+note: required by a bound in `assert_copy`
+  --> tests/ui/fail/source_capability_reusable_workgroup_not_copy_send.rs:3:19
+   |
+ 3 | fn assert_copy<T: Copy>() {}
+   |                   ^^^^ required by this bound in `assert_copy`
+
+error[E0277]: the trait bound `ReusableWorkgroupLds<'static, u32, 64, ()>: Clone` is not satisfied
+  --> tests/ui/fail/source_capability_reusable_workgroup_not_copy_send.rs:14:20
+   |
+14 |     assert_clone::<ReusableWorkgroupLds<'static, u32, 64, ()>>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ReusableWorkgroupLds<'static, u32, 64, ()>`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/ui/fail/source_capability_reusable_workgroup_not_copy_send.rs:4:20
+   |
+ 4 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`

@@ -1,8 +1,34 @@
+warning: use of deprecated type alias `fe2o3_device::Wave32`: use SubgroupWidth32; target legalization still checks the exact width
+ --> tests/ui/fail/wave_lane_is_not_copy.rs:1:20
+  |
+1 | use fe2o3_device::{Wave32, WaveLane};
+  |                    ^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/wave_lane_is_not_copy.rs:1:28
+  |
+1 | use fe2o3_device::{Wave32, WaveLane};
+  |                            ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/wave_lane_is_not_copy.rs:3:20
+  |
+3 | fn duplicate(lane: WaveLane<Wave32>) {
+  |                    ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::Wave32`: use SubgroupWidth32; target legalization still checks the exact width
+ --> tests/ui/fail/wave_lane_is_not_copy.rs:3:29
+  |
+3 | fn duplicate(lane: WaveLane<Wave32>) {
+  |                             ^^^^^^
+
 error[E0382]: use of moved value: `lane`
  --> tests/ui/fail/wave_lane_is_not_copy.rs:5:18
   |
 3 | fn duplicate(lane: WaveLane<Wave32>) {
-  |              ---- move occurs because `lane` has type `WaveLane<Wave32>`, which does not implement the `Copy` trait
+  |              ---- move occurs because `lane` has type `SubgroupLane<SubgroupWidth32>`, which does not implement the `Copy` trait
 4 |     let first = lane;
   |                 ---- value moved here
 5 |     let second = lane;

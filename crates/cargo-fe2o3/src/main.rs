@@ -30,6 +30,7 @@ mod pinned_executable;
 #[cfg(test)]
 mod pinned_executable_test_directory;
 mod process_execution;
+mod production_capability_completion_v5;
 mod production_cargo_plan;
 mod profile_command;
 mod profile_dispatch_import_v1;

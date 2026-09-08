@@ -138,6 +138,27 @@ fn constructors_reject_conflicts_and_unknown_authority_bits() {
         ),
         Err(KernelFrontendContractValidationErrorV1::AssemblyEffectsConflictWithOptions)
     );
+    assert_eq!(
+        KernelFrontendContractV1::new_with_raw_memory_provider(
+            fixture().launch(),
+            fixture().unsafe_assembly(),
+            true,
+        ),
+        Err(KernelFrontendContractValidationErrorV1::ConflictingUnsafeBoundaries)
+    );
+}
+
+#[test]
+fn raw_memory_provider_boundary_round_trips_without_assembly_authority() {
+    let contract =
+        KernelFrontendContractV1::new_with_raw_memory_provider(None, None, true).unwrap();
+    let encoded = encode_kernel_frontend_contract_v1(contract);
+    let decoded = decode_kernel_frontend_contract_v1(&encoded).unwrap();
+
+    assert_eq!(decoded, contract);
+    assert!(decoded.unsafe_raw_memory_provider());
+    assert_eq!(decoded.unsafe_assembly(), None);
+    assert_eq!(encode_kernel_frontend_contract_v1(decoded), encoded);
 }
 
 #[test]

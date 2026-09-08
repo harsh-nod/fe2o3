@@ -6,16 +6,18 @@ use crate::{
     AMDGPU_DIAGNOSTICS_CAPABILITY_NAME, AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE,
     AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME, AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE,
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, AssemblyConstraint, AssemblyEffect,
-    AssemblyOperandKind, AssemblyOption, Atomic, AtomicKind, Barrier, BasicBlock, BinaryOp,
-    BlockId, CastKind, CheckedBinaryOperator, ComparePredicate, Constant, ControlFlowError, Fence,
+    AssemblyOperandKind, AssemblyOption, AsyncCopyCompletionV1, Atomic, AtomicKind, Barrier,
+    BasicBlock, BinaryOp, BlockId, CastKind, CheckedBinaryOperator,
+    CollectiveCapabilityOperationV1, ComparePredicate, Constant, ControlFlowError,
+    ExecutionCapabilityOpV1, ExecutionCapabilityRequirementV1, ExecutionCapabilityRoleV1, Fence,
     FloatOperation, Function, FunctionId, FunctionRole, Gfx950LdsTransposeFormatV1,
-    Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1, IndexedControlFlow,
-    InlineAssembly, Kernel, KernelId, LaunchExtent, MatrixOperation, MatrixOperationKind,
-    MatrixVerificationIssueKind, MemoryOrdering, Module, ModuleId, Operation, OperationKind,
-    ScalarType, SemanticOperationIssueKind, SemanticOperationVerificationContext,
-    SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueId, WaveOperation,
-    WaveOperationKind, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
-    analyze_control_flow, pointer_for,
+    Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1, GlobalCapabilityRoleV1,
+    IndexedControlFlow, InlineAssembly, Kernel, KernelId, LaunchExtent, MatrixOperation,
+    MatrixOperationKind, MatrixVerificationIssueKind, MemoryOrdering, Module, ModuleId, Operation,
+    OperationKind, ResourceCapabilityRequirementV1, ScalarType, SemanticOperationIssueKind,
+    SemanticOperationVerificationContext, SynchronizationScope, TargetCapability, Terminator, Type,
+    UnaryOp, ValueId, WaveOperation, WaveOperationKind, WorkgroupBarrier, WorkgroupMemory,
+    WorkgroupMemoryExtent, analyze_control_flow, pointer_for,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -63,6 +65,9 @@ pub enum DiagnosticCode {
     InvalidFloatOperation,
     InvalidAmdGpuDiagnosticOperation,
     InvalidInlineAssembly,
+    InvalidKernelContext,
+    InvalidGlobalCapability,
+    InvalidExecutionCapability,
     InvalidTerminator,
 }
 
@@ -338,6 +343,7 @@ impl<'module> ModuleVerifier<'module> {
     fn verify_function(&mut self, function: &Function) {
         let location = DiagnosticLocation::function(self.module, function);
         self.verify_capabilities(&function.required_capabilities, location.clone());
+        self.verify_kernel_context_signature(function, location.clone());
 
         if function
             .id
@@ -450,6 +456,100 @@ impl<'module> ModuleVerifier<'module> {
         function_verifier.verify();
     }
 
+    fn verify_kernel_context_signature(
+        &mut self,
+        function: &Function,
+        location: DiagnosticLocation,
+    ) {
+        let mut direct_contexts = 0_usize;
+        for (index, ty) in function.signature.parameters.iter().enumerate() {
+            let is_direct_context = matches!(ty, Type::KernelContext(_));
+            direct_contexts += usize::from(is_direct_context);
+            if ty.contains_kernel_context()
+                && (function.role != FunctionRole::InternalHelper || !is_direct_context)
+            {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::InvalidKernelContext,
+                    format!(
+                        "parameter {index} places a logical kernel context in the {:?} ABI",
+                        function.role
+                    ),
+                );
+            }
+            if is_direct_context && index != 0 {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::InvalidKernelContext,
+                    format!(
+                        "logical kernel context must be parameter 0 of an internal helper, found parameter {index}"
+                    ),
+                );
+            }
+            if let Type::KernelContext(context) = ty
+                && !context.is_complete()
+            {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::InvalidKernelContext,
+                    format!("parameter {index} has an incomplete kernel-context brand"),
+                );
+            }
+            if let Type::GlobalCapability(capability) = ty {
+                if function.role != FunctionRole::InternalHelper {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidGlobalCapability,
+                        format!(
+                            "parameter {index} places branded global authority in the {:?} ABI",
+                            function.role
+                        ),
+                    );
+                }
+                if !capability.is_complete() {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidGlobalCapability,
+                        format!("parameter {index} has an incomplete global-capability type"),
+                    );
+                }
+            }
+            if let Type::ExecutionCapability(capability) = ty {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::InvalidExecutionCapability,
+                    format!(
+                        "parameter {index} places execution authority in the {:?} ABI instead of a verified V13 defining graph",
+                        function.role
+                    ),
+                );
+                if !capability.is_complete() {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidExecutionCapability,
+                        format!("parameter {index} has an incomplete execution-capability type"),
+                    );
+                }
+            }
+        }
+        if direct_contexts > 1 {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidKernelContext,
+                "an internal helper may accept at most one logical kernel context",
+            );
+        }
+        for (index, ty) in function.signature.results.iter().enumerate() {
+            if ty.contains_logical_capability() {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::InvalidGlobalCapability,
+                    format!("result {index} would let logical capability authority escape"),
+                );
+            }
+        }
+    }
+
     fn verify_kernel(&mut self, kernel: &Kernel) {
         let location = DiagnosticLocation::kernel(self.module, kernel);
         self.verify_capabilities(&kernel.required_capabilities, location.clone());
@@ -518,6 +618,7 @@ impl<'module> ModuleVerifier<'module> {
         }
 
         self.verify_reachable_intrinsic_axes(kernel, entry);
+        self.verify_reachable_kernel_context_flow(kernel, entry);
     }
 
     fn verify_reachable_intrinsic_axes(&mut self, kernel: &Kernel, entry: &'module Function) {
@@ -555,6 +656,99 @@ impl<'module> ModuleVerifier<'module> {
                         && let Some(callee) = self.functions.get(callee).copied()
                     {
                         pending.push(callee);
+                    }
+                }
+            }
+        }
+    }
+
+    fn verify_reachable_kernel_context_flow(&mut self, kernel: &Kernel, entry: &'module Function) {
+        let issued = entry
+            .body
+            .iter()
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+            .filter_map(
+                |operation| match (&operation.kind, operation.results.as_slice()) {
+                    (OperationKind::KernelContextIssue(_), [result]) => match &result.ty {
+                        Type::KernelContext(context) => Some(context.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+            )
+            .collect::<Vec<_>>();
+        let [expected] = issued.as_slice() else {
+            // Context-free older modules retain their established validation.
+            // Local verification rejects malformed or duplicate V12 issuances.
+            return;
+        };
+
+        let mut pending = vec![entry.id.clone()];
+        let mut visited = BTreeSet::new();
+        while let Some(function_id) = pending.pop() {
+            if !visited.insert(function_id.clone()) {
+                continue;
+            }
+            let Some(function) = self.functions.get(&function_id).copied() else {
+                continue;
+            };
+            let helper_context = function
+                .signature
+                .parameters
+                .iter()
+                .find_map(|ty| match ty {
+                    Type::KernelContext(context) => Some(context),
+                    Type::GlobalCapability(capability) => Some(capability.context()),
+                    _ => None,
+                });
+            let carries_context = function.id == entry.id
+                || helper_context.is_some_and(|context| context == expected);
+            let Some(body) = &function.body else {
+                continue;
+            };
+
+            for block in &body.blocks {
+                for (operation_index, operation) in block.operations.iter().enumerate() {
+                    let mut location = DiagnosticLocation::function(self.module, function);
+                    location.kernel = Some(kernel.id.clone());
+                    location = location.at_block(block.id).at_operation(operation_index);
+                    if operation_requires_kernel_context(operation) && !carries_context {
+                        self.emit(
+                            location.clone(),
+                            DiagnosticCode::InvalidKernelContext,
+                            format!(
+                                "context-enabled kernel {} reaches a capability operation through helper {} without its exact context brand",
+                                kernel.id, function.id
+                            ),
+                        );
+                    }
+
+                    let OperationKind::Call { callee, .. } = &operation.kind else {
+                        continue;
+                    };
+                    let Some(callee) = self.functions.get(callee).copied() else {
+                        continue;
+                    };
+                    if callee.role != FunctionRole::ExternalImport {
+                        pending.push(callee.id.clone());
+                    }
+                    let callee_context =
+                        callee.signature.parameters.first().and_then(|ty| match ty {
+                            Type::KernelContext(context) => Some(context),
+                            _ => None,
+                        });
+                    if let Some(callee_context) = callee_context
+                        && (!carries_context || callee_context != expected)
+                    {
+                        self.emit(
+                            location,
+                            DiagnosticCode::InvalidKernelContext,
+                            format!(
+                                "call from {} to {} substitutes or omits the exact context brand for kernel {}",
+                                function.id, callee.id, kernel.id
+                            ),
+                        );
                     }
                 }
             }
@@ -624,6 +818,9 @@ impl<'module> ModuleVerifier<'module> {
                 TargetCapability::Extension { namespace, name } => {
                     namespace.is_empty() || name.is_empty()
                 }
+                TargetCapability::Execution(requirement) => {
+                    !valid_execution_capability_requirement(requirement)
+                }
                 _ => false,
             };
             if invalid {
@@ -684,6 +881,10 @@ struct FunctionVerifier<'a, 'module> {
     control_flow: Option<IndexedControlFlow>,
     dynamic_workgroup_memory_declarations: usize,
     gfx950_lds_transpose_currents: BTreeSet<Gfx950LdsTransposeFormatV1>,
+    kernel_context_issuances: usize,
+    kernel_context_authority: Option<DefInfo>,
+    bound_physical_globals: BTreeSet<ValueId>,
+    execution_source_locations: BTreeSet<([u8; 32], u32)>,
 }
 
 impl<'a, 'module> FunctionVerifier<'a, 'module> {
@@ -706,6 +907,10 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             control_flow,
             dynamic_workgroup_memory_declarations: 0,
             gfx950_lds_transpose_currents: BTreeSet::new(),
+            kernel_context_issuances: 0,
+            kernel_context_authority: None,
+            bound_physical_globals: BTreeSet::new(),
+            execution_source_locations: BTreeSet::new(),
         }
     }
 
@@ -725,7 +930,7 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             );
         }
 
-        for block in &body.blocks {
+        for (block_index, block) in body.blocks.iter().enumerate() {
             let location = base_location.clone().at_block(block.id);
             if self.blocks.insert(block.id, block).is_some() {
                 self.emit(
@@ -735,6 +940,64 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 );
             }
             for parameter in &block.parameters {
+                if let Type::KernelContext(context) = &parameter.ty {
+                    if block_index == 0 {
+                        self.emit(
+                            location.clone(),
+                            DiagnosticCode::InvalidKernelContext,
+                            format!(
+                                "entry block parameter {} cannot introduce a logical kernel context",
+                                parameter.id
+                            ),
+                        );
+                    }
+                    if !context.is_complete() {
+                        self.emit(
+                            location.clone(),
+                            DiagnosticCode::InvalidKernelContext,
+                            format!(
+                                "block parameter {} has an incomplete kernel-context brand",
+                                parameter.id
+                            ),
+                        );
+                    }
+                }
+                if parameter.ty.contains_kernel_context()
+                    && !matches!(parameter.ty, Type::KernelContext(_))
+                {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidKernelContext,
+                        format!(
+                            "block parameter {} nests a logical kernel context in another type",
+                            parameter.id
+                        ),
+                    );
+                }
+                if let Type::GlobalCapability(capability) = &parameter.ty {
+                    if block_index == 0 || !capability.is_complete() {
+                        self.emit(
+                            location.clone(),
+                            DiagnosticCode::InvalidGlobalCapability,
+                            format!(
+                                "block parameter {} introduces invalid global-capability authority",
+                                parameter.id
+                            ),
+                        );
+                    }
+                }
+                if let Type::ExecutionCapability(capability) = &parameter.ty
+                    && (block_index == 0 || !capability.is_complete())
+                {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidExecutionCapability,
+                        format!(
+                            "block parameter {} introduces invalid execution authority",
+                            parameter.id
+                        ),
+                    );
+                }
                 self.define(
                     parameter.id,
                     parameter.ty.clone(),
@@ -761,6 +1024,38 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             }
         }
 
+        let issued_authorities = body
+            .blocks
+            .iter()
+            .flat_map(|block| {
+                block.operations.iter().enumerate().filter_map(
+                    move |(operation_index, operation)| {
+                        if matches!(operation.kind, OperationKind::KernelContextIssue(_)) {
+                            operation.results.first().map(|result| DefInfo {
+                                ty: result.ty.clone(),
+                                site: DefSite::Operation(block.id, operation_index),
+                            })
+                        } else {
+                            None
+                        }
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        if let [authority] = issued_authorities.as_slice() {
+            self.kernel_context_authority = Some(authority.clone());
+        }
+
+        let bound_physical_globals = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter_map(|operation| match operation.kind {
+                OperationKind::GlobalCapabilityBind(bind) => Some(bind.physical),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+
         for block in &body.blocks {
             for (operation_index, operation) in block.operations.iter().enumerate() {
                 let location = base_location
@@ -781,9 +1076,64 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                         "terminating AMDGPU diagnostic must be the final operation of a block terminated by unreachable",
                     );
                 }
+                if !matches!(operation.kind, OperationKind::GlobalCapabilityBind(_))
+                    && operation
+                        .kind
+                        .operands()
+                        .iter()
+                        .any(|operand| bound_physical_globals.contains(operand))
+                {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidGlobalCapability,
+                        "a bound physical global slice may be used only through its logical capability",
+                    );
+                }
+                let capability_operand = operation
+                    .kind
+                    .operands()
+                    .into_iter()
+                    .any(|operand| matches!(self.ty(operand), Some(Type::GlobalCapability(_))));
+                if capability_operand
+                    && !matches!(
+                        operation.kind,
+                        OperationKind::SliceLength { .. }
+                            | OperationKind::SliceData { .. }
+                            | OperationKind::GlobalCapabilityIndex(_)
+                            | OperationKind::Call { .. }
+                    )
+                {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidGlobalCapability,
+                        "global-capability authority is used by an operation outside its closed projection surface",
+                    );
+                }
+                let execution_operand =
+                    operation.kind.operands().into_iter().any(|operand| {
+                        matches!(self.ty(operand), Some(Type::ExecutionCapability(_)))
+                    });
+                if execution_operand
+                    && !matches!(
+                        operation.kind,
+                        OperationKind::ExecutionCapability(_) | OperationKind::Call { .. }
+                    )
+                {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidExecutionCapability,
+                        "execution authority is used outside the closed V13 operation surface",
+                    );
+                }
                 for operand in operation.kind.operands() {
                     self.verify_use(operand, block.id, Some(operation_index), location.clone());
                 }
+                self.verify_kernel_context_authority(
+                    operation,
+                    block.id,
+                    operation_index,
+                    location.clone(),
+                );
                 self.verify_operation(operation, location);
             }
             if let Some(terminator) = &block.terminator {
@@ -851,7 +1201,106 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             .is_some_and(|control_flow| control_flow.dominates(definition, use_block))
     }
 
+    fn verify_kernel_context_authority(
+        &mut self,
+        operation: &Operation,
+        block: BlockId,
+        operation_index: usize,
+        location: DiagnosticLocation,
+    ) {
+        for operand in operation.kind.operands() {
+            if self
+                .definitions
+                .get(&operand)
+                .is_some_and(|definition| definition.ty.contains_kernel_context())
+                && !matches!(
+                    operation.kind,
+                    OperationKind::Call { .. }
+                        | OperationKind::GlobalCapabilityBind(_)
+                        | OperationKind::ExecutionCapability(_)
+                )
+            {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::InvalidKernelContext,
+                    "logical kernel-context authority may flow only through typed helper calls, V13 execution operations, and control-flow block arguments",
+                );
+            }
+        }
+
+        if !operation_requires_kernel_context(operation)
+            || self.function.role != FunctionRole::KernelEntry
+        {
+            return;
+        }
+        let Some(authority) = self.kernel_context_authority.clone() else {
+            return;
+        };
+        if !self.site_dominates(authority.site, block, Some(operation_index)) {
+            self.emit(
+                location,
+                DiagnosticCode::InvalidKernelContext,
+                "kernel-context issuance must dominate every capability operation in its physical root",
+            );
+        }
+    }
+
+    fn site_dominates(
+        &self,
+        definition: DefSite,
+        use_block: BlockId,
+        use_operation: Option<usize>,
+    ) -> bool {
+        match definition {
+            DefSite::FunctionParameter => true,
+            DefSite::BlockParameter(def_block) => {
+                def_block == use_block || self.block_dominates(def_block, use_block)
+            }
+            DefSite::Operation(def_block, def_operation) if def_block == use_block => {
+                use_operation.is_none_or(|use_operation| def_operation < use_operation)
+            }
+            DefSite::Operation(def_block, _) => self.block_dominates(def_block, use_block),
+        }
+    }
+
     fn verify_operation(&mut self, operation: &Operation, location: DiagnosticLocation) {
+        if !matches!(&operation.kind, OperationKind::KernelContextIssue(_))
+            && operation
+                .results
+                .iter()
+                .any(|result| result.ty.contains_kernel_context())
+        {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidKernelContext,
+                "only KernelContextIssue may define a kernel-context SSA value",
+            );
+        }
+        if !matches!(&operation.kind, OperationKind::GlobalCapabilityBind(_))
+            && operation
+                .results
+                .iter()
+                .any(|result| matches!(result.ty, Type::GlobalCapability(_)))
+        {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidGlobalCapability,
+                "only GlobalCapabilityBind may define global-capability SSA authority",
+            );
+        }
+        if !matches!(&operation.kind, OperationKind::ExecutionCapability(_))
+            && operation
+                .results
+                .iter()
+                .any(|result| matches!(result.ty, Type::ExecutionCapability(_)))
+        {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidExecutionCapability,
+                "only a V13 execution operation may define execution authority",
+            );
+        }
+
         if let Some(supported) = self.supported_capabilities {
             for capability in operation.required_capabilities() {
                 if !capability_is_supported(&capability, supported) {
@@ -1053,7 +1502,10 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 self.expect_results(operation, &[result], location);
             }
             OperationKind::SliceLength { slice } => {
-                if !matches!(self.ty(*slice), Some(Type::Slice(_))) {
+                if !matches!(
+                    self.ty(*slice),
+                    Some(Type::Slice(_) | Type::GlobalCapability(_))
+                ) {
                     self.emit(
                         location.clone(),
                         DiagnosticCode::InvalidOperandType,
@@ -1063,19 +1515,22 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 self.expect_results(operation, &[Type::INDEX], location);
             }
             OperationKind::SliceData { slice } => {
-                let Some(Type::Slice(slice_ty)) = self.ty(*slice) else {
-                    self.emit(
-                        location,
-                        DiagnosticCode::InvalidOperandType,
-                        "slice_data operand must have slice type",
-                    );
-                    return;
+                let result = match self.ty(*slice) {
+                    Some(Type::Slice(slice_ty)) => pointer_for(
+                        (*slice_ty.element).clone(),
+                        slice_ty.address_space,
+                        slice_ty.access,
+                    ),
+                    Some(Type::GlobalCapability(capability)) => capability.physical_pointer_type(),
+                    _ => {
+                        self.emit(
+                            location,
+                            DiagnosticCode::InvalidOperandType,
+                            "slice_data operand must have slice or global-capability type",
+                        );
+                        return;
+                    }
                 };
-                let result = pointer_for(
-                    (*slice_ty.element).clone(),
-                    slice_ty.address_space,
-                    slice_ty.access,
-                );
                 self.expect_results(operation, &[result], location);
             }
             OperationKind::GetElementPointer { base, offset } => {
@@ -1111,6 +1566,15 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 };
                 self.expect_type(*predicate, &Type::BOOL, location.clone());
                 self.expect_type(*fallback, &pointee, location.clone());
+                if let Some(Err(message)) =
+                    self.verify_guarded_global_capability_access(*pointer, *predicate, false)
+                {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidGlobalCapability,
+                        message,
+                    );
+                }
                 self.expect_results(operation, &[pointee], location);
             }
             OperationKind::GuardedStore {
@@ -1125,6 +1589,15 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                     return;
                 };
                 self.expect_type(*predicate, &Type::BOOL, location.clone());
+                if let Some(Err(message)) =
+                    self.verify_guarded_global_capability_access(*pointer, *predicate, true)
+                {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidGlobalCapability,
+                        message,
+                    );
+                }
                 self.expect_type(*value, &pointee, location);
             }
             OperationKind::Store {
@@ -1182,7 +1655,480 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             OperationKind::InlineAssembly(assembly) => {
                 self.verify_inline_assembly(operation, assembly, location)
             }
+            OperationKind::KernelContextIssue(issue) => {
+                self.kernel_context_issuances += 1;
+                if self.kernel_context_issuances > 1 {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidKernelContext,
+                        "a kernel entry may issue at most one logical kernel context",
+                    );
+                }
+                if self.function.role != FunctionRole::KernelEntry {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidKernelContext,
+                        "a logical kernel context may be issued only in a kernel entry",
+                    );
+                }
+                if !issue.source().is_complete() {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidKernelContext,
+                        "kernel-context source provenance is incomplete",
+                    );
+                }
+                if operation.results.len() != 1 {
+                    self.emit(
+                        location,
+                        DiagnosticCode::ResultArity,
+                        format!(
+                            "KernelContextIssue defines {} results but exactly one is required",
+                            operation.results.len()
+                        ),
+                    );
+                    return;
+                }
+                let Type::KernelContext(context) = &operation.results[0].ty else {
+                    self.emit(
+                        location,
+                        DiagnosticCode::TypeMismatch,
+                        "KernelContextIssue result must have KernelContext type",
+                    );
+                    return;
+                };
+                if !context.is_complete() {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidKernelContext,
+                        "issued kernel-context brand is incomplete",
+                    );
+                }
+                if context.root() != &self.function.id {
+                    self.emit(
+                        location,
+                        DiagnosticCode::InvalidKernelContext,
+                        format!(
+                            "kernel-context root {} does not match issuing function {}",
+                            context.root(),
+                            self.function.id
+                        ),
+                    );
+                }
+            }
+            OperationKind::GlobalCapabilityBind(bind) => {
+                if self.function.role != FunctionRole::KernelEntry {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidGlobalCapability,
+                        "global capabilities may be bound only in a physical kernel root",
+                    );
+                }
+                let [result] = operation.results.as_slice() else {
+                    self.emit(
+                        location,
+                        DiagnosticCode::ResultArity,
+                        "GlobalCapabilityBind must define exactly one result",
+                    );
+                    return;
+                };
+                let Type::GlobalCapability(capability) = &result.ty else {
+                    self.emit(
+                        location,
+                        DiagnosticCode::TypeMismatch,
+                        "GlobalCapabilityBind result must have global-capability type",
+                    );
+                    return;
+                };
+                if !capability.is_complete() {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidGlobalCapability,
+                        "global-capability type is incomplete",
+                    );
+                }
+                self.expect_type(
+                    bind.context,
+                    &Type::KernelContext(capability.context().clone()),
+                    location.clone(),
+                );
+                self.expect_type(
+                    bind.physical,
+                    &capability.physical_slice_type(),
+                    location.clone(),
+                );
+                if !self.bound_physical_globals.insert(bind.physical) {
+                    self.emit(
+                        location,
+                        DiagnosticCode::InvalidGlobalCapability,
+                        "one physical global slice may be bound only once",
+                    );
+                }
+            }
+            OperationKind::GlobalCapabilityIndex(index) => {
+                let Some(Type::GlobalCapability(capability)) = self.ty(index.capability) else {
+                    self.emit(
+                        location,
+                        DiagnosticCode::InvalidGlobalCapability,
+                        "global-capability index projection requires branded authority",
+                    );
+                    return;
+                };
+                let role = capability.role();
+                self.expect_type(index.index, &Type::INDEX, location.clone());
+                let expected = match role {
+                    GlobalCapabilityRoleV1::ReadOnly
+                    | GlobalCapabilityRoleV1::ExclusiveReadWrite => None,
+                    GlobalCapabilityRoleV1::DisjointWrite(index_space) => Some(index_space),
+                };
+                if index.index_space != expected {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidGlobalCapability,
+                        "global-capability index projection substituted its access role or index space",
+                    );
+                }
+                self.expect_results(operation, &[Type::INDEX], location);
+            }
+            OperationKind::ExecutionCapability(contract) => {
+                self.verify_execution_capability(operation, contract, location)
+            }
         }
+    }
+
+    fn verify_execution_capability(
+        &mut self,
+        operation: &Operation,
+        contract: &ExecutionCapabilityOpV1,
+        location: DiagnosticLocation,
+    ) {
+        let current_block = location.block;
+        let current_operation = location.operation;
+        if !contract.is_complete() || contract.provenance.root != self.function.id {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidExecutionCapability,
+                "execution contract is incomplete or names the wrong canonical root",
+            );
+        }
+        if !self
+            .execution_source_locations
+            .insert((contract.source.operation, contract.source.block))
+        {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidExecutionCapability,
+                "execution source operation identity/location was duplicated or replayed",
+            );
+        }
+        if operation.results.len() > crate::MAX_EXECUTION_CAPABILITY_RESULTS_V1 {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::ResourceLimit,
+                "execution operation exceeds its bounded result count",
+            );
+        }
+        let declared = contract.operation.required_capabilities();
+        for requirement in declared {
+            if !self.function.required_capabilities.contains(&requirement)
+                || !self.module.required_capabilities.contains(&requirement)
+            {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::InvalidExecutionCapability,
+                    format!("execution operation omits required declaration {requirement:?}"),
+                );
+            }
+        }
+
+        let expected_operands = execution_operand_contract(&contract.operation);
+        if contract.operands.len() != expected_operands.len() {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidExecutionCapability,
+                format!(
+                    "execution operation has {} SSA operands, expected {} in its closed V13 order",
+                    contract.operands.len(),
+                    expected_operands.len()
+                ),
+            );
+        }
+        for (index, (operand, expected)) in
+            contract.operands.iter().zip(&expected_operands).enumerate()
+        {
+            let actual = self.ty(*operand);
+            if !execution_operand_type_matches(actual, *expected, contract) {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::InvalidExecutionCapability,
+                    format!(
+                        "SSA operand {index} ({operand}) does not match its exact V13 type/role"
+                    ),
+                );
+            }
+        }
+        if let crate::ExecutionCapabilityOperationV1::RawMemoryBind { extent, .. } =
+            &contract.operation
+            && !self.valid_dynamic_extent(contract, *extent)
+        {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidExecutionCapability,
+                "dynamic extent ordinal, semantic type, transport type, or upper-bound check is invalid",
+            );
+        }
+        if matches!(
+            contract.operation,
+            crate::ExecutionCapabilityOperationV1::Atomic { .. }
+        ) && !self.valid_atomic_address_role(contract)
+        {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidExecutionCapability,
+                "atomic address space does not match its location or memory-view authority",
+            );
+        }
+
+        let expected_results = execution_result_contract(&contract.operation, contract, |index| {
+            contract
+                .operands
+                .get(index)
+                .and_then(|operand| self.ty(*operand))
+                .cloned()
+        });
+        if operation.results.len() != expected_results.len() {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidExecutionCapability,
+                format!(
+                    "execution operation has {} SSA results, expected {} in its closed V13 order",
+                    operation.results.len(),
+                    expected_results.len()
+                ),
+            );
+        }
+        for (index, (result, expected)) in
+            operation.results.iter().zip(&expected_results).enumerate()
+        {
+            if !execution_result_type_matches(&result.ty, *expected, contract) {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::InvalidExecutionCapability,
+                    format!(
+                        "SSA result {index} ({}) substitutes its exact V13 type, provenance, epoch, or role",
+                        result.id
+                    ),
+                );
+            }
+        }
+
+        let Some(body) = &self.function.body else {
+            return;
+        };
+        for block in &body.blocks {
+            for (operation_index, candidate) in block.operations.iter().enumerate() {
+                let OperationKind::ExecutionCapability(transition) = &candidate.kind else {
+                    continue;
+                };
+                let (Some(brand), Some(before), Some(_)) = (
+                    transition.workgroup_brand,
+                    transition.epoch_before,
+                    transition.epoch_after,
+                ) else {
+                    continue;
+                };
+                if contract.workgroup_brand == Some(brand)
+                    && contract.epoch_before == Some(before)
+                    && transition.provenance == contract.provenance
+                    && current_block.zip(current_operation).is_some_and(
+                        |(current_block, current_operation)| {
+                            self.site_dominates(
+                                DefSite::Operation(block.id, operation_index),
+                                current_block,
+                                Some(current_operation),
+                            )
+                        },
+                    )
+                {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidExecutionCapability,
+                        "execution operation consumes an epoch after a dominating transition",
+                    );
+                    break;
+                }
+            }
+        }
+    }
+
+    fn valid_dynamic_extent(
+        &self,
+        contract: &ExecutionCapabilityOpV1,
+        extent: crate::ExecutionDynamicExtentV1,
+    ) -> bool {
+        let expected_nonnegative = matches!(
+            extent.value_type,
+            ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64
+        )
+        .then_some(4);
+        if extent.source_argument != 2
+            || extent.operand != 2
+            || extent.bound_check_operand != 3
+            || extent.nonnegative_check_operand != expected_nonnegative
+        {
+            return false;
+        }
+        let Some(value) = contract.operands.get(usize::from(extent.operand)).copied() else {
+            return false;
+        };
+        let Some(bound_check) = contract
+            .operands
+            .get(usize::from(extent.bound_check_operand))
+            .copied()
+        else {
+            return false;
+        };
+        let nonnegative_check = extent
+            .nonnegative_check_operand
+            .and_then(|operand| contract.operands.get(usize::from(operand)).copied());
+        if contract
+            .signature
+            .arguments()
+            .nth(usize::from(extent.source_argument))
+            != Some(extent.source_type)
+            || self.ty(value) != Some(&Type::Scalar(extent.value_type))
+            || self.ty(bound_check) != Some(&Type::BOOL)
+            || extent
+                .nonnegative_check_operand
+                .is_some_and(|_| nonnegative_check.is_none())
+        {
+            return false;
+        }
+        let Some(OperationKind::Compare {
+            predicate: crate::ComparePredicate::LessThanOrEqual,
+            lhs,
+            rhs,
+        }) = self
+            .defining_operation(bound_check)
+            .map(|operation| &operation.kind)
+        else {
+            return false;
+        };
+        if *lhs != value
+            || self.constant_extent_bound(*rhs, extent.value_type) != Some(extent.upper_bound)
+        {
+            return false;
+        }
+        match (extent.value_type, nonnegative_check) {
+            (
+                ScalarType::U8
+                | ScalarType::U16
+                | ScalarType::U32
+                | ScalarType::U64
+                | ScalarType::Index,
+                None,
+            ) => true,
+            (
+                ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64,
+                Some(nonnegative_check),
+            ) if self.ty(nonnegative_check) == Some(&Type::BOOL) => matches!(
+                self.defining_operation(nonnegative_check)
+                    .map(|operation| &operation.kind),
+                Some(OperationKind::Compare {
+                    predicate: crate::ComparePredicate::GreaterThanOrEqual,
+                    lhs,
+                    rhs,
+                }) if *lhs == value && self.constant_zero(*rhs, extent.value_type)
+            ),
+            _ => false,
+        }
+    }
+
+    fn valid_atomic_address_role(&self, contract: &ExecutionCapabilityOpV1) -> bool {
+        use crate::{
+            ExecutionAtomicKindV1 as Atomic, ExecutionCapabilityOperationV1 as Op,
+            ExecutionCapabilityRoleV1 as Role, ExecutionMemoryAccessV1 as Access,
+        };
+        let Op::Atomic {
+            kind,
+            element,
+            address_space,
+            scope,
+            ..
+        } = &contract.operation
+        else {
+            return false;
+        };
+        if *kind == Atomic::BindGlobalView {
+            return *address_space == crate::ExecutionMemoryAddressSpaceV1::Global;
+        }
+        let Some(Type::ExecutionCapability(location)) = contract
+            .operands
+            .get(1)
+            .and_then(|operand| self.ty(*operand))
+        else {
+            return false;
+        };
+        match (kind, &location.role) {
+            (
+                Atomic::BindGlobalLocation,
+                Role::MemoryView {
+                    element: role_element,
+                    space,
+                    access: Access::AtomicReadWrite,
+                    atomic_scope: Some(role_scope),
+                    ..
+                },
+            ) => {
+                *address_space == crate::ExecutionMemoryAddressSpaceV1::Global
+                    && space == address_space
+                    && role_element == element
+                    && role_scope == scope
+            }
+            (
+                Atomic::Load | Atomic::Store | Atomic::FetchAdd | Atomic::CompareExchange,
+                Role::ScopedAtomic {
+                    element: role_element,
+                    space,
+                    scope: role_scope,
+                },
+            ) => role_element == element && space == address_space && role_scope == scope,
+            _ => false,
+        }
+    }
+
+    fn constant_extent_bound(&self, value: ValueId, ty: ScalarType) -> Option<u64> {
+        let operation = self.defining_operation(value)?;
+        match (&operation.kind, ty) {
+            (OperationKind::Constant(Constant::U8(value)), ScalarType::U8) => {
+                Some(u64::from(*value))
+            }
+            (OperationKind::Constant(Constant::U16(value)), ScalarType::U16) => {
+                Some(u64::from(*value))
+            }
+            (OperationKind::Constant(Constant::U32(value)), ScalarType::U32) => {
+                Some(u64::from(*value))
+            }
+            (OperationKind::Constant(Constant::U64(value)), ScalarType::U64)
+            | (OperationKind::Constant(Constant::Index(value)), ScalarType::Index) => Some(*value),
+            (OperationKind::Constant(Constant::I8(value)), ScalarType::I8) => {
+                u64::try_from(*value).ok()
+            }
+            (OperationKind::Constant(Constant::I16(value)), ScalarType::I16) => {
+                u64::try_from(*value).ok()
+            }
+            (OperationKind::Constant(Constant::I32(value)), ScalarType::I32) => {
+                u64::try_from(*value).ok()
+            }
+            (OperationKind::Constant(Constant::I64(value)), ScalarType::I64) => {
+                u64::try_from(*value).ok()
+            }
+            _ => None,
+        }
+    }
+
+    fn constant_zero(&self, value: ValueId, ty: ScalarType) -> bool {
+        self.constant_extent_bound(value, ty) == Some(0)
     }
 
     fn verify_matrix_lds_allocation(
@@ -2449,6 +3395,116 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
         }
     }
 
+    fn verify_guarded_global_capability_access(
+        &self,
+        pointer: ValueId,
+        predicate: ValueId,
+        write: bool,
+    ) -> Option<Result<(), &'static str>> {
+        let OperationKind::GetElementPointer { base, offset } =
+            &self.defining_operation(pointer)?.kind
+        else {
+            return None;
+        };
+        let OperationKind::SliceData { slice: capability } = self.defining_operation(*base)?.kind
+        else {
+            return None;
+        };
+        let Some(Type::GlobalCapability(capability_ty)) = self.ty(capability) else {
+            return None;
+        };
+        let role_matches = matches!(
+            (write, capability_ty.role()),
+            (false, GlobalCapabilityRoleV1::ReadOnly)
+                | (false, GlobalCapabilityRoleV1::ExclusiveReadWrite)
+                | (true, GlobalCapabilityRoleV1::ExclusiveReadWrite)
+                | (true, GlobalCapabilityRoleV1::DisjointWrite(_))
+        );
+        if !role_matches {
+            return Some(Err(
+                "guarded global access does not match the capability initialization/access role",
+            ));
+        }
+        let OperationKind::Select {
+            condition,
+            true_value,
+            false_value,
+        } = self.defining_operation(*offset)?.kind
+        else {
+            return Some(Err(
+                "guarded global access must use a predicate-selected safe index",
+            ));
+        };
+        if condition != predicate {
+            return Some(Err(
+                "guarded global access predicate differs from its safe-index predicate",
+            ));
+        }
+        if !matches!(
+            self.defining_operation(false_value)
+                .map(|operation| &operation.kind),
+            Some(OperationKind::Constant(Constant::Index(0)))
+        ) {
+            return Some(Err(
+                "guarded global access must select index zero on the inactive path",
+            ));
+        }
+        let Some(projected) = self.defining_operation(true_value) else {
+            return Some(Err(
+                "guarded global access index lacks a capability projection",
+            ));
+        };
+        let OperationKind::GlobalCapabilityIndex(projected) = projected.kind else {
+            return Some(Err(
+                "guarded global access index lacks a capability projection",
+            ));
+        };
+        if projected.capability != capability {
+            return Some(Err(
+                "guarded global access substituted a different capability at index projection",
+            ));
+        }
+        if !self.guarded_global_bounds_match(predicate, true_value, capability) {
+            return Some(Err(
+                "guarded global access predicate lacks the exact projected-index slice bound",
+            ));
+        }
+        Some(Ok(()))
+    }
+
+    fn guarded_global_bounds_match(
+        &self,
+        predicate: ValueId,
+        projected: ValueId,
+        capability: ValueId,
+    ) -> bool {
+        let Some(operation) = self.defining_operation(predicate) else {
+            return false;
+        };
+        match operation.kind {
+            OperationKind::Compare {
+                predicate: ComparePredicate::LessThan,
+                lhs,
+                rhs,
+            } => {
+                lhs == projected
+                    && matches!(
+                        self.defining_operation(rhs).map(|operation| &operation.kind),
+                        Some(OperationKind::SliceLength { slice }) if *slice == capability
+                    )
+            }
+            OperationKind::Binary {
+                op: BinaryOp::BitAnd,
+                lhs,
+                rhs,
+            } => {
+                self.guarded_global_bounds_match(lhs, projected, capability)
+                    || self.guarded_global_bounds_match(rhs, projected, capability)
+            }
+            _ => false,
+        }
+    }
+
     fn ty(&self, value: ValueId) -> Option<&Type> {
         self.definitions
             .get(&value)
@@ -2554,6 +3610,1167 @@ fn is_assembly_register_type(ty: &Type) -> bool {
     matches!(ty, Type::Scalar(ScalarType::I32 | ScalarType::U32))
 }
 
+fn operation_requires_kernel_context(operation: &Operation) -> bool {
+    matches!(
+        operation.kind,
+        OperationKind::Intrinsic(_) | OperationKind::GlobalCapabilityBind(_)
+    ) || !operation.required_capabilities().is_empty()
+}
+
+#[derive(Clone, Copy)]
+enum ExecutionOperandContractV1 {
+    KernelContext,
+    Capability {
+        source: [Option<crate::ExecutionTypeIdentityV1>; 2],
+        role: ExecutionRoleContractV1,
+    },
+    Scalar(ScalarType),
+    ElementScalar(crate::ExecutionElementLayoutV1),
+    Pointer {
+        layout: crate::ExecutionElementLayoutV1,
+        space: AddressSpace,
+        access: AccessMode,
+    },
+    Slice {
+        scalar: ScalarType,
+        space: AddressSpace,
+        access: AccessMode,
+    },
+    BoolProof,
+}
+
+#[derive(Clone, Copy)]
+enum ExecutionResultContractV1 {
+    Capability {
+        source: crate::ExecutionTypeIdentityV1,
+        role: ExecutionRoleContractV1,
+    },
+    Scalar(ScalarType),
+    ElementScalar(crate::ExecutionElementLayoutV1),
+    Bool,
+}
+
+#[derive(Clone, Copy)]
+enum ExecutionRoleContractV1 {
+    Workgroup,
+    Subgroup {
+        width: u32,
+    },
+    Lds {
+        element: crate::ExecutionTypeIdentityV1,
+        layout: crate::ExecutionElementLayoutV1,
+        elements: u64,
+        state: crate::ExecutionLdsStateV1,
+    },
+    ScopedAtomic {
+        element: crate::ExecutionTypeIdentityV1,
+        space: crate::ExecutionMemoryAddressSpaceV1,
+        scope: crate::ExecutionMemoryScopeV1,
+    },
+    Matrix {
+        subgroup_brand: [u8; 32],
+        width: u32,
+    },
+    PendingAsyncCopy {
+        element: crate::ExecutionTypeIdentityV1,
+        layout: crate::ExecutionElementLayoutV1,
+        elements: u64,
+    },
+    MemoryView {
+        element: crate::ExecutionTypeIdentityV1,
+        layout: crate::ExecutionElementLayoutV1,
+        space: crate::ExecutionMemoryAddressSpaceV1,
+        access: crate::ExecutionMemoryAccessV1,
+        extent: Option<crate::ExecutionMemoryExtentV1>,
+        initialization: Option<crate::ExecutionMemoryInitializationV1>,
+        index_space: Option<crate::ExecutionTypeIdentityV1>,
+        requires_index_space: bool,
+        atomic_scope: Option<crate::ExecutionMemoryScopeV1>,
+    },
+    WorkgroupMemoryIndex,
+}
+
+const fn execution_source(
+    source: crate::ExecutionTypeIdentityV1,
+) -> [Option<crate::ExecutionTypeIdentityV1>; 2] {
+    [Some(source), None]
+}
+
+const fn execution_sources(
+    first: crate::ExecutionTypeIdentityV1,
+    second: crate::ExecutionTypeIdentityV1,
+) -> [Option<crate::ExecutionTypeIdentityV1>; 2] {
+    [Some(first), Some(second)]
+}
+
+fn execution_operand_contract(
+    operation: &crate::ExecutionCapabilityOperationV1,
+) -> Vec<ExecutionOperandContractV1> {
+    use crate::{
+        ExecutionAtomicKindV1 as Atomic, ExecutionCapabilityOperationV1 as Op,
+        ExecutionLdsStateV1 as Lds, ExecutionMemoryAccessV1 as Access,
+        ExecutionMemoryAddressSpaceV1 as Space, ExecutionMemoryInitializationV1 as Initialization,
+    };
+
+    let capability = |source, role| ExecutionOperandContractV1::Capability { source, role };
+    let workgroup =
+        |source| capability(execution_source(source), ExecutionRoleContractV1::Workgroup);
+    let lds = |source, element, layout, elements, state| {
+        capability(
+            source,
+            ExecutionRoleContractV1::Lds {
+                element,
+                layout,
+                elements,
+                state,
+            },
+        )
+    };
+    let memory_view = |source,
+                       element,
+                       layout,
+                       space,
+                       access,
+                       initialization,
+                       index_space,
+                       requires_index_space,
+                       atomic_scope| {
+        capability(
+            source,
+            ExecutionRoleContractV1::MemoryView {
+                element,
+                layout,
+                space,
+                access,
+                extent: None,
+                initialization,
+                index_space,
+                requires_index_space,
+                atomic_scope,
+            },
+        )
+    };
+
+    match operation {
+        Op::WorkgroupDerive { .. } => vec![ExecutionOperandContractV1::KernelContext],
+        Op::SubgroupDerive {
+            workgroup: source, ..
+        }
+        | Op::LdsAllocate {
+            workgroup: source, ..
+        }
+        | Op::WorkgroupBarrier {
+            input_workgroup: source,
+            ..
+        }
+        | Op::WorkgroupFence {
+            workgroup: source, ..
+        }
+        | Op::WorkgroupMemoryIndex {
+            workgroup: source, ..
+        }
+        | Op::WorkgroupMemoryAllocate {
+            workgroup: source, ..
+        } => vec![workgroup(*source)],
+        Op::LdsInitializeByInvocation {
+            input_lds,
+            workgroup: workgroup_source,
+            element,
+            layout,
+            elements,
+            ..
+        } => vec![
+            lds(
+                execution_source(*input_lds),
+                *element,
+                *layout,
+                *elements,
+                Lds::Uninitialized,
+            ),
+            workgroup(*workgroup_source),
+            ExecutionOperandContractV1::ElementScalar(*layout),
+        ],
+        Op::LdsPublish {
+            input_workgroup,
+            input_lds,
+            element,
+            layout,
+            elements,
+            ..
+        } => vec![
+            workgroup(*input_workgroup),
+            lds(
+                execution_source(*input_lds),
+                *element,
+                *layout,
+                *elements,
+                Lds::InvocationInitialized,
+            ),
+        ],
+        Op::LdsReadPublished {
+            lds_reference,
+            lds: lds_type,
+            workgroup: workgroup_source,
+            element,
+            layout,
+            elements,
+            ..
+        } => vec![
+            lds(
+                execution_sources(*lds_reference, *lds_type),
+                *element,
+                *layout,
+                *elements,
+                Lds::Published,
+            ),
+            workgroup(*workgroup_source),
+            ExecutionOperandContractV1::Scalar(ScalarType::Index),
+        ],
+        Op::SubgroupBarrier {
+            input_workgroup,
+            subgroup,
+            width,
+            ..
+        } => vec![
+            workgroup(*input_workgroup),
+            capability(
+                execution_source(*subgroup),
+                ExecutionRoleContractV1::Subgroup { width: *width },
+            ),
+        ],
+        Op::SubgroupFence {
+            subgroup_reference,
+            subgroup,
+            width,
+            ..
+        } => vec![capability(
+            execution_sources(*subgroup_reference, *subgroup),
+            ExecutionRoleContractV1::Subgroup { width: *width },
+        )],
+        Op::Atomic {
+            kind,
+            authority,
+            location_input,
+            location,
+            element,
+            operand: _,
+            replacement: _,
+            value_type,
+            scope,
+            ..
+        } => match kind {
+            Atomic::BindGlobalView => vec![
+                ExecutionOperandContractV1::KernelContext,
+                ExecutionOperandContractV1::Slice {
+                    scalar: *value_type,
+                    space: AddressSpace::Global,
+                    access: AccessMode::ReadOnly,
+                },
+            ],
+            Atomic::BindGlobalLocation => vec![
+                workgroup(*authority),
+                memory_view(
+                    execution_source(*location_input),
+                    *element,
+                    execution_scalar_layout(*value_type),
+                    Space::Global,
+                    Access::AtomicReadWrite,
+                    Some(Initialization::FullyInitialized),
+                    None,
+                    false,
+                    Some(*scope),
+                ),
+                ExecutionOperandContractV1::Scalar(ScalarType::Index),
+            ],
+            Atomic::Load => vec![
+                workgroup(*authority),
+                capability(
+                    execution_sources(*location_input, *location),
+                    ExecutionRoleContractV1::ScopedAtomic {
+                        element: *element,
+                        space: Space::Global,
+                        scope: *scope,
+                    },
+                ),
+            ],
+            Atomic::Store | Atomic::FetchAdd => vec![
+                workgroup(*authority),
+                capability(
+                    execution_sources(*location_input, *location),
+                    ExecutionRoleContractV1::ScopedAtomic {
+                        element: *element,
+                        space: Space::Global,
+                        scope: *scope,
+                    },
+                ),
+                ExecutionOperandContractV1::Scalar(*value_type),
+            ],
+            Atomic::CompareExchange => vec![
+                workgroup(*authority),
+                capability(
+                    execution_sources(*location_input, *location),
+                    ExecutionRoleContractV1::ScopedAtomic {
+                        element: *element,
+                        space: Space::Global,
+                        scope: *scope,
+                    },
+                ),
+                ExecutionOperandContractV1::Scalar(*value_type),
+                ExecutionOperandContractV1::Scalar(*value_type),
+            ],
+        },
+        Op::WorkgroupCollective {
+            kind,
+            input_workgroup,
+            scratch,
+            element,
+            value_type,
+            layout,
+            elements,
+            ..
+        } => {
+            match kind {
+                crate::ExecutionCollectiveKindV1::ReduceSum
+                | crate::ExecutionCollectiveKindV1::InclusiveScanSum
+                | crate::ExecutionCollectiveKindV1::ExclusiveScanSum => {}
+            }
+            vec![
+                workgroup(*input_workgroup),
+                lds(
+                    execution_source(*scratch),
+                    *element,
+                    *layout,
+                    *elements,
+                    Lds::Uninitialized,
+                ),
+                ExecutionOperandContractV1::Scalar(*value_type),
+            ]
+        }
+        Op::SubgroupCollective {
+            kind,
+            subgroup_reference,
+            subgroup,
+            element: _,
+            value_type,
+            width,
+            ..
+        } => {
+            match kind {
+                crate::ExecutionCollectiveKindV1::ReduceSum
+                | crate::ExecutionCollectiveKindV1::InclusiveScanSum
+                | crate::ExecutionCollectiveKindV1::ExclusiveScanSum => {}
+            }
+            vec![
+                capability(
+                    execution_sources(*subgroup_reference, *subgroup),
+                    ExecutionRoleContractV1::Subgroup { width: *width },
+                ),
+                ExecutionOperandContractV1::Scalar(*value_type),
+            ]
+        }
+        Op::MatrixAccess {
+            subgroup, width, ..
+        } => vec![capability(
+            execution_source(*subgroup),
+            ExecutionRoleContractV1::Subgroup { width: *width },
+        )],
+        Op::AsyncCopy {
+            workgroup: workgroup_source,
+            source_reference,
+            source,
+            destination,
+            element,
+            layout,
+            elements,
+            ..
+        } => vec![
+            workgroup(*workgroup_source),
+            memory_view(
+                execution_sources(*source_reference, *source),
+                *element,
+                *layout,
+                Space::Global,
+                Access::ReadOnly,
+                Some(Initialization::FullyInitialized),
+                None,
+                false,
+                None,
+            ),
+            ExecutionOperandContractV1::Scalar(ScalarType::Index),
+            lds(
+                execution_source(*destination),
+                *element,
+                *layout,
+                *elements,
+                Lds::Uninitialized,
+            ),
+        ],
+        Op::AsyncWait {
+            input_workgroup,
+            pending,
+            element,
+            layout,
+            elements,
+            ..
+        } => vec![
+            workgroup(*input_workgroup),
+            capability(
+                execution_source(*pending),
+                ExecutionRoleContractV1::PendingAsyncCopy {
+                    element: *element,
+                    layout: *layout,
+                    elements: *elements,
+                },
+            ),
+        ],
+        Op::RawMemoryBind {
+            authority,
+            extent,
+            layout,
+            space,
+            ..
+        } => {
+            let authority = if matches!(space, Space::Private) {
+                ExecutionOperandContractV1::KernelContext
+            } else {
+                workgroup(*authority)
+            };
+            let mut operands = vec![
+                authority,
+                ExecutionOperandContractV1::Pointer {
+                    layout: *layout,
+                    space: space.address_space(),
+                    access: AccessMode::ReadWrite,
+                },
+                ExecutionOperandContractV1::Scalar(extent.value_type),
+                ExecutionOperandContractV1::BoolProof,
+            ];
+            if extent.nonnegative_check_operand.is_some() {
+                operands.push(ExecutionOperandContractV1::BoolProof);
+            }
+            operands
+        }
+        Op::PrivateMemoryAllocate { .. } => vec![ExecutionOperandContractV1::KernelContext],
+        Op::WorkgroupMemoryPublish {
+            input_workgroup,
+            input_view,
+            element,
+            layout,
+            ..
+        } => vec![
+            workgroup(*input_workgroup),
+            memory_view(
+                execution_source(*input_view),
+                *element,
+                *layout,
+                Space::Workgroup,
+                Access::DisjointWrite,
+                Some(Initialization::Uninitialized),
+                None,
+                true,
+                None,
+            ),
+        ],
+        Op::MemoryLoad {
+            view,
+            workgroup: workgroup_source,
+            element,
+            layout,
+            space,
+            access,
+            ..
+        } => {
+            let mut operands = vec![memory_view(
+                execution_source(*view),
+                *element,
+                *layout,
+                *space,
+                *access,
+                None,
+                None,
+                false,
+                None,
+            )];
+            if let Some(source) = workgroup_source {
+                operands.push(workgroup(*source));
+            }
+            operands.push(ExecutionOperandContractV1::Scalar(ScalarType::Index));
+            operands
+        }
+        Op::MemoryStore {
+            view,
+            workgroup: workgroup_source,
+            index,
+            element,
+            layout,
+            space,
+            access,
+            ..
+        } => {
+            let disjoint = matches!(access, Access::DisjointWrite);
+            let mut operands = vec![memory_view(
+                execution_source(*view),
+                *element,
+                *layout,
+                *space,
+                *access,
+                None,
+                None,
+                disjoint,
+                None,
+            )];
+            if let Some(source) = workgroup_source {
+                operands.push(workgroup(*source));
+            }
+            if disjoint {
+                operands.push(capability(
+                    execution_source(*index),
+                    ExecutionRoleContractV1::WorkgroupMemoryIndex,
+                ));
+            } else {
+                operands.push(ExecutionOperandContractV1::Scalar(ScalarType::Index));
+            }
+            operands.push(ExecutionOperandContractV1::ElementScalar(*layout));
+            operands
+        }
+    }
+}
+
+fn execution_result_contract(
+    operation: &crate::ExecutionCapabilityOperationV1,
+    _contract: &ExecutionCapabilityOpV1,
+    operand_type: impl Fn(usize) -> Option<Type>,
+) -> Vec<ExecutionResultContractV1> {
+    use crate::{
+        ExecutionAtomicKindV1 as Atomic, ExecutionCapabilityOperationV1 as Op,
+        ExecutionLdsStateV1 as Lds, ExecutionMemoryAccessV1 as Access,
+        ExecutionMemoryAddressSpaceV1 as Space, ExecutionMemoryExtentV1 as Extent,
+        ExecutionMemoryInitializationV1 as Initialization,
+    };
+    let capability = |source, role| ExecutionResultContractV1::Capability { source, role };
+    let workgroup = |source| capability(source, ExecutionRoleContractV1::Workgroup);
+    let lds = |source, element, layout, elements, state| {
+        capability(
+            source,
+            ExecutionRoleContractV1::Lds {
+                element,
+                layout,
+                elements,
+                state,
+            },
+        )
+    };
+
+    match operation {
+        Op::WorkgroupDerive {
+            workgroup: output, ..
+        } => vec![workgroup(*output)],
+        Op::SubgroupDerive {
+            subgroup: output,
+            width,
+            ..
+        } => vec![capability(
+            *output,
+            ExecutionRoleContractV1::Subgroup { width: *width },
+        )],
+        Op::LdsAllocate {
+            lds: output_lds,
+            element,
+            layout,
+            elements,
+            ..
+        } => vec![lds(
+            *output_lds,
+            *element,
+            *layout,
+            *elements,
+            Lds::Uninitialized,
+        )],
+        Op::LdsInitializeByInvocation {
+            output_lds,
+            element,
+            layout,
+            elements,
+            ..
+        } => vec![lds(
+            *output_lds,
+            *element,
+            *layout,
+            *elements,
+            Lds::InvocationInitialized,
+        )],
+        Op::LdsPublish {
+            output_lds,
+            transition,
+            element,
+            layout,
+            elements,
+            ..
+        } => vec![
+            workgroup(*transition),
+            lds(*output_lds, *element, *layout, *elements, Lds::Published),
+        ],
+        Op::LdsReadPublished { layout, .. } | Op::MemoryLoad { layout, .. } => vec![
+            ExecutionResultContractV1::ElementScalar(*layout),
+            ExecutionResultContractV1::Bool,
+        ],
+        Op::WorkgroupBarrier {
+            output_workgroup, ..
+        } => vec![workgroup(*output_workgroup)],
+        Op::SubgroupBarrier {
+            transition, width, ..
+        } => vec![
+            workgroup(*transition),
+            capability(
+                *transition,
+                ExecutionRoleContractV1::Subgroup { width: *width },
+            ),
+        ],
+        Op::WorkgroupFence { .. } | Op::SubgroupFence { .. } => Vec::new(),
+        Op::Atomic {
+            kind,
+            location,
+            result,
+            element,
+            value_type,
+            scope,
+            ..
+        } => match kind {
+            Atomic::BindGlobalLocation => vec![
+                capability(
+                    *location,
+                    ExecutionRoleContractV1::ScopedAtomic {
+                        element: *element,
+                        space: Space::Global,
+                        scope: *scope,
+                    },
+                ),
+                ExecutionResultContractV1::Bool,
+            ],
+            Atomic::BindGlobalView => vec![capability(
+                *result,
+                ExecutionRoleContractV1::MemoryView {
+                    element: *element,
+                    layout: execution_scalar_layout(*value_type),
+                    space: Space::Global,
+                    access: Access::AtomicReadWrite,
+                    extent: None,
+                    initialization: Some(Initialization::FullyInitialized),
+                    index_space: None,
+                    requires_index_space: false,
+                    atomic_scope: Some(*scope),
+                },
+            )],
+            Atomic::Load | Atomic::FetchAdd => {
+                vec![ExecutionResultContractV1::Scalar(*value_type)]
+            }
+            Atomic::Store => Vec::new(),
+            Atomic::CompareExchange => vec![
+                ExecutionResultContractV1::Scalar(*value_type),
+                ExecutionResultContractV1::Bool,
+            ],
+        },
+        Op::WorkgroupCollective {
+            transition,
+            element,
+            value_type,
+            layout,
+            elements,
+            ..
+        } => vec![
+            workgroup(*transition),
+            lds(
+                *transition,
+                *element,
+                *layout,
+                *elements,
+                Lds::Uninitialized,
+            ),
+            ExecutionResultContractV1::Scalar(*value_type),
+        ],
+        Op::SubgroupCollective { value_type, .. } => {
+            vec![ExecutionResultContractV1::Scalar(*value_type)]
+        }
+        Op::MatrixAccess {
+            matrix,
+            subgroup_brand,
+            width,
+            ..
+        } => vec![capability(
+            *matrix,
+            ExecutionRoleContractV1::Matrix {
+                subgroup_brand: *subgroup_brand,
+                width: *width,
+            },
+        )],
+        Op::AsyncCopy {
+            pending,
+            element,
+            layout,
+            elements,
+            ..
+        } => vec![capability(
+            *pending,
+            ExecutionRoleContractV1::PendingAsyncCopy {
+                element: *element,
+                layout: *layout,
+                elements: *elements,
+            },
+        )],
+        Op::AsyncWait {
+            output_lds,
+            transition,
+            element,
+            layout,
+            elements,
+            ..
+        } => vec![
+            workgroup(*transition),
+            lds(*output_lds, *element, *layout, *elements, Lds::Published),
+        ],
+        Op::RawMemoryBind {
+            view,
+            element,
+            extent,
+            layout,
+            space,
+            access,
+            index_space,
+            atomic_scope,
+            ..
+        } => vec![capability(
+            *view,
+            ExecutionRoleContractV1::MemoryView {
+                element: *element,
+                layout: *layout,
+                space: *space,
+                access: *access,
+                extent: Some(Extent::Dynamic(*extent)),
+                initialization: Some(Initialization::FullyInitialized),
+                index_space: *index_space,
+                requires_index_space: index_space.is_some(),
+                atomic_scope: *atomic_scope,
+            },
+        )],
+        Op::PrivateMemoryAllocate {
+            view,
+            element,
+            layout,
+            elements,
+            ..
+        } => vec![capability(
+            *view,
+            ExecutionRoleContractV1::MemoryView {
+                element: *element,
+                layout: *layout,
+                space: Space::Private,
+                access: Access::ExclusiveReadWrite,
+                extent: Some(Extent::Static(*elements)),
+                initialization: Some(Initialization::FullyInitialized),
+                index_space: None,
+                requires_index_space: false,
+                atomic_scope: None,
+            },
+        )],
+        Op::WorkgroupMemoryIndex { witness, .. } => vec![capability(
+            *witness,
+            ExecutionRoleContractV1::WorkgroupMemoryIndex,
+        )],
+        Op::WorkgroupMemoryAllocate {
+            view,
+            element,
+            layout,
+            elements,
+            index_space,
+            ..
+        } => vec![capability(
+            *view,
+            ExecutionRoleContractV1::MemoryView {
+                element: *element,
+                layout: *layout,
+                space: Space::Workgroup,
+                access: Access::DisjointWrite,
+                extent: Some(Extent::Static(*elements)),
+                initialization: Some(Initialization::Uninitialized),
+                index_space: Some(*index_space),
+                requires_index_space: true,
+                atomic_scope: None,
+            },
+        )],
+        Op::WorkgroupMemoryPublish {
+            output_view,
+            transition,
+            element,
+            layout,
+            ..
+        } => {
+            let extent = operand_type(1).and_then(|ty| match ty {
+                Type::ExecutionCapability(capability) => match capability.role {
+                    ExecutionCapabilityRoleV1::MemoryView { extent, .. } => Some(extent),
+                    _ => None,
+                },
+                _ => None,
+            });
+            vec![
+                workgroup(*transition),
+                capability(
+                    *output_view,
+                    ExecutionRoleContractV1::MemoryView {
+                        element: *element,
+                        layout: *layout,
+                        space: Space::Workgroup,
+                        access: Access::ReadOnly,
+                        extent,
+                        initialization: Some(Initialization::Published),
+                        index_space: None,
+                        requires_index_space: false,
+                        atomic_scope: None,
+                    },
+                ),
+            ]
+        }
+        Op::MemoryStore { .. } => vec![ExecutionResultContractV1::Bool],
+    }
+}
+
+fn execution_operand_type_matches(
+    actual: Option<&Type>,
+    expected: ExecutionOperandContractV1,
+    contract: &ExecutionCapabilityOpV1,
+) -> bool {
+    match expected {
+        ExecutionOperandContractV1::KernelContext => matches!(
+            actual,
+            Some(Type::KernelContext(context))
+                if context.root() == &contract.provenance.root
+                    && context.kernel_marker() == &contract.provenance.kernel_marker
+                    && context.target() == &contract.provenance.target_brand
+                    && context.launch() == &contract.provenance.launch_brand
+        ),
+        ExecutionOperandContractV1::Capability { source, role } => matches!(
+            actual,
+            Some(Type::ExecutionCapability(capability))
+                if source.into_iter().flatten().any(|source| source == capability.source_type)
+                    && capability.provenance == contract.provenance
+                    && capability.workgroup_brand == contract.workgroup_brand
+                    && capability.epoch == contract.epoch_before
+                    && execution_role_matches(&capability.role, role)
+        ),
+        ExecutionOperandContractV1::Scalar(scalar) => actual == Some(&Type::Scalar(scalar)),
+        ExecutionOperandContractV1::ElementScalar(layout) => {
+            matches!(actual, Some(Type::Scalar(scalar)) if scalar_matches_execution_layout(*scalar, layout))
+        }
+        ExecutionOperandContractV1::Pointer {
+            layout,
+            space,
+            access,
+        } => matches!(
+            actual,
+            Some(Type::Pointer(pointer))
+                if pointer.address_space == space
+                    && pointer.access == access
+                    && matches!(pointer.pointee.as_ref(), Type::Scalar(scalar) if scalar_matches_execution_layout(*scalar, layout))
+        ),
+        ExecutionOperandContractV1::Slice {
+            scalar,
+            space,
+            access,
+        } => matches!(
+            actual,
+            Some(Type::Slice(slice))
+                if slice.address_space == space
+                    && slice.access == access
+                    && slice.element.as_ref() == &Type::Scalar(scalar)
+        ),
+        ExecutionOperandContractV1::BoolProof => actual == Some(&Type::BOOL),
+    }
+}
+
+fn execution_result_type_matches(
+    actual: &Type,
+    expected: ExecutionResultContractV1,
+    contract: &ExecutionCapabilityOpV1,
+) -> bool {
+    match expected {
+        ExecutionResultContractV1::Capability { source, role } => matches!(
+            actual,
+            Type::ExecutionCapability(capability)
+                if capability.source_type == source
+                    && capability.provenance == contract.provenance
+                    && capability.workgroup_brand == contract.workgroup_brand
+                    && capability.epoch == contract.epoch_after.or(contract.epoch_before)
+                    && execution_role_matches(&capability.role, role)
+        ),
+        ExecutionResultContractV1::Scalar(scalar) => actual == &Type::Scalar(scalar),
+        ExecutionResultContractV1::ElementScalar(layout) => {
+            matches!(actual, Type::Scalar(scalar) if scalar_matches_execution_layout(*scalar, layout))
+        }
+        ExecutionResultContractV1::Bool => actual == &Type::BOOL,
+    }
+}
+
+fn execution_role_matches(
+    actual: &ExecutionCapabilityRoleV1,
+    expected: ExecutionRoleContractV1,
+) -> bool {
+    use crate::ExecutionCapabilityRoleV1 as Role;
+    match (actual, expected) {
+        (Role::Workgroup, ExecutionRoleContractV1::Workgroup)
+        | (Role::WorkgroupMemoryIndex, ExecutionRoleContractV1::WorkgroupMemoryIndex) => true,
+        (
+            Role::Subgroup { width },
+            ExecutionRoleContractV1::Subgroup {
+                width: expected_width,
+            },
+        ) => *width == expected_width,
+        (
+            Role::Lds {
+                element,
+                layout,
+                elements,
+                state,
+            },
+            ExecutionRoleContractV1::Lds {
+                element: expected_element,
+                layout: expected_layout,
+                elements: expected_elements,
+                state: expected_state,
+            },
+        ) => {
+            *element == expected_element
+                && *layout == expected_layout
+                && *elements == expected_elements
+                && *state == expected_state
+        }
+        (
+            Role::ScopedAtomic {
+                element,
+                space,
+                scope,
+            },
+            ExecutionRoleContractV1::ScopedAtomic {
+                element: expected_element,
+                space: expected_space,
+                scope: expected_scope,
+            },
+        ) => *element == expected_element && *space == expected_space && *scope == expected_scope,
+        (
+            Role::Matrix {
+                subgroup_brand,
+                width,
+            },
+            ExecutionRoleContractV1::Matrix {
+                subgroup_brand: expected_brand,
+                width: expected_width,
+            },
+        ) => *subgroup_brand == expected_brand && *width == expected_width,
+        (
+            Role::PendingAsyncCopy {
+                element,
+                layout,
+                elements,
+            },
+            ExecutionRoleContractV1::PendingAsyncCopy {
+                element: expected_element,
+                layout: expected_layout,
+                elements: expected_elements,
+            },
+        ) => {
+            *element == expected_element
+                && *layout == expected_layout
+                && *elements == expected_elements
+        }
+        (
+            Role::MemoryView {
+                element,
+                layout,
+                space,
+                access,
+                extent,
+                initialization,
+                index_space,
+                atomic_scope,
+            },
+            ExecutionRoleContractV1::MemoryView {
+                element: expected_element,
+                layout: expected_layout,
+                space: expected_space,
+                access: expected_access,
+                extent: expected_extent,
+                initialization: expected_initialization,
+                index_space: expected_index_space,
+                requires_index_space,
+                atomic_scope: expected_atomic_scope,
+            },
+        ) => {
+            *element == expected_element
+                && *layout == expected_layout
+                && *space == expected_space
+                && *access == expected_access
+                && expected_extent.is_none_or(|expected| *extent == expected)
+                && expected_initialization.is_none_or(|expected| *initialization == expected)
+                && if requires_index_space {
+                    index_space.is_some()
+                        && expected_index_space
+                            .is_none_or(|expected| *index_space == Some(expected))
+                } else {
+                    index_space.is_none()
+                }
+                && *atomic_scope == expected_atomic_scope
+        }
+        _ => false,
+    }
+}
+
+fn execution_scalar_layout(scalar: ScalarType) -> crate::ExecutionElementLayoutV1 {
+    let bytes = scalar.bit_width().unwrap_or(0).div_ceil(8);
+    crate::ExecutionElementLayoutV1 {
+        byte_size: u32::from(bytes),
+        byte_alignment: bytes,
+    }
+}
+
+fn scalar_matches_execution_layout(
+    scalar: ScalarType,
+    layout: crate::ExecutionElementLayoutV1,
+) -> bool {
+    !matches!(scalar, ScalarType::Bool | ScalarType::Index)
+        && execution_scalar_layout(scalar) == layout
+}
+
+fn valid_execution_capability_requirement(requirement: &ExecutionCapabilityRequirementV1) -> bool {
+    match requirement {
+        ExecutionCapabilityRequirementV1::AddressSpace { .. } => true,
+        ExecutionCapabilityRequirementV1::Atomic {
+            value_type,
+            operation,
+            ordering,
+            failure_ordering,
+            scope,
+            address_space,
+        } => {
+            let legal_storage = valid_capability_scalar(*value_type)
+                && matches!(
+                    address_space,
+                    AddressSpace::Workgroup | AddressSpace::Global | AddressSpace::Generic
+                )
+                && *scope != SynchronizationScope::Invocation
+                && (*address_space != AddressSpace::Workgroup
+                    || scope.rank() <= SynchronizationScope::Workgroup.rank());
+            let legal_ordering = match operation {
+                AtomicKind::Load => {
+                    failure_ordering.is_none()
+                        && !matches!(
+                            ordering,
+                            MemoryOrdering::Release | MemoryOrdering::AcquireRelease
+                        )
+                }
+                AtomicKind::Store => {
+                    failure_ordering.is_none()
+                        && !matches!(
+                            ordering,
+                            MemoryOrdering::Acquire | MemoryOrdering::AcquireRelease
+                        )
+                }
+                AtomicKind::CompareExchange => failure_ordering
+                    .is_some_and(|failure| valid_failure_ordering(*ordering, failure)),
+                _ => failure_ordering.is_none(),
+            };
+            legal_storage && legal_ordering
+        }
+        ExecutionCapabilityRequirementV1::Barrier {
+            execution_scope,
+            memory_scope,
+            ordering,
+            address_spaces,
+        } => {
+            matches!(
+                execution_scope,
+                SynchronizationScope::Subgroup
+                    | SynchronizationScope::Workgroup
+                    | SynchronizationScope::Device
+            ) && memory_scope.rank() >= execution_scope.rank()
+                && valid_synchronization_semantics(*memory_scope, *ordering, address_spaces)
+        }
+        ExecutionCapabilityRequirementV1::Collective {
+            execution_scope,
+            operation,
+            value_type,
+            participants,
+        } => {
+            matches!(
+                execution_scope,
+                SynchronizationScope::Subgroup
+                    | SynchronizationScope::Workgroup
+                    | SynchronizationScope::Device
+            ) && match operation {
+                CollectiveCapabilityOperationV1::Any | CollectiveCapabilityOperationV1::All => {
+                    *value_type == ScalarType::Bool
+                }
+                CollectiveCapabilityOperationV1::Broadcast => {
+                    *value_type == ScalarType::Bool || valid_capability_scalar(*value_type)
+                }
+                _ => valid_capability_scalar(*value_type),
+            } && *participants != 0
+        }
+        ExecutionCapabilityRequirementV1::Matrix {
+            m,
+            n,
+            k,
+            input_type,
+            accumulator_type,
+        } => {
+            *m != 0
+                && *n != 0
+                && *k != 0
+                && valid_capability_scalar(*input_type)
+                && valid_capability_scalar(*accumulator_type)
+        }
+        ExecutionCapabilityRequirementV1::AsyncCopy {
+            source,
+            destination,
+            bytes,
+            alignment,
+            completion,
+        } => {
+            let legal_transfer = source != destination
+                && matches!(
+                    (source, destination),
+                    (
+                        AddressSpace::Global | AddressSpace::Constant,
+                        AddressSpace::Workgroup
+                    ) | (AddressSpace::Workgroup, AddressSpace::Global)
+                )
+                && *bytes != 0
+                && *alignment != 0
+                && alignment.is_power_of_two();
+            let legal_completion = match completion {
+                AsyncCopyCompletionV1::ExplicitWaitGroups {
+                    maximum_pending_groups,
+                } => *maximum_pending_groups != 0,
+                AsyncCopyCompletionV1::WorkgroupBarrier => true,
+            };
+            legal_transfer && legal_completion
+        }
+        ExecutionCapabilityRequirementV1::Numerical { value_type, mode } => {
+            let _ = mode;
+            value_type.is_float()
+        }
+        ExecutionCapabilityRequirementV1::Resource(resource) => match resource {
+            ResourceCapabilityRequirementV1::WorkgroupInvocationsAtMost(value) => *value != 0,
+            ResourceCapabilityRequirementV1::StaticWorkgroupMemoryBytesAtMost(value)
+            | ResourceCapabilityRequirementV1::DynamicWorkgroupMemoryBytesAtMost(value)
+            | ResourceCapabilityRequirementV1::PrivateMemoryBytesPerInvocationAtMost(value) => {
+                *value != 0
+            }
+        },
+    }
+}
+
+fn valid_capability_scalar(scalar: ScalarType) -> bool {
+    scalar != ScalarType::Bool && scalar != ScalarType::Index && scalar.bit_width().is_some()
+}
+
 fn capability_is_supported(
     required: &TargetCapability,
     supported: &BTreeSet<TargetCapability>,
@@ -2595,6 +4812,44 @@ fn capability_is_supported(
                     name: AMDGPU_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
                 })
         }
+        TargetCapability::Execution(required) => supported.iter().any(|capability| {
+            matches!(
+                capability,
+                TargetCapability::Execution(available)
+                    if execution_requirement_is_supported(required, available)
+            )
+        }),
         _ => supported.contains(required),
+    }
+}
+
+fn execution_requirement_is_supported(
+    required: &ExecutionCapabilityRequirementV1,
+    available: &ExecutionCapabilityRequirementV1,
+) -> bool {
+    match (required, available) {
+        (
+            ExecutionCapabilityRequirementV1::Resource(required),
+            ExecutionCapabilityRequirementV1::Resource(available),
+        ) => match (required, available) {
+            (
+                ResourceCapabilityRequirementV1::WorkgroupInvocationsAtMost(required),
+                ResourceCapabilityRequirementV1::WorkgroupInvocationsAtMost(available),
+            ) => required <= available,
+            (
+                ResourceCapabilityRequirementV1::StaticWorkgroupMemoryBytesAtMost(required),
+                ResourceCapabilityRequirementV1::StaticWorkgroupMemoryBytesAtMost(available),
+            )
+            | (
+                ResourceCapabilityRequirementV1::DynamicWorkgroupMemoryBytesAtMost(required),
+                ResourceCapabilityRequirementV1::DynamicWorkgroupMemoryBytesAtMost(available),
+            )
+            | (
+                ResourceCapabilityRequirementV1::PrivateMemoryBytesPerInvocationAtMost(required),
+                ResourceCapabilityRequirementV1::PrivateMemoryBytesPerInvocationAtMost(available),
+            ) => required <= available,
+            _ => false,
+        },
+        _ => required == available,
     }
 }

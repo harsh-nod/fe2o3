@@ -36,6 +36,8 @@ pub(crate) const MAX_REFERENCE_EXPRESSION_NODES_V1: usize = 8_192;
 pub(crate) const MAX_REFERENCE_SYMBOLIC_STEPS_V2: usize = 65_536;
 pub(crate) const MAX_REFERENCE_SYMBOLIC_WORK_NODES_V2: usize = 1_048_576;
 pub(crate) const MAX_REFERENCE_LOOP_ITERATIONS_V2: usize = 4_096;
+pub(crate) const MAX_REFERENCE_LOOP_ACTIVATIONS_V2: usize = 4_096;
+pub(crate) const MAX_REFERENCE_LOOP_NESTING_V2: usize = 64;
 pub(crate) const MAX_REFERENCE_HELPER_ARGUMENTS_V2: usize = 64;
 
 /// Keeps logical kernel-scalar arguments disjoint from the three point-axis
@@ -81,6 +83,12 @@ pub(crate) enum ReferenceArgumentRelationV1 {
         element: ReferenceScalarTypeV1,
     },
     DisjointOutputCoordinate {
+        argument: u32,
+        element: ReferenceScalarTypeV1,
+    },
+    /// One scalar output selected by this invocation's authenticated identity
+    /// `Index1D` coordinate. This is never a relation to the whole allocation.
+    InvocationDisjointOutputCoordinate1D {
         argument: u32,
         element: ReferenceScalarTypeV1,
     },
@@ -267,13 +275,24 @@ pub(crate) struct ReferenceEffectIrV1 {
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct ReferenceLoopActivationFrameV2 {
+    pub(crate) header: u32,
+    pub(crate) latch: u32,
+    pub(crate) ordinal: u64,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct ReferenceLoopSummaryV2 {
+    /// Exact lexical/dynamic activation path. The last frame names this loop;
+    /// preceding frames name the active containing loops.
+    pub(crate) activation: Box<[ReferenceLoopActivationFrameV2]>,
     pub(crate) header: u32,
     pub(crate) latch: u32,
     pub(crate) exit: u32,
     pub(crate) exact_iterations: Option<u64>,
     pub(crate) maximum_iterations: u64,
     pub(crate) carried_locals: Box<[u32]>,
+    pub(crate) entry_predicate_sha256: [u8; 32],
     pub(crate) initial_state_sha256: [u8; 32],
     pub(crate) transition_sha256: [u8; 32],
     pub(crate) variant_sha256: [u8; 32],
@@ -451,6 +470,10 @@ impl ReferenceEffectIrV1 {
                 ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, .. } => {
                     (*argument, true)
                 }
+                ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D {
+                    argument,
+                    ..
+                } => (*argument, true),
                 ReferenceArgumentRelationV1::ScalarInput { .. }
                 | ReferenceArgumentRelationV1::SharedSliceInput { .. }
                 | ReferenceArgumentRelationV1::PointCoordinate { .. } => continue,
@@ -579,6 +602,13 @@ impl ReferenceEffectIrV1 {
                     digest.update([3, scalar_tag(*element)]);
                     digest.update(argument.to_le_bytes());
                 }
+                ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D {
+                    argument,
+                    element,
+                } => {
+                    digest.update([5, scalar_tag(*element)]);
+                    digest.update(argument.to_le_bytes());
+                }
             }
         }
         put_len(&mut digest, self.blocks.len());
@@ -594,6 +624,12 @@ impl ReferenceEffectIrV1 {
         }
         put_len(&mut digest, self.loop_summaries.len());
         for summary in &self.loop_summaries {
+            put_len(&mut digest, summary.activation.len());
+            for frame in &summary.activation {
+                digest.update(frame.header.to_le_bytes());
+                digest.update(frame.latch.to_le_bytes());
+                digest.update(frame.ordinal.to_le_bytes());
+            }
             digest.update(summary.header.to_le_bytes());
             digest.update(summary.latch.to_le_bytes());
             digest.update(summary.exit.to_le_bytes());
@@ -609,6 +645,7 @@ impl ReferenceEffectIrV1 {
             for local in &summary.carried_locals {
                 digest.update(local.to_le_bytes());
             }
+            digest.update(summary.entry_predicate_sha256);
             digest.update(summary.initial_state_sha256);
             digest.update(summary.transition_sha256);
             digest.update(summary.variant_sha256);
@@ -634,9 +671,11 @@ type ReferenceSymbolicEnvironmentV2 = BTreeMap<u32, ReferenceSymbolicValueV2>;
 
 #[derive(Clone, Debug)]
 struct ReferenceLoopTraceV2 {
+    activation: Box<[ReferenceLoopActivationFrameV2]>,
     header: u32,
     latch: u32,
     exit: Option<u32>,
+    entry_guard: ReferencePathPredicateV1,
     initial: ReferenceSymbolicEnvironmentV2,
     transitions: Vec<ReferenceSymbolicEnvironmentV2>,
     variants: Vec<ReferenceEffectExpressionV1>,
@@ -650,6 +689,8 @@ struct ReferenceSymbolicStateV2 {
     environment: ReferenceSymbolicEnvironmentV2,
     guard: ReferencePathPredicateV1,
     traces: BTreeMap<(u32, u32), ReferenceLoopTraceV2>,
+    completed_traces: Vec<ReferenceLoopTraceV2>,
+    activation_ordinals: BTreeMap<(u32, u32, Box<[ReferenceLoopActivationFrameV2]>), u64>,
 }
 
 #[derive(Default)]
@@ -743,7 +784,8 @@ impl ReferenceEffectIrV1 {
                 }
                 ReferenceArgumentRelationV1::SharedSliceInput { .. }
                 | ReferenceArgumentRelationV1::DisjointOutputSlice { .. }
-                | ReferenceArgumentRelationV1::DisjointOutputCoordinate { .. } => {}
+                | ReferenceArgumentRelationV1::DisjointOutputCoordinate { .. }
+                | ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D { .. } => {}
             }
         }
         let mut pending = VecDeque::from([ReferenceSymbolicStateV2 {
@@ -751,6 +793,8 @@ impl ReferenceEffectIrV1 {
             environment: initial_environment,
             guard: ReferencePathPredicateV1::unconditional_v1(),
             traces: BTreeMap::new(),
+            completed_traces: Vec::new(),
+            activation_ordinals: BTreeMap::new(),
         }]);
         let mut writes = Vec::new();
         let mut completed_traces = Vec::new();
@@ -767,24 +811,12 @@ impl ReferenceEffectIrV1 {
                 )));
             }
             if loop_headers.contains(&state.block) {
-                for (latch, header) in backedges {
-                    if *header == state.block && !state.traces.contains_key(&(*header, *latch)) {
-                        work_budget.charge_environment_v2(&state.environment)?;
-                        state.traces.insert(
-                            (*header, *latch),
-                            ReferenceLoopTraceV2 {
-                                header: *header,
-                                latch: *latch,
-                                exit: None,
-                                initial: state.environment.clone(),
-                                transitions: Vec::new(),
-                                variants: Vec::new(),
-                                exact_iterations: None,
-                                maximum_iterations: None,
-                            },
-                        );
-                    }
-                }
+                start_reference_loop_activations_v2(
+                    &mut state,
+                    backedges,
+                    &loop_nodes,
+                    &mut work_budget,
+                )?;
             }
             let block = self.blocks.get(state.block as usize).ok_or_else(|| {
                 ReferenceBindingErrorV1::new(format!(
@@ -839,7 +871,12 @@ impl ReferenceEffectIrV1 {
             }
             match &block.terminator {
                 ReferenceTerminatorV1::Return => {
-                    completed_traces.extend(state.traces.into_values());
+                    if !state.traces.is_empty() {
+                        return Err(ReferenceBindingErrorV1::new(
+                            "reference return leaves one or more loop activations incomplete",
+                        ));
+                    }
+                    completed_traces.extend(state.completed_traces);
                 }
                 ReferenceTerminatorV1::Goto { target } => {
                     dispatch_symbolic_edge_v2(
@@ -952,11 +989,14 @@ impl ReferenceEffectIrV1 {
                                             "dynamic reference loop lost its compiler trace",
                                         )
                                     })?;
-                                trace.exit = Some(summary.exit);
                                 trace.exact_iterations = None;
                                 trace.maximum_iterations = Some(summary.maximum_iterations);
                                 trace.transitions.push(state.environment.clone());
-                                trace.variants.push(expression);
+                                complete_reference_loop_activation_v2(
+                                    &mut state,
+                                    (block.block, summary.latch),
+                                    summary.exit,
+                                )?;
                                 state.block = summary.exit;
                                 work_budget.charge_state_clone_v2(&state)?;
                                 pending.push_back(state);
@@ -1022,12 +1062,7 @@ impl ReferenceEffectIrV1 {
                 "bounded reference loop has no successful return path",
             ));
         }
-        let mut summaries = completed_traces
-            .iter()
-            .map(reference_loop_summary_v2)
-            .collect::<Result<Vec<_>, _>>()?;
-        summaries.sort();
-        summaries.dedup();
+        let summaries = canonical_reference_loop_summaries_v2(&completed_traces)?;
         writes.sort_by(|lhs, rhs| {
             (
                 lhs.argument,
@@ -1070,6 +1105,10 @@ impl ReferenceEffectIrV1 {
                 ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, .. } => {
                     (*argument, true)
                 }
+                ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D {
+                    argument,
+                    ..
+                } => (*argument, true),
                 _ => return None,
             };
             let reference_argument = point_count.checked_add(argument)?;
@@ -1677,7 +1716,15 @@ fn symbolic_predicate_nodes_v2(
 }
 
 fn symbolic_trace_nodes_v2(trace: &ReferenceLoopTraceV2) -> Result<usize, ReferenceBindingErrorV1> {
-    let mut nodes = symbolic_environment_nodes_v2(&trace.initial)?;
+    let activation_nodes = trace.activation.len().checked_mul(3).ok_or_else(|| {
+        ReferenceBindingErrorV1::new("reference loop activation node count overflowed")
+    })?;
+    let mut nodes = symbolic_environment_nodes_v2(&trace.initial)?
+        .checked_add(symbolic_predicate_nodes_v2(&trace.entry_guard)?)
+        .and_then(|nodes| nodes.checked_add(activation_nodes))
+        .ok_or_else(|| {
+            ReferenceBindingErrorV1::new("reference symbolic trace node count overflowed")
+        })?;
     for environment in &trace.transitions {
         nodes = nodes
             .checked_add(symbolic_environment_nodes_v2(environment)?)
@@ -1710,7 +1757,164 @@ fn symbolic_state_nodes_v2(
                 ReferenceBindingErrorV1::new("reference symbolic state node count overflowed")
             })?;
     }
+    for trace in &state.completed_traces {
+        nodes = nodes
+            .checked_add(symbolic_trace_nodes_v2(trace)?)
+            .ok_or_else(|| {
+                ReferenceBindingErrorV1::new("reference symbolic state node count overflowed")
+            })?;
+    }
+    for ((_, _, parent), _) in &state.activation_ordinals {
+        nodes = nodes
+            .checked_add(parent.len().checked_mul(3).ok_or_else(|| {
+                ReferenceBindingErrorV1::new("reference activation-counter node count overflowed")
+            })?)
+            .and_then(|nodes| nodes.checked_add(1))
+            .ok_or_else(|| {
+                ReferenceBindingErrorV1::new("reference symbolic state node count overflowed")
+            })?;
+    }
     Ok(nodes)
+}
+
+fn start_reference_loop_activations_v2(
+    state: &mut ReferenceSymbolicStateV2,
+    backedges: &BTreeSet<(u32, u32)>,
+    loop_nodes: &BTreeMap<(u32, u32), BTreeSet<u32>>,
+    work_budget: &mut ReferenceSymbolicWorkBudgetV2,
+) -> Result<(), ReferenceBindingErrorV1> {
+    let matching = backedges
+        .iter()
+        .filter(|(_, header)| *header == state.block)
+        .copied()
+        .collect::<Vec<_>>();
+    let [(latch, header)] = matching.as_slice() else {
+        return Err(ReferenceBindingErrorV1::new(format!(
+            "reference loop header {} has ambiguous activation identity",
+            state.block,
+        )));
+    };
+    let active_key = (*header, *latch);
+    if state.traces.contains_key(&active_key) {
+        return Ok(());
+    }
+    let nodes = loop_nodes.get(&(*latch, *header)).ok_or_else(|| {
+        ReferenceBindingErrorV1::new("reference natural-loop nodes vanished at activation")
+    })?;
+    let mut parents = Vec::new();
+    for (key, trace) in &state.traces {
+        let parent_nodes = loop_nodes.get(&(key.1, key.0)).ok_or_else(|| {
+            ReferenceBindingErrorV1::new(
+                "active reference loop has no authenticated natural-loop region",
+            )
+        })?;
+        if nodes.len() < parent_nodes.len() && nodes.is_subset(parent_nodes) {
+            parents.push((parent_nodes.len(), trace));
+        }
+    }
+    parents.sort_by_key(|(node_count, trace)| (*node_count, trace.activation.clone()));
+    let parent = match parents.as_slice() {
+        [] => Box::default(),
+        [(_, parent), ..] => {
+            if parents
+                .get(1)
+                .is_some_and(|(node_count, _)| *node_count == parents[0].0)
+            {
+                return Err(ReferenceBindingErrorV1::new(format!(
+                    "reference loop <header={header}, latch={latch}> has ambiguous containing activation",
+                )));
+            }
+            parent.activation.clone()
+        }
+    };
+    if parent.len() >= MAX_REFERENCE_LOOP_NESTING_V2 {
+        return Err(ReferenceBindingErrorV1::new(format!(
+            "reference loop nesting exceeds {MAX_REFERENCE_LOOP_NESTING_V2} activations",
+        )));
+    }
+    let activation_count = state
+        .activation_ordinals
+        .values()
+        .try_fold(0_u64, |total, count| total.checked_add(*count))
+        .ok_or_else(|| {
+            ReferenceBindingErrorV1::new("reference loop activation count overflowed")
+        })?;
+    if activation_count >= MAX_REFERENCE_LOOP_ACTIVATIONS_V2 as u64 {
+        return Err(ReferenceBindingErrorV1::new(format!(
+            "reference symbolic execution exceeds {MAX_REFERENCE_LOOP_ACTIVATIONS_V2} loop activations",
+        )));
+    }
+    let counter_key = (*header, *latch, parent.clone());
+    let ordinal = state.activation_ordinals.entry(counter_key).or_default();
+    let current_ordinal = *ordinal;
+    *ordinal = ordinal.checked_add(1).ok_or_else(|| {
+        ReferenceBindingErrorV1::new("reference loop activation ordinal overflowed")
+    })?;
+    let mut activation = parent.into_vec();
+    activation.push(ReferenceLoopActivationFrameV2 {
+        header: *header,
+        latch: *latch,
+        ordinal: current_ordinal,
+    });
+    work_budget.charge_environment_v2(&state.environment)?;
+    work_budget.charge_predicate_v2(&state.guard)?;
+    work_budget.charge_v2(activation.len().checked_mul(3).ok_or_else(|| {
+        ReferenceBindingErrorV1::new("reference loop activation node count overflowed")
+    })?)?;
+    state.traces.insert(
+        active_key,
+        ReferenceLoopTraceV2 {
+            activation: activation.into_boxed_slice(),
+            header: *header,
+            latch: *latch,
+            exit: None,
+            entry_guard: state.guard.clone(),
+            initial: state.environment.clone(),
+            transitions: Vec::new(),
+            variants: Vec::new(),
+            exact_iterations: None,
+            maximum_iterations: None,
+        },
+    );
+    Ok(())
+}
+
+fn complete_reference_loop_activation_v2(
+    state: &mut ReferenceSymbolicStateV2,
+    key: (u32, u32),
+    exit: u32,
+) -> Result<(), ReferenceBindingErrorV1> {
+    let activation = state
+        .traces
+        .get(&key)
+        .ok_or_else(|| {
+            ReferenceBindingErrorV1::new(format!(
+                "reference loop <header={}, latch={}> has no active recurrence",
+                key.0, key.1,
+            ))
+        })?
+        .activation
+        .clone();
+    if state.traces.values().any(|trace| {
+        trace.activation.len() > activation.len()
+            && trace.activation.starts_with(activation.as_ref())
+    }) {
+        return Err(ReferenceBindingErrorV1::new(format!(
+            "reference loop <header={}, latch={}> exits with a nested activation still active",
+            key.0, key.1,
+        )));
+    }
+    let mut trace = state.traces.remove(&key).ok_or_else(|| {
+        ReferenceBindingErrorV1::new("reference loop activation vanished during completion")
+    })?;
+    if trace.exit.replace(exit).is_some() {
+        return Err(ReferenceBindingErrorV1::new(format!(
+            "reference loop <header={}, latch={}> has incompatible exits",
+            key.0, key.1,
+        )));
+    }
+    state.completed_traces.push(trace);
+    Ok(())
 }
 
 fn dispatch_symbolic_edge_v2(
@@ -1736,17 +1940,28 @@ fn dispatch_symbolic_edge_v2(
             )));
         }
     }
-    if let Some(trace) = state
-        .traces
-        .values_mut()
-        .find(|trace| trace.header == source)
-    {
+    let mut exiting = Vec::new();
+    for (key, trace) in &state.traces {
         let nodes = loop_nodes
             .get(&(trace.latch, trace.header))
-            .ok_or_else(|| ReferenceBindingErrorV1::new("reference natural-loop nodes vanished"))?;
-        if !nodes.contains(&target) {
-            trace.exit = Some(target);
+            .ok_or_else(|| {
+                ReferenceBindingErrorV1::new(
+                    "active reference loop has no authenticated natural-loop region",
+                )
+            })?;
+        if nodes.contains(&source) && !nodes.contains(&target) {
+            exiting.push((trace.activation.len(), *key));
         }
+    }
+    exiting.sort_by(|lhs, rhs| rhs.cmp(lhs));
+    for (_, key) in exiting {
+        if key.0 != source {
+            return Err(ReferenceBindingErrorV1::new(format!(
+                "reference loop <header={}, latch={}> has an incompatible exit from block {source}",
+                key.0, key.1,
+            )));
+        }
+        complete_reference_loop_activation_v2(&mut state, key, target)?;
     }
     state.block = target;
     pending.push_back(state);
@@ -1850,14 +2065,16 @@ fn validate_reference_loop_shapes_v2(
     backedges: &BTreeSet<(u32, u32)>,
 ) -> Result<(), ReferenceBindingErrorV1> {
     let mut headers = BTreeSet::new();
-    let loop_nodes = reference_natural_loop_nodes_v2(effect_ir, backedges)?;
-    reject_overlapping_reference_loops_v2(&loop_nodes)?;
-    for (latch, header) in backedges {
+    for (_, header) in backedges {
         if !headers.insert(*header) {
             return Err(ReferenceBindingErrorV1::new(format!(
                 "reference loop header {header} has multiple latches; only one canonical recurrence is supported",
             )));
         }
+    }
+    let loop_nodes = reference_natural_loop_nodes_v2(effect_ir, backedges)?;
+    validate_reference_loop_region_relationships_v2(&loop_nodes)?;
+    for (latch, header) in backedges {
         let header_block = effect_ir.blocks.get(*header as usize).ok_or_else(|| {
             ReferenceBindingErrorV1::new("reference loop header is outside the block table")
         })?;
@@ -1904,15 +2121,21 @@ fn validate_reference_loop_shapes_v2(
     Ok(())
 }
 
-fn reject_overlapping_reference_loops_v2(
+fn validate_reference_loop_region_relationships_v2(
     loop_nodes: &BTreeMap<(u32, u32), BTreeSet<u32>>,
 ) -> Result<(), ReferenceBindingErrorV1> {
     let loops = loop_nodes.iter().collect::<Vec<_>>();
     for (left_index, (left_identity, left_nodes)) in loops.iter().enumerate() {
         for (right_identity, right_nodes) in loops.iter().skip(left_index + 1) {
-            if !left_nodes.is_disjoint(right_nodes) {
+            if left_nodes.is_disjoint(right_nodes) {
+                continue;
+            }
+            let properly_nested = (left_nodes.len() < right_nodes.len()
+                && left_nodes.is_subset(right_nodes))
+                || (right_nodes.len() < left_nodes.len() && right_nodes.is_subset(left_nodes));
+            if !properly_nested {
                 return Err(ReferenceBindingErrorV1::new(format!(
-                    "reference loops <header={}, latch={}> and <header={}, latch={}> overlap or nest; activation-specific recurrence summaries are not implemented",
+                    "reference loops <header={}, latch={}> and <header={}, latch={}> have an irreducible partial or equal overlap",
                     left_identity.1, left_identity.0, right_identity.1, right_identity.0,
                 )));
             }
@@ -1924,6 +2147,17 @@ fn reject_overlapping_reference_loops_v2(
 fn reference_loop_summary_v2(
     trace: &ReferenceLoopTraceV2,
 ) -> Result<ReferenceLoopSummaryV2, ReferenceBindingErrorV1> {
+    let Some(frame) = trace.activation.last() else {
+        return Err(ReferenceBindingErrorV1::new(
+            "reference loop trace has no activation identity",
+        ));
+    };
+    if frame.header != trace.header || frame.latch != trace.latch {
+        return Err(ReferenceBindingErrorV1::new(format!(
+            "reference loop <header={}, latch={}> activation identity is stale or mutated",
+            trace.header, trace.latch,
+        )));
+    }
     let exit = trace.exit.ok_or_else(|| {
         ReferenceBindingErrorV1::new(format!(
             "reference loop <header={}, latch={}> has no authenticated exit",
@@ -1947,6 +2181,8 @@ fn reference_loop_summary_v2(
     initial_digest.update(b"fe2o3/reference-loop-initial/v2\0");
     let mut transition_digest = Sha256::new();
     transition_digest.update(b"fe2o3/reference-loop-transition/v2\0");
+    digest_reference_loop_activation_v2(&mut initial_digest, &trace.activation);
+    digest_reference_loop_activation_v2(&mut transition_digest, &trace.activation);
     for local in &carried_locals {
         initial_digest.update(local.to_le_bytes());
         digest_symbolic_value_v2(
@@ -1967,6 +2203,7 @@ fn reference_loop_summary_v2(
     }
     let mut variant_digest = Sha256::new();
     variant_digest.update(b"fe2o3/reference-loop-variant/v2\0");
+    digest_reference_loop_activation_v2(&mut variant_digest, &trace.activation);
     for variant in &trace.variants {
         digest_effect_expression_v1(&mut variant_digest, variant);
     }
@@ -1978,17 +2215,60 @@ fn reference_loop_summary_v2(
         Some(iterations)
     };
     let maximum_iterations = trace.maximum_iterations.unwrap_or(iterations);
+    let mut entry_predicate_digest = Sha256::new();
+    entry_predicate_digest.update(b"fe2o3/reference-loop-entry-predicate/v2\0");
+    digest_reference_loop_activation_v2(&mut entry_predicate_digest, &trace.activation);
+    digest_path_predicate_v1(&mut entry_predicate_digest, &trace.entry_guard);
     Ok(ReferenceLoopSummaryV2 {
+        activation: trace.activation.clone(),
         header: trace.header,
         latch: trace.latch,
         exit,
         exact_iterations,
         maximum_iterations,
         carried_locals: carried_locals.into_boxed_slice(),
+        entry_predicate_sha256: entry_predicate_digest.finalize().into(),
         initial_state_sha256: initial_digest.finalize().into(),
         transition_sha256: transition_digest.finalize().into(),
         variant_sha256: variant_digest.finalize().into(),
     })
+}
+
+fn canonical_reference_loop_summaries_v2(
+    traces: &[ReferenceLoopTraceV2],
+) -> Result<Vec<ReferenceLoopSummaryV2>, ReferenceBindingErrorV1> {
+    let mut by_activation =
+        BTreeMap::<Box<[ReferenceLoopActivationFrameV2]>, ReferenceLoopSummaryV2>::new();
+    for trace in traces {
+        let summary = reference_loop_summary_v2(trace)?;
+        match by_activation.entry(summary.activation.clone()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(summary);
+            }
+            std::collections::btree_map::Entry::Occupied(entry) if entry.get() == &summary => {}
+            std::collections::btree_map::Entry::Occupied(_) => {
+                return Err(ReferenceBindingErrorV1::new(format!(
+                    "reference loop <header={}, latch={}> has an ambiguous activation-specific recurrence summary",
+                    summary.header, summary.latch,
+                )));
+            }
+        }
+    }
+    let mut summaries = by_activation.into_values().collect::<Vec<_>>();
+    summaries.sort();
+    Ok(summaries)
+}
+
+fn digest_reference_loop_activation_v2(
+    digest: &mut Sha256,
+    activation: &[ReferenceLoopActivationFrameV2],
+) {
+    put_len(digest, activation.len());
+    for frame in activation {
+        digest.update(frame.header.to_le_bytes());
+        digest.update(frame.latch.to_le_bytes());
+        digest.update(frame.ordinal.to_le_bytes());
+    }
 }
 
 fn digest_symbolic_value_v2(digest: &mut Sha256, value: &ReferenceSymbolicValueV2) {
@@ -2219,6 +2499,7 @@ pub(crate) fn authenticate_reference_binding_v1<'tcx>(
             relation,
             ReferenceArgumentRelationV1::DisjointOutputSlice { .. }
                 | ReferenceArgumentRelationV1::DisjointOutputCoordinate { .. }
+                | ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D { .. }
         )
     }) && observable_output_writes.is_empty()
     {
@@ -2406,21 +2687,39 @@ fn logical_abi_relation_v1<'tcx>(
             relations.push(ReferenceArgumentRelationV1::SharedSliceInput { argument, element });
             continue;
         }
-        if let Some((element_ty, element)) = disjoint_slice_element_v1(tcx, kernel_ty) {
-            match *reference_ty.kind() {
-                TyKind::Ref(_, pointee, Mutability::Mut) if matches!(*pointee.kind(), TyKind::Slice(actual) if actual == element_ty) =>
-                {
+        if let Some((element_ty, element, output_kind)) = disjoint_output_element_v1(tcx, kernel_ty)
+        {
+            match (output_kind, *reference_ty.kind()) {
+                (
+                    DisjointOutputKernelTypeV1::LegacyMutableSlice,
+                    TyKind::Ref(_, pointee, Mutability::Mut),
+                ) if matches!(*pointee.kind(), TyKind::Slice(actual) if actual == element_ty) => {
                     relations.push(ReferenceArgumentRelationV1::DisjointOutputSlice {
                         argument,
                         element,
                     });
                     continue;
                 }
-                TyKind::Ref(_, pointee, Mutability::Mut) if pointee == element_ty => {
+                (
+                    DisjointOutputKernelTypeV1::LegacyMutableSlice,
+                    TyKind::Ref(_, pointee, Mutability::Mut),
+                ) if pointee == element_ty => {
                     relations.push(ReferenceArgumentRelationV1::DisjointOutputCoordinate {
                         argument,
                         element,
                     });
+                    continue;
+                }
+                (
+                    DisjointOutputKernelTypeV1::InvocationIndex1D,
+                    TyKind::Ref(_, pointee, Mutability::Mut),
+                ) if pointee == element_ty && point_axis_count == 1 => {
+                    relations.push(
+                        ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D {
+                            argument,
+                            element,
+                        },
+                    );
                     continue;
                 }
                 _ => return Err(logical_abi_mismatch(index, kernel_ty, reference_ty)),
@@ -2475,20 +2774,37 @@ fn shared_slice_element_v1(ty: Ty<'_>) -> Option<ReferenceScalarTypeV1> {
     scalar_type_v1(element)
 }
 
-fn disjoint_slice_element_v1<'tcx>(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DisjointOutputKernelTypeV1 {
+    LegacyMutableSlice,
+    InvocationIndex1D,
+}
+
+fn disjoint_output_element_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
-) -> Option<(Ty<'tcx>, ReferenceScalarTypeV1)> {
+) -> Option<(Ty<'tcx>, ReferenceScalarTypeV1, DisjointOutputKernelTypeV1)> {
     let TyKind::Adt(definition, arguments) = *ty.kind() else {
         return None;
     };
-    if trusted_device_items::classify(tcx, definition.did())
-        != Some(TrustedDeviceItem::DisjointSlice)
-    {
-        return None;
-    }
     let element = arguments.first()?.as_type()?;
-    Some((element, scalar_type_v1(element)?))
+    let scalar = scalar_type_v1(element)?;
+    match trusted_device_items::classify(tcx, definition.did())? {
+        TrustedDeviceItem::DisjointSlice => Some((
+            element,
+            scalar,
+            DisjointOutputKernelTypeV1::LegacyMutableSlice,
+        )),
+        TrustedDeviceItem::WriteOnlyDisjointSlice => {
+            let index_space = arguments.get(1)?.as_type()?;
+            trusted_device_items::is_authenticated_index_space_1d_v1(tcx, index_space).then_some((
+                element,
+                scalar,
+                DisjointOutputKernelTypeV1::InvocationIndex1D,
+            ))
+        }
+        _ => None,
+    }
 }
 
 fn lower_reference_effect_ir_v1<'tcx>(
@@ -3092,9 +3408,11 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
                     ReferenceArgumentRelationV1::ScalarInput { argument, .. }
                     | ReferenceArgumentRelationV1::SharedSliceInput { argument, .. }
                     | ReferenceArgumentRelationV1::DisjointOutputSlice { argument, .. }
-                    | ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, .. } => {
-                        *argument == kernel_argument
-                    }
+                    | ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, .. }
+                    | ReferenceArgumentRelationV1::InvocationDisjointOutputCoordinate1D {
+                        argument,
+                        ..
+                    } => *argument == kernel_argument,
                     ReferenceArgumentRelationV1::PointCoordinate { .. } => false,
                 }) {
                 Some(ReferenceArgumentRelationV1::ScalarInput { .. }) => {
@@ -4596,6 +4914,127 @@ mod tests {
         }
     }
 
+    fn nested_counted_loop_reference_ir(bounds: &[u128]) -> ReferenceEffectIrV1 {
+        assert!((2..=3).contains(&bounds.len()));
+        let depth = u32::try_from(bounds.len()).unwrap();
+        let result_local = 2 + depth;
+        let condition_base = result_local + 1;
+        let final_block = 1 + 3 * depth;
+        let header = |level: u32| 1 + 3 * level;
+        let body = |level: u32| header(level) + 1;
+        let latch = |level: u32| header(level) + 2;
+        let induction = |level: u32| 2 + level;
+
+        let mut blocks = Vec::with_capacity(final_block as usize + 1);
+        blocks.push(ReferenceBlockV1 {
+            block: 0,
+            assignments: vec![
+                assign(induction(0), 0, ReferenceValueV1::Use(scalar_operand(0))),
+                assign(result_local, 1, ReferenceValueV1::Use(scalar_operand(0))),
+            ]
+            .into_boxed_slice(),
+            terminator: ReferenceTerminatorV1::Goto { target: header(0) },
+        });
+        for (level, bound) in bounds.iter().copied().enumerate() {
+            let level = u32::try_from(level).unwrap();
+            let exit = if level == 0 {
+                final_block
+            } else {
+                latch(level - 1)
+            };
+            blocks.push(ReferenceBlockV1 {
+                block: header(level),
+                assignments: vec![assign(
+                    condition_base + level,
+                    0,
+                    ReferenceValueV1::Binary {
+                        operation: ReferenceBinaryOpV1::LessThan,
+                        lhs: local(induction(level)),
+                        rhs: scalar_operand(bound),
+                        checked: false,
+                    },
+                )]
+                .into_boxed_slice(),
+                terminator: ReferenceTerminatorV1::Switch {
+                    discriminant: local(condition_base + level),
+                    values: vec![(0, exit)].into_boxed_slice(),
+                    otherwise: body(level),
+                },
+            });
+            let body_assignment = if level + 1 < depth {
+                assign(
+                    induction(level + 1),
+                    0,
+                    ReferenceValueV1::Use(scalar_operand(0)),
+                )
+            } else {
+                assign(
+                    result_local,
+                    0,
+                    ReferenceValueV1::Binary {
+                        operation: ReferenceBinaryOpV1::Add,
+                        lhs: local(result_local),
+                        rhs: scalar_operand(1),
+                        checked: false,
+                    },
+                )
+            };
+            blocks.push(ReferenceBlockV1 {
+                block: body(level),
+                assignments: vec![body_assignment].into_boxed_slice(),
+                terminator: ReferenceTerminatorV1::Goto {
+                    target: if level + 1 < depth {
+                        header(level + 1)
+                    } else {
+                        latch(level)
+                    },
+                },
+            });
+            blocks.push(ReferenceBlockV1 {
+                block: latch(level),
+                assignments: vec![assign(
+                    induction(level),
+                    0,
+                    ReferenceValueV1::Binary {
+                        operation: ReferenceBinaryOpV1::Add,
+                        lhs: local(induction(level)),
+                        rhs: scalar_operand(1),
+                        checked: false,
+                    },
+                )]
+                .into_boxed_slice(),
+                terminator: ReferenceTerminatorV1::Goto {
+                    target: header(level),
+                },
+            });
+        }
+        blocks.push(ReferenceBlockV1 {
+            block: final_block,
+            assignments: vec![ReferenceAssignmentV1 {
+                statement: 0,
+                destination: ReferencePlaceV1 {
+                    local: 1,
+                    projection: vec![ReferencePlaceProjectionV1::Dereference].into_boxed_slice(),
+                },
+                value: ReferenceValueV1::Use(local(result_local)),
+            }]
+            .into_boxed_slice(),
+            terminator: ReferenceTerminatorV1::Return,
+        });
+        ReferenceEffectIrV1 {
+            argument_count: 1,
+            local_count: condition_base + depth,
+            relations: vec![ReferenceArgumentRelationV1::DisjointOutputCoordinate {
+                argument: 0,
+                element: ReferenceScalarTypeV1::U32,
+            }]
+            .into_boxed_slice(),
+            blocks: blocks.into_boxed_slice(),
+            loop_summaries: Box::default(),
+            observable_output_effects: Box::default(),
+        }
+    }
+
     #[test]
     fn exact_counted_loop_derives_loop_carried_value_and_recurrence_identity() {
         let effect_ir = counted_loop_reference_ir(scalar_operand(4));
@@ -4615,6 +5054,84 @@ mod tests {
         assert_eq!(summaries[0].carried_locals.as_ref(), &[3, 4]);
         assert_ne!(summaries[0].transition_sha256, [0; 32]);
         assert_ne!(summaries[0].variant_sha256, [0; 32]);
+    }
+
+    #[test]
+    fn two_nested_loops_derive_one_summary_per_dynamic_activation() {
+        let effect_ir = nested_counted_loop_reference_ir(&[2, 3]);
+        let backedges = reference_cfg_backedges_v2(&effect_ir).unwrap();
+        validate_reference_loop_shapes_v2(&effect_ir, &backedges).unwrap();
+        let first = effect_ir
+            .observable_output_writes_with_loops_v2(&backedges)
+            .unwrap();
+        let second = effect_ir
+            .observable_output_writes_with_loops_v2(&backedges)
+            .unwrap();
+        assert_eq!(
+            first, second,
+            "nested recurrence derivation must be deterministic"
+        );
+        let (writes, summaries) = first;
+        assert_eq!(writes.len(), 1);
+        assert_eq!(
+            writes[0].rhs,
+            ReferenceEffectExpressionV1::Constant(scalar_constant(6)),
+        );
+        assert_eq!(summaries.len(), 3);
+        assert_eq!(
+            summaries
+                .iter()
+                .map(|summary| summary.activation.len())
+                .collect::<Vec<_>>(),
+            [1, 2, 2],
+        );
+        assert_eq!(summaries[0].exact_iterations, Some(2));
+        assert_eq!(
+            summaries[1..]
+                .iter()
+                .map(|summary| summary.activation.last().unwrap().ordinal)
+                .collect::<Vec<_>>(),
+            [0, 1],
+        );
+        assert!(
+            summaries[1..]
+                .iter()
+                .all(|summary| summary.exact_iterations == Some(3))
+        );
+    }
+
+    #[test]
+    fn three_nested_loops_retain_parent_paths_and_carried_locals() {
+        let effect_ir = nested_counted_loop_reference_ir(&[2, 2, 2]);
+        let backedges = reference_cfg_backedges_v2(&effect_ir).unwrap();
+        validate_reference_loop_shapes_v2(&effect_ir, &backedges).unwrap();
+        let (writes, summaries) = effect_ir
+            .observable_output_writes_with_loops_v2(&backedges)
+            .unwrap();
+        assert_eq!(
+            writes[0].rhs,
+            ReferenceEffectExpressionV1::Constant(scalar_constant(8)),
+        );
+        assert_eq!(summaries.len(), 7);
+        assert_eq!(
+            summaries.iter().fold([0_usize; 3], |mut counts, summary| {
+                counts[summary.activation.len() - 1] += 1;
+                counts
+            }),
+            [1, 2, 4],
+        );
+        let result_local = 5;
+        assert!(
+            summaries
+                .iter()
+                .all(|summary| summary.carried_locals.contains(&result_local))
+        );
+        assert!(summaries.iter().all(|summary| {
+            summary.entry_predicate_sha256 != [0; 32]
+                && summary.initial_state_sha256 != [0; 32]
+                && summary.transition_sha256 != [0; 32]
+                && summary.variant_sha256 != [0; 32]
+        }));
     }
 
     #[test]
@@ -4824,9 +5341,16 @@ mod tests {
             traces: BTreeMap::from([(
                 (1, 4),
                 ReferenceLoopTraceV2 {
+                    activation: vec![ReferenceLoopActivationFrameV2 {
+                        header: 1,
+                        latch: 4,
+                        ordinal: 0,
+                    }]
+                    .into_boxed_slice(),
                     header: 1,
                     latch: 4,
                     exit: None,
+                    entry_guard: ReferencePathPredicateV1::unconditional_v1(),
                     initial: BTreeMap::new(),
                     transitions: vec![BTreeMap::new(); MAX_REFERENCE_LOOP_ITERATIONS_V2],
                     variants: Vec::new(),
@@ -4834,6 +5358,8 @@ mod tests {
                     maximum_iterations: None,
                 },
             )]),
+            completed_traces: Vec::new(),
+            activation_ordinals: BTreeMap::new(),
         };
         let error = dispatch_symbolic_edge_v2(
             &mut VecDeque::new(),
@@ -4850,18 +5376,142 @@ mod tests {
     }
 
     #[test]
-    fn overlapping_or_nested_loop_regions_fail_before_symbolic_execution() {
-        let mut overlapping = BTreeMap::new();
-        overlapping.insert((2, 1), BTreeSet::from([1, 2, 3]));
-        overlapping.insert((4, 3), BTreeSet::from([3, 4]));
-        let error = reject_overlapping_reference_loops_v2(&overlapping).unwrap_err();
-        assert!(error.to_string().contains("overlap or nest"));
+    fn proper_nesting_and_disjoint_regions_are_accepted_but_partial_overlap_is_rejected() {
+        let nested = BTreeMap::from([
+            ((6, 1), BTreeSet::from([1, 2, 3, 4, 5, 6])),
+            ((5, 3), BTreeSet::from([3, 4, 5])),
+        ]);
+        validate_reference_loop_region_relationships_v2(&nested).unwrap();
 
         let disjoint = BTreeMap::from([
             ((2, 1), BTreeSet::from([1, 2])),
             ((4, 3), BTreeSet::from([3, 4])),
         ]);
-        reject_overlapping_reference_loops_v2(&disjoint).unwrap();
+        validate_reference_loop_region_relationships_v2(&disjoint).unwrap();
+
+        let partial = BTreeMap::from([
+            ((3, 1), BTreeSet::from([1, 2, 3])),
+            ((4, 2), BTreeSet::from([2, 3, 4])),
+        ]);
+        let error = validate_reference_loop_region_relationships_v2(&partial).unwrap_err();
+        assert!(error.to_string().contains("irreducible partial"));
+
+        let equal = BTreeMap::from([
+            ((3, 1), BTreeSet::from([1, 2, 3])),
+            ((2, 1), BTreeSet::from([1, 2, 3])),
+        ]);
+        let error = validate_reference_loop_region_relationships_v2(&equal).unwrap_err();
+        assert!(error.to_string().contains("partial or equal overlap"));
+    }
+
+    #[test]
+    fn malformed_nested_loop_exits_and_latches_fail_closed() {
+        let effect_ir = nested_counted_loop_reference_ir(&[2, 2]);
+        let backedges = reference_cfg_backedges_v2(&effect_ir).unwrap();
+
+        let mut bad_latch = effect_ir.clone();
+        bad_latch.blocks[6].terminator = ReferenceTerminatorV1::Switch {
+            discriminant: scalar_operand(0),
+            values: vec![(0, 4)].into_boxed_slice(),
+            otherwise: 4,
+        };
+        let error = validate_reference_loop_shapes_v2(&bad_latch, &backedges).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("latch 6 is not one unconditional edge"),
+            "{error}",
+        );
+
+        let mut bad_exit = effect_ir.clone();
+        bad_exit.blocks[5].terminator = ReferenceTerminatorV1::Switch {
+            discriminant: scalar_operand(0),
+            values: vec![(0, 7)].into_boxed_slice(),
+            otherwise: 6,
+        };
+        let error = validate_reference_loop_shapes_v2(&bad_exit, &backedges).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("must have exactly one header exit")
+        );
+
+        let mut multiple_latches = backedges.clone();
+        multiple_latches.insert((5, 4));
+        let error = validate_reference_loop_shapes_v2(&effect_ir, &multiple_latches).unwrap_err();
+        assert!(error.to_string().contains("header 4 has multiple latches"));
+    }
+
+    #[test]
+    fn mutated_or_ambiguous_activation_summaries_fail_closed() {
+        let frame = ReferenceLoopActivationFrameV2 {
+            header: 1,
+            latch: 2,
+            ordinal: 0,
+        };
+        let trace = ReferenceLoopTraceV2 {
+            activation: vec![frame.clone()].into_boxed_slice(),
+            header: 1,
+            latch: 2,
+            exit: Some(3),
+            entry_guard: ReferencePathPredicateV1::unconditional_v1(),
+            initial: BTreeMap::new(),
+            transitions: vec![BTreeMap::new()],
+            variants: vec![ReferenceEffectExpressionV1::Constant(scalar_constant(1))],
+            exact_iterations: None,
+            maximum_iterations: None,
+        };
+        let mut stale = trace.clone();
+        stale.activation[0].header = 9;
+        let error = reference_loop_summary_v2(&stale).unwrap_err();
+        assert!(error.to_string().contains("stale or mutated"));
+
+        let mut alternate = trace.clone();
+        alternate.entry_guard = ReferencePathPredicateV1::unreachable_v1();
+        let error = canonical_reference_loop_summaries_v2(&[trace, alternate]).unwrap_err();
+        assert!(error.to_string().contains("ambiguous activation-specific"));
+    }
+
+    #[test]
+    fn loop_summary_mutation_changes_the_sealed_reference_identity() {
+        let mut effect_ir = nested_counted_loop_reference_ir(&[2, 2]);
+        let backedges = reference_cfg_backedges_v2(&effect_ir).unwrap();
+        let (effects, summaries) = effect_ir
+            .observable_output_writes_with_loops_v2(&backedges)
+            .unwrap();
+        effect_ir.observable_output_effects = effects.into_boxed_slice();
+        effect_ir.loop_summaries = summaries.into_boxed_slice();
+        let authenticated = effect_ir.canonical_sha256_v1();
+
+        effect_ir.loop_summaries[1].transition_sha256[0] ^= 1;
+        assert_ne!(effect_ir.canonical_sha256_v1(), authenticated);
+        effect_ir.loop_summaries[1].transition_sha256[0] ^= 1;
+        effect_ir.loop_summaries[1].activation[1].ordinal += 1;
+        assert_ne!(effect_ir.canonical_sha256_v1(), authenticated);
+    }
+
+    #[test]
+    fn loop_activation_resource_bound_fails_closed() {
+        let parent = Box::<[ReferenceLoopActivationFrameV2]>::default();
+        let mut state = ReferenceSymbolicStateV2 {
+            block: 1,
+            environment: BTreeMap::new(),
+            guard: ReferencePathPredicateV1::unconditional_v1(),
+            traces: BTreeMap::new(),
+            completed_traces: Vec::new(),
+            activation_ordinals: BTreeMap::from([(
+                (1, 2, parent),
+                MAX_REFERENCE_LOOP_ACTIVATIONS_V2 as u64,
+            )]),
+        };
+        let error = start_reference_loop_activations_v2(
+            &mut state,
+            &BTreeSet::from([(2, 1)]),
+            &BTreeMap::from([((2, 1), BTreeSet::from([1, 2]))]),
+            &mut ReferenceSymbolicWorkBudgetV2::default(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("exceeds 4096 loop activations"));
     }
 
     #[test]

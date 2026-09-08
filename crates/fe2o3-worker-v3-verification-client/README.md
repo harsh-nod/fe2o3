@@ -6,10 +6,10 @@ protocol order, binds their exact lengths and SHA-256 digests to one canonical r
 retains only read-only close-on-exec handles, sends the request and both descriptors in one
 `SCM_RIGHTS` message, and accepts one exact framing-only response.
 
-The client authenticates neither the service peer nor a verification theorem. A framing receipt
-does not grant compiler, executable, load, launch, or safety authority. Protected peer identity,
-fresh-challenge replay exclusion, theorem-record authentication, and host promotion remain owned by
-later reviewed boundaries.
+The V1 framing client authenticates neither the service peer nor a verification theorem. A framing
+receipt does not grant compiler, executable, load, launch, or safety authority. Protected peer
+identity, fresh-challenge replay exclusion, theorem-record authentication, and host promotion
+remain owned by later reviewed boundaries.
 
 `WorkerV3VerificationClientV2` adds a strict multi-phase typestate on one connection and one
 absolute deadline. `begin` sends the canonical V1 request and its two snapshots without closing the
@@ -37,3 +37,13 @@ arrays, sends their canonical V2 frame, closes the write half, and accepts one b
 packet followed by exact peer EOF. Phase packets cannot carry descriptors or other ancillary data.
 The terminal response is opaque and authority-free even when the remote application selected the
 application-response disposition.
+
+`WorkerV3VerificationCapabilityClientV5` is a separate one-shot exact-V5 path for an already
+connected fixed-path service. Admission pins the canonical pathname, `SO_PEERCRED` UID/GID, policy
+identity, and verifier measurement; the exchange also requires matching kernel-stamped
+`SCM_CREDENTIALS`, exact request/challenge/carriage correlation, peer EOF, and an injected durable
+response-replay guard. Every error or generic rejection invokes an injected attempt-quarantine
+boundary. These checks authenticate the selected transport endpoint and response correlation, but
+the current V5 response carries only identity coordinates, not a signed artifact completion. The
+move-only completion receipt therefore remains inert and cannot consume
+`PreparedCompilerCapabilityCompletionV5` or grant compiler, publication, load, or launch authority.

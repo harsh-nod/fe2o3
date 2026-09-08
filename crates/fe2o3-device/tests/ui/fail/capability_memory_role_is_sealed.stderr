@@ -1,0 +1,42 @@
+error[E0046]: not all trait items implemented, missing: `ACCESS_V1`, `ALIASING_V1`
+ --> tests/ui/fail/capability_memory_role_is_sealed.rs:5:1
+  |
+5 | impl MemoryRole for ForgedRole {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `ACCESS_V1`, `ALIASING_V1` in implementation
+  |
+  = help: implement the missing item: `const ACCESS_V1: MemoryAccessV1 = /* value */;`
+  = help: implement the missing item: `const ALIASING_V1: MemoryAliasV1 = /* value */;`
+
+error[E0277]: the trait bound `ForgedRole: capability_memory::sealed::Role` is not satisfied
+ --> tests/ui/fail/capability_memory_role_is_sealed.rs:5:21
+  |
+5 | impl MemoryRole for ForgedRole {
+  |                     ^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `capability_memory::sealed::Role` is not implemented for `ForgedRole`
+ --> tests/ui/fail/capability_memory_role_is_sealed.rs:3:1
+  |
+3 | struct ForgedRole;
+  | ^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `capability_memory::sealed::Role`
+ --> src/capability_memory.rs
+  |
+  | impl sealed::Role for ReadOnly {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `fe2o3_device::ReadOnly`
+  | impl<IndexSpace> sealed::Role for DisjointWrite<IndexSpace> {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `DisjointWrite<IndexSpace>`
+  | impl sealed::Role for ExclusiveReadWrite {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `ExclusiveReadWrite`
+  | impl<Scope: MemoryScope> sealed::Role for AtomicReadWrite<Scope> {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `fe2o3_device::AtomicReadWrite<Scope>`
+note: required by a bound in `MemoryRole`
+ --> src/capability_memory.rs
+  |
+  | pub trait MemoryRole: sealed::Role {
+  |                       ^^^^^^^^^^^^ required by this bound in `MemoryRole`
+  = note: `MemoryRole` is a "sealed trait", because to implement it you also need to implement `fe2o3_device::capability_memory::sealed::Role`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+  = help: the following types implement the trait:
+            fe2o3_device::ReadOnly
+            fe2o3_device::DisjointWrite<IndexSpace>
+            fe2o3_device::ExclusiveReadWrite
+            fe2o3_device::AtomicReadWrite<Scope>

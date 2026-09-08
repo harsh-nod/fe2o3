@@ -82,7 +82,9 @@ impl ProductionAnalysisImplementationV1 {
     }
 }
 
-fn implementation_for(pass: KernelCheckPassKindV1) -> ProductionAnalysisImplementationV1 {
+pub(crate) fn production_analysis_implementation_for_v1(
+    pass: KernelCheckPassKindV1,
+) -> ProductionAnalysisImplementationV1 {
     match pass {
         KernelCheckPassKindV1::TensorLayout => {
             ProductionAnalysisImplementationV1::PlironTensorLayoutV1
@@ -127,6 +129,7 @@ pub enum ProductionAnalysisConfigurationV1 {
     /// Exact sorted target capabilities supplied to atomic legality.
     AtomicTarget {
         capabilities: Vec<PlironAtomicTargetCapabilityV1>,
+        system_coherent_allocations: Vec<u64>,
     },
 }
 
@@ -326,9 +329,10 @@ impl ProductionAnalysisReportValidationV1 {
     }
 
     pub fn all_reports_independently_validated(&self) -> bool {
-        self.stages
-            .iter()
-            .all(|stage| stage.witness.coverage().is_complete())
+        self.stages.iter().all(|stage| {
+            stage.witness.coverage().is_complete()
+                && stage.independent_validation_status() == KernelCheckStatusV1::Clean
+        })
     }
 
     /// Diagnostic metadata and compact labels never mint refinement authority.
@@ -553,6 +557,11 @@ impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
             ProductionAnalysisConfigurationV1::AtomicTargetAgnostic,
             |target| ProductionAnalysisConfigurationV1::AtomicTarget {
                 capabilities: target.capabilities().iter().copied().collect(),
+                system_coherent_allocations: target
+                    .system_coherent_allocations()
+                    .iter()
+                    .copied()
+                    .collect(),
             },
         );
         Self {
@@ -610,7 +619,7 @@ impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
             context_address: self.context_address,
             function: self.function,
             submitted_checkpoint,
-            implementation: implementation_for(expected),
+            implementation: production_analysis_implementation_for_v1(expected),
             configuration: self.expected_configuration(expected),
             claimed_status: report.status(),
             issued_report: report.clone(),
@@ -676,7 +685,7 @@ impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
                 ProductionAnalysisReportValidationErrorV1::CheckpointMetadataTampered { position },
             );
         }
-        if bound.implementation != implementation_for(expected)
+        if bound.implementation != production_analysis_implementation_for_v1(expected)
             || bound.implementation.pass() != expected
         {
             return Err(
@@ -854,8 +863,8 @@ impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
 mod tests {
     use dialect_gpu::{ExecutionDomainAttr, ExecutionLayoutOp};
     use dialect_kernel::{
-        DIALECT_NAME, InvocationIndexOp, ReturnOp, TensorConvergenceAttr, TensorLayoutOp,
-        register_dialect,
+        AtomicScopeAttr, DIALECT_NAME, InvocationIndexOp, MemorySpaceAttr, ReturnOp,
+        TensorConvergenceAttr, TensorLayoutOp, register_dialect,
     };
     use fe2o3_kernel_ir::TensorLayoutContractV1;
     use fe2o3_pliron_owner_core::ensure_context_identity;
@@ -874,11 +883,13 @@ mod tests {
         PlironStructuralIdentityProviderV1,
     };
     use crate::{
-        LivePlironStructuralIdentityProviderV1, PlironPassContractSessionV1,
-        begin_production_pliron_pass_contract_session_v1,
-        require_production_pliron_checks_before_lowering_v2, run_pliron_atomic_legality_check_v1,
-        run_pliron_ranked_bounds_check_v1, run_pliron_ranked_race_check_v1,
-        run_pliron_tensor_layout_check_v1,
+        LivePlironStructuralIdentityProviderV1, PlironAtomicTargetCapabilityV1,
+        PlironAtomicTargetContextV1, PlironPassContractSessionV1,
+        ProductionAnalysisWitnessCheckerV1, begin_production_pliron_pass_contract_session_v1,
+        require_production_pliron_checks_before_lowering_v2,
+        require_production_pliron_checks_with_atomic_target_before_lowering_v2,
+        run_pliron_atomic_legality_check_v1, run_pliron_ranked_bounds_check_v1,
+        run_pliron_ranked_race_check_v1, run_pliron_tensor_layout_check_v1,
     };
 
     fn setup() -> Context {
@@ -977,7 +988,7 @@ mod tests {
     }
 
     #[test]
-    fn production_happy_path_completes_only_supported_witness_fragments() {
+    fn production_happy_path_completes_every_independent_witness() {
         let context = &mut setup();
         let function = valid_function(context, "validation_happy");
         let report = require_production_pliron_checks_before_lowering_v2(context, &function)
@@ -985,8 +996,8 @@ mod tests {
         let validation = report.report_validation();
 
         assert_eq!(validation.stages().len(), 9);
-        assert_eq!(validation.status(), KernelCheckStatusV1::Incomplete);
-        assert!(!validation.all_reports_independently_validated());
+        assert_eq!(validation.status(), KernelCheckStatusV1::Clean);
+        assert!(validation.all_reports_independently_validated());
         assert!(!validation.grants_compiler_refinement_authority());
         assert!(!validation.grants_lowering_or_launch_authority());
         for (position, stage) in validation.stages().iter().enumerate() {
@@ -997,22 +1008,12 @@ mod tests {
             );
             assert_eq!(stage.implementation().pass(), stage.checkpoint().pass());
             assert_eq!(stage.analysis_status(), KernelCheckStatusV1::Clean);
-            let expected_status =
-                if stage.checkpoint().pass() == KernelCheckPassKindV1::MemoryBounds {
-                    KernelCheckStatusV1::Clean
-                } else {
-                    KernelCheckStatusV1::Incomplete
-                };
-            assert_eq!(stage.independent_validation_status(), expected_status);
-            if expected_status == KernelCheckStatusV1::Clean {
-                assert_eq!(stage.remaining_witness_gap(), None);
-            } else {
-                let gap = stage
-                    .remaining_witness_gap()
-                    .expect("remaining witness gap");
-                assert_eq!(gap.pass(), stage.checkpoint().pass());
-                assert!(!gap.required_evidence().is_empty());
-            }
+            assert_eq!(
+                stage.independent_validation_status(),
+                KernelCheckStatusV1::Clean
+            );
+            assert_eq!(stage.remaining_witness_gap(), None);
+            assert!(stage.witness().coverage().is_complete());
             assert!(!stage.witness().grants_compiler_refinement_authority());
             assert!(!stage.witness().grants_lowering_or_launch_authority());
         }
@@ -1020,6 +1021,40 @@ mod tests {
             validation.stages()[2].configuration(),
             &ProductionAnalysisConfigurationV1::AtomicTargetAgnostic
         );
+    }
+
+    #[test]
+    fn atomic_witness_replay_binds_capabilities_and_coherent_allocations() {
+        let context = &mut setup();
+        let function = bare_function(context, "atomic_replay_configuration");
+        let capability = PlironAtomicTargetCapabilityV1::new(
+            32,
+            MemorySpaceAttr::Global,
+            AtomicScopeAttr::System,
+        )
+        .unwrap();
+        let target = PlironAtomicTargetContextV1::new([capability])
+            .unwrap()
+            .with_system_coherent_allocations([9, 17])
+            .unwrap();
+        let report = require_production_pliron_checks_with_atomic_target_before_lowering_v2(
+            context, &function, &target,
+        )
+        .expect("target-bound independent replay");
+        let atomic = &report.report_validation().stages()[2];
+
+        assert_eq!(
+            atomic.configuration(),
+            &ProductionAnalysisConfigurationV1::AtomicTarget {
+                capabilities: vec![capability],
+                system_coherent_allocations: vec![9, 17],
+            }
+        );
+        assert_eq!(
+            atomic.witness().checker(),
+            ProductionAnalysisWitnessCheckerV1::AtomicFreshLiveIrReplayV2
+        );
+        assert!(atomic.witness().coverage().is_complete());
     }
 
     #[test]
@@ -1207,7 +1242,7 @@ mod tests {
     }
 
     #[test]
-    fn non_clean_report_remains_non_clean_and_independently_incomplete() {
+    fn independent_status_joins_with_the_analysis_status() {
         let context = &mut setup();
         let function = bare_function(context, "validation_negative");
         let provider = LivePlironStructuralIdentityProviderV1::new(context, &function);
@@ -1286,7 +1321,7 @@ mod tests {
         );
         assert_eq!(
             validation.stages[3].independent_validation_status(),
-            KernelCheckStatusV1::Incomplete
+            KernelCheckStatusV1::Clean
         );
     }
 

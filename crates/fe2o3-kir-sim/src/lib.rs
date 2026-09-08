@@ -2,8 +2,10 @@
 #![doc = include_str!("../README.md")]
 
 mod capability;
+mod context;
 mod debug;
 mod execute;
+mod execution_capability_v13;
 mod explore;
 mod f32_surface;
 mod model;
@@ -44,6 +46,11 @@ pub use execute::{
     SimulationOrderedMemoryConflictV1, SimulationOutOfBoundsV2, SimulationRaceAssessmentV1,
     WorkgroupBarrierMismatchV1, WorkgroupParticipantV1,
 };
+pub use execution_capability_v13::{
+    SimulationCapabilityCoordinateKindV13, SimulationCapabilityCoordinateV13,
+    SimulationCapabilityProjectionReceiptV13, SimulationExecutionCapabilityFamilyV13,
+    SimulationLogicalCapabilityKindV13,
+};
 pub use explore::{
     MAX_EXPLORATION_RETAINED_DECISIONS_V1, MAX_EXPLORATION_SCHEDULES_V1,
     SimulationExplorationFailureV1, SimulationExplorationRequestErrorV1,
@@ -53,10 +60,10 @@ pub use f32_surface::{F32_SCALAR_OPERATION_ROSTER_V1, F32ScalarOperationV1};
 pub use model::{
     AdmittedSimulationModuleV1, BufferArgumentErrorV1, BufferArgumentV1, BufferBackingIdV1,
     BufferViewArgumentV1, DynamicWorkgroupMemoryRequestV1, EventPolicyV1, GridShapeV1,
-    IndexWidthV1, ScalarBitsErrorV1, ScalarBitsV1, SharedBufferV1, SimulationAdmissionErrorV1,
-    SimulationArgumentV1, SimulationInvocationV1, SimulationKernelIrIdentityV1,
-    SimulationLimitsErrorV1, SimulationLimitsV1, SimulationRequestV1, SimulationSiteV1,
-    SimulationTargetV1, WorkgroupShapeV1,
+    IncompleteExecutionCapabilityOperationV13, IndexWidthV1, ScalarBitsErrorV1, ScalarBitsV1,
+    SharedBufferV1, SimulationAdmissionErrorV1, SimulationArgumentV1, SimulationInvocationV1,
+    SimulationKernelIrIdentityV1, SimulationLimitsErrorV1, SimulationLimitsV1, SimulationRequestV1,
+    SimulationSiteV1, SimulationTargetV1, WorkgroupShapeV1,
 };
 pub use preflight::{
     DynamicWorkgroupMemorySiteV1, DynamicWorkgroupMemoryUnavailableV1,

@@ -3,9 +3,13 @@ use fe2o3_pliron_owner_core::{
 };
 
 use crate::{
-    AddressSpaceAttr, BarrierOp, DIALECT_NAME, ExecutionDomainAttr, ExecutionExtentAttr,
-    ExecutionLayoutOp, FenceOp, GridIdentityAttr, HierarchyAttr, HierarchyIdOp, HierarchyIndexType,
-    MemoryOrderAttr, MemoryScopeAttr, MemorySpaceOp, MemorySpaceType, SubgroupSizeAttr,
+    AddressSpaceAttr, AllocaOp, AtomicOp, BarrierOp, CanonicalBarrierOp, CanonicalFenceOp,
+    CanonicalKirOperationAttr, CanonicalKirTerminatorAttr, DIALECT_NAME, ExecutionCapabilityOp,
+    ExecutionDomainAttr, ExecutionExtentAttr, ExecutionLayoutOp, FenceOp, Gfx950LdsTransposeOp,
+    GridIdentityAttr, GuardedLoadOp, GuardedStoreOp, HierarchyAttr, HierarchyIdOp,
+    HierarchyIndexType, InlineAssemblyOp, IntegerSwitchOp, IntrinsicOp, MatrixOp,
+    MemoryIntrinsicOp, MemoryOrderAttr, MemoryScopeAttr, MemorySpaceOp, MemorySpaceType,
+    SubgroupSizeAttr, SwitchOp, UnreachableOp, WaveOp, WorkgroupBarrierOp, WorkgroupMemoryOp,
     optimization_v1::{
         AccessModeAttr, BFloat16Attr, BFloat16Type, BinaryKindAttr, BinaryOp, BranchOp, CallOp,
         CastKindAttr, CastOp, CompareOp, ComparePredicateAttr, CondBranchOp, ConstantOp,
@@ -37,6 +41,8 @@ fn registration_hook(
     service.register_attribute::<BFloat16Attr>()?;
     service.register_attribute::<MemoryAlignmentAttr>()?;
     service.register_attribute::<VolatileAttr>()?;
+    service.register_attribute::<CanonicalKirOperationAttr>()?;
+    service.register_attribute::<CanonicalKirTerminatorAttr>()?;
     service.register_attribute::<PreservedOperationKindAttr>()?;
     service.register_attribute::<PreservedTerminatorKindAttr>()?;
     service.register_type::<HierarchyIndexType>()?;
@@ -67,6 +73,24 @@ fn registration_hook(
     service.register_operation::<StoreOp>()?;
     service.register_operation::<PreservedOperationOp>()?;
     service.register_operation::<PreservedTerminatorOp>()?;
+    service.register_operation::<IntrinsicOp>()?;
+    service.register_operation::<MemoryIntrinsicOp>()?;
+    service.register_operation::<AllocaOp>()?;
+    service.register_operation::<GuardedLoadOp>()?;
+    service.register_operation::<GuardedStoreOp>()?;
+    service.register_operation::<CanonicalBarrierOp>()?;
+    service.register_operation::<AtomicOp>()?;
+    service.register_operation::<CanonicalFenceOp>()?;
+    service.register_operation::<WorkgroupBarrierOp>()?;
+    service.register_operation::<WorkgroupMemoryOp>()?;
+    service.register_operation::<MatrixOp>()?;
+    service.register_operation::<Gfx950LdsTransposeOp>()?;
+    service.register_operation::<WaveOp>()?;
+    service.register_operation::<InlineAssemblyOp>()?;
+    service.register_operation::<SwitchOp>()?;
+    service.register_operation::<IntegerSwitchOp>()?;
+    service.register_operation::<UnreachableOp>()?;
+    service.register_operation::<ExecutionCapabilityOp>()?;
     Ok(())
 }
 

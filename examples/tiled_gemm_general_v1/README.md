@@ -1,68 +1,64 @@
 # Dynamic strided GEMM
 
-This example is an attributed safe Rust GPU kernel candidate for
+This M4 example is one target-neutral, attributed Rust kernel for
 
 ```text
 C = alpha * A * B + beta * C
 ```
 
 `M`, `N`, `K`, `lda`, `ldb`, `ldc`, `alpha`, and `beta` are runtime values.
-Each wave64 workgroup owns one 16x16 output tile and executes
-`V_MFMA_F32_16X16X16_BF16` for every 16-element K phase. Checked edge loads
-contribute BF16 zero; checked tiled output witnesses suppress stores outside
-logical M and N. Every active output applies the dynamic alpha/beta epilogue
-once.
+Each 64-invocation workgroup owns one 16x16 output tile. Checked matrix loads
+zero-fill M/N/K tails, and checked disjoint stores leave output padding
+unchanged. The numerical contract requires exact BF16-to-FP32 widening,
+depth-ordered FP32 products and additions, positive-zero K tails, and separate
+FP32 alpha/beta products before the final addition. Simulation and hardware
+qualification therefore require bitwise agreement with the Rust oracle.
 
-The K loop keeps current and next MFMA operand fragments live as a two-buffer
-register pipeline and performs one speculative, zero-filled prefetch. This is
-distinct from the target-neutral `kernel.pipeline` PLIRON protocol, which
-verifies shared workgroup-storage ring lifecycles. The source frontend does not
-yet synthesize that workgroup protocol from this Rust loop.
-
-The matrix instruction is exposed through the target-neutral `DeviceMatrix`
-capability. Bounds, uniformity, convergence, ranked indexing, and disjoint
-output ownership are ordinary compiler analyses shared with every other kernel;
-none of those passes recognizes GEMM or grants it a special case.
-
-## Run on gfx942
-
-From this directory:
+The generic kernel contains no processor or backend schedule selection. Exact
+target binding occurs in separate runners:
 
 ```bash
 ./run-gfx942.sh
+./run-gfx950.sh
 ```
 
-The script requests the complete qualification flow:
+Set `FE2O3_EXAMPLE_COMPILE_ONLY=1` to stop after a compiler-produced Bundle V8
+has passed the local KIR V13 contract, hostile-mutation, and deterministic
+simulation gates and the separately extracted LLVM has been linked into
+target-matched HSACO. Bundle and LLVM extraction must carry the same
+compiler-issued crate binding. Failed runs leave no persistent Bundle or HSACO,
+and temporary build artifacts are removed on shell exit.
 
-```text
-safe Rust
-  -> semantic MIR
-  -> ranked PLIRON verification
-  -> Kernel IR
-  -> formal memory admission
-  -> gfx942 LLVM
-  -> external ROCm clang/LLD HSACO
-  -> fe2o3-core unsafe qualification launch
+A genuine compiler bundle can also exercise the deterministic simulator:
+
+```bash
+FE2O3_M4_BUNDLE_V8=target/fe2o3-gfx950/tiled_gemm_general_v1.bundle-v8 \
+FE2O3_M4_EXPECTED_TARGET=gfx950:xnack- \
+cargo test --features bundle-v8-simulator --test production_v13 \
+  bundle_v8_matches_the_deterministic_cpu_oracle \
+  -- --ignored --exact
 ```
 
-The compiler now carries the checked-tiled source capability through the
-dynamic-launch race proof and reaches gfx942 LLVM qualification.
-`run-gfx942.sh` passes that LLVM through external ROCm clang/LLD to produce an
-HSACO and runs the numerical gfx942 qualification path. Confirming that the
-disassembly contains `v_mfma_f32_16x16x16_bf16` remains required before making
-performance claims.
+## Current production boundary
 
-This script deliberately uses the external-HSACO unsafe qualification path. It
-does not exercise protected Worker publication or artifact-currentness
-admission; those remain a separate, fail-closed pipeline.
+M4 is not production-complete. Four shared APIs still prevent the ordinary
+kernel from using the complete compiler-issued hierarchy end to end:
 
-## Safety boundary
+- matrix views accept raw slices rather than branded read-only `Global` views;
+- `#[kernel(typed)]` cannot bind an exclusive/disjoint read-modify-write
+  `Global` needed by `beta * C`;
+- runtime K loops cannot carry the changing `WorkgroupCapability` epoch type;
+- the source matrix API cannot bind an exact numerical-policy capability.
 
-The library containing the kernel uses `#![forbid(unsafe_code)]`. Ordinary Rust
-slice indexing and `DisjointSlice::get_mut` remain visible to the compiler, so
-generic bounds and ownership analysis can verify them. The host binary contains
-the two required documented unsafe operations: loading external machine code
-and launching it with an exact physical ABI.
+The source uses real `KernelContext` invocation, private-memory, and subgroup
+APIs. Its deprecated context-branded matrix and dynamic LDS pipeline calls are
+the two remaining compatibility terminals; compile-fail boundary fixtures pin
+their missing typed replacements. Source/UI/reference tests are not production
+receipts. The Bundle V8 gate rejects missing layout roles, K-phase control
+flow, barrier families, resource limits, launch shape, target binding, or
+strict numerical requirements, but cannot run until shared W6 emits the exact
+finalized graph.
 
-Any resulting HSACO is qualification output. Protected release publication
-and artifact-currentness admission remain a separate, fail-closed pipeline.
+The library forbids unsafe code. The host runner's external-HSACO load and
+launch remain an explicitly unsafe qualification path and grant no protected
+publication, load, or launch authority.

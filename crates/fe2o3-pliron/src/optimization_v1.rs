@@ -21,6 +21,7 @@ use pliron::{
 };
 
 use crate::{
+    DominanceScopedGlobalValueNumberingPassV1, GeneralTargetIndependentCanonicalizationPassV1,
     HARD_MAX_OPERATION_HANDLES, HARD_MAX_OPERATION_TREE_ITEMS, HARD_MAX_PASSES,
     HARD_MAX_SESSION_OPERATION_TREE_ITEMS, OperationHandle, OperationHandleError, PlironSession,
     inspect_operation_tree_details,
@@ -47,6 +48,8 @@ pub enum PlironOptimizationPassV1 {
     SelectSameValueCanonicalization,
     LocalPureCommonSubexpressionElimination,
     SimplifyControlFlow,
+    GeneralTargetIndependentCanonicalization,
+    GlobalValueNumbering,
 }
 
 impl PlironOptimizationPassV1 {
@@ -59,6 +62,10 @@ impl PlironOptimizationPassV1 {
                 "local-pure-common-subexpression-elimination"
             }
             Self::SimplifyControlFlow => "simplify-control-flow",
+            Self::GeneralTargetIndependentCanonicalization => {
+                "general-target-independent-canonicalization"
+            }
+            Self::GlobalValueNumbering => "global-value-numbering",
         }
     }
 }
@@ -672,6 +679,12 @@ fn run_trusted_pass(
             passes.add_pass(LocalPureCsePassV1)
         }
         PlironOptimizationPassV1::SimplifyControlFlow => passes.add_pass(SimplifyCFGPass),
+        PlironOptimizationPassV1::GeneralTargetIndependentCanonicalization => {
+            passes.add_pass(GeneralTargetIndependentCanonicalizationPassV1)
+        }
+        PlironOptimizationPassV1::GlobalValueNumbering => {
+            passes.add_pass(DominanceScopedGlobalValueNumberingPassV1)
+        }
     }
     passes
         .run(pointer, context, analyses)

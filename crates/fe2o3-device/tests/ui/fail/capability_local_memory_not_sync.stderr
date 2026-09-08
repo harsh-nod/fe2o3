@@ -1,0 +1,22 @@
+error[E0277]: `*mut ()` cannot be shared between threads safely
+ --> tests/ui/fail/capability_local_memory_not_sync.rs:8:20
+  |
+8 |     require_sync::<PrivateMemoryView<'static, u32, ExclusiveReadWrite, Brand>>();
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be shared between threads safely
+  |
+  = help: within `CapabilityMemoryView<'static, u32, PrivateAddressSpace, fe2o3_device::ExclusiveReadWrite, Brand>`, the trait `Sync` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `CapabilityMemoryView<'static, u32, PrivateAddressSpace, fe2o3_device::ExclusiveReadWrite, Brand>`
+ --> src/capability_memory.rs
+  |
+  | pub struct CapabilityMemoryView<'kernel, T: 'kernel, Space, Role, Brand>
+  |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `require_sync`
+ --> tests/ui/fail/capability_local_memory_not_sync.rs:5:20
+  |
+5 | fn require_sync<T: Sync>() {}
+  |                    ^^^^ required by this bound in `require_sync`

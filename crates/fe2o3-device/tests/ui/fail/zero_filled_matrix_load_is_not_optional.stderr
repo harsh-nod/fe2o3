@@ -1,13 +1,39 @@
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/zero_filled_matrix_load_is_not_optional.rs:4:56
+  |
+4 | use fe2o3_device::{Bf16MfmaAFragment, Bf16MfmaAMatrix, Wave64, WaveLane};
+  |                                                        ^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/zero_filled_matrix_load_is_not_optional.rs:4:64
+  |
+4 | use fe2o3_device::{Bf16MfmaAFragment, Bf16MfmaAMatrix, Wave64, WaveLane};
+  |                                                                ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/zero_filled_matrix_load_is_not_optional.rs:8:18
+  |
+8 |     lane: &'wave WaveLane<Wave64>,
+  |                  ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/zero_filled_matrix_load_is_not_optional.rs:8:27
+  |
+8 |     lane: &'wave WaveLane<Wave64>,
+  |                           ^^^^^^
+
 error[E0308]: mismatched types
   --> tests/ui/fail/zero_filled_matrix_load_is_not_optional.rs:10:5
    |
  9 | ) -> Option<Bf16MfmaAFragment<'wave>> {
-   |      -------------------------------- expected `Option<Bf16MfmaFragment<'wave, MfmaOperandA, Bf16F32M16N16K16, MfmaRegisterTile16x16, Wave64>>` because of return type
+   |      -------------------------------- expected `Option<Bf16MfmaFragment<'wave, MfmaOperandA, Bf16F32M16N16K16, MfmaRegisterTile16x16, SubgroupWidth64>>` because of return type
 10 |     matrix.load_m16k16(lane, usize::MAX, usize::MAX)
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Option<...>`, found `Bf16MfmaFragment<'_, ..., ..., ..., ...>`
    |
-   = note: expected enum `Option<Bf16MfmaFragment<'wave, MfmaOperandA, Bf16F32M16N16K16, MfmaRegisterTile16x16, Wave64>>`
-            found struct `Bf16MfmaFragment<'_, MfmaOperandA, Bf16F32M16N16K16, MfmaRegisterTile16x16, Wave64>`
+   = note: expected enum `Option<Bf16MfmaFragment<'wave, MfmaOperandA, Bf16F32M16N16K16, MfmaRegisterTile16x16, SubgroupWidth64>>`
+            found struct `Bf16MfmaFragment<'_, MfmaOperandA, Bf16F32M16N16K16, MfmaRegisterTile16x16, SubgroupWidth64>`
 help: try wrapping the expression in `Some`
    |
 10 |     Some(matrix.load_m16k16(lane, usize::MAX, usize::MAX))

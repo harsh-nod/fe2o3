@@ -1,0 +1,57 @@
+error[E0277]: the trait bound `MemorySemantics<SubgroupScope, fe2o3_device::AcquireRelease, WorkgroupMemory>: WorkgroupBarrierSemantics` is not satisfied
+ --> tests/ui/fail/source_capability_wrong_barrier_contract.rs:7:29
+  |
+7 |     let _ = group.barrier::<SubgroupScope, AcquireRelease, WorkgroupMemory>();
+  |                             ^^^^^^^^^^^^^ the trait `WorkgroupBarrierSemantics` is not implemented for `MemorySemantics<SubgroupScope, fe2o3_device::AcquireRelease, WorkgroupMemory>`
+  |
+help: the following other types implement trait `WorkgroupBarrierSemantics`
+ --> src/execution.rs
+  |
+  | /             impl WorkgroupBarrierSemantics
+  | |                 for MemorySemantics<WorkgroupScope, AcquireRelease, $spaces>
+  | |                                                                            ^
+  | |                                                                            |
+  | |                                                                            `MemorySemantics<WorkgroupScope, fe2o3_device::AcquireRelease, GlobalAndWorkgroupMemory>`
+  | |____________________________________________________________________________`MemorySemantics<WorkgroupScope, fe2o3_device::AcquireRelease, GlobalMemory>`
+  |                                                                              `MemorySemantics<WorkgroupScope, fe2o3_device::AcquireRelease, WorkgroupMemory>`
+...
+  |   workgroup_barrier_semantics!(GlobalMemory, WorkgroupMemory, GlobalAndWorkgroupMemory);
+  |   ------------------------------------------------------------------------------------- in this macro invocation
+note: required by a bound in `WorkgroupCapability::<'workgroup, KernelBrand, Epoch>::barrier`
+ --> src/execution.rs
+  |
+  |     pub fn barrier<Scope, Ordering, Spaces>(
+  |            ------- required by a bound in this associated function
+...
+  |         MemorySemantics<Scope, Ordering, Spaces>: WorkgroupBarrierSemantics,
+  |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `WorkgroupCapability::<'workgroup, KernelBrand, Epoch>::barrier`
+  = note: this error originates in the macro `workgroup_barrier_semantics` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `MemorySemantics<WorkgroupScope, fe2o3_device::Relaxed, GlobalMemory>: WorkgroupBarrierSemantics` is not satisfied
+  --> tests/ui/fail/source_capability_wrong_barrier_contract.rs:11:29
+   |
+11 |     let _ = group.barrier::<WorkgroupScope, Relaxed, GlobalMemory>();
+   |                             ^^^^^^^^^^^^^^ the trait `WorkgroupBarrierSemantics` is not implemented for `MemorySemantics<WorkgroupScope, fe2o3_device::Relaxed, GlobalMemory>`
+   |
+help: the following other types implement trait `WorkgroupBarrierSemantics`
+  --> src/execution.rs
+   |
+   | /             impl WorkgroupBarrierSemantics
+   | |                 for MemorySemantics<WorkgroupScope, AcquireRelease, $spaces>
+   | |                                                                            ^
+   | |                                                                            |
+   | |                                                                            `MemorySemantics<WorkgroupScope, fe2o3_device::AcquireRelease, GlobalAndWorkgroupMemory>`
+   | |____________________________________________________________________________`MemorySemantics<WorkgroupScope, fe2o3_device::AcquireRelease, GlobalMemory>`
+   |                                                                              `MemorySemantics<WorkgroupScope, fe2o3_device::AcquireRelease, WorkgroupMemory>`
+...
+   |   workgroup_barrier_semantics!(GlobalMemory, WorkgroupMemory, GlobalAndWorkgroupMemory);
+   |   ------------------------------------------------------------------------------------- in this macro invocation
+note: required by a bound in `WorkgroupCapability::<'workgroup, KernelBrand, Epoch>::barrier`
+  --> src/execution.rs
+   |
+   |     pub fn barrier<Scope, Ordering, Spaces>(
+   |            ------- required by a bound in this associated function
+...
+   |         MemorySemantics<Scope, Ordering, Spaces>: WorkgroupBarrierSemantics,
+   |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `WorkgroupCapability::<'workgroup, KernelBrand, Epoch>::barrier`
+   = note: this error originates in the macro `workgroup_barrier_semantics` (in Nightly builds, run with -Z macro-backtrace for more info)

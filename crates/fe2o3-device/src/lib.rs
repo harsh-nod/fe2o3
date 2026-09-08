@@ -2,6 +2,7 @@
 #![feature(core_float_math)]
 #![feature(rustc_attrs)]
 #![allow(internal_features)]
+#![allow(deprecated)]
 
 //! Device-side API for fe2o3 kernels.
 //!
@@ -19,8 +20,11 @@ extern crate std;
 use core::marker::PhantomData;
 
 pub mod atomic;
+pub mod capability_memory;
 pub mod collective;
+pub mod context;
 pub mod diagnostics;
+pub mod execution;
 pub mod ffi;
 pub mod fp8;
 pub mod gfx950;
@@ -29,8 +33,11 @@ pub mod half;
 pub mod kernel_result;
 pub mod lds;
 pub mod math;
+pub mod matrix;
 pub mod memory;
 pub mod mx;
+pub mod numerical;
+pub mod prelude;
 pub mod simd;
 pub mod sync;
 pub mod tensor;
@@ -38,8 +45,17 @@ pub mod thread;
 pub mod views;
 pub mod wave;
 
-/// Target-neutral name for the compiler-issued subgroup capability.
-pub use collective::Gfx942Collectives as Subgroup;
+pub use capability_memory::{
+    AddressSpace, AliasMode, AtomicAliases, AtomicReadWrite, AtomicReadWriteAccess,
+    CAPABILITY_MEMORY_VIEW_CONTRACT_VERSION_V1, CapabilityMemoryElementV1, CapabilityMemoryView,
+    CapabilityMemoryViewTypeV1, DisjointAliases, DisjointWrite, ExclusiveAliases,
+    ExclusiveReadWrite, Global, GlobalAddressSpace, MemoryAccessV1, MemoryAddressSpaceV1,
+    MemoryAliasV1, MemoryRole, Private, PrivateAddressSpace, PrivateMemoryView,
+    PublishedWorkgroupMemoryTransition, RawMemoryRoleV1, ReadAccess, ReadOnly, ReadWriteAccess,
+    SharedAliases, UNSAFE_RAW_MEMORY_OBLIGATION_CONTRACT_VERSION_V1,
+    UnsafeRawMemoryObligationSetV1, UnsafeRawMemoryObligationV1, WorkgroupAddressSpace,
+    WorkgroupIndex1D, WorkgroupMemoryBrand, WorkgroupMemoryView, WriteAccess,
+};
 pub use collective::{
     GFX942_COLLECTIVE_CONTRACT_VERSION_V1, GFX942_STATIC_LDS_U32X256_ALIGNMENT,
     GFX942_STATIC_LDS_U32X256_BYTES, GFX942_STATIC_LDS_U32X256_SLOTS,
@@ -48,7 +64,25 @@ pub use collective::{
     WORKGROUP_COLLECTIVE_CONTRACT_VERSION_V1, WorkgroupCollectiveElement,
     WorkgroupCollectiveScratch, WorkgroupCollectiveScratchError, WorkgroupCollectives,
 };
+pub use context::{
+    CurrentTarget, KernelCapabilityBrand, KernelContext, KernelContextTypeV1, KernelLaunch,
+    KernelTarget, RegisteredLaunch, UnboundKernel, UnbrandedCapability,
+};
 pub use diagnostics::{clock32, debugtrap, trap};
+pub use execution::{
+    Acquire, AcquireRelease, AtomicElement, AtomicFailureOrdering, AtomicLoadOrdering,
+    AtomicOrderPair, AtomicRmwOrdering, AtomicStoreOrdering, CollectiveSubgroupWidth, DeviceScope,
+    DynamicPhaseEpoch, EXECUTION_CAPABILITY_CONTRACT_VERSION_V1, GlobalAndWorkgroupMemory,
+    GlobalMemory, InitialEpoch, MatrixSubgroupWidth, MemoryOrdering, MemoryScope, MemorySemantics,
+    MemorySpaces, NextEpoch, PendingAsyncCopy, PublishedLdsPairTransition, PublishedLdsTransition,
+    Relaxed, Release, ReusablePhaseCompletion, ReusableSynchronizationEpoch, ReusableWorkgroup,
+    ReusableWorkgroupBrand, ReusableWorkgroupLds, ScopedAtomic, SequentiallyConsistent, Subgroup,
+    SubgroupBarrierSemantics, SubgroupBarrierTransition, SubgroupBrand, SubgroupFenceSemantics,
+    SubgroupScope, SynchronizationEpoch, SystemScope, ValidAtomicOrderPair, WorkgroupAtomicScope,
+    WorkgroupBarrierSemantics, WorkgroupBrand, WorkgroupCapability, WorkgroupCollectiveTransition,
+    WorkgroupEpoch, WorkgroupFenceSemantics, WorkgroupLds, WorkgroupLdsInvocationInitialized,
+    WorkgroupLdsPublished, WorkgroupLdsUninitialized, WorkgroupMemory, WorkgroupScope,
+};
 pub use fe2o3_macros::{device_export, device_import, import_device, import_kernel, kernel};
 pub use ffi::{
     DeviceConstantPtr, DeviceFfiAbiTypeV1, DeviceGlobalConstPtr, DeviceGlobalMutPtr,
@@ -58,12 +92,15 @@ pub use fp8::{Fp8E4M3Fnuz, Fp8E4M3Fnuzx4, Fp8E5M2Fnuz, Fp8E5M2Fnuzx4};
 pub use gfx950::{
     GFX950_LOW_PRECISION_CONTRACT_VERSION_V1, GFX950_MFMA_K, GFX950_MFMA_M, GFX950_MFMA_N,
     GFX950_MFMA_OPERAND_DWORDS, GFX950_MFMA_WAVE_LANES, GFX950_SUBGROUP_MAX_WIDTH,
-    Gfx950F32AccumulatorFragment, Gfx950Fp4E2M1, Gfx950Fp4MfmaAFragment, Gfx950Fp4MfmaAMatrix,
-    Gfx950Fp4MfmaBFragment, Gfx950Fp4MfmaBMatrix, Gfx950Fp8E4M3, Gfx950Fp8MfmaAFragment,
-    Gfx950Fp8MfmaAMatrix, Gfx950Fp8MfmaBFragment, Gfx950Fp8MfmaBMatrix, Gfx950LdsTransposeTile,
-    Gfx950Matrix, Gfx950MatrixViewError, Gfx950MfmaAMatrix, Gfx950MfmaBMatrix, Gfx950MfmaFormat,
-    Gfx950MfmaFragment, Gfx950MfmaOperandA, Gfx950MfmaOperandB, Gfx950Subgroup,
-    Gfx950TransposePublished, Gfx950TransposeStaged, Gfx950TransposeUninitialized,
+    GFX950_WAVE16_WIDTH, Gfx950F32AccumulatorFragment, Gfx950Fp4E2M1, Gfx950Fp4MfmaAFragment,
+    Gfx950Fp4MfmaAMatrix, Gfx950Fp4MfmaBFragment, Gfx950Fp4MfmaBMatrix, Gfx950Fp8E4M3,
+    Gfx950Fp8MfmaAFragment, Gfx950Fp8MfmaAMatrix, Gfx950Fp8MfmaBFragment, Gfx950Fp8MfmaBMatrix,
+    Gfx950LdsTransposeTile, Gfx950Matrix, Gfx950MatrixViewError, Gfx950MfmaAMatrix,
+    Gfx950MfmaBMatrix, Gfx950MfmaFormat, Gfx950MfmaFragment, Gfx950MfmaOperandA,
+    Gfx950MfmaOperandB, Gfx950Subgroup, Gfx950TransposePublishTransition, Gfx950TransposePublished,
+    Gfx950TransposeStaged, Gfx950TransposeUninitialized, GlobalGfx950Fp4MfmaAMatrix,
+    GlobalGfx950Fp4MfmaBMatrix, GlobalGfx950Fp8MfmaAMatrix, GlobalGfx950Fp8MfmaBMatrix,
+    GlobalGfx950MfmaMatrix, PolicyGfx950Matrix,
 };
 pub use group::{
     ActiveLaneGroup, Grid, Group, GroupMemoryOrdering, GroupMemorySpace, GroupScope, SubgroupTile,
@@ -78,8 +115,13 @@ pub use lds::{
 };
 /// Target-neutral name for the compiler-issued device math capability.
 pub use math::DeviceMath as Math;
-pub use math::{DEVICE_MATH_CONTRACT_VERSION_V1, DeviceMath};
+pub use math::{DEVICE_MATH_CONTRACT_VERSION_V1, DeviceMath, PolicyDeviceMath};
+pub use matrix::{MatrixCapability, MatrixGlobalAccess, PolicyMatrixCapability};
 pub use mx::{MxScaleConversionError, MxScaleE8M0, MxScaleE8M0x4};
+pub use numerical::{
+    NUMERICAL_POLICY_CAPABILITY_CONTRACT_VERSION_V1, NumericalPolicy, NumericalPolicyCapability,
+    StrictIeee,
+};
 pub use simd::{GpuSimd, GpuSimdElement, GpuSimdLaneCount, ValidGpuSimdLaneCount};
 pub use sync::{
     AmdBarrierTarget, BarrierInitializationError, BarrierPending, BarrierReady,
@@ -92,8 +134,10 @@ pub use tensor::{
     BF16_F32_MFMA_M, BF16_F32_MFMA_N, BF16_F32_MFMA_REDUCTION, BF16_F32_MFMA_WAVE_LANES,
     Bf16F32M16N16K16, Bf16MatrixViewError, Bf16MfmaAFragment, Bf16MfmaAMatrix, Bf16MfmaBFragment,
     Bf16MfmaBMatrix, Bf16MfmaFragment, Bf16MfmaMatrix, DeviceMatrix, F32AccumulatorFragment,
-    LdsTile16x16, LdsTileShapeError, MATRIX_CONTRACT_VERSION_V1, MfmaAccumulatorRowMajor,
-    MfmaLdsTile16x16, MfmaLdsXor4, MfmaOperandA, MfmaOperandB, MfmaRegisterTile16x16, RowMajorXor4,
+    F32AccumulatorMatrixViewError, GlobalBf16MfmaAMatrix, GlobalBf16MfmaBMatrix,
+    GlobalBf16MfmaMatrix, GlobalF32AccumulatorMatrix, LdsTile16x16, LdsTileShapeError,
+    MATRIX_CONTRACT_VERSION_V1, MfmaAccumulatorRowMajor, MfmaLdsTile16x16, MfmaLdsXor4,
+    MfmaOperandA, MfmaOperandB, MfmaRegisterTile16x16, RowMajorXor4,
 };
 pub use thread::{
     Blocked, DisjointBlock, DisjointIndex, DisjointRowStripe2D, DisjointTile2D, GlobalGridSize,
@@ -104,7 +148,10 @@ pub use views::{
     DisjointStaticTileMut, StaticIndex, StaticTileRegionWitness, StaticView, StaticViewError,
     StaticViewMut, StridedReadView2D, StridedReadView2DError,
 };
-pub use wave::{Wave32, Wave64, WaveLane, WaveWidth};
+pub use wave::{
+    SubgroupLane, SubgroupWidth, SubgroupWidth32, SubgroupWidth64, Wave32, Wave64, WaveLane,
+    WaveWidth,
+};
 
 /// Executes one operation from the closed, typed gfx942 vector-ALU allowlist.
 #[macro_export]
@@ -412,9 +459,9 @@ impl<T, IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize
     /// final slice extent are checked before returning a reference.
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice_get_block_mut"]
-    pub fn get_block_mut(
+    pub fn get_block_mut<Brand>(
         &mut self,
-        block: &DisjointBlock<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE>,
+        block: &DisjointBlock<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE, Brand>,
         component: usize,
     ) -> Option<&mut T> {
         // SAFETY: `DisjointBlock` is compiler-index-derived and implements the
@@ -443,7 +490,7 @@ impl<
     /// for inactive components, and `row_stride` may include arbitrary padding.
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice_get_tiled_2d_mut"]
-    pub fn get_tiled_2d_mut(
+    pub fn get_tiled_2d_mut<Brand>(
         &mut self,
         tile: &DisjointTile2D<
             IndexSpace,
@@ -451,6 +498,7 @@ impl<
             TILE_ROWS,
             TILE_COLUMNS,
             ELEMENTS_PER_LANE,
+            Brand,
         >,
         component: usize,
         rows: usize,
@@ -474,9 +522,9 @@ impl<T, IndexSpace, const LANES_PER_ROW: usize, const ELEMENTS_PER_LANE: usize>
     /// and the physical slice extent all fail closed.
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice_get_row_striped_2d_mut"]
-    pub fn get_row_striped_2d_mut(
+    pub fn get_row_striped_2d_mut<Brand>(
         &mut self,
-        stripe: &DisjointRowStripe2D<IndexSpace, LANES_PER_ROW, ELEMENTS_PER_LANE>,
+        stripe: &DisjointRowStripe2D<IndexSpace, LANES_PER_ROW, ELEMENTS_PER_LANE, Brand>,
         component: usize,
         rows: usize,
         columns: usize,
@@ -558,6 +606,14 @@ impl<T: Copy, IndexSpace> WriteOnlyDisjointSlice<T, IndexSpace> {
         self.write_at(index.get(), value)
     }
 
+    pub(crate) fn write_disjoint_branded<Brand>(
+        &mut self,
+        index: DisjointIndex<IndexSpace, Brand>,
+        value: T,
+    ) -> bool {
+        self.write_at(index.get(), value)
+    }
+
     fn write_at(&mut self, index: usize, value: T) -> bool {
         if index >= self.len {
             return false;
@@ -584,9 +640,9 @@ impl<T: Copy, IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE:
     /// Writes one component owned by an exact blocked witness.
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_write_block_v1"]
-    pub fn write_block(
+    pub fn write_block<Brand>(
         &mut self,
-        block: &DisjointBlock<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE>,
+        block: &DisjointBlock<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE, Brand>,
         component: usize,
         value: T,
     ) -> bool {
@@ -613,7 +669,7 @@ impl<
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_write_tiled_2d_v1"]
     #[allow(clippy::too_many_arguments)]
-    pub fn write_tiled_2d(
+    pub fn write_tiled_2d<Brand>(
         &mut self,
         tile: &DisjointTile2D<
             IndexSpace,
@@ -621,6 +677,7 @@ impl<
             TILE_ROWS,
             TILE_COLUMNS,
             ELEMENTS_PER_LANE,
+            Brand,
         >,
         component: usize,
         rows: usize,
@@ -640,9 +697,9 @@ impl<T: Copy, IndexSpace, const LANES_PER_ROW: usize, const ELEMENTS_PER_LANE: u
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_write_only_disjoint_slice_write_row_striped_2d_v1"]
     #[allow(clippy::too_many_arguments)]
-    pub fn write_row_striped_2d(
+    pub fn write_row_striped_2d<Brand>(
         &mut self,
-        stripe: &DisjointRowStripe2D<IndexSpace, LANES_PER_ROW, ELEMENTS_PER_LANE>,
+        stripe: &DisjointRowStripe2D<IndexSpace, LANES_PER_ROW, ELEMENTS_PER_LANE, Brand>,
         component: usize,
         rows: usize,
         columns: usize,
@@ -701,6 +758,28 @@ mod tests {
     #[test]
     fn kernel_marker_contract_version_is_stable() {
         assert_eq!(KERNEL_MARKER_CONTRACT_VERSION_V1, 1);
+    }
+
+    #[test]
+    fn branded_2d_witnesses_keep_their_single_index_abi() {
+        enum Brand {}
+
+        assert_eq!(
+            size_of::<DisjointTile2D<Index1D, 64, 16, 16, 4, Brand>>(),
+            size_of::<usize>()
+        );
+        assert_eq!(
+            align_of::<DisjointTile2D<Index1D, 64, 16, 16, 4, Brand>>(),
+            align_of::<usize>()
+        );
+        assert_eq!(
+            size_of::<DisjointRowStripe2D<Index1D, 64, 4, Brand>>(),
+            size_of::<usize>()
+        );
+        assert_eq!(
+            align_of::<DisjointRowStripe2D<Index1D, 64, 4, Brand>>(),
+            align_of::<usize>()
+        );
     }
 
     #[test]

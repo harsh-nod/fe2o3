@@ -13,6 +13,7 @@ mod advanced_model;
 mod atomic_legalizability;
 mod capabilities;
 mod feature_capabilities;
+mod neutral_capabilities_v1;
 mod resolved_target_v2;
 
 pub use advanced_model::{
@@ -32,6 +33,10 @@ pub use feature_capabilities::{
     Fp8Formats, LaunchBoundsField, LaunchBoundsMetadata, LdsTransposeInstruction,
     LdsTransposeInstructions, MfmaFamilies, MfmaFamily, MxFormat, MxFormats, WorkgroupAxis,
     WorkgroupLimits,
+};
+pub use neutral_capabilities_v1::{
+    PRODUCTION_AMD_NEUTRAL_CAPABILITY_MODEL_REVISION_V1, ProductionAmdCapabilityOwnerV1,
+    ProductionAmdTargetCapabilityModelErrorV1, ProductionAmdTargetCapabilityModelV1,
 };
 pub use resolved_target_v2::{
     AmdTargetDetectionV2, CanonicalResolvedAmdTargetBytesV2, DecodeResolvedAmdTargetV2Error,
@@ -103,6 +108,18 @@ pub enum ProductionAmdTargetProfileV1 {
 }
 
 impl ProductionAmdTargetProfileV1 {
+    pub(crate) const fn target_id(self) -> AmdTargetId {
+        let processor = match self {
+            Self::Gfx942 => PRODUCTION_GFX942_DEVICE_CPU_V1,
+            Self::Gfx950 => PRODUCTION_GFX950_DEVICE_CPU_V1,
+        };
+        AmdTargetId {
+            processor,
+            sramecc: None,
+            xnack: Some(FeatureState::Disabled),
+        }
+    }
+
     /// Resolves an exact configured processor spelling.
     pub const fn from_cpu(cpu: &str) -> Option<Self> {
         match cpu.as_bytes() {

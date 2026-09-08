@@ -1,0 +1,11 @@
+error[E0277]: the trait bound `CapabilityMemoryView<'static, u32, PrivateAddressSpace, fe2o3_device::ExclusiveReadWrite, Brand>: Clone` is not satisfied
+ --> tests/ui/fail/capability_local_memory_not_clone.rs:8:21
+  |
+8 |     require_clone::<PrivateMemoryView<'static, u32, ExclusiveReadWrite, Brand>>();
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `CapabilityMemoryView<'static, u32, PrivateAddressSpace, fe2o3_device::ExclusiveReadWrite, Brand>`
+  |
+note: required by a bound in `require_clone`
+ --> tests/ui/fail/capability_local_memory_not_clone.rs:5:21
+  |
+5 | fn require_clone<T: Clone>() {}
+  |                     ^^^^^ required by this bound in `require_clone`

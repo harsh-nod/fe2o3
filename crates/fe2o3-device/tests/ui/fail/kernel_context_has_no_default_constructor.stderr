@@ -1,0 +1,11 @@
+error[E0599]: no associated function or constant named `default` found for struct `KernelContext<'kernel, Kernel, Target, Launch>` in the current scope
+ --> tests/ui/fail/kernel_context_has_no_default_constructor.rs:4:39
+  |
+4 |     let _ = KernelContext::<'static>::default();
+  |                                       ^^^^^^^ associated function or constant not found in `KernelContext<'static, _, _, _>`
+  |
+note: if you're trying to build a new `KernelContext<'static, _, _, _>`, consider using `KernelContext::<'kernel, Kernel, Target, Launch>::__compiler_issue` which returns `KernelContext<'_, _, _, _>`
+ --> src/context.rs
+  |
+  |     pub unsafe fn __compiler_issue() -> Self {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -41,6 +41,7 @@ scalar-transmute = []
 fabs-f32 = []
 is-finite-fabs-f32 = []
 volatile-load-f32 = []
+execution-capability-v17 = []
 
 [dependencies]
 fe2o3-device.workspace = true

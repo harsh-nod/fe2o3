@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/fail/kernel_context_tensor_gfx950_cross_kernel.rs:19:49
+   |
+19 |     let _ = matrix.multiply_accumulate_fp4(lhs, rhs, accumulator);
+   |                    -----------------------      ^^^ expected `KernelA`, found `KernelB`
+   |                    |
+   |                    arguments to this method are incorrect
+   |
+   = note: expected struct `Gfx950MfmaFragment<'_, Gfx950Fp4E2M1, Gfx950MfmaOperandB, fe2o3_device::KernelCapabilityBrand<'wave, KernelA, CurrentTarget, RegisteredLaunch>>`
+              found struct `Gfx950MfmaFragment<'wave, Gfx950Fp4E2M1, Gfx950MfmaOperandB, fe2o3_device::KernelCapabilityBrand<'wave, KernelB, CurrentTarget, RegisteredLaunch>>`
+note: method defined here
+  --> src/gfx950.rs
+   |
+   |     pub fn multiply_accumulate_fp4<'wave>(
+   |            ^^^^^^^^^^^^^^^^^^^^^^^

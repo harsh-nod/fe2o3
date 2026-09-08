@@ -117,14 +117,11 @@ pub enum CastKindAttr {
     Bitcast,
 }
 
-/// Canonical Kernel IR operation families preserved opaquely by the generic
-/// optimizing middle end.
+/// Legacy operation families that do not yet have self-contained Pliron semantics.
 ///
-/// The operation's SSA operands and result types remain first-class Pliron
-/// values. The family tag prevents one preserved semantic operation from being
-/// mistaken for another, while the bridge-owned origin table retains the exact
-/// versioned payload. These operations are intentionally effectful until a
-/// dedicated executable dialect operation is implemented for the family.
+/// The family tag is diagnostic compatibility data only. It is insufficient
+/// for safety analysis or Kernel IR reconstruction, so the production KIR
+/// bridge rejects every member before constructing a graph.
 #[pliron_attr(name = "gpu.preserved_operation_kind", format, verifier = "succ")]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum PreservedOperationKindAttr {
@@ -144,7 +141,7 @@ pub enum PreservedOperationKindAttr {
     InlineAssembly,
 }
 
-/// Canonical Kernel IR terminators whose payload is retained by the bridge.
+/// Legacy terminator tags rejected by the production KIR bridge.
 #[pliron_attr(name = "gpu.preserved_terminator_kind", format, verifier = "succ")]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum PreservedTerminatorKindAttr {
@@ -1455,14 +1452,10 @@ impl Verify for StoreOp {
     }
 }
 
-/// A typed, fail-closed carrier for canonical Kernel IR semantics that do not
-/// yet have a dedicated optimizing Pliron operation.
+/// A legacy, analysis-incomplete carrier for operations without a dedicated op.
 ///
-/// Operand identities and result types are represented directly in the graph.
-/// Exact versioned semantic fields are retained in the importing bridge's
-/// private origin metadata. This operation is always effectful: generic passes
-/// may propagate values through its operands but may not fold, CSE, or erase
-/// the operation based on an incomplete semantic model.
+/// This remains registered so old text receives a deterministic verification
+/// error. It is always effectful, but that does not make it analysis-visible.
 #[pliron_op(
     name = "gpu.preserved_operation",
     format,
@@ -1511,7 +1504,10 @@ impl Verify for PreservedOperationOp {
                 "gpu.preserved_operation requires a semantic family and no CFG structure"
             );
         }
-        Ok(())
+        verify_err!(
+            self.loc(ctx),
+            "gpu.preserved_operation is analysis-incomplete and cannot enter a verified graph"
+        )
     }
 }
 
@@ -1522,11 +1518,11 @@ impl SideEffects for PreservedOperationOp {
     }
 }
 
-/// A CFG-aware carrier for switch-like and unreachable Kernel IR terminators.
+/// A legacy CFG carrier for switch-like and unreachable Kernel IR terminators.
 ///
 /// Operand segment zero contains the selector for switch variants. Each
 /// remaining segment corresponds positionally to one real Pliron successor.
-/// The exact case constants and variant payload remain bridge-owned metadata.
+/// Case constants are absent, so verified production graphs reject this op.
 #[pliron_op(
     name = "gpu.preserved_terminator",
     format,
@@ -1674,7 +1670,10 @@ impl Verify for PreservedTerminatorOp {
                 }
             }
         }
-        Ok(())
+        verify_err!(
+            self.loc(ctx),
+            "gpu.preserved_terminator is analysis-incomplete and cannot enter a verified graph"
+        )
     }
 }
 

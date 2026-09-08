@@ -22,5 +22,8 @@ help: the trait `LdsElement` is not implemented for `ZeroSized`
 note: required by a bound in `DynamicLds`
  --> src/lds.rs
   |
-  | pub struct DynamicLds<'workgroup, T: LdsElement, State = LdsUninitialized> {
-  |                                      ^^^^^^^^^^ required by this bound in `DynamicLds`
+  | pub struct DynamicLds<
+  |            ---------- required by a bound in this struct
+  |     'workgroup,
+  |     T: LdsElement,
+  |        ^^^^^^^^^^ required by this bound in `DynamicLds`

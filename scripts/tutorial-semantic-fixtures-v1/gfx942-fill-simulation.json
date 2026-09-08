@@ -1,0 +1,99 @@
+{
+  "argumentRoles": [
+    "output"
+  ],
+  "canaries": [
+    {
+      "argument": 0,
+      "bytes": "0x00e4404600e44046",
+      "offset": 16
+    }
+  ],
+  "checkApplicability": {
+    "canaries": {
+      "reason": null,
+      "status": "checked"
+    },
+    "padding": {
+      "reason": "physical ABI has no logical padding region",
+      "status": "not-applicable"
+    }
+  },
+  "compilerInputContractSha256": "c9001184266768cd860604ccbf027b0b23fa33240f91a24f13d8a76b76e2ab74",
+  "expectedArguments": [
+    {
+      "bytes": "0x00002a4200002a4200002a4200002a4200e4404600e44046",
+      "element": "f32",
+      "kind": "buffer"
+    }
+  ],
+  "fixtureId": "gfx942-fill-simulation",
+  "kernelSymbol": "fill",
+  "numericalPolicy": {
+    "mode": "exact-bits"
+  },
+  "oracle": {
+    "function": "fe2o3_fill::fill_cpu_reference",
+    "inputSha256": "c1f92ddb133432b5fa5da4781946fb0ed89b5e40200f54fe39aefcd622627339",
+    "kind": "existing-rust-cpu-reference-v1"
+  },
+  "oracleSuiteId": "cpu-reference-fill",
+  "padding": [],
+  "physicalAbi": {
+    "arguments": [
+      {
+        "access": "read_write",
+        "element": "f32",
+        "kind": "buffer",
+        "name": "out"
+      }
+    ],
+    "schema": "fe2o3-physical-kernel-abi-v1",
+    "signatureSha256": "3d9d37687547502677ded42c7828ed798f4821dcb7ec2094e2d401d30858c2eb",
+    "sourcePath": "examples/fill/src/lib.rs"
+  },
+  "productionExport": {
+    "coordinates": null,
+    "diagnostic": "FE2O3-TUTORIAL-PROBE-001: production exporter failed: crates/fe2o3-verifier/src/production_final_graph_functional_refinement_v1.rs:77:5: error[E0277]: `ProductionVerifiedFinalGraphV1` doesn't implement `std::fmt::Debug`: the trait `std::fmt::Debug` is not implemented for `ProductionVerifiedFinalGraphV1`",
+    "diagnosticCode": "FE2O3-TUTORIAL-PROBE-001",
+    "diagnosticIdentitySha256": "c1ea218da43d557fe5229dd7c359c77e273541314166c7777587b2a4961138e7",
+    "identityContract": {
+      "rawContentField": "evidenceFiles[optimized-kir-v13].sha256",
+      "rawContentIdentity": "SHA-256(raw optimized KIR V13 bytes)",
+      "verifiedCanonicalKernelIrV13Fields": [
+        "productionEvidence.finalOptimizedKirSha256",
+        "graph.productionKirIdentitySha256",
+        "simulator.subjectSha256"
+      ],
+      "verifiedCanonicalKernelIrV13Identity": "domain-separated VerifiedCanonicalKernelIrV13 identity"
+    },
+    "stage": "exporter-build",
+    "status": "blocked"
+  },
+  "request": {
+    "arguments": [
+      {
+        "access": "read_write",
+        "alignment": 4,
+        "bytes": "0x00e4404600e4404600e4404600e4404600e4404600e44046",
+        "element": "f32",
+        "kind": "buffer"
+      }
+    ],
+    "grid": [
+      4,
+      1,
+      1
+    ],
+    "kernel": "fill",
+    "schema": "fe2o3-simulation-request-v1",
+    "workgroup": [
+      64,
+      1,
+      1
+    ]
+  },
+  "schema": "fe2o3-tutorial-capability-simulation-fixture-v1",
+  "sourceClosureSha256": "6f7126a8aa0f8313c5350c1d52253de63aa81a01fcd9662e1b1c80b2f23135f8",
+  "target": "gfx942"
+}

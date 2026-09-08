@@ -129,10 +129,18 @@ pub mod reference;
 
 /// The ordinary Rust kernel sources are present and host-checked.
 pub const GFX950_ADVANCED_SYSTEMS_RUST_SOURCE_PRESENT_V1: bool = true;
-/// Whether all seven source roots use the production semantic lowering surface.
-pub const GFX950_ADVANCED_SYSTEMS_SOURCE_LOWERING_SUPPORTED: bool = true;
-/// Boundary not established by the production source-lowering and runtime suite.
-pub const GFX950_ADVANCED_SYSTEMS_SOURCE_BLOCKER: &str = "the retained production extraction, finalization, ISA inspection, and gfx950 numerical runs do not establish formal compiler refinement, protected publication authority, performance, distributed-runtime behavior, or full-model behavior";
+/// Whether all seven roots receive compiler-issued invocation authority.
+pub const GFX950_ADVANCED_SYSTEMS_KERNEL_CONTEXT_V1: bool = true;
+/// Whether every kernel argument uses a compiler-bound typed global role.
+pub const GFX950_ADVANCED_SYSTEMS_TYPED_GLOBALS_V1: bool = true;
+/// Whether production extraction currently lowers the complete migrated package.
+pub const GFX950_ADVANCED_SYSTEMS_SOURCE_LOWERING_SUPPORTED: bool = false;
+/// Whether every real root has produced a clean W4 final-graph ownership/race result.
+pub const GFX950_ADVANCED_SYSTEMS_FINAL_GRAPH_W4_CLEAN: bool = false;
+/// Whether compiler-produced canonical KIR V13 Bundle V8 fixtures are checked in.
+pub const GFX950_ADVANCED_SYSTEMS_BUNDLE_V8_SUPPORTED: bool = false;
+/// Exact boundaries that prevent complete issue #272 qualification for this package.
+pub const GFX950_ADVANCED_SYSTEMS_SOURCE_BLOCKER: &str = "all attributed roots use compiler-issued context, typed Global roles, StrictIeee-bound device math and gfx950 MFMA, branded output ownership, and epoch-scoped LDS exchange; production V13 extraction, genuine Bundle V8 export and differential simulation, final-graph W4 Clean receipts, protected publication, and fresh gfx950 hardware qualification remain unproven";
 
 /// Number of MoE tokens.
 pub const TOKENS: usize = 16;

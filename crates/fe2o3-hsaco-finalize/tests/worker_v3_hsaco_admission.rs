@@ -614,6 +614,29 @@ fn native_v3_finalization_fails_closed_without_descriptor_source_evidence() {
 }
 
 #[test]
+fn native_v3_finalization_fails_closed_without_machine_refinement_evidence() {
+    let directory = TestDirectory::new();
+    let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
+    let (_, source) = evidence_in_directory_for_kernel(
+        &directory,
+        fixture.bytes,
+        EvidenceConfig::BASE,
+        "vecadd",
+        "vecadd.kd",
+    );
+    let raw = inspect_protected_worker_v3_hsaco_v1(source).unwrap();
+    let raw_identity = raw.identity();
+    let raw_output = raw.raw_hsaco_identity();
+    let retained = match finalize_protected_worker_v3_hsaco_v1(raw) {
+        Err(WorkerV3HsacoFinalizationError::MissingMachineRefinementEvidence(retained)) => retained,
+        result => panic!("expected machine-refinement blocker, found {result:?}"),
+    };
+    assert_eq!(retained.identity(), raw_identity);
+    assert_eq!(retained.raw_hsaco_identity(), raw_output);
+    assert!(!retained.grants_publication_authority());
+}
+
+#[test]
 fn native_v3_finalization_rejects_a_different_canonical_descriptor_source() {
     let directory = TestDirectory::new();
     let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());

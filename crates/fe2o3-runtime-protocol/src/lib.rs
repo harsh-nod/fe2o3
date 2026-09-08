@@ -3,6 +3,8 @@
 
 mod application_handoff_v3;
 mod static_application;
+mod worker_v3_capability_ancillary_evidence_v1;
+mod worker_v3_capability_result_carrier_v1;
 mod worker_v3_load_envelope;
 mod worker_v3_load_envelope_v2;
 
@@ -75,6 +77,26 @@ pub use fe2o3_compiler_execution_protocol::{
 };
 pub use static_application::{
     SealedStaticApplicationErrorV1, sealed_static_application_identity_v1,
+};
+pub use worker_v3_capability_ancillary_evidence_v1::{
+    MAX_WORKER_V3_CAPABILITY_ANCILLARY_EVIDENCE_BYTES_V1,
+    WorkerV3CapabilityAncillaryEvidenceErrorV1, WorkerV3CapabilityAncillaryEvidenceV1,
+    recover_worker_v3_capability_ancillary_evidence_for_live_v1,
+    recover_worker_v3_capability_ancillary_evidence_for_recovered_v1,
+    recover_worker_v3_capability_ancillary_evidence_v1,
+};
+pub use worker_v3_capability_result_carrier_v1::{
+    ConsumedWorkerV3CapabilityResultCarrierV1, MAX_WORKER_V3_CAPABILITY_RESULT_CARRIER_BYTES_V1,
+    MAX_WORKER_V3_PENDING_CAPABILITY_RESULT_BYTES_V1,
+    RecoverableWorkerV3CapabilityResultConsumptionErrorV1,
+    RecoveredWorkerV3CapabilityResultCarrierV1, WORKER_V3_CAPABILITY_RESULT_CARRIER_MAGIC_V1,
+    WORKER_V3_CAPABILITY_RESULT_CARRIER_VERSION_V1, WorkerV3CapabilityResultBindingFieldV1,
+    WorkerV3CapabilityResultCarrierErrorV1, WorkerV3CapabilityResultCarrierIdentityV1,
+    WorkerV3CapabilityResultCarrierV1, WorkerV3CapabilityResultCarrierWireV1,
+    WorkerV3DynamicPreconditionRosterIdentityV1, WorkerV3PendingCapabilityResultV1,
+    recover_worker_v3_capability_result_carrier_v1,
+    recover_worker_v3_pending_capability_result_for_live_v1,
+    recover_worker_v3_pending_capability_result_v1,
 };
 pub use worker_v3_load_envelope::{
     MAX_WORKER_V3_LOAD_ENVELOPE_ALLOCATION_BYTES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1,

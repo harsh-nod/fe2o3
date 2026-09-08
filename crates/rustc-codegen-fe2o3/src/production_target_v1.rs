@@ -2,55 +2,54 @@
 
 use std::fmt;
 
-use fe2o3_amd_target::{
-    PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1, PRODUCTION_AMDHSA_RUSTC_DATA_LAYOUT_V1,
-    ProductionAmdTargetProfileV1,
-};
 use rustc_middle::ty::TyCtxt;
 
-use crate::AmdGpuTarget;
+use crate::ProductionDeviceTarget;
+use crate::production_backend_v1::{ProductionBackendTargetContractV1, ProductionBackendTargetV1};
 use crate::semantic_layout_bridge::{
     SemanticLayoutBridgeError, SemanticLayoutTargetV1, rustc_semantic_layout_target_v1,
 };
 
-pub(crate) const PRODUCTION_RUSTC_DATA_LAYOUT_V1: &str = PRODUCTION_AMDHSA_RUSTC_DATA_LAYOUT_V1;
-/// Exact data layout returned by the pinned upstream LLVM gfx942/gfx950 target machines.
+#[cfg(test)]
+pub(crate) const PRODUCTION_RUSTC_DATA_LAYOUT_V1: &str =
+    crate::production_backend_v1::PRODUCTION_RUSTC_DATA_LAYOUT_V1;
+/// Exact worker data layout returned by the selected production backend.
+#[cfg(test)]
 pub(crate) const PRODUCTION_WORKER_DATA_LAYOUT_V1: &str =
-    PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1;
-const PRODUCTION_RUSTC_POINTER_WIDTH_V1: u16 = 64;
+    crate::production_backend_v1::PRODUCTION_WORKER_DATA_LAYOUT_V1;
 
 /// Move-only proof that the live rustc session was the exact production target
 /// before monomorphization or production MIR collection began.
 #[derive(Debug)]
 pub(crate) struct RetainedProductionTargetV1 {
-    profile: ProductionAmdTargetProfileV1,
+    backend: ProductionBackendTargetV1,
     rustc_layout: SemanticLayoutTargetV1,
 }
 
-/// Exact target facts authenticated from the live AMDGPU rustc session.
+/// Exact target facts authenticated from the live device rustc session.
 ///
 /// This is move-only and crate-private so configured device labels cannot be
 /// substituted for the target that actually answered layout and FnAbi queries.
 #[derive(Debug)]
 pub(crate) struct AuthenticatedProductionTargetV1 {
-    profile: ProductionAmdTargetProfileV1,
+    backend: ProductionBackendTargetV1,
     rustc_layout: SemanticLayoutTargetV1,
 }
 
 impl RetainedProductionTargetV1 {
     pub(crate) fn authenticate_before_collection(
         tcx: TyCtxt<'_>,
-        configured_target: &AmdGpuTarget,
+        configured_target: &ProductionDeviceTarget,
     ) -> Result<Self, ProductionTargetErrorV1> {
         let retained = Self::authenticate_live_before_collection(tcx)?;
-        let configured_profile = production_profile_for_configured_target_v1(configured_target)
+        let configured_backend = production_backend_for_configured_target_v1(configured_target)
             .ok_or_else(|| ProductionTargetErrorV1::ConfiguredTarget {
                 observed: configured_target.as_str().to_owned(),
             })?;
-        if configured_profile != retained.profile {
+        if !configured_backend.same_target(&retained.backend) {
             return Err(ProductionTargetErrorV1::ConfiguredTargetMismatch {
                 configured: configured_target.as_str().to_owned(),
-                observed: retained.profile.device_target().to_owned(),
+                observed: retained.backend.contract().canonical_target().to_owned(),
             });
         }
         Ok(retained)
@@ -62,20 +61,20 @@ impl RetainedProductionTargetV1 {
         let rustc_layout = rustc_semantic_layout_target_v1(tcx)
             .map_err(ProductionTargetErrorV1::RustcObservation)?;
         let observed_cpu = rustc_layout.active_cpu().unwrap_or("unavailable");
-        let profile = ProductionAmdTargetProfileV1::from_cpu(observed_cpu).ok_or_else(|| {
+        let backend = ProductionBackendTargetV1::from_live_cpu(observed_cpu).ok_or_else(|| {
             ProductionTargetErrorV1::LiveCpu {
                 observed: observed_cpu.to_owned(),
             }
         })?;
-        validate_authoritative_rustc_target_v1(profile, &rustc_layout)?;
+        validate_authoritative_rustc_target_v1(&backend, &rustc_layout)?;
         Ok(Self {
-            profile,
+            backend,
             rustc_layout,
         })
     }
 
     pub(crate) fn canonical_name(&self) -> &'static str {
-        self.profile.device_target()
+        self.backend.contract().canonical_target()
     }
 
     pub(crate) fn authenticate_import_session(
@@ -87,17 +86,21 @@ impl RetainedProductionTargetV1 {
         if observed != self.rustc_layout {
             return Err(ProductionTargetErrorV1::RustcSessionChanged);
         }
-        validate_authoritative_rustc_target_v1(self.profile, &observed)?;
+        validate_authoritative_rustc_target_v1(&self.backend, &observed)?;
         Ok(AuthenticatedProductionTargetV1 {
-            profile: self.profile,
+            backend: self.backend,
             rustc_layout: observed,
         })
     }
 }
 
 impl AuthenticatedProductionTargetV1 {
-    pub(crate) const fn profile(&self) -> ProductionAmdTargetProfileV1 {
-        self.profile
+    pub(crate) const fn backend(&self) -> &ProductionBackendTargetV1 {
+        &self.backend
+    }
+
+    pub(crate) fn contract(&self) -> ProductionBackendTargetContractV1 {
+        self.backend.contract()
     }
 
     pub(crate) fn rustc_layout(&self) -> &SemanticLayoutTargetV1 {
@@ -105,36 +108,51 @@ impl AuthenticatedProductionTargetV1 {
     }
 
     pub(crate) fn device_target(&self) -> fe2o3_compiler_ffi::DeviceTargetV1 {
-        fe2o3_compiler_ffi::DeviceTargetV1::parse(self.profile.device_target())
-            .expect("the authenticated production target is valid")
+        self.backend.device_target()
     }
 }
 
 fn validate_authoritative_rustc_target_v1(
-    profile: ProductionAmdTargetProfileV1,
+    backend: &ProductionBackendTargetV1,
     target: &SemanticLayoutTargetV1,
 ) -> Result<(), ProductionTargetErrorV1> {
-    require_exact_target_text("LLVM target", profile.rustc_target(), target.llvm_target())?;
+    let contract = backend.contract();
+    contract.neutral_profile().validate().map_err(|error| {
+        ProductionTargetErrorV1::BackendProfileInvalid {
+            detail: error.to_string(),
+        }
+    })?;
+    for (field, value) in [
+        ("backend family", contract.backend_family()),
+        ("worker data layout", contract.worker_data_layout()),
+    ] {
+        if value.is_empty() {
+            return Err(ProductionTargetErrorV1::BackendProfileInvalid {
+                detail: format!("{field} is empty"),
+            });
+        }
+    }
+    require_exact_target_text("LLVM target", contract.rustc_target(), target.llvm_target())?;
     require_exact_target_text(
         "data layout",
-        PRODUCTION_RUSTC_DATA_LAYOUT_V1,
+        contract.rustc_data_layout(),
         target.data_layout(),
     )?;
-    if target.default_pointer_width_bits() != PRODUCTION_RUSTC_POINTER_WIDTH_V1 {
+    if target.default_pointer_width_bits() != contract.pointer_width_bits() {
         return Err(ProductionTargetErrorV1::RustcTargetMismatch {
             field: "default pointer width",
-            expected: PRODUCTION_RUSTC_POINTER_WIDTH_V1.to_string(),
+            expected: contract.pointer_width_bits().to_string(),
             observed: target.default_pointer_width_bits().to_string(),
         });
     }
     require_exact_target_text(
         "active CPU",
-        profile.cpu(),
+        contract.cpu(),
         target.active_cpu().unwrap_or("unavailable"),
     )?;
     require_exact_target_text(
         "active target features",
-        profile.rustc_features(),
+        contract.rustc_features(),
         target.active_features().unwrap_or("unavailable"),
     )
 }
@@ -155,10 +173,10 @@ fn require_exact_target_text(
     }
 }
 
-fn production_profile_for_configured_target_v1(
-    target: &AmdGpuTarget,
-) -> Option<ProductionAmdTargetProfileV1> {
-    ProductionAmdTargetProfileV1::from_device_target(target.as_str())
+fn production_backend_for_configured_target_v1(
+    target: &ProductionDeviceTarget,
+) -> Option<ProductionBackendTargetV1> {
+    ProductionBackendTargetV1::from_configured_target(target.as_str())
 }
 
 #[derive(Debug)]
@@ -172,6 +190,9 @@ pub(crate) enum ProductionTargetErrorV1 {
     },
     LiveCpu {
         observed: String,
+    },
+    BackendProfileInvalid {
+        detail: String,
     },
     RustcObservation(SemanticLayoutBridgeError),
     RustcSessionChanged,
@@ -187,7 +208,7 @@ impl fmt::Display for ProductionTargetErrorV1 {
         match self {
             Self::ConfiguredTarget { observed } => write!(
                 formatter,
-                "production compilation requires configured device target \"gfx942:xnack-\" or \"gfx950:xnack-\"; found {observed:?}"
+                "production compilation found no backend for configured device target {observed:?}"
             ),
             Self::ConfiguredTargetMismatch {
                 configured,
@@ -198,7 +219,11 @@ impl fmt::Display for ProductionTargetErrorV1 {
             ),
             Self::LiveCpu { observed } => write!(
                 formatter,
-                "production compilation requires live rustc target CPU \"gfx942\" or \"gfx950\"; found {observed:?}"
+                "production compilation found no backend for live rustc target CPU {observed:?}"
+            ),
+            Self::BackendProfileInvalid { detail } => write!(
+                formatter,
+                "production compilation selected an invalid target profile: {detail}"
             ),
             Self::RustcObservation(error) => {
                 write!(
@@ -228,6 +253,7 @@ impl std::error::Error for ProductionTargetErrorV1 {
             Self::ConfiguredTarget { .. }
             | Self::ConfiguredTargetMismatch { .. }
             | Self::LiveCpu { .. }
+            | Self::BackendProfileInvalid { .. }
             | Self::RustcSessionChanged
             | Self::RustcTargetMismatch { .. } => None,
         }
@@ -237,7 +263,7 @@ impl std::error::Error for ProductionTargetErrorV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AmdGpuTarget;
+    use crate::ProductionDeviceTarget;
     use fe2o3_amd_target::{
         PRODUCTION_GFX942_DEVICE_CPU_V1, PRODUCTION_GFX942_RUSTC_FEATURES_V1,
         PRODUCTION_GFX942_RUSTC_TARGET_V1,
@@ -250,17 +276,27 @@ mod tests {
     #[test]
     fn production_device_target_accepts_only_exact_admitted_target_ids() {
         assert_eq!(
-            production_profile_for_configured_target_v1(&AmdGpuTarget::new("gfx942:xnack-")),
-            Some(ProductionAmdTargetProfileV1::Gfx942)
+            production_backend_for_configured_target_v1(&ProductionDeviceTarget::new(
+                "gfx942:xnack-"
+            ))
+            .unwrap()
+            .contract()
+            .canonical_target(),
+            "gfx942:xnack-"
         );
         assert_eq!(
-            production_profile_for_configured_target_v1(&AmdGpuTarget::new("gfx950:xnack-")),
-            Some(ProductionAmdTargetProfileV1::Gfx950)
+            production_backend_for_configured_target_v1(&ProductionDeviceTarget::new(
+                "gfx950:xnack-"
+            ))
+            .unwrap()
+            .contract()
+            .canonical_target(),
+            "gfx950:xnack-"
         );
         for rejected in ["gfx942", "gfx942:xnack+", "gfx950", "GFX942:xnack-"] {
-            assert_eq!(
-                production_profile_for_configured_target_v1(&AmdGpuTarget::new(rejected)),
-                None
+            assert!(
+                production_backend_for_configured_target_v1(&ProductionDeviceTarget::new(rejected))
+                    .is_none()
             );
         }
     }
@@ -287,23 +323,27 @@ mod tests {
 
     #[test]
     fn production_rustc_target_requires_every_authoritative_axis() {
+        let backend = production_backend_for_configured_target_v1(&ProductionDeviceTarget::new(
+            "gfx942:xnack-",
+        ))
+        .unwrap();
+        let pointer_width = backend.contract().pointer_width_bits();
         let exact = SemanticLayoutTargetV1::new_with_codegen_profile(
             PRODUCTION_GFX942_RUSTC_TARGET_V1,
             PRODUCTION_RUSTC_DATA_LAYOUT_V1,
-            PRODUCTION_RUSTC_POINTER_WIDTH_V1,
+            pointer_width,
             PRODUCTION_GFX942_DEVICE_CPU_V1,
             "",
             PRODUCTION_GFX942_RUSTC_FEATURES_V1,
         )
         .unwrap();
-        validate_authoritative_rustc_target_v1(ProductionAmdTargetProfileV1::Gfx942, &exact)
-            .unwrap();
+        validate_authoritative_rustc_target_v1(&backend, &exact).unwrap();
 
         let substitutions = [
             SemanticLayoutTargetV1::new_with_codegen_profile(
                 "x86_64-unknown-linux-gnu",
                 PRODUCTION_RUSTC_DATA_LAYOUT_V1,
-                PRODUCTION_RUSTC_POINTER_WIDTH_V1,
+                pointer_width,
                 PRODUCTION_GFX942_DEVICE_CPU_V1,
                 "",
                 PRODUCTION_GFX942_RUSTC_FEATURES_V1,
@@ -312,7 +352,7 @@ mod tests {
             SemanticLayoutTargetV1::new_with_codegen_profile(
                 PRODUCTION_GFX942_RUSTC_TARGET_V1,
                 "e-p:64:64",
-                PRODUCTION_RUSTC_POINTER_WIDTH_V1,
+                pointer_width,
                 PRODUCTION_GFX942_DEVICE_CPU_V1,
                 "",
                 PRODUCTION_GFX942_RUSTC_FEATURES_V1,
@@ -330,7 +370,7 @@ mod tests {
             SemanticLayoutTargetV1::new_with_codegen_profile(
                 PRODUCTION_GFX942_RUSTC_TARGET_V1,
                 PRODUCTION_RUSTC_DATA_LAYOUT_V1,
-                PRODUCTION_RUSTC_POINTER_WIDTH_V1,
+                pointer_width,
                 "gfx950",
                 "",
                 PRODUCTION_GFX942_RUSTC_FEATURES_V1,
@@ -339,7 +379,7 @@ mod tests {
             SemanticLayoutTargetV1::new_with_codegen_profile(
                 PRODUCTION_GFX942_RUSTC_TARGET_V1,
                 PRODUCTION_RUSTC_DATA_LAYOUT_V1,
-                PRODUCTION_RUSTC_POINTER_WIDTH_V1,
+                pointer_width,
                 PRODUCTION_GFX942_DEVICE_CPU_V1,
                 "",
                 "-wavefrontsize32,+wavefrontsize64,+xnack",
@@ -348,7 +388,7 @@ mod tests {
             SemanticLayoutTargetV1::new_with_codegen_profile(
                 PRODUCTION_GFX942_RUSTC_TARGET_V1,
                 PRODUCTION_RUSTC_DATA_LAYOUT_V1,
-                PRODUCTION_RUSTC_POINTER_WIDTH_V1,
+                pointer_width,
                 PRODUCTION_GFX942_DEVICE_CPU_V1,
                 "",
                 "-wavefrontsize32,+wavefrontsize64",
@@ -357,7 +397,7 @@ mod tests {
             SemanticLayoutTargetV1::new_with_codegen_profile(
                 PRODUCTION_GFX942_RUSTC_TARGET_V1,
                 PRODUCTION_RUSTC_DATA_LAYOUT_V1,
-                PRODUCTION_RUSTC_POINTER_WIDTH_V1,
+                pointer_width,
                 PRODUCTION_GFX942_DEVICE_CPU_V1,
                 "",
                 "+wavefrontsize32,-wavefrontsize64,-xnack",
@@ -366,10 +406,7 @@ mod tests {
         ];
         for substitution in substitutions {
             assert!(matches!(
-                validate_authoritative_rustc_target_v1(
-                    ProductionAmdTargetProfileV1::Gfx942,
-                    &substitution,
-                ),
+                validate_authoritative_rustc_target_v1(&backend, &substitution),
                 Err(ProductionTargetErrorV1::RustcTargetMismatch { .. })
             ));
         }
@@ -386,11 +423,11 @@ mod tests {
                 rustc_semantic_layout_target_v1(tcx)
                     .map_err(|error| error.to_string())
                     .and_then(|target| {
-                        validate_authoritative_rustc_target_v1(
-                            ProductionAmdTargetProfileV1::Gfx942,
-                            &target,
-                        )
-                        .map_err(|error| error.to_string())
+                        let backend =
+                            ProductionBackendTargetV1::from_configured_target("gfx942:xnack-")
+                                .expect("test backend target");
+                        validate_authoritative_rustc_target_v1(&backend, &target)
+                            .map_err(|error| error.to_string())
                     }),
             );
             Compilation::Stop

@@ -62,24 +62,26 @@
       "lds_bytes": 0
     }
   ],
-  "rejected": [
+  "unqualified": [
     {
       "variant": "scalar-attention",
       "feature": "kernel-gpt-oss-decode-scalar-attention",
-      "status": "compiler-rejected",
-      "reason": "the arithmetic-safe scalar helper reaches a call terminator before exact callable memory-effect summaries are available",
-      "retained_conclusion": "no HSACO, numerical result, or latency contribution is claimed"
+      "status": "capability-source-functional-control",
+      "reason": "the scalar QK implementation is capability-safe source but has no current compiler-produced V13, Bundle V8, final-W4, HSACO, or hardware receipt",
+      "retained_conclusion": "no production qualification or latency contribution is claimed"
     },
     {
       "variant": "pipelined-attention",
       "feature": "kernel-gpt-oss-decode-pipelined-attention",
-      "status": "compiler-rejected",
+      "status": "capability-source-functional-control",
       "planned_lds_bytes": 8192,
       "planned_stages": 2,
       "planned_prefetch_distance": 1,
-      "reason": "the ranked projection rejects the loop-carried pipeline epoch because its retained scalar temporary has multiple definitions before the exact prime, loop, and drain lifecycle can be admitted",
-      "retained_conclusion": "this is a production-lowering feasibility rejection, not a measured slowdown"
-    },
+      "reason": "the current device API cannot bind a reusable phase-branded Global-to-LDS allocation to the BF16 matrix fragment consumed in the matching phase, so this named control executes the canonical non-pipelined attention schedule",
+      "retained_conclusion": "no double-buffering, current HSACO, production qualification, or performance contribution is claimed"
+    }
+  ],
+  "rejected": [
     {
       "variant": "pipelined-fp4-expert",
       "status": "structurally-inapplicable",

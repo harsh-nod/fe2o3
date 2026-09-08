@@ -1,0 +1,33 @@
+error: lifetime may not live long enough
+  --> tests/ui/fail/gfx950_capability_transpose_rejects_workgroup_substitution.rs:22:5
+   |
+13 | fn substitute<'first, 'second, 'kernel>(
+   |               ------  ------- lifetime `'second` defined here
+   |               |
+   |               lifetime `'first` defined here
+...
+22 |     staged.publish(other).0
+   |     ^^^^^^^^^^^^^^^^^^^^^ argument requires that `'first` must outlive `'second`
+   |
+   = help: consider adding the following bound: `'first: 'second`
+   = note: requirement occurs because of the type `WorkgroupCapability<'_, fe2o3_device::KernelCapabilityBrand<'_, Kernel, CurrentTarget, RegisteredLaunch>>`, which makes the generic argument `'_` invariant
+   = note: the struct `WorkgroupCapability<'workgroup, KernelBrand, Epoch>` is invariant over the parameter `'workgroup`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+
+error: lifetime may not live long enough
+  --> tests/ui/fail/gfx950_capability_transpose_rejects_workgroup_substitution.rs:22:5
+   |
+13 | fn substitute<'first, 'second, 'kernel>(
+   |               ------  ------- lifetime `'second` defined here
+   |               |
+   |               lifetime `'first` defined here
+...
+22 |     staged.publish(other).0
+   |     ^^^^^^^^^^^^^^^^^^^^^ argument requires that `'second` must outlive `'first`
+   |
+   = help: consider adding the following bound: `'second: 'first`
+   = note: requirement occurs because of the type `Gfx950LdsTransposeTile<'_, Gfx950Fp4E2M1, Gfx950TransposeStaged, SubgroupBrand<'_, SubgroupWidth64, fe2o3_device::KernelCapabilityBrand<'_, Kernel, CurrentTarget, RegisteredLaunch>, InitialEpoch>>`, which makes the generic argument `'_` invariant
+   = note: the struct `Gfx950LdsTransposeTile<'wave, Format, State, Brand>` is invariant over the parameter `'wave`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+
+help: `'first` and `'second` must be the same: replace one with the other

@@ -1,0 +1,11 @@
+error[E0451]: fields `_kernel`, `_policy` and `_not_send_sync` of struct `NumericalPolicyCapability` are private
+ --> tests/ui/fail/source_capability_numerical_policy_private_fields.rs:7:9
+  |
+6 |     let _ = NumericalPolicyCapability::<(), StrictIeee> {
+  |             ------------------------------------------- in this type
+7 |         _kernel: PhantomData,
+  |         ^^^^^^^ private field
+8 |         _policy: PhantomData,
+  |         ^^^^^^^ private field
+9 |         _not_send_sync: PhantomData,
+  |         ^^^^^^^^^^^^^^ private field

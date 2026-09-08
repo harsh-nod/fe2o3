@@ -1,13 +1,15 @@
-error[E0451]: fields `block_base`, `lane`, `_index_space` and `_not_send_sync` of struct `DisjointBlock` are private
- --> tests/ui/fail/disjoint_block_private_fields.rs:6:9
+error: cannot construct `DisjointBlock<Index1D, 16, 4>` with struct literal syntax due to private fields
+ --> tests/ui/fail/disjoint_block_private_fields.rs:5:13
   |
 5 |     let _ = DisjointBlock::<Index1D, 16, 4> {
-  |             ------------------------------- in this type
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 6 |         block_base: 0,
-  |         ^^^^^^^^^^ private field
+  |         ------------- private field
 7 |         lane: 0,
-  |         ^^^^ private field
+  |         ------- private field
 8 |         _index_space: PhantomData,
-  |         ^^^^^^^^^^^^ private field
+  |         ------------------------- private field
 9 |         _not_send_sync: PhantomData,
-  |         ^^^^^^^^^^^^^^ private field
+  |         --------------------------- private field
+  |
+  = note: ...and other private field `_brand` that was not provided

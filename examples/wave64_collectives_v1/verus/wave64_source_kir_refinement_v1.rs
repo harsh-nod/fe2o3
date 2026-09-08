@@ -13,14 +13,16 @@ pub struct Digest256V1 {
 /// SHA-256 of the exact checked-in attributed `src/kernel.rs`.
 pub open spec fn attributed_source_identity_v1() -> Digest256V1 {
     Digest256V1 {
-        word0: 0x7c6ead1e7c01a61a,
-        word1: 0x8f31a010c9e8cb9b,
-        word2: 0xd1c21a905ba61e9d,
-        word3: 0x90c6c077c748ffd4,
+        word0: 0xa007fce33c6f61c8,
+        word1: 0x86427af116a5d835,
+        word2: 0x9c95124fec3111b7,
+        word3: 0xd31f6ee61102dddf,
     }
 }
 
-/// SHA-256 of the exact checked-in Wave64 semantic Kernel-IR schema source.
+/// Historical identity of the mathematical KIR model proved in this file.
+///
+/// This is not a canonical V13 byte identity or a compiler refinement receipt.
 pub open spec fn kernel_ir_schema_identity_v1() -> Digest256V1 {
     Digest256V1 {
         word0: 0xda2722bd3ce34922,

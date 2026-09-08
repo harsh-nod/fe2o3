@@ -1,7 +1,7 @@
-# Kernel IR Wire Formats V1 through V11
+# Kernel IR Wire Formats V1 through V12
 
 This document freezes the canonical binary representations produced by
-`encode_module_v1` through `encode_module_v11`. `decode_module_v1` accepts only
+`encode_module_v1` through `encode_module_v12`. `decode_module_v1` accepts only
 V1; each later decoder accepts canonical bytes up to its own version for
 migration safety. Every encoder always emits exactly its named version.
 
@@ -15,6 +15,9 @@ namespace for canonical V11 content. Exact verified V11 ownership uses
 `VerifiedCanonicalKernelIrV11` and its separate policy-qualified identity;
 neither raw nor verified identities grant proof, publication, or execution
 authority.
+`KERNEL_IR_DOMAIN_V12` and `VerifiedCanonicalKernelIrV12` provide distinct raw
+and verified-policy identity namespaces for V12 under the same authority-free
+contract.
 
 ### Content and Verified-Policy Identities
 
@@ -101,7 +104,7 @@ The 20-byte header is:
 
 ```text
 byte[8] magic = "FE2O3KI\0"
-u16     version = 1 through 11
+u16     version = 1 through 12
 u16     flags = 0
 u32     total_length_including_header
 u32     reserved = 0
@@ -177,6 +180,7 @@ WorkgroupSize = u32(x) || u32(y) || u32(z)
 | 2 | `Scalar` | `u8 ScalarType` |
 | 3 | `Pointer` | `u8 AddressSpace, u8 AccessMode, Type pointee` |
 | 4 | `Slice` | `u8 AddressSpace, u8 AccessMode, Type element` |
+| 5 (V12) | `KernelContext` | `text root, byte[32] kernel_marker, byte[32] target, byte[32] launch` |
 
 Scalar tags follow declaration order: `Bool=1`, `I8=2`, `I16=3`, `I32=4`,
 `I64=5`, `U8=6`, `U16=7`, `U32=8`, `U64=9`, `Index=10`, `F16=11`,
@@ -216,6 +220,50 @@ and `Generic=5`. Access-mode tags are `ReadOnly=1`, `ReadWrite=2`, and
 | 24 (V9) | `Gfx950LdsTranspose` | `Gfx950LdsTransposeOperation` |
 | 25 (V9) | `GuardedStore` | `ValueId pointer, ValueId predicate, ValueId value, MemoryAccess` |
 | 26 (V10) | `MemoryIntrinsic` | `u32 semantic_instance_bytes, byte[semantic_instance_bytes] instance, variant operands` |
+| 27 (V12) | `KernelContextIssue` | `byte[32] frontend_unit, byte[32] function, byte[32] contract, byte[32] issuance` |
+
+### V12 Kernel Context and Execution Requirements
+
+V12 retains a compiler-issued logical context in the executable SSA graph.
+`KernelContextIssue` has no operands and exactly one direct `KernelContext`
+result. The type binds the physical root plus source-kernel, target, and launch
+brands. The operation binds the authenticated frontend unit, source function,
+frontend contract, and issuance-site identities. These digests are provenance
+coordinates, not self-authenticating authority. The verifier requires complete
+identities, matching root identity, a kernel-entry issuing function, and at
+most one issuance in that function. Kernel-entry, export, and external ABIs
+cannot contain the logical type; an internal helper may accept it only as its
+single parameter zero. For a context-enabled kernel, issuance dominates root
+capability operations and every reachable capability-using helper carries the
+same exact context brand. Context values may otherwise flow only through
+matching helper-call or CFG block arguments and may never escape as results or
+be embedded in another type.
+
+`TargetCapability` tag 13 stores one
+`ExecutionCapabilityRequirementV1`. Its closed V1 variants are:
+
+| Tag | Requirement | Payload |
+|---:|---|---|
+| 1 | `AddressSpace` | `u8 address_space, u8 access` |
+| 2 | `Atomic` | `u8 scalar, u8 operation, u8 ordering, option<u8> failure_ordering, u8 scope, u8 address_space` |
+| 3 | `Barrier` | `u8 execution_scope, u8 memory_scope, u8 ordering, set<AddressSpace>` |
+| 4 | `Collective` | `u8 execution_scope, u8 operation, u8 scalar, u32 participants` |
+| 5 | `Matrix` | `u16 m, u16 n, u16 k, u8 input_scalar, u8 accumulator_scalar` |
+| 6 | `AsyncCopy` | `u8 source, u8 destination, u32 bytes, u16 alignment, AsyncCopyCompletion` |
+| 7 | `Numerical` | `u8 scalar, u8 mode` |
+| 8 | `Resource` | `ResourceCapabilityRequirementV1` |
+
+Async-copy completion tag 1 is `ExplicitWaitGroups(u16
+maximum_pending_groups)` and tag 2 is `WorkgroupBarrier`. Resource tags are
+workgroup invocations (`u32`), static workgroup-memory bytes (`u64`), dynamic
+workgroup-memory bytes (`u64`), and private bytes per invocation (`u64`). All
+sets retain strict canonical `Ord` order. Unknown requirement, operation,
+completion, numerical-mode, and resource tags fail closed.
+
+V1 through V11 encoders reject the logical type, issuance operation, and
+execution requirement. Their decoders reject forged V12 tags even if an input
+rewrites the envelope version. V12 does not add a proof graph: these values and
+requirements are nodes and attributes of the existing canonical module.
 
 `MemoryAccess` is `u8 address_space || u32 alignment || u8 volatile_boolean`.
 

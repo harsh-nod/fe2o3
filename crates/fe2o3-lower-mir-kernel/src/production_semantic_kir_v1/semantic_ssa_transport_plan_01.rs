@@ -112,6 +112,7 @@ impl SemanticControlFlowSsaPlanV1 {
         semantic_ssa: &ProductionSemanticSsaFunctionPlanV1,
         option_dominance: &SemanticOptionDominanceV1,
         direct_parameters: &BTreeMap<u32, Type>,
+        kernel_context_type: Option<&KernelContextTypeV1>,
         max_analysis_work: usize,
         max_analysis_storage: usize,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
@@ -259,13 +260,18 @@ impl SemanticControlFlowSsaPlanV1 {
                 &mut capability_origins,
                 direct_parameters,
             )?;
-            let kernel_types =
-                binding.transport_types(types, transport_semantic_type, direct_parameters)?;
+            let kernel_types = binding.transport_types(
+                types,
+                transport_semantic_type,
+                direct_parameters,
+                kernel_context_type,
+            )?;
             if kernel_types.is_empty()
                 && !matches!(
                     binding,
                     SemanticPromotedTransportV1::Semantic(
-                        SemanticPromotedBindingV1::MathContext
+                        SemanticPromotedBindingV1::KernelContext
+                            | SemanticPromotedBindingV1::MathContext
                             | SemanticPromotedBindingV1::CollectiveContext
                             | SemanticPromotedBindingV1::WorkgroupLdsScope
                             | SemanticPromotedBindingV1::MatrixContext

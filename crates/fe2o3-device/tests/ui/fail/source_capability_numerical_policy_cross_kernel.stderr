@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/fail/source_capability_numerical_policy_cross_kernel.rs:18:42
+   |
+18 |     let _ = matrix.with_numerical_policy(policy);
+   |                    --------------------- ^^^^^^ expected `&NumericalPolicyCapability<..., _>`, found `&NumericalPolicyCapability<..., ...>`
+   |                    |
+   |                    arguments to this method are incorrect
+   |
+   = note: expected reference `&NumericalPolicyCapability<fe2o3_device::KernelCapabilityBrand<'_, KernelA, CurrentTarget, RegisteredLaunch>, _>`
+              found reference `&NumericalPolicyCapability<fe2o3_device::KernelCapabilityBrand<'kernel, KernelB, CurrentTarget, RegisteredLaunch>, StrictIeee>`
+note: method defined here
+  --> src/matrix.rs
+   |
+   |     pub fn with_numerical_policy<'capability, GlobalBrand, Policy>(
+   |            ^^^^^^^^^^^^^^^^^^^^^

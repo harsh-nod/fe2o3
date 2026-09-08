@@ -7,6 +7,31 @@
 //! Both kernels are type-checked as ordinary attributed Rust and enter the
 //! same production compiler, artifact, and protected runtime pipeline.
 
+#[cfg(any(
+    feature = "lds-kernel",
+    feature = "lds-u32-kernel",
+    feature = "lds-f32-kernel",
+    feature = "lds-scan-u32-kernel",
+    feature = "lds-scan-u32-65-kernel",
+    feature = "lds-scan-u32-255-kernel",
+    feature = "lds-scan-u32-exclusive-kernel",
+    feature = "lds-scan-u32-exclusive-3-kernel",
+    feature = "lds-scan-u32-exclusive-65-kernel",
+    feature = "lds-scan-i32-kernel",
+    feature = "lds-scan-i32-3-kernel",
+    feature = "lds-scan-i32-255-kernel",
+    feature = "lds-scan-i32-inclusive-kernel",
+    feature = "lds-scan-i32-inclusive-65-kernel",
+    feature = "lds-scan-i32-inclusive-255-kernel",
+    feature = "lds-scan-f32-kernel",
+    feature = "lds-scan-f32-3-kernel",
+    feature = "lds-scan-f32-65-kernel",
+    feature = "lds-scan-f32-exclusive-kernel",
+    feature = "lds-scan-f32-exclusive-3-kernel",
+    feature = "lds-scan-f32-exclusive-255-kernel"
+))]
+mod capability_collectives;
+
 #[cfg(not(target_arch = "amdgpu"))]
 pub mod contract;
 #[cfg(feature = "lds-kernel")]

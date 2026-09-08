@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `RecoveredWorkerV3CapabilityResultCarrierV1` in the current scope
+ --> tests/ui/worker_v3_verification_admission/capability_result_carrier_cannot_clone.rs:4:28
+  |
+4 |     let _duplicate = value.clone();
+  |                            ^^^^^ method not found in `RecoveredWorkerV3CapabilityResultCarrierV1`

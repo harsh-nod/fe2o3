@@ -1,0 +1,11 @@
+error[E0432]: unresolved import `fe2o3_host::authenticate_inherited_worker_v3_capability_application_v1`
+ --> tests/ui/generated_host_contract_v2/raw_startup_is_not_normal_api.rs:1:5
+  |
+1 | use fe2o3_host::authenticate_inherited_worker_v3_capability_application_v1;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `authenticate_inherited_worker_v3_capability_application_v1` in the root
+  |
+help: a similar name exists in the module
+  |
+1 - use fe2o3_host::authenticate_inherited_worker_v3_capability_application_v1;
+1 + use fe2o3_host::prepare_inherited_worker_v3_kfd_application_v1;
+  |

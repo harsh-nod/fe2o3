@@ -2,7 +2,7 @@ use core::marker::PhantomData;
 use fe2o3_device::{ActiveLaneGroup, Grid, SubgroupTile, Workgroup};
 
 fn forge_grid() {
-    let _ = Grid {
+    let _: Grid<'static> = Grid {
         size: 1,
         thread_rank: 0,
         _invocation: PhantomData,
@@ -11,7 +11,7 @@ fn forge_grid() {
 }
 
 fn forge_workgroup() {
-    let _ = Workgroup {
+    let _: Workgroup<'static> = Workgroup {
         size: 1,
         thread_rank: 0,
         _invocation: PhantomData,

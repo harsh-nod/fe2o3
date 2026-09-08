@@ -4,6 +4,8 @@
 
 use fe2o3_device::Bf16;
 
+use crate::contract::epilogue_v1;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ReferenceProblemV1 {
     pub rows: u32,
@@ -17,13 +19,7 @@ pub struct ReferenceProblemV1 {
 }
 
 pub fn strided_extent_v1(rows: u32, columns: u32, stride: u32) -> Option<usize> {
-    if rows == 0 || columns == 0 {
-        return Some(0);
-    }
-    let last_row = usize::try_from(rows - 1).ok()?;
-    let stride = usize::try_from(stride).ok()?;
-    let columns = usize::try_from(columns).ok()?;
-    last_row.checked_mul(stride)?.checked_add(columns)
+    usize::try_from(crate::contract::strided_extent_v1(rows, columns, stride)).ok()
 }
 
 /// Evaluates every logical output in row-major order while preserving stride
@@ -62,11 +58,16 @@ pub fn evaluate_reference_v1(
                     Bf16::from_bits(lhs[row * problem.lhs_stride as usize + depth]).to_f32();
                 let rhs_value =
                     Bf16::from_bits(rhs[depth * problem.rhs_stride as usize + column]).to_f32();
-                accumulator += lhs_value * rhs_value;
+                let product = lhs_value * rhs_value;
+                accumulator = accumulator + product;
             }
             let index = row * problem.output_stride as usize + column;
-            output[index] =
-                problem.product_scale * accumulator + problem.output_scale * initial_output[index];
+            output[index] = epilogue_v1(
+                accumulator,
+                initial_output[index],
+                problem.product_scale,
+                problem.output_scale,
+            );
         }
     }
     Ok(output)

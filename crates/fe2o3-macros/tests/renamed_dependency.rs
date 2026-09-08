@@ -1,11 +1,18 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+fn fixture_target(manifest_dir: &std::path::Path) -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest_dir.join("../../target"))
+        .join("renamed-device-marker-test")
+}
+
 #[test]
 fn kernel_marker_resolves_renamed_device_dependency() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/renamed-device/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/renamed-device-marker-test");
+    let target_dir = fixture_target(&manifest_dir);
 
     let output = Command::new(env!("CARGO"))
         .arg("check")
@@ -29,7 +36,7 @@ fn kernel_marker_resolves_renamed_device_dependency() {
 fn generated_control_flow_sidecar_decodes_canonically() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/renamed-device/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/renamed-device-marker-test");
+    let target_dir = fixture_target(&manifest_dir);
 
     let output = Command::new(env!("CARGO"))
         .arg("run")

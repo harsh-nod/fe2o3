@@ -51,6 +51,22 @@ pub fn analyze_kernel_entry(module: &Module, function: &Function) -> AnalysisRep
     )
 }
 
+pub(crate) fn analyze_function_with_root_inputs(
+    module: &Module,
+    function: &Function,
+    parameter_variations: &[Variation],
+    workgroup_size: Option<WorkgroupSize>,
+) -> AnalysisReport {
+    let (summarized_calls, uniform_input_calls) = summarize_uniform_helpers(module, function);
+    analyze_function_with_contract(
+        function,
+        parameter_variations,
+        &summarized_calls,
+        &uniform_input_calls,
+        workgroup_size,
+    )
+}
+
 fn analyze_function_with_contract(
     function: &Function,
     parameter_variations: &[Variation],
@@ -763,6 +779,25 @@ impl<'a> Analyzer<'a> {
     fn operation_variation(&self, operation: &Operation) -> Variation {
         match &operation.kind {
             OperationKind::Constant(_) => Variation::GridUniform,
+            // A context is provenance, not a runtime value from which this
+            // analysis may infer uniform control or memory behavior.
+            OperationKind::KernelContextIssue(_) => Variation::Varying,
+            // Capability authority and derived addresses never establish a
+            // uniformity fact. A later memory analysis may prove stronger
+            // properties without making them implicit here.
+            OperationKind::GlobalCapabilityBind(_) | OperationKind::GlobalCapabilityIndex(_) => {
+                Variation::Varying
+            }
+            OperationKind::ExecutionCapability(contract) => {
+                execution_capability_variation(&contract.operation, |ordinal| {
+                    contract
+                        .operands
+                        .get(ordinal)
+                        .copied()
+                        .map(|value| self.value(value))
+                        .unwrap_or(Variation::Varying)
+                })
+            }
             OperationKind::Intrinsic(intrinsic) => match intrinsic.kind {
                 IntrinsicKind::LaunchExtent { .. } => Variation::GridUniform,
                 IntrinsicKind::InvocationIndex { kind, .. } => match kind {
@@ -1090,6 +1125,29 @@ impl<'a> Analyzer<'a> {
                     OperationKind::WorkgroupBarrier(_) => {
                         fe2o3_kernel_ir::SynchronizationScope::Workgroup
                     }
+                    OperationKind::ExecutionCapability(contract) => match contract.operation {
+                        fe2o3_kernel_ir::ExecutionCapabilityOperationV1::LdsPublish { .. }
+                        | fe2o3_kernel_ir::ExecutionCapabilityOperationV1::WorkgroupBarrier {
+                            ..
+                        }
+                        | fe2o3_kernel_ir::ExecutionCapabilityOperationV1::WorkgroupCollective {
+                            ..
+                        }
+                        | fe2o3_kernel_ir::ExecutionCapabilityOperationV1::AsyncWait { .. }
+                        | fe2o3_kernel_ir::ExecutionCapabilityOperationV1::WorkgroupMemoryPublish {
+                            ..
+                        } => fe2o3_kernel_ir::SynchronizationScope::Workgroup,
+                        fe2o3_kernel_ir::ExecutionCapabilityOperationV1::SubgroupBarrier {
+                            ..
+                        }
+                        | fe2o3_kernel_ir::ExecutionCapabilityOperationV1::SubgroupCollective {
+                            ..
+                        }
+                        | fe2o3_kernel_ir::ExecutionCapabilityOperationV1::MatrixAccess {
+                            ..
+                        } => fe2o3_kernel_ir::SynchronizationScope::Subgroup,
+                        _ => continue,
+                    },
                     _ => continue,
                 };
                 if !control.is_uniform_for(execution_scope) {
@@ -1171,6 +1229,64 @@ impl<'a> Analyzer<'a> {
             remaining -= 1;
         }
         value
+    }
+}
+
+fn execution_capability_variation(
+    operation: &fe2o3_kernel_ir::ExecutionCapabilityOperationV1,
+    operand_variation: impl Fn(usize) -> Variation,
+) -> Variation {
+    use fe2o3_kernel_ir::{
+        ExecutionAtomicKindV1 as Atomic, ExecutionCapabilityOperationV1 as Capability,
+        ExecutionCollectiveKindV1 as Collective,
+    };
+    match operation {
+        Capability::WorkgroupDerive { .. }
+        | Capability::LdsAllocate { .. }
+        | Capability::LdsInitializeByInvocation { .. }
+        | Capability::LdsPublish { .. }
+        | Capability::WorkgroupBarrier { .. }
+        | Capability::WorkgroupFence { .. }
+        | Capability::WorkgroupCollective { .. }
+        | Capability::AsyncCopy { .. }
+        | Capability::AsyncWait { .. }
+        | Capability::WorkgroupMemoryAllocate { .. }
+        | Capability::WorkgroupMemoryPublish { .. } => Variation::WorkgroupUniform,
+        Capability::SubgroupDerive { .. }
+        | Capability::SubgroupBarrier { .. }
+        | Capability::SubgroupFence { .. } => Variation::SubgroupUniform,
+        Capability::SubgroupCollective {
+            kind: Collective::ReduceSum,
+            ..
+        } => Variation::SubgroupUniform,
+        Capability::SubgroupCollective {
+            kind: Collective::InclusiveScanSum | Collective::ExclusiveScanSum,
+            ..
+        } => {
+            if operand_variation(2).is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup)
+            {
+                Variation::SubgroupUniform
+            } else {
+                Variation::Varying
+            }
+        }
+        Capability::LdsReadPublished { .. }
+        | Capability::Atomic {
+            kind:
+                Atomic::BindGlobalLocation
+                | Atomic::Load
+                | Atomic::Store
+                | Atomic::FetchAdd
+                | Atomic::CompareExchange
+                | Atomic::BindGlobalView,
+            ..
+        }
+        | Capability::MatrixAccess { .. }
+        | Capability::RawMemoryBind { .. }
+        | Capability::PrivateMemoryAllocate { .. }
+        | Capability::WorkgroupMemoryIndex { .. }
+        | Capability::MemoryLoad { .. }
+        | Capability::MemoryStore { .. } => Variation::Varying,
     }
 }
 
@@ -3313,4 +3429,352 @@ fn immediate_postdominator(
                     .is_some_and(|dominators| dominators.contains(candidate))
         })
     })
+}
+
+#[cfg(test)]
+mod execution_capability_tests {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        ExecutionAtomicKindV1 as Atomic, ExecutionCapabilityOperationV1 as Op,
+        ExecutionCollectiveKindV1 as Collective, ExecutionDynamicExtentV1,
+        ExecutionElementLayoutV1, ExecutionMemoryAccessV1 as Access,
+        ExecutionMemoryAddressSpaceV1 as Space, ExecutionMemoryOrderingV1 as Ordering,
+        ExecutionMemoryScopeV1 as Scope, ExecutionMemorySemanticsV1,
+        ExecutionMemorySpacesV1 as Spaces, ExecutionTypeIdentityV1,
+    };
+
+    fn id(tag: u8) -> ExecutionTypeIdentityV1 {
+        ExecutionTypeIdentityV1::new([tag; 32])
+    }
+
+    fn layout() -> ExecutionElementLayoutV1 {
+        ExecutionElementLayoutV1 {
+            byte_size: 4,
+            byte_alignment: 4,
+        }
+    }
+
+    fn semantics(scope: Scope) -> ExecutionMemorySemanticsV1 {
+        ExecutionMemorySemanticsV1 {
+            scope,
+            ordering: Ordering::AcquireRelease,
+            spaces: Spaces::Workgroup,
+        }
+    }
+
+    fn operation_roster() -> Vec<(Op, Variation)> {
+        vec![
+            (
+                Op::WorkgroupDerive {
+                    context: id(1),
+                    workgroup: id(2),
+                },
+                Variation::WorkgroupUniform,
+            ),
+            (
+                Op::SubgroupDerive {
+                    workgroup: id(1),
+                    subgroup: id(2),
+                    width: 64,
+                },
+                Variation::SubgroupUniform,
+            ),
+            (
+                Op::LdsAllocate {
+                    workgroup: id(1),
+                    lds: id(2),
+                    element: id(3),
+                    layout: layout(),
+                    elements: 64,
+                },
+                Variation::WorkgroupUniform,
+            ),
+            (
+                Op::LdsInitializeByInvocation {
+                    input_lds: id(1),
+                    workgroup: id(2),
+                    output_lds: id(3),
+                    element: id(4),
+                    layout: layout(),
+                    elements: 64,
+                },
+                Variation::WorkgroupUniform,
+            ),
+            (
+                Op::LdsPublish {
+                    input_workgroup: id(1),
+                    input_lds: id(2),
+                    output_lds: id(3),
+                    transition: id(4),
+                    element: id(5),
+                    layout: layout(),
+                    elements: 64,
+                },
+                Variation::WorkgroupUniform,
+            ),
+            (
+                Op::LdsReadPublished {
+                    lds_reference: id(1),
+                    lds: id(2),
+                    workgroup: id(3),
+                    index: id(4),
+                    option: id(5),
+                    element: id(6),
+                    layout: layout(),
+                    elements: 64,
+                },
+                Variation::Varying,
+            ),
+            (
+                Op::WorkgroupBarrier {
+                    input_workgroup: id(1),
+                    output_workgroup: id(2),
+                    semantics: semantics(Scope::Workgroup),
+                },
+                Variation::WorkgroupUniform,
+            ),
+            (
+                Op::SubgroupBarrier {
+                    input_workgroup: id(1),
+                    semantics: semantics(Scope::Subgroup),
+                    subgroup: id(2),
+                    transition: id(3),
+                    width: 64,
+                },
+                Variation::SubgroupUniform,
+            ),
+            (
+                Op::WorkgroupFence {
+                    workgroup: id(1),
+                    result: id(2),
+                    semantics: semantics(Scope::Workgroup),
+                },
+                Variation::WorkgroupUniform,
+            ),
+            (
+                Op::SubgroupFence {
+                    semantics: semantics(Scope::Subgroup),
+                    subgroup_reference: id(1),
+                    subgroup: id(2),
+                    epoch: id(3),
+                    result: id(4),
+                    width: 64,
+                },
+                Variation::SubgroupUniform,
+            ),
+            (
+                Op::Atomic {
+                    kind: Atomic::Load,
+                    authority: id(1),
+                    location_input: id(2),
+                    location: id(3),
+                    element: id(4),
+                    operand: None,
+                    replacement: None,
+                    result: id(4),
+                    value_type: ScalarType::U32,
+                    address_space: Space::Workgroup,
+                    scope: Scope::Workgroup,
+                    success: Some(Ordering::Acquire),
+                    failure: None,
+                },
+                Variation::Varying,
+            ),
+            (
+                Op::WorkgroupCollective {
+                    kind: Collective::ReduceSum,
+                    input_workgroup: id(1),
+                    scratch: id(2),
+                    element: id(3),
+                    transition: id(4),
+                    value_type: ScalarType::U32,
+                    layout: layout(),
+                    elements: 64,
+                },
+                Variation::WorkgroupUniform,
+            ),
+            (
+                Op::SubgroupCollective {
+                    kind: Collective::ReduceSum,
+                    subgroup_reference: id(1),
+                    subgroup: id(2),
+                    epoch: id(3),
+                    element: id(4),
+                    value_type: ScalarType::U32,
+                    width: 64,
+                },
+                Variation::SubgroupUniform,
+            ),
+            (
+                Op::MatrixAccess {
+                    subgroup: id(1),
+                    epoch: id(2),
+                    matrix: id(3),
+                    subgroup_brand: [4; 32],
+                    width: 64,
+                },
+                Variation::Varying,
+            ),
+            (
+                Op::AsyncCopy {
+                    workgroup: id(1),
+                    source_reference: id(2),
+                    source: id(3),
+                    index: id(4),
+                    destination: id(5),
+                    pending: id(6),
+                    element: id(7),
+                    layout: layout(),
+                    elements: 64,
+                },
+                Variation::WorkgroupUniform,
+            ),
+            (
+                Op::AsyncWait {
+                    input_workgroup: id(1),
+                    pending: id(2),
+                    output_lds: id(3),
+                    transition: id(4),
+                    element: id(5),
+                    layout: layout(),
+                    elements: 64,
+                },
+                Variation::WorkgroupUniform,
+            ),
+            (
+                Op::RawMemoryBind {
+                    authority: id(1),
+                    pointer: id(2),
+                    length: id(3),
+                    extent: ExecutionDynamicExtentV1 {
+                        operand: 0,
+                        source_argument: 2,
+                        source_type: id(3),
+                        value_type: ScalarType::Index,
+                        upper_bound: 64,
+                        bound_check_operand: 1,
+                        nonnegative_check_operand: None,
+                    },
+                    view: id(4),
+                    element: id(5),
+                    layout: layout(),
+                    space: Space::Global,
+                    access: Access::ReadOnly,
+                    index_space: None,
+                    atomic_scope: None,
+                    unsafe_obligation: id(6),
+                },
+                Variation::Varying,
+            ),
+            (
+                Op::PrivateMemoryAllocate {
+                    context: id(1),
+                    view: id(2),
+                    element: id(3),
+                    layout: layout(),
+                    elements: 1,
+                },
+                Variation::Varying,
+            ),
+            (
+                Op::WorkgroupMemoryIndex {
+                    workgroup: id(1),
+                    witness: id(2),
+                },
+                Variation::Varying,
+            ),
+            (
+                Op::WorkgroupMemoryAllocate {
+                    workgroup: id(1),
+                    view: id(2),
+                    element: id(3),
+                    layout: layout(),
+                    elements: 64,
+                    index_space: id(4),
+                },
+                Variation::WorkgroupUniform,
+            ),
+            (
+                Op::WorkgroupMemoryPublish {
+                    input_workgroup: id(1),
+                    input_view: id(2),
+                    output_view: id(3),
+                    transition: id(4),
+                    element: id(5),
+                    layout: layout(),
+                },
+                Variation::WorkgroupUniform,
+            ),
+            (
+                Op::MemoryLoad {
+                    view: id(1),
+                    workgroup: None,
+                    index: id(2),
+                    option: id(3),
+                    element: id(4),
+                    layout: layout(),
+                    space: Space::Global,
+                    access: Access::ReadOnly,
+                },
+                Variation::Varying,
+            ),
+            (
+                Op::MemoryStore {
+                    view: id(1),
+                    workgroup: None,
+                    index: id(2),
+                    element: id(3),
+                    layout: layout(),
+                    result: id(4),
+                    space: Space::Global,
+                    access: Access::DisjointWrite,
+                },
+                Variation::Varying,
+            ),
+        ]
+    }
+
+    #[test]
+    fn closed_execution_capability_roster_has_sound_variation() {
+        let roster = operation_roster();
+        assert_eq!(roster.len(), 23);
+        for (operation, expected) in roster {
+            assert_eq!(
+                execution_capability_variation(&operation, |_| Variation::Varying),
+                expected,
+                "{operation:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn subgroup_scan_requires_subgroup_uniform_input() {
+        let mut scan = operation_roster().remove(12).0;
+        if let Op::SubgroupCollective { kind, .. } = &mut scan {
+            *kind = Collective::InclusiveScanSum;
+        } else {
+            unreachable!()
+        }
+        assert_eq!(
+            execution_capability_variation(&scan, |_| Variation::Varying),
+            Variation::Varying
+        );
+        assert_eq!(
+            execution_capability_variation(&scan, |ordinal| {
+                if ordinal == 2 {
+                    Variation::SubgroupUniform
+                } else {
+                    Variation::Varying
+                }
+            }),
+            Variation::SubgroupUniform
+        );
+        if let Op::SubgroupCollective { kind, .. } = &mut scan {
+            *kind = Collective::ExclusiveScanSum;
+        }
+        assert_eq!(
+            execution_capability_variation(&scan, |_| Variation::Varying),
+            Variation::Varying
+        );
+    }
 }

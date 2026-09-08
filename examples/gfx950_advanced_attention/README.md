@@ -3,12 +3,32 @@
 The ordinary attributed Rust kernels in [`src/kernel.rs`](src/kernel.rs) are
 the fe2o3 source for these tutorials. [`src/reference.rs`](src/reference.rs)
 contains independent safe CPU references, and
-`cargo fe2o3 test --offline --all-targets` checks
+`cargo test --locked --offline --all-targets` checks
 their fixed-shape numerical and selection contracts. The HIP program remains
 a separate compiler, ISA, and MI350 hardware-validation companion for the
 older non-KDA profiles. The matrix-state KDA artifacts come from the production
 Rust compiler path, but their recorded device execution uses the deprecated
 HSA qualification oracle rather than the production direct-KFD runtime.
+
+## Capability migration status
+
+Every canonical, KDA baseline, and shipped ablation root receives a
+compiler-issued `KernelContext` and uses typed `Global` roles for every physical
+memory argument. Invocation geometry, math, workgroup authority, subgroup
+collectives, and compact output ownership derive from that context. Batch
+counts derive from the authenticated grid for one through four workgroups
+instead of assuming grid four. The logical context is absent from the physical
+kernarg ABI, so the runner's validated argument sizes do not grow.
+
+No admitted root calls a compatibility `current()` API or accepts a raw slice.
+The shared API exposes typed gfx950 FP8 `Global` matrix views and epoch-aware
+transpose LDS. Its published transpose fragment now composes with the matching
+next-epoch matrix capability in safe Rust, and the package-local
+`typed_fp8_transpose` fixture is an active compile-pass regression. The two FP8
+roots retain their attention, selection, normalization, and output algorithms
+using typed Wave64 scalar reductions; this source revision does not yet claim
+the historical MFMA/transpose schedule or its performance. No Bundle V8,
+production V13 extraction, or current hardware receipt is claimed.
 
 Each `run-*-gfx950.sh` entry point selects exactly one kernel feature, invokes
 the production fe2o3 extractor, checks the compiler-published crate binding,
@@ -43,13 +63,13 @@ contains:
 - AttnRes four-depth softmax aggregation, four-branch gated residual mixing,
   and a four-stream mHC mixer with three Sinkhorn iterations.
 
-Every production Rust kernel launches four `256`-thread workgroups. KDA uses
-all four Wave64s in a workgroup for one matrix-state problem, producing four
-independent batches per launch. Content-sparse and compressed-hybrid attention
-assign one independent head to each Wave64, for 16 heads per launch. DeepSeek
-sparse attention, AttnRes, and four-branch residual assign one independent
-16-channel item to each Wave16 subgroup, for 64 items per launch. mHC assigns
-one independent four-stream problem to each Wave64, for 16 items per launch.
+Every production Rust kernel accepts one through four `256`-thread workgroups;
+the qualification runners use four. KDA uses all four Wave64s in a workgroup
+for one matrix-state problem, producing one batch per workgroup.
+Content-sparse and compressed-hybrid attention assign one independent head to
+each Wave64. DeepSeek sparse attention, AttnRes, and four-branch residual assign
+one independent 16-channel item to each Wave16 subgroup. mHC assigns one
+independent four-stream problem to each Wave64.
 Inputs vary by batch and every output span has a single wave, subgroup, or
 workgroup owner.
 
@@ -96,7 +116,7 @@ Kimi Linear layer.
 Run the Rust source and independent CPU-reference checks:
 
 ```bash
-cargo fe2o3 test --offline --all-targets
+cargo test --locked --offline --all-targets
 ```
 
 Run the production Rust lowering and deprecated HSA qualification-oracle
@@ -113,9 +133,9 @@ numerical verification on a gfx950 host:
 ./run-mhc-sinkhorn-mix-gfx950.sh
 ```
 
-## Current WG256/grid4 numerical qualification
+## Historical WG256/grid4 numerical qualification
 
-On 2026-09-03, all eight production Rust wrappers completed extraction,
+On 2026-09-03, the pre-capability-migration versions of all eight production Rust wrappers completed extraction,
 gfx950:xnack- COV6 finalization, symbol-scoped ISA inspection, and numerical
 execution on physical GPU 6 of SSH host `mi350` with ROCm 7.2.1. Every launch
 used four WG256 workgroups, exercised all disjoint non-identical problems, and

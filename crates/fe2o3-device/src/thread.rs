@@ -1,6 +1,8 @@
 use core::fmt;
 use core::marker::PhantomData;
 
+use crate::context::UnbrandedCapability;
+
 /// A work-item's local coordinate within its workgroup.
 ///
 /// This is copyable coordinate data, not evidence that the values describe the
@@ -232,54 +234,35 @@ impl GlobalGridSize {
     }
 }
 
-/// Caller-asserted snapshot of one complete three-dimensional launch index.
+/// Snapshot of one complete three-dimensional launch index.
 ///
 /// Coordinate getters return ordinary copyable data. The witness itself is
 /// deliberately neither `Copy`, `Clone`, `Send`, nor `Sync`: code that later
 /// performs arithmetic from it retains the lexical association with the
-/// snapshot. The type is not branded and does not authenticate a launch,
-/// current invocation, control-flow epoch, or compiler-provided value.
-#[derive(Debug)]
+/// snapshot. `Brand` retains nominal source provenance. Context-derived
+/// snapshots carry the matching kernel, target, and launch brand; compatibility
+/// constructors use the default unbranded marker and authenticate none of them.
 #[rustc_diagnostic_item = "fe2o3_device_invocation_3d"]
-pub struct Invocation3D {
+pub struct Invocation3D<Brand = UnbrandedCapability> {
     workitem: WorkitemId,
     workgroup: WorkgroupId,
     workgroup_size: WorkgroupSize,
     grid_size: GridSize,
+    _brand: PhantomData<fn(Brand) -> Brand>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
 impl Invocation3D {
-    /// Returns a compiler-authenticated snapshot of the current invocation.
+    /// Returns an unbranded compatibility snapshot of the current invocation.
     ///
-    /// Unsupported lowering and host execution trap. Unlike
-    /// [`Self::from_raw_parts`], this API accepts no caller-asserted identity.
+    /// Unsupported lowering and host execution trap. This API accepts no
+    /// caller-asserted identity, but its result carries no nominal kernel,
+    /// target, or launch brand. New kernels should use
+    /// [`crate::KernelContext::invocation`].
     #[inline(always)]
     #[rustc_diagnostic_item = "fe2o3_device_invocation_3d_current"]
     pub fn current() -> Self {
-        Self {
-            workitem: WorkitemId {
-                x: thread_idx_x(),
-                y: thread_idx_y(),
-                z: thread_idx_z(),
-            },
-            workgroup: WorkgroupId {
-                x: block_idx_x(),
-                y: block_idx_y(),
-                z: block_idx_z(),
-            },
-            workgroup_size: WorkgroupSize {
-                x: block_dim_x(),
-                y: block_dim_y(),
-                z: block_dim_z(),
-            },
-            grid_size: GridSize {
-                x: grid_dim_x(),
-                y: grid_dim_y(),
-                z: grid_dim_z(),
-            },
-            _not_send_sync: PhantomData,
-        }
+        Self::current_branded()
     }
 
     /// Constructs an invocation snapshot from caller-asserted coordinates.
@@ -315,6 +298,35 @@ impl Invocation3D {
     ) -> Option<Self> {
         Self::checked(workitem, workgroup, workgroup_size, grid_size)
     }
+}
+
+impl<Brand> Invocation3D<Brand> {
+    pub(crate) fn current_branded() -> Self {
+        Self {
+            workitem: WorkitemId {
+                x: thread_idx_x(),
+                y: thread_idx_y(),
+                z: thread_idx_z(),
+            },
+            workgroup: WorkgroupId {
+                x: block_idx_x(),
+                y: block_idx_y(),
+                z: block_idx_z(),
+            },
+            workgroup_size: WorkgroupSize {
+                x: block_dim_x(),
+                y: block_dim_y(),
+                z: block_dim_z(),
+            },
+            grid_size: GridSize {
+                x: grid_dim_x(),
+                y: grid_dim_y(),
+                z: grid_dim_z(),
+            },
+            _brand: PhantomData,
+            _not_send_sync: PhantomData,
+        }
+    }
 
     const fn checked(
         workitem: WorkitemId,
@@ -330,6 +342,7 @@ impl Invocation3D {
             workgroup,
             workgroup_size,
             grid_size,
+            _brand: PhantomData,
             _not_send_sync: PhantomData,
         })
     }
@@ -364,6 +377,34 @@ impl Invocation3D {
             y: self.grid_size.y as u64 * self.workgroup_size.y as u64,
             z: self.grid_size.z as u64 * self.workgroup_size.z as u64,
         }
+    }
+
+    /// Derives this invocation's identity-mapped one-dimensional index.
+    ///
+    /// The returned witness retains the invocation brand. A disjoint-write view
+    /// can therefore accept it only when both values came from the same kernel,
+    /// target, and launch context.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_invocation_3d_index_1d_v1"]
+    pub fn index_1d(&self) -> ThreadIndex<Index1D, Brand> {
+        ThreadIndex {
+            raw: self.global_workitem_id().x() as usize,
+            _index_space: PhantomData,
+            _brand: PhantomData,
+            _not_send_sync: PhantomData,
+        }
+    }
+}
+
+impl<Brand> fmt::Debug for Invocation3D<Brand> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Invocation3D")
+            .field("workitem", &self.workitem)
+            .field("workgroup", &self.workgroup)
+            .field("workgroup_size", &self.workgroup_size)
+            .field("grid_size", &self.grid_size)
+            .finish()
     }
 }
 
@@ -449,13 +490,16 @@ pub enum Index2D<const ROW_STRIDE: usize> {}
 /// A non-duplicable index witness for the current device invocation.
 ///
 /// `IndexSpace` identifies the mapping from invocation coordinates to the
-/// flattened element index. The marker fields are zero-sized, so the device
-/// representation remains one `usize`.
+/// flattened element index. `Brand` binds context-derived indices to one
+/// kernel, target, and launch while defaulting to the legacy unbranded API.
+/// The marker fields are zero-sized, so the device representation remains one
+/// `usize`.
 #[repr(transparent)]
 #[rustc_diagnostic_item = "fe2o3_device_thread_index"]
-pub struct ThreadIndex<IndexSpace = Index1D> {
+pub struct ThreadIndex<IndexSpace = Index1D, Brand = UnbrandedCapability> {
     raw: usize,
     _index_space: PhantomData<fn() -> IndexSpace>,
+    _brand: PhantomData<fn(Brand) -> Brand>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
@@ -463,14 +507,17 @@ pub struct ThreadIndex<IndexSpace = Index1D> {
 ///
 /// Safe construction starts with a compiler-issued [`ThreadIndex`]. The
 /// mapping remains in `IndexSpace`, preventing an index transformed under one
-/// mapping from accessing a [`crate::DisjointSlice`] declared for another.
-/// This value is deliberately neither `Copy`, `Clone`, `Send`, nor `Sync`.
+/// mapping from accessing a [`crate::DisjointSlice`] declared for another. Its
+/// `Brand` is preserved from the source index, preventing cross-kernel use by
+/// branded memory views. This value is deliberately neither `Copy`, `Clone`,
+/// `Send`, nor `Sync`.
 #[repr(transparent)]
 #[must_use = "disjoint write authority is lost when the index is discarded"]
 #[rustc_diagnostic_item = "fe2o3_device_disjoint_index"]
-pub struct DisjointIndex<IndexSpace = Index1D> {
+pub struct DisjointIndex<IndexSpace = Index1D, Brand = UnbrandedCapability> {
     raw: usize,
     _index_space: PhantomData<fn() -> IndexSpace>,
+    _brand: PhantomData<fn(Brand) -> Brand>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
@@ -481,14 +528,24 @@ pub struct DisjointIndex<IndexSpace = Index1D> {
 /// `Clone`, `Send`, nor `Sync`.
 #[must_use = "blocked output authority is lost when the witness is discarded"]
 #[rustc_diagnostic_item = "fe2o3_device_disjoint_block"]
-pub struct DisjointBlock<IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize> {
+pub struct DisjointBlock<
+    IndexSpace,
+    const LANES_PER_BLOCK: usize,
+    const ELEMENTS_PER_LANE: usize,
+    Brand = UnbrandedCapability,
+> {
     block_base: usize,
     lane: usize,
     _index_space: PhantomData<fn() -> IndexSpace>,
+    _brand: PhantomData<fn(Brand) -> Brand>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
 /// Move-only authority for one lane's elements in a two-dimensional tile.
+///
+/// `Brand` is preserved from the compiler-issued source index, so a checked
+/// tile cannot be substituted across kernel contexts. The default retains the
+/// legacy unbranded spelling without changing the one-`usize` representation.
 #[repr(transparent)]
 #[must_use = "tiled output authority is lost when the witness is discarded"]
 #[rustc_diagnostic_item = "fe2o3_device_disjoint_tile_2d"]
@@ -498,13 +555,19 @@ pub struct DisjointTile2D<
     const TILE_ROWS: usize,
     const TILE_COLUMNS: usize,
     const ELEMENTS_PER_LANE: usize,
+    Brand = UnbrandedCapability,
 > {
     raw: usize,
     _index_space: PhantomData<fn() -> IndexSpace>,
+    _brand: PhantomData<fn(Brand) -> Brand>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
 /// Move-only authority for one invocation's elements in a compact output row.
+///
+/// `Brand` is preserved from the compiler-issued source index, so a checked
+/// row cannot be substituted across kernel contexts. The default retains the
+/// legacy unbranded spelling without changing the one-`usize` representation.
 #[repr(transparent)]
 #[must_use = "row-striped output authority is lost when the witness is discarded"]
 #[rustc_diagnostic_item = "fe2o3_device_disjoint_row_stripe_2d"]
@@ -512,9 +575,11 @@ pub struct DisjointRowStripe2D<
     IndexSpace,
     const LANES_PER_ROW: usize,
     const ELEMENTS_PER_LANE: usize,
+    Brand = UnbrandedCapability,
 > {
     raw: usize,
     _index_space: PhantomData<fn() -> IndexSpace>,
+    _brand: PhantomData<fn(Brand) -> Brand>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
@@ -532,7 +597,16 @@ pub struct GridLeader {
     _not_send_sync: PhantomData<*mut ()>,
 }
 
-impl<IndexSpace> ThreadIndex<IndexSpace> {
+impl<IndexSpace, Brand> ThreadIndex<IndexSpace, Brand> {
+    pub(crate) const fn from_capability_index(raw: usize) -> Self {
+        Self {
+            raw,
+            _index_space: PhantomData,
+            _brand: PhantomData,
+            _not_send_sync: PhantomData,
+        }
+    }
+
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_thread_index_get"]
     pub fn get(&self) -> usize {
@@ -566,10 +640,11 @@ impl<IndexSpace> ThreadIndex<IndexSpace> {
     /// Converts the current invocation's index into identity-mapped disjoint
     /// write authority.
     #[rustc_diagnostic_item = "fe2o3_device_thread_index_into_disjoint"]
-    pub fn into_disjoint(self) -> DisjointIndex<IndexSpace> {
+    pub fn into_disjoint(self) -> DisjointIndex<IndexSpace, Brand> {
         DisjointIndex {
             raw: self.raw,
             _index_space: PhantomData,
+            _brand: PhantomData,
             _not_send_sync: PhantomData,
         }
     }
@@ -582,7 +657,7 @@ impl<IndexSpace> ThreadIndex<IndexSpace> {
     #[rustc_diagnostic_item = "fe2o3_device_thread_index_checked_shift"]
     pub fn checked_shift<const OFFSET: usize>(
         self,
-    ) -> Option<DisjointIndex<Shifted<IndexSpace, OFFSET>>> {
+    ) -> Option<DisjointIndex<Shifted<IndexSpace, OFFSET>, Brand>> {
         self.into_disjoint().checked_shift::<OFFSET>()
     }
 
@@ -595,11 +670,13 @@ impl<IndexSpace> ThreadIndex<IndexSpace> {
     #[rustc_diagnostic_item = "fe2o3_device_thread_index_checked_block"]
     pub fn checked_block<const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize>(
         self,
-    ) -> Option<DisjointBlock<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE>> {
+    ) -> Option<DisjointBlock<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE, Brand>> {
         DisjointBlock::checked_from_raw(self.raw)
     }
 
     /// Converts this invocation index into one statically shaped 2D tile witness.
+    ///
+    /// The output retains this index's exact capability brand.
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_thread_index_checked_tiled_2d"]
     pub fn checked_tiled_2d<
@@ -610,7 +687,14 @@ impl<IndexSpace> ThreadIndex<IndexSpace> {
     >(
         self,
     ) -> Option<
-        DisjointTile2D<IndexSpace, LANES_PER_TILE, TILE_ROWS, TILE_COLUMNS, ELEMENTS_PER_LANE>,
+        DisjointTile2D<
+            IndexSpace,
+            LANES_PER_TILE,
+            TILE_ROWS,
+            TILE_COLUMNS,
+            ELEMENTS_PER_LANE,
+            Brand,
+        >,
     > {
         DisjointTile2D::checked_from_raw(self.raw)
     }
@@ -619,16 +703,17 @@ impl<IndexSpace> ThreadIndex<IndexSpace> {
     ///
     /// The static geometry is rejected when either dimension is zero or the
     /// greatest component column cannot be represented by `usize`.
+    /// The output retains this index's exact capability brand.
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_thread_index_checked_row_striped_2d"]
     pub fn checked_row_striped_2d<const LANES_PER_ROW: usize, const ELEMENTS_PER_LANE: usize>(
         self,
-    ) -> Option<DisjointRowStripe2D<IndexSpace, LANES_PER_ROW, ELEMENTS_PER_LANE>> {
+    ) -> Option<DisjointRowStripe2D<IndexSpace, LANES_PER_ROW, ELEMENTS_PER_LANE, Brand>> {
         DisjointRowStripe2D::checked_from_raw(self.raw)
     }
 }
 
-impl<IndexSpace> fmt::Debug for ThreadIndex<IndexSpace> {
+impl<IndexSpace, Brand> fmt::Debug for ThreadIndex<IndexSpace, Brand> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_tuple("ThreadIndex")
@@ -637,7 +722,7 @@ impl<IndexSpace> fmt::Debug for ThreadIndex<IndexSpace> {
     }
 }
 
-impl<IndexSpace> DisjointIndex<IndexSpace> {
+impl<IndexSpace, Brand> DisjointIndex<IndexSpace, Brand> {
     /// Returns the mapped element index as coordinate data.
     ///
     /// The integer does not carry the disjoint-write authority of `self`.
@@ -650,10 +735,11 @@ impl<IndexSpace> DisjointIndex<IndexSpace> {
     #[rustc_diagnostic_item = "fe2o3_device_disjoint_index_checked_shift"]
     pub fn checked_shift<const OFFSET: usize>(
         self,
-    ) -> Option<DisjointIndex<Shifted<IndexSpace, OFFSET>>> {
+    ) -> Option<DisjointIndex<Shifted<IndexSpace, OFFSET>, Brand>> {
         Some(DisjointIndex {
             raw: self.raw.checked_add(OFFSET)?,
             _index_space: PhantomData,
+            _brand: PhantomData,
             _not_send_sync: PhantomData,
         })
     }
@@ -663,12 +749,13 @@ impl<IndexSpace> DisjointIndex<IndexSpace> {
         Self {
             raw,
             _index_space: PhantomData,
+            _brand: PhantomData,
             _not_send_sync: PhantomData,
         }
     }
 }
 
-impl<IndexSpace> fmt::Debug for DisjointIndex<IndexSpace> {
+impl<IndexSpace, Brand> fmt::Debug for DisjointIndex<IndexSpace, Brand> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_tuple("DisjointIndex")
@@ -677,8 +764,8 @@ impl<IndexSpace> fmt::Debug for DisjointIndex<IndexSpace> {
     }
 }
 
-impl<IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize>
-    DisjointBlock<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE>
+impl<IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize, Brand>
+    DisjointBlock<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE, Brand>
 {
     fn checked_from_raw(raw: usize) -> Option<Self> {
         if LANES_PER_BLOCK == 0 || ELEMENTS_PER_LANE == 0 {
@@ -698,6 +785,7 @@ impl<IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize>
             block_base,
             lane,
             _index_space: PhantomData,
+            _brand: PhantomData,
             _not_send_sync: PhantomData,
         })
     }
@@ -725,7 +813,8 @@ impl<
     const TILE_ROWS: usize,
     const TILE_COLUMNS: usize,
     const ELEMENTS_PER_LANE: usize,
-> DisjointTile2D<IndexSpace, LANES_PER_TILE, TILE_ROWS, TILE_COLUMNS, ELEMENTS_PER_LANE>
+    Brand,
+> DisjointTile2D<IndexSpace, LANES_PER_TILE, TILE_ROWS, TILE_COLUMNS, ELEMENTS_PER_LANE, Brand>
 {
     fn checked_from_raw(raw: usize) -> Option<Self> {
         if LANES_PER_TILE == 0
@@ -742,6 +831,7 @@ impl<
         Some(Self {
             raw,
             _index_space: PhantomData,
+            _brand: PhantomData,
             _not_send_sync: PhantomData,
         })
     }
@@ -787,8 +877,8 @@ impl<
     }
 }
 
-impl<IndexSpace, const LANES_PER_ROW: usize, const ELEMENTS_PER_LANE: usize>
-    DisjointRowStripe2D<IndexSpace, LANES_PER_ROW, ELEMENTS_PER_LANE>
+impl<IndexSpace, const LANES_PER_ROW: usize, const ELEMENTS_PER_LANE: usize, Brand>
+    DisjointRowStripe2D<IndexSpace, LANES_PER_ROW, ELEMENTS_PER_LANE, Brand>
 {
     fn checked_from_raw(raw: usize) -> Option<Self> {
         if LANES_PER_ROW == 0 || ELEMENTS_PER_LANE == 0 {
@@ -800,6 +890,7 @@ impl<IndexSpace, const LANES_PER_ROW: usize, const ELEMENTS_PER_LANE: usize>
         Some(Self {
             raw,
             _index_space: PhantomData,
+            _brand: PhantomData,
             _not_send_sync: PhantomData,
         })
     }
@@ -829,8 +920,8 @@ impl<IndexSpace, const LANES_PER_ROW: usize, const ELEMENTS_PER_LANE: usize>
     }
 }
 
-impl<IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize> fmt::Debug
-    for DisjointBlock<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE>
+impl<IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize, Brand> fmt::Debug
+    for DisjointBlock<IndexSpace, LANES_PER_BLOCK, ELEMENTS_PER_LANE, Brand>
 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -889,6 +980,7 @@ pub fn index_1d() -> ThreadIndex {
     ThreadIndex {
         raw: global_id_1d(),
         _index_space: PhantomData,
+        _brand: PhantomData,
         _not_send_sync: PhantomData,
     }
 }
@@ -930,6 +1022,7 @@ pub fn index_2d<const ROW_STRIDE: usize>() -> Option<ThreadIndex<Index2D<ROW_STR
         Some(ThreadIndex {
             raw,
             _index_space: PhantomData,
+            _brand: PhantomData,
             _not_send_sync: PhantomData,
         })
     } else {
@@ -1039,12 +1132,30 @@ mod tests {
 
     #[test]
     fn index_space_markers_do_not_change_the_witness_abi() {
+        enum KernelBrand {}
+
         assert_eq!(size_of::<ThreadIndex<Index1D>>(), size_of::<usize>());
         assert_eq!(align_of::<ThreadIndex<Index1D>>(), align_of::<usize>());
+        assert_eq!(
+            size_of::<ThreadIndex<Index1D, KernelBrand>>(),
+            size_of::<usize>()
+        );
+        assert_eq!(
+            align_of::<ThreadIndex<Index1D, KernelBrand>>(),
+            align_of::<usize>()
+        );
         assert_eq!(size_of::<ThreadIndex<Index2D<64>>>(), size_of::<usize>());
         assert_eq!(align_of::<ThreadIndex<Index2D<64>>>(), align_of::<usize>());
         assert_eq!(size_of::<DisjointIndex<Index1D>>(), size_of::<usize>());
         assert_eq!(align_of::<DisjointIndex<Index1D>>(), align_of::<usize>());
+        assert_eq!(
+            size_of::<DisjointIndex<Index1D, KernelBrand>>(),
+            size_of::<usize>()
+        );
+        assert_eq!(
+            align_of::<DisjointIndex<Index1D, KernelBrand>>(),
+            align_of::<usize>()
+        );
         assert_eq!(
             size_of::<DisjointIndex<Shifted<Index1D, 1>>>(),
             size_of::<usize>()
@@ -1137,8 +1248,10 @@ mod tests {
 
         let global = invocation.global_workitem_id();
         let extent = invocation.global_grid_size();
+        let index = invocation.index_1d();
         assert_eq!((global.x(), global.y(), global.z()), (35, 22, 13));
         assert_eq!((extent.x(), extent.y(), extent.z()), (80, 80, 60));
+        assert_eq!(index.get(), 35);
         assert_eq!(global.linear(extent), Some((13 * 80 + 22) * 80 + 35));
         assert_eq!(extent.volume(), Some(384_000));
     }

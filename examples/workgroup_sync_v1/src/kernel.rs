@@ -1,25 +1,15 @@
-//! Attributed source profiles with compiler-derived registration identity.
-//!
-//! This profile highlights the synchronization contract: validate the exact
-//! launch, acquire one LDS scope, execute the collective uniformly, and let only
-//! the grid leader publish through an exclusive capability.
+//! Attributed `i32` reduction using compiler-issued execution capabilities.
 
-#![allow(missing_docs)] // Generated typed-kernel modules do not carry rustdoc in V1.
+#![allow(missing_docs)]
 
-use fe2o3_device::{
-    DisjointSlice, DynamicLds, GridExclusive, WorkgroupCollectives, WorkgroupLdsScope, kernel,
-    thread,
-};
+use fe2o3_device::{DisjointWrite, Global, Index1D, KernelContext, ReadOnly, kernel};
+
+use crate::capability_collectives::execute_workgroup_collectives_v1;
 
 /// Exact workgroup dimensions for both synchronization profiles.
 pub const LDS_REDUCTION_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
 
-/// Reduces one exact 64-element `i32` row through LDS and writes from lane zero.
-///
-/// Admitted inputs have a mathematical sum representable by `i32`, making the
-/// device collective's wrapping additions equal to the exact host oracle. The
-/// public collective implementation performs one unique LDS publish per lane,
-/// uniform publish/read barriers, and a final barrier before scratch reuse.
+/// Reduces one exact 64-element `i32` row and publishes from lane zero.
 #[kernel(
     typed,
     launch(
@@ -29,43 +19,31 @@ pub const LDS_REDUCTION_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
     )
 )]
 pub fn lds_publish_read_reduce_i32_v1(
-    values: &[i32],
-    mut output: DisjointSlice<i32, GridExclusive>,
+    mut context: KernelContext<'_>,
+    values: Global<'_, i32, ReadOnly>,
+    mut output: Global<'_, i32, DisjointWrite<Index1D>>,
 ) {
-    // The exact launch check is uniform and occurs before LDS barriers.
-    let lane = thread::thread_idx_x();
-    let launch_extent = thread::launch_extent_1d();
+    let invocation = context.invocation();
+    let lane = invocation.index_1d().get();
     if values.len() != 64
         || output.len() != 1
-        || launch_extent != 64
-        || thread::block_dim_x() != 64
-        || thread::block_dim_y() != 1
-        || thread::block_dim_z() != 1
-        || thread::thread_idx_y() != 0
-        || thread::thread_idx_z() != 0
-        || thread::block_idx_x() != 0
-        || thread::block_idx_y() != 0
-        || thread::block_idx_z() != 0
+        || invocation.workgroup_size().volume() != 64
+        || invocation.grid_size().volume() != Some(1)
     {
         fe2o3_device::trap();
     }
-
-    // One scope owns the scratch lifetime across publish, reduction, and final reuse barrier.
-    let mut lds_scope = WorkgroupLdsScope::current();
-    let lds = DynamicLds::<i32>::exact_current::<64>(&mut lds_scope);
-    let context = WorkgroupCollectives::current();
-    let value = values[lane as usize];
-    let sum = context.reduce_sum_portable(lds, value);
-
-    // Only lane zero can acquire GridLeader and publish the workgroup result.
-    if lane == 0 {
-        let Some(leader) = thread::grid_leader() else {
-            fe2o3_device::trap();
-        };
-        if let Some(slot) = output.get_mut_exclusive(&leader, 0) {
-            *slot = sum;
-        } else {
-            fe2o3_device::trap();
-        }
+    let Some(value) = values.load(lane) else {
+        fe2o3_device::trap();
+    };
+    let result = context.with_workgroup(|workgroup| {
+        execute_workgroup_collectives_v1::<i32, 64, _>(workgroup, value)
+    });
+    if lane == 0
+        && !output.store(
+            context.invocation().index_1d().into_disjoint(),
+            result.reduction,
+        )
+    {
+        fe2o3_device::trap();
     }
 }

@@ -32,7 +32,7 @@ fn exact_ordinary_attributed_kernel_is_discovered() {
     assert_eq!(kernel.sig.ident, "moe_top2_route_f32_t8_e4_k2_c4_v1");
     assert!(matches!(kernel.vis, Visibility::Public(_)));
     assert!(kernel.sig.unsafety.is_none());
-    assert_eq!(kernel.sig.inputs.len(), 8);
+    assert_eq!(kernel.sig.inputs.len(), 9);
 
     let attribute = kernel
         .attrs
@@ -45,8 +45,11 @@ fn exact_ordinary_attributed_kernel_is_discovered() {
     assert!(arguments.contains("required = [64 , 1 , 1]"));
     assert!(arguments.contains("max = [64 , 1 , 1]"));
     assert!(arguments.contains("loop_bounds (8 , 4 , 16 , 16 , 4)"));
-    assert!(SOURCE.contains("thread::grid_leader()"));
-    assert!(SOURCE.contains("get_mut_exclusive"));
+    assert!(SOURCE.contains("context: KernelContext<'_>"));
+    assert!(SOURCE.contains("logits: Global<'_, f32, ReadOnly>"));
+    assert!(SOURCE.matches("ExclusiveReadWrite").count() >= 8);
+    assert!(SOURCE.contains("context.invocation().index_1d().get()"));
+    assert!(SOURCE.contains("output.store(index, value)"));
     assert!(SOURCE.contains("let mut staged_permutation"));
     assert!(file.items.iter().all(|item| !matches!(
         item,
@@ -76,7 +79,7 @@ fn any_source_identity_mutation_is_rejected() {
 #[test]
 fn source_states_the_pending_compiler_authority_boundary() {
     assert!(SOURCE.contains("MOE_TOP2_SOURCE_LOWERING_SUPPORTED_V1: bool = false"));
-    assert!(SOURCE.contains("no authenticated MIR-to-Kernel-IR compiler profile"));
+    assert!(SOURCE.contains("compiler-produced Bundle V8 extraction"));
     assert!(SOURCE.contains("not explanatory pseudocode"));
     assert!(SOURCE.contains("not a `macro_rules!` facade"));
 }

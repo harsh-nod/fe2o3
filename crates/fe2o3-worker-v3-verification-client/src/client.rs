@@ -118,7 +118,7 @@ impl WorkerV3VerificationFramingReceiptV1 {
     }
 }
 
-fn validate_peer(peer: &OwnedFd) -> Result<(), WorkerV3VerificationClientErrorV1> {
+pub(crate) fn validate_peer(peer: &OwnedFd) -> Result<(), WorkerV3VerificationClientErrorV1> {
     let socket_type = rustix::net::sockopt::socket_type(peer)
         .map_err(|source| descriptor_error("inspect peer socket type", source.into()))?;
     if socket_type != SocketType::SEQPACKET {
@@ -144,7 +144,7 @@ fn validate_peer(peer: &OwnedFd) -> Result<(), WorkerV3VerificationClientErrorV1
     Ok(())
 }
 
-fn set_close_on_exec(peer: &OwnedFd) -> Result<(), WorkerV3VerificationClientErrorV1> {
+pub(crate) fn set_close_on_exec(peer: &OwnedFd) -> Result<(), WorkerV3VerificationClientErrorV1> {
     rustix::io::fcntl_setfd(peer, rustix::io::FdFlags::CLOEXEC)
         .map_err(|source| descriptor_error("set peer close-on-exec", source.into()))?;
     let actual = rustix::io::fcntl_getfd(peer)
@@ -161,7 +161,7 @@ fn set_close_on_exec(peer: &OwnedFd) -> Result<(), WorkerV3VerificationClientErr
     Ok(())
 }
 
-fn send_request(
+pub(crate) fn send_request(
     peer: &OwnedFd,
     bytes: &[u8],
     descriptors: [std::os::fd::BorrowedFd<'_>; 2],
@@ -248,7 +248,7 @@ fn receive_response(
     }
 }
 
-fn wait_for_peer(
+pub(crate) fn wait_for_peer(
     peer: &OwnedFd,
     wanted: PollFlags,
     deadline: Instant,

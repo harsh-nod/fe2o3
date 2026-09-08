@@ -108,6 +108,7 @@ fe2o3_run_gfx942() {
         return 0
     fi
 
+    fe2o3_tutorial_hardware_begin
     (
         cd -- "$FE2O3_EXAMPLE_DIR" || exit
         env -u FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2 \
@@ -117,6 +118,7 @@ fe2o3_run_gfx942() {
             rustup run "$toolchain" cargo run --release --locked \
                 --bin "$FE2O3_EXAMPLE_HOST_BIN"
     )
+    fe2o3_tutorial_hardware_finish gfx942 "$hsaco" "$llvm_ir"
 
     printf 'HSACO: %s\n' "$hsaco"
 }

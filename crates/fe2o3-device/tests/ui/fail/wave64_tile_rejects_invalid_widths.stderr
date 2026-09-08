@@ -1,3 +1,53 @@
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/wave64_tile_rejects_invalid_widths.rs:1:34
+  |
+1 | use fe2o3_device::{SubgroupTile, Wave64, WaveLane};
+  |                                  ^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/wave64_tile_rejects_invalid_widths.rs:1:42
+  |
+1 | use fe2o3_device::{SubgroupTile, Wave64, WaveLane};
+  |                                          ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/wave64_tile_rejects_invalid_widths.rs:3:15
+  |
+3 | fn zero(lane: WaveLane<Wave64>) {
+  |               ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/wave64_tile_rejects_invalid_widths.rs:3:24
+  |
+3 | fn zero(lane: WaveLane<Wave64>) {
+  |                        ^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/wave64_tile_rejects_invalid_widths.rs:7:27
+  |
+7 | fn non_power_of_two(lane: WaveLane<Wave64>) {
+  |                           ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/wave64_tile_rejects_invalid_widths.rs:7:36
+  |
+7 | fn non_power_of_two(lane: WaveLane<Wave64>) {
+  |                                    ^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+  --> tests/ui/fail/wave64_tile_rejects_invalid_widths.rs:11:26
+   |
+11 | fn wider_than_wave(lane: WaveLane<Wave64>) {
+   |                          ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+  --> tests/ui/fail/wave64_tile_rejects_invalid_widths.rs:11:35
+   |
+11 | fn wider_than_wave(lane: WaveLane<Wave64>) {
+   |                                   ^^^^^^
+
 error[E0277]: the trait bound `Wave64TileWidth<0>: ValidWave64TileWidth` is not satisfied
  --> tests/ui/fail/wave64_tile_rejects_invalid_widths.rs:4:13
   |
@@ -15,7 +65,7 @@ error[E0277]: the trait bound `Wave64TileWidth<0>: ValidWave64TileWidth` is not 
 note: required by a bound in `SubgroupTile`
  --> src/group.rs
   |
-  | pub struct SubgroupTile<'wave, const N: u32>
+  | pub struct SubgroupTile<'wave, const N: u32, Brand = UnbrandedCapability>
   |            ------------ required by a bound in this struct
   | where
   |     Wave64TileWidth<N>: ValidWave64TileWidth,
@@ -52,7 +102,7 @@ error[E0277]: the trait bound `Wave64TileWidth<3>: ValidWave64TileWidth` is not 
 note: required by a bound in `SubgroupTile`
  --> src/group.rs
   |
-  | pub struct SubgroupTile<'wave, const N: u32>
+  | pub struct SubgroupTile<'wave, const N: u32, Brand = UnbrandedCapability>
   |            ------------ required by a bound in this struct
   | where
   |     Wave64TileWidth<N>: ValidWave64TileWidth,
@@ -89,7 +139,7 @@ error[E0277]: the trait bound `Wave64TileWidth<128>: ValidWave64TileWidth` is no
 note: required by a bound in `SubgroupTile`
   --> src/group.rs
    |
-   | pub struct SubgroupTile<'wave, const N: u32>
+   | pub struct SubgroupTile<'wave, const N: u32, Brand = UnbrandedCapability>
    |            ------------ required by a bound in this struct
    | where
    |     Wave64TileWidth<N>: ValidWave64TileWidth,

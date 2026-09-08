@@ -2,14 +2,17 @@ use std::{error::Error, fmt};
 
 use fe2o3_build_authority::{CompilerClosureErrorV2, CompilerClosureV2};
 use fe2o3_compiler_ffi::{
+    InertProductionCapabilityHandoffErrorV5, InertProductionCapabilityHandoffV5,
     InertSemanticCompilerModuleHandoffErrorV3, InertSemanticCompilerModuleHandoffV3,
     preflight_inert_semantic_compiler_module_handoff_v3,
 };
 use sha2::{Digest, Sha256};
 
 use crate::{
-    AttemptCodecError, BuildAttempt, BuildInvocation, BuildSession, CompilerModuleHandoffReceiptV3,
-    CompilerModuleHandoffSlotV3, CompilerModuleHandoffTransactionIdentityV3,
+    AttemptCodecError, BuildAttempt, BuildInvocation, BuildSession,
+    CompilerCapabilityHandoffReceiptV5, CompilerCapabilityHandoffSlotV5,
+    CompilerModuleHandoffReceiptV3, CompilerModuleHandoffSlotV3,
+    CompilerModuleHandoffTransactionIdentityV3, ConsumedCompilerCapabilityHandoffV5,
     ConsumedCompilerModuleHandoffV3,
 };
 
@@ -149,6 +152,45 @@ impl InertCompilerExecutionSubjectV1 {
         )
     }
 
+    /// Derives the protected compiler occurrence from an exact native V5 publication.
+    ///
+    /// The V5 transaction identity commits to the complete capability handoff and exact Bundle
+    /// V8 bytes. The fixed V1 execution-subject schema retains that transaction identity while
+    /// its existing content bindings are derived from the exactly embedded frozen V3
+    /// source/module owner. No V3 transaction is published or recovered by this transition.
+    pub fn from_capability_publication_v5(
+        receipt: &CompilerCapabilityHandoffReceiptV5,
+        handoff: &InertProductionCapabilityHandoffV5,
+    ) -> Result<Self, CompilerExecutionSubjectErrorV1> {
+        let decoded = InertProductionCapabilityHandoffV5::decode(handoff.canonical_bytes())
+            .map_err(CompilerExecutionSubjectErrorV1::NonCanonicalCapabilityHandoff)?;
+        if decoded.identity() != handoff.identity()
+            || decoded.canonical_bytes() != handoff.canonical_bytes()
+        {
+            return Err(CompilerExecutionSubjectErrorV1::NonCanonicalOuterHandoff);
+        }
+        if receipt.slot() != CompilerCapabilityHandoffSlotV5::Production
+            || receipt.handoff_identity() != handoff.identity()
+        {
+            return Err(CompilerExecutionSubjectErrorV1::HandoffIdentityMismatch);
+        }
+        if usize::try_from(receipt.handoff_identity().byte_len()).ok()
+            != Some(handoff.canonical_bytes().len())
+        {
+            return Err(CompilerExecutionSubjectErrorV1::HandoffLengthMismatch);
+        }
+        Self::from_exact_binding(
+            receipt.attempt(),
+            CompilerModuleHandoffSlotV3::Production,
+            CompilerModuleHandoffTransactionIdentityV3::from_bytes(
+                *receipt.transaction_identity().as_bytes(),
+            ),
+            handoff.legacy_handoff().identity(),
+            handoff.legacy_handoff().canonical_bytes().len(),
+            handoff.legacy_handoff(),
+        )
+    }
+
     /// Reconstructs the same subject from one strictly consumed V3 handoff.
     pub fn from_consumed(
         consumed: &ConsumedCompilerModuleHandoffV3,
@@ -160,6 +202,23 @@ impl InertCompilerExecutionSubjectV1 {
             consumed.handoff_identity(),
             consumed.bytes().len(),
             consumed.handoff(),
+        )
+    }
+
+    /// Reconstructs the protected compiler occurrence from one consumed native V5 handoff.
+    pub fn from_consumed_capability_v5(
+        consumed: &ConsumedCompilerCapabilityHandoffV5,
+    ) -> Result<Self, CompilerExecutionSubjectErrorV1> {
+        let handoff = consumed.handoff();
+        Self::from_exact_binding(
+            consumed.attempt(),
+            CompilerModuleHandoffSlotV3::Production,
+            CompilerModuleHandoffTransactionIdentityV3::from_bytes(
+                *consumed.transaction_identity().as_bytes(),
+            ),
+            handoff.legacy_handoff().identity(),
+            handoff.legacy_handoff().canonical_bytes().len(),
+            handoff.legacy_handoff(),
         )
     }
 
@@ -625,6 +684,8 @@ impl SubjectFieldsV1 {
 pub enum CompilerExecutionSubjectErrorV1 {
     /// The retained strict handoff fails its native inner preflight.
     NonCanonicalHandoff(InertSemanticCompilerModuleHandoffErrorV3),
+    /// The retained native V5 handoff fails exact canonical decoding.
+    NonCanonicalCapabilityHandoff(InertProductionCapabilityHandoffErrorV5),
     /// The retained outer handoff identity does not match its canonical bytes.
     NonCanonicalOuterHandoff,
     /// A publication or consumption binding names a different handoff identity.
@@ -679,6 +740,12 @@ impl fmt::Display for CompilerExecutionSubjectErrorV1 {
         match self {
             Self::NonCanonicalHandoff(error) => {
                 write!(formatter, "strict V3 handoff preflight failed: {error}")
+            }
+            Self::NonCanonicalCapabilityHandoff(error) => {
+                write!(
+                    formatter,
+                    "native V5 capability handoff preflight failed: {error}"
+                )
             }
             Self::NonCanonicalOuterHandoff => {
                 formatter.write_str("strict V3 outer handoff identity does not match its bytes")
@@ -744,6 +811,7 @@ impl Error for CompilerExecutionSubjectErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::NonCanonicalHandoff(error) => Some(error),
+            Self::NonCanonicalCapabilityHandoff(error) => Some(error),
             Self::Attempt(error) => Some(error),
             Self::CompilerClosure(error) => Some(error),
             _ => None,

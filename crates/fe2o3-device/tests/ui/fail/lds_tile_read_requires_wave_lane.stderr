@@ -2,14 +2,14 @@ error[E0308]: mismatched types
  --> tests/ui/fail/lds_tile_read_requires_wave_lane.rs:4:37
   |
 4 |     let _ = tile.read_wave_fragment(0);
-  |                  ------------------ ^ expected `&WaveLane<Wave64>`, found integer
+  |                  ------------------ ^ expected `&SubgroupLane<SubgroupWidth64>`, found integer
   |                  |
   |                  arguments to this method are incorrect
   |
-  = note: expected reference `&WaveLane<Wave64>`
+  = note: expected reference `&SubgroupLane<SubgroupWidth64>`
                   found type `{integer}`
 note: method defined here
  --> src/tensor.rs
   |
-  |     pub fn read_wave_fragment(&self, lane: &WaveLane<Wave64>) -> [T; 4] {
+  |     pub fn read_wave_fragment(&self, lane: &WaveLane<Wave64, Brand>) -> [T; 4] {
   |            ^^^^^^^^^^^^^^^^^^

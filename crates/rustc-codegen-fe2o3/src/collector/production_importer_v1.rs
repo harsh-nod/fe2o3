@@ -1,30 +1,43 @@
 //! Sole consuming boundary from production rustc collection to semantic MIR.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use dialect_amdgcn::DeviceValueDiagnosticItem;
+use fe2o3_artifacts::{BlockSize, LaunchContract};
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, HARD_MAX_FUNCTIONS_V1, HARD_MAX_ROOTS_V1,
-    InertSemanticMirRequestV1, SemanticAbiPassModeV1, SemanticBackendReprV1,
-    SemanticBf16ConversionKindV1, SemanticCallableDeclV1, SemanticCallableIdV1, SemanticCanonAbiV1,
+    InertSemanticMirRequestV1, SemanticAbiArgumentRoleV1, SemanticAbiPassModeV1,
+    SemanticBackendReprV1, SemanticBf16ConversionKindV1, SemanticCallableDeclV1,
+    SemanticCallableIdV1, SemanticCanonAbiV1, SemanticCapabilityMemoryContractV1,
     SemanticCompilerIntrinsicIdentityV1, SemanticCompilerIntrinsicOperationV1,
-    SemanticDisjointIndexSpaceV1, SemanticExternAbiV1, SemanticF32MathFunctionV1,
-    SemanticFunctionAbiV1, SemanticFunctionIdV1, SemanticFunctionIdentityV1,
-    SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1, SemanticKernelBindingIdentityV1,
+    SemanticDisjointIndexSpaceV1, SemanticExecutionAtomicKindV1,
+    SemanticExecutionCapabilityContractV1, SemanticExecutionCapabilityOperationV1,
+    SemanticExecutionCapabilitySignatureV1, SemanticExecutionCollectiveKindV1,
+    SemanticExecutionMemoryAccessV1, SemanticExecutionMemoryAddressSpaceV1,
+    SemanticExecutionMemoryOrderingV1, SemanticExecutionMemoryScopeV1,
+    SemanticExecutionMemorySemanticsV1, SemanticExecutionMemorySpacesV1, SemanticExternAbiV1,
+    SemanticF32MathFunctionV1, SemanticFunctionAbiV1, SemanticFunctionIdV1,
+    SemanticFunctionIdentityV1, SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1,
+    SemanticKernelBindingIdentityV1, SemanticKernelCapabilityFrontendUnitIdentityV1,
+    SemanticKernelCapabilityIssuanceIdentityV1, SemanticKernelCapabilityLaunchBrandIdentityV1,
+    SemanticKernelCapabilityProvenanceV1, SemanticKernelCapabilityTargetBrandIdentityV1,
     SemanticKernelEntryV1, SemanticKernelLaunchBoundsV1, SemanticKernelResourceContractV1,
     SemanticKernelSourceContractV1, SemanticLinkSymbolV1, SemanticMfmaAccumulatorContractV1,
     SemanticMfmaAccumulatorDistributionV1, SemanticMfmaOperandContractV1,
     SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1,
     SemanticMfmaStorageLayoutV1, SemanticMirErrorV1, SemanticMirLimitsV1, SemanticMirResourceV1,
-    SemanticNonBodyCallableBindingV1, SemanticReachableAssemblyV1, SemanticScalarTypeV1,
-    SemanticSubgroupReductionKindV1, SemanticTargetDataLayoutV1, SemanticTypeDeclV1,
-    SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
-    SemanticUnsafeAssemblyDeclarationV1, SemanticUnsafeAssemblyTargetV1,
-    SemanticWorkgroupDimensionsV1, SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
+    SemanticMirWireVersionV1, SemanticNonBodyCallableBindingV1, SemanticReachableAssemblyV1,
+    SemanticScalarTypeV1, SemanticSourceArgumentOwnershipV1, SemanticSubgroupReductionKindV1,
+    SemanticTargetDataLayoutV1, SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeIdentityV1,
+    SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1, SemanticUnsafeAssemblyDeclarationV1,
+    SemanticUnsafeAssemblyTargetV1, SemanticWorkgroupDimensionsV1,
+    SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
     SemanticWriteOnlyDisjointWriteKindV1,
 };
-use rustc_middle::ty::{FloatTy, GenericArgKind, Instance, IntTy, Ty, TyCtxt, TyKind, UintTy};
+use rustc_middle::ty::{
+    FloatTy, GenericArgKind, GenericArgsRef, Instance, IntTy, Ty, TyCtxt, TyKind, UintTy,
+};
 use rustc_span::{Symbol, sym};
 
 use super::{
@@ -51,6 +64,7 @@ use crate::production_semantic_types_v1::{
 use crate::production_target_v1::ProductionTargetErrorV1;
 use crate::rustc_semantic_adapter_v1::{
     SemanticIdentityDigestV1, canonical_function_identities_v1, canonical_target_layout_v1,
+    rustc_type_identity_v1,
 };
 use crate::rustc_semantic_plan_v1::{
     DebugSourceCaptureRequestV2, ProductionSemanticPreflightErrorV1,
@@ -94,6 +108,14 @@ pub(crate) enum ProductionSemanticImportErrorV1 {
     },
     FunctionIdentityCollision,
     RootIdentityMismatch,
+    KernelContextBinding(&'static str),
+    CapabilityTerminalRejected {
+        root: String,
+        span: String,
+        helper_chain: String,
+        stage: &'static str,
+        detail: String,
+    },
     Preflight(Box<ProductionSemanticPreflightErrorV1>),
     TypeConstruction(Box<ProductionSemanticTypeErrorV1>),
     FunctionAbiConstruction(Box<ProductionSemanticFnAbiErrorV1>),
@@ -134,6 +156,19 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
             Self::RootIdentityMismatch => formatter.write_str(
                 "semantic importer could not bind independently derived roots to unique collected functions",
             ),
+            Self::KernelContextBinding(detail) => {
+                write!(formatter, "semantic importer rejected kernel-context custody: {detail}")
+            }
+            Self::CapabilityTerminalRejected {
+                root,
+                span,
+                helper_chain,
+                stage,
+                detail,
+            } => write!(
+                formatter,
+                "FE2O3-CAP Rejected root={root} span={span} helper_chain={helper_chain} stage={stage}: {detail}",
+            ),
             Self::Preflight(error) => write!(formatter, "semantic importer {error}"),
             Self::TypeConstruction(error) => {
                 write!(formatter, "semantic importer rejected semantic type construction: {error}")
@@ -164,7 +199,7 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
                 semantic_sha256,
             } => write!(
                 formatter,
-                "semantic importer authenticated rustc identity inventory {} and bounded preflight plan {}, then admitted one complete semantic MIR request with {functions} function(s), {callables} callable(s), and canonical identity {}; an owner-held Pliron locator graph was recursively verified for exact semantic equivalence; target-neutral lowering remains pending; no fallback or artifact emission was entered",
+                "FE2O3-CAP Incomplete root=authenticated-set span=authenticated-set helper_chain=authenticated-closure stage=target-neutral-lowering: semantic importer authenticated rustc identity inventory {} and bounded preflight plan {}, then admitted one complete semantic MIR request with {functions} function(s), {callables} callable(s), and canonical identity {}; an owner-held Pliron locator graph was recursively verified for exact semantic equivalence; target-neutral lowering remains pending; no fallback or artifact emission was entered",
                 crate::encode_hex(rustc_identity_inventory_sha256),
                 crate::encode_hex(rustc_preflight_plan_sha256),
                 crate::encode_hex(semantic_sha256),
@@ -186,7 +221,9 @@ impl std::error::Error for ProductionSemanticImportErrorV1 {
             | Self::LimitExceeded { .. }
             | Self::LineageTranscriptTooLarge { .. }
             | Self::FunctionIdentityCollision
-            | Self::RootIdentityMismatch => None,
+            | Self::RootIdentityMismatch
+            | Self::KernelContextBinding(_)
+            | Self::CapabilityTerminalRejected { .. } => None,
             Self::TargetNeutralLoweringPending { .. } => None,
         }
     }
@@ -247,6 +284,7 @@ pub(crate) struct ConstructedProductionSemanticMirV1 {
     pub(crate) rustc_identity_inventory: AuthenticatedRustcIdentityInventoryV3,
     pub(crate) rustc_preflight_plan: AuthenticatedRustcPreflightPlanV3,
     pub(crate) rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
+    pub(crate) kernel_contexts: AuthenticatedProductionKernelContextsV1,
     pub(crate) reference_effect_bindings:
         crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     pub(crate) debug_source_files: Box<[fe2o3_kernel_ir::DebugSourceMapFileV1]>,
@@ -257,6 +295,397 @@ pub(crate) struct ConstructedProductionSemanticMirV1 {
     pub(crate) debug_capture_gap: Option<fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1>,
 }
 
+const KERNEL_CONTEXT_FRONTEND_UNIT_DOMAIN_V1: &[u8] =
+    b"fe2o3/production/kernel-context/frontend-unit/v1";
+const KERNEL_CONTEXT_TARGET_DOMAIN_V1: &[u8] = b"fe2o3/production/kernel-context/target-brand/v1";
+const KERNEL_CONTEXT_LAUNCH_DOMAIN_V1: &[u8] = b"fe2o3/production/kernel-context/launch-brand/v1";
+const KERNEL_CONTEXT_CUSTODY_DOMAIN_V1: &[u8] = b"fe2o3/production/kernel-context/custody/v1";
+
+struct CollectedKernelContextV1 {
+    root_function_identity: [u8; 32],
+    kernel_binding: [u8; 32],
+    kernel_marker_identity: [u8; 32],
+    launch_brand_identity: [u8; 32],
+    issuance_identity: [u8; 32],
+    physical_argument_count: u32,
+    logical_argument_count: u32,
+}
+
+#[derive(Debug)]
+struct AuthenticatedProductionKernelContextRootV1 {
+    selected_root: SemanticFunctionIdV1,
+    root_function_identity: [u8; 32],
+    kernel_binding: [u8; 32],
+    kernel_marker_identity: [u8; 32],
+    launch_brand_identity: [u8; 32],
+    issuance_identity: [u8; 32],
+    physical_argument_count: u32,
+    logical_argument_count: u32,
+}
+
+struct ProductionKernelContextRootObservationV1 {
+    selected_root: SemanticFunctionIdV1,
+    root_function_identity: [u8; 32],
+    kernel_binding: [u8; 32],
+    launch_brand_identity: [u8; 32],
+}
+
+/// Move-only custody for compiler-authenticated context inputs. Its private
+/// records cannot be built from caller-provided hashes.
+pub(crate) struct AuthenticatedProductionKernelContextsV1 {
+    frontend_unit_identity: [u8; 32],
+    target_brand_identity: [u8; 32],
+    expected_roots: Box<[SemanticFunctionIdV1]>,
+    roots: Box<[AuthenticatedProductionKernelContextRootV1]>,
+    custody_identity: [u8; 32],
+}
+
+fn kernel_context_frontend_unit_identity_v1(
+    inventory: &AuthenticatedRustcIdentityInventoryV3,
+) -> [u8; 32] {
+    let mut digest = SemanticIdentityDigestV1::new(KERNEL_CONTEXT_FRONTEND_UNIT_DOMAIN_V1);
+    digest.field(&inventory.sha256());
+    digest.field(inventory.canonical_transcript());
+    digest.finish()
+}
+
+fn kernel_context_target_brand_identity_v1(
+    target: &crate::production_target_v1::AuthenticatedProductionTargetV1,
+) -> [u8; 32] {
+    kernel_context_target_brand_identity_from_contract_v1(
+        canonical_target_layout_v1(target.rustc_layout()),
+        target.contract(),
+    )
+}
+
+pub(crate) fn kernel_context_target_brand_identity_from_contract_v1(
+    layout: SemanticTargetDataLayoutV1,
+    contract: crate::production_backend_v1::ProductionBackendTargetContractV1,
+) -> [u8; 32] {
+    let mut digest = SemanticIdentityDigestV1::new(KERNEL_CONTEXT_TARGET_DOMAIN_V1);
+    digest.field(layout.identity().as_bytes());
+    digest.field(contract.canonical_target().as_bytes());
+    digest.finish()
+}
+
+fn kernel_context_launch_brand_identity_v1(launch: &LaunchContract) -> [u8; 32] {
+    let mut digest = SemanticIdentityDigestV1::new(KERNEL_CONTEXT_LAUNCH_DOMAIN_V1);
+    digest.field(&[launch.rank()]);
+    match launch.block_size() {
+        BlockSize::Any => digest.field(&[0]),
+        BlockSize::Exact(dimensions) => {
+            digest.field(&[1]);
+            kernel_context_dimensions_v1(&mut digest, dimensions);
+        }
+        BlockSize::AtMost(dimensions) => {
+            digest.field(&[2]);
+            kernel_context_dimensions_v1(&mut digest, dimensions);
+        }
+    }
+    kernel_context_dimensions_v1(&mut digest, launch.max_grid());
+    digest.field(&launch.static_shared_memory_bytes().to_le_bytes());
+    digest.field(&launch.max_dynamic_shared_memory_bytes().to_le_bytes());
+    digest.finish()
+}
+
+fn kernel_context_dimensions_v1(
+    digest: &mut SemanticIdentityDigestV1,
+    dimensions: fe2o3_artifacts::Dimensions,
+) {
+    digest.field(&dimensions.x().to_le_bytes());
+    digest.field(&dimensions.y().to_le_bytes());
+    digest.field(&dimensions.z().to_le_bytes());
+}
+
+fn collect_authenticated_kernel_contexts_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    collection: &mut CollectionResult<'tcx>,
+) -> Result<Vec<CollectedKernelContextV1>, ProductionSemanticImportErrorV1> {
+    let mut contexts = Vec::new();
+    for function in &mut collection.functions {
+        if function.kernel_context_contract.is_none() {
+            continue;
+        }
+        if !function.is_kernel_entry() {
+            return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                "a context sidecar is bound to a non-kernel function",
+            ));
+        }
+        let launch = super::rederive_general_typed_launch_for_descriptor_v1(
+            function.frontend_contract.as_ref(),
+            &function.export_name,
+        )
+        .map_err(|_| {
+            ProductionSemanticImportErrorV1::KernelContextBinding(
+                "a context root lacks one exact authenticated launch contract",
+            )
+        })?;
+        let source = function
+            .kernel_context_contract
+            .as_mut()
+            .and_then(|contract| contract.take_authenticated_source())
+            .ok_or(ProductionSemanticImportErrorV1::KernelContextBinding(
+                "a context sidecar reached import without complete collector authentication",
+            ))?;
+        let observed_root = canonical_function_identities_v1(tcx, function.instance).function();
+        if source.root_function_identity() != *observed_root.as_bytes() {
+            return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                "the authenticated context root identity is stale",
+            ));
+        }
+        let kernel_binding = function.kernel_binding.ok_or(
+            ProductionSemanticImportErrorV1::KernelContextBinding(
+                "a context root lacks its authenticated kernel binding",
+            ),
+        )?;
+        contexts.push(CollectedKernelContextV1 {
+            root_function_identity: source.root_function_identity(),
+            kernel_binding: kernel_binding.as_bytes(),
+            kernel_marker_identity: source.kernel_marker_identity(),
+            launch_brand_identity: kernel_context_launch_brand_identity_v1(&launch),
+            issuance_identity: source.issuance_identity(),
+            physical_argument_count: source.physical_argument_count(),
+            logical_argument_count: source.logical_argument_count(),
+        });
+    }
+    Ok(contexts)
+}
+
+fn bind_authenticated_kernel_contexts_v1(
+    contexts: Vec<CollectedKernelContextV1>,
+    functions: &[RetainedSemanticFunctionProducerV1<'_>],
+    semantic_roots: &[SemanticFunctionIdV1],
+    inventory: &AuthenticatedRustcIdentityInventoryV3,
+    target: &crate::production_target_v1::AuthenticatedProductionTargetV1,
+) -> Result<AuthenticatedProductionKernelContextsV1, ProductionSemanticImportErrorV1> {
+    let frontend_unit_identity = kernel_context_frontend_unit_identity_v1(inventory);
+    let target_brand_identity = kernel_context_target_brand_identity_v1(target);
+    let mut roots = Vec::with_capacity(contexts.len());
+    for context in contexts {
+        let selected_root = functions
+            .iter()
+            .position(|function| {
+                function.identities.function().as_bytes() == &context.root_function_identity
+            })
+            .and_then(|index| u32::try_from(index).ok())
+            .map(SemanticFunctionIdV1::from_index)
+            .filter(|root| semantic_roots.contains(root))
+            .ok_or(ProductionSemanticImportErrorV1::KernelContextBinding(
+                "an authenticated context is not bound to one semantic kernel root",
+            ))?;
+        roots.push(AuthenticatedProductionKernelContextRootV1 {
+            selected_root,
+            root_function_identity: context.root_function_identity,
+            kernel_binding: context.kernel_binding,
+            kernel_marker_identity: context.kernel_marker_identity,
+            launch_brand_identity: context.launch_brand_identity,
+            issuance_identity: context.issuance_identity,
+            physical_argument_count: context.physical_argument_count,
+            logical_argument_count: context.logical_argument_count,
+        });
+    }
+    roots.sort_unstable_by_key(|root| root.selected_root);
+    if roots
+        .windows(2)
+        .any(|pair| pair[0].selected_root == pair[1].selected_root)
+    {
+        return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+            "two authenticated contexts select the same semantic root",
+        ));
+    }
+    let expected_roots = roots
+        .iter()
+        .map(|root| root.selected_root)
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    let custody_identity = kernel_context_custody_identity_v1(
+        frontend_unit_identity,
+        target_brand_identity,
+        &expected_roots,
+        &roots,
+    );
+    Ok(AuthenticatedProductionKernelContextsV1 {
+        frontend_unit_identity,
+        target_brand_identity,
+        expected_roots,
+        roots: roots.into_boxed_slice(),
+        custody_identity,
+    })
+}
+
+fn kernel_context_custody_identity_v1(
+    frontend_unit_identity: [u8; 32],
+    target_brand_identity: [u8; 32],
+    expected_roots: &[SemanticFunctionIdV1],
+    roots: &[AuthenticatedProductionKernelContextRootV1],
+) -> [u8; 32] {
+    let mut digest = SemanticIdentityDigestV1::new(KERNEL_CONTEXT_CUSTODY_DOMAIN_V1);
+    digest.field(&frontend_unit_identity);
+    digest.field(&target_brand_identity);
+    for root in expected_roots {
+        digest.field(&root.index().to_le_bytes());
+    }
+    for root in roots {
+        digest.field(&root.selected_root.index().to_le_bytes());
+        digest.field(&root.root_function_identity);
+        digest.field(&root.kernel_binding);
+        digest.field(&root.kernel_marker_identity);
+        digest.field(&root.launch_brand_identity);
+        digest.field(&root.issuance_identity);
+        digest.field(&root.physical_argument_count.to_le_bytes());
+        digest.field(&root.logical_argument_count.to_le_bytes());
+    }
+    digest.finish()
+}
+
+impl AuthenticatedProductionKernelContextsV1 {
+    fn validate_carriage(
+        &self,
+        frontend_unit_identity: [u8; 32],
+        target_brand_identity: [u8; 32],
+        observed: &[ProductionKernelContextRootObservationV1],
+    ) -> Result<(), ProductionSemanticImportErrorV1> {
+        if self.frontend_unit_identity != frontend_unit_identity {
+            return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                "context custody belongs to a different frontend compilation unit",
+            ));
+        }
+        if self.target_brand_identity != target_brand_identity {
+            return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                "context custody belongs to a different selected target",
+            ));
+        }
+        let carried_roots = self
+            .roots
+            .iter()
+            .map(|root| root.selected_root)
+            .collect::<Vec<_>>();
+        if carried_roots.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                "context custody contains duplicate or noncanonical roots",
+            ));
+        }
+        if carried_roots.as_slice() != self.expected_roots.as_ref() {
+            return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                "context custody is missing, duplicated, or reordered",
+            ));
+        }
+        if kernel_context_custody_identity_v1(
+            self.frontend_unit_identity,
+            self.target_brand_identity,
+            &self.expected_roots,
+            &self.roots,
+        ) != self.custody_identity
+        {
+            return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                "context custody identity is stale",
+            ));
+        }
+        for root in &self.roots {
+            if [
+                self.frontend_unit_identity,
+                self.target_brand_identity,
+                root.kernel_marker_identity,
+                root.launch_brand_identity,
+                root.issuance_identity,
+            ]
+            .contains(&[0; 32])
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "context custody contains an incomplete identity",
+                ));
+            }
+            let current = observed
+                .iter()
+                .find(|current| current.selected_root == root.selected_root)
+                .ok_or(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "context custody names a different semantic root roster",
+                ))?;
+            if current.root_function_identity != root.root_function_identity
+                || current.kernel_binding != root.kernel_binding
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "context custody was substituted across kernel roots",
+                ));
+            }
+            if current.launch_brand_identity != root.launch_brand_identity {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "context custody was substituted across launch contracts",
+                ));
+            }
+            if root
+                .logical_argument_count
+                .checked_sub(root.physical_argument_count)
+                != Some(1)
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "logical context changed the physical kernel argument count",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn into_lowering_inputs(
+        self,
+        inventory: &AuthenticatedRustcIdentityInventoryV3,
+        target: &crate::production_target_v1::AuthenticatedProductionTargetV1,
+        ranked_roots: &[crate::production_ranked_projection_v1::ProductionRankedRootProgramV1],
+        typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+    ) -> Result<
+        Vec<fe2o3_lower_mir_kernel::ProductionKernelContextLoweringInputV1>,
+        ProductionSemanticImportErrorV1,
+    > {
+        if ranked_roots.len() != typed_roots.len() {
+            return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                "ranked and typed root rosters differ",
+            ));
+        }
+        let observed = ranked_roots
+            .iter()
+            .zip(typed_roots)
+            .map(|(ranked, typed)| {
+                if ranked.kernel_binding() != &typed.kernel_binding_bytes() {
+                    return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                        "ranked and typed roots have different kernel bindings",
+                    ));
+                }
+                let launch = typed.source_launch().ok_or(
+                    ProductionSemanticImportErrorV1::KernelContextBinding(
+                        "context root lost its exact launch contract",
+                    ),
+                )?;
+                Ok(ProductionKernelContextRootObservationV1 {
+                    selected_root: ranked.semantic_root(),
+                    root_function_identity: *ranked.semantic_root_identity().as_bytes(),
+                    kernel_binding: *ranked.kernel_binding(),
+                    launch_brand_identity: kernel_context_launch_brand_identity_v1(launch),
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.validate_carriage(
+            kernel_context_frontend_unit_identity_v1(inventory),
+            kernel_context_target_brand_identity_v1(target),
+            &observed,
+        )?;
+
+        let mut inputs = Vec::with_capacity(self.roots.len());
+        for root in self.roots {
+            inputs.push(
+                fe2o3_lower_mir_kernel::ProductionKernelContextLoweringInputV1::new(
+                    root.selected_root,
+                    self.frontend_unit_identity,
+                    root.kernel_marker_identity,
+                    self.target_brand_identity,
+                    root.launch_brand_identity,
+                    root.issuance_identity,
+                ),
+            );
+        }
+        Ok(inputs)
+    }
+}
+
 pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
@@ -264,7 +693,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
 ) -> Result<ConstructedProductionSemanticMirV1, ProductionSemanticImportErrorV1> {
     let AuthenticatedCollectedKernelClosureV1 {
         target,
-        collection,
+        mut collection,
         roots,
     } = closure;
     let target = match target.authenticate_import_session(tcx) {
@@ -294,6 +723,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     if !exact_ordered_axes_match(retained_roots, independently_observed_roots) {
         return Err(ProductionSemanticImportErrorV1::RootCustodyMismatch);
     }
+    let collected_kernel_contexts = collect_authenticated_kernel_contexts_v1(tcx, &mut collection)?;
     let reference_effect_bindings =
         crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::new(
             collection
@@ -302,6 +732,13 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
                 .filter_map(|function| function.reference_effect_binding.clone())
                 .collect(),
         );
+    let authenticated_closure_types = collection
+        .functions
+        .iter()
+        .filter_map(|function| function.closure_plan.as_ref())
+        .flat_map(|plan| plan.authenticated_closure_type_identities())
+        .map(SemanticTypeIdentityV1::from_sha256)
+        .collect::<BTreeSet<_>>();
     let identity_inventory = build_identity_inventory_v1(tcx, &target, &collection, &roots)?;
     require_lineage_transcript_bound_v3(
         "rustc identity inventory",
@@ -314,12 +751,24 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         sha256: rustc_identity_inventory_sha256,
         canonical_transcript: rustc_identity_inventory_transcript,
     } = identity_inventory;
+    let rustc_identity_inventory = AuthenticatedRustcIdentityInventoryV3 {
+        sha256: rustc_identity_inventory_sha256,
+        canonical_transcript: rustc_identity_inventory_transcript,
+    };
+    let kernel_contexts = bind_authenticated_kernel_contexts_v1(
+        collected_kernel_contexts,
+        &functions,
+        &roots,
+        &rustc_identity_inventory,
+        &target,
+    )?;
     let plan = match build_production_semantic_preflight_plan_v1(
         tcx,
         canonical_target_layout_v1(target.rustc_layout()),
         functions,
         roots,
         rustc_identity_inventory_sha256,
+        &authenticated_closure_types,
         debug_source_capture,
     ) {
         Ok(plan) => plan,
@@ -367,6 +816,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         tcx,
         canonical_target_layout_v1(target.rustc_layout()),
         &plan,
+        &kernel_contexts,
         semantic_types.into_records(),
         semantic_function_abis,
         semantic_terminal_abis,
@@ -384,16 +834,14 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     drop(collection);
     Ok(ConstructedProductionSemanticMirV1 {
         semantic_mir,
-        rustc_identity_inventory: AuthenticatedRustcIdentityInventoryV3 {
-            sha256: rustc_identity_inventory_sha256,
-            canonical_transcript: rustc_identity_inventory_transcript,
-        },
+        rustc_identity_inventory,
         rustc_preflight_plan: AuthenticatedRustcPreflightPlanV3 {
             sha256: rustc_preflight_plan_sha256,
             rustc_identity_inventory_sha256,
             canonical_transcript: rustc_preflight_plan_transcript,
         },
         rustc_target: target,
+        kernel_contexts,
         reference_effect_bindings,
         debug_source_files,
         debug_source_scopes,
@@ -417,10 +865,122 @@ fn require_lineage_transcript_bound_v3(
     }
 }
 
+fn semantic_function_path_v1(
+    root: SemanticFunctionIdV1,
+    target: SemanticFunctionIdV1,
+    edges: &[(SemanticFunctionIdV1, SemanticFunctionIdV1)],
+) -> Option<Vec<SemanticFunctionIdV1>> {
+    let mut pending = VecDeque::from([(root, vec![root])]);
+    let mut visited = BTreeSet::new();
+    while let Some((current, path)) = pending.pop_front() {
+        if current == target {
+            return Some(path);
+        }
+        if !visited.insert(current) {
+            continue;
+        }
+        let mut successors = edges
+            .iter()
+            .filter_map(|(caller, callee)| (*caller == current).then_some(*callee))
+            .collect::<Vec<_>>();
+        successors.sort_unstable();
+        successors.dedup();
+        for successor in successors {
+            let mut next_path = path.clone();
+            next_path.push(successor);
+            pending.push_back((successor, next_path));
+        }
+    }
+    None
+}
+
+fn capability_terminal_rejection_v1(
+    tcx: TyCtxt<'_>,
+    plan: &ProductionSemanticPreflightPlanV1<'_>,
+    terminal_index: u32,
+    root: Option<&AuthenticatedProductionKernelContextRootV1>,
+    stage: &'static str,
+    error: ProductionSemanticImportErrorV1,
+) -> ProductionSemanticImportErrorV1 {
+    let (root, span, helper_chain) = capability_terminal_site_v1(tcx, plan, terminal_index, root);
+    ProductionSemanticImportErrorV1::CapabilityTerminalRejected {
+        root,
+        span,
+        helper_chain,
+        stage,
+        detail: error.to_string(),
+    }
+}
+
+fn capability_terminal_site_v1(
+    tcx: TyCtxt<'_>,
+    plan: &ProductionSemanticPreflightPlanV1<'_>,
+    terminal_index: u32,
+    root: Option<&AuthenticatedProductionKernelContextRootV1>,
+) -> (String, String, String) {
+    let recipes = plan
+        .terminal_expansion_producers()
+        .iter()
+        .filter(|recipe| recipe.terminal == terminal_index)
+        .collect::<Vec<_>>();
+    let mut spans = recipes
+        .iter()
+        .map(|recipe| tcx.sess.source_map().span_to_diagnostic_string(recipe.span))
+        .collect::<Vec<_>>();
+    spans.sort();
+    spans.dedup();
+    let edges = plan
+        .direct_call_producers()
+        .iter()
+        .map(|edge| (edge.caller, edge.callee))
+        .collect::<Vec<_>>();
+    let identity = |function: SemanticFunctionIdV1| {
+        plan.function_producers()
+            .get(function.index() as usize)
+            .map(|producer| crate::encode_hex(producer.identities.function().as_bytes()))
+            .unwrap_or_else(|| format!("function#{}", function.index()))
+    };
+    let terminal_identity = plan
+        .terminal_producers()
+        .get(terminal_index as usize)
+        .map(|terminal| crate::encode_hex(terminal.identities.function().as_bytes()))
+        .unwrap_or_else(|| format!("terminal#{terminal_index}"));
+    let mut chains = recipes
+        .iter()
+        .map(|recipe| {
+            let functions = root
+                .and_then(|root| {
+                    semantic_function_path_v1(root.selected_root, recipe.caller, &edges)
+                })
+                .unwrap_or_else(|| vec![recipe.caller]);
+            let mut chain = functions.into_iter().map(identity).collect::<Vec<_>>();
+            chain.push(terminal_identity.clone());
+            chain.join("->")
+        })
+        .collect::<Vec<_>>();
+    chains.sort();
+    chains.dedup();
+    (
+        root.map(|root| crate::encode_hex(&root.root_function_identity))
+            .unwrap_or_else(|| "unresolved".to_owned()),
+        if spans.is_empty() {
+            "unresolved".to_owned()
+        } else {
+            spans.join(",")
+        },
+        if chains.is_empty() {
+            "unresolved".to_owned()
+        } else {
+            chains.join("|")
+        },
+    )
+}
+
 fn construct_complete_request_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     target: SemanticTargetDataLayoutV1,
     plan: &ProductionSemanticPreflightPlanV1<'tcx>,
+    kernel_contexts: &AuthenticatedProductionKernelContextsV1,
     types: Vec<SemanticTypeDeclV1>,
     function_abis: ConstructedSemanticFunctionAbisV1,
     terminal_abis: ConstructedSemanticFunctionAbisV1,
@@ -469,8 +1029,58 @@ fn construct_complete_request_v1<'tcx>(
         .zip(&terminal_abis)
         .enumerate()
     {
-        let operation =
-            terminal_operation_v1(tcx, terminal.instance, terminal.expansion, abi, &types)?;
+        let terminal_index = u32::try_from(index)
+            .map_err(|_| ProductionSemanticImportErrorV1::RootIdentityMismatch)?;
+        let capability_root = capability_memory_root_for_terminal_v1(
+            plan,
+            kernel_contexts,
+            terminal_index,
+            terminal.expansion,
+        )
+        .map_err(|error| {
+            if matches!(
+                terminal.expansion,
+                crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1::Execution(_)
+            ) {
+                capability_terminal_rejection_v1(
+                    tcx,
+                    plan,
+                    terminal_index,
+                    None,
+                    "root-authentication",
+                    error,
+                )
+            } else {
+                error
+            }
+        })?;
+        let operation = terminal_operation_v1(
+            tcx,
+            terminal.instance,
+            terminal.expansion,
+            abi,
+            &types,
+            capability_root,
+            terminal.identities.function(),
+            kernel_contexts,
+        )
+        .map_err(|error| {
+            if matches!(
+                terminal.expansion,
+                crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1::Execution(_)
+            ) {
+                capability_terminal_rejection_v1(
+                    tcx,
+                    plan,
+                    terminal_index,
+                    capability_root,
+                    "terminal-authentication",
+                    error,
+                )
+            } else {
+                error
+            }
+        })?;
         let mut digest = SemanticIdentityDigestV1::new(PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V4);
         digest.field(terminal.identities.function().as_bytes());
         digest.field(abi.identity().as_bytes());
@@ -633,7 +1243,7 @@ fn construct_complete_request_v1<'tcx>(
         );
     }
 
-    InertSemanticMirRequestV1::new_with_callables(
+    let semantic_mir = InertSemanticMirRequestV1::new_with_callables(
         target,
         types,
         Vec::new(),
@@ -644,7 +1254,93 @@ fn construct_complete_request_v1<'tcx>(
         plan.roots().to_vec(),
     )
     .and_then(|request| request.admit_current_production(SemanticMirLimitsV1::default()))
-    .map_err(ProductionSemanticImportErrorV1::SemanticSchema)
+    .map_err(ProductionSemanticImportErrorV1::SemanticSchema)?;
+    validate_execution_terminal_carriage_v1(tcx, plan, kernel_contexts, &semantic_mir)?;
+    Ok(semantic_mir)
+}
+
+fn validate_execution_terminal_carriage_v1(
+    tcx: TyCtxt<'_>,
+    plan: &ProductionSemanticPreflightPlanV1<'_>,
+    kernel_contexts: &AuthenticatedProductionKernelContextsV1,
+    semantic_mir: &AdmittedInertSemanticMirV1,
+) -> Result<(), ProductionSemanticImportErrorV1> {
+    use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1 as Expansion;
+
+    let function_count = plan.function_producers().len();
+    let mut execution_records = 0_usize;
+    let mut roster_mask = 0_u64;
+    for (terminal_index, terminal) in plan.terminal_producers().iter().enumerate() {
+        let Expansion::Execution(execution) = terminal.expansion else {
+            continue;
+        };
+        let callable = semantic_mir
+            .callables()
+            .get(function_count + terminal_index)
+            .ok_or_else(|| body_owner_table_mismatch_v1("execution terminal callable index"))?;
+        let SemanticCallableDeclV1::CompilerIntrinsic {
+            binding,
+            operation: SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract },
+            ..
+        } = callable
+        else {
+            return Err(body_owner_table_mismatch_v1(
+                "execution terminal must be a V17 ExecutionCapability callable",
+            ));
+        };
+        if semantic_mir.wire_version() != SemanticMirWireVersionV1::V17
+            || binding.identity() != terminal.identities.function()
+            || binding.abi().identity() != terminal.abi.identity
+            || contract.source_identity() != terminal.identities.function()
+        {
+            return Err(body_owner_table_mismatch_v1(
+                "execution terminal V17 identity carriage",
+            ));
+        }
+
+        execution_records += 1;
+        roster_mask |= 1_u64 << execution.identity_tag();
+        if !crate::env_flag(crate::VERBOSE_ENV) {
+            continue;
+        }
+
+        let terminal_index = u32::try_from(terminal_index)
+            .map_err(|_| ProductionSemanticImportErrorV1::RootIdentityMismatch)?;
+        let root = capability_memory_root_for_terminal_v1(
+            plan,
+            kernel_contexts,
+            terminal_index,
+            terminal.expansion,
+        )?;
+        let (root, span, helper_chain) =
+            capability_terminal_site_v1(tcx, plan, terminal_index, root);
+        let def_id = terminal.instance.def_id();
+        eprintln!(
+            "[FE2O3-CAP-AUDIT001] root={root} span={span} helper_chain={helper_chain} stage=semantic-mir-v17 terminal={execution:?} diagnostic={:?} provider_crate={} provider={} provider_item_sha256={} monomorphization_sha256={} generic_types_sha256={} const_generics_sha256={} fn_abi_sha256={} source={:?} signature={:?} workgroup_brand={:?} epoch_before={:?} epoch_after={:?} obligations=0x{:04x} operation={:?} trap=false",
+            execution.trusted_device_item(),
+            tcx.crate_name(def_id.krate),
+            tcx.def_path_str(def_id),
+            crate::encode_hex(terminal.identities.item_definition().as_bytes()),
+            crate::encode_hex(terminal.identities.monomorphization().as_bytes()),
+            crate::encode_hex(terminal.identities.generic_type_arguments().as_bytes()),
+            crate::encode_hex(terminal.identities.const_generic_arguments().as_bytes()),
+            crate::encode_hex(binding.abi().identity().as_bytes()),
+            terminal.source.provenance,
+            contract.signature(),
+            contract.workgroup_brand(),
+            contract.epoch_before(),
+            contract.epoch_after(),
+            contract.obligations().bits(),
+            contract.operation(),
+        );
+    }
+    if crate::env_flag(crate::VERBOSE_ENV) {
+        eprintln!(
+            "[FE2O3-CAP-AUDIT002] root=authenticated-set span=authenticated-set helper_chain=authenticated-closure stage=semantic-mir-v17 wire={} execution_records={execution_records} roster_mask=0x{roster_mask:010x} trap_records=0",
+            semantic_mir.wire_version().as_u16(),
+        );
+    }
+    Ok(())
 }
 
 fn build_body_request_owner_v1<'tcx>(
@@ -861,12 +1557,2560 @@ fn semantic_kernel_source_contract_v1(
     .map_err(ProductionSemanticImportErrorV1::SemanticSchema)
 }
 
+fn capability_memory_root_for_terminal_v1<'a>(
+    plan: &ProductionSemanticPreflightPlanV1<'_>,
+    contexts: &'a AuthenticatedProductionKernelContextsV1,
+    terminal: u32,
+    expansion: crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1,
+) -> Result<Option<&'a AuthenticatedProductionKernelContextRootV1>, ProductionSemanticImportErrorV1>
+{
+    use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1 as Expansion;
+    let is_capability_terminal = matches!(
+        expansion,
+        Expansion::CapabilityGlobalBindReadOnly
+            | Expansion::CapabilityGlobalBindDisjointWrite
+            | Expansion::CapabilityGlobalLoad
+            | Expansion::CapabilityGlobalStore
+            | Expansion::Invocation3DIndex1D
+            | Expansion::Execution(_)
+    );
+    if !is_capability_terminal {
+        return Ok(None);
+    }
+
+    let callers = plan
+        .terminal_expansion_producers()
+        .iter()
+        .filter(|recipe| recipe.terminal == terminal && recipe.expansion == expansion)
+        .map(|recipe| recipe.caller)
+        .collect::<BTreeSet<_>>();
+    if callers.is_empty() {
+        return Err(body_owner_table_mismatch_v1(
+            "capability terminal call ownership",
+        ));
+    }
+
+    let edges = plan
+        .direct_call_producers()
+        .iter()
+        .map(|edge| (edge.caller, edge.callee))
+        .collect::<Vec<_>>();
+    authenticate_capability_memory_root_v1(
+        contexts,
+        &callers,
+        &edges,
+        matches!(
+            expansion,
+            Expansion::CapabilityGlobalBindReadOnly
+                | Expansion::CapabilityGlobalBindDisjointWrite
+                | Expansion::Execution(
+                    crate::production_semantic_terminal_v1::ProductionExecutionTerminalV1::BindAtomicView
+                )
+                | Expansion::Execution(
+                    crate::production_semantic_terminal_v1::ProductionExecutionTerminalV1::GlobalBindExclusiveReadWrite
+                )
+        ),
+    )
+    .map(Some)
+}
+
+fn authenticate_capability_memory_root_v1<'a>(
+    contexts: &'a AuthenticatedProductionKernelContextsV1,
+    callers: &BTreeSet<SemanticFunctionIdV1>,
+    edges: &[(SemanticFunctionIdV1, SemanticFunctionIdV1)],
+    bind_must_be_root: bool,
+) -> Result<&'a AuthenticatedProductionKernelContextRootV1, ProductionSemanticImportErrorV1> {
+    let mut selected = None;
+    for caller in callers.iter().copied() {
+        let roots = contexts
+            .roots
+            .iter()
+            .filter(|root| semantic_function_reaches_v1(root.selected_root, caller, edges))
+            .collect::<Vec<_>>();
+        let [root] = roots.as_slice() else {
+            return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                "typed-global terminal is not owned by exactly one authenticated kernel root",
+            ));
+        };
+        if bind_must_be_root && caller != root.selected_root {
+            return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                "typed-global binding is not issued directly by its physical kernel root",
+            ));
+        }
+        match selected {
+            None => selected = Some(*root),
+            Some(previous) if std::ptr::eq(previous, *root) => {}
+            Some(_) => {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "typed-global terminal is shared across authenticated kernel roots",
+                ));
+            }
+        }
+    }
+    selected.ok_or_else(|| body_owner_table_mismatch_v1("typed-global terminal call ownership"))
+}
+
+fn semantic_function_reaches_v1(
+    root: SemanticFunctionIdV1,
+    target: SemanticFunctionIdV1,
+    edges: &[(SemanticFunctionIdV1, SemanticFunctionIdV1)],
+) -> bool {
+    let mut pending = vec![root];
+    let mut visited = BTreeSet::new();
+    while let Some(current) = pending.pop() {
+        if current == target {
+            return true;
+        }
+        if !visited.insert(current) {
+            continue;
+        }
+        pending.extend(
+            edges
+                .iter()
+                .filter_map(|(caller, callee)| (*caller == current).then_some(*callee)),
+        );
+    }
+    false
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RustCapabilityMemoryRoleV1<'tcx> {
+    ReadOnly,
+    ExclusiveReadWrite,
+    DisjointWrite {
+        index_space: Ty<'tcx>,
+        mapping: SemanticDisjointIndexSpaceV1,
+    },
+    AtomicReadWrite {
+        scope: Ty<'tcx>,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RustCapabilityMemoryViewV1<'tcx> {
+    element: Ty<'tcx>,
+    role: RustCapabilityMemoryRoleV1<'tcx>,
+    brand: RustKernelBrandV1<'tcx>,
+    kernel: Ty<'tcx>,
+    target: Ty<'tcx>,
+    launch: Ty<'tcx>,
+}
+
+fn rust_capability_memory_view_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<RustCapabilityMemoryViewV1<'tcx>> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    if trusted_device_items::classify(tcx, definition.did())
+        != Some(TrustedDeviceItem::CapabilityMemoryView)
+    {
+        return None;
+    }
+    let arguments = arguments.types().collect::<Vec<_>>();
+    let [element, space, role, brand] = arguments.as_slice() else {
+        return None;
+    };
+    if !rust_supported_capability_memory_scalar_v1(*element)
+        || !rust_is_exact_trusted_marker_v1(
+            tcx,
+            *space,
+            TrustedDeviceItem::CapabilityGlobalAddressSpace,
+        )
+    {
+        return None;
+    }
+    let role = if rust_is_exact_trusted_marker_v1(tcx, *role, TrustedDeviceItem::CapabilityReadOnly)
+    {
+        RustCapabilityMemoryRoleV1::ReadOnly
+    } else if rust_is_exact_trusted_marker_v1(
+        tcx,
+        *role,
+        TrustedDeviceItem::CapabilityExclusiveReadWrite,
+    ) {
+        RustCapabilityMemoryRoleV1::ExclusiveReadWrite
+    } else if let Some(role_arguments) =
+        rust_trusted_adt_type_arguments_v1(tcx, *role, TrustedDeviceItem::CapabilityDisjointWrite)
+    {
+        let [index_space] = role_arguments.as_slice() else {
+            return None;
+        };
+        RustCapabilityMemoryRoleV1::DisjointWrite {
+            index_space: *index_space,
+            mapping: rust_disjoint_index_space_v1(tcx, *index_space)?,
+        }
+    } else {
+        let role_arguments = rust_trusted_adt_type_arguments_v1(
+            tcx,
+            *role,
+            TrustedDeviceItem::CapabilityAtomicReadWrite,
+        )?;
+        let [scope] = role_arguments.as_slice() else {
+            return None;
+        };
+        RustCapabilityMemoryRoleV1::AtomicReadWrite { scope: *scope }
+    };
+    let brand = rust_kernel_brand_v1(tcx, *brand)?;
+    Some(RustCapabilityMemoryViewV1 {
+        element: *element,
+        role,
+        brand,
+        kernel: brand.kernel,
+        target: brand.target,
+        launch: brand.launch,
+    })
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RustKernelBrandV1<'tcx> {
+    ty: Ty<'tcx>,
+    kernel: Ty<'tcx>,
+    target: Ty<'tcx>,
+    launch: Ty<'tcx>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RustExecutionMemoryRoleV1<'tcx> {
+    ReadOnly,
+    ExclusiveReadWrite,
+    DisjointWrite {
+        index_space: Ty<'tcx>,
+    },
+    AtomicReadWrite {
+        scope: Ty<'tcx>,
+        semantic_scope: SemanticExecutionMemoryScopeV1,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RustWorkgroupMemoryBrandV1<'tcx> {
+    ty: Ty<'tcx>,
+    kernel_brand: RustKernelBrandV1<'tcx>,
+    epoch: Ty<'tcx>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RustExecutionMemoryBrandV1<'tcx> {
+    Kernel(RustKernelBrandV1<'tcx>),
+    Workgroup(RustWorkgroupMemoryBrandV1<'tcx>),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RustExecutionMemoryViewV1<'tcx> {
+    ty: Ty<'tcx>,
+    element: Ty<'tcx>,
+    space: SemanticExecutionMemoryAddressSpaceV1,
+    role: RustExecutionMemoryRoleV1<'tcx>,
+    brand: RustExecutionMemoryBrandV1<'tcx>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RustWorkgroupCapabilityV1<'tcx> {
+    kernel_brand: RustKernelBrandV1<'tcx>,
+    epoch: Ty<'tcx>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RustSubgroupV1<'tcx> {
+    width: u32,
+    kernel_brand: RustKernelBrandV1<'tcx>,
+    epoch: Ty<'tcx>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RustExecutionLdsStateV1 {
+    Uninitialized,
+    InvocationInitialized,
+    Published,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RustWorkgroupLdsV1<'tcx> {
+    ty: Ty<'tcx>,
+    element: Ty<'tcx>,
+    elements: u64,
+    state: RustExecutionLdsStateV1,
+    kernel_brand: RustKernelBrandV1<'tcx>,
+    epoch: Ty<'tcx>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RustPendingAsyncCopyV1<'tcx> {
+    element: Ty<'tcx>,
+    elements: u64,
+    kernel_brand: RustKernelBrandV1<'tcx>,
+    epoch: Ty<'tcx>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RustWorkgroupEpochV1<'tcx> {
+    kernel_brand: RustKernelBrandV1<'tcx>,
+    epoch: Ty<'tcx>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RustScopedAtomicV1<'tcx> {
+    ty: Ty<'tcx>,
+    element: Ty<'tcx>,
+    address_space: SemanticExecutionMemoryAddressSpaceV1,
+    scope: Ty<'tcx>,
+    kernel_brand: RustKernelBrandV1<'tcx>,
+    epoch: Ty<'tcx>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RustMatrixCapabilityV1<'tcx> {
+    ty: Ty<'tcx>,
+    subgroup_brand: Ty<'tcx>,
+    width: u32,
+    kernel_brand: RustKernelBrandV1<'tcx>,
+    epoch: Ty<'tcx>,
+}
+
+fn rust_exact_reviewed_adt_arguments_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+    expected_path: &str,
+) -> Option<GenericArgsRef<'tcx>> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    trusted_device_items::is_exact_reviewed_provider_definition_v1(
+        tcx,
+        definition.did(),
+        expected_path,
+    )
+    .then_some(arguments)
+}
+
+fn rust_kernel_brand_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<RustKernelBrandV1<'tcx>> {
+    let arguments = rust_exact_reviewed_adt_arguments_v1(
+        tcx,
+        ty,
+        "fe2o3_device::context::KernelCapabilityBrand",
+    )?;
+    let types = arguments.types().collect::<Vec<_>>();
+    let [kernel, target, launch] = types.as_slice() else {
+        return None;
+    };
+    Some(RustKernelBrandV1 {
+        ty,
+        kernel: *kernel,
+        target: *target,
+        launch: *launch,
+    })
+}
+
+fn rust_workgroup_memory_brand_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<RustWorkgroupMemoryBrandV1<'tcx>> {
+    let arguments =
+        rust_trusted_adt_type_arguments_v1(tcx, ty, TrustedDeviceItem::WorkgroupMemoryBrand)?;
+    let [kernel_brand, epoch] = arguments.as_slice() else {
+        return None;
+    };
+    Some(RustWorkgroupMemoryBrandV1 {
+        ty,
+        kernel_brand: rust_kernel_brand_v1(tcx, *kernel_brand)?,
+        epoch: *epoch,
+    })
+}
+
+fn rust_execution_memory_view_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<RustExecutionMemoryViewV1<'tcx>> {
+    let arguments =
+        rust_trusted_adt_type_arguments_v1(tcx, ty, TrustedDeviceItem::CapabilityMemoryView)?;
+    let [element, space, role, brand] = arguments.as_slice() else {
+        return None;
+    };
+    if !rust_supported_capability_memory_scalar_v1(*element) {
+        return None;
+    }
+    let space = if rust_is_exact_trusted_marker_v1(
+        tcx,
+        *space,
+        TrustedDeviceItem::CapabilityPrivateAddressSpace,
+    ) {
+        SemanticExecutionMemoryAddressSpaceV1::Private
+    } else if rust_is_exact_trusted_marker_v1(
+        tcx,
+        *space,
+        TrustedDeviceItem::CapabilityGlobalAddressSpace,
+    ) {
+        SemanticExecutionMemoryAddressSpaceV1::Global
+    } else if rust_is_exact_trusted_marker_v1(
+        tcx,
+        *space,
+        TrustedDeviceItem::CapabilityWorkgroupAddressSpace,
+    ) {
+        SemanticExecutionMemoryAddressSpaceV1::Workgroup
+    } else {
+        return None;
+    };
+    let role = if rust_is_exact_trusted_marker_v1(tcx, *role, TrustedDeviceItem::CapabilityReadOnly)
+    {
+        RustExecutionMemoryRoleV1::ReadOnly
+    } else if rust_is_exact_trusted_marker_v1(
+        tcx,
+        *role,
+        TrustedDeviceItem::CapabilityExclusiveReadWrite,
+    ) {
+        RustExecutionMemoryRoleV1::ExclusiveReadWrite
+    } else if let Some(arguments) =
+        rust_trusted_adt_type_arguments_v1(tcx, *role, TrustedDeviceItem::CapabilityDisjointWrite)
+    {
+        let [index_space] = arguments.as_slice() else {
+            return None;
+        };
+        RustExecutionMemoryRoleV1::DisjointWrite {
+            index_space: *index_space,
+        }
+    } else {
+        let arguments = rust_trusted_adt_type_arguments_v1(
+            tcx,
+            *role,
+            TrustedDeviceItem::CapabilityAtomicReadWrite,
+        )?;
+        let [scope] = arguments.as_slice() else {
+            return None;
+        };
+        RustExecutionMemoryRoleV1::AtomicReadWrite {
+            scope: *scope,
+            semantic_scope: rust_execution_scope_v1(tcx, *scope)?,
+        }
+    };
+    let brand = match space {
+        SemanticExecutionMemoryAddressSpaceV1::Private
+        | SemanticExecutionMemoryAddressSpaceV1::Global => {
+            RustExecutionMemoryBrandV1::Kernel(rust_kernel_brand_v1(tcx, *brand)?)
+        }
+        SemanticExecutionMemoryAddressSpaceV1::Workgroup => {
+            RustExecutionMemoryBrandV1::Workgroup(rust_workgroup_memory_brand_v1(tcx, *brand)?)
+        }
+    };
+    Some(RustExecutionMemoryViewV1 {
+        ty,
+        element: *element,
+        space,
+        role,
+        brand,
+    })
+}
+
+fn rust_workgroup_capability_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<RustWorkgroupCapabilityV1<'tcx>> {
+    let arguments = rust_trusted_adt_type_arguments_v1(
+        tcx,
+        ty,
+        TrustedDeviceItem::ExecutionWorkgroupCapability,
+    )?;
+    let [kernel_brand, epoch] = arguments.as_slice() else {
+        return None;
+    };
+    Some(RustWorkgroupCapabilityV1 {
+        kernel_brand: rust_kernel_brand_v1(tcx, *kernel_brand)?,
+        epoch: *epoch,
+    })
+}
+
+fn rust_subgroup_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<RustSubgroupV1<'tcx>> {
+    let arguments = rust_trusted_adt_type_arguments_v1(
+        tcx,
+        ty,
+        TrustedDeviceItem::ExecutionSubgroupCapability,
+    )?;
+    let [width_ty, kernel_brand, epoch] = arguments.as_slice() else {
+        return None;
+    };
+    Some(RustSubgroupV1 {
+        width: rust_subgroup_width_v1(tcx, *width_ty)?,
+        kernel_brand: rust_kernel_brand_v1(tcx, *kernel_brand)?,
+        epoch: *epoch,
+    })
+}
+
+fn rust_workgroup_lds_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<RustWorkgroupLdsV1<'tcx>> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    if trusted_device_items::classify(tcx, definition.did())
+        != Some(TrustedDeviceItem::ExecutionWorkgroupLds)
+    {
+        return None;
+    }
+    let types = arguments.types().collect::<Vec<_>>();
+    let [element, state, kernel_brand, epoch] = types.as_slice() else {
+        return None;
+    };
+    let mut consts = arguments.consts();
+    let elements = consts.next()?.try_to_target_usize(tcx)?;
+    if consts.next().is_some() || elements == 0 {
+        return None;
+    }
+    Some(RustWorkgroupLdsV1 {
+        ty,
+        element: *element,
+        elements,
+        state: rust_execution_lds_state_v1(tcx, *state)?,
+        kernel_brand: rust_kernel_brand_v1(tcx, *kernel_brand)?,
+        epoch: *epoch,
+    })
+}
+
+fn rust_pending_async_copy_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<RustPendingAsyncCopyV1<'tcx>> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    if trusted_device_items::classify(tcx, definition.did())
+        != Some(TrustedDeviceItem::ExecutionPendingAsyncCopy)
+    {
+        return None;
+    }
+    let types = arguments.types().collect::<Vec<_>>();
+    let [element, kernel_brand, epoch] = types.as_slice() else {
+        return None;
+    };
+    let mut consts = arguments.consts();
+    let elements = consts.next()?.try_to_target_usize(tcx)?;
+    if consts.next().is_some() || elements == 0 {
+        return None;
+    }
+    Some(RustPendingAsyncCopyV1 {
+        element: *element,
+        elements,
+        kernel_brand: rust_kernel_brand_v1(tcx, *kernel_brand)?,
+        epoch: *epoch,
+    })
+}
+
+fn rust_workgroup_epoch_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<RustWorkgroupEpochV1<'tcx>> {
+    let arguments =
+        rust_exact_reviewed_adt_arguments_v1(tcx, ty, "fe2o3_device::execution::WorkgroupEpoch")?;
+    let types = arguments.types().collect::<Vec<_>>();
+    let [kernel_brand, epoch] = types.as_slice() else {
+        return None;
+    };
+    Some(RustWorkgroupEpochV1 {
+        kernel_brand: rust_kernel_brand_v1(tcx, *kernel_brand)?,
+        epoch: *epoch,
+    })
+}
+
+fn rust_scoped_atomic_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<RustScopedAtomicV1<'tcx>> {
+    let arguments =
+        rust_exact_reviewed_adt_arguments_v1(tcx, ty, "fe2o3_device::execution::ScopedAtomic")?;
+    let types = arguments.types().collect::<Vec<_>>();
+    let [element, space, scope, workgroup_brand, epoch] = types.as_slice() else {
+        return None;
+    };
+    let address_space = if rust_is_exact_trusted_marker_v1(
+        tcx,
+        *space,
+        TrustedDeviceItem::CapabilityGlobalAddressSpace,
+    ) {
+        SemanticExecutionMemoryAddressSpaceV1::Global
+    } else if rust_is_exact_trusted_marker_v1(
+        tcx,
+        *space,
+        TrustedDeviceItem::CapabilityWorkgroupAddressSpace,
+    ) {
+        SemanticExecutionMemoryAddressSpaceV1::Workgroup
+    } else {
+        return None;
+    };
+    let workgroup_arguments = rust_exact_reviewed_adt_arguments_v1(
+        tcx,
+        *workgroup_brand,
+        "fe2o3_device::execution::WorkgroupBrand",
+    )?
+    .types()
+    .collect::<Vec<_>>();
+    let [kernel_brand] = workgroup_arguments.as_slice() else {
+        return None;
+    };
+    Some(RustScopedAtomicV1 {
+        ty,
+        element: *element,
+        address_space,
+        scope: *scope,
+        kernel_brand: rust_kernel_brand_v1(tcx, *kernel_brand)?,
+        epoch: *epoch,
+    })
+}
+
+fn rust_matrix_capability_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<RustMatrixCapabilityV1<'tcx>> {
+    let arguments =
+        rust_exact_reviewed_adt_arguments_v1(tcx, ty, "fe2o3_device::matrix::MatrixCapability")?;
+    let types = arguments.types().collect::<Vec<_>>();
+    let [subgroup_brand] = types.as_slice() else {
+        return None;
+    };
+    let brand_arguments = rust_exact_reviewed_adt_arguments_v1(
+        tcx,
+        *subgroup_brand,
+        "fe2o3_device::execution::SubgroupBrand",
+    )?
+    .types()
+    .collect::<Vec<_>>();
+    let [width, kernel_brand, epoch] = brand_arguments.as_slice() else {
+        return None;
+    };
+    Some(RustMatrixCapabilityV1 {
+        ty,
+        subgroup_brand: *subgroup_brand,
+        width: rust_subgroup_width_v1(tcx, *width)?,
+        kernel_brand: rust_kernel_brand_v1(tcx, *kernel_brand)?,
+        epoch: *epoch,
+    })
+}
+
+fn rust_execution_lds_state_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<RustExecutionLdsStateV1> {
+    [
+        (
+            "fe2o3_device::execution::WorkgroupLdsUninitialized",
+            RustExecutionLdsStateV1::Uninitialized,
+        ),
+        (
+            "fe2o3_device::execution::WorkgroupLdsInvocationInitialized",
+            RustExecutionLdsStateV1::InvocationInitialized,
+        ),
+        (
+            "fe2o3_device::execution::WorkgroupLdsPublished",
+            RustExecutionLdsStateV1::Published,
+        ),
+    ]
+    .into_iter()
+    .find_map(|(path, state)| {
+        rust_exact_reviewed_adt_arguments_v1(tcx, ty, path)
+            .is_some_and(|arguments| arguments.iter().next().is_none())
+            .then_some(state)
+    })
+}
+
+fn rust_subgroup_width_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<u32> {
+    [
+        ("fe2o3_device::wave::SubgroupWidth32", 32),
+        ("fe2o3_device::wave::SubgroupWidth64", 64),
+    ]
+    .into_iter()
+    .find_map(|(path, width)| {
+        rust_exact_reviewed_adt_arguments_v1(tcx, ty, path)
+            .is_some_and(|arguments| arguments.iter().next().is_none())
+            .then_some(width)
+    })
+}
+
+fn rust_initial_epoch_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    rust_exact_reviewed_adt_arguments_v1(tcx, ty, "fe2o3_device::execution::InitialEpoch")
+        .is_some_and(|arguments| arguments.iter().next().is_none())
+}
+
+fn rust_next_epoch_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+    let arguments =
+        rust_exact_reviewed_adt_arguments_v1(tcx, ty, "fe2o3_device::execution::NextEpoch")?;
+    let types = arguments.types().collect::<Vec<_>>();
+    let [previous] = types.as_slice() else {
+        return None;
+    };
+    Some(*previous)
+}
+
+fn rust_execution_scope_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<SemanticExecutionMemoryScopeV1> {
+    use SemanticExecutionMemoryScopeV1 as Scope;
+    [
+        ("fe2o3_device::execution::SystemScope", Scope::System),
+        ("fe2o3_device::execution::DeviceScope", Scope::Device),
+        ("fe2o3_device::execution::WorkgroupScope", Scope::Workgroup),
+        ("fe2o3_device::execution::SubgroupScope", Scope::Subgroup),
+    ]
+    .into_iter()
+    .find_map(|(path, scope)| {
+        rust_exact_reviewed_adt_arguments_v1(tcx, ty, path)
+            .is_some_and(|arguments| arguments.iter().next().is_none())
+            .then_some(scope)
+    })
+}
+
+fn rust_execution_ordering_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<SemanticExecutionMemoryOrderingV1> {
+    use SemanticExecutionMemoryOrderingV1 as Ordering;
+    [
+        ("fe2o3_device::execution::Relaxed", Ordering::Relaxed),
+        ("fe2o3_device::execution::Acquire", Ordering::Acquire),
+        ("fe2o3_device::execution::Release", Ordering::Release),
+        (
+            "fe2o3_device::execution::AcquireRelease",
+            Ordering::AcquireRelease,
+        ),
+        (
+            "fe2o3_device::execution::SequentiallyConsistent",
+            Ordering::SequentiallyConsistent,
+        ),
+    ]
+    .into_iter()
+    .find_map(|(path, ordering)| {
+        rust_exact_reviewed_adt_arguments_v1(tcx, ty, path)
+            .is_some_and(|arguments| arguments.iter().next().is_none())
+            .then_some(ordering)
+    })
+}
+
+fn rust_execution_spaces_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<SemanticExecutionMemorySpacesV1> {
+    use SemanticExecutionMemorySpacesV1 as Spaces;
+    [
+        ("fe2o3_device::execution::GlobalMemory", Spaces::Global),
+        (
+            "fe2o3_device::execution::WorkgroupMemory",
+            Spaces::Workgroup,
+        ),
+        (
+            "fe2o3_device::execution::GlobalAndWorkgroupMemory",
+            Spaces::GlobalAndWorkgroup,
+        ),
+    ]
+    .into_iter()
+    .find_map(|(path, spaces)| {
+        rust_exact_reviewed_adt_arguments_v1(tcx, ty, path)
+            .is_some_and(|arguments| arguments.iter().next().is_none())
+            .then_some(spaces)
+    })
+}
+
+fn rust_execution_semantics_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> Option<SemanticExecutionMemorySemanticsV1> {
+    let types = instance.args.types().collect::<Vec<_>>();
+    let scopes = types
+        .iter()
+        .filter_map(|ty| rust_execution_scope_v1(tcx, *ty))
+        .collect::<Vec<_>>();
+    let orderings = types
+        .iter()
+        .filter_map(|ty| rust_execution_ordering_v1(tcx, *ty))
+        .collect::<Vec<_>>();
+    let spaces = types
+        .iter()
+        .filter_map(|ty| rust_execution_spaces_v1(tcx, *ty))
+        .collect::<Vec<_>>();
+    let ([scope], [ordering], [spaces]) =
+        (scopes.as_slice(), orderings.as_slice(), spaces.as_slice())
+    else {
+        return None;
+    };
+    Some(SemanticExecutionMemorySemanticsV1::new(
+        *scope, *ordering, *spaces,
+    ))
+}
+
+fn rust_execution_atomic_orders_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> Vec<SemanticExecutionMemoryOrderingV1> {
+    instance
+        .args
+        .types()
+        .filter_map(|ty| rust_execution_ordering_v1(tcx, ty))
+        .collect()
+}
+
+fn rust_execution_generic_scope_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> Option<(Ty<'tcx>, SemanticExecutionMemoryScopeV1)> {
+    let scopes = instance
+        .args
+        .types()
+        .filter_map(|ty| rust_execution_scope_v1(tcx, ty).map(|scope| (ty, scope)))
+        .collect::<Vec<_>>();
+    let [scope] = scopes.as_slice() else {
+        return None;
+    };
+    Some(*scope)
+}
+
+fn rust_execution_generic_width_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> Option<u32> {
+    let widths = instance
+        .args
+        .types()
+        .filter_map(|ty| rust_subgroup_width_v1(tcx, ty))
+        .collect::<Vec<_>>();
+    let [width] = widths.as_slice() else {
+        return None;
+    };
+    Some(*width)
+}
+
+fn rust_execution_generic_extent_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> Option<u64> {
+    let extents = instance
+        .args
+        .consts()
+        .filter_map(|value| value.try_to_target_usize(tcx))
+        .collect::<Vec<_>>();
+    let [extent] = extents.as_slice() else {
+        return None;
+    };
+    (*extent != 0).then_some(*extent)
+}
+
+fn rust_tuple_fields_v1(ty: Ty<'_>) -> Option<Vec<Ty<'_>>> {
+    let TyKind::Tuple(fields) = ty.kind() else {
+        return None;
+    };
+    Some(fields.iter().collect())
+}
+
+fn rust_unit_v1(ty: Ty<'_>) -> bool {
+    rust_tuple_fields_v1(ty).is_some_and(|fields| fields.is_empty())
+}
+
+fn rust_kernel_brand_matches_root_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    brand: RustKernelBrandV1<'tcx>,
+    root: &AuthenticatedProductionKernelContextRootV1,
+) -> bool {
+    *rustc_type_identity_v1(tcx, brand.kernel).as_bytes() == root.kernel_marker_identity
+}
+
+fn rust_same_kernel_brand_v1<'tcx>(
+    left: RustKernelBrandV1<'tcx>,
+    right: RustKernelBrandV1<'tcx>,
+) -> bool {
+    left.ty == right.ty
+        && left.kernel == right.kernel
+        && left.target == right.target
+        && left.launch == right.launch
+}
+
+fn rust_execution_epoch_transition_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    before: Ty<'tcx>,
+    after: Ty<'tcx>,
+) -> bool {
+    rust_next_epoch_v1(tcx, after) == Some(before)
+}
+
+fn rust_execution_memory_role_contract_v1<'tcx>(
+    role: RustExecutionMemoryRoleV1<'tcx>,
+) -> (
+    SemanticExecutionMemoryAccessV1,
+    Option<Ty<'tcx>>,
+    Option<SemanticExecutionMemoryScopeV1>,
+) {
+    match role {
+        RustExecutionMemoryRoleV1::ReadOnly => {
+            (SemanticExecutionMemoryAccessV1::ReadOnly, None, None)
+        }
+        RustExecutionMemoryRoleV1::ExclusiveReadWrite => (
+            SemanticExecutionMemoryAccessV1::ExclusiveReadWrite,
+            None,
+            None,
+        ),
+        RustExecutionMemoryRoleV1::DisjointWrite { index_space } => (
+            SemanticExecutionMemoryAccessV1::DisjointWrite,
+            Some(index_space),
+            None,
+        ),
+        RustExecutionMemoryRoleV1::AtomicReadWrite { semantic_scope, .. } => (
+            SemanticExecutionMemoryAccessV1::AtomicReadWrite,
+            None,
+            Some(semantic_scope),
+        ),
+    }
+}
+
+fn rust_execution_view_matches_workgroup_v1<'tcx>(
+    view: RustExecutionMemoryViewV1<'tcx>,
+    workgroup: RustWorkgroupCapabilityV1<'tcx>,
+) -> bool {
+    matches!(
+        view.brand,
+        RustExecutionMemoryBrandV1::Workgroup(brand)
+            if rust_same_kernel_brand_v1(brand.kernel_brand, workgroup.kernel_brand)
+                && brand.epoch == workgroup.epoch
+    )
+}
+
+fn rust_workgroup_memory_index_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+    item: TrustedDeviceItem,
+) -> Option<(Ty<'tcx>, RustWorkgroupMemoryBrandV1<'tcx>)> {
+    let arguments = rust_trusted_adt_type_arguments_v1(tcx, ty, item)?;
+    let [index_space, brand] = arguments.as_slice() else {
+        return None;
+    };
+    rust_is_exact_trusted_marker_v1(
+        tcx,
+        *index_space,
+        TrustedDeviceItem::WorkgroupMemoryIndexSpace1D,
+    )
+    .then_some((*index_space, rust_workgroup_memory_brand_v1(tcx, *brand)?))
+}
+
+fn rust_branded_index_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+    item: TrustedDeviceItem,
+) -> Option<(Ty<'tcx>, Ty<'tcx>)> {
+    let arguments = rust_trusted_adt_type_arguments_v1(tcx, ty, item)?;
+    let [index_space, brand] = arguments.as_slice() else {
+        return None;
+    };
+    Some((*index_space, *brand))
+}
+
+fn rust_mut_raw_pointer_element_v1(ty: Ty<'_>) -> Option<Ty<'_>> {
+    match *ty.kind() {
+        TyKind::RawPtr(pointee, rustc_hir::Mutability::Mut) => Some(pointee),
+        _ => None,
+    }
+}
+
+fn rust_kernel_context_axes_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<(Ty<'tcx>, Ty<'tcx>, Ty<'tcx>)> {
+    let arguments = rust_trusted_adt_type_arguments_v1(tcx, ty, TrustedDeviceItem::KernelContext)?;
+    let [kernel, target, launch] = arguments.as_slice() else {
+        return None;
+    };
+    Some((*kernel, *target, *launch))
+}
+
+fn rust_invocation_brand_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+    let arguments = rust_trusted_adt_type_arguments_v1(tcx, ty, TrustedDeviceItem::Invocation3D)?;
+    let [brand] = arguments.as_slice() else {
+        return None;
+    };
+    Some(*brand)
+}
+
+fn semantic_type_for_rust_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    types: &[SemanticTypeDeclV1],
+    ty: Ty<'tcx>,
+) -> Result<SemanticTypeIdV1, ProductionSemanticImportErrorV1> {
+    let identity = rustc_type_identity_v1(tcx, ty);
+    let mut matches = types
+        .iter()
+        .enumerate()
+        .filter(|(_, declaration)| declaration.identity() == identity);
+    let Some((index, _)) = matches.next() else {
+        return Err(body_owner_table_mismatch_v1(
+            "typed-global nested semantic type identity",
+        ));
+    };
+    if matches.next().is_some() {
+        return Err(body_owner_table_mismatch_v1(
+            "typed-global duplicate semantic type identity",
+        ));
+    }
+    Ok(SemanticTypeIdV1::from_index(u32::try_from(index).map_err(
+        |_| ProductionSemanticImportErrorV1::RootIdentityMismatch,
+    )?))
+}
+
+fn capability_memory_provenance_v1(
+    root: &AuthenticatedProductionKernelContextRootV1,
+    contexts: &AuthenticatedProductionKernelContextsV1,
+) -> Result<SemanticKernelCapabilityProvenanceV1, ProductionSemanticImportErrorV1> {
+    SemanticKernelCapabilityProvenanceV1::new(
+        root.selected_root,
+        SemanticKernelBindingIdentityV1::from_sha256(root.kernel_binding),
+        SemanticKernelCapabilityFrontendUnitIdentityV1::from_sha256(
+            contexts.frontend_unit_identity,
+        ),
+        SemanticTypeIdentityV1::from_sha256(root.kernel_marker_identity),
+        SemanticKernelCapabilityTargetBrandIdentityV1::from_sha256(contexts.target_brand_identity),
+        SemanticKernelCapabilityLaunchBrandIdentityV1::from_sha256(root.launch_brand_identity),
+        SemanticKernelCapabilityIssuanceIdentityV1::from_sha256(root.issuance_identity),
+    )
+    .map_err(ProductionSemanticImportErrorV1::SemanticSchema)
+}
+
+fn require_capability_memory_terminal_abi_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    abi: &SemanticFunctionAbiV1,
+    types: &[SemanticTypeDeclV1],
+    rust_inputs: &[Ty<'tcx>],
+    rust_output: Ty<'tcx>,
+    expected_ownership: &[SemanticSourceArgumentOwnershipV1],
+) -> Result<(), ProductionSemanticImportErrorV1> {
+    if abi.canon_abi() != SemanticCanonAbiV1::Rust
+        || abi.extern_abi() != SemanticExternAbiV1::Rust
+        || abi.can_unwind()
+        || abi.c_variadic()
+        || !abi.hidden_arguments().is_empty()
+        || abi.source_input_types().len() != rust_inputs.len()
+        || abi.arguments().len() != rust_inputs.len()
+        || abi.adjusted_arguments().len() != rust_inputs.len()
+        || usize::try_from(abi.fixed_count()).ok() != Some(rust_inputs.len())
+        || abi.source_argument_ownership() != expected_ownership
+        || abi.return_value().ty() != abi.source_output_type()
+        || abi.return_value().adjusted().is_some()
+        || abi.return_value().pointee_override().is_some()
+    {
+        return Err(body_owner_table_mismatch_v1("typed-global terminal FnAbi"));
+    }
+    for ((semantic, rust), physical) in abi
+        .source_input_types()
+        .iter()
+        .zip(rust_inputs)
+        .zip(abi.arguments())
+    {
+        if physical.role() != SemanticAbiArgumentRoleV1::Source
+            || physical.ty() != *semantic
+            || physical.value().adjusted().is_some()
+            || physical.value().pointee_override().is_some()
+            || *semantic != semantic_type_for_rust_v1(tcx, types, *rust)?
+        {
+            return Err(body_owner_table_mismatch_v1(
+                "typed-global terminal physical input ABI",
+            ));
+        }
+    }
+    if abi.source_output_type() != semantic_type_for_rust_v1(tcx, types, rust_output)? {
+        return Err(body_owner_table_mismatch_v1(
+            "typed-global terminal output type identity",
+        ));
+    }
+    Ok(())
+}
+
+fn require_execution_terminal_abi_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    abi: &SemanticFunctionAbiV1,
+    types: &[SemanticTypeDeclV1],
+    rust_inputs: &[Ty<'tcx>],
+    rust_output: Ty<'tcx>,
+) -> Result<(), ProductionSemanticImportErrorV1> {
+    let ownership = rust_inputs
+        .iter()
+        .map(|ty| match ty.kind() {
+            TyKind::Ref(_, _, rustc_hir::Mutability::Not) => {
+                SemanticSourceArgumentOwnershipV1::SharedBorrow
+            }
+            TyKind::Ref(_, _, rustc_hir::Mutability::Mut) => {
+                SemanticSourceArgumentOwnershipV1::UniqueBorrow
+            }
+            _ => SemanticSourceArgumentOwnershipV1::ByValue,
+        })
+        .collect::<Vec<_>>();
+    require_capability_memory_terminal_abi_v1(tcx, abi, types, rust_inputs, rust_output, &ownership)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execution_capability_operation_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    abi: &SemanticFunctionAbiV1,
+    operation: SemanticExecutionCapabilityOperationV1,
+    root: &AuthenticatedProductionKernelContextRootV1,
+    contexts: &AuthenticatedProductionKernelContextsV1,
+    kernel_brand: RustKernelBrandV1<'tcx>,
+    epoch_before: Ty<'tcx>,
+    epoch_after: Option<Ty<'tcx>>,
+    source_identity: SemanticFunctionIdentityV1,
+) -> Result<SemanticCompilerIntrinsicOperationV1, ProductionSemanticImportErrorV1> {
+    if !rust_kernel_brand_matches_root_v1(tcx, kernel_brand, root) {
+        return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+            "execution terminal kernel brand does not match its authenticated root",
+        ));
+    }
+    let signature = SemanticExecutionCapabilitySignatureV1::new(
+        abi.source_input_types(),
+        abi.source_output_type(),
+    )
+    .map_err(ProductionSemanticImportErrorV1::SemanticSchema)?;
+    let contract = SemanticExecutionCapabilityContractV1::new(
+        operation,
+        signature,
+        capability_memory_provenance_v1(root, contexts)?,
+        rustc_type_identity_v1(tcx, kernel_brand.ty),
+        rustc_type_identity_v1(tcx, epoch_before),
+        epoch_after.map(|epoch| rustc_type_identity_v1(tcx, epoch)),
+        source_identity,
+    )
+    .map_err(ProductionSemanticImportErrorV1::SemanticSchema)?;
+    Ok(SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract })
+}
+
+fn kernel_scoped_execution_capability_operation_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    abi: &SemanticFunctionAbiV1,
+    operation: SemanticExecutionCapabilityOperationV1,
+    root: &AuthenticatedProductionKernelContextRootV1,
+    contexts: &AuthenticatedProductionKernelContextsV1,
+    kernel_brand: RustKernelBrandV1<'tcx>,
+    source_identity: SemanticFunctionIdentityV1,
+) -> Result<SemanticCompilerIntrinsicOperationV1, ProductionSemanticImportErrorV1> {
+    if !rust_kernel_brand_matches_root_v1(tcx, kernel_brand, root) {
+        return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+            "kernel-scoped execution terminal brand does not match its authenticated root",
+        ));
+    }
+    let signature = SemanticExecutionCapabilitySignatureV1::new(
+        abi.source_input_types(),
+        abi.source_output_type(),
+    )
+    .map_err(ProductionSemanticImportErrorV1::SemanticSchema)?;
+    let contract = SemanticExecutionCapabilityContractV1::new_kernel_scoped(
+        operation,
+        signature,
+        capability_memory_provenance_v1(root, contexts)?,
+        source_identity,
+    )
+    .map_err(ProductionSemanticImportErrorV1::SemanticSchema)?;
+    Ok(SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract })
+}
+
+fn rust_supported_capability_memory_scalar_v1(ty: Ty<'_>) -> bool {
+    matches!(
+        ty.kind(),
+        TyKind::Int(IntTy::I8 | IntTy::I16 | IntTy::I32 | IntTy::I64)
+            | TyKind::Uint(UintTy::U8 | UintTy::U16 | UintTy::U32 | UintTy::U64)
+            | TyKind::Float(FloatTy::F32 | FloatTy::F64)
+    )
+}
+
+fn rust_supported_atomic_scalar_v1(ty: Ty<'_>) -> bool {
+    matches!(
+        ty.kind(),
+        TyKind::Int(IntTy::I32 | IntTy::I64) | TyKind::Uint(UintTy::U32 | UintTy::U64)
+    )
+}
+
+fn rust_supported_collective_scalar_v1(ty: Ty<'_>) -> bool {
+    matches!(
+        ty.kind(),
+        TyKind::Int(IntTy::I32) | TyKind::Uint(UintTy::U32) | TyKind::Float(FloatTy::F32)
+    )
+}
+
+fn rust_reference_with_mutability_v1(
+    ty: Ty<'_>,
+    mutability: rustc_hir::Mutability,
+) -> Option<Ty<'_>> {
+    match *ty.kind() {
+        TyKind::Ref(_, pointee, actual) if actual == mutability => Some(pointee),
+        _ => None,
+    }
+}
+
+fn rust_shared_reference_v1(ty: Ty<'_>) -> Option<Ty<'_>> {
+    rust_reference_with_mutability_v1(ty, rustc_hir::Mutability::Not)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn raw_memory_terminal_operation_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    terminal: crate::production_semantic_terminal_v1::ProductionExecutionTerminalV1,
+    abi: &SemanticFunctionAbiV1,
+    types: &[SemanticTypeDeclV1],
+    rust_inputs: &[Ty<'tcx>],
+    rust_output: Ty<'tcx>,
+    root: &AuthenticatedProductionKernelContextRootV1,
+    contexts: &AuthenticatedProductionKernelContextsV1,
+    source_identity: SemanticFunctionIdentityV1,
+) -> Result<SemanticCompilerIntrinsicOperationV1, ProductionSemanticImportErrorV1> {
+    use crate::production_semantic_terminal_v1::ProductionExecutionTerminalV1 as Terminal;
+
+    if tcx.fn_sig(instance.def_id()).skip_binder().safety() != rustc_hir::Safety::Unsafe
+        || !matches!(rust_inputs[2].kind(), TyKind::Uint(UintTy::Usize))
+        || !rust_is_trusted_adt_v1(
+            tcx,
+            rust_inputs[3],
+            TrustedDeviceItem::UnsafeRawMemoryObligation,
+        )
+    {
+        return Err(body_owner_table_mismatch_v1(
+            "raw-memory terminal safety, extent, or obligation ABI",
+        ));
+    }
+    let view = rust_execution_memory_view_v1(tcx, rust_output)
+        .ok_or_else(|| body_owner_table_mismatch_v1("raw-memory output view"))?;
+    if rust_mut_raw_pointer_element_v1(rust_inputs[1]) != Some(view.element) {
+        return Err(body_owner_table_mismatch_v1("raw-memory pointer element"));
+    }
+    let (access, index_space, atomic_scope) = rust_execution_memory_role_contract_v1(view.role);
+    let operation = SemanticExecutionCapabilityOperationV1::RawMemoryBind {
+        authority: abi.source_input_types()[0],
+        pointer: abi.source_input_types()[1],
+        length: abi.source_input_types()[2],
+        view: abi.source_output_type(),
+        element: semantic_type_for_rust_v1(tcx, types, view.element)?,
+        space: view.space,
+        access,
+        index_space: index_space
+            .map(|ty| semantic_type_for_rust_v1(tcx, types, ty))
+            .transpose()?,
+        atomic_scope,
+        unsafe_obligation: abi.source_input_types()[3],
+    };
+    match terminal {
+        Terminal::PrivateMemoryFromRawParts => {
+            let context = rust_shared_reference_v1(rust_inputs[0])
+                .and_then(|ty| rust_kernel_context_axes_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("private raw-memory context"))?;
+            let RustExecutionMemoryBrandV1::Kernel(kernel_brand) = view.brand else {
+                return Err(body_owner_table_mismatch_v1("private raw-memory brand"));
+            };
+            if view.space != SemanticExecutionMemoryAddressSpaceV1::Private
+                || context
+                    != (
+                        kernel_brand.kernel,
+                        kernel_brand.target,
+                        kernel_brand.launch,
+                    )
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "private raw-memory terminal substituted address space or kernel brand",
+                ));
+            }
+            kernel_scoped_execution_capability_operation_v1(
+                tcx,
+                abi,
+                operation,
+                root,
+                contexts,
+                kernel_brand,
+                source_identity,
+            )
+        }
+        Terminal::WorkgroupMemoryFromRawParts => {
+            let workgroup = rust_shared_reference_v1(rust_inputs[0])
+                .and_then(|ty| rust_workgroup_capability_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("workgroup raw-memory authority"))?;
+            if view.space != SemanticExecutionMemoryAddressSpaceV1::Workgroup
+                || !rust_execution_view_matches_workgroup_v1(view, workgroup)
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "workgroup raw-memory terminal substituted address space, brand, or epoch",
+                ));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                operation,
+                root,
+                contexts,
+                workgroup.kernel_brand,
+                workgroup.epoch,
+                None,
+                source_identity,
+            )
+        }
+        _ => Err(body_owner_table_mismatch_v1("raw-memory terminal kind")),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn memory_access_terminal_operation_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    terminal: crate::production_semantic_terminal_v1::ProductionExecutionTerminalV1,
+    abi: &SemanticFunctionAbiV1,
+    types: &[SemanticTypeDeclV1],
+    rust_inputs: &[Ty<'tcx>],
+    rust_output: Ty<'tcx>,
+    root: &AuthenticatedProductionKernelContextRootV1,
+    contexts: &AuthenticatedProductionKernelContextsV1,
+    source_identity: SemanticFunctionIdentityV1,
+) -> Result<SemanticCompilerIntrinsicOperationV1, ProductionSemanticImportErrorV1> {
+    use crate::production_semantic_terminal_v1::ProductionExecutionTerminalV1 as Terminal;
+
+    let store = matches!(
+        terminal,
+        Terminal::PrivateMemoryExclusiveStore
+            | Terminal::PrivateMemoryDisjointStore
+            | Terminal::WorkgroupMemoryExclusiveStore
+            | Terminal::WorkgroupMemoryDisjointStore
+    );
+    let workgroup_scoped = matches!(
+        terminal,
+        Terminal::WorkgroupMemoryLoad
+            | Terminal::WorkgroupMemoryExclusiveLoad
+            | Terminal::WorkgroupMemoryExclusiveStore
+            | Terminal::WorkgroupMemoryDisjointStore
+    );
+    let view_ty = if store {
+        rust_reference_with_mutability_v1(rust_inputs[0], rustc_hir::Mutability::Mut)
+    } else {
+        rust_shared_reference_v1(rust_inputs[0])
+    }
+    .ok_or_else(|| body_owner_table_mismatch_v1("memory-access view borrow"))?;
+    let view = rust_execution_memory_view_v1(tcx, view_ty)
+        .ok_or_else(|| body_owner_table_mismatch_v1("memory-access view"))?;
+    let expected_space = if workgroup_scoped {
+        SemanticExecutionMemoryAddressSpaceV1::Workgroup
+    } else {
+        SemanticExecutionMemoryAddressSpaceV1::Private
+    };
+    let expected_role = match terminal {
+        Terminal::PrivateMemoryLoad | Terminal::WorkgroupMemoryLoad => {
+            RustExecutionMemoryRoleV1::ReadOnly
+        }
+        Terminal::PrivateMemoryExclusiveLoad
+        | Terminal::PrivateMemoryExclusiveStore
+        | Terminal::WorkgroupMemoryExclusiveLoad
+        | Terminal::WorkgroupMemoryExclusiveStore => RustExecutionMemoryRoleV1::ExclusiveReadWrite,
+        Terminal::PrivateMemoryDisjointStore | Terminal::WorkgroupMemoryDisjointStore => {
+            let RustExecutionMemoryRoleV1::DisjointWrite { index_space } = view.role else {
+                return Err(body_owner_table_mismatch_v1("disjoint memory-access role"));
+            };
+            RustExecutionMemoryRoleV1::DisjointWrite { index_space }
+        }
+        _ => return Err(body_owner_table_mismatch_v1("memory-access terminal kind")),
+    };
+    if view.space != expected_space || view.role != expected_role {
+        return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+            "memory-access terminal substituted address space or role",
+        ));
+    }
+    let workgroup = workgroup_scoped
+        .then(|| {
+            rust_inputs
+                .get(1)
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_workgroup_capability_v1(tcx, ty))
+        })
+        .flatten();
+    if workgroup_scoped
+        && !workgroup
+            .is_some_and(|workgroup| rust_execution_view_matches_workgroup_v1(view, workgroup))
+    {
+        return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+            "workgroup memory access substituted its workgroup brand or epoch",
+        ));
+    }
+    let index_position = usize::from(workgroup_scoped) + 1;
+    let index_ty = rust_inputs[index_position];
+    match view.role {
+        RustExecutionMemoryRoleV1::DisjointWrite { index_space } => {
+            let (witness_space, witness_brand) =
+                rust_branded_index_v1(tcx, index_ty, TrustedDeviceItem::DisjointIndex)
+                    .ok_or_else(|| body_owner_table_mismatch_v1("disjoint memory witness"))?;
+            let expected_brand = match view.brand {
+                RustExecutionMemoryBrandV1::Kernel(brand) => brand.ty,
+                RustExecutionMemoryBrandV1::Workgroup(brand) => brand.ty,
+            };
+            if witness_space != index_space || witness_brand != expected_brand {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "disjoint memory access substituted index space or brand",
+                ));
+            }
+        }
+        _ if !matches!(index_ty.kind(), TyKind::Uint(UintTy::Usize)) => {
+            return Err(body_owner_table_mismatch_v1("memory-access integer index"));
+        }
+        _ => {}
+    }
+    let (access, _, _) = rust_execution_memory_role_contract_v1(view.role);
+    let operation = if store {
+        let value_position = index_position + 1;
+        if rust_inputs.get(value_position).copied() != Some(view.element)
+            || !matches!(rust_output.kind(), TyKind::Bool)
+        {
+            return Err(body_owner_table_mismatch_v1("memory-store value or result"));
+        }
+        SemanticExecutionCapabilityOperationV1::MemoryStore {
+            view: abi.source_input_types()[0],
+            workgroup: workgroup_scoped.then_some(abi.source_input_types()[1]),
+            index: abi.source_input_types()[index_position],
+            element: semantic_type_for_rust_v1(tcx, types, view.element)?,
+            result: abi.source_output_type(),
+            space: view.space,
+            access,
+        }
+    } else {
+        if rust_option_payload_v1(tcx, rust_output) != Some(view.element) {
+            return Err(body_owner_table_mismatch_v1("memory-load option element"));
+        }
+        SemanticExecutionCapabilityOperationV1::MemoryLoad {
+            view: abi.source_input_types()[0],
+            workgroup: workgroup_scoped.then_some(abi.source_input_types()[1]),
+            index: abi.source_input_types()[index_position],
+            option: abi.source_output_type(),
+            element: semantic_type_for_rust_v1(tcx, types, view.element)?,
+            space: view.space,
+            access,
+        }
+    };
+    match view.brand {
+        RustExecutionMemoryBrandV1::Kernel(kernel_brand) => {
+            kernel_scoped_execution_capability_operation_v1(
+                tcx,
+                abi,
+                operation,
+                root,
+                contexts,
+                kernel_brand,
+                source_identity,
+            )
+        }
+        RustExecutionMemoryBrandV1::Workgroup(_) => {
+            let workgroup = workgroup.expect("workgroup-scoped view checked above");
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                operation,
+                root,
+                contexts,
+                workgroup.kernel_brand,
+                workgroup.epoch,
+                None,
+                source_identity,
+            )
+        }
+    }
+}
+
+fn execution_terminal_operation_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    terminal: crate::production_semantic_terminal_v1::ProductionExecutionTerminalV1,
+    abi: &SemanticFunctionAbiV1,
+    types: &[SemanticTypeDeclV1],
+    capability_root: Option<&AuthenticatedProductionKernelContextRootV1>,
+    source_identity: SemanticFunctionIdentityV1,
+    kernel_contexts: &AuthenticatedProductionKernelContextsV1,
+) -> Result<SemanticCompilerIntrinsicOperationV1, ProductionSemanticImportErrorV1> {
+    use crate::production_semantic_terminal_v1::ProductionExecutionTerminalV1 as Terminal;
+
+    let signature = tcx.instantiate_bound_regions_with_erased(
+        tcx.fn_sig(instance.def_id())
+            .instantiate(tcx, instance.args),
+    );
+    let rust_inputs = signature.inputs();
+    let rust_output = signature.output();
+    if rust_inputs.len() != terminal.source_argument_count() {
+        return Err(body_owner_table_mismatch_v1(
+            "execution terminal source arity",
+        ));
+    }
+    require_execution_terminal_abi_v1(tcx, abi, types, rust_inputs, rust_output)?;
+    let root = capability_root.ok_or(ProductionSemanticImportErrorV1::KernelContextBinding(
+        "execution terminal lacks unique authenticated kernel-root custody",
+    ))?;
+    let type_id = |ty| semantic_type_for_rust_v1(tcx, types, ty);
+
+    match terminal {
+        Terminal::PrivateMemoryFromRawParts | Terminal::WorkgroupMemoryFromRawParts => {
+            raw_memory_terminal_operation_v1(
+                tcx,
+                instance,
+                terminal,
+                abi,
+                types,
+                rust_inputs,
+                rust_output,
+                root,
+                kernel_contexts,
+                source_identity,
+            )
+        }
+        Terminal::PrivateMemoryLoad
+        | Terminal::PrivateMemoryExclusiveLoad
+        | Terminal::PrivateMemoryExclusiveStore
+        | Terminal::PrivateMemoryDisjointStore
+        | Terminal::WorkgroupMemoryLoad
+        | Terminal::WorkgroupMemoryExclusiveLoad
+        | Terminal::WorkgroupMemoryExclusiveStore
+        | Terminal::WorkgroupMemoryDisjointStore => memory_access_terminal_operation_v1(
+            tcx,
+            terminal,
+            abi,
+            types,
+            rust_inputs,
+            rust_output,
+            root,
+            kernel_contexts,
+            source_identity,
+        ),
+        Terminal::PrivateMemoryAllocate => {
+            let context_ty = rust_shared_reference_v1(rust_inputs[0])
+                .ok_or_else(|| body_owner_table_mismatch_v1("private allocation context"))?;
+            let context = rust_kernel_context_axes_v1(tcx, context_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("private allocation context type"))?;
+            let view = rust_execution_memory_view_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("private allocation output"))?;
+            let RustExecutionMemoryBrandV1::Kernel(kernel_brand) = view.brand else {
+                return Err(body_owner_table_mismatch_v1("private allocation brand"));
+            };
+            let elements = rust_execution_generic_extent_v1(tcx, instance)
+                .ok_or_else(|| body_owner_table_mismatch_v1("private allocation extent"))?;
+            if view.space != SemanticExecutionMemoryAddressSpaceV1::Private
+                || view.role != RustExecutionMemoryRoleV1::ExclusiveReadWrite
+                || context
+                    != (
+                        kernel_brand.kernel,
+                        kernel_brand.target,
+                        kernel_brand.launch,
+                    )
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "private allocation substituted element, role, space, or kernel brand",
+                ));
+            }
+            kernel_scoped_execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::PrivateMemoryAllocate {
+                    context: abi.source_input_types()[0],
+                    view: abi.source_output_type(),
+                    element: type_id(view.element)?,
+                    elements,
+                },
+                root,
+                kernel_contexts,
+                kernel_brand,
+                source_identity,
+            )
+        }
+        Terminal::WorkgroupMemoryIndex1D => {
+            let workgroup = rust_shared_reference_v1(rust_inputs[0])
+                .and_then(|ty| rust_workgroup_capability_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("workgroup-memory index authority"))?;
+            let witness = rust_option_payload_v1(tcx, rust_output)
+                .and_then(|ty| {
+                    rust_workgroup_memory_index_v1(tcx, ty, TrustedDeviceItem::ThreadIndex)
+                })
+                .ok_or_else(|| body_owner_table_mismatch_v1("workgroup-memory index output"))?;
+            if !rust_same_kernel_brand_v1(workgroup.kernel_brand, witness.1.kernel_brand)
+                || workgroup.epoch != witness.1.epoch
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "workgroup-memory index substituted index space, workgroup brand, or epoch",
+                ));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::WorkgroupMemoryIndex {
+                    workgroup: abi.source_input_types()[0],
+                    witness: abi.source_output_type(),
+                },
+                root,
+                kernel_contexts,
+                workgroup.kernel_brand,
+                workgroup.epoch,
+                None,
+                source_identity,
+            )
+        }
+        Terminal::WorkgroupMemoryAllocate => {
+            let workgroup = rust_shared_reference_v1(rust_inputs[0])
+                .and_then(|ty| rust_workgroup_capability_v1(tcx, ty))
+                .ok_or_else(|| {
+                    body_owner_table_mismatch_v1("workgroup-memory allocation authority")
+                })?;
+            let view = rust_execution_memory_view_v1(tcx, rust_output).ok_or_else(|| {
+                body_owner_table_mismatch_v1("workgroup-memory allocation output")
+            })?;
+            let RustExecutionMemoryRoleV1::DisjointWrite { index_space } = view.role else {
+                return Err(body_owner_table_mismatch_v1(
+                    "workgroup-memory allocation role",
+                ));
+            };
+            let elements = rust_execution_generic_extent_v1(tcx, instance).ok_or_else(|| {
+                body_owner_table_mismatch_v1("workgroup-memory allocation extent")
+            })?;
+            if view.space != SemanticExecutionMemoryAddressSpaceV1::Workgroup
+                || !rust_is_exact_trusted_marker_v1(
+                    tcx,
+                    index_space,
+                    TrustedDeviceItem::WorkgroupMemoryIndexSpace1D,
+                )
+                || !rust_execution_view_matches_workgroup_v1(view, workgroup)
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "workgroup-memory allocation substituted role, index space, brand, or epoch",
+                ));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::WorkgroupMemoryAllocate {
+                    workgroup: abi.source_input_types()[0],
+                    view: abi.source_output_type(),
+                    element: type_id(view.element)?,
+                    elements,
+                    index_space: type_id(index_space)?,
+                },
+                root,
+                kernel_contexts,
+                workgroup.kernel_brand,
+                workgroup.epoch,
+                None,
+                source_identity,
+            )
+        }
+        Terminal::WorkgroupMemoryPublish => {
+            let input_workgroup =
+                rust_workgroup_capability_v1(tcx, rust_inputs[0]).ok_or_else(|| {
+                    body_owner_table_mismatch_v1("workgroup-memory publish authority")
+                })?;
+            let input_view = rust_execution_memory_view_v1(tcx, rust_inputs[1])
+                .ok_or_else(|| body_owner_table_mismatch_v1("workgroup-memory publish input"))?;
+            let output = rust_tuple_fields_v1(rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("workgroup-memory publish output"))?;
+            let [output_workgroup_ty, output_view_ty] = output.as_slice() else {
+                return Err(body_owner_table_mismatch_v1(
+                    "workgroup-memory publish tuple",
+                ));
+            };
+            let output_workgroup = rust_workgroup_capability_v1(tcx, *output_workgroup_ty)
+                .ok_or_else(|| {
+                    body_owner_table_mismatch_v1("workgroup-memory publish output authority")
+                })?;
+            let output_view =
+                rust_execution_memory_view_v1(tcx, *output_view_ty).ok_or_else(|| {
+                    body_owner_table_mismatch_v1("workgroup-memory publish output view")
+                })?;
+            let RustExecutionMemoryRoleV1::DisjointWrite { index_space } = input_view.role else {
+                return Err(body_owner_table_mismatch_v1(
+                    "workgroup-memory publish input role",
+                ));
+            };
+            if input_view.space != SemanticExecutionMemoryAddressSpaceV1::Workgroup
+                || output_view.space != SemanticExecutionMemoryAddressSpaceV1::Workgroup
+                || output_view.role != RustExecutionMemoryRoleV1::ReadOnly
+                || !rust_is_exact_trusted_marker_v1(
+                    tcx,
+                    index_space,
+                    TrustedDeviceItem::WorkgroupMemoryIndexSpace1D,
+                )
+                || input_view.element != output_view.element
+                || !rust_execution_view_matches_workgroup_v1(input_view, input_workgroup)
+                || !rust_same_kernel_brand_v1(
+                    input_workgroup.kernel_brand,
+                    output_workgroup.kernel_brand,
+                )
+                || !rust_execution_epoch_transition_v1(
+                    tcx,
+                    input_workgroup.epoch,
+                    output_workgroup.epoch,
+                )
+                || !rust_execution_view_matches_workgroup_v1(output_view, output_workgroup)
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "workgroup-memory publish substituted role, element, brand, or epoch transition",
+                ));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::WorkgroupMemoryPublish {
+                    input_workgroup: abi.source_input_types()[0],
+                    input_view: abi.source_input_types()[1],
+                    output_view: type_id(output_view.ty)?,
+                    transition: abi.source_output_type(),
+                    element: type_id(input_view.element)?,
+                },
+                root,
+                kernel_contexts,
+                input_workgroup.kernel_brand,
+                input_workgroup.epoch,
+                Some(output_workgroup.epoch),
+                source_identity,
+            )
+        }
+        Terminal::BindAtomicView => {
+            let context = rust_inputs
+                .first()
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_kernel_context_axes_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("atomic-view context"))?;
+            let physical_element = rust_inputs
+                .get(1)
+                .and_then(|ty| rust_shared_slice_element_v1(*ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("atomic-view physical slice"))?;
+            let view = rust_capability_memory_view_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("atomic-view output"))?;
+            let RustCapabilityMemoryRoleV1::AtomicReadWrite { scope } = view.role else {
+                return Err(body_owner_table_mismatch_v1("atomic-view role"));
+            };
+            let (generic_scope, semantic_scope) = rust_execution_generic_scope_v1(tcx, instance)
+                .ok_or_else(|| body_owner_table_mismatch_v1("atomic-view scope argument"))?;
+            if context != (view.kernel, view.target, view.launch)
+                || view.element != physical_element
+                || scope != generic_scope
+                || !rust_supported_atomic_scalar_v1(view.element)
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "atomic-view binding substituted context, element, scope, or kernel brand",
+                ));
+            }
+            kernel_scoped_execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::Atomic {
+                    kind: SemanticExecutionAtomicKindV1::BindGlobalView,
+                    authority: abi.source_input_types()[0],
+                    location_input: abi.source_input_types()[1],
+                    location: abi.source_output_type(),
+                    element: type_id(view.element)?,
+                    operand: None,
+                    replacement: None,
+                    result: abi.source_output_type(),
+                    address_space: SemanticExecutionMemoryAddressSpaceV1::Global,
+                    scope: semantic_scope,
+                    success: None,
+                    failure: None,
+                },
+                root,
+                kernel_contexts,
+                view.brand,
+                source_identity,
+            )
+        }
+        Terminal::WorkgroupDerive => {
+            let context_ty = rust_inputs
+                .first()
+                .and_then(|ty| rust_reference_with_mutability_v1(*ty, rustc_hir::Mutability::Mut))
+                .ok_or_else(|| body_owner_table_mismatch_v1("workgroup-derive context"))?;
+            let context = rust_kernel_context_axes_v1(tcx, context_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("workgroup-derive context type"))?;
+            let workgroup = rust_workgroup_capability_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("workgroup-derive output"))?;
+            if context
+                != (
+                    workgroup.kernel_brand.kernel,
+                    workgroup.kernel_brand.target,
+                    workgroup.kernel_brand.launch,
+                )
+                || !rust_initial_epoch_v1(tcx, workgroup.epoch)
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "workgroup derivation substituted its context brand or initial epoch",
+                ));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::WorkgroupDerive {
+                    context: abi.source_input_types()[0],
+                    workgroup: abi.source_output_type(),
+                },
+                root,
+                kernel_contexts,
+                workgroup.kernel_brand,
+                workgroup.epoch,
+                None,
+                source_identity,
+            )
+        }
+        Terminal::SubgroupDerive => {
+            let workgroup = rust_inputs
+                .first()
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_workgroup_capability_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("subgroup-derive workgroup"))?;
+            let subgroup = rust_subgroup_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("subgroup-derive output"))?;
+            if !rust_same_kernel_brand_v1(workgroup.kernel_brand, subgroup.kernel_brand)
+                || workgroup.epoch != subgroup.epoch
+                || rust_execution_generic_width_v1(tcx, instance) != Some(subgroup.width)
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "subgroup derivation substituted width, workgroup brand, or epoch",
+                ));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::SubgroupDerive {
+                    workgroup: abi.source_input_types()[0],
+                    subgroup: abi.source_output_type(),
+                    width: subgroup.width,
+                },
+                root,
+                kernel_contexts,
+                workgroup.kernel_brand,
+                workgroup.epoch,
+                None,
+                source_identity,
+            )
+        }
+        Terminal::LdsAllocate => {
+            let workgroup = rust_inputs
+                .first()
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_workgroup_capability_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("LDS allocation workgroup"))?;
+            let lds = rust_workgroup_lds_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("LDS allocation output"))?;
+            if lds.state != RustExecutionLdsStateV1::Uninitialized
+                || !rust_same_kernel_brand_v1(workgroup.kernel_brand, lds.kernel_brand)
+                || workgroup.epoch != lds.epoch
+                || rust_execution_generic_extent_v1(tcx, instance) != Some(lds.elements)
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "LDS allocation substituted extent, state, workgroup brand, or epoch",
+                ));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::LdsAllocate {
+                    workgroup: abi.source_input_types()[0],
+                    lds: abi.source_output_type(),
+                    element: type_id(lds.element)?,
+                    elements: lds.elements,
+                },
+                root,
+                kernel_contexts,
+                workgroup.kernel_brand,
+                workgroup.epoch,
+                None,
+                source_identity,
+            )
+        }
+        Terminal::WorkgroupBarrier => {
+            let input = rust_workgroup_capability_v1(tcx, rust_inputs[0])
+                .ok_or_else(|| body_owner_table_mismatch_v1("workgroup barrier input"))?;
+            let output = rust_workgroup_capability_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("workgroup barrier output"))?;
+            let semantics = rust_execution_semantics_v1(tcx, instance)
+                .ok_or_else(|| body_owner_table_mismatch_v1("workgroup barrier semantics"))?;
+            if !rust_same_kernel_brand_v1(input.kernel_brand, output.kernel_brand)
+                || !rust_execution_epoch_transition_v1(tcx, input.epoch, output.epoch)
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "workgroup barrier substituted its brand or epoch transition",
+                ));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::WorkgroupBarrier {
+                    input_workgroup: abi.source_input_types()[0],
+                    output_workgroup: abi.source_output_type(),
+                    semantics,
+                },
+                root,
+                kernel_contexts,
+                input.kernel_brand,
+                input.epoch,
+                Some(output.epoch),
+                source_identity,
+            )
+        }
+        Terminal::SubgroupBarrier => {
+            let input = rust_workgroup_capability_v1(tcx, rust_inputs[0])
+                .ok_or_else(|| body_owner_table_mismatch_v1("subgroup barrier workgroup"))?;
+            let subgroup = rust_subgroup_v1(tcx, rust_inputs[1])
+                .ok_or_else(|| body_owner_table_mismatch_v1("subgroup barrier subgroup"))?;
+            let output = rust_tuple_fields_v1(rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("subgroup barrier output tuple"))?;
+            let [output_workgroup_ty, output_subgroup_ty] = output.as_slice() else {
+                return Err(body_owner_table_mismatch_v1(
+                    "subgroup barrier output tuple",
+                ));
+            };
+            let output_workgroup = rust_workgroup_capability_v1(tcx, *output_workgroup_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("subgroup barrier output workgroup"))?;
+            let output_subgroup = rust_subgroup_v1(tcx, *output_subgroup_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("subgroup barrier output subgroup"))?;
+            let semantics = rust_execution_semantics_v1(tcx, instance)
+                .ok_or_else(|| body_owner_table_mismatch_v1("subgroup barrier semantics"))?;
+            if !rust_same_kernel_brand_v1(input.kernel_brand, subgroup.kernel_brand)
+                || !rust_same_kernel_brand_v1(input.kernel_brand, output_workgroup.kernel_brand)
+                || !rust_same_kernel_brand_v1(input.kernel_brand, output_subgroup.kernel_brand)
+                || input.epoch != subgroup.epoch
+                || !rust_execution_epoch_transition_v1(tcx, input.epoch, output_workgroup.epoch)
+                || output_workgroup.epoch != output_subgroup.epoch
+                || subgroup.width != output_subgroup.width
+                || rust_execution_generic_width_v1(tcx, instance) != Some(subgroup.width)
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "subgroup barrier substituted participants, width, brand, or epoch transition",
+                ));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::SubgroupBarrier {
+                    input_workgroup: abi.source_input_types()[0],
+                    semantics,
+                    subgroup: abi.source_input_types()[1],
+                    transition: abi.source_output_type(),
+                    width: subgroup.width,
+                },
+                root,
+                kernel_contexts,
+                input.kernel_brand,
+                input.epoch,
+                Some(output_workgroup.epoch),
+                source_identity,
+            )
+        }
+        Terminal::WorkgroupFence => {
+            let workgroup = rust_inputs
+                .first()
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_workgroup_capability_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("workgroup fence receiver"))?;
+            let semantics = rust_execution_semantics_v1(tcx, instance)
+                .ok_or_else(|| body_owner_table_mismatch_v1("workgroup fence semantics"))?;
+            if !rust_unit_v1(rust_output) {
+                return Err(body_owner_table_mismatch_v1("workgroup fence output"));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::WorkgroupFence {
+                    workgroup: abi.source_input_types()[0],
+                    result: abi.source_output_type(),
+                    semantics,
+                },
+                root,
+                kernel_contexts,
+                workgroup.kernel_brand,
+                workgroup.epoch,
+                None,
+                source_identity,
+            )
+        }
+        Terminal::LdsPublish => {
+            let input = rust_workgroup_capability_v1(tcx, rust_inputs[0])
+                .ok_or_else(|| body_owner_table_mismatch_v1("LDS publish workgroup"))?;
+            let input_lds = rust_workgroup_lds_v1(tcx, rust_inputs[1])
+                .ok_or_else(|| body_owner_table_mismatch_v1("LDS publish input"))?;
+            let output = rust_tuple_fields_v1(rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("LDS publish output tuple"))?;
+            let [output_workgroup_ty, output_lds_ty] = output.as_slice() else {
+                return Err(body_owner_table_mismatch_v1("LDS publish output tuple"));
+            };
+            let output_workgroup = rust_workgroup_capability_v1(tcx, *output_workgroup_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("LDS publish output workgroup"))?;
+            let output_lds = rust_workgroup_lds_v1(tcx, *output_lds_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("LDS publish output LDS"))?;
+            if input_lds.state != RustExecutionLdsStateV1::InvocationInitialized
+                || output_lds.state != RustExecutionLdsStateV1::Published
+                || input_lds.element != output_lds.element
+                || input_lds.elements != output_lds.elements
+                || rust_execution_generic_extent_v1(tcx, instance) != Some(input_lds.elements)
+                || !rust_same_kernel_brand_v1(input.kernel_brand, input_lds.kernel_brand)
+                || !rust_same_kernel_brand_v1(input.kernel_brand, output_workgroup.kernel_brand)
+                || !rust_same_kernel_brand_v1(input.kernel_brand, output_lds.kernel_brand)
+                || input.epoch != input_lds.epoch
+                || !rust_execution_epoch_transition_v1(tcx, input.epoch, output_workgroup.epoch)
+                || output_workgroup.epoch != output_lds.epoch
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "LDS publish substituted state, extent, element, brand, or epoch transition",
+                ));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::LdsPublish {
+                    input_workgroup: abi.source_input_types()[0],
+                    input_lds: abi.source_input_types()[1],
+                    output_lds: type_id(output_lds.ty)?,
+                    transition: abi.source_output_type(),
+                    element: type_id(input_lds.element)?,
+                    elements: input_lds.elements,
+                },
+                root,
+                kernel_contexts,
+                input.kernel_brand,
+                input.epoch,
+                Some(output_workgroup.epoch),
+                source_identity,
+            )
+        }
+        Terminal::AsyncCopy => {
+            let workgroup = rust_inputs
+                .first()
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_workgroup_capability_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("async-copy workgroup"))?;
+            let source = rust_inputs
+                .get(1)
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_capability_memory_view_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("async-copy source"))?;
+            let destination = rust_workgroup_lds_v1(tcx, rust_inputs[3])
+                .ok_or_else(|| body_owner_table_mismatch_v1("async-copy destination"))?;
+            let pending = rust_pending_async_copy_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("async-copy output"))?;
+            if source.role != RustCapabilityMemoryRoleV1::ReadOnly
+                || !matches!(rust_inputs[2].kind(), TyKind::Uint(UintTy::Usize))
+                || destination.state != RustExecutionLdsStateV1::Uninitialized
+                || source.element != destination.element
+                || destination.element != pending.element
+                || destination.elements != pending.elements
+                || rust_execution_generic_extent_v1(tcx, instance) != Some(destination.elements)
+                || !rust_same_kernel_brand_v1(workgroup.kernel_brand, source.brand)
+                || !rust_same_kernel_brand_v1(workgroup.kernel_brand, destination.kernel_brand)
+                || !rust_same_kernel_brand_v1(workgroup.kernel_brand, pending.kernel_brand)
+                || workgroup.epoch != destination.epoch
+                || workgroup.epoch != pending.epoch
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "async copy substituted source role, extent, element, brand, or epoch",
+                ));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::AsyncCopy {
+                    workgroup: abi.source_input_types()[0],
+                    source_reference: abi.source_input_types()[1],
+                    source: pointer_pointee_v1(types, abi.source_input_types()[1])?,
+                    index: abi.source_input_types()[2],
+                    destination: abi.source_input_types()[3],
+                    pending: abi.source_output_type(),
+                    element: type_id(destination.element)?,
+                    elements: destination.elements,
+                },
+                root,
+                kernel_contexts,
+                workgroup.kernel_brand,
+                workgroup.epoch,
+                None,
+                source_identity,
+            )
+        }
+        Terminal::AsyncWait => {
+            let input = rust_workgroup_capability_v1(tcx, rust_inputs[0])
+                .ok_or_else(|| body_owner_table_mismatch_v1("async-wait workgroup"))?;
+            let pending = rust_pending_async_copy_v1(tcx, rust_inputs[1])
+                .ok_or_else(|| body_owner_table_mismatch_v1("async-wait pending state"))?;
+            let output = rust_tuple_fields_v1(rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("async-wait output tuple"))?;
+            let [output_workgroup_ty, output_lds_ty] = output.as_slice() else {
+                return Err(body_owner_table_mismatch_v1("async-wait output tuple"));
+            };
+            let output_workgroup = rust_workgroup_capability_v1(tcx, *output_workgroup_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("async-wait output workgroup"))?;
+            let output_lds = rust_workgroup_lds_v1(tcx, *output_lds_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("async-wait output LDS"))?;
+            if output_lds.state != RustExecutionLdsStateV1::Published
+                || pending.element != output_lds.element
+                || pending.elements != output_lds.elements
+                || rust_execution_generic_extent_v1(tcx, instance) != Some(pending.elements)
+                || !rust_same_kernel_brand_v1(input.kernel_brand, pending.kernel_brand)
+                || !rust_same_kernel_brand_v1(input.kernel_brand, output_workgroup.kernel_brand)
+                || !rust_same_kernel_brand_v1(input.kernel_brand, output_lds.kernel_brand)
+                || input.epoch != pending.epoch
+                || !rust_execution_epoch_transition_v1(tcx, input.epoch, output_workgroup.epoch)
+                || output_workgroup.epoch != output_lds.epoch
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "async wait substituted pending state, extent, element, brand, or epoch",
+                ));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::AsyncWait {
+                    input_workgroup: abi.source_input_types()[0],
+                    pending: abi.source_input_types()[1],
+                    output_lds: type_id(output_lds.ty)?,
+                    transition: abi.source_output_type(),
+                    element: type_id(pending.element)?,
+                    elements: pending.elements,
+                },
+                root,
+                kernel_contexts,
+                input.kernel_brand,
+                input.epoch,
+                Some(output_workgroup.epoch),
+                source_identity,
+            )
+        }
+        Terminal::WorkgroupReduceSum
+        | Terminal::WorkgroupInclusiveScanSum
+        | Terminal::WorkgroupExclusiveScanSum => {
+            let input = rust_workgroup_capability_v1(tcx, rust_inputs[0])
+                .ok_or_else(|| body_owner_table_mismatch_v1("workgroup collective input"))?;
+            let scratch = rust_workgroup_lds_v1(tcx, rust_inputs[1])
+                .ok_or_else(|| body_owner_table_mismatch_v1("workgroup collective scratch"))?;
+            let output = rust_tuple_fields_v1(rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("workgroup collective output"))?;
+            let [output_workgroup_ty, output_scratch_ty, output_value] = output.as_slice() else {
+                return Err(body_owner_table_mismatch_v1("workgroup collective output"));
+            };
+            let output_workgroup = rust_workgroup_capability_v1(tcx, *output_workgroup_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("collective output workgroup"))?;
+            let output_scratch = rust_workgroup_lds_v1(tcx, *output_scratch_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("collective output scratch"))?;
+            if scratch.state != RustExecutionLdsStateV1::Uninitialized
+                || output_scratch.state != RustExecutionLdsStateV1::Uninitialized
+                || !rust_supported_collective_scalar_v1(scratch.element)
+                || rust_inputs[2] != scratch.element
+                || *output_value != scratch.element
+                || scratch.element != output_scratch.element
+                || scratch.elements != output_scratch.elements
+                || rust_execution_generic_extent_v1(tcx, instance) != Some(scratch.elements)
+                || !rust_same_kernel_brand_v1(input.kernel_brand, scratch.kernel_brand)
+                || !rust_same_kernel_brand_v1(input.kernel_brand, output_workgroup.kernel_brand)
+                || !rust_same_kernel_brand_v1(input.kernel_brand, output_scratch.kernel_brand)
+                || input.epoch != scratch.epoch
+                || !rust_execution_epoch_transition_v1(tcx, input.epoch, output_workgroup.epoch)
+                || output_workgroup.epoch != output_scratch.epoch
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "workgroup collective substituted kind, participants, scratch, extent, brand, or epoch",
+                ));
+            }
+            let kind = match terminal {
+                Terminal::WorkgroupReduceSum => SemanticExecutionCollectiveKindV1::ReduceSum,
+                Terminal::WorkgroupInclusiveScanSum => {
+                    SemanticExecutionCollectiveKindV1::InclusiveScanSum
+                }
+                Terminal::WorkgroupExclusiveScanSum => {
+                    SemanticExecutionCollectiveKindV1::ExclusiveScanSum
+                }
+                _ => unreachable!(),
+            };
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::WorkgroupCollective {
+                    kind,
+                    input_workgroup: abi.source_input_types()[0],
+                    scratch: abi.source_input_types()[1],
+                    element: type_id(scratch.element)?,
+                    transition: abi.source_output_type(),
+                    elements: scratch.elements,
+                },
+                root,
+                kernel_contexts,
+                input.kernel_brand,
+                input.epoch,
+                Some(output_workgroup.epoch),
+                source_identity,
+            )
+        }
+        Terminal::BindGlobalAtomicLocation => {
+            let workgroup = rust_inputs
+                .first()
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_workgroup_capability_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("global-atomic workgroup"))?;
+            let view = rust_inputs
+                .get(1)
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_capability_memory_view_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("global-atomic view"))?;
+            let RustCapabilityMemoryRoleV1::AtomicReadWrite { scope } = view.role else {
+                return Err(body_owner_table_mismatch_v1("global-atomic view role"));
+            };
+            let location_ty = rust_option_payload_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("global-atomic output"))?;
+            let location = rust_scoped_atomic_v1(tcx, location_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("global-atomic location"))?;
+            let (generic_scope, semantic_scope) = rust_execution_generic_scope_v1(tcx, instance)
+                .ok_or_else(|| body_owner_table_mismatch_v1("global-atomic scope"))?;
+            if !matches!(rust_inputs[2].kind(), TyKind::Uint(UintTy::Usize))
+                || !rust_supported_atomic_scalar_v1(view.element)
+                || view.element != location.element
+                || scope != generic_scope
+                || scope != location.scope
+                || !rust_same_kernel_brand_v1(workgroup.kernel_brand, view.brand)
+                || !rust_same_kernel_brand_v1(workgroup.kernel_brand, location.kernel_brand)
+                || workgroup.epoch != location.epoch
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "global atomic location substituted view role, scope, element, brand, or epoch",
+                ));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::Atomic {
+                    kind: SemanticExecutionAtomicKindV1::BindGlobalLocation,
+                    authority: abi.source_input_types()[0],
+                    location_input: abi.source_input_types()[1],
+                    location: type_id(location.ty)?,
+                    element: type_id(location.element)?,
+                    operand: Some(abi.source_input_types()[2]),
+                    replacement: None,
+                    result: abi.source_output_type(),
+                    address_space: location.address_space,
+                    scope: semantic_scope,
+                    success: None,
+                    failure: None,
+                },
+                root,
+                kernel_contexts,
+                workgroup.kernel_brand,
+                workgroup.epoch,
+                None,
+                source_identity,
+            )
+        }
+        Terminal::AtomicLoad
+        | Terminal::AtomicStore
+        | Terminal::AtomicFetchAdd
+        | Terminal::AtomicCompareExchange => {
+            let workgroup = rust_inputs
+                .first()
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_workgroup_capability_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("scoped atomic workgroup"))?;
+            let location = rust_inputs
+                .get(1)
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_scoped_atomic_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("scoped atomic location"))?;
+            let (generic_scope, semantic_scope) = rust_execution_generic_scope_v1(tcx, instance)
+                .ok_or_else(|| body_owner_table_mismatch_v1("scoped atomic scope"))?;
+            let orders = rust_execution_atomic_orders_v1(tcx, instance);
+            let (kind, success, failure, value_contract) = match terminal {
+                Terminal::AtomicLoad => (
+                    SemanticExecutionAtomicKindV1::Load,
+                    orders.first().copied(),
+                    None,
+                    rust_inputs.len() == 2 && rust_output == location.element,
+                ),
+                Terminal::AtomicStore => (
+                    SemanticExecutionAtomicKindV1::Store,
+                    orders.first().copied(),
+                    None,
+                    rust_inputs.get(2).copied() == Some(location.element)
+                        && rust_unit_v1(rust_output),
+                ),
+                Terminal::AtomicFetchAdd => (
+                    SemanticExecutionAtomicKindV1::FetchAdd,
+                    orders.first().copied(),
+                    None,
+                    rust_inputs.get(2).copied() == Some(location.element)
+                        && rust_output == location.element,
+                ),
+                Terminal::AtomicCompareExchange => {
+                    let result = rust_result_payloads_v1(tcx, rust_output);
+                    (
+                        SemanticExecutionAtomicKindV1::CompareExchange,
+                        orders.first().copied(),
+                        orders.get(1).copied(),
+                        rust_inputs.get(2).copied() == Some(location.element)
+                            && rust_inputs.get(3).copied() == Some(location.element)
+                            && result == Some((location.element, location.element)),
+                    )
+                }
+                _ => unreachable!(),
+            };
+            let expected_orders = if terminal == Terminal::AtomicCompareExchange {
+                2
+            } else {
+                1
+            };
+            if !rust_supported_atomic_scalar_v1(location.element)
+                || location.scope != generic_scope
+                || !rust_same_kernel_brand_v1(workgroup.kernel_brand, location.kernel_brand)
+                || workgroup.epoch != location.epoch
+                || orders.len() != expected_orders
+                || !value_contract
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "scoped atomic substituted operation, type, scope, order, brand, or epoch",
+                ));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::Atomic {
+                    kind,
+                    authority: abi.source_input_types()[0],
+                    location_input: abi.source_input_types()[1],
+                    location: type_id(location.ty)?,
+                    element: type_id(location.element)?,
+                    operand: abi.source_input_types().get(2).copied(),
+                    replacement: abi.source_input_types().get(3).copied(),
+                    result: abi.source_output_type(),
+                    address_space: location.address_space,
+                    scope: semantic_scope,
+                    success,
+                    failure,
+                },
+                root,
+                kernel_contexts,
+                workgroup.kernel_brand,
+                workgroup.epoch,
+                None,
+                source_identity,
+            )
+        }
+        Terminal::SubgroupFence => {
+            let subgroup = rust_inputs
+                .first()
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_subgroup_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("subgroup fence receiver"))?;
+            let epoch = rust_inputs
+                .get(1)
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_workgroup_epoch_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("subgroup fence epoch"))?;
+            let semantics = rust_execution_semantics_v1(tcx, instance)
+                .ok_or_else(|| body_owner_table_mismatch_v1("subgroup fence semantics"))?;
+            if !rust_unit_v1(rust_output)
+                || !rust_same_kernel_brand_v1(subgroup.kernel_brand, epoch.kernel_brand)
+                || subgroup.epoch != epoch.epoch
+                || rust_execution_generic_width_v1(tcx, instance) != Some(subgroup.width)
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "subgroup fence substituted width, workgroup brand, or epoch",
+                ));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::SubgroupFence {
+                    semantics,
+                    subgroup_reference: abi.source_input_types()[0],
+                    subgroup: pointer_pointee_v1(types, abi.source_input_types()[0])?,
+                    epoch: abi.source_input_types()[1],
+                    result: abi.source_output_type(),
+                    width: subgroup.width,
+                },
+                root,
+                kernel_contexts,
+                subgroup.kernel_brand,
+                subgroup.epoch,
+                None,
+                source_identity,
+            )
+        }
+        Terminal::SubgroupReduceSum | Terminal::SubgroupInclusiveScanSum => {
+            let subgroup = rust_inputs
+                .first()
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_subgroup_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("subgroup collective receiver"))?;
+            let epoch = rust_inputs
+                .get(1)
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_workgroup_epoch_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("subgroup collective epoch"))?;
+            let element = rust_inputs[2];
+            if !rust_supported_collective_scalar_v1(element)
+                || rust_output != element
+                || !rust_same_kernel_brand_v1(subgroup.kernel_brand, epoch.kernel_brand)
+                || subgroup.epoch != epoch.epoch
+                || rust_execution_generic_width_v1(tcx, instance) != Some(subgroup.width)
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "subgroup collective substituted kind, type, width, brand, or epoch",
+                ));
+            }
+            let kind = match terminal {
+                Terminal::SubgroupReduceSum => SemanticExecutionCollectiveKindV1::ReduceSum,
+                Terminal::SubgroupInclusiveScanSum => {
+                    SemanticExecutionCollectiveKindV1::InclusiveScanSum
+                }
+                _ => unreachable!(),
+            };
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::SubgroupCollective {
+                    kind,
+                    subgroup_reference: abi.source_input_types()[0],
+                    subgroup: pointer_pointee_v1(types, abi.source_input_types()[0])?,
+                    epoch: abi.source_input_types()[1],
+                    element: type_id(element)?,
+                    width: subgroup.width,
+                },
+                root,
+                kernel_contexts,
+                subgroup.kernel_brand,
+                subgroup.epoch,
+                None,
+                source_identity,
+            )
+        }
+        Terminal::MatrixAccess => {
+            let subgroup = rust_inputs
+                .first()
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_subgroup_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("matrix-access subgroup"))?;
+            let epoch = rust_inputs
+                .get(1)
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_workgroup_epoch_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("matrix-access epoch"))?;
+            let matrix = rust_matrix_capability_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("matrix-access output"))?;
+            if matrix.width != 64
+                || subgroup.width != matrix.width
+                || !rust_same_kernel_brand_v1(subgroup.kernel_brand, epoch.kernel_brand)
+                || !rust_same_kernel_brand_v1(subgroup.kernel_brand, matrix.kernel_brand)
+                || subgroup.epoch != epoch.epoch
+                || subgroup.epoch != matrix.epoch
+                || rust_execution_generic_width_v1(tcx, instance) != Some(subgroup.width)
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "matrix access substituted matrix brand, width, workgroup brand, or epoch",
+                ));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::MatrixAccess {
+                    subgroup: abi.source_input_types()[0],
+                    epoch: abi.source_input_types()[1],
+                    matrix: type_id(matrix.ty)?,
+                    subgroup_brand: rustc_type_identity_v1(tcx, matrix.subgroup_brand),
+                    width: matrix.width,
+                },
+                root,
+                kernel_contexts,
+                subgroup.kernel_brand,
+                subgroup.epoch,
+                None,
+                source_identity,
+            )
+        }
+        Terminal::LdsInitializeByInvocation => {
+            let input = rust_workgroup_lds_v1(tcx, rust_inputs[0])
+                .ok_or_else(|| body_owner_table_mismatch_v1("LDS initialize input"))?;
+            let workgroup = rust_inputs
+                .get(1)
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_workgroup_capability_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("LDS initialize workgroup"))?;
+            let output = rust_workgroup_lds_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("LDS initialize output"))?;
+            if input.state != RustExecutionLdsStateV1::Uninitialized
+                || output.state != RustExecutionLdsStateV1::InvocationInitialized
+                || input.element != rust_inputs[2]
+                || input.element != output.element
+                || input.elements != output.elements
+                || rust_execution_generic_extent_v1(tcx, instance) != Some(input.elements)
+                || !rust_same_kernel_brand_v1(input.kernel_brand, workgroup.kernel_brand)
+                || !rust_same_kernel_brand_v1(input.kernel_brand, output.kernel_brand)
+                || input.epoch != workgroup.epoch
+                || input.epoch != output.epoch
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "LDS initialization substituted state, extent, element, brand, or epoch",
+                ));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::LdsInitializeByInvocation {
+                    input_lds: abi.source_input_types()[0],
+                    workgroup: abi.source_input_types()[1],
+                    output_lds: abi.source_output_type(),
+                    element: type_id(input.element)?,
+                    elements: input.elements,
+                },
+                root,
+                kernel_contexts,
+                input.kernel_brand,
+                input.epoch,
+                None,
+                source_identity,
+            )
+        }
+        Terminal::LdsReadPublished => {
+            let lds = rust_inputs
+                .first()
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_workgroup_lds_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("published LDS read input"))?;
+            let workgroup = rust_inputs
+                .get(1)
+                .and_then(|ty| rust_shared_reference_v1(*ty))
+                .and_then(|ty| rust_workgroup_capability_v1(tcx, ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("published LDS read workgroup"))?;
+            let payload = rust_option_payload_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("published LDS read output"))?;
+            if lds.state != RustExecutionLdsStateV1::Published
+                || lds.element != payload
+                || !matches!(rust_inputs[2].kind(), TyKind::Uint(UintTy::Usize))
+                || rust_execution_generic_extent_v1(tcx, instance) != Some(lds.elements)
+                || !rust_same_kernel_brand_v1(lds.kernel_brand, workgroup.kernel_brand)
+                || lds.epoch != workgroup.epoch
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "published LDS read substituted state, extent, element, brand, or epoch",
+                ));
+            }
+            execution_capability_operation_v1(
+                tcx,
+                abi,
+                SemanticExecutionCapabilityOperationV1::LdsReadPublished {
+                    lds_reference: abi.source_input_types()[0],
+                    lds: pointer_pointee_v1(types, abi.source_input_types()[0])?,
+                    workgroup: abi.source_input_types()[1],
+                    index: abi.source_input_types()[2],
+                    option: abi.source_output_type(),
+                    element: type_id(lds.element)?,
+                    elements: lds.elements,
+                },
+                root,
+                kernel_contexts,
+                lds.kernel_brand,
+                lds.epoch,
+                None,
+                source_identity,
+            )
+        }
+        Terminal::GlobalBindExclusiveReadWrite
+        | Terminal::GlobalExclusiveLoad
+        | Terminal::GlobalExclusiveStore
+        | Terminal::GlobalStoreBlock => Err(body_owner_table_mismatch_v1(
+            "typed-global terminal entered the execution-capability decoder",
+        )),
+    }
+}
+
 fn terminal_operation_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     expansion: crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1,
     abi: &SemanticFunctionAbiV1,
     types: &[SemanticTypeDeclV1],
+    capability_root: Option<&AuthenticatedProductionKernelContextRootV1>,
+    source_identity: SemanticFunctionIdentityV1,
+    kernel_contexts: &AuthenticatedProductionKernelContextsV1,
 ) -> Result<SemanticCompilerIntrinsicOperationV1, ProductionSemanticImportErrorV1> {
     use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
     let inputs = abi.source_input_types();
@@ -878,6 +4122,494 @@ fn terminal_operation_v1<'tcx>(
     let rust_inputs = signature.inputs();
     let rust_output = signature.output();
     match expansion {
+        ProductionTerminalExpansionV1::Execution(terminal)
+            if !terminal.is_typed_global_memory() => execution_terminal_operation_v1(
+            tcx,
+            instance,
+            terminal,
+            abi,
+            types,
+            capability_root,
+            source_identity,
+            kernel_contexts,
+        ),
+        ProductionTerminalExpansionV1::KernelContextIssue
+            if inputs.is_empty()
+                && rust_inputs.is_empty()
+                && abi.canon_abi() == SemanticCanonAbiV1::Rust
+                && abi.extern_abi() == SemanticExternAbiV1::Rust
+                && !abi.c_variadic()
+                && rust_kernel_context_axes_v1(tcx, rust_output).is_some()
+                && output == abi.return_value().ty()
+                && matches!(abi.return_value().mode(), SemanticAbiPassModeV1::Ignore)
+                && abi.return_value().adjusted().is_none()
+                && abi.return_value().pointee_override().is_none()
+                && abi.arguments().is_empty()
+                && abi.hidden_arguments().is_empty()
+                && semantic_exact_inhabited_aggregate_zst_v1(types, output) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::KernelContextIssue { context: output })
+        }
+        ProductionTerminalExpansionV1::CapabilityGlobalBindReadOnly => {
+            require_capability_memory_terminal_abi_v1(
+                tcx,
+                abi,
+                types,
+                rust_inputs,
+                rust_output,
+                &[
+                    SemanticSourceArgumentOwnershipV1::SharedBorrow,
+                    SemanticSourceArgumentOwnershipV1::SharedBorrow,
+                ],
+            )?;
+            let root =
+                capability_root.ok_or(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "typed-global read-only binding lacks authenticated root custody",
+                ))?;
+            let context_ty = rust_inputs
+                .first()
+                .and_then(|ty| rust_reference_with_mutability_v1(*ty, rustc_hir::Mutability::Not))
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global context borrow"))?;
+            let context_axes = rust_kernel_context_axes_v1(tcx, context_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global context type"))?;
+            let physical_element = rust_inputs
+                .get(1)
+                .and_then(|ty| rust_shared_slice_element_v1(*ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global shared slice"))?;
+            let view = rust_capability_memory_view_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global read-only view"))?;
+            if view.role != RustCapabilityMemoryRoleV1::ReadOnly
+                || view.element != physical_element
+                || (view.kernel, view.target, view.launch) != context_axes
+                || *rustc_type_identity_v1(tcx, view.kernel).as_bytes()
+                    != root.kernel_marker_identity
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "typed-global read-only view does not match its authenticated context brand",
+                ));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindReadOnly {
+                    context: pointer_pointee_v1(types, inputs[0])?,
+                    physical: inputs[1],
+                    view: output,
+                    element: semantic_type_for_rust_v1(tcx, types, view.element)?,
+                    contract: SemanticCapabilityMemoryContractV1::global_read_only(),
+                    provenance: capability_memory_provenance_v1(root, kernel_contexts)?,
+                    source_identity,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::Execution(
+            crate::production_semantic_terminal_v1::ProductionExecutionTerminalV1::GlobalBindExclusiveReadWrite,
+        ) => {
+            require_capability_memory_terminal_abi_v1(
+                tcx,
+                abi,
+                types,
+                rust_inputs,
+                rust_output,
+                &[
+                    SemanticSourceArgumentOwnershipV1::SharedBorrow,
+                    SemanticSourceArgumentOwnershipV1::UniqueBorrow,
+                ],
+            )?;
+            let root =
+                capability_root.ok_or(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "typed-global exclusive binding lacks authenticated root custody",
+                ))?;
+            let context_ty = rust_inputs
+                .first()
+                .and_then(|ty| rust_reference_with_mutability_v1(*ty, rustc_hir::Mutability::Not))
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global context borrow"))?;
+            let context_axes = rust_kernel_context_axes_v1(tcx, context_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global context type"))?;
+            let physical_element = rust_inputs
+                .get(1)
+                .and_then(|ty| rust_mutable_slice_element_v1(*ty))
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global exclusive slice"))?;
+            let view = rust_capability_memory_view_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global exclusive view"))?;
+            if view.role != RustCapabilityMemoryRoleV1::ExclusiveReadWrite
+                || view.element != physical_element
+                || (view.kernel, view.target, view.launch) != context_axes
+                || *rustc_type_identity_v1(tcx, view.kernel).as_bytes()
+                    != root.kernel_marker_identity
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "typed-global exclusive view does not match its context, allocation, or brand",
+                ));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindExclusiveReadWrite {
+                    context: pointer_pointee_v1(types, inputs[0])?,
+                    physical: inputs[1],
+                    view: output,
+                    element: semantic_type_for_rust_v1(tcx, types, view.element)?,
+                    contract: SemanticCapabilityMemoryContractV1::global_exclusive_read_write(),
+                    provenance: capability_memory_provenance_v1(root, kernel_contexts)?,
+                    source_identity,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::CapabilityGlobalBindDisjointWrite => {
+            require_capability_memory_terminal_abi_v1(
+                tcx,
+                abi,
+                types,
+                rust_inputs,
+                rust_output,
+                &[
+                    SemanticSourceArgumentOwnershipV1::SharedBorrow,
+                    SemanticSourceArgumentOwnershipV1::ExclusiveOwner,
+                ],
+            )?;
+            let root =
+                capability_root.ok_or(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "typed-global disjoint binding lacks authenticated root custody",
+                ))?;
+            let context_ty = rust_inputs
+                .first()
+                .and_then(|ty| rust_reference_with_mutability_v1(*ty, rustc_hir::Mutability::Not))
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global context borrow"))?;
+            let context_axes = rust_kernel_context_axes_v1(tcx, context_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global context type"))?;
+            let physical = rust_inputs
+                .get(1)
+                .copied()
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global physical storage"))?;
+            let (physical_element, physical_mapping) =
+                rust_write_only_disjoint_slice_v1(tcx, physical).ok_or_else(|| {
+                    body_owner_table_mismatch_v1("typed-global write-only disjoint storage")
+                })?;
+            let physical_arguments = rust_trusted_adt_type_arguments_v1(
+                tcx,
+                physical,
+                TrustedDeviceItem::WriteOnlyDisjointSlice,
+            )
+            .ok_or_else(|| {
+                body_owner_table_mismatch_v1("typed-global physical storage identity")
+            })?;
+            let physical_index_space = physical_arguments
+                .get(1)
+                .copied()
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global physical index space"))?;
+            let view = rust_capability_memory_view_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global disjoint view"))?;
+            let RustCapabilityMemoryRoleV1::DisjointWrite {
+                index_space,
+                mapping,
+            } = view.role
+            else {
+                return Err(body_owner_table_mismatch_v1("typed-global disjoint role"));
+            };
+            if view.element != physical_element
+                || index_space != physical_index_space
+                || mapping != physical_mapping
+                || (view.kernel, view.target, view.launch) != context_axes
+                || *rustc_type_identity_v1(tcx, view.kernel).as_bytes()
+                    != root.kernel_marker_identity
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "typed-global disjoint view does not match context, storage, or index brand",
+                ));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindDisjointWrite {
+                    context: pointer_pointee_v1(types, inputs[0])?,
+                    physical: inputs[1],
+                    view: output,
+                    element: semantic_type_for_rust_v1(tcx, types, view.element)?,
+                    contract: SemanticCapabilityMemoryContractV1::global_disjoint_write(
+                        semantic_type_for_rust_v1(tcx, types, index_space)?,
+                        mapping,
+                    ),
+                    provenance: capability_memory_provenance_v1(root, kernel_contexts)?,
+                    source_identity,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::CapabilityGlobalLoad => {
+            require_capability_memory_terminal_abi_v1(
+                tcx,
+                abi,
+                types,
+                rust_inputs,
+                rust_output,
+                &[
+                    SemanticSourceArgumentOwnershipV1::SharedBorrow,
+                    SemanticSourceArgumentOwnershipV1::ByValue,
+                ],
+            )?;
+            let root =
+                capability_root.ok_or(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "typed-global load lacks authenticated root custody",
+                ))?;
+            let view_ty = rust_inputs
+                .first()
+                .and_then(|ty| rust_reference_with_mutability_v1(*ty, rustc_hir::Mutability::Not))
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global load receiver"))?;
+            let view = rust_capability_memory_view_v1(tcx, view_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global load view"))?;
+            let payload = rust_option_payload_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global load Option output"))?;
+            if view.role != RustCapabilityMemoryRoleV1::ReadOnly
+                || view.element != payload
+                || rust_inputs
+                    .get(1)
+                    .is_none_or(|index| !matches!(index.kind(), TyKind::Uint(UintTy::Usize)))
+                || *rustc_type_identity_v1(tcx, view.kernel).as_bytes()
+                    != root.kernel_marker_identity
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "typed-global load does not match its bound view brand or value contract",
+                ));
+            }
+            Ok(SemanticCompilerIntrinsicOperationV1::CapabilityGlobalLoad {
+                view: pointer_pointee_v1(types, inputs[0])?,
+                option: output,
+                element: semantic_type_for_rust_v1(tcx, types, view.element)?,
+                contract: SemanticCapabilityMemoryContractV1::global_read_only(),
+                provenance: capability_memory_provenance_v1(root, kernel_contexts)?,
+                source_identity,
+            })
+        }
+        ProductionTerminalExpansionV1::Execution(
+            crate::production_semantic_terminal_v1::ProductionExecutionTerminalV1::GlobalExclusiveLoad,
+        ) => {
+            require_capability_memory_terminal_abi_v1(
+                tcx,
+                abi,
+                types,
+                rust_inputs,
+                rust_output,
+                &[
+                    SemanticSourceArgumentOwnershipV1::SharedBorrow,
+                    SemanticSourceArgumentOwnershipV1::ByValue,
+                ],
+            )?;
+            let root =
+                capability_root.ok_or(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "typed-global exclusive load lacks authenticated root custody",
+                ))?;
+            let view_ty = rust_inputs
+                .first()
+                .and_then(|ty| rust_reference_with_mutability_v1(*ty, rustc_hir::Mutability::Not))
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global exclusive load receiver"))?;
+            let view = rust_capability_memory_view_v1(tcx, view_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global exclusive load view"))?;
+            let payload = rust_option_payload_v1(tcx, rust_output).ok_or_else(|| {
+                body_owner_table_mismatch_v1("typed-global exclusive load Option output")
+            })?;
+            if view.role != RustCapabilityMemoryRoleV1::ExclusiveReadWrite
+                || view.element != payload
+                || rust_inputs
+                    .get(1)
+                    .is_none_or(|index| !matches!(index.kind(), TyKind::Uint(UintTy::Usize)))
+                || *rustc_type_identity_v1(tcx, view.kernel).as_bytes()
+                    != root.kernel_marker_identity
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "typed-global exclusive load substituted its role, element, or root brand",
+                ));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveLoad {
+                    view: pointer_pointee_v1(types, inputs[0])?,
+                    option: output,
+                    element: semantic_type_for_rust_v1(tcx, types, view.element)?,
+                    contract: SemanticCapabilityMemoryContractV1::global_exclusive_read_write(),
+                    provenance: capability_memory_provenance_v1(root, kernel_contexts)?,
+                    source_identity,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::CapabilityGlobalStore => {
+            require_capability_memory_terminal_abi_v1(
+                tcx,
+                abi,
+                types,
+                rust_inputs,
+                rust_output,
+                &[
+                    SemanticSourceArgumentOwnershipV1::UniqueBorrow,
+                    SemanticSourceArgumentOwnershipV1::ByValue,
+                    SemanticSourceArgumentOwnershipV1::ByValue,
+                ],
+            )?;
+            let root =
+                capability_root.ok_or(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "typed-global store lacks authenticated root custody",
+                ))?;
+            let view_ty = rust_inputs
+                .first()
+                .and_then(|ty| rust_reference_with_mutability_v1(*ty, rustc_hir::Mutability::Mut))
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global store receiver"))?;
+            let view = rust_capability_memory_view_v1(tcx, view_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global store view"))?;
+            let RustCapabilityMemoryRoleV1::DisjointWrite {
+                index_space,
+                mapping,
+            } = view.role
+            else {
+                return Err(body_owner_table_mismatch_v1("typed-global store role"));
+            };
+            let witness = rust_inputs
+                .get(1)
+                .copied()
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global store witness"))?;
+            let (witness_space, witness_brand) =
+                rust_branded_index_v1(tcx, witness, TrustedDeviceItem::DisjointIndex)
+                    .ok_or_else(|| body_owner_table_mismatch_v1("typed-global store witness"))?;
+            if witness_space != index_space
+                || witness_brand != view.brand.ty
+                || rust_disjoint_index_space_v1(tcx, witness_space) != Some(mapping)
+                || rust_inputs.get(2).copied() != Some(view.element)
+                || !matches!(rust_output.kind(), TyKind::Bool)
+                || *rustc_type_identity_v1(tcx, view.kernel).as_bytes()
+                    != root.kernel_marker_identity
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "typed-global store does not match its view, witness, element, or root brand",
+                ));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStore {
+                    view: pointer_pointee_v1(types, inputs[0])?,
+                    witness: inputs[1],
+                    element: inputs[2],
+                    result: output,
+                    contract: SemanticCapabilityMemoryContractV1::global_disjoint_write(
+                        semantic_type_for_rust_v1(tcx, types, index_space)?,
+                        mapping,
+                    ),
+                    provenance: capability_memory_provenance_v1(root, kernel_contexts)?,
+                    source_identity,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::Execution(
+            crate::production_semantic_terminal_v1::ProductionExecutionTerminalV1::GlobalExclusiveStore,
+        ) => {
+            require_capability_memory_terminal_abi_v1(
+                tcx,
+                abi,
+                types,
+                rust_inputs,
+                rust_output,
+                &[
+                    SemanticSourceArgumentOwnershipV1::UniqueBorrow,
+                    SemanticSourceArgumentOwnershipV1::ByValue,
+                    SemanticSourceArgumentOwnershipV1::ByValue,
+                ],
+            )?;
+            let root =
+                capability_root.ok_or(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "typed-global exclusive store lacks authenticated root custody",
+                ))?;
+            let view_ty = rust_inputs
+                .first()
+                .and_then(|ty| rust_reference_with_mutability_v1(*ty, rustc_hir::Mutability::Mut))
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global exclusive store receiver"))?;
+            let view = rust_capability_memory_view_v1(tcx, view_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global exclusive store view"))?;
+            if view.role != RustCapabilityMemoryRoleV1::ExclusiveReadWrite
+                || rust_inputs
+                    .get(1)
+                    .is_none_or(|index| !matches!(index.kind(), TyKind::Uint(UintTy::Usize)))
+                || rust_inputs.get(2).copied() != Some(view.element)
+                || !matches!(rust_output.kind(), TyKind::Bool)
+                || *rustc_type_identity_v1(tcx, view.kernel).as_bytes()
+                    != root.kernel_marker_identity
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "typed-global exclusive store substituted its role, index, element, or root brand",
+                ));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveStore {
+                    view: pointer_pointee_v1(types, inputs[0])?,
+                    index: inputs[1],
+                    element: inputs[2],
+                    result: output,
+                    contract: SemanticCapabilityMemoryContractV1::global_exclusive_read_write(),
+                    provenance: capability_memory_provenance_v1(root, kernel_contexts)?,
+                    source_identity,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::Execution(
+            crate::production_semantic_terminal_v1::ProductionExecutionTerminalV1::GlobalStoreBlock,
+        ) => {
+            require_capability_memory_terminal_abi_v1(
+                tcx,
+                abi,
+                types,
+                rust_inputs,
+                rust_output,
+                &[
+                    SemanticSourceArgumentOwnershipV1::UniqueBorrow,
+                    SemanticSourceArgumentOwnershipV1::SharedBorrow,
+                    SemanticSourceArgumentOwnershipV1::ByValue,
+                    SemanticSourceArgumentOwnershipV1::ByValue,
+                ],
+            )?;
+            let root =
+                capability_root.ok_or(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "typed-global blocked store lacks authenticated root custody",
+                ))?;
+            let view_ty = rust_inputs
+                .first()
+                .and_then(|ty| rust_reference_with_mutability_v1(*ty, rustc_hir::Mutability::Mut))
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global blocked store receiver"))?;
+            let view = rust_capability_memory_view_v1(tcx, view_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global blocked store view"))?;
+            let RustCapabilityMemoryRoleV1::DisjointWrite {
+                index_space,
+                mapping,
+            } = view.role
+            else {
+                return Err(body_owner_table_mismatch_v1("typed-global blocked store role"));
+            };
+            let witness_ty = rust_inputs
+                .get(1)
+                .and_then(|ty| rust_reference_with_mutability_v1(*ty, rustc_hir::Mutability::Not))
+                .ok_or_else(|| body_owner_table_mismatch_v1("typed-global blocked witness borrow"))?;
+            let (witness_mapping, lanes_per_block, elements_per_lane, witness_brand) =
+                rust_disjoint_block_contract_v1(tcx, witness_ty).ok_or_else(|| {
+                    body_owner_table_mismatch_v1("typed-global blocked witness contract")
+                })?;
+            if mapping != witness_mapping
+                || rust_disjoint_index_space_v1(tcx, index_space) != Some(witness_mapping)
+                || witness_brand != view.brand.ty
+                || rust_inputs
+                    .get(2)
+                    .is_none_or(|component| !matches!(component.kind(), TyKind::Uint(UintTy::Usize)))
+                || rust_inputs.get(3).copied() != Some(view.element)
+                || !matches!(rust_output.kind(), TyKind::Bool)
+                || *rustc_type_identity_v1(tcx, view.kernel).as_bytes()
+                    != root.kernel_marker_identity
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "typed-global blocked store substituted nominal mapping, geometry, brand, component, element, or root",
+                ));
+            }
+            Ok(SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStoreBlock {
+                view: pointer_pointee_v1(types, inputs[0])?,
+                witness: pointer_pointee_v1(types, inputs[1])?,
+                component: inputs[2],
+                element: inputs[3],
+                result: output,
+                contract: SemanticCapabilityMemoryContractV1::global_disjoint_write(
+                    semantic_type_for_rust_v1(tcx, types, index_space)?,
+                    mapping,
+                ),
+                lanes_per_block,
+                elements_per_lane,
+                provenance: capability_memory_provenance_v1(root, kernel_contexts)?,
+                source_identity,
+            })
+        }
         ProductionTerminalExpansionV1::ThreadIndex(axis)
             if inputs.is_empty()
                 && rust_inputs.is_empty()
@@ -2162,12 +5894,47 @@ fn terminal_operation_v1<'tcx>(
         ProductionTerminalExpansionV1::ThreadIndex1d
             if inputs.is_empty()
                 && rust_inputs.is_empty()
-                && rust_index_witness_space_v1(
-                    tcx,
-                    rust_output,
-                    TrustedDeviceItem::ThreadIndex,
-                ) == Some(SemanticDisjointIndexSpaceV1::Index1d) =>
+                && rust_branded_index_v1(tcx, rust_output, TrustedDeviceItem::ThreadIndex)
+                    .is_some_and(|(index_space, brand)| {
+                        rust_disjoint_index_space_v1(tcx, index_space)
+                            == Some(SemanticDisjointIndexSpaceV1::Index1d)
+                            && rust_is_unbranded_capability_v1(tcx, brand)
+                    }) =>
         {
+            let raw_index = aggregate_field_v1(types, output, 0)?;
+            Ok(SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
+                index_witness: output,
+                raw_index,
+            })
+        }
+        ProductionTerminalExpansionV1::Invocation3DIndex1D
+            if inputs.len() == 1 && rust_inputs.len() == 1 =>
+        {
+            let root = capability_root.ok_or(
+                ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "invocation index lacks authenticated root custody",
+                ),
+            )?;
+            let invocation_brand = rust_inputs
+                .first()
+                .and_then(|ty| rust_reference_pointee_v1(*ty))
+                .and_then(|ty| rust_invocation_brand_v1(tcx, ty))
+                .and_then(|brand| rust_kernel_brand_v1(tcx, brand))
+                .ok_or_else(|| body_owner_table_mismatch_v1("branded invocation index input"))?;
+            let (index_space, index_brand_ty) =
+                rust_branded_index_v1(tcx, rust_output, TrustedDeviceItem::ThreadIndex)
+                    .ok_or_else(|| body_owner_table_mismatch_v1("branded invocation index output"))?;
+            let index_brand = rust_kernel_brand_v1(tcx, index_brand_ty)
+                .ok_or_else(|| body_owner_table_mismatch_v1("branded invocation index output"))?;
+            if !trusted_device_items::is_authenticated_index_space_1d_v1(tcx, index_space)
+                || invocation_brand.ty != index_brand.ty
+                || *rustc_type_identity_v1(tcx, index_brand.kernel).as_bytes()
+                    != root.kernel_marker_identity
+            {
+                return Err(ProductionSemanticImportErrorV1::KernelContextBinding(
+                    "invocation index does not retain its root's exact kernel, target, launch, and Index1D brand",
+                ));
+            }
             let raw_index = aggregate_field_v1(types, output, 0)?;
             Ok(SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
                 index_witness: output,
@@ -2192,13 +5959,13 @@ fn terminal_operation_v1<'tcx>(
         ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint
             if inputs.len() == 1 && rust_inputs.len() == 1 =>
         {
-            let (Some(input_space), Some(output_space)) = (
-                rust_index_witness_space_v1(tcx, rust_inputs[0], TrustedDeviceItem::ThreadIndex),
-                rust_index_witness_space_v1(tcx, rust_output, TrustedDeviceItem::DisjointIndex),
+            let (Some((input_space, input_brand)), Some((output_space, output_brand))) = (
+                rust_index_witness_contract_v1(tcx, rust_inputs[0], TrustedDeviceItem::ThreadIndex),
+                rust_index_witness_contract_v1(tcx, rust_output, TrustedDeviceItem::DisjointIndex),
             ) else {
                 return Err(body_owner_table_mismatch_v1("terminal disjoint mapping"));
             };
-            if input_space != output_space {
+            if input_space != output_space || input_brand != output_brand {
                 return Err(body_owner_table_mismatch_v1("terminal disjoint mapping"));
             }
             let raw_index = aggregate_field_v1(types, inputs[0], 0)?;
@@ -2228,18 +5995,18 @@ fn terminal_operation_v1<'tcx>(
         ProductionTerminalExpansionV1::ThreadIndexCheckedBlock
             if inputs.len() == 1 && rust_inputs.len() == 1 =>
         {
-            let input_space =
-                rust_index_witness_space_v1(tcx, rust_inputs[0], TrustedDeviceItem::ThreadIndex)
+            let (input_space, input_brand) =
+                rust_index_witness_contract_v1(tcx, rust_inputs[0], TrustedDeviceItem::ThreadIndex)
                     .ok_or_else(|| body_owner_table_mismatch_v1("terminal checked-block input"))?;
             let rust_output_block = rust_option_payload_v1(tcx, rust_output)
                 .ok_or_else(|| body_owner_table_mismatch_v1("terminal checked-block result"))?;
-            let (output_space, lanes_per_block, elements_per_lane) =
-                rust_disjoint_block_v1(tcx, rust_output_block).ok_or_else(|| {
+            let (output_space, lanes_per_block, elements_per_lane, output_brand) =
+                rust_disjoint_block_contract_v1(tcx, rust_output_block).ok_or_else(|| {
                     body_owner_table_mismatch_v1("terminal checked-block witness")
                 })?;
-            if input_space != SemanticDisjointIndexSpaceV1::Index1d {
+            if input_space != SemanticDisjointIndexSpaceV1::Index1d || input_brand != output_brand {
                 return Err(body_owner_table_mismatch_v1(
-                    "terminal checked-block input mapping",
+                    "terminal checked-block input mapping or brand",
                 ));
             }
             let output_block = option_payload_v1(types, output)?;
@@ -2259,20 +6026,29 @@ fn terminal_operation_v1<'tcx>(
         ProductionTerminalExpansionV1::ThreadIndexCheckedTiled2d
             if inputs.len() == 1 && rust_inputs.len() == 1 =>
         {
-            let input_space =
-                rust_index_witness_space_v1(tcx, rust_inputs[0], TrustedDeviceItem::ThreadIndex)
-                    .ok_or_else(|| {
-                        body_owner_table_mismatch_v1("terminal checked-tiled-2d input")
-                    })?;
+            let (input_space, input_brand) = rust_index_witness_contract_v1(
+                tcx,
+                rust_inputs[0],
+                TrustedDeviceItem::ThreadIndex,
+            )
+            .ok_or_else(|| body_owner_table_mismatch_v1("terminal checked-tiled-2d input"))?;
             let rust_output_tile = rust_option_payload_v1(tcx, rust_output)
                 .ok_or_else(|| body_owner_table_mismatch_v1("terminal checked-tiled-2d result"))?;
-            let (output_space, lanes_per_tile, tile_rows, tile_columns, elements_per_lane) =
-                rust_disjoint_tile_2d_v1(tcx, rust_output_tile).ok_or_else(|| {
+            let (
+                output_space,
+                lanes_per_tile,
+                tile_rows,
+                tile_columns,
+                elements_per_lane,
+                output_brand,
+            ) = rust_disjoint_tile_2d_contract_v1(tcx, rust_output_tile).ok_or_else(|| {
                     body_owner_table_mismatch_v1("terminal checked-tiled-2d witness")
                 })?;
-            if input_space != SemanticDisjointIndexSpaceV1::Index1d {
+            if input_space != SemanticDisjointIndexSpaceV1::Index1d
+                || input_brand != output_brand
+            {
                 return Err(body_owner_table_mismatch_v1(
-                    "terminal checked-tiled-2d input mapping",
+                    "terminal checked-tiled-2d input mapping or brand",
                 ));
             }
             Ok(
@@ -2292,21 +6068,26 @@ fn terminal_operation_v1<'tcx>(
         ProductionTerminalExpansionV1::ThreadIndexCheckedRowStriped2d
             if inputs.len() == 1 && rust_inputs.len() == 1 =>
         {
-            let input_space =
-                rust_index_witness_space_v1(tcx, rust_inputs[0], TrustedDeviceItem::ThreadIndex)
-                    .ok_or_else(|| {
-                        body_owner_table_mismatch_v1("terminal checked-row-striped-2d input")
-                    })?;
+            let (input_space, input_brand) = rust_index_witness_contract_v1(
+                tcx,
+                rust_inputs[0],
+                TrustedDeviceItem::ThreadIndex,
+            )
+            .ok_or_else(|| {
+                body_owner_table_mismatch_v1("terminal checked-row-striped-2d input")
+            })?;
             let rust_output_stripe = rust_option_payload_v1(tcx, rust_output).ok_or_else(|| {
                 body_owner_table_mismatch_v1("terminal checked-row-striped-2d result")
             })?;
-            let (output_space, lanes_per_row, elements_per_lane) =
-                rust_disjoint_row_stripe_2d_v1(tcx, rust_output_stripe).ok_or_else(|| {
+            let (output_space, lanes_per_row, elements_per_lane, output_brand) =
+                rust_disjoint_row_stripe_2d_contract_v1(tcx, rust_output_stripe).ok_or_else(|| {
                     body_owner_table_mismatch_v1("terminal checked-row-striped-2d witness")
                 })?;
-            if input_space != SemanticDisjointIndexSpaceV1::Index1d {
+            if input_space != SemanticDisjointIndexSpaceV1::Index1d
+                || input_brand != output_brand
+            {
                 return Err(body_owner_table_mismatch_v1(
-                    "terminal checked-row-striped-2d input mapping",
+                    "terminal checked-row-striped-2d input mapping or brand",
                 ));
             }
             Ok(
@@ -2637,11 +6418,13 @@ fn terminal_operation_v1<'tcx>(
                 },
             )
         }
-        ProductionTerminalExpansionV1::ThreadIndex(_)
+        ProductionTerminalExpansionV1::KernelContextIssue
+        | ProductionTerminalExpansionV1::ThreadIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupDimension(_)
         | ProductionTerminalExpansionV1::GridDimension(_)
         | ProductionTerminalExpansionV1::ThreadIndex1d
+        | ProductionTerminalExpansionV1::Invocation3DIndex1D
         | ProductionTerminalExpansionV1::ThreadIndexGet
         | ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint
         | ProductionTerminalExpansionV1::ThreadIndexCheckedShift
@@ -2723,7 +6506,8 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::MemoryVolatileLoad
         | ProductionTerminalExpansionV1::Trap
         | ProductionTerminalExpansionV1::ColdPath
-        | ProductionTerminalExpansionV1::WorkgroupBarrier => {
+        | ProductionTerminalExpansionV1::WorkgroupBarrier
+        | ProductionTerminalExpansionV1::Execution(_) => {
             Err(body_owner_table_mismatch_v1("terminal callable ABI"))
         }
     }
@@ -3126,13 +6910,16 @@ fn checked_shift_operation_v1<'tcx>(
     input_kind: TrustedDeviceItem,
     thread_index: bool,
 ) -> Result<SemanticCompilerIntrinsicOperationV1, ProductionSemanticImportErrorV1> {
-    let input_space = rust_index_witness_space_v1(tcx, rust_input, input_kind)
+    let (input_space, input_brand) = rust_index_witness_contract_v1(tcx, rust_input, input_kind)
         .ok_or_else(|| body_owner_table_mismatch_v1("terminal checked-shift input"))?;
     let rust_output_witness = rust_option_payload_v1(tcx, rust_output)
         .ok_or_else(|| body_owner_table_mismatch_v1("terminal checked-shift result"))?;
-    let output_space =
-        rust_index_witness_space_v1(tcx, rust_output_witness, TrustedDeviceItem::DisjointIndex)
+    let (output_space, output_brand) =
+        rust_index_witness_contract_v1(tcx, rust_output_witness, TrustedDeviceItem::DisjointIndex)
             .ok_or_else(|| body_owner_table_mismatch_v1("terminal checked-shift output"))?;
+    if input_brand != output_brand {
+        return Err(body_owner_table_mismatch_v1("terminal checked-shift brand"));
+    }
     let offset = match (input_space, output_space) {
         (
             SemanticDisjointIndexSpaceV1::Index1d,
@@ -3211,6 +6998,16 @@ fn rust_shared_u8_slice_v1(ty: Ty<'_>) -> bool {
 
 fn rust_shared_slice_element_v1(ty: Ty<'_>) -> Option<Ty<'_>> {
     let TyKind::Ref(_, pointee, rustc_hir::Mutability::Not) = *ty.kind() else {
+        return None;
+    };
+    match *pointee.kind() {
+        TyKind::Slice(element) => Some(element),
+        _ => None,
+    }
+}
+
+fn rust_mutable_slice_element_v1(ty: Ty<'_>) -> Option<Ty<'_>> {
+    let TyKind::Ref(_, pointee, rustc_hir::Mutability::Mut) = *ty.kind() else {
         return None;
     };
     match *pointee.kind() {
@@ -3577,13 +7374,25 @@ pub(crate) fn rust_index_witness_space_v1<'tcx>(
     ty: Ty<'tcx>,
     item: TrustedDeviceItem,
 ) -> Option<SemanticDisjointIndexSpaceV1> {
-    let TyKind::Adt(definition, arguments) = *ty.kind() else {
-        return None;
-    };
-    if trusted_device_items::classify(tcx, definition.did()) != Some(item) || arguments.len() != 1 {
-        return None;
-    }
-    rust_disjoint_index_space_v1(tcx, arguments[0].as_type()?)
+    rust_index_witness_contract_v1(tcx, ty, item).map(|(space, _)| space)
+}
+
+fn rust_index_witness_contract_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+    item: TrustedDeviceItem,
+) -> Option<(SemanticDisjointIndexSpaceV1, Ty<'tcx>)> {
+    let (index_space, brand) = rust_branded_index_v1(tcx, ty, item)?;
+    Some((rust_disjoint_index_space_v1(tcx, index_space)?, brand))
+}
+
+fn rust_is_unbranded_capability_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    matches!(
+        *ty.kind(),
+        TyKind::Adt(definition, arguments)
+            if arguments.is_empty()
+                && tcx.def_path_str(definition.did()) == "fe2o3_device::UnbrandedCapability"
+    )
 }
 
 fn rust_disjoint_index_space_v1<'tcx>(
@@ -3691,12 +7500,23 @@ fn rust_disjoint_block_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
 ) -> Option<(SemanticDisjointIndexSpaceV1, u64, u64)> {
+    rust_disjoint_block_contract_v1(tcx, ty).map(
+        |(index_space, lanes_per_block, elements_per_lane, _)| {
+            (index_space, lanes_per_block, elements_per_lane)
+        },
+    )
+}
+
+fn rust_disjoint_block_contract_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<(SemanticDisjointIndexSpaceV1, u64, u64, Ty<'tcx>)> {
     let TyKind::Adt(definition, arguments) = *ty.kind() else {
         return None;
     };
     if trusted_device_items::classify(tcx, definition.did())
         != Some(TrustedDeviceItem::DisjointBlock)
-        || arguments.len() != 3
+        || arguments.len() != 4
     {
         return None;
     }
@@ -3719,6 +7539,7 @@ fn rust_disjoint_block_v1<'tcx>(
         },
         lanes_per_block,
         elements_per_lane,
+        arguments[3].as_type()?,
     ))
 }
 
@@ -3747,12 +7568,29 @@ pub(crate) fn rust_disjoint_tile_2d_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
 ) -> Option<(SemanticDisjointIndexSpaceV1, u64, u64, u64, u64)> {
+    rust_disjoint_tile_2d_contract_v1(tcx, ty).map(
+        |(mapping, lanes_per_tile, tile_rows, tile_columns, elements_per_lane, _)| {
+            (
+                mapping,
+                lanes_per_tile,
+                tile_rows,
+                tile_columns,
+                elements_per_lane,
+            )
+        },
+    )
+}
+
+fn rust_disjoint_tile_2d_contract_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<(SemanticDisjointIndexSpaceV1, u64, u64, u64, u64, Ty<'tcx>)> {
     let TyKind::Adt(definition, arguments) = *ty.kind() else {
         return None;
     };
     if trusted_device_items::classify(tcx, definition.did())
         != Some(TrustedDeviceItem::DisjointTile2D)
-        || arguments.len() != 5
+        || arguments.len() != 6
         || arguments[0].as_type()? != trusted_index1d_type_v1(tcx)?
     {
         return None;
@@ -3776,6 +7614,7 @@ pub(crate) fn rust_disjoint_tile_2d_v1<'tcx>(
         tile_rows,
         tile_columns,
         elements_per_lane,
+        arguments[5].as_type()?,
     ))
 }
 
@@ -3783,12 +7622,23 @@ fn rust_disjoint_row_stripe_2d_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
 ) -> Option<(SemanticDisjointIndexSpaceV1, u64, u64)> {
+    rust_disjoint_row_stripe_2d_contract_v1(tcx, ty).map(
+        |(mapping, lanes_per_row, elements_per_lane, _)| {
+            (mapping, lanes_per_row, elements_per_lane)
+        },
+    )
+}
+
+fn rust_disjoint_row_stripe_2d_contract_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<(SemanticDisjointIndexSpaceV1, u64, u64, Ty<'tcx>)> {
     let TyKind::Adt(definition, arguments) = *ty.kind() else {
         return None;
     };
     if trusted_device_items::classify(tcx, definition.did())
         != Some(TrustedDeviceItem::DisjointRowStripe2D)
-        || arguments.len() != 3
+        || arguments.len() != 4
         || arguments[0].as_type()? != trusted_index1d_type_v1(tcx)?
     {
         return None;
@@ -3805,6 +7655,7 @@ fn rust_disjoint_row_stripe_2d_v1<'tcx>(
         },
         lanes_per_row,
         elements_per_lane,
+        arguments[3].as_type()?,
     ))
 }
 
@@ -3816,9 +7667,13 @@ fn trusted_index1d_type_v1<'tcx>(tcx: TyCtxt<'tcx>) -> Option<Ty<'tcx>> {
         return None;
     };
     (trusted_device_items::classify(tcx, definition.did()) == Some(TrustedDeviceItem::ThreadIndex)
-        && arguments.len() == 1)
-        .then(|| arguments[0].as_type())
-        .flatten()
+        && arguments.len() == 2
+        && arguments
+            .get(1)
+            .and_then(|argument| argument.as_type())
+            .is_some_and(|brand| rust_is_unbranded_capability_v1(tcx, brand)))
+    .then(|| arguments[0].as_type())
+    .flatten()
 }
 
 fn option_payload_v1(
@@ -3985,6 +7840,7 @@ const fn terminal_operation_tag_for_schema_v1(
         ) => 24,
         ProductionTerminalExpansionV1::DisjointSliceLen => 25,
         ProductionTerminalExpansionV1::ThreadIndex1d => 0,
+        ProductionTerminalExpansionV1::Invocation3DIndex1D => 167,
         ProductionTerminalExpansionV1::ThreadIndexGet => 1,
         ProductionTerminalExpansionV1::DisjointSliceGetMut => 2,
         ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint => 3,
@@ -4105,6 +7961,12 @@ const fn terminal_operation_tag_for_schema_v1(
         ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteBlock => 108,
         ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteTiled2d => 109,
         ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteRowStriped2d => 110,
+        ProductionTerminalExpansionV1::KernelContextIssue => 120,
+        ProductionTerminalExpansionV1::CapabilityGlobalBindReadOnly => 121,
+        ProductionTerminalExpansionV1::CapabilityGlobalBindDisjointWrite => 122,
+        ProductionTerminalExpansionV1::CapabilityGlobalLoad => 123,
+        ProductionTerminalExpansionV1::CapabilityGlobalStore => 124,
+        ProductionTerminalExpansionV1::Execution(terminal) => 125 + terminal.identity_tag(),
     }
 }
 
@@ -4290,11 +8152,334 @@ mod tests {
     use super::*;
 
     #[test]
+    fn synthetic_backend_contract_produces_a_target_neutral_context_brand() {
+        let contract = crate::production_backend_v1::ProductionBackendTargetContractV1::synthetic_test_contract_v1();
+        let rustc_layout =
+            crate::semantic_layout_bridge::SemanticLayoutTargetV1::new_with_codegen_profile(
+                contract.rustc_target(),
+                contract.rustc_data_layout(),
+                contract.pointer_width_bits(),
+                contract.cpu(),
+                "",
+                contract.rustc_features(),
+            )
+            .unwrap();
+        let layout = canonical_target_layout_v1(&rustc_layout);
+        let brand = kernel_context_target_brand_identity_from_contract_v1(layout, contract);
+        assert_ne!(brand, [0; 32]);
+        assert_eq!(
+            brand,
+            kernel_context_target_brand_identity_from_contract_v1(layout, contract),
+        );
+    }
+
+    fn context_root(
+        selected_root: u32,
+        root_identity: u8,
+        launch_identity: u8,
+        physical_argument_count: u32,
+        logical_argument_count: u32,
+    ) -> AuthenticatedProductionKernelContextRootV1 {
+        AuthenticatedProductionKernelContextRootV1 {
+            selected_root: SemanticFunctionIdV1::from_index(selected_root),
+            root_function_identity: [root_identity; 32],
+            kernel_binding: [root_identity.wrapping_add(1); 32],
+            kernel_marker_identity: [root_identity.wrapping_add(2); 32],
+            launch_brand_identity: [launch_identity; 32],
+            issuance_identity: [root_identity.wrapping_add(3); 32],
+            physical_argument_count,
+            logical_argument_count,
+        }
+    }
+
+    fn context_custody(
+        expected_roots: Vec<SemanticFunctionIdV1>,
+        roots: Vec<AuthenticatedProductionKernelContextRootV1>,
+        frontend: u8,
+        target: u8,
+    ) -> AuthenticatedProductionKernelContextsV1 {
+        let frontend_unit_identity = [frontend; 32];
+        let target_brand_identity = [target; 32];
+        let custody_identity = kernel_context_custody_identity_v1(
+            frontend_unit_identity,
+            target_brand_identity,
+            &expected_roots,
+            &roots,
+        );
+        AuthenticatedProductionKernelContextsV1 {
+            frontend_unit_identity,
+            target_brand_identity,
+            expected_roots: expected_roots.into_boxed_slice(),
+            roots: roots.into_boxed_slice(),
+            custody_identity,
+        }
+    }
+
+    fn context_observation(
+        selected_root: u32,
+        root_identity: u8,
+        launch_identity: u8,
+    ) -> ProductionKernelContextRootObservationV1 {
+        ProductionKernelContextRootObservationV1 {
+            selected_root: SemanticFunctionIdV1::from_index(selected_root),
+            root_function_identity: [root_identity; 32],
+            kernel_binding: [root_identity.wrapping_add(1); 32],
+            launch_brand_identity: [launch_identity; 32],
+        }
+    }
+
+    fn context_error<T: std::fmt::Debug>(
+        result: Result<T, ProductionSemanticImportErrorV1>,
+    ) -> &'static str {
+        match result {
+            Err(ProductionSemanticImportErrorV1::KernelContextBinding(detail)) => detail,
+            other => panic!("expected context custody rejection, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn context_carriage_rejects_missing_and_duplicate_roots() {
+        let root = SemanticFunctionIdV1::from_index(0);
+        let missing = context_custody(vec![root], vec![], 1, 2);
+        assert_eq!(
+            context_error(missing.validate_carriage(
+                [1; 32],
+                [2; 32],
+                &[context_observation(0, 10, 20)],
+            )),
+            "context custody is missing, duplicated, or reordered"
+        );
+
+        let duplicate = context_custody(
+            vec![root, root],
+            vec![context_root(0, 10, 20, 3, 4), context_root(0, 10, 20, 3, 4)],
+            1,
+            2,
+        );
+        assert_eq!(
+            context_error(duplicate.validate_carriage(
+                [1; 32],
+                [2; 32],
+                &[context_observation(0, 10, 20)],
+            )),
+            "context custody contains duplicate or noncanonical roots"
+        );
+    }
+
+    #[test]
+    fn context_carriage_rejects_cross_root_target_and_launch_substitution() {
+        let expected = vec![SemanticFunctionIdV1::from_index(0)];
+        let cross_root =
+            context_custody(expected.clone(), vec![context_root(0, 10, 20, 3, 4)], 1, 2);
+        assert_eq!(
+            context_error(cross_root.validate_carriage(
+                [1; 32],
+                [2; 32],
+                &[context_observation(0, 11, 20)],
+            )),
+            "context custody was substituted across kernel roots"
+        );
+
+        let cross_target =
+            context_custody(expected.clone(), vec![context_root(0, 10, 20, 3, 4)], 1, 2);
+        assert_eq!(
+            context_error(cross_target.validate_carriage(
+                [1; 32],
+                [3; 32],
+                &[context_observation(0, 10, 20)],
+            )),
+            "context custody belongs to a different selected target"
+        );
+
+        let cross_launch = context_custody(expected, vec![context_root(0, 10, 20, 3, 4)], 1, 2);
+        assert_eq!(
+            context_error(cross_launch.validate_carriage(
+                [1; 32],
+                [2; 32],
+                &[context_observation(0, 10, 21)],
+            )),
+            "context custody was substituted across launch contracts"
+        );
+    }
+
+    #[test]
+    fn context_carriage_rejects_stale_identity_and_preserves_physical_kernarg_count() {
+        let expected = vec![SemanticFunctionIdV1::from_index(0)];
+        let mut stale =
+            context_custody(expected.clone(), vec![context_root(0, 10, 20, 3, 4)], 1, 2);
+        stale.custody_identity[0] ^= 1;
+        assert_eq!(
+            context_error(stale.validate_carriage(
+                [1; 32],
+                [2; 32],
+                &[context_observation(0, 10, 20)],
+            )),
+            "context custody identity is stale"
+        );
+
+        let exact = context_custody(expected.clone(), vec![context_root(0, 10, 20, 3, 4)], 1, 2);
+        assert!(
+            exact
+                .validate_carriage([1; 32], [2; 32], &[context_observation(0, 10, 20)],)
+                .is_ok()
+        );
+
+        let changed_physical_abi =
+            context_custody(expected, vec![context_root(0, 10, 20, 3, 5)], 1, 2);
+        assert_eq!(
+            context_error(changed_physical_abi.validate_carriage(
+                [1; 32],
+                [2; 32],
+                &[context_observation(0, 10, 20)],
+            )),
+            "logical context changed the physical kernel argument count"
+        );
+    }
+
+    #[test]
     fn root_custody_comparison_rejects_every_sequence_substitution() {
         assert!(exact_ordered_axes_match([1, 2], [1, 2]));
         for substituted in [vec![1], vec![1, 2, 2], vec![2, 1], vec![1, 3]] {
             assert!(!exact_ordered_axes_match(vec![1, 2], substituted));
         }
+    }
+
+    #[test]
+    fn capability_diagnostics_are_stable_and_distinguish_rejected_from_incomplete() {
+        let rejected = ProductionSemanticImportErrorV1::CapabilityTerminalRejected {
+            root: "root-id".to_owned(),
+            span: "kernel.rs:7:9".to_owned(),
+            helper_chain: "root-id->helper-id->terminal-id".to_owned(),
+            stage: "terminal-authentication",
+            detail: "wrong epoch".to_owned(),
+        };
+        assert_eq!(
+            rejected.to_string(),
+            "FE2O3-CAP Rejected root=root-id span=kernel.rs:7:9 helper_chain=root-id->helper-id->terminal-id stage=terminal-authentication: wrong epoch",
+        );
+
+        let incomplete = ProductionSemanticImportErrorV1::TargetNeutralLoweringPending {
+            functions: 1,
+            callables: 2,
+            rustc_identity_inventory_sha256: [1; 32],
+            rustc_preflight_plan_sha256: [2; 32],
+            semantic_sha256: [3; 32],
+        }
+        .to_string();
+        assert!(incomplete.starts_with(
+            "FE2O3-CAP Incomplete root=authenticated-set span=authenticated-set helper_chain=authenticated-closure stage=target-neutral-lowering:"
+        ));
+    }
+
+    #[test]
+    fn capability_helper_paths_are_deterministic_bounded_and_cycle_safe() {
+        let function = SemanticFunctionIdV1::from_index;
+        let edges = [
+            (function(0), function(2)),
+            (function(0), function(1)),
+            (function(1), function(3)),
+            (function(2), function(3)),
+            (function(3), function(0)),
+        ];
+        assert_eq!(
+            semantic_function_path_v1(function(0), function(3), &edges),
+            Some(vec![function(0), function(1), function(3)]),
+        );
+        assert_eq!(
+            semantic_function_path_v1(function(0), function(4), &edges),
+            None,
+        );
+    }
+
+    #[test]
+    fn typed_global_terminal_custody_rejects_orphans_and_cross_root_substitution() {
+        let function = SemanticFunctionIdV1::from_index;
+        let contexts = context_custody(
+            vec![function(0), function(1)],
+            vec![context_root(0, 10, 20, 2, 3), context_root(1, 11, 21, 2, 3)],
+            1,
+            2,
+        );
+        let helper_callers = BTreeSet::from([function(2)]);
+
+        let exact = authenticate_capability_memory_root_v1(
+            &contexts,
+            &helper_callers,
+            &[(function(0), function(2))],
+            false,
+        )
+        .unwrap();
+        assert_eq!(exact.selected_root, function(0));
+
+        assert_eq!(
+            context_error(authenticate_capability_memory_root_v1(
+                &contexts,
+                &helper_callers,
+                &[],
+                false,
+            )),
+            "typed-global terminal is not owned by exactly one authenticated kernel root"
+        );
+        assert_eq!(
+            context_error(authenticate_capability_memory_root_v1(
+                &contexts,
+                &helper_callers,
+                &[(function(0), function(2)), (function(1), function(2))],
+                false,
+            )),
+            "typed-global terminal is not owned by exactly one authenticated kernel root"
+        );
+
+        let substituted_callers = BTreeSet::from([function(0), function(1)]);
+        assert_eq!(
+            context_error(authenticate_capability_memory_root_v1(
+                &contexts,
+                &substituted_callers,
+                &[],
+                false,
+            )),
+            "typed-global terminal is shared across authenticated kernel roots"
+        );
+    }
+
+    #[test]
+    fn typed_global_bind_requires_direct_root_issuance_and_reachability_is_cycle_safe() {
+        let function = SemanticFunctionIdV1::from_index;
+        let contexts =
+            context_custody(vec![function(0)], vec![context_root(0, 10, 20, 2, 3)], 1, 2);
+        let helper_callers = BTreeSet::from([function(2)]);
+        let cyclic_edges = [
+            (function(0), function(3)),
+            (function(3), function(0)),
+            (function(3), function(2)),
+        ];
+        assert!(semantic_function_reaches_v1(
+            function(0),
+            function(2),
+            &cyclic_edges,
+        ));
+        assert!(!semantic_function_reaches_v1(
+            function(0),
+            function(4),
+            &cyclic_edges,
+        ));
+        assert_eq!(
+            context_error(authenticate_capability_memory_root_v1(
+                &contexts,
+                &helper_callers,
+                &cyclic_edges,
+                true,
+            )),
+            "typed-global binding is not issued directly by its physical kernel root"
+        );
+
+        let root_callers = BTreeSet::from([function(0)]);
+        assert_eq!(
+            authenticate_capability_memory_root_v1(&contexts, &root_callers, &cyclic_edges, true)
+                .unwrap()
+                .selected_root,
+            function(0),
+        );
     }
 
     #[test]

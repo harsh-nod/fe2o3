@@ -1,12 +1,16 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod final_graph_verification_v1;
 mod kir_bridge_v1;
 mod optimization_v1;
 mod production;
+mod target_neutral_transforms_v1;
 
+pub use final_graph_verification_v1::*;
 pub use kir_bridge_v1::*;
 pub use optimization_v1::*;
+pub use target_neutral_transforms_v1::*;
 
 pub use production::{
     ConstructedGraphStageV1, ConstructionRegisteredStageV1, HARD_MAX_PRODUCTION_CONSTRUCTIONS,

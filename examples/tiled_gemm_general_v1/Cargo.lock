@@ -141,9 +141,9 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cc"
-version = "1.4.4"
+version = "1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ad534f4357a5264cce5019c989cf66a4f0dc4e0d1b1d15f8aacec0ff7360273"
+checksum = "005ec2760ca554fae18df7a11195552ec576cd665632a881bc011d5bb2fd4d80"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -272,8 +272,11 @@ dependencies = [
 name = "dialect-gpu"
 version = "0.1.0"
 dependencies = [
+ "dialect-kernel",
+ "fe2o3-kernel-ir",
  "fe2o3-pliron-owner-core",
  "pliron",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -389,11 +392,13 @@ name = "fe2o3-amdgcn-model"
 version = "0.1.0"
 dependencies = [
  "fe2o3-amd-target",
+ "fe2o3-compiler-lineage",
  "fe2o3-kernel-analysis",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
  "fe2o3-kernel-opt",
  "fe2o3-llvm-handoff",
+ "fe2o3-target-spec",
  "sha2 0.11.0",
 ]
 
@@ -413,8 +418,10 @@ version = "0.1.0"
 name = "fe2o3-artifact-transaction"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "fe2o3-build-authority",
  "fe2o3-compiler-ffi",
+ "fe2o3-compiler-lineage",
  "fe2o3-rustc-invocation",
  "libc",
  "rustix",
@@ -479,6 +486,7 @@ dependencies = [
  "fe2o3-amd-target",
  "fe2o3-compiler-lineage",
  "fe2o3-kernel-descriptor",
+ "fe2o3-proof-contracts",
  "reserved-fe2o3-symbols",
  "sha2 0.11.0",
 ]
@@ -490,6 +498,7 @@ dependencies = [
  "fe2o3-amd-target",
  "fe2o3-build-authority",
  "fe2o3-kernel-descriptor",
+ "fe2o3-proof-contracts",
  "fe2o3-rustc-invocation",
  "sha2 0.11.0",
 ]
@@ -566,18 +575,26 @@ dependencies = [
  "fe2o3-aql",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
+ "fe2o3-compiler-closure-capability",
  "fe2o3-compiler-execution-client",
+ "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-ffi",
+ "fe2o3-compiler-lineage",
+ "fe2o3-core",
  "fe2o3-device",
+ "fe2o3-hip-sys",
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
  "fe2o3-kfd",
+ "fe2o3-proof-contracts",
  "fe2o3-runtime",
  "fe2o3-runtime-protocol",
  "fe2o3-service-host",
  "fe2o3-verifier",
+ "fe2o3-worker-v3-verification-client",
+ "fe2o3-worker-v3-verification-protocol",
  "libc",
  "reserved-fe2o3-symbols",
  "rustix",
@@ -627,8 +644,10 @@ dependencies = [
  "dialect-gpu",
  "dialect-kernel",
  "dialect-proof",
+ "fe2o3-compiler-lineage",
  "fe2o3-kernel-ir",
  "fe2o3-pliron-owner-core",
+ "fe2o3-target-spec",
  "pliron",
  "sha2 0.11.0",
 ]
@@ -655,6 +674,7 @@ name = "fe2o3-kernel-opt"
 version = "0.1.0"
 dependencies = [
  "dialect-gpu",
+ "fe2o3-kernel-analysis",
  "fe2o3-kernel-ir",
  "fe2o3-pliron",
 ]
@@ -678,6 +698,29 @@ dependencies = [
 [[package]]
 name = "fe2o3-kfd-uapi"
 version = "0.1.0"
+
+[[package]]
+name = "fe2o3-kir-sim"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-kernel-ir",
+ "rustc_apfloat",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-kir-sim-cli"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-kernel-ir",
+ "fe2o3-kir-sim",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+]
 
 [[package]]
 name = "fe2o3-llvm-handoff"
@@ -714,6 +757,7 @@ name = "fe2o3-macros"
 version = "0.1.0"
 dependencies = [
  "fe2o3-artifacts",
+ "fe2o3-rustc-front",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
@@ -745,6 +789,7 @@ dependencies = [
  "fe2o3-mir-model",
  "fe2o3-pliron-owner-core",
  "fe2o3-proof-contracts",
+ "fe2o3-target-spec",
  "pliron",
  "sha2 0.11.0",
 ]
@@ -780,6 +825,9 @@ dependencies = [
 [[package]]
 name = "fe2o3-proof-contracts"
 version = "0.1.0"
+dependencies = [
+ "sha2 0.11.0",
+]
 
 [[package]]
 name = "fe2o3-runtime"
@@ -863,10 +911,12 @@ version = "0.1.0"
 name = "fe2o3-tiled-gemm-general-v1"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
  "fe2o3-gemm-device-v1",
  "fe2o3-host",
+ "fe2o3-kernel-ir",
+ "fe2o3-kir-sim-cli",
+ "serde_json",
  "syn 2.0.119",
  "trybuild",
 ]
@@ -881,6 +931,7 @@ dependencies = [
  "fe2o3-amd-target",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
+ "fe2o3-compiler-ffi",
  "fe2o3-compiler-lineage",
  "fe2o3-contracts",
  "fe2o3-functional-proof",
@@ -899,6 +950,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-worker-v3-verification-client"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-artifact-transaction",
+ "fe2o3-compiler-execution-client",
+ "fe2o3-compiler-execution-protocol",
+ "fe2o3-kernel-ir",
+ "fe2o3-runtime-protocol",
+ "fe2o3-worker-v3-verification-protocol",
+ "rustix",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-worker-v3-verification-protocol"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-hsaco",
+ "fe2o3-kernel-descriptor",
+ "fe2o3-runtime-protocol",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -906,9 +981,9 @@ checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.11"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
+checksum = "3e0f1c7c3a72c66fd80abe965175f7523475c0489a87d3ff9d6e8c87d87a9d2d"
 
 [[package]]
 name = "foldhash"
@@ -975,9 +1050,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.14.1"
+version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07aa2048142242915a31d35844fb311e0e53fcca590c3a0a40dcf1b841fa09eb"
+checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown",
@@ -1021,7 +1096,7 @@ checksum = "77060ebe535362c3da75682cd17b0431017b6e7c5661e714fc69a7ad017d1301"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -1114,7 +1189,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rustc-hash",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -1287,7 +1362,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -1402,9 +1477,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.4"
+version = "3.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6275cddf4610d1775e6d1fe9469b2e77d0f39fd98fb7450901b821e0c53649f"
+checksum = "12df2e0110f65b775f769bb17ef989067a1d931b2eb822bd4346631eeada89f9"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1443,7 +1518,7 @@ checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]

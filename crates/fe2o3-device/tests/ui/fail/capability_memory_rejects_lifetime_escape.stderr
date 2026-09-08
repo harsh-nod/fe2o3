@@ -1,0 +1,12 @@
+error: lifetime may not live long enough
+ --> tests/ui/fail/capability_memory_rejects_lifetime_escape.rs:8:5
+  |
+5 | fn escape<'kernel>(
+  |           ------- lifetime `'kernel` defined here
+...
+8 |     view
+  |     ^^^^ returning this value requires that `'kernel` must outlive `'static`
+  |
+  = note: requirement occurs because of the type `CapabilityMemoryView<'_, u32, GlobalAddressSpace, fe2o3_device::ReadOnly, KernelBrand>`, which makes the generic argument `'_` invariant
+  = note: the struct `CapabilityMemoryView<'kernel, T, Space, Role, Brand>` is invariant over the parameter `'kernel`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance

@@ -1,9 +1,9 @@
 //! Independent safe CPU references for the systems tutorial kernels.
 
 use crate::{
-    ALL_EXPERTS, CANDIDATES, DISPATCH_CAPACITY, DRAFT_STEPS, EXPERTS, GRADIENT_SHARDS, HIDDEN,
-    MUON_DIM, MUON_ELEMENTS, MUON_ITERATIONS, MUON_LEARNING_RATE, NGRAM, OUTPUT, QUERIES,
-    STATE_WIDTH, SYSTEM_BATCHES, TABLE_SIZE, TOKENS, TOP_K,
+    ALL_EXPERTS, CANDIDATES, COMBINE_BATCHES, DISPATCH_CAPACITY, DRAFT_STEPS, EXPERTS,
+    GRADIENT_SHARDS, HIDDEN, MUON_DIM, MUON_ELEMENTS, MUON_ITERATIONS, MUON_LEARNING_RATE, NGRAM,
+    OUTPUT, QUERIES, STATE_WIDTH, SYSTEM_BATCHES, TABLE_SIZE, TOKENS, TOP_K,
 };
 
 /// Complete CPU routing observation.
@@ -226,6 +226,17 @@ pub fn batched_moe_rank_reference(
     output
 }
 
+/// Adds two expert-rank partials in the kernel's fixed rank order.
+pub fn combine_expert_ranks_reference(rank0: &[f32], rank1: &[f32]) -> Vec<f32> {
+    assert_eq!(rank0.len(), COMBINE_BATCHES * TOKENS * OUTPUT);
+    assert_eq!(rank1.len(), rank0.len());
+    rank0
+        .iter()
+        .zip(rank1)
+        .map(|(left, right)| left + right)
+        .collect()
+}
+
 /// Applies transactional speculative acceptance.
 pub fn speculative_reference(
     draft: &[i32],
@@ -370,6 +381,12 @@ pub fn batched_ngram_reference(
         ));
     }
     output
+}
+
+/// Copies all batch-local gradient elements in deterministic storage order.
+pub fn stage_gradient_shard_reference(input: &[f32]) -> Vec<f32> {
+    assert_eq!(input.len(), SYSTEM_BATCHES * MUON_ELEMENTS);
+    input.to_vec()
 }
 
 /// Computes the fixed-order two-shard Muon update.

@@ -41,9 +41,9 @@ help: the following other types implement trait `Gfx942CollectiveElement`
   | |     "fe2o3_device_gfx942_lds_load_f32_v1"
   | | );
   | |_- in this macro invocation
-note: required by a bound in `collective::<impl SubgroupTile<'_, 64>>::reduce_sum`
+note: required by a bound in `collective::<impl SubgroupTile<'_, 64, Brand>>::reduce_sum`
  --> src/collective.rs
   |
   |     pub fn reduce_sum<T: Gfx942CollectiveElement>(
-  |                          ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `collective::<impl SubgroupTile<'_, 64>>::reduce_sum`
+  |                          ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `collective::<impl SubgroupTile<'_, 64, Brand>>::reduce_sum`
   = note: this error originates in the macro `collective_element` (in Nightly builds, run with -Z macro-backtrace for more info)

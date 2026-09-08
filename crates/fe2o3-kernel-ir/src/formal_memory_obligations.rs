@@ -765,6 +765,10 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                 OperationKind::Constant(_)
                 | OperationKind::Intrinsic(_)
                 | OperationKind::MemoryIntrinsic(_)
+                | OperationKind::KernelContextIssue(_)
+                | OperationKind::GlobalCapabilityBind(_)
+                | OperationKind::GlobalCapabilityIndex(_)
+                | OperationKind::ExecutionCapability(_)
                 | OperationKind::Wave(_)
                 | OperationKind::Unary { .. }
                 | OperationKind::Binary { .. }

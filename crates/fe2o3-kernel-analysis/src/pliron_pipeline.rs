@@ -20,7 +20,10 @@ use crate::pliron_atomic_legality::require_pliron_atomic_legality_with_analyses_
 use crate::pliron_barrier::require_pliron_barrier_convergence_with_analyses_v1;
 use crate::pliron_hierarchical_ownership::require_pliron_hierarchical_ownership_with_analyses_v1;
 use crate::pliron_ir_identity::LivePlironStructuralIdentityProviderV1;
-use crate::pliron_launch_contract::require_pliron_launch_contract_with_analyses_v1;
+use crate::pliron_launch_contract::{
+    require_pliron_launch_contract_with_analyses_v1,
+    require_pliron_launch_contract_with_canonical_layout_and_analyses_v1,
+};
 use crate::pliron_pass_contract::{
     PlironPassContractSessionV1, PlironPassPreservationErrorV1, PlironPassPreservationReportV1,
     begin_production_pliron_pass_contract_session_v1,
@@ -40,12 +43,13 @@ use crate::{
     HierarchicalOwnershipCheckErrorV1, HierarchicalOwnershipReportV1, KernelCheckPassKindV1,
     KernelCheckStatusV1, PlironAtomicLegalityCheckErrorV1, PlironAtomicLegalityReportV1,
     PlironAtomicTargetContextV1, PlironBarrierCheckErrorV1, PlironBarrierReportV1,
-    PlironLaunchContractCheckErrorV1, PlironLaunchContractReportV1, PlironLaunchContractV1,
-    PlironPipelineProtocolCheckErrorV1, PlironPipelineProtocolReportV1,
-    PlironSemanticRefinementCheckErrorV1, PlironSemanticRefinementReportV1,
-    PlironTensorLayoutCheckErrorV1, PlironTensorLayoutDataflowIssueV1, PlironTensorLayoutFindingV1,
-    PlironTensorLayoutReportV1, PlironWorkgroupMemoryCheckErrorV1, PlironWorkgroupMemoryReportV1,
-    RankedBoundsCheckErrorV1, RankedBoundsReportV1, RankedRaceCheckErrorV1, RankedRaceReportV1,
+    PlironCanonicalExecutionLayoutV1, PlironLaunchContractCheckErrorV1,
+    PlironLaunchContractReportV1, PlironLaunchContractV1, PlironPipelineProtocolCheckErrorV1,
+    PlironPipelineProtocolReportV1, PlironSemanticRefinementCheckErrorV1,
+    PlironSemanticRefinementReportV1, PlironTensorLayoutCheckErrorV1,
+    PlironTensorLayoutDataflowIssueV1, PlironTensorLayoutFindingV1, PlironTensorLayoutReportV1,
+    PlironWorkgroupMemoryCheckErrorV1, PlironWorkgroupMemoryReportV1, RankedBoundsCheckErrorV1,
+    RankedBoundsReportV1, RankedRaceCheckErrorV1, RankedRaceReportV1,
 };
 
 /// Whether a compiler repair can be applied without another semantic choice.
@@ -383,6 +387,14 @@ pub struct ProductionPlironPreloweringReportV2 {
 }
 
 impl ProductionPlironPreloweringReportV2 {
+    /// Frozen logical capability-analysis dependency inventory. This records
+    /// embedded and optional coverage as such; it is not an authority receipt.
+    pub const fn capability_analysis_schedule(
+        &self,
+    ) -> &'static [crate::ProductionCapabilityAnalysisStageV1; 16] {
+        &crate::PRODUCTION_CAPABILITY_ANALYSIS_SCHEDULE_V1
+    }
+
     pub const fn pass_order(&self) -> &[KernelCheckPassKindV1; 9] {
         &PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2
     }
@@ -563,7 +575,7 @@ pub fn require_production_pliron_checks_before_lowering_v2(
     context: &Context,
     function: &FuncOp,
 ) -> Result<ProductionPlironPreloweringReportV2, ProductionPlironPreloweringErrorV2> {
-    require_production_pliron_checks_v2(context, function, None, None)
+    require_production_pliron_checks_v2(context, function, None, None, None)
 }
 
 #[allow(clippy::result_large_err)]
@@ -572,7 +584,7 @@ pub fn require_production_pliron_checks_with_atomic_target_before_lowering_v2(
     function: &FuncOp,
     atomic_target: &PlironAtomicTargetContextV1,
 ) -> Result<ProductionPlironPreloweringReportV2, ProductionPlironPreloweringErrorV2> {
-    require_production_pliron_checks_v2(context, function, Some(atomic_target), None)
+    require_production_pliron_checks_v2(context, function, Some(atomic_target), None, None)
 }
 
 /// Runs the same fixed nine-stage policy pipeline with compiler-supplied
@@ -583,7 +595,7 @@ pub fn require_production_pliron_checks_with_target_before_lowering_v2(
     function: &FuncOp,
     target_contract: &PlironLaunchContractV1,
 ) -> Result<ProductionPlironPreloweringReportV2, ProductionPlironPreloweringErrorV2> {
-    require_production_pliron_checks_v2(context, function, None, Some(target_contract))
+    require_production_pliron_checks_v2(context, function, None, Some(target_contract), None)
 }
 
 #[allow(clippy::result_large_err)]
@@ -598,6 +610,26 @@ pub fn require_production_pliron_checks_with_atomic_and_target_before_lowering_v
         function,
         Some(atomic_target),
         Some(target_contract),
+        None,
+    )
+}
+
+/// Runs the fixed production checks using launch geometry retained by the
+/// exact canonical KIR kernel root instead of a duplicate body-local layout.
+#[allow(clippy::result_large_err)]
+pub fn require_production_pliron_checks_with_atomic_target_and_canonical_layout_before_lowering_v2(
+    context: &Context,
+    function: &FuncOp,
+    atomic_target: &PlironAtomicTargetContextV1,
+    target_contract: &PlironLaunchContractV1,
+    canonical_layout: PlironCanonicalExecutionLayoutV1,
+) -> Result<ProductionPlironPreloweringReportV2, ProductionPlironPreloweringErrorV2> {
+    require_production_pliron_checks_v2(
+        context,
+        function,
+        Some(atomic_target),
+        Some(target_contract),
+        Some(canonical_layout),
     )
 }
 
@@ -633,16 +665,24 @@ fn require_production_pliron_checks_v2(
     function: &FuncOp,
     atomic_target: Option<&PlironAtomicTargetContextV1>,
     target_contract: Option<&PlironLaunchContractV1>,
+    canonical_layout: Option<PlironCanonicalExecutionLayoutV1>,
 ) -> Result<ProductionPlironPreloweringReportV2, ProductionPlironPreloweringErrorV2> {
     let mut analyses = PlironAnalysisManagerV1::new(function);
     let target_contract = target_contract
-        .map(|target| {
-            require_pliron_launch_contract_with_analyses_v1(
+        .map(|target| match canonical_layout {
+            Some(layout) => require_pliron_launch_contract_with_canonical_layout_and_analyses_v1(
+                context,
+                function,
+                target,
+                layout,
+                &mut analyses,
+            ),
+            None => require_pliron_launch_contract_with_analyses_v1(
                 context,
                 function,
                 target,
                 &mut analyses,
-            )
+            ),
         })
         .transpose()
         .map_err(ProductionPlironPreloweringErrorV2::TargetContract)?;

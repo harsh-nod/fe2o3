@@ -6,15 +6,17 @@ use dialect_kernel::IndexBinaryKindAttr;
 use fe2o3_kernel_ir::{
     AccessMode, AmdGpuDiagnosticOperation, BinaryOp, BlockId, CastKind, CheckedBinaryOperator,
     FunctionRole, LaunchDomain, OperationKind, ScalarType, TargetCapability, Terminator, Type,
-    WaveWidth, WorkgroupSize, analyze_interprocedural_effects_v1, decode_module_v8,
+    WaveWidth, WorkgroupSize, analyze_interprocedural_effects_v1, decode_module_v13,
     gfx942_xnack_minus_target_capability, gfx950_xnack_minus_target_capability, verify_module,
 };
 use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV3, InertCanonicalMirToKirCorrespondenceEvidenceV5,
-    PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1, ProductionCorrespondenceEvidenceErrorV5,
-    ProductionFormalMemoryOwnerV1, ProductionRankedAccessSourceV1,
+    PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1, ProductionCanonicalKernelIrVersionV1,
+    ProductionCorrespondenceEvidenceErrorV5, ProductionFormalMemoryOwnerV1,
+    ProductionKernelContextLoweringInputV1, ProductionRankedAccessSourceV1,
     ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirErrorV1,
     ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1, ProductionSemanticKirResourceV1,
+    ProductionSourceRefinementEvidenceErrorV1, ProductionSourceRefinementEvidenceV1,
     SemanticKirParameterProjectionV1, SemanticKirSyntheticOperationRuleV1,
     validate_borrowed_ranked_semantic_projection_candidate_v1,
 };
@@ -444,6 +446,513 @@ fn compiler_intrinsic_callable(
         operation,
         operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256(bytes(tag)),
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KernelContextFixtureV1 {
+    Valid,
+    DuplicateRootIssuance,
+    HelperIssuance,
+}
+
+fn kernel_context_type_v15() -> SemanticTypeDeclV1 {
+    SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(160)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(160)),
+        SemanticTypeLayoutV1::aggregate_with_backend_repr(
+            Some(0),
+            1,
+            SemanticBackendReprV1::memory(true),
+            false,
+            SemanticAggregateLayoutV1::new(vec![], vec![]).unwrap(),
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![]).unwrap()),
+    )
+}
+
+fn kernel_context_source_v15(line: u32) -> SemanticSourceProvenanceV1 {
+    let origin = SemanticSourceOriginV1::new(
+        SemanticSourceFileIdentityV1::from_sha256(bytes(161)),
+        u64::from(line) * 10,
+        u64::from(line) * 10 + 8,
+        line,
+        1,
+        line,
+        9,
+    )
+    .unwrap();
+    SemanticSourceProvenanceV1::new(Some(origin), Some(origin))
+}
+
+fn kernel_context_block_v15(
+    tag: u8,
+    line: u32,
+    terminator: SemanticTerminatorKindV1,
+) -> SemanticBasicBlockV1 {
+    let source = kernel_context_source_v15(line);
+    SemanticBasicBlockV1::new(
+        SemanticBlockIdentityV1::from_sha256(bytes(tag)),
+        source,
+        vec![],
+        SemanticTerminatorV1::new(source, terminator),
+    )
+    .unwrap()
+}
+
+fn kernel_context_call_v15(
+    callee: u32,
+    arguments: Vec<SemanticOperandV1>,
+    destination_local: u32,
+    destination_type: SemanticTypeIdV1,
+    target: u32,
+) -> SemanticTerminatorKindV1 {
+    SemanticTerminatorKindV1::Call(
+        SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(callee),
+            arguments,
+            Some(SemanticCallDestinationV1::new(
+                local_place(destination_local, destination_type),
+                SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::CallReturn,
+                    SemanticBlockIdV1::from_index(target),
+                ),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap(),
+    )
+}
+
+fn kernel_context_owner_v15(fixture: KernelContextFixtureV1) -> ProductionSemanticMirOwnerV1 {
+    let unit = SemanticTypeIdV1::from_index(0);
+    let context = SemanticTypeIdV1::from_index(1);
+    let source = kernel_context_source_v15(1);
+    let ignored = |ty| SemanticAbiValueV1::new(ty, SemanticAbiPassModeV1::Ignore);
+    let root_abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256(bytes(162)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+        SemanticCanonAbiV1::GpuKernel,
+        SemanticExternAbiV1::GpuKernel,
+        false,
+        false,
+        0,
+        vec![],
+        ignored(unit),
+    )
+    .unwrap();
+    let helper_has_context = fixture != KernelContextFixtureV1::HelperIssuance;
+    let helper_arguments = helper_has_context
+        .then(|| SemanticAbiArgumentV1::source(ignored(context)))
+        .into_iter()
+        .collect::<Vec<_>>();
+    let helper_abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256(bytes(163)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+        SemanticCanonAbiV1::Rust,
+        SemanticExternAbiV1::Rust,
+        false,
+        false,
+        u32::from(helper_has_context),
+        helper_arguments,
+        ignored(unit),
+    )
+    .unwrap()
+    .with_source_argument_ownership(
+        helper_has_context
+            .then_some(SemanticSourceArgumentOwnershipV1::ByValue)
+            .into_iter()
+            .collect(),
+    )
+    .unwrap();
+
+    let local = |tag, ty, role| {
+        SemanticLocalDeclV1::new(
+            SemanticLocalIdentityV1::from_sha256(bytes(tag)),
+            ty,
+            role,
+            source,
+        )
+    };
+    let (root_locals, root_blocks) = match fixture {
+        KernelContextFixtureV1::Valid => (
+            vec![
+                local(164, unit, SemanticLocalRoleV1::Return),
+                local(165, context, SemanticLocalRoleV1::Temporary),
+                local(166, unit, SemanticLocalRoleV1::Temporary),
+                local(193, unit, SemanticLocalRoleV1::Temporary),
+            ],
+            vec![
+                kernel_context_block_v15(
+                    167,
+                    10,
+                    kernel_context_call_v15(2, vec![], 1, context, 1),
+                ),
+                kernel_context_block_v15(
+                    168,
+                    11,
+                    kernel_context_call_v15(
+                        1,
+                        vec![SemanticOperandV1::Move(local_place(1, context))],
+                        2,
+                        unit,
+                        2,
+                    ),
+                ),
+                kernel_context_block_v15(169, 12, kernel_context_call_v15(3, vec![], 3, unit, 3)),
+                kernel_context_block_v15(194, 13, SemanticTerminatorKindV1::Return),
+            ],
+        ),
+        KernelContextFixtureV1::DuplicateRootIssuance => (
+            vec![
+                local(164, unit, SemanticLocalRoleV1::Return),
+                local(165, context, SemanticLocalRoleV1::Temporary),
+                local(166, unit, SemanticLocalRoleV1::Temporary),
+                local(170, context, SemanticLocalRoleV1::Temporary),
+                local(193, unit, SemanticLocalRoleV1::Temporary),
+            ],
+            vec![
+                kernel_context_block_v15(
+                    167,
+                    10,
+                    kernel_context_call_v15(2, vec![], 1, context, 1),
+                ),
+                kernel_context_block_v15(
+                    168,
+                    11,
+                    kernel_context_call_v15(2, vec![], 3, context, 2),
+                ),
+                kernel_context_block_v15(
+                    169,
+                    12,
+                    kernel_context_call_v15(
+                        1,
+                        vec![SemanticOperandV1::Move(local_place(3, context))],
+                        2,
+                        unit,
+                        3,
+                    ),
+                ),
+                kernel_context_block_v15(171, 13, kernel_context_call_v15(3, vec![], 4, unit, 4)),
+                kernel_context_block_v15(194, 14, SemanticTerminatorKindV1::Return),
+            ],
+        ),
+        KernelContextFixtureV1::HelperIssuance => (
+            vec![
+                local(164, unit, SemanticLocalRoleV1::Return),
+                local(166, unit, SemanticLocalRoleV1::Temporary),
+            ],
+            vec![
+                kernel_context_block_v15(167, 10, kernel_context_call_v15(1, vec![], 1, unit, 1)),
+                kernel_context_block_v15(168, 11, SemanticTerminatorKindV1::Return),
+            ],
+        ),
+    };
+    let dimensions = SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
+    let root = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(bytes(172)),
+        SemanticFunctionRoleV1::KernelRoot,
+        SemanticItemDefinitionIdentityV1::from_sha256(bytes(173)),
+        SemanticMonomorphizationIdentityV1::from_sha256(bytes(174)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(175)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(176)),
+        source,
+        root_abi,
+        root_locals,
+        SemanticBlockIdV1::from_index(0),
+        root_blocks,
+    )
+    .unwrap()
+    .with_kernel_entry(SemanticKernelEntryV1::new(
+        SemanticLinkSymbolV1::new(b"kernel_context_v15_to_v12".to_vec()).unwrap(),
+        SemanticKernelBindingIdentityV1::from_sha256(bytes(177)),
+        SemanticKernelSourceContractV1::new(
+            Some(
+                SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None)
+                    .unwrap(),
+            ),
+            None,
+            None,
+        )
+        .unwrap(),
+    ));
+
+    let helper_locals = if helper_has_context {
+        vec![
+            local(178, unit, SemanticLocalRoleV1::Return),
+            local(179, context, SemanticLocalRoleV1::Argument(0)),
+        ]
+    } else {
+        vec![
+            local(178, unit, SemanticLocalRoleV1::Return),
+            local(179, context, SemanticLocalRoleV1::Temporary),
+        ]
+    };
+    let helper_blocks = if helper_has_context {
+        vec![kernel_context_block_v15(
+            180,
+            20,
+            SemanticTerminatorKindV1::Return,
+        )]
+    } else {
+        vec![
+            kernel_context_block_v15(180, 20, kernel_context_call_v15(2, vec![], 1, context, 1)),
+            kernel_context_block_v15(181, 21, SemanticTerminatorKindV1::Return),
+        ]
+    };
+    let helper = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(bytes(182)),
+        SemanticFunctionRoleV1::InternalHelper,
+        SemanticItemDefinitionIdentityV1::from_sha256(bytes(183)),
+        SemanticMonomorphizationIdentityV1::from_sha256(bytes(184)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(185)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(186)),
+        source,
+        helper_abi,
+        helper_locals,
+        SemanticBlockIdV1::from_index(0),
+        helper_blocks,
+    )
+    .unwrap();
+
+    let mut callables = vec![
+        SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+        SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(1)),
+        compiler_intrinsic_callable(
+            187,
+            vec![],
+            ignored(context),
+            SemanticCompilerIntrinsicOperationV1::KernelContextIssue { context },
+        ),
+    ];
+    if fixture != KernelContextFixtureV1::HelperIssuance {
+        callables.push(compiler_intrinsic_callable(
+            195,
+            vec![],
+            ignored(unit),
+            SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier,
+        ));
+    }
+    let request = InertSemanticMirRequestV1::new_with_callables(
+        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
+        vec![unit_type(), kernel_context_type_v15()],
+        vec![],
+        vec![],
+        vec![],
+        vec![root, helper],
+        callables,
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap();
+    let admitted = request
+        .admit_exact_v15(SemanticMirLimitsV1::default())
+        .unwrap();
+    ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+        .unwrap()
+}
+
+fn kernel_context_input_v1() -> ProductionKernelContextLoweringInputV1 {
+    ProductionKernelContextLoweringInputV1::new(
+        SemanticFunctionIdV1::from_index(0),
+        bytes(188),
+        bytes(189),
+        bytes(190),
+        bytes(191),
+        bytes(192),
+    )
+}
+
+#[test]
+fn kernel_context_v15_lowers_to_one_optimizer_visible_v13_issue() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower_with_kernel_contexts(
+        kernel_context_owner_v15(KernelContextFixtureV1::Valid),
+        ProductionSemanticKirLimitsV1::default(),
+        vec![kernel_context_input_v1()],
+    )
+    .unwrap();
+    lowered.verify_equivalence().unwrap();
+    assert_eq!(
+        lowered.canonical_kernel_ir_identity().version(),
+        ProductionCanonicalKernelIrVersionV1::V13
+    );
+    assert_eq!(
+        decode_module_v13(lowered.canonical_kernel_ir_bytes()).unwrap(),
+        *lowered.module()
+    );
+
+    let entry = &lowered.module().functions[0];
+    let issues = entry
+        .body
+        .as_ref()
+        .unwrap()
+        .blocks
+        .iter()
+        .flat_map(|block| &block.operations)
+        .filter_map(|operation| match &operation.kind {
+            OperationKind::KernelContextIssue(issue) => Some((operation, issue)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [(operation, issue)] = issues.as_slice() else {
+        panic!("expected exactly one KIR KernelContextIssue");
+    };
+    let [result] = operation.results.as_slice() else {
+        panic!("expected exactly one logical context result");
+    };
+    let Type::KernelContext(context) = &result.ty else {
+        panic!("issued result must retain its logical context type");
+    };
+    assert_eq!(context.root().as_str(), "kernel_context_v15_to_v12");
+    assert_eq!(context.kernel_marker(), &bytes(189));
+    assert_eq!(context.target(), &bytes(190));
+    assert_eq!(context.launch(), &bytes(191));
+    assert_eq!(issue.source().frontend_unit(), bytes(188));
+    assert_eq!(issue.source().function(), bytes(172));
+    assert_eq!(issue.source().contract(), bytes(177));
+    assert_eq!(issue.source().issuance(), bytes(192));
+
+    let helper = lowered
+        .module()
+        .functions
+        .iter()
+        .find(|function| function.role == FunctionRole::InternalHelper)
+        .unwrap();
+    assert_eq!(helper.signature.parameters, [result.ty.clone()]);
+    let entry_body = entry.body.as_ref().unwrap();
+    let issue_block = entry_body
+        .blocks
+        .iter()
+        .find(|block| block.id == BlockId(0))
+        .unwrap();
+    let Terminator::Branch { target, arguments } = issue_block.terminator.as_ref().unwrap() else {
+        panic!("context issuance must branch to its continuation");
+    };
+    assert_eq!((*target, arguments.as_slice()), (BlockId(1), &[][..]));
+    let continuation = entry_body
+        .blocks
+        .iter()
+        .find(|block| block.id == BlockId(1))
+        .unwrap();
+    assert!(
+        continuation.parameters.is_empty(),
+        "a dominating context definition does not require a redundant block parameter"
+    );
+    let helper_call = continuation
+        .operations
+        .iter()
+        .find_map(|operation| match &operation.kind {
+            OperationKind::Call { callee, arguments } if callee == &helper.id => Some(arguments),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(helper_call, &[result.id]);
+    let has_portable_barrier = |requirements: &std::collections::BTreeSet<TargetCapability>| {
+        requirements.iter().any(|capability| {
+            matches!(
+                capability,
+                TargetCapability::Execution(
+                    fe2o3_kernel_ir::ExecutionCapabilityRequirementV1::Barrier {
+                        execution_scope: fe2o3_kernel_ir::SynchronizationScope::Workgroup,
+                        ..
+                    }
+                )
+            )
+        })
+    };
+    assert!(has_portable_barrier(&entry.required_capabilities));
+    assert!(has_portable_barrier(
+        &lowered.module().kernels[0].required_capabilities
+    ));
+    assert!(has_portable_barrier(
+        &lowered.module().required_capabilities
+    ));
+    assert!(
+        lowered
+            .correspondence()
+            .terminator_operation_spans()
+            .iter()
+            .any(|span| span.semantic_function().index() == 0
+                && span.semantic_block().index() == 0
+                && span.operation_count() == 1)
+    );
+    let induction = fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(
+        lowered.semantic().semantic(),
+        SemanticFunctionIdV1::from_index(0),
+    )
+    .unwrap();
+    InertCanonicalMirToKirCorrespondenceEvidenceV5::from_live_owner(&lowered, &induction).unwrap();
+
+    let optimizer_input = decode_module_v13(lowered.canonical_kernel_ir_bytes()).unwrap();
+    assert!(
+        optimizer_input
+            .functions
+            .iter()
+            .flat_map(|function| function.body.iter())
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+            .any(|operation| matches!(operation.kind, OperationKind::KernelContextIssue(_)))
+    );
+}
+
+#[test]
+fn kernel_context_lowering_fails_closed_without_authenticated_identity() {
+    assert!(matches!(
+        ProductionSemanticKirOwnerV1::try_lower(
+            kernel_context_owner_v15(KernelContextFixtureV1::Valid),
+            ProductionSemanticKirLimitsV1::default(),
+        ),
+        Err(ProductionSemanticKirErrorV1::Unsupported { detail, .. })
+            if detail == "semantic kernel context lacks authenticated lowering input"
+    ));
+
+    let incomplete = ProductionKernelContextLoweringInputV1::new(
+        SemanticFunctionIdV1::from_index(0),
+        [0; 32],
+        bytes(189),
+        bytes(190),
+        bytes(191),
+        bytes(192),
+    );
+    assert!(matches!(
+        ProductionSemanticKirOwnerV1::try_lower_with_kernel_contexts(
+            kernel_context_owner_v15(KernelContextFixtureV1::Valid),
+            ProductionSemanticKirLimitsV1::default(),
+            vec![incomplete],
+        ),
+        Err(ProductionSemanticKirErrorV1::Unsupported { detail, .. })
+            if detail == "kernel-context lowering input contains an incomplete authenticated identity"
+    ));
+}
+
+#[test]
+fn kernel_context_lowering_rejects_duplicate_and_helper_issuance() {
+    let input = kernel_context_input_v1();
+    assert!(matches!(
+        ProductionSemanticKirOwnerV1::try_lower_with_kernel_contexts(
+            kernel_context_owner_v15(KernelContextFixtureV1::Valid),
+            ProductionSemanticKirLimitsV1::default(),
+            vec![input, input],
+        ),
+        Err(ProductionSemanticKirErrorV1::Unsupported { detail, .. })
+            if detail == "kernel-context lowering input duplicates a semantic root"
+    ));
+    assert!(matches!(
+        ProductionSemanticKirOwnerV1::try_lower_with_kernel_contexts(
+            kernel_context_owner_v15(KernelContextFixtureV1::DuplicateRootIssuance),
+            ProductionSemanticKirLimitsV1::default(),
+            vec![input],
+        ),
+        Err(ProductionSemanticKirErrorV1::Unsupported { detail, .. })
+            if detail == "semantic kernel root contains duplicate kernel-context issuances"
+    ));
+    assert!(matches!(
+        ProductionSemanticKirOwnerV1::try_lower(
+            kernel_context_owner_v15(KernelContextFixtureV1::HelperIssuance),
+            ProductionSemanticKirLimitsV1::default(),
+        ),
+        Err(ProductionSemanticKirErrorV1::Unsupported { detail, .. })
+            if detail == "kernel-context issuance appears in a helper or unbound function"
+    ));
 }
 
 fn gfx950_reduction_admission(
@@ -1763,12 +2272,17 @@ fn retained_scalar_argument_is_stored_once_in_the_entry_slot() {
     lowered.verify_equivalence().unwrap();
     verify_module(lowered.module()).unwrap();
     lowered
-        .canonical_kernel_ir_v11()
-        .expect("pointer narrowing requires canonical Kernel IR V11")
+        .canonical_kernel_ir_v13()
+        .expect("production pointer narrowing must retain canonical Kernel IR V13")
         .revalidate()
         .unwrap();
+    assert_eq!(
+        lowered.canonical_kernel_ir_identity().version(),
+        ProductionCanonicalKernelIrVersionV1::V13,
+    );
     assert!(lowered.canonical_kernel_ir_v8().is_none());
     assert!(lowered.canonical_kernel_ir_v8_identity().is_none());
+    assert!(lowered.canonical_kernel_ir_v11().is_none());
     let function = &lowered.module().functions[0];
     let body = function.body.as_ref().unwrap();
     let [span] = lowered.correspondence().synthetic_operation_spans() else {
@@ -3406,46 +3920,35 @@ fn independent_lowerings_are_deterministic() {
     .unwrap();
     assert_eq!(first.module(), second.module());
     assert_eq!(first.correspondence(), second.correspondence());
+    let first_canonical = first
+        .canonical_kernel_ir_v13()
+        .expect("production lowering must retain canonical Kernel IR V13");
+    let second_canonical = second
+        .canonical_kernel_ir_v13()
+        .expect("production lowering must retain canonical Kernel IR V13");
     assert_eq!(
-        first
-            .canonical_kernel_ir_v8()
-            .expect("the fixture lowers to Kernel IR V8")
-            .canonical_bytes(),
-        second
-            .canonical_kernel_ir_v8()
-            .expect("the fixture lowers to Kernel IR V8")
-            .canonical_bytes(),
+        first_canonical.canonical_bytes(),
+        second_canonical.canonical_bytes(),
+    );
+    assert_eq!(first_canonical.identity(), second_canonical.identity());
+    assert_eq!(
+        first.canonical_kernel_ir_identity(),
+        second.canonical_kernel_ir_identity(),
     );
     assert_eq!(
-        first.canonical_kernel_ir_v8_identity(),
-        second.canonical_kernel_ir_v8_identity(),
+        first.canonical_kernel_ir_identity().version(),
+        ProductionCanonicalKernelIrVersionV1::V13,
     );
     assert_eq!(
-        first
-            .canonical_kernel_ir_v8_identity()
-            .expect("the fixture lowers to Kernel IR V8")
-            .canonical_length(),
-        first
-            .canonical_kernel_ir_v8()
-            .expect("the fixture lowers to Kernel IR V8")
-            .canonical_bytes()
-            .len() as u64,
+        first_canonical.identity().canonical_length(),
+        first_canonical.canonical_bytes().len() as u64,
     );
     assert_eq!(
-        decode_module_v8(
-            first
-                .canonical_kernel_ir_v8()
-                .expect("the fixture lowers to Kernel IR V8")
-                .canonical_bytes(),
-        )
-        .unwrap(),
+        decode_module_v13(first_canonical.canonical_bytes()).unwrap(),
         *first.module(),
     );
-    first
-        .canonical_kernel_ir_v8()
-        .expect("the fixture lowers to Kernel IR V8")
-        .revalidate()
-        .unwrap();
+    first_canonical.revalidate().unwrap();
+    second_canonical.revalidate().unwrap();
 }
 
 #[test]
@@ -3458,15 +3961,20 @@ fn formal_memory_admission_retains_exact_kir_without_authority() {
     let admitted = ProductionFormalMemoryOwnerV1::try_admit(lowered).unwrap();
 
     admitted.verify_equivalence().unwrap();
+    let canonical = admitted
+        .semantic_kir()
+        .canonical_kernel_ir_v13()
+        .expect("formal memory admission must retain canonical Kernel IR V13");
+    canonical.revalidate().unwrap();
     assert_eq!(
-        decode_module_v8(
-            admitted
-                .semantic_kir()
-                .canonical_kernel_ir_v8()
-                .expect("the fixture lowers to Kernel IR V8")
-                .canonical_bytes(),
-        )
-        .unwrap(),
+        admitted
+            .semantic_kir()
+            .canonical_kernel_ir_identity()
+            .version(),
+        ProductionCanonicalKernelIrVersionV1::V13,
+    );
+    assert_eq!(
+        decode_module_v13(canonical.canonical_bytes()).unwrap(),
         *admitted.semantic_kir().module(),
     );
     assert_eq!(
@@ -4418,6 +4926,67 @@ fn exact_function_owner_correspondence_v5_round_trips_and_rejects_hostile_roster
         InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(&trailing),
         Err(ProductionCorrespondenceEvidenceErrorV5::InvalidLength)
     ));
+}
+
+#[test]
+fn live_owner_issues_exact_source_refinement_and_hostile_bytes_fail_closed() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        defined_helper_owner_v1(DefinedHelperFixtureV1::Valid),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    let induction = fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(
+        lowered.semantic().semantic(),
+        SemanticFunctionIdV1::from_index(0),
+    )
+    .unwrap();
+    let evidence =
+        ProductionSourceRefinementEvidenceV1::from_live_owner(&lowered, &induction).unwrap();
+    let decoded = ProductionSourceRefinementEvidenceV1::decode(evidence.canonical_bytes()).unwrap();
+    assert_eq!(decoded, evidence);
+    assert_eq!(decoded.roots().len(), 1);
+    assert_eq!(decoded.roots()[0].semantic_root(), 0);
+    assert_eq!(decoded.roots()[0].kernel_entry_ordinal(), 0);
+    assert_eq!(decoded.roots()[0].kernel_function_ordinal(), 0);
+    assert_eq!(
+        decoded.roots()[0].export_symbol(),
+        decoded.roots()[0].kernel_id()
+    );
+    assert_eq!(
+        decoded.roots()[0].kernel_id(),
+        decoded.roots()[0].kernel_function()
+    );
+    assert!(!decoded.grants_artifact_or_launch_authority());
+
+    let mut wrong_version = evidence.canonical_bytes().to_vec();
+    wrong_version[8..10].copy_from_slice(&2_u16.to_le_bytes());
+    assert!(matches!(
+        ProductionSourceRefinementEvidenceV1::decode(&wrong_version),
+        Err(ProductionSourceRefinementEvidenceErrorV1::InvalidHeader)
+    ));
+
+    let mut stale_source_kir = evidence.canonical_bytes().to_vec();
+    stale_source_kir[64] ^= 1;
+    assert!(ProductionSourceRefinementEvidenceV1::decode(&stale_source_kir).is_err());
+
+    let root_offset = 136;
+    let mut substituted_binding = evidence.canonical_bytes().to_vec();
+    substituted_binding[root_offset + 36] ^= 1;
+    assert!(ProductionSourceRefinementEvidenceV1::decode(&substituted_binding).is_err());
+
+    let mut permuted_entry = evidence.canonical_bytes().to_vec();
+    permuted_entry[root_offset + 68..root_offset + 72].copy_from_slice(&1_u32.to_le_bytes());
+    assert!(matches!(
+        ProductionSourceRefinementEvidenceV1::decode(&permuted_entry),
+        Err(ProductionSourceRefinementEvidenceErrorV1::InvalidRootRoster)
+    ));
+
+    assert!(
+        ProductionSourceRefinementEvidenceV1::decode(
+            &evidence.canonical_bytes()[..evidence.canonical_bytes().len() - 1]
+        )
+        .is_err()
+    );
 }
 
 #[test]

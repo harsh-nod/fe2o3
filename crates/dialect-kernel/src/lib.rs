@@ -25,6 +25,14 @@ mod registration;
 
 pub use registration::dialect_registration;
 
+mod capability_v1;
+
+pub use capability_v1::{
+    CanonicalIdentityAttr, ExecutionCapabilityContractAttr, ExecutionCapabilityType,
+    ExecutionRequirementAttr, ExecutionRequirementOp, GraphContractOp, KernelContextIssueOp,
+    KernelContextType, RequirementOrdinalAttr, SourceCoordinateAttr,
+};
+
 mod collective_semantics;
 
 pub use collective_semantics::{

@@ -1,0 +1,15 @@
+error[E0624]: associated function `new` is private
+ --> tests/ui/generated_host_contract_v2/manual_constraint_substitution.rs:4:44
+  |
+4 |       let _ = GeneratedHostAxisConstraintV2::new(1, 64, 1, 1);
+  |                                              ^^^ private associated function
+  |
+ ::: src/generated_host_contract_v2.rs
+  |
+  | /     pub(crate) fn new(
+  | |         minimum_extent: u64,
+  | |         maximum_extent: u64,
+  | |         minimum_stride: u64,
+  | |         maximum_stride: u64,
+  | |     ) -> Result<Self, GeneratedHostContractErrorV2> {
+  | |___________________________________________________- private associated function defined here

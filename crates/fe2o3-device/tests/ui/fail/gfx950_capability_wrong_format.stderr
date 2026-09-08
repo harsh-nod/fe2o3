@@ -1,0 +1,25 @@
+error[E0308]: arguments to this method are incorrect
+  --> tests/ui/fail/gfx950_capability_wrong_format.rs:16:16
+   |
+16 |         gfx950.multiply_accumulate_fp8(lhs, rhs, accumulator);
+   |                ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: expected `Gfx950Fp8E4M3`, found `Gfx950Fp4E2M1`
+  --> tests/ui/fail/gfx950_capability_wrong_format.rs:16:40
+   |
+16 |         gfx950.multiply_accumulate_fp8(lhs, rhs, accumulator);
+   |                                        ^^^
+   = note: expected struct `Gfx950MfmaFragment<'_, Gfx950Fp8E4M3, Gfx950MfmaOperandA, MatrixBrand>`
+              found struct `Gfx950MfmaFragment<'a, Gfx950Fp4E2M1, Gfx950MfmaOperandA, MatrixBrand>`
+note: expected `Gfx950Fp8E4M3`, found `Gfx950Fp4E2M1`
+  --> tests/ui/fail/gfx950_capability_wrong_format.rs:16:50
+   |
+16 |         gfx950.multiply_accumulate_fp8(lhs, rhs, accumulator);
+   |                                                  ^^^^^^^^^^^
+   = note: expected struct `Gfx950F32AccumulatorFragment<'_, Gfx950Fp8E4M3, MatrixBrand>`
+              found struct `Gfx950F32AccumulatorFragment<'a, Gfx950Fp4E2M1, MatrixBrand>`
+note: method defined here
+  --> src/gfx950.rs
+   |
+   |     pub fn multiply_accumulate_fp8<'wave>(
+   |            ^^^^^^^^^^^^^^^^^^^^^^^

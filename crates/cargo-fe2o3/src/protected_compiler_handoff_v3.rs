@@ -3,11 +3,13 @@ use std::fmt;
 use std::path::Path;
 
 use fe2o3_artifact_transaction::{
-    BuildAttempt, CompilerExecutionReceiptTransportErrorV1, CompilerExecutionSubjectErrorV1,
-    CompilerModuleHandoffErrorV3, CompilerModuleHandoffReceiptV3, ConsumedCompilerModuleHandoffV3,
+    BuildAttempt, CompilerCapabilityHandoffErrorV5, CompilerExecutionReceiptTransportErrorV1,
+    CompilerExecutionSubjectErrorV1, CompilerModuleHandoffErrorV3, CompilerModuleHandoffReceiptV3,
+    ConsumedCompilerCapabilityHandoffV5, ConsumedCompilerModuleHandoffV3,
     InertCompilerExecutionSubjectV1, ProducerIdentity,
-    acquire_compiler_module_handoff_currentness_lease_v3,
-    consume_compiler_module_handoff_with_currentness_v3,
+    acquire_compiler_module_handoff_currentness_lease_v3, consume_compiler_capability_handoff_v5,
+    consume_compiler_module_handoff_with_currentness_v3, recover_compiler_capability_handoff_v5,
+    recover_compiler_execution_receipt_transport_for_capability_v5,
     recover_compiler_execution_receipt_transport_with_currentness_v1,
     recover_compiler_module_handoff_receipt_v3,
 };
@@ -121,15 +123,14 @@ impl Error for ParentRustcInvocationCustodyError {}
 /// The exact recovered receipt remains paired with the consumed transaction so
 /// downstream worker execution never reconstructs or drops its transaction
 /// identity. This remains inert and grants no compiler or runtime authority.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct ParentConsumedProductionHandoff {
     receipt: CompilerModuleHandoffReceiptV3,
     consumed: ConsumedCompilerModuleHandoffV3,
     compiler_closure: CompilerClosureV2,
     compiler_execution: CompilerExecutionReceiptCarriageV1,
+    capability_v5: Option<ConsumedCompilerCapabilityHandoffV5>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl ParentConsumedProductionHandoff {
     pub(crate) fn into_parts(
         self,
@@ -138,12 +139,14 @@ impl ParentConsumedProductionHandoff {
         ConsumedCompilerModuleHandoffV3,
         CompilerClosureV2,
         CompilerExecutionReceiptCarriageV1,
+        Option<ConsumedCompilerCapabilityHandoffV5>,
     ) {
         (
             self.receipt,
             self.consumed,
             self.compiler_closure,
             self.compiler_execution,
+            self.capability_v5,
         )
     }
 }
@@ -159,8 +162,6 @@ impl ProductionCompilerModuleHandoffIntake {
         Self
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn consume_after_preflight<T>(
         &self,
         output_dir: &Path,
@@ -178,6 +179,135 @@ impl ProductionCompilerModuleHandoffIntake {
         parent_custody
             .revalidate()
             .map_err(ProductionCompilerModuleHandoffIntakeError::ParentCustody)?;
+        match recover_compiler_capability_handoff_v5(output_dir, producer, attempt) {
+            Ok(recovered) => Self::consume_capability_v5(
+                output_dir,
+                producer,
+                attempt,
+                parent_custody,
+                compiler_execution_readiness,
+                recovered,
+                preflight,
+            ),
+            Err(CompilerCapabilityHandoffErrorV5::NotPublished) => Self::consume_legacy_v3(
+                output_dir,
+                producer,
+                attempt,
+                parent_custody,
+                compiler_execution_readiness,
+                preflight,
+            ),
+            Err(error) => {
+                Err(ProductionCompilerModuleHandoffIntakeError::CapabilityTransport(error))
+            }
+        }
+    }
+
+    fn consume_capability_v5<T>(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        parent_custody: &ParentRustcInvocationCustody,
+        compiler_execution_readiness: &ParentCompilerExecutionReadinessCustodyV1,
+        recovered: fe2o3_artifact_transaction::RecoveredCompilerCapabilityHandoffV5,
+        preflight: impl FnOnce(
+            &InertSemanticCompilerModuleHandoffV3,
+            CompilerModuleHandoffReceiptV3,
+            CompilerClosureV2,
+        ) -> Result<T, ProtectedFirstBuildWorkerV3Error>,
+    ) -> Result<(ParentConsumedProductionHandoff, T), ProductionCompilerModuleHandoffIntakeError>
+    {
+        let capability_receipt = recovered.receipt();
+        if capability_receipt.attempt() != attempt {
+            return Err(
+                ProductionCompilerModuleHandoffIntakeError::CapabilityTransportBindingMismatch,
+            );
+        }
+        if recovered.handoff().legacy_handoff().capsule().invocation()
+            != parent_custody.descriptor()
+        {
+            return Err(ProductionCompilerModuleHandoffIntakeError::InvocationMismatch);
+        }
+        let subject = InertCompilerExecutionSubjectV1::from_capability_publication_v5(
+            capability_receipt,
+            recovered.handoff(),
+        )
+        .map_err(ProductionCompilerModuleHandoffIntakeError::CompilerExecutionSubject)?;
+        let receipt_transport = recover_compiler_execution_receipt_transport_for_capability_v5(
+            output_dir,
+            producer,
+            capability_receipt,
+            &subject,
+        )
+        .map_err(ProductionCompilerModuleHandoffIntakeError::CompilerExecutionTransport)?;
+        let compiler_execution = compiler_execution_readiness
+            .admit_receipt_transport(&subject, receipt_transport)
+            .map_err(ProductionCompilerModuleHandoffIntakeError::CompilerExecutionReadiness)?;
+        let (worker_receipt, worker_handoff) = recovered
+            .worker_v3_preflight_compatibility()
+            .map_err(ProductionCompilerModuleHandoffIntakeError::CapabilityTransport)?;
+        let compiler_closure = *parent_custody.descriptor().compiler_closure();
+        let prepared = preflight(&worker_handoff, worker_receipt, compiler_closure)
+            .map_err(ProductionCompilerModuleHandoffIntakeError::WorkerPreflight)?;
+        parent_custody
+            .revalidate()
+            .map_err(ProductionCompilerModuleHandoffIntakeError::ParentCustody)?;
+        compiler_execution_readiness
+            .revalidate()
+            .map_err(ProductionCompilerModuleHandoffIntakeError::CompilerExecutionReadiness)?;
+        let expected_capability_attempt = capability_receipt.attempt();
+        let expected_capability_slot = capability_receipt.slot();
+        let expected_capability_transaction = capability_receipt.transaction_identity();
+        let mut capability_v5 =
+            consume_compiler_capability_handoff_v5(output_dir, producer, recovered.into_receipt())
+                .map_err(ProductionCompilerModuleHandoffIntakeError::CapabilityTransport)?;
+        if capability_v5.attempt() != expected_capability_attempt
+            || capability_v5.slot() != expected_capability_slot
+            || capability_v5.transaction_identity() != expected_capability_transaction
+            || InertCompilerExecutionSubjectV1::from_consumed_capability_v5(&capability_v5)
+                .map_err(ProductionCompilerModuleHandoffIntakeError::CompilerExecutionSubject)?
+                != subject
+        {
+            return Err(
+                ProductionCompilerModuleHandoffIntakeError::CapabilityTransportBindingMismatch,
+            );
+        }
+        let (consumed_receipt, consumed) = capability_v5
+            .take_authenticated_worker_v3_compatibility()
+            .map_err(ProductionCompilerModuleHandoffIntakeError::CapabilityTransport)?;
+        if consumed_receipt != worker_receipt
+            || consumed.handoff().canonical_bytes() != worker_handoff.canonical_bytes()
+            || compiler_execution.request().subject() != &subject
+        {
+            return Err(
+                ProductionCompilerModuleHandoffIntakeError::CompilerExecutionBindingMismatch,
+            );
+        }
+        Ok((
+            ParentConsumedProductionHandoff {
+                receipt: consumed_receipt,
+                consumed,
+                compiler_closure,
+                compiler_execution,
+                capability_v5: Some(capability_v5),
+            },
+            prepared,
+        ))
+    }
+
+    fn consume_legacy_v3<T>(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        parent_custody: &ParentRustcInvocationCustody,
+        compiler_execution_readiness: &ParentCompilerExecutionReadinessCustodyV1,
+        preflight: impl FnOnce(
+            &InertSemanticCompilerModuleHandoffV3,
+            CompilerModuleHandoffReceiptV3,
+            CompilerClosureV2,
+        ) -> Result<T, ProtectedFirstBuildWorkerV3Error>,
+    ) -> Result<(ParentConsumedProductionHandoff, T), ProductionCompilerModuleHandoffIntakeError>
+    {
         let receipt = recover_compiler_module_handoff_receipt_v3(output_dir, producer, attempt)
             .map_err(ProductionCompilerModuleHandoffIntakeError::Transport)?;
         if receipt.attempt() != attempt || receipt.grants_compiler_authority() {
@@ -195,6 +325,9 @@ impl ProductionCompilerModuleHandoffIntake {
         let token = lease
             .acquire_current_token()
             .map_err(ProductionCompilerModuleHandoffIntakeError::Transport)?;
+        if handoff_contains_native_v13(token.handoff()) {
+            return Err(ProductionCompilerModuleHandoffIntakeError::MissingCapabilityV5);
+        }
         if token.handoff().capsule().invocation() != parent_custody.descriptor() {
             return Err(ProductionCompilerModuleHandoffIntakeError::InvocationMismatch);
         }
@@ -241,9 +374,26 @@ impl ProductionCompilerModuleHandoffIntake {
             consumed,
             compiler_closure,
             compiler_execution,
+            capability_v5: None,
         };
         Ok((consumed, prepared))
     }
+}
+
+pub(crate) fn handoff_contains_native_v13(handoff: &InertSemanticCompilerModuleHandoffV3) -> bool {
+    let kir = handoff
+        .capsule()
+        .receipts()
+        .kernel_ir()
+        .canonical_preimage();
+    const VERSION_OFFSET: usize = 8;
+    kir.starts_with(&fe2o3_kernel_ir::KERNEL_IR_MAGIC_V1)
+        && kir
+            .get(VERSION_OFFSET..VERSION_OFFSET + 2)
+            .is_some_and(|version| {
+                u16::from_le_bytes([version[0], version[1]])
+                    == fe2o3_kernel_ir::KERNEL_IR_VERSION_V13
+            })
 }
 
 #[derive(Debug)]
@@ -251,10 +401,13 @@ pub(crate) enum ProductionCompilerModuleHandoffIntakeError {
     ParentCustody(ParentRustcInvocationCustodyError),
     CompilerExecutionReadiness(CompilerExecutionBoundaryErrorV1),
     Transport(CompilerModuleHandoffErrorV3),
+    CapabilityTransport(CompilerCapabilityHandoffErrorV5),
     CompilerExecutionTransport(CompilerExecutionReceiptTransportErrorV1),
     CompilerExecutionSubject(CompilerExecutionSubjectErrorV1),
     WorkerPreflight(ProtectedFirstBuildWorkerV3Error),
     TransportBindingMismatch,
+    CapabilityTransportBindingMismatch,
+    MissingCapabilityV5,
     CompilerExecutionBindingMismatch,
     InvocationMismatch,
 }
@@ -265,11 +418,18 @@ impl fmt::Display for ProductionCompilerModuleHandoffIntakeError {
             Self::ParentCustody(error) => error.fmt(formatter),
             Self::CompilerExecutionReadiness(error) => error.fmt(formatter),
             Self::Transport(error) => error.fmt(formatter),
+            Self::CapabilityTransport(error) => error.fmt(formatter),
             Self::CompilerExecutionTransport(error) => error.fmt(formatter),
             Self::CompilerExecutionSubject(error) => error.fmt(formatter),
             Self::WorkerPreflight(error) => write!(formatter, "protected V3 worker preflight failed before handoff consumption: {error}"),
             Self::TransportBindingMismatch => formatter.write_str(
                 "consumed V3 compiler-module handoff changed its exact transaction binding",
+            ),
+            Self::CapabilityTransportBindingMismatch => formatter.write_str(
+                "consumed V5 capability handoff changed its exact transaction binding",
+            ),
+            Self::MissingCapabilityV5 => formatter.write_str(
+                "native canonical KIR V13 requires the exact V5 capability handoff; V3 downgrade is forbidden",
             ),
             Self::CompilerExecutionBindingMismatch => formatter.write_str(
                 "consumed V3 compiler-module handoff changed its exact compiler-execution receipt binding",
@@ -287,10 +447,13 @@ impl Error for ProductionCompilerModuleHandoffIntakeError {
             Self::ParentCustody(error) => Some(error),
             Self::CompilerExecutionReadiness(error) => Some(error),
             Self::Transport(error) => Some(error),
+            Self::CapabilityTransport(error) => Some(error),
             Self::CompilerExecutionTransport(error) => Some(error),
             Self::CompilerExecutionSubject(error) => Some(error),
             Self::WorkerPreflight(error) => Some(error),
             Self::TransportBindingMismatch
+            | Self::CapabilityTransportBindingMismatch
+            | Self::MissingCapabilityV5
             | Self::CompilerExecutionBindingMismatch
             | Self::InvocationMismatch => None,
         }

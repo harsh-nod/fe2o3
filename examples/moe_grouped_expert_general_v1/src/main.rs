@@ -1,15 +1,18 @@
 use std::io;
 
-use fe2o3_core::{
-    DeviceBuffer, GpuContext, KernelParams, LaunchConfig, launch_kernel_on_stream,
-};
+use fe2o3_core::{DeviceBuffer, GpuContext, KernelParams, LaunchConfig, launch_kernel_on_stream};
 use fe2o3_device::Bf16;
-use fe2o3_moe_grouped_expert_general_v1::reference::{
-    ReferenceLayoutV1, evaluate_reference_v1,
+use fe2o3_host::{
+    TutorialRuntimeLaunchIdentityV1, TutorialRuntimeSemanticRegionsV1,
+    publish_tutorial_runtime_semantic_observation_v1, tutorial_runtime_semantic_bytes_v1,
 };
+use fe2o3_moe_grouped_expert_general_v1::reference::{ReferenceLayoutV1, evaluate_reference_v1};
 
 const HSACO_ENV: &str = "FE2O3_MOE_EXPERT_HSACO";
 const KERNEL: &str = "moe_grouped_expert_general_v1";
+const OUTPUT_CANARY_ELEMENTS: usize = 8;
+const OUTPUT_PREFIX: f32 = f32::from_bits(0x4f01_2345);
+const OUTPUT_SUFFIX: f32 = f32::from_bits(0xcf54_3210);
 
 fn invalid_input(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
@@ -97,7 +100,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let expert_weights_device = DeviceBuffer::from_host(&stream, &expert_weights)?;
     let route_gates_device = DeviceBuffer::from_host(&stream, &route_gates)?;
     let expert_bias_device = DeviceBuffer::from_host(&stream, &expert_bias)?;
-    let routed_output_device = DeviceBuffer::from_host(&stream, &initial_output)?;
+    let mut guarded_output = Vec::with_capacity(output_len + 2 * OUTPUT_CANARY_ELEMENTS);
+    guarded_output.extend(std::iter::repeat_n(OUTPUT_PREFIX, OUTPUT_CANARY_ELEMENTS));
+    guarded_output.extend_from_slice(&initial_output);
+    guarded_output.extend(std::iter::repeat_n(OUTPUT_SUFFIX, OUTPUT_CANARY_ELEMENTS));
+    let routed_output_device = DeviceBuffer::from_host(&stream, &guarded_output)?;
+    let routed_output_view =
+        routed_output_device.view(OUTPUT_CANARY_ELEMENTS..OUTPUT_CANARY_ELEMENTS + output_len)?;
     let hsaco = std::env::var_os(HSACO_ENV).ok_or_else(|| {
         io::Error::new(io::ErrorKind::NotFound, format!("{HSACO_ENV} is not set"))
     })?;
@@ -117,8 +126,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         arguments.push(route_gates_device.len());
         arguments.push(expert_bias_device.as_device_ptr());
         arguments.push(expert_bias_device.len());
-        arguments.push(routed_output_device.as_device_ptr());
-        arguments.push(routed_output_device.len());
+        arguments.push(routed_output_view.as_device_ptr());
+        arguments.push(routed_output_view.len());
         arguments.push(layout.rows_padded);
         arguments.push(layout.output_columns);
         arguments.push(layout.reduction);
@@ -144,7 +153,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         stream.synchronize()?;
     }
 
-    let actual = routed_output_device.to_host_vec(&stream)?;
+    let actual_allocation = routed_output_device.to_host_vec(&stream)?;
+    let actual = &actual_allocation[OUTPUT_CANARY_ELEMENTS..OUTPUT_CANARY_ELEMENTS + output_len];
     let mut maximum_error = 0.0_f32;
     for row in 0..layout.rows_padded as usize {
         for column in 0..layout.output_stride as usize {
@@ -168,6 +178,80 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    let routed_tokens_after = routed_tokens_device.to_host_vec(&stream)?;
+    let expert_weights_after = expert_weights_device.to_host_vec(&stream)?;
+    let route_gates_after = route_gates_device.to_host_vec(&stream)?;
+    let expert_bias_after = expert_bias_device.to_host_vec(&stream)?;
+    let mut expected_allocation = guarded_output.clone();
+    expected_allocation[OUTPUT_CANARY_ELEMENTS..OUTPUT_CANARY_ELEMENTS + output_len]
+        .copy_from_slice(&expected);
+    let padding_before = (0..layout.rows_padded as usize)
+        .flat_map(|row| {
+            initial_output[row * layout.output_stride as usize + layout.output_columns as usize
+                ..(row + 1) * layout.output_stride as usize]
+                .iter()
+                .copied()
+        })
+        .collect::<Vec<_>>();
+    let padding_after = (0..layout.rows_padded as usize)
+        .flat_map(|row| {
+            actual[row * layout.output_stride as usize + layout.output_columns as usize
+                ..(row + 1) * layout.output_stride as usize]
+                .iter()
+                .copied()
+        })
+        .collect::<Vec<_>>();
+    drop(routed_output_view);
+    drop(routed_output_device);
+    drop(expert_bias_device);
+    drop(route_gates_device);
+    drop(expert_weights_device);
+    drop(routed_tokens_device);
+    drop(stream);
+    drop(context);
+    publish_tutorial_runtime_semantic_observation_v1(
+        TutorialRuntimeLaunchIdentityV1 {
+            target: "gfx942",
+            kernel_symbols: &[KERNEL],
+            grid: [
+                (layout.rows_padded / 16) * layout.output_columns.div_ceil(16),
+                1,
+                1,
+            ],
+            workgroup: [64, 1, 1],
+            dynamic_lds_bytes: 0,
+        },
+        TutorialRuntimeSemanticRegionsV1 {
+            inputs_before: &[
+                tutorial_runtime_semantic_bytes_v1(&routed_tokens),
+                tutorial_runtime_semantic_bytes_v1(&expert_weights),
+                tutorial_runtime_semantic_bytes_v1(&route_gates),
+                tutorial_runtime_semantic_bytes_v1(&expert_bias),
+            ],
+            inputs_after: &[
+                tutorial_runtime_semantic_bytes_v1(&routed_tokens_after),
+                tutorial_runtime_semantic_bytes_v1(&expert_weights_after),
+                tutorial_runtime_semantic_bytes_v1(&route_gates_after),
+                tutorial_runtime_semantic_bytes_v1(&expert_bias_after),
+            ],
+            canaries_before: &[
+                tutorial_runtime_semantic_bytes_v1(&guarded_output[..OUTPUT_CANARY_ELEMENTS]),
+                tutorial_runtime_semantic_bytes_v1(
+                    &guarded_output[OUTPUT_CANARY_ELEMENTS + output_len..],
+                ),
+            ],
+            canaries_after: &[
+                tutorial_runtime_semantic_bytes_v1(&actual_allocation[..OUTPUT_CANARY_ELEMENTS]),
+                tutorial_runtime_semantic_bytes_v1(
+                    &actual_allocation[OUTPUT_CANARY_ELEMENTS + output_len..],
+                ),
+            ],
+            padding_before: &[tutorial_runtime_semantic_bytes_v1(&padding_before)],
+            padding_after: &[tutorial_runtime_semantic_bytes_v1(&padding_after)],
+            expected_output: &[tutorial_runtime_semantic_bytes_v1(&expected_allocation)],
+            observed_output: &[tutorial_runtime_semantic_bytes_v1(&actual_allocation)],
+        },
+    )?;
     println!(
         "PASS {KERNEL}: expert {}, {}x{}x{}, {} workgroups, max_abs_error={maximum_error:.6}",
         layout.expert,

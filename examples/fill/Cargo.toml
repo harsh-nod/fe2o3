@@ -13,6 +13,10 @@ fe2o3-device.workspace = true
 [target.'cfg(not(target_arch = "amdgpu"))'.dependencies]
 fe2o3-host.workspace = true
 
+[dev-dependencies]
+fe2o3-kernel-ir.workspace = true
+syn = { version = "2", features = ["full"] }
+
 [lib]
 name = "fe2o3_fill"
 

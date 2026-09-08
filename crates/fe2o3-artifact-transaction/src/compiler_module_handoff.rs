@@ -701,6 +701,7 @@ enum HandoffEngineError {
     WorkingSetBudgetExceeded { required: usize, maximum: usize },
     PayloadAllocationFailed { requested: usize },
     InvalidCanonicalV3(fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffErrorV3),
+    InvalidCanonicalV5(fe2o3_compiler_ffi::InertProductionCapabilityHandoffErrorV5),
 }
 
 impl From<CompilerModuleHandoffErrorV1> for HandoffEngineError {
@@ -746,6 +747,10 @@ impl HandoffEngineError {
             Self::InvalidCanonicalV3(error) => invalid_slot(
                 Path::new(""),
                 format!("V1 handoff unexpectedly required V3 decoding: {error}"),
+            ),
+            Self::InvalidCanonicalV5(error) => invalid_slot(
+                Path::new(""),
+                format!("V1 handoff unexpectedly required V5 decoding: {error}"),
             ),
         }
     }
@@ -1137,12 +1142,33 @@ fn consume_in_slot_engine<S: HandoffSchema>(
     binding: S::Binding,
     hooks: &mut impl HandoffHooks,
 ) -> Result<ConsumedHandoff<S>, HandoffEngineError> {
+    consume_in_slot_engine_exact::<S>(
+        output_dir,
+        producer,
+        attempt,
+        handoff_slot,
+        binding,
+        None,
+        hooks,
+    )
+}
+
+fn consume_in_slot_engine_exact<S: HandoffSchema>(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    handoff_slot: S::Slot,
+    binding: S::Binding,
+    expected_transaction_identity: Option<[u8; 32]>,
+    hooks: &mut impl HandoffHooks,
+) -> Result<ConsumedHandoff<S>, HandoffEngineError> {
     consume_in_slot_engine_with_working_set_limit::<S>(
         output_dir,
         producer,
         attempt,
         handoff_slot,
         binding,
+        expected_transaction_identity,
         S::MAX_DECODE_WORKING_SET_BYTES,
         hooks,
     )
@@ -1154,6 +1180,7 @@ fn consume_in_slot_engine_with_working_set_limit<S: HandoffSchema>(
     attempt: BuildAttempt,
     handoff_slot: S::Slot,
     binding: S::Binding,
+    expected_transaction_identity: Option<[u8; 32]>,
     maximum_working_set_bytes: usize,
     hooks: &mut impl HandoffHooks,
 ) -> Result<ConsumedHandoff<S>, HandoffEngineError> {
@@ -1165,6 +1192,7 @@ fn consume_in_slot_engine_with_working_set_limit<S: HandoffSchema>(
         attempt,
         handoff_slot,
         binding,
+        expected_transaction_identity,
         maximum_working_set_bytes,
         hooks,
     )
@@ -1176,6 +1204,7 @@ fn consume_in_slot_engine_locked<S: HandoffSchema>(
     attempt: BuildAttempt,
     handoff_slot: S::Slot,
     binding: S::Binding,
+    expected_transaction_identity: Option<[u8; 32]>,
     maximum_working_set_bytes: usize,
     hooks: &mut impl HandoffHooks,
 ) -> Result<ConsumedHandoff<S>, HandoffEngineError> {
@@ -1211,6 +1240,9 @@ fn consume_in_slot_engine_locked<S: HandoffSchema>(
     }
     let record =
         read_bound_record::<S>(&slot, READY_ENTRY, producer_id, slot_id, attempt, binding)?;
+    if expected_transaction_identity.is_some_and(|expected| record.identity != expected) {
+        return Err(CompilerModuleHandoffErrorV1::DigestMismatch.into());
+    }
     let bytes = read_payload::<S>(&slot, &record, maximum_working_set_bytes)?;
     let payload = S::decode_payload(record.binding, bytes)?;
     hooks.hit(FaultPoint::PayloadValidated)?;
@@ -1500,6 +1532,33 @@ fn cleanup_stale_slots<S: HandoffSchema>(
         )
         .into());
     }
+    parent.verify()?;
+    Ok(())
+}
+
+fn purge_exact_attempt_slot<S: HandoffSchema>(
+    output: &PinnedOutput,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    slot: S::Slot,
+) -> Result<(), HandoffEngineError> {
+    let producer_identity = producer_identity_for::<S>(producer);
+    let Some(parent) = open_private_directory(
+        &output.fd,
+        &output.display_path,
+        format!("{}{}", S::PARENT_PREFIX, hex(&producer_identity)),
+    )?
+    else {
+        return Ok(());
+    };
+    let slot_identity = slot_identity_for::<S>(producer_identity, attempt, slot);
+    let slot_name = PathBuf::from(format!("{}{}", S::SLOT_PREFIX, hex(&slot_identity)));
+    match statat(&parent.fd, &slot_name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(_) => remove_slot_entry(&parent, &slot_name)?,
+        Err(error) if error == rustix::io::Errno::NOENT => {}
+        Err(error) => return Err(CompilerModuleHandoffErrorV1::Io(error.into()).into()),
+    }
+    output.verify_path_identity()?;
     parent.verify()?;
     Ok(())
 }
@@ -2626,6 +2685,12 @@ mod protected_v2 {
                     reason: format!("V2 handoff unexpectedly required V3 decoding: {error}"),
                 }
             }
+            HandoffEngineError::InvalidCanonicalV5(error) => {
+                CompilerModuleHandoffErrorV2::InvalidSlot {
+                    path: PathBuf::new(),
+                    reason: format!("V2 handoff unexpectedly required V5 decoding: {error}"),
+                }
+            }
         }
     }
 
@@ -3340,11 +3405,12 @@ pub(crate) mod semantic_v3 {
     /// Durable inert receipt for one strict semantic V3 handoff.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct CompilerModuleHandoffReceiptV3 {
-        attempt: BuildAttempt,
-        slot: CompilerModuleHandoffSlotV3,
-        handoff_identity: fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffIdentityV3,
-        transaction_identity: CompilerModuleHandoffTransactionIdentityV3,
-        length: usize,
+        pub(super) attempt: BuildAttempt,
+        pub(super) slot: CompilerModuleHandoffSlotV3,
+        pub(super) handoff_identity:
+            fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffIdentityV3,
+        pub(super) transaction_identity: CompilerModuleHandoffTransactionIdentityV3,
+        pub(super) length: usize,
     }
 
     impl CompilerModuleHandoffReceiptV3 {
@@ -3399,9 +3465,9 @@ pub(crate) mod semantic_v3 {
     /// Inert durable receipt for one exact compiler-execution sidecar transport.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct CompilerExecutionReceiptTransportReceiptV1 {
-        subject: crate::InertCompilerExecutionSubjectIdentityV1,
-        identity: CompilerExecutionReceiptTransportIdentityV1,
-        length: usize,
+        pub(super) subject: crate::InertCompilerExecutionSubjectIdentityV1,
+        pub(super) identity: CompilerExecutionReceiptTransportIdentityV1,
+        pub(super) length: usize,
     }
 
     impl CompilerExecutionReceiptTransportReceiptV1 {
@@ -3437,8 +3503,8 @@ pub(crate) mod semantic_v3 {
     /// Exact recovered sidecar bytes paired with their subject-bound transport receipt.
     #[derive(Debug)]
     pub struct RecoveredCompilerExecutionReceiptTransportV1 {
-        receipt: CompilerExecutionReceiptTransportReceiptV1,
-        exact_bytes: Arc<[u8]>,
+        pub(super) receipt: CompilerExecutionReceiptTransportReceiptV1,
+        pub(super) exact_bytes: Arc<[u8]>,
     }
 
     impl RecoveredCompilerExecutionReceiptTransportV1 {
@@ -3470,10 +3536,10 @@ pub(crate) mod semantic_v3 {
     /// Strictly decoded handoff returned by the one successful V3 consumption.
     #[derive(Debug)]
     pub struct ConsumedCompilerModuleHandoffV3 {
-        attempt: BuildAttempt,
-        slot: CompilerModuleHandoffSlotV3,
-        transaction_identity: CompilerModuleHandoffTransactionIdentityV3,
-        handoff: fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
+        pub(super) attempt: BuildAttempt,
+        pub(super) slot: CompilerModuleHandoffSlotV3,
+        pub(super) transaction_identity: CompilerModuleHandoffTransactionIdentityV3,
+        pub(super) handoff: fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
     }
 
     impl ConsumedCompilerModuleHandoffV3 {
@@ -3609,9 +3675,15 @@ pub(crate) mod semantic_v3 {
         committed_generation: u64,
     }
 
-    struct PinnedHandoffFileV3 {
+    pub(super) struct PinnedHandoffFileV3 {
         file: fs::File,
         identity: FileIdentity,
+    }
+
+    impl PinnedHandoffFileV3 {
+        pub(super) const fn identity(&self) -> FileIdentity {
+            self.identity
+        }
     }
 
     impl fmt::Debug for CompilerModuleHandoffCurrentnessLeaseV3 {
@@ -3917,6 +3989,7 @@ pub(crate) mod semantic_v3 {
     #[derive(Debug)]
     pub enum CompilerExecutionReceiptTransportErrorV1 {
         Handoff(CompilerModuleHandoffErrorV3),
+        CapabilityHandoff(super::semantic_v5::CompilerCapabilityHandoffErrorV5),
         InvalidReceiptSize { actual: usize, maximum: usize },
         NotPublished,
         ConflictingPublication,
@@ -3927,6 +4000,9 @@ pub(crate) mod semantic_v3 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
                 Self::Handoff(error) => write!(formatter, "compiler handoff is not current: {error}"),
+                Self::CapabilityHandoff(error) => {
+                    write!(formatter, "compiler capability handoff is not current: {error}")
+                }
                 Self::InvalidReceiptSize { actual, maximum } => write!(
                     formatter,
                     "compiler-execution receipt sidecar size {actual} is outside 1..={maximum} bytes"
@@ -3947,6 +4023,7 @@ pub(crate) mod semantic_v3 {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             match self {
                 Self::Handoff(error) => Some(error),
+                Self::CapabilityHandoff(error) => Some(error),
                 _ => None,
             }
         }
@@ -3955,6 +4032,14 @@ pub(crate) mod semantic_v3 {
     impl From<CompilerModuleHandoffErrorV3> for CompilerExecutionReceiptTransportErrorV1 {
         fn from(error: CompilerModuleHandoffErrorV3) -> Self {
             Self::Handoff(error)
+        }
+    }
+
+    impl From<super::semantic_v5::CompilerCapabilityHandoffErrorV5>
+        for CompilerExecutionReceiptTransportErrorV1
+    {
+        fn from(error: super::semantic_v5::CompilerCapabilityHandoffErrorV5) -> Self {
+            Self::CapabilityHandoff(error)
         }
     }
 
@@ -4707,7 +4792,7 @@ pub(crate) mod semantic_v3 {
         Ok(())
     }
 
-    fn authorize_compiler_execution_receipt_transport_v1(
+    pub(super) fn authorize_compiler_execution_receipt_transport_v1(
         output: &PinnedOutput,
         producer: &ProducerIdentity,
         attempt: BuildAttempt,
@@ -4757,7 +4842,7 @@ pub(crate) mod semantic_v3 {
         Ok(())
     }
 
-    fn read_compiler_execution_receipt_bytes_v1(
+    pub(super) fn read_compiler_execution_receipt_bytes_v1(
         slot: &PinnedDirectory,
     ) -> Result<Option<Vec<u8>>, CompilerExecutionReceiptTransportErrorV1> {
         let stat = match statat(
@@ -4784,7 +4869,7 @@ pub(crate) mod semantic_v3 {
         Ok(Some(exact))
     }
 
-    fn validate_compiler_execution_receipt_transport_size_v1(
+    pub(super) fn validate_compiler_execution_receipt_transport_size_v1(
         length: usize,
     ) -> Result<(), CompilerExecutionReceiptTransportErrorV1> {
         if length == 0 || length > MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V1 {
@@ -4798,7 +4883,7 @@ pub(crate) mod semantic_v3 {
         Ok(())
     }
 
-    fn compiler_execution_receipt_transport_receipt_v1(
+    pub(super) fn compiler_execution_receipt_transport_receipt_v1(
         subject: &crate::InertCompilerExecutionSubjectV1,
         exact_receipt_bytes: &[u8],
     ) -> CompilerExecutionReceiptTransportReceiptV1 {
@@ -5004,7 +5089,7 @@ pub(crate) mod semantic_v3 {
         Ok(CompilerModuleHandoffCurrentnessLeaseV3 { binding })
     }
 
-    fn require_current_slot_shape_v3(
+    pub(super) fn require_current_slot_shape_v3(
         slot: &PinnedDirectory,
     ) -> Result<(), CompilerModuleHandoffErrorV3> {
         let entries = slot_entries(slot)?;
@@ -5031,7 +5116,7 @@ pub(crate) mod semantic_v3 {
         })
     }
 
-    fn open_pinned_handoff_file_v3(
+    pub(super) fn open_pinned_handoff_file_v3(
         slot: &PinnedDirectory,
         entry: &str,
         exact_length: usize,
@@ -5062,7 +5147,7 @@ pub(crate) mod semantic_v3 {
         })
     }
 
-    fn validate_pinned_handoff_file_v3(
+    pub(super) fn validate_pinned_handoff_file_v3(
         slot: &PinnedDirectory,
         entry: &str,
         pinned: &PinnedHandoffFileV3,
@@ -5113,7 +5198,7 @@ pub(crate) mod semantic_v3 {
         Ok(())
     }
 
-    fn read_pinned_handoff_file_v3(
+    pub(super) fn read_pinned_handoff_file_v3(
         slot: &PinnedDirectory,
         entry: &str,
         pinned: &PinnedHandoffFileV3,
@@ -5381,6 +5466,20 @@ pub(crate) mod semantic_v3 {
         .map_err(engine_error_v3)
     }
 
+    pub(super) fn purge_failed_attempt_v3(
+        output: &PinnedOutput,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+    ) -> Result<(), CompilerModuleHandoffErrorV3> {
+        purge_exact_attempt_slot::<HandoffV3Schema>(
+            output,
+            producer,
+            attempt,
+            CompilerModuleHandoffSlotV3::Production,
+        )
+        .map_err(engine_error_v3)
+    }
+
     fn engine_error_v3(error: HandoffEngineError) -> CompilerModuleHandoffErrorV3 {
         match error {
             HandoffEngineError::Common(error) => error.into(),
@@ -5396,6 +5495,12 @@ pub(crate) mod semantic_v3 {
             }
             HandoffEngineError::InvalidCanonicalV3(error) => {
                 CompilerModuleHandoffErrorV3::NonCanonicalHandoff(error)
+            }
+            HandoffEngineError::InvalidCanonicalV5(error) => {
+                CompilerModuleHandoffErrorV3::InvalidSlot {
+                    path: PathBuf::new(),
+                    reason: format!("V3 handoff unexpectedly required V5 decoding: {error}"),
+                }
             }
         }
     }
@@ -6800,6 +6905,7 @@ pub(crate) mod semantic_v3 {
                     attempt,
                     CompilerModuleHandoffSlotV3::Production,
                     handoff.identity().into(),
+                    None,
                     required - 1,
                     &mut NoFaults,
                 ),
@@ -7775,6 +7881,3783 @@ pub(crate) mod semantic_v3 {
         }
     }
 }
+
+pub(crate) mod semantic_v5 {
+    use super::*;
+    use crate::authenticated_compiler_completion_v5::{
+        AuthenticatedCompilerCapabilityCompletionV5,
+        AuthenticatedCompilerCapabilityEvidenceIdentityV5,
+    };
+    use fe2o3_compiler_ffi::{
+        InertCompilerStageOutputReceiptV5, InertProductionCapabilityHandoffErrorV5,
+        InertProductionCapabilityHandoffIdentityV5, InertProductionCapabilityHandoffV5,
+        InertProductionCapabilityResultV5, InertProductionCapabilityTransactionIdentityV5,
+        InertProductionCapabilityTransactionV5, InertSemanticCompilerModuleHandoffV3,
+        InertSimulationBundleIdentityV8, InertSimulationBundleV8, ProductionCompilerOutputStageV5,
+    };
+    use fe2o3_compiler_lineage::{
+        InertCapabilityRefinementReceiptV1, InertCompilerProofOwnerV5,
+        InertMultiRootStaticCapabilityEvidenceAssociationV1,
+    };
+
+    const PARENT_PREFIX_V5: &str = ".fe2o3-compiler-capability-transaction-v5-";
+    const SLOT_PREFIX_V5: &str = "attempt-";
+    const RECORD_MAGIC_V5: &[u8] = b"FE2O3-COMPILER-CAPABILITY-TRANSACTION-V5\0";
+    const RECORD_VERSION_V5: u16 = 5;
+    const PRODUCER_DOMAIN_V5: &[u8] = b"fe2o3.compiler-capability-transaction.producer.v5\0";
+    const SLOT_DOMAIN_V5: &[u8] = b"fe2o3.compiler-capability-transaction.slot.v5\0";
+    const NAMED_SLOT_DOMAIN_V5: &[u8] = b"fe2o3.compiler-capability-transaction.named-slot.v5\0";
+    const TRANSACTION_IDENTITY_DOMAIN_V5: &[u8] =
+        b"fe2o3.compiler-capability-transaction.transaction-identity.v5\0";
+    const RECORD_DOMAIN_V5: &[u8] = b"fe2o3.compiler-capability-transaction.record.v5\0";
+    const COMPILER_EXECUTION_RECEIPT_ENTRY_V1: &str = "compiler-execution-receipt-v1";
+    const TRANSACTION_BINDING_BYTES_V5: usize = 32 + 8;
+    const RECORD_BYTES_V5: usize = RECORD_MAGIC_V5.len()
+        + 2
+        + 32
+        + 8
+        + 16
+        + 32
+        + 32
+        + TRANSACTION_BINDING_BYTES_V5
+        + 32
+        + 8
+        + (7 * 8)
+        + 32;
+
+    /// Maximum exact same-transaction V5 handoff plus Bundle V8 payload.
+    pub const MAX_COMPILER_CAPABILITY_TRANSACTION_BYTES_V5: usize =
+        fe2o3_compiler_ffi::MAX_INERT_PRODUCTION_CAPABILITY_TRANSACTION_BYTES_V5;
+
+    const V5_DECODE_WORKING_SET_MULTIPLIER: usize = 4;
+    const V5_DECODE_FIXED_BYTES: usize = 8 * 1024 * 1024;
+    const MAX_V5_DECODE_WORKING_SET_BYTES: usize = MAX_COMPILER_CAPABILITY_TRANSACTION_BYTES_V5
+        * V5_DECODE_WORKING_SET_MULTIPLIER
+        + V5_DECODE_FIXED_BYTES;
+
+    /// Sole production slot for a native exact-V13 capability handoff.
+    #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+    #[repr(u8)]
+    pub enum CompilerCapabilityHandoffSlotV5 {
+        Production = 0,
+    }
+
+    /// Domain-separated identity of one exact V5 worker transaction.
+    #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+    pub struct CompilerCapabilityHandoffTransactionIdentityV5([u8; 32]);
+
+    impl CompilerCapabilityHandoffTransactionIdentityV5 {
+        pub const fn as_bytes(&self) -> &[u8; 32] {
+            &self.0
+        }
+    }
+
+    /// Move-only custody receipt for one exact V5 handoff plus Bundle V8 publication.
+    ///
+    /// The private fields prevent caller construction. This value grants no compiler or launch
+    /// authority; downstream durable consumption moves it into the sealed verifier path.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_artifact_transaction::CompilerCapabilityHandoffReceiptV5;
+    /// fn duplicate(receipt: CompilerCapabilityHandoffReceiptV5) {
+    ///     let _copy = receipt.clone();
+    /// }
+    /// ```
+    #[derive(Debug, Eq, PartialEq)]
+    pub struct CompilerCapabilityHandoffReceiptV5 {
+        producer_identity: [u8; 32],
+        attempt: BuildAttempt,
+        slot: CompilerCapabilityHandoffSlotV5,
+        payload_identity: InertProductionCapabilityTransactionIdentityV5,
+        handoff_identity: InertProductionCapabilityHandoffIdentityV5,
+        simulation_bundle_identity: InertSimulationBundleIdentityV8,
+        transaction_identity: CompilerCapabilityHandoffTransactionIdentityV5,
+        length: usize,
+    }
+
+    impl CompilerCapabilityHandoffReceiptV5 {
+        /// Returns the domain-separated producer committed by the durable identity.
+        pub const fn producer_identity(&self) -> &[u8; 32] {
+            &self.producer_identity
+        }
+
+        pub const fn attempt(&self) -> BuildAttempt {
+            self.attempt
+        }
+
+        pub const fn slot(&self) -> CompilerCapabilityHandoffSlotV5 {
+            self.slot
+        }
+
+        /// Returns the identity of the complete canonical V5+V8 payload.
+        pub const fn payload_identity(&self) -> InertProductionCapabilityTransactionIdentityV5 {
+            self.payload_identity
+        }
+
+        pub const fn handoff_identity(&self) -> InertProductionCapabilityHandoffIdentityV5 {
+            self.handoff_identity
+        }
+
+        pub const fn simulation_bundle_identity(&self) -> InertSimulationBundleIdentityV8 {
+            self.simulation_bundle_identity
+        }
+
+        pub const fn transaction_identity(&self) -> CompilerCapabilityHandoffTransactionIdentityV5 {
+            self.transaction_identity
+        }
+
+        pub const fn length(&self) -> usize {
+            self.length
+        }
+    }
+
+    /// Strictly recovered current V5 publication retained for fail-before-consume preflight.
+    #[derive(Debug)]
+    pub struct RecoveredCompilerCapabilityHandoffV5 {
+        receipt: CompilerCapabilityHandoffReceiptV5,
+        transaction: InertProductionCapabilityTransactionV5,
+    }
+
+    impl RecoveredCompilerCapabilityHandoffV5 {
+        pub const fn receipt(&self) -> &CompilerCapabilityHandoffReceiptV5 {
+            &self.receipt
+        }
+
+        /// Moves the strictly recovered current custody token toward durable consumption.
+        pub fn into_receipt(self) -> CompilerCapabilityHandoffReceiptV5 {
+            self.receipt
+        }
+
+        pub const fn transaction(&self) -> &InertProductionCapabilityTransactionV5 {
+            &self.transaction
+        }
+
+        pub const fn handoff(&self) -> &InertProductionCapabilityHandoffV5 {
+            self.transaction.handoff()
+        }
+
+        pub const fn simulation_bundle(&self) -> &InertSimulationBundleV8 {
+            self.transaction.simulation_bundle()
+        }
+
+        pub fn worker_v3_preflight_compatibility(
+            &self,
+        ) -> Result<
+            (
+                CompilerModuleHandoffReceiptV3,
+                InertSemanticCompilerModuleHandoffV3,
+            ),
+            CompilerCapabilityHandoffErrorV5,
+        > {
+            authenticated_worker_v3_compatibility(
+                self.receipt.attempt(),
+                self.receipt.transaction_identity(),
+                self.transaction.handoff(),
+            )
+        }
+    }
+
+    /// Strictly decoded, move-only input custody after durable one-shot consumption.
+    #[derive(Debug)]
+    pub struct ConsumedCompilerCapabilityHandoffV5 {
+        attempt: BuildAttempt,
+        slot: CompilerCapabilityHandoffSlotV5,
+        transaction_identity: CompilerCapabilityHandoffTransactionIdentityV5,
+        transaction: InertProductionCapabilityTransactionV5,
+        worker_v3_compatibility_available: bool,
+    }
+
+    impl ConsumedCompilerCapabilityHandoffV5 {
+        pub const fn attempt(&self) -> BuildAttempt {
+            self.attempt
+        }
+
+        pub const fn slot(&self) -> CompilerCapabilityHandoffSlotV5 {
+            self.slot
+        }
+
+        pub const fn transaction_identity(&self) -> CompilerCapabilityHandoffTransactionIdentityV5 {
+            self.transaction_identity
+        }
+
+        pub const fn handoff(&self) -> &InertProductionCapabilityHandoffV5 {
+            self.transaction.handoff()
+        }
+
+        pub const fn simulation_bundle(&self) -> &InertSimulationBundleV8 {
+            self.transaction.simulation_bundle()
+        }
+
+        /// Derives the frozen V3 worker view only after authenticated V5 consumption.
+        ///
+        /// The returned transaction identity remains the native V5 transaction identity. This
+        /// is an in-memory compatibility view for the frozen object worker, not a V3 publication
+        /// and not a route for recovering V13 through the legacy namespace.
+        pub fn take_authenticated_worker_v3_compatibility(
+            &mut self,
+        ) -> Result<
+            (
+                CompilerModuleHandoffReceiptV3,
+                ConsumedCompilerModuleHandoffV3,
+            ),
+            CompilerCapabilityHandoffErrorV5,
+        > {
+            if !self.worker_v3_compatibility_available {
+                return Err(CompilerCapabilityHandoffErrorV5::CompatibilityAlreadyConsumed);
+            }
+            self.worker_v3_compatibility_available = false;
+            let (receipt, handoff) = authenticated_worker_v3_compatibility(
+                self.attempt,
+                self.transaction_identity,
+                self.transaction.handoff(),
+            )?;
+            let consumed = ConsumedCompilerModuleHandoffV3 {
+                attempt: self.attempt,
+                slot: CompilerModuleHandoffSlotV3::Production,
+                transaction_identity: receipt.transaction_identity(),
+                handoff,
+            };
+            Ok((receipt, consumed))
+        }
+
+        /// Measures the exact worker outputs and advances to the only completion-ready state.
+        ///
+        /// A failure consumes this owner. The durable transaction remains tombstoned, so neither
+        /// the caller nor a later process can publish or consume the same attempt again.
+        pub fn begin_completion(
+            self,
+            object_bytes: Vec<u8>,
+        ) -> Result<PreparedCompilerCapabilityCompletionV5, CompilerCapabilityCompletionErrorV5>
+        {
+            if object_bytes.is_empty() || object_bytes.len() > crate::MAX_COMPILER_HSACO_BYTES_V1 {
+                return Err(CompilerCapabilityCompletionErrorV5::InvalidObjectSize {
+                    actual: object_bytes.len(),
+                    maximum: crate::MAX_COMPILER_HSACO_BYTES_V1,
+                });
+            }
+            let Self {
+                attempt,
+                slot,
+                transaction_identity,
+                transaction,
+                worker_v3_compatibility_available: _,
+            } = self;
+            let handoff = transaction.handoff();
+            let llvm_output = InertCompilerStageOutputReceiptV5::from_stage_output(
+                ProductionCompilerOutputStageV5::Llvm,
+                handoff.legacy_handoff().module_handoff().module_bytes(),
+            )?;
+            let object_output = InertCompilerStageOutputReceiptV5::from_stage_output(
+                ProductionCompilerOutputStageV5::Object,
+                &object_bytes,
+            )?;
+            Ok(PreparedCompilerCapabilityCompletionV5 {
+                attempt,
+                slot,
+                transaction_identity,
+                transaction,
+                llvm_output,
+                object_output,
+                object_bytes: object_bytes.into_boxed_slice(),
+            })
+        }
+    }
+
+    fn authenticated_worker_v3_compatibility(
+        attempt: BuildAttempt,
+        transaction_identity: CompilerCapabilityHandoffTransactionIdentityV5,
+        capability_handoff: &InertProductionCapabilityHandoffV5,
+    ) -> Result<
+        (
+            CompilerModuleHandoffReceiptV3,
+            InertSemanticCompilerModuleHandoffV3,
+        ),
+        CompilerCapabilityHandoffErrorV5,
+    > {
+        let handoff = InertSemanticCompilerModuleHandoffV3::decode(
+            capability_handoff.legacy_handoff().canonical_bytes(),
+        )
+        .map_err(|error| CompilerCapabilityHandoffErrorV5::InvalidSlot {
+            path: PathBuf::new(),
+            reason: format!("embedded frozen V3 worker handoff is not canonical: {error}"),
+        })?;
+        if handoff.identity() != capability_handoff.legacy_handoff().identity() {
+            return Err(CompilerCapabilityHandoffErrorV5::HandoffIdentityMismatch);
+        }
+        let transaction_identity = CompilerModuleHandoffTransactionIdentityV3::from_bytes(
+            *transaction_identity.as_bytes(),
+        );
+        Ok((
+            CompilerModuleHandoffReceiptV3 {
+                attempt,
+                slot: CompilerModuleHandoffSlotV3::Production,
+                handoff_identity: handoff.identity(),
+                transaction_identity,
+                length: handoff.canonical_bytes().len(),
+            },
+            handoff,
+        ))
+    }
+
+    /// Move-only second phase; every field needed for a complete result is already present.
+    #[derive(Debug)]
+    pub struct PreparedCompilerCapabilityCompletionV5 {
+        attempt: BuildAttempt,
+        slot: CompilerCapabilityHandoffSlotV5,
+        transaction_identity: CompilerCapabilityHandoffTransactionIdentityV5,
+        transaction: InertProductionCapabilityTransactionV5,
+        llvm_output: InertCompilerStageOutputReceiptV5,
+        object_output: InertCompilerStageOutputReceiptV5,
+        object_bytes: Box<[u8]>,
+    }
+
+    impl PreparedCompilerCapabilityCompletionV5 {
+        pub const fn attempt(&self) -> BuildAttempt {
+            self.attempt
+        }
+
+        pub const fn transaction_identity(&self) -> CompilerCapabilityHandoffTransactionIdentityV5 {
+            self.transaction_identity
+        }
+
+        pub const fn handoff(&self) -> &InertProductionCapabilityHandoffV5 {
+            self.transaction.handoff()
+        }
+
+        pub const fn simulation_bundle(&self) -> &InertSimulationBundleV8 {
+            self.transaction.simulation_bundle()
+        }
+
+        pub fn object_bytes(&self) -> &[u8] {
+            &self.object_bytes
+        }
+
+        /// Returns the strict inert W4 payload that the live witness must match.
+        pub const fn expected_w4_witness(&self) -> &fe2o3_compiler_ffi::InertProductionW4WitnessV5 {
+            self.transaction.handoff().final_graph_report().w4_witness()
+        }
+
+        /// Binds the exact move-only W4 witness before any proof completion can occur.
+        ///
+        /// The extractor is used only while `witness` is borrowed. The witness itself remains
+        /// owned by the returned typestate. A mismatch returns one indivisible owner containing
+        /// both the prepared transaction and rejected witness for service quarantine.
+        pub fn bind_w4_witness<W, F>(
+            self,
+            witness: W,
+            canonical_encoding: F,
+        ) -> Result<
+            W4BoundCompilerCapabilityCompletionV5<W>,
+            RecoverableCompilerCapabilityCompletionErrorV5<RejectedW4WitnessBindingCustodyV5<W>>,
+        >
+        where
+            F: for<'a> FnOnce(&'a W) -> &'a [u8],
+        {
+            let observed = canonical_encoding(&witness);
+            let expected = self.transaction.handoff().final_graph_report().w4_witness();
+            if observed != expected.canonical_encoding() {
+                return Err(
+                    RecoverableCompilerCapabilityCompletionErrorV5::W4WitnessMismatch {
+                        custody: RejectedW4WitnessBindingCustodyV5 {
+                            prepared: self,
+                            witness,
+                        },
+                    },
+                );
+            }
+            Ok(W4BoundCompilerCapabilityCompletionV5 {
+                prepared: self,
+                witness,
+            })
+        }
+    }
+
+    /// Indivisible custody returned when a live W4 witness does not match prepared V5+V8 state.
+    ///
+    /// This aggregate cannot be cloned and exposes no tuple-returning split operation. A service
+    /// can move it directly into quarantine or atomically map both children into its own custody
+    /// wrapper with [`Self::map`].
+    #[derive(Debug)]
+    pub struct RejectedW4WitnessBindingCustodyV5<W> {
+        prepared: PreparedCompilerCapabilityCompletionV5,
+        witness: W,
+    }
+
+    impl<W> RejectedW4WitnessBindingCustodyV5<W> {
+        pub const fn prepared(&self) -> &PreparedCompilerCapabilityCompletionV5 {
+            &self.prepared
+        }
+
+        pub const fn witness(&self) -> &W {
+            &self.witness
+        }
+
+        /// Atomically rewraps both children without exposing an intermediate tuple.
+        pub fn map<T>(
+            self,
+            rewrap: impl FnOnce(PreparedCompilerCapabilityCompletionV5, W) -> T,
+        ) -> T {
+            rewrap(self.prepared, self.witness)
+        }
+    }
+
+    /// Whole custody returned when authenticated completion validation fails.
+    #[derive(Debug)]
+    pub struct RejectedAuthenticatedCompilerCapabilityCompletionCustodyV5<W> {
+        bound: W4BoundCompilerCapabilityCompletionV5<W>,
+        authenticated: AuthenticatedCompilerCapabilityCompletionV5,
+    }
+
+    impl<W> RejectedAuthenticatedCompilerCapabilityCompletionCustodyV5<W> {
+        pub const fn bound(&self) -> &W4BoundCompilerCapabilityCompletionV5<W> {
+            &self.bound
+        }
+
+        pub const fn authenticated(&self) -> &AuthenticatedCompilerCapabilityCompletionV5 {
+            &self.authenticated
+        }
+
+        pub fn map<T>(
+            self,
+            rewrap: impl FnOnce(
+                W4BoundCompilerCapabilityCompletionV5<W>,
+                AuthenticatedCompilerCapabilityCompletionV5,
+            ) -> T,
+        ) -> T {
+            rewrap(self.bound, self.authenticated)
+        }
+    }
+
+    /// Completion typestate retaining the exact live W4 witness by move ownership.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_artifact_transaction::W4BoundCompilerCapabilityCompletionV5;
+    /// fn duplicate<W>(value: W4BoundCompilerCapabilityCompletionV5<W>) {
+    ///     let _again = value.clone();
+    /// }
+    /// ```
+    #[derive(Debug)]
+    pub struct W4BoundCompilerCapabilityCompletionV5<W> {
+        prepared: PreparedCompilerCapabilityCompletionV5,
+        witness: W,
+    }
+
+    impl<W> W4BoundCompilerCapabilityCompletionV5<W> {
+        pub const fn attempt(&self) -> BuildAttempt {
+            self.prepared.attempt
+        }
+
+        pub const fn transaction_identity(&self) -> CompilerCapabilityHandoffTransactionIdentityV5 {
+            self.prepared.transaction_identity
+        }
+
+        pub const fn handoff(&self) -> &InertProductionCapabilityHandoffV5 {
+            self.prepared.transaction.handoff()
+        }
+
+        pub const fn simulation_bundle(&self) -> &InertSimulationBundleV8 {
+            self.prepared.transaction.simulation_bundle()
+        }
+
+        pub fn object_bytes(&self) -> &[u8] {
+            &self.prepared.object_bytes
+        }
+
+        /// Lends the exact W4 witness without exposing a path to duplicate or replace it.
+        pub const fn w4_witness(&self) -> &W {
+            &self.witness
+        }
+
+        /// Consumes one independently authenticated result and closes the V5 transaction.
+        pub fn complete_multi_root(
+            self,
+            authenticated: AuthenticatedCompilerCapabilityCompletionV5,
+        ) -> Result<
+            CompletedCompilerCapabilityTransactionV5,
+            RecoverableCompilerCapabilityCompletionErrorV5<
+                RejectedAuthenticatedCompilerCapabilityCompletionCustodyV5<W>,
+            >,
+        > {
+            let result = match self.rebuild_multi_root_result(&authenticated) {
+                Ok(result) => result,
+                Err(error) => {
+                    return Err(RecoverableCompilerCapabilityCompletionErrorV5::Carriage {
+                        error,
+                        custody: RejectedAuthenticatedCompilerCapabilityCompletionCustodyV5 {
+                            bound: self,
+                            authenticated,
+                        },
+                    });
+                }
+            };
+            self.finish_with_result(result, authenticated)
+        }
+
+        fn rebuild_multi_root_result(
+            &self,
+            authenticated: &AuthenticatedCompilerCapabilityCompletionV5,
+        ) -> Result<InertProductionCapabilityResultV5, InertProductionCapabilityHandoffErrorV5>
+        {
+            if !authenticated.matches_transaction(
+                self.transaction_identity().as_bytes(),
+                self.handoff(),
+                self.simulation_bundle(),
+                self.object_bytes(),
+            ) {
+                return Err(InertProductionCapabilityHandoffErrorV5::IdentityMismatch(
+                    "authenticated verifier request",
+                ));
+            }
+            InertProductionCapabilityResultV5::new_multi_root(
+                InertProductionCapabilityTransactionV5::decode(
+                    self.prepared.transaction.canonical_bytes(),
+                )?,
+                InertCompilerStageOutputReceiptV5::decode(
+                    self.prepared.llvm_output.canonical_bytes(),
+                )?,
+                InertCompilerStageOutputReceiptV5::decode(
+                    self.prepared.object_output.canonical_bytes(),
+                )?,
+                InertCapabilityRefinementReceiptV1::from_canonical_preimage(
+                    authenticated.machine_refinement().kind(),
+                    authenticated
+                        .machine_refinement()
+                        .canonical_preimage()
+                        .to_vec(),
+                )?,
+                InertMultiRootStaticCapabilityEvidenceAssociationV1::decode(
+                    authenticated.capability_associations().canonical_bytes(),
+                )?,
+                InertCompilerProofOwnerV5::decode(authenticated.proof_owner().canonical_bytes())?,
+            )
+        }
+
+        fn finish_with_result(
+            self,
+            result: InertProductionCapabilityResultV5,
+            authenticated: AuthenticatedCompilerCapabilityCompletionV5,
+        ) -> Result<
+            CompletedCompilerCapabilityTransactionV5,
+            RecoverableCompilerCapabilityCompletionErrorV5<
+                RejectedAuthenticatedCompilerCapabilityCompletionCustodyV5<W>,
+            >,
+        > {
+            if result.object_output().output_sha256()
+                != Sha256::digest(&self.prepared.object_bytes).as_slice()
+                || usize::try_from(result.object_output().output_bytes()).ok()
+                    != Some(self.prepared.object_bytes.len())
+            {
+                return Err(
+                    RecoverableCompilerCapabilityCompletionErrorV5::ObjectMeasurementMismatch {
+                        custody: RejectedAuthenticatedCompilerCapabilityCompletionCustodyV5 {
+                            bound: self,
+                            authenticated,
+                        },
+                    },
+                );
+            }
+            let Self { prepared, witness } = self;
+            let PreparedCompilerCapabilityCompletionV5 {
+                attempt,
+                slot,
+                transaction_identity,
+                object_bytes,
+                ..
+            } = prepared;
+            drop(witness);
+            let (checker_evidence, checker_evidence_identity) = authenticated.into_evidence_parts();
+            Ok(CompletedCompilerCapabilityTransactionV5 {
+                attempt,
+                slot,
+                transaction_identity,
+                object_bytes,
+                result,
+                checker_evidence,
+                checker_evidence_identity,
+            })
+        }
+    }
+
+    /// Complete move-only custody of exact input, proof result, and object bytes.
+    #[derive(Debug)]
+    pub struct CompletedCompilerCapabilityTransactionV5 {
+        attempt: BuildAttempt,
+        slot: CompilerCapabilityHandoffSlotV5,
+        transaction_identity: CompilerCapabilityHandoffTransactionIdentityV5,
+        object_bytes: Box<[u8]>,
+        result: InertProductionCapabilityResultV5,
+        checker_evidence: Box<[u8]>,
+        checker_evidence_identity: AuthenticatedCompilerCapabilityEvidenceIdentityV5,
+    }
+
+    impl CompletedCompilerCapabilityTransactionV5 {
+        pub const fn attempt(&self) -> BuildAttempt {
+            self.attempt
+        }
+
+        pub const fn slot(&self) -> CompilerCapabilityHandoffSlotV5 {
+            self.slot
+        }
+
+        pub const fn transaction_identity(&self) -> CompilerCapabilityHandoffTransactionIdentityV5 {
+            self.transaction_identity
+        }
+
+        pub fn object_bytes(&self) -> &[u8] {
+            &self.object_bytes
+        }
+
+        pub const fn result(&self) -> &InertProductionCapabilityResultV5 {
+            &self.result
+        }
+
+        /// Returns the exact canonical evidence emitted by the authenticated checker.
+        pub fn checker_evidence_bytes(&self) -> &[u8] {
+            &self.checker_evidence
+        }
+
+        /// Returns the checker's exact canonical evidence identity.
+        pub const fn checker_evidence_identity(
+            &self,
+        ) -> AuthenticatedCompilerCapabilityEvidenceIdentityV5 {
+            self.checker_evidence_identity
+        }
+
+        /// Returns the strict typed W4 payload retained for downstream evidence.
+        pub const fn w4_witness(&self) -> &fe2o3_compiler_ffi::InertProductionW4WitnessV5 {
+            self.result.handoff().final_graph_report().w4_witness()
+        }
+
+        /// Returns exact Bundle V8 custody for downstream sealed verification and evidence.
+        pub const fn simulation_bundle(&self) -> &InertSimulationBundleV8 {
+            self.result.simulation_bundle()
+        }
+
+        pub fn into_parts(
+            self,
+        ) -> (
+            Box<[u8]>,
+            InertProductionCapabilityResultV5,
+            Box<[u8]>,
+            AuthenticatedCompilerCapabilityEvidenceIdentityV5,
+        ) {
+            (
+                self.object_bytes,
+                self.result,
+                self.checker_evidence,
+                self.checker_evidence_identity,
+            )
+        }
+    }
+
+    /// V5 publication or one-shot consumption failure.
+    #[derive(Debug)]
+    pub enum CompilerCapabilityHandoffErrorV5 {
+        Io(std::io::Error),
+        Attempt { reason: String },
+        InvalidSlot { path: PathBuf, reason: String },
+        InvalidHandoffSize { actual: usize, maximum: usize },
+        AlreadyPublished,
+        ConflictingPublication,
+        AlreadyConsumed,
+        CompatibilityAlreadyConsumed,
+        NotPublished,
+        DigestMismatch,
+        WrongHandoffIdentity,
+        NonCanonicalHandoff(InertProductionCapabilityHandoffErrorV5),
+        HandoffIdentityMismatch,
+        WorkingSetBudgetExceeded { required: usize, maximum: usize },
+        PayloadAllocationFailed { requested: usize },
+    }
+
+    impl fmt::Display for CompilerCapabilityHandoffErrorV5 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::Io(error) => write!(formatter, "{error}"),
+                Self::Attempt { reason } => write!(formatter, "invalid V5 build attempt: {reason}"),
+                Self::InvalidSlot { path, reason } => write!(
+                    formatter,
+                    "invalid V5 capability handoff {}: {reason}",
+                    path.display()
+                ),
+                Self::InvalidHandoffSize { actual, maximum } => write!(
+                    formatter,
+                    "canonical V5+V8 capability transaction size {actual} is outside 1..={maximum} bytes"
+                ),
+                Self::AlreadyPublished => {
+                    formatter.write_str("V5+V8 capability transaction is already published")
+                }
+                Self::ConflictingPublication => formatter
+                    .write_str("V5+V8 capability transaction conflicts with committed custody"),
+                Self::AlreadyConsumed => {
+                    formatter.write_str("V5+V8 capability transaction was already consumed")
+                }
+                Self::CompatibilityAlreadyConsumed => formatter
+                    .write_str("authenticated V3 compatibility custody was already consumed"),
+                Self::NotPublished => {
+                    formatter.write_str("V5+V8 capability transaction is not published")
+                }
+                Self::DigestMismatch => {
+                    formatter.write_str("V5 capability transaction identity mismatch")
+                }
+                Self::WrongHandoffIdentity => {
+                    formatter.write_str("receipt names another V5+V8 transaction payload")
+                }
+                Self::NonCanonicalHandoff(error) => {
+                    write!(
+                        formatter,
+                        "noncanonical V5+V8 capability transaction: {error}"
+                    )
+                }
+                Self::HandoffIdentityMismatch => formatter
+                    .write_str("decoded V5+V8 payload identity disagrees with transaction binding"),
+                Self::WorkingSetBudgetExceeded { required, maximum } => write!(
+                    formatter,
+                    "V5 decode requires {required} bytes, exceeding the {maximum}-byte limit"
+                ),
+                Self::PayloadAllocationFailed { requested } => write!(
+                    formatter,
+                    "could not reserve the {requested}-byte V5 handoff input buffer"
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for CompilerCapabilityHandoffErrorV5 {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Self::Io(error) => Some(error),
+                Self::NonCanonicalHandoff(error) => Some(error),
+                _ => None,
+            }
+        }
+    }
+
+    impl From<CompilerModuleHandoffErrorV1> for CompilerCapabilityHandoffErrorV5 {
+        fn from(error: CompilerModuleHandoffErrorV1) -> Self {
+            match error {
+                CompilerModuleHandoffErrorV1::Io(error) => Self::Io(error),
+                CompilerModuleHandoffErrorV1::Attempt { reason } => Self::Attempt { reason },
+                CompilerModuleHandoffErrorV1::AttemptNotClaimable => Self::Attempt {
+                    reason: "build attempt is not in the claimable building phase".to_owned(),
+                },
+                CompilerModuleHandoffErrorV1::InvalidSlot { path, reason } => {
+                    Self::InvalidSlot { path, reason }
+                }
+                CompilerModuleHandoffErrorV1::InvalidHandoffSize { actual, maximum } => {
+                    Self::InvalidHandoffSize { actual, maximum }
+                }
+                CompilerModuleHandoffErrorV1::AlreadyPublished => Self::AlreadyPublished,
+                CompilerModuleHandoffErrorV1::ConflictingPublication => {
+                    Self::ConflictingPublication
+                }
+                CompilerModuleHandoffErrorV1::AlreadyConsumed => Self::AlreadyConsumed,
+                CompilerModuleHandoffErrorV1::NotPublished => Self::NotPublished,
+                CompilerModuleHandoffErrorV1::DigestMismatch => Self::DigestMismatch,
+            }
+        }
+    }
+
+    /// Failure after durable consumption while forming a complete worker result.
+    #[derive(Debug)]
+    pub enum CompilerCapabilityCompletionErrorV5 {
+        InvalidObjectSize { actual: usize, maximum: usize },
+        W4WitnessMismatch,
+        Carriage(InertProductionCapabilityHandoffErrorV5),
+        ObjectMeasurementMismatch,
+    }
+
+    impl fmt::Display for CompilerCapabilityCompletionErrorV5 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::InvalidObjectSize { actual, maximum } => write!(
+                    formatter,
+                    "worker object size {actual} is outside 1..={maximum} bytes"
+                ),
+                Self::W4WitnessMismatch => formatter
+                    .write_str("move-owned W4 witness does not match the exact V5 witness payload"),
+                Self::Carriage(error) => {
+                    write!(formatter, "V5 completion carriage failed: {error}")
+                }
+                Self::ObjectMeasurementMismatch => {
+                    formatter.write_str("completed V5 result substituted the retained object bytes")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for CompilerCapabilityCompletionErrorV5 {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Self::Carriage(error) => Some(error),
+                _ => None,
+            }
+        }
+    }
+
+    impl From<InertProductionCapabilityHandoffErrorV5> for CompilerCapabilityCompletionErrorV5 {
+        fn from(error: InertProductionCapabilityHandoffErrorV5) -> Self {
+            Self::Carriage(error)
+        }
+    }
+
+    /// Validation failure that retains one complete move-only custody owner.
+    ///
+    /// Callers may quarantine the returned custody directly or use [`Self::map_custody`] to wrap
+    /// it in a service-owned aggregate. The error never returns authority-bearing fields as a
+    /// tuple and cannot be cloned when its custody cannot be cloned.
+    #[derive(Debug)]
+    pub enum RecoverableCompilerCapabilityCompletionErrorV5<C> {
+        W4WitnessMismatch {
+            custody: C,
+        },
+        Carriage {
+            error: InertProductionCapabilityHandoffErrorV5,
+            custody: C,
+        },
+        ObjectMeasurementMismatch {
+            custody: C,
+        },
+    }
+
+    impl<C> RecoverableCompilerCapabilityCompletionErrorV5<C> {
+        /// Borrows the complete custody owner retained by this failure.
+        pub const fn custody(&self) -> &C {
+            match self {
+                Self::W4WitnessMismatch { custody }
+                | Self::Carriage { custody, .. }
+                | Self::ObjectMeasurementMismatch { custody } => custody,
+            }
+        }
+
+        /// Moves the complete custody owner into quarantine or an explicit retry path.
+        pub fn into_custody(self) -> C {
+            match self {
+                Self::W4WitnessMismatch { custody }
+                | Self::Carriage { custody, .. }
+                | Self::ObjectMeasurementMismatch { custody } => custody,
+            }
+        }
+
+        /// Atomically changes only the service wrapper around retained custody.
+        pub fn map_custody<T>(
+            self,
+            rewrap: impl FnOnce(C) -> T,
+        ) -> RecoverableCompilerCapabilityCompletionErrorV5<T> {
+            match self {
+                Self::W4WitnessMismatch { custody } => {
+                    RecoverableCompilerCapabilityCompletionErrorV5::<T>::W4WitnessMismatch {
+                        custody: rewrap(custody),
+                    }
+                }
+                Self::Carriage { error, custody } => {
+                    RecoverableCompilerCapabilityCompletionErrorV5::<T>::Carriage {
+                        error,
+                        custody: rewrap(custody),
+                    }
+                }
+                Self::ObjectMeasurementMismatch { custody } => {
+                    RecoverableCompilerCapabilityCompletionErrorV5::<T>::ObjectMeasurementMismatch {
+                        custody: rewrap(custody),
+                    }
+                }
+            }
+        }
+
+        /// Returns the strict carriage cause when nested result validation failed.
+        pub const fn carriage_error(&self) -> Option<&InertProductionCapabilityHandoffErrorV5> {
+            match self {
+                Self::Carriage { error, .. } => Some(error),
+                _ => None,
+            }
+        }
+    }
+
+    impl<C> fmt::Display for RecoverableCompilerCapabilityCompletionErrorV5<C> {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::W4WitnessMismatch { .. } => formatter
+                    .write_str("move-owned W4 witness does not match retained V5+V8 custody"),
+                Self::Carriage { error, .. } => {
+                    write!(formatter, "V5+V8 completion carriage failed: {error}")
+                }
+                Self::ObjectMeasurementMismatch { .. } => {
+                    formatter.write_str("completed V5+V8 result substituted retained object bytes")
+                }
+            }
+        }
+    }
+
+    impl<C: fmt::Debug> std::error::Error for RecoverableCompilerCapabilityCompletionErrorV5<C> {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.carriage_error()
+                .map(|error| error as &(dyn std::error::Error + 'static))
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct CapabilityTransactionBindingV5 {
+        sha256: [u8; 32],
+        byte_len: u64,
+    }
+
+    impl From<InertProductionCapabilityTransactionIdentityV5> for CapabilityTransactionBindingV5 {
+        fn from(identity: InertProductionCapabilityTransactionIdentityV5) -> Self {
+            Self {
+                sha256: identity.sha256(),
+                byte_len: identity.byte_len(),
+            }
+        }
+    }
+
+    struct HandoffV5Schema;
+
+    impl HandoffSchema for HandoffV5Schema {
+        type Slot = CompilerCapabilityHandoffSlotV5;
+        type Binding = CapabilityTransactionBindingV5;
+        type Payload = InertProductionCapabilityTransactionV5;
+
+        const PARENT_PREFIX: &'static str = PARENT_PREFIX_V5;
+        const SLOT_PREFIX: &'static str = SLOT_PREFIX_V5;
+        const RECORD_MAGIC: &'static [u8] = RECORD_MAGIC_V5;
+        const RECORD_VERSION: u16 = RECORD_VERSION_V5;
+        const PRODUCER_DOMAIN: &'static [u8] = PRODUCER_DOMAIN_V5;
+        const SLOT_DOMAIN: &'static [u8] = SLOT_DOMAIN_V5;
+        const NAMED_SLOT_DOMAIN: &'static [u8] = NAMED_SLOT_DOMAIN_V5;
+        const RECORD_DOMAIN: &'static [u8] = RECORD_DOMAIN_V5;
+        const RECORD_BYTES: usize = RECORD_BYTES_V5;
+        const MAX_HANDOFF_BYTES: usize = MAX_COMPILER_CAPABILITY_TRANSACTION_BYTES_V5;
+        const DECODE_WORKING_SET_MULTIPLIER: usize = V5_DECODE_WORKING_SET_MULTIPLIER;
+        const DECODE_WORKING_SET_FIXED_BYTES: usize = V5_DECODE_FIXED_BYTES;
+        const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_V5_DECODE_WORKING_SET_BYTES;
+        const VALIDATE_RECORD_DURING_RECOVERY: bool = true;
+        const COMMITTED_SIDECAR_ENTRY: Option<&'static str> =
+            Some(COMPILER_EXECUTION_RECEIPT_ENTRY_V1);
+        const ALL_SLOTS: &'static [Self::Slot] = &[CompilerCapabilityHandoffSlotV5::Production];
+
+        fn default_slot() -> Self::Slot {
+            CompilerCapabilityHandoffSlotV5::Production
+        }
+
+        fn slot_tag(slot: Self::Slot) -> u8 {
+            slot as u8
+        }
+
+        fn encode_binding(binding: Self::Binding, bytes: &mut Vec<u8>) {
+            bytes.extend_from_slice(&binding.sha256);
+            bytes.extend_from_slice(&binding.byte_len.to_le_bytes());
+        }
+
+        fn decode_binding(decoder: &mut Decoder<'_>) -> Result<Self::Binding, &'static str> {
+            let sha256 = decoder.array()?;
+            let byte_len = decoder.u64()?;
+            if sha256 == [0; 32] || byte_len == 0 {
+                return Err("native V5 handoff identity is zero");
+            }
+            Ok(CapabilityTransactionBindingV5 { sha256, byte_len })
+        }
+
+        fn binding_matches_length(binding: Self::Binding, length: usize) -> bool {
+            usize::try_from(binding.byte_len).ok() == Some(length)
+                && length <= MAX_COMPILER_CAPABILITY_TRANSACTION_BYTES_V5
+        }
+
+        fn decode_payload(
+            binding: Self::Binding,
+            bytes: Vec<u8>,
+        ) -> Result<Self::Payload, HandoffEngineError> {
+            let transaction = InertProductionCapabilityTransactionV5::decode(&bytes)
+                .map_err(HandoffEngineError::InvalidCanonicalV5)?;
+            if CapabilityTransactionBindingV5::from(transaction.identity()) != binding {
+                return Err(HandoffEngineError::PayloadBindingMismatch);
+            }
+            Ok(transaction)
+        }
+
+        fn derive_identity(
+            producer: [u8; 32],
+            slot: [u8; 32],
+            attempt: BuildAttempt,
+            binding: Self::Binding,
+            handoff_bytes: &[u8],
+        ) -> [u8; 32] {
+            let mut digest = Sha256::new();
+            digest.update(TRANSACTION_IDENTITY_DOMAIN_V5);
+            digest.update(binding.sha256);
+            digest.update(binding.byte_len.to_le_bytes());
+            digest.update(slot);
+            digest.update(producer);
+            digest.update(attempt.generation().to_le_bytes());
+            digest.update(attempt.session().as_bytes());
+            digest.update(attempt.invocation().as_bytes());
+            digest.update((handoff_bytes.len() as u64).to_le_bytes());
+            digest.update(handoff_bytes);
+            digest.finalize().into()
+        }
+    }
+
+    /// Atomically publishes one native V5 handoff and exact simulation Bundle V8.
+    pub fn publish_compiler_capability_transaction_v5(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        handoff: &InertProductionCapabilityHandoffV5,
+        simulation_bundle: &InertSimulationBundleV8,
+    ) -> Result<CompilerCapabilityHandoffReceiptV5, CompilerCapabilityHandoffErrorV5> {
+        publish_in_slot_v5(
+            output_dir,
+            producer,
+            attempt,
+            CompilerCapabilityHandoffSlotV5::Production,
+            handoff,
+            simulation_bundle,
+            &mut NoFaults,
+        )
+    }
+
+    /// Atomically publishes one native V5 handoff and exact simulation Bundle V8.
+    ///
+    /// This established public name now denotes the non-downgradable V5+V8 transaction. Omitting
+    /// the bundle is intentionally not representable.
+    pub fn publish_compiler_capability_handoff_v5(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        handoff: &InertProductionCapabilityHandoffV5,
+        simulation_bundle: &InertSimulationBundleV8,
+    ) -> Result<CompilerCapabilityHandoffReceiptV5, CompilerCapabilityHandoffErrorV5> {
+        publish_compiler_capability_transaction_v5(
+            output_dir,
+            producer,
+            attempt,
+            handoff,
+            simulation_bundle,
+        )
+    }
+
+    /// Recovers the inert receipt for one exact native V5 publication.
+    ///
+    /// Recovery validates the current attempt, complete ready record, payload metadata,
+    /// canonical V5 bytes, and transaction identity under the cooperative output lock. It does
+    /// not consume the handoff or inspect a legacy namespace.
+    pub fn recover_compiler_capability_transaction_receipt_v5(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+    ) -> Result<CompilerCapabilityHandoffReceiptV5, CompilerCapabilityHandoffErrorV5> {
+        recover_compiler_capability_transaction_v5(output_dir, producer, attempt)
+            .map(RecoveredCompilerCapabilityHandoffV5::into_receipt)
+    }
+
+    /// Recovers the move-only receipt for the exact current V5+V8 publication.
+    pub fn recover_compiler_capability_handoff_receipt_v5(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+    ) -> Result<CompilerCapabilityHandoffReceiptV5, CompilerCapabilityHandoffErrorV5> {
+        recover_compiler_capability_transaction_receipt_v5(output_dir, producer, attempt)
+    }
+
+    /// Strictly recovers the exact current V5 receipt and typed handoff for preflight.
+    pub fn recover_compiler_capability_transaction_v5(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+    ) -> Result<RecoveredCompilerCapabilityHandoffV5, CompilerCapabilityHandoffErrorV5> {
+        use super::semantic_v3::{
+            open_pinned_handoff_file_v3, read_pinned_handoff_file_v3,
+            require_current_slot_shape_v3, validate_pinned_handoff_file_v3,
+        };
+
+        let slot = CompilerCapabilityHandoffSlotV5::Production;
+        let output = PinnedOutput::open_existing(output_dir)
+            .map_err(CompilerModuleHandoffErrorV3::from)
+            .map_err(transport_error_v5)?;
+        let _lock = output
+            .lock()
+            .map_err(CompilerModuleHandoffErrorV3::from)
+            .map_err(transport_error_v5)?;
+        output
+            .verify_path_identity()
+            .map_err(CompilerModuleHandoffErrorV3::from)
+            .map_err(transport_error_v5)?;
+        authorize(&output, producer, attempt)?;
+
+        let producer_identity = producer_identity_for::<HandoffV5Schema>(producer);
+        let slot_identity = slot_identity_for::<HandoffV5Schema>(producer_identity, attempt, slot);
+        let parent = open_private_directory(
+            &output.fd,
+            &output.display_path,
+            format!("{PARENT_PREFIX_V5}{}", hex(&producer_identity)),
+        )?
+        .ok_or(CompilerCapabilityHandoffErrorV5::NotPublished)?;
+        cleanup_stale_slots::<HandoffV5Schema>(&parent, producer_identity, attempt)
+            .map_err(engine_error_v5)?;
+        let slot_directory = open_private_directory(
+            &parent.fd,
+            &parent.path,
+            format!("{SLOT_PREFIX_V5}{}", hex(&slot_identity)),
+        )?
+        .ok_or(CompilerCapabilityHandoffErrorV5::NotPublished)?;
+        recover_slot::<HandoffV5Schema>(&slot_directory).map_err(engine_error_v5)?;
+        require_current_slot_shape_v3(&slot_directory).map_err(transport_error_v5)?;
+
+        let ready_file = open_pinned_handoff_file_v3(
+            &slot_directory,
+            READY_ENTRY,
+            HandoffV5Schema::RECORD_BYTES,
+        )
+        .map_err(transport_error_v5)?;
+        let record_bytes = read_pinned_handoff_file_v3(
+            &slot_directory,
+            READY_ENTRY,
+            &ready_file,
+            HandoffV5Schema::RECORD_BYTES,
+            HandoffV5Schema::RECORD_BYTES,
+        )
+        .map_err(transport_error_v5)?;
+        let record = HandoffRecord::<HandoffV5Schema>::decode(&record_bytes).map_err(|reason| {
+            CompilerCapabilityHandoffErrorV5::InvalidSlot {
+                path: slot_directory.path.join(READY_ENTRY),
+                reason: reason.to_string(),
+            }
+        })?;
+        if record.producer != producer_identity
+            || record.attempt != attempt
+            || record.slot != slot_identity
+        {
+            return Err(CompilerCapabilityHandoffErrorV5::InvalidSlot {
+                path: slot_directory.path.join(READY_ENTRY),
+                reason: "record binding does not match the requested producer, attempt, and slot"
+                    .to_owned(),
+            });
+        }
+
+        let payload_file =
+            open_pinned_handoff_file_v3(&slot_directory, PAYLOAD_ENTRY, record.length)
+                .map_err(transport_error_v5)?;
+        if record.file != payload_file.identity() {
+            return Err(CompilerCapabilityHandoffErrorV5::InvalidSlot {
+                path: slot_directory.path.join(PAYLOAD_ENTRY),
+                reason: "payload metadata does not match the durable ready record".to_owned(),
+            });
+        }
+        validate_decode_working_set::<HandoffV5Schema>(
+            record.length,
+            MAX_V5_DECODE_WORKING_SET_BYTES,
+        )
+        .map_err(engine_error_v5)?;
+        let payload_bytes = read_pinned_handoff_file_v3(
+            &slot_directory,
+            PAYLOAD_ENTRY,
+            &payload_file,
+            record.length,
+            MAX_COMPILER_CAPABILITY_TRANSACTION_BYTES_V5,
+        )
+        .map_err(transport_error_v5)?;
+        let transaction_identity = HandoffV5Schema::derive_identity(
+            record.producer,
+            record.slot,
+            record.attempt,
+            record.binding,
+            &payload_bytes,
+        );
+        if transaction_identity != record.identity {
+            return Err(CompilerCapabilityHandoffErrorV5::DigestMismatch);
+        }
+        let transaction = HandoffV5Schema::decode_payload(record.binding, payload_bytes)
+            .map_err(engine_error_v5)?;
+        let payload_identity = transaction.identity();
+        if CapabilityTransactionBindingV5::from(payload_identity) != record.binding {
+            return Err(CompilerCapabilityHandoffErrorV5::HandoffIdentityMismatch);
+        }
+        let handoff_identity = transaction.handoff().identity();
+        let simulation_bundle_identity = transaction.simulation_bundle().identity();
+
+        authorize(&output, producer, attempt)?;
+        output
+            .verify_path_identity()
+            .map_err(CompilerModuleHandoffErrorV3::from)
+            .map_err(transport_error_v5)?;
+        parent.verify()?;
+        slot_directory.verify()?;
+        require_current_slot_shape_v3(&slot_directory).map_err(transport_error_v5)?;
+        let final_record_bytes = read_pinned_handoff_file_v3(
+            &slot_directory,
+            READY_ENTRY,
+            &ready_file,
+            HandoffV5Schema::RECORD_BYTES,
+            HandoffV5Schema::RECORD_BYTES,
+        )
+        .map_err(transport_error_v5)?;
+        if final_record_bytes != record_bytes {
+            return Err(CompilerCapabilityHandoffErrorV5::InvalidSlot {
+                path: slot_directory.path.join(READY_ENTRY),
+                reason: "ready record changed while its exact payload was validated".to_owned(),
+            });
+        }
+        validate_pinned_handoff_file_v3(&slot_directory, PAYLOAD_ENTRY, &payload_file)
+            .map_err(transport_error_v5)?;
+
+        Ok(RecoveredCompilerCapabilityHandoffV5 {
+            receipt: CompilerCapabilityHandoffReceiptV5 {
+                producer_identity,
+                attempt,
+                slot,
+                payload_identity,
+                handoff_identity,
+                simulation_bundle_identity,
+                transaction_identity: CompilerCapabilityHandoffTransactionIdentityV5(
+                    transaction_identity,
+                ),
+                length: record.length,
+            },
+            transaction,
+        })
+    }
+
+    /// Strictly recovers the exact current V5+V8 pair and its move-only receipt.
+    pub fn recover_compiler_capability_handoff_v5(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+    ) -> Result<RecoveredCompilerCapabilityHandoffV5, CompilerCapabilityHandoffErrorV5> {
+        recover_compiler_capability_transaction_v5(output_dir, producer, attempt)
+    }
+
+    /// Atomically publishes opaque compiler-execution receipt bytes beside one exact V5 handoff.
+    pub fn publish_compiler_execution_receipt_transport_for_capability_v5(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        receipt: &CompilerCapabilityHandoffReceiptV5,
+        subject: &crate::InertCompilerExecutionSubjectV1,
+        exact_receipt_bytes: &[u8],
+    ) -> Result<
+        super::semantic_v3::CompilerExecutionReceiptTransportReceiptV1,
+        super::semantic_v3::CompilerExecutionReceiptTransportErrorV1,
+    > {
+        use super::semantic_v3::{
+            compiler_execution_receipt_transport_receipt_v1,
+            read_compiler_execution_receipt_bytes_v1,
+            validate_compiler_execution_receipt_transport_size_v1,
+        };
+
+        validate_compiler_execution_receipt_transport_size_v1(exact_receipt_bytes.len())?;
+        let output = PinnedOutput::open_existing(output_dir)?;
+        let _lock = output.lock()?;
+        let slot =
+            open_capability_subject_bound_slot_v5(&output, producer, receipt, subject, false)?;
+        if let Some(existing) = read_compiler_execution_receipt_bytes_v1(&slot)? {
+            if existing != exact_receipt_bytes {
+                return Err(
+                    super::semantic_v3::CompilerExecutionReceiptTransportErrorV1::ConflictingPublication,
+                );
+            }
+            fsync(&slot.fd).map_err(std::io::Error::from)?;
+            validate_capability_subject_bound_slot_v5(
+                &output, producer, receipt, subject, &slot, false,
+            )?;
+            return Ok(compiler_execution_receipt_transport_receipt_v1(
+                subject, &existing,
+            ));
+        }
+
+        let (temporary_name, mut temporary) =
+            create_temp(&slot, COMPILER_EXECUTION_RECEIPT_ENTRY_V1)?;
+        temporary.write_all(exact_receipt_bytes)?;
+        temporary.sync_all()?;
+        let temporary_stat = fstat(&temporary).map_err(std::io::Error::from)?;
+        if !is_private_file(&temporary_stat)
+            || usize::try_from(temporary_stat.st_size).ok() != Some(exact_receipt_bytes.len())
+        {
+            return Err(
+                super::semantic_v3::CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch,
+            );
+        }
+        validate_capability_subject_bound_slot_v5(
+            &output, producer, receipt, subject, &slot, false,
+        )?;
+        match renameat_with(
+            &slot.fd,
+            &temporary_name,
+            &slot.fd,
+            COMPILER_EXECUTION_RECEIPT_ENTRY_V1,
+            RenameFlags::NOREPLACE,
+        ) {
+            Ok(()) => {}
+            Err(error) if error == rustix::io::Errno::EXIST => {
+                return Err(
+                    super::semantic_v3::CompilerExecutionReceiptTransportErrorV1::ConflictingPublication,
+                );
+            }
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        }
+        fsync(&slot.fd).map_err(std::io::Error::from)?;
+        slot.verify()?;
+        let committed = read_compiler_execution_receipt_bytes_v1(&slot)?
+            .ok_or(super::semantic_v3::CompilerExecutionReceiptTransportErrorV1::NotPublished)?;
+        if committed != exact_receipt_bytes {
+            return Err(
+                super::semantic_v3::CompilerExecutionReceiptTransportErrorV1::ConflictingPublication,
+            );
+        }
+        validate_capability_subject_bound_slot_v5(
+            &output, producer, receipt, subject, &slot, false,
+        )?;
+        Ok(compiler_execution_receipt_transport_receipt_v1(
+            subject, &committed,
+        ))
+    }
+
+    /// Recovers the exact compiler-execution sidecar while the matching V5 handoff is ready.
+    pub fn recover_compiler_execution_receipt_transport_for_capability_v5(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        receipt: &CompilerCapabilityHandoffReceiptV5,
+        subject: &crate::InertCompilerExecutionSubjectV1,
+    ) -> Result<
+        super::semantic_v3::RecoveredCompilerExecutionReceiptTransportV1,
+        super::semantic_v3::CompilerExecutionReceiptTransportErrorV1,
+    > {
+        use super::semantic_v3::{
+            RecoveredCompilerExecutionReceiptTransportV1,
+            compiler_execution_receipt_transport_receipt_v1,
+            read_compiler_execution_receipt_bytes_v1,
+        };
+
+        let output = PinnedOutput::open_existing(output_dir)?;
+        let _lock = output.lock()?;
+        let slot =
+            open_capability_subject_bound_slot_v5(&output, producer, receipt, subject, false)?;
+        let exact_bytes = read_compiler_execution_receipt_bytes_v1(&slot)?
+            .ok_or(super::semantic_v3::CompilerExecutionReceiptTransportErrorV1::NotPublished)?;
+        validate_capability_subject_bound_slot_v5(
+            &output, producer, receipt, subject, &slot, false,
+        )?;
+        Ok(RecoveredCompilerExecutionReceiptTransportV1 {
+            receipt: compiler_execution_receipt_transport_receipt_v1(subject, &exact_bytes),
+            exact_bytes: Arc::from(exact_bytes),
+        })
+    }
+
+    fn open_capability_subject_bound_slot_v5(
+        output: &PinnedOutput,
+        producer: &ProducerIdentity,
+        receipt: &CompilerCapabilityHandoffReceiptV5,
+        subject: &crate::InertCompilerExecutionSubjectV1,
+        allow_consumed: bool,
+    ) -> Result<PinnedDirectory, super::semantic_v3::CompilerExecutionReceiptTransportErrorV1> {
+        output.verify_path_identity()?;
+        super::semantic_v3::authorize_compiler_execution_receipt_transport_v1(
+            output,
+            producer,
+            receipt.attempt(),
+            allow_consumed,
+        )?;
+        let producer_identity = producer_identity_for::<HandoffV5Schema>(producer);
+        let slot_identity = slot_identity_for::<HandoffV5Schema>(
+            producer_identity,
+            receipt.attempt(),
+            receipt.slot(),
+        );
+        let parent = open_private_directory(
+            &output.fd,
+            &output.display_path,
+            format!("{PARENT_PREFIX_V5}{}", hex(&producer_identity)),
+        )?
+        .ok_or(CompilerCapabilityHandoffErrorV5::NotPublished)?;
+        cleanup_stale_slots::<HandoffV5Schema>(&parent, producer_identity, receipt.attempt())
+            .map_err(engine_error_v5)?;
+        let slot = open_private_directory(
+            &parent.fd,
+            &parent.path,
+            format!("{SLOT_PREFIX_V5}{}", hex(&slot_identity)),
+        )?
+        .ok_or(CompilerCapabilityHandoffErrorV5::NotPublished)?;
+        recover_slot::<HandoffV5Schema>(&slot).map_err(engine_error_v5)?;
+        validate_capability_subject_bound_slot_v5(
+            output,
+            producer,
+            receipt,
+            subject,
+            &slot,
+            allow_consumed,
+        )?;
+        parent.verify()?;
+        Ok(slot)
+    }
+
+    fn validate_capability_subject_bound_slot_v5(
+        output: &PinnedOutput,
+        producer: &ProducerIdentity,
+        receipt: &CompilerCapabilityHandoffReceiptV5,
+        subject: &crate::InertCompilerExecutionSubjectV1,
+        slot: &PinnedDirectory,
+        allow_consumed: bool,
+    ) -> Result<(), super::semantic_v3::CompilerExecutionReceiptTransportErrorV1> {
+        use super::semantic_v3::CompilerExecutionReceiptTransportErrorV1;
+
+        output.verify_path_identity()?;
+        super::semantic_v3::authorize_compiler_execution_receipt_transport_v1(
+            output,
+            producer,
+            receipt.attempt(),
+            allow_consumed,
+        )?;
+        slot.verify()?;
+        let entries = slot_entries(slot)?;
+        let has_ready = entries.iter().any(|entry| entry == READY_ENTRY);
+        let has_consumed = entries.iter().any(|entry| entry == CONSUMED_ENTRY);
+        let record_entry = match (has_ready, has_consumed) {
+            (true, false) => READY_ENTRY,
+            (false, true) if allow_consumed => CONSUMED_ENTRY,
+            (false, true) => {
+                return Err(CompilerCapabilityHandoffErrorV5::AlreadyConsumed.into());
+            }
+            (false, false) => return Err(CompilerCapabilityHandoffErrorV5::NotPublished.into()),
+            (true, true) => {
+                return Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch);
+            }
+        };
+        let record_bytes = read_private_file(slot, record_entry, HandoffV5Schema::RECORD_BYTES)?
+            .ok_or(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch)?;
+        let record = HandoffRecord::<HandoffV5Schema>::decode(&record_bytes)
+            .map_err(|_| CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch)?;
+        let producer_identity = producer_identity_for::<HandoffV5Schema>(producer);
+        let slot_identity = slot_identity_for::<HandoffV5Schema>(
+            producer_identity,
+            receipt.attempt(),
+            receipt.slot(),
+        );
+        if record.producer != producer_identity
+            || receipt.producer_identity() != &producer_identity
+            || record.slot != slot_identity
+            || record.attempt != receipt.attempt()
+            || record.binding != CapabilityTransactionBindingV5::from(receipt.payload_identity())
+            || record.identity != *receipt.transaction_identity().as_bytes()
+            || record.length != receipt.length()
+            || subject.attempt() != receipt.attempt()
+            || subject.transaction_identity().as_bytes()
+                != receipt.transaction_identity().as_bytes()
+        {
+            return Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch);
+        }
+        if record_entry == READY_ENTRY {
+            let transaction_bytes =
+                read_payload::<HandoffV5Schema>(slot, &record, MAX_V5_DECODE_WORKING_SET_BYTES)
+                    .map_err(engine_error_v5)?;
+            let transaction = HandoffV5Schema::decode_payload(record.binding, transaction_bytes)
+                .map_err(engine_error_v5)?;
+            let reconstructed =
+                crate::InertCompilerExecutionSubjectV1::from_capability_publication_v5(
+                    receipt,
+                    transaction.handoff(),
+                )
+                .map_err(|_| CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch)?;
+            if &reconstructed != subject {
+                return Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch);
+            }
+        }
+        output.verify_path_identity()?;
+        slot.verify()?;
+        Ok(())
+    }
+
+    /// Consumes and strictly decodes one exact V5 plus Bundle V8 transaction exactly once.
+    pub fn consume_compiler_capability_transaction_v5(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        receipt: CompilerCapabilityHandoffReceiptV5,
+    ) -> Result<ConsumedCompilerCapabilityHandoffV5, CompilerCapabilityHandoffErrorV5> {
+        consume_in_slot_v5(output_dir, producer, receipt, &mut NoFaults)
+    }
+
+    /// Consumes the exact current V5+V8 transaction by move-owned receipt.
+    pub fn consume_compiler_capability_handoff_v5(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        receipt: CompilerCapabilityHandoffReceiptV5,
+    ) -> Result<ConsumedCompilerCapabilityHandoffV5, CompilerCapabilityHandoffErrorV5> {
+        consume_compiler_capability_transaction_v5(output_dir, producer, receipt)
+    }
+
+    /// Deletes exact V5 and paired V3 handoff state after the attempt is durably failed.
+    ///
+    /// This cleanup cannot revoke a current or completed attempt. It removes only the exact
+    /// attempt-scoped slots after revalidating the failed registry record under the output lock.
+    pub fn purge_failed_compiler_capability_transaction_v5(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+    ) -> Result<(), CompilerCapabilityHandoffErrorV5> {
+        let output = PinnedOutput::open_existing(output_dir)
+            .map_err(CompilerModuleHandoffErrorV3::from)
+            .map_err(transport_error_v5)?;
+        let _lock = output
+            .lock()
+            .map_err(CompilerModuleHandoffErrorV3::from)
+            .map_err(transport_error_v5)?;
+        output
+            .verify_path_identity()
+            .map_err(CompilerModuleHandoffErrorV3::from)
+            .map_err(transport_error_v5)?;
+        let attempts = read_attempt_registry(&output).map_err(|error| {
+            CompilerCapabilityHandoffErrorV5::Attempt {
+                reason: error.to_string(),
+            }
+        })?;
+        let record = attempts
+            .record_exact(&producer.stable_source, attempt)
+            .map_err(|error| CompilerCapabilityHandoffErrorV5::Attempt {
+                reason: error.to_string(),
+            })?;
+        if record.crate_name != producer.crate_name || record.phase != AttemptPhase::Failed {
+            return Err(CompilerCapabilityHandoffErrorV5::Attempt {
+                reason: "compiler handoff cleanup requires the exact durably failed attempt"
+                    .to_owned(),
+            });
+        }
+        purge_exact_attempt_slot::<HandoffV5Schema>(
+            &output,
+            producer,
+            attempt,
+            CompilerCapabilityHandoffSlotV5::Production,
+        )
+        .map_err(engine_error_v5)?;
+        super::semantic_v3::purge_failed_attempt_v3(&output, producer, attempt)
+            .map_err(transport_error_v5)?;
+        output
+            .verify_path_identity()
+            .map_err(CompilerModuleHandoffErrorV3::from)
+            .map_err(transport_error_v5)
+    }
+
+    /// Purges exact V5+V8 and paired V3 custody for one durably failed attempt.
+    pub fn purge_failed_compiler_handoff_attempt_v5(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+    ) -> Result<(), CompilerCapabilityHandoffErrorV5> {
+        purge_failed_compiler_capability_transaction_v5(output_dir, producer, attempt)
+    }
+
+    fn publish_in_slot_v5(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        slot: CompilerCapabilityHandoffSlotV5,
+        handoff: &InertProductionCapabilityHandoffV5,
+        simulation_bundle: &InertSimulationBundleV8,
+        hooks: &mut impl HandoffHooks,
+    ) -> Result<CompilerCapabilityHandoffReceiptV5, CompilerCapabilityHandoffErrorV5> {
+        let decoded_handoff = InertProductionCapabilityHandoffV5::decode(handoff.canonical_bytes())
+            .map_err(CompilerCapabilityHandoffErrorV5::NonCanonicalHandoff)?;
+        let handoff_identity = handoff.identity();
+        if decoded_handoff.identity() != handoff_identity
+            || usize::try_from(handoff_identity.byte_len()).ok()
+                != Some(handoff.canonical_bytes().len())
+        {
+            return Err(CompilerCapabilityHandoffErrorV5::HandoffIdentityMismatch);
+        }
+        let decoded_bundle = InertSimulationBundleV8::from_verified_canonical_bytes(
+            simulation_bundle.identity().sha256(),
+            simulation_bundle.canonical_bytes().to_vec(),
+        )
+        .map_err(InertProductionCapabilityHandoffErrorV5::from)
+        .map_err(CompilerCapabilityHandoffErrorV5::NonCanonicalHandoff)?;
+        let transaction =
+            InertProductionCapabilityTransactionV5::new(decoded_handoff, decoded_bundle)
+                .map_err(CompilerCapabilityHandoffErrorV5::NonCanonicalHandoff)?;
+        let payload_identity = transaction.identity();
+        let simulation_bundle_identity = transaction.simulation_bundle().identity();
+        let bytes = transaction.canonical_bytes();
+        publish_in_slot_engine::<HandoffV5Schema>(
+            output_dir,
+            producer,
+            attempt,
+            slot,
+            payload_identity.into(),
+            bytes,
+            hooks,
+        )
+        .map(|published| CompilerCapabilityHandoffReceiptV5 {
+            producer_identity: producer_identity_for::<HandoffV5Schema>(producer),
+            attempt: published.attempt,
+            slot: published.slot,
+            payload_identity,
+            handoff_identity,
+            simulation_bundle_identity,
+            transaction_identity: CompilerCapabilityHandoffTransactionIdentityV5(
+                published.identity,
+            ),
+            length: published.length,
+        })
+        .map_err(engine_error_v5)
+    }
+
+    fn consume_in_slot_v5(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        receipt: CompilerCapabilityHandoffReceiptV5,
+        hooks: &mut impl HandoffHooks,
+    ) -> Result<ConsumedCompilerCapabilityHandoffV5, CompilerCapabilityHandoffErrorV5> {
+        let producer_identity = producer_identity_for::<HandoffV5Schema>(producer);
+        if receipt.producer_identity() != &producer_identity
+            || receipt.slot() != CompilerCapabilityHandoffSlotV5::Production
+        {
+            return Err(CompilerCapabilityHandoffErrorV5::WrongHandoffIdentity);
+        }
+        let attempt = receipt.attempt();
+        let slot = receipt.slot();
+        let expected_payload_identity = receipt.payload_identity();
+        let expected_handoff_identity = receipt.handoff_identity();
+        let expected_bundle_identity = receipt.simulation_bundle_identity();
+        let expected_transaction_identity = receipt.transaction_identity();
+        consume_in_slot_engine_exact::<HandoffV5Schema>(
+            output_dir,
+            producer,
+            attempt,
+            slot,
+            expected_payload_identity.into(),
+            Some(*expected_transaction_identity.as_bytes()),
+            hooks,
+        )
+        .map_err(engine_error_v5)
+        .and_then(|consumed| {
+            if consumed.payload.handoff().identity() != expected_handoff_identity
+                || consumed.payload.simulation_bundle().identity() != expected_bundle_identity
+                || consumed.payload.identity() != expected_payload_identity
+                || consumed.identity != *expected_transaction_identity.as_bytes()
+            {
+                return Err(CompilerCapabilityHandoffErrorV5::HandoffIdentityMismatch);
+            }
+            Ok(ConsumedCompilerCapabilityHandoffV5 {
+                attempt: consumed.attempt,
+                slot: consumed.slot,
+                transaction_identity: CompilerCapabilityHandoffTransactionIdentityV5(
+                    consumed.identity,
+                ),
+                transaction: consumed.payload,
+                worker_v3_compatibility_available: true,
+            })
+        })
+    }
+
+    fn engine_error_v5(error: HandoffEngineError) -> CompilerCapabilityHandoffErrorV5 {
+        match error {
+            HandoffEngineError::Common(error) => error.into(),
+            HandoffEngineError::WrongBinding => {
+                CompilerCapabilityHandoffErrorV5::WrongHandoffIdentity
+            }
+            HandoffEngineError::PayloadBindingMismatch => {
+                CompilerCapabilityHandoffErrorV5::HandoffIdentityMismatch
+            }
+            HandoffEngineError::WorkingSetBudgetExceeded { required, maximum } => {
+                CompilerCapabilityHandoffErrorV5::WorkingSetBudgetExceeded { required, maximum }
+            }
+            HandoffEngineError::PayloadAllocationFailed { requested } => {
+                CompilerCapabilityHandoffErrorV5::PayloadAllocationFailed { requested }
+            }
+            HandoffEngineError::InvalidCanonicalV3(error) => {
+                CompilerCapabilityHandoffErrorV5::InvalidSlot {
+                    path: PathBuf::new(),
+                    reason: format!("V5 handoff unexpectedly required V3 decoding: {error}"),
+                }
+            }
+            HandoffEngineError::InvalidCanonicalV5(error) => {
+                CompilerCapabilityHandoffErrorV5::NonCanonicalHandoff(error)
+            }
+        }
+    }
+
+    fn transport_error_v5(error: CompilerModuleHandoffErrorV3) -> CompilerCapabilityHandoffErrorV5 {
+        match error {
+            CompilerModuleHandoffErrorV3::Io(error) => CompilerCapabilityHandoffErrorV5::Io(error),
+            CompilerModuleHandoffErrorV3::Attempt { reason } => {
+                CompilerCapabilityHandoffErrorV5::Attempt { reason }
+            }
+            CompilerModuleHandoffErrorV3::InvalidSlot { path, reason } => {
+                CompilerCapabilityHandoffErrorV5::InvalidSlot { path, reason }
+            }
+            CompilerModuleHandoffErrorV3::InvalidHandoffSize { actual, maximum } => {
+                CompilerCapabilityHandoffErrorV5::InvalidHandoffSize { actual, maximum }
+            }
+            CompilerModuleHandoffErrorV3::AlreadyPublished => {
+                CompilerCapabilityHandoffErrorV5::AlreadyPublished
+            }
+            CompilerModuleHandoffErrorV3::ConflictingPublication => {
+                CompilerCapabilityHandoffErrorV5::ConflictingPublication
+            }
+            CompilerModuleHandoffErrorV3::AlreadyConsumed => {
+                CompilerCapabilityHandoffErrorV5::AlreadyConsumed
+            }
+            CompilerModuleHandoffErrorV3::NotPublished => {
+                CompilerCapabilityHandoffErrorV5::NotPublished
+            }
+            CompilerModuleHandoffErrorV3::DigestMismatch => {
+                CompilerCapabilityHandoffErrorV5::DigestMismatch
+            }
+            CompilerModuleHandoffErrorV3::WrongHandoffIdentity => {
+                CompilerCapabilityHandoffErrorV5::WrongHandoffIdentity
+            }
+            CompilerModuleHandoffErrorV3::HandoffIdentityMismatch => {
+                CompilerCapabilityHandoffErrorV5::HandoffIdentityMismatch
+            }
+            CompilerModuleHandoffErrorV3::WorkingSetBudgetExceeded { required, maximum } => {
+                CompilerCapabilityHandoffErrorV5::WorkingSetBudgetExceeded { required, maximum }
+            }
+            CompilerModuleHandoffErrorV3::PayloadAllocationFailed { requested } => {
+                CompilerCapabilityHandoffErrorV5::PayloadAllocationFailed { requested }
+            }
+            CompilerModuleHandoffErrorV3::Busy
+            | CompilerModuleHandoffErrorV3::MismatchedCurrentnessToken
+            | CompilerModuleHandoffErrorV3::NonCanonicalHandoff(_) => {
+                CompilerCapabilityHandoffErrorV5::InvalidSlot {
+                    path: PathBuf::new(),
+                    reason: "legacy transport helper rejected the native V5 slot".to_owned(),
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::authenticated_compiler_completion_v5::{
+            AuthenticatedCompilerCapabilityCompletionErrorV5,
+            InertCompilerCapabilityVerifierResponseV5,
+            authenticated_compiler_capability_evidence_identity_v5, sign_fixture_response_v5,
+        };
+        use crate::{BuildInvocation, BuildSession, begin_build_attempt};
+        use ed25519_dalek::SigningKey;
+        use fe2o3_build_authority::CompilerClosureV2;
+        use fe2o3_compiler_ffi::{
+            CodeObjectVersion, CompilerFfiEnvelopeV1, CompilerModuleHandoffV2,
+            CompilerModuleKindV1, CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1,
+            DeviceTargetV1, InertFinalCompilerModuleCommitmentV3,
+            InertProductionCapabilityHandoffInputsV5, InertProductionCapabilityTransactionV5,
+            InertProductionFinalGraphReportV5, InertProductionTargetCapabilityClosureV5,
+            InertSemanticCompilerModuleHandoffV3, InertSimulationBundleV8,
+        };
+        use fe2o3_compiler_lineage::{
+            InertAbiReceiptV3, InertAmdgpuLoweringReceiptV3, InertCanonicalKernelIrV13ReceiptV5,
+            InertCanonicalSemanticMirReceiptV3, InertCompilerProofOwnerInputsV5,
+            InertDataLayoutReceiptV3, InertExportManifestReceiptV3,
+            InertFinalCompilerModuleCommitmentReceiptV3, InertFormalMemoryReceiptV3,
+            InertKernelIrReceiptV3, InertLineageContentIdentityV3, InertMiddleEndReceiptV3,
+            InertMirToKirCorrespondenceReceiptV3, InertMultiRootProofLineageV3,
+            InertProductionSemanticCapsuleV3, InertProofBindingAssociationInputsV4,
+            InertProofBindingAssociationV4, InertProofBindingReceiptV3,
+            InertRustcIdentityInventoryReceiptV3, InertRustcPreflightPlanReceiptV3,
+            InertSemanticToLlvmReceiptV3, InertStaticCapabilityEvidenceAssociationInputsV1,
+            InertStaticCapabilityEvidenceAssociationV1, InertTargetBindingReceiptV3,
+            MachineRefinementContentIdentityV1, MachineRefinementFamilyV1,
+            MultiRootCanonicalKirVersionV3, MultiRootNeutralKirIdentityV3,
+            MultiRootProofRosterInputsV3, MultiRootProofRosterKindV3,
+            MultiRootProofRosterRootInputV3, MultiRootProofRosterTranscriptV3,
+            OrderedInertSemanticLineageReceiptsV3, TargetBindingTranscriptInputsV3,
+            TargetBindingTranscriptV3, TargetLineageIdentityV3,
+            TargetMachineRefinementReceiptPartsV1, TargetMachineRefinementReceiptV1,
+            TargetMachineRefinementTargetV1,
+            decode_compiler_instruction_selection_correspondence_identity_v1,
+            decode_exact_compiler_stage_content_identity_v1,
+            decode_post_llvm_stage_custody_identity_v1,
+        };
+        use fe2o3_proof_contracts::{
+            ArtifactIdentityV1, CapabilityObligationSpecV1, CapabilityOutcomeV1,
+            CapabilityPropertyIdV1, CapabilityResultSpecV1, CapabilitySubjectV1, DigestV1,
+            EvidenceIdentityV1, ExactToolIdentityV1, ExecutableKirIdentityV1,
+            InertCapabilityObligationSetV1, InertCapabilityResultSetV1, KernelIdentityV1,
+            KernelRootIdentityV1, LaunchContractIdentityV1, StatementIdentityV1,
+            TargetModelIdentityV1,
+        };
+        use fe2o3_rustc_invocation::{
+            CompileEnvironmentV2, RustcInvocationDescriptorV2, RustcInvocationDescriptorV3,
+            RustcUnitV2,
+        };
+        use std::ffi::OsString;
+
+        const TARGET: &str = "gfx942:xnack-";
+
+        struct TestDirectory(PathBuf);
+
+        impl TestDirectory {
+            fn new() -> Self {
+                static NEXT: AtomicU64 = AtomicU64::new(1);
+                let path = std::env::temp_dir().join(format!(
+                    "fe2o3-capability-handoff-v5-test-{}-{}",
+                    std::process::id(),
+                    NEXT.fetch_add(1, Ordering::Relaxed)
+                ));
+                fs::create_dir(&path).unwrap();
+                Self(path)
+            }
+        }
+
+        impl Drop for TestDirectory {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        fn digest(byte: u8) -> DigestV1 {
+            DigestV1::from_untrusted_bytes([byte; 32])
+        }
+
+        fn machine_evidence(seed: u8) -> Vec<u8> {
+            let families = MachineRefinementFamilyV1::ControlFlow.bit();
+            TargetMachineRefinementReceiptV1::from_parts(TargetMachineRefinementReceiptPartsV1 {
+                target: TargetMachineRefinementTargetV1::Gfx942,
+                post_llvm_custody: decode_post_llvm_stage_custody_identity_v1(
+                    [seed; 32],
+                    u64::from(seed) + 1,
+                )
+                .unwrap(),
+                instruction_selection:
+                    decode_compiler_instruction_selection_correspondence_identity_v1(
+                        [seed.wrapping_add(1); 32],
+                        u64::from(seed) + 2,
+                    )
+                    .unwrap(),
+                decoded_isa: MachineRefinementContentIdentityV1::new(
+                    [seed.wrapping_add(2); 32],
+                    u64::from(seed) + 3,
+                )
+                .unwrap(),
+                final_code_object: decode_exact_compiler_stage_content_identity_v1(
+                    [seed.wrapping_add(3); 32],
+                    u64::from(seed) + 4,
+                )
+                .unwrap(),
+                machine_refinement_sha256: [seed.wrapping_add(4); 32],
+                required_families: families,
+                established_families: families,
+            })
+            .unwrap()
+            .canonical_bytes()
+            .to_vec()
+        }
+
+        fn producer(name: &str) -> ProducerIdentity {
+            ProducerIdentity::from_codegen(name, Some(Path::new("/src/capability-kernel.rs")))
+                .unwrap()
+        }
+
+        fn begin(path: &Path, producer: &ProducerIdentity, seed: u8) -> BuildAttempt {
+            begin_build_attempt(
+                path,
+                producer,
+                BuildInvocation::from_bytes([seed; 32]),
+                BuildSession::from_bytes([seed.wrapping_add(1); 16]),
+            )
+            .unwrap()
+        }
+
+        fn target() -> DeviceTargetV1 {
+            DeviceTargetV1::parse(TARGET).unwrap()
+        }
+
+        fn compiler_closure(seed: u8) -> CompilerClosureV2 {
+            CompilerClosureV2::new(
+                [seed; 32],
+                [seed.wrapping_add(1); 32],
+                [seed.wrapping_add(2); 32],
+                [seed.wrapping_add(3); 32],
+                [seed.wrapping_add(4); 32],
+                [seed.wrapping_add(5); 32],
+            )
+            .unwrap()
+        }
+
+        fn invocation(seed: u8) -> RustcInvocationDescriptorV3 {
+            let closure = compiler_closure(seed.wrapping_add(1));
+            let rustc = RustcUnitV2::new(
+                "/workspace/fe2o3",
+                vec![
+                    "/opt/fe2o3/rustc".into(),
+                    "--crate-name".into(),
+                    format!("transaction_v5_{seed:02x}"),
+                    "crates/transaction-v5-fixture/src/lib.rs".into(),
+                    "--crate-type=lib".into(),
+                    "--edition=2024".into(),
+                    "-Zcodegen-backend=/opt/fe2o3/librustc_codegen_fe2o3.so".into(),
+                ],
+            )
+            .unwrap();
+            let environment = CompileEnvironmentV2::from_child_environment(
+                [
+                    ("CARGO_CFG_TARGET_ARCH", "amdgcn"),
+                    ("FE2O3_HSACO_DIR", "/workspace/fe2o3/target/fe2o3"),
+                    ("FE2O3_TARGET", TARGET),
+                    ("FE2O3_VERIFY_KERNEL_IR", "1"),
+                ]
+                .map(|(key, value)| (OsString::from(key), OsString::from(value))),
+            )
+            .unwrap();
+            let v2 = RustcInvocationDescriptorV2::new(
+                closure.rustc_executable_sha256(),
+                closure.codegen_backend_sha256(),
+                rustc,
+                environment,
+            )
+            .unwrap();
+            RustcInvocationDescriptorV3::new(v2, closure).unwrap()
+        }
+
+        fn payload(label: &str, seed: u8) -> Vec<u8> {
+            format!("fe2o3-transaction-v5/{label}/seed-{seed:03}").into_bytes()
+        }
+
+        fn domain_identity(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
+            let mut digest = Sha256::new();
+            digest.update(domain);
+            digest.update((bytes.len() as u64).to_le_bytes());
+            digest.update(bytes);
+            digest.finalize().into()
+        }
+
+        fn push_test_text(bytes: &mut Vec<u8>, text: &str) {
+            bytes.extend_from_slice(&(text.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(text.as_bytes());
+        }
+
+        fn source_refinement(
+            lineage: &InertMultiRootProofLineageV3,
+            semantic_mir: [u8; 32],
+            kir: [u8; 32],
+            kir_len: u64,
+            epoch: u64,
+        ) -> InertCapabilityRefinementReceiptV1 {
+            const CORRESPONDENCE_DOMAIN: &[u8] =
+                b"FE2O3/EXACT-FUNCTION-MIR-TO-KIR-CORRESPONDENCE-EVIDENCE/V5\0";
+            const SOURCE_DOMAIN: &[u8] =
+                b"FE2O3/CHECKED-SOURCE-MIR-TO-KIR-REFINEMENT-EVIDENCE/V1\0";
+
+            let mut nested_v4 = Vec::from(b"F2M2K4\0\0".as_slice());
+            nested_v4.extend_from_slice(&4_u16.to_le_bytes());
+            nested_v4.extend_from_slice(&1_u16.to_le_bytes());
+            nested_v4.extend_from_slice(&0_u32.to_le_bytes());
+            nested_v4.extend_from_slice(&124_u32.to_le_bytes());
+            nested_v4.extend_from_slice(&semantic_mir);
+            nested_v4.extend_from_slice(&13_u16.to_le_bytes());
+            nested_v4.extend_from_slice(&0_u16.to_le_bytes());
+            nested_v4.extend_from_slice(&kir_len.to_le_bytes());
+            nested_v4.extend_from_slice(&kir);
+            nested_v4.resize(124, 0);
+
+            let correspondence_len = 28 + nested_v4.len() + 20 + "kernel".len();
+            let mut correspondence = Vec::new();
+            correspondence.extend_from_slice(b"F2M2K5\0\0");
+            correspondence.extend_from_slice(&5_u16.to_le_bytes());
+            correspondence.extend_from_slice(&1_u16.to_le_bytes());
+            correspondence.extend_from_slice(&0_u32.to_le_bytes());
+            correspondence.extend_from_slice(&(correspondence_len as u32).to_le_bytes());
+            correspondence.extend_from_slice(&(nested_v4.len() as u32).to_le_bytes());
+            correspondence.extend_from_slice(&1_u32.to_le_bytes());
+            correspondence.extend_from_slice(&nested_v4);
+            correspondence.extend_from_slice(&0_u32.to_le_bytes());
+            correspondence.extend_from_slice(&0_u32.to_le_bytes());
+            correspondence.extend_from_slice(&0_u32.to_le_bytes());
+            correspondence.push(1);
+            correspondence.extend_from_slice(&[0; 3]);
+            push_test_text(&mut correspondence, "kernel");
+            assert_eq!(correspondence.len(), correspondence_len);
+            let correspondence_identity = domain_identity(CORRESPONDENCE_DOMAIN, &correspondence);
+
+            let root_bytes = 76 + 3 * (4 + "kernel".len());
+            let source_len = 136 + root_bytes + correspondence.len() + 32;
+            let mut source = Vec::new();
+            source.extend_from_slice(b"F2SREFV1");
+            source.extend_from_slice(&1_u16.to_le_bytes());
+            source.extend_from_slice(&1_u16.to_le_bytes());
+            source.extend_from_slice(&0_u32.to_le_bytes());
+            source.extend_from_slice(&(source_len as u32).to_le_bytes());
+            source.extend_from_slice(&semantic_mir);
+            source.extend_from_slice(&13_u16.to_le_bytes());
+            source.extend_from_slice(&0_u16.to_le_bytes());
+            source.extend_from_slice(&kir_len.to_le_bytes());
+            source.extend_from_slice(&kir);
+            source.extend_from_slice(&correspondence_identity);
+            source.extend_from_slice(&1_u32.to_le_bytes());
+            source.extend_from_slice(&(correspondence.len() as u32).to_le_bytes());
+            source.extend_from_slice(&0_u32.to_le_bytes());
+            source.extend_from_slice(&[22; 32]);
+            source.extend_from_slice(&[21; 32]);
+            source.extend_from_slice(&0_u32.to_le_bytes());
+            source.extend_from_slice(&0_u32.to_le_bytes());
+            push_test_text(&mut source, "kernel");
+            push_test_text(&mut source, "kernel");
+            push_test_text(&mut source, "kernel");
+            source.extend_from_slice(&correspondence);
+            let source_identity = domain_identity(SOURCE_DOMAIN, &source);
+            source.extend_from_slice(&source_identity);
+            assert_eq!(source.len(), source_len);
+
+            let receipt = InertCapabilityRefinementReceiptV1::from_checked_source_evidence_v1(
+                &source, lineage,
+            )
+            .unwrap();
+            assert_eq!(lineage.neutral_kir().graph_epoch(), epoch);
+            receipt
+        }
+
+        fn w4_witness(payload: &[u8]) -> Vec<u8> {
+            const DOMAIN: &[u8] = b"FE2O3/PRODUCTION-W4-FINAL-GRAPH-CAPABILITY-WITNESS/V1\0";
+            const CHECKSUM_DOMAIN: &[u8] = b"FE2O3/PRODUCTION-W4-WITNESS-CHECKSUM/V1\0";
+            let mut bytes = Vec::from(DOMAIN);
+            bytes.extend_from_slice(&1_u16.to_le_bytes());
+            bytes.extend_from_slice(payload);
+            let mut checksum = Sha256::new();
+            checksum.update(CHECKSUM_DOMAIN);
+            checksum.update(&bytes);
+            bytes.extend_from_slice(&checksum.finalize());
+            bytes
+        }
+
+        #[derive(Debug)]
+        struct MoveOnlyW4(Vec<u8>);
+
+        #[derive(Debug)]
+        struct QuarantinedW4Binding {
+            prepared: PreparedCompilerCapabilityCompletionV5,
+            witness: MoveOnlyW4,
+        }
+
+        fn bind_w4(
+            prepared: PreparedCompilerCapabilityCompletionV5,
+        ) -> W4BoundCompilerCapabilityCompletionV5<MoveOnlyW4> {
+            let witness = MoveOnlyW4(
+                prepared
+                    .handoff()
+                    .final_graph_report()
+                    .w4_witness()
+                    .canonical_encoding()
+                    .to_vec(),
+            );
+            prepared
+                .bind_w4_witness(witness, |witness| &witness.0)
+                .unwrap()
+        }
+
+        fn llvm_module(seed: u8) -> Vec<u8> {
+            format!(
+                "; ModuleID = 'transaction-v5-{seed:02x}'\ndefine amdgpu_kernel void @kernel() {{ ret void }}\n"
+            )
+            .into_bytes()
+        }
+
+        fn receipts(seed: u8, final_commitment: &[u8]) -> OrderedInertSemanticLineageReceiptsV3 {
+            let semantic = InertCanonicalSemanticMirReceiptV3::from_canonical_preimage(payload(
+                "semantic-mir",
+                seed,
+            ))
+            .unwrap();
+            let middle =
+                InertMiddleEndReceiptV3::from_canonical_preimage(payload("middle-end", seed))
+                    .unwrap();
+            let kernel_ir =
+                InertKernelIrReceiptV3::from_canonical_preimage(payload("kernel-ir", seed))
+                    .unwrap();
+            let correspondence = InertMirToKirCorrespondenceReceiptV3::from_canonical_preimage(
+                payload("mir-to-kir", seed),
+            )
+            .unwrap();
+            let memory =
+                InertFormalMemoryReceiptV3::from_canonical_preimage(payload("formal-memory", seed))
+                    .unwrap();
+            let receipt_identity = |sha256: &[u8; 32], byte_len| {
+                InertLineageContentIdentityV3::new(*sha256, byte_len).unwrap()
+            };
+            let proof_binding = InertProofBindingAssociationV4::new(
+                InertProofBindingAssociationInputsV4::new(
+                    receipt_identity(semantic.identity().sha256(), semantic.identity().byte_len()),
+                    receipt_identity(middle.identity().sha256(), middle.identity().byte_len()),
+                    receipt_identity(
+                        kernel_ir.identity().sha256(),
+                        kernel_ir.identity().byte_len(),
+                    ),
+                    receipt_identity(
+                        correspondence.identity().sha256(),
+                        correspondence.identity().byte_len(),
+                    ),
+                    receipt_identity(memory.identity().sha256(), memory.identity().byte_len()),
+                ),
+                &payload("signed-verus", seed),
+            )
+            .unwrap();
+            let target_binding = TargetBindingTranscriptV3::new(TargetBindingTranscriptInputsV3 {
+                protected_rustc_invocation: TargetLineageIdentityV3::new([91; 32], 1).unwrap(),
+                semantic_mir: TargetLineageIdentityV3::new(
+                    *semantic.identity().sha256(),
+                    semantic.identity().byte_len(),
+                )
+                .unwrap(),
+                target_neutral_kir: TargetLineageIdentityV3::new(
+                    Sha256::digest(kernel_ir.canonical_preimage()).into(),
+                    kernel_ir.canonical_preimage().len() as u64,
+                )
+                .unwrap(),
+                target_bound_kir: TargetLineageIdentityV3::new([92; 32], 1).unwrap(),
+                configured_target: TARGET,
+                rustc_llvm_target: "amdgcn-amd-amdhsa",
+                target_cpu: "gfx942",
+                target_features: "-wavefrontsize32,+wavefrontsize64,-xnack",
+                code_object_version: 6,
+                wave_width_bits: 64,
+                default_workgroup: [64, 1, 1],
+            })
+            .unwrap();
+            OrderedInertSemanticLineageReceiptsV3::new(
+                InertRustcIdentityInventoryReceiptV3::from_canonical_preimage(payload(
+                    "inventory",
+                    seed,
+                ))
+                .unwrap(),
+                InertRustcPreflightPlanReceiptV3::from_canonical_preimage(payload(
+                    "preflight",
+                    seed,
+                ))
+                .unwrap(),
+                semantic,
+                middle,
+                kernel_ir,
+                correspondence,
+                memory,
+                InertProofBindingReceiptV3::from_canonical_preimage(
+                    proof_binding.canonical_bytes(),
+                )
+                .unwrap(),
+                InertTargetBindingReceiptV3::from_canonical_preimage(
+                    target_binding.canonical_bytes(),
+                )
+                .unwrap(),
+                InertDataLayoutReceiptV3::from_canonical_preimage(payload("data-layout", seed))
+                    .unwrap(),
+                InertAbiReceiptV3::from_canonical_preimage(payload("abi", seed)).unwrap(),
+                InertExportManifestReceiptV3::from_canonical_preimage(payload(
+                    "export-manifest",
+                    seed,
+                ))
+                .unwrap(),
+                InertAmdgpuLoweringReceiptV3::from_canonical_preimage(payload(
+                    "amdgpu-lowering",
+                    seed,
+                ))
+                .unwrap(),
+                InertSemanticToLlvmReceiptV3::from_canonical_preimage(payload(
+                    "semantic-to-llvm",
+                    seed,
+                ))
+                .unwrap(),
+                InertFinalCompilerModuleCommitmentReceiptV3::from_canonical_preimage(
+                    final_commitment.to_vec(),
+                )
+                .unwrap(),
+            )
+        }
+
+        fn legacy_handoff(seed: u8) -> InertSemanticCompilerModuleHandoffV3 {
+            let llvm = llvm_module(seed);
+            let envelope = CompilerFfiEnvelopeV1::for_module_without_device_ffi(
+                target(),
+                CodeObjectVersion::V6,
+            )
+            .unwrap();
+            let manifest = CompilerModuleSymbolManifestV1::new([
+                (CompilerModuleSymbolRoleV1::KernelEntry, "kernel"),
+                (CompilerModuleSymbolRoleV1::KernelDescriptor, "kernel.kd"),
+            ])
+            .unwrap();
+            let module = CompilerModuleHandoffV2::new(
+                CompilerModuleKindV1::LlvmTextIr,
+                target(),
+                CodeObjectVersion::V6,
+                envelope,
+                manifest,
+                &llvm,
+            )
+            .unwrap();
+            let final_commitment =
+                InertFinalCompilerModuleCommitmentV3::from_handoff(&module).unwrap();
+            let capsule = InertProductionSemanticCapsuleV3::new(
+                invocation(seed),
+                target(),
+                receipts(seed, final_commitment.canonical_bytes()),
+            )
+            .unwrap();
+            InertSemanticCompilerModuleHandoffV3::new(capsule, module).unwrap()
+        }
+
+        fn proof_lineage(
+            kir: [u8; 32],
+            kir_len: u64,
+            epoch: u64,
+            semantic_mir: [u8; 32],
+        ) -> InertMultiRootProofLineageV3 {
+            proof_lineage_with_kernel(kir, kir_len, epoch, semantic_mir, [21; 32])
+        }
+
+        fn proof_lineage_with_kernel(
+            kir: [u8; 32],
+            kir_len: u64,
+            epoch: u64,
+            semantic_mir: [u8; 32],
+            kernel_binding: [u8; 32],
+        ) -> InertMultiRootProofLineageV3 {
+            let neutral = MultiRootNeutralKirIdentityV3::new(
+                MultiRootCanonicalKirVersionV3::V13,
+                kir_len,
+                kir,
+                epoch,
+            )
+            .unwrap();
+            let roster = |kind, evidence: &'static [u8]| {
+                let roots = [MultiRootProofRosterRootInputV3 {
+                    semantic_root: 0,
+                    semantic_root_identity: [22; 32],
+                    kernel_binding,
+                    source_rank: 1,
+                    workgroup: [64, 1, 1],
+                    logical_name: "kernel",
+                    export_symbol: "kernel",
+                    kernel_id: "kernel",
+                    payload: evidence,
+                }];
+                MultiRootProofRosterTranscriptV3::new(MultiRootProofRosterInputsV3 {
+                    kind,
+                    semantic_mir_sha256: semantic_mir,
+                    neutral_kir: neutral,
+                    roster_identity: [40; 32],
+                    canonical_kernel_order: &[0],
+                    roots: &roots,
+                })
+                .unwrap()
+            };
+            InertMultiRootProofLineageV3::new(
+                roster(MultiRootProofRosterKindV3::MiddleEnd, b"middle"),
+                roster(
+                    MultiRootProofRosterKindV3::Correspondence,
+                    b"correspondence",
+                ),
+                roster(MultiRootProofRosterKindV3::FormalMemory, b"memory"),
+                roster(MultiRootProofRosterKindV3::VerusExecution, b"verus"),
+            )
+            .unwrap()
+        }
+
+        fn subject(
+            kir: [u8; 32],
+            epoch: u64,
+            target_model: [u8; 32],
+            launch_contract: [u8; 32],
+        ) -> CapabilitySubjectV1 {
+            CapabilitySubjectV1::new(
+                KernelIdentityV1::from_untrusted_digest(digest(21)),
+                KernelRootIdentityV1::from_untrusted_digest(digest(22)),
+                ExecutableKirIdentityV1::from_untrusted_digest(DigestV1::from_untrusted_bytes(kir)),
+                epoch,
+                TargetModelIdentityV1::from_untrusted_digest(DigestV1::from_untrusted_bytes(
+                    target_model,
+                )),
+                LaunchContractIdentityV1::from_untrusted_digest(DigestV1::from_untrusted_bytes(
+                    launch_contract,
+                )),
+            )
+            .unwrap()
+        }
+
+        fn live_target_closure(
+            seed: u8,
+            kir: [u8; 32],
+            kir_len: u64,
+            epoch: u64,
+        ) -> (Vec<u8>, [u8; 32], [u8; 32], [u8; 32]) {
+            const IDENTITY_DOMAIN: &[u8] = b"FE2O3/PRODUCTION-TARGET-CAPABILITY-CLOSURE/V1\0";
+            const MODEL_DOMAIN: &[u8] = b"FE2O3/PRODUCTION-CAPABILITY-TARGET-MODEL/V5\0";
+            const PROFILE: [u64; 4] = [
+                0xf1bb_8ef6_8f79_2ff5,
+                0x1d57_2a80_70f2_03f5,
+                0x1215_97f0_eb6c_ce70,
+                0x64ae_6fae_6709_2967,
+            ];
+            const REVISION: [u64; 4] = [
+                0xb8d1_ed24_505d_a768,
+                0xdbca_a7af_68d7_865c,
+                0x089d_8b1a_6fe2_a314,
+                0x482b_359a_ba2d_00e2,
+            ];
+            let launch_evidence = [seed.max(1); 32];
+            let mut closure = vec![0_u8; 157];
+            closure[..8].copy_from_slice(b"F2TCAP01");
+            closure[8..10].copy_from_slice(&1_u16.to_le_bytes());
+            closure[10] = 13;
+            closure[11..43].copy_from_slice(&kir);
+            closure[43..51].copy_from_slice(&kir_len.to_le_bytes());
+            closure[51..59].copy_from_slice(&epoch.to_le_bytes());
+            for (index, word) in PROFILE.into_iter().chain(REVISION).enumerate() {
+                closure[59 + index * 8..67 + index * 8].copy_from_slice(&word.to_le_bytes());
+            }
+            closure[123..155].copy_from_slice(&launch_evidence);
+            closure[155..157].copy_from_slice(&1_u16.to_le_bytes());
+
+            let mut identity = Sha256::new();
+            identity.update((IDENTITY_DOMAIN.len() as u32).to_le_bytes());
+            identity.update(IDENTITY_DOMAIN);
+            identity.update((closure.len() as u64).to_le_bytes());
+            identity.update(&closure);
+            let mut model = Sha256::new();
+            model.update(MODEL_DOMAIN);
+            model.update(&closure[59..123]);
+            (
+                closure,
+                identity.finalize().into(),
+                model.finalize().into(),
+                launch_evidence,
+            )
+        }
+
+        fn root_launch_contract(launch_evidence: [u8; 32]) -> [u8; 32] {
+            let mut digest = Sha256::new();
+            digest.update(b"FE2O3/PRODUCTION-CAPABILITY-ROOT-LAUNCH/V5\0");
+            digest.update(launch_evidence);
+            digest.update(0_u64.to_le_bytes());
+            digest.update(0_u32.to_le_bytes());
+            digest.update([22; 32]);
+            digest.update([21; 32]);
+            digest.update([1]);
+            for dimension in [64_u32, 1, 1] {
+                digest.update(dimension.to_le_bytes());
+            }
+            digest.update(6_u64.to_le_bytes());
+            digest.update(b"kernel");
+            digest.finalize().into()
+        }
+
+        fn obligations(subject: CapabilitySubjectV1) -> InertCapabilityObligationSetV1 {
+            InertCapabilityObligationSetV1::from_specs(
+                subject,
+                vec![CapabilityObligationSpecV1::new(
+                    CapabilityPropertyIdV1::TYPING,
+                    StatementIdentityV1::from_untrusted_digest(digest(41)),
+                )],
+            )
+            .unwrap()
+        }
+
+        fn capability_handoff(seed: u8) -> InertProductionCapabilityHandoffV5 {
+            let legacy_handoff = legacy_handoff(seed);
+            let kir_bytes = payload("canonical-kir-v13", seed);
+            let kir: [u8; 32] = Sha256::digest(&kir_bytes).into();
+            let kir_len = kir_bytes.len() as u64;
+            let epoch = 7;
+            let semantic_mir = *legacy_handoff
+                .capsule()
+                .receipts()
+                .semantic_mir()
+                .identity()
+                .sha256();
+            let proof_lineage = proof_lineage(kir, kir_len, epoch, semantic_mir);
+            let source_refinement =
+                source_refinement(&proof_lineage, semantic_mir, kir, kir_len, epoch);
+            let (closure, closure_identity, target_model, launch_evidence) =
+                live_target_closure(seed, kir, kir_len, epoch);
+            let subject = subject(
+                kir,
+                epoch,
+                target_model,
+                root_launch_contract(launch_evidence),
+            );
+            InertProductionCapabilityHandoffV5::new(
+                legacy_handoff,
+                InertCanonicalKernelIrV13ReceiptV5::from_canonical_preimage(kir_bytes).unwrap(),
+                proof_lineage,
+                InertProductionCapabilityHandoffInputsV5::new(semantic_mir, subject, [33; 32])
+                    .unwrap(),
+                source_refinement,
+                obligations(subject),
+                InertProductionTargetCapabilityClosureV5::new(
+                    closure_identity,
+                    kir,
+                    kir_len,
+                    epoch,
+                    subject.target_model(),
+                    subject.launch_contract(),
+                    closure,
+                )
+                .unwrap(),
+                InertProductionFinalGraphReportV5::new(
+                    kir,
+                    kir_len,
+                    epoch,
+                    w4_witness(&payload("final-report", seed)),
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        }
+
+        fn simulation_bundle(seed: u8) -> InertSimulationBundleV8 {
+            const HEADER_BYTES: usize = 416;
+            const IDENTITY_DOMAIN: &[u8] = b"FE2O3/SIMULATION-BUNDLE-CONTENT/V8\0";
+            let target = TARGET.as_bytes();
+            let kir = payload("bundle-kir-v13", seed);
+            let source = payload("bundle-source-map", seed);
+            let semantic = payload("bundle-semantic-mir", seed);
+            let storage = payload("bundle-storage-map", seed);
+            let aggregate = payload("bundle-aggregate-map", seed);
+            let mut bytes = vec![0_u8; HEADER_BYTES];
+            bytes[..8].copy_from_slice(b"F2SIMB08");
+            bytes[8..10].copy_from_slice(&8_u16.to_le_bytes());
+            bytes[12..14].copy_from_slice(&13_u16.to_le_bytes());
+            bytes[14..16].copy_from_slice(&13_u16.to_le_bytes());
+            bytes[16..20].copy_from_slice(&1_u32.to_le_bytes());
+            bytes[20..22].copy_from_slice(&(target.len() as u16).to_le_bytes());
+            bytes[28..36].copy_from_slice(&(kir.len() as u64).to_le_bytes());
+            bytes[36..40].copy_from_slice(&(source.len() as u32).to_le_bytes());
+            bytes[40..48].copy_from_slice(&(semantic.len() as u64).to_le_bytes());
+            bytes[48..52].copy_from_slice(&(storage.len() as u32).to_le_bytes());
+            bytes[52..56].copy_from_slice(&(aggregate.len() as u32).to_le_bytes());
+            bytes[56..64].copy_from_slice(&7_u64.to_le_bytes());
+            for (range, value) in [
+                (64..96, seed.wrapping_add(1)),
+                (104..136, seed.wrapping_add(2)),
+                (144..176, seed.wrapping_add(3)),
+                (184..216, seed.wrapping_add(4)),
+                (224..256, seed.wrapping_add(5)),
+                (256..288, seed.wrapping_add(6)),
+                (288..320, seed.wrapping_add(7)),
+                (320..352, seed.wrapping_add(8)),
+                (352..384, seed.wrapping_add(9)),
+                (384..416, seed.wrapping_add(10)),
+            ] {
+                bytes[range].fill(value.max(1));
+            }
+            bytes[96..104].copy_from_slice(&1_u64.to_le_bytes());
+            bytes[136..144].copy_from_slice(&1_u64.to_le_bytes());
+            bytes[176..184].copy_from_slice(&(kir.len() as u64).to_le_bytes());
+            bytes[216..224].copy_from_slice(&(kir.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(target);
+            bytes.extend_from_slice(&kir);
+            bytes.extend_from_slice(&source);
+            bytes.extend_from_slice(&semantic);
+            bytes.extend_from_slice(&storage);
+            bytes.extend_from_slice(&aggregate);
+            InertSimulationBundleV8::from_verified_canonical_bytes(
+                domain_identity(IDENTITY_DOMAIN, &bytes),
+                bytes,
+            )
+            .unwrap()
+        }
+
+        fn capability_transaction(
+            handoff: &InertProductionCapabilityHandoffV5,
+            bundle: &InertSimulationBundleV8,
+        ) -> InertProductionCapabilityTransactionV5 {
+            InertProductionCapabilityTransactionV5::new(
+                InertProductionCapabilityHandoffV5::decode(handoff.canonical_bytes()).unwrap(),
+                InertSimulationBundleV8::from_verified_canonical_bytes(
+                    bundle.identity().sha256(),
+                    bundle.canonical_bytes().to_vec(),
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        }
+
+        fn lineage_identity(sha256: [u8; 32], byte_len: u64) -> InertLineageContentIdentityV3 {
+            InertLineageContentIdentityV3::new(sha256, byte_len).unwrap()
+        }
+
+        fn completion_evidence(
+            handoff: &InertProductionCapabilityHandoffV5,
+            machine: &InertCapabilityRefinementReceiptV1,
+        ) -> (
+            InertStaticCapabilityEvidenceAssociationV1,
+            InertCompilerProofOwnerV5,
+        ) {
+            completion_evidence_for_subject(handoff, machine, handoff.inputs().subject())
+        }
+
+        fn completion_evidence_for_subject(
+            handoff: &InertProductionCapabilityHandoffV5,
+            machine: &InertCapabilityRefinementReceiptV1,
+            subject: CapabilitySubjectV1,
+        ) -> (
+            InertStaticCapabilityEvidenceAssociationV1,
+            InertCompilerProofOwnerV5,
+        ) {
+            completion_evidence_for_subject_and_lineage(
+                handoff,
+                machine,
+                subject,
+                handoff.proof_lineage(),
+            )
+        }
+
+        fn completion_evidence_for_subject_and_lineage(
+            handoff: &InertProductionCapabilityHandoffV5,
+            machine: &InertCapabilityRefinementReceiptV1,
+            subject: CapabilitySubjectV1,
+            proof_lineage: &InertMultiRootProofLineageV3,
+        ) -> (
+            InertStaticCapabilityEvidenceAssociationV1,
+            InertCompilerProofOwnerV5,
+        ) {
+            let capsule = handoff.legacy_handoff().capsule();
+            let receipts = capsule.receipts();
+            let kir_receipt = handoff.executable_kir().identity();
+            let source = handoff.source_refinement().identity();
+            let machine_identity = machine.identity();
+            let association_inputs = InertStaticCapabilityEvidenceAssociationInputsV1::new(
+                lineage_identity(*capsule.identity().sha256(), capsule.identity().byte_len()),
+                lineage_identity(kir_receipt.sha256(), kir_receipt.byte_len()),
+                lineage_identity(
+                    *receipts.proof_binding().identity().sha256(),
+                    receipts.proof_binding().identity().byte_len(),
+                ),
+                lineage_identity(
+                    *receipts.target_binding().identity().sha256(),
+                    receipts.target_binding().identity().byte_len(),
+                ),
+                lineage_identity(
+                    *receipts.amdgpu_lowering().identity().sha256(),
+                    receipts.amdgpu_lowering().identity().byte_len(),
+                ),
+                lineage_identity(
+                    *receipts.semantic_to_llvm().identity().sha256(),
+                    receipts.semantic_to_llvm().identity().byte_len(),
+                ),
+                lineage_identity(
+                    *receipts
+                        .final_compiler_module_commitment()
+                        .identity()
+                        .sha256(),
+                    receipts
+                        .final_compiler_module_commitment()
+                        .identity()
+                        .byte_len(),
+                ),
+                Some(source),
+                Some(machine_identity),
+            );
+            let obligations = obligations(subject);
+            let results = InertCapabilityResultSetV1::from_specs(
+                obligations.subject(),
+                obligations.identity(),
+                obligations
+                    .obligations()
+                    .iter()
+                    .map(|obligation| {
+                        CapabilityResultSpecV1::new(
+                            obligation.identity(),
+                            CapabilityOutcomeV1::Proven {
+                                evidence: EvidenceIdentityV1::from_untrusted_digest(digest(51)),
+                                tool: ExactToolIdentityV1::new(digest(52), digest(53)),
+                                proof_artifact: ArtifactIdentityV1::new(digest(54), digest(55)),
+                            },
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap();
+            let association = InertStaticCapabilityEvidenceAssociationV1::new(
+                association_inputs,
+                &obligations,
+                &results,
+            )
+            .unwrap();
+            let association_roster =
+                InertMultiRootStaticCapabilityEvidenceAssociationV1::new(vec![
+                    InertStaticCapabilityEvidenceAssociationV1::decode(
+                        association.canonical_bytes(),
+                    )
+                    .unwrap(),
+                ])
+                .unwrap();
+            let owner_inputs = InertCompilerProofOwnerInputsV5::new(
+                lineage_identity(
+                    *receipts.proof_binding().identity().sha256(),
+                    receipts.proof_binding().identity().byte_len(),
+                ),
+                lineage_identity(
+                    *receipts.semantic_mir().identity().sha256(),
+                    receipts.semantic_mir().identity().byte_len(),
+                ),
+                handoff.inputs().semantic_mir_identity(),
+                kir_receipt,
+                kir_receipt.byte_len(),
+                subject,
+                handoff.inputs().compiler_policy(),
+                source,
+                machine_identity,
+                association_roster.identity(),
+            )
+            .unwrap();
+            let owner = InertCompilerProofOwnerV5::new_multi_root_for_association_at_ordinal(
+                owner_inputs,
+                proof_lineage,
+                vec![subject],
+                0,
+                association.identity(),
+            )
+            .unwrap();
+            (association, owner)
+        }
+
+        fn authenticated_completion(
+            prepared: &PreparedCompilerCapabilityCompletionV5,
+            evidence: Vec<u8>,
+        ) -> AuthenticatedCompilerCapabilityCompletionV5 {
+            let (response, signing_key) = signed_response_for(prepared, evidence);
+            let signature = sign_fixture_response_v5(&response, &signing_key);
+            AuthenticatedCompilerCapabilityCompletionV5::from_fixture_response(
+                response,
+                signature,
+                &signing_key,
+            )
+            .unwrap()
+        }
+
+        fn signed_response_for(
+            prepared: &PreparedCompilerCapabilityCompletionV5,
+            evidence: Vec<u8>,
+        ) -> (InertCompilerCapabilityVerifierResponseV5, SigningKey) {
+            let machine = InertCapabilityRefinementReceiptV1::from_canonical_preimage(
+                fe2o3_compiler_lineage::InertCapabilityRefinementReceiptKindV1::Machine,
+                evidence.clone(),
+            )
+            .unwrap();
+            let (association, owner) = completion_evidence(prepared.handoff(), &machine);
+            let associations =
+                InertMultiRootStaticCapabilityEvidenceAssociationV1::new(vec![association])
+                    .unwrap();
+            signed_response(prepared, evidence, associations, owner)
+        }
+
+        fn signed_completion(
+            prepared: &PreparedCompilerCapabilityCompletionV5,
+            evidence: Vec<u8>,
+            associations: InertMultiRootStaticCapabilityEvidenceAssociationV1,
+            owner: InertCompilerProofOwnerV5,
+        ) -> AuthenticatedCompilerCapabilityCompletionV5 {
+            let (response, signing_key) = signed_response(prepared, evidence, associations, owner);
+            let signature = sign_fixture_response_v5(&response, &signing_key);
+            AuthenticatedCompilerCapabilityCompletionV5::from_fixture_response(
+                response,
+                signature,
+                &signing_key,
+            )
+            .unwrap()
+        }
+
+        fn signed_response(
+            prepared: &PreparedCompilerCapabilityCompletionV5,
+            evidence: Vec<u8>,
+            associations: InertMultiRootStaticCapabilityEvidenceAssociationV1,
+            owner: InertCompilerProofOwnerV5,
+        ) -> (InertCompilerCapabilityVerifierResponseV5, SigningKey) {
+            let signing_key = SigningKey::from_bytes(&[0xa5; 32]);
+            let response = InertCompilerCapabilityVerifierResponseV5::fixture(
+                *prepared.transaction_identity().as_bytes(),
+                prepared.handoff(),
+                prepared.simulation_bundle(),
+                prepared.object_bytes(),
+                owner,
+                associations,
+                evidence,
+                &signing_key,
+            )
+            .unwrap();
+            (response, signing_key)
+        }
+
+        fn slot_path(path: &Path, producer: &ProducerIdentity, attempt: BuildAttempt) -> PathBuf {
+            let producer_id = producer_identity_for::<HandoffV5Schema>(producer);
+            path.join(format!("{PARENT_PREFIX_V5}{}", hex(&producer_id)))
+                .join(format!(
+                    "{SLOT_PREFIX_V5}{}",
+                    hex(&slot_identity_for::<HandoffV5Schema>(
+                        producer_id,
+                        attempt,
+                        CompilerCapabilityHandoffSlotV5::Production,
+                    ))
+                ))
+        }
+
+        fn rewrite_record_for_payload(slot: &Path, payload: &[u8]) {
+            let ready = slot.join(READY_ENTRY);
+            let mut record =
+                HandoffRecord::<HandoffV5Schema>::decode(&fs::read(&ready).unwrap()).unwrap();
+            fs::write(slot.join(PAYLOAD_ENTRY), payload).unwrap();
+            let file = fs::File::open(slot.join(PAYLOAD_ENTRY)).unwrap();
+            record.file = FileIdentity::from_stat(&fstat(&file).unwrap());
+            record.identity = HandoffV5Schema::derive_identity(
+                record.producer,
+                record.slot,
+                record.attempt,
+                record.binding,
+                payload,
+            );
+            fs::write(ready, record.encode()).unwrap();
+        }
+
+        #[test]
+        fn v5_schema_has_one_non_downgradable_slot() {
+            assert_eq!(
+                HandoffV5Schema::ALL_SLOTS,
+                &[CompilerCapabilityHandoffSlotV5::Production]
+            );
+            assert_eq!(CompilerCapabilityHandoffSlotV5::Production as u8, 0);
+            assert_ne!(PARENT_PREFIX_V5, ".fe2o3-compiler-module-handoff-v3-");
+        }
+
+        #[test]
+        fn v5_transaction_retains_exact_object_and_complete_result() {
+            let temp = TestDirectory::new();
+            let producer = producer("complete_v5");
+            let attempt = begin(&temp.0, &producer, 1);
+            let handoff = capability_handoff(11);
+            let bundle = simulation_bundle(11);
+            let expected_identity = handoff.identity();
+            let expected_bundle_identity = bundle.identity();
+            let receipt = publish_compiler_capability_handoff_v5(
+                &temp.0, &producer, attempt, &handoff, &bundle,
+            )
+            .unwrap();
+            let recovered =
+                recover_compiler_capability_handoff_receipt_v5(&temp.0, &producer, attempt)
+                    .unwrap();
+            assert_eq!(recovered, receipt);
+            let recovered_pair =
+                recover_compiler_capability_handoff_v5(&temp.0, &producer, attempt).unwrap();
+            assert_eq!(recovered_pair.receipt(), &receipt);
+            assert_eq!(recovered_pair.handoff().identity(), expected_identity);
+            assert_eq!(
+                recovered_pair.simulation_bundle().identity(),
+                expected_bundle_identity
+            );
+            assert_eq!(receipt.attempt(), attempt);
+            assert_eq!(receipt.handoff_identity(), expected_identity);
+            assert_eq!(
+                receipt.simulation_bundle_identity(),
+                expected_bundle_identity
+            );
+            assert!(receipt.length() > handoff.canonical_bytes().len());
+            let transaction_identity = receipt.transaction_identity();
+
+            let consumed =
+                consume_compiler_capability_handoff_v5(&temp.0, &producer, receipt).unwrap();
+            assert_eq!(consumed.transaction_identity(), transaction_identity);
+            assert_eq!(
+                consumed.simulation_bundle().identity(),
+                expected_bundle_identity
+            );
+            let object = payload("object", 11);
+            let prepared = consumed.begin_completion(object.clone()).unwrap();
+            let evidence = machine_evidence(11);
+            let authenticated = authenticated_completion(&prepared, evidence.clone());
+            assert!(authenticated.authenticates_exact_object_bytes(&object));
+            assert!(
+                !authenticated.authenticates_exact_object_bytes(&payload("different-object", 11))
+            );
+            let prepared = bind_w4(prepared);
+            assert_eq!(
+                prepared.w4_witness().0.as_slice(),
+                prepared.handoff().final_graph_report().canonical_results()
+            );
+            let completed = prepared.complete_multi_root(authenticated).unwrap();
+            assert_eq!(completed.object_bytes(), object);
+            assert_eq!(completed.result().handoff().identity(), expected_identity);
+            assert_eq!(
+                completed.simulation_bundle().identity(),
+                expected_bundle_identity
+            );
+            assert_eq!(
+                completed.w4_witness().canonical_encoding(),
+                completed
+                    .result()
+                    .handoff()
+                    .final_graph_report()
+                    .canonical_results()
+            );
+            assert_eq!(
+                completed.result().object_output().output_sha256(),
+                Sha256::digest(&object).as_slice()
+            );
+            assert_eq!(completed.checker_evidence_bytes(), evidence);
+            let checker_identity = completed.checker_evidence_identity();
+            assert!(checker_identity.matches_bytes(completed.checker_evidence_bytes()));
+            assert_ne!(
+                checker_identity.sha256(),
+                <[u8; 32]>::from(Sha256::digest(completed.checker_evidence_bytes()))
+            );
+        }
+
+        #[test]
+        fn signed_completion_rejects_signature_and_response_digest_mutation() {
+            let temp = TestDirectory::new();
+            let producer = producer("signed_response_mutation_v5");
+            let attempt = begin(&temp.0, &producer, 2);
+            let handoff = capability_handoff(12);
+            let bundle = simulation_bundle(12);
+            let receipt = publish_compiler_capability_transaction_v5(
+                &temp.0, &producer, attempt, &handoff, &bundle,
+            )
+            .unwrap();
+            let consumed =
+                consume_compiler_capability_transaction_v5(&temp.0, &producer, receipt).unwrap();
+            let prepared = consumed.begin_completion(payload("object", 12)).unwrap();
+
+            let evidence = machine_evidence(12);
+            let (response, signing_key) = signed_response_for(&prepared, evidence.clone());
+            let checker_identity = response.checker_evidence_identity();
+            assert!(checker_identity.matches_bytes(&evidence));
+            assert_ne!(
+                checker_identity.sha256(),
+                <[u8; 32]>::from(Sha256::digest(&evidence))
+            );
+            let mut signature = sign_fixture_response_v5(&response, &signing_key);
+            signature[0] ^= 1;
+            assert!(matches!(
+                AuthenticatedCompilerCapabilityCompletionV5::from_fixture_response(
+                    response,
+                    signature,
+                    &signing_key,
+                ),
+                Err(AuthenticatedCompilerCapabilityCompletionErrorV5::InvalidSignature)
+            ));
+
+            let (response, signing_key) = signed_response_for(&prepared, evidence);
+            let signature = sign_fixture_response_v5(&response, &signing_key);
+            let transaction_identity = prepared.transaction_identity();
+            let transaction = transaction_identity.as_bytes();
+            let mut mutated = response.canonical_bytes().to_vec();
+            let offsets = mutated
+                .windows(transaction.len())
+                .enumerate()
+                .filter_map(|(offset, candidate)| (candidate == transaction).then_some(offset))
+                .collect::<Vec<_>>();
+            assert_eq!(offsets.len(), 1);
+            mutated[offsets[0]] ^= 1;
+            let mutated = InertCompilerCapabilityVerifierResponseV5::decode(&mutated).unwrap();
+            assert!(matches!(
+                AuthenticatedCompilerCapabilityCompletionV5::from_fixture_response(
+                    mutated,
+                    signature,
+                    &signing_key,
+                ),
+                Err(AuthenticatedCompilerCapabilityCompletionErrorV5::InvalidSignature)
+            ));
+        }
+
+        #[test]
+        fn verifier_response_rejects_arbitrary_machine_bytes_with_exact_digest() {
+            let temp = TestDirectory::new();
+            let producer = producer("arbitrary_machine_evidence_v5");
+            let attempt = begin(&temp.0, &producer, 22);
+            let handoff = capability_handoff(22);
+            let bundle = simulation_bundle(22);
+            let receipt = publish_compiler_capability_transaction_v5(
+                &temp.0, &producer, attempt, &handoff, &bundle,
+            )
+            .unwrap();
+            let prepared = consume_compiler_capability_transaction_v5(&temp.0, &producer, receipt)
+                .unwrap()
+                .begin_completion(payload("object", 22))
+                .unwrap();
+
+            let valid_evidence = machine_evidence(22);
+            let machine = InertCapabilityRefinementReceiptV1::from_canonical_preimage(
+                fe2o3_compiler_lineage::InertCapabilityRefinementReceiptKindV1::Machine,
+                valid_evidence,
+            )
+            .unwrap();
+            let (association, owner) = completion_evidence(prepared.handoff(), &machine);
+            let associations =
+                InertMultiRootStaticCapabilityEvidenceAssociationV1::new(vec![association])
+                    .unwrap();
+            let arbitrary = b"arbitrary machine evidence with a correct derived digest".to_vec();
+            let exact_identity =
+                authenticated_compiler_capability_evidence_identity_v5(&arbitrary).unwrap();
+            assert!(exact_identity.matches_bytes(&arbitrary));
+
+            let signing_key = SigningKey::from_bytes(&[0xa5; 32]);
+            assert!(matches!(
+                InertCompilerCapabilityVerifierResponseV5::fixture(
+                    *prepared.transaction_identity().as_bytes(),
+                    prepared.handoff(),
+                    prepared.simulation_bundle(),
+                    prepared.object_bytes(),
+                    owner,
+                    associations,
+                    arbitrary,
+                    &signing_key,
+                ),
+                Err(AuthenticatedCompilerCapabilityCompletionErrorV5::InvalidCheckerEvidence)
+            ));
+        }
+
+        #[test]
+        fn signed_completion_cannot_replay_across_requests() {
+            let first_temp = TestDirectory::new();
+            let first_producer = producer("cross_request_source_v5");
+            let first_attempt = begin(&first_temp.0, &first_producer, 3);
+            let handoff = capability_handoff(13);
+            let bundle = simulation_bundle(13);
+            let first_receipt = publish_compiler_capability_transaction_v5(
+                &first_temp.0,
+                &first_producer,
+                first_attempt,
+                &handoff,
+                &bundle,
+            )
+            .unwrap();
+            let first = consume_compiler_capability_transaction_v5(
+                &first_temp.0,
+                &first_producer,
+                first_receipt,
+            )
+            .unwrap()
+            .begin_completion(payload("object", 13))
+            .unwrap();
+            let authenticated = authenticated_completion(&first, machine_evidence(13));
+
+            let second_temp = TestDirectory::new();
+            let second_producer = producer("cross_request_destination_v5");
+            let second_attempt = begin(&second_temp.0, &second_producer, 4);
+            let second_receipt = publish_compiler_capability_transaction_v5(
+                &second_temp.0,
+                &second_producer,
+                second_attempt,
+                &handoff,
+                &bundle,
+            )
+            .unwrap();
+            let second = consume_compiler_capability_transaction_v5(
+                &second_temp.0,
+                &second_producer,
+                second_receipt,
+            )
+            .unwrap()
+            .begin_completion(payload("object", 13))
+            .unwrap();
+            assert_ne!(first.transaction_identity(), second.transaction_identity());
+            let error = bind_w4(second)
+                .complete_multi_root(authenticated)
+                .unwrap_err();
+            assert!(matches!(
+                error.carriage_error(),
+                Some(InertProductionCapabilityHandoffErrorV5::IdentityMismatch(
+                    "authenticated verifier request"
+                ))
+            ));
+        }
+
+        #[test]
+        fn signed_completion_cannot_substitute_a_cross_kernel_owner() {
+            let temp = TestDirectory::new();
+            let producer = producer("cross_kernel_v5");
+            let attempt = begin(&temp.0, &producer, 7);
+            let handoff = capability_handoff(14);
+            let bundle = simulation_bundle(14);
+            let receipt = publish_compiler_capability_transaction_v5(
+                &temp.0, &producer, attempt, &handoff, &bundle,
+            )
+            .unwrap();
+            let prepared = consume_compiler_capability_transaction_v5(&temp.0, &producer, receipt)
+                .unwrap()
+                .begin_completion(payload("object", 14))
+                .unwrap();
+            let evidence = machine_evidence(14);
+            let machine = InertCapabilityRefinementReceiptV1::from_canonical_preimage(
+                fe2o3_compiler_lineage::InertCapabilityRefinementReceiptKindV1::Machine,
+                evidence.clone(),
+            )
+            .unwrap();
+            let original = handoff.inputs().subject();
+            let substituted = CapabilitySubjectV1::new(
+                KernelIdentityV1::from_untrusted_digest(digest(202)),
+                original.root(),
+                original.executable_kir(),
+                original.executable_kir_epoch(),
+                original.target_model(),
+                original.launch_contract(),
+            )
+            .unwrap();
+            let kir_receipt = handoff.executable_kir().identity();
+            let alternate_lineage = proof_lineage_with_kernel(
+                *original.executable_kir().digest().as_bytes(),
+                kir_receipt.byte_len(),
+                original.executable_kir_epoch(),
+                handoff.inputs().semantic_mir_identity(),
+                *digest(202).as_bytes(),
+            );
+            assert_ne!(handoff.inputs().subject().kernel(), substituted.kernel());
+            let (association, owner) = completion_evidence_for_subject_and_lineage(
+                &handoff,
+                &machine,
+                substituted,
+                &alternate_lineage,
+            );
+            let associations =
+                InertMultiRootStaticCapabilityEvidenceAssociationV1::new(vec![association])
+                    .unwrap();
+            let authenticated = signed_completion(&prepared, evidence, associations, owner);
+            let error = bind_w4(prepared)
+                .complete_multi_root(authenticated)
+                .unwrap_err();
+            assert!(matches!(
+                error.carriage_error(),
+                Some(InertProductionCapabilityHandoffErrorV5::IdentityMismatch(_))
+            ));
+        }
+
+        #[test]
+        fn signed_completion_cannot_substitute_a_cross_target_owner() {
+            let temp = TestDirectory::new();
+            let producer = producer("cross_target_v5");
+            let attempt = begin(&temp.0, &producer, 8);
+            let handoff = capability_handoff(16);
+            let bundle = simulation_bundle(16);
+            let receipt = publish_compiler_capability_transaction_v5(
+                &temp.0, &producer, attempt, &handoff, &bundle,
+            )
+            .unwrap();
+            let prepared = consume_compiler_capability_transaction_v5(&temp.0, &producer, receipt)
+                .unwrap()
+                .begin_completion(payload("object", 16))
+                .unwrap();
+            let evidence = machine_evidence(16);
+            let machine = InertCapabilityRefinementReceiptV1::from_canonical_preimage(
+                fe2o3_compiler_lineage::InertCapabilityRefinementReceiptKindV1::Machine,
+                evidence.clone(),
+            )
+            .unwrap();
+            let original = handoff.inputs().subject();
+            let substituted = CapabilitySubjectV1::new(
+                original.kernel(),
+                original.root(),
+                original.executable_kir(),
+                original.executable_kir_epoch(),
+                TargetModelIdentityV1::from_untrusted_digest(digest(201)),
+                original.launch_contract(),
+            )
+            .unwrap();
+            let (association, owner) =
+                completion_evidence_for_subject(&handoff, &machine, substituted);
+            let associations =
+                InertMultiRootStaticCapabilityEvidenceAssociationV1::new(vec![association])
+                    .unwrap();
+            let authenticated = signed_completion(&prepared, evidence, associations, owner);
+            let error = bind_w4(prepared)
+                .complete_multi_root(authenticated)
+                .unwrap_err();
+            assert!(matches!(
+                error.carriage_error(),
+                Some(InertProductionCapabilityHandoffErrorV5::IdentityMismatch(_))
+            ));
+        }
+
+        #[test]
+        fn v5_production_sidecar_binds_exact_subject_before_one_shot_consumption() {
+            let temp = TestDirectory::new();
+            let primary_producer = producer("sidecar_v5");
+            let attempt = begin(&temp.0, &primary_producer, 20);
+            let handoff = capability_handoff(20);
+            let bundle = simulation_bundle(20);
+            let receipt = publish_compiler_capability_transaction_v5(
+                &temp.0,
+                &primary_producer,
+                attempt,
+                &handoff,
+                &bundle,
+            )
+            .unwrap();
+            let subject = crate::InertCompilerExecutionSubjectV1::from_capability_publication_v5(
+                &receipt, &handoff,
+            )
+            .unwrap();
+
+            let other_temp = TestDirectory::new();
+            let other_producer = producer("other_sidecar_v5");
+            let other_handoff = capability_handoff(21);
+            let other_bundle = simulation_bundle(21);
+            let other_attempt = begin(&other_temp.0, &other_producer, 21);
+            let other_receipt = publish_compiler_capability_transaction_v5(
+                &other_temp.0,
+                &other_producer,
+                other_attempt,
+                &other_handoff,
+                &other_bundle,
+            )
+            .unwrap();
+            let substituted =
+                crate::InertCompilerExecutionSubjectV1::from_capability_publication_v5(
+                    &other_receipt,
+                    &other_handoff,
+                )
+                .unwrap();
+            assert!(matches!(
+                publish_compiler_execution_receipt_transport_for_capability_v5(
+                    &temp.0,
+                    &primary_producer,
+                    &receipt,
+                    &substituted,
+                    b"must-not-publish",
+                ),
+                Err(super::super::semantic_v3::CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch)
+            ));
+            assert!(
+                !slot_path(&temp.0, &primary_producer, attempt)
+                    .join(COMPILER_EXECUTION_RECEIPT_ENTRY_V1)
+                    .exists()
+            );
+
+            let exact_receipt = b"authenticated-compiler-execution-receipt-v1";
+            let published = publish_compiler_execution_receipt_transport_for_capability_v5(
+                &temp.0,
+                &primary_producer,
+                &receipt,
+                &subject,
+                exact_receipt,
+            )
+            .unwrap();
+            let recovered = recover_compiler_execution_receipt_transport_for_capability_v5(
+                &temp.0,
+                &primary_producer,
+                &receipt,
+                &subject,
+            )
+            .unwrap();
+            assert_eq!(recovered.receipt(), published);
+            assert_eq!(recovered.exact_bytes(), exact_receipt);
+
+            let transaction_identity = receipt.transaction_identity();
+            let mut consumed =
+                consume_compiler_capability_transaction_v5(&temp.0, &primary_producer, receipt)
+                    .unwrap();
+            assert_eq!(
+                crate::InertCompilerExecutionSubjectV1::from_consumed_capability_v5(&consumed)
+                    .unwrap(),
+                subject
+            );
+            let (compatibility_receipt, compatibility) = consumed
+                .take_authenticated_worker_v3_compatibility()
+                .unwrap();
+            assert_eq!(
+                compatibility_receipt.transaction_identity().as_bytes(),
+                transaction_identity.as_bytes()
+            );
+            assert_eq!(
+                compatibility.handoff().canonical_bytes(),
+                handoff.legacy_handoff().canonical_bytes()
+            );
+            assert!(matches!(
+                consumed.take_authenticated_worker_v3_compatibility(),
+                Err(CompilerCapabilityHandoffErrorV5::CompatibilityAlreadyConsumed)
+            ));
+            assert!(
+                slot_path(&temp.0, &primary_producer, attempt)
+                    .join(COMPILER_EXECUTION_RECEIPT_ENTRY_V1)
+                    .is_file()
+            );
+        }
+
+        #[test]
+        fn failed_attempt_purge_removes_native_and_paired_legacy_custody() {
+            let temp = TestDirectory::new();
+            let producer = producer("purge_failed_v5");
+            let attempt = begin(&temp.0, &producer, 19);
+            let handoff = capability_handoff(19);
+            let bundle = simulation_bundle(19);
+            let legacy_identity = handoff.legacy_handoff().identity();
+            let receipt = publish_compiler_capability_transaction_v5(
+                &temp.0, &producer, attempt, &handoff, &bundle,
+            )
+            .unwrap();
+            super::super::semantic_v3::publish_compiler_module_handoff_v3(
+                &temp.0,
+                &producer,
+                attempt,
+                handoff.legacy_handoff(),
+            )
+            .unwrap();
+            consume_compiler_capability_transaction_v5(&temp.0, &producer, receipt).unwrap();
+
+            crate::fail_build_attempt(&temp.0, &producer, attempt).unwrap();
+            purge_failed_compiler_handoff_attempt_v5(&temp.0, &producer, attempt).unwrap();
+
+            assert!(!slot_path(&temp.0, &producer, attempt).exists());
+            let (legacy_parent, legacy_slot) =
+                super::super::semantic_v3::publication_object_names_v1(&producer, attempt);
+            assert!(!temp.0.join(legacy_parent).join(legacy_slot).exists());
+            assert!(matches!(
+                recover_compiler_capability_transaction_receipt_v5(&temp.0, &producer, attempt),
+                Err(CompilerCapabilityHandoffErrorV5::Attempt { .. })
+            ));
+            assert!(matches!(
+                super::super::semantic_v3::consume_compiler_module_handoff_v3(
+                    &temp.0,
+                    &producer,
+                    attempt,
+                    legacy_identity,
+                ),
+                Err(CompilerModuleHandoffErrorV3::Attempt { .. })
+                    | Err(CompilerModuleHandoffErrorV3::NotPublished)
+            ));
+        }
+
+        #[test]
+        fn complete_v5_codecs_reject_every_omitted_suffix_and_version_downgrade() {
+            let handoff = capability_handoff(17);
+            let bundle = simulation_bundle(17);
+            let handoff_bytes = handoff.canonical_bytes().to_vec();
+            assert_eq!(
+                InertProductionCapabilityHandoffV5::decode(&handoff_bytes)
+                    .unwrap()
+                    .canonical_bytes(),
+                handoff_bytes
+            );
+            for prefix in 0..handoff_bytes.len() {
+                assert!(
+                    InertProductionCapabilityHandoffV5::decode(&handoff_bytes[..prefix]).is_err()
+                );
+            }
+            let mut downgraded = handoff_bytes.clone();
+            downgraded[8..10].copy_from_slice(&4_u16.to_le_bytes());
+            assert!(matches!(
+                InertProductionCapabilityHandoffV5::decode(&downgraded),
+                Err(InertProductionCapabilityHandoffErrorV5::UnsupportedVersion)
+            ));
+
+            let transaction = capability_transaction(&handoff, &bundle);
+            let transaction_bytes = transaction.canonical_bytes().to_vec();
+            for prefix in 0..transaction_bytes.len() {
+                assert!(
+                    InertProductionCapabilityTransactionV5::decode(&transaction_bytes[..prefix])
+                        .is_err()
+                );
+            }
+            let mut downgraded_transaction = transaction_bytes;
+            downgraded_transaction[8..10].copy_from_slice(&4_u16.to_le_bytes());
+            assert!(matches!(
+                InertProductionCapabilityTransactionV5::decode(&downgraded_transaction),
+                Err(InertProductionCapabilityHandoffErrorV5::UnsupportedVersion)
+            ));
+
+            let machine = InertCapabilityRefinementReceiptV1::from_canonical_preimage(
+                fe2o3_compiler_lineage::InertCapabilityRefinementReceiptKindV1::Machine,
+                machine_evidence(17),
+            )
+            .unwrap();
+            let (association, owner) = completion_evidence(&handoff, &machine);
+            let object = payload("object", 17);
+            let llvm_output = InertCompilerStageOutputReceiptV5::from_stage_output(
+                ProductionCompilerOutputStageV5::Llvm,
+                handoff.legacy_handoff().module_handoff().module_bytes(),
+            )
+            .unwrap();
+            let object_output = InertCompilerStageOutputReceiptV5::from_stage_output(
+                ProductionCompilerOutputStageV5::Object,
+                &object,
+            )
+            .unwrap();
+            let result = InertProductionCapabilityResultV5::new(
+                transaction,
+                llvm_output,
+                object_output,
+                machine,
+                association,
+                owner,
+            )
+            .unwrap();
+            let result_bytes = result.canonical_bytes();
+            assert_eq!(
+                InertProductionCapabilityResultV5::decode(result_bytes)
+                    .unwrap()
+                    .canonical_bytes(),
+                result_bytes
+            );
+            for prefix in 0..result_bytes.len() {
+                assert!(
+                    InertProductionCapabilityResultV5::decode(&result_bytes[..prefix]).is_err()
+                );
+            }
+        }
+
+        #[test]
+        fn wrong_identity_and_downgraded_payload_fail_before_consumption() {
+            let temp = TestDirectory::new();
+            let primary_producer = producer("downgrade_v5");
+            let attempt = begin(&temp.0, &primary_producer, 2);
+            let handoff = capability_handoff(12);
+            let bundle = simulation_bundle(12);
+            let receipt = publish_compiler_capability_transaction_v5(
+                &temp.0,
+                &primary_producer,
+                attempt,
+                &handoff,
+                &bundle,
+            )
+            .unwrap();
+
+            let other_temp = TestDirectory::new();
+            let other_producer = producer("downgrade_other_v5");
+            let other_attempt = begin(&other_temp.0, &other_producer, 13);
+            let other_handoff = capability_handoff(13);
+            let other_bundle = simulation_bundle(13);
+            let other_receipt = publish_compiler_capability_transaction_v5(
+                &other_temp.0,
+                &other_producer,
+                other_attempt,
+                &other_handoff,
+                &other_bundle,
+            )
+            .unwrap();
+            assert!(matches!(
+                consume_compiler_capability_transaction_v5(
+                    &temp.0,
+                    &primary_producer,
+                    other_receipt,
+                ),
+                Err(CompilerCapabilityHandoffErrorV5::WrongHandoffIdentity)
+            ));
+
+            let transaction = capability_transaction(&handoff, &bundle);
+            let mut downgraded = transaction.canonical_bytes().to_vec();
+            downgraded[8..10].copy_from_slice(&4_u16.to_le_bytes());
+            rewrite_record_for_payload(
+                &slot_path(&temp.0, &primary_producer, attempt),
+                &downgraded,
+            );
+            assert!(matches!(
+                consume_compiler_capability_transaction_v5(&temp.0, &primary_producer, receipt,),
+                Err(CompilerCapabilityHandoffErrorV5::DigestMismatch)
+            ));
+            assert!(matches!(
+                recover_compiler_capability_transaction_v5(&temp.0, &primary_producer, attempt,),
+                Err(CompilerCapabilityHandoffErrorV5::NonCanonicalHandoff(_))
+            ));
+            assert!(
+                slot_path(&temp.0, &primary_producer, attempt)
+                    .join(READY_ENTRY)
+                    .exists()
+            );
+        }
+
+        #[test]
+        fn truncated_payload_fails_strict_decode() {
+            let temp = TestDirectory::new();
+            let producer = producer("truncated_v5");
+            let attempt = begin(&temp.0, &producer, 3);
+            let handoff = capability_handoff(14);
+            let bundle = simulation_bundle(14);
+            publish_compiler_capability_transaction_v5(
+                &temp.0, &producer, attempt, &handoff, &bundle,
+            )
+            .unwrap();
+            let transaction = capability_transaction(&handoff, &bundle);
+            let truncated =
+                &transaction.canonical_bytes()[..transaction.canonical_bytes().len() - 1];
+            rewrite_record_for_payload(&slot_path(&temp.0, &producer, attempt), truncated);
+            assert!(matches!(
+                recover_compiler_capability_transaction_v5(&temp.0, &producer, attempt),
+                Err(CompilerCapabilityHandoffErrorV5::InvalidSlot { .. })
+            ));
+        }
+
+        #[test]
+        fn completion_failure_leaves_attempt_consumed_and_unpublishable() {
+            let temp = TestDirectory::new();
+            let producer = producer("failed_completion_v5");
+            let attempt = begin(&temp.0, &producer, 4);
+            let handoff = capability_handoff(15);
+            let bundle = simulation_bundle(15);
+            let receipt = publish_compiler_capability_transaction_v5(
+                &temp.0, &producer, attempt, &handoff, &bundle,
+            )
+            .unwrap();
+            let consumed =
+                consume_compiler_capability_transaction_v5(&temp.0, &producer, receipt).unwrap();
+            assert!(matches!(
+                consumed.begin_completion(Vec::new()),
+                Err(CompilerCapabilityCompletionErrorV5::InvalidObjectSize { .. })
+            ));
+            assert!(matches!(
+                publish_compiler_capability_transaction_v5(
+                    &temp.0, &producer, attempt, &handoff, &bundle,
+                ),
+                Err(CompilerCapabilityHandoffErrorV5::AlreadyConsumed)
+            ));
+        }
+
+        #[test]
+        fn substituted_w4_witness_returns_whole_owner_for_quarantine() {
+            let temp = TestDirectory::new();
+            let producer = producer("substituted_w4_v5");
+            let attempt = begin(&temp.0, &producer, 41);
+            let handoff = capability_handoff(41);
+            let bundle = simulation_bundle(41);
+            let receipt = publish_compiler_capability_transaction_v5(
+                &temp.0, &producer, attempt, &handoff, &bundle,
+            )
+            .unwrap();
+            let consumed =
+                consume_compiler_capability_transaction_v5(&temp.0, &producer, receipt).unwrap();
+            let object = payload("object", 41);
+            let prepared = consumed.begin_completion(object.clone()).unwrap();
+            let substituted_bytes = w4_witness(b"different W4 witness");
+            let substituted = MoveOnlyW4(substituted_bytes.clone());
+            let error = prepared
+                .bind_w4_witness(substituted, |witness| &witness.0)
+                .unwrap_err();
+            assert!(matches!(
+                &error,
+                RecoverableCompilerCapabilityCompletionErrorV5::W4WitnessMismatch { .. }
+            ));
+            let quarantined = error
+                .into_custody()
+                .map(|prepared, witness| QuarantinedW4Binding { prepared, witness });
+            assert_eq!(quarantined.prepared.attempt(), attempt);
+            assert_eq!(quarantined.prepared.object_bytes(), object);
+            assert_eq!(
+                quarantined.prepared.handoff().identity(),
+                handoff.identity()
+            );
+            assert_eq!(
+                quarantined.prepared.simulation_bundle().identity(),
+                bundle.identity()
+            );
+            assert_eq!(quarantined.witness.0, substituted_bytes);
+            assert!(matches!(
+                publish_compiler_capability_transaction_v5(
+                    &temp.0, &producer, attempt, &handoff, &bundle,
+                ),
+                Err(CompilerCapabilityHandoffErrorV5::AlreadyConsumed)
+            ));
+        }
+
+        #[test]
+        fn hostile_machine_owner_mismatch_is_rejected_before_authority_minting() {
+            let temp = TestDirectory::new();
+            let producer = producer("cross_stage_v5");
+            let attempt = begin(&temp.0, &producer, 5);
+            let handoff = capability_handoff(16);
+            let bundle = simulation_bundle(16);
+            let receipt = publish_compiler_capability_transaction_v5(
+                &temp.0, &producer, attempt, &handoff, &bundle,
+            )
+            .unwrap();
+            let consumed =
+                consume_compiler_capability_transaction_v5(&temp.0, &producer, receipt).unwrap();
+            let object = payload("object", 16);
+            let prepared = consumed.begin_completion(object.clone()).unwrap();
+            let wrong_kind = InertCapabilityRefinementReceiptV1::from_canonical_preimage(
+                fe2o3_compiler_lineage::InertCapabilityRefinementReceiptKindV1::SourceMirToKir,
+                prepared
+                    .handoff()
+                    .source_refinement()
+                    .canonical_preimage()
+                    .to_vec(),
+            )
+            .unwrap();
+            let (association, owner) = completion_evidence(prepared.handoff(), &wrong_kind);
+            let associations =
+                InertMultiRootStaticCapabilityEvidenceAssociationV1::new(vec![association])
+                    .unwrap();
+            let evidence = payload("authenticated-machine-refinement", 16);
+            let signing_key = SigningKey::from_bytes(&[0xa5; 32]);
+            let error = InertCompilerCapabilityVerifierResponseV5::fixture(
+                *prepared.transaction_identity().as_bytes(),
+                prepared.handoff(),
+                prepared.simulation_bundle(),
+                prepared.object_bytes(),
+                owner,
+                associations,
+                evidence,
+                &signing_key,
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                AuthenticatedCompilerCapabilityCompletionErrorV5::NestedOwnerMismatch
+            ));
+            assert_eq!(prepared.attempt(), attempt);
+            assert_eq!(prepared.object_bytes(), object);
+            assert_eq!(prepared.handoff().identity(), handoff.identity());
+            assert_eq!(prepared.simulation_bundle().identity(), bundle.identity());
+            assert!(matches!(
+                publish_compiler_capability_transaction_v5(
+                    &temp.0, &producer, attempt, &handoff, &bundle,
+                ),
+                Err(CompilerCapabilityHandoffErrorV5::AlreadyConsumed)
+            ));
+        }
+
+        #[test]
+        fn same_stage_receipt_substitution_fails_after_consumption() {
+            let temp = TestDirectory::new();
+            let producer = producer("substituted_receipt_v5");
+            let attempt = begin(&temp.0, &producer, 6);
+            let handoff = capability_handoff(18);
+            let bundle = simulation_bundle(18);
+            let receipt = publish_compiler_capability_transaction_v5(
+                &temp.0, &producer, attempt, &handoff, &bundle,
+            )
+            .unwrap();
+            let consumed =
+                consume_compiler_capability_transaction_v5(&temp.0, &producer, receipt).unwrap();
+            let prepared = consumed.begin_completion(payload("object", 18)).unwrap();
+            let expected_machine = InertCapabilityRefinementReceiptV1::from_canonical_preimage(
+                fe2o3_compiler_lineage::InertCapabilityRefinementReceiptKindV1::Machine,
+                machine_evidence(18),
+            )
+            .unwrap();
+            let substituted_machine = InertCapabilityRefinementReceiptV1::from_canonical_preimage(
+                fe2o3_compiler_lineage::InertCapabilityRefinementReceiptKindV1::Machine,
+                payload("substituted-machine-refinement", 18),
+            )
+            .unwrap();
+            let (association, owner) = completion_evidence(prepared.handoff(), &expected_machine);
+            let associations =
+                InertMultiRootStaticCapabilityEvidenceAssociationV1::new(vec![association])
+                    .unwrap();
+            let signing_key = SigningKey::from_bytes(&[0xa5; 32]);
+            let error = InertCompilerCapabilityVerifierResponseV5::fixture(
+                *prepared.transaction_identity().as_bytes(),
+                prepared.handoff(),
+                prepared.simulation_bundle(),
+                prepared.object_bytes(),
+                owner,
+                associations,
+                substituted_machine.canonical_preimage().to_vec(),
+                &signing_key,
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                AuthenticatedCompilerCapabilityCompletionErrorV5::NestedOwnerMismatch
+            ));
+            assert_eq!(prepared.attempt(), attempt);
+            assert_eq!(prepared.simulation_bundle().identity(), bundle.identity());
+            assert!(matches!(
+                publish_compiler_capability_transaction_v5(
+                    &temp.0, &producer, attempt, &handoff, &bundle,
+                ),
+                Err(CompilerCapabilityHandoffErrorV5::AlreadyConsumed)
+            ));
+        }
+
+        struct FailAt(FaultPoint);
+
+        impl HandoffHooks for FailAt {
+            fn hit(&mut self, point: FaultPoint) -> std::io::Result<()> {
+                if point == self.0 {
+                    Err(std::io::Error::other("simulated V5+V8 transaction crash"))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        #[test]
+        fn spliced_bundle_bytes_fail_original_receipt_and_strict_recovery() {
+            let temp = TestDirectory::new();
+            let producer = producer("spliced_bundle_v5");
+            let attempt = begin(&temp.0, &producer, 61);
+            let handoff = capability_handoff(61);
+            let bundle = simulation_bundle(61);
+            let receipt = publish_compiler_capability_transaction_v5(
+                &temp.0, &producer, attempt, &handoff, &bundle,
+            )
+            .unwrap();
+            let other_bundle = simulation_bundle(62);
+            let spliced = capability_transaction(&handoff, &other_bundle);
+            rewrite_record_for_payload(
+                &slot_path(&temp.0, &producer, attempt),
+                spliced.canonical_bytes(),
+            );
+
+            assert!(matches!(
+                consume_compiler_capability_transaction_v5(&temp.0, &producer, receipt),
+                Err(CompilerCapabilityHandoffErrorV5::DigestMismatch)
+            ));
+            assert!(matches!(
+                recover_compiler_capability_transaction_v5(&temp.0, &producer, attempt),
+                Err(CompilerCapabilityHandoffErrorV5::HandoffIdentityMismatch)
+            ));
+            assert!(
+                slot_path(&temp.0, &producer, attempt)
+                    .join(READY_ENTRY)
+                    .exists()
+            );
+        }
+
+        #[test]
+        fn stale_cross_attempt_receipt_cannot_consume_the_current_transaction() {
+            let temp = TestDirectory::new();
+            let producer = producer("stale_attempt_v5");
+            let old_attempt = begin(&temp.0, &producer, 71);
+            let old_handoff = capability_handoff(71);
+            let old_bundle = simulation_bundle(71);
+            let stale = publish_compiler_capability_transaction_v5(
+                &temp.0,
+                &producer,
+                old_attempt,
+                &old_handoff,
+                &old_bundle,
+            )
+            .unwrap();
+            crate::fail_build_attempt(&temp.0, &producer, old_attempt).unwrap();
+            purge_failed_compiler_capability_transaction_v5(&temp.0, &producer, old_attempt)
+                .unwrap();
+
+            let current_attempt = begin(&temp.0, &producer, 72);
+            let current_handoff = capability_handoff(72);
+            let current_bundle = simulation_bundle(72);
+            let current = publish_compiler_capability_transaction_v5(
+                &temp.0,
+                &producer,
+                current_attempt,
+                &current_handoff,
+                &current_bundle,
+            )
+            .unwrap();
+            assert!(matches!(
+                consume_compiler_capability_transaction_v5(&temp.0, &producer, stale),
+                Err(CompilerCapabilityHandoffErrorV5::Attempt { .. })
+                    | Err(CompilerCapabilityHandoffErrorV5::NotPublished)
+            ));
+            let consumed =
+                consume_compiler_capability_transaction_v5(&temp.0, &producer, current).unwrap();
+            assert_eq!(
+                consumed.simulation_bundle().identity(),
+                current_bundle.identity()
+            );
+        }
+
+        #[test]
+        fn v5_bundle_publication_crashes_never_expose_a_partial_pair() {
+            for (index, point) in [
+                FaultPoint::DirectoryCreated,
+                FaultPoint::PayloadCreated,
+                FaultPoint::PayloadWritten,
+                FaultPoint::PayloadSynced,
+                FaultPoint::PayloadRenamed,
+                FaultPoint::RecordWritten,
+                FaultPoint::RecordSynced,
+                FaultPoint::RecordRenamed,
+                FaultPoint::PublishedSynced,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let temp = TestDirectory::new();
+                let producer = producer("publish_crash_v5_bundle");
+                let seed = 80 + index as u8;
+                let attempt = begin(&temp.0, &producer, seed);
+                let handoff = capability_handoff(seed);
+                let bundle = simulation_bundle(seed);
+                assert!(
+                    publish_in_slot_v5(
+                        &temp.0,
+                        &producer,
+                        attempt,
+                        CompilerCapabilityHandoffSlotV5::Production,
+                        &handoff,
+                        &bundle,
+                        &mut FailAt(point),
+                    )
+                    .is_err()
+                );
+                let receipt = match point {
+                    FaultPoint::RecordRenamed | FaultPoint::PublishedSynced => {
+                        recover_compiler_capability_transaction_v5(&temp.0, &producer, attempt)
+                            .unwrap()
+                            .into_receipt()
+                    }
+                    _ => publish_compiler_capability_transaction_v5(
+                        &temp.0, &producer, attempt, &handoff, &bundle,
+                    )
+                    .unwrap(),
+                };
+                let recovered =
+                    recover_compiler_capability_transaction_v5(&temp.0, &producer, attempt)
+                        .unwrap();
+                assert_eq!(recovered.handoff().identity(), handoff.identity());
+                assert_eq!(recovered.simulation_bundle().identity(), bundle.identity());
+                assert_eq!(recovered.receipt(), &receipt);
+                let consumed =
+                    consume_compiler_capability_transaction_v5(&temp.0, &producer, receipt)
+                        .unwrap();
+                assert_eq!(consumed.handoff().identity(), handoff.identity());
+                assert_eq!(consumed.simulation_bundle().identity(), bundle.identity());
+            }
+        }
+
+        #[test]
+        fn v5_bundle_consumption_crashes_are_retryable_or_exactly_once() {
+            for (index, point) in [
+                FaultPoint::PayloadValidated,
+                FaultPoint::ConsumedRenamed,
+                FaultPoint::ConsumedSynced,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let temp = TestDirectory::new();
+                let producer = producer("consume_crash_v5_bundle");
+                let seed = 100 + index as u8;
+                let attempt = begin(&temp.0, &producer, seed);
+                let handoff = capability_handoff(seed);
+                let bundle = simulation_bundle(seed);
+                let receipt = publish_compiler_capability_transaction_v5(
+                    &temp.0, &producer, attempt, &handoff, &bundle,
+                )
+                .unwrap();
+                assert!(
+                    consume_in_slot_v5(&temp.0, &producer, receipt, &mut FailAt(point)).is_err()
+                );
+                if point == FaultPoint::PayloadValidated {
+                    let recovered =
+                        recover_compiler_capability_transaction_v5(&temp.0, &producer, attempt)
+                            .unwrap();
+                    assert_eq!(recovered.handoff().identity(), handoff.identity());
+                    assert_eq!(recovered.simulation_bundle().identity(), bundle.identity());
+                    consume_compiler_capability_transaction_v5(
+                        &temp.0,
+                        &producer,
+                        recovered.into_receipt(),
+                    )
+                    .unwrap();
+                } else {
+                    assert!(matches!(
+                        recover_compiler_capability_transaction_v5(&temp.0, &producer, attempt,),
+                        Err(CompilerCapabilityHandoffErrorV5::AlreadyConsumed)
+                    ));
+                }
+            }
+        }
+    }
+}
+
+pub use semantic_v5::{
+    CompilerCapabilityCompletionErrorV5, CompilerCapabilityHandoffErrorV5,
+    CompilerCapabilityHandoffReceiptV5, CompilerCapabilityHandoffSlotV5,
+    CompilerCapabilityHandoffTransactionIdentityV5, CompletedCompilerCapabilityTransactionV5,
+    ConsumedCompilerCapabilityHandoffV5, MAX_COMPILER_CAPABILITY_TRANSACTION_BYTES_V5,
+    PreparedCompilerCapabilityCompletionV5, RecoverableCompilerCapabilityCompletionErrorV5,
+    RecoveredCompilerCapabilityHandoffV5,
+    RejectedAuthenticatedCompilerCapabilityCompletionCustodyV5, RejectedW4WitnessBindingCustodyV5,
+    W4BoundCompilerCapabilityCompletionV5, consume_compiler_capability_handoff_v5,
+    consume_compiler_capability_transaction_v5, publish_compiler_capability_handoff_v5,
+    publish_compiler_capability_transaction_v5,
+    publish_compiler_execution_receipt_transport_for_capability_v5,
+    purge_failed_compiler_capability_transaction_v5, purge_failed_compiler_handoff_attempt_v5,
+    recover_compiler_capability_handoff_receipt_v5, recover_compiler_capability_handoff_v5,
+    recover_compiler_capability_transaction_receipt_v5, recover_compiler_capability_transaction_v5,
+    recover_compiler_execution_receipt_transport_for_capability_v5,
+};
 
 pub use semantic_v3::{
     CompilerExecutionReceiptTransportErrorV1, CompilerExecutionReceiptTransportIdentityV1,

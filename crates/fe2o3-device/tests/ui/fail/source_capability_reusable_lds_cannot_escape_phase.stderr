@@ -1,0 +1,11 @@
+error[E0499]: cannot borrow `phases` as mutable more than once at a time
+  --> tests/ui/fail/source_capability_reusable_lds_cannot_escape_phase.rs:13:5
+   |
+ 8 |     let escaped = phases.with_phase(|phase| {
+   |                   ------ first mutable borrow occurs here
+...
+13 |     phases.with_phase(|phase| {
+   |     ^^^^^^ second mutable borrow occurs here
+...
+17 |     drop(escaped);
+   |          ------- first borrow later used here

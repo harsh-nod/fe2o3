@@ -28,10 +28,10 @@ pub use oracle::{
     compare_wave64_collectives_v1, wave64_collectives_oracle_v1,
 };
 pub use source_kir_refinement::{
-    WAVE64_COLLECTIVES_V1_KIR_SCHEMA_SHA256, WAVE64_REFINEMENT_BOUNDARY_V1,
-    Wave64RefinementErrorV1, Wave64RefinementIdentitiesV1, Wave64SemanticOutputV1,
-    Wave64SemanticOutputsV1, Wave64SourceKirRefinementV1, exact_wave64_refinement_identities_v1,
-    source_contributor_mask_v1, verify_wave64_source_model_to_kir_v1,
+    WAVE64_COLLECTIVES_V1_SOURCE_SHA256, WAVE64_REFINEMENT_BOUNDARY_V13, Wave64KirShapeErrorV13,
+    Wave64RefinementErrorV13, Wave64RefinementIdentitiesV13, Wave64SemanticOutputV1,
+    Wave64SemanticOutputsV1, Wave64SourceKirRefinementV13, bind_wave64_refinement_identities_v13,
+    source_contributor_mask_v1, verify_wave64_source_model_to_kir_v13,
 };
 pub use source_model_correspondence::{
     REVIEWED_SOURCE_CPU_CORRESPONDENCE_BOUNDARY_V2, ReviewedSourceAlgorithmV2, SourceCpuBindingV2,

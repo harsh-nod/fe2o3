@@ -36,20 +36,34 @@ fn source_is_one_ordinary_typed_kernel_without_algorithm_macros() {
 #[test]
 fn source_uses_explicit_mask_and_all_three_bounded_collectives() {
     for marker in [
+        "context: KernelContext<'_>",
+        "input: Global<'_, f32, ReadOnly>",
         "active_mask: u64",
         "active_mask & (1_u64 << lane)",
-        "wave.reduce_sum(&context, contribution)",
-        "wave.inclusive_scan_sum(&context, contribution)",
-        "wave.exclusive_scan_sum(&context, contribution)",
+        "context.with_workgroup(|workgroup|",
+        "workgroup.subgroup::<SubgroupWidth64>()",
+        "subgroup.reduce_sum(workgroup.epoch(), contribution)",
+        "workgroup.inclusive_scan_sum(scratch, contribution)",
+        "workgroup.exclusive_scan_sum(scratch, contribution)",
+        "context.invocation().index_1d().into_disjoint()",
         "if active { reduction } else { 0.0 }",
         "if active { inclusive } else { 0.0 }",
         "if active { exclusive } else { 0.0 }",
     ] {
         assert!(SOURCE.contains(marker), "missing source contract {marker}");
     }
-    assert!(SOURCE.contains("WaveLane::<Wave64>::current()"));
-    assert!(SOURCE.contains("Gfx942Collectives::current()"));
-    assert!(!SOURCE.contains("unsafe"));
+    for forbidden in [
+        "::current()",
+        "Gfx942",
+        "WaveLane",
+        "SubgroupTile",
+        "let wave64 =",
+        "unsafe",
+        "*mut",
+        "from_raw_parts",
+    ] {
+        assert!(!SOURCE.contains(forbidden), "retained {forbidden}");
+    }
 }
 
 #[test]

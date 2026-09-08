@@ -991,6 +991,9 @@ fn hash_type(digest: &mut Sha256, ty: &Type, depth: usize) -> Result<(), Simulat
             ]);
             hash_type(digest, &slice.element, depth + 1)?;
         }
+        Type::KernelContext(_) | Type::GlobalCapability(_) | Type::ExecutionCapability(_) => {
+            return Err(SimulationBundleErrorV1::InvalidKernelAbi);
+        }
     }
     Ok(())
 }

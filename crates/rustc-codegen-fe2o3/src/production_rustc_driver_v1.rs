@@ -31,6 +31,7 @@ impl Callbacks for ProductionExtractionCallbacksV1 {
         self.result = Some(
             if let Some(output) = self.simulation_bundle_output.as_deref() {
                 match self.simulation_bundle_version {
+                    8 => extract_simulation_bundle_in_active_session_v8(tcx, output),
                     6 => extract_simulation_bundle_in_active_session_v6(tcx, output),
                     5 => extract_simulation_bundle_in_active_session_v5(tcx, output),
                     4 => extract_simulation_bundle_in_active_session_v4(tcx, output),
@@ -549,6 +550,37 @@ fn extract_simulation_bundle_in_active_session_v6(
     Ok(())
 }
 
+fn extract_simulation_bundle_in_active_session_v8(
+    tcx: TyCtxt<'_>,
+    output: &Path,
+) -> Result<(), String> {
+    let bundle = transaction_in_active_session_v1(
+        tcx,
+        crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::SourceVariables,
+    )?
+    .export_simulation_bundle_v8()
+    .map_err(|error| error.to_string())?;
+    publish_new_simulation_bundle(
+        output,
+        bundle.canonical_bytes(),
+        fe2o3_kernel_ir::MAX_SIMULATION_BUNDLE_BYTES_V8,
+    )?;
+    eprintln!(
+        "fe2o3 production extraction: ordinary Rust -> admitted semantic MIR -> final target KIR V13 with retained W4 result and target closure -> simulation bundle V8; target {}, graph epoch {}, {} kernel(s), subject {}, content {}, source_map {}, semantic_mir {}, storage_map {}, aggregate_map {}, {} byte(s), compiler_execution=extraction_only_unavailable, proof/compiler/artifact/hardware/load/launch authority false",
+        bundle.target(),
+        bundle.final_graph_epoch(),
+        bundle.kernel_count(),
+        lower_hex_v1(bundle.subject_identity()),
+        lower_hex_v1(bundle.identity().as_bytes()),
+        lower_hex_v1(&bundle.debug_map_identity()),
+        lower_hex_v1(&bundle.semantic_mir_identity()),
+        lower_hex_v1(&bundle.storage_map_identity()),
+        lower_hex_v1(&bundle.aggregate_storage_map_identity()),
+        bundle.canonical_bytes().len(),
+    );
+    Ok(())
+}
+
 fn publish_new_simulation_bundle_v1(output: &Path, bytes: &[u8]) -> Result<(), String> {
     publish_new_simulation_bundle(
         output,
@@ -856,6 +888,29 @@ pub fn run_production_simulation_bundle_extraction_driver_v6(
         args,
         callbacks,
         "production simulation-bundle V6 extraction callback did not reach rustc analysis",
+    )
+}
+
+/// Runs the V8 exporter through target lowering and consumes the retained V13
+/// graph, final epoch, target closure, and W4 verification result before any
+/// create-new output publication.
+pub fn run_production_simulation_bundle_extraction_driver_v8(
+    args: &[String],
+    output: &Path,
+) -> Result<(), String> {
+    let callbacks = ProductionExtractionCallbacksV1 {
+        ranked_memory: false,
+        amdgpu_llvm_output: None,
+        expected_llvm_target: None,
+        gfx942_compiler_handoff_output: None,
+        simulation_bundle_output: Some(output.to_path_buf()),
+        simulation_bundle_version: 8,
+        result: None,
+    };
+    run_production_driver_v1(
+        args,
+        callbacks,
+        "production simulation-bundle V8 extraction callback did not reach rustc analysis",
     )
 }
 

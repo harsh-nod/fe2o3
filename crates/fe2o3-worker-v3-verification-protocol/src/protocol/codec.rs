@@ -7,16 +7,22 @@ use super::*;
 pub(super) fn validate_payload_order(
     payloads: &[WorkerV3VerificationFdPayloadDescriptorV1; WORKER_V3_VERIFICATION_FD_PAYLOADS_V1],
 ) -> Result<(), WorkerV3VerificationProtocolErrorV1> {
-    for (actual, expected) in payloads.iter().zip([
-        WorkerV3VerificationFdPayloadKindV1::LoadEnvelopeV2,
-        WorkerV3VerificationFdPayloadKindV1::FinalizedHsaco,
-    ]) {
-        if actual.kind != expected {
-            return Err(WorkerV3VerificationProtocolErrorV1::UnexpectedPayloadKind {
-                expected,
-                actual: actual.kind,
-            });
-        }
+    let first = payloads[0].kind;
+    if !matches!(
+        first,
+        WorkerV3VerificationFdPayloadKindV1::LoadEnvelopeV2
+            | WorkerV3VerificationFdPayloadKindV1::ProtectedCompletionEvidenceV5
+    ) {
+        return Err(WorkerV3VerificationProtocolErrorV1::UnexpectedPayloadKind {
+            expected: WorkerV3VerificationFdPayloadKindV1::LoadEnvelopeV2,
+            actual: first,
+        });
+    }
+    if payloads[1].kind != WorkerV3VerificationFdPayloadKindV1::FinalizedHsaco {
+        return Err(WorkerV3VerificationProtocolErrorV1::UnexpectedPayloadKind {
+            expected: WorkerV3VerificationFdPayloadKindV1::FinalizedHsaco,
+            actual: payloads[1].kind,
+        });
     }
     Ok(())
 }

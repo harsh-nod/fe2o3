@@ -1,4 +1,4 @@
-error[E0599]: no method named `assume_init` found for struct `LdsTile16x16<'workgroup, T, State>` in the current scope
+error[E0599]: no method named `assume_init` found for struct `LdsTile16x16<'workgroup, T, State, Brand>` in the current scope
  --> tests/ui/fail/lds_tile_direct_assume_init_is_unavailable.rs:4:18
   |
 4 |     let _ = tile.assume_init();

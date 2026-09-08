@@ -35,8 +35,16 @@ use pliron::{
 };
 use sha2::{Digest, Sha256};
 
+use dialect_gpu::{
+    CanonicalKirSafetySemanticProjectionV1, canonical_kir_safety_semantic_projection_v1,
+    optimization_v1::{
+        BFloat16Type as GpuBFloat16Type, IndexType as GpuIndexType, PointerType as GpuPointerType,
+        SliceType as GpuSliceType,
+    },
+};
 use dialect_kernel::{
-    IndexType, PipelineType, RankedViewType, SemanticScalarType, is_checked_access_capability_type,
+    IndexType, KernelContextType, PipelineType, RankedViewType, SemanticScalarType,
+    is_checked_access_capability_type,
 };
 use dialect_proof::{EvidenceRefType, ObligationRefType};
 
@@ -97,6 +105,10 @@ pub enum PlironIrIdentityErrorV1 {
         location: PlironPreserveLocationV1,
         detail: &'static str,
     },
+    InvalidCanonicalSafetyCarrier {
+        location: PlironPreserveLocationV1,
+        detail: String,
+    },
     UnsupportedAttribute {
         location: PlironPreserveLocationV1,
         attribute: String,
@@ -137,6 +149,7 @@ impl PlironIrIdentityErrorV1 {
             Self::StructuralVerificationFailed { .. } => "FE2O3-PRESERVE-000",
             Self::UnsupportedRoot { .. }
             | Self::UnsupportedOperation { .. }
+            | Self::InvalidCanonicalSafetyCarrier { .. }
             | Self::UnsupportedAttribute { .. }
             | Self::UnsupportedType { .. } => "FE2O3-PRESERVE-001",
             Self::ResourceLimitExceeded { .. } => "FE2O3-PRESERVE-002",
@@ -157,6 +170,10 @@ impl fmt::Display for PlironIrIdentityErrorV1 {
             Self::UnsupportedOperation { location, detail } => write!(
                 formatter,
                 "error[FE2O3-PRESERVE-001]: unsupported structure at {location}: {detail}; help: lower the construct into the closed production ranked PLIRON subset before preservation checking"
+            ),
+            Self::InvalidCanonicalSafetyCarrier { location, detail } => write!(
+                formatter,
+                "error[FE2O3-PRESERVE-001]: invalid canonical safety carrier at {location}: {detail}; help: rebuild the carrier from exact canonical KIR semantics and authenticated source coordinates"
             ),
             Self::UnsupportedAttribute {
                 location,
@@ -429,8 +446,14 @@ impl PlironStructuralIdentityProviderV1 for LivePlironStructuralIdentityProvider
 
 struct PrescanV1 {
     blocks: Vec<Ptr<BasicBlock>>,
-    operations: Vec<Vec<(Ptr<Operation>, String)>>,
+    operations: Vec<Vec<PrescannedOperationV1>>,
     values: usize,
+}
+
+struct PrescannedOperationV1 {
+    operation: Ptr<Operation>,
+    name: String,
+    canonical_safety: Option<CanonicalKirSafetySemanticProjectionV1>,
 }
 
 /// Constructs a bounded, deterministic identity for live PLIRON.
@@ -528,8 +551,8 @@ fn build_identity(
             value_ids.insert(argument, next_value);
             next_value += 1;
         }
-        for (operation, _) in &prescan.operations[block_index] {
-            for result in operation.deref(context).results() {
+        for operation in &prescan.operations[block_index] {
+            for result in operation.operation.deref(context).results() {
                 value_ids.insert(result, next_value);
                 next_value += 1;
             }
@@ -601,10 +624,9 @@ fn build_identity(
             )?;
         }
 
-        for (operation_index, (operation, name)) in
-            prescan.operations[block_index].iter().enumerate()
-        {
-            let raw = operation.deref(context);
+        for (operation_index, operation) in prescan.operations[block_index].iter().enumerate() {
+            let raw = operation.operation.deref(context);
+            let name = &operation.name;
             let location = PlironPreserveLocationV1::Operation {
                 block: block_index,
                 operation: operation_index,
@@ -683,7 +705,11 @@ fn build_identity(
                 }
                 Ok(())
             })?;
-            encode_attributes(context, &raw.attributes, location.clone(), &mut encoder)?;
+            if let Some(projection) = &operation.canonical_safety {
+                encode_canonical_safety_projection(projection, location.clone(), &mut encoder)?;
+            } else {
+                encode_attributes(context, &raw.attributes, location.clone(), &mut encoder)?;
+            }
             let mut successor_ids = Vec::with_capacity(raw.get_num_successors());
             for (successor_index, successor) in raw.successors().enumerate() {
                 let Some(block_id) = block_ids.get(&successor).copied() else {
@@ -835,14 +861,23 @@ fn prescan(context: &Context, function: &FuncOp) -> Result<PrescanV1, PlironIrId
                 operation_count,
                 MAX_PLIRON_IDENTITY_OPERATIONS_V1,
             )?;
-            if !is_production_ranked_operation_v1(dynamic.as_ref()) {
+            let canonical_safety =
+                canonical_kir_safety_semantic_projection_v1(dynamic.as_ref(), context).map_err(
+                    |error| PlironIrIdentityErrorV1::InvalidCanonicalSafetyCarrier {
+                        location: location.clone(),
+                        detail: error.to_string(),
+                    },
+                )?;
+            if canonical_safety.is_none() && !is_production_ranked_operation_v1(dynamic.as_ref()) {
                 return Err(PlironIrIdentityErrorV1::UnsupportedOperation {
                     location,
-                    detail: "operation is outside the closed ranked operation allowlist",
+                    detail: "operation is neither a ranked operation nor a typed canonical safety carrier",
                 });
             }
             let raw = operation.deref(context);
-            validate_attribute_dict(context, &raw.attributes, location.clone())?;
+            if canonical_safety.is_none() {
+                validate_attribute_dict(context, &raw.attributes, location.clone())?;
+            }
             for result in raw.results() {
                 validate_type_handle(context, result.get_type(context), location.clone())?;
             }
@@ -880,7 +915,11 @@ fn prescan(context: &Context, function: &FuncOp) -> Result<PrescanV1, PlironIrId
                 attributes,
                 MAX_PLIRON_IDENTITY_ATTRIBUTES_V1,
             )?;
-            block_operations.push((operation, name));
+            block_operations.push(PrescannedOperationV1 {
+                operation,
+                name,
+                canonical_safety,
+            });
         }
         blocks.push(block);
         operations.push(block_operations);
@@ -894,6 +933,35 @@ fn prescan(context: &Context, function: &FuncOp) -> Result<PrescanV1, PlironIrId
         blocks,
         operations,
         values,
+    })
+}
+
+fn encode_canonical_safety_projection(
+    projection: &CanonicalKirSafetySemanticProjectionV1,
+    location: PlironPreserveLocationV1,
+    encoder: &mut IdentityEncoderV1,
+) -> Result<(), PlironIrIdentityErrorV1> {
+    let coordinate = projection.coordinate().components();
+    let summary = format!(
+        "{:?} at ({}, {}, {}), {} effects, {} target requirements",
+        projection.family(),
+        coordinate.0,
+        coordinate.1,
+        coordinate.2,
+        projection.memory_effects().len(),
+        projection.required_capabilities().len(),
+    );
+    encoder.record(location, "canonical safety semantics", summary, |encoder| {
+        encoder.string(b"fe2o3.pliron.canonical-safety-projection.v1")?;
+        encoder.usize(projection.family().ordinal())?;
+        encoder.u64(u64::from(coordinate.0))?;
+        encoder.u64(u64::from(coordinate.1))?;
+        encoder.u64(u64::from(coordinate.2))?;
+        encoder.extend(&projection.graph_epoch())?;
+        encoder.extend(projection.carrier_identity())?;
+        encoder.string(projection.canonical_payload())?;
+        encoder.usize(projection.memory_effects().len())?;
+        encoder.usize(projection.required_capabilities().len())
     })
 }
 
@@ -1061,6 +1129,11 @@ fn is_production_type(ty: &dyn Type) -> bool {
         || ty.downcast_ref::<FP32Type>().is_some()
         || ty.downcast_ref::<FP64Type>().is_some()
         || ty.downcast_ref::<IndexType>().is_some()
+        || ty.downcast_ref::<GpuIndexType>().is_some()
+        || ty.downcast_ref::<GpuBFloat16Type>().is_some()
+        || ty.downcast_ref::<GpuPointerType>().is_some()
+        || ty.downcast_ref::<GpuSliceType>().is_some()
+        || ty.downcast_ref::<KernelContextType>().is_some()
         || ty.downcast_ref::<PipelineType>().is_some()
         || ty.downcast_ref::<RankedViewType>().is_some()
         || ty.downcast_ref::<SemanticScalarType>().is_some()
@@ -1093,6 +1166,7 @@ fn is_production_attribute_id(attribute: &str) -> bool {
             | "kernel.analysis_split_control_count"
             | "kernel.atomic_ordering"
             | "kernel.atomic_scope"
+            | "kernel.canonical_identity"
             | "kernel.dimension"
             | "kernel.index_binary_kind"
             | "kernel.index_value"
@@ -1120,6 +1194,7 @@ fn is_production_attribute_id(attribute: &str) -> bool {
             | "kernel.semantic_symbol"
             | "kernel.semantic_typed_binary_kind"
             | "kernel.semantic_unary_kind"
+            | "kernel.source_coordinate"
             | "kernel.tensor_convergence"
             | "kernel.tensor_fragment"
             | "kernel.tensor_instruction"

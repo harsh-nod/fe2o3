@@ -20,13 +20,403 @@ pub(crate) enum ProductionBf16ConversionV1 {
     ToF32,
 }
 
+/// Closed source signatures for reviewed typed-global operations.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum ProductionCapabilityMemoryTerminalV1 {
+    /// `(&KernelContext<K,T,L>, &[E]) -> Global<E, ReadOnly, Brand<K,T,L>>`.
+    BindReadOnly,
+    /// `(&KernelContext<K,T,L>, &mut [E]) -> Global<E, ExclusiveReadWrite, Brand<K,T,L>>`.
+    BindExclusiveReadWrite,
+    /// `(&KernelContext<K,T,L>, WriteOnlyDisjointSlice<E,I>) ->
+    /// Global<E, DisjointWrite<I>, Brand<K,T,L>>`.
+    BindDisjointWrite,
+    /// `(&Global<E, ReadOnly, B>, usize) -> Option<E>` for an admitted scalar `E`.
+    Load,
+    /// `(&Global<E, ExclusiveReadWrite, B>, usize) -> Option<E>`.
+    ExclusiveLoad,
+    /// `(&mut Global<E, DisjointWrite<I>, B>, DisjointIndex<I>, E) -> bool`.
+    Store,
+    /// `(&mut Global<E, ExclusiveReadWrite, B>, usize, E) -> bool`.
+    ExclusiveStore,
+    /// `(&mut Global<E, DisjointWrite<Blocked<I,L,E>>, B>,
+    /// &DisjointBlock<I,L,E,B>, usize, E) -> bool`.
+    StoreBlock,
+}
+
+#[cfg(test)]
+impl ProductionCapabilityMemoryTerminalV1 {
+    pub(crate) const fn source_argument_count(self) -> usize {
+        match self {
+            Self::BindReadOnly
+            | Self::BindExclusiveReadWrite
+            | Self::BindDisjointWrite
+            | Self::Load
+            | Self::ExclusiveLoad => 2,
+            Self::Store | Self::ExclusiveStore => 3,
+            Self::StoreBlock => 4,
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) const fn capability_memory_terminal_contract_v1(
+    item: TrustedDeviceItem,
+) -> Option<ProductionCapabilityMemoryTerminalV1> {
+    match item {
+        TrustedDeviceItem::CapabilityGlobalBindReadOnly => {
+            Some(ProductionCapabilityMemoryTerminalV1::BindReadOnly)
+        }
+        TrustedDeviceItem::CapabilityGlobalBindExclusiveReadWrite => {
+            Some(ProductionCapabilityMemoryTerminalV1::BindExclusiveReadWrite)
+        }
+        TrustedDeviceItem::CapabilityGlobalBindDisjointWrite => {
+            Some(ProductionCapabilityMemoryTerminalV1::BindDisjointWrite)
+        }
+        TrustedDeviceItem::CapabilityGlobalLoad => Some(ProductionCapabilityMemoryTerminalV1::Load),
+        TrustedDeviceItem::CapabilityGlobalExclusiveLoad => {
+            Some(ProductionCapabilityMemoryTerminalV1::ExclusiveLoad)
+        }
+        TrustedDeviceItem::CapabilityGlobalStore => {
+            Some(ProductionCapabilityMemoryTerminalV1::Store)
+        }
+        TrustedDeviceItem::CapabilityGlobalExclusiveStore => {
+            Some(ProductionCapabilityMemoryTerminalV1::ExclusiveStore)
+        }
+        TrustedDeviceItem::CapabilityGlobalStoreBlock => {
+            Some(ProductionCapabilityMemoryTerminalV1::StoreBlock)
+        }
+        _ => None,
+    }
+}
+
+/// Closed source terminals for the target-neutral execution capability surface.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum ProductionExecutionTerminalV1 {
+    BindAtomicView,
+    WorkgroupDerive,
+    SubgroupDerive,
+    LdsAllocate,
+    WorkgroupBarrier,
+    SubgroupBarrier,
+    WorkgroupFence,
+    LdsPublish,
+    AsyncCopy,
+    AsyncWait,
+    WorkgroupReduceSum,
+    WorkgroupInclusiveScanSum,
+    WorkgroupExclusiveScanSum,
+    BindGlobalAtomicLocation,
+    AtomicLoad,
+    AtomicStore,
+    AtomicFetchAdd,
+    AtomicCompareExchange,
+    SubgroupFence,
+    SubgroupReduceSum,
+    SubgroupInclusiveScanSum,
+    MatrixAccess,
+    LdsInitializeByInvocation,
+    LdsReadPublished,
+    PrivateMemoryFromRawParts,
+    WorkgroupMemoryFromRawParts,
+    PrivateMemoryAllocate,
+    WorkgroupMemoryIndex1D,
+    WorkgroupMemoryAllocate,
+    WorkgroupMemoryPublish,
+    PrivateMemoryLoad,
+    PrivateMemoryExclusiveLoad,
+    PrivateMemoryExclusiveStore,
+    PrivateMemoryDisjointStore,
+    WorkgroupMemoryLoad,
+    WorkgroupMemoryExclusiveLoad,
+    WorkgroupMemoryExclusiveStore,
+    WorkgroupMemoryDisjointStore,
+    GlobalBindExclusiveReadWrite,
+    GlobalExclusiveLoad,
+    GlobalExclusiveStore,
+    GlobalStoreBlock,
+}
+
+impl ProductionExecutionTerminalV1 {
+    pub(crate) const fn is_typed_global_memory(self) -> bool {
+        matches!(
+            self,
+            Self::GlobalBindExclusiveReadWrite
+                | Self::GlobalExclusiveLoad
+                | Self::GlobalExclusiveStore
+                | Self::GlobalStoreBlock
+        )
+    }
+
+    #[cfg(test)]
+    const ALL: [Self; 42] = [
+        Self::BindAtomicView,
+        Self::WorkgroupDerive,
+        Self::SubgroupDerive,
+        Self::LdsAllocate,
+        Self::WorkgroupBarrier,
+        Self::SubgroupBarrier,
+        Self::WorkgroupFence,
+        Self::LdsPublish,
+        Self::AsyncCopy,
+        Self::AsyncWait,
+        Self::WorkgroupReduceSum,
+        Self::WorkgroupInclusiveScanSum,
+        Self::WorkgroupExclusiveScanSum,
+        Self::BindGlobalAtomicLocation,
+        Self::AtomicLoad,
+        Self::AtomicStore,
+        Self::AtomicFetchAdd,
+        Self::AtomicCompareExchange,
+        Self::SubgroupFence,
+        Self::SubgroupReduceSum,
+        Self::SubgroupInclusiveScanSum,
+        Self::MatrixAccess,
+        Self::LdsInitializeByInvocation,
+        Self::LdsReadPublished,
+        Self::PrivateMemoryFromRawParts,
+        Self::WorkgroupMemoryFromRawParts,
+        Self::PrivateMemoryAllocate,
+        Self::WorkgroupMemoryIndex1D,
+        Self::WorkgroupMemoryAllocate,
+        Self::WorkgroupMemoryPublish,
+        Self::PrivateMemoryLoad,
+        Self::PrivateMemoryExclusiveLoad,
+        Self::PrivateMemoryExclusiveStore,
+        Self::PrivateMemoryDisjointStore,
+        Self::WorkgroupMemoryLoad,
+        Self::WorkgroupMemoryExclusiveLoad,
+        Self::WorkgroupMemoryExclusiveStore,
+        Self::WorkgroupMemoryDisjointStore,
+        Self::GlobalBindExclusiveReadWrite,
+        Self::GlobalExclusiveLoad,
+        Self::GlobalExclusiveStore,
+        Self::GlobalStoreBlock,
+    ];
+
+    pub(crate) const fn identity_tag(self) -> u8 {
+        match self {
+            Self::BindAtomicView => 0,
+            Self::WorkgroupDerive => 1,
+            Self::SubgroupDerive => 2,
+            Self::LdsAllocate => 3,
+            Self::WorkgroupBarrier => 4,
+            Self::SubgroupBarrier => 5,
+            Self::WorkgroupFence => 6,
+            Self::LdsPublish => 7,
+            Self::AsyncCopy => 8,
+            Self::AsyncWait => 9,
+            Self::WorkgroupReduceSum => 10,
+            Self::WorkgroupInclusiveScanSum => 11,
+            Self::WorkgroupExclusiveScanSum => 12,
+            Self::BindGlobalAtomicLocation => 13,
+            Self::AtomicLoad => 14,
+            Self::AtomicStore => 15,
+            Self::AtomicFetchAdd => 16,
+            Self::AtomicCompareExchange => 17,
+            Self::SubgroupFence => 18,
+            Self::SubgroupReduceSum => 19,
+            Self::SubgroupInclusiveScanSum => 20,
+            Self::MatrixAccess => 21,
+            Self::LdsInitializeByInvocation => 22,
+            Self::LdsReadPublished => 23,
+            Self::PrivateMemoryFromRawParts => 24,
+            Self::WorkgroupMemoryFromRawParts => 25,
+            Self::PrivateMemoryAllocate => 26,
+            Self::WorkgroupMemoryIndex1D => 27,
+            Self::WorkgroupMemoryAllocate => 28,
+            Self::WorkgroupMemoryPublish => 29,
+            Self::PrivateMemoryLoad => 30,
+            Self::PrivateMemoryExclusiveLoad => 31,
+            Self::PrivateMemoryExclusiveStore => 32,
+            Self::PrivateMemoryDisjointStore => 33,
+            Self::WorkgroupMemoryLoad => 34,
+            Self::WorkgroupMemoryExclusiveLoad => 35,
+            Self::WorkgroupMemoryExclusiveStore => 36,
+            Self::WorkgroupMemoryDisjointStore => 37,
+            Self::GlobalBindExclusiveReadWrite => 38,
+            Self::GlobalExclusiveLoad => 39,
+            Self::GlobalExclusiveStore => 40,
+            Self::GlobalStoreBlock => 41,
+        }
+    }
+
+    pub(crate) const fn source_argument_count(self) -> usize {
+        match self {
+            Self::WorkgroupDerive
+            | Self::SubgroupDerive
+            | Self::LdsAllocate
+            | Self::WorkgroupBarrier
+            | Self::PrivateMemoryAllocate
+            | Self::WorkgroupMemoryIndex1D
+            | Self::WorkgroupMemoryAllocate => 1,
+            Self::BindAtomicView
+            | Self::SubgroupBarrier
+            | Self::WorkgroupFence
+            | Self::LdsPublish
+            | Self::AsyncWait
+            | Self::AtomicLoad
+            | Self::SubgroupFence
+            | Self::MatrixAccess
+            | Self::WorkgroupMemoryPublish
+            | Self::PrivateMemoryLoad
+            | Self::PrivateMemoryExclusiveLoad
+            | Self::GlobalBindExclusiveReadWrite
+            | Self::GlobalExclusiveLoad => 2,
+            Self::WorkgroupReduceSum
+            | Self::WorkgroupInclusiveScanSum
+            | Self::WorkgroupExclusiveScanSum
+            | Self::BindGlobalAtomicLocation
+            | Self::AtomicStore
+            | Self::AtomicFetchAdd
+            | Self::SubgroupReduceSum
+            | Self::SubgroupInclusiveScanSum
+            | Self::LdsInitializeByInvocation
+            | Self::LdsReadPublished
+            | Self::PrivateMemoryExclusiveStore
+            | Self::PrivateMemoryDisjointStore
+            | Self::WorkgroupMemoryLoad
+            | Self::WorkgroupMemoryExclusiveLoad
+            | Self::GlobalExclusiveStore => 3,
+            Self::AsyncCopy
+            | Self::AtomicCompareExchange
+            | Self::PrivateMemoryFromRawParts
+            | Self::WorkgroupMemoryFromRawParts
+            | Self::WorkgroupMemoryExclusiveStore
+            | Self::WorkgroupMemoryDisjointStore
+            | Self::GlobalStoreBlock => 4,
+        }
+    }
+
+    pub(crate) const fn trusted_device_item(self) -> TrustedDeviceItem {
+        match self {
+            Self::BindAtomicView => TrustedDeviceItem::CapabilityGlobalBindAtomic,
+            Self::WorkgroupDerive => TrustedDeviceItem::ExecutionWorkgroupCurrent,
+            Self::SubgroupDerive => TrustedDeviceItem::ExecutionSubgroupCurrent,
+            Self::LdsAllocate => TrustedDeviceItem::ExecutionLdsAllocate,
+            Self::WorkgroupBarrier => TrustedDeviceItem::ExecutionWorkgroupBarrier,
+            Self::SubgroupBarrier => TrustedDeviceItem::ExecutionSubgroupBarrier,
+            Self::WorkgroupFence => TrustedDeviceItem::ExecutionWorkgroupFence,
+            Self::LdsPublish => TrustedDeviceItem::ExecutionLdsPublish,
+            Self::AsyncCopy => TrustedDeviceItem::ExecutionAsyncCopy,
+            Self::AsyncWait => TrustedDeviceItem::ExecutionAsyncWait,
+            Self::WorkgroupReduceSum => TrustedDeviceItem::ExecutionWorkgroupReduceSum,
+            Self::WorkgroupInclusiveScanSum => {
+                TrustedDeviceItem::ExecutionWorkgroupInclusiveScanSum
+            }
+            Self::WorkgroupExclusiveScanSum => {
+                TrustedDeviceItem::ExecutionWorkgroupExclusiveScanSum
+            }
+            Self::BindGlobalAtomicLocation => TrustedDeviceItem::ExecutionGlobalAtomic,
+            Self::AtomicLoad => TrustedDeviceItem::ExecutionAtomicLoad,
+            Self::AtomicStore => TrustedDeviceItem::ExecutionAtomicStore,
+            Self::AtomicFetchAdd => TrustedDeviceItem::ExecutionAtomicFetchAdd,
+            Self::AtomicCompareExchange => TrustedDeviceItem::ExecutionAtomicCompareExchange,
+            Self::SubgroupFence => TrustedDeviceItem::ExecutionSubgroupFence,
+            Self::SubgroupReduceSum => TrustedDeviceItem::ExecutionSubgroupReduceSum,
+            Self::SubgroupInclusiveScanSum => TrustedDeviceItem::ExecutionSubgroupInclusiveScanSum,
+            Self::MatrixAccess => TrustedDeviceItem::ExecutionMatrixAccess,
+            Self::LdsInitializeByInvocation => {
+                TrustedDeviceItem::ExecutionLdsInitializeByInvocation
+            }
+            Self::LdsReadPublished => TrustedDeviceItem::ExecutionLdsReadPublished,
+            Self::PrivateMemoryFromRawParts => TrustedDeviceItem::PrivateMemoryFromRawParts,
+            Self::WorkgroupMemoryFromRawParts => TrustedDeviceItem::WorkgroupMemoryFromRawParts,
+            Self::PrivateMemoryAllocate => TrustedDeviceItem::PrivateMemoryAllocate,
+            Self::WorkgroupMemoryIndex1D => TrustedDeviceItem::WorkgroupMemoryIndex1D,
+            Self::WorkgroupMemoryAllocate => TrustedDeviceItem::WorkgroupMemoryAllocate,
+            Self::WorkgroupMemoryPublish => TrustedDeviceItem::WorkgroupMemoryPublish,
+            Self::PrivateMemoryLoad => TrustedDeviceItem::PrivateMemoryLoad,
+            Self::PrivateMemoryExclusiveLoad => TrustedDeviceItem::PrivateMemoryExclusiveLoad,
+            Self::PrivateMemoryExclusiveStore => TrustedDeviceItem::PrivateMemoryExclusiveStore,
+            Self::PrivateMemoryDisjointStore => TrustedDeviceItem::PrivateMemoryDisjointStore,
+            Self::WorkgroupMemoryLoad => TrustedDeviceItem::WorkgroupMemoryLoad,
+            Self::WorkgroupMemoryExclusiveLoad => TrustedDeviceItem::WorkgroupMemoryExclusiveLoad,
+            Self::WorkgroupMemoryExclusiveStore => TrustedDeviceItem::WorkgroupMemoryExclusiveStore,
+            Self::WorkgroupMemoryDisjointStore => TrustedDeviceItem::WorkgroupMemoryDisjointStore,
+            Self::GlobalBindExclusiveReadWrite => {
+                TrustedDeviceItem::CapabilityGlobalBindExclusiveReadWrite
+            }
+            Self::GlobalExclusiveLoad => TrustedDeviceItem::CapabilityGlobalExclusiveLoad,
+            Self::GlobalExclusiveStore => TrustedDeviceItem::CapabilityGlobalExclusiveStore,
+            Self::GlobalStoreBlock => TrustedDeviceItem::CapabilityGlobalStoreBlock,
+        }
+    }
+}
+
+pub(crate) const fn execution_terminal_contract_v1(
+    item: TrustedDeviceItem,
+) -> Option<ProductionExecutionTerminalV1> {
+    use ProductionExecutionTerminalV1 as Terminal;
+    Some(match item {
+        TrustedDeviceItem::CapabilityGlobalBindAtomic => Terminal::BindAtomicView,
+        TrustedDeviceItem::ExecutionWorkgroupCurrent => Terminal::WorkgroupDerive,
+        TrustedDeviceItem::ExecutionSubgroupCurrent => Terminal::SubgroupDerive,
+        TrustedDeviceItem::ExecutionLdsAllocate => Terminal::LdsAllocate,
+        TrustedDeviceItem::ExecutionWorkgroupBarrier => Terminal::WorkgroupBarrier,
+        TrustedDeviceItem::ExecutionSubgroupBarrier => Terminal::SubgroupBarrier,
+        TrustedDeviceItem::ExecutionWorkgroupFence => Terminal::WorkgroupFence,
+        TrustedDeviceItem::ExecutionLdsPublish => Terminal::LdsPublish,
+        TrustedDeviceItem::ExecutionAsyncCopy => Terminal::AsyncCopy,
+        TrustedDeviceItem::ExecutionAsyncWait => Terminal::AsyncWait,
+        TrustedDeviceItem::ExecutionWorkgroupReduceSum => Terminal::WorkgroupReduceSum,
+        TrustedDeviceItem::ExecutionWorkgroupInclusiveScanSum => {
+            Terminal::WorkgroupInclusiveScanSum
+        }
+        TrustedDeviceItem::ExecutionWorkgroupExclusiveScanSum => {
+            Terminal::WorkgroupExclusiveScanSum
+        }
+        TrustedDeviceItem::ExecutionGlobalAtomic => Terminal::BindGlobalAtomicLocation,
+        TrustedDeviceItem::ExecutionAtomicLoad => Terminal::AtomicLoad,
+        TrustedDeviceItem::ExecutionAtomicStore => Terminal::AtomicStore,
+        TrustedDeviceItem::ExecutionAtomicFetchAdd => Terminal::AtomicFetchAdd,
+        TrustedDeviceItem::ExecutionAtomicCompareExchange => Terminal::AtomicCompareExchange,
+        TrustedDeviceItem::ExecutionSubgroupFence => Terminal::SubgroupFence,
+        TrustedDeviceItem::ExecutionSubgroupReduceSum => Terminal::SubgroupReduceSum,
+        TrustedDeviceItem::ExecutionSubgroupInclusiveScanSum => Terminal::SubgroupInclusiveScanSum,
+        TrustedDeviceItem::ExecutionMatrixAccess => Terminal::MatrixAccess,
+        TrustedDeviceItem::ExecutionLdsInitializeByInvocation => {
+            Terminal::LdsInitializeByInvocation
+        }
+        TrustedDeviceItem::ExecutionLdsReadPublished => Terminal::LdsReadPublished,
+        TrustedDeviceItem::PrivateMemoryFromRawParts => Terminal::PrivateMemoryFromRawParts,
+        TrustedDeviceItem::WorkgroupMemoryFromRawParts => Terminal::WorkgroupMemoryFromRawParts,
+        TrustedDeviceItem::PrivateMemoryAllocate => Terminal::PrivateMemoryAllocate,
+        TrustedDeviceItem::WorkgroupMemoryIndex1D => Terminal::WorkgroupMemoryIndex1D,
+        TrustedDeviceItem::WorkgroupMemoryAllocate => Terminal::WorkgroupMemoryAllocate,
+        TrustedDeviceItem::WorkgroupMemoryPublish => Terminal::WorkgroupMemoryPublish,
+        TrustedDeviceItem::PrivateMemoryLoad => Terminal::PrivateMemoryLoad,
+        TrustedDeviceItem::PrivateMemoryExclusiveLoad => Terminal::PrivateMemoryExclusiveLoad,
+        TrustedDeviceItem::PrivateMemoryExclusiveStore => Terminal::PrivateMemoryExclusiveStore,
+        TrustedDeviceItem::PrivateMemoryDisjointStore => Terminal::PrivateMemoryDisjointStore,
+        TrustedDeviceItem::WorkgroupMemoryLoad => Terminal::WorkgroupMemoryLoad,
+        TrustedDeviceItem::WorkgroupMemoryExclusiveLoad => Terminal::WorkgroupMemoryExclusiveLoad,
+        TrustedDeviceItem::WorkgroupMemoryExclusiveStore => Terminal::WorkgroupMemoryExclusiveStore,
+        TrustedDeviceItem::WorkgroupMemoryDisjointStore => Terminal::WorkgroupMemoryDisjointStore,
+        TrustedDeviceItem::CapabilityGlobalBindExclusiveReadWrite => {
+            Terminal::GlobalBindExclusiveReadWrite
+        }
+        TrustedDeviceItem::CapabilityGlobalExclusiveLoad => Terminal::GlobalExclusiveLoad,
+        TrustedDeviceItem::CapabilityGlobalExclusiveStore => Terminal::GlobalExclusiveStore,
+        TrustedDeviceItem::CapabilityGlobalStoreBlock => Terminal::GlobalStoreBlock,
+        _ => return None,
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ProductionTerminalExpansionV1 {
+    KernelContextIssue,
+    CapabilityGlobalBindReadOnly,
+    CapabilityGlobalBindDisjointWrite,
+    CapabilityGlobalLoad,
+    CapabilityGlobalStore,
+    Execution(ProductionExecutionTerminalV1),
     ThreadIndex(SemanticAxisV1),
     WorkgroupIndex(SemanticAxisV1),
     WorkgroupDimension(SemanticAxisV1),
     GridDimension(SemanticAxisV1),
     ThreadIndex1d,
+    Invocation3DIndex1D,
     ThreadIndexGet,
     ThreadIndexIntoDisjoint,
     ThreadIndexCheckedShift,
@@ -141,7 +531,25 @@ pub(crate) const fn is_traversed_reviewed_helper_v1(item: TrustedDeviceItem) -> 
 
 impl ProductionSemanticTerminalRuleV1 {
     pub(crate) const fn from_trusted_device_item(item: TrustedDeviceItem) -> Self {
+        if let Some(terminal) = execution_terminal_contract_v1(item) {
+            return Self::Expand(ProductionTerminalExpansionV1::Execution(terminal));
+        }
         match item {
+            TrustedDeviceItem::KernelContextIssue => {
+                Self::Expand(ProductionTerminalExpansionV1::KernelContextIssue)
+            }
+            TrustedDeviceItem::CapabilityGlobalBindReadOnly => {
+                Self::Expand(ProductionTerminalExpansionV1::CapabilityGlobalBindReadOnly)
+            }
+            TrustedDeviceItem::CapabilityGlobalBindDisjointWrite => {
+                Self::Expand(ProductionTerminalExpansionV1::CapabilityGlobalBindDisjointWrite)
+            }
+            TrustedDeviceItem::CapabilityGlobalLoad => {
+                Self::Expand(ProductionTerminalExpansionV1::CapabilityGlobalLoad)
+            }
+            TrustedDeviceItem::CapabilityGlobalStore => {
+                Self::Expand(ProductionTerminalExpansionV1::CapabilityGlobalStore)
+            }
             TrustedDeviceItem::ThreadIndexX => Self::Expand(
                 ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::X),
             ),
@@ -180,6 +588,9 @@ impl ProductionSemanticTerminalRuleV1 {
             ),
             TrustedDeviceItem::ThreadIndex1d => {
                 Self::Expand(ProductionTerminalExpansionV1::ThreadIndex1d)
+            }
+            TrustedDeviceItem::Invocation3DIndex1D => {
+                Self::Expand(ProductionTerminalExpansionV1::Invocation3DIndex1D)
             }
             TrustedDeviceItem::ThreadIndexGet => {
                 Self::Expand(ProductionTerminalExpansionV1::ThreadIndexGet)
@@ -466,6 +877,24 @@ impl ProductionSemanticTerminalRuleV1 {
     #[cfg(test)]
     const fn trusted_device_item(self) -> TrustedDeviceItem {
         match self {
+            Self::Expand(ProductionTerminalExpansionV1::KernelContextIssue) => {
+                TrustedDeviceItem::KernelContextIssue
+            }
+            Self::Expand(ProductionTerminalExpansionV1::CapabilityGlobalBindReadOnly) => {
+                TrustedDeviceItem::CapabilityGlobalBindReadOnly
+            }
+            Self::Expand(ProductionTerminalExpansionV1::CapabilityGlobalBindDisjointWrite) => {
+                TrustedDeviceItem::CapabilityGlobalBindDisjointWrite
+            }
+            Self::Expand(ProductionTerminalExpansionV1::CapabilityGlobalLoad) => {
+                TrustedDeviceItem::CapabilityGlobalLoad
+            }
+            Self::Expand(ProductionTerminalExpansionV1::CapabilityGlobalStore) => {
+                TrustedDeviceItem::CapabilityGlobalStore
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Execution(terminal)) => {
+                terminal.trusted_device_item()
+            }
             Self::Expand(ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::X)) => {
                 TrustedDeviceItem::ThreadIndexX
             }
@@ -504,6 +933,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::ThreadIndex1d) => {
                 TrustedDeviceItem::ThreadIndex1d
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Invocation3DIndex1D) => {
+                TrustedDeviceItem::Invocation3DIndex1D
             }
             Self::Expand(ProductionTerminalExpansionV1::ThreadIndexGet) => {
                 TrustedDeviceItem::ThreadIndexGet
@@ -809,8 +1241,129 @@ mod tests {
     use super::*;
 
     #[test]
+    fn execution_terminal_roster_is_closed_unique_and_fully_expanded() {
+        let mut tags = std::collections::BTreeSet::new();
+        let mut items = Vec::new();
+        for terminal in ProductionExecutionTerminalV1::ALL {
+            assert!(tags.insert(terminal.identity_tag()));
+            let item = terminal.trusted_device_item();
+            assert!(!items.contains(&item));
+            items.push(item);
+            assert_eq!(execution_terminal_contract_v1(item), Some(terminal));
+            assert_eq!(
+                ProductionSemanticTerminalRuleV1::from_trusted_device_item(item),
+                ProductionSemanticTerminalRuleV1::Expand(ProductionTerminalExpansionV1::Execution(
+                    terminal
+                ),),
+            );
+            assert!((1..=4).contains(&terminal.source_argument_count()));
+        }
+        assert_eq!(
+            tags.into_iter().collect::<Vec<_>>(),
+            (0_u8..42).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn typed_global_contract_is_closed_and_has_production_expansions() {
+        let cases = [
+            (
+                TrustedDeviceItem::CapabilityGlobalBindReadOnly,
+                ProductionCapabilityMemoryTerminalV1::BindReadOnly,
+                2,
+            ),
+            (
+                TrustedDeviceItem::CapabilityGlobalBindDisjointWrite,
+                ProductionCapabilityMemoryTerminalV1::BindDisjointWrite,
+                2,
+            ),
+            (
+                TrustedDeviceItem::CapabilityGlobalBindExclusiveReadWrite,
+                ProductionCapabilityMemoryTerminalV1::BindExclusiveReadWrite,
+                2,
+            ),
+            (
+                TrustedDeviceItem::CapabilityGlobalLoad,
+                ProductionCapabilityMemoryTerminalV1::Load,
+                2,
+            ),
+            (
+                TrustedDeviceItem::CapabilityGlobalStore,
+                ProductionCapabilityMemoryTerminalV1::Store,
+                3,
+            ),
+            (
+                TrustedDeviceItem::CapabilityGlobalExclusiveLoad,
+                ProductionCapabilityMemoryTerminalV1::ExclusiveLoad,
+                2,
+            ),
+            (
+                TrustedDeviceItem::CapabilityGlobalExclusiveStore,
+                ProductionCapabilityMemoryTerminalV1::ExclusiveStore,
+                3,
+            ),
+            (
+                TrustedDeviceItem::CapabilityGlobalStoreBlock,
+                ProductionCapabilityMemoryTerminalV1::StoreBlock,
+                4,
+            ),
+        ];
+        for (item, expected, arity) in cases {
+            let contract = capability_memory_terminal_contract_v1(item).unwrap();
+            assert_eq!(contract, expected);
+            assert_eq!(contract.source_argument_count(), arity);
+            let ProductionSemanticTerminalRuleV1::Expand(expansion) =
+                ProductionSemanticTerminalRuleV1::from_trusted_device_item(item)
+            else {
+                panic!("typed global operation remained fail-closed")
+            };
+            assert_eq!(
+                expansion,
+                match expected {
+                    ProductionCapabilityMemoryTerminalV1::BindReadOnly => {
+                        ProductionTerminalExpansionV1::CapabilityGlobalBindReadOnly
+                    }
+                    ProductionCapabilityMemoryTerminalV1::BindExclusiveReadWrite => {
+                        ProductionTerminalExpansionV1::Execution(
+                            ProductionExecutionTerminalV1::GlobalBindExclusiveReadWrite,
+                        )
+                    }
+                    ProductionCapabilityMemoryTerminalV1::BindDisjointWrite => {
+                        ProductionTerminalExpansionV1::CapabilityGlobalBindDisjointWrite
+                    }
+                    ProductionCapabilityMemoryTerminalV1::Load => {
+                        ProductionTerminalExpansionV1::CapabilityGlobalLoad
+                    }
+                    ProductionCapabilityMemoryTerminalV1::ExclusiveLoad => {
+                        ProductionTerminalExpansionV1::Execution(
+                            ProductionExecutionTerminalV1::GlobalExclusiveLoad,
+                        )
+                    }
+                    ProductionCapabilityMemoryTerminalV1::Store => {
+                        ProductionTerminalExpansionV1::CapabilityGlobalStore
+                    }
+                    ProductionCapabilityMemoryTerminalV1::ExclusiveStore => {
+                        ProductionTerminalExpansionV1::Execution(
+                            ProductionExecutionTerminalV1::GlobalExclusiveStore,
+                        )
+                    }
+                    ProductionCapabilityMemoryTerminalV1::StoreBlock => {
+                        ProductionTerminalExpansionV1::Execution(
+                            ProductionExecutionTerminalV1::GlobalStoreBlock,
+                        )
+                    }
+                }
+            );
+        }
+    }
+
+    #[test]
     fn fill_terminals_have_explicit_workload_neutral_expansions() {
         let cases = [
+            (
+                TrustedDeviceItem::KernelContextIssue,
+                ProductionTerminalExpansionV1::KernelContextIssue,
+            ),
             (
                 TrustedDeviceItem::ThreadIndexX,
                 ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::X),
@@ -862,6 +1415,10 @@ mod tests {
             (
                 TrustedDeviceItem::ThreadIndex1d,
                 ProductionTerminalExpansionV1::ThreadIndex1d,
+            ),
+            (
+                TrustedDeviceItem::Invocation3DIndex1D,
+                ProductionTerminalExpansionV1::Invocation3DIndex1D,
             ),
             (
                 TrustedDeviceItem::ThreadIndexGet,
@@ -1130,6 +1687,10 @@ mod tests {
 
     #[test]
     fn reviewed_rust_helpers_are_traversed_instead_of_hidden_by_a_terminal() {
+        assert!(
+            !is_traversed_reviewed_helper_v1(TrustedDeviceItem::KernelContextIssue),
+            "kernel context issuance must remain an authenticated semantic terminal",
+        );
         for item in [
             TrustedDeviceItem::Invocation3DCurrent,
             TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic,

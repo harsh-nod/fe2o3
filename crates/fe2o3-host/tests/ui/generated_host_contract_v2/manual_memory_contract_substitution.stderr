@@ -1,0 +1,16 @@
+error[E0624]: associated function `new` is private
+ --> tests/ui/generated_host_contract_v2/manual_memory_contract_substitution.rs:5:42
+  |
+5 |           GeneratedHostMemoryConstraintV2::new(0, GeneratedHostMemoryRoleV2::Output, 4, 4, []);
+  |                                            ^^^ private associated function
+  |
+ ::: src/generated_host_contract_v2.rs
+  |
+  | /     pub(crate) fn new(
+  | |         argument_index: usize,
+  | |         role: GeneratedHostMemoryRoleV2,
+  | |         element_bytes: u64,
+  | |         required_alignment: u64,
+  | |         axes: impl Into<Vec<GeneratedHostAxisConstraintV2>>,
+  | |     ) -> Result<Self, GeneratedHostContractErrorV2> {
+  | |___________________________________________________- private associated function defined here

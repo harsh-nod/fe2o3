@@ -85,8 +85,7 @@ fn policy(executable_digest: Digest) -> VerifierPolicy {
 }
 
 fn synthetic_recorder_fixture() -> &'static str {
-    option_env!("CARGO_BIN_EXE_fe2o3-verifier-test-recorder")
-        .expect("Cargo did not provide the verifier test recorder")
+    env!("CARGO_BIN_EXE_fe2o3-verifier-test-recorder")
 }
 
 fn inputs(

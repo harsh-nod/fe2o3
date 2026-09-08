@@ -1,0 +1,112 @@
+{
+  "argumentRoles": [
+    "input",
+    "output"
+  ],
+  "canaries": [],
+  "checkApplicability": {
+    "canaries": {
+      "reason": "kernel requires an exact output extent with no admissible tail",
+      "status": "not-applicable"
+    },
+    "padding": {
+      "reason": "physical ABI has no logical padding region",
+      "status": "not-applicable"
+    }
+  },
+  "compilerInputContractSha256": "4210d590cced99688b4651df66c5ae84fb243f645666e8f95d1cd88ba5878b92",
+  "expectedArguments": [
+    {
+      "bytes": "0xe0ffffffe1ffffffe2ffffffe3ffffffe4ffffffe5ffffffe6ffffffe7ffffffe8ffffffe9ffffffeaffffffebffffffecffffffedffffffeeffffffeffffffff0fffffff1fffffff2fffffff3fffffff4fffffff5fffffff6fffffff7fffffff8fffffff9fffffffafffffffbfffffffcfffffffdfffffffeffffffffffffff000000000100000002000000030000000400000005000000060000000700000008000000090000000a0000000b0000000c0000000d0000000e0000000f000000100000001100000012000000130000001400000015000000160000001700000018000000190000001a0000001b0000001c0000001d0000001e0000001f000000",
+      "element": "i32",
+      "kind": "buffer"
+    },
+    {
+      "bytes": "0xe0ffffff",
+      "element": "i32",
+      "kind": "buffer"
+    }
+  ],
+  "fixtureId": "gfx942-workgroup-collectives",
+  "kernelSymbol": "lds_publish_read_reduce_i32_v1",
+  "numericalPolicy": {
+    "mode": "exact-bits"
+  },
+  "oracle": {
+    "function": "lds_reduction_oracle_v1",
+    "inputSha256": "a21f84e8bc186376381042588e91c9f6b1fdd0ffdffd645ad1184f26b4401291",
+    "kind": "existing-rust-cpu-reference-v1"
+  },
+  "oracleSuiteId": "cpu-reference-workgroup-collectives",
+  "padding": [],
+  "physicalAbi": {
+    "arguments": [
+      {
+        "access": "read_only",
+        "element": "i32",
+        "kind": "buffer",
+        "name": "values"
+      },
+      {
+        "access": "read_write",
+        "element": "i32",
+        "kind": "buffer",
+        "name": "output"
+      }
+    ],
+    "schema": "fe2o3-physical-kernel-abi-v1",
+    "signatureSha256": "f590e840f6bcf6c14b81ab9088e1de0281055bb7e1a9eee6e8d8bc8ed1424501",
+    "sourcePath": "examples/workgroup_sync_v1/src/kernel.rs"
+  },
+  "productionExport": {
+    "coordinates": null,
+    "diagnostic": "FE2O3-TUTORIAL-PROBE-001: production exporter failed: crates/fe2o3-verifier/src/production_final_graph_functional_refinement_v1.rs:77:5: error[E0277]: `ProductionVerifiedFinalGraphV1` doesn't implement `std::fmt::Debug`: the trait `std::fmt::Debug` is not implemented for `ProductionVerifiedFinalGraphV1`",
+    "diagnosticCode": "FE2O3-TUTORIAL-PROBE-001",
+    "diagnosticIdentitySha256": "1475d204da0ae06acb1eaf873144fdc8e0d68afb65da5e38ddfc1d93ea16a2b5",
+    "identityContract": {
+      "rawContentField": "evidenceFiles[optimized-kir-v13].sha256",
+      "rawContentIdentity": "SHA-256(raw optimized KIR V13 bytes)",
+      "verifiedCanonicalKernelIrV13Fields": [
+        "productionEvidence.finalOptimizedKirSha256",
+        "graph.productionKirIdentitySha256",
+        "simulator.subjectSha256"
+      ],
+      "verifiedCanonicalKernelIrV13Identity": "domain-separated VerifiedCanonicalKernelIrV13 identity"
+    },
+    "stage": "exporter-build",
+    "status": "blocked"
+  },
+  "request": {
+    "arguments": [
+      {
+        "access": "read_only",
+        "alignment": 4,
+        "bytes": "0xe0ffffffe1ffffffe2ffffffe3ffffffe4ffffffe5ffffffe6ffffffe7ffffffe8ffffffe9ffffffeaffffffebffffffecffffffedffffffeeffffffeffffffff0fffffff1fffffff2fffffff3fffffff4fffffff5fffffff6fffffff7fffffff8fffffff9fffffffafffffffbfffffffcfffffffdfffffffeffffffffffffff000000000100000002000000030000000400000005000000060000000700000008000000090000000a0000000b0000000c0000000d0000000e0000000f000000100000001100000012000000130000001400000015000000160000001700000018000000190000001a0000001b0000001c0000001d0000001e0000001f000000",
+        "element": "i32",
+        "kind": "buffer"
+      },
+      {
+        "access": "read_write",
+        "alignment": 4,
+        "bytes": "0x19fcffff",
+        "element": "i32",
+        "kind": "buffer"
+      }
+    ],
+    "grid": [
+      64,
+      1,
+      1
+    ],
+    "kernel": "lds_publish_read_reduce_i32_v1",
+    "schema": "fe2o3-simulation-request-v1",
+    "workgroup": [
+      64,
+      1,
+      1
+    ]
+  },
+  "schema": "fe2o3-tutorial-capability-simulation-fixture-v1",
+  "sourceClosureSha256": "f93c7ac38c992c4b95ce87d4fc8a8a6b5cf64e5497ace622c4c84efc34c486c6",
+  "target": "gfx942"
+}

@@ -9,6 +9,7 @@ use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationTokenV1, InertCompilerExecutionSubjectV1, PublishedLinkArtifactV1,
     WorkerV3LoadEnvelopeBindingV1,
 };
+use fe2o3_compiler_ffi::InertProductionCapabilityResultV5;
 use fe2o3_hsaco::{CodeObjectVersion, InspectedKernel, KernelDescriptorBinding};
 use fe2o3_hsaco_finalize::{
     RevalidatedProtectedWorkerV3FinalizerDerivationV1, WorkerV3HsacoPublicationErrorV1,
@@ -17,10 +18,12 @@ use fe2o3_hsaco_finalize::{
 use fe2o3_kernel_descriptor::{BlockSizeV1, DeviceDescriptorTableV1, KernelDescriptorV1, KernelId};
 use fe2o3_runtime_protocol::{CompilerExecutionReceiptCarriageV1, WorkerV3LoadEnvelopeWireV1};
 use fe2o3_verifier::{
-    CompilerMultiRootProofValidationErrorV1, CompilerProofInputValidationErrorV4,
-    CompilerTargetLineageValidationErrorV1, ValidatedCompilerMultiRootProofInputsV1,
+    CompilerCapabilitySourceOwnerErrorV1, CompilerMultiRootProofValidationErrorV1,
+    CompilerProofInputValidationErrorV4, CompilerTargetLineageValidationErrorV1,
+    ValidatedCompilerCapabilitySourceOwnerV1, ValidatedCompilerMultiRootProofInputsV1,
     ValidatedCompilerMultiRootTargetLineageV1, ValidatedCompilerProofInputsV4,
-    ValidatedCompilerTargetLineageV1, validate_compiler_multi_root_proof_inputs_v1,
+    ValidatedCompilerProofInputsV5, ValidatedCompilerTargetLineageV1,
+    validate_compiler_capability_source_owner_v1, validate_compiler_multi_root_proof_inputs_v1,
     validate_compiler_multi_root_target_lineage_v1, validate_compiler_proof_inputs_v4,
     validate_compiler_target_lineage_v1,
 };
@@ -51,7 +54,7 @@ pub const MAX_WORKER_V3_MACHINE_EFFECT_EVIDENCE_BYTES_V1: usize = 64 * 1024 * 10
 /// Maximum exact proof artifact retained by one Worker V3 refinement receipt.
 pub const MAX_WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_PROOF_BYTES_V1: usize = 64 * 1024 * 1024;
 
-mod verifier_seal {
+pub(crate) mod verifier_seal {
     pub trait Sealed<K> {}
 }
 
@@ -128,6 +131,7 @@ pub struct WorkerV3VerificationRequestV1<'admission, K> {
     finalizer_replay: &'admission WorkerV3LoadEnvelopeWireV1,
     compiler_execution_subject: &'admission InertCompilerExecutionSubjectV1,
     compiler_execution_receipt: &'admission CompilerExecutionReceiptCarriageV1,
+    load_envelope_v2: Box<[u8]>,
     handoff: &'admission fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
     finalized_hsaco: &'admission [u8],
     descriptor: &'admission KernelDescriptorV1,
@@ -197,6 +201,14 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
     /// Returns the exact canonical receipt carriage bytes, without a projected schema.
     pub const fn compiler_execution_receipt_bytes(&self) -> &[u8] {
         self.compiler_execution_receipt.canonical_bytes()
+    }
+
+    /// Returns the exact recovered V2 envelope bytes retained by application admission.
+    ///
+    /// The production verifier snapshots this byte string into the fixed Worker V3 service
+    /// protocol. The bytes remain inert and grant no compiler, proof, load, or launch authority.
+    pub const fn load_envelope_v2_bytes(&self) -> &[u8] {
+        &self.load_envelope_v2
     }
 
     pub const fn compiler_execution_subject_sha256(&self) -> [u8; 32] {
@@ -434,11 +446,15 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
 /// capsule, descriptor, final HSACO, and generated Rust marker, and that every reported safety
 /// property covers all executable memory effects for every concrete invocation satisfying the
 /// generated ABI, effect, alias, initialization, and launch contracts.
+/// Implementations must independently derive the final optimized KIR identity and epoch,
+/// kernel/root identity, target-model identity, launch-contract identity, and complete static
+/// obligation-set identity from protected compiler policy. Capability validation against values
+/// supplied by the sidecar itself does not authenticate those values.
 /// This is a universally quantified kernel theorem: the later safe composition boundary may
 /// instantiate it only with compiler-generated capabilities and independently checked physical
 /// runtime inputs. The inert V3 receipts do not establish these claims by themselves. This trait
-/// cannot construct the separate semantic-to-machine receipt and therefore cannot currently
-/// authorize native application loading even when these obligations hold.
+/// does not by itself construct the separate semantic-to-machine receipt. Native application
+/// loading requires the sealed refining adapter to join both independently reviewed backends.
 pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1>:
     verifier_seal::Sealed<K>
 {
@@ -595,8 +611,9 @@ fn validate_semantic_machine_refinement_evidence_fields(
 /// There is deliberately no public constructor. The current protected-verifier adapter does not
 /// produce this receipt. [`WorkerV3RefiningProtectedVerifierAdapterV1`] can construct it only from
 /// exact owned proof artifacts returned through the unsafe reviewed refinement-backend contract.
-/// No concrete production backend or proof artifact is currently shipped, so application
-/// execution remains unavailable unless a deployment supplies that missing trusted component.
+/// The fixed-deployment backend ships in this crate, but it does not embed a verifier service or
+/// proof producer. Application execution remains unavailable until deployment wires those trusted
+/// components and supplies the authenticated proof artifact.
 ///
 /// ```compile_fail
 /// use fe2o3_host::WorkerV3SemanticMachineRefinementReceiptV1;
@@ -657,6 +674,11 @@ impl WorkerV3SemanticMachineRefinementReceiptV1 {
     /// Returns the exact canonical Kernel IR identity covered by the refinement.
     pub const fn kir_identity(&self) -> (&[u8; 32], u64) {
         (&self.host.kir_sha256, self.host.kir_bytes)
+    }
+
+    /// Returns the exact optimization epoch covered by the machine theorem.
+    pub const fn kir_epoch(&self) -> u64 {
+        self.host.kir_epoch
     }
 
     /// Returns the exact final LLVM module identity covered by the refinement.
@@ -737,7 +759,10 @@ impl WorkerV3SemanticMachineRefinementReceiptV1 {
         {
             return None;
         }
-        Some(AdmittedWorkerV3SemanticMachineRefinementV1 { receipt: self })
+        Some(AdmittedWorkerV3SemanticMachineRefinementV1 {
+            receipt: self,
+            compiler_capability_source: None,
+        })
     }
 
     fn from_protected_evidence(
@@ -784,6 +809,11 @@ impl WorkerV3SemanticMachineRefinementReceiptV1 {
 struct WorkerV3SemanticMachineHostCoordinatesV1 {
     kir_sha256: [u8; 32],
     kir_bytes: u64,
+    kir_epoch: u64,
+    kernel_identity: [u8; 32],
+    kernel_root_identity: [u8; 32],
+    target_model_identity: [u8; 32],
+    launch_contract_identity: [u8; 32],
     llvm_sha256: [u8; 32],
     llvm_bytes: u64,
     isa_sha256: [u8; 32],
@@ -820,13 +850,15 @@ struct WorkerV3SemanticMachineHostCoordinatesV1 {
 
 /// Exact borrowed inputs presented to a reviewed semantic-to-final-machine proof backend.
 ///
-/// The request joins the already validated source-side proof owner and compiler currentness to
-/// exact final LLVM, selected ISA, final HSACO, and durable publication bytes. These inputs remain
-/// non-authoritative: only an independently authenticated proof execution may return evidence.
+/// The request joins the frozen V4 source owner, native final-graph V5 owner, and compiler
+/// currentness to exact final LLVM, selected ISA, final HSACO, and durable publication bytes.
+/// These inputs remain non-authoritative: only an independently authenticated proof execution may
+/// return evidence.
 pub struct WorkerV3SemanticMachineRefinementRequestV1<'verification, 'admission, K> {
     verification_request: &'verification WorkerV3VerificationRequestV1<'admission, K>,
     compiler_execution: &'verification WorkerV3CompilerExecutionVerificationV1,
     proof_inputs: &'verification ValidatedCompilerProofInputsV4,
+    proof_owner: &'verification ValidatedCompilerProofInputsV5,
     target_lineage: &'verification ValidatedCompilerTargetLineageV1,
     selected_isa: &'verification [u8],
     host: WorkerV3SemanticMachineHostCoordinatesV1,
@@ -848,6 +880,11 @@ impl<K: CompilerGeneratedKernelExpectationV1>
     /// Returns the exact independently decoded source-side proof owner.
     pub const fn proof_inputs(&self) -> &ValidatedCompilerProofInputsV4 {
         self.proof_inputs
+    }
+
+    /// Returns the native owner of the exact canonical KIR V13 graph and optimization epoch.
+    pub const fn proof_owner(&self) -> &ValidatedCompilerProofInputsV5 {
+        self.proof_owner
     }
 
     /// Returns the exact independently replayed target-lineage owner.
@@ -877,11 +914,34 @@ impl<K: CompilerGeneratedKernelExpectationV1>
 
 pub(crate) struct AdmittedWorkerV3SemanticMachineRefinementV1 {
     receipt: WorkerV3SemanticMachineRefinementReceiptV1,
+    compiler_capability_source: Option<Box<ValidatedCompilerCapabilitySourceOwnerV1>>,
 }
 
 impl AdmittedWorkerV3SemanticMachineRefinementV1 {
     pub(crate) const fn receipt(&self) -> &WorkerV3SemanticMachineRefinementReceiptV1 {
         &self.receipt
+    }
+
+    pub(crate) fn compiler_capability_source(
+        &self,
+    ) -> Option<&ValidatedCompilerCapabilitySourceOwnerV1> {
+        self.compiler_capability_source.as_deref()
+    }
+
+    pub(crate) fn compiler_capability_association_identity(&self) -> Option<([u8; 32], u64)> {
+        let identity = self
+            .compiler_capability_source()?
+            .capability()
+            .association()
+            .identity();
+        Some((identity.sha256(), identity.byte_len()))
+    }
+
+    pub(crate) fn production_capability_result_identity(&self) -> Option<([u8; 32], u64)> {
+        let identity = self
+            .compiler_capability_source()?
+            .production_result_identity();
+        Some((identity.sha256(), identity.byte_len()))
     }
 }
 
@@ -903,6 +963,11 @@ fn refinement_host_coordinates_for_test_v1() -> WorkerV3SemanticMachineHostCoord
     WorkerV3SemanticMachineHostCoordinatesV1 {
         kir_sha256: [1; 32],
         kir_bytes: 101,
+        kir_epoch: 7,
+        kernel_identity: [33; 32],
+        kernel_root_identity: [34; 32],
+        target_model_identity: [35; 32],
+        launch_contract_identity: [36; 32],
         llvm_sha256: [2; 32],
         llvm_bytes: 102,
         isa_sha256: [3; 32],
@@ -964,6 +1029,10 @@ fn semantic_machine_refinement_receipt_identity(
     for identity in [
         receipt.producer_measurement_sha256,
         receipt.verification_transcript_sha256,
+        host.kernel_identity,
+        host.kernel_root_identity,
+        host.target_model_identity,
+        host.launch_contract_identity,
         host.worker_challenge_identity,
         host.worker_lineage_identity,
         host.compiler_execution_subject_identity,
@@ -985,6 +1054,7 @@ fn semantic_machine_refinement_receipt_identity(
     ] {
         digest.update(identity);
     }
+    digest.update(host.kir_epoch.to_le_bytes());
     digest.update(host.compiler_execution_sequence.to_le_bytes());
     digest.update(host.publication_generation.to_le_bytes());
     digest.update(host.publication_session);
@@ -1013,6 +1083,7 @@ pub struct WorkerV3ProtectedVerificationEvidenceV1 {
     compiler_execution: WorkerV3CompilerExecutionVerificationV1,
     proof_inputs: ValidatedCompilerProofInputsV4,
     target_lineage: ValidatedCompilerTargetLineageV1,
+    compiler_capability_source: Option<ValidatedCompilerCapabilitySourceOwnerV1>,
     verifier_measurement_sha256: [u8; 32],
     verification_transcript_sha256: [u8; 32],
     proof_executable_binding_sha256: [u8; 32],
@@ -1048,6 +1119,7 @@ impl WorkerV3ProtectedVerificationEvidenceV1 {
             compiler_execution,
             proof_inputs,
             target_lineage,
+            compiler_capability_source: None,
             verifier_measurement_sha256,
             verification_transcript_sha256,
             proof_executable_binding_sha256,
@@ -1055,6 +1127,24 @@ impl WorkerV3ProtectedVerificationEvidenceV1 {
             rust_effect_contract_sha256,
             safety_properties,
         }
+    }
+
+    /// Associates a native exact-canonical-KIR-V13 owner with authenticated V4 source custody.
+    ///
+    /// This transition grants no authority. The V5 owner has already independently decoded V13;
+    /// V4 contributes source/MIR custody only and is never projected into the V13 graph identity.
+    pub fn try_with_compiler_capability_evidence(
+        mut self,
+        proof_owner: ValidatedCompilerProofInputsV5,
+        production_result: &InertProductionCapabilityResultV5,
+    ) -> Result<Self, CompilerCapabilitySourceOwnerErrorV1> {
+        self.compiler_capability_source = Some(validate_compiler_capability_source_owner_v1(
+            proof_owner,
+            production_result,
+            &self.proof_inputs,
+            self.compiler_execution.policy_sha256(),
+        )?);
+        Ok(self)
     }
 }
 
@@ -1069,6 +1159,9 @@ impl WorkerV3ProtectedVerificationEvidenceV1 {
 /// Returned evidence must bind the exact borrowed request and may not be synthesized from request
 /// fields. This backend does not produce the separate semantic-to-machine receipt, so its
 /// provenance and returned digests alone cannot authorize native application loading.
+/// Before attaching capability evidence, the implementation must independently derive its exact
+/// optimized KIR/epoch, kernel root, target model, launch contract, and complete required static
+/// obligation set. It must not echo those coordinates from the capability sidecar.
 pub unsafe trait WorkerV3ProtectedVerifierBackendV1<K: CompilerGeneratedKernelExpectationV1> {
     type Error;
 
@@ -1256,6 +1349,17 @@ where
         let host = refinement_request.into_host_coordinates();
         let receipt =
             WorkerV3SemanticMachineRefinementReceiptV1::from_protected_evidence(host, refinement);
+        if decision.compiler_capability_source().is_some() {
+            validate_compiler_capability_machine_owner(&decision, &receipt)
+                .map_err(WorkerV3RefiningProtectedVerifierErrorV1::CapabilityMachineOwner)?;
+        } else {
+            #[cfg(not(feature = "worker-v3-verifier-test-support"))]
+            return Err(
+                WorkerV3RefiningProtectedVerifierErrorV1::CapabilityMachineOwner(
+                    WorkerV3CapabilityMachineOwnerErrorV1::MissingSourceOwner,
+                ),
+            );
+        }
         decision.semantic_machine_refinement = Some(receipt);
         Ok(decision)
     }
@@ -1282,6 +1386,7 @@ fn protected_decision_from_evidence<K: CompilerGeneratedKernelExpectationV1>(
         evidence.compiler_execution,
         evidence.proof_inputs,
         evidence.target_lineage,
+        evidence.compiler_capability_source,
         evidence.verifier_measurement_sha256,
         evidence.verification_transcript_sha256,
         evidence.proof_executable_binding_sha256,
@@ -1302,6 +1407,7 @@ pub enum WorkerV3RefiningProtectedVerifierErrorV1<ProtectedError, RefinementErro
     RefinementCoordinatesUnavailable,
     SemanticMachineRefinement(RefinementError),
     SemanticMachineRefinementPanicked,
+    CapabilityMachineOwner(WorkerV3CapabilityMachineOwnerErrorV1),
 }
 
 /// Explicit synthetic-verifier hook for the receipt-bearing integration harness.
@@ -1819,6 +1925,7 @@ pub struct WorkerV3VerificationDecisionV1 {
     compiler_execution: WorkerV3CompilerExecutionVerificationV1,
     proof_inputs: WorkerV3ProofInputEvidenceV1,
     target_lineage: WorkerV3TargetLineageEvidenceV1,
+    compiler_capability_source: Option<Box<ValidatedCompilerCapabilitySourceOwnerV1>>,
     verifier_measurement_sha256: [u8; 32],
     verification_transcript_sha256: [u8; 32],
     proof_executable_binding_sha256: [u8; 32],
@@ -1890,6 +1997,7 @@ impl WorkerV3VerificationDecisionV1 {
         compiler_execution: WorkerV3CompilerExecutionVerificationV1,
         proof_inputs: ValidatedCompilerProofInputsV4,
         target_lineage: ValidatedCompilerTargetLineageV1,
+        compiler_capability_source: Option<ValidatedCompilerCapabilitySourceOwnerV1>,
         verifier_measurement_sha256: [u8; 32],
         verification_transcript_sha256: [u8; 32],
         proof_executable_binding_sha256: [u8; 32],
@@ -1914,6 +2022,7 @@ impl WorkerV3VerificationDecisionV1 {
             compiler_execution,
             WorkerV3ProofInputEvidenceV1::Validated(Box::new(proof_inputs)),
             WorkerV3TargetLineageEvidenceV1::Validated(Box::new(target_lineage)),
+            compiler_capability_source.map(Box::new),
             verifier_measurement_sha256,
             verification_transcript_sha256,
             proof_executable_binding_sha256,
@@ -1943,6 +2052,7 @@ impl WorkerV3VerificationDecisionV1 {
         compiler_execution: WorkerV3CompilerExecutionVerificationV1,
         proof_inputs: WorkerV3ProofInputEvidenceV1,
         target_lineage: WorkerV3TargetLineageEvidenceV1,
+        compiler_capability_source: Option<Box<ValidatedCompilerCapabilitySourceOwnerV1>>,
         verifier_measurement_sha256: [u8; 32],
         verification_transcript_sha256: [u8; 32],
         proof_executable_binding_sha256: [u8; 32],
@@ -1969,6 +2079,7 @@ impl WorkerV3VerificationDecisionV1 {
             compiler_execution,
             proof_inputs,
             target_lineage,
+            compiler_capability_source,
             verifier_measurement_sha256,
             verification_transcript_sha256,
             proof_executable_binding_sha256,
@@ -2023,6 +2134,7 @@ impl WorkerV3VerificationDecisionV1 {
             compiler_execution,
             WorkerV3ProofInputEvidenceV1::Synthetic,
             WorkerV3TargetLineageEvidenceV1::Synthetic,
+            None,
             verifier_measurement_sha256,
             verification_transcript_sha256,
             proof_executable_binding_sha256,
@@ -2139,6 +2251,26 @@ impl WorkerV3VerificationDecisionV1 {
         }
     }
 
+    pub(crate) fn compiler_capability_source(
+        &self,
+    ) -> Option<&ValidatedCompilerCapabilitySourceOwnerV1> {
+        self.compiler_capability_source.as_deref()
+    }
+
+    const fn retains_required_compiler_capability_source(&self) -> bool {
+        if self.compiler_capability_source.is_some() {
+            return true;
+        }
+        #[cfg(feature = "worker-v3-verifier-test-support")]
+        {
+            // Legacy integration fixtures exercise the otherwise unreachable protected adapter.
+            // This feature is excluded from production builds and cannot mint native authority.
+            return true;
+        }
+        #[cfg(not(feature = "worker-v3-verifier-test-support"))]
+        false
+    }
+
     /// Reports custody of every prerequisite for the consuming application transition.
     ///
     /// Protected-backend provenance and current compiler/Verus evidence are insufficient without
@@ -2147,7 +2279,8 @@ impl WorkerV3VerificationDecisionV1 {
     /// supplies its separately reviewed unsafe backend.
     pub(crate) const fn retains_protected_application_execution_evidence(&self) -> bool {
         self.authority_evidence.admits_production_application(
-            self.retains_current_compiler_and_signed_verus_evidence(),
+            self.retains_current_compiler_and_signed_verus_evidence()
+                && self.retains_required_compiler_capability_source(),
             self.semantic_machine_refinement.is_some(),
         )
     }
@@ -2160,11 +2293,13 @@ fn semantic_machine_refinement_request<'verification, 'admission, K>(
 where
     K: CompilerGeneratedKernelExpectationV1,
 {
+    let proof_owner = decision.compiler_capability_source()?.proof_owner();
     let (host, selected_isa) = semantic_machine_host_coordinates(request, decision)?;
     Some(WorkerV3SemanticMachineRefinementRequestV1 {
         verification_request: request,
         compiler_execution: decision.compiler_execution(),
         proof_inputs: decision.validated_compiler_proof_inputs()?,
+        proof_owner,
         target_lineage: decision.validated_compiler_target_lineage()?,
         selected_isa,
         host,
@@ -2183,7 +2318,35 @@ where
 {
     let proof = decision.validated_compiler_proof_inputs()?;
     let target_lineage = decision.validated_compiler_target_lineage()?;
-    let kir = proof.kernel_ir().identity();
+    let capability_subject = decision
+        .compiler_capability_source()
+        .map(|source| source.proof_owner().association().inputs().subject());
+    let capability_kir = decision
+        .compiler_capability_source()
+        .map(|source| source.capability().kernel_ir().identity());
+    let (kir_sha256, kir_bytes) = capability_kir
+        .map(|identity| (*identity.digest(), identity.canonical_length()))
+        .unwrap_or_else(|| {
+            let identity = proof.kernel_ir().identity();
+            (*identity.digest(), identity.canonical_length())
+        });
+    let (
+        kir_epoch,
+        kernel_identity,
+        kernel_root_identity,
+        target_model_identity,
+        launch_contract_identity,
+    ) = capability_subject
+        .map(|subject| {
+            (
+                subject.executable_kir_epoch(),
+                *subject.kernel().digest().as_bytes(),
+                *subject.root().digest().as_bytes(),
+                *subject.target_model().digest().as_bytes(),
+                *subject.launch_contract().digest().as_bytes(),
+            )
+        })
+        .unwrap_or((0, [0; 32], [0; 32], [0; 32], [0; 32]));
     let llvm = target_lineage.final_llvm_identity();
     let binding = request.descriptor_binding();
     let isa_start = usize::try_from(binding.entry_file_offset()).ok()?;
@@ -2195,8 +2358,13 @@ where
     let attempt = published.attempt();
     let scope = published.scope();
     let coordinates = WorkerV3SemanticMachineHostCoordinatesV1 {
-        kir_sha256: *kir.digest(),
-        kir_bytes: kir.canonical_length(),
+        kir_sha256,
+        kir_bytes,
+        kir_epoch,
+        kernel_identity,
+        kernel_root_identity,
+        target_model_identity,
+        launch_contract_identity,
         llvm_sha256: llvm.sha256(),
         llvm_bytes: llvm.byte_len(),
         isa_sha256: Sha256::digest(exact_isa).into(),
@@ -2235,6 +2403,112 @@ where
     };
     Some((coordinates, exact_isa))
 }
+
+fn validate_compiler_capability_machine_owner(
+    decision: &WorkerV3VerificationDecisionV1,
+    machine: &WorkerV3SemanticMachineRefinementReceiptV1,
+) -> Result<(), WorkerV3CapabilityMachineOwnerErrorV1> {
+    let source = decision
+        .compiler_capability_source()
+        .ok_or(WorkerV3CapabilityMachineOwnerErrorV1::MissingSourceOwner)?;
+    validate_compiler_capability_machine_receipt(source, machine)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WorkerV3CapabilityMachineSubjectCoordinatesV1 {
+    kir_sha256: [u8; 32],
+    kir_bytes: u64,
+    kir_epoch: u64,
+    kernel_identity: [u8; 32],
+    kernel_root_identity: [u8; 32],
+    target_model_identity: [u8; 32],
+    launch_contract_identity: [u8; 32],
+}
+
+fn validate_compiler_capability_machine_receipt(
+    source: &ValidatedCompilerCapabilitySourceOwnerV1,
+    machine: &WorkerV3SemanticMachineRefinementReceiptV1,
+) -> Result<(), WorkerV3CapabilityMachineOwnerErrorV1> {
+    let capability = source.capability();
+    let associated_machine = capability
+        .machine_refinement()
+        .ok_or(WorkerV3CapabilityMachineOwnerErrorV1::MissingMachineReceipt)?;
+    let capability_kir = capability.kernel_ir().identity();
+    let subject = source.proof_owner().association().inputs().subject();
+    let (machine_kir_sha256, machine_kir_bytes) = machine.kir_identity();
+    validate_compiler_capability_machine_coordinates(
+        WorkerV3CapabilityMachineSubjectCoordinatesV1 {
+            kir_sha256: *capability_kir.digest(),
+            kir_bytes: capability_kir.canonical_length(),
+            kir_epoch: subject.executable_kir_epoch(),
+            kernel_identity: *subject.kernel().digest().as_bytes(),
+            kernel_root_identity: *subject.root().digest().as_bytes(),
+            target_model_identity: *subject.target_model().digest().as_bytes(),
+            launch_contract_identity: *subject.launch_contract().digest().as_bytes(),
+        },
+        WorkerV3CapabilityMachineSubjectCoordinatesV1 {
+            kir_sha256: *machine_kir_sha256,
+            kir_bytes: machine_kir_bytes,
+            kir_epoch: machine.host.kir_epoch,
+            kernel_identity: machine.host.kernel_identity,
+            kernel_root_identity: machine.host.kernel_root_identity,
+            target_model_identity: machine.host.target_model_identity,
+            launch_contract_identity: machine.host.launch_contract_identity,
+        },
+        associated_machine.canonical_preimage(),
+        machine.refinement_proof_bytes(),
+    )
+}
+
+fn validate_compiler_capability_machine_coordinates(
+    capability_subject: WorkerV3CapabilityMachineSubjectCoordinatesV1,
+    machine_subject: WorkerV3CapabilityMachineSubjectCoordinatesV1,
+    associated_machine_receipt: &[u8],
+    authenticated_machine_proof: &[u8],
+) -> Result<(), WorkerV3CapabilityMachineOwnerErrorV1> {
+    if capability_subject != machine_subject {
+        return Err(WorkerV3CapabilityMachineOwnerErrorV1::ExecutionSubjectMismatch);
+    }
+    if associated_machine_receipt != authenticated_machine_proof {
+        return Err(WorkerV3CapabilityMachineOwnerErrorV1::MachineReceiptMismatch);
+    }
+    Ok(())
+}
+
+/// Failure to join static capability evidence to the authenticated machine-refinement owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum WorkerV3CapabilityMachineOwnerErrorV1 {
+    /// No exact capability/source-refinement join reached the sealed adapter.
+    MissingSourceOwner,
+    /// Complete production capability policy requires a machine-refinement receipt.
+    MissingMachineReceipt,
+    /// The machine theorem owns a different graph, epoch, kernel, root, target, or launch contract.
+    ExecutionSubjectMismatch,
+    /// The associated opaque machine receipt is not the authenticated machine proof artifact.
+    MachineReceiptMismatch,
+}
+
+impl fmt::Display for WorkerV3CapabilityMachineOwnerErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingSourceOwner => {
+                formatter.write_str("validated capability/source-refinement owner is missing")
+            }
+            Self::MissingMachineReceipt => {
+                formatter.write_str("required machine-refinement capability receipt is missing")
+            }
+            Self::ExecutionSubjectMismatch => formatter.write_str(
+                "capability and machine-refinement owners name different V13 execution subjects",
+            ),
+            Self::MachineReceiptMismatch => formatter.write_str(
+                "capability machine-refinement receipt differs from the authenticated machine proof",
+            ),
+        }
+    }
+}
+
+impl Error for WorkerV3CapabilityMachineOwnerErrorV1 {}
 
 /// Authenticated compiler/Verus state for one exact V3 executable.
 ///
@@ -2354,10 +2628,20 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         }
         let request = prepare_request::<K>(&self.admission, &self.current).ok()?;
         let (expected, _) = semantic_machine_host_coordinates(&request, &self.verification)?;
-        self.verification
+        let mut admitted = self
+            .verification
             .semantic_machine_refinement
             .take()?
-            .admit(&expected)
+            .admit(&expected)?;
+        let Some(source) = self.verification.compiler_capability_source.take() else {
+            #[cfg(feature = "worker-v3-verifier-test-support")]
+            return Some(admitted);
+            #[cfg(not(feature = "worker-v3-verifier-test-support"))]
+            return None;
+        };
+        validate_compiler_capability_machine_receipt(source.as_ref(), admitted.receipt()).ok()?;
+        admitted.compiler_capability_source = Some(source);
+        Some(admitted)
     }
 }
 
@@ -3002,6 +3286,14 @@ impl WorkerV3RosterVerificationDecisionV1 {
 
     pub const fn compiler_execution(&self) -> &WorkerV3CompilerExecutionVerificationV1 {
         &self.compiler_execution
+    }
+
+    pub const fn verifier_measurement_sha256(&self) -> [u8; 32] {
+        self.verifier_measurement_sha256
+    }
+
+    pub const fn verification_transcript_sha256(&self) -> [u8; 32] {
+        self.verification_transcript_sha256
     }
 
     /// Returns the one common decoded multi-root compiler-proof owner for this artifact.
@@ -4188,6 +4480,7 @@ fn prepare_request<'admission, K: CompilerGeneratedKernelExpectationV1>(
         return Err(WorkerV3VerificationRequestPreparationErrorV1::UnsupportedGeneratedProfile);
     }
     let challenge = derive_challenge::<K>(lineage.identity(), generated_host_contract);
+    let load_envelope = admission.load_envelope_evidence_view();
     Ok(WorkerV3VerificationRequestV1 {
         challenge,
         lineage,
@@ -4195,6 +4488,10 @@ fn prepare_request<'admission, K: CompilerGeneratedKernelExpectationV1>(
         finalizer_replay: admission.finalizer_replay(),
         compiler_execution_subject: admission.compiler_execution_subject(),
         compiler_execution_receipt: admission.compiler_execution_receipt(),
+        load_envelope_v2: load_envelope
+            .exact_canonical_bytes()
+            .to_vec()
+            .into_boxed_slice(),
         handoff: admission.outer_handoff(),
         finalized_hsaco: current.exact_artifact_bytes(),
         descriptor: admission.descriptor(),
@@ -4440,6 +4737,79 @@ fn validate_decision<K: CompilerGeneratedKernelExpectationV1>(
     }
     validate_decision_proof_inputs(request, decision)?;
     validate_decision_target_lineage(request, decision)?;
+    validate_decision_compiler_capability(request, decision)?;
+    Ok(())
+}
+
+fn validate_decision_compiler_capability<K: CompilerGeneratedKernelExpectationV1>(
+    request: &WorkerV3VerificationRequestV1<'_, K>,
+    decision: &WorkerV3VerificationDecisionV1,
+) -> Result<(), WorkerV3VerificationDecisionErrorV1> {
+    let Some(source) = decision.compiler_capability_source() else {
+        #[cfg(feature = "worker-v3-verifier-test-support")]
+        return Ok(());
+        #[cfg(not(feature = "worker-v3-verifier-test-support"))]
+        return Err(WorkerV3VerificationDecisionErrorV1::MissingCompilerCapabilityEvidence);
+    };
+    let capability = source.capability();
+    let association = capability.association();
+    let inputs = association.inputs();
+    let native_inputs = source.proof_owner().association().inputs();
+    let capsule = request.handoff.capsule();
+    let proof = request.handoff.capsule().receipts().proof_binding();
+    let semantic_mir = request.handoff.capsule().receipts().semantic_mir();
+    for (matches, field) in [
+        (
+            inputs.capsule().sha256() == *capsule.identity().sha256()
+                && inputs.capsule().byte_len() == capsule.identity().byte_len(),
+            "semantic capsule",
+        ),
+        (
+            inputs.proof_binding().sha256() == *proof.identity().sha256()
+                && inputs.proof_binding().byte_len() == proof.identity().byte_len(),
+            "proof-binding receipt",
+        ),
+        (
+            inputs.kernel_ir().sha256() == native_inputs.executable_kir_receipt().sha256()
+                && inputs.kernel_ir().byte_len()
+                    == native_inputs.executable_kir_receipt().byte_len(),
+            "optimized executable KIR receipt",
+        ),
+        (
+            native_inputs.legacy_proof_binding().sha256() == *proof.identity().sha256()
+                && native_inputs.legacy_proof_binding().byte_len() == proof.identity().byte_len(),
+            "native owner legacy proof-binding receipt",
+        ),
+        (
+            native_inputs.semantic_mir_receipt().sha256() == *semantic_mir.identity().sha256()
+                && native_inputs.semantic_mir_receipt().byte_len()
+                    == semantic_mir.identity().byte_len(),
+            "native owner semantic MIR receipt",
+        ),
+        (
+            native_inputs.subject() == association.subject(),
+            "native owner execution subject",
+        ),
+        (
+            native_inputs.compiler_policy() == decision.compiler_execution.policy_sha256(),
+            "native owner compiler policy",
+        ),
+        (
+            association.subject().kernel().digest().as_bytes() == &K::KERNEL_BINDING_ID_V1,
+            "generated kernel binding",
+        ),
+        (
+            association.subject().executable_kir().digest().as_bytes()
+                == capability.kernel_ir().identity().digest(),
+            "optimized executable KIR subject",
+        ),
+    ] {
+        if !matches {
+            return Err(
+                WorkerV3VerificationDecisionErrorV1::CompilerCapabilityEvidenceMismatch(field),
+            );
+        }
+    }
     Ok(())
 }
 
@@ -4642,6 +5012,8 @@ pub enum WorkerV3VerificationDecisionErrorV1 {
     MissingSafetyProperty(WorkerV3SafetyPropertyV1),
     ProofInputMismatch(&'static str),
     TargetLineageMismatch(&'static str),
+    MissingCompilerCapabilityEvidence,
+    CompilerCapabilityEvidenceMismatch(&'static str),
 }
 
 impl<E: fmt::Display> fmt::Display for WorkerV3VerificationAuthenticationErrorV1<E> {
@@ -4684,6 +5056,13 @@ impl fmt::Display for WorkerV3VerificationDecisionErrorV1 {
                     "validated compiler {field} differs from the exact target lineage"
                 )
             }
+            Self::MissingCompilerCapabilityEvidence => formatter.write_str(
+                "complete compiler capability evidence and source-refinement custody are missing",
+            ),
+            Self::CompilerCapabilityEvidenceMismatch(field) => write!(
+                formatter,
+                "validated compiler capability {field} differs from the exact request"
+            ),
         }
     }
 }
@@ -4765,6 +5144,12 @@ impl<ProtectedError: fmt::Display, RefinementError: fmt::Display> fmt::Display
             Self::SemanticMachineRefinementPanicked => {
                 formatter.write_str("semantic-to-machine refinement backend panicked")
             }
+            Self::CapabilityMachineOwner(error) => {
+                write!(
+                    formatter,
+                    "capability/machine-refinement join failed: {error}"
+                )
+            }
         }
     }
 }
@@ -4818,6 +5203,7 @@ where
             Self::ProtectedVerifier(error) => Some(error),
             Self::ProtectedDecision(error) => Some(error),
             Self::SemanticMachineRefinement(error) => Some(error),
+            Self::CapabilityMachineOwner(error) => Some(error),
             Self::ProtectedVerifierPanicked
             | Self::ProtectedPrerequisitesUnavailable
             | Self::RefinementCoordinatesUnavailable
@@ -4860,6 +5246,49 @@ mod tests {
         ] {
             assert!(required.contains(property));
         }
+    }
+
+    #[test]
+    fn capability_machine_join_rejects_stale_graph_and_receipt_substitution() {
+        let subject = WorkerV3CapabilityMachineSubjectCoordinatesV1 {
+            kir_sha256: [1; 32],
+            kir_bytes: 101,
+            kir_epoch: 7,
+            kernel_identity: [2; 32],
+            kernel_root_identity: [3; 32],
+            target_model_identity: [4; 32],
+            launch_contract_identity: [5; 32],
+        };
+        assert_eq!(
+            validate_compiler_capability_machine_coordinates(
+                subject,
+                subject,
+                b"machine-proof",
+                b"machine-proof",
+            ),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_compiler_capability_machine_coordinates(
+                subject,
+                WorkerV3CapabilityMachineSubjectCoordinatesV1 {
+                    kir_epoch: 8,
+                    ..subject
+                },
+                b"machine-proof",
+                b"machine-proof",
+            ),
+            Err(WorkerV3CapabilityMachineOwnerErrorV1::ExecutionSubjectMismatch)
+        ));
+        assert_eq!(
+            validate_compiler_capability_machine_coordinates(
+                subject,
+                subject,
+                b"substituted-machine-proof",
+                b"machine-proof",
+            ),
+            Err(WorkerV3CapabilityMachineOwnerErrorV1::MachineReceiptMismatch)
+        );
     }
 
     #[test]
@@ -4906,6 +5335,7 @@ mod tests {
         let refinement_proof_sha256: [u8; 32] = Sha256::digest([20; 120]).into();
         assert_ne!(admitted.receipt().identity(), &[0; 32]);
         assert_eq!(admitted.receipt().kir_identity(), (&[1; 32], 101));
+        assert_eq!(admitted.receipt().kir_epoch(), 7);
         assert_eq!(admitted.receipt().llvm_identity(), (&[2; 32], 102));
         assert_eq!(admitted.receipt().isa_identity(), (&[3; 32], 103));
         assert_eq!(
@@ -4933,7 +5363,7 @@ mod tests {
     #[test]
     fn semantic_machine_refinement_rejects_every_host_coordinate_substitution() {
         let expected = refinement_host_coordinates();
-        for axis in 0..34 {
+        for axis in 0..39 {
             let mut substituted = expected.clone();
             match axis {
                 0 => substituted.kir_sha256[0] ^= 1,
@@ -4970,6 +5400,11 @@ mod tests {
                 31 => substituted.publication_kernel_set_identity[0] ^= 1,
                 32 => substituted.publication_target_identity[0] ^= 1,
                 33 => substituted.publication_identity[0] ^= 1,
+                34 => substituted.kir_epoch += 1,
+                35 => substituted.kernel_identity[0] ^= 1,
+                36 => substituted.kernel_root_identity[0] ^= 1,
+                37 => substituted.target_model_identity[0] ^= 1,
+                38 => substituted.launch_contract_identity[0] ^= 1,
                 _ => unreachable!(),
             }
             assert!(

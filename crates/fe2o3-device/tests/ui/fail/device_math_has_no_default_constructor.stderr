@@ -1,10 +1,10 @@
-error[E0599]: no associated function or constant named `default` found for struct `DeviceMath` in the current scope
+error[E0599]: no associated function or constant named `default` found for struct `DeviceMath<Brand>` in the current scope
  --> tests/ui/fail/device_math_has_no_default_constructor.rs:4:25
   |
 4 |     let _ = DeviceMath::default();
-  |                         ^^^^^^^ associated function or constant not found in `DeviceMath`
+  |                         ^^^^^^^ associated function or constant not found in `DeviceMath<_>`
   |
-note: if you're trying to build a new `DeviceMath`, consider using `DeviceMath::current` which returns `DeviceMath`
+note: if you're trying to build a new `DeviceMath<_>`, consider using `DeviceMath::current` which returns `DeviceMath`
  --> src/math.rs
   |
   |     pub fn current() -> Self {

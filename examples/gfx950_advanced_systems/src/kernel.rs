@@ -1,9 +1,9 @@
-//! Complete safe Rust kernel source for the bounded systems profiles.
+//! Complete safe Rust kernel source for the bounded systems kernels.
 //!
 //! Read every entry point in the same order: validate the whole launch before
 //! subgroup operations, map the global thread to a batch/wave/lane owner, build
 //! checked typed views, run collectives under uniform control flow, and finish
-//! with a `DisjointSlice` store whose layout makes write ownership explicit.
+//! with bounds-checked stores through compiler-bound global-memory roles.
 //! Comments emphasize those invariants and the reason for non-obvious code;
 //! they intentionally do not narrate ordinary Rust syntax.
 
@@ -11,9 +11,8 @@
 #![cfg_attr(target_arch = "amdgpu", allow(unused_imports))]
 
 use fe2o3_device::{
-    Blocked, DeviceMath, DisjointSlice, Gfx950F32AccumulatorFragment, Gfx950Fp4E2M1,
-    Gfx950Fp4MfmaAMatrix, Gfx950Fp8MfmaBMatrix, Gfx950Matrix, Gfx950Subgroup, Index1D,
-    RowStriped2D, StridedReadView2D, Wave64, WaveLane, kernel, thread,
+    CapabilityMemoryElementV1, DisjointWrite, ExclusiveReadWrite, Global, Index1D, KernelContext,
+    ReadOnly, StrictIeee, SubgroupWidth64, SynchronizationEpoch, WorkgroupCapability, kernel,
 };
 
 use crate::{
@@ -21,6 +20,97 @@ use crate::{
     GRADIENT_SHARDS, HIDDEN, MUON_ELEMENTS, MUON_LEARNING_RATE, NGRAM, OUTPUT, QUERIES,
     STATE_WIDTH, SYSTEM_BATCHES, TABLE_SIZE, TOKENS, TOP_K,
 };
+
+#[inline(always)]
+fn global_load_2d_or<T: CapabilityMemoryElementV1, Brand>(
+    values: &Global<'_, T, ReadOnly, Brand>,
+    base: usize,
+    row: usize,
+    column: usize,
+    stride: usize,
+    default_value: T,
+) -> T {
+    let Some(index) = row
+        .checked_mul(stride)
+        .and_then(|offset| base.checked_add(offset))
+        .and_then(|offset| offset.checked_add(column))
+    else {
+        return default_value;
+    };
+    values.load(index).unwrap_or(default_value)
+}
+
+#[inline(always)]
+fn global_store_or_trap<T: CapabilityMemoryElementV1, Brand>(
+    values: &mut Global<'_, T, ExclusiveReadWrite, Brand>,
+    index: usize,
+    value: T,
+) {
+    if !values.store(index, value) {
+        fe2o3_device::trap();
+    }
+}
+
+#[inline(always)]
+fn workgroup_subgroup_slot<const WIDTH: usize>(workgroup_rank: usize, source_lane: usize) -> usize {
+    let subgroup_base = workgroup_rank.wrapping_sub(workgroup_rank % WIDTH);
+    subgroup_base.wrapping_add(source_lane % WIDTH)
+}
+
+#[inline(always)]
+fn publish_route_records<'workgroup, KernelBrand, Epoch: SynchronizationEpoch>(
+    workgroup: WorkgroupCapability<'workgroup, KernelBrand, Epoch>,
+    top_source: usize,
+    local_pair: u32,
+    first_weight: f32,
+    second_weight: f32,
+) -> (u32, f32, f32, u64) {
+    let workgroup_rank = workgroup.invocation_rank() as usize;
+    let routes = workgroup.allocate_lds::<[f32; 3], 256>();
+    let routes = routes
+        .initialize_by_invocation(&workgroup, [local_pair as f32, first_weight, second_weight]);
+    let (workgroup, routes) = workgroup.publish_lds(routes);
+    let selected = routes
+        .read(
+            &workgroup,
+            workgroup_subgroup_slot::<64>(workgroup_rank, top_source),
+        )
+        .unwrap_or([0.0; 3]);
+    let wave_base = workgroup_rank & !63;
+    let route0 = routes.read(&workgroup, wave_base).unwrap_or([0.0; 3])[0] as u64;
+    let route1 = routes.read(&workgroup, wave_base + 1).unwrap_or([0.0; 3])[0] as u64;
+    let route2 = routes.read(&workgroup, wave_base + 2).unwrap_or([0.0; 3])[0] as u64;
+    let route3 = routes.read(&workgroup, wave_base + 3).unwrap_or([0.0; 3])[0] as u64;
+    let route4 = routes.read(&workgroup, wave_base + 4).unwrap_or([0.0; 3])[0] as u64;
+    let route5 = routes.read(&workgroup, wave_base + 5).unwrap_or([0.0; 3])[0] as u64;
+    let route6 = routes.read(&workgroup, wave_base + 6).unwrap_or([0.0; 3])[0] as u64;
+    let route7 = routes.read(&workgroup, wave_base + 7).unwrap_or([0.0; 3])[0] as u64;
+    let route8 = routes.read(&workgroup, wave_base + 8).unwrap_or([0.0; 3])[0] as u64;
+    let route9 = routes.read(&workgroup, wave_base + 9).unwrap_or([0.0; 3])[0] as u64;
+    let route10 = routes.read(&workgroup, wave_base + 10).unwrap_or([0.0; 3])[0] as u64;
+    let route11 = routes.read(&workgroup, wave_base + 11).unwrap_or([0.0; 3])[0] as u64;
+    let route12 = routes.read(&workgroup, wave_base + 12).unwrap_or([0.0; 3])[0] as u64;
+    let route13 = routes.read(&workgroup, wave_base + 13).unwrap_or([0.0; 3])[0] as u64;
+    let route14 = routes.read(&workgroup, wave_base + 14).unwrap_or([0.0; 3])[0] as u64;
+    let route15 = routes.read(&workgroup, wave_base + 15).unwrap_or([0.0; 3])[0] as u64;
+    let packed_routes = route0
+        | route1 << 4
+        | route2 << 8
+        | route3 << 12
+        | route4 << 16
+        | route5 << 20
+        | route6 << 24
+        | route7 << 28
+        | route8 << 32
+        | route9 << 36
+        | route10 << 40
+        | route11 << 44
+        | route12 << 48
+        | route13 << 52
+        | route14 << 56
+        | route15 << 60;
+    (selected[0] as u32, selected[1], selected[2], packed_routes)
+}
 
 /// Stable top-2 routing, weights, expert counts, and compact dispatch metadata.
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-moe-route"))]
@@ -31,15 +121,16 @@ use crate::{
 )]
 #[allow(clippy::too_many_arguments, unused_assignments)]
 pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
-    activations: &[u8],
-    router_weights: &[f32],
-    mut top_experts: DisjointSlice<u32, RowStriped2D<Index1D, 64, 1>>,
-    mut top_weights: DisjointSlice<f32, RowStriped2D<Index1D, 64, 1>>,
-    mut expert_counts: DisjointSlice<u32, RowStriped2D<Index1D, 64, 1>>,
-    mut dispatch: DisjointSlice<i32, RowStriped2D<Index1D, 64, 2>>,
+    mut context: KernelContext<'_>,
+    activations: Global<'_, u8, ReadOnly>,
+    router_weights: Global<'_, f32, ReadOnly>,
+    mut top_experts: Global<'_, u32, ExclusiveReadWrite>,
+    mut top_weights: Global<'_, f32, ExclusiveReadWrite>,
+    mut expert_counts: Global<'_, u32, ExclusiveReadWrite>,
+    mut dispatch: Global<'_, i32, ExclusiveReadWrite>,
 ) {
     // One Wave64 owns one batch. Every lane participates in the broadcasts below.
-    let global_index = thread::index_1d().get();
+    let global_index = context.invocation().index_1d().get();
     let batch = global_index / 64;
     let wave_lane = global_index & 63;
     // Reject the complete buffer contract before any lane enters a collective.
@@ -53,20 +144,9 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     {
         return;
     }
-    // Typed views keep the batch offsets and row strides out of the dot-product loop.
     let activation_base = batch.wrapping_mul(TOKENS).wrapping_mul(HIDDEN);
     let router_base = batch.wrapping_mul(EXPERTS).wrapping_mul(HIDDEN);
-    let Ok(router_weights) =
-        StridedReadView2D::from_shared_slice(router_weights, router_base, EXPERTS, HIDDEN, HIDDEN)
-    else {
-        return;
-    };
     let token = wave_lane & (TOKENS - 1);
-    let Ok(activations) =
-        StridedReadView2D::from_shared_slice(activations, activation_base, TOKENS, HIDDEN, HIDDEN)
-    else {
-        return;
-    };
     // Decode packed E2M1 activations once per depth and score all four experts.
     let mut route_logit0 = 0.0_f32;
     let mut route_logit1 = 0.0_f32;
@@ -74,15 +154,19 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     let mut route_logit3 = 0.0_f32;
     let mut depth = 0_usize;
     while depth < HIDDEN {
-        let bits = activations.load_or(token, depth, 0);
+        let bits = global_load_2d_or(&activations, activation_base, token, depth, HIDDEN, 0);
         let magnitude =
             (0xc864_3210_u32.wrapping_shr(((bits & 7) as u32).wrapping_mul(4)) & 15) as f32 * 0.5;
         let sign = 1.0 - 2.0 * ((bits >> 3) & 1) as f32;
         let activation = sign * magnitude;
-        route_logit0 += activation * router_weights.load_or(0, depth, 0.0);
-        route_logit1 += activation * router_weights.load_or(1, depth, 0.0);
-        route_logit2 += activation * router_weights.load_or(2, depth, 0.0);
-        route_logit3 += activation * router_weights.load_or(3, depth, 0.0);
+        route_logit0 +=
+            activation * global_load_2d_or(&router_weights, router_base, 0, depth, HIDDEN, 0.0);
+        route_logit1 +=
+            activation * global_load_2d_or(&router_weights, router_base, 1, depth, HIDDEN, 0.0);
+        route_logit2 +=
+            activation * global_load_2d_or(&router_weights, router_base, 2, depth, HIDDEN, 0.0);
+        route_logit3 +=
+            activation * global_load_2d_or(&router_weights, router_base, 3, depth, HIDDEN, 0.0);
         depth += 1;
     }
     // A branch-light ranking network gives deterministic top-2 tie handling.
@@ -130,38 +214,30 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     } else {
         second_logit
     };
-    let math = DeviceMath::current();
+    let policy = context.numerical_policy::<StrictIeee>();
+    let math_capability = context.math();
+    let math = math_capability.with_numerical_policy(&policy);
     let first_exp = math.exp_f32(first_logit - maximum);
     let second_exp = math.exp_f32(second_logit - maximum);
     let denominator = first_exp + second_exp;
     let first_weight_local = first_exp / denominator;
     let second_weight_local = second_exp / denominator;
-    // Broadcast each token's route so lanes can form counts and dispatch metadata.
-    let subgroup = Gfx950Subgroup::current();
-    let top_source = ((wave_lane / TOP_K) & (TOKENS - 1)) as u32 & 63;
+    // Publish one route record per lane before other lanes consume it.
+    let top_source = (wave_lane / TOP_K) & (TOKENS - 1);
     let local_pair = first_local | (second_local << 2);
-    let top_pair = subgroup.broadcast_f32::<64>(local_pair as f32, top_source) as u32;
+    let (top_pair, top_first_weight, top_second_weight, packed_routes) =
+        context.with_workgroup(|workgroup| {
+            publish_route_records(
+                workgroup,
+                top_source,
+                local_pair,
+                first_weight_local,
+                second_weight_local,
+            )
+        });
     let top_first = top_pair & 3;
     let top_second = top_pair >> 2;
-    let top_first_weight = subgroup.broadcast_f32::<64>(first_weight_local, top_source);
-    let top_second_weight = subgroup.broadcast_f32::<64>(second_weight_local, top_source);
-    let packed_routes = (subgroup.broadcast_f32::<64>(local_pair as f32, 0) as u64)
-        | (subgroup.broadcast_f32::<64>(local_pair as f32, 1) as u64) << 4
-        | (subgroup.broadcast_f32::<64>(local_pair as f32, 2) as u64) << 8
-        | (subgroup.broadcast_f32::<64>(local_pair as f32, 3) as u64) << 12
-        | (subgroup.broadcast_f32::<64>(local_pair as f32, 4) as u64) << 16
-        | (subgroup.broadcast_f32::<64>(local_pair as f32, 5) as u64) << 20
-        | (subgroup.broadcast_f32::<64>(local_pair as f32, 6) as u64) << 24
-        | (subgroup.broadcast_f32::<64>(local_pair as f32, 7) as u64) << 28
-        | (subgroup.broadcast_f32::<64>(local_pair as f32, 8) as u64) << 32
-        | (subgroup.broadcast_f32::<64>(local_pair as f32, 9) as u64) << 36
-        | (subgroup.broadcast_f32::<64>(local_pair as f32, 10) as u64) << 40
-        | (subgroup.broadcast_f32::<64>(local_pair as f32, 11) as u64) << 44
-        | (subgroup.broadcast_f32::<64>(local_pair as f32, 12) as u64) << 48
-        | (subgroup.broadcast_f32::<64>(local_pair as f32, 13) as u64) << 52
-        | (subgroup.broadcast_f32::<64>(local_pair as f32, 14) as u64) << 56
-        | (subgroup.broadcast_f32::<64>(local_pair as f32, 15) as u64) << 60;
-    // Row-striped capabilities prove that route, count, and dispatch stores do not alias.
+    // Each compact index is injective over the batch/lane partition.
     if wave_lane < TOKENS * TOP_K {
         let choice = wave_lane & (TOP_K - 1);
         let selected = if choice == 0 { top_first } else { top_second };
@@ -170,27 +246,9 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
         } else {
             top_second_weight
         };
-        let Some(top_row) = thread::index_1d().checked_row_striped_2d::<64, 1>() else {
-            return;
-        };
-        if let Some(slot) = top_experts.get_row_striped_2d_mut(
-            &top_row,
-            0,
-            SYSTEM_BATCHES,
-            TOKENS * TOP_K,
-            TOKENS * TOP_K,
-        ) {
-            *slot = selected;
-        }
-        if let Some(slot) = top_weights.get_row_striped_2d_mut(
-            &top_row,
-            0,
-            SYSTEM_BATCHES,
-            TOKENS * TOP_K,
-            TOKENS * TOP_K,
-        ) {
-            *slot = weight;
-        }
+        let top_index = batch.wrapping_mul(TOKENS * TOP_K).wrapping_add(wave_lane);
+        global_store_or_trap(&mut top_experts, top_index, selected);
+        global_store_or_trap(&mut top_weights, top_index, weight);
     }
     let count_expert = wave_lane as u32;
     let mut count = 0_u32;
@@ -201,18 +259,10 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
         record += 1;
     }
     if wave_lane < EXPERTS {
-        let Some(count_row) = thread::index_1d().checked_row_striped_2d::<64, 1>() else {
-            return;
-        };
-        if let Some(slot) =
-            expert_counts.get_row_striped_2d_mut(&count_row, 0, SYSTEM_BATCHES, EXPERTS, EXPERTS)
-        {
-            *slot = count;
-        }
+        let count_index = batch.wrapping_mul(EXPERTS).wrapping_add(wave_lane);
+        global_store_or_trap(&mut expert_counts, count_index, count);
     }
-    let Some(dispatch_row) = thread::index_1d().checked_row_striped_2d::<64, 2>() else {
-        return;
-    };
+    let dispatch_base = batch.wrapping_mul(EXPERTS).wrapping_mul(DISPATCH_CAPACITY);
     let dispatch_expert0 = (wave_lane / DISPATCH_CAPACITY) as u32;
     let wanted0 =
         wave_lane.wrapping_sub((dispatch_expert0 as usize).wrapping_mul(DISPATCH_CAPACITY));
@@ -231,15 +281,11 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
         seen0 = seen0.wrapping_add(dispatch_matches);
         route0 += 1;
     }
-    if let Some(slot) = dispatch.get_row_striped_2d_mut(
-        &dispatch_row,
-        0,
-        SYSTEM_BATCHES,
-        EXPERTS * DISPATCH_CAPACITY,
-        EXPERTS * DISPATCH_CAPACITY,
-    ) {
-        *slot = dispatched0;
-    }
+    global_store_or_trap(
+        &mut dispatch,
+        dispatch_base.wrapping_add(wave_lane),
+        dispatched0,
+    );
     let dispatch_element1 = wave_lane.wrapping_add(64);
     let dispatch_expert1 = (dispatch_element1 / DISPATCH_CAPACITY) as u32;
     let wanted1 =
@@ -259,15 +305,11 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
         seen1 = seen1.wrapping_add(dispatch_matches);
         route1 += 1;
     }
-    if let Some(slot) = dispatch.get_row_striped_2d_mut(
-        &dispatch_row,
-        1,
-        SYSTEM_BATCHES,
-        EXPERTS * DISPATCH_CAPACITY,
-        EXPERTS * DISPATCH_CAPACITY,
-    ) {
-        *slot = dispatched1;
-    }
+    global_store_or_trap(
+        &mut dispatch,
+        dispatch_base.wrapping_add(dispatch_element1),
+        dispatched1,
+    );
 }
 
 /// Computes a routed expert partition and optional shared-expert contribution.
@@ -288,20 +330,21 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
 )]
 #[allow(clippy::too_many_arguments)]
 pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
-    activations: &[u8],
-    expert_weights: &[u8],
-    top_experts: &[u32],
-    top_weights: &[f32],
+    mut context: KernelContext<'_>,
+    activations: Global<'_, u8, ReadOnly>,
+    expert_weights: Global<'_, u8, ReadOnly>,
+    top_experts: Global<'_, u32, ReadOnly>,
+    top_weights: Global<'_, f32, ReadOnly>,
     first_expert: u32,
     include_shared_expert: u32,
-    mut output: DisjointSlice<f32, Blocked<Index1D, 64, 4>>,
+    mut output: Global<'_, f32, ExclusiveReadWrite>,
 ) {
     // One Wave64 owns one batch; each lane ultimately writes four output elements.
-    let thread_index = thread::index_1d();
+    let thread_index = context.invocation().index_1d();
     let global_index = thread_index.get();
     let batch = global_index / 64;
     let lane_index = global_index & 63;
-    // Validate every buffer and rank selector before the first MFMA or broadcast.
+    // Validate every buffer and rank range before the first MFMA or broadcast.
     if batch >= SYSTEM_BATCHES
         || activations.len() != SYSTEM_BATCHES * TOKENS * HIDDEN
         || expert_weights.len() != SYSTEM_BATCHES * ALL_EXPERTS * HIDDEN * OUTPUT
@@ -312,9 +355,8 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
     {
         return;
     }
-    // Convert raw storage into typed MFMA views for two routed experts plus one shared expert.
+    // Build policy-bound Global views for two routed experts plus one shared expert.
     let second_expert = first_expert.wrapping_add(1);
-    let lane = WaveLane::<Wave64>::current();
     let activation_base = batch.wrapping_mul(TOKENS).wrapping_mul(HIDDEN);
     let expert_batch_base = batch
         .wrapping_mul(ALL_EXPERTS)
@@ -326,235 +368,221 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
             .wrapping_mul(HIDDEN)
             .wrapping_mul(OUTPUT),
     );
-    // Keep the three independent fragment lifetimes overlapping in the production path.
-    #[cfg(not(feature = "ablation-expert-serial"))]
-    let (first_values, second_values, shared_values) = {
-        let Ok(activations_view) =
-            Gfx950Fp4MfmaAMatrix::row_major(activations, activation_base, TOKENS, HIDDEN, HIDDEN)
-        else {
-            return;
-        };
-        let activations_first = activations_view.load_m16k128(&lane, 0, 0);
-        let activations_second = activations_view.load_m16k128(&lane, 0, 0);
-        let activations_shared = activations_view.load_m16k128(&lane, 0, 0);
-        let Ok(first_weights_view) =
-            Gfx950Fp8MfmaBMatrix::row_major(expert_weights, first_offset, HIDDEN, OUTPUT, OUTPUT)
-        else {
-            return;
-        };
-        let first_weights = first_weights_view.load_k128n16(&lane, 0, 0);
-        let Ok(second_weights_view) = Gfx950Fp8MfmaBMatrix::row_major(
-            expert_weights,
-            first_offset.wrapping_add(HIDDEN * OUTPUT),
-            HIDDEN,
-            OUTPUT,
-            OUTPUT,
-        ) else {
-            return;
-        };
-        let second_weights = second_weights_view.load_k128n16(&lane, 0, 0);
-        let Ok(shared_weights_view) = Gfx950Fp8MfmaBMatrix::row_major(
-            expert_weights,
-            expert_batch_base.wrapping_add((ALL_EXPERTS - 1) * HIDDEN * OUTPUT),
-            HIDDEN,
-            OUTPUT,
-            OUTPUT,
-        ) else {
-            return;
-        };
-        let shared_weights = shared_weights_view.load_k128n16(&lane, 0, 0);
-        let matrix = Gfx950Matrix::current();
-        (
-            matrix
-                .multiply_accumulate_fp4_fp8(
-                    activations_first,
-                    first_weights,
-                    Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
-                )
-                .into_values(),
-            matrix
-                .multiply_accumulate_fp4_fp8(
-                    activations_second,
-                    second_weights,
-                    Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
-                )
-                .into_values(),
-            matrix
-                .multiply_accumulate_fp4_fp8(
-                    activations_shared,
-                    shared_weights,
-                    Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
-                )
-                .into_values(),
-        )
+    let policy = context.numerical_policy::<StrictIeee>();
+    let math_capability = context.math();
+    let math = math_capability.with_numerical_policy(&policy);
+    let matrix_values = context.with_workgroup(|workgroup| {
+        let subgroup = workgroup.subgroup::<SubgroupWidth64>();
+        subgroup.with_matrix(workgroup.epoch(), |matrix, lane| {
+            let policy_matrix = matrix.with_numerical_policy(&policy);
+            let matrix = policy_matrix.gfx950();
+            let Ok(activations_view) = matrix.fp4_a_global_row_major(
+                &activations,
+                activation_base,
+                TOKENS,
+                HIDDEN,
+                HIDDEN,
+            ) else {
+                return None;
+            };
+
+            // Keep all three independent fragment lifetimes overlapping in the production path.
+            #[cfg(not(feature = "ablation-expert-serial"))]
+            {
+                let activations_first = activations_view.load_m16k128(lane, 0, 0);
+                let activations_second = activations_view.load_m16k128(lane, 0, 0);
+                let activations_shared = activations_view.load_m16k128(lane, 0, 0);
+                let Ok(first_weights_view) = matrix.fp8_b_global_row_major(
+                    &expert_weights,
+                    first_offset,
+                    HIDDEN,
+                    OUTPUT,
+                    OUTPUT,
+                ) else {
+                    return None;
+                };
+                let first_weights = first_weights_view.load_k128n16(lane, 0, 0);
+                let Ok(second_weights_view) = matrix.fp8_b_global_row_major(
+                    &expert_weights,
+                    first_offset.wrapping_add(HIDDEN * OUTPUT),
+                    HIDDEN,
+                    OUTPUT,
+                    OUTPUT,
+                ) else {
+                    return None;
+                };
+                let second_weights = second_weights_view.load_k128n16(lane, 0, 0);
+                let Ok(shared_weights_view) = matrix.fp8_b_global_row_major(
+                    &expert_weights,
+                    expert_batch_base.wrapping_add((ALL_EXPERTS - 1) * HIDDEN * OUTPUT),
+                    HIDDEN,
+                    OUTPUT,
+                    OUTPUT,
+                ) else {
+                    return None;
+                };
+                let shared_weights = shared_weights_view.load_k128n16(lane, 0, 0);
+                Some((
+                    matrix
+                        .multiply_accumulate_fp4_fp8(
+                            activations_first,
+                            first_weights,
+                            matrix.fp4_zero_accumulator(lane),
+                        )
+                        .into_values(),
+                    matrix
+                        .multiply_accumulate_fp4_fp8(
+                            activations_second,
+                            second_weights,
+                            matrix.fp4_zero_accumulator(lane),
+                        )
+                        .into_values(),
+                    matrix
+                        .multiply_accumulate_fp4_fp8(
+                            activations_shared,
+                            shared_weights,
+                            matrix.fp4_zero_accumulator(lane),
+                        )
+                        .into_values(),
+                ))
+            }
+
+            #[cfg(feature = "ablation-expert-serial")]
+            {
+                let activations_first = activations_view.load_m16k128(lane, 0, 0);
+                let Ok(first_weights_view) = matrix.fp8_b_global_row_major(
+                    &expert_weights,
+                    first_offset,
+                    HIDDEN,
+                    OUTPUT,
+                    OUTPUT,
+                ) else {
+                    return None;
+                };
+                let first_weights = first_weights_view.load_k128n16(lane, 0, 0);
+                let first_values = matrix
+                    .multiply_accumulate_fp4_fp8(
+                        activations_first,
+                        first_weights,
+                        matrix.fp4_zero_accumulator(lane),
+                    )
+                    .into_values();
+                let activations_second = activations_view.load_m16k128(lane, 0, 0);
+                let Ok(second_weights_view) = matrix.fp8_b_global_row_major(
+                    &expert_weights,
+                    first_offset.wrapping_add(HIDDEN * OUTPUT),
+                    HIDDEN,
+                    OUTPUT,
+                    OUTPUT,
+                ) else {
+                    return None;
+                };
+                let second_weights = second_weights_view.load_k128n16(lane, 0, 0);
+                let second_values = matrix
+                    .multiply_accumulate_fp4_fp8(
+                        activations_second,
+                        second_weights,
+                        matrix.fp4_zero_accumulator(lane),
+                    )
+                    .into_values();
+                let activations_shared = activations_view.load_m16k128(lane, 0, 0);
+                let Ok(shared_weights_view) = matrix.fp8_b_global_row_major(
+                    &expert_weights,
+                    expert_batch_base.wrapping_add((ALL_EXPERTS - 1) * HIDDEN * OUTPUT),
+                    HIDDEN,
+                    OUTPUT,
+                    OUTPUT,
+                ) else {
+                    return None;
+                };
+                let shared_weights = shared_weights_view.load_k128n16(lane, 0, 0);
+                let shared_values = matrix
+                    .multiply_accumulate_fp4_fp8(
+                        activations_shared,
+                        shared_weights,
+                        matrix.fp4_zero_accumulator(lane),
+                    )
+                    .into_values();
+                Some((first_values, second_values, shared_values))
+            }
+        })
+    });
+    let Some((first_values, second_values, shared_values)) = matrix_values else {
+        return;
     };
-    #[cfg(feature = "ablation-expert-serial")]
-    let (first_values, second_values, shared_values) = {
-        let Ok(activations_view) =
-            Gfx950Fp4MfmaAMatrix::row_major(activations, activation_base, TOKENS, HIDDEN, HIDDEN)
-        else {
-            return;
-        };
-        let matrix = Gfx950Matrix::current();
-        let activations_first = activations_view.load_m16k128(&lane, 0, 0);
-        let Ok(first_weights_view) =
-            Gfx950Fp8MfmaBMatrix::row_major(expert_weights, first_offset, HIDDEN, OUTPUT, OUTPUT)
-        else {
-            return;
-        };
-        let first_weights = first_weights_view.load_k128n16(&lane, 0, 0);
-        let first_values = matrix
-            .multiply_accumulate_fp4_fp8(
-                activations_first,
-                first_weights,
-                Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
-            )
-            .into_values();
-        let activations_second = activations_view.load_m16k128(&lane, 0, 0);
-        let Ok(second_weights_view) = Gfx950Fp8MfmaBMatrix::row_major(
-            expert_weights,
-            first_offset.wrapping_add(HIDDEN * OUTPUT),
-            HIDDEN,
-            OUTPUT,
-            OUTPUT,
-        ) else {
-            return;
-        };
-        let second_weights = second_weights_view.load_k128n16(&lane, 0, 0);
-        let second_values = matrix
-            .multiply_accumulate_fp4_fp8(
-                activations_second,
-                second_weights,
-                Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
-            )
-            .into_values();
-        let activations_shared = activations_view.load_m16k128(&lane, 0, 0);
-        let Ok(shared_weights_view) = Gfx950Fp8MfmaBMatrix::row_major(
-            expert_weights,
-            expert_batch_base.wrapping_add((ALL_EXPERTS - 1) * HIDDEN * OUTPUT),
-            HIDDEN,
-            OUTPUT,
-            OUTPUT,
-        ) else {
-            return;
-        };
-        let shared_weights = shared_weights_view.load_k128n16(&lane, 0, 0);
-        let shared_values = matrix
-            .multiply_accumulate_fp4_fp8(
-                activations_shared,
-                shared_weights,
-                Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane),
-            )
-            .into_values();
-        (first_values, second_values, shared_values)
-    };
-    let subgroup = Gfx950Subgroup::current();
-    let math = DeviceMath::current();
-    // Redistribute MFMA accumulator fragments into token/channel output ownership.
-    macro_rules! broadcast_component {
-        (
-            $output_component:literal,
-            $first0:ident,
-            $first1:ident,
-            $first2:ident,
-            $first3:ident,
-            $second0:ident,
-            $second1:ident,
-            $second2:ident,
-            $second3:ident,
-            $shared0:ident,
-            $shared1:ident,
-            $shared2:ident,
-            $shared3:ident
-        ) => {
-            let element = lane_index.wrapping_add($output_component * 64);
-            let token = element / OUTPUT;
-            let column = element & (OUTPUT - 1);
-            let source_lane = ((token / 4).wrapping_mul(OUTPUT).wrapping_add(column) as u32) & 63;
-            let $first0 = subgroup.broadcast_f32::<64>(first_values[0], source_lane);
-            let $first1 = subgroup.broadcast_f32::<64>(first_values[1], source_lane);
-            let $first2 = subgroup.broadcast_f32::<64>(first_values[2], source_lane);
-            let $first3 = subgroup.broadcast_f32::<64>(first_values[3], source_lane);
-            let $second0 = subgroup.broadcast_f32::<64>(second_values[0], source_lane);
-            let $second1 = subgroup.broadcast_f32::<64>(second_values[1], source_lane);
-            let $second2 = subgroup.broadcast_f32::<64>(second_values[2], source_lane);
-            let $second3 = subgroup.broadcast_f32::<64>(second_values[3], source_lane);
-            let $shared0 = subgroup.broadcast_f32::<64>(shared_values[0], source_lane);
-            let $shared1 = subgroup.broadcast_f32::<64>(shared_values[1], source_lane);
-            let $shared2 = subgroup.broadcast_f32::<64>(shared_values[2], source_lane);
-            let $shared3 = subgroup.broadcast_f32::<64>(shared_values[3], source_lane);
-        };
-    }
-    broadcast_component!(
-        0, first00, first01, first02, first03, second00, second01, second02, second03, shared00,
-        shared01, shared02, shared03
-    );
-    broadcast_component!(
-        1, first10, first11, first12, first13, second10, second11, second12, second13, shared10,
-        shared11, shared12, shared13
-    );
-    broadcast_component!(
-        2, first20, first21, first22, first23, second20, second21, second22, second23, shared20,
-        shared21, shared22, shared23
-    );
-    broadcast_component!(
-        3, first30, first31, first32, first33, second30, second31, second32, second33, shared30,
-        shared31, shared32, shared33
-    );
+    // Publish all accumulator components once, then gather each output owner's source lane.
+    let redistributed = context.with_workgroup(|workgroup| {
+        let workgroup_rank = workgroup.invocation_rank() as usize;
+        let fragments = workgroup.allocate_lds::<[f32; 12], 256>();
+        let fragments = fragments.initialize_by_invocation(
+            &workgroup,
+            [
+                first_values[0],
+                first_values[1],
+                first_values[2],
+                first_values[3],
+                second_values[0],
+                second_values[1],
+                second_values[2],
+                second_values[3],
+                shared_values[0],
+                shared_values[1],
+                shared_values[2],
+                shared_values[3],
+            ],
+        );
+        let (workgroup, fragments) = workgroup.publish_lds(fragments);
+        let source0 = ((lane_index / OUTPUT / 4) * OUTPUT + lane_index % OUTPUT) & 63;
+        let element1 = lane_index.wrapping_add(64);
+        let source1 = ((element1 / OUTPUT / 4) * OUTPUT + element1 % OUTPUT) & 63;
+        let element2 = lane_index.wrapping_add(128);
+        let source2 = ((element2 / OUTPUT / 4) * OUTPUT + element2 % OUTPUT) & 63;
+        let element3 = lane_index.wrapping_add(192);
+        let source3 = ((element3 / OUTPUT / 4) * OUTPUT + element3 % OUTPUT) & 63;
+        [
+            fragments
+                .read(
+                    &workgroup,
+                    workgroup_subgroup_slot::<64>(workgroup_rank, source0),
+                )
+                .unwrap_or([0.0; 12]),
+            fragments
+                .read(
+                    &workgroup,
+                    workgroup_subgroup_slot::<64>(workgroup_rank, source1),
+                )
+                .unwrap_or([0.0; 12]),
+            fragments
+                .read(
+                    &workgroup,
+                    workgroup_subgroup_slot::<64>(workgroup_rank, source2),
+                )
+                .unwrap_or([0.0; 12]),
+            fragments
+                .read(
+                    &workgroup,
+                    workgroup_subgroup_slot::<64>(workgroup_rank, source3),
+                )
+                .unwrap_or([0.0; 12]),
+        ]
+    });
 
     // Apply the two route gates and optional shared expert after redistribution.
     macro_rules! compute_component {
-        (
-            $output_component:literal,
-            $first0:ident,
-            $first1:ident,
-            $first2:ident,
-            $first3:ident,
-            $second0:ident,
-            $second1:ident,
-            $second2:ident,
-            $second3:ident,
-            $shared0:ident,
-            $shared1:ident,
-            $shared2:ident,
-            $shared3:ident
-        ) => {{
+        ($output_component:literal) => {{
             let element = lane_index.wrapping_add($output_component * 64);
             let token = element / OUTPUT;
             let accumulator_component = token & 3;
-            let first = if accumulator_component == 0 {
-                $first0
-            } else if accumulator_component == 1 {
-                $first1
-            } else if accumulator_component == 2 {
-                $first2
-            } else {
-                $first3
-            };
-            let second = if accumulator_component == 0 {
-                $second0
-            } else if accumulator_component == 1 {
-                $second1
-            } else if accumulator_component == 2 {
-                $second2
-            } else {
-                $second3
-            };
-            let shared = if accumulator_component == 0 {
-                $shared0
-            } else if accumulator_component == 1 {
-                $shared1
-            } else if accumulator_component == 2 {
-                $shared2
-            } else {
-                $shared3
-            };
+            let values = redistributed[$output_component];
+            let first = values[accumulator_component];
+            let second = values[4 + accumulator_component];
+            let shared = values[8 + accumulator_component];
             let route_base = route_batch_base.wrapping_add(token.wrapping_mul(TOP_K));
             let route_second = route_base.wrapping_add(1);
-            let selected0 = top_experts[route_base];
-            let selected1 = top_experts[route_second];
-            let gate0 = top_weights[route_base];
-            let gate1 = top_weights[route_second];
+            let selected0 = top_experts.load(route_base).unwrap_or(0);
+            let selected1 = top_experts.load(route_second).unwrap_or(0);
+            let gate0 = top_weights.load(route_base).unwrap_or(0.0);
+            let gate1 = top_weights.load(route_second).unwrap_or(0.0);
             let mut result = 0.0_f32;
             if selected0 == first_expert {
                 result += gate0 * (first / (1.0 + math.exp_f32(-first)));
@@ -572,38 +600,28 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
             result
         }};
     }
-    let result0 = compute_component!(
-        0, first00, first01, first02, first03, second00, second01, second02, second03, shared00,
-        shared01, shared02, shared03
+    let result0 = compute_component!(0);
+    let result1 = compute_component!(1);
+    let result2 = compute_component!(2);
+    let result3 = compute_component!(3);
+    // The compiler proves this blocked formula injective over lane and component.
+    let output_base = batch.wrapping_mul(TOKENS).wrapping_mul(OUTPUT);
+    global_store_or_trap(&mut output, output_base.wrapping_add(lane_index), result0);
+    global_store_or_trap(
+        &mut output,
+        output_base.wrapping_add(64).wrapping_add(lane_index),
+        result1,
     );
-    let result1 = compute_component!(
-        1, first10, first11, first12, first13, second10, second11, second12, second13, shared10,
-        shared11, shared12, shared13
+    global_store_or_trap(
+        &mut output,
+        output_base.wrapping_add(128).wrapping_add(lane_index),
+        result2,
     );
-    let result2 = compute_component!(
-        2, first20, first21, first22, first23, second20, second21, second22, second23, shared20,
-        shared21, shared22, shared23
+    global_store_or_trap(
+        &mut output,
+        output_base.wrapping_add(192).wrapping_add(lane_index),
+        result3,
     );
-    let result3 = compute_component!(
-        3, first30, first31, first32, first33, second30, second31, second32, second33, shared30,
-        shared31, shared32, shared33
-    );
-    // The blocked capability assigns four unique output elements to every lane.
-    let Some(output_block) = thread_index.checked_block::<64, 4>() else {
-        return;
-    };
-    if let Some(slot) = output.get_block_mut(&output_block, 0) {
-        *slot = result0;
-    }
-    if let Some(slot) = output.get_block_mut(&output_block, 1) {
-        *slot = result1;
-    }
-    if let Some(slot) = output.get_block_mut(&output_block, 2) {
-        *slot = result2;
-    }
-    if let Some(slot) = output.get_block_mut(&output_block, 3) {
-        *slot = result3;
-    }
 }
 
 /// Adds two expert-rank partials in fixed rank order.
@@ -622,13 +640,15 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
         launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
     )
 )]
+#[allow(unused_mut)]
 pub fn gfx950_combine_expert_ranks_v1(
-    rank0: &[f32],
-    rank1: &[f32],
-    mut output: DisjointSlice<f32, RowStriped2D<Index1D, 256, 1>>,
+    mut context: KernelContext<'_>,
+    rank0: Global<'_, f32, ReadOnly>,
+    rank1: Global<'_, f32, ReadOnly>,
+    mut output: Global<'_, f32, DisjointWrite<Index1D>>,
 ) {
     // This elementwise boundary has no collectives in the production path.
-    let index = thread::index_1d();
+    let index = context.invocation().index_1d();
     let element = index.get();
     if rank0.len() != COMBINE_BATCHES * TOKENS * OUTPUT
         || rank1.len() != COMBINE_BATCHES * TOKENS * OUTPUT
@@ -641,27 +661,29 @@ pub fn gfx950_combine_expert_ranks_v1(
     }
     // Fixed rank order makes the floating-point reference and device result reproducible.
     #[cfg(not(feature = "ablation-combine-transposed"))]
-    let result = rank0[element] + rank1[element];
+    let result = rank0.load(element).unwrap_or(0.0) + rank1.load(element).unwrap_or(0.0);
     #[cfg(feature = "ablation-combine-transposed")]
     let result = {
         let wave_lane = element & 63;
         let source_lane = 63 - wave_lane;
         let source_element = (element & !63) + source_lane;
-        let source_result = rank0[source_element] + rank1[source_element];
-        Gfx950Subgroup::current().broadcast_f32::<64>(source_result, source_lane as u32)
+        let source_result =
+            rank0.load(source_element).unwrap_or(0.0) + rank1.load(source_element).unwrap_or(0.0);
+        context.with_workgroup(|workgroup| {
+            let workgroup_rank = workgroup.invocation_rank() as usize;
+            let values = workgroup.allocate_lds::<f32, 256>();
+            let values = values.initialize_by_invocation(&workgroup, source_result);
+            let (workgroup, values) = workgroup.publish_lds(values);
+            values
+                .read(
+                    &workgroup,
+                    workgroup_subgroup_slot::<64>(workgroup_rank, source_lane),
+                )
+                .unwrap_or(0.0)
+        })
     };
-    // Row-striped ownership maps each in-range thread to exactly one result.
-    let Some(output_row) = index.checked_row_striped_2d::<256, 1>() else {
-        return;
-    };
-    if let Some(slot) = output.get_row_striped_2d_mut(
-        &output_row,
-        0,
-        COMBINE_BATCHES,
-        TOKENS * OUTPUT,
-        TOKENS * OUTPUT,
-    ) {
-        *slot = result;
+    if !output.store(index.into_disjoint(), result) {
+        fe2o3_device::trap();
     }
 }
 
@@ -684,20 +706,21 @@ pub fn gfx950_combine_expert_ranks_v1(
         launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
     )
 )]
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, unused_mut)]
 pub fn gfx950_speculative_transaction_v1(
-    draft_tokens: &[i32],
-    target_tokens: &[i32],
-    draft_scores: &[f32],
-    thresholds: &[f32],
-    base_state: &[f32],
-    proposed_deltas: &[f32],
-    mut accepted_steps: DisjointSlice<u32, RowStriped2D<Index1D, 64, 1>>,
-    mut committed: DisjointSlice<u32, RowStriped2D<Index1D, 64, 1>>,
-    mut output_state: DisjointSlice<f32>,
+    mut context: KernelContext<'_>,
+    draft_tokens: Global<'_, i32, ReadOnly>,
+    target_tokens: Global<'_, i32, ReadOnly>,
+    draft_scores: Global<'_, f32, ReadOnly>,
+    thresholds: Global<'_, f32, ReadOnly>,
+    base_state: Global<'_, f32, ReadOnly>,
+    proposed_deltas: Global<'_, f32, ReadOnly>,
+    mut accepted_steps: Global<'_, u32, ExclusiveReadWrite>,
+    mut committed: Global<'_, u32, ExclusiveReadWrite>,
+    mut output_state: Global<'_, f32, DisjointWrite<Index1D>>,
 ) {
     // One Wave64 owns a batch: lanes first evaluate candidates, then own state elements.
-    let global_index = thread::index_1d().get();
+    let global_index = context.invocation().index_1d().get();
     let batch = global_index / 64;
     let lane = global_index & 63;
     // Establish the full transactional buffer contract before subgroup broadcasts.
@@ -714,7 +737,6 @@ pub fn gfx950_speculative_transaction_v1(
     {
         return;
     }
-    // Checked views name candidate/step structure and remove repeated stride arithmetic.
     let transaction_base = batch.wrapping_mul(CANDIDATES).wrapping_mul(DRAFT_STEPS);
     let target_base = batch.wrapping_mul(DRAFT_STEPS);
     let state_base = batch.wrapping_mul(STATE_WIDTH);
@@ -722,53 +744,54 @@ pub fn gfx950_speculative_transaction_v1(
         .wrapping_mul(CANDIDATES)
         .wrapping_mul(DRAFT_STEPS)
         .wrapping_mul(STATE_WIDTH);
-    let Ok(target_tokens) = StridedReadView2D::from_shared_slice(
-        target_tokens,
-        target_base,
-        1,
-        DRAFT_STEPS,
-        DRAFT_STEPS,
-    ) else {
-        return;
-    };
-    let Ok(thresholds) =
-        StridedReadView2D::from_shared_slice(thresholds, target_base, 1, DRAFT_STEPS, DRAFT_STEPS)
-    else {
-        return;
-    };
-    let Ok(draft_tokens) = StridedReadView2D::from_shared_slice(
-        draft_tokens,
-        transaction_base,
-        CANDIDATES,
-        DRAFT_STEPS,
-        DRAFT_STEPS,
-    ) else {
-        return;
-    };
-    let Ok(draft_scores) = StridedReadView2D::from_shared_slice(
-        draft_scores,
-        transaction_base,
-        CANDIDATES,
-        DRAFT_STEPS,
-        DRAFT_STEPS,
-    ) else {
-        return;
-    };
+    macro_rules! target_token {
+        ($step:expr) => {
+            global_load_2d_or(&target_tokens, target_base, 0, $step, DRAFT_STEPS, 0)
+        };
+    }
+    macro_rules! threshold {
+        ($step:expr) => {
+            global_load_2d_or(&thresholds, target_base, 0, $step, DRAFT_STEPS, 0.0)
+        };
+    }
+    macro_rules! draft_token {
+        ($candidate:expr, $step:expr) => {
+            global_load_2d_or(
+                &draft_tokens,
+                transaction_base,
+                $candidate,
+                $step,
+                DRAFT_STEPS,
+                0,
+            )
+        };
+    }
+    macro_rules! draft_score {
+        ($candidate:expr, $step:expr) => {
+            global_load_2d_or(
+                &draft_scores,
+                transaction_base,
+                $candidate,
+                $step,
+                DRAFT_STEPS,
+                0.0,
+            )
+        };
+    }
     #[cfg(feature = "ablation-speculative-recompute-prefix")]
     macro_rules! accepted_prefix {
         ($candidate:expr) => {{
-            let accepts0 = (draft_tokens.load_or($candidate, 0, 0)
-                == target_tokens.load_or(0, 0, 0))
-                & (draft_scores.load_or($candidate, 0, 0.0) >= thresholds.load_or(0, 0, 0.0));
+            let accepts0 = (draft_token!($candidate, 0) == target_token!(0))
+                & (draft_score!($candidate, 0) >= threshold!(0));
             let accepts1 = accepts0
-                & (draft_tokens.load_or($candidate, 1, 0) == target_tokens.load_or(0, 1, 0))
-                & (draft_scores.load_or($candidate, 1, 0.0) >= thresholds.load_or(0, 1, 0.0));
+                & (draft_token!($candidate, 1) == target_token!(1))
+                & (draft_score!($candidate, 1) >= threshold!(1));
             let accepts2 = accepts1
-                & (draft_tokens.load_or($candidate, 2, 0) == target_tokens.load_or(0, 2, 0))
-                & (draft_scores.load_or($candidate, 2, 0.0) >= thresholds.load_or(0, 2, 0.0));
+                & (draft_token!($candidate, 2) == target_token!(2))
+                & (draft_score!($candidate, 2) >= threshold!(2));
             let accepts3 = accepts2
-                & (draft_tokens.load_or($candidate, 3, 0) == target_tokens.load_or(0, 3, 0))
-                & (draft_scores.load_or($candidate, 3, 0.0) >= thresholds.load_or(0, 3, 0.0));
+                & (draft_token!($candidate, 3) == target_token!(3))
+                & (draft_score!($candidate, 3) >= threshold!(3));
             (accepts0 as usize)
                 .wrapping_add(accepts1 as usize)
                 .wrapping_add(accepts2 as usize)
@@ -777,18 +800,17 @@ pub fn gfx950_speculative_transaction_v1(
     }
     // Build a prefix: a later step can be accepted only when every earlier step was.
     let acceptance_candidate = lane & (CANDIDATES - 1);
-    let accepts0 = (draft_tokens.load_or(acceptance_candidate, 0, 0)
-        == target_tokens.load_or(0, 0, 0))
-        & (draft_scores.load_or(acceptance_candidate, 0, 0.0) >= thresholds.load_or(0, 0, 0.0));
+    let accepts0 = (draft_token!(acceptance_candidate, 0) == target_token!(0))
+        & (draft_score!(acceptance_candidate, 0) >= threshold!(0));
     let accepts1 = accepts0
-        & (draft_tokens.load_or(acceptance_candidate, 1, 0) == target_tokens.load_or(0, 1, 0))
-        & (draft_scores.load_or(acceptance_candidate, 1, 0.0) >= thresholds.load_or(0, 1, 0.0));
+        & (draft_token!(acceptance_candidate, 1) == target_token!(1))
+        & (draft_score!(acceptance_candidate, 1) >= threshold!(1));
     let accepts2 = accepts1
-        & (draft_tokens.load_or(acceptance_candidate, 2, 0) == target_tokens.load_or(0, 2, 0))
-        & (draft_scores.load_or(acceptance_candidate, 2, 0.0) >= thresholds.load_or(0, 2, 0.0));
+        & (draft_token!(acceptance_candidate, 2) == target_token!(2))
+        & (draft_score!(acceptance_candidate, 2) >= threshold!(2));
     let accepts3 = accepts2
-        & (draft_tokens.load_or(acceptance_candidate, 3, 0) == target_tokens.load_or(0, 3, 0))
-        & (draft_scores.load_or(acceptance_candidate, 3, 0.0) >= thresholds.load_or(0, 3, 0.0));
+        & (draft_token!(acceptance_candidate, 3) == target_token!(3))
+        & (draft_score!(acceptance_candidate, 3) >= threshold!(3));
     let accepted_local = (accepts0 as usize)
         .wrapping_add(accepts1 as usize)
         .wrapping_add(accepts2 as usize)
@@ -797,64 +819,67 @@ pub fn gfx950_speculative_transaction_v1(
     let candidate = lane / STATE_WIDTH;
     let state_element = lane.wrapping_sub(candidate.wrapping_mul(STATE_WIDTH));
     #[cfg(not(feature = "ablation-speculative-recompute-prefix"))]
-    let accepted = Gfx950Subgroup::current()
-        .broadcast_f32::<64>(accepted_local as f32, candidate as u32 & 63)
-        as usize;
+    let accepted = context.with_workgroup(|workgroup| {
+        let workgroup_rank = workgroup.invocation_rank() as usize;
+        let accepted = workgroup.allocate_lds::<u32, 256>();
+        let accepted = accepted.initialize_by_invocation(&workgroup, accepted_local as u32);
+        let (workgroup, accepted) = workgroup.publish_lds(accepted);
+        accepted
+            .read(
+                &workgroup,
+                workgroup_subgroup_slot::<64>(workgroup_rank, candidate),
+            )
+            .unwrap_or(0) as usize
+    });
     #[cfg(feature = "ablation-speculative-recompute-prefix")]
     let accepted = accepted_prefix!(candidate);
     // Commit status and all state deltas together; rejected candidates retain base state.
     if lane < CANDIDATES {
-        let Some(status_row) = thread::index_1d().checked_row_striped_2d::<64, 1>() else {
-            return;
-        };
-        if let Some(slot) = accepted_steps.get_row_striped_2d_mut(
-            &status_row,
-            0,
-            SYSTEM_BATCHES,
-            CANDIDATES,
-            CANDIDATES,
-        ) {
-            *slot = accepted_local as u32;
-        }
-        if let Some(slot) =
-            committed.get_row_striped_2d_mut(&status_row, 0, SYSTEM_BATCHES, CANDIDATES, CANDIDATES)
-        {
-            *slot = if accepted_local == DRAFT_STEPS { 1 } else { 0 };
-        }
+        let status_index = batch.wrapping_mul(CANDIDATES).wrapping_add(lane);
+        global_store_or_trap(&mut accepted_steps, status_index, accepted_local as u32);
+        global_store_or_trap(
+            &mut committed,
+            status_index,
+            if accepted_local == DRAFT_STEPS { 1 } else { 0 },
+        );
     }
-    let mut value = base_state[state_base.wrapping_add(state_element)];
+    let mut value = base_state
+        .load(state_base.wrapping_add(state_element))
+        .unwrap_or(0.0);
     if accepted == DRAFT_STEPS {
-        value += proposed_deltas[delta_base.wrapping_add(
+        let candidate_base = delta_base.wrapping_add(
             candidate
                 .wrapping_mul(DRAFT_STEPS)
-                .wrapping_mul(STATE_WIDTH)
-                .wrapping_add(state_element),
-        )];
-        value += proposed_deltas[delta_base.wrapping_add(
-            candidate
-                .wrapping_mul(DRAFT_STEPS)
-                .wrapping_add(1)
-                .wrapping_mul(STATE_WIDTH)
-                .wrapping_add(state_element),
-        )];
-        value += proposed_deltas[delta_base.wrapping_add(
-            candidate
-                .wrapping_mul(DRAFT_STEPS)
-                .wrapping_add(2)
-                .wrapping_mul(STATE_WIDTH)
-                .wrapping_add(state_element),
-        )];
-        value += proposed_deltas[delta_base.wrapping_add(
-            candidate
-                .wrapping_mul(DRAFT_STEPS)
-                .wrapping_add(3)
-                .wrapping_mul(STATE_WIDTH)
-                .wrapping_add(state_element),
-        )];
+                .wrapping_mul(STATE_WIDTH),
+        );
+        value += proposed_deltas
+            .load(candidate_base.wrapping_add(state_element))
+            .unwrap_or(0.0);
+        value += proposed_deltas
+            .load(
+                candidate_base
+                    .wrapping_add(STATE_WIDTH)
+                    .wrapping_add(state_element),
+            )
+            .unwrap_or(0.0);
+        value += proposed_deltas
+            .load(
+                candidate_base
+                    .wrapping_add(2 * STATE_WIDTH)
+                    .wrapping_add(state_element),
+            )
+            .unwrap_or(0.0);
+        value += proposed_deltas
+            .load(
+                candidate_base
+                    .wrapping_add(3 * STATE_WIDTH)
+                    .wrapping_add(state_element),
+            )
+            .unwrap_or(0.0);
     }
     // The one-dimensional capability gives every lane a unique state destination.
-    if let Some(slot) = output_state.get_mut(thread::index_1d()) {
-        *slot = value;
+    if !output_state.store(context.invocation().index_1d().into_disjoint(), value) {
+        fe2o3_device::trap();
     }
 }
 
@@ -874,16 +899,18 @@ pub fn gfx950_speculative_transaction_v1(
         launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
     )
 )]
+#[allow(unused_assignments)]
 pub fn gfx950_qwen_ngram_gather_v1(
-    queries: &[i32],
-    table_hashes: &[u64],
-    table_grams: &[i32],
-    table_values: &[i32],
-    priorities: &[i32],
-    mut output: DisjointSlice<i32, RowStriped2D<Index1D, 64, 1>>,
+    context: KernelContext<'_>,
+    queries: Global<'_, i32, ReadOnly>,
+    table_hashes: Global<'_, u64, ReadOnly>,
+    table_grams: Global<'_, i32, ReadOnly>,
+    table_values: Global<'_, i32, ReadOnly>,
+    priorities: Global<'_, i32, ReadOnly>,
+    mut output: Global<'_, i32, ExclusiveReadWrite>,
 ) {
     // Each in-range lane owns one query; no subgroup coordination is required.
-    let global_index = thread::index_1d().get();
+    let global_index = context.invocation().index_1d().get();
     let batch = global_index / 64;
     let query = global_index & 63;
     if batch >= SYSTEM_BATCHES
@@ -905,11 +932,11 @@ pub fn gfx950_qwen_ngram_gather_v1(
     let gram_batch_base = batch.wrapping_mul(TABLE_SIZE).wrapping_mul(NGRAM);
     let base = query_batch_base.wrapping_add(query.wrapping_mul(NGRAM));
     let mut hash = 1_469_598_103_934_665_603_u64;
-    hash ^= queries[base] as u32 as u64;
+    hash ^= queries.load(base).unwrap_or(0) as u32 as u64;
     hash = hash.wrapping_mul(1_099_511_628_211);
-    hash ^= queries[base.wrapping_add(1)] as u32 as u64;
+    hash ^= queries.load(base.wrapping_add(1)).unwrap_or(0) as u32 as u64;
     hash = hash.wrapping_mul(1_099_511_628_211);
-    hash ^= queries[base.wrapping_add(2)] as u32 as u64;
+    hash ^= queries.load(base.wrapping_add(2)).unwrap_or(0) as u32 as u64;
     hash = hash.wrapping_mul(1_099_511_628_211);
     let mut best_slot = usize::MAX;
     let mut best_priority = i32::MIN;
@@ -920,16 +947,18 @@ pub fn gfx950_qwen_ngram_gather_v1(
             let slot = hash.wrapping_add($probe) as usize & (TABLE_SIZE - 1);
             let table_slot = table_batch_base.wrapping_add(slot);
             let gram_slot = gram_batch_base.wrapping_add(slot.wrapping_mul(NGRAM));
-            let equal = (table_hashes[table_slot] == hash)
-                & (table_grams[gram_slot] == queries[base])
-                & (table_grams[gram_slot.wrapping_add(1)] == queries[base.wrapping_add(1)])
-                & (table_grams[gram_slot.wrapping_add(2)] == queries[base.wrapping_add(2)]);
+            let equal = (table_hashes.load(table_slot).unwrap_or(0) == hash)
+                & (table_grams.load(gram_slot).unwrap_or(0) == queries.load(base).unwrap_or(0))
+                & (table_grams.load(gram_slot.wrapping_add(1)).unwrap_or(0)
+                    == queries.load(base.wrapping_add(1)).unwrap_or(0))
+                & (table_grams.load(gram_slot.wrapping_add(2)).unwrap_or(0)
+                    == queries.load(base.wrapping_add(2)).unwrap_or(0));
             if equal {
-                let priority = priorities[table_slot];
+                let priority = priorities.load(table_slot).unwrap_or(i32::MIN);
                 if priority > best_priority || (priority == best_priority && slot < best_slot) {
                     best_slot = slot;
                     best_priority = priority;
-                    best_value = table_values[table_slot];
+                    best_value = table_values.load(table_slot).unwrap_or(-1);
                 }
             }
         }};
@@ -940,14 +969,16 @@ pub fn gfx950_qwen_ngram_gather_v1(
             let slot = hash.wrapping_add($probe) as usize & (TABLE_SIZE - 1);
             let table_slot = table_batch_base.wrapping_add(slot);
             let gram_slot = gram_batch_base.wrapping_add(slot.wrapping_mul(NGRAM));
-            let equal = (table_hashes[table_slot] == hash)
-                & (table_grams[gram_slot] == queries[base])
-                & (table_grams[gram_slot.wrapping_add(1)] == queries[base.wrapping_add(1)])
-                & (table_grams[gram_slot.wrapping_add(2)] == queries[base.wrapping_add(2)]);
+            let equal = (table_hashes.load(table_slot).unwrap_or(0) == hash)
+                & (table_grams.load(gram_slot).unwrap_or(0) == queries.load(base).unwrap_or(0))
+                & (table_grams.load(gram_slot.wrapping_add(1)).unwrap_or(0)
+                    == queries.load(base.wrapping_add(1)).unwrap_or(0))
+                & (table_grams.load(gram_slot.wrapping_add(2)).unwrap_or(0)
+                    == queries.load(base.wrapping_add(2)).unwrap_or(0));
             if equal {
-                let priority = priorities[table_slot];
+                let priority = priorities.load(table_slot).unwrap_or(i32::MIN);
                 if priority > best_priority || (priority == best_priority && slot < best_slot) {
-                    best_value = table_values[table_slot];
+                    best_value = table_values.load(table_slot).unwrap_or(-1);
                 }
             }
         }};
@@ -990,15 +1021,9 @@ pub fn gfx950_qwen_ngram_gather_v1(
         probe!(1);
         probe!(0);
     }
-    // Row-striped ownership assigns exactly one result slot to the query lane.
-    let Some(output_row) = thread::index_1d().checked_row_striped_2d::<64, 1>() else {
-        return;
-    };
-    if let Some(slot) =
-        output.get_row_striped_2d_mut(&output_row, 0, SYSTEM_BATCHES, QUERIES, QUERIES)
-    {
-        *slot = best_value;
-    }
+    // The compact batch/query index is unique for every active invocation.
+    let output_index = batch.wrapping_mul(QUERIES).wrapping_add(query);
+    global_store_or_trap(&mut output, output_index, best_value);
 }
 
 /// Copies one gradient shard into deterministic transport staging.
@@ -1017,12 +1042,14 @@ pub fn gfx950_qwen_ngram_gather_v1(
         launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
     )
 )]
+#[allow(unused_mut)]
 pub fn gfx950_stage_gradient_shard_v1(
-    input: &[f32],
-    mut output: DisjointSlice<f32, RowStriped2D<Index1D, 64, 1>>,
+    mut context: KernelContext<'_>,
+    input: Global<'_, f32, ReadOnly>,
+    mut output: Global<'_, f32, ExclusiveReadWrite>,
 ) {
     // One wave stages one batch; only the first 16 lanes correspond to matrix elements.
-    let global_index = thread::index_1d().get();
+    let global_index = context.invocation().index_1d().get();
     let batch = global_index / 64;
     let element = global_index & 63;
     if batch >= SYSTEM_BATCHES
@@ -1031,51 +1058,63 @@ pub fn gfx950_stage_gradient_shard_v1(
     {
         return;
     }
+    #[cfg(not(feature = "ablation-stage-tile4"))]
     if element >= MUON_ELEMENTS {
         return;
     }
     let input_base = batch.wrapping_mul(MUON_ELEMENTS);
     // The production path is a direct coalesced copy; the tile path is an ablation only.
     #[cfg(not(feature = "ablation-stage-tile4"))]
-    let value = input[input_base.wrapping_add(element)];
+    let value = input.load(input_base.wrapping_add(element)).unwrap_or(0.0);
     #[cfg(feature = "ablation-stage-tile4")]
-    let value = {
+    let value = context.with_workgroup(|workgroup| {
         let mut tile0 = 0.0_f32;
         let mut tile1 = 0.0_f32;
         let mut tile2 = 0.0_f32;
         let mut tile3 = 0.0_f32;
         if element < 4 {
             let tile_base = element * 4;
-            tile0 = input[input_base.wrapping_add(tile_base)];
-            tile1 = input[input_base.wrapping_add(tile_base).wrapping_add(1)];
-            tile2 = input[input_base.wrapping_add(tile_base).wrapping_add(2)];
-            tile3 = input[input_base.wrapping_add(tile_base).wrapping_add(3)];
+            tile0 = input
+                .load(input_base.wrapping_add(tile_base))
+                .unwrap_or(0.0);
+            tile1 = input
+                .load(input_base.wrapping_add(tile_base).wrapping_add(1))
+                .unwrap_or(0.0);
+            tile2 = input
+                .load(input_base.wrapping_add(tile_base).wrapping_add(2))
+                .unwrap_or(0.0);
+            tile3 = input
+                .load(input_base.wrapping_add(tile_base).wrapping_add(3))
+                .unwrap_or(0.0);
         }
-        let source = (element / 4) as u32;
-        let subgroup = Gfx950Subgroup::current();
-        let value0 = subgroup.broadcast_f32::<64>(tile0, source);
-        let value1 = subgroup.broadcast_f32::<64>(tile1, source);
-        let value2 = subgroup.broadcast_f32::<64>(tile2, source);
-        let value3 = subgroup.broadcast_f32::<64>(tile3, source);
+        let workgroup_rank = workgroup.invocation_rank() as usize;
+        let tiles = workgroup.allocate_lds::<[f32; 4], 256>();
+        let tiles = tiles.initialize_by_invocation(&workgroup, [tile0, tile1, tile2, tile3]);
+        let (workgroup, tiles) = workgroup.publish_lds(tiles);
+        let source = element / 4;
+        let values = tiles
+            .read(
+                &workgroup,
+                workgroup_subgroup_slot::<64>(workgroup_rank, source),
+            )
+            .unwrap_or([0.0; 4]);
         if element & 3 == 0 {
-            value0
+            values[0]
         } else if element & 3 == 1 {
-            value1
+            values[1]
         } else if element & 3 == 2 {
-            value2
+            values[2]
         } else {
-            value3
+            values[3]
         }
-    };
-    // Row-striped ownership prevents multiple waves from staging the same element.
-    let Some(output_row) = thread::index_1d().checked_row_striped_2d::<64, 1>() else {
+    });
+    #[cfg(feature = "ablation-stage-tile4")]
+    if element >= MUON_ELEMENTS {
         return;
-    };
-    if let Some(slot) =
-        output.get_row_striped_2d_mut(&output_row, 0, SYSTEM_BATCHES, MUON_ELEMENTS, MUON_ELEMENTS)
-    {
-        *slot = value;
     }
+    // The compact batch/element index is unique for every active invocation.
+    let output_index = batch.wrapping_mul(MUON_ELEMENTS).wrapping_add(element);
+    global_store_or_trap(&mut output, output_index, value);
 }
 
 /// Reduces two shards and computes five Newton-Schulz Muon iterations.
@@ -1095,12 +1134,13 @@ pub fn gfx950_stage_gradient_shard_v1(
     )
 )]
 pub fn gfx950_muon_update_4x4_v1(
-    shards: &[f32],
-    mut output: DisjointSlice<f32, RowStriped2D<Index1D, 64, 1>>,
-    mut output_norm: DisjointSlice<f32, RowStriped2D<Index1D, 64, 1>>,
+    mut context: KernelContext<'_>,
+    shards: Global<'_, f32, ReadOnly>,
+    mut output: Global<'_, f32, ExclusiveReadWrite>,
+    mut output_norm: Global<'_, f32, ExclusiveReadWrite>,
 ) {
     // One Wave64 owns one 4x4 update; the first 16 lanes hold the matrix elements.
-    let global_index = thread::index_1d().get();
+    let global_index = context.invocation().index_1d().get();
     let batch = global_index / 64;
     let lane = global_index & 63;
     // Validate every launch-wide shape before the norm reduction.
@@ -1111,110 +1151,127 @@ pub fn gfx950_muon_update_4x4_v1(
     {
         return;
     }
-    // A checked two-row view makes the two-shard reduction explicit.
-    let Ok(shards) = StridedReadView2D::from_shared_slice(
-        shards,
-        batch
-            .wrapping_mul(GRADIENT_SHARDS)
-            .wrapping_mul(MUON_ELEMENTS),
-        GRADIENT_SHARDS,
-        MUON_ELEMENTS,
-        MUON_ELEMENTS,
-    ) else {
-        return;
-    };
+    let shard_base = batch
+        .wrapping_mul(GRADIENT_SHARDS)
+        .wrapping_mul(MUON_ELEMENTS);
     let matrix_element = lane & (MUON_ELEMENTS - 1);
     let active = (lane < MUON_ELEMENTS) as u32 as f32;
-    let mut matrix_value =
-        active * (shards.load_or(0, matrix_element, 0.0) + shards.load_or(1, matrix_element, 0.0));
-    let subgroup = Gfx950Subgroup::current();
-    // Reduce in FP32, then normalize before the Newton-Schulz iterations.
-    #[cfg(not(feature = "ablation-muon-broadcast16"))]
-    let squared_norm = subgroup.reduce_sum_f32::<64>(matrix_value * matrix_value);
-    #[cfg(feature = "ablation-muon-broadcast16")]
-    let squared_norm = {
+    let matrix_value = active
+        * (global_load_2d_or(&shards, shard_base, 0, matrix_element, MUON_ELEMENTS, 0.0)
+            + global_load_2d_or(&shards, shard_base, 1, matrix_element, MUON_ELEMENTS, 0.0));
+    let policy = context.numerical_policy::<StrictIeee>();
+    let math_capability = context.math();
+    let math = math_capability.with_numerical_policy(&policy);
+    let (matrix_value, norm) = context.with_workgroup(|workgroup| {
+        let workgroup_rank = workgroup.invocation_rank() as usize;
+        #[cfg(feature = "ablation-muon-broadcast16")]
+        let wave_base = workgroup_rank & !63;
         let local_square = matrix_value * matrix_value;
-        let mut sum = subgroup.broadcast_f32::<64>(local_square, 0);
-        sum += subgroup.broadcast_f32::<64>(local_square, 1);
-        sum += subgroup.broadcast_f32::<64>(local_square, 2);
-        sum += subgroup.broadcast_f32::<64>(local_square, 3);
-        sum += subgroup.broadcast_f32::<64>(local_square, 4);
-        sum += subgroup.broadcast_f32::<64>(local_square, 5);
-        sum += subgroup.broadcast_f32::<64>(local_square, 6);
-        sum += subgroup.broadcast_f32::<64>(local_square, 7);
-        sum += subgroup.broadcast_f32::<64>(local_square, 8);
-        sum += subgroup.broadcast_f32::<64>(local_square, 9);
-        sum += subgroup.broadcast_f32::<64>(local_square, 10);
-        sum += subgroup.broadcast_f32::<64>(local_square, 11);
-        sum += subgroup.broadcast_f32::<64>(local_square, 12);
-        sum += subgroup.broadcast_f32::<64>(local_square, 13);
-        sum += subgroup.broadcast_f32::<64>(local_square, 14);
-        sum += subgroup.broadcast_f32::<64>(local_square, 15);
-        sum
-    };
-    let norm = DeviceMath::current().sqrt_f32(squared_norm);
-    let inverse_norm = 1.0 / (norm + 1.0e-6);
-    matrix_value *= inverse_norm;
-    let row = matrix_element / 4;
-    let column = matrix_element.wrapping_sub(row.wrapping_mul(4));
-    let row_base = row.wrapping_mul(4);
-    let column_base = column.wrapping_mul(4);
-    // Each uniform iteration forms X X^T and then X X^T X through wave broadcasts.
-    macro_rules! muon_iteration {
-        () => {{
-            let mut gram = 0.0_f32;
-            gram += subgroup.broadcast_f32::<64>(matrix_value, row_base as u32 & 63)
-                * subgroup.broadcast_f32::<64>(matrix_value, column_base as u32 & 63);
-            gram += subgroup
-                .broadcast_f32::<64>(matrix_value, row_base.wrapping_add(1) as u32 & 63)
-                * subgroup
-                    .broadcast_f32::<64>(matrix_value, column_base.wrapping_add(1) as u32 & 63);
-            gram += subgroup
-                .broadcast_f32::<64>(matrix_value, row_base.wrapping_add(2) as u32 & 63)
-                * subgroup
-                    .broadcast_f32::<64>(matrix_value, column_base.wrapping_add(2) as u32 & 63);
-            gram += subgroup
-                .broadcast_f32::<64>(matrix_value, row_base.wrapping_add(3) as u32 & 63)
-                * subgroup
-                    .broadcast_f32::<64>(matrix_value, column_base.wrapping_add(3) as u32 & 63);
-            let mut cubic = 0.0_f32;
-            cubic += subgroup.broadcast_f32::<64>(gram, row_base as u32 & 63)
-                * subgroup.broadcast_f32::<64>(matrix_value, column as u32 & 63);
-            cubic += subgroup.broadcast_f32::<64>(gram, row_base.wrapping_add(1) as u32 & 63)
-                * subgroup.broadcast_f32::<64>(matrix_value, column.wrapping_add(4) as u32 & 63);
-            cubic += subgroup.broadcast_f32::<64>(gram, row_base.wrapping_add(2) as u32 & 63)
-                * subgroup.broadcast_f32::<64>(matrix_value, column.wrapping_add(8) as u32 & 63);
-            cubic += subgroup.broadcast_f32::<64>(gram, row_base.wrapping_add(3) as u32 & 63)
-                * subgroup.broadcast_f32::<64>(matrix_value, column.wrapping_add(12) as u32 & 63);
-            matrix_value = 1.5 * matrix_value - 0.5 * cubic;
-        }};
-    }
-    muon_iteration!();
-    muon_iteration!();
-    muon_iteration!();
-    muon_iteration!();
-    muon_iteration!();
-    // Matrix lanes own disjoint outputs; lane zero separately owns the reported norm.
-    if lane < MUON_ELEMENTS {
-        let Some(output_row) = thread::index_1d().checked_row_striped_2d::<64, 1>() else {
-            return;
+
+        // Reduce in FP32 under the exact workgroup epoch.
+        #[cfg(not(feature = "ablation-muon-broadcast16"))]
+        let (workgroup, squared_norm) = {
+            let subgroup = workgroup.subgroup::<SubgroupWidth64>();
+            let squared_norm = subgroup.reduce_sum(workgroup.epoch(), local_square);
+            (workgroup, squared_norm)
         };
-        if let Some(slot) = output.get_row_striped_2d_mut(
-            &output_row,
-            0,
-            SYSTEM_BATCHES,
-            MUON_ELEMENTS,
-            MUON_ELEMENTS,
-        ) {
-            *slot = -MUON_LEARNING_RATE * matrix_value;
+        #[cfg(feature = "ablation-muon-broadcast16")]
+        let (workgroup, squared_norm) = {
+            let squares = workgroup.allocate_lds::<f32, 256>();
+            let squares = squares.initialize_by_invocation(&workgroup, local_square);
+            let (workgroup, squares) = workgroup.publish_lds(squares);
+            let mut sum = squares.read(&workgroup, wave_base).unwrap_or(0.0);
+            sum += squares.read(&workgroup, wave_base + 1).unwrap_or(0.0);
+            sum += squares.read(&workgroup, wave_base + 2).unwrap_or(0.0);
+            sum += squares.read(&workgroup, wave_base + 3).unwrap_or(0.0);
+            sum += squares.read(&workgroup, wave_base + 4).unwrap_or(0.0);
+            sum += squares.read(&workgroup, wave_base + 5).unwrap_or(0.0);
+            sum += squares.read(&workgroup, wave_base + 6).unwrap_or(0.0);
+            sum += squares.read(&workgroup, wave_base + 7).unwrap_or(0.0);
+            sum += squares.read(&workgroup, wave_base + 8).unwrap_or(0.0);
+            sum += squares.read(&workgroup, wave_base + 9).unwrap_or(0.0);
+            sum += squares.read(&workgroup, wave_base + 10).unwrap_or(0.0);
+            sum += squares.read(&workgroup, wave_base + 11).unwrap_or(0.0);
+            sum += squares.read(&workgroup, wave_base + 12).unwrap_or(0.0);
+            sum += squares.read(&workgroup, wave_base + 13).unwrap_or(0.0);
+            sum += squares.read(&workgroup, wave_base + 14).unwrap_or(0.0);
+            sum += squares.read(&workgroup, wave_base + 15).unwrap_or(0.0);
+            (workgroup, sum)
+        };
+
+        let norm = math.sqrt_f32(squared_norm);
+        let mut matrix_value = matrix_value / (norm + 1.0e-6);
+        let row = matrix_element / 4;
+        let column = matrix_element.wrapping_sub(row.wrapping_mul(4));
+        let row_base = row.wrapping_mul(4);
+        let column_base = column.wrapping_mul(4);
+        let mut exchange = workgroup.allocate_lds::<[f32; 2], 256>().into_reusable();
+        let mut phases = workgroup.into_reusable();
+
+        // Each iteration publishes X, computes X X^T, publishes both, then forms X X^T X.
+        macro_rules! muon_iteration {
+            () => {{
+                let gram = phases.with_phase(|phase| {
+                    let values = phase.bind_reusable_lds(&mut exchange);
+                    let values = values.initialize_by_invocation(&phase, [matrix_value, 0.0]);
+                    let (phase, values) = phase.publish_lds(values);
+                    macro_rules! read_matrix {
+                        ($source:expr) => {
+                            values
+                                .read(
+                                    &phase,
+                                    workgroup_subgroup_slot::<64>(workgroup_rank, $source),
+                                )
+                                .unwrap_or([0.0; 2])[0]
+                        };
+                    }
+                    let gram = read_matrix!(row_base) * read_matrix!(column_base)
+                        + read_matrix!(row_base + 1) * read_matrix!(column_base + 1)
+                        + read_matrix!(row_base + 2) * read_matrix!(column_base + 2)
+                        + read_matrix!(row_base + 3) * read_matrix!(column_base + 3);
+                    let completion = phase.finish_reusable_phase();
+                    (completion, gram)
+                });
+                matrix_value = phases.with_phase(|phase| {
+                    let values = phase.bind_reusable_lds(&mut exchange);
+                    let values = values.initialize_by_invocation(&phase, [matrix_value, gram]);
+                    let (phase, values) = phase.publish_lds(values);
+                    macro_rules! read_values {
+                        ($source:expr) => {
+                            values
+                                .read(
+                                    &phase,
+                                    workgroup_subgroup_slot::<64>(workgroup_rank, $source),
+                                )
+                                .unwrap_or([0.0; 2])
+                        };
+                    }
+                    let cubic = read_values!(row_base)[1] * read_values!(column)[0]
+                        + read_values!(row_base + 1)[1] * read_values!(column + 4)[0]
+                        + read_values!(row_base + 2)[1] * read_values!(column + 8)[0]
+                        + read_values!(row_base + 3)[1] * read_values!(column + 12)[0];
+                    let completion = phase.finish_reusable_phase();
+                    (completion, 1.5 * matrix_value - 0.5 * cubic)
+                });
+            }};
         }
+        muon_iteration!();
+        muon_iteration!();
+        muon_iteration!();
+        muon_iteration!();
+        muon_iteration!();
+        (matrix_value, norm)
+    });
+    // Matrix lanes own disjoint compact outputs; lane zero separately owns the norm.
+    if lane < MUON_ELEMENTS {
+        let output_index = batch.wrapping_mul(MUON_ELEMENTS).wrapping_add(lane);
+        global_store_or_trap(
+            &mut output,
+            output_index,
+            -MUON_LEARNING_RATE * matrix_value,
+        );
     }
     if lane == 0 {
-        let Some(norm_row) = thread::index_1d().checked_row_striped_2d::<64, 1>() else {
-            return;
-        };
-        if let Some(slot) = output_norm.get_row_striped_2d_mut(&norm_row, 0, SYSTEM_BATCHES, 1, 1) {
-            *slot = norm;
-        }
+        global_store_or_trap(&mut output_norm, batch, norm);
     }
 }

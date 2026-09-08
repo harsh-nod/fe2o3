@@ -1,32 +1,28 @@
-//! Safe Rust qualification kernel for dynamic strided matrix multiplication.
+//! Capability-based Rust kernel for dynamic strided matrix multiplication.
 //!
-//! Its review order is deliberate: validate dynamic extents, map a wave to a
-//! tile, build typed matrices, run a uniform double-buffered K pipeline, then
-//! perform edge-safe stores through a tiled disjoint capability.
+//! Review order is deliberate: validate the dynamic contract, derive the
+//! invocation's tile, materialize zero-filled lane fragments, execute one
+//! convergent K-phase schedule, then apply the checked alpha/beta epilogue.
 
 #![allow(missing_docs)] // Generated typed-kernel modules lack rustdoc in V1.
 
 use fe2o3_device::{
-    Bf16MfmaAFragment, Bf16MfmaAMatrix, Bf16MfmaBFragment, Bf16MfmaBMatrix, DisjointSlice,
-    F32AccumulatorFragment, Index1D, KernelError, KernelResult, Matrix, Tiled2D, Wave64, WaveLane,
-    WorkgroupLdsScope, WorkgroupPipeline, kernel, thread,
+    ExclusiveReadWrite, Global, KernelContext, KernelError, KernelResult, ReadOnly, StrictIeee,
+    SubgroupWidth64, kernel,
+};
+
+use crate::contract::{
+    FRAGMENT_ELEMENTS_PER_LANE_V1, TILE_K_V1, TILE_M_V1, TILE_N_V1, epilogue_v1, strided_extent_v1,
 };
 
 /// Exact workgroup dimensions required by the wave64 matrix profile.
 pub const GENERAL_TILED_GEMM_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
 
-fn accessed_extent(rows: u32, columns: u32, stride: u32) -> u64 {
-    if rows == 0 || columns == 0 {
-        return 0;
-    }
-    u64::from(rows - 1) * u64::from(stride) + u64::from(columns)
-}
-
 /// Computes `C = alpha * A * B + beta * C` for dynamic row-major matrices.
 ///
-/// Each workgroup is one wave64 and owns one 16x16 output tile. All lanes call
-/// the matrix operation uniformly; edge loads contribute BF16 zero, while the
-/// checked tiled output witness suppresses stores outside logical M and N.
+/// Each workgroup is one 64-lane subgroup and owns one 16x16 output tile. All
+/// lanes execute the same matrix and LDS pipeline sequence; M/N/K tails become
+/// positive BF16 zero before fragment formation.
 #[kernel(
     typed,
     launch(
@@ -34,13 +30,14 @@ fn accessed_extent(rows: u32, columns: u32, stride: u32) -> u64 {
         max = [64, 1, 1],
         static_shared_memory_bytes = 2048
     ),
-    control_flow(loop_bounds(4294967295))
+    control_flow(loop_bounds(4294967295, 4, 4))
 )]
 #[allow(clippy::too_many_arguments)]
 pub fn tiled_gemm_general_v1(
-    a: &[u16],
-    b: &[u16],
-    mut c: DisjointSlice<f32, Tiled2D<Index1D, 64, 16, 16, 4>>,
+    context: KernelContext<'_>,
+    a: Global<'_, u16, ReadOnly>,
+    b: Global<'_, u16, ReadOnly>,
+    mut c: Global<'_, f32, ExclusiveReadWrite>,
     m: u32,
     n: u32,
     k: u32,
@@ -50,13 +47,12 @@ pub fn tiled_gemm_general_v1(
     alpha: f32,
     beta: f32,
 ) -> KernelResult {
-    // Reject incompatible shapes and strides before every lane enters LDS barriers.
     let invalid_stride = (m != 0 && k != 0 && lda < k)
         || (k != 0 && n != 0 && ldb < n)
         || (m != 0 && n != 0 && ldc < n);
-    let a_extent = accessed_extent(m, k, lda);
-    let b_extent = accessed_extent(k, n, ldb);
-    let c_extent = accessed_extent(m, n, ldc);
+    let a_extent = strided_extent_v1(m, k, lda);
+    let b_extent = strided_extent_v1(k, n, ldb);
+    let c_extent = strided_extent_v1(m, n, ldc);
     if invalid_stride
         || (a.len() as u64) < a_extent
         || (b.len() as u64) < b_extent
@@ -65,97 +61,90 @@ pub fn tiled_gemm_general_v1(
         return Err(KernelError::InvalidArgument);
     }
 
-    // Grid coordinates assign one Wave64 to one 16x16 output tile.
-    let thread_index = thread::index_1d();
-    let raw_index = thread_index.get();
-    let tiles_per_row = (n as usize + 15) / 16;
-    if tiles_per_row == 0 {
+    let invocation = context.invocation();
+    let workgroup_size = invocation.workgroup_size();
+    let grid_size = invocation.grid_size();
+    if workgroup_size.x() != 64
+        || workgroup_size.y() != 1
+        || workgroup_size.z() != 1
+        || grid_size.y() != 1
+        || grid_size.z() != 1
+    {
+        fe2o3_device::trap();
+    }
+
+    let tile_columns = (n as usize).div_ceil(TILE_N_V1);
+    if tile_columns == 0 {
         return Ok(());
     }
-    let tile = raw_index / 64;
-    let tile_row = tile / tiles_per_row;
-    let tile_column = tile % tiles_per_row;
-
-    // Typed views centralize layout and padding; the output witness captures ownership.
-    let output_tile = thread_index.checked_tiled_2d::<64, 16, 16, 4>();
-    let a_matrix = Bf16MfmaAMatrix::row_major(a, 0, m as usize, k as usize, lda as usize)?;
-    let b_matrix = Bf16MfmaBMatrix::row_major(b, 0, k as usize, n as usize, ldb as usize)?;
-    let wave_lane = WaveLane::<Wave64>::current();
-    let matrix = Matrix::current();
-    let mut accumulator = F32AccumulatorFragment::zero(&wave_lane);
-    // Two LDS stages overlap fragment production for n+1 with MFMA consumption for n.
-    let phase_count = (k as usize + 15) / 16;
-    let lane = raw_index % 64;
-    let mut pipeline_scope = WorkgroupLdsScope::current();
-    let mut lhs_pipeline =
-        WorkgroupPipeline::<Bf16MfmaAFragment<'_>, 2, 64, 1>::current(&mut pipeline_scope);
-    let mut rhs_pipeline =
-        WorkgroupPipeline::<Bf16MfmaBFragment<'_>, 2, 64, 1>::current(&mut pipeline_scope);
-
-    let lhs = a_matrix.load_m16k16(&wave_lane, tile_row * 16, 0);
-    let rhs = b_matrix.load_k16n16(&wave_lane, 0, tile_column * 16);
-    lhs_pipeline.stage(0);
-    lhs_pipeline.write(0, lane, lhs);
-    lhs_pipeline.commit(0);
-    rhs_pipeline.stage(0);
-    rhs_pipeline.write(0, lane, rhs);
-    rhs_pipeline.commit(0);
-
-    let mut phase_index = 0_usize;
-    while phase_index < phase_count {
-        let future_epoch = phase_index + 1;
-        let next_phase = future_epoch * 16;
-        let next_lhs = a_matrix.load_m16k16(&wave_lane, tile_row * 16, next_phase);
-        let next_rhs = b_matrix.load_k16n16(&wave_lane, next_phase, tile_column * 16);
-
-        lhs_pipeline.stage(future_epoch);
-        lhs_pipeline.write(future_epoch, lane, next_lhs);
-        lhs_pipeline.commit(future_epoch);
-        rhs_pipeline.stage(future_epoch);
-        rhs_pipeline.write(future_epoch, lane, next_rhs);
-        rhs_pipeline.commit(future_epoch);
-
-        lhs_pipeline.wait(phase_index);
-        lhs_pipeline.consume(phase_index);
-        let lhs = lhs_pipeline.read(phase_index, lane);
-        rhs_pipeline.wait(phase_index);
-        rhs_pipeline.consume(phase_index);
-        let rhs = rhs_pipeline.read(phase_index, lane);
-        accumulator = matrix.multiply_accumulate(lhs, rhs, accumulator);
-        lhs_pipeline.release(phase_index);
-        rhs_pipeline.release(phase_index);
-        phase_index += 1;
+    let tile = invocation.workgroup_id().x() as usize;
+    let tile_rows = (m as usize).div_ceil(TILE_M_V1);
+    let Some(tile_count) = tile_rows.checked_mul(tile_columns) else {
+        fe2o3_device::trap();
+    };
+    if tile >= tile_count {
+        return Ok(());
     }
-    lhs_pipeline.wait(phase_count);
-    lhs_pipeline.discard(phase_count);
-    lhs_pipeline.release(phase_count);
-    rhs_pipeline.wait(phase_count);
-    rhs_pipeline.discard(phase_count);
-    rhs_pipeline.release(phase_count);
+    let tile_row = tile / tile_columns;
+    let tile_column = tile % tile_columns;
+    drop(invocation);
 
-    // The tiled capability clips M/N edges while proving unique ownership of valid C.
+    let mut private_accumulator = context.private_memory::<f32, 4>();
+    let Some(tile_row_base) = tile_row.checked_mul(TILE_M_V1) else {
+        fe2o3_device::trap();
+    };
+    let Some(tile_column_base) = tile_column.checked_mul(TILE_N_V1) else {
+        fe2o3_device::trap();
+    };
+    let policy = context.numerical_policy::<StrictIeee>();
+    let lane = context.subgroup_lane::<SubgroupWidth64>();
+    let lane_index = lane.get() as usize;
+    #[allow(deprecated)]
+    let matrix = context.matrix();
+    let matrix = matrix.with_numerical_policy(&policy);
+    let a_matrix = matrix.bf16_a_global_row_major(&a, 0, m as usize, k as usize, lda as usize)?;
+    let b_matrix = matrix.bf16_b_global_row_major(&b, 0, k as usize, n as usize, ldb as usize)?;
+    let mut accumulator = matrix.bf16_zero_accumulator(&lane);
+    let phase_count = (k as usize).div_ceil(TILE_K_V1);
+    let mut phase = 0_usize;
+    while phase < phase_count {
+        let Some(reduction) = phase.checked_mul(TILE_K_V1) else {
+            fe2o3_device::trap();
+        };
+        let a_fragment = a_matrix.load_m16k16(&lane, tile_row_base, reduction);
+        let b_fragment = b_matrix.load_k16n16(&lane, reduction, tile_column_base);
+        accumulator = matrix.multiply_accumulate(a_fragment, b_fragment, accumulator);
+        phase += 1;
+    }
     let values = accumulator.into_values();
-    if let Some(output_tile) = output_tile {
-        if let Some(output) =
-            c.get_tiled_2d_mut(&output_tile, 0, m as usize, n as usize, ldc as usize)
-        {
-            *output = alpha * values[0] + beta * *output;
+    let mut component = 0;
+    while component < FRAGMENT_ELEMENTS_PER_LANE_V1 {
+        if !private_accumulator.store(component, values[component]) {
+            fe2o3_device::trap();
         }
-        if let Some(output) =
-            c.get_tiled_2d_mut(&output_tile, 1, m as usize, n as usize, ldc as usize)
-        {
-            *output = alpha * values[1] + beta * *output;
+        component += 1;
+    }
+
+    let output_column = tile_column_base + lane_index % TILE_N_V1;
+    let mut component = 0;
+    while component < FRAGMENT_ELEMENTS_PER_LANE_V1 {
+        let output_row = tile_row_base + (lane_index / TILE_N_V1) * 4 + component;
+        if output_row < m as usize && output_column < n as usize {
+            let Some(index) = output_row
+                .checked_mul(ldc as usize)
+                .and_then(|offset| offset.checked_add(output_column))
+            else {
+                fe2o3_device::trap();
+            };
+            let Some(product) = private_accumulator.load(component) else {
+                fe2o3_device::trap();
+            };
+            let previous = c.load(index).unwrap_or(0.0);
+            if !c.store(index, epilogue_v1(product, previous, alpha, beta)) {
+                fe2o3_device::trap();
+            }
         }
-        if let Some(output) =
-            c.get_tiled_2d_mut(&output_tile, 2, m as usize, n as usize, ldc as usize)
-        {
-            *output = alpha * values[2] + beta * *output;
-        }
-        if let Some(output) =
-            c.get_tiled_2d_mut(&output_tile, 3, m as usize, n as usize, ldc as usize)
-        {
-            *output = alpha * values[3] + beta * *output;
-        }
+        component += 1;
     }
     Ok(())
 }
@@ -166,11 +155,11 @@ mod tests {
 
     #[test]
     fn strided_extents_include_only_accessed_elements() {
-        assert_eq!(accessed_extent(3, 2, 5), 12);
-        assert_eq!(accessed_extent(0, 2, 5), 0);
-        assert_eq!(accessed_extent(3, 0, 5), 0);
+        assert_eq!(strided_extent_v1(3, 2, 5), 12);
+        assert_eq!(strided_extent_v1(0, 2, 5), 0);
+        assert_eq!(strided_extent_v1(3, 0, 5), 0);
         assert_eq!(
-            accessed_extent(u32::MAX, u32::MAX, u32::MAX),
+            strided_extent_v1(u32::MAX, u32::MAX, u32::MAX),
             u64::from(u32::MAX) * u64::from(u32::MAX)
         );
     }

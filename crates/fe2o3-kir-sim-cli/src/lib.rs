@@ -10,6 +10,7 @@ use std::process::ExitCode;
 use fe2o3_kernel_ir::{
     VerifiedSimulationBundleV1, VerifiedSimulationBundleV2, VerifiedSimulationBundleV3,
     VerifiedSimulationBundleV4, VerifiedSimulationBundleV5, VerifiedSimulationBundleV6,
+    VerifiedSimulationBundleV7, VerifiedSimulationBundleV8,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, PersistedSimulationScheduleArtifactV1,
@@ -46,6 +47,8 @@ pub struct AdmittedSimulationBundleEvidenceV1 {
     pub production_kir_version: u16,
     pub production_kir_sha256: [u8; 32],
     pub production_kir_bytes: u64,
+    /// Present only for epoch-bound bundle versions.
+    pub final_graph_epoch: Option<u64>,
     pub kernel_abi_identity: [u8; 32],
     pub identity_inventory_receipt_sha256: [u8; 32],
     pub identity_inventory_receipt_bytes: u64,
@@ -83,7 +86,40 @@ impl AdmittedSimulationInputV1 {
             self.simulation_bundle_identity,
             self.simulation_bundle_subject,
         ) {
+            (None, None) if self.module.identity().wire_version() == 12 => {
+                PersistedSimulationScheduleArtifactV1::CanonicalKirV12
+            }
             (None, None) => PersistedSimulationScheduleArtifactV1::CanonicalKirV7,
+            (Some(bundle_sha256), Some(subject_sha256))
+                if self
+                    .simulation_bundle_evidence
+                    .is_some_and(|evidence| evidence.envelope_version == 8) =>
+            {
+                let final_graph_epoch = self
+                    .simulation_bundle_evidence
+                    .and_then(|evidence| evidence.final_graph_epoch)
+                    .expect("admitted V8 evidence retains a nonzero graph epoch");
+                PersistedSimulationScheduleArtifactV1::SimulationBundleV8 {
+                    bundle_sha256,
+                    subject_sha256,
+                    final_graph_epoch,
+                }
+            }
+            (Some(bundle_sha256), Some(subject_sha256))
+                if self
+                    .simulation_bundle_evidence
+                    .is_some_and(|evidence| evidence.envelope_version == 7) =>
+            {
+                let final_graph_epoch = self
+                    .simulation_bundle_evidence
+                    .and_then(|evidence| evidence.final_graph_epoch)
+                    .expect("admitted V7 evidence retains a nonzero graph epoch");
+                PersistedSimulationScheduleArtifactV1::SimulationBundleV7 {
+                    bundle_sha256,
+                    subject_sha256,
+                    final_graph_epoch,
+                }
+            }
             (Some(bundle_sha256), Some(subject_sha256))
                 if self
                     .simulation_bundle_evidence
@@ -209,6 +245,86 @@ pub struct AdmittedSimulationBundleInputV5 {
 pub struct AdmittedSimulationBundleInputV6 {
     input: AdmittedSimulationInputV1,
     bundle: VerifiedSimulationBundleV6,
+}
+
+/// Strict V7/V12 custody plus the exact admitted request and graph epoch.
+#[derive(Debug)]
+pub struct AdmittedSimulationBundleInputV7 {
+    input: AdmittedSimulationInputV1,
+    bundle: VerifiedSimulationBundleV7,
+}
+
+/// Strict V8/V13 custody plus the exact admitted request and graph epoch.
+#[derive(Debug)]
+pub struct AdmittedSimulationBundleInputV8 {
+    input: AdmittedSimulationInputV1,
+    bundle: VerifiedSimulationBundleV8,
+}
+
+impl AdmittedSimulationBundleInputV8 {
+    pub fn input(&self) -> &AdmittedSimulationInputV1 {
+        &self.input
+    }
+    pub fn bundle(&self) -> &VerifiedSimulationBundleV8 {
+        &self.bundle
+    }
+    pub fn into_parts(self) -> (AdmittedSimulationInputV1, VerifiedSimulationBundleV8) {
+        (self.input, self.bundle)
+    }
+    pub const fn grants_proof_authority(&self) -> bool {
+        self.bundle.grants_proof_authority()
+    }
+    pub const fn grants_artifact_authority(&self) -> bool {
+        self.bundle.grants_artifact_authority()
+    }
+    pub const fn grants_compiler_authority(&self) -> bool {
+        self.bundle.grants_compiler_authority()
+    }
+    pub const fn authenticates_compiler_execution(&self) -> bool {
+        self.bundle.authenticates_compiler_execution()
+    }
+    pub const fn grants_hardware_authority(&self) -> bool {
+        self.bundle.grants_hardware_authority()
+    }
+    pub const fn grants_load_authority(&self) -> bool {
+        self.bundle.grants_load_authority()
+    }
+    pub const fn grants_launch_authority(&self) -> bool {
+        self.bundle.grants_launch_authority()
+    }
+}
+
+impl AdmittedSimulationBundleInputV7 {
+    pub fn input(&self) -> &AdmittedSimulationInputV1 {
+        &self.input
+    }
+    pub fn bundle(&self) -> &VerifiedSimulationBundleV7 {
+        &self.bundle
+    }
+    pub fn into_parts(self) -> (AdmittedSimulationInputV1, VerifiedSimulationBundleV7) {
+        (self.input, self.bundle)
+    }
+    pub const fn grants_proof_authority(&self) -> bool {
+        self.bundle.grants_proof_authority()
+    }
+    pub const fn grants_artifact_authority(&self) -> bool {
+        self.bundle.grants_artifact_authority()
+    }
+    pub const fn grants_compiler_authority(&self) -> bool {
+        self.bundle.grants_compiler_authority()
+    }
+    pub const fn authenticates_compiler_execution(&self) -> bool {
+        self.bundle.authenticates_compiler_execution()
+    }
+    pub const fn grants_hardware_authority(&self) -> bool {
+        self.bundle.grants_hardware_authority()
+    }
+    pub const fn grants_load_authority(&self) -> bool {
+        self.bundle.grants_load_authority()
+    }
+    pub const fn grants_launch_authority(&self) -> bool {
+        self.bundle.grants_launch_authority()
+    }
 }
 
 impl AdmittedSimulationBundleInputV6 {
@@ -703,6 +819,55 @@ pub fn load_debug_simulation_bundle_v6(
             stage: "platform".to_owned(),
             code: "unsupported_platform".to_owned(),
             message: "fe2o3 debugger simulation bundle V6 admission requires Linux".to_owned(),
+        })
+    }
+}
+
+/// Securely captures and admits a self-contained V7 bundle through its exact
+/// canonical KIR V12 body and bound final graph epoch. This never compiles,
+/// launches, or falls back to hardware.
+pub fn load_debug_simulation_bundle_v7(
+    bundle: &Path,
+    request: &Path,
+) -> Result<AdmittedSimulationBundleInputV7, SimulationInputErrorV1> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::load_debug_simulation_bundle_v7(
+            bundle.as_os_str().to_owned(),
+            request.as_os_str().to_owned(),
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (bundle, request);
+        Err(SimulationInputErrorV1 {
+            stage: "platform".to_owned(),
+            code: "unsupported_platform".to_owned(),
+            message: "fe2o3 debugger simulation bundle V7 admission requires Linux".to_owned(),
+        })
+    }
+}
+
+/// Securely captures and admits a self-contained V8 bundle through its exact
+/// canonical KIR V13 body and bound final graph epoch.
+pub fn load_debug_simulation_bundle_v8(
+    bundle: &Path,
+    request: &Path,
+) -> Result<AdmittedSimulationBundleInputV8, SimulationInputErrorV1> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::load_debug_simulation_bundle_v8(
+            bundle.as_os_str().to_owned(),
+            request.as_os_str().to_owned(),
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (bundle, request);
+        Err(SimulationInputErrorV1 {
+            stage: "platform".to_owned(),
+            code: "unsupported_platform".to_owned(),
+            message: "fe2o3 debugger simulation bundle V8 admission requires Linux".to_owned(),
         })
     }
 }

@@ -1,0 +1,493 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://harsh-nod.github.io/fe2o3-kernels/schema/tutorial-capability-qualification-batch-v1.json",
+  "title": "fe2o3 tutorial capability qualification batch v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "batchBindingSha256",
+    "candidate",
+    "manifest",
+    "records",
+    "roadmapIssue",
+    "schema",
+    "semanticQualification"
+  ],
+  "properties": {
+    "schema": {
+      "const": "fe2o3-tutorial-capability-qualification-batch-v1"
+    },
+    "roadmapIssue": {
+      "const": "https://github.com/harsh-nod/fe2o3/issues/272"
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "corpusContractSha256",
+        "path",
+        "rawSha256"
+      ],
+      "properties": {
+        "corpusContractSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "path": {
+          "const": "config/tutorial-kernel-manifest-v1.json"
+        },
+        "rawSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "candidate": {
+      "$ref": "#/$defs/candidate"
+    },
+    "records": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/record"
+      }
+    },
+    "semanticQualification": {
+      "$ref": "#/$defs/evidenceReference"
+    },
+    "batchBindingSha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "gitIdentity": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compilerCommit",
+        "compilerTree",
+        "worktreeClean"
+      ],
+      "properties": {
+        "compilerCommit": {
+          "$ref": "#/$defs/gitIdentity"
+        },
+        "compilerTree": {
+          "$ref": "#/$defs/gitIdentity"
+        },
+        "worktreeClean": {
+          "const": true
+        }
+      }
+    },
+    "evidenceReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bytes",
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483648
+        },
+        "path": {
+          "$ref": "#/$defs/path"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "evidenceFiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact",
+        "artifact-inspection",
+        "capability-analysis",
+        "capability-closure",
+        "compiler-input",
+        "compiler-policy",
+        "driver-identity",
+        "hardware",
+        "host-admission",
+        "launch-contract",
+        "llvm-module",
+        "lowering",
+        "machine-refinement",
+        "negative-fixture-set",
+        "numerical-policy",
+        "optimized-kir-v13",
+        "proof-checker",
+        "proof-evidence",
+        "proof-obligation-set",
+        "runtime-identity",
+        "sealed-production-receipt",
+        "semantic-mir",
+        "simulation-bundle-v8",
+        "simulator",
+        "source-closure",
+        "source-mir-to-kir-refinement",
+        "target-capability-decision",
+        "target-identity"
+      ],
+      "properties": {
+        "artifact": { "$ref": "#/$defs/evidenceReference" },
+        "artifact-inspection": { "$ref": "#/$defs/evidenceReference" },
+        "capability-analysis": { "$ref": "#/$defs/evidenceReference" },
+        "capability-closure": { "$ref": "#/$defs/evidenceReference" },
+        "compiler-input": { "$ref": "#/$defs/evidenceReference" },
+        "compiler-policy": { "$ref": "#/$defs/evidenceReference" },
+        "driver-identity": { "$ref": "#/$defs/evidenceReference" },
+        "hardware": { "$ref": "#/$defs/evidenceReference" },
+        "host-admission": { "$ref": "#/$defs/evidenceReference" },
+        "launch-contract": { "$ref": "#/$defs/evidenceReference" },
+        "llvm-module": { "$ref": "#/$defs/evidenceReference" },
+        "lowering": { "$ref": "#/$defs/evidenceReference" },
+        "machine-refinement": { "$ref": "#/$defs/evidenceReference" },
+        "negative-fixture-set": { "$ref": "#/$defs/evidenceReference" },
+        "numerical-policy": { "$ref": "#/$defs/evidenceReference" },
+        "optimized-kir-v13": { "$ref": "#/$defs/evidenceReference" },
+        "proof-checker": { "$ref": "#/$defs/evidenceReference" },
+        "proof-evidence": { "$ref": "#/$defs/evidenceReference" },
+        "proof-obligation-set": { "$ref": "#/$defs/evidenceReference" },
+        "runtime-identity": { "$ref": "#/$defs/evidenceReference" },
+        "sealed-production-receipt": { "$ref": "#/$defs/evidenceReference" },
+        "semantic-mir": { "$ref": "#/$defs/evidenceReference" },
+        "simulation-bundle-v8": { "$ref": "#/$defs/evidenceReference" },
+        "simulator": { "$ref": "#/$defs/evidenceReference" },
+        "source-closure": { "$ref": "#/$defs/evidenceReference" },
+        "source-mir-to-kir-refinement": { "$ref": "#/$defs/evidenceReference" },
+        "target-capability-decision": { "$ref": "#/$defs/evidenceReference" },
+        "target-identity": { "$ref": "#/$defs/evidenceReference" }
+      }
+    },
+    "compilerInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cargoLockSha256",
+        "contractSha256",
+        "packageManifestSha256",
+        "sourceClosureSha256"
+      ],
+      "properties": {
+        "cargoLockSha256": { "$ref": "#/$defs/sha256" },
+        "contractSha256": { "$ref": "#/$defs/sha256" },
+        "packageManifestSha256": { "$ref": "#/$defs/sha256" },
+        "sourceClosureSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "productionTransaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowsFallback",
+        "allowsPipelineSelection",
+        "pipelineEntry",
+        "policyVersion",
+        "status",
+        "transactionSha256"
+      ],
+      "properties": {
+        "allowsFallback": { "const": false },
+        "allowsPipelineSelection": { "const": false },
+        "pipelineEntry": { "const": "rustc-codegen-fe2o3::production_pipeline" },
+        "policyVersion": { "const": 4 },
+        "status": { "const": "sealed-production-complete" },
+        "transactionSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "productionEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactSha256",
+        "artifactInspectionSha256",
+        "capabilityAnalysisSha256",
+        "capabilityClosureSha256",
+        "compilerCommit",
+        "compilerPolicySha256",
+        "compilerTree",
+        "finalOptimizedKirSha256",
+        "hardwareEvidenceSha256",
+        "hostAdmissionSha256",
+        "launchContractSha256",
+        "loweringIdentitySha256",
+        "machineRefinementSha256",
+        "negativeFixtureSetSha256",
+        "numericalPolicySha256",
+        "proofCheckerSha256",
+        "proofEvidenceSha256",
+        "proofObligationSetSha256",
+        "simulatorEvidenceSha256",
+        "sourceMirIdentitySha256",
+        "sourceMirToKirRefinementSha256",
+        "targetCapabilityDecisionSha256",
+        "targetIdentitySha256"
+      ],
+      "properties": {
+        "artifactSha256": { "$ref": "#/$defs/sha256" },
+        "artifactInspectionSha256": { "$ref": "#/$defs/sha256" },
+        "capabilityAnalysisSha256": { "$ref": "#/$defs/sha256" },
+        "capabilityClosureSha256": { "$ref": "#/$defs/sha256" },
+        "compilerCommit": { "$ref": "#/$defs/gitIdentity" },
+        "compilerPolicySha256": { "$ref": "#/$defs/sha256" },
+        "compilerTree": { "$ref": "#/$defs/gitIdentity" },
+        "finalOptimizedKirSha256": { "$ref": "#/$defs/sha256" },
+        "hardwareEvidenceSha256": { "$ref": "#/$defs/sha256" },
+        "hostAdmissionSha256": { "$ref": "#/$defs/sha256" },
+        "launchContractSha256": { "$ref": "#/$defs/sha256" },
+        "loweringIdentitySha256": { "$ref": "#/$defs/sha256", "description": "Domain-separated InertAmdgpuLoweringReceiptV3 identity; the raw lowering bytes are addressed separately by evidenceFiles.lowering.sha256." },
+        "machineRefinementSha256": { "$ref": "#/$defs/sha256", "description": "Domain-separated InertCapabilityRefinementReceiptV1 machine-refinement identity; the raw receipt bytes are addressed separately by evidenceFiles.machine-refinement.sha256." },
+        "negativeFixtureSetSha256": { "$ref": "#/$defs/sha256" },
+        "numericalPolicySha256": { "$ref": "#/$defs/sha256" },
+        "proofCheckerSha256": { "$ref": "#/$defs/sha256", "description": "Domain-separated AuthenticatedCompilerCapabilityEvidenceIdentityV5 derived from the exact authenticated checker-evidence bytes; the raw bytes are addressed separately by evidenceFiles.proof-checker.sha256." },
+        "proofEvidenceSha256": { "$ref": "#/$defs/sha256", "description": "Domain-separated InertCapabilityResultSetV1 identity over the canonical pre-terminal result-set body; the full canonical bytes are addressed separately by evidenceFiles.proof-evidence.sha256." },
+        "proofObligationSetSha256": { "$ref": "#/$defs/sha256", "description": "Domain-separated InertCapabilityObligationSetV1 identity over the canonical pre-terminal obligation-set body; the full canonical bytes are addressed separately by evidenceFiles.proof-obligation-set.sha256." },
+        "simulatorEvidenceSha256": { "$ref": "#/$defs/sha256" },
+        "sourceMirIdentitySha256": { "$ref": "#/$defs/sha256" },
+        "sourceMirToKirRefinementSha256": { "$ref": "#/$defs/sha256", "description": "Domain-separated InertCapabilityRefinementReceiptV1 source-MIR-to-KIR identity; the raw receipt bytes are addressed separately by evidenceFiles.source-mir-to-kir-refinement.sha256." },
+        "targetCapabilityDecisionSha256": { "$ref": "#/$defs/sha256" },
+        "targetIdentitySha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "capabilityClosure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "requirements", "sha256", "status" ],
+      "properties": {
+        "requirements": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "status": { "const": "complete" }
+      }
+    },
+    "proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkerSha256",
+        "evidenceSha256",
+        "obligationSetSha256",
+        "properties",
+        "status"
+      ],
+      "properties": {
+        "checkerSha256": { "$ref": "#/$defs/sha256", "description": "Exact AuthenticatedCompilerCapabilityEvidenceIdentityV5, equal to productionEvidence.proofCheckerSha256." },
+        "evidenceSha256": { "$ref": "#/$defs/sha256", "description": "Exact InertCapabilityResultSetV1 typed identity, equal to productionEvidence.proofEvidenceSha256." },
+        "obligationSetSha256": { "$ref": "#/$defs/sha256", "description": "Exact InertCapabilityObligationSetV1 typed identity, equal to productionEvidence.proofObligationSetSha256." },
+        "properties": {
+          "type": "array",
+          "minItems": 4,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "status": { "const": "complete" }
+      }
+    },
+    "targetDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capabilityDecisionSha256",
+        "status",
+        "targetIdentitySha256"
+      ],
+      "properties": {
+        "capabilityDecisionSha256": { "$ref": "#/$defs/sha256" },
+        "status": { "const": "capability-complete" },
+        "targetIdentitySha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "graph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bundleContentIdentitySha256",
+        "bundleSubjectIdentitySha256",
+        "canonicalKirBytes",
+        "canonicalKirVersion",
+        "finalGraphEpoch",
+        "kernelAbiIdentitySha256",
+        "kernelCount",
+        "productionKirIdentitySha256",
+        "semanticMirIdentitySha256",
+        "sourceInventoryReceiptSha256",
+        "sourcePreflightReceiptSha256"
+      ],
+      "properties": {
+        "bundleContentIdentitySha256": { "$ref": "#/$defs/sha256" },
+        "bundleSubjectIdentitySha256": { "$ref": "#/$defs/sha256" },
+        "canonicalKirBytes": { "type": "integer", "minimum": 1 },
+        "canonicalKirVersion": { "const": 13 },
+        "finalGraphEpoch": { "type": "integer", "minimum": 1 },
+        "kernelAbiIdentitySha256": { "$ref": "#/$defs/sha256" },
+        "kernelCount": { "type": "integer", "minimum": 1 },
+        "productionKirIdentitySha256": { "$ref": "#/$defs/sha256" },
+        "semanticMirIdentitySha256": { "$ref": "#/$defs/sha256" },
+        "sourceInventoryReceiptSha256": { "$ref": "#/$defs/sha256" },
+        "sourcePreflightReceiptSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "commandResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "commandSha256", "evidenceSha256", "status", "subjectSha256" ],
+      "properties": {
+        "commandSha256": { "$ref": "#/$defs/sha256" },
+        "evidenceSha256": { "$ref": "#/$defs/sha256" },
+        "status": { "const": "passed" },
+        "subjectSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "hardwareResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactInspectionSha256",
+        "artifactSha256",
+        "canariesChecked",
+        "commandSha256",
+        "driverIdentitySha256",
+        "evidenceSha256",
+        "fullOutputChecked",
+        "inputsUnchangedChecked",
+        "lane",
+        "launchContractSha256",
+        "paddingChecked",
+        "runtimeIdentitySha256",
+        "status",
+        "subjectSha256",
+        "target",
+        "targetIdentitySha256",
+        "timeoutSeconds"
+      ],
+      "properties": {
+        "artifactInspectionSha256": { "$ref": "#/$defs/sha256" },
+        "artifactSha256": { "$ref": "#/$defs/sha256" },
+        "canariesChecked": { "const": true },
+        "commandSha256": { "$ref": "#/$defs/sha256" },
+        "driverIdentitySha256": { "$ref": "#/$defs/sha256" },
+        "evidenceSha256": { "$ref": "#/$defs/sha256" },
+        "fullOutputChecked": { "const": true },
+        "inputsUnchangedChecked": { "const": true },
+        "lane": { "enum": [ "mi300x", "mi350" ] },
+        "launchContractSha256": { "$ref": "#/$defs/sha256" },
+        "paddingChecked": { "const": true },
+        "runtimeIdentitySha256": { "$ref": "#/$defs/sha256" },
+        "status": { "const": "passed" },
+        "subjectSha256": { "$ref": "#/$defs/sha256" },
+        "target": { "type": "string", "pattern": "^gfx[0-9]{3}$" },
+        "targetIdentitySha256": { "$ref": "#/$defs/sha256" },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "negativeCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category",
+        "diagnosticCode",
+        "evidenceSha256",
+        "failureStage",
+        "fixtureId",
+        "testPath",
+        "testSha256"
+      ],
+      "properties": {
+        "category": { "type": "string", "minLength": 1 },
+        "diagnosticCode": { "type": "string", "pattern": "^FE2O3-[A-Z]+-[0-9]{3}$" },
+        "evidenceSha256": { "$ref": "#/$defs/sha256" },
+        "failureStage": { "type": "string", "minLength": 1 },
+        "fixtureId": { "$ref": "#/$defs/slug" },
+        "testPath": { "$ref": "#/$defs/path" },
+        "testSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "negativeFixtures": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "cases", "setSha256", "status" ],
+      "properties": {
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/negativeCase" }
+        },
+        "setSha256": { "$ref": "#/$defs/sha256" },
+        "status": { "const": "passed" }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capabilityClosure",
+        "compilerInput",
+        "evidenceFiles",
+        "fixtureId",
+        "graph",
+        "hardware",
+        "kernelSymbol",
+        "lessonIds",
+        "negativeFixtures",
+        "productionEvidence",
+        "productionTransaction",
+        "proof",
+        "recordBindingSha256",
+        "simulator",
+        "target",
+        "targetDecision"
+      ],
+      "properties": {
+        "capabilityClosure": { "$ref": "#/$defs/capabilityClosure" },
+        "compilerInput": { "$ref": "#/$defs/compilerInput" },
+        "evidenceFiles": { "$ref": "#/$defs/evidenceFiles" },
+        "fixtureId": { "$ref": "#/$defs/slug" },
+        "graph": { "$ref": "#/$defs/graph" },
+        "hardware": { "$ref": "#/$defs/hardwareResult" },
+        "kernelSymbol": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "lessonIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/slug" }
+        },
+        "negativeFixtures": { "$ref": "#/$defs/negativeFixtures" },
+        "productionEvidence": { "$ref": "#/$defs/productionEvidence" },
+        "productionTransaction": { "$ref": "#/$defs/productionTransaction" },
+        "proof": { "$ref": "#/$defs/proof" },
+        "recordBindingSha256": { "$ref": "#/$defs/sha256" },
+        "simulator": { "$ref": "#/$defs/commandResult" },
+        "target": { "type": "string", "pattern": "^gfx[0-9]{3}$" },
+        "targetDecision": { "$ref": "#/$defs/targetDecision" }
+      }
+    }
+  }
+}

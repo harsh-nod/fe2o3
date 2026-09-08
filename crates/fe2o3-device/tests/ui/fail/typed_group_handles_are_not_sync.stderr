@@ -13,7 +13,7 @@ note: required because it appears within the type `PhantomData<*mut ()>`
 note: required because it appears within the type `fe2o3_device::Grid<'static>`
  --> src/group.rs
   |
-  | pub struct Grid<'invocation> {
+  | pub struct Grid<'invocation, Brand = UnbrandedCapability> {
   |            ^^^^
 note: required by a bound in `assert_sync`
  --> tests/ui/fail/typed_group_handles_are_not_sync.rs:3:19
@@ -36,7 +36,7 @@ note: required because it appears within the type `PhantomData<*mut ()>`
 note: required because it appears within the type `fe2o3_device::Workgroup<'static>`
  --> src/group.rs
   |
-  | pub struct Workgroup<'invocation> {
+  | pub struct Workgroup<'invocation, Brand = UnbrandedCapability> {
   |            ^^^^^^^^^
 note: required by a bound in `assert_sync`
  --> tests/ui/fail/typed_group_handles_are_not_sync.rs:3:19
@@ -59,7 +59,7 @@ note: required because it appears within the type `PhantomData<*mut ()>`
 note: required because it appears within the type `SubgroupTile<'static, 32>`
  --> src/group.rs
   |
-  | pub struct SubgroupTile<'wave, const N: u32>
+  | pub struct SubgroupTile<'wave, const N: u32, Brand = UnbrandedCapability>
   |            ^^^^^^^^^^^^
 note: required by a bound in `assert_sync`
  --> tests/ui/fail/typed_group_handles_are_not_sync.rs:3:19

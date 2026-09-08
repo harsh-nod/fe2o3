@@ -32,6 +32,7 @@ fe2o3-artifacts.workspace = true
 fe2o3-artifact-transaction.workspace = true
 fe2o3-build-authority.workspace = true
 fe2o3-compiler-ffi.workspace = true
+fe2o3-compiler-lineage.workspace = true
 fe2o3-compiler-closure-capability.workspace = true
 fe2o3-compiler-execution-client.workspace = true
 fe2o3-compiler-execution-protocol.workspace = true
@@ -51,6 +52,9 @@ fe2o3-semantic-import.workspace = true
 fe2o3-semantic-query.workspace = true
 fe2o3-semantic-trace.workspace = true
 fe2o3-source-isa-observation.workspace = true
+fe2o3-worker-v3-verification-client.workspace = true
+fe2o3-worker-v3-verification-protocol.workspace = true
+fe2o3-worker-v3-verification-service.workspace = true
 libc.workspace = true
 proc-macro2.workspace = true
 reserved-fe2o3-symbols.workspace = true
@@ -64,7 +68,6 @@ syn = { workspace = true, features = ["visit"] }
 dialect-amdgcn.workspace = true
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 fe2o3-artifact-transaction = { workspace = true, features = ["test-hooks"] }
-fe2o3-compiler-lineage.workspace = true
 fe2o3-device.workspace = true
 fe2o3-functional-proof.workspace = true
 fe2o3-lower-mir-kernel.workspace = true

@@ -39,7 +39,7 @@ Commands:
       on the CPU. The bundle is extraction-only evidence, not GPU equivalence.
 
   simulate-source --crate NAME --request FILE [--target gfx942|gfx950]
-      [--bundle-version 1|5] [--output BUNDLE] -- <Cargo package/feature/target selection>
+      [--bundle-version 1|5|8] [--output BUNDLE] -- <Cargo package/feature/target selection>
       Export and simulate any admitted kernel crate through the same general
       source/MIR/KIR path. A temporary bundle is removed unless --output is set.
 
@@ -136,8 +136,8 @@ run_simulate_source() {
     printf '%s\n' 'quickstart: --target must be exactly gfx942 or gfx950' >&2
     return 2
   }
-  [[ "${bundle_version}" == 1 || "${bundle_version}" == 5 ]] || {
-    printf '%s\n' 'quickstart: --bundle-version must be exactly 1 or 5' >&2
+  [[ "${bundle_version}" == 1 || "${bundle_version}" == 5 || "${bundle_version}" == 8 ]] || {
+    printf '%s\n' 'quickstart: --bundle-version must be exactly 1, 5, or 8' >&2
     return 2
   }
   request="$(realpath --canonicalize-existing -- "${request}")"
@@ -175,6 +175,8 @@ run_simulate_source() {
   local simulator_input=--bundle
   if [[ "${bundle_version}" == 5 ]]; then
     simulator_input=--bundle-v5
+  elif [[ "${bundle_version}" == 8 ]]; then
+    simulator_input=--bundle-v8
   fi
   cargo_workspace run --locked --quiet -p rustc-codegen-fe2o3 \
     --bin fe2o3-export-sim -- \

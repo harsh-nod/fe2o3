@@ -1,4 +1,4 @@
-error[E0599]: no method named `clone` found for struct `DisjointIndex<IndexSpace>` in the current scope
+error[E0599]: no method named `clone` found for struct `DisjointIndex<IndexSpace, Brand>` in the current scope
  --> tests/ui/fail/disjoint_index_is_not_clone.rs:4:19
   |
 4 |     let _ = index.clone();

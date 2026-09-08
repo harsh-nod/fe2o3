@@ -40,3 +40,19 @@ This crate deliberately does not implement Pliron's `Pass` trait. The service
 materializes detached operations outside the source root, which is not a legal
 in-tree pass rewrite. Callers invoke `run_checked` and retrieve the explicit
 detached bundle from the service result.
+
+## Kernel context lowering
+
+Semantic MIR V15 `KernelContextIssue` is lowered only through the explicit
+`ProductionKernelContextLoweringInputV1` API. The lowerer derives the root
+symbol, function identity, and kernel-contract identity from the admitted
+semantic owner, requires one nonzero authenticated input for each context-
+bearing root, and emits canonical KIR V12. Legacy entry points fail closed
+instead of erasing the logical zero-sized value.
+
+The production compiler adapter must authenticate the physical root, logical
+helper, nominal marker, and unique issuance record from the frontend sidecar;
+derive the compilation-unit, marker, target-brand, launch-brand, and issuance
+identities; and pass them to `try_lower_with_kernel_contexts`,
+`try_lower_after_ranked_checks_with_kernel_context`, or the ranked-roster API.
+The lowerer intentionally does not derive these identities from source names.

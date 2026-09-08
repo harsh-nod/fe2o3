@@ -6,15 +6,18 @@ use crate::ranked_memory::CheckedAccessCapabilityType;
 use crate::{
     AccessKindAttr, AlgorithmOp, AlgorithmType, AllocationEffectOp, AllocationOriginAttr,
     AnalysisSplitControlCountAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr,
-    BranchArgsOp, BranchOp, CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DIALECT_NAME,
-    DeterministicJoinOp, DimensionAttr, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp,
-    IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp,
-    IndexLessThanBranchOp, IndexType, IndexUnknownOp, IndexUnsignedCastOp, IndexValueAttr,
-    InvocationDimensionAttr, InvocationIndexOp, IterationDomainAttr, LaunchExtentAttr,
-    MemorySpaceAttr, NoAliasClassAttr, OwnershipContractOp, OwnershipCoverageAttr,
-    OwnershipPartitionAttr, PipelineCreateOp, PipelineEventKindAttr, PipelineEventOp, PipelineType,
-    RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, RequireFiniteFoldOp,
-    RequireFiniteRecurrenceOp, RequirePermutationGatherOp, ReturnOp, SemanticBinaryKindAttr,
+    BranchArgsOp, BranchOp, CanonicalIdentityAttr, CheckedRowStripedIndex2DOp,
+    CheckedTiledIndex2DOp, DIALECT_NAME, DeterministicJoinOp, DimensionAttr, DimensionOp,
+    ExecutionCapabilityContractAttr, ExecutionCapabilityType, ExecutionRequirementAttr,
+    ExecutionRequirementOp, GraphContractOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
+    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
+    IndexType, IndexUnknownOp, IndexUnsignedCastOp, IndexValueAttr, InvocationDimensionAttr,
+    InvocationIndexOp, IterationDomainAttr, KernelContextIssueOp, KernelContextType,
+    LaunchExtentAttr, MemorySpaceAttr, NoAliasClassAttr, OwnershipContractOp,
+    OwnershipCoverageAttr, OwnershipPartitionAttr, PipelineCreateOp, PipelineEventKindAttr,
+    PipelineEventOp, PipelineType, RankedAccessOp, RankedViewOp, RankedViewType,
+    RequireEquivalentOp, RequireFiniteFoldOp, RequireFiniteRecurrenceOp,
+    RequirePermutationGatherOp, RequirementOrdinalAttr, ReturnOp, SemanticBinaryKindAttr,
     SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp, SemanticCoverageBindingAttr,
     SemanticDomainBoundAttr, SemanticEvaluationOrderAttr, SemanticExceptionalValueAttr,
     SemanticExpressionCommitmentAttr, SemanticExpressionCommitmentOp, SemanticIeeeRoundingAttr,
@@ -23,8 +26,9 @@ use crate::{
     SemanticTypedBinaryOp, SemanticTypedCastKindAttr, SemanticTypedCastOp,
     SemanticTypedCompareKindAttr, SemanticTypedCompareOp, SemanticTypedConstantOp,
     SemanticTypedExpressionRootOp, SemanticTypedSelectOp, SemanticTypedSymbolOp,
-    SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp, TensorConvergenceAttr, TensorFragmentAttr,
-    TensorInstructionAttr, TensorLayoutOp, TensorResultComponentOp, TensorValueRootAttr, TrapOp,
+    SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp, SourceCoordinateAttr, TensorConvergenceAttr,
+    TensorFragmentAttr, TensorInstructionAttr, TensorLayoutOp, TensorResultComponentOp,
+    TensorValueRootAttr, TrapOp,
 };
 
 fn registration_hook(
@@ -38,6 +42,8 @@ fn registration_hook(
     service.register_type::<CheckedAccessCapabilityType>()?;
     service.register_type::<PipelineType>()?;
     service.register_type::<SemanticScalarType>()?;
+    service.register_type::<KernelContextType>()?;
+    service.register_type::<ExecutionCapabilityType>()?;
     service.register_attribute::<SemanticScalarKindAttr>()?;
     service.register_attribute::<SemanticTypedUnaryKindAttr>()?;
     service.register_attribute::<SemanticTypedBinaryKindAttr>()?;
@@ -74,6 +80,11 @@ fn registration_hook(
     service.register_attribute::<TensorFragmentAttr>()?;
     service.register_attribute::<TensorValueRootAttr>()?;
     service.register_attribute::<PipelineEventKindAttr>()?;
+    service.register_attribute::<CanonicalIdentityAttr>()?;
+    service.register_attribute::<SourceCoordinateAttr>()?;
+    service.register_attribute::<RequirementOrdinalAttr>()?;
+    service.register_attribute::<ExecutionRequirementAttr>()?;
+    service.register_attribute::<ExecutionCapabilityContractAttr>()?;
     service.register_operation::<AlgorithmOp>()?;
     service.register_operation::<RankedViewOp>()?;
     service.register_operation::<PipelineCreateOp>()?;
@@ -117,6 +128,9 @@ fn registration_hook(
     service.register_operation::<RequireFiniteRecurrenceOp>()?;
     service.register_operation::<RequirePermutationGatherOp>()?;
     service.register_operation::<TensorLayoutOp>()?;
+    service.register_operation::<GraphContractOp>()?;
+    service.register_operation::<ExecutionRequirementOp>()?;
+    service.register_operation::<KernelContextIssueOp>()?;
     Ok(())
 }
 

@@ -925,9 +925,7 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                             SemanticAggregateKindV1::Aggregate
                         }
                     }
-                    AggregateKind::Closure(..) => {
-                        return Err(unsupported("closure aggregate rvalue", block, statement));
-                    }
+                    AggregateKind::Closure(..) => SemanticAggregateKindV1::Aggregate,
                     AggregateKind::CoroutineClosure(..) => {
                         return Err(unsupported(
                             "coroutine-closure aggregate rvalue",
@@ -2135,7 +2133,11 @@ fn semantic_borrow_kind_v1(
 
 const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) -> Option<usize> {
     match expansion {
-        ProductionTerminalExpansionV1::ThreadIndex(_)
+        ProductionTerminalExpansionV1::Execution(terminal) => {
+            Some(terminal.source_argument_count())
+        }
+        ProductionTerminalExpansionV1::KernelContextIssue
+        | ProductionTerminalExpansionV1::ThreadIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupDimension(_)
         | ProductionTerminalExpansionV1::GridDimension(_)
@@ -2150,7 +2152,8 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent
         | ProductionTerminalExpansionV1::Trap
         | ProductionTerminalExpansionV1::ColdPath => Some(0),
-        ProductionTerminalExpansionV1::ThreadIndexGet
+        ProductionTerminalExpansionV1::Invocation3DIndex1D
+        | ProductionTerminalExpansionV1::ThreadIndexGet
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorZero
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues
         | ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorZero
@@ -2170,6 +2173,9 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::DisjointSliceLen => Some(1),
         ProductionTerminalExpansionV1::SubgroupReduceSumF32
         | ProductionTerminalExpansionV1::SubgroupReduceMaxF32
+        | ProductionTerminalExpansionV1::CapabilityGlobalBindReadOnly
+        | ProductionTerminalExpansionV1::CapabilityGlobalBindDisjointWrite
+        | ProductionTerminalExpansionV1::CapabilityGlobalLoad
         | ProductionTerminalExpansionV1::Gfx950SubgroupReduceMaxF32
         | ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32
         | ProductionTerminalExpansionV1::DisjointBlockComponentIndex
@@ -2181,6 +2187,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::WorkgroupPipelineDiscard
         | ProductionTerminalExpansionV1::WorkgroupPipelineRelease => Some(2),
         ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32
+        | ProductionTerminalExpansionV1::CapabilityGlobalStore
         | ProductionTerminalExpansionV1::WorkgroupPipelineRead
         | ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum
         | ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum
@@ -2336,6 +2343,10 @@ mod tests {
         assert_eq!(
             terminal_argument_count_v1(ProductionTerminalExpansionV1::ThreadIndex1d),
             Some(0)
+        );
+        assert_eq!(
+            terminal_argument_count_v1(ProductionTerminalExpansionV1::Invocation3DIndex1D),
+            Some(1)
         );
         assert_eq!(
             terminal_argument_count_v1(ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent),

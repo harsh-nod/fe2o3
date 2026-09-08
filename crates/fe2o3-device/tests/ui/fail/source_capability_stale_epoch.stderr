@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail/source_capability_stale_epoch.rs:9:22
+  |
+9 |     let _ = lds.read(current, 0);
+  |                 ---- ^^^^^^^ expected `&WorkgroupCapability<'_, Brand>`, found `&WorkgroupCapability<'_, Brand, ...>`
+  |                 |
+  |                 arguments to this method are incorrect
+  |
+  = note: expected reference `&WorkgroupCapability<'_, Brand, InitialEpoch>`
+             found reference `&WorkgroupCapability<'workgroup, Brand, NextEpoch<InitialEpoch>>`
+note: method defined here
+ --> src/execution.rs
+  |
+  |     pub fn read(
+  |            ^^^^

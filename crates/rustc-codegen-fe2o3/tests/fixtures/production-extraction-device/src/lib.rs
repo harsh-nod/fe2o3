@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(feature = "execution-capability-v17")]
+mod execution_capability_v17;
+
 #[cfg(feature = "atomic-rmw")]
 use fe2o3_device::DeviceGlobalMutPtr;
 #[cfg(any(feature = "write-only-output", feature = "write-only-disjoint-output"))]
@@ -44,6 +47,7 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
     feature = "fabs-f32",
     feature = "is-finite-fabs-f32",
     feature = "volatile-load-f32",
+    feature = "execution-capability-v17",
 )))]
 #[kernel(typed)]
 pub fn fill(mut output: DisjointSlice<u32>) {

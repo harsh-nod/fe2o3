@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail/source_capability_exclusive_global_cross_kernel.rs:9:13
+  |
+9 |     needs_a(output);
+  |     ------- ^^^^^^ expected `KernelA`, found `KernelB`
+  |     |
+  |     arguments to this function are incorrect
+  |
+  = note: expected struct `CapabilityMemoryView<'_, f32, GlobalAddressSpace, ExclusiveReadWrite, KernelA>`
+             found struct `CapabilityMemoryView<'_, f32, GlobalAddressSpace, ExclusiveReadWrite, KernelB>`
+note: function defined here
+ --> tests/ui/fail/source_capability_exclusive_global_cross_kernel.rs:6:4
+  |
+6 | fn needs_a(_: Global<'_, f32, ExclusiveReadWrite, KernelA>) {}
+  |    ^^^^^^^ -----------------------------------------------

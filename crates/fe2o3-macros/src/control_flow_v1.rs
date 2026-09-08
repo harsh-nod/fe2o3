@@ -180,6 +180,10 @@ impl DirectControlFlowUseVisitor {
 }
 
 impl<'ast> Visit<'ast> for DirectControlFlowUseVisitor {
+    fn visit_item(&mut self, _item: &'ast syn::Item) {}
+
+    fn visit_expr_const(&mut self, _expression: &'ast syn::ExprConst) {}
+
     fn visit_expr_loop(&mut self, expression: &'ast ExprLoop) {
         self.record(expression.loop_token.span, "loop");
         syn::visit::visit_expr_loop(self, expression);
@@ -387,7 +391,12 @@ impl LiteralForLowerer<'_> {
             (false, _) => start_suffix,
             (_, false) => end_suffix,
             (true, true) => "",
-        };
+        }
+        .to_owned();
+        self.visit_block_mut(&mut for_loop.body);
+        if self.error.is_some() {
+            return;
+        }
         let mut copies = Vec::with_capacity(iterations as usize);
         for (copy_index, value) in (start_value..end_value).enumerate() {
             let continue_label = syn::Lifetime::new(
@@ -426,6 +435,8 @@ impl LiteralForLowerer<'_> {
 }
 
 impl VisitMut for LiteralForLowerer<'_> {
+    fn visit_item_mut(&mut self, _item: &mut syn::Item) {}
+
     fn visit_expr_mut(&mut self, expression: &mut Expr) {
         if self.error.is_some() {
             return;
@@ -438,10 +449,12 @@ impl VisitMut for LiteralForLowerer<'_> {
             }
             Expr::While(while_expression) => {
                 if self.take_bound(while_expression.span()).is_some() {
+                    self.visit_expr_mut(&mut while_expression.cond);
                     self.visit_block_mut(&mut while_expression.body);
                 }
             }
             Expr::ForLoop(_) => self.lower_for(expression),
+            Expr::Const(_) => {}
             _ => syn::visit_mut::visit_expr_mut(self, expression),
         }
     }
@@ -460,7 +473,10 @@ impl VisitMut for LoopExitRewriter<'_> {
         }
         match expression {
             Expr::Break(break_expression) => {
-                if break_expression.label.is_some() || break_expression.expr.is_some() {
+                if break_expression.label.is_some() {
+                    return;
+                }
+                if break_expression.expr.is_some() {
                     self.error = Some(syn::Error::new_spanned(
                         break_expression,
                         "bounded for lowering supports only unlabeled break without a value",
@@ -472,22 +488,14 @@ impl VisitMut for LoopExitRewriter<'_> {
             }
             Expr::Continue(continue_expression) => {
                 if continue_expression.label.is_some() {
-                    self.error = Some(syn::Error::new_spanned(
-                        continue_expression,
-                        "bounded for lowering supports only unlabeled continue",
-                    ));
+                    return;
                 } else {
                     let label = self.continue_label;
                     *expression =
                         syn::parse_quote_spanned!(continue_expression.span()=> break #label);
                 }
             }
-            Expr::Loop(_) | Expr::While(_) | Expr::ForLoop(_) => {
-                self.error = Some(syn::Error::new_spanned(
-                    expression,
-                    "bounded for lowering does not support nested loops",
-                ));
-            }
+            Expr::Loop(_) | Expr::While(_) | Expr::ForLoop(_) => {}
             _ => syn::visit_mut::visit_expr_mut(self, expression),
         }
     }
@@ -610,12 +618,89 @@ struct LoopContext {
     breaks: Vec<PendingEdge>,
 }
 
+struct ClosureContext {
+    loop_base: usize,
+    returns: Vec<PendingEdge>,
+}
+
+#[derive(Default)]
+struct NestedExpressionVisitor<'ast> {
+    expressions: Vec<&'ast Expr>,
+    error: Option<syn::Error>,
+}
+
+impl NestedExpressionVisitor<'_> {
+    fn reject(&mut self, expression: &Expr, message: &'static str) {
+        if self.error.is_none() {
+            self.error = Some(syn::Error::new_spanned(expression, message));
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for NestedExpressionVisitor<'ast> {
+    fn visit_expr(&mut self, expression: &'ast Expr) {
+        if self.error.is_some() {
+            return;
+        }
+        match expression {
+            Expr::Block(_)
+            | Expr::Unsafe(_)
+            | Expr::If(_)
+            | Expr::Loop(_)
+            | Expr::While(_)
+            | Expr::ForLoop(_)
+            | Expr::Break(_)
+            | Expr::Continue(_)
+            | Expr::Match(_)
+            | Expr::Return(_)
+            | Expr::Closure(_) => self.expressions.push(expression),
+            Expr::Const(_) => {}
+            Expr::Async(_) => self.reject(
+                expression,
+                "async expressions are unsupported by the V1 kernel sidecar",
+            ),
+            Expr::Await(_) => self.reject(
+                expression,
+                "await expressions are unsupported by the V1 kernel sidecar",
+            ),
+            Expr::TryBlock(_) => self.reject(
+                expression,
+                "try blocks are unsupported by the V1 kernel sidecar",
+            ),
+            Expr::Yield(_) => self.reject(
+                expression,
+                "yield expressions are unsupported by the V1 kernel sidecar",
+            ),
+            Expr::Verbatim(_) => self.reject(
+                expression,
+                "unparsed expressions are unsupported by the V1 kernel sidecar",
+            ),
+            _ => syn::visit::visit_expr(self, expression),
+        }
+    }
+
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        let is_assembly = invocation
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "asm");
+        if !is_assembly && self.error.is_none() {
+            self.error = Some(syn::Error::new(
+                invocation.span(),
+                "expression macros are opaque to the V1 kernel control-flow sidecar",
+            ));
+        }
+    }
+}
+
 struct GraphBuilder<'a> {
     declaration: &'a ParsedControlFlowOptionsV1,
     nodes: Vec<TempNode>,
     loop_cursor: usize,
     switch_cursor: usize,
     loops: Vec<LoopContext>,
+    closures: Vec<ClosureContext>,
     function_exit: usize,
 }
 
@@ -637,6 +722,7 @@ impl<'a> GraphBuilder<'a> {
             loop_cursor: 0,
             switch_cursor: 0,
             loops: Vec::new(),
+            closures: Vec::new(),
             function_exit: 1,
         })
     }
@@ -696,8 +782,8 @@ impl<'a> GraphBuilder<'a> {
                 let Some(init) = &local.init else {
                     return self.simple(statement.span());
                 };
+                let initializer = self.build_expression(&init.expr)?;
                 if let Some((_, diverge)) = &init.diverge {
-                    reject_nested_control_flow(&init.expr)?;
                     let branch = self.push_node(
                         local.span(),
                         TempNodeKind::Branch {
@@ -717,12 +803,13 @@ impl<'a> GraphBuilder<'a> {
                         &mut exits,
                     )?;
                     exits.extend(else_fragment.exits);
-                    return Ok(Fragment {
+                    let pattern_branch = Fragment {
                         entry: Some(branch),
                         exits,
-                    });
+                    };
+                    return self.sequence(initializer, pattern_branch, local.span());
                 }
-                self.build_expression(&init.expr)
+                Ok(initializer)
             }
             Stmt::Item(_) => Ok(Fragment::default()),
             Stmt::Expr(expression, _) => self.build_expression(expression),
@@ -737,6 +824,7 @@ impl<'a> GraphBuilder<'a> {
         match expression {
             Expr::Block(expression) => self.build_block(&expression.block),
             Expr::Unsafe(expression) => self.build_block(&expression.block),
+            Expr::Closure(expression) => self.build_closure(expression),
             Expr::If(expression) => self.build_if(expression),
             Expr::Loop(expression) => self.build_loop(expression),
             Expr::While(expression) => self.build_while(expression),
@@ -744,34 +832,109 @@ impl<'a> GraphBuilder<'a> {
             Expr::Break(expression) => self.build_break(expression),
             Expr::Continue(expression) => self.build_continue(expression),
             Expr::Match(expression) => self.build_match(expression),
-            Expr::Assign(expression) => {
-                reject_nested_control_flow(&expression.left)?;
-                self.build_expression(&expression.right)
-            }
-            Expr::Return(expression) => {
-                if let Some(value) = &expression.expr {
-                    reject_nested_control_flow(value)?;
-                }
-                let node = self.push_node(
-                    expression.span(),
-                    TempNodeKind::Block {
-                        target: Some(self.function_exit),
-                    },
-                )?;
-                Ok(Fragment {
-                    entry: Some(node),
-                    exits: Vec::new(),
-                })
-            }
-            _ => {
-                reject_nested_control_flow(expression)?;
-                self.simple(expression.span())
-            }
+            Expr::Return(expression) => self.build_return(expression),
+            Expr::Const(_) => self.simple(expression.span()),
+            Expr::Async(_) => Err(syn::Error::new_spanned(
+                expression,
+                "async expressions are unsupported by the V1 kernel sidecar",
+            )),
+            Expr::Await(_) => Err(syn::Error::new_spanned(
+                expression,
+                "await expressions are unsupported by the V1 kernel sidecar",
+            )),
+            Expr::TryBlock(_) => Err(syn::Error::new_spanned(
+                expression,
+                "try blocks are unsupported by the V1 kernel sidecar",
+            )),
+            Expr::Yield(_) => Err(syn::Error::new_spanned(
+                expression,
+                "yield expressions are unsupported by the V1 kernel sidecar",
+            )),
+            Expr::Verbatim(_) => Err(syn::Error::new_spanned(
+                expression,
+                "unparsed expressions are unsupported by the V1 kernel sidecar",
+            )),
+            _ => self.build_expression_contents(expression),
         }
     }
 
+    fn build_expression_contents(&mut self, expression: &Expr) -> syn::Result<Fragment> {
+        let mut visitor = NestedExpressionVisitor::default();
+        syn::visit::visit_expr(&mut visitor, expression);
+        if let Some(error) = visitor.error {
+            return Err(error);
+        }
+
+        let mut result = Fragment::default();
+        for nested in visitor.expressions {
+            if result.entry.is_some() && result.exits.is_empty() {
+                break;
+            }
+            let next = self.build_expression(nested)?;
+            result = self.sequence(result, next, nested.span())?;
+        }
+        if result.entry.is_some() && result.exits.is_empty() {
+            return Ok(result);
+        }
+        let operation = self.simple(expression.span())?;
+        self.sequence(result, operation, expression.span())
+    }
+
+    fn build_closure(&mut self, expression: &syn::ExprClosure) -> syn::Result<Fragment> {
+        if expression.asyncness.is_some() {
+            return Err(syn::Error::new_spanned(
+                expression,
+                "async closures are unsupported by the V1 kernel sidecar",
+            ));
+        }
+        self.closures.push(ClosureContext {
+            loop_base: self.loops.len(),
+            returns: Vec::new(),
+        });
+        let body = self.build_expression(&expression.body);
+        let closure = self
+            .closures
+            .pop()
+            .expect("closure context was just pushed");
+        let mut body = body?;
+        body.exits.extend(closure.returns);
+        if body.entry.is_none() {
+            self.simple(expression.span())
+        } else {
+            Ok(body)
+        }
+    }
+
+    fn build_return(&mut self, expression: &syn::ExprReturn) -> syn::Result<Fragment> {
+        let value = match &expression.expr {
+            Some(value) => self.build_expression(value)?,
+            None => Fragment::default(),
+        };
+        let in_closure = !self.closures.is_empty();
+        let node = self.push_node(
+            expression.span(),
+            TempNodeKind::Block {
+                target: (!in_closure).then_some(self.function_exit),
+            },
+        )?;
+        if let Some(closure) = self.closures.last_mut() {
+            closure.returns.push(PendingEdge {
+                node,
+                slot: PendingSlot::BlockTarget,
+            });
+        }
+        self.sequence(
+            value,
+            Fragment {
+                entry: Some(node),
+                exits: Vec::new(),
+            },
+            expression.span(),
+        )
+    }
+
     fn build_if(&mut self, expression: &ExprIf) -> syn::Result<Fragment> {
-        reject_nested_control_flow(&expression.cond)?;
+        let condition = self.build_expression(&expression.cond)?;
         let branch = self.push_node(
             expression.span(),
             TempNodeKind::Branch {
@@ -799,10 +962,14 @@ impl<'a> GraphBuilder<'a> {
         )?;
         exits.extend(then_fragment.exits);
         exits.extend(else_fragment.exits);
-        Ok(Fragment {
-            entry: Some(branch),
-            exits,
-        })
+        self.sequence(
+            condition,
+            Fragment {
+                entry: Some(branch),
+                exits,
+            },
+            expression.span(),
+        )
     }
 
     fn build_loop(&mut self, expression: &ExprLoop) -> syn::Result<Fragment> {
@@ -814,21 +981,51 @@ impl<'a> GraphBuilder<'a> {
     }
 
     fn build_while(&mut self, expression: &ExprWhile) -> syn::Result<Fragment> {
-        reject_nested_control_flow(&expression.cond)?;
-        self.build_loop_block(
-            expression.label.as_ref(),
-            &expression.body,
-            expression.span(),
-        )
+        let header = self.begin_loop(expression.label.as_ref(), expression.span())?;
+        let condition = self.build_expression(&expression.cond)?;
+        let branch = self.push_node(
+            expression.cond.span(),
+            TempNodeKind::Branch {
+                then_target: None,
+                else_target: None,
+            },
+        )?;
+        let body = self.build_block(&expression.body)?;
+        let context = self.loops.pop().expect("loop context was just pushed");
+
+        let condition_target = condition.entry.unwrap_or(branch);
+        match &mut self.nodes[header].kind {
+            TempNodeKind::Loop { body, .. } => *body = Some(condition_target),
+            _ => unreachable!("loop header retained its node kind"),
+        }
+        self.patch_all(condition.exits, branch)?;
+
+        let mut back_edges = body.exits;
+        self.bind_fragment_entry(branch, PendingSlot::BranchThen, body.entry, &mut back_edges)?;
+        self.patch_all(back_edges, header)?;
+        let mut exits = vec![
+            PendingEdge {
+                node: header,
+                slot: PendingSlot::LoopExit,
+            },
+            PendingEdge {
+                node: branch,
+                slot: PendingSlot::BranchElse,
+            },
+        ];
+        exits.extend(context.breaks);
+        Ok(Fragment {
+            entry: Some(header),
+            exits,
+        })
     }
 
     fn build_for(&mut self, expression: &ExprForLoop) -> syn::Result<Fragment> {
-        reject_nested_control_flow(&expression.expr)?;
-        self.build_loop_block(
-            expression.label.as_ref(),
-            &expression.body,
-            expression.span(),
-        )
+        let header = self.begin_loop(expression.label.as_ref(), expression.span())?;
+        let iterator = self.build_expression(&expression.expr)?;
+        let body = self.build_block(&expression.body)?;
+        let loop_fragment = self.finish_loop(header, body)?;
+        self.sequence(iterator, loop_fragment, expression.span())
     }
 
     fn build_loop_block(
@@ -837,6 +1034,12 @@ impl<'a> GraphBuilder<'a> {
         body: &Block,
         span: Span,
     ) -> syn::Result<Fragment> {
+        let header = self.begin_loop(label, span)?;
+        let body = self.build_block(body)?;
+        self.finish_loop(header, body)
+    }
+
+    fn begin_loop(&mut self, label: Option<&syn::Label>, span: Span) -> syn::Result<usize> {
         let Some(max_iterations) = self.declaration.loop_bounds.get(self.loop_cursor).copied()
         else {
             return Err(syn::Error::new(
@@ -858,7 +1061,10 @@ impl<'a> GraphBuilder<'a> {
             header,
             breaks: Vec::new(),
         });
-        let body = self.build_block(body)?;
+        Ok(header)
+    }
+
+    fn finish_loop(&mut self, header: usize, body: Fragment) -> syn::Result<Fragment> {
         let context = self.loops.pop().expect("loop context was just pushed");
         let body_target = body.entry.unwrap_or(header);
         match &mut self.nodes[header].kind {
@@ -920,7 +1126,6 @@ impl<'a> GraphBuilder<'a> {
     }
 
     fn build_match(&mut self, expression: &ExprMatch) -> syn::Result<Fragment> {
-        reject_nested_control_flow(&expression.expr)?;
         let Some(ty) = self
             .declaration
             .integer_switches
@@ -941,6 +1146,7 @@ impl<'a> GraphBuilder<'a> {
                 default: None,
             },
         )?;
+        let discriminant = self.build_expression(&expression.expr)?;
 
         let mut exits = Vec::new();
         let arm_count = expression.arms.len();
@@ -1039,21 +1245,27 @@ impl<'a> GraphBuilder<'a> {
                 "integer switch exceeds 256 canonical cases",
             ));
         }
-        Ok(Fragment {
-            entry: Some(switch),
-            exits,
-        })
+        self.sequence(
+            discriminant,
+            Fragment {
+                entry: Some(switch),
+                exits,
+            },
+            expression.span(),
+        )
     }
 
     fn resolve_loop(&self, label: Option<&syn::Lifetime>, span: Span) -> syn::Result<usize> {
+        let loop_base = self.closures.last().map_or(0, |closure| closure.loop_base);
         let index = match label {
             Some(label) => {
                 let name = label.ident.to_string();
-                self.loops
+                self.loops[loop_base..]
                     .iter()
                     .rposition(|context| context.label.as_deref() == Some(name.as_str()))
+                    .map(|index| loop_base + index)
             }
-            None => self.loops.len().checked_sub(1),
+            None => (self.loops.len() > loop_base).then(|| self.loops.len() - 1),
         };
         index.ok_or_else(|| {
             syn::Error::new(
@@ -1204,46 +1416,6 @@ impl<'a> GraphBuilder<'a> {
         let length = u32::try_from(writer.bytes.len()).expect("1 MiB fits u32");
         writer.bytes[12..16].copy_from_slice(&length.to_le_bytes());
         Ok(writer.bytes)
-    }
-}
-
-fn reject_nested_control_flow(expression: &Expr) -> syn::Result<()> {
-    let mut visitor = DirectControlFlowUseVisitor::default();
-    visitor.visit_expr(expression);
-    if let Some((span, kind)) = visitor.first {
-        return Err(syn::Error::new(
-            span,
-            format!(
-                "{kind} nested in this expression position is unsupported by the V1 kernel sidecar"
-            ),
-        ));
-    }
-    let mut macro_visitor = OpaqueMacroVisitor::default();
-    macro_visitor.visit_expr(expression);
-    if let Some(span) = macro_visitor.first {
-        return Err(syn::Error::new(
-            span,
-            "expression macros are opaque to the V1 kernel control-flow sidecar",
-        ));
-    }
-    Ok(())
-}
-
-#[derive(Default)]
-struct OpaqueMacroVisitor {
-    first: Option<Span>,
-}
-
-impl<'ast> Visit<'ast> for OpaqueMacroVisitor {
-    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
-        let is_assembly = invocation
-            .path
-            .segments
-            .last()
-            .is_some_and(|segment| segment.ident == "asm");
-        if !is_assembly && self.first.is_none() {
-            self.first = Some(invocation.span());
-        }
     }
 }
 
@@ -1647,6 +1819,176 @@ mod tests {
     }
 
     #[test]
+    fn nested_capability_closures_preserve_lexical_control_flow_and_generics() {
+        let mut input: ItemFn = parse_quote! {
+            fn kernel<const TILE: usize>(context: Context, subgroup: Subgroup, mut value: u32) {
+                helper::<TILE>({
+                    if value == 0 { value = 1; }
+                    value
+                });
+                context.with_workgroup(|workgroup| {
+                    let mut tile = 0usize;
+                    while tile < TILE {
+                        let class = consume(match value {
+                            0 => 1,
+                            _ => 2,
+                        });
+                        let matrix_value = workgroup.with_phase(|phase| {
+                            subgroup.with_matrix(phase, |matrix| {
+                                let mut lane = 0usize;
+                                while lane < 4 {
+                                    value += matrix.read(lane);
+                                    lane += 1;
+                                }
+                                value
+                            })
+                        });
+                        for offset in 0usize..2usize {
+                            if offset == 1 { continue; }
+                            value += class + matrix_value + offset as u32;
+                        }
+                        tile += 1;
+                    }
+                });
+            }
+        };
+        let declaration = parse_control_flow_options_v1(&parse_quote!(control_flow(
+            loop_bounds(8, 4, 2),
+            integer_switches(u32)
+        )))
+        .unwrap();
+
+        let sidecar = analyze_kernel_control_flow_v1(&input, Some(&declaration))
+            .unwrap()
+            .unwrap();
+        lower_bounded_for_loops_v1(&mut input, Some(&declaration)).unwrap();
+
+        let lowered = quote!(#input).to_string();
+        assert!(lowered.contains("const TILE : usize"), "{lowered}");
+        assert!(lowered.contains("helper :: < TILE >"), "{lowered}");
+        assert!(lowered.contains("with_workgroup"), "{lowered}");
+        assert!(lowered.contains("with_matrix"), "{lowered}");
+        assert!(!lowered.contains("for offset in"), "{lowered}");
+        assert_eq!(lowered.matches("let offset =").count(), 2, "{lowered}");
+        assert_eq!(&sidecar[..8], &CONTROL_FLOW_CONTRACT_MAGIC_V1);
+    }
+
+    #[test]
+    fn flash_attention_source_preserves_nested_capability_control_flow() {
+        let source = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../examples/flash_attention_general_v1/src/kernel.rs"
+        ));
+        let file = syn::parse_file(source).unwrap();
+        let input = file
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::Item::Fn(function) if function.sig.ident == "flash_attention_general_v1" => {
+                    Some(function)
+                }
+                _ => None,
+            })
+            .expect("flash attention kernel remains present");
+        let kernel_options = input
+            .attrs
+            .iter()
+            .find_map(|attribute| match &attribute.meta {
+                syn::Meta::List(list) if list.path.is_ident("kernel") => {
+                    Some(crate::parse_kernel_options(list.tokens.clone()).unwrap())
+                }
+                _ => None,
+            })
+            .expect("flash attention kernel remains attributed");
+
+        let source_declaration = kernel_options
+            .control_flow
+            .as_ref()
+            .expect("flash attention declares control flow");
+        assert_eq!(source_declaration.loop_bounds, vec![256, 64, 16, 4]);
+        let sidecar = analyze_kernel_control_flow_v1(input, Some(source_declaration))
+            .unwrap()
+            .unwrap();
+        let contract = fe2o3_rustc_front::decode_control_flow_contract_v1(&sidecar).unwrap();
+        assert_eq!(
+            contract
+                .nodes()
+                .iter()
+                .filter(|node| matches!(
+                    node.kind(),
+                    fe2o3_rustc_front::ControlFlowNodeKindV1::Loop { .. }
+                ))
+                .count(),
+            4
+        );
+
+        let mut lowered = input.clone();
+        lower_bounded_for_loops_v1(&mut lowered, Some(source_declaration)).unwrap();
+    }
+
+    #[test]
+    fn nested_literal_for_loops_lower_with_independent_exit_scopes() {
+        let mut input: ItemFn = parse_quote! {
+            fn kernel(mut sum: u32) {
+                for outer in 0u32..2u32 {
+                    for inner in 0u32..2u32 {
+                        if inner == 0 { continue; }
+                        sum += outer + inner;
+                    }
+                    while sum < 4 { break; }
+                }
+            }
+        };
+        let declaration = ParsedControlFlowOptionsV1 {
+            loop_bounds: vec![2, 2, 4],
+            integer_switches: Vec::new(),
+        };
+
+        analyze_kernel_control_flow_v1(&input, Some(&declaration)).unwrap();
+        lower_bounded_for_loops_v1(&mut input, Some(&declaration)).unwrap();
+
+        let lowered = quote!(#input).to_string();
+        assert!(!lowered.contains("for outer in"), "{lowered}");
+        assert!(!lowered.contains("for inner in"), "{lowered}");
+        assert!(lowered.contains("while sum < 4"), "{lowered}");
+        assert_eq!(lowered.matches("let outer =").count(), 2, "{lowered}");
+        assert_eq!(lowered.matches("let inner =").count(), 4, "{lowered}");
+    }
+
+    #[test]
+    fn unsupported_nested_control_flow_forms_fail_closed_stably() {
+        let declaration =
+            parse_control_flow_options_v1(&parse_quote!(control_flow(loop_bounds(1)))).unwrap();
+        let cases: Vec<(ItemFn, &str)> = vec![
+            (
+                parse_quote! {
+                    fn kernel() { let _future = async { loop { break; } }; }
+                },
+                "async expressions are unsupported by the V1 kernel sidecar",
+            ),
+            (
+                parse_quote! {
+                    fn kernel() { invoke(async || { loop { break; } }); }
+                },
+                "async closures are unsupported by the V1 kernel sidecar",
+            ),
+            (
+                parse_quote! {
+                    fn kernel() {
+                        loop { invoke(|| break); }
+                    }
+                },
+                "break or continue must target a lexically enclosing kernel loop",
+            ),
+        ];
+
+        for (input, expected) in cases {
+            let error = analyze_kernel_control_flow_v1(&input, Some(&declaration)).unwrap_err();
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[test]
     fn unsupported_for_unroll_shapes_fail_closed() {
         let cases: Vec<(ItemFn, Vec<u32>, &str)> = vec![
             (
@@ -1668,17 +2010,6 @@ mod tests {
                 parse_quote! { fn kernel() { for i in 0..33 { let _ = i; } } },
                 vec![33],
                 "supports at most 32 iterations",
-            ),
-            (
-                parse_quote! {
-                    fn kernel() {
-                        for i in 0..2 {
-                            while i == 0 { break; }
-                        }
-                    }
-                },
-                vec![2, 1],
-                "does not support nested loops",
             ),
             (
                 parse_quote! {

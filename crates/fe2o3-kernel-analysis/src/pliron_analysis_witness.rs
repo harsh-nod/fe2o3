@@ -6,8 +6,9 @@
 //! digest, a report commitment, or a caller-authored success bit is never
 //! accepted as evidence.
 //!
-//! V1 completes only the explicitly documented ranked-bounds fragment. Other
-//! passes and unsupported bounds forms remain `Incomplete`. A complete replay
+//! Ranked bounds uses a separate exhaustive raw-index interpreter. Every other
+//! production pass is rerun from the live, structurally fingerprinted IR with
+//! a fresh analysis manager and exact target configuration. A complete replay
 //! validates this analysis report at this checkpoint; it grants no compiler
 //! refinement, lowering, artifact, publication, or launch authority.
 
@@ -34,20 +35,33 @@ use pliron::{
 
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::{
-    CapturedProductionAnalysisReportV1, KernelCheckStatusV1, PresburgerMapV1,
+    CapturedProductionAnalysisReportV1, KernelCheckPassKindV1, KernelCheckStatusV1,
+    PlironAtomicTargetContextV1, PlironIrStructuralIdentityV1, PresburgerMapV1,
     ProductionAnalysisCheckpointV1, ProductionAnalysisConfigurationV1,
     ProductionAnalysisImplementationV1, ProductionAnalysisWitnessGapV1, RankedBoundsReportV1,
-    SparseIndexFactV1, witness_gap,
+    SparseIndexFactV1, derive_pliron_ir_structural_identity_v1,
+    run_pliron_atomic_legality_check_v1, run_pliron_atomic_legality_check_with_target_v1,
+    run_pliron_barrier_convergence_check_v1, run_pliron_hierarchical_ownership_check_v1,
+    run_pliron_pipeline_protocol_check_v1, run_pliron_ranked_race_check_v1,
+    run_pliron_semantic_refinement_check_v1, run_pliron_tensor_layout_check_v1,
+    run_pliron_workgroup_memory_check_v1, witness_gap,
 };
 
-const MAX_BOUNDS_WITNESS_INVOCATIONS_V1: u64 = 65_536;
-const MAX_BOUNDS_WITNESS_EVALUATION_STEPS_V1: usize = 1_048_576;
+pub(crate) const MAX_BOUNDS_WITNESS_INVOCATIONS_V1: u64 = 65_536;
+pub(crate) const MAX_BOUNDS_WITNESS_EVALUATION_STEPS_V1: usize = 1_048_576;
 
 /// Checker implementation recorded in a witness envelope.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ProductionAnalysisWitnessCheckerV1 {
+    TensorLayoutFreshLiveIrReplayV2,
     BoundsExhaustiveRawIrReplayV1,
-    UnsupportedV1,
+    AtomicFreshLiveIrReplayV2,
+    RaceFreshLiveIrReplayV2,
+    OwnershipFreshLiveIrReplayV2,
+    BarrierFreshLiveIrReplayV2,
+    PipelineFreshLiveIrReplayV2,
+    WorkgroupFreshLiveIrReplayV2,
+    SemanticFreshLiveIrReplayV2,
 }
 
 /// Exact supported-fragment result of one independent replay.
@@ -55,6 +69,9 @@ pub enum ProductionAnalysisWitnessCheckerV1 {
 pub enum ProductionAnalysisWitnessCoverageV1 {
     Complete {
         obligation_count: usize,
+    },
+    Rejected {
+        reason: String,
     },
     Incomplete {
         gap: ProductionAnalysisWitnessGapV1,
@@ -66,6 +83,7 @@ impl ProductionAnalysisWitnessCoverageV1 {
     pub const fn status(&self) -> KernelCheckStatusV1 {
         match self {
             Self::Complete { .. } => KernelCheckStatusV1::Clean,
+            Self::Rejected { .. } => KernelCheckStatusV1::Rejected,
             Self::Incomplete { .. } => KernelCheckStatusV1::Incomplete,
         }
     }
@@ -77,21 +95,28 @@ impl ProductionAnalysisWitnessCoverageV1 {
     pub const fn obligation_count(&self) -> usize {
         match self {
             Self::Complete { obligation_count } => *obligation_count,
-            Self::Incomplete { .. } => 0,
+            Self::Rejected { .. } | Self::Incomplete { .. } => 0,
         }
     }
 
     pub const fn gap(&self) -> Option<ProductionAnalysisWitnessGapV1> {
         match self {
-            Self::Complete { .. } => None,
+            Self::Complete { .. } | Self::Rejected { .. } => None,
             Self::Incomplete { gap, .. } => Some(*gap),
         }
     }
 
     pub fn incomplete_reason(&self) -> Option<&str> {
         match self {
-            Self::Complete { .. } => None,
+            Self::Complete { .. } | Self::Rejected { .. } => None,
             Self::Incomplete { reason, .. } => Some(reason),
+        }
+    }
+
+    pub fn rejection_reason(&self) -> Option<&str> {
+        match self {
+            Self::Rejected { reason } => Some(reason),
+            Self::Complete { .. } | Self::Incomplete { .. } => None,
         }
     }
 }
@@ -111,9 +136,20 @@ struct BoundsPresburgerWitnessV1 {
     obligations: Vec<BoundsPresburgerObligationV1>,
 }
 
+/// Exact subject and bounded traversal retained by a fresh pass replay.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FreshLiveIrReplayWitnessV2 {
+    structural_identity: PlironIrStructuralIdentityV1,
+    checked_operations: usize,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ProductionAnalysisWitnessPayloadV1 {
     Bounds(BoundsPresburgerWitnessV1),
+    FreshLiveIr(FreshLiveIrReplayWitnessV2),
+    Rejected {
+        reason: String,
+    },
     Incomplete {
         gap: ProductionAnalysisWitnessGapV1,
         reason: String,
@@ -201,6 +237,10 @@ pub enum ProductionAnalysisWitnessValidationErrorV1 {
         invocation: Vec<u64>,
         operator: &'static str,
     },
+    SubjectFingerprintChanged,
+    IndependentReplayConfiguration {
+        pass: KernelCheckPassKindV1,
+    },
 }
 
 impl ProductionAnalysisWitnessValidationErrorV1 {
@@ -254,6 +294,13 @@ impl fmt::Display for ProductionAnalysisWitnessValidationErrorV1 {
                 formatter,
                 "bounds witness replay found checked unsigned {operator} overflow at block {block} op {operation} dimension {dimension} for invocation {invocation:?}",
             ),
+            Self::SubjectFingerprintChanged => formatter.write_str(
+                "the exact PLIRON structural fingerprint changed during independent witness replay",
+            ),
+            Self::IndependentReplayConfiguration { pass } => write!(
+                formatter,
+                "independent {pass:?} witness replay received a configuration for a different analysis",
+            ),
         }
     }
 }
@@ -262,6 +309,7 @@ impl std::error::Error for ProductionAnalysisWitnessValidationErrorV1 {}
 
 enum SupportedWitnessBuildV1<T> {
     Complete(T),
+    Rejected(String),
     Incomplete(String),
 }
 
@@ -293,60 +341,13 @@ pub(crate) fn issue_and_validate_production_analysis_witness_v1(
     }
 
     let context_identity = require_context_identity(context).ok();
-    let pass = report.pass();
-    let (checker, payload, coverage) = match (&report, context_identity) {
-        (CapturedProductionAnalysisReportV1::Bounds(_), None) => {
-            let gap = witness_gap(pass);
-            let reason = "bounds replay cannot complete because this PLIRON context has no compiler-owned ContextIdentity".to_owned();
-            (
-                ProductionAnalysisWitnessCheckerV1::BoundsExhaustiveRawIrReplayV1,
-                ProductionAnalysisWitnessPayloadV1::Incomplete {
-                    gap,
-                    reason: reason.clone(),
-                },
-                ProductionAnalysisWitnessCoverageV1::Incomplete { gap, reason },
-            )
-        }
-        (CapturedProductionAnalysisReportV1::Bounds(bounds), Some(_)) => {
-            match build_bounds_presburger_witness(context, function, bounds)? {
-                SupportedWitnessBuildV1::Complete(witness) => {
-                    let obligation_count = witness.obligations.len();
-                    (
-                        ProductionAnalysisWitnessCheckerV1::BoundsExhaustiveRawIrReplayV1,
-                        ProductionAnalysisWitnessPayloadV1::Bounds(witness),
-                        ProductionAnalysisWitnessCoverageV1::Complete { obligation_count },
-                    )
-                }
-                SupportedWitnessBuildV1::Incomplete(reason) => {
-                    let gap = witness_gap(pass);
-                    (
-                        ProductionAnalysisWitnessCheckerV1::BoundsExhaustiveRawIrReplayV1,
-                        ProductionAnalysisWitnessPayloadV1::Incomplete {
-                            gap,
-                            reason: reason.clone(),
-                        },
-                        ProductionAnalysisWitnessCoverageV1::Incomplete { gap, reason },
-                    )
-                }
-            }
-        }
-        _ => {
-            let gap = witness_gap(pass);
-            let reason = format!(
-                "{} witness replay is not implemented in V1; required evidence: {}",
-                pass.name(),
-                gap.required_evidence()
-            );
-            (
-                ProductionAnalysisWitnessCheckerV1::UnsupportedV1,
-                ProductionAnalysisWitnessPayloadV1::Incomplete {
-                    gap,
-                    reason: reason.clone(),
-                },
-                ProductionAnalysisWitnessCoverageV1::Incomplete { gap, reason },
-            )
-        }
-    };
+    let (checker, payload, coverage) = build_production_analysis_witness_v1(
+        context,
+        function,
+        &configuration,
+        &report,
+        context_identity.is_some(),
+    )?;
 
     let envelope = ProductionAnalysisWitnessEnvelopeV1 {
         context_identity,
@@ -422,47 +423,18 @@ fn validate_production_analysis_witness_v1(
         );
     }
 
-    match (&envelope.report, &envelope.payload, &envelope.coverage) {
-        (
-            CapturedProductionAnalysisReportV1::Bounds(bounds),
-            ProductionAnalysisWitnessPayloadV1::Bounds(witness),
-            ProductionAnalysisWitnessCoverageV1::Complete { obligation_count },
-        ) if envelope.checker
-            == ProductionAnalysisWitnessCheckerV1::BoundsExhaustiveRawIrReplayV1 =>
-        {
-            if envelope.context_identity.is_none() {
-                return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
-            }
-            if *obligation_count != witness.obligations.len() {
-                return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
-            }
-            match build_bounds_presburger_witness(context, function, bounds)? {
-                SupportedWitnessBuildV1::Complete(replayed) if replayed == *witness => {}
-                SupportedWitnessBuildV1::Complete(_) | SupportedWitnessBuildV1::Incomplete(_) => {
-                    return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
-                }
-            }
-        }
-        (
-            _,
-            ProductionAnalysisWitnessPayloadV1::Incomplete {
-                gap: payload_gap,
-                reason: payload_reason,
-            },
-            ProductionAnalysisWitnessCoverageV1::Incomplete { gap, reason },
-        ) if envelope.checker == ProductionAnalysisWitnessCheckerV1::UnsupportedV1
-            || envelope.checker
-                == ProductionAnalysisWitnessCheckerV1::BoundsExhaustiveRawIrReplayV1 =>
-        {
-            if payload_gap != gap
-                || payload_reason != reason
-                || gap.pass() != checkpoint.pass()
-                || reason.is_empty()
-            {
-                return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
-            }
-        }
-        _ => return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch),
+    let replayed = build_production_analysis_witness_v1(
+        context,
+        function,
+        configuration,
+        report,
+        envelope.context_identity.is_some(),
+    )?;
+    if replayed.0 != envelope.checker
+        || replayed.1 != envelope.payload
+        || replayed.2 != envelope.coverage
+    {
+        return Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch);
     }
 
     let after = current_mutation_epoch(context)?;
@@ -475,6 +447,301 @@ fn validate_production_analysis_witness_v1(
         );
     }
     Ok(())
+}
+
+fn build_production_analysis_witness_v1(
+    context: &Context,
+    function: &FuncOp,
+    configuration: &ProductionAnalysisConfigurationV1,
+    report: &CapturedProductionAnalysisReportV1,
+    has_context_identity: bool,
+) -> Result<
+    (
+        ProductionAnalysisWitnessCheckerV1,
+        ProductionAnalysisWitnessPayloadV1,
+        ProductionAnalysisWitnessCoverageV1,
+    ),
+    ProductionAnalysisWitnessValidationErrorV1,
+> {
+    let pass = report.pass();
+    let checker = production_analysis_witness_checker_for_v1(pass);
+    if !has_context_identity {
+        return Ok(incomplete_witness(
+            checker,
+            pass,
+            format!(
+                "{} replay cannot complete because this PLIRON context has no compiler-owned ContextIdentity",
+                pass.name()
+            ),
+        ));
+    }
+
+    let built = match report {
+        CapturedProductionAnalysisReportV1::Bounds(bounds) => {
+            build_bounds_presburger_witness(context, function, bounds).map(|result| {
+                result.map_complete(ProductionAnalysisWitnessPayloadV1::Bounds, |witness| {
+                    witness.obligations.len()
+                })
+            })?
+        }
+        _ => build_fresh_live_ir_replay(context, function, configuration, report)?
+            .map_complete(ProductionAnalysisWitnessPayloadV1::FreshLiveIr, |witness| {
+                witness.checked_operations
+            }),
+    };
+
+    Ok(match built {
+        CompletedWitnessBuildV1::Complete {
+            payload,
+            obligation_count,
+        } => (
+            checker,
+            payload,
+            ProductionAnalysisWitnessCoverageV1::Complete { obligation_count },
+        ),
+        CompletedWitnessBuildV1::Rejected(reason) => (
+            checker,
+            ProductionAnalysisWitnessPayloadV1::Rejected {
+                reason: reason.clone(),
+            },
+            ProductionAnalysisWitnessCoverageV1::Rejected { reason },
+        ),
+        CompletedWitnessBuildV1::Incomplete(reason) => incomplete_witness(checker, pass, reason),
+    })
+}
+
+enum CompletedWitnessBuildV1 {
+    Complete {
+        payload: ProductionAnalysisWitnessPayloadV1,
+        obligation_count: usize,
+    },
+    Rejected(String),
+    Incomplete(String),
+}
+
+impl<T> SupportedWitnessBuildV1<T> {
+    fn map_complete(
+        self,
+        payload: impl FnOnce(T) -> ProductionAnalysisWitnessPayloadV1,
+        obligation_count: impl FnOnce(&T) -> usize,
+    ) -> CompletedWitnessBuildV1 {
+        match self {
+            Self::Complete(witness) => {
+                let count = obligation_count(&witness);
+                CompletedWitnessBuildV1::Complete {
+                    payload: payload(witness),
+                    obligation_count: count,
+                }
+            }
+            Self::Rejected(reason) => CompletedWitnessBuildV1::Rejected(reason),
+            Self::Incomplete(reason) => CompletedWitnessBuildV1::Incomplete(reason),
+        }
+    }
+}
+
+fn incomplete_witness(
+    checker: ProductionAnalysisWitnessCheckerV1,
+    pass: KernelCheckPassKindV1,
+    reason: String,
+) -> (
+    ProductionAnalysisWitnessCheckerV1,
+    ProductionAnalysisWitnessPayloadV1,
+    ProductionAnalysisWitnessCoverageV1,
+) {
+    let gap = witness_gap(pass);
+    (
+        checker,
+        ProductionAnalysisWitnessPayloadV1::Incomplete {
+            gap,
+            reason: reason.clone(),
+        },
+        ProductionAnalysisWitnessCoverageV1::Incomplete { gap, reason },
+    )
+}
+
+pub(crate) fn production_analysis_witness_checker_for_v1(
+    pass: KernelCheckPassKindV1,
+) -> ProductionAnalysisWitnessCheckerV1 {
+    match pass {
+        KernelCheckPassKindV1::TensorLayout => {
+            ProductionAnalysisWitnessCheckerV1::TensorLayoutFreshLiveIrReplayV2
+        }
+        KernelCheckPassKindV1::MemoryBounds => {
+            ProductionAnalysisWitnessCheckerV1::BoundsExhaustiveRawIrReplayV1
+        }
+        KernelCheckPassKindV1::AtomicLegality => {
+            ProductionAnalysisWitnessCheckerV1::AtomicFreshLiveIrReplayV2
+        }
+        KernelCheckPassKindV1::RaceFreedom => {
+            ProductionAnalysisWitnessCheckerV1::RaceFreshLiveIrReplayV2
+        }
+        KernelCheckPassKindV1::HierarchicalOwnership => {
+            ProductionAnalysisWitnessCheckerV1::OwnershipFreshLiveIrReplayV2
+        }
+        KernelCheckPassKindV1::BarrierConvergence => {
+            ProductionAnalysisWitnessCheckerV1::BarrierFreshLiveIrReplayV2
+        }
+        KernelCheckPassKindV1::PipelineProtocol => {
+            ProductionAnalysisWitnessCheckerV1::PipelineFreshLiveIrReplayV2
+        }
+        KernelCheckPassKindV1::WorkgroupMemory => {
+            ProductionAnalysisWitnessCheckerV1::WorkgroupFreshLiveIrReplayV2
+        }
+        KernelCheckPassKindV1::SemanticRefinement => {
+            ProductionAnalysisWitnessCheckerV1::SemanticFreshLiveIrReplayV2
+        }
+        KernelCheckPassKindV1::Structural | KernelCheckPassKindV1::ControlFlow => {
+            unreachable!("non-production witness pass")
+        }
+    }
+}
+
+fn build_fresh_live_ir_replay(
+    context: &Context,
+    function: &FuncOp,
+    configuration: &ProductionAnalysisConfigurationV1,
+    captured: &CapturedProductionAnalysisReportV1,
+) -> Result<
+    SupportedWitnessBuildV1<FreshLiveIrReplayWitnessV2>,
+    ProductionAnalysisWitnessValidationErrorV1,
+> {
+    let before = match derive_pliron_ir_structural_identity_v1(context, function) {
+        Ok(identity) => identity,
+        Err(error) => return Ok(SupportedWitnessBuildV1::Incomplete(error.to_string())),
+    };
+    let replayed = independently_replay_report(context, function, configuration, captured.pass())?;
+    let after = match derive_pliron_ir_structural_identity_v1(context, function) {
+        Ok(identity) => identity,
+        Err(error) => return Ok(SupportedWitnessBuildV1::Incomplete(error.to_string())),
+    };
+    if !before.exactly_matches(&after) {
+        return Err(ProductionAnalysisWitnessValidationErrorV1::SubjectFingerprintChanged);
+    }
+
+    let replay_status = replayed.status();
+    if replay_status != KernelCheckStatusV1::Clean {
+        let reason = format!(
+            "fresh {} live-IR replay returned {replay_status:?}",
+            captured.pass().name()
+        );
+        return Ok(match replay_status {
+            KernelCheckStatusV1::Rejected => SupportedWitnessBuildV1::Rejected(reason),
+            KernelCheckStatusV1::Incomplete => SupportedWitnessBuildV1::Incomplete(reason),
+            KernelCheckStatusV1::Clean => unreachable!(),
+        });
+    }
+    if &replayed != captured {
+        return Err(ProductionAnalysisWitnessValidationErrorV1::ReportMismatch);
+    }
+
+    let checked_operations = before.operation_count();
+    Ok(SupportedWitnessBuildV1::Complete(
+        FreshLiveIrReplayWitnessV2 {
+            structural_identity: before,
+            checked_operations,
+        },
+    ))
+}
+
+fn independently_replay_report(
+    context: &Context,
+    function: &FuncOp,
+    configuration: &ProductionAnalysisConfigurationV1,
+    pass: KernelCheckPassKindV1,
+) -> Result<CapturedProductionAnalysisReportV1, ProductionAnalysisWitnessValidationErrorV1> {
+    let fixed = || {
+        if matches!(
+            configuration,
+            ProductionAnalysisConfigurationV1::FixedByImplementation
+        ) {
+            Ok(())
+        } else {
+            Err(ProductionAnalysisWitnessValidationErrorV1::IndependentReplayConfiguration { pass })
+        }
+    };
+    Ok(match pass {
+        KernelCheckPassKindV1::TensorLayout => {
+            fixed()?;
+            CapturedProductionAnalysisReportV1::TensorLayout(run_pliron_tensor_layout_check_v1(
+                context, function,
+            ))
+        }
+        KernelCheckPassKindV1::AtomicLegality => {
+            let report = match configuration {
+                ProductionAnalysisConfigurationV1::AtomicTargetAgnostic => {
+                    run_pliron_atomic_legality_check_v1(context, function)
+                }
+                ProductionAnalysisConfigurationV1::AtomicTarget {
+                    capabilities,
+                    system_coherent_allocations,
+                } => {
+                    let target = PlironAtomicTargetContextV1::new(capabilities.iter().copied())
+                        .and_then(|target| {
+                            target.with_system_coherent_allocations(
+                                system_coherent_allocations.iter().copied(),
+                            )
+                        })
+                        .map_err(|_| {
+                            ProductionAnalysisWitnessValidationErrorV1::IndependentReplayConfiguration {
+                                pass,
+                            }
+                        })?;
+                    run_pliron_atomic_legality_check_with_target_v1(context, function, &target)
+                }
+                ProductionAnalysisConfigurationV1::FixedByImplementation => {
+                    return Err(
+                        ProductionAnalysisWitnessValidationErrorV1::IndependentReplayConfiguration {
+                            pass,
+                        },
+                    );
+                }
+            };
+            CapturedProductionAnalysisReportV1::Atomic(report)
+        }
+        KernelCheckPassKindV1::RaceFreedom => {
+            fixed()?;
+            CapturedProductionAnalysisReportV1::Race(run_pliron_ranked_race_check_v1(
+                context, function,
+            ))
+        }
+        KernelCheckPassKindV1::HierarchicalOwnership => {
+            fixed()?;
+            CapturedProductionAnalysisReportV1::Ownership(
+                run_pliron_hierarchical_ownership_check_v1(context, function),
+            )
+        }
+        KernelCheckPassKindV1::BarrierConvergence => {
+            fixed()?;
+            CapturedProductionAnalysisReportV1::Barrier(run_pliron_barrier_convergence_check_v1(
+                context, function,
+            ))
+        }
+        KernelCheckPassKindV1::PipelineProtocol => {
+            fixed()?;
+            CapturedProductionAnalysisReportV1::Pipeline(run_pliron_pipeline_protocol_check_v1(
+                context, function,
+            ))
+        }
+        KernelCheckPassKindV1::WorkgroupMemory => {
+            fixed()?;
+            CapturedProductionAnalysisReportV1::Workgroup(run_pliron_workgroup_memory_check_v1(
+                context, function,
+            ))
+        }
+        KernelCheckPassKindV1::SemanticRefinement => {
+            fixed()?;
+            CapturedProductionAnalysisReportV1::Semantic(run_pliron_semantic_refinement_check_v1(
+                context, function,
+            ))
+        }
+        KernelCheckPassKindV1::MemoryBounds
+        | KernelCheckPassKindV1::Structural
+        | KernelCheckPassKindV1::ControlFlow => {
+            return Err(
+                ProductionAnalysisWitnessValidationErrorV1::IndependentReplayConfiguration { pass },
+            );
+        }
+    })
 }
 
 fn build_bounds_presburger_witness(
@@ -506,7 +773,34 @@ fn build_bounds_presburger_witness(
         ));
     }
 
+    match report.status() {
+        KernelCheckStatusV1::Clean => {}
+        KernelCheckStatusV1::Rejected => {
+            return Ok(SupportedWitnessBuildV1::Rejected(
+                "the bounds report contains a rejected obligation and cannot produce a positive witness"
+                    .to_owned(),
+            ));
+        }
+        KernelCheckStatusV1::Incomplete => {
+            return Ok(SupportedWitnessBuildV1::Incomplete(
+                "the bounds report is incomplete and cannot produce a positive witness".to_owned(),
+            ));
+        }
+    }
+
     let block_operations = inventory.block_operations(0);
+    let has_ranked_access = block_operations.iter().any(|site| {
+        Operation::get_op_dyn(site.pointer(), context)
+            .downcast_ref::<RankedAccessOp>()
+            .is_some()
+    });
+    if !has_ranked_access {
+        return Ok(SupportedWitnessBuildV1::Complete(
+            BoundsPresburgerWitnessV1 {
+                obligations: Vec::new(),
+            },
+        ));
+    }
     let launch_extents = match raw_launch_extents(context, block_operations) {
         Ok(extents) => extents,
         Err(reason) => return Ok(SupportedWitnessBuildV1::Incomplete(reason)),
@@ -515,12 +809,6 @@ fn build_bounds_presburger_witness(
         Ok(count) => count,
         Err(reason) => return Ok(SupportedWitnessBuildV1::Incomplete(reason)),
     };
-    if report.status() != KernelCheckStatusV1::Clean {
-        return Ok(SupportedWitnessBuildV1::Incomplete(
-            "the raw launch domain is supported, but only a Clean bounds report can be replayed as a positive witness"
-                .to_owned(),
-        ));
-    }
 
     // This transcript is useful for auditing the production analysis, but it
     // is deliberately not the authority for `Complete`. The separate raw-IR
@@ -936,6 +1224,17 @@ builtin.func @bounds_witness_safe: builtin.function <() -> ()>
 }
 "#;
 
+    const REJECTED_TENSOR_LAYOUT: &str = r#"
+builtin.func @tensor_witness_rejected: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 7, gpu_execution_global_x: gpu.execution_extent 64, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 64, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 64, gpu_execution_domain: gpu.execution_domain PotentiallyPartial]: <() -> ()>;
+    v99 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 64]: <() -> (kernel.index )>;
+    kernel.tensor_layout () [] [kernel_tensor_a: kernel.tensor_fragment <1,16,16,1,4,1,16,16,0,1,0,0,1,0,0,4,1,1,1,1,1,1>, kernel_tensor_accumulator: kernel.tensor_fragment <3,16,16,2,4,1,16,16,0,0,4,1,1,0,1,0,0,1,1,1,2,1>, kernel_tensor_b: kernel.tensor_fragment <2,16,16,1,4,1,16,16,0,0,4,1,1,0,1,0,0,1,1,1,1,1>, kernel_tensor_convergence: kernel.tensor_convergence UniformSubgroup, kernel_tensor_instruction: kernel.tensor_instruction <2,0,64,64,1>]: <() -> ()>;
+    kernel.return () [] []: <() -> ()>
+}
+"#;
+
     fn setup() -> Context {
         let mut context = Context::new();
         register_dialect(
@@ -959,10 +1258,10 @@ builtin.func @bounds_witness_safe: builtin.function <() -> ()>
         FuncOp::from_operation(operation)
     }
 
-    fn bounds_envelope<'a>(
-        report: &'a crate::ProductionPlironPreloweringReportV2,
+    fn bounds_envelope(
+        report: &crate::ProductionPlironPreloweringReportV2,
     ) -> (
-        &'a crate::ProductionAnalysisStageValidationV1,
+        &crate::ProductionAnalysisStageValidationV1,
         ProductionAnalysisWitnessEnvelopeV1,
     ) {
         let stage = &report.report_validation().stages()[1];
@@ -1000,6 +1299,9 @@ builtin.func @bounds_witness_safe: builtin.function <() -> ()>
             ),
             Ok(SupportedWitnessBuildV1::Complete(_)) => {
                 panic!("hostile bounds replay must never be Complete")
+            }
+            Ok(SupportedWitnessBuildV1::Rejected(reason)) => {
+                panic!("expected Incomplete bounds replay, got rejection: {reason}")
             }
             Err(error) => panic!("expected Incomplete bounds replay, got rejection: {error}"),
         }
@@ -1042,6 +1344,144 @@ builtin.func @bounds_witness_safe: builtin.function <() -> ()>
         );
         assert!(!envelope.grants_compiler_refinement_authority());
         assert!(!envelope.grants_lowering_or_launch_authority());
+    }
+
+    #[test]
+    fn vacuous_bounds_replay_never_downgrades_a_non_clean_report() {
+        let context = &mut setup();
+        let rejected_source = SAFE_AFFINE
+            .replace("@bounds_witness_safe", "@bounds_witness_rejected_report")
+            .replace("[16]", "[15]");
+        let rejected_function = parse_source(context, &rejected_source);
+        let rejected_report = crate::run_pliron_ranked_bounds_check_v1(context, &rejected_function);
+        assert_eq!(rejected_report.status(), KernelCheckStatusV1::Rejected);
+
+        let vacuous = parse_source(
+            context,
+            r#"
+builtin.func @bounds_witness_vacuous: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    kernel.return () [] []: <() -> ()>
+}
+"#,
+        );
+        let replay = build_bounds_presburger_witness(context, &vacuous, &rejected_report)
+            .expect("bounded rejected replay");
+        assert!(matches!(replay, SupportedWitnessBuildV1::Rejected(_)));
+    }
+
+    #[test]
+    fn every_production_pass_has_a_complete_deterministic_live_ir_witness() {
+        let context = &mut setup();
+        let function = parse_function(context);
+        let first = require_production_pliron_checks_before_lowering_v2(context, &function)
+            .expect("first complete witness set");
+        let second = require_production_pliron_checks_before_lowering_v2(context, &function)
+            .expect("second complete witness set");
+        let expected = [
+            ProductionAnalysisWitnessCheckerV1::TensorLayoutFreshLiveIrReplayV2,
+            ProductionAnalysisWitnessCheckerV1::BoundsExhaustiveRawIrReplayV1,
+            ProductionAnalysisWitnessCheckerV1::AtomicFreshLiveIrReplayV2,
+            ProductionAnalysisWitnessCheckerV1::RaceFreshLiveIrReplayV2,
+            ProductionAnalysisWitnessCheckerV1::OwnershipFreshLiveIrReplayV2,
+            ProductionAnalysisWitnessCheckerV1::BarrierFreshLiveIrReplayV2,
+            ProductionAnalysisWitnessCheckerV1::PipelineFreshLiveIrReplayV2,
+            ProductionAnalysisWitnessCheckerV1::WorkgroupFreshLiveIrReplayV2,
+            ProductionAnalysisWitnessCheckerV1::SemanticFreshLiveIrReplayV2,
+        ];
+
+        assert!(
+            first
+                .report_validation()
+                .all_reports_independently_validated()
+        );
+        assert_eq!(first.report_validation(), second.report_validation());
+        for ((stage, replayed), checker) in first
+            .report_validation()
+            .stages()
+            .iter()
+            .zip(second.report_validation().stages())
+            .zip(expected)
+        {
+            assert_eq!(stage.witness().checker(), checker);
+            assert!(stage.witness().coverage().is_complete());
+            assert_eq!(stage.witness(), replayed.witness());
+        }
+    }
+
+    #[test]
+    fn fresh_replay_preserves_rejected_instead_of_downgrading_it() {
+        let context = &mut setup();
+        let safe = parse_function(context);
+        let safe_report = require_production_pliron_checks_before_lowering_v2(context, &safe)
+            .expect("safe tensor report");
+        let captured =
+            CapturedProductionAnalysisReportV1::TensorLayout(safe_report.tensor_layout().clone());
+        let rejected = parse_source(context, REJECTED_TENSOR_LAYOUT);
+
+        let replay = build_fresh_live_ir_replay(
+            context,
+            &rejected,
+            &ProductionAnalysisConfigurationV1::FixedByImplementation,
+            &captured,
+        )
+        .expect("bounded rejected replay");
+        assert!(
+            matches!(replay, SupportedWitnessBuildV1::Rejected(reason) if reason.contains("Rejected"))
+        );
+    }
+
+    #[test]
+    fn fresh_witness_substitution_and_staleness_fail_closed() {
+        let context = &mut setup();
+        let function = parse_function(context);
+        let report = require_production_pliron_checks_before_lowering_v2(context, &function)
+            .expect("complete witness set");
+        let stage = &report.report_validation().stages()[0];
+        let envelope = stage.witness().clone();
+        let captured =
+            CapturedProductionAnalysisReportV1::TensorLayout(report.tensor_layout().clone());
+        let validate = |context: &Context, candidate: &ProductionAnalysisWitnessEnvelopeV1| {
+            validate_production_analysis_witness_v1(
+                context,
+                &function,
+                stage.checkpoint(),
+                stage.implementation(),
+                stage.configuration(),
+                &captured,
+                candidate,
+            )
+        };
+
+        let mut checker_substitution = envelope.clone();
+        checker_substitution.checker =
+            ProductionAnalysisWitnessCheckerV1::AtomicFreshLiveIrReplayV2;
+        assert!(matches!(
+            validate(context, &checker_substitution),
+            Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch)
+        ));
+
+        let mut transcript_substitution = envelope.clone();
+        let ProductionAnalysisWitnessPayloadV1::FreshLiveIr(witness) =
+            &mut transcript_substitution.payload
+        else {
+            panic!("fresh tensor witness")
+        };
+        witness.checked_operations += 1;
+        assert!(matches!(
+            validate(context, &transcript_substitution),
+            Err(ProductionAnalysisWitnessValidationErrorV1::PayloadMismatch)
+        ));
+
+        let _unrelated_mutation = parse_source(
+            context,
+            &SAFE_AFFINE.replace("@bounds_witness_safe", "@witness_epoch_mutation"),
+        );
+        assert!(matches!(
+            validate(context, &envelope),
+            Err(ProductionAnalysisWitnessValidationErrorV1::MutationEpochMismatch { .. })
+        ));
     }
 
     #[test]

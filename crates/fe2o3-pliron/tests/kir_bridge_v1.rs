@@ -3,10 +3,34 @@ use fe2o3_pliron::{
     KirBridgeCoordinateV1, KirBridgeErrorV1, PlironOptimizationPlanV1, PlironSession, ShellLimits,
 };
 
+#[cfg(feature = "internal-test-context-access")]
+use dialect_gpu::{
+    AllocaOp as PlironAllocaOp, AtomicOp as PlironAtomicOp, CanonicalBarrierOp as PlironBarrierOp,
+    CanonicalFenceOp as PlironFenceOp, CanonicalKirOperationAttr, CanonicalKirSafetyOpInterface,
+    ExecutionCapabilityOp, Gfx950LdsTransposeOp as PlironGfx950LdsTransposeOp,
+    GuardedLoadOp as PlironGuardedLoadOp, GuardedStoreOp as PlironGuardedStoreOp,
+    InlineAssemblyOp as PlironInlineAssemblyOp, IntrinsicOp as PlironIntrinsicOp,
+    MatrixOp as PlironMatrixOp, MemoryIntrinsicOp as PlironMemoryIntrinsicOp,
+    WaveOp as PlironWaveOp, WorkgroupBarrierOp as PlironWorkgroupBarrierOp,
+    WorkgroupMemoryOp as PlironWorkgroupMemoryOp,
+};
+#[cfg(feature = "internal-test-context-access")]
+use dialect_kernel::{CanonicalIdentityAttr, ExecutionCapabilityContractAttr};
+#[cfg(feature = "internal-test-context-access")]
+use pliron::{
+    context::{Context, Ptr},
+    linked_list::ContainsLinkedList,
+    op::{Op, op_cast},
+    operation::Operation as PlironOperation,
+};
+
 fn session() -> PlironSession {
     PlironSession::new(
         ShellLimits::default(),
-        [dialect_gpu::dialect_registration().expect("valid gpu registration")],
+        [
+            dialect_gpu::dialect_registration().expect("valid gpu registration"),
+            dialect_kernel::dialect_registration().expect("valid kernel registration"),
+        ],
     )
     .expect("fresh Pliron session")
 }
@@ -666,6 +690,788 @@ fn preserved_switch_cfg_rewrite_module() -> Module {
     module
 }
 
+fn preserved_intrinsic_module() -> Module {
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(0), Type::INDEX),
+        OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+    ));
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let mut module = Module::new("tests::preserved_intrinsic");
+    module.functions.push(Function::internal_helper(
+        "intrinsic",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![block],
+    ));
+    module
+}
+
+fn preserved_memory_intrinsic_module() -> Module {
+    let scalar = Type::Scalar(ScalarType::U32);
+    let pointer = Type::pointer(scalar.clone(), AddressSpace::Global, AccessMode::ReadWrite);
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations.push(Operation::new(
+        vec![],
+        OperationKind::MemoryIntrinsic(MemoryIntrinsicOperation::VolatileStore {
+            pointer: ValueId(0),
+            value: ValueId(1),
+            element: MemoryElementType::Scalar(ScalarType::U32),
+            address_space: AddressSpace::Global,
+            layout: MemoryLayout::new(4, 4),
+            contract: VolatileAccessContract::rust_allocation_store(),
+        }),
+    ));
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let mut module = Module::new("tests::memory_intrinsic");
+    module.functions.push(Function::internal_helper(
+        "memory_intrinsic",
+        Signature::new(vec![pointer, scalar], vec![]),
+        vec![ValueId(0), ValueId(1)],
+        vec![block],
+    ));
+    module
+}
+
+fn preserved_unreachable_module() -> Module {
+    let mut block = BasicBlock::new(BlockId(0));
+    block.terminator = Some(Terminator::Unreachable);
+    let mut module = Module::new("tests::preserved_unreachable");
+    module.functions.push(Function::internal_helper(
+        "unreachable",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![block],
+    ));
+    module
+}
+
+const V13_DYNAMIC_UPPER_BOUND: u64 = 257;
+
+fn v13_identity(byte: u8) -> ExecutionTypeIdentityV1 {
+    ExecutionTypeIdentityV1::new([byte; 32])
+}
+
+fn v13_provenance() -> ExecutionCapabilityProvenanceV1 {
+    ExecutionCapabilityProvenanceV1 {
+        root: FunctionId::new("entry"),
+        kernel_binding: [1; 32],
+        frontend_unit: [2; 32],
+        kernel_marker: [3; 32],
+        target_brand: [4; 32],
+        launch_brand: [5; 32],
+        issuance: [6; 32],
+    }
+}
+
+fn v13_dynamic_extent() -> ExecutionDynamicExtentV1 {
+    ExecutionDynamicExtentV1 {
+        operand: 2,
+        source_argument: 2,
+        source_type: v13_identity(9),
+        value_type: ScalarType::Index,
+        upper_bound: V13_DYNAMIC_UPPER_BOUND,
+        bound_check_operand: 3,
+        nonnegative_check_operand: None,
+    }
+}
+
+fn v13_raw_bind_operation(extent: ExecutionDynamicExtentV1) -> ExecutionCapabilityOperationV1 {
+    ExecutionCapabilityOperationV1::RawMemoryBind {
+        authority: v13_identity(7),
+        pointer: v13_identity(8),
+        length: v13_identity(9),
+        extent,
+        view: v13_identity(10),
+        element: v13_identity(11),
+        layout: ExecutionElementLayoutV1 {
+            byte_size: 4,
+            byte_alignment: 4,
+        },
+        space: ExecutionMemoryAddressSpaceV1::Private,
+        access: ExecutionMemoryAccessV1::ReadOnly,
+        index_space: None,
+        atomic_scope: None,
+        unsafe_obligation: v13_identity(12),
+    }
+}
+
+fn v13_raw_bind_result(extent: ExecutionDynamicExtentV1) -> Type {
+    Type::ExecutionCapability(ExecutionCapabilityTypeV1 {
+        source_type: v13_identity(10),
+        provenance: v13_provenance(),
+        workgroup_brand: None,
+        epoch: None,
+        role: ExecutionCapabilityRoleV1::MemoryView {
+            element: v13_identity(11),
+            layout: ExecutionElementLayoutV1 {
+                byte_size: 4,
+                byte_alignment: 4,
+            },
+            space: ExecutionMemoryAddressSpaceV1::Private,
+            access: ExecutionMemoryAccessV1::ReadOnly,
+            extent: ExecutionMemoryExtentV1::Dynamic(extent),
+            initialization: ExecutionMemoryInitializationV1::FullyInitialized,
+            index_space: None,
+            atomic_scope: None,
+        },
+    })
+}
+
+fn v13_raw_bind_module() -> Module {
+    let extent = v13_dynamic_extent();
+    let operation = v13_raw_bind_operation(extent);
+    let requirements = operation.required_capabilities();
+    let contract = ExecutionCapabilityOpV1 {
+        operands: vec![ValueId(2), ValueId(0), ValueId(1), ValueId(4)],
+        operation,
+        signature: ExecutionCapabilitySignatureV1::new(
+            &[
+                v13_identity(7),
+                v13_identity(8),
+                v13_identity(9),
+                v13_identity(12),
+            ],
+            v13_identity(10),
+        )
+        .unwrap(),
+        provenance: v13_provenance(),
+        workgroup_brand: None,
+        epoch_before: None,
+        epoch_after: None,
+        obligations: ExecutionSafetyObligationsV1::from_bits(required_execution_obligations_v1(
+            &v13_raw_bind_operation(extent),
+        )),
+        source: ExecutionCapabilitySourceV1 {
+            function: [13; 32],
+            operation: [14; 32],
+            block: 0,
+        },
+    };
+    let provenance = v13_provenance();
+    let context = KernelContextTypeV1::new(
+        "entry",
+        provenance.kernel_marker,
+        provenance.target_brand,
+        provenance.launch_brand,
+    );
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = vec![
+        Operation::kernel_context_issue(
+            ValueId(2),
+            context,
+            KernelContextSourceIdentityV1::new([21; 32], [22; 32], [23; 32], [24; 32]),
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(3), Type::INDEX),
+            OperationKind::Constant(Constant::Index(V13_DYNAMIC_UPPER_BOUND)),
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(4), Type::BOOL),
+            OperationKind::Compare {
+                predicate: ComparePredicate::LessThanOrEqual,
+                lhs: ValueId(1),
+                rhs: ValueId(3),
+            },
+        ),
+        Operation::effect_free(
+            ValueDef::new(ValueId(5), v13_raw_bind_result(extent)),
+            OperationKind::ExecutionCapability(contract),
+        ),
+    ];
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let mut function = Function::kernel_entry(
+        "entry",
+        Signature::new(
+            vec![
+                Type::pointer(
+                    Type::Scalar(ScalarType::U32),
+                    AddressSpace::Private,
+                    AccessMode::ReadWrite,
+                ),
+                Type::INDEX,
+            ],
+            vec![],
+        ),
+        vec![ValueId(0), ValueId(1)],
+        vec![block],
+    );
+    function.required_capabilities = requirements.clone();
+    let mut module = Module::new("tests::execution_capability_v13");
+    module.functions.push(function);
+    module.required_capabilities = requirements;
+    module.kernels.push(Kernel::new(
+        "kernel",
+        "entry",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    ));
+    module
+}
+
+#[cfg(feature = "internal-test-context-access")]
+fn expected_ids(ids: &[&str]) -> Vec<String> {
+    let mut ids = ids.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+#[cfg(feature = "internal-test-context-access")]
+fn represented_safety_families(mut ids: Vec<String>) -> Vec<String> {
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+#[cfg(feature = "internal-test-context-access")]
+fn assert_fresh_text_round_trip_v9(module: Module, ids: &[&str]) -> String {
+    let input = VerifiedCanonicalKernelIrV9::from_module(module).expect("verified V9 fixture");
+    let mut source = session();
+    let graph = source.import_canonical_kir_v9_o0(&input).unwrap();
+    assert_eq!(
+        represented_safety_families(
+            source
+                .canonical_kir_safety_operation_ids_for_test(&graph)
+                .unwrap(),
+        ),
+        expected_ids(ids)
+    );
+    let source_text = source.canonical_kir_text_for_test(&graph).unwrap();
+    let mut repeated = session();
+    let repeated_graph = repeated.import_canonical_kir_v9_o0(&input).unwrap();
+    assert_eq!(
+        repeated
+            .canonical_kir_text_for_test(&repeated_graph)
+            .unwrap(),
+        source_text
+    );
+
+    let mut fresh = session();
+    let fresh_graph = fresh
+        .reparse_canonical_kir_text_for_test(&graph, &source_text)
+        .expect("fresh V9 parse and recursive verification");
+    assert_eq!(
+        represented_safety_families(
+            fresh
+                .canonical_kir_safety_operation_ids_for_test(&fresh_graph)
+                .unwrap(),
+        ),
+        expected_ids(ids)
+    );
+    let (output, report) = fresh.extract_canonical_kir_v9_o0(&fresh_graph).unwrap();
+    assert_eq!(output.canonical_bytes(), input.canonical_bytes());
+    assert!(report.is_exact());
+    source_text
+}
+
+#[cfg(feature = "internal-test-context-access")]
+fn assert_fresh_text_round_trip_v10(module: Module, ids: &[&str]) {
+    let input = VerifiedCanonicalKernelIrV10::from_module(module).expect("verified V10 fixture");
+    let mut source = session();
+    let graph = source.import_canonical_kir_v10_o0(&input).unwrap();
+    assert_eq!(
+        represented_safety_families(
+            source
+                .canonical_kir_safety_operation_ids_for_test(&graph)
+                .unwrap(),
+        ),
+        expected_ids(ids)
+    );
+    let text = source.canonical_kir_text_for_test(&graph).unwrap();
+    let mut repeated = session();
+    let repeated_graph = repeated.import_canonical_kir_v10_o0(&input).unwrap();
+    assert_eq!(
+        repeated
+            .canonical_kir_text_for_test(&repeated_graph)
+            .unwrap(),
+        text
+    );
+    let mut fresh = session();
+    let fresh_graph = fresh
+        .reparse_canonical_kir_text_for_test(&graph, &text)
+        .expect("fresh V10 parse and recursive verification");
+    assert_eq!(
+        represented_safety_families(
+            fresh
+                .canonical_kir_safety_operation_ids_for_test(&fresh_graph)
+                .unwrap(),
+        ),
+        expected_ids(ids)
+    );
+    let (output, report) = fresh.extract_canonical_kir_v10_o0(&fresh_graph).unwrap();
+    assert_eq!(output.canonical_bytes(), input.canonical_bytes());
+    assert!(report.is_exact());
+}
+
+#[cfg(feature = "internal-test-context-access")]
+fn assert_fresh_text_round_trip_v13(module: Module) {
+    let input = VerifiedCanonicalKernelIrV13::from_module(module).expect("verified V13 fixture");
+    let mut source = session();
+    let graph = source.import_canonical_kir_v13_o0(&input).unwrap();
+    let text = source.canonical_kir_text_for_test(&graph).unwrap();
+
+    let mut repeated = session();
+    let repeated_graph = repeated.import_canonical_kir_v13_o0(&input).unwrap();
+    assert_eq!(
+        repeated
+            .canonical_kir_text_for_test(&repeated_graph)
+            .unwrap(),
+        text
+    );
+
+    let mut fresh = session();
+    let fresh_graph = fresh
+        .reparse_canonical_kir_text_for_test(&graph, &text)
+        .expect("fresh V13 parse and recursive verification");
+    let (output, report) = fresh.extract_canonical_kir_v13_o0(&fresh_graph).unwrap();
+    assert_eq!(output.canonical_bytes(), input.canonical_bytes());
+    assert!(report.is_exact());
+}
+
+#[cfg(feature = "internal-test-context-access")]
+fn operation_tree(root: Ptr<PlironOperation>, context: &Context) -> Vec<Ptr<PlironOperation>> {
+    let mut pending = vec![root];
+    let mut operations = Vec::new();
+    while let Some(operation) = pending.pop() {
+        operations.push(operation);
+        let mut children = Vec::new();
+        for region in operation.deref(context).regions() {
+            for block in region.deref(context).iter(context) {
+                children.extend(block.deref(context).iter(context));
+            }
+        }
+        pending.extend(children.into_iter().rev());
+    }
+    operations
+}
+
+#[cfg(feature = "internal-test-context-access")]
+fn typed_op<O: Op>(root: Ptr<PlironOperation>, context: &Context) -> O {
+    let pointer = operation_tree(root, context)
+        .into_iter()
+        .find(|operation| PlironOperation::is_op::<O>(*operation, context))
+        .expect("typed operation is present");
+    PlironOperation::get_op::<O>(pointer, context).unwrap()
+}
+
+#[cfg(feature = "internal-test-context-access")]
+fn typed_safety_op<O: Op>(root: Ptr<PlironOperation>, context: &Context) -> O {
+    let operation = typed_op::<O>(root, context);
+    let pointer = operation.get_operation();
+    let operation = PlironOperation::get_op_dyn(pointer, context);
+    let interface = op_cast::<dyn CanonicalKirSafetyOpInterface>(&*operation)
+        .expect("capability operation is registered with the typed safety interface");
+    assert!(interface.is_self_contained_canonical_kir());
+    PlironOperation::get_op::<O>(pointer, context).unwrap()
+}
+
+#[cfg(feature = "internal-test-context-access")]
+fn require_mutated_v9_rejection(mutation: impl FnOnce(&mut Context, Ptr<PlironOperation>)) {
+    require_mutated_v9_module_rejection(preserved_memory_and_synchronization_module(), mutation);
+}
+
+#[cfg(feature = "internal-test-context-access")]
+fn require_mutated_v9_module_rejection(
+    module: Module,
+    mutation: impl FnOnce(&mut Context, Ptr<PlironOperation>),
+) {
+    let input = VerifiedCanonicalKernelIrV9::from_module(module).unwrap();
+    let mut owner = session();
+    let graph = owner.import_canonical_kir_v9_o0(&input).unwrap();
+    owner
+        .with_canonical_kir_graph_mut_for_test(&graph, mutation)
+        .unwrap();
+    assert_eq!(
+        owner.extract_canonical_kir_v9_o0(&graph),
+        Err(KirBridgeErrorV1::MalformedGraph)
+    );
+}
+
+#[cfg(feature = "internal-test-context-access")]
+fn require_mutated_v10_module_rejection(
+    module: Module,
+    mutation: impl FnOnce(&mut Context, Ptr<PlironOperation>),
+) {
+    let input = VerifiedCanonicalKernelIrV10::from_module(module).unwrap();
+    let mut owner = session();
+    let graph = owner.import_canonical_kir_v10_o0(&input).unwrap();
+    owner
+        .with_canonical_kir_graph_mut_for_test(&graph, mutation)
+        .unwrap();
+    assert_eq!(
+        owner.extract_canonical_kir_v10_o0(&graph),
+        Err(KirBridgeErrorV1::MalformedGraph)
+    );
+}
+
+#[cfg(feature = "internal-test-context-access")]
+fn require_execution_contract_mutation_rejection(
+    mutation: impl FnOnce(&mut ExecutionCapabilityOpV1),
+) {
+    let input = VerifiedCanonicalKernelIrV13::from_module(v13_raw_bind_module()).unwrap();
+    let mut owner = session();
+    let graph = owner.import_canonical_kir_v13_o0(&input).unwrap();
+    let mut rejected_by_attribute = false;
+    owner
+        .with_canonical_kir_graph_mut_for_test(&graph, |context, root| {
+            let operation = typed_op::<ExecutionCapabilityOp>(root, context);
+            let mut contract = operation.contract(context).unwrap();
+            mutation(&mut contract);
+            let Some(attribute) = ExecutionCapabilityContractAttr::new(&contract) else {
+                rejected_by_attribute = true;
+                return;
+            };
+            operation.set_attr_gpu_execution_capability_contract(context, attribute);
+        })
+        .unwrap();
+    if rejected_by_attribute {
+        return;
+    }
+    assert_eq!(
+        owner.extract_canonical_kir_v13_o0(&graph),
+        Err(KirBridgeErrorV1::MalformedGraph)
+    );
+}
+
+#[cfg(feature = "internal-test-context-access")]
+fn require_metadata_substitution_rejection(mutation: impl FnOnce(&mut Module)) {
+    let original = VerifiedCanonicalKernelIrV13::from_module(v13_raw_bind_module()).unwrap();
+    let mut original_owner = session();
+    let original_graph = original_owner
+        .import_canonical_kir_v13_o0(&original)
+        .unwrap();
+    let original_text = original_owner
+        .canonical_kir_text_for_test(&original_graph)
+        .unwrap();
+
+    let mut substituted_module = v13_raw_bind_module();
+    mutation(&mut substituted_module);
+    let substituted = VerifiedCanonicalKernelIrV13::from_module(substituted_module)
+        .expect("one-axis metadata substitution remains canonical KIR");
+    let mut template_owner = session();
+    let substituted_template = template_owner
+        .import_canonical_kir_v13_o0(&substituted)
+        .unwrap();
+
+    let mut fresh = session();
+    let substituted_graph =
+        match fresh.reparse_canonical_kir_text_for_test(&substituted_template, &original_text) {
+            Ok(graph) => graph,
+            Err(KirBridgeErrorV1::Session(
+                fe2o3_pliron::OperationHandleError::OperationVerificationRejected,
+            )) => return,
+            Err(error) => panic!("unexpected metadata-substitution failure: {error:?}"),
+        };
+    assert_eq!(
+        fresh.extract_canonical_kir_v13_o0(&substituted_graph),
+        Err(KirBridgeErrorV1::MalformedGraph)
+    );
+}
+
+#[cfg(feature = "internal-test-context-access")]
+#[test]
+fn every_canonical_safety_carrier_round_trips_through_fresh_context_text() {
+    assert_fresh_text_round_trip_v9(preserved_intrinsic_module(), &["gpu.kir_intrinsic"]);
+    assert_fresh_text_round_trip_v10(
+        preserved_memory_intrinsic_module(),
+        &["gpu.kir_memory_intrinsic"],
+    );
+    assert_fresh_text_round_trip_v9(
+        preserved_memory_and_synchronization_module(),
+        &[
+            "gpu.kir_alloca",
+            "gpu.kir_atomic",
+            "gpu.kir_barrier",
+            "gpu.kir_fence",
+            "gpu.kir_guarded_load",
+            "gpu.kir_guarded_store",
+            "gpu.kir_workgroup_barrier",
+            "gpu.kir_workgroup_memory",
+        ],
+    );
+    assert_fresh_text_round_trip_v9(preserved_matrix_module(), &["gpu.kir_matrix"]);
+    assert_fresh_text_round_trip_v9(
+        preserved_wave_and_transpose_module(),
+        &["gpu.kir_gfx950_lds_transpose", "gpu.kir_wave"],
+    );
+    assert_fresh_text_round_trip_v9(
+        preserved_inline_assembly_module(),
+        &["gpu.kir_inline_assembly"],
+    );
+    assert_fresh_text_round_trip_v9(
+        preserved_switch_module(),
+        &["gpu.kir_integer_switch", "gpu.kir_switch"],
+    );
+    assert_fresh_text_round_trip_v9(preserved_unreachable_module(), &["gpu.kir_unreachable"]);
+}
+
+#[cfg(feature = "internal-test-context-access")]
+#[test]
+fn execution_capability_graph_round_trips_through_fresh_context_text() {
+    assert_fresh_text_round_trip_v13(v13_raw_bind_module());
+}
+
+#[cfg(feature = "internal-test-context-access")]
+#[test]
+fn typed_capability_graph_rejects_every_required_one_axis_mutation() {
+    require_execution_contract_mutation_rejection(|contract| {
+        let ExecutionCapabilityOperationV1::RawMemoryBind { space, .. } = &mut contract.operation
+        else {
+            unreachable!()
+        };
+        *space = ExecutionMemoryAddressSpaceV1::Global;
+        contract.workgroup_brand = Some([41; 32]);
+        contract.epoch_before = Some([42; 32]);
+    });
+    require_execution_contract_mutation_rejection(|contract| {
+        let ExecutionCapabilityOperationV1::RawMemoryBind { access, .. } = &mut contract.operation
+        else {
+            unreachable!()
+        };
+        *access = ExecutionMemoryAccessV1::ExclusiveReadWrite;
+    });
+    require_execution_contract_mutation_rejection(|contract| {
+        let ExecutionCapabilityOperationV1::RawMemoryBind { extent, .. } = &mut contract.operation
+        else {
+            unreachable!()
+        };
+        extent.upper_bound += 1;
+    });
+    require_execution_contract_mutation_rejection(|contract| {
+        contract.provenance.target_brand = [43; 32];
+    });
+
+    require_mutated_v9_rejection(|context, root| {
+        let barrier = typed_safety_op::<PlironBarrierOp>(root, context);
+        let mut contract = barrier.contract(context).unwrap();
+        let OperationKind::Barrier(payload) = &mut contract.kind else {
+            unreachable!()
+        };
+        payload.execution_scope = SynchronizationScope::Subgroup;
+        barrier.set_attr_gpu_kir_barrier_contract(
+            context,
+            CanonicalKirOperationAttr::new(&contract).unwrap(),
+        );
+    });
+    require_mutated_v9_rejection(|context, root| {
+        let atomic = typed_safety_op::<PlironAtomicOp>(root, context);
+        let mut contract = atomic.contract(context).unwrap();
+        let OperationKind::Atomic(payload) = &mut contract.kind else {
+            unreachable!()
+        };
+        payload.ordering = MemoryOrdering::SequentiallyConsistent;
+        atomic.set_attr_gpu_kir_atomic_contract(
+            context,
+            CanonicalKirOperationAttr::new(&contract).unwrap(),
+        );
+    });
+    require_mutated_v9_rejection(|context, root| {
+        let atomic = typed_safety_op::<PlironAtomicOp>(root, context);
+        let mut contract = atomic.contract(context).unwrap();
+        let OperationKind::Atomic(payload) = &mut contract.kind else {
+            unreachable!()
+        };
+        payload.scope = SynchronizationScope::System;
+        atomic.set_attr_gpu_kir_atomic_contract(
+            context,
+            CanonicalKirOperationAttr::new(&contract).unwrap(),
+        );
+    });
+    require_mutated_v9_rejection(|context, root| {
+        let barrier = typed_safety_op::<PlironBarrierOp>(root, context);
+        barrier.set_attr_gpu_kir_barrier_identity(
+            context,
+            CanonicalIdentityAttr::from_bytes([44; 32]),
+        );
+    });
+    require_mutated_v9_rejection(|context, root| {
+        let barrier = typed_safety_op::<PlironBarrierOp>(root, context);
+        let memory = typed_safety_op::<PlironWorkgroupMemoryOp>(root, context);
+        let barrier = barrier.get_operation();
+        barrier.unlink(context);
+        barrier.insert_after(context, memory.get_operation());
+    });
+    require_mutated_v9_rejection(|context, root| {
+        let barrier = typed_safety_op::<PlironBarrierOp>(root, context);
+        barrier.set_attr_gpu_kir_barrier_graph_epoch(
+            context,
+            CanonicalIdentityAttr::from_bytes([45; 32]),
+        );
+    });
+
+    require_metadata_substitution_rejection(|module| {
+        module
+            .required_capabilities
+            .insert(TargetCapability::Float64);
+    });
+    require_metadata_substitution_rejection(|module| {
+        module.kernels[0].domain = LaunchDomain::D1 {
+            x: LaunchExtent::Static(V13_DYNAMIC_UPPER_BOUND as u32),
+        };
+    });
+
+    let input = VerifiedCanonicalKernelIrV13::from_module(v13_raw_bind_module()).unwrap();
+    let mut owner = session();
+    let graph = owner.import_canonical_kir_v13_o0(&input).unwrap();
+    owner
+        .with_canonical_kir_graph_mut_for_test(&graph, |context, root| {
+            let operation = typed_op::<ExecutionCapabilityOp>(root, context);
+            operation.set_attr_gpu_execution_capability_source_operation_identity(
+                context,
+                CanonicalIdentityAttr::from_bytes([46; 32]),
+            );
+        })
+        .unwrap();
+    assert_eq!(
+        owner.extract_canonical_kir_v13_o0(&graph),
+        Err(KirBridgeErrorV1::MalformedGraph)
+    );
+}
+
+#[cfg(feature = "internal-test-context-access")]
+#[test]
+fn every_operation_family_rejects_an_identity_substitution() {
+    macro_rules! reject_v9_identity_substitution {
+        ($module:expr, $op:ty, $setter:ident) => {
+            require_mutated_v9_module_rejection($module, |context, root| {
+                typed_safety_op::<$op>(root, context)
+                    .$setter(context, CanonicalIdentityAttr::from_bytes([0xfe; 32]));
+            });
+        };
+    }
+
+    reject_v9_identity_substitution!(
+        preserved_intrinsic_module(),
+        PlironIntrinsicOp,
+        set_attr_gpu_kir_intrinsic_identity
+    );
+    require_mutated_v10_module_rejection(preserved_memory_intrinsic_module(), |context, root| {
+        typed_safety_op::<PlironMemoryIntrinsicOp>(root, context)
+            .set_attr_gpu_kir_memory_intrinsic_identity(
+                context,
+                CanonicalIdentityAttr::from_bytes([0xfe; 32]),
+            );
+    });
+    reject_v9_identity_substitution!(
+        preserved_memory_and_synchronization_module(),
+        PlironAllocaOp,
+        set_attr_gpu_kir_alloca_identity
+    );
+    reject_v9_identity_substitution!(
+        preserved_memory_and_synchronization_module(),
+        PlironGuardedLoadOp,
+        set_attr_gpu_kir_guarded_load_identity
+    );
+    reject_v9_identity_substitution!(
+        preserved_memory_and_synchronization_module(),
+        PlironGuardedStoreOp,
+        set_attr_gpu_kir_guarded_store_identity
+    );
+    reject_v9_identity_substitution!(
+        preserved_memory_and_synchronization_module(),
+        PlironBarrierOp,
+        set_attr_gpu_kir_barrier_identity
+    );
+    reject_v9_identity_substitution!(
+        preserved_memory_and_synchronization_module(),
+        PlironAtomicOp,
+        set_attr_gpu_kir_atomic_identity
+    );
+    reject_v9_identity_substitution!(
+        preserved_memory_and_synchronization_module(),
+        PlironFenceOp,
+        set_attr_gpu_kir_fence_identity
+    );
+    reject_v9_identity_substitution!(
+        preserved_memory_and_synchronization_module(),
+        PlironWorkgroupBarrierOp,
+        set_attr_gpu_kir_workgroup_barrier_identity
+    );
+    reject_v9_identity_substitution!(
+        preserved_memory_and_synchronization_module(),
+        PlironWorkgroupMemoryOp,
+        set_attr_gpu_kir_workgroup_memory_identity
+    );
+    reject_v9_identity_substitution!(
+        preserved_matrix_module(),
+        PlironMatrixOp,
+        set_attr_gpu_kir_matrix_identity
+    );
+    reject_v9_identity_substitution!(
+        preserved_wave_and_transpose_module(),
+        PlironGfx950LdsTransposeOp,
+        set_attr_gpu_kir_gfx950_lds_transpose_identity
+    );
+    reject_v9_identity_substitution!(
+        preserved_wave_and_transpose_module(),
+        PlironWaveOp,
+        set_attr_gpu_kir_wave_identity
+    );
+    reject_v9_identity_substitution!(
+        preserved_inline_assembly_module(),
+        PlironInlineAssemblyOp,
+        set_attr_gpu_kir_inline_assembly_identity
+    );
+}
+
+#[cfg(feature = "internal-test-context-access")]
+#[test]
+fn canonical_kir_text_process_probe() {
+    const ENV: &str = "FE2O3_CANONICAL_KIR_TEXT_PROCESS_PROBE_V1";
+    if std::env::var_os(ENV).is_none() {
+        return;
+    }
+    use sha2::{Digest, Sha256};
+
+    let text = assert_fresh_text_round_trip_v9(
+        preserved_memory_and_synchronization_module(),
+        &[
+            "gpu.kir_alloca",
+            "gpu.kir_atomic",
+            "gpu.kir_barrier",
+            "gpu.kir_fence",
+            "gpu.kir_guarded_load",
+            "gpu.kir_guarded_store",
+            "gpu.kir_workgroup_barrier",
+            "gpu.kir_workgroup_memory",
+        ],
+    );
+    let digest: [u8; 32] = Sha256::digest(text.as_bytes()).into();
+    let digest = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    println!("FE2O3_CANONICAL_KIR_TEXT_DIGEST_V1={digest}");
+}
+
+#[cfg(feature = "internal-test-context-access")]
+#[test]
+fn canonical_kir_text_is_stable_across_fresh_processes() {
+    const ENV: &str = "FE2O3_CANONICAL_KIR_TEXT_PROCESS_PROBE_V1";
+    const PREFIX: &str = "FE2O3_CANONICAL_KIR_TEXT_DIGEST_V1=";
+    let run = || {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "canonical_kir_text_process_probe", "--nocapture"])
+            .env(ENV, "1")
+            .output()
+            .expect("spawn current conformance test process");
+        assert!(
+            output.status.success(),
+            "child failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .find_map(|line| line.strip_prefix(PREFIX).map(str::to_owned))
+            .expect("child emitted canonical text digest")
+    };
+
+    assert_eq!(run(), run());
+}
+
 #[test]
 fn typed_o0_round_trip_is_exact_and_has_stable_correspondence() {
     let input = VerifiedCanonicalKernelIrV9::from_module(rich_supported_module()).unwrap();
@@ -694,7 +1500,32 @@ fn typed_o0_round_trip_is_exact_and_has_stable_correspondence() {
 }
 
 #[test]
-fn every_preserved_operation_family_round_trips_through_the_standard_pipeline() {
+fn accepted_graph_reconstructs_exactly_in_a_fresh_context() {
+    let input = VerifiedCanonicalKernelIrV9::from_module(rich_supported_module()).unwrap();
+    let canonical_bytes = {
+        let mut first = session();
+        let graph = first.import_canonical_kir_v9_o0(&input).unwrap();
+        first
+            .extract_canonical_kir_v9_o0(&graph)
+            .unwrap()
+            .0
+            .canonical_bytes()
+            .to_vec()
+    };
+
+    let decoded = decode_module_v9(&canonical_bytes).expect("fresh canonical decode");
+    let reencoded =
+        VerifiedCanonicalKernelIrV9::from_module(decoded).expect("fresh canonical encode");
+    let mut fresh = session();
+    let graph = fresh.import_canonical_kir_v9_o0(&reencoded).unwrap();
+    let (output, report) = fresh.extract_canonical_kir_v9_o0(&graph).unwrap();
+
+    assert_eq!(output.canonical_bytes(), input.canonical_bytes());
+    assert!(report.is_exact());
+}
+
+#[test]
+fn safety_significant_operation_families_survive_the_standard_pipeline() {
     for module in [
         preserved_memory_and_synchronization_module(),
         preserved_matrix_module(),
@@ -706,93 +1537,52 @@ fn every_preserved_operation_family_round_trips_through_the_standard_pipeline() 
 }
 
 #[test]
-fn both_switch_forms_round_trip_with_real_cfg_successors() {
+fn switch_terminators_round_trip_exactly() {
     assert_exact_through_standard_optimization(preserved_switch_module());
 }
 
 #[test]
-fn preserved_switch_export_tracks_dead_arguments_repeated_edges_and_block_merging() {
+fn switch_cfg_operands_and_repeated_successors_round_trip_exactly() {
     let input = VerifiedCanonicalKernelIrV9::from_module(preserved_switch_cfg_rewrite_module())
         .expect("valid switch rewrite fixture");
     let mut owner = session();
     let graph = owner.import_canonical_kir_v9_o0(&input).unwrap();
+    let (output, report) = owner.extract_canonical_kir_v9_o0(&graph).unwrap();
+    assert_eq!(output.canonical_bytes(), input.canonical_bytes());
+    assert!(report.is_exact());
+
     owner
         .execute_optimization_v1(graph.root(), &PlironOptimizationPlanV1::standard())
         .unwrap();
     let (optimized, receipt) = owner.extract_optimized_canonical_kir_v9_v1(&graph).unwrap();
     assert!(receipt.changed());
-
     let optimized = decode_module_v9(optimized.canonical_bytes()).unwrap();
-    verify_module(&optimized).expect("rewritten switch CFG remains verified Kernel IR");
-    let body = optimized.functions[0].body.as_ref().unwrap();
-    assert_eq!(
-        body.blocks.len(),
-        3,
-        "one block merged and one removed as unreachable"
-    );
-    assert!(body.blocks.iter().all(|block| block.id != BlockId(30)));
-    assert!(body.blocks.iter().all(|block| block.id != BlockId(40)));
-
-    let entry = body
+    verify_module(&optimized).unwrap();
+    let entry = optimized.functions[0]
+        .body
+        .as_ref()
+        .unwrap()
         .blocks
         .iter()
         .find(|block| block.id == BlockId(0))
         .unwrap();
     let Terminator::Switch {
         cases,
-        default_target,
         default_arguments,
         ..
     } = entry.terminator.as_ref().unwrap()
     else {
-        panic!("entry switch must remain a typed preserved terminator");
+        panic!("typed switch was omitted by optimization");
     };
     assert_eq!(cases.len(), 2);
-    assert_eq!(cases[0].target, BlockId(10));
-    assert_eq!(cases[1].target, BlockId(10));
+    assert_eq!(cases[0].target, cases[1].target);
     assert_eq!(cases[0].arguments.len(), 2);
-    assert_eq!(cases[1].arguments, vec![ValueId(2), ValueId(1)]);
-    assert_eq!(*default_target, BlockId(20));
+    assert_eq!(cases[1].arguments.len(), 2);
     assert_eq!(default_arguments.len(), 2);
-
-    let folded_value = cases[0].arguments[0];
-    assert_eq!(cases[0].arguments[1], ValueId(1));
-    assert_eq!(default_arguments, &[ValueId(1), ValueId(2)]);
-    assert!(entry.operations.iter().any(|operation| {
-        operation
-            .results
-            .iter()
-            .any(|result| result.id == folded_value)
-            && matches!(operation.kind, OperationKind::Constant(Constant::U32(2)))
-    }));
-
-    let repeated_target = body
-        .blocks
-        .iter()
-        .find(|block| block.id == BlockId(10))
-        .unwrap();
-    // Builtin FuncOp retains non-entry arguments, so both repeated edges must
-    // keep the unused second slot aligned while other CFG nodes are rewritten.
-    assert_eq!(repeated_target.parameters.len(), 2);
-    let merge_predecessor = body
-        .blocks
-        .iter()
-        .find(|block| block.id == BlockId(20))
-        .unwrap();
-    assert_eq!(merge_predecessor.parameters.len(), 2);
-    let merged_live_parameter = merge_predecessor.parameters[0].id;
-    assert!(
-        matches!(
-            merge_predecessor.terminator,
-            Some(Terminator::Return { ref values }) if values == &[merged_live_parameter]
-        ),
-        "unexpected merged block: {:?}",
-        merge_predecessor
-    );
 }
 
 #[test]
-fn optimized_export_remaps_rewritten_operands_inside_preserved_payloads() {
+fn optimized_export_remaps_rewritten_atomic_operands() {
     let u32_ty = Type::Scalar(ScalarType::U32);
     let pointer_ty = Type::pointer(u32_ty.clone(), AddressSpace::Global, AccessMode::ReadWrite);
     let mut block = BasicBlock::new(BlockId(0));
@@ -855,7 +1645,7 @@ fn optimized_export_remaps_rewritten_operands_inside_preserved_payloads() {
             OperationKind::Atomic(atomic) => Some(atomic),
             _ => None,
         })
-        .expect("preserved atomic survives");
+        .expect("typed atomic survives optimization");
     let value = atomic.value.expect("atomic add operand survives");
     assert!(operations.iter().any(|operation| {
         operation.results.iter().any(|result| result.id == value)
@@ -942,7 +1732,7 @@ fn optimized_export_accepts_an_unreachable_block_removed_by_simplify_cfg() {
 }
 
 #[test]
-fn bridge_rejects_foreign_sessions_and_preserves_unreachable_and_generic_types() {
+fn bridge_rejects_foreign_sessions_unreachable_and_preserves_generic_types() {
     let input = VerifiedCanonicalKernelIrV9::from_module(rich_supported_module()).unwrap();
     let mut owner = session();
     let graph = owner.import_canonical_kir_v9_o0(&input).unwrap();
@@ -1004,30 +1794,27 @@ fn bridge_rejects_foreign_sessions_and_preserves_unreachable_and_generic_types()
 }
 
 #[test]
-fn intrinsic_carrier_is_exact_and_survives_optimization() {
-    let mut block = BasicBlock::new(fe2o3_kernel_ir::BlockId(0));
-    block.operations.push(Operation::effect_free(
-        ValueDef::new(ValueId(0), Type::INDEX),
-        OperationKind::Intrinsic(fe2o3_kernel_ir::IntrinsicOperation::global_id_1d()),
-    ));
-    block.terminator = Some(Terminator::Return { values: vec![] });
-    let mut module = Module::new("tests::preserved_intrinsic");
-    module.functions.push(Function::internal_helper(
-        "intrinsic",
-        Signature::new(vec![], vec![]),
-        vec![],
-        vec![block],
-    ));
-    let input = VerifiedCanonicalKernelIrV9::from_module(module).unwrap();
+fn intrinsic_is_exact_and_survives_optimization() {
+    let input = VerifiedCanonicalKernelIrV9::from_module(preserved_intrinsic_module()).unwrap();
     let mut owner = session();
     let graph = owner.import_canonical_kir_v9_o0(&input).unwrap();
-    let (o0, report) = owner.extract_canonical_kir_v9_o0(&graph).unwrap();
-    assert_eq!(o0.canonical_bytes(), input.canonical_bytes());
+    let (output, report) = owner.extract_canonical_kir_v9_o0(&graph).unwrap();
+    assert_eq!(output.canonical_bytes(), input.canonical_bytes());
     assert!(report.is_exact());
-
     owner
         .execute_optimization_v1(graph.root(), &PlironOptimizationPlanV1::standard())
         .unwrap();
     let (optimized, _) = owner.extract_optimized_canonical_kir_v9_v1(&graph).unwrap();
     assert_eq!(optimized.canonical_bytes(), input.canonical_bytes());
+}
+
+#[test]
+fn memory_intrinsic_has_self_contained_semantics_and_round_trips_exactly() {
+    let input =
+        VerifiedCanonicalKernelIrV10::from_module(preserved_memory_intrinsic_module()).unwrap();
+    let mut owner = session();
+    let graph = owner.import_canonical_kir_v10_o0(&input).unwrap();
+    let (output, report) = owner.extract_canonical_kir_v10_o0(&graph).unwrap();
+    assert_eq!(output.canonical_bytes(), input.canonical_bytes());
+    assert!(report.is_exact());
 }

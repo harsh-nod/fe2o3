@@ -5,6 +5,28 @@
 
 use core::fmt;
 
+mod capability_v1;
+
+pub use capability_v1::{
+    MAX_TARGET_CAPABILITY_CLOSURE_REQUIREMENTS_V1, TargetAbiConstraintV1, TargetAddressSpaceV1,
+    TargetAsyncCopyRequirementV1, TargetAsyncWaitRequirementV1, TargetAtomicOperationV1,
+    TargetAtomicRequirementV1, TargetBarrierParticipationV1, TargetBarrierRequirementV1,
+    TargetCapabilityClosureErrorV1, TargetCapabilityClosureNodeV1, TargetCapabilityClosureSpecV1,
+    TargetCapabilityClosureV1, TargetCapabilityDecisionOutcomeV1, TargetCapabilityDecisionV1,
+    TargetCapabilityModelIdentityErrorV1, TargetCapabilityModelIdentityV1,
+    TargetCapabilityModelRevisionFingerprintV1, TargetCapabilityProfileFingerprintV1,
+    TargetCapabilityQueryErrorV1, TargetCapabilityQueryV1, TargetCapabilityRequirementErrorV1,
+    TargetCapabilityRequirementV1, TargetCollectiveOperationV1, TargetCollectiveParticipationV1,
+    TargetCollectiveRequirementV1, TargetEndiannessV1, TargetExecutionScopeV1,
+    TargetFenceRequirementV1, TargetLaunchEvidenceKindV1, TargetMatrixLayoutV1,
+    TargetMatrixLayoutsV1, TargetMatrixOperationV1, TargetMatrixRequirementV1, TargetMatrixShapeV1,
+    TargetMemoryAccessV1, TargetMemoryOrderingV1, TargetMemoryScopeV1, TargetNumericalModeV1,
+    TargetNumericalRequirementV1, TargetObjectConstraintV1, TargetObjectFormatV1,
+    TargetResourceRequirementV1, TargetScalarEncodingV1, TargetScalarKindV1, TargetScalarTypeV1,
+    admit_static_target_capability_closure_v1, query_target_capability_closure_v1,
+    query_target_capability_v1,
+};
+
 const ABSENT_PROFILE_FIELD: &str = "<absent>";
 
 /// Organization or hardware ecosystem that owns the target profile semantics.

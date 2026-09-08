@@ -1,3 +1,29 @@
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/lds_tile_uninitialized_read.rs:1:52
+  |
+1 | use fe2o3_device::{LdsTile16x16, LdsUninitialized, Wave64, WaveLane};
+  |                                                    ^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/lds_tile_uninitialized_read.rs:1:60
+  |
+1 | use fe2o3_device::{LdsTile16x16, LdsUninitialized, Wave64, WaveLane};
+  |                                                            ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/lds_tile_uninitialized_read.rs:5:12
+  |
+5 |     lane: &WaveLane<Wave64>,
+  |            ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/lds_tile_uninitialized_read.rs:5:21
+  |
+5 |     lane: &WaveLane<Wave64>,
+  |                     ^^^^^^
+
 error[E0599]: no method named `read_wave_fragment` found for reference `&LdsTile16x16<'_, u32>` in the current scope
  --> tests/ui/fail/lds_tile_uninitialized_read.rs:7:18
   |
@@ -7,5 +33,5 @@ error[E0599]: no method named `read_wave_fragment` found for reference `&LdsTile
 help: there is a method `write_wave_fragment` with a similar name, but with different arguments
  --> src/tensor.rs
   |
-  |     pub fn write_wave_fragment(&mut self, lane: &WaveLane<Wave64>, values: [T; 4]) {
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |     pub fn write_wave_fragment(&mut self, lane: &WaveLane<Wave64, Brand>, values: [T; 4]) {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

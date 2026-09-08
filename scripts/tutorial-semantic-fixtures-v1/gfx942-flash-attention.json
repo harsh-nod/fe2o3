@@ -1,0 +1,509 @@
+{
+  "argumentRoles": [
+    "input",
+    "input",
+    "input",
+    "input",
+    "output",
+    "scalar",
+    "scalar",
+    "scalar",
+    "scalar",
+    "scalar",
+    "scalar",
+    "scalar",
+    "scalar",
+    "scalar",
+    "scalar",
+    "scalar",
+    "scalar",
+    "scalar",
+    "scalar",
+    "scalar",
+    "scalar"
+  ],
+  "canaries": [],
+  "checkApplicability": {
+    "canaries": {
+      "reason": "kernel requires an exact output extent with no admissible tail",
+      "status": "not-applicable"
+    },
+    "padding": {
+      "reason": null,
+      "status": "checked"
+    }
+  },
+  "compilerInputContractSha256": "7b1e0b9cefae31ee931953fb993acb4c52dd28e9e40deea6bc08542dbc892923",
+  "expectedArguments": [
+    {
+      "bytes": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "element": "u16",
+      "kind": "buffer"
+    },
+    {
+      "bytes": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "element": "u16",
+      "kind": "buffer"
+    },
+    {
+      "bytes": "0x0000803f0000004000004040000080400000a0400000c0400000e040000000410000104100002041000030410000404100005041000060410000704100008041",
+      "element": "f32",
+      "kind": "buffer"
+    },
+    {
+      "bytes": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "element": "f32",
+      "kind": "buffer"
+    },
+    {
+      "bytes": "0x0000084100e440460000084100e440460000000000e440460000000000e440460000000000e440460000000000e440460000000000e440460000000000e440460000000000e440460000000000e440460000000000e440460000000000e440460000000000e440460000000000e440460000000000e440460000000000e44046",
+      "element": "f32",
+      "kind": "buffer"
+    },
+    {
+      "bits": "0x01000000",
+      "kind": "scalar",
+      "type": "u32"
+    },
+    {
+      "bits": "0x02000000",
+      "kind": "scalar",
+      "type": "u32"
+    },
+    {
+      "bits": "0x10000000",
+      "kind": "scalar",
+      "type": "u32"
+    },
+    {
+      "bits": "0x10000000",
+      "kind": "scalar",
+      "type": "u32"
+    },
+    {
+      "bits": "0x10000000",
+      "kind": "scalar",
+      "type": "u32"
+    },
+    {
+      "bits": "0x01000000",
+      "kind": "scalar",
+      "type": "u32"
+    },
+    {
+      "bits": "0x01000000",
+      "kind": "scalar",
+      "type": "u32"
+    },
+    {
+      "bits": "0x01000000",
+      "kind": "scalar",
+      "type": "u32"
+    },
+    {
+      "bits": "0x10000000",
+      "kind": "scalar",
+      "type": "u32"
+    },
+    {
+      "bits": "0x10000000",
+      "kind": "scalar",
+      "type": "u32"
+    },
+    {
+      "bits": "0x01000000",
+      "kind": "scalar",
+      "type": "u32"
+    },
+    {
+      "bits": "0x10000000",
+      "kind": "scalar",
+      "type": "u32"
+    },
+    {
+      "bits": "0x10000000",
+      "kind": "scalar",
+      "type": "u32"
+    },
+    {
+      "bits": "0x02000000",
+      "kind": "scalar",
+      "type": "u32"
+    },
+    {
+      "bits": "0x10000000",
+      "kind": "scalar",
+      "type": "u32"
+    },
+    {
+      "bits": "0x0000803f",
+      "kind": "scalar",
+      "type": "f32"
+    }
+  ],
+  "fixtureId": "gfx942-flash-attention",
+  "kernelSymbol": "flash_attention_general_v1",
+  "numericalPolicy": {
+    "absoluteTolerance": 1e-05,
+    "allowNaN": false,
+    "mode": "f32-tolerance",
+    "relativeTolerance": 1e-05
+  },
+  "oracle": {
+    "function": "fe2o3_flash_attention_general_v1::reference::evaluate_reference_v1",
+    "inputSha256": "c0505fa5aa59ec5ffbbae35e8a6c32c9dd602563b8960340ee724b84d2bbadd9",
+    "kind": "existing-rust-cpu-reference-v1"
+  },
+  "oracleSuiteId": "cpu-reference-flash-attention",
+  "padding": [
+    {
+      "argument": 4,
+      "bytes": "0x00e44046",
+      "offset": 4
+    },
+    {
+      "argument": 4,
+      "bytes": "0x00e44046",
+      "offset": 12
+    },
+    {
+      "argument": 4,
+      "bytes": "0x00e44046",
+      "offset": 20
+    },
+    {
+      "argument": 4,
+      "bytes": "0x00e44046",
+      "offset": 28
+    },
+    {
+      "argument": 4,
+      "bytes": "0x00e44046",
+      "offset": 36
+    },
+    {
+      "argument": 4,
+      "bytes": "0x00e44046",
+      "offset": 44
+    },
+    {
+      "argument": 4,
+      "bytes": "0x00e44046",
+      "offset": 52
+    },
+    {
+      "argument": 4,
+      "bytes": "0x00e44046",
+      "offset": 60
+    },
+    {
+      "argument": 4,
+      "bytes": "0x00e44046",
+      "offset": 68
+    },
+    {
+      "argument": 4,
+      "bytes": "0x00e44046",
+      "offset": 76
+    },
+    {
+      "argument": 4,
+      "bytes": "0x00e44046",
+      "offset": 84
+    },
+    {
+      "argument": 4,
+      "bytes": "0x00e44046",
+      "offset": 92
+    },
+    {
+      "argument": 4,
+      "bytes": "0x00e44046",
+      "offset": 100
+    },
+    {
+      "argument": 4,
+      "bytes": "0x00e44046",
+      "offset": 108
+    },
+    {
+      "argument": 4,
+      "bytes": "0x00e44046",
+      "offset": 116
+    },
+    {
+      "argument": 4,
+      "bytes": "0x00e44046",
+      "offset": 124
+    }
+  ],
+  "physicalAbi": {
+    "arguments": [
+      {
+        "access": "read_only",
+        "element": "u16",
+        "kind": "buffer",
+        "name": "q"
+      },
+      {
+        "access": "read_only",
+        "element": "u16",
+        "kind": "buffer",
+        "name": "k_transposed"
+      },
+      {
+        "access": "read_only",
+        "element": "f32",
+        "kind": "buffer",
+        "name": "v"
+      },
+      {
+        "access": "read_only",
+        "element": "f32",
+        "kind": "buffer",
+        "name": "additive_mask"
+      },
+      {
+        "access": "read_write",
+        "element": "f32",
+        "kind": "buffer",
+        "name": "output"
+      },
+      {
+        "kind": "scalar",
+        "name": "batch_heads",
+        "type": "u32"
+      },
+      {
+        "kind": "scalar",
+        "name": "query_rows",
+        "type": "u32"
+      },
+      {
+        "kind": "scalar",
+        "name": "query_rows_padded",
+        "type": "u32"
+      },
+      {
+        "kind": "scalar",
+        "name": "keys",
+        "type": "u32"
+      },
+      {
+        "kind": "scalar",
+        "name": "keys_padded",
+        "type": "u32"
+      },
+      {
+        "kind": "scalar",
+        "name": "depth",
+        "type": "u32"
+      },
+      {
+        "kind": "scalar",
+        "name": "value_dimension",
+        "type": "u32"
+      },
+      {
+        "kind": "scalar",
+        "name": "q_stride",
+        "type": "u32"
+      },
+      {
+        "kind": "scalar",
+        "name": "k_depth_stride",
+        "type": "u32"
+      },
+      {
+        "kind": "scalar",
+        "name": "k_head_stride",
+        "type": "u32"
+      },
+      {
+        "kind": "scalar",
+        "name": "v_stride",
+        "type": "u32"
+      },
+      {
+        "kind": "scalar",
+        "name": "v_head_stride",
+        "type": "u32"
+      },
+      {
+        "kind": "scalar",
+        "name": "mask_stride",
+        "type": "u32"
+      },
+      {
+        "kind": "scalar",
+        "name": "output_stride",
+        "type": "u32"
+      },
+      {
+        "kind": "scalar",
+        "name": "output_rows",
+        "type": "u32"
+      },
+      {
+        "kind": "scalar",
+        "name": "scale",
+        "type": "f32"
+      }
+    ],
+    "schema": "fe2o3-physical-kernel-abi-v1",
+    "signatureSha256": "e0e7937ee9fad954d24f195645e2b6886d229b04341df235e99da50125e921d3",
+    "sourcePath": "examples/flash_attention_general_v1/src/kernel.rs"
+  },
+  "productionExport": {
+    "coordinates": null,
+    "diagnostic": "FE2O3-TUTORIAL-PROBE-001: production exporter failed: crates/fe2o3-verifier/src/production_final_graph_functional_refinement_v1.rs:77:5: error[E0277]: `ProductionVerifiedFinalGraphV1` doesn't implement `std::fmt::Debug`: the trait `std::fmt::Debug` is not implemented for `ProductionVerifiedFinalGraphV1`",
+    "diagnosticCode": "FE2O3-TUTORIAL-PROBE-001",
+    "diagnosticIdentitySha256": "eb7ae96497889a138ee2c6936251475c7722709d2dea4f3809560a6375076706",
+    "identityContract": {
+      "rawContentField": "evidenceFiles[optimized-kir-v13].sha256",
+      "rawContentIdentity": "SHA-256(raw optimized KIR V13 bytes)",
+      "verifiedCanonicalKernelIrV13Fields": [
+        "productionEvidence.finalOptimizedKirSha256",
+        "graph.productionKirIdentitySha256",
+        "simulator.subjectSha256"
+      ],
+      "verifiedCanonicalKernelIrV13Identity": "domain-separated VerifiedCanonicalKernelIrV13 identity"
+    },
+    "stage": "exporter-build",
+    "status": "blocked"
+  },
+  "request": {
+    "arguments": [
+      {
+        "access": "read_only",
+        "alignment": 2,
+        "bytes": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "element": "u16",
+        "kind": "buffer"
+      },
+      {
+        "access": "read_only",
+        "alignment": 2,
+        "bytes": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "element": "u16",
+        "kind": "buffer"
+      },
+      {
+        "access": "read_only",
+        "alignment": 4,
+        "bytes": "0x0000803f0000004000004040000080400000a0400000c0400000e040000000410000104100002041000030410000404100005041000060410000704100008041",
+        "element": "f32",
+        "kind": "buffer"
+      },
+      {
+        "access": "read_only",
+        "alignment": 4,
+        "bytes": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "element": "f32",
+        "kind": "buffer"
+      },
+      {
+        "access": "read_write",
+        "alignment": 4,
+        "bytes": "0x00e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e4404600e44046",
+        "element": "f32",
+        "kind": "buffer"
+      },
+      {
+        "bits": "0x01000000",
+        "kind": "scalar",
+        "type": "u32"
+      },
+      {
+        "bits": "0x02000000",
+        "kind": "scalar",
+        "type": "u32"
+      },
+      {
+        "bits": "0x10000000",
+        "kind": "scalar",
+        "type": "u32"
+      },
+      {
+        "bits": "0x10000000",
+        "kind": "scalar",
+        "type": "u32"
+      },
+      {
+        "bits": "0x10000000",
+        "kind": "scalar",
+        "type": "u32"
+      },
+      {
+        "bits": "0x01000000",
+        "kind": "scalar",
+        "type": "u32"
+      },
+      {
+        "bits": "0x01000000",
+        "kind": "scalar",
+        "type": "u32"
+      },
+      {
+        "bits": "0x01000000",
+        "kind": "scalar",
+        "type": "u32"
+      },
+      {
+        "bits": "0x10000000",
+        "kind": "scalar",
+        "type": "u32"
+      },
+      {
+        "bits": "0x10000000",
+        "kind": "scalar",
+        "type": "u32"
+      },
+      {
+        "bits": "0x01000000",
+        "kind": "scalar",
+        "type": "u32"
+      },
+      {
+        "bits": "0x10000000",
+        "kind": "scalar",
+        "type": "u32"
+      },
+      {
+        "bits": "0x10000000",
+        "kind": "scalar",
+        "type": "u32"
+      },
+      {
+        "bits": "0x02000000",
+        "kind": "scalar",
+        "type": "u32"
+      },
+      {
+        "bits": "0x10000000",
+        "kind": "scalar",
+        "type": "u32"
+      },
+      {
+        "bits": "0x0000803f",
+        "kind": "scalar",
+        "type": "f32"
+      }
+    ],
+    "grid": [
+      64,
+      1,
+      1
+    ],
+    "kernel": "flash_attention_general_v1",
+    "schema": "fe2o3-simulation-request-v1",
+    "workgroup": [
+      64,
+      1,
+      1
+    ]
+  },
+  "schema": "fe2o3-tutorial-capability-simulation-fixture-v1",
+  "sourceClosureSha256": "6037b899e8e3d5a03b7f35ae36cf3773586eac574de73bdd4b3527fe5ede0789",
+  "target": "gfx942"
+}

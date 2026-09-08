@@ -1042,12 +1042,25 @@ fn trusted_index1d_type<'tcx>(tcx: TyCtxt<'tcx>) -> Result<Ty<'tcx>, GeneralType
             "trusted Index1D function has an unexpected return type",
         ));
     };
+    let trusted_unbranded = args
+        .get(1)
+        .and_then(|argument| argument.as_type())
+        .is_some_and(|brand| {
+            matches!(
+                *brand.kind(),
+                TyKind::Adt(definition, brand_args)
+                    if brand_args.is_empty()
+                        && tcx.def_path_str(definition.did())
+                            == "fe2o3_device::UnbrandedCapability"
+            )
+        });
     if trusted_device_items::classify(tcx, thread_index.did())
         != Some(TrustedDeviceItem::ThreadIndex)
-        || args.len() != 1
+        || args.len() != 2
+        || !trusted_unbranded
     {
         return Err(GeneralTypedExtractError::new(
-            "trusted Index1D return type is not the trusted ThreadIndex",
+            "trusted Index1D return type is not the trusted unbranded ThreadIndex",
         ));
     }
     args.first()

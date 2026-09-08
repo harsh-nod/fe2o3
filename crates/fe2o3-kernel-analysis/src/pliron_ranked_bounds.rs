@@ -10,15 +10,18 @@ use std::{
     fmt,
 };
 
-use dialect_gpu::{BarrierOp, ExecutionLayoutOp, FenceOp};
+use dialect_gpu::{
+    BarrierOp, CanonicalKirSafetyContractV1, ExecutionLayoutOp, FenceOp,
+    canonical_kir_safety_semantic_projection_v1,
+};
 use dialect_kernel::{
     AccessKindAttr, AllocationEffectOp, AnalysisSplitOp, BranchArgsOp, BranchOp,
     CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DeterministicJoinOp, DimensionOp,
     IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp,
     IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexUnknownOp,
-    IndexUnsignedCastOp, InvocationIndexOp, MAX_RANKED_MEMORY_RANK, OwnershipContractOp,
-    PipelineCreateOp, PipelineEventOp, RankedAccessOp, RankedViewOp, RankedViewType,
-    RequireEquivalentOp, RequireFiniteFoldOp, RequireFiniteRecurrenceOp,
+    IndexUnsignedCastOp, InvocationIndexOp, KernelContextIssueOp, MAX_RANKED_MEMORY_RANK,
+    OwnershipContractOp, PipelineCreateOp, PipelineEventOp, RankedAccessOp, RankedViewOp,
+    RankedViewType, RequireEquivalentOp, RequireFiniteFoldOp, RequireFiniteRecurrenceOp,
     RequirePermutationGatherOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp,
     SemanticExpressionCommitmentOp, SemanticSymbolOp, SemanticTypedBinaryOp, SemanticTypedCastOp,
     SemanticTypedCompareOp, SemanticTypedConstantOp, SemanticTypedExpressionRootOp,
@@ -345,6 +348,7 @@ struct PredecessorEdge {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RankedOperationKind {
+    KernelContextIssue,
     RankedView,
     IndexConstant,
     IndexUnsignedCast,
@@ -406,7 +410,9 @@ impl RankedOperationKind {
 }
 
 fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
-    if operation.downcast_ref::<RankedViewOp>().is_some() {
+    if operation.downcast_ref::<KernelContextIssueOp>().is_some() {
+        Some(RankedOperationKind::KernelContextIssue)
+    } else if operation.downcast_ref::<RankedViewOp>().is_some() {
         Some(RankedOperationKind::RankedView)
     } else if operation.downcast_ref::<PipelineCreateOp>().is_some() {
         Some(RankedOperationKind::PipelineCreate)
@@ -730,7 +736,19 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
                 return finding_failure(finding);
             }
             let operation = Operation::get_op_dyn(operation_pointer, context);
-            let Some(kind) = ranked_operation_kind(operation.as_ref()) else {
+            let canonical_safety =
+                match canonical_kir_safety_semantic_projection_v1(operation.as_ref(), context) {
+                    Ok(projection) => projection,
+                    Err(_) => {
+                        return finding_failure(RankedBoundsFindingV1::UnsupportedOperation {
+                            block: block_index,
+                            operation: operation_index,
+                            kind: operation.get_opid().to_string(),
+                        });
+                    }
+                };
+            let ranked = ranked_operation_kind(operation.as_ref());
+            if ranked.is_none() && canonical_safety.is_none() {
                 let finding = if terminator == Some(operation_pointer) {
                     RankedBoundsFindingV1::UnsupportedTerminator {
                         block: block_index,
@@ -744,8 +762,15 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
                     }
                 };
                 return finding_failure(finding);
+            }
+            let is_terminator = match canonical_safety.as_ref().map(|value| value.contract()) {
+                Some(CanonicalKirSafetyContractV1::Operation { .. }) => false,
+                Some(CanonicalKirSafetyContractV1::Terminator { .. }) => true,
+                None => ranked
+                    .expect("closed ranked operation was established")
+                    .is_terminator(),
             };
-            if kind.is_terminator() != (terminator == Some(operation_pointer)) {
+            if is_terminator != (terminator == Some(operation_pointer)) {
                 return structural_failure();
             }
 

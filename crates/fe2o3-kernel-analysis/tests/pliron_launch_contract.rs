@@ -9,7 +9,7 @@ use fe2o3_kernel_analysis::{
     KernelCheckRepairActionV1, KernelCheckStatusV1, MAX_PLIRON_IDENTITY_BLOCKS_V1,
     PlironAtomicTargetCapabilityV1, PlironAtomicTargetContextV1, PlironHostAllocationV1,
     PlironLaunchContractFindingV1, PlironLaunchContractInputErrorV1, PlironLaunchContractV1,
-    PlironLaunchTargetLimitsV1, ProductionPlironPreloweringErrorV2,
+    PlironLaunchTargetLimitsV1, PlironRuntimePreconditionV1, ProductionPlironPreloweringErrorV2,
     require_production_pliron_checks_with_atomic_and_target_before_lowering_v2,
     require_production_pliron_checks_with_target_before_lowering_v2,
     run_pliron_launch_contract_check_v1,
@@ -51,6 +51,16 @@ fn view(
     memory_space: MemorySpaceAttr,
     origin: u64,
 ) -> RankedViewOp {
+    view_with_alias_class(context, shape, memory_space, origin, origin)
+}
+
+fn view_with_alias_class(
+    context: &mut Context,
+    shape: Vec<u64>,
+    memory_space: MemorySpaceAttr,
+    origin: u64,
+    noalias_class: u64,
+) -> RankedViewOp {
     let ty = RankedViewType::new(context, 32, true, shape).unwrap();
     RankedViewOp::new_in_space_with_allocation_contract(
         context,
@@ -58,7 +68,7 @@ fn view(
         vec![],
         memory_space,
         origin,
-        origin,
+        noalias_class,
     )
     .unwrap()
 }
@@ -84,7 +94,11 @@ fn contract(
 ) -> PlironLaunchContractV1 {
     PlironLaunchContractV1::new(
         limits(max_lds, subgroups),
-        vec![PlironHostAllocationV1::new(2, host_bytes, host_alignment).unwrap()],
+        vec![
+            PlironHostAllocationV1::new(2, host_bytes, host_alignment)
+                .unwrap()
+                .with_static_noalias_class(2),
+        ],
     )
     .unwrap()
 }
@@ -190,7 +204,7 @@ fn origin_substitution_cannot_reuse_an_unrelated_host_descriptor() {
 }
 
 #[test]
-fn dynamic_allocation_size_fails_closed_and_duplicate_bindings_are_invalid() {
+fn dynamic_allocation_size_becomes_an_explicit_runtime_precondition() {
     let context = &mut setup();
     let function = function(context, "dynamic_abi", [64, 1, 1], 64);
     let entry = function.get_entry_block(context);
@@ -211,10 +225,15 @@ fn dynamic_allocation_size_fails_closed_and_duplicate_bindings_are_invalid() {
     append(context, entry, &ret);
     let contract = contract(65_536, vec![64], 64, 16);
     let report = run_pliron_launch_contract_check_v1(context, &function, &contract);
-    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert_eq!(report.status(), KernelCheckStatusV1::Clean);
+    assert!(report.findings().is_empty());
     assert!(matches!(
-        report.findings(),
-        [PlironLaunchContractFindingV1::GlobalViewSizeUnknown { dimension: 0, .. }]
+        report.runtime_preconditions(),
+        [PlironRuntimePreconditionV1::GlobalViewByteLengthFits {
+            origin: 2,
+            static_required: None,
+            ..
+        }]
     ));
 
     let allocation = PlironHostAllocationV1::new(2, 64, 16).unwrap();
@@ -299,13 +318,90 @@ fn malformed_layout_and_global_size_overflow_never_produce_clean_reports() {
     let ret = ReturnOp::new(context);
     append(context, entry, &global);
     append(context, entry, &ret);
-    let contract = contract(65_536, vec![64], u64::MAX, 16);
+    let contract = contract(65_536, vec![64], 64, 16);
     let report = run_pliron_launch_contract_check_v1(context, &function, &contract);
     assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
     assert!(matches!(
         report.findings(),
         [PlironLaunchContractFindingV1::GlobalViewSizeArithmeticOverflow { origin: 2, .. }]
     ));
+}
+
+#[test]
+fn fabricated_maxima_are_rejected_and_unknown_host_facts_remain_runtime_obligations() {
+    assert!(matches!(
+        PlironHostAllocationV1::new(1, u64::MAX, 4_096),
+        Err(PlironLaunchContractInputErrorV1::InvalidHostAllocation(_))
+    ));
+    assert!(matches!(
+        PlironLaunchTargetLimitsV1::new(
+            [u64::MAX, 1, 1],
+            [1_024, 1, 1],
+            1_024,
+            vec![64],
+            65_536,
+            16,
+            8,
+        ),
+        Err(PlironLaunchContractInputErrorV1::InvalidTargetLimit(_))
+    ));
+
+    let context = &mut setup();
+    let function = function(context, "runtime_host_facts", [64, 1, 1], 64);
+    append_static_resources(context, &function, 1_024);
+    let contract = PlironLaunchContractV1::new(
+        limits(65_536, vec![64]),
+        vec![PlironHostAllocationV1::runtime_required(2).unwrap()],
+    )
+    .unwrap();
+    let report = run_pliron_launch_contract_check_v1(context, &function, &contract);
+    assert_eq!(report.status(), KernelCheckStatusV1::Clean);
+    assert_eq!(report.checked_global_allocation_count(), 0);
+    assert_eq!(report.runtime_preconditions().len(), 3);
+}
+
+#[test]
+fn exact_zero_capacities_are_valid_and_alias_conflicts_fail_closed() {
+    let context = &mut setup();
+    let empty = function(context, "empty_exact_resources", [64, 1, 1], 64);
+    let empty_ret = ReturnOp::new(context);
+    append(context, empty.get_entry_block(context), &empty_ret);
+    let zero_limits = PlironLaunchTargetLimitsV1::new(
+        [65_535, 65_535, 65_535],
+        [64, 1, 1],
+        64,
+        vec![64],
+        0,
+        1,
+        0,
+    )
+    .unwrap();
+    let empty_contract = PlironLaunchContractV1::new(zero_limits, vec![]).unwrap();
+    assert!(run_pliron_launch_contract_check_v1(context, &empty, &empty_contract).is_clean());
+
+    let conflicting = function(context, "conflicting_alias_classes", [64, 1, 1], 64);
+    let entry = conflicting.get_entry_block(context);
+    let first = view_with_alias_class(context, vec![16], MemorySpaceAttr::Global, 2, 7);
+    let second = view_with_alias_class(context, vec![16], MemorySpaceAttr::Global, 2, 9);
+    append(context, entry, &first);
+    append(context, entry, &second);
+    let conflicting_ret = ReturnOp::new(context);
+    append(context, entry, &conflicting_ret);
+    let runtime_contract = PlironLaunchContractV1::new(
+        limits(0, vec![64]),
+        vec![PlironHostAllocationV1::runtime_required(2).unwrap()],
+    )
+    .unwrap();
+    let report = run_pliron_launch_contract_check_v1(context, &conflicting, &runtime_contract);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironLaunchContractFindingV1::ConflictingGlobalAliasClasses {
+            origin: 2,
+            first: 7,
+            second: 9,
+        }
+    )));
 }
 
 fn function_with_block_count(context: &mut Context, name: &str, count: usize) -> FuncOp {

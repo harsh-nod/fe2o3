@@ -6,9 +6,10 @@ use fe2o3_amdgcn_model::{
 };
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, Function, FunctionId, FunctionRole,
-    IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, Module, Operation, OperationKind,
-    Signature, TargetCapability, Terminator, Type, ValueDef, ValueId, VerifiedCanonicalKernelIrV9,
-    WaveWidth, WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
+    IntrinsicOperation, Kernel, KernelContextSourceIdentityV1, KernelContextTypeV1, LaunchDomain,
+    LaunchExtent, Module, Operation, OperationKind, Signature, TargetCapability, Terminator, Type,
+    ValueDef, ValueId, VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV12, WaveWidth,
+    WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
 };
 
 fn returning_block(operations: Vec<Operation>, values: Vec<ValueId>) -> BasicBlock {
@@ -172,6 +173,58 @@ fn compiler_module() -> Module {
     module
 }
 
+fn contextual_compiler_module() -> Module {
+    let context = KernelContextTypeV1::new("entry", [1; 32], [2; 32], [3; 32]);
+    let helper = Function::internal_helper(
+        "context_helper",
+        Signature::new(vec![Type::KernelContext(context.clone())], vec![]),
+        vec![ValueId(0)],
+        vec![returning_block(vec![], vec![])],
+    );
+    let entry = Function::kernel_entry(
+        "entry",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![returning_block(
+            vec![
+                Operation::kernel_context_issue(
+                    ValueId(0),
+                    context,
+                    KernelContextSourceIdentityV1::new([4; 32], [5; 32], [6; 32], [7; 32]),
+                ),
+                Operation::new(
+                    vec![],
+                    OperationKind::Call {
+                        callee: FunctionId::new("context_helper"),
+                        arguments: vec![ValueId(0)],
+                    },
+                ),
+            ],
+            vec![],
+        )],
+    );
+
+    let mut module = Module::new("tests::context_erasure");
+    module.functions = vec![entry, helper];
+    module.kernels = vec![wave_kernel("kernel", "entry", WaveWidth::Wave64)];
+    module
+}
+
+fn physically_erased_context_module() -> Module {
+    let mut module = contextual_compiler_module();
+    let entry = module.functions[0].body.as_mut().unwrap();
+    entry.blocks[0].operations.remove(0);
+    let OperationKind::Call { arguments, .. } = &mut entry.blocks[0].operations[0].kind else {
+        unreachable!()
+    };
+    arguments.clear();
+
+    let helper = &mut module.functions[1];
+    helper.signature.parameters.clear();
+    helper.body.as_mut().unwrap().parameters.clear();
+    module
+}
+
 fn exact_gfx942_xnack_minus_compiler_module(mut module: Module) -> Module {
     let target = fe2o3_kernel_ir::gfx942_xnack_minus_target_capability();
     module.required_capabilities.insert(target.clone());
@@ -210,6 +263,31 @@ fn canonical_order_is_independent_of_module_vector_order() {
         lower_compiler_module_to_llvm_ir(&permuted).unwrap(),
         baseline
     );
+}
+
+#[test]
+fn logical_kernel_context_is_fully_erased_from_llvm() {
+    let contextual = lower_compiler_module_to_llvm_ir(&contextual_compiler_module()).unwrap();
+    let erased = lower_compiler_module_to_llvm_ir(&physically_erased_context_module()).unwrap();
+
+    assert_eq!(contextual, erased);
+    assert!(contextual.contains("define internal void @context_helper()"));
+    assert!(contextual.contains("call void @context_helper()"));
+}
+
+#[test]
+fn v12_semantic_anchor_admits_contextual_compiler_modules() {
+    let module = exact_gfx942_xnack_minus_compiler_module(contextual_compiler_module());
+    let owner = VerifiedCanonicalKernelIrV12::from_module(module.clone()).unwrap();
+
+    let llvm = lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
+        &module,
+        ProductionSemanticAnchorKirIdentityV1::from_v12(&owner),
+    )
+    .unwrap();
+
+    assert!(llvm.contains("define internal void @context_helper()"));
+    assert!(llvm.contains("call void @context_helper()"));
 }
 
 #[test]

@@ -155,12 +155,11 @@ pub(crate) fn discharge_reference_bounds_over_ranked_domains_v2(
             });
         }
     }
+    let definitions = definitions(kernel)?;
+    let domains = point_domains(kernel, outputs, &definitions)?;
     if accesses.is_empty() && checks.is_empty() {
         return Ok(());
     }
-
-    let definitions = definitions(kernel)?;
-    let domains = point_domains(kernel, outputs, &definitions)?;
     let mut normalized = Vec::with_capacity(checks.len());
     for check in checks {
         validate_check(&check)?;

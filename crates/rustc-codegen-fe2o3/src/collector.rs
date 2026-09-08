@@ -4,12 +4,15 @@ use fe2o3_rustc_front::{
     ASSEMBLY_OPERAND_ADDRESS_V1, ASSEMBLY_OPERAND_IMMEDIATE_V1, ASSEMBLY_OPERAND_SGPR_V1,
     ASSEMBLY_OPERAND_VGPR_V1, ASSEMBLY_OPTION_NOMEM_V1, ASSEMBLY_OPTION_NOSTACK_V1,
     ASSEMBLY_OPTION_PRESERVES_FLAGS_V1, ASSEMBLY_OPTION_PURE_V1, ASSEMBLY_OPTION_READONLY_V1,
-    KERNEL_FRONTEND_REGISTRATION_KIND_V1, KERNEL_FRONTEND_REGISTRATION_MAGIC_V1,
-    KERNEL_FRONTEND_REGISTRATION_PREFIX_V1, KERNEL_FRONTEND_REGISTRATION_VERSION_V1,
-    KERNEL_RESOURCE_REGISTRATION_KIND_V1, KERNEL_RESOURCE_REGISTRATION_MAGIC_V1,
-    KERNEL_RESOURCE_REGISTRATION_PREFIX_V1, KERNEL_RESOURCE_REGISTRATION_VERSION_V1,
-    KernelFrontendContractV1, KernelResourceContractV1, decode_kernel_frontend_contract_v1,
-    decode_kernel_resource_contract_v1,
+    KERNEL_CONTEXT_FRONTEND_REGISTRATION_KIND_V1, KERNEL_CONTEXT_FRONTEND_REGISTRATION_MAGIC_V1,
+    KERNEL_CONTEXT_FRONTEND_REGISTRATION_PREFIX_V1,
+    KERNEL_CONTEXT_FRONTEND_REGISTRATION_VERSION_V1, KERNEL_FRONTEND_REGISTRATION_KIND_V1,
+    KERNEL_FRONTEND_REGISTRATION_MAGIC_V1, KERNEL_FRONTEND_REGISTRATION_PREFIX_V1,
+    KERNEL_FRONTEND_REGISTRATION_VERSION_V1, KERNEL_RESOURCE_REGISTRATION_KIND_V1,
+    KERNEL_RESOURCE_REGISTRATION_MAGIC_V1, KERNEL_RESOURCE_REGISTRATION_PREFIX_V1,
+    KERNEL_RESOURCE_REGISTRATION_VERSION_V1, KernelContextFrontendContractV1,
+    KernelFrontendContractV1, KernelResourceContractV1, decode_kernel_context_frontend_contract_v1,
+    decode_kernel_frontend_contract_v1, decode_kernel_resource_contract_v1,
 };
 use reserved_fe2o3_symbols::{
     CrateBindingIdV1, GeneratedHostContractIdV3, KernelBindingIdV1,
@@ -17,9 +20,10 @@ use reserved_fe2o3_symbols::{
     derive_kernel_binding_id_v1, host_kernel_symbol_v1,
 };
 use rustc_ast::InlineAsmOptions;
-use rustc_hir::def_id::{DefId, LOCAL_CRATE};
+use rustc_hir::def::Res;
+use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
 use rustc_hir::intravisit::{self, Visitor};
-use rustc_hir::{BlockCheckMode, ExprKind, ItemKind, Safety, UnsafeSource};
+use rustc_hir::{BlockCheckMode, ExprKind, ItemKind, Mutability, Safety, UnsafeSource};
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::interpret::GlobalAlloc;
 use rustc_middle::mir::mono::{CodegenUnit, MonoItem};
@@ -28,9 +32,13 @@ use rustc_middle::mir::{
     TerminatorKind, UnwindAction,
 };
 use rustc_middle::ty::adjustment::PointerCoercion;
+use rustc_middle::ty::layout::{LayoutCx, LayoutOf};
 use rustc_middle::ty::{
-    EarlyBinder, Instance, InstanceKind, TyCtxt, TyKind, TypeVisitableExt, TypingEnv,
+    self, EarlyBinder, GenericArgKind, Instance, InstanceKind, Ty, TyCtxt, TyKind,
+    TypeVisitableExt, TypingEnv,
 };
+use rustc_span::sym;
+use rustc_target::callconv::PassMode;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
@@ -39,9 +47,9 @@ use crate::production_rustc_drop_v1::{ProductionRustcDropClassV1, classify_rustc
 mod production_importer_v1;
 
 pub(crate) use production_importer_v1::{
-    AuthenticatedRustcIdentityInventoryV3, AuthenticatedRustcPreflightPlanV3,
-    ConstructedProductionSemanticMirV1, ProductionSemanticImportErrorV1,
-    construct_production_semantic_mir_v1,
+    AuthenticatedProductionKernelContextsV1, AuthenticatedRustcIdentityInventoryV3,
+    AuthenticatedRustcPreflightPlanV3, ConstructedProductionSemanticMirV1,
+    ProductionSemanticImportErrorV1, construct_production_semantic_mir_v1,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -112,11 +120,14 @@ pub struct CollectedFunction<'tcx> {
     pub(crate) kernel_binding: Option<KernelBindingIdV1>,
     /// Compiler-authenticated source contract for this exact kernel root.
     pub(crate) frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
+    /// Compiler-bound declaration for one logical context argument.
+    pub(crate) kernel_context_contract: Option<BoundKernelContextFrontendContractV1>,
     /// Exact safe-Rust reference/effect binding for this kernel root.
     pub(crate) reference_effect_binding:
         Option<crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1>,
     /// Compiler-private observation derived from this exact monomorphized MIR.
     pub(crate) dead_branches: Option<crate::monomorphization_dead::CompilerDeadBranchObservationV1>,
+    pub(crate) closure_plan: Option<crate::closure_profile_v1::Gfx942ClosureLoweringV1>,
 }
 
 /// Source-level kernel contract authenticated against one exact rustc instance.
@@ -138,6 +149,66 @@ pub(crate) struct AuthenticatedKernelFrontendContractV1 {
 struct AuthenticatedKernelResourceContractV1 {
     canonical_bytes: Vec<u8>,
     contract: KernelResourceContractV1,
+}
+
+/// Inert context metadata bound to an exact physical root. Full graph
+/// authentication occurs after reachable MIR collection and before this value
+/// may reach the semantic importer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BoundKernelContextFrontendContractV1 {
+    registration_path: String,
+    canonical_bytes: Vec<u8>,
+    contract: KernelContextFrontendContractV1,
+    authenticated_source: Option<AuthenticatedKernelContextSourceV1>,
+}
+
+impl BoundKernelContextFrontendContractV1 {
+    pub(crate) fn canonical_bytes(&self) -> &[u8] {
+        &self.canonical_bytes
+    }
+
+    pub(crate) fn contract(&self) -> &KernelContextFrontendContractV1 {
+        &self.contract
+    }
+
+    pub(crate) fn take_authenticated_source(
+        &mut self,
+    ) -> Option<AuthenticatedKernelContextSourceV1> {
+        self.authenticated_source.take()
+    }
+}
+
+/// Exact rustc facts retained only after the context sidecar, nominal marker,
+/// physical ABI, and unique issuance call have all been authenticated.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedKernelContextSourceV1 {
+    root_function_identity: [u8; 32],
+    kernel_marker_identity: [u8; 32],
+    issuance_identity: [u8; 32],
+    physical_argument_count: u32,
+    logical_argument_count: u32,
+}
+
+impl AuthenticatedKernelContextSourceV1 {
+    pub(crate) const fn root_function_identity(&self) -> [u8; 32] {
+        self.root_function_identity
+    }
+
+    pub(crate) const fn kernel_marker_identity(&self) -> [u8; 32] {
+        self.kernel_marker_identity
+    }
+
+    pub(crate) const fn issuance_identity(&self) -> [u8; 32] {
+        self.issuance_identity
+    }
+
+    pub(crate) const fn physical_argument_count(&self) -> u32 {
+        self.physical_argument_count
+    }
+
+    pub(crate) const fn logical_argument_count(&self) -> u32 {
+        self.logical_argument_count
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -264,6 +335,18 @@ impl<'tcx> AuthenticatedCollectedKernelClosureV1<'tcx> {
             tcx,
             &self.collection.functions,
         )
+    }
+
+    pub(crate) fn exact_codegen_function_symbols_v1(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (Instance<'tcx>, CollectedFunctionRole, &str)> {
+        self.collection.functions.iter().map(|function| {
+            (
+                function.instance,
+                function.role,
+                function.export_name.as_str(),
+            )
+        })
     }
 }
 
@@ -417,6 +500,7 @@ struct KernelRoot<T> {
     generated_host_contract_identity: Option<GeneratedHostContractIdV3>,
     kernel_binding: Option<KernelBindingIdV1>,
     frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
+    kernel_context_contract: Option<BoundKernelContextFrontendContractV1>,
     reference_effect_binding:
         Option<crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1>,
 }
@@ -434,6 +518,47 @@ struct FrontendContractRegistrationRecord<T> {
     target_symbol: String,
     target_identity: String,
     target: T,
+}
+
+#[derive(Clone, Debug)]
+struct KernelContextContractRegistrationRecord<T> {
+    registration_path: String,
+    item_name: String,
+    magic: u64,
+    version: u16,
+    kind: u16,
+    logical_name: String,
+    canonical_bytes: Vec<u8>,
+    contract: KernelContextFrontendContractV1,
+    target_identity: String,
+    target: T,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ObservedKernelContextIssuanceV1 {
+    rustc_block: u32,
+    terminal_function_identity: [u8; 32],
+}
+
+const KERNEL_CONTEXT_ISSUANCE_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3/rustc/kernel-context-issuance/v1";
+
+fn derive_kernel_context_issuance_identity_v1(
+    root_function_identity: &[u8; 32],
+    mir_body_identity: &[u8; 32],
+    block_identity: &[u8; 32],
+    terminal_function_identity: &[u8; 32],
+    kernel_marker_identity: &[u8; 32],
+) -> [u8; 32] {
+    crate::rustc_semantic_adapter_v1::domain_digest(
+        KERNEL_CONTEXT_ISSUANCE_IDENTITY_DOMAIN_V1,
+        &[
+            root_function_identity,
+            mir_body_identity,
+            block_identity,
+            terminal_function_identity,
+            kernel_marker_identity,
+        ],
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -562,6 +687,8 @@ fn kernel_roots<'tcx>(
     )?;
     let frontend_records = decode_frontend_contract_registrations(tcx, &functions_by_symbol)?;
     bind_frontend_contract_registrations(tcx, &mut roots, frontend_records)?;
+    let context_records = decode_kernel_context_contract_registrations(tcx, &functions_by_symbol)?;
+    bind_kernel_context_contract_registrations(tcx, &mut roots, context_records)?;
     let resource_records = decode_resource_contract_registrations(tcx, &functions_by_symbol)?;
     bind_resource_contract_registrations(tcx, &mut roots, resource_records)?;
     let reference_records = decode_reference_binding_registrations(tcx)?;
@@ -705,6 +832,27 @@ fn frontend_contract_candidates<'tcx>(
             let item_name = final_path_segment(&path).to_string();
             item_name
                 .starts_with(KERNEL_FRONTEND_REGISTRATION_PREFIX_V1)
+                .then_some((path, item_name, def_id, item))
+        })
+        .collect()
+}
+
+fn kernel_context_contract_candidates<'tcx>(
+    tcx: TyCtxt<'tcx>,
+) -> Vec<(
+    String,
+    String,
+    rustc_hir::def_id::LocalDefId,
+    &'tcx rustc_hir::Item<'tcx>,
+)> {
+    tcx.hir_free_items()
+        .filter_map(|item_id| {
+            let item = tcx.hir_item(item_id);
+            let def_id = item.owner_id.def_id;
+            let path = tcx.def_path_str(def_id.to_def_id());
+            let item_name = final_path_segment(&path).to_string();
+            item_name
+                .starts_with(KERNEL_CONTEXT_FRONTEND_REGISTRATION_PREFIX_V1)
                 .then_some((path, item_name, def_id, item))
         })
         .collect()
@@ -1172,12 +1320,16 @@ fn bind_frontend_contract_registrations<'tcx>(
                 record.target_identity
             )));
         }
-        if record.contract.unsafe_assembly().is_some()
+        if (record.contract.unsafe_assembly().is_some()
+            || record.contract.unsafe_raw_memory_provider())
             && tcx.fn_sig(record.target.def_id()).skip_binder().safety() != Safety::Unsafe
         {
-            return Err(error(
-                "unsafe-assembly contracts require an unsafe registered kernel function".to_owned(),
-            ));
+            return Err(error(if record.contract.unsafe_assembly().is_some() {
+                "unsafe-assembly contracts require an unsafe registered kernel function".to_owned()
+            } else {
+                "unsafe raw-memory provider contracts require an unsafe registered kernel function"
+                    .to_owned()
+            }));
         }
 
         root.frontend_contract = Some(AuthenticatedKernelFrontendContractV1 {
@@ -1188,6 +1340,221 @@ fn bind_frontend_contract_registrations<'tcx>(
             contract: record.contract,
             resource: None,
             reachable_assembly: ReachableAssemblySummaryV1::default(),
+        });
+    }
+    Ok(())
+}
+
+fn decode_kernel_context_contract_registrations<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    functions_by_symbol: &BTreeMap<String, Vec<Instance<'tcx>>>,
+) -> Result<Vec<KernelContextContractRegistrationRecord<Instance<'tcx>>>, RegistrationError> {
+    let mut candidates = kernel_context_contract_candidates(tcx);
+    candidates.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
+    candidates
+        .into_iter()
+        .map(|(path, item_name, def_id, item)| {
+            decode_kernel_context_contract_registration(
+                tcx,
+                def_id,
+                path,
+                item_name,
+                item,
+                functions_by_symbol,
+            )
+        })
+        .collect()
+}
+
+fn decode_kernel_context_contract_registration<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: rustc_hir::def_id::LocalDefId,
+    registration_path: String,
+    item_name: String,
+    item: &rustc_hir::Item<'tcx>,
+    functions_by_symbol: &BTreeMap<String, Vec<Instance<'tcx>>>,
+) -> Result<KernelContextContractRegistrationRecord<Instance<'tcx>>, RegistrationError> {
+    if !matches!(item.kind, ItemKind::Static(..)) {
+        return Err(RegistrationError::new(
+            registration_path,
+            "the reserved kernel-context contract name must identify a static item",
+        ));
+    }
+    if tcx.is_mutable_static(def_id.to_def_id()) {
+        return Err(RegistrationError::new(
+            registration_path,
+            "kernel-context contract registration statics must be immutable",
+        ));
+    }
+    let flags = tcx.codegen_fn_attrs(def_id).flags;
+    if !flags.intersects(CodegenFnAttrFlags::USED_COMPILER | CodegenFnAttrFlags::USED_LINKER) {
+        return Err(RegistrationError::new(
+            registration_path,
+            "kernel-context contract registration statics must carry #[used]",
+        ));
+    }
+
+    let registration_ty = tcx.type_of(def_id).instantiate_identity();
+    let TyKind::Tuple(field_types) = registration_ty.kind() else {
+        return Err(RegistrationError::new(
+            registration_path,
+            "kernel-context contract registration must use the exact V1 tuple type",
+        ));
+    };
+    let exact_type = field_types.len() == 6
+        && field_types[0] == tcx.types.u64
+        && field_types[1] == tcx.types.u16
+        && field_types[2] == tcx.types.u16
+        && is_shared_str(field_types[3])
+        && is_shared_u8_slice(field_types[4])
+        && matches!(field_types[5].kind(), TyKind::FnPtr(..));
+    if !exact_type {
+        return Err(RegistrationError::new(
+            registration_path,
+            "kernel-context contract registration type must be `(u64, u16, u16, &str, &[u8], fn pointer)`",
+        ));
+    }
+
+    let body = tcx.mir_for_ctfe(def_id);
+    let fields = registration_tuple_fields(body, 6, &registration_path)?;
+    let magic = registration_integer(tcx, fields[0], tcx.types.u64, "magic", &registration_path)?;
+    let version =
+        registration_integer(tcx, fields[1], tcx.types.u16, "version", &registration_path)?;
+    let kind = registration_integer(tcx, fields[2], tcx.types.u16, "kind", &registration_path)?;
+    let logical_name = registration_string(tcx, fields[3], "logical name", &registration_path)?;
+    let canonical_bytes = registration_bytes(tcx, fields[4], "contract", &registration_path)?;
+    let contract =
+        decode_kernel_context_frontend_contract_v1(&canonical_bytes).map_err(|error| {
+            RegistrationError::new(
+                &registration_path,
+                format!("kernel-context contract bytes are invalid: {error}"),
+            )
+        })?;
+    let target = registration_target(tcx, body, fields[5], &registration_path)?;
+    let target_symbol = tcx.symbol_name(target).name.to_string();
+    let target_identity = tcx.def_path_str(target.def_id());
+    let Some(cgu_targets) = functions_by_symbol.get(&target_symbol) else {
+        return Err(RegistrationError::new(
+            registration_path,
+            format!(
+                "kernel-context contract target `{target_symbol}` was not monomorphized into a codegen unit"
+            ),
+        ));
+    };
+    if cgu_targets.as_slice() != [target] {
+        return Err(RegistrationError::new(
+            registration_path,
+            format!(
+                "kernel-context contract target `{target_symbol}` is ambiguous or inconsistent"
+            ),
+        ));
+    }
+
+    Ok(KernelContextContractRegistrationRecord {
+        registration_path,
+        item_name,
+        magic: u64::try_from(magic).map_err(|_| {
+            RegistrationError::new("kernel context contract", "magic does not fit u64")
+        })?,
+        version: u16::try_from(version).map_err(|_| {
+            RegistrationError::new("kernel context contract", "version does not fit u16")
+        })?,
+        kind: u16::try_from(kind).map_err(|_| {
+            RegistrationError::new("kernel context contract", "kind does not fit u16")
+        })?,
+        logical_name,
+        canonical_bytes,
+        contract,
+        target_identity,
+        target,
+    })
+}
+
+fn bind_kernel_context_contract_registrations<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    roots: &mut [KernelRoot<Instance<'tcx>>],
+    mut records: Vec<KernelContextContractRegistrationRecord<Instance<'tcx>>>,
+) -> Result<(), RegistrationError> {
+    records.sort_by(|lhs, rhs| lhs.registration_path.cmp(&rhs.registration_path));
+    let roots_by_name = roots
+        .iter()
+        .enumerate()
+        .map(|(index, root)| (root.logical_name.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut targets = BTreeMap::new();
+
+    for record in records {
+        let error = |reason| RegistrationError::new(record.registration_path.clone(), reason);
+        if record.magic != KERNEL_CONTEXT_FRONTEND_REGISTRATION_MAGIC_V1 {
+            return Err(error(format!(
+                "kernel-context contract magic {:#018x} does not match {:#018x}",
+                record.magic, KERNEL_CONTEXT_FRONTEND_REGISTRATION_MAGIC_V1
+            )));
+        }
+        if record.version != KERNEL_CONTEXT_FRONTEND_REGISTRATION_VERSION_V1 {
+            return Err(error(format!(
+                "unknown kernel-context contract registration version {}",
+                record.version
+            )));
+        }
+        if record.kind != KERNEL_CONTEXT_FRONTEND_REGISTRATION_KIND_V1 {
+            return Err(error(format!(
+                "unknown kernel-context contract registration kind {}",
+                record.kind
+            )));
+        }
+        let expected_item_name = format!(
+            "{KERNEL_CONTEXT_FRONTEND_REGISTRATION_PREFIX_V1}{}",
+            record.logical_name
+        );
+        if record.item_name != expected_item_name {
+            return Err(error(format!(
+                "kernel-context contract item name `{}` is inconsistent with logical name `{}`",
+                record.item_name, record.logical_name
+            )));
+        }
+        let Some(&root_index) = roots_by_name.get(&record.logical_name) else {
+            return Err(error(format!(
+                "orphan kernel-context contract has no registered kernel `{}`",
+                record.logical_name
+            )));
+        };
+        let root = &mut roots[root_index];
+        if root.target != record.target {
+            return Err(error(format!(
+                "kernel-context contract target `{}` is not the exact registered kernel function",
+                record.target_identity
+            )));
+        }
+        let physical_path = tcx.def_path_str(root.target.def_id());
+        let physical_name = final_path_segment(&physical_path);
+        if record.contract.physical_kernel_root().name() != physical_name {
+            return Err(error(format!(
+                "kernel-context contract physical root `{}` does not match `{physical_name}`",
+                record.contract.physical_kernel_root().name()
+            )));
+        }
+        if root.kernel_context_contract.is_some() {
+            return Err(error(format!(
+                "duplicate kernel-context contract for kernel `{}`",
+                record.logical_name
+            )));
+        }
+        if let Some(previous) = targets.insert(
+            record.target_identity.clone(),
+            record.registration_path.clone(),
+        ) {
+            return Err(error(format!(
+                "duplicate kernel-context contract target `{}`; first registered by `{previous}`",
+                record.target_identity
+            )));
+        }
+
+        root.kernel_context_contract = Some(BoundKernelContextFrontendContractV1 {
+            registration_path: record.registration_path,
+            canonical_bytes: record.canonical_bytes,
+            contract: record.contract,
+            authenticated_source: None,
         });
     }
     Ok(())
@@ -2128,6 +2495,7 @@ fn validate_registration_records<T: Copy>(
             generated_host_contract_identity,
             kernel_binding,
             frontend_contract: None,
+            kernel_context_contract: None,
             reference_effect_binding: None,
         });
     }
@@ -2143,6 +2511,28 @@ fn validate_registration_records<T: Copy>(
 fn owner_module_path(path: &str) -> &str {
     path.rsplit_once("::")
         .map_or("", |(module_path, _)| module_path)
+}
+
+fn sibling_item_has_name(
+    tcx: TyCtxt<'_>,
+    owner: DefId,
+    candidate: DefId,
+    expected_name: &str,
+) -> bool {
+    tcx.opt_parent(candidate) == tcx.opt_parent(owner)
+        && tcx
+            .def_key(candidate)
+            .get_opt_name()
+            .is_some_and(|name| name.as_str() == expected_name)
+}
+
+fn sibling_item_diagnostic_path(owner_path: &str, item_name: &str) -> String {
+    let module_path = owner_module_path(owner_path);
+    if module_path.is_empty() {
+        item_name.to_owned()
+    } else {
+        format!("{module_path}::{item_name}")
+    }
 }
 
 fn reject_duplicate(
@@ -2164,6 +2554,22 @@ fn final_path_segment(path: &str) -> &str {
     path.rsplit("::").next().unwrap_or(path)
 }
 
+fn is_authenticated_unsafe_raw_memory_terminal_v1(
+    rule: Option<crate::production_semantic_terminal_v1::ProductionSemanticTerminalRuleV1>,
+) -> bool {
+    use crate::production_semantic_terminal_v1::{
+        ProductionExecutionTerminalV1 as Execution, ProductionSemanticTerminalRuleV1 as Rule,
+        ProductionTerminalExpansionV1 as Expansion,
+    };
+
+    matches!(
+        rule,
+        Some(Rule::Expand(Expansion::Execution(
+            Execution::PrivateMemoryFromRawParts | Execution::WorkgroupMemoryFromRawParts
+        )))
+    )
+}
+
 fn is_fully_monomorphized<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> bool {
     let generics = tcx.generics_of(instance.def_id());
 
@@ -2174,6 +2580,14 @@ fn is_fully_monomorphized<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> 
     }
 
     generics.count() == 0 || !instance.args.is_empty()
+}
+
+fn callable_safety(tcx: TyCtxt<'_>, instance: Instance<'_>) -> Safety {
+    if tcx.def_kind(instance.def_id()) == rustc_hir::def::DefKind::Closure {
+        instance.args.as_closure().sig().skip_binder().safety
+    } else {
+        tcx.fn_sig(instance.def_id()).skip_binder().safety()
+    }
 }
 
 struct DeviceCollector<'tcx> {
@@ -2189,6 +2603,10 @@ struct DeviceCollector<'tcx> {
     >,
     reachable_unsafe_calls:
         BTreeMap<crate::device_ffi::DeviceFfiInstanceIdentity, BTreeSet<String>>,
+    kernel_context_issuance_calls: BTreeMap<
+        crate::device_ffi::DeviceFfiInstanceIdentity,
+        Vec<ObservedKernelContextIssuanceV1>,
+    >,
     inline_assembly:
         BTreeMap<crate::device_ffi::DeviceFfiInstanceIdentity, ObservedInlineAssemblyV1>,
     used_export_names: BTreeSet<String>,
@@ -2269,17 +2687,79 @@ fn root_scoped_call_chains<T: Clone + Ord>(
     (links, order)
 }
 
-#[derive(Default)]
-struct UserUnsafeBlockVisitor {
+struct UserUnsafeBlockVisitor<'tcx> {
+    tcx: TyCtxt<'tcx>,
+    owner: LocalDefId,
+    allow_authenticated_raw_memory: bool,
+    allow_authenticated_context_issuance: bool,
     first_span: Option<rustc_span::Span>,
 }
 
-impl<'tcx> Visitor<'tcx> for UserUnsafeBlockVisitor {
+impl<'tcx> UserUnsafeBlockVisitor<'tcx> {
+    fn new(
+        tcx: TyCtxt<'tcx>,
+        owner: LocalDefId,
+        allow_authenticated_raw_memory: bool,
+        allow_authenticated_context_issuance: bool,
+    ) -> Self {
+        Self {
+            tcx,
+            owner,
+            allow_authenticated_raw_memory,
+            allow_authenticated_context_issuance,
+            first_span: None,
+        }
+    }
+
+    fn is_exact_authenticated_raw_memory_call(&self, block: &rustc_hir::Block<'tcx>) -> bool {
+        let ([], Some(expression)) = (block.stmts, block.expr) else {
+            return false;
+        };
+        let ExprKind::Call(callee, arguments) = expression.kind else {
+            return false;
+        };
+        if arguments.len() != 4 {
+            return false;
+        }
+        let ExprKind::Path(ref path) = callee.kind else {
+            return false;
+        };
+        let Res::Def(_, def_id) = self.tcx.typeck(self.owner).qpath_res(path, callee.hir_id) else {
+            return false;
+        };
+        is_authenticated_unsafe_raw_memory_terminal_v1(
+            crate::production_semantic_terminal_v1::classify(self.tcx, def_id),
+        )
+    }
+
+    fn is_exact_authenticated_context_issuance(&self, block: &rustc_hir::Block<'tcx>) -> bool {
+        let ([], Some(expression)) = (block.stmts, block.expr) else {
+            return false;
+        };
+        let ExprKind::Call(callee, []) = expression.kind else {
+            return false;
+        };
+        let ExprKind::Path(ref path) = callee.kind else {
+            return false;
+        };
+        let Res::Def(_, def_id) = self.tcx.typeck(self.owner).qpath_res(path, callee.hir_id) else {
+            return false;
+        };
+        crate::trusted_device_items::classify(self.tcx, def_id)
+            == Some(crate::trusted_device_items::TrustedDeviceItem::KernelContextIssue)
+    }
+}
+
+impl<'tcx> Visitor<'tcx> for UserUnsafeBlockVisitor<'tcx> {
     fn visit_block(&mut self, block: &'tcx rustc_hir::Block<'tcx>) {
         if matches!(
             block.rules,
             BlockCheckMode::UnsafeBlock(UnsafeSource::UserProvided)
-        ) {
+        ) && !(self.allow_authenticated_raw_memory
+            && self.is_exact_authenticated_raw_memory_call(block))
+            && !(self.allow_authenticated_context_issuance
+                && self.is_exact_authenticated_context_issuance(block))
+        {
             self.first_span.get_or_insert(block.span);
         }
         intravisit::walk_block(self, block);
@@ -2314,6 +2794,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             call_chains: BTreeMap::new(),
             call_edges: BTreeMap::new(),
             reachable_unsafe_calls: BTreeMap::new(),
+            kernel_context_issuance_calls: BTreeMap::new(),
             inline_assembly: BTreeMap::new(),
             used_export_names: BTreeSet::new(),
             worklist: VecDeque::new(),
@@ -2406,8 +2887,10 @@ impl<'tcx> DeviceCollector<'tcx> {
                 generated_host_contract_identity: None,
                 kernel_binding: None,
                 frontend_contract: None,
+                kernel_context_contract: None,
                 reference_effect_binding: None,
                 dead_branches: None,
+                closure_plan: None,
             });
         }
         Ok(())
@@ -2421,6 +2904,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             generated_host_contract_identity,
             kernel_binding,
             frontend_contract,
+            kernel_context_contract,
             reference_effect_binding,
         } = root;
         if !self.used_export_names.insert(export_name.clone()) {
@@ -2447,8 +2931,10 @@ impl<'tcx> DeviceCollector<'tcx> {
                 generated_host_contract_identity,
                 kernel_binding,
                 frontend_contract,
+                kernel_context_contract,
                 reference_effect_binding,
                 dead_branches: None,
+                closure_plan: None,
             });
         }
         Ok(())
@@ -2468,15 +2954,17 @@ impl<'tcx> DeviceCollector<'tcx> {
 
             let mir = self.tcx.instance_mir(function.instance.def);
             self.charge_function_blocks(&function.instance, mir.basic_blocks.len())?;
-            if crate::closure_profile_v1::contains_concrete_closure_v1(self.tcx, function.instance)
-                .map_err(|error| {
-                    self.reachable_error(
-                        &function.instance,
-                        &format!("closure presence check failed closed: {error}"),
-                        None,
-                    )
-                })?
-            {
+            let closure_plan = if crate::closure_profile_v1::contains_concrete_closure_v1(
+                self.tcx,
+                function.instance,
+            )
+            .map_err(|error| {
+                self.reachable_error(
+                    &function.instance,
+                    &format!("closure presence check failed closed: {error}"),
+                    None,
+                )
+            })? {
                 let closure_plan = crate::closure_profile_v1::analyze_gfx942_closures_v1(
                     self.tcx,
                     function.instance,
@@ -2492,13 +2980,17 @@ impl<'tcx> DeviceCollector<'tcx> {
                 })?;
                 if self.verbose {
                     eprintln!(
-                        "[collector] gfx942 closure profile: {} environment(s), {} static call(s), identity {}",
+                        "[collector] gfx942 closure profile: {} environment(s), {} static call(s), {} authenticated higher-order capability call(s), identity {}",
                         closure_plan.environments().len(),
                         closure_plan.calls().len(),
+                        closure_plan.higher_order_calls().len(),
                         encode_lower_hex(&closure_plan.identity()),
                     );
                 }
-            }
+                Some(closure_plan)
+            } else {
+                None
+            };
             let dead_branches =
                 crate::monomorphization_dead::CompilerDeadBranchObservationV1::observe(
                     self.tcx,
@@ -2530,16 +3022,27 @@ impl<'tcx> DeviceCollector<'tcx> {
                 );
             }
 
-            for (_, block) in mir.basic_blocks.iter_enumerated() {
+            for (rustc_block, block) in mir.basic_blocks.iter_enumerated() {
                 if let Some(terminator) = &block.terminator {
-                    self.process_terminator(&terminator.kind, mir, &function.instance)?;
+                    let rustc_block =
+                        u32::try_from(rustc_block.as_usize()).map_err(|_| CollectError {
+                            message: "kernel-context issuance block exceeds u32".to_owned(),
+                        })?;
+                    self.process_terminator(
+                        rustc_block,
+                        &terminator.kind,
+                        mir,
+                        &function.instance,
+                    )?;
                 }
             }
 
             function.dead_branches = Some(dead_branches);
+            function.closure_plan = closure_plan;
             self.result.push(function);
         }
 
+        self.authenticate_kernel_context_contracts()?;
         self.authenticate_production_kernel_source_safety()?;
         self.authenticate_reachable_frontend_contracts()?;
 
@@ -2581,6 +3084,7 @@ impl<'tcx> DeviceCollector<'tcx> {
 
     fn process_terminator(
         &mut self,
+        rustc_block: u32,
         terminator: &TerminatorKind<'tcx>,
         body: &Body<'tcx>,
         caller: &Instance<'tcx>,
@@ -2599,7 +3103,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                         None,
                     ));
                 }
-                self.process_call_operand(func, caller)
+                self.process_call_operand(rustc_block, func, caller)
             }
             TerminatorKind::InlineAsm {
                 asm_macro,
@@ -2822,6 +3326,346 @@ impl<'tcx> DeviceCollector<'tcx> {
         Ok(())
     }
 
+    fn authenticate_kernel_context_contracts(&mut self) -> Result<(), CollectError> {
+        let functions = self
+            .result
+            .iter()
+            .map(|function| (self.instance_identity(function.instance), function))
+            .collect::<BTreeMap<_, _>>();
+        let labels = functions
+            .iter()
+            .map(|(identity, function)| (identity.clone(), self.instance_label(function.instance)))
+            .collect::<BTreeMap<_, _>>();
+
+        let mut authenticated_sources = Vec::new();
+        for root in self
+            .result
+            .iter()
+            .filter(|function| function.is_kernel_entry())
+        {
+            let logical_name = root.logical_name.as_deref().unwrap_or(&root.export_name);
+            let root_identity = self.instance_identity(root.instance);
+            let (links, order) = root_scoped_call_chains(&self.call_edges, &labels, &root_identity);
+            let contract = root.kernel_context_contract.as_ref();
+
+            for identity in &order {
+                let issuance_count = self
+                    .kernel_context_issuance_calls
+                    .get(identity)
+                    .map_or(0, Vec::len);
+                let expected = if identity == &root_identity {
+                    contract.map_or(0, |contract| {
+                        usize::from(contract.contract.required_issuance_count())
+                    })
+                } else {
+                    0
+                };
+                if issuance_count != expected {
+                    let chain = reconstruct_call_chain(&links, identity).join(" -> ");
+                    return Err(CollectError {
+                        message: format!(
+                            "[FE2O3-CAP-AUTH001] kernel `{logical_name}` requires {expected} authenticated context issuance call(s) at its physical root but observed {issuance_count}; reachable call chain: {chain}",
+                        ),
+                    });
+                }
+            }
+
+            let Some(bound) = contract else {
+                continue;
+            };
+            let _canonical_bytes = bound.canonical_bytes();
+            let declared = bound.contract();
+            let root_path = self.tcx.def_path_str(root.instance.def_id());
+            let expected_helper_name = declared.logical_helper().name();
+            let helpers = self
+                .result
+                .iter()
+                .filter(|function| {
+                    sibling_item_has_name(
+                        self.tcx,
+                        root.instance.def_id(),
+                        function.instance.def_id(),
+                        expected_helper_name,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let expected_helper_path =
+                sibling_item_diagnostic_path(&root_path, expected_helper_name);
+            let [helper] = helpers.as_slice() else {
+                return Err(CollectError {
+                    message: format!(
+                        "[FE2O3-CAP-AUTH002] kernel-context contract `{}` requires exactly one reachable logical helper `{expected_helper_path}`; found {}",
+                        bound.registration_path,
+                        helpers.len()
+                    ),
+                });
+            };
+            if helper.role != CollectedFunctionRole::InternalHelper {
+                return Err(CollectError {
+                    message: format!(
+                        "[FE2O3-CAP-AUTH002] declared logical helper `{expected_helper_path}` is not an internal helper"
+                    ),
+                });
+            }
+            let helper_identity = self.instance_identity(helper.instance);
+            if !self
+                .call_edges
+                .get(&root_identity)
+                .is_some_and(|callees| callees.contains(&helper_identity))
+            {
+                return Err(CollectError {
+                    message: format!(
+                        "[FE2O3-CAP-AUTH002] physical root `{root_path}` does not call its declared logical helper `{expected_helper_path}` directly"
+                    ),
+                });
+            }
+
+            let marker_name = declared.nominal_kernel_marker().name();
+            let marker_path = sibling_item_diagnostic_path(&root_path, marker_name);
+            let marker_defs = self
+                .tcx
+                .hir_free_items()
+                .filter_map(|item_id| {
+                    let item = self.tcx.hir_item(item_id);
+                    let def_id = item.owner_id.def_id.to_def_id();
+                    sibling_item_has_name(self.tcx, root.instance.def_id(), def_id, marker_name)
+                        .then_some(def_id)
+                })
+                .collect::<Vec<_>>();
+            let [marker_def_id] = marker_defs.as_slice() else {
+                return Err(CollectError {
+                    message: format!(
+                        "[FE2O3-CAP-AUTH003] kernel-context contract requires exactly one nominal marker `{marker_path}`; found {}",
+                        marker_defs.len()
+                    ),
+                });
+            };
+            let marker_ty = self.tcx.type_of(*marker_def_id).instantiate_identity();
+            let TyKind::Adt(marker_adt, marker_args) = marker_ty.kind() else {
+                return Err(CollectError {
+                    message: format!(
+                        "[FE2O3-CAP-AUTH003] nominal marker `{marker_path}` is not an ADT"
+                    ),
+                });
+            };
+            if !marker_adt.is_enum() || !marker_adt.variants().is_empty() || !marker_args.is_empty()
+            {
+                return Err(CollectError {
+                    message: format!(
+                        "[FE2O3-CAP-AUTH003] nominal marker `{marker_path}` is not the exact uninhabited nongeneric enum shape"
+                    ),
+                });
+            }
+
+            let root_signature = self.tcx.normalize_erasing_regions(
+                TypingEnv::fully_monomorphized(),
+                self.tcx.instantiate_bound_regions_with_erased(
+                    self.tcx
+                        .fn_sig(root.instance.def_id())
+                        .instantiate(self.tcx, root.instance.args),
+                ),
+            );
+            let helper_signature = self.tcx.normalize_erasing_regions(
+                TypingEnv::fully_monomorphized(),
+                self.tcx.instantiate_bound_regions_with_erased(
+                    self.tcx
+                        .fn_sig(helper.instance.def_id())
+                        .instantiate(self.tcx, helper.instance.args),
+                ),
+            );
+            let Some((context_ty, helper_physical_inputs)) =
+                helper_signature.inputs().split_first()
+            else {
+                return Err(CollectError {
+                    message: format!(
+                        "[FE2O3-CAP-ABI001] logical helper `{expected_helper_path}` has no context input"
+                    ),
+                });
+            };
+            let argument_relation = if helper_physical_inputs.len() != root_signature.inputs().len()
+            {
+                Err(format!(
+                    "physical/logical argument counts differ: {}/{}",
+                    root_signature.inputs().len(),
+                    helper_physical_inputs.len(),
+                ))
+            } else {
+                helper_physical_inputs
+                    .iter()
+                    .zip(root_signature.inputs())
+                    .enumerate()
+                    .try_for_each(|(ordinal, (logical, physical))| {
+                        authenticate_logical_physical_kernel_argument_v1(
+                            self.tcx, marker_ty, *logical, *physical,
+                        )
+                        .map_err(|detail| {
+                            format!(
+                                "physical/logical argument {ordinal} violates the exact identity-or-capability-carrier relation: {detail}"
+                            )
+                        })
+                    })
+            };
+            let return_relation = match authenticate_logical_physical_kernel_signature_v1(
+                self.tcx,
+                argument_relation,
+                helper_signature.output(),
+                root_signature.output(),
+                helper_signature.abi,
+                root_signature.abi,
+                helper_signature.safety,
+                root_signature.safety,
+                helper_signature.c_variadic,
+                root_signature.c_variadic,
+            ) {
+                Ok(relation) => relation,
+                Err(detail) => {
+                    return Err(logical_physical_kernel_abi_error_v1(
+                        &expected_helper_path,
+                        &root_path,
+                        declared.context_source_ordinal(),
+                        &detail,
+                    ));
+                }
+            };
+            let TyKind::Adt(context_adt, context_args) = context_ty.kind() else {
+                return Err(CollectError {
+                    message: format!(
+                        "[FE2O3-CAP-AUTH004] logical helper `{expected_helper_path}` first input is not the trusted KernelContext ADT"
+                    ),
+                });
+            };
+            if crate::trusted_device_items::classify(self.tcx, context_adt.did())
+                != Some(crate::trusted_device_items::TrustedDeviceItem::KernelContext)
+            {
+                return Err(CollectError {
+                    message: format!(
+                        "[FE2O3-CAP-AUTH004] logical helper `{expected_helper_path}` first input is not the trusted KernelContext ADT"
+                    ),
+                });
+            }
+            let context_types = context_args.types().collect::<Vec<_>>();
+            if context_args.len() != 4
+                || !matches!(context_args[0].kind(), GenericArgKind::Lifetime(_))
+                || context_types.len() != 3
+                || context_types[0] != marker_ty
+                || !exact_reviewed_marker_v1(
+                    self.tcx,
+                    context_types[1],
+                    "fe2o3_device::context::CurrentTarget",
+                )
+                || !exact_reviewed_marker_v1(
+                    self.tcx,
+                    context_types[2],
+                    "fe2o3_device::context::RegisteredLaunch",
+                )
+            {
+                return Err(CollectError {
+                    message: format!(
+                        "[FE2O3-CAP-AUTH005] logical helper `{expected_helper_path}` KernelContext does not carry the exact nominal marker `{marker_path}`, target, and launch brands"
+                    ),
+                });
+            }
+            authenticate_nonphysical_kernel_context_abi_v1(
+                self.tcx,
+                root.instance,
+                helper.instance,
+                *context_ty,
+                root_signature.inputs().len(),
+                helper_signature.inputs().len(),
+                return_relation,
+            )
+            .map_err(|detail| CollectError {
+                message: format!(
+                    "[FE2O3-CAP-ABI001] logical helper `{expected_helper_path}` context ordinal {} is not a nonphysical kernarg: {detail}",
+                    declared.context_source_ordinal(),
+                ),
+            })?;
+
+            let issuance = self
+                .kernel_context_issuance_calls
+                .get(&root_identity)
+                .and_then(|issuances| issuances.first())
+                .copied()
+                .ok_or_else(|| CollectError {
+                    message: format!(
+                        "[FE2O3-CAP-AUTH001] kernel `{logical_name}` lost its authenticated context issuance"
+                    ),
+                })?;
+            let root_function_identity =
+                crate::rustc_semantic_adapter_v1::canonical_function_identities_v1(
+                    self.tcx,
+                    root.instance,
+                )
+                .function();
+            let mir_body_identity =
+                crate::rustc_semantic_adapter_v1::rustc_mir_body_sha256_v1(self.tcx, root.instance);
+            let block_identity = crate::rustc_semantic_adapter_v1::rustc_block_identity_v1(
+                root_function_identity,
+                mir_body_identity,
+                issuance.rustc_block,
+            );
+            let kernel_marker_identity =
+                crate::rustc_semantic_adapter_v1::rustc_type_identity_v1(self.tcx, marker_ty);
+            let issuance_identity = derive_kernel_context_issuance_identity_v1(
+                root_function_identity.as_bytes(),
+                &mir_body_identity,
+                block_identity.as_bytes(),
+                &issuance.terminal_function_identity,
+                kernel_marker_identity.as_bytes(),
+            );
+            let physical_argument_count =
+                u32::try_from(root_signature.inputs().len()).map_err(|_| CollectError {
+                    message: "physical kernel argument count exceeds u32".to_owned(),
+                })?;
+            let logical_argument_count =
+                u32::try_from(helper_signature.inputs().len()).map_err(|_| CollectError {
+                    message: "logical kernel argument count exceeds u32".to_owned(),
+                })?;
+            if logical_argument_count.checked_sub(physical_argument_count) != Some(1) {
+                return Err(CollectError {
+                    message: format!(
+                        "[FE2O3-CAP-ABI001] logical helper `{expected_helper_path}` does not add exactly one nonphysical context argument"
+                    ),
+                });
+            }
+            authenticated_sources.push((
+                root_identity,
+                AuthenticatedKernelContextSourceV1 {
+                    root_function_identity: *root_function_identity.as_bytes(),
+                    kernel_marker_identity: *kernel_marker_identity.as_bytes(),
+                    issuance_identity,
+                    physical_argument_count,
+                    logical_argument_count,
+                },
+            ));
+        }
+
+        for (root_identity, authenticated_source) in authenticated_sources {
+            let root_index = self
+                .result
+                .iter()
+                .position(|function| {
+                    function.is_kernel_entry()
+                        && self.instance_identity(function.instance) == root_identity
+                })
+                .expect("authenticated context root remains in the collected closure");
+            let bound = self.result[root_index]
+                .kernel_context_contract
+                .as_mut()
+                .expect("authenticated context root retains its bound sidecar");
+            if bound
+                .authenticated_source
+                .replace(authenticated_source)
+                .is_some()
+            {
+                return Err(CollectError {
+                    message: "kernel-context source was authenticated more than once".to_owned(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn authenticate_production_kernel_source_safety(&self) -> Result<(), CollectError> {
         let functions = self
             .result
@@ -2838,29 +3682,58 @@ impl<'tcx> DeviceCollector<'tcx> {
             .iter()
             .filter(|function| function.is_kernel_entry())
         {
-            if root
+            let frontend = root
                 .frontend_contract
                 .as_ref()
-                .and_then(|contract| contract.contract.unsafe_assembly())
+                .map(|contract| contract.contract);
+            if frontend
+                .and_then(KernelFrontendContractV1::unsafe_assembly)
                 .is_some()
             {
                 continue;
             }
+            let raw_memory_provider =
+                frontend.is_some_and(KernelFrontendContractV1::unsafe_raw_memory_provider);
             let logical_name = root.logical_name.as_deref().unwrap_or(&root.export_name);
             let root_identity = self.instance_identity(root.instance);
             let (links, order) = root_scoped_call_chains(&self.call_edges, &labels, &root_identity);
+            let raw_memory_helper_identity = raw_memory_provider
+                .then(|| {
+                    root.kernel_context_contract
+                        .as_ref()
+                        .map(|bound| bound.contract().logical_helper().name())
+                })
+                .flatten()
+                .and_then(|expected_name| {
+                    functions.iter().find_map(|(identity, function)| {
+                        sibling_item_has_name(
+                            self.tcx,
+                            root.instance.def_id(),
+                            function.instance.def_id(),
+                            expected_name,
+                        )
+                        .then(|| identity.clone())
+                    })
+                });
 
             for identity in order {
                 let function = functions
                     .get(&identity)
                     .expect("root-scoped traversal retains only collected function labels");
                 let chain = || reconstruct_call_chain(&links, &identity).join(" -> ");
-                if self
-                    .tcx
-                    .fn_sig(function.instance.def_id())
-                    .skip_binder()
-                    .safety()
-                    == Safety::Unsafe
+                let authenticated_raw_terminal = raw_memory_provider
+                    && is_authenticated_unsafe_raw_memory_terminal_v1(
+                        crate::production_semantic_terminal_v1::classify(
+                            self.tcx,
+                            function.instance.def_id(),
+                        ),
+                    );
+                let authenticated_raw_boundary = raw_memory_provider
+                    && (&identity == &root_identity
+                        || raw_memory_helper_identity.as_ref() == Some(&identity));
+                if callable_safety(self.tcx, function.instance) == Safety::Unsafe
+                    && !authenticated_raw_boundary
+                    && !authenticated_raw_terminal
                     && !crate::production_rustc_intrinsic_v1::is_reviewed_core_atomic_function_v1(
                         self.tcx,
                         function.instance,
@@ -2868,7 +3741,8 @@ impl<'tcx> DeviceCollector<'tcx> {
                 {
                     return Err(CollectError {
                         message: format!(
-                            "ordinary production kernel `{logical_name}` reaches unsafe function instance `{}`; reachable call chain: {}",
+                            "[FE2O3-CAP-SOURCE001] FE2O3-CAP Rejected root={logical_name} span=unresolved helper_chain={} stage=source-safety: production kernel `{logical_name}` reaches an unsafe function outside its authenticated low-level boundary: `{}`; reachable call chain: {}",
+                            chain(),
                             self.instance_label(function.instance),
                             chain(),
                         ),
@@ -2879,7 +3753,8 @@ impl<'tcx> DeviceCollector<'tcx> {
                 {
                     return Err(CollectError {
                         message: format!(
-                            "ordinary production kernel `{logical_name}` reaches unsafe function instance `{callee}`; reachable call chain: {} -> {callee}",
+                            "[FE2O3-CAP-SOURCE002] FE2O3-CAP Rejected root={logical_name} span=unresolved helper_chain={}->{callee} stage=source-safety: ordinary production kernel `{logical_name}` reaches unsafe function instance `{callee}`; reachable call chain: {} -> {callee}",
+                            chain(),
                             chain(),
                         ),
                     });
@@ -2930,7 +3805,8 @@ impl<'tcx> DeviceCollector<'tcx> {
                         Err(detail) => {
                             return Err(CollectError {
                                 message: format!(
-                                    "ordinary production kernel `{logical_name}` rejected reviewed external helper `{}`: {detail}; reachable call chain: {}",
+                                    "[FE2O3-CAP-SOURCE003] FE2O3-CAP Rejected root={logical_name} span=unresolved helper_chain={} stage=source-safety: ordinary production kernel `{logical_name}` rejected reviewed external helper `{}`: {detail}; reachable call chain: {}",
+                                    chain(),
                                     self.instance_label(function.instance),
                                     chain(),
                                 ),
@@ -2939,7 +3815,8 @@ impl<'tcx> DeviceCollector<'tcx> {
                     }
                     return Err(CollectError {
                         message: format!(
-                            "ordinary production kernel `{logical_name}` cannot authenticate the absence of user-provided unsafe blocks in external helper `{}`: cross-crate HIR is unavailable and optimized MIR does not retain unsafe-block syntax; reachable call chain: {}",
+                            "[FE2O3-CAP-SOURCE004] FE2O3-CAP Rejected root={logical_name} span=unresolved helper_chain={} stage=source-safety: ordinary production kernel `{logical_name}` cannot authenticate the absence of user-provided unsafe blocks in external helper `{}`: cross-crate HIR is unavailable and optimized MIR does not retain unsafe-block syntax; reachable call chain: {}",
+                            chain(),
                             self.instance_label(function.instance),
                             chain(),
                         ),
@@ -2948,19 +3825,31 @@ impl<'tcx> DeviceCollector<'tcx> {
                 let Some(body) = self.tcx.hir_maybe_body_owned_by(local_def_id) else {
                     return Err(CollectError {
                         message: format!(
-                            "ordinary production kernel `{logical_name}` cannot authenticate local HIR for reachable function `{}`; reachable call chain: {}",
+                            "[FE2O3-CAP-SOURCE005] FE2O3-CAP Rejected root={logical_name} span=unresolved helper_chain={} stage=source-safety: ordinary production kernel `{logical_name}` cannot authenticate local HIR for reachable function `{}`; reachable call chain: {}",
+                            chain(),
                             self.instance_label(function.instance),
                             chain(),
                         ),
                     });
                 };
-                let mut visitor = UserUnsafeBlockVisitor::default();
+                let authenticated_context_root = identity == root_identity
+                    && root
+                        .kernel_context_contract
+                        .as_ref()
+                        .is_some_and(|bound| bound.authenticated_source.is_some());
+                let mut visitor = UserUnsafeBlockVisitor::new(
+                    self.tcx,
+                    local_def_id,
+                    raw_memory_provider,
+                    authenticated_context_root,
+                );
                 visitor.visit_body(body);
                 if let Some(span) = visitor.first_span {
+                    let span = self.tcx.sess.source_map().span_to_diagnostic_string(span);
                     return Err(CollectError {
                         message: format!(
-                            "ordinary production kernel `{logical_name}` reaches a safe-signature local helper containing a user-provided unsafe block at {}; reachable call chain: {}",
-                            self.tcx.sess.source_map().span_to_diagnostic_string(span),
+                            "[FE2O3-CAP-SOURCE006] FE2O3-CAP Rejected root={logical_name} span={span} helper_chain={} stage=source-safety: ordinary production kernel `{logical_name}` reaches a safe-signature local helper containing a user-provided unsafe block at {span}; reachable call chain: {}",
+                            chain(),
                             chain(),
                         ),
                     });
@@ -3003,6 +3892,7 @@ impl<'tcx> DeviceCollector<'tcx> {
 
     fn process_call_operand(
         &mut self,
+        rustc_block: u32,
         func: &Operand<'tcx>,
         caller: &Instance<'tcx>,
     ) -> Result<(), CollectError> {
@@ -3078,24 +3968,46 @@ impl<'tcx> DeviceCollector<'tcx> {
                 ));
             }
         };
-        let normalized_intrinsic =
-            if crate::production_semantic_terminal_v1::classify(self.tcx, resolved.def_id())
-                .is_none()
-            {
-                crate::production_rustc_intrinsic_v1::classify(self.tcx, resolved).map_err(
-                    |error| {
-                        self.reachable_error(
-                            caller,
-                            &format!("unsupported rustc compiler intrinsic: {error}"),
-                            Some(self.instance_label(resolved)),
-                        )
-                    },
-                )?
-            } else {
-                None
-            };
+        let semantic_terminal =
+            crate::production_semantic_terminal_v1::classify(self.tcx, resolved.def_id());
+        let authenticated_unsafe_raw_memory_terminal =
+            is_authenticated_unsafe_raw_memory_terminal_v1(semantic_terminal);
+        let kernel_context_issuance = matches!(
+            semantic_terminal,
+            Some(crate::production_semantic_terminal_v1::ProductionSemanticTerminalRuleV1::Expand(
+                crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1::KernelContextIssue
+            ))
+        );
+        if kernel_context_issuance {
+            let caller_identity = self.instance_identity(*caller);
+            let terminal_function_identity =
+                crate::rustc_semantic_adapter_v1::canonical_function_identities_v1(
+                    self.tcx, resolved,
+                )
+                .function();
+            self.kernel_context_issuance_calls
+                .entry(caller_identity)
+                .or_default()
+                .push(ObservedKernelContextIssuanceV1 {
+                    rustc_block,
+                    terminal_function_identity: *terminal_function_identity.as_bytes(),
+                });
+        }
+        let normalized_intrinsic = if semantic_terminal.is_none() {
+            crate::production_rustc_intrinsic_v1::classify(self.tcx, resolved).map_err(|error| {
+                self.reachable_error(
+                    caller,
+                    &format!("unsupported rustc compiler intrinsic: {error}"),
+                    Some(self.instance_label(resolved)),
+                )
+            })?
+        } else {
+            None
+        };
         if normalized_intrinsic.is_none()
-            && self.tcx.fn_sig(*def_id).skip_binder().safety() == Safety::Unsafe
+            && !kernel_context_issuance
+            && !authenticated_unsafe_raw_memory_terminal
+            && callable_safety(self.tcx, resolved) == Safety::Unsafe
             && !crate::production_rustc_intrinsic_v1::is_reviewed_core_atomic_function_v1(
                 self.tcx, resolved,
             )
@@ -3295,8 +4207,10 @@ impl<'tcx> DeviceCollector<'tcx> {
             generated_host_contract_identity: None,
             kernel_binding: None,
             frontend_contract: None,
+            kernel_context_contract: None,
             reference_effect_binding: None,
             dead_branches: None,
+            closure_plan: None,
         });
         Ok(())
     }
@@ -3438,6 +4352,378 @@ impl<'tcx> DeviceCollector<'tcx> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LogicalKernelReturnRelationV1 {
+    Exact,
+    TrustedKernelResultToUnit,
+    Mismatch,
+}
+
+fn logical_physical_kernel_abi_error_v1(
+    logical_helper: &str,
+    physical_root: &str,
+    context_ordinal: u16,
+    detail: &str,
+) -> CollectError {
+    CollectError {
+        message: format!(
+            "[FE2O3-CAP-ABI001] logical helper `{logical_helper}` does not equal physical root `{physical_root}` after removing only context ordinal {context_ordinal}: {detail}",
+        ),
+    }
+}
+
+fn authenticate_logical_physical_kernel_signature_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    argument_relation: Result<(), String>,
+    logical_output: Ty<'tcx>,
+    physical_output: Ty<'tcx>,
+    logical_abi: rustc_abi::ExternAbi,
+    physical_abi: rustc_abi::ExternAbi,
+    logical_safety: Safety,
+    physical_safety: Safety,
+    logical_c_variadic: bool,
+    physical_c_variadic: bool,
+) -> Result<LogicalKernelReturnRelationV1, String> {
+    authenticate_kernel_signature_components_v1(
+        argument_relation,
+        logical_kernel_return_relation_v1(tcx, logical_output, physical_output),
+        logical_abi,
+        physical_abi,
+        logical_safety,
+        physical_safety,
+        logical_c_variadic,
+        physical_c_variadic,
+    )
+}
+
+fn authenticate_kernel_signature_components_v1<Abi: Eq, SignatureSafety: Eq>(
+    argument_relation: Result<(), String>,
+    return_relation: LogicalKernelReturnRelationV1,
+    logical_abi: Abi,
+    physical_abi: Abi,
+    logical_safety: SignatureSafety,
+    physical_safety: SignatureSafety,
+    logical_c_variadic: bool,
+    physical_c_variadic: bool,
+) -> Result<LogicalKernelReturnRelationV1, String> {
+    argument_relation?;
+    if logical_abi != physical_abi {
+        return Err("physical/logical calling ABIs differ".to_owned());
+    }
+    if logical_safety != physical_safety {
+        return Err("physical/logical safety qualifiers differ".to_owned());
+    }
+    if logical_c_variadic != physical_c_variadic {
+        return Err("physical/logical variadic qualifiers differ".to_owned());
+    }
+    if return_relation == LogicalKernelReturnRelationV1::Mismatch {
+        return Err(
+            "physical/logical return types differ outside the exact trusted KernelResult-to-unit entry normalization"
+                .to_owned(),
+        );
+    }
+    Ok(return_relation)
+}
+
+fn logical_kernel_return_relation_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    logical: Ty<'tcx>,
+    physical: Ty<'tcx>,
+) -> LogicalKernelReturnRelationV1 {
+    if logical == physical {
+        return LogicalKernelReturnRelationV1::Exact;
+    }
+    if physical.is_unit() && exact_trusted_kernel_result_v1(tcx, logical) {
+        return LogicalKernelReturnRelationV1::TrustedKernelResultToUnit;
+    }
+    LogicalKernelReturnRelationV1::Mismatch
+}
+
+fn exact_trusted_kernel_result_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    let TyKind::Adt(result, arguments) = ty.kind() else {
+        return false;
+    };
+    if !tcx.is_diagnostic_item(sym::Result, result.did()) || arguments.len() != 2 {
+        return false;
+    }
+    let Some(ok) = arguments[0].as_type() else {
+        return false;
+    };
+    let Some(error) = arguments[1].as_type() else {
+        return false;
+    };
+    let TyKind::Adt(error, error_arguments) = error.kind() else {
+        return false;
+    };
+    ok.is_unit()
+        && error_arguments.is_empty()
+        && crate::trusted_device_items::classify(tcx, error.did())
+            == Some(crate::trusted_device_items::TrustedDeviceItem::KernelError)
+}
+
+fn authenticate_nonphysical_kernel_context_abi_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    physical_root: Instance<'tcx>,
+    helper: Instance<'tcx>,
+    context: Ty<'tcx>,
+    physical_argument_count: usize,
+    logical_argument_count: usize,
+    return_relation: LogicalKernelReturnRelationV1,
+) -> Result<(), String> {
+    let layout = LayoutCx::new(tcx, TypingEnv::fully_monomorphized())
+        .layout_of(context)
+        .map_err(|error| format!("KernelContext layout is unavailable: {error}"))?;
+    if layout.size.bytes() != 0 {
+        return Err("KernelContext has a nonzero rustc layout".to_owned());
+    }
+
+    let typing_env = TypingEnv::fully_monomorphized();
+    let helper_query = typing_env.as_query_input((helper, ty::List::empty()));
+    let helper_abi = tcx
+        .fn_abi_of_instance(helper_query)
+        .map_err(|error| format!("logical helper FnAbi is unavailable: {error:?}"))?;
+    if helper_abi.args.len() != logical_argument_count {
+        return Err("logical helper FnAbi changed its source argument count".to_owned());
+    }
+    let Some(argument) = helper_abi.args.first() else {
+        return Err("logical helper FnAbi omitted context ordinal zero".to_owned());
+    };
+    if argument.layout.ty != context {
+        return Err("logical helper FnAbi rebound context ordinal zero".to_owned());
+    }
+    if !matches!(&argument.mode, PassMode::Ignore) {
+        return Err("KernelContext rustc pass mode is not Ignore".to_owned());
+    }
+
+    let root_query = typing_env.as_query_input((physical_root, ty::List::empty()));
+    let root_abi = tcx
+        .fn_abi_of_instance(root_query)
+        .map_err(|error| format!("physical root FnAbi is unavailable: {error:?}"))?;
+    if root_abi.args.len() != physical_argument_count
+        || helper_abi.args.len().checked_sub(1) != Some(root_abi.args.len())
+    {
+        return Err(
+            "physical root FnAbi does not equal the logical helper FnAbi argument count after one ignored context"
+                .to_owned(),
+        );
+    }
+    for (ordinal, (logical, physical)) in helper_abi.args[1..]
+        .iter()
+        .zip(root_abi.args.iter())
+        .enumerate()
+    {
+        if !logical.eq_abi(physical) {
+            return Err(format!(
+                "physical/logical argument {ordinal} has a different adjusted rustc ABI"
+            ));
+        }
+    }
+    if helper_abi.conv != root_abi.conv {
+        return Err("physical/logical adjusted calling conventions differ".to_owned());
+    }
+    if helper_abi.can_unwind != root_abi.can_unwind {
+        return Err("physical/logical adjusted unwind ABIs differ".to_owned());
+    }
+    if helper_abi.c_variadic != root_abi.c_variadic {
+        return Err("physical/logical adjusted variadic ABIs differ".to_owned());
+    }
+    if helper_abi.fixed_count.checked_sub(1) != Some(root_abi.fixed_count) {
+        return Err(
+            "physical root adjusted fixed-argument count did not remove exactly one context"
+                .to_owned(),
+        );
+    }
+    match return_relation {
+        LogicalKernelReturnRelationV1::Exact if !helper_abi.ret.eq_abi(&root_abi.ret) => {
+            return Err("physical/logical adjusted return ABIs differ".to_owned());
+        }
+        LogicalKernelReturnRelationV1::TrustedKernelResultToUnit
+            if !root_abi.ret.layout.ty.is_unit()
+                || !matches!(&root_abi.ret.mode, PassMode::Ignore) =>
+        {
+            return Err(
+                "trusted KernelResult normalization did not produce the exact ignored unit entry return ABI"
+                    .to_owned(),
+            );
+        }
+        LogicalKernelReturnRelationV1::Mismatch => {
+            return Err("unreviewed physical/logical return relation reached FnAbi".to_owned());
+        }
+        LogicalKernelReturnRelationV1::Exact
+        | LogicalKernelReturnRelationV1::TrustedKernelResultToUnit => {}
+    }
+    Ok(())
+}
+
+fn authenticate_logical_physical_kernel_argument_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    marker_ty: Ty<'tcx>,
+    logical: Ty<'tcx>,
+    physical: Ty<'tcx>,
+) -> Result<(), String> {
+    if logical == physical {
+        return Ok(());
+    }
+
+    let TyKind::Adt(view, view_arguments) = logical.kind() else {
+        return Err("nonidentical logical type is not a reviewed capability view".to_owned());
+    };
+    if crate::trusted_device_items::classify(tcx, view.did())
+        != Some(crate::trusted_device_items::TrustedDeviceItem::CapabilityMemoryView)
+    {
+        return Err("nonidentical logical type is not the reviewed capability view".to_owned());
+    }
+    if view_arguments.len() != 5 || !matches!(view_arguments[0].kind(), GenericArgKind::Lifetime(_))
+    {
+        return Err(
+            "reviewed capability view changed its lifetime/type/const generic argument shape"
+                .to_owned(),
+        );
+    }
+    let view_types = view_arguments.types().collect::<Vec<_>>();
+    let [element, space, role, brand] = view_types.as_slice() else {
+        return Err("reviewed capability view changed its generic type arity".to_owned());
+    };
+    let TyKind::Adt(space_definition, space_arguments) = space.kind() else {
+        return Err("capability view address space is not a reviewed marker".to_owned());
+    };
+    if !space_arguments.is_empty()
+        || crate::trusted_device_items::classify(tcx, space_definition.did())
+            != Some(crate::trusted_device_items::TrustedDeviceItem::CapabilityGlobalAddressSpace)
+    {
+        return Err("logical capability view is not in global memory".to_owned());
+    }
+    authenticate_kernel_capability_brand_v1(tcx, marker_ty, *brand)?;
+
+    let TyKind::Adt(role_definition, role_arguments) = role.kind() else {
+        return Err("capability view role is not a reviewed marker".to_owned());
+    };
+    let role_types = role_arguments.types().collect::<Vec<_>>();
+    let role = crate::trusted_device_items::classify(tcx, role_definition.did());
+    match role {
+        Some(crate::trusted_device_items::TrustedDeviceItem::CapabilityReadOnly)
+            if role_arguments.is_empty() =>
+        {
+            authenticate_physical_slice_v1(*element, physical, Mutability::Not)?;
+        }
+        Some(crate::trusted_device_items::TrustedDeviceItem::CapabilityAtomicReadWrite)
+            if role_arguments.len() == 1 && role_types.len() == 1 =>
+        {
+            authenticate_physical_slice_v1(*element, physical, Mutability::Not)?;
+        }
+        Some(crate::trusted_device_items::TrustedDeviceItem::CapabilityExclusiveReadWrite)
+            if role_arguments.is_empty() =>
+        {
+            authenticate_physical_slice_v1(*element, physical, Mutability::Mut)?;
+        }
+        Some(crate::trusted_device_items::TrustedDeviceItem::CapabilityDisjointWrite)
+            if role_arguments.len() == 1 && role_types.len() == 1 =>
+        {
+            let TyKind::Adt(carrier, carrier_arguments) = physical.kind() else {
+                return Err("disjoint capability has no reviewed physical carrier".to_owned());
+            };
+            if crate::trusted_device_items::classify(tcx, carrier.did())
+                != Some(crate::trusted_device_items::TrustedDeviceItem::WriteOnlyDisjointSlice)
+            {
+                return Err("disjoint capability has the wrong physical carrier".to_owned());
+            }
+            let carrier_types = carrier_arguments.types().collect::<Vec<_>>();
+            if carrier_arguments.len() != 2 || carrier_types.as_slice() != [*element, role_types[0]]
+            {
+                return Err(
+                    "disjoint capability element or index-space type changed at the physical boundary"
+                        .to_owned(),
+                );
+            }
+        }
+        _ => return Err("capability view role is not an exact supported reviewed role".to_owned()),
+    }
+
+    let layout_cx = LayoutCx::new(tcx, TypingEnv::fully_monomorphized());
+    let logical_layout = layout_cx
+        .layout_of(logical)
+        .map_err(|error| format!("logical capability layout is unavailable: {error}"))?;
+    let physical_layout = layout_cx
+        .layout_of(physical)
+        .map_err(|error| format!("physical capability carrier layout is unavailable: {error}"))?;
+    if logical_layout.size != physical_layout.size
+        || logical_layout.align.abi != physical_layout.align.abi
+        || logical_layout.backend_repr != physical_layout.backend_repr
+        || logical_layout.is_uninhabited() != physical_layout.is_uninhabited()
+    {
+        return Err(
+            "reviewed capability view and physical carrier have different rustc ABI layouts"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn authenticate_kernel_capability_brand_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    marker_ty: Ty<'tcx>,
+    brand: Ty<'tcx>,
+) -> Result<(), String> {
+    let TyKind::Adt(definition, arguments) = brand.kind() else {
+        return Err("capability brand is not the reviewed kernel brand".to_owned());
+    };
+    if !crate::trusted_device_items::is_exact_reviewed_provider_definition_v1(
+        tcx,
+        definition.did(),
+        "fe2o3_device::context::KernelCapabilityBrand",
+    ) {
+        return Err("capability brand is not the reviewed kernel brand".to_owned());
+    }
+    if arguments.len() != 4 || !matches!(arguments[0].kind(), GenericArgKind::Lifetime(_)) {
+        return Err(
+            "reviewed kernel brand changed its lifetime/type/const generic argument shape"
+                .to_owned(),
+        );
+    }
+    let types = arguments.types().collect::<Vec<_>>();
+    let [kernel, target, launch] = types.as_slice() else {
+        return Err("reviewed kernel brand changed its generic type arity".to_owned());
+    };
+    if *kernel != marker_ty
+        || !exact_reviewed_marker_v1(tcx, *target, "fe2o3_device::context::CurrentTarget")
+        || !exact_reviewed_marker_v1(tcx, *launch, "fe2o3_device::context::RegisteredLaunch")
+    {
+        return Err(
+            "capability brand does not bind this kernel marker, target, and launch".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn exact_reviewed_marker_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>, expected_path: &str) -> bool {
+    let TyKind::Adt(definition, arguments) = ty.kind() else {
+        return false;
+    };
+    arguments.is_empty()
+        && crate::trusted_device_items::is_exact_reviewed_provider_definition_v1(
+            tcx,
+            definition.did(),
+            expected_path,
+        )
+}
+
+fn authenticate_physical_slice_v1<'tcx>(
+    element: Ty<'tcx>,
+    physical: Ty<'tcx>,
+    expected_mutability: Mutability,
+) -> Result<(), String> {
+    let TyKind::Ref(_, pointee, mutability) = physical.kind() else {
+        return Err("capability view physical carrier is not a slice reference".to_owned());
+    };
+    let TyKind::Slice(physical_element) = pointee.kind() else {
+        return Err("capability view physical carrier is not a slice reference".to_owned());
+    };
+    if *mutability != expected_mutability || *physical_element != element {
+        return Err("capability view physical slice changed element type or mutability".to_owned());
+    }
+    Ok(())
+}
+
 fn assembly_operand_bit(ty: rustc_middle::ty::Ty<'_>) -> Option<u16> {
     match ty.kind() {
         TyKind::Bool | TyKind::Char | TyKind::Int(_) | TyKind::Uint(_) | TyKind::FnDef(..) => {
@@ -3551,9 +4837,11 @@ fn sanitize_symbol_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuthenticatedKernelFrontendContractV1, CallChainLink, KernelRoot, ObservedInlineAssemblyV1,
-        RegistrationError, RegistrationRecord, TypedArgumentListError, TypedArgumentListV1,
-        general_typed_launch_v3, reconcile_frontend_contract, reconstruct_call_chain,
+        AuthenticatedKernelFrontendContractV1, CallChainLink, KernelRoot,
+        LogicalKernelReturnRelationV1, ObservedInlineAssemblyV1, RegistrationError,
+        RegistrationRecord, TypedArgumentListError, TypedArgumentListV1,
+        authenticate_kernel_signature_components_v1, general_typed_launch_v3,
+        logical_physical_kernel_abi_error_v1, reconcile_frontend_contract, reconstruct_call_chain,
         root_scoped_call_chains, validate_registration_records as validate_records,
     };
     use fe2o3_artifacts::{
@@ -4362,5 +5650,110 @@ mod tests {
         }
         assert!(production.contains("RetainedProductionTargetV1"));
         assert!(!production.contains("authenticate_before_collection"));
+    }
+
+    #[test]
+    fn logical_context_signature_normalization_preserves_exact_qualifiers() {
+        assert_eq!(
+            authenticate_kernel_signature_components_v1(
+                Ok(()),
+                LogicalKernelReturnRelationV1::Exact,
+                "Rust",
+                "Rust",
+                "safe",
+                "safe",
+                false,
+                false,
+            ),
+            Ok(LogicalKernelReturnRelationV1::Exact),
+        );
+        assert_eq!(
+            authenticate_kernel_signature_components_v1(
+                Ok(()),
+                LogicalKernelReturnRelationV1::TrustedKernelResultToUnit,
+                "Rust",
+                "Rust",
+                "safe",
+                "safe",
+                false,
+                false,
+            ),
+            Ok(LogicalKernelReturnRelationV1::TrustedKernelResultToUnit),
+        );
+    }
+
+    #[test]
+    fn logical_context_signature_normalization_reports_stable_abi_failures() {
+        let check =
+            |arguments, result, logical_abi, physical_abi, logical_safety, physical_safety| {
+                let detail = authenticate_kernel_signature_components_v1(
+                    arguments,
+                    result,
+                    logical_abi,
+                    physical_abi,
+                    logical_safety,
+                    physical_safety,
+                    false,
+                    false,
+                )
+                .unwrap_err();
+                logical_physical_kernel_abi_error_v1(
+                    "fixture::__fe2o3_kernel_body_v1_copy",
+                    "fixture::__fe2o3_host_kernel_v1_copy",
+                    0,
+                    &detail,
+                )
+                .message
+            };
+
+        assert_eq!(
+            check(
+                Err("physical/logical argument 2 changed a const generic".to_owned()),
+                LogicalKernelReturnRelationV1::Exact,
+                "Rust",
+                "Rust",
+                "safe",
+                "safe",
+            ),
+            "[FE2O3-CAP-ABI001] logical helper `fixture::__fe2o3_kernel_body_v1_copy` does not equal physical root `fixture::__fe2o3_host_kernel_v1_copy` after removing only context ordinal 0: physical/logical argument 2 changed a const generic",
+        );
+        for (message, suffix) in [
+            (
+                check(
+                    Ok(()),
+                    LogicalKernelReturnRelationV1::Exact,
+                    "C",
+                    "Rust",
+                    "safe",
+                    "safe",
+                ),
+                "physical/logical calling ABIs differ",
+            ),
+            (
+                check(
+                    Ok(()),
+                    LogicalKernelReturnRelationV1::Exact,
+                    "Rust",
+                    "Rust",
+                    "unsafe",
+                    "safe",
+                ),
+                "physical/logical safety qualifiers differ",
+            ),
+            (
+                check(
+                    Ok(()),
+                    LogicalKernelReturnRelationV1::Mismatch,
+                    "Rust",
+                    "Rust",
+                    "safe",
+                    "safe",
+                ),
+                "physical/logical return types differ outside the exact trusted KernelResult-to-unit entry normalization",
+            ),
+        ] {
+            assert!(message.starts_with("[FE2O3-CAP-ABI001]"), "{message}");
+            assert!(message.ends_with(suffix), "{message}");
+        }
     }
 }

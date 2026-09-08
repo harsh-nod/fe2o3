@@ -1,0 +1,5 @@
+error[E0599]: no method named `store` found for mutable reference `&mut CapabilityMemoryView<'_, u32, GlobalAddressSpace, fe2o3_device::ReadOnly, KernelBrand>` in the current scope
+  --> tests/ui/fail/capability_memory_read_only_has_no_store.rs:11:19
+   |
+11 |     let _ = input.store(index, 7);
+   |                   ^^^^^ method not found in `&mut CapabilityMemoryView<'_, u32, GlobalAddressSpace, fe2o3_device::ReadOnly, KernelBrand>`

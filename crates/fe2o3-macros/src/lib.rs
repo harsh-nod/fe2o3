@@ -10,6 +10,12 @@ use fe2o3_artifacts::{
     RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1, ScalarType, TypeIdentity,
     derive_compiler_layout_registration_identity_v1, derive_generated_host_contract_identity_v1,
 };
+use fe2o3_rustc_front::{
+    KERNEL_CONTEXT_FRONTEND_REGISTRATION_KIND_V1, KERNEL_CONTEXT_FRONTEND_REGISTRATION_MAGIC_V1,
+    KERNEL_CONTEXT_FRONTEND_REGISTRATION_PREFIX_V1,
+    KERNEL_CONTEXT_FRONTEND_REGISTRATION_VERSION_V1,
+    encode_generated_kernel_context_frontend_contract_v1,
+};
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use quote::{format_ident, quote};
@@ -230,13 +236,16 @@ fn validate_device_copy_repr(attrs: &[syn::Attribute]) -> syn::Result<DeviceCopy
 /// likewise kept behind the separate [`device_import`] and [`device_export`]
 /// attributes rather than weakening ordinary kernels.
 ///
-/// Direct source loops and integer `match` expressions require an ordered
-/// `control_flow(loop_bounds(...), integer_switches(...))` declaration. Every
-/// loop receives one nonzero maximum iteration count and every match receives
-/// one fixed-width signed or unsigned discriminant type in lexical order. The
-/// macro emits a separate canonical source-CFG sidecar with exact spans and
-/// structured break/continue targets. The sidecar is descriptive until a
-/// compiler collector authenticates it against MIR.
+/// Source loops and integer `match` expressions anywhere in the attributed
+/// body require an ordered `control_flow(loop_bounds(...),
+/// integer_switches(...))` declaration. This includes control flow in nested
+/// blocks and ordinary closures passed to capability APIs. Every loop receives
+/// one nonzero maximum iteration count and every match receives one fixed-width
+/// signed or unsigned discriminant type in lexical preorder. The macro emits a
+/// separate canonical source-CFG sidecar with exact spans and structured
+/// closure, branch, break, and continue scopes. The sidecar is descriptive
+/// until a compiler collector authenticates it against MIR and reachable
+/// monomorphized helpers.
 #[proc_macro_attribute]
 pub fn kernel(attr: TokenStream, item: TokenStream) -> TokenStream {
     let options = match parse_kernel_options(attr.into()) {
@@ -357,6 +366,7 @@ struct KernelOptions {
     reference: Option<String>,
     launch: Option<ParsedLaunchBoundsV1>,
     unsafe_assembly: Option<ParsedUnsafeAssemblyV1>,
+    unsafe_raw_memory_provider: bool,
     control_flow: Option<ParsedControlFlowOptionsV1>,
 }
 
@@ -422,6 +432,7 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
             reference: None,
             launch: None,
             unsafe_assembly: None,
+            unsafe_raw_memory_provider: false,
             control_flow: None,
         });
     }
@@ -432,6 +443,7 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
     let mut reference = None;
     let mut launch = None;
     let mut unsafe_assembly = None;
+    let mut unsafe_raw_memory_provider = false;
     let mut control_flow = None;
     for argument in arguments {
         match argument {
@@ -493,6 +505,22 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
                 }
                 unsafe_assembly = Some(parse_unsafe_assembly_v1(&list)?);
             }
+            Meta::List(list) if list.path.is_ident("unsafe_provider") => {
+                if unsafe_raw_memory_provider {
+                    return Err(syn::Error::new_spanned(
+                        list,
+                        "#[kernel] accepts at most one unsafe_provider declaration",
+                    ));
+                }
+                let provider = list.parse_args::<syn::Ident>()?;
+                if provider != "raw_memory" {
+                    return Err(syn::Error::new_spanned(
+                        provider,
+                        "unsafe_provider supports only raw_memory",
+                    ));
+                }
+                unsafe_raw_memory_provider = true;
+            }
             Meta::List(list) if list.path.is_ident("control_flow") => {
                 if control_flow.is_some() {
                     return Err(syn::Error::new_spanned(
@@ -505,7 +533,7 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
             _ => {
                 return Err(syn::Error::new_spanned(
                     argument,
-                    "#[kernel] accepts only #[kernel], #[kernel(typed)], namespace, reference, launch(...), unsafe_asm(...), and control_flow(...) declarations",
+                    "#[kernel] accepts only #[kernel], #[kernel(typed)], namespace, reference, launch(...), unsafe_asm(...), unsafe_provider(raw_memory), and control_flow(...) declarations",
                 ));
             }
         }
@@ -515,6 +543,12 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
         return Err(syn::Error::new_spanned(
             attr,
             "#[kernel] namespace requires typed mode",
+        ));
+    }
+    if unsafe_assembly.is_some() && unsafe_raw_memory_provider {
+        return Err(syn::Error::new_spanned(
+            attr,
+            "unsafe_asm and unsafe_provider(raw_memory) are mutually exclusive low-level boundaries",
         ));
     }
     if reference.is_some() && !typed {
@@ -544,6 +578,7 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
         reference,
         launch,
         unsafe_assembly,
+        unsafe_raw_memory_provider,
         control_flow,
     })
 }
@@ -905,11 +940,16 @@ fn validate_assembly_options_and_effects_v1(
 
 fn expand_kernel(input: ItemFn, options: KernelOptions) -> syn::Result<proc_macro2::TokenStream> {
     validate_kernel_assembly_boundary(&input, options.unsafe_assembly)?;
+    logical_kernel_context_v1(&input)?;
     if options.mode == KernelMode::Typed {
         validate_typed_kernel_profile_v1(&input, &options)?;
         validate_typed_kernel_symbol_stem(&input.sig.ident)?;
     }
-    validate_kernel_source_safety(&input, options.unsafe_assembly.is_some())?;
+    validate_kernel_source_safety(
+        &input,
+        options.unsafe_assembly.is_some(),
+        options.unsafe_raw_memory_provider,
+    )?;
     validate_kernel_signature(&input)?;
 
     let crate_binding = if options.mode == KernelMode::Typed {
@@ -1046,6 +1086,7 @@ fn expand_kernel_with_device_import(
             reference: None,
             launch: None,
             unsafe_assembly: None,
+            unsafe_raw_memory_provider: false,
             control_flow: None,
         },
         device_import,
@@ -1064,7 +1105,8 @@ fn expand_kernel_with_imports(
     crate_binding: Option<CrateBindingIdV1>,
 ) -> syn::Result<proc_macro2::TokenStream> {
     if options.mode == KernelMode::Typed {
-        validate_general_typed_signature_shape_v1(&input, &options)?;
+        let physical = physical_typed_kernel_input_v1(&input, &quote!(fe2o3_device))?;
+        validate_general_typed_signature_shape_v1(&physical, &options)?;
         return expand_general_typed_kernel_with_imports(
             input,
             options,
@@ -1087,6 +1129,7 @@ fn expand_device_kernel_with_imports(
     device_path: Option<&proc_macro2::TokenStream>,
 ) -> syn::Result<proc_macro2::TokenStream> {
     debug_assert_eq!(options.mode, KernelMode::Basic);
+    let logical_context = logical_kernel_context_v1(&input)?;
     validate_kernel_assembly_boundary(&input, options.unsafe_assembly)?;
     if options.control_flow.is_some()
         && options
@@ -1098,7 +1141,11 @@ fn expand_device_kernel_with_imports(
             "unsafe assembly with control_flow effects cannot participate in a structured control_flow V1 contract",
         ));
     }
-    validate_kernel_source_safety(&input, options.unsafe_assembly.is_some())?;
+    validate_kernel_source_safety(
+        &input,
+        options.unsafe_assembly.is_some(),
+        options.unsafe_raw_memory_provider,
+    )?;
     validate_kernel_signature(&input)?;
 
     let original_ident = input.sig.ident.clone();
@@ -1106,6 +1153,10 @@ fn expand_device_kernel_with_imports(
     let control_flow_contract =
         analyze_kernel_control_flow_v1(&input, options.control_flow.as_ref())?;
     lower_bounded_for_loops_v1(&mut input, options.control_flow.as_ref())?;
+    let logical_input = input.clone();
+    if logical_context {
+        input.sig.inputs = input.sig.inputs.iter().skip(1).cloned().collect();
+    }
 
     if original_name.starts_with(RESERVED_ROOT) {
         return Err(syn::Error::new_spanned(
@@ -1115,6 +1166,7 @@ fn expand_device_kernel_with_imports(
     }
 
     let internal_ident = format_ident!("{KERNEL_PREFIX}{original_name}");
+    let logical_helper_ident = format_ident!("__fe2o3_kernel_body_v1_{original_name}");
     let name_marker_ident = format_ident!("__fe2o3_kernel_name_{original_name}");
     let type_marker_ident = format_ident!("__fe2o3_kernel_marker_{original_name}");
     let registration_ident = format_ident!("{KERNEL_REGISTRATION_PREFIX}{original_name}");
@@ -1139,7 +1191,69 @@ fn expand_device_kernel_with_imports(
         .cloned()
         .unwrap_or_else(|| quote!(__fe2o3_kernel_device));
     let fallback_device_import = device_path.is_none().then_some(device_import);
-    input.sig.ident = internal_ident.clone();
+    let logical_context_assertion = logical_context.then(|| {
+        let Some(FnArg::Typed(context)) = logical_input.sig.inputs.first() else {
+            unreachable!("logical context validation retained one typed first argument")
+        };
+        let context_type = &context.ty;
+        quote! {
+            const _: () = {
+                fn __fe2o3_assert_kernel_context_type_v1<
+                    T: #device_api::KernelContextTypeV1,
+                >() {}
+                let _ = __fe2o3_assert_kernel_context_type_v1::<#context_type>;
+            };
+        }
+    });
+    let argument_names = if logical_context {
+        input
+            .sig
+            .inputs
+            .iter()
+            .map(|argument| match argument {
+                FnArg::Typed(argument) => match argument.pat.as_ref() {
+                    Pat::Ident(pattern) => Ok(pattern.ident.clone()),
+                    _ => Err(syn::Error::new_spanned(
+                        &argument.pat,
+                        "a kernel with KernelContext requires identifier argument patterns",
+                    )),
+                },
+                FnArg::Receiver(receiver) => Err(syn::Error::new_spanned(
+                    receiver,
+                    "kernel methods cannot be represented by the v1 kernel marker contract",
+                )),
+            })
+            .collect::<syn::Result<Vec<_>>>()?
+    } else {
+        Vec::new()
+    };
+    let helper_input = if logical_context {
+        let mut helper = logical_input;
+        helper.vis = Visibility::Inherited;
+        helper.sig.ident = logical_helper_ident.clone();
+        helper.attrs.push(parse_quote!(#[inline(always)]));
+        let Some(FnArg::Typed(context)) = helper.sig.inputs.first_mut() else {
+            unreachable!("logical context validation retained one typed first argument")
+        };
+        context.ty = Box::new(parse_quote!(
+            #device_api::KernelContext<
+                '_,
+                #type_marker_ident,
+                #device_api::CurrentTarget,
+                #device_api::RegisteredLaunch
+            >
+        ));
+        let helper_ident = helper.sig.ident.clone();
+        input.sig.ident = internal_ident.clone();
+        let context_argument = quote!(unsafe { #device_api::KernelContext::__compiler_issue() });
+        *input.block = parse_quote!({
+            #helper_ident(#context_argument, #(#argument_names),*)
+        });
+        Some(helper)
+    } else {
+        input.sig.ident = internal_ident.clone();
+        None
+    };
 
     let registration_type = quote!((u64, u16, u16, &'static str, &'static str, #function_pointer));
     let registration_value = quote!((
@@ -1181,6 +1295,15 @@ fn expand_device_kernel_with_imports(
             );
         }
     });
+    let kernel_context_registration = expand_kernel_context_frontend_registration_v1(
+        logical_context,
+        &original_ident,
+        &marker_value,
+        &internal_ident,
+        &logical_helper_ident,
+        &type_marker_ident,
+        &function_pointer,
+    )?;
     let resource_registration = expand_kernel_resource_registration_v1(
         &original_name,
         &marker_value,
@@ -1224,6 +1347,12 @@ fn expand_device_kernel_with_imports(
     Ok(quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
+        #helper_input
+
+        #logical_context_assertion
+
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
         #[unsafe(no_mangle)]
         #input
 
@@ -1241,6 +1370,7 @@ fn expand_device_kernel_with_imports(
         static #registration_ident: #registration_type = #registration_value;
 
         #frontend_registration
+        #kernel_context_registration
         #resource_registration
         #control_flow_registration
         #reference_registration
@@ -1272,8 +1402,13 @@ fn expand_general_typed_kernel_with_imports(
     host_import: Option<&proc_macro2::TokenStream>,
     crate_binding: Option<CrateBindingIdV1>,
 ) -> syn::Result<proc_macro2::TokenStream> {
+    let logical_context = logical_kernel_context_v1(&input)?;
     validate_kernel_assembly_boundary(&input, options.unsafe_assembly)?;
-    validate_kernel_source_safety(&input, options.unsafe_assembly.is_some())?;
+    validate_kernel_source_safety(
+        &input,
+        options.unsafe_assembly.is_some(),
+        options.unsafe_raw_memory_provider,
+    )?;
     if options.control_flow.is_some()
         && options
             .unsafe_assembly
@@ -1308,14 +1443,25 @@ fn expand_general_typed_kernel_with_imports(
         &original_name,
         &original_name,
     );
-    let model = model_general_typed_signature_v1(&input, &options, kernel_binding.as_bytes())?;
+    let control_flow_contract =
+        analyze_kernel_control_flow_v1(&input, options.control_flow.as_ref())?;
+    lower_bounded_for_loops_v1(&mut input, options.control_flow.as_ref())?;
+
+    let logical_input = input.clone();
+    let device_api = device_path
+        .cloned()
+        .unwrap_or_else(|| quote!(__fe2o3_kernel_device));
+    let capability_globals = capability_global_arguments_v1(&logical_input, logical_context)?;
+    let has_capability_globals = capability_globals.iter().any(Option::is_some);
+    let physical_model = physical_typed_kernel_input_v1(&input, &quote!(fe2o3_device))?;
+    input = physical_typed_kernel_input_v1(&input, &device_api)?;
+    let model =
+        model_general_typed_signature_v1(&physical_model, &options, kernel_binding.as_bytes())?;
     let generated_host_contract =
         GeneratedHostContractIdV3::from_bytes(*model.generated_host_contract_identity.as_bytes());
     let generated_host_arguments = generated_general_typed_arguments_v1(&input, &model.arguments);
     let generated_worker_v3_adapter = generated_worker_v3_adapter_v1(&input, &model);
-    let control_flow_contract =
-        analyze_kernel_control_flow_v1(&input, options.control_flow.as_ref())?;
-    lower_bounded_for_loops_v1(&mut input, options.control_flow.as_ref())?;
+    let generated_safe_host_contract_v2 = generated_safe_host_contract_v2(&input, &model);
 
     let returns_kernel_result = is_kernel_result_return(&input.sig.output);
     let internal_ident = format_ident!("__fe2o3_host_kernel_v1_{}", kernel_binding.to_hex());
@@ -1357,10 +1503,35 @@ fn expand_general_typed_kernel_with_imports(
         input.sig.output.clone()
     };
     let function_pointer = quote!(#safety #abi fn(#(#argument_types),*) #output);
-    let device_api = device_path
-        .cloned()
-        .unwrap_or_else(|| quote!(__fe2o3_kernel_device));
     let fallback_device_import = device_path.is_none().then_some(device_import);
+    let logical_context_assertion = logical_context.then(|| {
+        let Some(FnArg::Typed(context)) = logical_input.sig.inputs.first() else {
+            unreachable!("logical context validation retained one typed first argument")
+        };
+        let context_type = &context.ty;
+        quote! {
+            const _: () = {
+                fn __fe2o3_assert_kernel_context_type_v1<
+                    T: #device_api::KernelContextTypeV1,
+                >() {}
+                let _ = __fe2o3_assert_kernel_context_type_v1::<#context_type>;
+            };
+        }
+    });
+    let capability_global_assertions = logical_input
+        .sig
+        .inputs
+        .iter()
+        .skip(usize::from(logical_context))
+        .zip(&capability_globals)
+        .filter_map(|(argument, capability)| {
+            let capability = capability.as_ref()?;
+            let FnArg::Typed(argument) = argument else {
+                unreachable!("general typed validation rejects receivers")
+            };
+            Some(capability.source_assertion(&argument.ty, &device_api))
+        })
+        .collect::<Vec<_>>();
     let argument_names = input
         .sig
         .inputs
@@ -1373,14 +1544,62 @@ fn expand_general_typed_kernel_with_imports(
             syn::FnArg::Receiver(_) => unreachable!("general typed validation rejects receivers"),
         })
         .collect::<Vec<_>>();
-    let helper_input = if returns_kernel_result {
-        let mut helper = input.clone();
+    let helper_input = if returns_kernel_result || logical_context || has_capability_globals {
+        let mut helper = logical_input;
         helper.vis = Visibility::Inherited;
         helper.sig.ident = body_ident.clone();
         helper.attrs.push(parse_quote!(#[inline(always)]));
+        if has_capability_globals {
+            helper
+                .sig
+                .generics
+                .params
+                .push(parse_quote!('__fe2o3_kernel));
+        }
+        if logical_context {
+            let Some(FnArg::Typed(context)) = helper.sig.inputs.first_mut() else {
+                unreachable!("logical context validation retained one typed first argument")
+            };
+            context.ty = if has_capability_globals {
+                Box::new(parse_quote!(
+                    #device_api::KernelContext<
+                        '__fe2o3_kernel,
+                        #type_marker_ident,
+                        #device_api::CurrentTarget,
+                        #device_api::RegisteredLaunch
+                    >
+                ))
+            } else {
+                Box::new(parse_quote!(
+                    #device_api::KernelContext<
+                        '_,
+                        #type_marker_ident,
+                        #device_api::CurrentTarget,
+                        #device_api::RegisteredLaunch
+                    >
+                ))
+            };
+        }
+        for (argument, capability) in helper
+            .sig
+            .inputs
+            .iter_mut()
+            .skip(usize::from(logical_context))
+            .zip(&capability_globals)
+        {
+            let Some(capability) = capability else {
+                continue;
+            };
+            let FnArg::Typed(argument) = argument else {
+                unreachable!("general typed validation rejects receivers")
+            };
+            argument.ty = Box::new(capability.branded_type(&device_api, &type_marker_ident)?);
+        }
 
         input.sig.ident = internal_ident.clone();
-        input.sig.output = ReturnType::Default;
+        if returns_kernel_result {
+            input.sig.output = ReturnType::Default;
+        }
         for argument in &mut input.sig.inputs {
             if let syn::FnArg::Typed(argument) = argument
                 && let Pat::Ident(pattern) = argument.pat.as_mut()
@@ -1388,9 +1607,50 @@ fn expand_general_typed_kernel_with_imports(
                 pattern.mutability = None;
             }
         }
-        *input.block = parse_quote!({
-            let _: #result_device_path::KernelResult = #body_ident(#(#argument_names),*);
+        let context_local = format_ident!("__fe2o3_kernel_context_v1");
+        let context_setup = logical_context.then(|| {
+            quote! {
+                let #context_local = unsafe {
+                    #device_api::KernelContext::__compiler_issue()
+                };
+            }
         });
+        let mut binding_statements = Vec::new();
+        let mut call_arguments = Vec::new();
+        if logical_context {
+            call_arguments.push(quote!(#context_local));
+        }
+        for (position, (argument, capability)) in
+            argument_names.iter().zip(&capability_globals).enumerate()
+        {
+            if let Some(capability) = capability {
+                let bound = format_ident!("__fe2o3_capability_global_v1_{position}");
+                let binding = capability.binding_expression(
+                    argument,
+                    &context_local,
+                    &device_api,
+                    &type_marker_ident,
+                );
+                binding_statements.push(quote!(let #bound = #binding;));
+                call_arguments.push(quote!(#bound));
+            } else {
+                call_arguments.push(quote!(#argument));
+            }
+        }
+        if returns_kernel_result {
+            *input.block = parse_quote!({
+                #context_setup
+                #(#binding_statements)*
+                let _: #result_device_path::KernelResult =
+                    #body_ident(#(#call_arguments),*);
+            });
+        } else {
+            *input.block = parse_quote!({
+                #context_setup
+                #(#binding_statements)*
+                #body_ident(#(#call_arguments),*);
+            });
+        }
         Some(helper)
     } else {
         input.sig.ident = internal_ident.clone();
@@ -1457,6 +1717,15 @@ fn expand_general_typed_kernel_with_imports(
             );
         }
     });
+    let kernel_context_registration = expand_kernel_context_frontend_registration_v1(
+        logical_context,
+        &original_ident,
+        &marker_value,
+        &internal_ident,
+        &body_ident,
+        &type_marker_ident,
+        &function_pointer,
+    )?;
     let resource_registration = expand_kernel_resource_registration_v1(
         &original_name,
         &marker_value,
@@ -1514,6 +1783,7 @@ fn expand_general_typed_kernel_with_imports(
 
             #generated_host_arguments
             #generated_worker_v3_adapter
+            #generated_safe_host_contract_v2
 
             const _: () = {
                 // SAFETY: these constants and the generated argument adapter
@@ -1540,6 +1810,9 @@ fn expand_general_typed_kernel_with_imports(
         #[allow(non_snake_case)]
         #helper_input
 
+        #logical_context_assertion
+        #(#capability_global_assertions)*
+
         #[doc(hidden)]
         #[allow(non_snake_case)]
         #export_attribute
@@ -1559,6 +1832,7 @@ fn expand_general_typed_kernel_with_imports(
         static #registration_ident: #registration_type = #registration_value;
 
         #frontend_registration
+        #kernel_context_registration
         #resource_registration
         #control_flow_registration
         #reference_registration
@@ -1581,6 +1855,432 @@ fn expand_general_typed_kernel_with_imports(
 
         #typed_module
     })
+}
+
+fn logical_kernel_context_v1(input: &ItemFn) -> syn::Result<bool> {
+    let contexts = input
+        .sig
+        .inputs
+        .iter()
+        .enumerate()
+        .filter(|(_, argument)| match argument {
+            FnArg::Typed(argument) => is_kernel_context_type_v1(&argument.ty),
+            FnArg::Receiver(_) => false,
+        })
+        .collect::<Vec<_>>();
+    match contexts.as_slice() {
+        [] => Ok(false),
+        [(0, FnArg::Typed(argument))] => {
+            validate_kernel_context_source_type_v1(&argument.ty)?;
+            Ok(true)
+        }
+        [(0, FnArg::Receiver(_))] => unreachable!("context search rejects receivers"),
+        [(_, argument), ..] => Err(syn::Error::new_spanned(
+            argument,
+            "KernelContext must be the first kernel parameter and may appear only once",
+        )),
+    }
+}
+
+fn validate_kernel_context_source_type_v1(ty: &Type) -> syn::Result<()> {
+    let Type::Path(path) = ty else {
+        unreachable!("logical context recognition requires a path type")
+    };
+    let segment = path
+        .path
+        .segments
+        .last()
+        .expect("logical context recognition requires one path segment");
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "KernelContext requires exactly the compiler-bound `'_` lifetime; kernel, target, and launch brands are compiler-issued",
+        ));
+    };
+    if arguments.colon2_token.is_some() || arguments.args.len() != 1 {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "KernelContext requires exactly the compiler-bound `'_` lifetime; kernel, target, and launch brands are compiler-issued",
+        ));
+    }
+    let Some(GenericArgument::Lifetime(lifetime)) = arguments.args.first() else {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "KernelContext's first argument must be the compiler-bound `'_` lifetime",
+        ));
+    };
+    if lifetime.ident != "_" {
+        return Err(syn::Error::new_spanned(
+            lifetime,
+            "KernelContext's lifetime is compiler-bound and must be written as '_",
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Clone)]
+enum CapabilityGlobalRoleV1 {
+    ReadOnly,
+    DisjointWrite { index_space: Type },
+    ExclusiveReadWrite,
+    AtomicReadWrite { scope: Type },
+}
+
+#[derive(Clone)]
+struct CapabilityGlobalArgumentV1 {
+    element_type: Type,
+    role: CapabilityGlobalRoleV1,
+}
+
+impl CapabilityGlobalArgumentV1 {
+    fn physical_type(&self, device_api: &proc_macro2::TokenStream) -> syn::Result<Type> {
+        let element = &self.element_type;
+        match &self.role {
+            CapabilityGlobalRoleV1::ReadOnly => syn::parse2(quote!(&[#element])),
+            CapabilityGlobalRoleV1::DisjointWrite { index_space } => syn::parse2(quote!(
+                #device_api::WriteOnlyDisjointSlice<#element, #index_space>
+            )),
+            CapabilityGlobalRoleV1::ExclusiveReadWrite => syn::parse2(quote!(&mut [#element])),
+            CapabilityGlobalRoleV1::AtomicReadWrite { .. } => syn::parse2(quote!(&[#element])),
+        }
+    }
+
+    fn branded_type(
+        &self,
+        device_api: &proc_macro2::TokenStream,
+        marker: &syn::Ident,
+    ) -> syn::Result<Type> {
+        let element = &self.element_type;
+        let role = match &self.role {
+            CapabilityGlobalRoleV1::ReadOnly => {
+                quote!(#device_api::capability_memory::ReadOnly)
+            }
+            CapabilityGlobalRoleV1::DisjointWrite { index_space } => {
+                quote!(#device_api::capability_memory::DisjointWrite<#index_space>)
+            }
+            CapabilityGlobalRoleV1::ExclusiveReadWrite => {
+                quote!(#device_api::capability_memory::ExclusiveReadWrite)
+            }
+            CapabilityGlobalRoleV1::AtomicReadWrite { scope } => {
+                quote!(#device_api::capability_memory::AtomicReadWrite<#scope>)
+            }
+        };
+        syn::parse2(quote!(
+            #device_api::capability_memory::Global<
+                '__fe2o3_kernel,
+                #element,
+                #role,
+                #device_api::KernelCapabilityBrand<
+                    '__fe2o3_kernel,
+                    #marker,
+                    #device_api::CurrentTarget,
+                    #device_api::RegisteredLaunch
+                >
+            >
+        ))
+    }
+
+    fn binding_expression(
+        &self,
+        argument: &syn::Ident,
+        context: &syn::Ident,
+        device_api: &proc_macro2::TokenStream,
+        marker: &syn::Ident,
+    ) -> proc_macro2::TokenStream {
+        let element = &self.element_type;
+        let brand = quote!(
+            #device_api::KernelCapabilityBrand<
+                '_,
+                #marker,
+                #device_api::CurrentTarget,
+                #device_api::RegisteredLaunch
+            >
+        );
+        match &self.role {
+            CapabilityGlobalRoleV1::ReadOnly => quote! {
+                #device_api::capability_memory::Global::<
+                    '_,
+                    #element,
+                    #device_api::capability_memory::ReadOnly,
+                    #brand
+                >::__compiler_bind_read_only(&#context, #argument)
+            },
+            CapabilityGlobalRoleV1::DisjointWrite { index_space } => quote! {
+                #device_api::capability_memory::Global::<
+                    '_,
+                    #element,
+                    #device_api::capability_memory::DisjointWrite<#index_space>,
+                    #brand
+                >::__compiler_bind_disjoint_write(&#context, #argument)
+            },
+            CapabilityGlobalRoleV1::ExclusiveReadWrite => quote! {
+                #device_api::capability_memory::Global::<
+                    '_,
+                    #element,
+                    #device_api::capability_memory::ExclusiveReadWrite,
+                    #brand
+                >::__compiler_bind_exclusive_read_write(&#context, #argument)
+            },
+            CapabilityGlobalRoleV1::AtomicReadWrite { scope } => quote! {
+                #device_api::capability_memory::Global::<
+                    '_,
+                    #element,
+                    #device_api::capability_memory::AtomicReadWrite<#scope>,
+                    #brand
+                >::__compiler_bind_atomic(&#context, #argument)
+            },
+        }
+    }
+
+    fn source_assertion(
+        &self,
+        source_type: &Type,
+        device_api: &proc_macro2::TokenStream,
+    ) -> proc_macro2::TokenStream {
+        let element = &self.element_type;
+        let role = match &self.role {
+            CapabilityGlobalRoleV1::ReadOnly => {
+                quote!(#device_api::capability_memory::ReadOnly)
+            }
+            CapabilityGlobalRoleV1::DisjointWrite { index_space } => {
+                quote!(#device_api::capability_memory::DisjointWrite<#index_space>)
+            }
+            CapabilityGlobalRoleV1::ExclusiveReadWrite => {
+                quote!(#device_api::capability_memory::ExclusiveReadWrite)
+            }
+            CapabilityGlobalRoleV1::AtomicReadWrite { scope } => {
+                quote!(#device_api::capability_memory::AtomicReadWrite<#scope>)
+            }
+        };
+        quote! {
+            const _: () = {
+                fn __fe2o3_assert_capability_global_type_v1<
+                    T: #device_api::capability_memory::CapabilityMemoryViewTypeV1<
+                        Element = #element,
+                        Space = #device_api::capability_memory::GlobalAddressSpace,
+                        Role = #role,
+                        Brand = #device_api::UnbrandedCapability,
+                    >,
+                >() {}
+                let _ = __fe2o3_assert_capability_global_type_v1::<#source_type>;
+            };
+        }
+    }
+}
+
+fn physical_typed_kernel_input_v1(
+    input: &ItemFn,
+    device_api: &proc_macro2::TokenStream,
+) -> syn::Result<ItemFn> {
+    let logical_context = logical_kernel_context_v1(input)?;
+    let mut physical = input.clone();
+    if logical_context {
+        physical.sig.inputs = physical.sig.inputs.iter().skip(1).cloned().collect();
+    }
+    let mut first_capability_span = None;
+    for argument in &mut physical.sig.inputs {
+        let FnArg::Typed(argument) = argument else {
+            continue;
+        };
+        if let Some(capability) = parse_capability_global_type_v1(&argument.ty)? {
+            first_capability_span.get_or_insert_with(|| (*argument.ty).clone());
+            argument.ty = Box::new(capability.physical_type(device_api)?);
+        }
+    }
+    if !logical_context && let Some(capability) = first_capability_span {
+        return Err(syn::Error::new_spanned(
+            capability,
+            "typed Global capability arguments require KernelContext<'_> as the first parameter",
+        ));
+    }
+    Ok(physical)
+}
+
+fn capability_global_arguments_v1(
+    input: &ItemFn,
+    logical_context: bool,
+) -> syn::Result<Vec<Option<CapabilityGlobalArgumentV1>>> {
+    input
+        .sig
+        .inputs
+        .iter()
+        .skip(usize::from(logical_context))
+        .map(|argument| match argument {
+            FnArg::Typed(argument) => parse_capability_global_type_v1(&argument.ty),
+            FnArg::Receiver(receiver) => Err(syn::Error::new_spanned(
+                receiver,
+                "general typed V1 does not support methods",
+            )),
+        })
+        .collect()
+}
+
+fn parse_capability_global_type_v1(ty: &Type) -> syn::Result<Option<CapabilityGlobalArgumentV1>> {
+    let Type::Path(path) = ty else {
+        return Ok(None);
+    };
+    if path.qself.is_some() {
+        return Ok(None);
+    }
+    let Some(segment) = path.path.segments.last() else {
+        return Ok(None);
+    };
+    if matches!(
+        segment.ident.to_string().as_str(),
+        "Workgroup"
+            | "WorkgroupMemoryView"
+            | "Private"
+            | "PrivateMemoryView"
+            | "CapabilityMemoryView"
+    ) {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "typed capability memory arguments support only global address space in V1",
+        ));
+    }
+    if segment.ident != "Global" {
+        return Ok(None);
+    }
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "Global must name a supported compiler-authenticated memory role",
+        ));
+    };
+    if arguments.colon2_token.is_some() || arguments.args.len() != 3 {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "Global requires exactly lifetime, element, and role arguments; its Brand is compiler-bound and must not be written explicitly",
+        ));
+    }
+    let Some(GenericArgument::Lifetime(lifetime)) = arguments.args.first() else {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "Global's first argument must be a lifetime",
+        ));
+    };
+    if lifetime.ident != "_" {
+        return Err(syn::Error::new_spanned(
+            lifetime,
+            "Global's lifetime is compiler-bound and must be written as '_",
+        ));
+    }
+    let Some(GenericArgument::Type(element_type)) = arguments.args.iter().nth(1) else {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "Global's second argument must be a supported scalar element type",
+        ));
+    };
+    if parse_general_typed_scalar_v1(element_type).is_none() {
+        return Err(syn::Error::new_spanned(
+            element_type,
+            "Global supports only i8/u8/i16/u16/i32/u32/i64/u64/f32/f64 elements in V1",
+        ));
+    }
+    let Some(GenericArgument::Type(role)) = arguments.args.iter().nth(2) else {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "Global's third argument must be ReadOnly, DisjointWrite<IndexSpace>, ExclusiveReadWrite, or AtomicReadWrite<Scope>",
+        ));
+    };
+    let Type::Path(role_path) = role else {
+        return Err(syn::Error::new_spanned(
+            role,
+            "Global's role must be ReadOnly, DisjointWrite<IndexSpace>, ExclusiveReadWrite, or AtomicReadWrite<Scope>",
+        ));
+    };
+    if role_path.qself.is_some() {
+        return Err(syn::Error::new_spanned(
+            role,
+            "Global's role must be ReadOnly, DisjointWrite<IndexSpace>, ExclusiveReadWrite, or AtomicReadWrite<Scope>",
+        ));
+    }
+    let Some(role_segment) = role_path.path.segments.last() else {
+        return Err(syn::Error::new_spanned(
+            role,
+            "Global's role must be ReadOnly, DisjointWrite<IndexSpace>, ExclusiveReadWrite, or AtomicReadWrite<Scope>",
+        ));
+    };
+    let role = if role_segment.ident == "ReadOnly"
+        && matches!(role_segment.arguments, PathArguments::None)
+    {
+        CapabilityGlobalRoleV1::ReadOnly
+    } else if role_segment.ident == "DisjointWrite" {
+        let PathArguments::AngleBracketed(role_arguments) = &role_segment.arguments else {
+            return Err(syn::Error::new_spanned(
+                role,
+                "DisjointWrite requires exactly one supported IndexSpace argument",
+            ));
+        };
+        if role_arguments.colon2_token.is_some() || role_arguments.args.len() != 1 {
+            return Err(syn::Error::new_spanned(
+                role,
+                "DisjointWrite requires exactly one supported IndexSpace argument",
+            ));
+        }
+        let Some(GenericArgument::Type(index_space)) = role_arguments.args.first() else {
+            return Err(syn::Error::new_spanned(
+                role,
+                "DisjointWrite requires exactly one supported IndexSpace argument",
+            ));
+        };
+        parse_disjoint_index_space_v1(index_space).ok_or_else(|| {
+            syn::Error::new_spanned(
+                index_space,
+                "DisjointWrite uses an unsupported or malformed IndexSpace",
+            )
+        })?;
+        CapabilityGlobalRoleV1::DisjointWrite {
+            index_space: index_space.clone(),
+        }
+    } else if role_segment.ident == "ExclusiveReadWrite"
+        && matches!(role_segment.arguments, PathArguments::None)
+    {
+        CapabilityGlobalRoleV1::ExclusiveReadWrite
+    } else if role_segment.ident == "AtomicReadWrite" {
+        let PathArguments::AngleBracketed(role_arguments) = &role_segment.arguments else {
+            return Err(syn::Error::new_spanned(
+                role,
+                "AtomicReadWrite requires exactly one MemoryScope argument",
+            ));
+        };
+        if role_arguments.colon2_token.is_some() || role_arguments.args.len() != 1 {
+            return Err(syn::Error::new_spanned(
+                role,
+                "AtomicReadWrite requires exactly one MemoryScope argument",
+            ));
+        }
+        let Some(GenericArgument::Type(scope)) = role_arguments.args.first() else {
+            return Err(syn::Error::new_spanned(
+                role,
+                "AtomicReadWrite requires exactly one MemoryScope argument",
+            ));
+        };
+        CapabilityGlobalRoleV1::AtomicReadWrite {
+            scope: scope.clone(),
+        }
+    } else {
+        return Err(syn::Error::new_spanned(
+            role,
+            "Global's role must be ReadOnly, DisjointWrite<IndexSpace>, ExclusiveReadWrite, or AtomicReadWrite<Scope>",
+        ));
+    };
+    Ok(Some(CapabilityGlobalArgumentV1 {
+        element_type: element_type.clone(),
+        role,
+    }))
+}
+
+fn is_kernel_context_type_v1(ty: &Type) -> bool {
+    let Type::Path(path) = ty else {
+        return false;
+    };
+    path.qself.is_none()
+        && path
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "KernelContext")
 }
 
 fn expand_reference_registration_v1(
@@ -2453,6 +3153,162 @@ fn generated_worker_v3_adapter_v1(
     }
 }
 
+fn generated_safe_host_contract_v2(
+    input: &ItemFn,
+    model: &GeneralTypedSignatureModelV1,
+) -> proc_macro2::TokenStream {
+    if model.arguments.iter().any(|argument| {
+        matches!(
+            argument,
+            GeneralTypedArgumentKindV1::GlobalMutPointer(_)
+                | GeneralTypedArgumentKindV1::CompilerLaidOutByValue
+        )
+    }) {
+        return quote! {};
+    }
+
+    let fields = input
+        .sig
+        .inputs
+        .iter()
+        .map(|argument| match argument {
+            FnArg::Typed(argument) => match argument.pat.as_ref() {
+                Pat::Ident(pattern) => pattern.ident.clone(),
+                _ => unreachable!("general typed argument validation requires identifiers"),
+            },
+            FnArg::Receiver(_) => unreachable!("general typed validation rejects receivers"),
+        })
+        .collect::<Vec<_>>();
+    let memory_parameters = model
+        .arguments
+        .iter()
+        .enumerate()
+        .filter(|(_, argument)| {
+            matches!(
+                argument,
+                GeneralTypedArgumentKindV1::SharedSlice(_)
+                    | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
+                    | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+                    | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, _)
+                    | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
+            )
+        })
+        .map(|(index, _)| format_ident!("__Fe2o3MemoryArgument{index}"))
+        .collect::<Vec<_>>();
+    let memory_observations = model
+        .arguments
+        .iter()
+        .zip(&fields)
+        .enumerate()
+        .filter(|(_, (argument, _))| {
+            matches!(
+                argument,
+                GeneralTypedArgumentKindV1::SharedSlice(_)
+                    | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
+                    | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+                    | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, _)
+                    | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
+            )
+        })
+        .map(|(index, (_, field))| {
+            quote!(
+                __fe2o3_kernel_host::__generated::GeneratedHostMemoryArgumentV2::
+                    generated_host_memory_binding_v2(&self.#field, #index)
+            )
+        })
+        .collect::<Vec<_>>();
+    let arguments_type = if memory_parameters.is_empty() {
+        quote!(Arguments)
+    } else {
+        quote!(Arguments<'allocation, #(#memory_parameters),*>)
+    };
+    let memory_bounds = memory_parameters.iter().map(|parameter| {
+        quote!(
+            #parameter: 'allocation
+                + __fe2o3_kernel_host::__generated::GeneratedHostMemoryArgumentV2<'allocation>
+        )
+    });
+    let layout = generated_worker_v3_layout_v1(model);
+    let launch = generated_host_launch_contract_v2(&model.launch);
+
+    quote! {
+        // SAFETY: both values are emitted from the exact canonical signature and launch
+        // registration used to derive this marker's generated-host-contract identity.
+        unsafe impl __fe2o3_kernel_host::__generated::CompilerGeneratedKernelExpectationV2
+            for Marker
+        {
+            fn generated_host_contract_v2() -> Result<
+                __fe2o3_kernel_host::__generated::CompilerGeneratedHostContractV2,
+                __fe2o3_kernel_host::__generated::GeneratedArgumentLayoutError,
+            > {
+                Ok(__fe2o3_kernel_host::__generated::CompilerGeneratedHostContractV2::new(
+                    #layout?,
+                    #launch,
+                ))
+            }
+        }
+
+        // SAFETY: each observation is taken from its exact generated field in canonical source
+        // argument order. Memory field implementations are themselves unsafe generated/runtime
+        // contracts and scalar fields intentionally produce no memory observation.
+        unsafe impl<'allocation, #(#memory_bounds),*>
+            __fe2o3_kernel_host::__generated::CompilerGeneratedHostArgumentsV2<
+                'allocation,
+                Marker,
+            > for #arguments_type
+        {
+            fn generated_host_memory_bindings_v2(
+                &self,
+            ) -> __fe2o3_kernel_alloc::vec::Vec<
+                __fe2o3_kernel_host::__generated::GeneratedHostMemoryBindingV2,
+            > {
+                [#(#memory_observations),*].into_iter().collect()
+            }
+        }
+    }
+}
+
+fn generated_host_launch_contract_v2(launch: &LaunchContract) -> proc_macro2::TokenStream {
+    let rank = launch.rank();
+    let maximum = launch.max_grid();
+    let max_x = maximum.x();
+    let max_y = maximum.y();
+    let max_z = maximum.z();
+    let block = match launch.block_size() {
+        BlockSize::Any => quote!(__fe2o3_kernel_host::__generated::BlockSize::Any),
+        BlockSize::Exact(dimensions) | BlockSize::AtMost(dimensions) => {
+            let x = dimensions.x();
+            let y = dimensions.y();
+            let z = dimensions.z();
+            let dimensions = quote!(
+                __fe2o3_kernel_host::__generated::Dimensions::new(#x, #y, #z)
+                    .expect("compiler-generated launch dimensions are valid")
+            );
+            match launch.block_size() {
+                BlockSize::Exact(_) => {
+                    quote!(__fe2o3_kernel_host::__generated::BlockSize::Exact(#dimensions))
+                }
+                BlockSize::AtMost(_) => {
+                    quote!(__fe2o3_kernel_host::__generated::BlockSize::AtMost(#dimensions))
+                }
+                BlockSize::Any => unreachable!(),
+            }
+        }
+    };
+    let static_lds = launch.static_shared_memory_bytes();
+    let dynamic_lds = launch.max_dynamic_shared_memory_bytes();
+    quote!(
+        __fe2o3_kernel_host::__generated::LaunchContract::new(
+            #rank,
+            #block,
+            __fe2o3_kernel_host::__generated::Dimensions::new(#max_x, #max_y, #max_z)
+                .expect("compiler-generated maximum grid is valid"),
+            #static_lds,
+            #dynamic_lds,
+        ).expect("compiler-generated launch contract is valid")
+    )
+}
+
 fn generated_worker_v3_layout_v1(model: &GeneralTypedSignatureModelV1) -> proc_macro2::TokenStream {
     let fields = model
         .arguments
@@ -2771,15 +3627,18 @@ fn parse_general_typed_argument_type_v1(ty: &Type) -> Result<GeneralTypedArgumen
         return Ok(GeneralTypedArgumentKindV1::Scalar(scalar));
     }
     if let Type::Reference(reference) = ty {
-        if reference.lifetime.is_some() || reference.mutability.is_some() {
+        if reference.lifetime.is_some() {
             return Err(());
         }
         let Type::Slice(slice) = reference.elem.as_ref() else {
             return Err(());
         };
-        return parse_general_typed_scalar_v1(&slice.elem)
-            .map(GeneralTypedArgumentKindV1::SharedSlice)
-            .ok_or(());
+        let scalar = parse_general_typed_scalar_v1(&slice.elem).ok_or(())?;
+        return Ok(if reference.mutability.is_some() {
+            GeneralTypedArgumentKindV1::ExclusiveSlice(scalar)
+        } else {
+            GeneralTypedArgumentKindV1::SharedSlice(scalar)
+        });
     }
 
     if matches!(ty, Type::Tuple(_) | Type::Array(_)) {
@@ -3470,6 +4329,61 @@ fn general_typed_dimensions_v1(dimensions: [u32; 3]) -> Dimensions {
         .expect("macro launch parsing already validates dimensions")
 }
 
+fn expand_kernel_context_frontend_registration_v1(
+    logical_context: bool,
+    original_ident: &syn::Ident,
+    marker_value: &syn::LitStr,
+    physical_root: &syn::Ident,
+    logical_helper: &syn::Ident,
+    nominal_marker: &syn::Ident,
+    function_pointer: &proc_macro2::TokenStream,
+) -> syn::Result<Option<proc_macro2::TokenStream>> {
+    if !logical_context {
+        return Ok(None);
+    }
+
+    let bytes = encode_generated_kernel_context_frontend_contract_v1(
+        &physical_root.to_string(),
+        &logical_helper.to_string(),
+        &nominal_marker.to_string(),
+    )
+    .map_err(|error| syn::Error::new(original_ident.span(), error.to_string()))?;
+    let registration_ident = format_ident!(
+        "{KERNEL_CONTEXT_FRONTEND_REGISTRATION_PREFIX_V1}{}",
+        original_ident
+    );
+    let bytes_ident = format_ident!(
+        "__fe2o3_kernel_context_contract_bytes_v1_{}",
+        original_ident
+    );
+    let bytes = bytes.iter();
+
+    Ok(Some(quote! {
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        const #bytes_ident: &'static [u8] = &[#(#bytes),*];
+
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        #[used]
+        static #registration_ident: (
+            u64,
+            u16,
+            u16,
+            &'static str,
+            &'static [u8],
+            #function_pointer,
+        ) = (
+            #KERNEL_CONTEXT_FRONTEND_REGISTRATION_MAGIC_V1,
+            #KERNEL_CONTEXT_FRONTEND_REGISTRATION_VERSION_V1,
+            #KERNEL_CONTEXT_FRONTEND_REGISTRATION_KIND_V1,
+            #marker_value,
+            #bytes_ident,
+            #physical_root,
+        );
+    }))
+}
+
 const fn align_up_v1(value: u64, alignment: u32) -> Option<u64> {
     let alignment = alignment as u64;
     let mask = alignment - 1;
@@ -3480,14 +4394,18 @@ const fn align_up_v1(value: u64, alignment: u32) -> Option<u64> {
 }
 
 fn encode_kernel_frontend_contract_v1(options: &KernelOptions) -> Option<Vec<u8>> {
-    if options.launch.is_none() && options.unsafe_assembly.is_none() {
+    if options.launch.is_none()
+        && options.unsafe_assembly.is_none()
+        && !options.unsafe_raw_memory_provider
+    {
         return None;
     }
     let mut bytes = Vec::with_capacity(76);
     bytes.extend_from_slice(&FRONTEND_KERNEL_CONTRACT_MAGIC_V1);
     push_u16(&mut bytes, 1);
     let flags = u16::from(options.launch.is_some())
-        | (u16::from(options.unsafe_assembly.is_some()) * 0x0002);
+        | (u16::from(options.unsafe_assembly.is_some()) * 0x0002)
+        | (u16::from(options.unsafe_raw_memory_provider) * 0x0004);
     push_u16(&mut bytes, flags);
     push_u32(&mut bytes, 0);
     push_u32(&mut bytes, 0);
@@ -3622,16 +4540,37 @@ impl<'ast> Visit<'ast> for KernelAssemblyUseVisitor {
 #[derive(Default)]
 struct KernelUnsafeSyntaxVisitor {
     first_use: Option<(proc_macro2::Span, &'static str)>,
+    allow_direct_raw_memory_calls: bool,
 }
 
 impl KernelUnsafeSyntaxVisitor {
     fn record(&mut self, span: proc_macro2::Span, diagnostic: &'static str) {
         self.first_use.get_or_insert((span, diagnostic));
     }
+
+    fn is_direct_raw_memory_call(expression: &syn::ExprUnsafe) -> bool {
+        let [syn::Stmt::Expr(syn::Expr::Call(call), None)] = expression.block.stmts.as_slice()
+        else {
+            return false;
+        };
+        let syn::Expr::Path(path) = call.func.as_ref() else {
+            return false;
+        };
+        call.args.len() == 4
+            && path
+                .path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "from_raw_parts")
+    }
 }
 
 impl<'ast> Visit<'ast> for KernelUnsafeSyntaxVisitor {
     fn visit_expr_unsafe(&mut self, expression: &'ast syn::ExprUnsafe) {
+        if self.allow_direct_raw_memory_calls && Self::is_direct_raw_memory_call(expression) {
+            syn::visit::visit_expr_unsafe(self, expression);
+            return;
+        }
         self.record(
             expression.unsafe_token.span,
             "unsafe blocks are not allowed in ordinary #[kernel] bodies; use safe fe2o3 device APIs or an explicitly declared low-level provider boundary",
@@ -3723,18 +4662,28 @@ impl<'ast> Visit<'ast> for KernelUnsafeSyntaxVisitor {
 fn validate_kernel_source_safety(
     input: &ItemFn,
     declared_unsafe_assembly: bool,
+    declared_raw_memory_provider: bool,
 ) -> syn::Result<()> {
     if declared_unsafe_assembly {
         return Ok(());
     }
-    if let Some(unsafety) = input.sig.unsafety {
+    if declared_raw_memory_provider && input.sig.unsafety.is_none() {
+        return Err(syn::Error::new_spanned(
+            &input.sig,
+            "unsafe_provider(raw_memory) requires an unsafe kernel function",
+        ));
+    }
+    if !declared_raw_memory_provider && let Some(unsafety) = input.sig.unsafety {
         return Err(syn::Error::new(
             unsafety.span,
-            "ordinary #[kernel] functions must be safe; use unsafe_asm(...) only for an explicitly declared low-level assembly kernel",
+            "ordinary #[kernel] functions must be safe; use an explicit low-level provider declaration when unsafe authority is required",
         ));
     }
 
-    let mut visitor = KernelUnsafeSyntaxVisitor::default();
+    let mut visitor = KernelUnsafeSyntaxVisitor {
+        allow_direct_raw_memory_calls: declared_raw_memory_provider,
+        ..KernelUnsafeSyntaxVisitor::default()
+    };
     visitor.visit_generics(&input.sig.generics);
     for argument in &input.sig.inputs {
         visitor.visit_fn_arg(argument);
@@ -4519,8 +5468,8 @@ mod tests {
         expand_kernel_with_device_import, expand_kernel_with_imports,
         general_typed_global_mut_pointer_type_identity_v1, generated_general_typed_arguments_v1,
         generated_worker_v3_adapter_v1, host_import_for, model_general_typed_signature_v1,
-        parse_device_ffi_options, parse_kernel_options, reconcile_crate_binding_v1,
-        simulation_attempt_value_v1, simulation_mode_value_v1,
+        parse_device_ffi_options, parse_kernel_options, physical_typed_kernel_input_v1,
+        reconcile_crate_binding_v1, simulation_attempt_value_v1, simulation_mode_value_v1,
         validate_generated_device_ffi_contract_grammar, validate_kernel_assembly_boundary,
         validate_kernel_source_safety, validate_typed_kernel_profile_v1,
         validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
@@ -4881,6 +5830,7 @@ mod tests {
                 reference: None,
                 launch: None,
                 unsafe_assembly: None,
+                unsafe_raw_memory_provider: false,
                 control_flow: None,
             }
         );
@@ -4892,6 +5842,7 @@ mod tests {
                 reference: None,
                 launch: None,
                 unsafe_assembly: None,
+                unsafe_raw_memory_provider: false,
                 control_flow: None,
             }
         );
@@ -5098,7 +6049,7 @@ mod tests {
         let safe: ItemFn = parse_quote! {
             fn kernel(value: u32) -> u32 { value + 1 }
         };
-        validate_kernel_source_safety(&safe, false).unwrap();
+        validate_kernel_source_safety(&safe, false, false).unwrap();
 
         let rejected: Vec<(ItemFn, &str)> = vec![
             (
@@ -5134,7 +6085,7 @@ mod tests {
         ];
         for (input, expected) in rejected {
             assert!(
-                validate_kernel_source_safety(&input, false)
+                validate_kernel_source_safety(&input, false, false)
                     .unwrap_err()
                     .to_string()
                     .contains(expected)
@@ -5147,7 +6098,36 @@ mod tests {
         let input: ItemFn = parse_quote! {
             unsafe fn kernel() { unsafe { core::arch::asm!("nop") } }
         };
-        validate_kernel_source_safety(&input, true).unwrap();
+        validate_kernel_source_safety(&input, true, false).unwrap();
+    }
+
+    #[test]
+    fn declared_raw_memory_provider_admits_only_direct_raw_constructor_calls() {
+        let admitted: ItemFn = parse_quote! {
+            unsafe fn kernel(context: Context, pointer: *mut u32) {
+                let _ = unsafe {
+                    CapabilityMemoryView::<u32, Private, ReadOnly, Brand>::from_raw_parts(
+                        &context,
+                        pointer,
+                        4,
+                        obligation,
+                    )
+                };
+            }
+        };
+        validate_kernel_source_safety(&admitted, false, true).unwrap();
+
+        let rejected: ItemFn = parse_quote! {
+            unsafe fn kernel(pointer: *mut u32) {
+                let _ = unsafe { pointer.read() };
+            }
+        };
+        assert!(
+            validate_kernel_source_safety(&rejected, false, true)
+                .unwrap_err()
+                .to_string()
+                .contains("unsafe blocks are not allowed")
+        );
     }
 
     #[test]
@@ -5306,6 +6286,410 @@ mod tests {
         ] {
             assert!(!expansion.contains(retired), "retained `{retired}`");
         }
+    }
+
+    #[test]
+    fn kernel_context_is_logical_and_absent_from_the_physical_entry_abi() {
+        let input: ItemFn = parse_quote! {
+            pub fn vecadd(
+                context: KernelContext<'_>,
+                a: &[f32],
+                b: &[f32],
+                mut c: DisjointSlice<f32>,
+            ) {
+                let _ = (context.invocation(), a, b, &mut c);
+            }
+        };
+        let device_import = device_import_for(FoundCrate::Name("gpu_device".to_string()));
+        let device_path = device_path_for(FoundCrate::Name("gpu_device".to_string()));
+        let host_import = host_import_for(FoundCrate::Name("gpu_host".to_string()));
+        let crate_binding = derive_crate_binding_id_v1("fixture", ["logical-context"]);
+
+        let expansion = expand_kernel_with_imports(
+            input,
+            parse_kernel_options(quote!(typed)).unwrap(),
+            &device_import,
+            Some(&device_path),
+            Some(&host_import),
+            Some(crate_binding),
+        )
+        .unwrap();
+        let file: syn::File = syn::parse2(expansion.clone()).unwrap();
+        let functions = file
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Fn(function) => Some(function),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let helper = functions
+            .iter()
+            .find(|function| {
+                function
+                    .sig
+                    .ident
+                    .to_string()
+                    .starts_with("__fe2o3_kernel_body_v1_")
+            })
+            .unwrap();
+        let entry = functions
+            .iter()
+            .find(|function| {
+                function
+                    .sig
+                    .ident
+                    .to_string()
+                    .starts_with("__fe2o3_host_kernel_v1_")
+            })
+            .unwrap();
+        assert_eq!(helper.sig.inputs.len(), 4);
+        assert_eq!(entry.sig.inputs.len(), 3);
+
+        let expansion = expansion.to_string();
+        assert!(expansion.contains("KernelContext :: __compiler_issue"));
+        assert!(expansion.contains("KernelContextTypeV1"));
+        assert!(expansion.contains("__fe2o3_kernel_context_contract_v1_vecadd"));
+        assert!(expansion.contains("__fe2o3_kernel_body_v1_"));
+        assert!(expansion.contains("__fe2o3_kernel_marker_vecadd"));
+        assert!(expansion.contains("pub struct Arguments < 'allocation"));
+        assert!(!expansion.contains("pub fn new (context"));
+        assert!(expansion.contains("fn (& [f32] , & [f32] , DisjointSlice < f32 >)"));
+        assert!(
+            !expansion
+                .contains("fn (KernelContext < '_ > , & [f32] , & [f32] , DisjointSlice < f32 >)")
+        );
+    }
+
+    #[test]
+    fn every_typed_global_role_is_branded_only_in_the_logical_helper() {
+        let input: ItemFn = parse_quote! {
+            pub fn copy(
+                context: KernelContext<'_>,
+                input: Global<'_, u32, ReadOnly>,
+                mut scratch: Global<'_, u32, ExclusiveReadWrite>,
+                output: Global<'_, u32, DisjointWrite<Blocked<Index1D, 64, 2>>>,
+                counters: Global<'_, u32, AtomicReadWrite<SystemScope>>,
+            ) {
+                let _ = (context, input, &mut scratch, output, counters);
+            }
+        };
+        let device_import = device_import_for(FoundCrate::Name("gpu_device".to_string()));
+        let device_path = device_path_for(FoundCrate::Name("gpu_device".to_string()));
+        let host_import = host_import_for(FoundCrate::Name("gpu_host".to_string()));
+        let crate_binding = derive_crate_binding_id_v1("fixture", ["typed-global"]);
+        let physical = physical_typed_kernel_input_v1(&input, &quote!(fe2o3_device)).unwrap();
+        let physical_model = model_general_typed_signature_v1(
+            &physical,
+            &parse_kernel_options(quote!(typed)).unwrap(),
+            [0; 32],
+        )
+        .unwrap();
+
+        assert_eq!(physical.sig.inputs.len(), 4);
+        assert_eq!(physical_model.abi.size(), 64);
+        assert_eq!(physical_model.abi.alignment(), 8);
+
+        let expansion = expand_kernel_with_imports(
+            input,
+            parse_kernel_options(quote!(typed)).unwrap(),
+            &device_import,
+            Some(&device_path),
+            Some(&host_import),
+            Some(crate_binding),
+        )
+        .unwrap();
+        let file: syn::File = syn::parse2(expansion.clone()).unwrap();
+        let functions = file
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Fn(function) => Some(function),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let helper = functions
+            .iter()
+            .find(|function| {
+                function
+                    .sig
+                    .ident
+                    .to_string()
+                    .starts_with("__fe2o3_kernel_body_v1_")
+            })
+            .unwrap();
+        let entry = functions
+            .iter()
+            .find(|function| {
+                function
+                    .sig
+                    .ident
+                    .to_string()
+                    .starts_with("__fe2o3_host_kernel_v1_")
+            })
+            .unwrap();
+        assert_eq!(helper.sig.inputs.len(), 5);
+        assert_eq!(helper.sig.generics.params.len(), 1);
+        assert_eq!(entry.sig.inputs.len(), 4);
+
+        let expansion = expansion.to_string();
+        assert!(expansion.contains("input : & [u32]"));
+        assert!(expansion.contains("scratch : & mut [u32]"));
+        assert!(
+            expansion.contains("WriteOnlyDisjointSlice < u32 , Blocked < Index1D , 64 , 2 > >")
+        );
+        assert!(expansion.contains("counters : & [u32]"));
+        assert!(expansion.contains("KernelCapabilityBrand < '__fe2o3_kernel"));
+        assert!(expansion.contains("CurrentTarget"));
+        assert!(expansion.contains("RegisteredLaunch"));
+        assert!(expansion.contains("__compiler_bind_read_only"));
+        assert!(expansion.contains("__compiler_bind_exclusive_read_write"));
+        assert!(expansion.contains("__compiler_bind_disjoint_write"));
+        assert!(expansion.contains("Blocked < Index1D , 64 , 2 >"));
+        assert!(expansion.contains("AtomicReadWrite < SystemScope >"));
+        assert!(expansion.contains("__compiler_bind_atomic"));
+        assert!(expansion.contains("CapabilityMemoryViewTypeV1"));
+    }
+
+    #[test]
+    fn typed_atomic_global_preserves_scope_and_has_no_logical_abi_bytes() {
+        let input: ItemFn = parse_quote! {
+            pub fn count(
+                context: KernelContext<'_>,
+                counters: Global<'_, u32, AtomicReadWrite<SystemScope>>,
+            ) {
+                let _ = (context, counters);
+            }
+        };
+        let device_import = device_import_for(FoundCrate::Name("gpu_device".to_string()));
+        let device_path = device_path_for(FoundCrate::Name("gpu_device".to_string()));
+        let host_import = host_import_for(FoundCrate::Name("gpu_host".to_string()));
+        let crate_binding = derive_crate_binding_id_v1("fixture", ["typed-atomic-global"]);
+
+        let expansion = expand_kernel_with_imports(
+            input,
+            parse_kernel_options(quote!(typed)).unwrap(),
+            &device_import,
+            Some(&device_path),
+            Some(&host_import),
+            Some(crate_binding),
+        )
+        .unwrap();
+        let file: syn::File = syn::parse2(expansion.clone()).unwrap();
+        let functions = file
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Fn(function) => Some(function),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let helper = functions
+            .iter()
+            .find(|function| {
+                function
+                    .sig
+                    .ident
+                    .to_string()
+                    .starts_with("__fe2o3_kernel_body_v1_")
+            })
+            .unwrap();
+        let entry = functions
+            .iter()
+            .find(|function| {
+                function
+                    .sig
+                    .ident
+                    .to_string()
+                    .starts_with("__fe2o3_host_kernel_v1_")
+            })
+            .unwrap();
+        assert_eq!(helper.sig.inputs.len(), 2);
+        assert_eq!(entry.sig.inputs.len(), 1);
+
+        let expansion = expansion.to_string();
+        assert!(expansion.contains("counters : & [u32]"));
+        assert!(expansion.contains("AtomicReadWrite < SystemScope >"));
+        assert!(expansion.contains("__compiler_bind_atomic"));
+        assert!(expansion.contains("KernelCapabilityBrand < '__fe2o3_kernel"));
+    }
+
+    #[test]
+    fn ordinary_kernel_context_is_logical_and_absent_from_the_physical_entry_abi() {
+        let input: ItemFn = parse_quote! {
+            pub unsafe extern "C" fn increment(context: KernelContext<'_>, value: u32) -> u32 {
+                let _ = context.invocation();
+                value + 1
+            }
+        };
+        let device_import = device_import_for(FoundCrate::Name("gpu_device".to_string()));
+        let device_path = device_path_for(FoundCrate::Name("gpu_device".to_string()));
+        let expansion = expand_kernel_with_imports(
+            input,
+            parse_kernel_options(quote!(unsafe_provider(raw_memory))).unwrap(),
+            &device_import,
+            Some(&device_path),
+            None,
+            None,
+        )
+        .unwrap();
+        let file: syn::File = syn::parse2(expansion.clone()).unwrap();
+        let functions = file
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Fn(function) => Some(function),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let helper = functions
+            .iter()
+            .find(|function| function.sig.ident == "__fe2o3_kernel_body_v1_increment")
+            .unwrap();
+        let entry = functions
+            .iter()
+            .find(|function| function.sig.ident == "fe2o3_kernel_increment")
+            .unwrap();
+        assert_eq!(helper.sig.inputs.len(), 2);
+        assert_eq!(entry.sig.inputs.len(), 1);
+        assert!(helper.sig.unsafety.is_some());
+        assert!(entry.sig.unsafety.is_some());
+        assert_eq!(
+            helper
+                .sig
+                .abi
+                .as_ref()
+                .unwrap()
+                .name
+                .as_ref()
+                .unwrap()
+                .value(),
+            entry
+                .sig
+                .abi
+                .as_ref()
+                .unwrap()
+                .name
+                .as_ref()
+                .unwrap()
+                .value(),
+        );
+        assert_eq!(
+            entry
+                .sig
+                .abi
+                .as_ref()
+                .unwrap()
+                .name
+                .as_ref()
+                .unwrap()
+                .value(),
+            "C"
+        );
+
+        let expansion = expansion.to_string();
+        assert!(expansion.contains("KernelContext :: __compiler_issue"));
+        assert!(expansion.contains("KernelContextTypeV1"));
+        assert!(expansion.contains("__fe2o3_kernel_context_contract_v1_increment"));
+        assert!(expansion.contains("__fe2o3_kernel_body_v1_increment"));
+        assert!(expansion.contains("__fe2o3_kernel_marker_increment"));
+        assert!(expansion.contains("fn (u32) -> u32"));
+        assert!(!expansion.contains("fn (KernelContext"));
+    }
+
+    #[test]
+    fn typed_context_kernel_result_preserves_every_physical_signature_component() {
+        let input: ItemFn = parse_quote! {
+            pub fn checked_copy(
+                context: KernelContext<'_>,
+                input: Global<'_, u32, ReadOnly>,
+                output: Global<'_, u32, DisjointWrite<Blocked<Index1D, 64, 2>>>,
+                extent: u32,
+            ) -> KernelResult {
+                let _ = (context, input, output, extent);
+                Ok(())
+            }
+        };
+        let device_import = device_import_for(FoundCrate::Name("gpu_device".to_string()));
+        let device_path = device_path_for(FoundCrate::Name("gpu_device".to_string()));
+        let host_import = host_import_for(FoundCrate::Name("gpu_host".to_string()));
+        let crate_binding = derive_crate_binding_id_v1("fixture", ["context-result"]);
+        let expansion = expand_kernel_with_imports(
+            input,
+            parse_kernel_options(quote!(typed)).unwrap(),
+            &device_import,
+            Some(&device_path),
+            Some(&host_import),
+            Some(crate_binding),
+        )
+        .unwrap();
+        let file: syn::File = syn::parse2(expansion).unwrap();
+        let functions = file
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Fn(function) => Some(function),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let helper = functions
+            .iter()
+            .find(|function| {
+                function
+                    .sig
+                    .ident
+                    .to_string()
+                    .starts_with("__fe2o3_kernel_body_v1_")
+            })
+            .unwrap();
+        let entry = functions
+            .iter()
+            .find(|function| {
+                function
+                    .sig
+                    .ident
+                    .to_string()
+                    .starts_with("__fe2o3_host_kernel_v1_")
+            })
+            .unwrap();
+
+        assert_eq!(helper.sig.inputs.len(), entry.sig.inputs.len() + 1);
+        assert_eq!(helper.sig.unsafety.is_some(), entry.sig.unsafety.is_some());
+        assert_eq!(
+            helper
+                .sig
+                .abi
+                .as_ref()
+                .map(quote::ToTokens::to_token_stream)
+                .map(|abi| abi.to_string()),
+            entry
+                .sig
+                .abi
+                .as_ref()
+                .map(quote::ToTokens::to_token_stream)
+                .map(|abi| abi.to_string()),
+        );
+        assert_eq!(helper.sig.variadic.is_some(), entry.sig.variadic.is_some());
+        assert!(matches!(helper.sig.output, syn::ReturnType::Type(..)));
+        assert!(matches!(entry.sig.output, syn::ReturnType::Default));
+        let physical = entry
+            .sig
+            .inputs
+            .iter()
+            .map(quote::ToTokens::to_token_stream);
+        let physical = quote!(#(#physical),*).to_string();
+        for exact in [
+            "input : & [u32]",
+            "output : :: gpu_device :: WriteOnlyDisjointSlice < u32",
+            "Blocked < Index1D , 64 , 2 >",
+            "extent : u32",
+        ] {
+            assert!(
+                physical.contains(exact),
+                "physical signature omitted `{exact}`"
+            );
+        }
+        assert!(!physical.contains("KernelContext"));
     }
 
     #[test]
@@ -6828,9 +8212,6 @@ mod tests {
             ),
             parse_quote!(
                 pub fn raw(value: *const u32) {}
-            ),
-            parse_quote!(
-                pub fn mutable(value: &mut [u32]) {}
             ),
             parse_quote!(
                 pub fn array(value: &[UserElement]) {}

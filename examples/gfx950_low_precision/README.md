@@ -18,6 +18,15 @@ perform stable softmax and value accumulation through typed fe2o3 operations.
 `src/reference.rs` is an independent CPU oracle with deterministic,
 axis-varying inputs and exact OCP E2M1/E4M3 decoders.
 
+Each root now starts from a compiler-issued `KernelContext`. Invocation indices,
+the Wave64 subgroup, the matrix capability, the strict numerical-policy owner,
+and every global-memory view derive from that root. Results are written only
+through blocked, branded `Global<DisjointWrite>` authority. The MFMA fragments
+carry the exact kernel, workgroup, subgroup-width, and synchronization-epoch
+brand. Safe Rust therefore rejects cross-kernel fragments, wrong matrix operand
+roles or formats, stale epochs, unsupported matrix widths, and memory-role or
+address-space substitution before production lowering begins.
+
 All four Rust kernels launch four `256`-thread workgroups. Each workgroup owns
 four Wave64 problems, for a total batch of 16 non-identical inputs. A GEMM wave
 owns one complete `16x16` output tile. An attention wave owns one complete
@@ -33,16 +42,35 @@ Run the Rust source and oracle checks with:
 cargo fe2o3 test --all-targets --manifest-path Cargo.toml
 ```
 
-The production rustc importer, V8/V9 Kernel IR schemas, exact gfx950 target
-profile, and full-module AMDGPU lowering consume all of these device terminals.
-`GFX950_RUST_TO_HSACO_LOWERING_SUPPORTED_V1` is therefore `true`.
+## Issue #272 status
 
-## Production Rust to gfx950 HSACO
+This package is not yet fully qualified by issue #272. The shared device API
+now exposes branded FP4/FP8 `Global` matrix views, blocked Global stores,
+policy-bound MFMA and math, context-derived Wave16 operations, and an
+epoch-advancing transpose publication. Both GEMM roots typecheck through that
+surface on the authenticated gfx950 target.
 
-Each runner rebuilds the production extractor, compiles exactly one ordinary
-Rust kernel for `amdgcn-amd-amdhsa`, validates the crate-binding handoff and
-LLVM profile, finalizes a COV6 object, checks symbol-scoped ISA and metadata,
-and executes a digest-pinned HSA numerical test:
+The operation-lifetime fix for `read_mfma_fragment` is complete: each read
+requires a matching next-epoch Wave64 lane, and the attributed transpose/MFMA
+composition now typechecks through `KernelContext::with_workgroup`. The active
+compile-pass regression keeps the kernel and generative workgroup lifetimes
+distinct so this boundary cannot silently regress.
+
+All source memory arguments are now typed, so
+`GFX950_FULLY_TYPED_MEMORY_V1` is `true`. Production V13 extraction and genuine
+Bundle V8 simulation remain unqualified. The fixed root-owned protected client
+profile was also unavailable in this test environment, so no protected
+publication or fresh hardware qualification was attempted. The corresponding
+production flags stay `false`; the historical HSACO digests below are not
+receipts for the migrated source.
+
+## Historical production runner
+
+The retained runners describe the previous production path. Once the V13
+Bundle V8 exporter and sealed W6/W7 handoff are available, each runner must
+again compile exactly one ordinary Rust kernel,
+validate the crate-binding handoff and final graph, finalize COV6, inspect
+symbol-scoped ISA and metadata, and execute a digest-pinned numerical test:
 
 ```bash
 ./run-fp4-gemm-gfx950.sh
@@ -66,18 +94,20 @@ the terminal analysis session receives the package-, manifest-, feature-,
 target-, and profile-bound portable token. Dependency compilations and general
 Cargo wrapper invocations are not rewritten.
 
-The strict Worker V3 provider and admission policy also pin this exact closure
-and reject caller-supplied providers. A measured native protected-worker build
-still requires matching LLVM/LLD development packages; this does not block the
-ordinary Rust-to-HSACO runners above.
+The strict Worker provider and admission policy pin this exact closure and
+reject caller-supplied providers. The migrated source still needs the
+higher-ranked transpose publication composition to typecheck, a new
+compiler-produced Bundle V8, and protected worker publication before these
+runners can supply current qualification evidence.
 
-## Current WG256/grid4 numerical qualification
+## Previous WG256/grid4 numerical qualification
 
-On 2026-09-03, all four production Rust wrappers completed extraction,
+On 2026-09-03, the pre-migration Rust wrappers completed extraction,
 gfx950:xnack- COV6 finalization, symbol-scoped ISA inspection, and numerical
 execution on physical GPU 6 of SSH host `mi350` with ROCm 7.2.1. Each launch
 checked 16 non-identical inputs and all 4,096 output values, as well as
-immutable inputs and guard canaries. These receipts do not include new timing
+immutable inputs and guard canaries. These receipts are regression baselines,
+not evidence for the current capability-branded source, and include no timing
 measurements.
 
 | Kernel | Maximum absolute error | HSACO SHA-256 |

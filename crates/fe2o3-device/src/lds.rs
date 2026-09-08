@@ -11,6 +11,8 @@ use core::mem::{MaybeUninit, align_of, size_of};
 use core::ptr::NonNull;
 use core::slice;
 
+use crate::context::UnbrandedCapability;
+
 /// Largest element alignment admitted by the dynamic LDS contract.
 ///
 /// The generated backend must provide a base with at least this alignment when
@@ -95,21 +97,25 @@ pub enum DynamicLdsError {
 /// only one root view; disjoint views must be derived with
 /// [`DynamicLds::split_at`].
 #[rustc_diagnostic_item = "fe2o3_device_workgroup_lds_scope"]
-pub struct WorkgroupLdsScope<'workgroup> {
-    _brand: PhantomData<&'workgroup mut &'workgroup ()>,
+pub struct WorkgroupLdsScope<'workgroup, Brand = UnbrandedCapability> {
+    _workgroup: PhantomData<&'workgroup mut &'workgroup ()>,
+    _brand: PhantomData<fn(Brand) -> Brand>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
 impl<'workgroup> WorkgroupLdsScope<'workgroup> {
-    /// Returns compiler-owned authority for the current workgroup's LDS.
+    /// Returns an unbranded compatibility scope for current workgroup LDS.
     ///
     /// The compiler reviews this private constructor in the production call
     /// closure. The value accepts no caller-provided epoch or workgroup
-    /// identity and grants no allocation without a compiler terminal.
+    /// identity, carries no nominal kernel/target/launch identity, and grants
+    /// no allocation without a compiler terminal. New kernels should use
+    /// [`crate::KernelContext::workgroup_lds`].
     #[inline(always)]
     #[rustc_diagnostic_item = "fe2o3_device_workgroup_lds_scope_current"]
     pub fn current() -> Self {
         Self {
+            _workgroup: PhantomData,
             _brand: PhantomData,
             _not_send_sync: PhantomData,
         }
@@ -118,6 +124,7 @@ impl<'workgroup> WorkgroupLdsScope<'workgroup> {
     #[cfg(test)]
     fn new_identity() -> Self {
         Self {
+            _workgroup: PhantomData,
             _brand: PhantomData,
             _not_send_sync: PhantomData,
         }
@@ -129,7 +136,17 @@ impl<'workgroup> WorkgroupLdsScope<'workgroup> {
     }
 }
 
-impl fmt::Debug for WorkgroupLdsScope<'_> {
+impl<'workgroup, Brand> WorkgroupLdsScope<'workgroup, Brand> {
+    pub(crate) fn current_branded() -> Self {
+        Self {
+            _workgroup: PhantomData,
+            _brand: PhantomData,
+            _not_send_sync: PhantomData,
+        }
+    }
+}
+
+impl<Brand> fmt::Debug for WorkgroupLdsScope<'_, Brand> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("WorkgroupLdsScope")
     }
@@ -156,16 +173,22 @@ pub enum LdsInitialized {}
 /// for supplying the AMDGPU workgroup-address-space base and exact launch byte
 /// extent.
 #[rustc_diagnostic_item = "fe2o3_device_dynamic_lds"]
-pub struct DynamicLds<'workgroup, T: LdsElement, State = LdsUninitialized> {
+pub struct DynamicLds<
+    'workgroup,
+    T: LdsElement,
+    State = LdsUninitialized,
+    Brand = UnbrandedCapability,
+> {
     ptr: NonNull<MaybeUninit<T>>,
     len: usize,
     byte_len: usize,
     _borrow: PhantomData<&'workgroup mut [MaybeUninit<T>]>,
     _state: PhantomData<fn() -> State>,
+    _brand: PhantomData<fn(Brand) -> Brand>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
-impl<'workgroup, T: LdsElement> DynamicLds<'workgroup, T, LdsUninitialized> {
+impl<'workgroup, T: LdsElement, Brand> DynamicLds<'workgroup, T, LdsUninitialized, Brand> {
     /// Creates one exact compiler-owned allocation in the current LDS scope.
     ///
     /// `ELEMENTS` and `T` are part of the authenticated source contract. The
@@ -174,7 +197,7 @@ impl<'workgroup, T: LdsElement> DynamicLds<'workgroup, T, LdsUninitialized> {
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_dynamic_lds_exact_current_v1"]
     pub fn exact_current<const ELEMENTS: usize>(
-        _scope: &'workgroup mut WorkgroupLdsScope<'workgroup>,
+        _scope: &'workgroup mut WorkgroupLdsScope<'workgroup, Brand>,
     ) -> Self {
         const {
             assert!(ELEMENTS > 0, "compiler-created dynamic LDS cannot be empty");
@@ -217,7 +240,7 @@ impl<'workgroup, T: LdsElement> DynamicLds<'workgroup, T, LdsUninitialized> {
     #[doc(hidden)]
     #[rustc_diagnostic_item = "fe2o3_device_dynamic_lds_from_raw_parts"]
     pub unsafe fn from_raw_parts(
-        _scope: &'workgroup mut WorkgroupLdsScope<'workgroup>,
+        _scope: &'workgroup mut WorkgroupLdsScope<'workgroup, Brand>,
         base: *mut u8,
         allocated_bytes: usize,
     ) -> Result<Self, DynamicLdsError> {
@@ -244,6 +267,7 @@ impl<'workgroup, T: LdsElement> DynamicLds<'workgroup, T, LdsUninitialized> {
             byte_len: allocated_bytes,
             _borrow: PhantomData,
             _state: PhantomData,
+            _brand: PhantomData,
             _not_send_sync: PhantomData,
         })
     }
@@ -256,7 +280,7 @@ impl<'workgroup, T: LdsElement> DynamicLds<'workgroup, T, LdsUninitialized> {
 
     #[cfg(test)]
     pub(crate) unsafe fn from_host_parts_for_test(
-        _scope: &'workgroup mut WorkgroupLdsScope<'workgroup>,
+        _scope: &'workgroup mut WorkgroupLdsScope<'workgroup, Brand>,
         base: *mut u8,
         allocated_bytes: usize,
     ) -> Result<Self, DynamicLdsError> {
@@ -310,19 +334,20 @@ impl<'workgroup, T: LdsElement> DynamicLds<'workgroup, T, LdsUninitialized> {
     /// Every element must hold a valid initialized `T`, and all writes that
     /// established initialization must happen before subsequent reads under
     /// the kernel's synchronization model.
-    pub unsafe fn assume_init(self) -> DynamicLds<'workgroup, T, LdsInitialized> {
+    pub unsafe fn assume_init(self) -> DynamicLds<'workgroup, T, LdsInitialized, Brand> {
         DynamicLds {
             ptr: self.ptr,
             len: self.len,
             byte_len: self.byte_len,
             _borrow: PhantomData,
             _state: PhantomData,
+            _brand: PhantomData,
             _not_send_sync: PhantomData,
         }
     }
 }
 
-impl<T: LdsElement> DynamicLds<'_, T, LdsInitialized> {
+impl<T: LdsElement, Brand> DynamicLds<'_, T, LdsInitialized, Brand> {
     pub fn get(&self, index: usize) -> Option<&T> {
         if index >= self.len {
             return None;
@@ -353,7 +378,7 @@ impl<T: LdsElement> DynamicLds<'_, T, LdsInitialized> {
     }
 }
 
-impl<T: LdsElement, State> DynamicLds<'_, T, State> {
+impl<T: LdsElement, State, Brand> DynamicLds<'_, T, State, Brand> {
     pub const fn len(&self) -> usize {
         self.len
     }
@@ -388,6 +413,7 @@ impl<T: LdsElement, State> DynamicLds<'_, T, State> {
             byte_len: left_bytes,
             _borrow: PhantomData,
             _state: PhantomData,
+            _brand: PhantomData,
             _not_send_sync: PhantomData,
         };
         let right = Self {
@@ -396,13 +422,14 @@ impl<T: LdsElement, State> DynamicLds<'_, T, State> {
             byte_len: right_bytes,
             _borrow: PhantomData,
             _state: PhantomData,
+            _brand: PhantomData,
             _not_send_sync: PhantomData,
         };
         Ok((left, right))
     }
 }
 
-impl<T: LdsElement, State> fmt::Debug for DynamicLds<'_, T, State> {
+impl<T: LdsElement, State, Brand> fmt::Debug for DynamicLds<'_, T, State, Brand> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("DynamicLds")
@@ -507,8 +534,10 @@ pub struct WorkgroupPipeline<
     const BUFFERS: usize,
     const ELEMENTS: usize,
     const PREFETCH: usize,
+    Brand = UnbrandedCapability,
 > {
     _storage: PhantomData<&'workgroup mut [T]>,
+    _brand: PhantomData<fn(Brand) -> Brand>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
@@ -518,12 +547,13 @@ impl<
     const BUFFERS: usize,
     const ELEMENTS: usize,
     const PREFETCH: usize,
-> WorkgroupPipeline<'workgroup, T, BUFFERS, ELEMENTS, PREFETCH>
+    Brand,
+> WorkgroupPipeline<'workgroup, T, BUFFERS, ELEMENTS, PREFETCH, Brand>
 {
     /// Creates one compiler-owned, disjoint workgroup staging allocation.
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_workgroup_pipeline_current_v1"]
-    pub fn current(_scope: &mut WorkgroupLdsScope<'workgroup>) -> Self {
+    pub fn current(_scope: &mut WorkgroupLdsScope<'workgroup, Brand>) -> Self {
         const {
             assert!(
                 BUFFERS >= 2,

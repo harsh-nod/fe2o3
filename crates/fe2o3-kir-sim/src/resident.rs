@@ -3,10 +3,10 @@ use std::hash::Hash;
 use std::mem::{align_of, size_of};
 
 use fe2o3_kernel_ir::{
-    AddressSpace, AssemblyEffect, AssemblyOption, BarrierSemantics, BasicBlock, Function,
-    FunctionBody, InlineAssembly, IntegerSwitchCase, Kernel, MatrixFrontendBindingV2,
-    MatrixOperation, Module, Operation, OperationKind, Signature, SwitchCase, TargetCapability,
-    Terminator, Type, ValueDef,
+    AddressSpace, AssemblyEffect, AssemblyOption, BarrierSemantics, BasicBlock,
+    ExecutionCapabilityRequirementV1, Function, FunctionBody, InlineAssembly, IntegerSwitchCase,
+    Kernel, MatrixFrontendBindingV2, MatrixOperation, Module, Operation, OperationKind, Signature,
+    SwitchCase, TargetCapability, Terminator, Type, ValueDef,
 };
 
 /// Checked accounting for retained allocation payloads.
@@ -251,6 +251,10 @@ fn add_operation(resident: &mut ResidentLedger, operation: &Operation) -> Option
         OperationKind::WorkgroupMemory(memory) => add_type_boxes(resident, &memory.element),
         OperationKind::Matrix(matrix) => add_matrix(resident, matrix),
         OperationKind::InlineAssembly(assembly) => add_inline_assembly(resident, assembly),
+        OperationKind::ExecutionCapability(capability) => {
+            resident.add_vec::<fe2o3_kernel_ir::ValueId>(capability.operands.capacity())?;
+            resident.add_bytes(capability.provenance.root.retained_capacity_bytes())
+        }
         OperationKind::Constant(_)
         | OperationKind::MemoryIntrinsic(_)
         | OperationKind::Unary { .. }
@@ -266,6 +270,9 @@ fn add_operation(resident: &mut ResidentLedger, operation: &Operation) -> Option
         | OperationKind::GuardedStore { .. }
         | OperationKind::Atomic(_)
         | OperationKind::Gfx950LdsTranspose(_)
+        | OperationKind::KernelContextIssue(_)
+        | OperationKind::GlobalCapabilityBind(_)
+        | OperationKind::GlobalCapabilityIndex(_)
         | OperationKind::Wave(_) => Some(()),
     }
 }
@@ -281,6 +288,19 @@ fn add_type_boxes(resident: &mut ResidentLedger, ty: &Type) -> Option<()> {
             Type::Slice(slice) => {
                 resident.add_box::<Type>()?;
                 &slice.element
+            }
+            Type::KernelContext(context) => {
+                resident.add_bytes(context.root().retained_capacity_bytes())?;
+                return Some(());
+            }
+            Type::GlobalCapability(capability) => {
+                resident.add_box::<Type>()?;
+                resident.add_bytes(capability.context().root().retained_capacity_bytes())?;
+                capability.element()
+            }
+            Type::ExecutionCapability(capability) => {
+                resident.add_bytes(capability.provenance.root.retained_capacity_bytes())?;
+                return Some(());
             }
             Type::Unit | Type::Scalar(_) => return Some(()),
         };
@@ -366,9 +386,16 @@ fn add_capabilities(
 ) -> Option<()> {
     resident.add_btree_set::<TargetCapability>(capabilities.len())?;
     for capability in capabilities {
-        if let TargetCapability::Extension { namespace, name } = capability {
-            resident.add_bytes(namespace.capacity())?;
-            resident.add_bytes(name.capacity())?;
+        match capability {
+            TargetCapability::Extension { namespace, name } => {
+                resident.add_bytes(namespace.capacity())?;
+                resident.add_bytes(name.capacity())?;
+            }
+            TargetCapability::Execution(ExecutionCapabilityRequirementV1::Barrier {
+                address_spaces,
+                ..
+            }) => add_plain_btree_set(resident, address_spaces)?,
+            _ => {}
         }
     }
     Some(())

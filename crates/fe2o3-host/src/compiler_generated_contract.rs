@@ -163,6 +163,40 @@ impl CompilerGeneratedKernelExpectationRosterEntryV1 {
     }
 }
 
+#[doc(hidden)]
+pub const fn canonicalize_generated_kernel_roster_v1<const N: usize>(
+    mut entries: [CompilerGeneratedKernelExpectationRosterEntryV1; N],
+) -> [CompilerGeneratedKernelExpectationRosterEntryV1; N] {
+    let mut right = 1;
+    while right < N {
+        let mut current = right;
+        while current > 0
+            && kernel_binding_precedes_v1(
+                entries[current].kernel_binding_id,
+                entries[current - 1].kernel_binding_id,
+            )
+        {
+            let left = entries[current - 1];
+            entries[current - 1] = entries[current];
+            entries[current] = left;
+            current -= 1;
+        }
+        right += 1;
+    }
+    entries
+}
+
+const fn kernel_binding_precedes_v1(left: [u8; 32], right: [u8; 32]) -> bool {
+    let mut index = 0;
+    while index < left.len() {
+        if left[index] != right[index] {
+            return left[index] < right[index];
+        }
+        index += 1;
+    }
+    false
+}
+
 /// Exact canonical descriptor-table-ordered set of compiler-generated kernel
 /// expectations for one artifact.
 ///
@@ -191,18 +225,19 @@ macro_rules! compiler_generated_kernel_expectation_roster_v1 {
         $visibility:vis struct $roster:ident = [$($marker:ty),+ $(,)?];
     ) => {
         $(#[$metadata])*
+        #[derive(Debug)]
         $visibility struct $roster;
 
         impl $crate::CompilerGeneratedKernelExpectationRosterV1 for $roster {
             const ENTRIES: &'static [
                 $crate::CompilerGeneratedKernelExpectationRosterEntryV1
-            ] = &[
+            ] = &$crate::canonicalize_generated_kernel_roster_v1([
                 $(
                     $crate::CompilerGeneratedKernelExpectationRosterEntryV1::for_marker::<
                         $marker
                     >()
                 ),+
-            ];
+            ]);
         }
     };
 }

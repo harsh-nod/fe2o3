@@ -1,3 +1,41 @@
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/wave_snapshot_group_lifetime_escape.rs:1:51
+  |
+1 | use fe2o3_device::{ActiveLaneGroup, SubgroupTile, Wave64, WaveLane};
+  |                                                   ^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/wave_snapshot_group_lifetime_escape.rs:1:59
+  |
+1 | use fe2o3_device::{ActiveLaneGroup, SubgroupTile, Wave64, WaveLane};
+  |                                                           ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/wave_snapshot_group_lifetime_escape.rs:3:23
+  |
+3 | fn escape_tile(lane: &WaveLane<Wave64>) -> SubgroupTile<'static, 32> {
+  |                       ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/wave_snapshot_group_lifetime_escape.rs:3:32
+  |
+3 | fn escape_tile(lane: &WaveLane<Wave64>) -> SubgroupTile<'static, 32> {
+  |                                ^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/wave_snapshot_group_lifetime_escape.rs:7:25
+  |
+7 | fn escape_active(lane: &WaveLane<Wave64>) -> ActiveLaneGroup<'static> {
+  |                         ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/wave_snapshot_group_lifetime_escape.rs:7:34
+  |
+7 | fn escape_active(lane: &WaveLane<Wave64>) -> ActiveLaneGroup<'static> {
+  |                                  ^^^^^^
+
 error: lifetime may not live long enough
  --> tests/ui/fail/wave_snapshot_group_lifetime_escape.rs:4:5
   |

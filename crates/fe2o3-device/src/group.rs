@@ -9,6 +9,7 @@
 use core::fmt;
 use core::marker::PhantomData;
 
+use crate::context::UnbrandedCapability;
 use crate::sync;
 use crate::thread::Invocation3D;
 use crate::wave::{Wave64, WaveLane};
@@ -134,10 +135,10 @@ pub trait Group: sealed::Group {
 /// invocation or epoch. This value is deliberately neither `Copy`, `Clone`,
 /// `Send`, nor `Sync`.
 #[rustc_diagnostic_item = "fe2o3_device_grid_group_v1"]
-pub struct Grid<'invocation> {
+pub struct Grid<'invocation, Brand = UnbrandedCapability> {
     size: u64,
     thread_rank: u64,
-    _invocation: PhantomData<&'invocation Invocation3D>,
+    _invocation: PhantomData<&'invocation Invocation3D<Brand>>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
@@ -155,7 +156,30 @@ impl<'invocation> Grid<'invocation> {
     }
 }
 
-impl fmt::Debug for Grid<'_> {
+impl<'invocation, Brand> Grid<'invocation, Brand> {
+    fn from_branded_invocation(invocation: &'invocation Invocation3D<Brand>) -> Option<Self> {
+        let extent = invocation.global_grid_size();
+        Some(Self {
+            size: extent.volume()?,
+            thread_rank: invocation.global_workitem_id().linear(extent)?,
+            _invocation: PhantomData,
+            _not_send_sync: PhantomData,
+        })
+    }
+
+    pub(crate) fn current_branded() -> Option<Self> {
+        let invocation = Invocation3D::<Brand>::current_branded();
+        let extent = invocation.global_grid_size();
+        Some(Self {
+            size: extent.volume()?,
+            thread_rank: invocation.global_workitem_id().linear(extent)?,
+            _invocation: PhantomData,
+            _not_send_sync: PhantomData,
+        })
+    }
+}
+
+impl<Brand> fmt::Debug for Grid<'_, Brand> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Grid")
@@ -165,9 +189,9 @@ impl fmt::Debug for Grid<'_> {
     }
 }
 
-impl sealed::Group for Grid<'_> {}
+impl<Brand> sealed::Group for Grid<'_, Brand> {}
 
-impl Group for Grid<'_> {
+impl<Brand> Group for Grid<'_, Brand> {
     type Synchronization = UnsupportedSynchronization;
 
     const SCOPE: GroupScope = GroupScope::Grid;
@@ -189,10 +213,10 @@ impl Group for Grid<'_> {
 /// hardware invocation or epoch. This value is deliberately neither `Copy`,
 /// `Clone`, `Send`, nor `Sync`.
 #[rustc_diagnostic_item = "fe2o3_device_workgroup_group_v1"]
-pub struct Workgroup<'invocation> {
+pub struct Workgroup<'invocation, Brand = UnbrandedCapability> {
     size: u64,
     thread_rank: u64,
-    _invocation: PhantomData<&'invocation Invocation3D>,
+    _invocation: PhantomData<&'invocation Invocation3D<Brand>>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
@@ -216,6 +240,43 @@ impl<'invocation> Workgroup<'invocation> {
             _not_send_sync: PhantomData,
         })
     }
+}
+
+impl<'invocation, Brand> Workgroup<'invocation, Brand> {
+    fn from_branded_invocation(invocation: &'invocation Invocation3D<Brand>) -> Self {
+        let size = invocation.workgroup_size();
+        let id = invocation.workitem_id();
+        Self {
+            size: size.volume(),
+            thread_rank: linear_rank_3d(
+                u64::from(id.x()),
+                u64::from(id.y()),
+                u64::from(id.z()),
+                u64::from(size.x()),
+                u64::from(size.y()),
+            ),
+            _invocation: PhantomData,
+            _not_send_sync: PhantomData,
+        }
+    }
+
+    pub(crate) fn current_branded() -> Self {
+        let invocation = Invocation3D::<Brand>::current_branded();
+        let size = invocation.workgroup_size();
+        let id = invocation.workitem_id();
+        Self {
+            size: size.volume(),
+            thread_rank: linear_rank_3d(
+                u64::from(id.x()),
+                u64::from(id.y()),
+                u64::from(id.z()),
+                u64::from(size.x()),
+                u64::from(size.y()),
+            ),
+            _invocation: PhantomData,
+            _not_send_sync: PhantomData,
+        }
+    }
 
     /// Executes one CUDA-compatible workgroup barrier.
     ///
@@ -233,7 +294,25 @@ impl<'invocation> Workgroup<'invocation> {
     }
 }
 
-impl fmt::Debug for Workgroup<'_> {
+impl<Brand> Invocation3D<Brand> {
+    /// Derives checked grid arithmetic from this exact invocation snapshot.
+    ///
+    /// The borrow keeps the grid and invocation brands coherent. This is an
+    /// arithmetic observation, not grid synchronization or launch authority.
+    pub fn grid(&self) -> Option<Grid<'_, Brand>> {
+        Grid::from_branded_invocation(self)
+    }
+
+    /// Derives workgroup arithmetic from this exact invocation snapshot.
+    ///
+    /// Effectful workgroup operations additionally require the generative
+    /// capability opened by [`crate::KernelContext::with_workgroup`].
+    pub fn workgroup(&self) -> Workgroup<'_, Brand> {
+        Workgroup::from_branded_invocation(self)
+    }
+}
+
+impl<Brand> fmt::Debug for Workgroup<'_, Brand> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Workgroup")
@@ -243,9 +322,9 @@ impl fmt::Debug for Workgroup<'_> {
     }
 }
 
-impl sealed::Group for Workgroup<'_> {}
+impl<Brand> sealed::Group for Workgroup<'_, Brand> {}
 
-impl Group for Workgroup<'_> {
+impl<Brand> Group for Workgroup<'_, Brand> {
     type Synchronization = WorkgroupSynchronization;
 
     const SCOPE: GroupScope = GroupScope::Workgroup;
@@ -288,12 +367,12 @@ valid_wave64_tile_widths!(1, 2, 4, 8, 16, 32, 64);
 /// bind a hardware execution epoch. This value is deliberately neither `Copy`,
 /// `Clone`, `Send`, nor `Sync`.
 #[rustc_diagnostic_item = "fe2o3_device_subgroup_tile_v1"]
-pub struct SubgroupTile<'wave, const N: u32>
+pub struct SubgroupTile<'wave, const N: u32, Brand = UnbrandedCapability>
 where
     Wave64TileWidth<N>: ValidWave64TileWidth,
 {
     lane: u32,
-    _wave_snapshot: PhantomData<&'wave WaveLane<Wave64>>,
+    _wave_snapshot: PhantomData<&'wave WaveLane<Wave64, Brand>>,
     _not_send_sync: PhantomData<*mut ()>,
 }
 
@@ -310,6 +389,20 @@ where
             _not_send_sync: PhantomData,
         }
     }
+}
+
+impl<'wave, const N: u32, Brand> SubgroupTile<'wave, N, Brand>
+where
+    Wave64TileWidth<N>: ValidWave64TileWidth,
+{
+    pub(crate) fn current_branded() -> Self {
+        let lane = WaveLane::<Wave64, Brand>::current_branded();
+        Self {
+            lane: lane.get(),
+            _wave_snapshot: PhantomData,
+            _not_send_sync: PhantomData,
+        }
+    }
 
     /// Zero-based index of this tile within its physical wave.
     pub const fn tile_index(&self) -> u32 {
@@ -317,7 +410,7 @@ where
     }
 }
 
-impl<const N: u32> fmt::Debug for SubgroupTile<'_, N>
+impl<const N: u32, Brand> fmt::Debug for SubgroupTile<'_, N, Brand>
 where
     Wave64TileWidth<N>: ValidWave64TileWidth,
 {
@@ -331,12 +424,12 @@ where
     }
 }
 
-impl<const N: u32> sealed::Group for SubgroupTile<'_, N> where
+impl<const N: u32, Brand> sealed::Group for SubgroupTile<'_, N, Brand> where
     Wave64TileWidth<N>: ValidWave64TileWidth
 {
 }
 
-impl<const N: u32> Group for SubgroupTile<'_, N>
+impl<const N: u32, Brand> Group for SubgroupTile<'_, N, Brand>
 where
     Wave64TileWidth<N>: ValidWave64TileWidth,
 {

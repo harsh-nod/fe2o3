@@ -1,3 +1,29 @@
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/active_lane_group_requires_unsafe_mask.rs:1:37
+  |
+1 | use fe2o3_device::{ActiveLaneGroup, Wave64, WaveLane};
+  |                                     ^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/active_lane_group_requires_unsafe_mask.rs:1:45
+  |
+1 | use fe2o3_device::{ActiveLaneGroup, Wave64, WaveLane};
+  |                                             ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::WaveLane`: use the target-neutral SubgroupLane
+ --> tests/ui/fail/active_lane_group_requires_unsafe_mask.rs:3:23
+  |
+3 | fn active_group(lane: WaveLane<Wave64>, mask: u64) {
+  |                       ^^^^^^^^
+
+warning: use of deprecated type alias `fe2o3_device::Wave64`: use SubgroupWidth64; target legalization still checks the exact width
+ --> tests/ui/fail/active_lane_group_requires_unsafe_mask.rs:3:32
+  |
+3 | fn active_group(lane: WaveLane<Wave64>, mask: u64) {
+  |                                ^^^^^^
+
 error[E0133]: call to unsafe function `ActiveLaneGroup::<'wave>::from_caller_asserted_snapshot` is unsafe and requires unsafe block
  --> tests/ui/fail/active_lane_group_requires_unsafe_mask.rs:4:13
   |

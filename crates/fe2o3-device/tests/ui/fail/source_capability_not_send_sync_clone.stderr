@@ -1,0 +1,80 @@
+error[E0277]: `*mut ()` cannot be sent between threads safely
+ --> tests/ui/fail/source_capability_not_send_sync_clone.rs:8:19
+  |
+8 |     assert_send::<WorkgroupCapability<'static, (), InitialEpoch>>();
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+  |
+  = help: within `WorkgroupCapability<'static, ()>`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `WorkgroupCapability<'static, ()>`
+ --> src/execution.rs
+  |
+  | pub struct WorkgroupCapability<'workgroup, KernelBrand, Epoch: SynchronizationEpoch = InitialEpoch>
+  |            ^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/ui/fail/source_capability_not_send_sync_clone.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `*mut ()` cannot be shared between threads safely
+ --> tests/ui/fail/source_capability_not_send_sync_clone.rs:9:19
+  |
+9 |     assert_sync::<WorkgroupCapability<'static, (), InitialEpoch>>();
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be shared between threads safely
+  |
+  = help: within `WorkgroupCapability<'static, ()>`, the trait `Sync` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `WorkgroupCapability<'static, ()>`
+ --> src/execution.rs
+  |
+  | pub struct WorkgroupCapability<'workgroup, KernelBrand, Epoch: SynchronizationEpoch = InitialEpoch>
+  |            ^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_sync`
+ --> tests/ui/fail/source_capability_not_send_sync_clone.rs:4:19
+  |
+4 | fn assert_sync<T: Sync>() {}
+  |                   ^^^^ required by this bound in `assert_sync`
+
+error[E0277]: the trait bound `WorkgroupCapability<'static, ()>: Clone` is not satisfied
+  --> tests/ui/fail/source_capability_not_send_sync_clone.rs:10:20
+   |
+10 |     assert_clone::<WorkgroupCapability<'static, (), InitialEpoch>>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `WorkgroupCapability<'static, ()>`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/ui/fail/source_capability_not_send_sync_clone.rs:5:20
+   |
+ 5 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: `*mut ()` cannot be sent between threads safely
+  --> tests/ui/fail/source_capability_not_send_sync_clone.rs:11:19
+   |
+11 |     assert_send::<fe2o3_device::Subgroup<'static, SubgroupWidth64, (), InitialEpoch>>();
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*mut ()` cannot be sent between threads safely
+   |
+   = help: within `fe2o3_device::Subgroup<'static, SubgroupWidth64, (), InitialEpoch>`, the trait `Send` is not implemented for `*mut ()`
+note: required because it appears within the type `PhantomData<*mut ()>`
+  --> $RUST/core/src/marker.rs
+   |
+   | pub struct PhantomData<T: PointeeSized>;
+   |            ^^^^^^^^^^^
+note: required because it appears within the type `fe2o3_device::Subgroup<'static, SubgroupWidth64, (), InitialEpoch>`
+  --> src/execution.rs
+   |
+   | pub struct Subgroup<'workgroup, Width: SubgroupWidth, KernelBrand, Epoch: SynchronizationEpoch> {
+   |            ^^^^^^^^
+note: required by a bound in `assert_send`
+  --> tests/ui/fail/source_capability_not_send_sync_clone.rs:3:19
+   |
+ 3 | fn assert_send<T: Send>() {}
+   |                   ^^^^ required by this bound in `assert_send`
