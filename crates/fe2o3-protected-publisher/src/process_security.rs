@@ -139,7 +139,7 @@ mod tests {
             .and_then(|line| line.split_whitespace().next())
             .and_then(|uid| uid.parse::<u32>().ok())
             .unwrap();
-        assert_eq!(child_uid, unsafe { libc::geteuid() });
+        assert_eq!(child_uid, rustix::process::geteuid().as_raw());
         let memory_error = OpenOptions::new()
             .read(true)
             .open(format!("/proc/{pid}/mem"))

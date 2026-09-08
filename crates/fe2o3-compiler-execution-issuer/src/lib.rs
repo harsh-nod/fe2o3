@@ -148,8 +148,7 @@ pub fn run_inherited_compiler_execution_issuer_v1()
     .map_err(CompilerExecutionIssuerEntrypointErrorV1::IssuerAdmission)?;
     let (issuer, _) = ProtectedCompilerExecutionIssuerV1::admit(admission)
         .map_err(CompilerExecutionIssuerEntrypointErrorV1::Issuer)?;
-    // SAFETY: getpid has no pointer arguments and cannot fail for a live process.
-    let issuer_pid = u32::try_from(unsafe { libc::getpid() })
+    let issuer_pid = u32::try_from(rustix::process::getpid().as_raw_pid())
         .map_err(|_| CompilerExecutionIssuerEntrypointErrorV1::InvalidIssuerPid)?;
     let readiness =
         CompilerExecutionServiceReadyV1::new(issuer_pid, launch.manifest(), policy.policy())

@@ -282,7 +282,7 @@ fn inherited_descriptors() -> Vec<(i32, String)> {
 }
 
 fn forge_supervisor_result() -> Result<bool, String> {
-    let parent = unsafe { libc::getppid() };
+    let parent = rustix::process::Pid::as_raw(rustix::process::getppid());
     let cmdline = fs::read(format!("/proc/{parent}/cmdline"))
         .map_err(|error| format!("read supervisor command line: {error}"))?;
     let arguments = cmdline

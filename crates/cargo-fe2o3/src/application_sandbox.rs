@@ -510,8 +510,7 @@ pub(crate) fn notification_is_live(listener: RawFd, id: u64) -> Result<bool, Str
 fn send_listener(socket: RawFd, listener: RawFd) -> io::Result<()> {
     let message = ListenerMessage {
         magic: LISTENER_MESSAGE_MAGIC,
-        // SAFETY: this is called in the post-fork child and returns that child's PID.
-        pid: unsafe { libc::getpid() } as u32,
+        pid: rustix::process::getpid().as_raw_pid() as u32,
         reserved: 0,
     };
     let mut io_vector = libc::iovec {

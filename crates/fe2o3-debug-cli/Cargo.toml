@@ -28,7 +28,7 @@ serde.workspace = true
 serde_json = "1"
 sha2.workspace = true
 libc.workspace = true
-rustix.workspace = true
+rustix = { workspace = true, features = ["event", "process"] }
 
 [dev-dependencies]
 fe2o3-semantic-trace.workspace = true

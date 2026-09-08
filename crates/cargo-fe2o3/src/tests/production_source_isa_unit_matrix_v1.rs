@@ -456,7 +456,7 @@ pub(super) fn measured_test_driver() -> crate::pinned_executable::PinnedExecutab
         .symlink_metadata()
         .expect("inspect measured cargo-fe2o3 CLI");
     assert!(metadata.file_type().is_file() && !metadata.file_type().is_symlink());
-    assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+    assert_eq!(metadata.uid(), rustix::process::geteuid().as_raw());
     let expected = parse_sha256(
         &std::env::var_os(TEST_DRIVER_SHA256_ENV)
             .unwrap_or_else(|| panic!("set {TEST_DRIVER_SHA256_ENV}")),

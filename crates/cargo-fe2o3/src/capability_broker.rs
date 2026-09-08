@@ -600,7 +600,7 @@ mod platform {
             let start_time_ticks = process_start_time_ticks(pid)?;
             let executable = current_executable_observation()?;
             let identity = Self {
-                uid: unsafe { libc::geteuid() },
+                uid: rustix::process::geteuid().as_raw(),
                 pid,
                 start_time_ticks,
                 device: executable.device,
@@ -616,7 +616,7 @@ mod platform {
 
         fn require_current_executable(self) -> Result<(), String> {
             let current = current_executable_observation()?;
-            if self.uid != unsafe { libc::geteuid() }
+            if self.uid != rustix::process::geteuid().as_raw()
                 || self.object_identity()
                     != LinuxObjectIdentityV3::from_linux_stat(
                         current.device,
@@ -642,7 +642,7 @@ mod platform {
                 .map_err(|error| format!("cannot inspect capability broker peer: {error}"))?;
             let peer_pid = u32::try_from(credentials.pid.as_raw_nonzero().get())
                 .map_err(|_| "capability broker peer PID is negative".to_owned())?;
-            let current_uid = unsafe { libc::geteuid() };
+            let current_uid = rustix::process::geteuid().as_raw();
             if credentials.uid.as_raw() != current_uid || credentials.uid.as_raw() != self.uid {
                 return Err("capability broker peer uid does not match the current user".into());
             }

@@ -889,6 +889,7 @@ dependencies = [
  "fe2o3-protected-service-profile",
  "fe2o3-runtime-protocol",
  "libc",
+ "rustix",
 ]
 
 [[package]]
@@ -1590,6 +1591,7 @@ dependencies = [
  "jsonwebtoken",
  "libc",
  "reqwest",
+ "rustix",
  "serde",
  "serde_json",
  "sha2 0.11.0",

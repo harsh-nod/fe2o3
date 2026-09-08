@@ -869,7 +869,7 @@ fn inspect_directory(
     let stat = fstat(directory).map_err(|error| descriptor_io("artifact directory", error))?;
     if flags & OFlags::ACCMODE != OFlags::RDONLY
         || FileType::from_raw_mode(stat.st_mode) != FileType::Directory
-        || stat.st_uid != unsafe { libc::geteuid() }
+        || stat.st_uid != rustix::process::geteuid().as_raw()
         || stat.st_mode & 0o077 != 0
     {
         return Err(ApplicationDescriptorHandoffErrorV1::UnsafeDirectory);
@@ -906,7 +906,7 @@ fn inspect_worker_v3_envelope(
     let snapshot = EnvelopeSnapshotV1::from_stat(&initial);
     if flags & OFlags::ACCMODE != OFlags::RDONLY
         || FileType::from_raw_mode(initial.st_mode) != FileType::RegularFile
-        || initial.st_uid != unsafe { libc::geteuid() }
+        || initial.st_uid != rustix::process::geteuid().as_raw()
         || initial.st_nlink != 1
         || initial.st_mode & 0o077 != 0
     {

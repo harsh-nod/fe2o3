@@ -1,12 +1,15 @@
+#![forbid(unsafe_code)]
+
 use std::ffi::{CStr, CString, OsStr};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use rustix::fs::{AtFlags, Mode, OFlags, RenameFlags};
 use zeroize::Zeroizing;
 
 use crate::PublisherError;
@@ -31,7 +34,7 @@ pub(crate) struct FileIdentity {
 }
 
 impl FileIdentity {
-    fn from_stat(stat: &libc::stat) -> Self {
+    fn from_stat(stat: &rustix::fs::Stat) -> Self {
         Self {
             dev: stat.st_dev,
             ino: stat.st_ino,
@@ -41,9 +44,9 @@ impl FileIdentity {
             nlink: stat.st_nlink,
             size: stat.st_size,
             mtime: stat.st_mtime,
-            mtime_nsec: stat.st_mtime_nsec,
+            mtime_nsec: stat.st_mtime_nsec as i64,
             ctime: stat.st_ctime,
-            ctime_nsec: stat.st_ctime_nsec,
+            ctime_nsec: stat.st_ctime_nsec as i64,
         }
     }
 
@@ -56,8 +59,8 @@ impl FileIdentity {
     }
 
     pub(crate) fn is_owner_only(self) -> bool {
-        self.uid == unsafe { libc::geteuid() }
-            && self.gid == unsafe { libc::getegid() }
+        self.uid == rustix::process::geteuid().as_raw()
+            && self.gid == rustix::process::getegid().as_raw()
             && self.mode & 0o077 == 0
     }
 
@@ -90,7 +93,7 @@ impl SecureLocation {
             .ok_or(PublisherError::Config)?;
         let name = component_name(name)?;
         let directory = open_directory_without_symlinks(parent)?;
-        let directory_identity = fstat(directory.as_raw_fd())?;
+        let directory_identity = fstat(&directory)?;
         if !directory_identity.is_directory() || !directory_identity.is_owner_only() {
             return Err(PublisherError::Config);
         }
@@ -118,12 +121,12 @@ impl SecureLocation {
         validate_owner_file(before, max_bytes)?;
         after_lstat();
         let file = openat(
-            self.directory.as_raw_fd(),
+            &self.directory,
             &self.name,
-            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-            0,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
         )?;
-        let opened = fstat(file.as_raw_fd())?;
+        let opened = fstat(&file)?;
         let after = self.entry_identity()?;
         if before != opened || opened != after {
             return Err(PublisherError::Config);
@@ -142,7 +145,7 @@ impl SecureLocation {
             .read_to_end(&mut bytes)
             .map_err(|_| PublisherError::Config)?;
         if bytes.len() > max_bytes
-            || fstat(file.as_raw_fd())? != opened
+            || fstat(&file)? != opened
             || self.entry_identity()? != opened
             || !self
                 .directory_identity()?
@@ -167,7 +170,7 @@ impl SecureLocation {
             .read_to_end(&mut bytes)
             .map_err(|_| PublisherError::Config)?;
         if bytes.len() > max_bytes
-            || fstat(file.as_raw_fd())? != opened
+            || fstat(&file)? != opened
             || self.entry_identity()? != opened
             || !self
                 .directory_identity()?
@@ -202,13 +205,13 @@ impl SecureLocation {
         }
         self.verify_directory_for_ledger()?;
         let mut temporary = openat_raw(
-            self.directory.as_raw_fd(),
+            &self.directory,
             CURRENT_DIRECTORY,
-            libc::O_RDWR | libc::O_CLOEXEC | libc::O_TMPFILE,
-            0o600,
+            OFlags::RDWR | OFlags::CLOEXEC | OFlags::TMPFILE,
+            Mode::RUSR | Mode::WUSR,
         )
         .map_err(|_| PublisherError::Store)?;
-        let initial = fstat(temporary.as_raw_fd())?;
+        let initial = fstat(&temporary)?;
         if !initial.is_regular()
             || !initial.is_owner_only()
             || initial.mode & 0o777 != 0o600
@@ -221,7 +224,7 @@ impl SecureLocation {
         control.stop(InitStage::BeforeTemporarySync)?;
         temporary.sync_data().map_err(|_| PublisherError::Store)?;
         control.stop(InitStage::AfterTemporarySync)?;
-        let synced = fstat(temporary.as_raw_fd())?;
+        let synced = fstat(&temporary)?;
         if !synced.is_regular()
             || !synced.is_owner_only()
             || synced.mode & 0o777 != 0o600
@@ -232,11 +235,7 @@ impl SecureLocation {
         }
         self.verify_directory_for_ledger()?;
         control.stop(InitStage::BeforePublish)?;
-        if let Err(error) = publish_anonymous(
-            temporary.as_raw_fd(),
-            self.directory.as_raw_fd(),
-            &self.name,
-        ) {
+        if let Err(error) = publish_anonymous(&temporary, &self.directory, &self.name) {
             if error.kind() != std::io::ErrorKind::AlreadyExists {
                 return Err(PublisherError::Store);
             }
@@ -244,7 +243,7 @@ impl SecureLocation {
             return self.open_existing_ledger()?.ok_or(PublisherError::Store);
         }
         control.stop(InitStage::AfterPublish)?;
-        let published = fstat(temporary.as_raw_fd())?;
+        let published = fstat(&temporary)?;
         let entry = self.entry_identity()?;
         if published != entry
             || published.nlink != 1
@@ -262,19 +261,19 @@ impl SecureLocation {
     }
 
     fn open_existing_ledger(&self) -> Result<Option<(File, FileIdentity)>, PublisherError> {
-        let before = match fstatat_raw(self.directory.as_raw_fd(), &self.name) {
+        let before = match fstatat_raw(&self.directory, &self.name) {
             Ok(identity) => identity,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => return Err(PublisherError::Config),
         };
         validate_ledger_file(before)?;
         let file = openat(
-            self.directory.as_raw_fd(),
+            &self.directory,
             &self.name,
-            libc::O_RDWR | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-            0,
+            OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
         )?;
-        let opened = fstat(file.as_raw_fd())?;
+        let opened = fstat(&file)?;
         let after = self.entry_identity()?;
         if before != opened
             || opened != after
@@ -331,16 +330,16 @@ impl SecureLocation {
     }
 
     fn entry_identity(&self) -> Result<FileIdentity, PublisherError> {
-        fstatat(self.directory.as_raw_fd(), &self.name)
+        fstatat(&self.directory, &self.name)
     }
 
     fn directory_identity(&self) -> Result<FileIdentity, PublisherError> {
-        fstat(self.directory.as_raw_fd())
+        fstat(&self.directory)
     }
 
     fn path_directory_identity(&self) -> Result<FileIdentity, PublisherError> {
         let directory = open_directory_without_symlinks(&self.parent_path)?;
-        fstat(directory.as_raw_fd())
+        fstat(&directory)
     }
 }
 
@@ -410,45 +409,28 @@ fn write_initial_header(
     Ok(())
 }
 
-fn publish_anonymous(temporary: RawFd, directory: RawFd, name: &CStr) -> std::io::Result<()> {
-    if unsafe {
-        libc::linkat(
-            temporary,
-            EMPTY_PATH.as_ptr(),
-            directory,
-            name.as_ptr(),
-            libc::AT_EMPTY_PATH,
-        )
-    } == 0
-    {
-        return Ok(());
-    }
-    let direct_error = std::io::Error::last_os_error();
-    if direct_error.kind() == std::io::ErrorKind::AlreadyExists {
-        return Err(direct_error);
-    }
+fn publish_anonymous(temporary: &File, directory: &File, name: &CStr) -> std::io::Result<()> {
+    let direct_error =
+        match rustix::fs::linkat(temporary, EMPTY_PATH, directory, name, AtFlags::EMPTY_PATH) {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
     if !matches!(
-        direct_error.raw_os_error(),
-        Some(libc::ENOENT | libc::EPERM | libc::EINVAL)
+        direct_error,
+        rustix::io::Errno::NOENT | rustix::io::Errno::PERM | rustix::io::Errno::INVAL
     ) {
-        return Err(direct_error);
+        return Err(direct_error.into());
     }
 
-    let descriptor_path = CString::new(format!("/proc/self/fd/{temporary}"))
-        .map_err(|_| std::io::Error::from_raw_os_error(libc::EINVAL))?;
-    if unsafe {
-        libc::linkat(
-            libc::AT_FDCWD,
-            descriptor_path.as_ptr(),
-            directory,
-            name.as_ptr(),
-            libc::AT_SYMLINK_FOLLOW,
-        )
-    } != 0
-    {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
+    let descriptor_path = format!("/proc/self/fd/{}", temporary.as_raw_fd());
+    rustix::fs::linkat(
+        rustix::fs::CWD,
+        &descriptor_path,
+        directory,
+        name,
+        AtFlags::SYMLINK_FOLLOW,
+    )
+    .map_err(Into::into)
 }
 
 pub(crate) fn read_owner_only(path: &Path, max_bytes: usize) -> Result<Vec<u8>, PublisherError> {
@@ -481,10 +463,10 @@ pub(crate) fn write_new_owner_only(
         ))
         .map_err(|_| PublisherError::Config)?;
         let mut file = match openat_raw(
-            location.directory.as_raw_fd(),
+            &location.directory,
             &temporary,
-            libc::O_WRONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_CREAT | libc::O_EXCL,
-            0o600,
+            OFlags::WRONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::CREATE | OFlags::EXCL,
+            Mode::RUSR | Mode::WUSR,
         ) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -493,18 +475,14 @@ pub(crate) fn write_new_owner_only(
         let result = (|| {
             file.write_all(bytes).map_err(|_| PublisherError::Config)?;
             file.sync_all().map_err(|_| PublisherError::Config)?;
-            if unsafe {
-                libc::renameat2(
-                    location.directory.as_raw_fd(),
-                    temporary.as_ptr(),
-                    location.directory.as_raw_fd(),
-                    location.name.as_ptr(),
-                    libc::RENAME_NOREPLACE,
-                )
-            } != 0
-            {
-                return Err(PublisherError::Config);
-            }
+            rustix::fs::renameat_with(
+                &location.directory,
+                &temporary,
+                &location.directory,
+                &location.name,
+                RenameFlags::NOREPLACE,
+            )
+            .map_err(|_| PublisherError::Config)?;
             location.sync().map_err(|_| PublisherError::Config)?;
             if location.read_existing_owner_only(max_bytes)? != bytes {
                 return Err(PublisherError::Config);
@@ -512,9 +490,7 @@ pub(crate) fn write_new_owner_only(
             Ok(())
         })();
         if result.is_err() {
-            unsafe {
-                libc::unlinkat(location.directory.as_raw_fd(), temporary.as_ptr(), 0);
-            }
+            let _ = rustix::fs::unlinkat(&location.directory, &temporary, AtFlags::empty());
         }
         return result;
     }
@@ -559,10 +535,10 @@ fn open_directory_without_symlinks(path: &Path) -> Result<File, PublisherError> 
         };
         let name = component_name(component)?;
         directory = openat(
-            directory.as_raw_fd(),
+            &directory,
             &name,
-            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
-            0,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::DIRECTORY | OFlags::NOFOLLOW,
+            Mode::empty(),
         )?;
     }
     Ok(directory)
@@ -577,66 +553,87 @@ fn component_name(name: &OsStr) -> Result<CString, PublisherError> {
 }
 
 fn openat(
-    directory: RawFd,
+    directory: &File,
     name: &CStr,
-    flags: libc::c_int,
-    mode: libc::mode_t,
+    flags: OFlags,
+    mode: Mode,
 ) -> Result<File, PublisherError> {
     openat_raw(directory, name, flags, mode).map_err(|_| PublisherError::Config)
 }
 
-fn openat_raw(
-    directory: RawFd,
-    name: &CStr,
-    flags: libc::c_int,
-    mode: libc::mode_t,
-) -> std::io::Result<File> {
-    let fd = unsafe { libc::openat(directory, name.as_ptr(), flags, mode) };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(unsafe { File::from_raw_fd(fd) })
+fn openat_raw(directory: &File, name: &CStr, flags: OFlags, mode: Mode) -> std::io::Result<File> {
+    rustix::fs::openat(directory, name, flags, mode)
+        .map(File::from)
+        .map_err(Into::into)
 }
 
-fn fstat(fd: RawFd) -> Result<FileIdentity, PublisherError> {
-    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-    if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0 {
-        return Err(PublisherError::Config);
-    }
-    Ok(FileIdentity::from_stat(&unsafe { stat.assume_init() }))
+fn fstat(file: &File) -> Result<FileIdentity, PublisherError> {
+    let stat = rustix::fs::fstat(file).map_err(|_| PublisherError::Config)?;
+    Ok(FileIdentity::from_stat(&stat))
 }
 
-fn fstatat(directory: RawFd, name: &CStr) -> Result<FileIdentity, PublisherError> {
+fn fstatat(directory: &File, name: &CStr) -> Result<FileIdentity, PublisherError> {
     fstatat_raw(directory, name).map_err(|_| PublisherError::Config)
 }
 
-fn fstatat_raw(directory: RawFd, name: &CStr) -> std::io::Result<FileIdentity> {
-    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-    if unsafe {
-        libc::fstatat(
-            directory,
-            name.as_ptr(),
-            stat.as_mut_ptr(),
-            libc::AT_SYMLINK_NOFOLLOW,
-        )
-    } != 0
-    {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(FileIdentity::from_stat(&unsafe { stat.assume_init() }))
+fn fstatat_raw(directory: &File, name: &CStr) -> std::io::Result<FileIdentity> {
+    let stat = rustix::fs::statat(directory, name, AtFlags::SYMLINK_NOFOLLOW)?;
+    Ok(FileIdentity::from_stat(&stat))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fs::{Permissions, hard_link};
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::fs::{FileTimes, Permissions, hard_link};
+    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
     use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
+    use std::time::{Duration, Instant, UNIX_EPOCH};
 
     use super::*;
     use crate::test_support::secure_tempdir;
 
     const TEST_LEDGER_HEADER: &[u8] = b"fe2o3-ledger-init-test-v1\n";
+
+    #[test]
+    fn typed_file_identity_matches_metadata_and_preserves_directory_ownership() {
+        let temp = secure_tempdir();
+        let path = temp.path().join("identity");
+        write_new_owner_only(&path, b"value", 16).unwrap();
+        let file = File::options().write(true).open(&path).unwrap();
+        file.set_times(FileTimes::new().set_modified(UNIX_EPOCH - Duration::new(5, 123_456_789)))
+            .unwrap();
+        drop(file);
+
+        let location = SecureLocation::open(&path).unwrap();
+        let (file, identity) = location.open_existing_owner_only(16).unwrap();
+        let metadata = file.metadata().unwrap();
+        assert!(metadata.mtime() < 0);
+        assert_eq!(
+            identity,
+            FileIdentity {
+                dev: metadata.dev(),
+                ino: metadata.ino(),
+                mode: metadata.mode(),
+                uid: metadata.uid(),
+                gid: metadata.gid(),
+                nlink: metadata.nlink(),
+                size: i64::try_from(metadata.size()).unwrap(),
+                mtime: metadata.mtime(),
+                mtime_nsec: metadata.mtime_nsec(),
+                ctime: metadata.ctime(),
+                ctime_nsec: metadata.ctime_nsec(),
+            }
+        );
+        assert_eq!(location.entry_identity().unwrap(), identity);
+        for descriptor in [&location.directory, &file] {
+            assert!(
+                rustix::io::fcntl_getfd(descriptor)
+                    .unwrap()
+                    .contains(rustix::io::FdFlags::CLOEXEC)
+            );
+        }
+        drop(file);
+        assert_eq!(location.read_existing_owner_only(16).unwrap(), b"value");
+    }
 
     #[test]
     fn owner_file_rejects_parent_symlinks_and_entry_links() {
@@ -863,5 +860,19 @@ mod tests {
         assert_eq!(read_owner_only(&path, 16).unwrap(), b"first");
         assert!(write_new_owner_only(&path, b"second", 16).is_err());
         assert_eq!(read_owner_only(&path, 16).unwrap(), b"first");
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn atomic_owner_file_creation_preserves_existing_symlink_and_removes_temporary() {
+        let temp = secure_tempdir();
+        let target = temp.path().join("target");
+        write_new_owner_only(&target, b"first", 16).unwrap();
+        let path = temp.path().join("enrollment.json");
+        symlink(&target, &path).unwrap();
+        assert!(write_new_owner_only(&path, b"second", 16).is_err());
+        assert_eq!(std::fs::read_link(&path).unwrap(), target);
+        assert_eq!(read_owner_only(&target, 16).unwrap(), b"first");
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 2);
     }
 }
