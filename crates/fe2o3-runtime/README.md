@@ -500,6 +500,16 @@ native submit, poll, and detach. Per-entry failure injection after entry 1 or
 2 of shared N=3 publish, complete, and recycle remains explicit follow-up work
 for the hardware tranche.
 
+The `hardware-qualification` feature now includes a separate, independently
+pinned `gfx942-runtime-r57-n3-qualification` lane for that hardware follow-up.
+Its exact authority first requires an uninitialized-C rejection before the
+authority callback, then admits only `A+B -> C` followed by `C+B -> D` over four
+whole DeviceLocal buffers. The runner requires `PersistentDeviceReused`, zero
+user-data materializations, no control reuse, exact full A/B/C/D readback, two
+authority calls, and explicit cleanup before its single bounded PASS record.
+This lane has not yet been run on MI300X and supplies no native numerical,
+refinement, latency, throughput, HIP/HSA parity, or speedup evidence.
+
 The opt-in `gfx942-lds-diagnostic` executes one SHA-pinned, loader-inspected LDS
 reduction through this same transition using an explicitly unsafe diagnostic
 authority implementation. On the qualifying MI300X it completed with result

@@ -1538,3 +1538,11 @@ uninitialized C rejects because no artifact- and extent-bound full-write
 certificate is available. The tranche has no native numerical or performance
 measurement and makes no generic arity, three-binding control-replay,
 Rust/native refinement, HIP/HSA parity, or speedup claim.
+
+The feature-gated `gfx942-runtime-r57-n3-qualification` example is now a
+dedicated live qualification surface with an independent policy/signature and
+authority sequence. It checks the pre-authority uninitialized-C rejection,
+then `A+B -> C` and `C+B -> D`, exact persistent-device reuse observations,
+full A/B/C/D readback digests, and cleanup before one bounded PASS record. The
+lane has not been executed on MI300X, so it does not change the hardware,
+refinement, or performance status above.
