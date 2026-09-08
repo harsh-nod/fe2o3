@@ -168,7 +168,7 @@ fn validate_build_std_vendor_package(
     Ok(())
 }
 
-fn configure_isolated_build_std_cargo(
+pub(super) fn configure_isolated_build_std_cargo(
     command: &mut Command,
     options: &Options,
     scratch: &Path,
