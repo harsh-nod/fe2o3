@@ -20,9 +20,9 @@ mod enabled {
     };
     use fe2o3_runtime::{
         KfdRuntimeBackendErrorKindV1, KfdRuntimeBackendV1, KfdRuntimeLaunchDataPathV1,
-        KfdRuntimeLaunchPerformanceV1, RuntimeAllocationIdV1, RuntimeContextV1, RuntimeErrorV1,
-        RuntimeMemoryKindV1, RuntimeModuleIdV1, RuntimePollV1, RuntimeStreamIdV1,
-        TypedRuntimeKernelV1,
+        KfdRuntimeLaunchPerformanceV1, RuntimeAccessV1, RuntimeAllocationIdV1, RuntimeContextV1,
+        RuntimeErrorV1, RuntimeMemoryKindV1, RuntimeMemoryRegionV1, RuntimeModuleIdV1,
+        RuntimePollV1, RuntimeStreamIdV1, TypedRuntimeKernelV1,
     };
     use sha2::{Digest, Sha256};
 
@@ -93,12 +93,59 @@ mod enabled {
         Ok(())
     }
 
+    const fn full_region(
+        allocation: RuntimeAllocationIdV1,
+        access: RuntimeAccessV1,
+    ) -> RuntimeMemoryRegionV1 {
+        RuntimeMemoryRegionV1 {
+            allocation,
+            access,
+            byte_offset: 0,
+            byte_len: GFX942_R57_N3_QUALIFICATION_BUFFER_BYTES_V1 as u64,
+        }
+    }
+
+    fn upload_full_h2d(
+        context: &mut RuntimeContextV1<KfdRuntimeBackendV1>,
+        stream: RuntimeStreamIdV1,
+        upload: RuntimeAllocationIdV1,
+        destination: RuntimeAllocationIdV1,
+        bytes: &[u8],
+    ) -> Result<(), String> {
+        context
+            .write_allocation(upload, 0, bytes)
+            .map_err(backend_error)?;
+        let mut submission = context
+            .copy_async(
+                stream,
+                full_region(upload, RuntimeAccessV1::Read),
+                full_region(destination, RuntimeAccessV1::Write),
+                &[],
+            )
+            .map_err(backend_error)?;
+        context.flush_stream(stream).map_err(backend_error)?;
+        match context
+            .wait(&mut submission, COMPLETION_TIMEOUT)
+            .map_err(backend_error)?
+        {
+            RuntimePollV1::Succeeded => {}
+            RuntimePollV1::Pending => return Err("R57 N3 H2D copy timed out".to_owned()),
+            RuntimePollV1::Failed { code } => {
+                return Err(format!("R57 N3 H2D copy failed with code {code}"));
+            }
+        }
+        context
+            .release_submission(submission)
+            .map_err(backend_error)
+    }
+
     struct QualifiedRunV1 {
         context: RuntimeContextV1<KfdRuntimeBackendV1>,
         authority: Gfx942R57N3QualificationAuthorityObservationV1,
         stream: RuntimeStreamIdV1,
         module: RuntimeModuleIdV1,
         kernel: TypedRuntimeKernelV1<Gfx942R57N3QualificationArgumentsV1>,
+        upload: RuntimeAllocationIdV1,
         allocations: [RuntimeAllocationIdV1; 4],
         initial: [Vec<u8>; 4],
         expected: [Vec<u8>; 2],
@@ -139,6 +186,14 @@ mod enabled {
                     GFX942_R57_N3_QUALIFICATION_KERNEL_V1,
                 )
                 .map_err(backend_error)?;
+            let upload = context
+                .allocate(
+                    device,
+                    RuntimeMemoryKindV1::HostVisible,
+                    GFX942_R57_N3_QUALIFICATION_BUFFER_BYTES_V1 as u64,
+                    GFX942_R57_N3_QUALIFICATION_BUFFER_ALIGNMENT_V1,
+                )
+                .map_err(backend_error)?;
             let mut roster = Vec::new();
             roster
                 .try_reserve_exact(4)
@@ -158,18 +213,15 @@ mod enabled {
             let allocations: [RuntimeAllocationIdV1; 4] = roster
                 .try_into()
                 .map_err(|_| "qualification allocation roster cardinality".to_owned())?;
-            context
-                .write_allocation(allocations[0], 0, &a)
-                .map_err(backend_error)?;
-            context
-                .write_allocation(allocations[1], 0, &b)
-                .map_err(backend_error)?;
+            upload_full_h2d(&mut context, stream, upload, allocations[0], &a)?;
+            upload_full_h2d(&mut context, stream, upload, allocations[1], &b)?;
             Ok(Self {
                 context,
                 authority,
                 stream,
                 module,
                 kernel,
+                upload,
                 allocations,
                 initial: [a, b, c_initial, d_initial],
                 expected: [expected_c, expected_d],
@@ -204,12 +256,20 @@ mod enabled {
                 return Err("uninitialized C reached final launch authority".to_owned());
             }
 
-            self.context
-                .write_allocation(self.allocations[2], 0, &self.initial[2])
-                .map_err(backend_error)?;
-            self.context
-                .write_allocation(self.allocations[3], 0, &self.initial[3])
-                .map_err(backend_error)?;
+            upload_full_h2d(
+                &mut self.context,
+                self.stream,
+                self.upload,
+                self.allocations[2],
+                &self.initial[2],
+            )?;
+            upload_full_h2d(
+                &mut self.context,
+                self.stream,
+                self.upload,
+                self.allocations[3],
+                &self.initial[3],
+            )?;
 
             let mut first = self
                 .context
@@ -299,6 +359,9 @@ mod enabled {
                     .release_allocation(allocation)
                     .map_err(backend_error)?;
             }
+            self.context
+                .release_allocation(self.upload)
+                .map_err(backend_error)?;
             self.context
                 .unload_module(self.module)
                 .map_err(backend_error)?;

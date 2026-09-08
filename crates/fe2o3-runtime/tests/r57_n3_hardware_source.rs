@@ -7,18 +7,49 @@ const POLICY: &str = include_str!("../fixtures/trusted-gfx942-r57-n3-v1/policy-v
 
 #[test]
 fn live_lane_has_one_reject_two_launches_four_readbacks_and_explicit_cleanup() {
-    let first_c_write = EXAMPLE
-        .find("write_allocation(self.allocations[2]")
-        .expect("C initialization");
+    let a_upload = EXAMPLE
+        .find("upload_full_h2d(&mut context, stream, upload, allocations[0], &a)")
+        .expect("A authenticated H2D initialization");
+    let b_upload = EXAMPLE
+        .find("upload_full_h2d(&mut context, stream, upload, allocations[1], &b)")
+        .expect("B authenticated H2D initialization");
+    let first_c_upload = EXAMPLE
+        .find("self.allocations[2],\n                &self.initial[2]")
+        .expect("C authenticated H2D initialization");
+    let first_d_upload = EXAMPLE
+        .find("self.allocations[3],\n                &self.initial[3]")
+        .expect("D authenticated H2D initialization");
     let rejected_launch = EXAMPLE
         .find("uninitialized C launch unexpectedly succeeded")
         .expect("prepublication rejection branch");
-    assert!(rejected_launch < first_c_write);
+    assert!(a_upload < b_upload);
+    assert!(b_upload < rejected_launch);
+    assert!(rejected_launch < first_c_upload);
+    assert!(first_c_upload < first_d_upload);
     assert_eq!(
         EXAMPLE.matches("RuntimeMemoryKindV1::DeviceLocal").count(),
         1
     );
+    assert_eq!(
+        EXAMPLE.matches("RuntimeMemoryKindV1::HostVisible").count(),
+        1
+    );
     assert!(EXAMPLE.contains("for _ in 0..4"));
+    let upload_helper = EXAMPLE
+        .split("fn upload_full_h2d(")
+        .nth(1)
+        .expect("authenticated H2D helper")
+        .split("struct QualifiedRunV1")
+        .next()
+        .expect("bounded authenticated H2D helper");
+    assert!(upload_helper.contains("write_allocation(upload"));
+    assert!(upload_helper.contains(".copy_async("));
+    assert!(upload_helper.contains("full_region(upload, RuntimeAccessV1::Read)"));
+    assert!(upload_helper.contains("full_region(destination, RuntimeAccessV1::Write)"));
+    assert!(upload_helper.contains("flush_stream(stream)"));
+    assert!(upload_helper.contains(".wait(&mut submission"));
+    assert!(upload_helper.contains("release_submission(submission)"));
+    assert_eq!(EXAMPLE.matches("upload_full_h2d(").count(), 5);
     assert!(EXAMPLE.contains("authorization_calls_v1() != 0"));
     assert!(EXAMPLE.contains("authorization_calls_v1() != 2"));
     assert_eq!(EXAMPLE.matches(".launch(").count(), 3);
@@ -36,6 +67,7 @@ fn live_lane_has_one_reject_two_launches_four_readbacks_and_explicit_cleanup() {
     assert!(EXAMPLE.contains("release_submission(first)"));
     assert!(EXAMPLE.contains("release_submission(second)"));
     assert!(EXAMPLE.contains("release_allocation(allocation)"));
+    assert!(EXAMPLE.contains("release_allocation(self.upload)"));
     assert!(EXAMPLE.contains("unload_module(self.module)"));
     assert!(EXAMPLE.contains("destroy_stream(self.stream)"));
     assert!(EXAMPLE.contains("self.context.shutdown()"));
