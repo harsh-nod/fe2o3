@@ -476,17 +476,32 @@ fn wrong_launcher_and_issuer_measurements_reject() {
 #[test]
 fn dynamic_and_invalid_source_descriptors_reject() {
     let fixture = Fixture::new("hostile-source");
-    let current = std::env::current_exe().unwrap();
-    let current_bytes = fs::read(&current).unwrap();
-    let current_measurement = ProvisionedStaticExecutableMeasurementV1::new(
-        Sha256::digest(&current_bytes).into(),
-        u64::try_from(current_bytes.len()).unwrap(),
+    let dynamic_image = fixture.root.join("dynamic-entry");
+    let mut dynamic_bytes = static_elf_with_code(&[0xc3]);
+    write_program(
+        &mut dynamic_bytes,
+        3,
+        ProgramFixture {
+            kind: 3,
+            flags: 4,
+            offset: 0,
+            virtual_address: 0,
+            file_size: 0,
+            memory_size: 0,
+            alignment: 1,
+        },
+    );
+    fs::write(&dynamic_image, &dynamic_bytes).unwrap();
+    fs::set_permissions(&dynamic_image, fs::Permissions::from_mode(0o555)).unwrap();
+    let dynamic_measurement = ProvisionedStaticExecutableMeasurementV1::new(
+        Sha256::digest(&dynamic_bytes).into(),
+        u64::try_from(dynamic_bytes.len()).unwrap(),
     )
     .unwrap();
     assert!(matches!(
         AdmittedIssuerProgramV1::provision(
-            File::open(current).unwrap(),
-            current_measurement,
+            File::open(dynamic_image).unwrap(),
+            dynamic_measurement,
             fixture.open(),
             policy(fixture.issuer_measurement()),
         ),
