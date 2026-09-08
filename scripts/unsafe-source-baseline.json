@@ -950,6 +950,9 @@
     "block": 1,
     "function": 2
   },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/src/lib.rs": {
+    "block": 1
+  },
   "crates/rustc-codegen-fe2o3/tests/fixtures/production-source-safety-device/local_unsafe_block.rs": {
     "block": 1
   },

@@ -535,6 +535,92 @@ fn production_barrier_cfg_preserves_order_and_fails_closed() {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_source_float_casts_saturate_in_simulation() {
+    let target = ScratchTarget::new();
+    for architecture in ["gfx942", "gfx950"] {
+        let bundle_path = target
+            .path()
+            .join(format!("float-casts-{architecture}.fe2sim"));
+        let result = output(
+            simulation_export_command_for_feature(
+                architecture,
+                &bundle_path,
+                &target.path().join(architecture),
+                None,
+                "float_to_integer",
+            ),
+            "export ordinary Rust float casts",
+        );
+        assert!(result.status.success(), "{}", result.stderr);
+        for value in [
+            f64::NEG_INFINITY,
+            -f64::MAX,
+            -2_147_483_649.0,
+            -2_147_483_648.0,
+            -42.9,
+            -1.0,
+            -0.5,
+            -0.0,
+            0.0,
+            0.5,
+            42.9,
+            2_147_483_647.0,
+            2_147_483_648.0,
+            4_294_967_295.0,
+            4_294_967_296.0,
+            f64::MAX,
+            f64::INFINITY,
+            f64::NAN,
+        ] {
+            let request_path = target.path().join("float-casts-request.json");
+            std::fs::write(
+                &request_path,
+                serde_json::to_vec(&json!({
+                    "schema": "fe2o3-simulation-request-v1",
+                    "kernel": "float_to_integer",
+                    "grid": [64, 1, 1],
+                    "workgroup": [64, 1, 1],
+                    "arguments": [
+                        { "kind": "scalar", "type": "f64", "bits": format!("0x{:016x}", value.to_bits()) },
+                        { "kind": "buffer", "element": "i32", "access": "read_write", "alignment": 4,
+                          "bytes": format!("0x{}", "00".repeat(64 * 4)) },
+                        { "kind": "buffer", "element": "u32", "access": "read_write", "alignment": 4,
+                          "bytes": format!("0x{}", "00".repeat(64 * 4)) },
+                    ],
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let admitted =
+                fe2o3_kir_sim_cli::load_debug_simulation_bundle_v1(&bundle_path, &request_path)
+                    .unwrap();
+            let execution = admitted
+                .input()
+                .module
+                .simulate(
+                    &admitted.input().request,
+                    admitted.input().simulation_target(),
+                    admitted.input().simulation_limits,
+                )
+                .unwrap_or_else(|error| panic!("{architecture}: {value:?}: {error:?}"));
+            assert_eq!(execution.invocations_executed(), 64);
+            for (argument, expected) in [
+                (1, (value as i32).to_le_bytes()),
+                (2, (value as u32).to_le_bytes()),
+            ] {
+                let bytes = execution.buffer(argument).unwrap().bytes();
+                assert_eq!(bytes.len(), 64 * 4);
+                assert!(
+                    bytes.chunks_exact(4).all(|word| word == expected),
+                    "{architecture}: {value:?}: argument {argument} did not match Rust as"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle() {
     let target = ScratchTarget::new();
     let bundle_path = target.path().join("copy-static.fe2sim");

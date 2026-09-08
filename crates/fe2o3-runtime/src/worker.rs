@@ -3295,7 +3295,7 @@ impl std::error::Error for RuntimeWorkerErrorV1 {
 pub struct RuntimeWorkerTransportV1 {
     child: Child,
     requests: Option<SyncSender<RuntimeWorkerWriteV1>>,
-    responses: Receiver<Result<Vec<u8>, RuntimeWorkerErrorV1>>,
+    responses: Option<Receiver<Result<Vec<u8>, RuntimeWorkerErrorV1>>>,
     writer: Option<JoinHandle<()>>,
     reader: Option<JoinHandle<()>>,
     terminal: bool,
@@ -3386,12 +3386,17 @@ impl RuntimeWorkerTransportV1 {
         let mut transport = Self {
             child,
             requests: Some(request_sender),
-            responses,
+            responses: Some(responses),
             writer: Some(writer),
             reader: Some(reader),
             terminal: false,
         };
-        let handshake = match transport.responses.recv_timeout(startup_timeout) {
+        let handshake = match transport
+            .responses
+            .as_ref()
+            .ok_or(RuntimeWorkerErrorV1::WorkerExited)?
+            .recv_timeout(startup_timeout)
+        {
             Ok(Ok(handshake)) => handshake,
             Ok(Err(error)) => {
                 transport.terminate();
@@ -3457,6 +3462,8 @@ impl RuntimeWorkerTransportV1 {
         self.write_request_until(request, deadline)?;
         match self
             .responses
+            .as_ref()
+            .ok_or(RuntimeWorkerErrorV1::WorkerExited)?
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
         {
             Ok(Ok(response)) => Ok(response),
@@ -3553,6 +3560,8 @@ impl RuntimeWorkerTransportV1 {
     }
 
     fn join_reader(&mut self) {
+        // The reader may be sending into a full channel rather than reading the child pipe.
+        self.responses.take();
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }
@@ -7680,6 +7689,127 @@ time.sleep(60)
         context.record_event(&submission).unwrap();
         let backend = context.shutdown().unwrap();
         backend.shutdown(Duration::from_secs(2)).unwrap();
+    }
+
+    fn assert_teardown_disconnects_full_response_channel(
+        terminal: bool,
+        child_succeeds: bool,
+        teardown: impl FnOnce(RuntimeWorkerTransportV1),
+    ) {
+        let mut child = match Command::new("python3")
+            .arg("-c")
+            .arg(if child_succeeds {
+                "raise SystemExit(0)"
+            } else {
+                "raise SystemExit(1)"
+            })
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+            Err(error) => panic!("failed to spawn test child: {error}"),
+        };
+        child.wait().unwrap();
+
+        let (requests, writer) = if terminal {
+            (None, None)
+        } else {
+            let (requests, receiver) = sync_channel::<RuntimeWorkerWriteV1>(1);
+            let writer = thread::spawn(move || {
+                while let Ok(request) = receiver.recv() {
+                    let _ = request.completion.send(Ok(()));
+                }
+            });
+            (Some(requests), Some(writer))
+        };
+        let (sender, responses) = sync_channel(1);
+        sender.send(Ok(Vec::new())).unwrap();
+        let (ready, started) = sync_channel(1);
+        let (completion, completed) = sync_channel(1);
+        let reader = thread::spawn(move || {
+            assert!(matches!(
+                sender.try_send(Err(RuntimeWorkerErrorV1::WorkerExited)),
+                Err(TrySendError::Full(_))
+            ));
+            let _ = ready.send(());
+            let deadline = Instant::now() + Duration::from_secs(5);
+            // Probe the blocked-send state without letting a regression hang the test runner.
+            loop {
+                match sender.try_send(Err(RuntimeWorkerErrorV1::WorkerExited)) {
+                    Err(TrySendError::Disconnected(_)) => {
+                        let _ = completion.send(true);
+                        break;
+                    }
+                    Err(TrySendError::Full(_)) if Instant::now() < deadline => {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    _ => {
+                        let _ = completion.send(false);
+                        break;
+                    }
+                }
+            }
+        });
+        let transport = RuntimeWorkerTransportV1 {
+            child,
+            requests,
+            responses: Some(responses),
+            writer,
+            reader: Some(reader),
+            terminal,
+        };
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        teardown(transport);
+        assert!(
+            completed.try_recv().unwrap(),
+            "teardown joined the reader without disconnecting its full response channel"
+        );
+    }
+
+    #[test]
+    fn worker_termination_disconnects_full_response_channel() {
+        assert_teardown_disconnects_full_response_channel(false, true, |mut transport| {
+            transport.terminate();
+            assert!(transport.is_terminal());
+            assert!(transport.responses.is_none());
+            assert!(transport.reader.is_none());
+            assert!(transport.writer.is_none());
+            transport.terminate();
+        });
+    }
+
+    #[test]
+    fn worker_shutdown_disconnects_full_response_channel() {
+        assert_teardown_disconnects_full_response_channel(false, true, |transport| {
+            transport.shutdown(Duration::from_secs(2)).unwrap();
+        });
+    }
+
+    #[test]
+    fn failed_worker_shutdown_disconnects_full_response_channel() {
+        assert_teardown_disconnects_full_response_channel(false, false, |transport| {
+            assert!(matches!(
+                transport.shutdown(Duration::from_secs(2)),
+                Err(RuntimeWorkerErrorV1::WorkerExited)
+            ));
+        });
+    }
+
+    #[test]
+    fn terminal_worker_shutdown_disconnects_full_response_channel() {
+        assert_teardown_disconnects_full_response_channel(true, true, |transport| {
+            transport.shutdown(Duration::from_secs(2)).unwrap();
+        });
+    }
+
+    #[test]
+    fn worker_drop_disconnects_full_response_channel() {
+        assert_teardown_disconnects_full_response_channel(false, true, drop);
+    }
+
+    #[test]
+    fn terminal_worker_drop_disconnects_full_response_channel() {
+        assert_teardown_disconnects_full_response_channel(true, true, drop);
     }
 
     #[test]

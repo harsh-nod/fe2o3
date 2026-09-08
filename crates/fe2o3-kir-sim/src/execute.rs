@@ -8319,6 +8319,12 @@ fn defined_division(
     if lhs.ty().is_signed_integer() {
         let left = signed_value(lhs, target)?;
         let right = signed_value(rhs, target)?;
+        // Widening hides narrower MIN / -1 and MIN % -1 overflow.
+        if lhs.bits() == 1_u128 << (width - 1) && right == -1 {
+            return Err(SimulationExecutionErrorKindV1::UndefinedIntegerOperation(
+                "signed division overflow",
+            ));
+        }
         let result = match op {
             BinaryOp::Divide => left.checked_div(right),
             BinaryOp::Remainder => left.checked_rem(right),
@@ -8455,9 +8461,6 @@ fn execute_cast(
 
 const fn map_soft_float_error(error: SoftFloatErrorV1) -> SimulationExecutionErrorKindV1 {
     match error {
-        SoftFloatErrorV1::InvalidIntegerConversion => {
-            SimulationExecutionErrorKindV1::IntegerOutOfRange
-        }
         SoftFloatErrorV1::InternalInvariant(message) => {
             SimulationExecutionErrorKindV1::InternalInvariant(message)
         }

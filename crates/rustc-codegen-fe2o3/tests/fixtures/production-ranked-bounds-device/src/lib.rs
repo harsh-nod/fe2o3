@@ -77,6 +77,7 @@ use fe2o3_device::{Wave64, WaveLane};
     feature = "debug_helper",
     feature = "debug_long_name",
     feature = "debug_mutated_argument",
+    feature = "float_to_integer",
     feature = "shifted",
     feature = "grid_exclusive",
     feature = "blocked",
@@ -123,6 +124,24 @@ pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
     let selected = input[63];
     if let Some(element) = output.get_mut(thread::index_1d()) {
         *element = selected;
+    }
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "float_to_integer")]
+pub fn float_to_integer(
+    value: f64,
+    mut signed: DisjointSlice<i32>,
+    mut unsigned: DisjointSlice<u32>,
+) {
+    if let Some(element) = signed.get_mut(thread::index_1d()) {
+        *element = value as i32;
+    }
+    if let Some(element) = unsigned.get_mut(thread::index_1d()) {
+        *element = value as u32;
     }
 }
 
