@@ -1,7 +1,13 @@
 use vstd::prelude::*;
 verus! {
-pub open spec fn quarantined_v1() -> bool { true }
-pub open spec fn mutated_post_retention_quarantined_v1() -> bool { false }
+pub enum StorageDispositionV1 { Quarantined, Released }
+pub open spec fn required_post_retention_disposition_v1() -> StorageDispositionV1 {
+    StorageDispositionV1::Quarantined
+}
+pub open spec fn mutated_post_retention_disposition_v1() -> StorageDispositionV1 {
+    StorageDispositionV1::Released
+}
 pub proof fn mutated_post_retention_fault_quarantines_v1()
-    ensures mutated_post_retention_quarantined_v1() == quarantined_v1(), {}
+    ensures mutated_post_retention_disposition_v1()
+        == required_post_retention_disposition_v1(), {}
 }
