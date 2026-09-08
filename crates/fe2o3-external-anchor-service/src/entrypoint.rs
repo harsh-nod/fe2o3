@@ -546,7 +546,7 @@ mod tests {
     #[test]
     fn executable_admission_rejects_measurement_substitution() {
         let _guard = crate::ENTRYPOINT_TEST_LOCK.lock().unwrap();
-        let (image, measurement) = sealed_test_executable();
+        let (image, measurement) = sealed_test_image(b"fe2o3 external-anchor measurement fixture");
         let mut substituted_digest = measurement.sha256();
         substituted_digest[0] ^= 1;
         let substituted =
@@ -633,8 +633,8 @@ mod tests {
     #[test]
     fn core_opens_existing_state_and_serves_one_exact_exchange() {
         let _guard = crate::ENTRYPOINT_TEST_LOCK.lock().unwrap();
-        let (executable, executable_measurement) = sealed_test_executable();
-        let deployment = manifest(17, executable_measurement);
+        let executable = sealed_test_executable();
+        let deployment = manifest(17, fake_executable());
         let deployment_capability =
             CompilerExecutionExternalAnchorDeploymentCapabilityV1::create(deployment.clone())
                 .unwrap();
@@ -820,8 +820,7 @@ mod tests {
         duplicated
     }
 
-    fn sealed_test_executable() -> (File, CompilerExecutionIssuerMeasurementV1) {
-        let bytes = fs::read(std::env::current_exe().unwrap()).unwrap();
+    fn sealed_test_image(bytes: &[u8]) -> (File, CompilerExecutionIssuerMeasurementV1) {
         let length = bytes.len() as u64;
         let image = rustix::fs::memfd_create(
             c"fe2o3-external-anchor-test-executable",
@@ -832,7 +831,7 @@ mod tests {
         .map(File::from)
         .unwrap();
         let mut writer = image.try_clone().unwrap();
-        writer.write_all(&bytes).unwrap();
+        writer.write_all(bytes).unwrap();
         writer.flush().unwrap();
         drop(writer);
         rustix::fs::fchmod(
@@ -862,9 +861,14 @@ mod tests {
         drop(image);
         (
             read_only,
-            CompilerExecutionIssuerMeasurementV1::new(Sha256::digest(&bytes).into(), length)
+            CompilerExecutionIssuerMeasurementV1::new(Sha256::digest(bytes).into(), length)
                 .unwrap(),
         )
+    }
+
+    fn sealed_test_executable() -> File {
+        let bytes = fs::read(std::env::current_exe().unwrap()).unwrap();
+        sealed_test_image(&bytes).0
     }
 
     #[test]

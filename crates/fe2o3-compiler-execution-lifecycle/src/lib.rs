@@ -395,7 +395,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::ExitStatusExt;
     use std::process::{Child, ChildStdin, Command, Stdio};
-    use std::sync::mpsc;
+    use std::sync::{Mutex, mpsc};
     use std::thread;
     use std::time::Duration;
 
@@ -404,6 +404,7 @@ mod tests {
     const HOLDER_MARKER_ENV: &str = "FE2O3_LIFECYCLE_HOLDER_V1";
     const HOLDER_STATE_ENV: &str = "FE2O3_LIFECYCLE_HOLDER_STATE_V1";
     const HOLDER_READY: &str = "FE2O3_LIFECYCLE_HOLDER_READY_V1";
+    static FORK_SENSITIVE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     struct Fixture {
         root: tempfile::TempDir,
@@ -594,12 +595,14 @@ mod tests {
 
     #[test]
     fn service_leases_survive_coordinator_sigkill_until_both_services_exit() {
+        let _fork_sensitive_guard = FORK_SENSITIVE_TEST_LOCK.lock().unwrap();
         prove_process_crash_order(true);
         prove_process_crash_order(false);
     }
 
     #[test]
     fn independent_child_lease_survives_unrelated_owner_unlock() {
+        let _fork_sensitive_guard = FORK_SENSITIVE_TEST_LOCK.lock().unwrap();
         let fixture = Fixture::new();
         let owner = File::open(&fixture.lock_path).unwrap();
         flock(&owner, FlockOperation::NonBlockingLockShared).unwrap();
