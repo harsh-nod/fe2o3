@@ -25,6 +25,9 @@ pub enum EffectV1 { ReadOnly, WriteOnly }
 pub enum PacketKindV1 { WaitForPrior, Dispatch }
 
 #[derive(PartialEq, Eq)]
+pub enum WriteCoverageV1 { FullExtent, Partial }
+
+#[derive(PartialEq, Eq)]
 pub struct AllocationV1 {
     pub owner: nat,
     pub allocation: nat,
@@ -59,12 +62,32 @@ pub struct PacketV1 {
 }
 
 #[derive(PartialEq, Eq)]
+pub struct FullWriteCertificateV1 {
+    pub issuer_authority: nat,
+    pub binder_authority: nat,
+    pub device: nat,
+    pub vm: nat,
+    pub queue: nat,
+    pub queue_generation: nat,
+    pub kernel: nat,
+    pub dispatch: nat,
+    pub transaction_generation: nat,
+    pub allocation: nat,
+    pub storage: nat,
+    pub allocation_generation: nat,
+    pub byte_offset: nat,
+    pub byte_len: nat,
+    pub coverage: WriteCoverageV1,
+}
+
+#[derive(PartialEq, Eq)]
 pub struct PlanV1 {
     pub device: nat,
     pub vm: nat,
     pub queue: nat,
     pub queue_generation: nat,
     pub fixed_binder_authority: nat,
+    pub full_write_issuer_authority: nat,
     pub kernel: nat,
     pub dispatch: nat,
     pub transaction_generation: nat,
@@ -72,6 +95,7 @@ pub struct PlanV1 {
     pub completion_signal: nat,
     pub wait_packet: PacketV1,
     pub dispatch_packet: PacketV1,
+    pub full_write: FullWriteCertificateV1,
     pub a: BindingV1,
     pub b: BindingV1,
     pub c: BindingV1,
@@ -118,6 +142,8 @@ pub open spec fn exact_plan_v1(plan: PlanV1) -> bool {
         && plan.queue > 0
         && plan.queue_generation > 0
         && plan.fixed_binder_authority > 0
+        && plan.full_write_issuer_authority > 0
+        && plan.full_write_issuer_authority != plan.fixed_binder_authority
         && plan.kernel > 0
         && plan.dispatch > 0
         && plan.transaction_generation > 0
@@ -129,6 +155,21 @@ pub open spec fn exact_plan_v1(plan: PlanV1) -> bool {
         && plan.dispatch_packet.packet != plan.wait_packet.packet
         && plan.dispatch_packet.kind == PacketKindV1::Dispatch
         && plan.dispatch_packet.order == 1
+        && plan.full_write.issuer_authority == plan.full_write_issuer_authority
+        && plan.full_write.binder_authority == plan.fixed_binder_authority
+        && plan.full_write.device == plan.device
+        && plan.full_write.vm == plan.vm
+        && plan.full_write.queue == plan.queue
+        && plan.full_write.queue_generation == plan.queue_generation
+        && plan.full_write.kernel == plan.kernel
+        && plan.full_write.dispatch == plan.dispatch
+        && plan.full_write.transaction_generation == plan.transaction_generation
+        && plan.full_write.allocation == plan.c.allocation
+        && plan.full_write.storage == plan.c.storage
+        && plan.full_write.allocation_generation == plan.c.allocation_generation
+        && plan.full_write.byte_offset == 0
+        && plan.full_write.byte_len == plan.c.byte_len
+        && plan.full_write.coverage == WriteCoverageV1::FullExtent
         && plan.a.ordinal == 0
         && plan.a.role == RoleV1::Read
         && plan.a.effect == EffectV1::ReadOnly
@@ -183,6 +224,7 @@ pub enum ReasonV1 {
     AmbiguousAfterDispatchPublication,
     CompletionIdentityMismatch,
     ClosingCurrentnessRejected,
+    InvalidPublishedPresentation,
 }
 
 #[derive(PartialEq, Eq)]
@@ -272,6 +314,7 @@ pub open spec fn complete_v1(
 ) -> OutcomeV1 {
     if published.phase == PhaseV1::Published
         && closing_currentness
+        && admitted_v1(published.plan, published.owners)
         && exact_completion_v1(published.plan, completion) {
         OutcomeV1 {
             phase: PhaseV1::Completed,
@@ -287,16 +330,46 @@ pub open spec fn complete_v1(
     } else if published.phase == PhaseV1::Published {
         OutcomeV1 {
             phase: PhaseV1::Quarantined,
-            reason: if closing_currentness {
-                ReasonV1::CompletionIdentityMismatch
-            } else {
+            reason: if !closing_currentness {
                 ReasonV1::ClosingCurrentnessRejected
+            } else if !admitted_v1(published.plan, published.owners) {
+                ReasonV1::InvalidPublishedPresentation
+            } else {
+                ReasonV1::CompletionIdentityMismatch
             },
             plan: published.plan,
             owners: published.owners,
             published_packet_prefix: published.published_packet_prefix,
         }
     } else { published }
+}
+
+#[derive(PartialEq, Eq)]
+pub enum WaitObservationV1 {
+    Timeout,
+    Completed(CompletionV1),
+}
+
+pub open spec fn wait_v1(
+    published: OutcomeV1,
+    closing_currentness: bool,
+    observation: WaitObservationV1,
+) -> OutcomeV1 {
+    if published.phase == PhaseV1::Published && !closing_currentness {
+        OutcomeV1 {
+            phase: PhaseV1::Quarantined,
+            reason: ReasonV1::ClosingCurrentnessRejected,
+            plan: published.plan,
+            owners: published.owners,
+            published_packet_prefix: published.published_packet_prefix,
+        }
+    } else {
+        match observation {
+            WaitObservationV1::Timeout => published,
+            WaitObservationV1::Completed(completion) =>
+                complete_v1(published, true, completion),
+        }
+    }
 }
 
 pub open spec fn observe_quarantine_again_v1(quarantined: OutcomeV1) -> OutcomeV1 {
@@ -542,7 +615,7 @@ pub proof fn exact_completion_authenticates_all_coordinates_v1(
 pub proof fn exact_completion_completes_v1(
     plan: PlanV1, owners: OwnersV1, completion: CompletionV1,
 )
-    requires exact_completion_v1(plan, completion),
+    requires admitted_v1(plan, owners), exact_completion_v1(plan, completion),
     ensures {
         let published = publish_v1(plan, owners, true, PublicationScriptV1::Complete);
         complete_v1(published, true, completion).phase == PhaseV1::Completed
@@ -553,7 +626,7 @@ pub proof fn exact_completion_completes_v1(
 pub proof fn inexact_completion_quarantines_all_v1(
     plan: PlanV1, owners: OwnersV1, completion: CompletionV1,
 )
-    requires !exact_completion_v1(plan, completion),
+    requires admitted_v1(plan, owners), !exact_completion_v1(plan, completion),
     ensures {
         let published = publish_v1(plan, owners, true, PublicationScriptV1::Complete);
         let out = complete_v1(published, true, completion);
@@ -566,7 +639,7 @@ pub proof fn inexact_completion_quarantines_all_v1(
 pub proof fn completion_preserves_both_inputs_v1(
     plan: PlanV1, owners: OwnersV1, completion: CompletionV1,
 )
-    requires exact_completion_v1(plan, completion),
+    requires admitted_v1(plan, owners), exact_completion_v1(plan, completion),
     ensures {
         let published = publish_v1(plan, owners, true, PublicationScriptV1::Complete);
         let out = complete_v1(published, true, completion);
@@ -578,7 +651,7 @@ pub proof fn completion_preserves_both_inputs_v1(
 pub proof fn completion_initializes_and_advances_output_once_v1(
     plan: PlanV1, owners: OwnersV1, completion: CompletionV1,
 )
-    requires exact_completion_v1(plan, completion),
+    requires admitted_v1(plan, owners), exact_completion_v1(plan, completion),
     ensures {
         let published = publish_v1(plan, owners, true, PublicationScriptV1::Complete);
         let out = complete_v1(published, true, completion);
@@ -593,7 +666,7 @@ pub proof fn completion_initializes_and_advances_output_once_v1(
 pub proof fn completion_preserves_all_storage_identities_v1(
     plan: PlanV1, owners: OwnersV1, completion: CompletionV1,
 )
-    requires exact_completion_v1(plan, completion),
+    requires admitted_v1(plan, owners), exact_completion_v1(plan, completion),
     ensures {
         let published = publish_v1(plan, owners, true, PublicationScriptV1::Complete);
         let out = complete_v1(published, true, completion);
@@ -612,15 +685,40 @@ pub proof fn completion_preserves_all_storage_identities_v1(
 // Obligation 34: closing-currentness loss after publication quarantines all
 // three owners at the exact two-packet prefix and never restores them.
 pub proof fn closing_currentness_loss_quarantines_all_v1(
-    plan: PlanV1, owners: OwnersV1, completion: CompletionV1,
+    plan: PlanV1, owners: OwnersV1, observation: WaitObservationV1,
 )
     ensures {
         let published = publish_v1(plan, owners, true, PublicationScriptV1::Complete);
-        let out = complete_v1(published, false, completion);
+        let out = wait_v1(published, false, observation);
         out.phase == PhaseV1::Quarantined && out.owners == owners
             && out.reason == ReasonV1::ClosingCurrentnessRejected
             && out.published_packet_prefix == 2
     },
+{}
+
+// Obligation 35: initialization promotion is authorized only by an exact
+// full-extent write certificate bound to its distinct issuer, the fixed binder
+// subject, the launch, and C.
+pub proof fn full_write_certificate_is_exactly_bound_v1(
+    plan: PlanV1, owners: OwnersV1,
+)
+    requires admitted_v1(plan, owners),
+    ensures plan.full_write.issuer_authority == plan.full_write_issuer_authority,
+        plan.full_write.binder_authority == plan.fixed_binder_authority,
+        plan.full_write.issuer_authority != plan.full_write.binder_authority,
+        plan.full_write.device == plan.device,
+        plan.full_write.vm == plan.vm,
+        plan.full_write.queue == plan.queue,
+        plan.full_write.queue_generation == plan.queue_generation,
+        plan.full_write.kernel == plan.kernel,
+        plan.full_write.dispatch == plan.dispatch,
+        plan.full_write.transaction_generation == plan.transaction_generation,
+        plan.full_write.allocation == owners.c.allocation,
+        plan.full_write.storage == owners.c.storage,
+        plan.full_write.allocation_generation == owners.c.allocation_generation,
+        plan.full_write.byte_offset == 0,
+        plan.full_write.byte_len == owners.c.byte_len,
+        plan.full_write.coverage == WriteCoverageV1::FullExtent,
 {}
 
 } // verus!

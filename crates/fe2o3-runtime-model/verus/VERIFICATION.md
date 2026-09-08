@@ -19,8 +19,9 @@ policy, R40 gfx942 striped-SDMA aggregate, R41 persistent striped-SDMA
 aggregate, R42 compute-event signal-custody, R44 live-foundation
 invariant-certificate, R45 compute-dependency-publisher, and R46 gfx942
 striped-SDMA tail-wait, R48 retryable striped-SDMA tail-wait, R51 native
-compute-dependency lifecycle, and R56 two-native-SDMA mux models. The
-authenticated runner proves 1179 obligations and rejects 535
+compute-dependency lifecycle, R56 two-native-SDMA mux, and R57 three-binding
+persistent-compute models. The
+authenticated runner proves 1214 obligations and rejects 558
 expected-negative mutations over finite
 abstract values and traces. The
 materialization input and image sequences are
@@ -2515,10 +2516,10 @@ carrier before such an unwind could be modeled as recoverable.
 
 ## R57 three-binding persistent compute transaction
 
-`r57_three_binding_compute_v1.rs` verifies exactly 34 obligations over an
+`r57_three_binding_compute_v1.rs` verifies exactly 35 obligations over an
 independent finite abstraction of one bounded out-of-place elementwise compute
-transaction. The runner pins that proof and 22 standalone expected-negative
-countermodels. The executable no-std model has 26 focused tests. Neither model
+transaction. The runner pins that proof and 23 standalone expected-negative
+countermodels. The executable no-std model has 27 focused tests. Neither model
 is a Rust-to-Verus or production-Rust refinement.
 
 The hostile executable boundary accepts a vector only to reject every binding
@@ -2529,6 +2530,15 @@ uninitialized. The three owner occurrences, allocation identities, and storage
 identities are pairwise distinct. Every allocation is persistent HBM on the
 same device and VM, and every binding covers its complete allocation. The
 bounded elementwise profile additionally requires equal A/B/C byte lengths.
+Preparation also requires a mathematical full-write certificate from the
+plan's separately named, nonzero coverage-issuer authority, which must differ
+from the nonzero binder authority. Issuer recognition is an external,
+caller-supplied premise: the model performs no trust-root lookup, and neither a
+nonzero identity nor structural equality authenticates an issuer. The
+certificate binds the issuer identity and the fixed-binder subject to the exact
+device, VM, queue, queue generation, kernel, dispatch, transaction generation,
+output allocation, storage, allocation generation, zero offset, and full byte
+length of C. Binder authority is not treated as coverage authority.
 
 The abstract publication is authorized by one nonzero fixed-binder identity
 and consists of exactly one `WaitForPrior` packet at order zero followed by one
@@ -2541,22 +2551,34 @@ and quarantine is absorbing.
 
 An exact completion authenticates queue, queue generation, dispatch,
 transaction generation, completion signal, and the two-packet frontier.
-Closing-currentness loss after publication quarantines all three owners at
-prefix two and is never modeled as restoration. Exact completion leaves A and
-B entirely unchanged, initializes C, and advances only C's content generation
-by one. Every owner occurrence, allocation, storage, allocation generation,
-device, VM, extent, and memory-kind identity remains unchanged. A substituted
-completion identity quarantines all three owners.
+Closing-currentness is checked before interpreting either a timeout or a
+completion observation. Its loss after publication quarantines all three
+owners at prefix two and is never modeled as pending or restoration. Exact
+completion leaves A and B entirely unchanged, initializes C, and advances only
+C's content generation by one, but only because the admitted presentation
+includes that exact full-write certificate. Every owner occurrence,
+allocation, storage, allocation generation, device, VM, extent, and
+memory-kind identity remains unchanged. A substituted completion identity
+quarantines all three owners.
+
+The full-write certificate is an explicit caller-supplied mathematical premise,
+not a fact derived from `WriteOnly`, full binding extent, or successful dispatch.
+The current concrete `queue_dispatch_binding.rs` contract deliberately excludes
+full-write coverage and initialization promotion, and
+`PublicRetainedDataPlanV1::fully_initialized` preserves the opening flag. It
+therefore cannot mint the R57 certificate. Any future concrete refinement must
+authenticate separate full-write authority; absent that authority it must
+preserve C's opening initialization state or fail closed.
 
 ## R57 claim matrix
 
 | Surface | Status | Exact boundary |
 | --- | --- | --- |
-| Binding profile | **Proved abstractly and checked** | Exactly three distinct persistent-HBM owner/allocation/storage identities; ordered initialized Read A/B and Write C; same device/VM; equal complete extents. |
+| Binding profile | **Proved abstractly and checked** | Exactly three distinct persistent-HBM owner/allocation/storage identities; ordered initialized Read A/B and Write C; same device/VM; equal complete extents; exact separate-issuer full-write certificate bound to the binder subject, C, and the launch. |
 | Packet order and frontier | **Proved abstractly and checked** | One fixed-binder transaction with exactly `WaitForPrior` then dispatch and frontier `before + 2`. |
 | Atomic failure custody | **Proved abstractly and checked** | Prepublication rejection restores exactly all three owners at prefix zero; postpublication ambiguity and closing-currentness loss quarantine all three at their exact prefix; quarantine is absorbing. |
-| Completion effects | **Proved abstractly and checked** | Exact six-coordinate completion preserves A/B content and every storage identity while initializing C and advancing only C content generation once. |
-| Boundary countermodels | **Rejected** | Twenty-two pinned mutations cover cardinality, partial restore/publish, owner/storage alias, uninitialized input, output-init overconstraint, unequal/partial extents, device/binder substitution, wait omission, packet reorder, frontier error, prepublication effect, ambiguity restoration, quarantine release, completion identity substitution, input mutation, and output-generation skip. |
+| Completion effects | **Proved abstractly and checked** | Given the admitted exact full-write certificate, exact six-coordinate completion preserves A/B content and every storage identity while initializing C and advancing only C content generation once. |
+| Boundary countermodels | **Rejected** | Twenty-three pinned structural mutant relations and concrete counterexamples cover cardinality, partial restore/publish, owner/storage alias, uninitialized input, output-init overconstraint, unequal/partial extents, device/binder/full-write-authority substitution, wait omission, packet reorder, frontier error, prepublication effect, ambiguity restoration, quarantine release, completion identity substitution, input mutation, output-generation skip, and the exact false-currentness timeout ordering bug. |
 | Production refinement, native execution, KFD/HSA/HIP behavior, hardware progress, parity, or performance | **Not established** | Explicitly outside the standalone R57 model and proof boundary. |
 
 The projection proof establishes the mathematical relation implemented by the

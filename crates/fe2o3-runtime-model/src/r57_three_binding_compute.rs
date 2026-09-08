@@ -5,11 +5,13 @@
 //! write-only output, each naming a distinct full-extent persistent HBM
 //! allocation on one device, VM, and queue. Publication contains exactly one
 //! `WaitForPrior` control packet followed by exactly one dispatch packet.
+//! Initialization promotion additionally requires a caller-supplied abstract
+//! full-write certificate from a separately named coverage issuer.
 //!
 //! This addressless model performs no I/O and grants no KFD, HSA, HIP, packet,
 //! signal, dispatch, progress, hardware, refinement, parity, or performance
-//! authority. Its identities and observations are caller-constructed
-//! mathematical inputs.
+//! authority. The certificate, identities, and observations are
+//! caller-constructed mathematical inputs.
 
 use alloc::vec::Vec;
 
@@ -38,6 +40,12 @@ pub enum R57BindingEffectV1 {
 pub enum R57PacketKindV1 {
     WaitForPrior,
     Dispatch,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum R57WriteCoverageV1 {
+    FullExtent,
+    Partial,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -130,12 +138,32 @@ pub struct R57PacketIdentityV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct R57FullWriteCertificateV1 {
+    pub issuer_authority: u64,
+    pub binder_authority: u64,
+    pub device: u32,
+    pub vm: u64,
+    pub queue: u64,
+    pub queue_generation: u64,
+    pub kernel: u64,
+    pub dispatch: u64,
+    pub transaction_generation: u64,
+    pub allocation: u64,
+    pub storage: u64,
+    pub allocation_generation: u64,
+    pub byte_offset: u64,
+    pub byte_len: u64,
+    pub coverage: R57WriteCoverageV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct R57ThreeBindingPlanV1 {
     pub device: u32,
     pub vm: u64,
     pub queue: u64,
     pub queue_generation: u64,
     pub fixed_binder_authority: u64,
+    pub full_write_issuer_authority: u64,
     pub kernel: u64,
     pub dispatch: u64,
     pub transaction_generation: u64,
@@ -143,6 +171,7 @@ pub struct R57ThreeBindingPlanV1 {
     pub completion_signal: u64,
     pub wait_packet: R57PacketIdentityV1,
     pub dispatch_packet: R57PacketIdentityV1,
+    pub full_write: R57FullWriteCertificateV1,
     pub bindings: [R57BindingSpecV1; R57_BINDING_COUNT_V1],
 }
 
@@ -158,6 +187,8 @@ impl R57ThreeBindingPlanV1 {
             && self.queue != 0
             && self.queue_generation != 0
             && self.fixed_binder_authority != 0
+            && self.full_write_issuer_authority != 0
+            && self.full_write_issuer_authority != self.fixed_binder_authority
             && self.kernel != 0
             && self.dispatch != 0
             && self.transaction_generation != 0
@@ -170,6 +201,21 @@ impl R57ThreeBindingPlanV1 {
             && self.dispatch_packet.packet != self.wait_packet.packet
             && self.dispatch_packet.kind == R57PacketKindV1::Dispatch
             && self.dispatch_packet.order == 1
+            && self.full_write.issuer_authority == self.full_write_issuer_authority
+            && self.full_write.binder_authority == self.fixed_binder_authority
+            && self.full_write.device == self.device
+            && self.full_write.vm == self.vm
+            && self.full_write.queue == self.queue
+            && self.full_write.queue_generation == self.queue_generation
+            && self.full_write.kernel == self.kernel
+            && self.full_write.dispatch == self.dispatch
+            && self.full_write.transaction_generation == self.transaction_generation
+            && self.full_write.allocation == self.bindings[2].allocation
+            && self.full_write.storage == self.bindings[2].storage
+            && self.full_write.allocation_generation == self.bindings[2].allocation_generation
+            && self.full_write.byte_offset == 0
+            && self.full_write.byte_len == self.bindings[2].byte_len
+            && self.full_write.coverage == R57WriteCoverageV1::FullExtent
             && self.bindings[0].ordinal == 0
             && self.bindings[0].role == R57BindingRoleV1::Read
             && self.bindings[0].effect == R57BindingEffectV1::ReadOnly
@@ -549,6 +595,20 @@ pub fn r57_wait_three_binding_compute_model_only(
     closing_currentness: bool,
     observation: R57CompletionObservationV1,
 ) -> R57WaitOutcomeV1 {
+    if !closing_currentness {
+        let R57PublishedThreeBindingV1 {
+            plan,
+            owners,
+            opening,
+        } = published;
+        return R57WaitOutcomeV1::Quarantined(R57QuarantinedThreeBindingV1 {
+            reason: R57QuarantineReasonV1::ClosingCurrentnessRejected,
+            published_packet_prefix: R57_PACKET_COUNT_V1,
+            plan,
+            owners,
+            opening,
+        });
+    }
     match observation {
         R57CompletionObservationV1::Timeout => R57WaitOutcomeV1::Pending(published),
         R57CompletionObservationV1::Completed(completion) => {
@@ -557,15 +617,6 @@ pub fn r57_wait_three_binding_compute_model_only(
                 mut owners,
                 opening,
             } = published;
-            if !closing_currentness {
-                return R57WaitOutcomeV1::Quarantined(R57QuarantinedThreeBindingV1 {
-                    reason: R57QuarantineReasonV1::ClosingCurrentnessRejected,
-                    published_packet_prefix: R57_PACKET_COUNT_V1,
-                    plan,
-                    owners,
-                    opening,
-                });
-            }
             if !exact_completion(plan, completion) {
                 return R57WaitOutcomeV1::Quarantined(R57QuarantinedThreeBindingV1 {
                     reason: R57QuarantineReasonV1::CompletionIdentityMismatch,

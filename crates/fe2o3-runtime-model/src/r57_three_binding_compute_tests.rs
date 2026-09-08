@@ -70,6 +70,7 @@ fn plan() -> R57ThreeBindingPlanV1 {
         queue: QUEUE,
         queue_generation: 17,
         fixed_binder_authority: 19,
+        full_write_issuer_authority: 53,
         kernel: 23,
         dispatch: 29,
         transaction_generation: 31,
@@ -84,6 +85,23 @@ fn plan() -> R57ThreeBindingPlanV1 {
             packet: 47,
             kind: R57PacketKindV1::Dispatch,
             order: 1,
+        },
+        full_write: R57FullWriteCertificateV1 {
+            issuer_authority: 53,
+            binder_authority: 19,
+            device: DEVICE,
+            vm: VM,
+            queue: QUEUE,
+            queue_generation: 17,
+            kernel: 23,
+            dispatch: 29,
+            transaction_generation: 31,
+            allocation: identity(2).allocation,
+            storage: identity(2).storage,
+            allocation_generation: identity(2).allocation_generation,
+            byte_offset: 0,
+            byte_len: identity(2).byte_len,
+            coverage: R57WriteCoverageV1::FullExtent,
         },
         bindings: [spec(0), spec(1), spec(2)],
     }
@@ -411,6 +429,70 @@ fn malformed_packet_identities_orders_and_frontier_are_rejected() {
 }
 
 #[test]
+fn full_write_certificate_is_required_and_exactly_bound_to_output_and_launch() {
+    let mut mutations = Vec::new();
+    let mut value = plan();
+    value.full_write_issuer_authority = 0;
+    mutations.push(value);
+    let mut value = plan();
+    value.full_write_issuer_authority = value.fixed_binder_authority;
+    value.full_write.issuer_authority = value.fixed_binder_authority;
+    mutations.push(value);
+    let mut value = plan();
+    value.full_write.issuer_authority += 1;
+    mutations.push(value);
+    let mut value = plan();
+    value.full_write.binder_authority += 1;
+    mutations.push(value);
+    let mut value = plan();
+    value.full_write.device += 1;
+    mutations.push(value);
+    let mut value = plan();
+    value.full_write.vm += 1;
+    mutations.push(value);
+    let mut value = plan();
+    value.full_write.queue += 1;
+    mutations.push(value);
+    let mut value = plan();
+    value.full_write.queue_generation += 1;
+    mutations.push(value);
+    let mut value = plan();
+    value.full_write.kernel += 1;
+    mutations.push(value);
+    let mut value = plan();
+    value.full_write.dispatch += 1;
+    mutations.push(value);
+    let mut value = plan();
+    value.full_write.transaction_generation += 1;
+    mutations.push(value);
+    let mut value = plan();
+    value.full_write.allocation += 1;
+    mutations.push(value);
+    let mut value = plan();
+    value.full_write.storage += 1;
+    mutations.push(value);
+    let mut value = plan();
+    value.full_write.allocation_generation += 1;
+    mutations.push(value);
+    let mut value = plan();
+    value.full_write.byte_offset = 1;
+    mutations.push(value);
+    let mut value = plan();
+    value.full_write.byte_len -= 1;
+    mutations.push(value);
+    let mut value = plan();
+    value.full_write.coverage = R57WriteCoverageV1::Partial;
+    mutations.push(value);
+
+    for mutation in mutations {
+        let failure =
+            r57_prepare_three_binding_compute_model_only(mutation, owners(false)).unwrap_err();
+        assert_eq!(failure.error, R57PreparationErrorV1::InvalidPlan);
+        assert_eq!(failure.owner_snapshots_model_only(), snapshots(false));
+    }
+}
+
+#[test]
 fn prepublication_currentness_failure_restores_exact_fixed_owner_roster() {
     for script in [
         R57PublicationScriptV1::Complete,
@@ -630,20 +712,21 @@ fn every_completion_coordinate_is_authenticated() {
 
 #[test]
 fn closing_currentness_loss_quarantines_all_three_after_both_packets() {
-    match r57_wait_three_binding_compute_model_only(
-        published(false),
-        false,
+    for observation in [
+        R57CompletionObservationV1::Timeout,
         R57CompletionObservationV1::Completed(completion()),
-    ) {
-        R57WaitOutcomeV1::Quarantined(quarantined) => {
-            assert_eq!(
-                quarantined.reason,
-                R57QuarantineReasonV1::ClosingCurrentnessRejected
-            );
-            assert_eq!(quarantined.published_packet_prefix, R57_PACKET_COUNT_V1);
-            assert_eq!(quarantined.owner_snapshots_model_only(), snapshots(false));
+    ] {
+        match r57_wait_three_binding_compute_model_only(published(false), false, observation) {
+            R57WaitOutcomeV1::Quarantined(quarantined) => {
+                assert_eq!(
+                    quarantined.reason,
+                    R57QuarantineReasonV1::ClosingCurrentnessRejected
+                );
+                assert_eq!(quarantined.published_packet_prefix, R57_PACKET_COUNT_V1);
+                assert_eq!(quarantined.owner_snapshots_model_only(), snapshots(false));
+            }
+            _ => panic!("closing-currentness loss did not quarantine"),
         }
-        _ => panic!("closing-currentness loss did not quarantine"),
     }
 }
 

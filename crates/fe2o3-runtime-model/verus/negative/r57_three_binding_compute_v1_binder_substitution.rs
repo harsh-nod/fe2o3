@@ -1,9 +1,16 @@
-// Expected-negative R57 mutation: fixed-binder authority is substituted.
+// Expected-negative R57 mutation: publication accepts a substituted binder.
 use vstd::prelude::*;
 verus! {
-pub open spec fn mutated_binder_substitution_preserves_identity_v1() -> bool { true }
-pub proof fn mutated_binder_substitution_is_rejected_v1()
-    ensures !mutated_binder_substitution_preserves_identity_v1(),
+pub struct PlanV1 { pub binder: nat }
+pub struct PublishedV1 { pub binder: nat }
+pub open spec fn mutated_publish_v1(plan: PlanV1, supplied_binder: nat) -> PublishedV1 {
+    PublishedV1 { binder: supplied_binder }
+}
+pub proof fn mutated_binder_substitution_is_rejected_v1(
+    plan: PlanV1, supplied_binder: nat,
+)
+    requires supplied_binder != plan.binder,
+    ensures mutated_publish_v1(plan, supplied_binder).binder == plan.binder,
 {}
 }
 fn main() {}
