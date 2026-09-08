@@ -281,6 +281,9 @@ mod enabled {
                     &[],
                 )
                 .map_err(backend_error)?;
+            self.context
+                .flush_stream(self.stream)
+                .map_err(backend_error)?;
             if self
                 .context
                 .wait(&mut first, COMPLETION_TIMEOUT)
@@ -312,6 +315,9 @@ mod enabled {
                     GFX942_R57_N3_QUALIFICATION_GEOMETRY_V1,
                     &[],
                 )
+                .map_err(backend_error)?;
+            self.context
+                .flush_stream(self.stream)
                 .map_err(backend_error)?;
             if self
                 .context

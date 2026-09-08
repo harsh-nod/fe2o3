@@ -53,6 +53,32 @@ fn live_lane_has_one_reject_two_launches_four_readbacks_and_explicit_cleanup() {
     assert!(EXAMPLE.contains("authorization_calls_v1() != 0"));
     assert!(EXAMPLE.contains("authorization_calls_v1() != 2"));
     assert_eq!(EXAMPLE.matches(".launch(").count(), 3);
+    assert_eq!(EXAMPLE.matches("flush_stream(self.stream)").count(), 2);
+    let first_launch = EXAMPLE
+        .find("let mut first = self")
+        .expect("first admitted launch");
+    let first_flush = EXAMPLE[first_launch..]
+        .find("flush_stream(self.stream)")
+        .map(|offset| first_launch + offset)
+        .expect("first admitted flush");
+    let first_wait = EXAMPLE[first_flush..]
+        .find(".wait(&mut first")
+        .map(|offset| first_flush + offset)
+        .expect("first admitted wait");
+    let second_launch = EXAMPLE
+        .find("let mut second = self")
+        .expect("second admitted launch");
+    let second_flush = EXAMPLE[second_launch..]
+        .find("flush_stream(self.stream)")
+        .map(|offset| second_launch + offset)
+        .expect("second admitted flush");
+    let second_wait = EXAMPLE[second_flush..]
+        .find(".wait(&mut second")
+        .map(|offset| second_flush + offset)
+        .expect("second admitted wait");
+    assert!(first_launch < first_flush && first_flush < first_wait);
+    assert!(first_wait < second_launch);
+    assert!(second_launch < second_flush && second_flush < second_wait);
     assert!(
         EXAMPLE
             .contains("for (allocation, bytes) in self.allocations.into_iter().zip(&mut observed)")

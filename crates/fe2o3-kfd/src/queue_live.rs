@@ -19156,7 +19156,8 @@ mod tests {
             .next()
             .unwrap();
         assert!(operational.contains("self.check_operational_currentness()?"));
-        assert!(operational.contains("validate_dispatch_device_memory_set"));
+        assert!(operational.contains("validate_dispatch_device_memory_authorities"));
+        assert!(!operational.contains("validate_complete_dispatch_device_memory_set"));
         assert!(!operational.contains("self.check_currentness()?"));
 
         let ordinary_rebind = production
