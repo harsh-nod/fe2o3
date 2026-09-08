@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
-use std::process::{ExitCode, Stdio};
+use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fe2o3_hsaco_finalize::{
@@ -36,6 +36,10 @@ const MAX_HANDOFF_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_TOOL_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAX_CARGO_GIT_SOURCES: usize = 64;
+const MAX_BUILD_STD_LOCK_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_BUILD_STD_REGISTRY_PACKAGES: usize = 512;
+const MAX_VENDOR_PACKAGE_MANIFEST_BYTES: u64 = 1024 * 1024;
+const MAX_VENDOR_PACKAGE_CHECKSUM_BYTES: u64 = 16 * 1024 * 1024;
 const EXTRACTOR_CHILD_FD: std::os::fd::RawFd = 205;
 const VENDOR_CHILD_FD: std::os::fd::RawFd = 206;
 const HOST_LINKER_CHILD_FD: std::os::fd::RawFd = 207;
@@ -378,9 +382,9 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
         ));
     }
     reject_cargo_override_args(&cargo_args)?;
-    if cargo_vendor.is_none() && !cargo_git_sources.is_empty() {
-        return Err("--cargo-git-source requires --cargo-vendor".to_owned());
-    }
+    let cargo_vendor = cargo_vendor.ok_or_else(|| {
+        "missing required --cargo-vendor with the complete pinned build-std closure".to_owned()
+    })?;
     if cargo_git_sources.len() > MAX_CARGO_GIT_SOURCES {
         return Err(format!(
             "at most {MAX_CARGO_GIT_SOURCES} --cargo-git-source values are allowed"
@@ -466,7 +470,7 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
             "--host-lld-proxy",
             "--host-lld-proxy-sha256",
         )?,
-        cargo_vendor: cargo_vendor.map(|path| absolute_path(current_dir, path)),
+        cargo_vendor: Some(absolute_path(current_dir, cargo_vendor)),
         cargo_git_sources,
         worker_build_identity: worker_build_identity.expect("validated required worker build ID"),
         llvm_build_identity: llvm_build_identity.expect("validated required LLVM build ID"),
@@ -746,7 +750,7 @@ fn conflicting_environment_name(name: &OsStr) -> bool {
 }
 
 const fn usage() -> &'static str {
-    "usage: cargo fe2o3 engineering hsaco --crate <rustc-crate-name> --output-root </fresh/fe2o3-engineering-v1> --target gfx942:xnack- --code-object-version 6 --extractor <absolute-path> --extractor-sha256 <hex> --extractor-backend <absolute-path> --extractor-backend-sha256 <hex> --worker <absolute-path> --worker-sha256 <hex> --worker-build-id <id> --llvm-build-id <id> --cargo <absolute-path> --cargo-sha256 <hex> --rustc <absolute-path> --rustc-sha256 <hex> --host-linker <absolute-clang-path> --host-linker-sha256 <hex> --host-lld <absolute-lld-path> --host-lld-sha256 <hex> --host-lld-proxy <absolute-proxy-path> --host-lld-proxy-sha256 <hex> [--cargo-vendor <absolute-directory> [--cargo-git-source <https://URL@40-hex-rev>]...] [--provider <llvm-bitcode|llvm-ir|amdgpu-relocatable>:<sha256>:<absolute-path>] [--timeout-seconds <1..600>] [--max-output-bytes <bytes>] -- [Cargo package/feature args]"
+    "usage: cargo fe2o3 engineering hsaco --crate <rustc-crate-name> --output-root </fresh/fe2o3-engineering-v1> --target gfx942:xnack- --code-object-version 6 --extractor <absolute-path> --extractor-sha256 <hex> --extractor-backend <absolute-path> --extractor-backend-sha256 <hex> --worker <absolute-path> --worker-sha256 <hex> --worker-build-id <id> --llvm-build-id <id> --cargo <absolute-path> --cargo-sha256 <hex> --rustc <absolute-path> --rustc-sha256 <hex> --host-linker <absolute-clang-path> --host-linker-sha256 <hex> --host-lld <absolute-lld-path> --host-lld-sha256 <hex> --host-lld-proxy <absolute-proxy-path> --host-lld-proxy-sha256 <hex> --cargo-vendor <absolute-versioned-directory> [--cargo-git-source <https://URL@40-hex-rev>]... [--provider <llvm-bitcode|llvm-ir|amdgpu-relocatable>:<sha256>:<absolute-path>] [--timeout-seconds <1..600>] [--max-output-bytes <bytes>] -- [Cargo package/feature args]"
 }
 
 #[cfg(test)]
@@ -801,12 +805,84 @@ mod tests {
             "/tools/lld-proxy".into(),
             "--host-lld-proxy-sha256".into(),
             digest.into(),
+            "--cargo-vendor".into(),
+            root.join("cargo-vendor").into_os_string(),
             "--".into(),
             "--manifest-path".into(),
             manifest.into_os_string(),
             "--lib".into(),
         ]
         .to_vec()
+    }
+
+    fn build_std_vendor_fixture(
+        label: &str,
+        include_registry_package: bool,
+        include_package: bool,
+        vendor_checksum: &str,
+    ) -> (
+        PathBuf,
+        crate::PinnedRustc,
+        crate::rustc_lib_tree::PinnedRustcLibTree,
+    ) {
+        let root = env::temp_dir().join(format!(
+            "fe2o3-engineering-build-std-{label}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let rustc_lib = root.join("rustc-lib");
+        let library = rustc_lib.join("rustlib/src/rust/library");
+        let vendor = root.join("vendor");
+        fs::create_dir_all(&library).unwrap();
+        fs::create_dir(&vendor).unwrap();
+        let mut lock =
+            String::from("version = 4\n\n[[package]]\nname = \"core\"\nversion = \"0.0.0\"\n");
+        if include_registry_package {
+            lock.push_str(concat!(
+                "\n[[package]]\n",
+                "name = \"rustc-literal-escaper\"\n",
+                "version = \"0.0.7\"\n",
+                "source = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
+                "checksum = \"1111111111111111111111111111111111111111111111111111111111111111\"\n",
+            ));
+        }
+        fs::write(library.join("Cargo.lock"), lock).unwrap();
+        if include_package {
+            let package = vendor.join("rustc-literal-escaper-0.0.7");
+            fs::create_dir(&package).unwrap();
+            fs::write(
+                package.join("Cargo.toml"),
+                "[package]\nname = \"rustc-literal-escaper\"\nversion = \"0.0.7\"\n",
+            )
+            .unwrap();
+            fs::write(
+                package.join(".cargo-checksum.json"),
+                format!("{{\"files\":{{}},\"package\":\"{vendor_checksum}\"}}"),
+            )
+            .unwrap();
+        }
+        let rustc_tree = crate::rustc_lib_tree::PinnedRustcLibTree::pin(
+            crate::project::PinnedDirectory::open_existing(
+                rustc_lib,
+                "test rustc lib-tree directory",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let rustc = crate::PinnedRustc {
+            executable: sealed_test_executable(),
+            lib_tree: crate::RustcLibTree::Authority(rustc_tree),
+        };
+        let vendor = pin_vendor_tree(&fs::canonicalize(vendor).unwrap()).unwrap();
+        (root, rustc, vendor)
+    }
+
+    fn sealed_test_executable() -> crate::pinned_executable::PinnedExecutable {
+        let executable_path = fs::canonicalize("/bin/true").unwrap();
+        crate::pinned_executable::PinnedExecutable::open(&executable_path)
+            .unwrap()
+            .seal_executable_image()
+            .unwrap()
     }
 
     #[test]
@@ -909,6 +985,11 @@ mod tests {
         }
 
         let mut source_without_vendor = base_args(&root);
+        let vendor = source_without_vendor
+            .iter()
+            .position(|argument| argument == "--cargo-vendor")
+            .unwrap();
+        source_without_vendor.drain(vendor..vendor + 2);
         source_without_vendor.splice(
             source_without_vendor.len() - 3..source_without_vendor.len() - 3,
             [
@@ -937,6 +1018,8 @@ mod tests {
             "CARGO_TARGET_AMDGCN_AMD_AMDHSA_LINKER",
             "CARGO_PROFILE_DEV_OPT_LEVEL",
             "RUSTC_BOOTSTRAP",
+            "RUSTUP_TOOLCHAIN",
+            "RUSTUP_HOME",
         ] {
             assert!(
                 conflicting_environment_name(OsStr::new(name)),
@@ -944,6 +1027,105 @@ mod tests {
             );
         }
         assert!(!conflicting_environment_name(OsStr::new("LANG")));
+    }
+
+    #[test]
+    fn isolated_build_std_command_clears_caller_channel_and_owns_fixed_arguments() {
+        let root = env::temp_dir();
+        let options = parse(&base_args(&root), &root).unwrap();
+        let cargo_home = root.join("fe2o3-engineering-test-cargo-home");
+        let mut command = Command::new("/bin/sh");
+        command
+            .args([
+                "-c",
+                "printf '%s' \"${RUSTC_BOOTSTRAP-unset}|${RUSTUP_TOOLCHAIN-unset}|${PATH-unset}\"",
+            ])
+            .env("RUSTC_BOOTSTRAP", "hostile-caller-value")
+            .env("RUSTUP_TOOLCHAIN", "stable");
+        configure_isolated_build_std_cargo(&mut command, &options, &root, &cargo_home);
+
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            arguments
+                .windows(3)
+                .any(|arguments| { arguments == ["check", "--frozen", "-Zbuild-std=core"] })
+        );
+        assert!(
+            arguments
+                .windows(2)
+                .any(|arguments| { arguments == ["--target", CARGO_TARGET] })
+        );
+        let output = command.output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "unset|unset|/__fe2o3_engineering_no_ambient_tools__"
+        );
+    }
+
+    #[test]
+    fn complete_versioned_build_std_vendor_closure_is_admitted() {
+        let checksum = "1".repeat(64);
+        let (root, rustc, vendor) = build_std_vendor_fixture("complete", true, true, &checksum);
+        validate_build_std_vendor_closure(&rustc, Some(&vendor)).unwrap();
+        drop(vendor);
+        drop(rustc);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn incomplete_build_std_vendor_fails_before_extraction_command_preparation() {
+        let checksum = "1".repeat(64);
+        let (root, rustc, vendor) = build_std_vendor_fixture("missing", true, false, &checksum);
+        let scratch = root.join("scratch");
+        fs::create_dir(&scratch).unwrap();
+        let options = parse(&base_args(&root), &root).unwrap();
+        let tool = sealed_test_executable();
+        let error = run_extraction(
+            &options,
+            &tool,
+            &rustc,
+            &tool,
+            &tool,
+            &tool,
+            Some(&vendor),
+            &tool,
+            &root.join("handoff"),
+            &scratch,
+        )
+        .unwrap_err();
+        assert!(error.contains("missing pinned build-std package rustc-literal-escaper 0.0.7"));
+        assert!(error.contains("cargo vendor --locked --versioned-dirs"));
+        assert!(!scratch.join("cargo-home").exists());
+        drop(tool);
+        drop(vendor);
+        drop(rustc);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn build_std_vendor_checksum_substitution_is_rejected() {
+        let checksum = "2".repeat(64);
+        let (root, rustc, vendor) = build_std_vendor_fixture("checksum", true, true, &checksum);
+        let error = validate_build_std_vendor_closure(&rustc, Some(&vendor)).unwrap_err();
+        assert!(error.contains("does not match the pinned Cargo.lock checksum"));
+        drop(vendor);
+        drop(rustc);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn empty_build_std_registry_closure_is_rejected() {
+        let checksum = "1".repeat(64);
+        let (root, rustc, vendor) = build_std_vendor_fixture("empty", false, true, &checksum);
+        let error = validate_build_std_vendor_closure(&rustc, Some(&vendor)).unwrap_err();
+        assert!(error.contains("contains no registry package closure"));
+        drop(vendor);
+        drop(rustc);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -983,8 +1165,6 @@ mod tests {
             args.splice(
                 insert..insert,
                 [
-                    "--cargo-vendor".into(),
-                    root.clone().into_os_string(),
                     "--cargo-git-source".into(),
                     sources[0].into(),
                     "--cargo-git-source".into(),
@@ -995,7 +1175,7 @@ mod tests {
         }
 
         let mut too_many = base_args(&root);
-        let mut inserted = vec!["--cargo-vendor".into(), root.clone().into_os_string()];
+        let mut inserted = Vec::new();
         for index in 0..=MAX_CARGO_GIT_SOURCES {
             inserted.push("--cargo-git-source".into());
             inserted.push(

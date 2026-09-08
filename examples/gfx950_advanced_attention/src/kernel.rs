@@ -1282,25 +1282,64 @@ pub fn gfx950_deepseek_sparse_attention(
     let policy = context.numerical_policy::<StrictIeee>();
     let device_math = context.math();
     let math = device_math.with_numerical_policy(&policy);
+    #[cfg(not(feature = "kernel-deepseek-sparse-attention-leader-exp-v1"))]
     let weight0 = if valid0 {
         math.exp_f32(score0 - maximum)
     } else {
         0.0
     };
+    #[cfg(not(feature = "kernel-deepseek-sparse-attention-leader-exp-v1"))]
     let weight1 = if valid1 {
         math.exp_f32(score1 - maximum)
     } else {
         0.0
     };
+    #[cfg(not(feature = "kernel-deepseek-sparse-attention-leader-exp-v1"))]
     let weight2 = if valid2 {
         math.exp_f32(score2 - maximum)
     } else {
         0.0
     };
+    #[cfg(not(feature = "kernel-deepseek-sparse-attention-leader-exp-v1"))]
     let weight3 = if valid3 {
         math.exp_f32(score3 - maximum)
     } else {
         0.0
+    };
+    #[cfg(feature = "kernel-deepseek-sparse-attention-leader-exp-v1")]
+    let (weight0, weight1, weight2, weight3) = {
+        // Counterexample: serialize subgroup-invariant exponentials on lane zero
+        // and pay four exchanges. This lowers correctly but regresses top-4.
+        let leader_weight0 = if column == 0 && valid0 {
+            math.exp_f32(score0 - maximum)
+        } else {
+            0.0
+        };
+        let leader_weight1 = if column == 0 && valid1 {
+            math.exp_f32(score1 - maximum)
+        } else {
+            0.0
+        };
+        let leader_weight2 = if column == 0 && valid2 {
+            math.exp_f32(score2 - maximum)
+        } else {
+            0.0
+        };
+        let leader_weight3 = if column == 0 && valid3 {
+            math.exp_f32(score3 - maximum)
+        } else {
+            0.0
+        };
+        context.with_workgroup(|workgroup| {
+            let subgroup = workgroup.subgroup::<SubgroupWidth64>();
+            let subgroup = subgroup.gfx950_wave16(workgroup.epoch());
+            (
+                subgroup.broadcast_f32(leader_weight0, 0),
+                subgroup.broadcast_f32(leader_weight1, 0),
+                subgroup.broadcast_f32(leader_weight2, 0),
+                subgroup.broadcast_f32(leader_weight3, 0),
+            )
+        })
     };
     let normalizer = weight0 + weight1 + weight2 + weight3;
     let mut numerator = 0.0_f32;

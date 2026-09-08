@@ -133,6 +133,15 @@ numerical verification on a gfx950 host:
 ./run-mhc-sinkhorn-mix-gfx950.sh
 ```
 
+## Performance audit
+
+[`PERFORMANCE_AUDIT.md`](PERFORMANCE_AUDIT.md) gives the per-kernel external
+candidate audit, exact-comparability decision, GPU4 latency, ablation result,
+and architecture-resource floor. The corresponding structured record is
+[`performance-audit-mi350-gpu4-v1.json`](performance-audit-mi350-gpu4-v1.json).
+The audit intentionally does not project these teaching shapes onto full-model
+latency or call a non-comparable result state of the art.
+
 ## Historical WG256/grid4 numerical qualification
 
 On 2026-09-03, the pre-capability-migration versions of all eight production Rust wrappers completed extraction,

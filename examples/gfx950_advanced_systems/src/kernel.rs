@@ -112,6 +112,32 @@ fn publish_route_records<'workgroup, KernelBrand, Epoch: SynchronizationEpoch>(
     (selected[0] as u32, selected[1], selected[2], packed_routes)
 }
 
+#[inline(always)]
+fn combine_striped_route_logits<'workgroup, KernelBrand, Epoch: SynchronizationEpoch>(
+    workgroup: WorkgroupCapability<'workgroup, KernelBrand, Epoch>,
+    token: usize,
+    partials: [f32; 4],
+) -> [f32; 4] {
+    let workgroup_rank = workgroup.invocation_rank() as usize;
+    let wave_base = workgroup_rank & !63;
+    let partials_lds = workgroup.allocate_lds::<[f32; 4], 256>();
+    let partials_lds = partials_lds.initialize_by_invocation(&workgroup, partials);
+    let (workgroup, partials_lds) = workgroup.publish_lds(partials_lds);
+    let mut result = [0.0_f32; 4];
+    let mut stripe = 0_usize;
+    while stripe < 4 {
+        let values = partials_lds
+            .read(&workgroup, wave_base + token + stripe * TOKENS)
+            .unwrap_or([0.0; 4]);
+        result[0] += values[0];
+        result[1] += values[1];
+        result[2] += values[2];
+        result[3] += values[3];
+        stripe += 1;
+    }
+    result
+}
+
 /// Stable top-2 routing, weights, expert counts, and compact dispatch metadata.
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-moe-route"))]
 #[kernel(
@@ -147,13 +173,28 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     let activation_base = batch.wrapping_mul(TOKENS).wrapping_mul(HIDDEN);
     let router_base = batch.wrapping_mul(EXPERTS).wrapping_mul(HIDDEN);
     let token = wave_lane & (TOKENS - 1);
-    // Decode packed E2M1 activations once per depth and score all four experts.
+    // Four lanes cooperate on each token by taking every fourth reduction
+    // element. This eliminates the former four-way duplicate input traffic;
+    // typed workgroup publication merges the four partials.
     let mut route_logit0 = 0.0_f32;
     let mut route_logit1 = 0.0_f32;
     let mut route_logit2 = 0.0_f32;
     let mut route_logit3 = 0.0_f32;
-    let mut depth = 0_usize;
-    while depth < HIDDEN {
+    #[cfg(feature = "ablation-route-redundant-lanes")]
+    let depth_group = 0_usize;
+    #[cfg(not(feature = "ablation-route-redundant-lanes"))]
+    let depth_group = wave_lane / TOKENS;
+    #[cfg(feature = "ablation-route-redundant-lanes")]
+    let depth_stride = 1_usize;
+    #[cfg(not(feature = "ablation-route-redundant-lanes"))]
+    let depth_stride = 4_usize;
+    #[cfg(feature = "ablation-route-redundant-lanes")]
+    let depth_steps = HIDDEN;
+    #[cfg(not(feature = "ablation-route-redundant-lanes"))]
+    let depth_steps = HIDDEN / 4;
+    let mut step = 0_usize;
+    while step < depth_steps {
+        let depth = depth_group.wrapping_add(step.wrapping_mul(depth_stride));
         let bits = global_load_2d_or(&activations, activation_base, token, depth, HIDDEN, 0);
         let magnitude =
             (0xc864_3210_u32.wrapping_shr(((bits & 7) as u32).wrapping_mul(4)) & 15) as f32 * 0.5;
@@ -167,7 +208,21 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
             activation * global_load_2d_or(&router_weights, router_base, 2, depth, HIDDEN, 0.0);
         route_logit3 +=
             activation * global_load_2d_or(&router_weights, router_base, 3, depth, HIDDEN, 0.0);
-        depth += 1;
+        step += 1;
+    }
+    #[cfg(not(feature = "ablation-route-redundant-lanes"))]
+    {
+        let combined = context.with_workgroup(|workgroup| {
+            combine_striped_route_logits(
+                workgroup,
+                token,
+                [route_logit0, route_logit1, route_logit2, route_logit3],
+            )
+        });
+        route_logit0 = combined[0];
+        route_logit1 = combined[1];
+        route_logit2 = combined[2];
+        route_logit3 = combined[3];
     }
     // A branch-light ranking network gives deterministic top-2 tie handling.
     let precedes12 = (route_logit1 >= route_logit2) as u32;

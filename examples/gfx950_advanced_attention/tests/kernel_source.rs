@@ -15,6 +15,7 @@ const SOURCE: &str = include_str!("../src/kernel.rs");
 const ABLATION_SOURCE: &str = include_str!("../src/ablation.rs");
 const KDA_BASELINE_SOURCE: &str = include_str!("../src/kda_baseline.rs");
 const ABLATION_REGISTRY: &str = include_str!("../ablation-variants-v1.json");
+const PERFORMANCE_AUDIT: &str = include_str!("../performance-audit-mi350-gpu4-v1.json");
 const RUNNER_SOURCE: &str = include_str!("../run-gfx950.sh");
 
 fn outer_type_name(argument: &FnArg) -> Option<&syn::Ident> {
@@ -337,6 +338,7 @@ fn package_states_the_production_source_and_evidence_boundary() {
         "kernel-kda-decode-baseline-v1",
         "kernel-kda-prefill-baseline-v1",
         "kernel-content-sparse-attention-reciprocal-reuse-v1",
+        "kernel-deepseek-sparse-attention-leader-exp-v1",
         "kernel-compressed-hybrid-attention-division-baseline-v1",
         "kernel-attnres-aggregate-explicit-reuse-v1",
         "kernel-four-branch-residual-explicit-v1",
@@ -376,4 +378,44 @@ fn package_states_the_production_source_and_evidence_boundary() {
     assert!(RUNNER_SOURCE.contains("cd -- \"$ATTEMPT_DIR\""));
     assert!(RUNNER_SOURCE.contains("\"$(basename -- \"$HSACO\")\""));
     assert!(!RUNNER_SOURCE.contains("--mcpu=gfx950 \"$HSACO\""));
+}
+
+#[test]
+fn performance_audit_covers_every_kernel_without_overclaiming() {
+    let audit: serde_json::Value =
+        serde_json::from_str(PERFORMANCE_AUDIT).expect("performance audit is valid JSON");
+    assert_eq!(
+        audit["schema"],
+        "fe2o3.gfx950.attention-performance-audit.v1"
+    );
+    let operators = audit["operators"]
+        .as_array()
+        .expect("operators is an array");
+    assert_eq!(operators.len(), 8);
+    for operator in operators {
+        assert_eq!(operator["exactly_comparable"], false);
+        assert!(operator["public_candidate"].is_string());
+        assert!(operator["comparability_reason"].is_string());
+        assert!(operator["canonical"]["median_ns"].as_u64().is_some());
+        assert!(operator["canonical"]["p95_ns"].as_f64().is_some());
+        assert!(operator["ablation"].is_object());
+        let floor = operator["resource_floor"]["floor_ns"]
+            .as_f64()
+            .expect("resource floor is numeric");
+        let canonical_median = operator["canonical"]["median_ns"]
+            .as_f64()
+            .expect("canonical median is numeric");
+        let canonical_over_floor = operator["resource_floor"]["canonical_measured_over_floor"]
+            .as_f64()
+            .expect("canonical resource ratio is numeric");
+        assert!((canonical_median / floor - canonical_over_floor).abs() <= 0.001);
+        assert!(operator["resource_floor"]["measured_over_floor"].is_null());
+        assert!(operator["resource_floor"]["fastest_measured_over_floor"].is_null());
+        assert!(operator["model_claim"].is_string());
+    }
+    assert!(
+        audit["claim_boundary"]
+            .as_str()
+            .is_some_and(|claim| claim.contains("No external SOTA"))
+    );
 }

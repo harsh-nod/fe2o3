@@ -3,7 +3,7 @@
 use core::fmt;
 use core::marker::PhantomData;
 use std::os::fd::BorrowedFd;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use fe2o3_kfd_uapi::{
     KFD_ALLOC_MEMORY_FLAGS_AQL_QUEUE, KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL,
@@ -73,20 +73,20 @@ pub const GFX942_DEVICE_MEMORY_LEASE_MANIFEST_SHA256_BYTES_V1: [u8; 32] = [
 
 /// Canonical contract for CPU initialization of public device-local storage.
 pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-device-memory-initialization-r4-v1\n",
+    "profile=fe2o3-mi300x-gfx942-device-memory-initialization-r6-v1\n",
     "uapi_profile_sha256=51a5d64a5d6a6c12a1f65e0734bcdf4bf7a8b67ba02210c5526b5088585f916f\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device-and-vm\n",
     "allocation=device-local-vram-hbm-public-writable:0xa0000001,separate-from-uninitialized:0x80000001\n",
-    "source=owned-nonempty-byte-slice-or-private-field-repeated-byte-recipe,exact-length-and-sha256-content-precommit,bounded-memory-repeated-byte-hash-before-native-allocation\n",
-    "cpu-map=returned-mmap-offset,prot-none-then-dontfork-then-read-write,whole-request-copy-with-full-readback-sha256-or-private-recipe-complete-safe-slice-repeated-byte-fill-without-redundant-hbm-readback,explicit-munmap-before-gpu-map\n",
+    "source=owned-nonempty-byte-slice-validated-once-into-private-owning-witness-or-private-field-repeated-byte-recipe,exact-length-and-sha256-content-precommit,bounded-memory-repeated-byte-hash-before-native-allocation\n",
+    "cpu-map=returned-mmap-offset,prot-none-then-dontfork-then-read-write,whole-request-bounded-safe-disjoint-slice-copy-then-distinct-full-readback-exact-comparison-against-retained-authenticated-source-or-private-recipe-complete-safe-slice-repeated-byte-fill-without-redundant-hbm-readback,explicit-munmap-before-gpu-map\n",
     "authority=linear-initialized-mapped-lease,private-allocation-device-vm-generation-and-address,public-layout-and-content-descriptor-only\n",
-    "failure=preflight-no-side-effects,post-allocation-or-mapping-failure-quarantines-session,no-retry-or-drop-cleanup\n",
+    "failure=preflight-no-side-effects,worker-spawn-or-panic-write-or-verification-failure-and-post-allocation-or-mapping-failure-quarantine-session,no-retry-or-drop-cleanup\n",
     "excluded=caller-asserted-initialization,callback-content-claim,persistent-cpu-mapping,gpu-address,copy-queue,execution,hardware-coherence-proof\n",
 );
 
 /// SHA-256 of [`GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_V1`].
 pub const GFX942_DEVICE_MEMORY_INITIALIZATION_MANIFEST_SHA256_V1: &str =
-    "e187789f3fbbaafa4d9d0e78f0012d12cb113fdfadb4aa61a3d2fce4dd044daa";
+    "1eb3c787a5111a022fc56fd6cb15fcf75202eaed56bd3e69eb8a0f8cca693a34";
 
 /// Canonical contract for the bounded multi-allocation R2 adapter.
 pub const SHARED_GTT_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
@@ -389,7 +389,8 @@ fn finish_xgmi_unmap_with_peer_post(
 /// through an owned CPU mapping before GPU publication.
 ///
 /// The authority binds the private allocation generation to one content
-/// descriptor. Arbitrary owned images are read back before this authority is
+/// descriptor. Arbitrary owned images are exactly compared to their retained
+/// authenticated source in a distinct full readback before this authority is
 /// minted; the private repeated-byte recipe instead uses one complete safe-slice
 /// fill without a redundant HBM readback. It has no public constructor, address,
 /// handle, pointer, or mutable-byte accessor and is neither `Clone` nor `Copy`.
@@ -1451,28 +1452,26 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
     fn initialize_public_device_memory(
         &mut self,
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
-        bytes: &[u8],
-        content: Gfx942DeviceContentDescriptorV1,
+        source: ValidatedInitializationSourceV1,
     ) -> Result<Gfx942InitializedDeviceMemoryV1, MemorySessionError> {
-        let expected_len =
-            u64::try_from(bytes.len()).map_err(|_| MemorySessionError::SizeOverflow)?;
-        let source_sha256: [u8; 32] = Sha256::digest(bytes).into();
+        let expected_len = source.byte_len();
+        let expected_len_usize = source.bytes().len();
+        let content = source.content();
         if lease.layout.uapi_flags != KFD_ALLOC_MEMORY_FLAGS_DEVICE_LOCAL_PUBLIC
             || content.byte_len() != expected_len
-            || content.sha256() != source_sha256
+            || u64::try_from(expected_len_usize) != Ok(expected_len)
             || expected_len != lease.layout.requested_bytes
         {
             return self.quarantine(MemorySessionError::DeviceContentMismatch);
         }
+        let (bytes, content) = source.into_parts();
+        let authenticated_source = &*bytes;
         self.initialize_public_device_memory_after_preflight(
             lease,
-            bytes.len(),
+            expected_len_usize,
             content,
-            |mapped| {
-                mapped.copy_from_slice(bytes);
-                Ok(())
-            },
-            true,
+            |mapped| copy_public_device_mapping(mapped, authenticated_source),
+            Some(authenticated_source),
         )
     }
 
@@ -1494,7 +1493,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             expected_len,
             content,
             |mapped| fill_public_device_mapping(mapped, initialization.repeated_byte()),
-            false,
+            None,
         )
     }
 
@@ -1504,7 +1503,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         expected_len: usize,
         content: Gfx942DeviceContentDescriptorV1,
         write: impl FnOnce(&mut [u8]) -> Result<(), MemorySessionError>,
-        verify_readback: bool,
+        verification_source: Option<&[u8]>,
     ) -> Result<Gfx942InitializedDeviceMemoryV1, MemorySessionError> {
         let index = self.device_memory_index(&lease, DeviceMemoryPhaseV1::Unmapped)?;
         self.check_currentness()?;
@@ -1546,20 +1545,20 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         if let Err(error) = write_result {
             return self.quarantine(error);
         }
-        let observed: Option<[u8; 32]> = if verify_readback {
+        let verification_result = if let Some(source) = verification_source {
             let record = &self.device_memory[index];
             let mapping = record
                 .mapping
                 .as_ref()
                 .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)?;
-            Some(B::with_bytes(mapping, expected_len, |mapped| {
-                Sha256::digest(mapped).into()
-            }))
+            B::with_bytes(mapping, expected_len, |mapped| {
+                verify_public_device_mapping(mapped, source)
+            })
         } else {
-            None
+            Ok(())
         };
-        if observed.is_some_and(|observed| observed != content.sha256()) {
-            return self.quarantine(MemorySessionError::DeviceContentMismatch);
+        if let Err(error) = verification_result {
+            return self.quarantine(error);
         }
         let unmap_result = {
             let (backend, records) = (&mut self.backend, &mut self.device_memory);
@@ -2776,12 +2775,12 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct RepeatedByteFillPlanV1 {
+struct PublicDeviceInitializationPlanV1 {
     chunk_bytes: usize,
     chunk_count: usize,
 }
 
-fn public_device_fill_worker_count(byte_len: usize, available_workers: usize) -> usize {
+fn public_device_initialization_worker_count(byte_len: usize, available_workers: usize) -> usize {
     if byte_len == 0 {
         return 0;
     }
@@ -2794,10 +2793,10 @@ fn public_device_fill_worker_count(byte_len: usize, available_workers: usize) ->
         .min(useful_workers)
 }
 
-fn repeated_byte_fill_plan(
+fn public_device_initialization_plan(
     byte_len: usize,
     requested_workers: usize,
-) -> Option<RepeatedByteFillPlanV1> {
+) -> Option<PublicDeviceInitializationPlanV1> {
     if byte_len == 0 {
         return None;
     }
@@ -2805,10 +2804,136 @@ fn repeated_byte_fill_plan(
         .clamp(1, MAX_PUBLIC_DEVICE_PARALLEL_FILL_WORKERS_V1)
         .min(byte_len);
     let chunk_bytes = byte_len.div_ceil(worker_limit);
-    Some(RepeatedByteFillPlanV1 {
+    Some(PublicDeviceInitializationPlanV1 {
         chunk_bytes,
         chunk_count: byte_len.div_ceil(chunk_bytes),
     })
+}
+
+/// Copies an authenticated source into a public device mapping using bounded,
+/// disjoint safe slices. The source remains owned by the caller until the
+/// distinct readback comparison completes.
+fn copy_public_device_mapping(
+    destination: &mut [u8],
+    source: &[u8],
+) -> Result<(), MemorySessionError> {
+    let available_workers = std::thread::available_parallelism().map_or(1, usize::from);
+    let worker_count =
+        public_device_initialization_worker_count(destination.len(), available_workers);
+    write_disjoint_source_partitions(
+        destination,
+        source,
+        worker_count,
+        |_| true,
+        |destination, source| destination.copy_from_slice(source),
+    )
+}
+
+/// Performs a second, complete read of the mapped logical extent and compares
+/// every byte with the retained authenticated source before CPU unmapping.
+fn verify_public_device_mapping(mapped: &[u8], source: &[u8]) -> Result<(), MemorySessionError> {
+    let available_workers = std::thread::available_parallelism().map_or(1, usize::from);
+    let worker_count = public_device_initialization_worker_count(mapped.len(), available_workers);
+    verify_disjoint_source_partitions(mapped, source, worker_count, |_| true, exact_bytes_match)
+}
+
+fn exact_bytes_match(left: &[u8], right: &[u8]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .fold(0_u8, |difference, (left, right)| {
+                difference | (left ^ right)
+            })
+            == 0
+}
+
+fn write_disjoint_source_partitions(
+    destination: &mut [u8],
+    source: &[u8],
+    requested_workers: usize,
+    allow_spawn: impl Fn(usize) -> bool + Copy + Send + Sync,
+    write: impl Fn(&mut [u8], &[u8]) + Copy + Send + Sync,
+) -> Result<(), MemorySessionError> {
+    if destination.len() != source.len() {
+        return Err(MemorySessionError::DeviceContentMismatch);
+    }
+    let Some(plan) = public_device_initialization_plan(destination.len(), requested_workers) else {
+        return Ok(());
+    };
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if plan.chunk_count == 1 {
+            write(destination, source);
+            return Ok(());
+        }
+        std::thread::scope(|scope| {
+            for (index, (destination, source)) in destination
+                .chunks_mut(plan.chunk_bytes)
+                .zip(source.chunks(plan.chunk_bytes))
+                .enumerate()
+            {
+                if !allow_spawn(index) {
+                    return Err(MemorySessionError::DeviceInitializationWriteFailed);
+                }
+                std::thread::Builder::new()
+                    .spawn_scoped(scope, move || write(destination, source))
+                    .map_err(|_| MemorySessionError::DeviceInitializationWriteFailed)?;
+            }
+            Ok(())
+        })
+    }));
+    match outcome {
+        Ok(result) => result,
+        Err(_) => Err(MemorySessionError::DeviceInitializationWriteFailed),
+    }
+}
+
+fn verify_disjoint_source_partitions(
+    mapped: &[u8],
+    source: &[u8],
+    requested_workers: usize,
+    allow_spawn: impl Fn(usize) -> bool + Copy + Send + Sync,
+    compare: impl Fn(&[u8], &[u8]) -> bool + Copy + Send + Sync,
+) -> Result<(), MemorySessionError> {
+    if mapped.len() != source.len() {
+        return Err(MemorySessionError::DeviceContentMismatch);
+    }
+    let Some(plan) = public_device_initialization_plan(mapped.len(), requested_workers) else {
+        return Ok(());
+    };
+    let all_equal = AtomicBool::new(true);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if plan.chunk_count == 1 {
+            all_equal.store(compare(mapped, source), Ordering::Relaxed);
+            return Ok(());
+        }
+        std::thread::scope(|scope| {
+            for (index, (mapped, source)) in mapped
+                .chunks(plan.chunk_bytes)
+                .zip(source.chunks(plan.chunk_bytes))
+                .enumerate()
+            {
+                if !allow_spawn(index) {
+                    return Err(MemorySessionError::DeviceInitializationVerificationFailed);
+                }
+                let all_equal = &all_equal;
+                std::thread::Builder::new()
+                    .spawn_scoped(scope, move || {
+                        if !compare(mapped, source) {
+                            all_equal.store(false, Ordering::Relaxed);
+                        }
+                    })
+                    .map_err(|_| MemorySessionError::DeviceInitializationVerificationFailed)?;
+            }
+            Ok(())
+        })
+    }));
+    match outcome {
+        Ok(Ok(())) if all_equal.load(Ordering::Relaxed) => Ok(()),
+        Ok(Ok(())) => Err(MemorySessionError::DeviceContentMismatch),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Err(MemorySessionError::DeviceInitializationVerificationFailed),
+    }
 }
 
 /// Fills a public device-local CPU mapping using only disjoint safe slices.
@@ -2822,7 +2947,7 @@ fn fill_public_device_mapping(
     repeated_byte: u8,
 ) -> Result<(), MemorySessionError> {
     let available_workers = std::thread::available_parallelism().map_or(1, usize::from);
-    let worker_count = public_device_fill_worker_count(bytes.len(), available_workers);
+    let worker_count = public_device_initialization_worker_count(bytes.len(), available_workers);
     fill_repeated_byte_with_workers(bytes, repeated_byte, worker_count)
 }
 
@@ -2841,7 +2966,7 @@ fn write_disjoint_repeated_byte_partitions(
     requested_workers: usize,
     write: impl Fn(&mut [u8]) + Copy + Send + Sync,
 ) -> Result<(), MemorySessionError> {
-    let Some(plan) = repeated_byte_fill_plan(bytes.len(), requested_workers) else {
+    let Some(plan) = public_device_initialization_plan(bytes.len(), requested_workers) else {
         return Ok(());
     };
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2871,16 +2996,46 @@ impl<B: MemoryBackend> Drop for SharedMemoryEngine<B> {
     }
 }
 
-fn validate_initialization_source(
-    bytes: &[u8],
+// Private fields and unique ownership bind validation to the exact allocation
+// that is later copied. Safe callers cannot mutate or substitute its bytes.
+struct ValidatedInitializationSourceV1 {
+    bytes: Box<[u8]>,
+    byte_len: u64,
     content: Gfx942DeviceContentDescriptorV1,
-) -> Result<u64, MemorySessionError> {
+}
+
+impl ValidatedInitializationSourceV1 {
+    fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    const fn byte_len(&self) -> u64 {
+        self.byte_len
+    }
+
+    const fn content(&self) -> Gfx942DeviceContentDescriptorV1 {
+        self.content
+    }
+
+    fn into_parts(self) -> (Box<[u8]>, Gfx942DeviceContentDescriptorV1) {
+        (self.bytes, self.content)
+    }
+}
+
+fn validate_initialization_source(
+    bytes: Box<[u8]>,
+    content: Gfx942DeviceContentDescriptorV1,
+) -> Result<ValidatedInitializationSourceV1, MemorySessionError> {
     let byte_len = u64::try_from(bytes.len()).map_err(|_| MemorySessionError::SizeOverflow)?;
-    let sha256: [u8; 32] = Sha256::digest(bytes).into();
+    let sha256: [u8; 32] = Sha256::digest(&bytes).into();
     if byte_len == 0 || content.byte_len() != byte_len || content.sha256() != sha256 {
         return Err(MemorySessionError::DeviceContentMismatch);
     }
-    Ok(byte_len)
+    Ok(ValidatedInitializationSourceV1 {
+        bytes,
+        byte_len,
+        content,
+    })
 }
 
 fn device_memory_layout(
@@ -3263,8 +3418,10 @@ impl SharedGttMemorySessionV1 {
     /// allocation to the selected GPU.
     ///
     /// The descriptor is data only. It cannot mint authority unless its exact
-    /// length and digest match both the caller bytes and the bytes read back
-    /// from this allocation's owned mapping. The ordinary uninitialized
+    /// length and digest match the caller bytes and a distinct full mapped
+    /// readback compares exactly to that retained authenticated source. Source
+    /// validation consumes the owned bytes, preventing safe mutation or
+    /// substitution before the mapped copy. The ordinary uninitialized
     /// device-local path remains a distinct API and flag profile.
     pub fn initialize_gfx942_device_memory(
         &mut self,
@@ -3272,7 +3429,8 @@ impl SharedGttMemorySessionV1 {
         alignment: u64,
         content: Gfx942DeviceContentDescriptorV1,
     ) -> Result<Gfx942InitializedDeviceMemoryV1, MemorySessionError> {
-        let requested_bytes = validate_initialization_source(&bytes, content)?;
+        let source = validate_initialization_source(bytes, content)?;
+        let requested_bytes = source.byte_len();
         let lease = self.engine.allocate_device_memory_with_flags(
             self.model_device.model_key(),
             self.vm,
@@ -3280,8 +3438,7 @@ impl SharedGttMemorySessionV1 {
             alignment,
             KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
         )?;
-        self.engine
-            .initialize_public_device_memory(lease, &bytes, content)
+        self.engine.initialize_public_device_memory(lease, source)
     }
 
     /// Allocates CPU-visible device-local storage, fills its complete logical
@@ -6534,17 +6691,19 @@ mod tests {
         let (device, vm) = device_vm(7);
         let bytes = vec![0x5a; 4097];
         let descriptor = content(&bytes);
+        let byte_len = bytes.len();
+        let source = validate_initialization_source(bytes.into_boxed_slice(), descriptor).unwrap();
         let lease = engine
             .allocate_device_memory_with_flags(
                 device,
                 vm,
-                bytes.len() as u64,
+                byte_len as u64,
                 4096,
                 KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
             )
             .unwrap();
         let initialized = engine
-            .initialize_public_device_memory(lease, &bytes, descriptor)
+            .initialize_public_device_memory(lease, source)
             .unwrap();
         assert_eq!(engine.backend.flags, vec![0xa000_0001]);
         assert_eq!(engine.backend.map_cpu_calls, 1);
@@ -6553,7 +6712,7 @@ mod tests {
         assert!(engine.device_memory[0].mapping.is_none());
         assert_eq!(engine.device_memory[0].phase, DeviceMemoryPhaseV1::Mapped);
         assert_eq!(initialized.content(), descriptor);
-        assert_eq!(initialized.layout().requested_bytes(), bytes.len() as u64);
+        assert_eq!(initialized.layout().requested_bytes(), byte_len as u64);
 
         let (lease, retained) = initialized.into_parts();
         assert_eq!(retained, descriptor);
@@ -6568,18 +6727,18 @@ mod tests {
     }
 
     #[test]
-    fn repeated_byte_fill_plan_is_bounded_and_covers_uneven_extents() {
-        assert_eq!(repeated_byte_fill_plan(0, 0), None);
+    fn public_device_initialization_plan_is_bounded_and_covers_uneven_extents() {
+        assert_eq!(public_device_initialization_plan(0, 0), None);
         assert_eq!(
-            repeated_byte_fill_plan(67, 4),
-            Some(RepeatedByteFillPlanV1 {
+            public_device_initialization_plan(67, 4),
+            Some(PublicDeviceInitializationPlanV1 {
                 chunk_bytes: 17,
                 chunk_count: 4,
             })
         );
         assert_eq!(
-            repeated_byte_fill_plan(3, usize::MAX),
-            Some(RepeatedByteFillPlanV1 {
+            public_device_initialization_plan(3, usize::MAX),
+            Some(PublicDeviceInitializationPlanV1 {
                 chunk_bytes: 1,
                 chunk_count: 3,
             })
@@ -6593,27 +6752,155 @@ mod tests {
     #[test]
     fn repeated_byte_fill_threshold_keeps_small_inputs_serial() {
         assert_eq!(
-            public_device_fill_worker_count(
+            public_device_initialization_worker_count(
                 PUBLIC_DEVICE_PARALLEL_FILL_THRESHOLD_BYTES_V1 - 1,
                 usize::MAX,
             ),
             1
         );
         assert_eq!(
-            public_device_fill_worker_count(
+            public_device_initialization_worker_count(
                 PUBLIC_DEVICE_PARALLEL_FILL_THRESHOLD_BYTES_V1,
                 usize::MAX,
             ),
             4
         );
         assert_eq!(
-            public_device_fill_worker_count(PUBLIC_DEVICE_PARALLEL_FILL_THRESHOLD_BYTES_V1, 0,),
+            public_device_initialization_worker_count(
+                PUBLIC_DEVICE_PARALLEL_FILL_THRESHOLD_BYTES_V1,
+                0,
+            ),
             1
         );
         assert_eq!(
-            public_device_fill_worker_count(usize::MAX, usize::MAX),
+            public_device_initialization_worker_count(usize::MAX, usize::MAX),
             MAX_PUBLIC_DEVICE_PARALLEL_FILL_WORKERS_V1
         );
+    }
+
+    #[test]
+    fn arbitrary_source_copy_and_distinct_verification_cover_partition_edges() {
+        for (byte_len, workers) in [(1, 1), (3, usize::MAX), (17, 4), (67, 4)] {
+            let source = (0..byte_len)
+                .map(|index| (index as u8).wrapping_mul(37))
+                .collect::<Vec<_>>();
+            let mut mapped = vec![0xff; byte_len];
+            write_disjoint_source_partitions(
+                &mut mapped,
+                &source,
+                workers,
+                |_| true,
+                |destination, source| destination.copy_from_slice(source),
+            )
+            .unwrap();
+            assert_eq!(mapped, source);
+            verify_disjoint_source_partitions(
+                &mapped,
+                &source,
+                workers,
+                |_| true,
+                |left, right| left == right,
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn arbitrary_source_verification_rejects_partial_wrong_and_length_substitution() {
+        let source = (0_u8..67).collect::<Vec<_>>();
+        let mut mapped = vec![0xff; source.len()];
+        write_disjoint_source_partitions(
+            &mut mapped,
+            &source,
+            4,
+            |_| true,
+            |destination, source| {
+                let copied = destination.len().saturating_sub(1);
+                destination[..copied].copy_from_slice(&source[..copied]);
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_disjoint_source_partitions(
+                &mapped,
+                &source,
+                4,
+                |_| true,
+                |left, right| left == right,
+            ),
+            Err(MemorySessionError::DeviceContentMismatch)
+        ));
+
+        mapped.copy_from_slice(&source);
+        mapped[34] ^= 1;
+        assert!(matches!(
+            verify_disjoint_source_partitions(
+                &mapped,
+                &source,
+                4,
+                |_| true,
+                |left, right| left == right,
+            ),
+            Err(MemorySessionError::DeviceContentMismatch)
+        ));
+        assert!(matches!(
+            verify_disjoint_source_partitions(
+                &mapped[..66],
+                &source,
+                4,
+                |_| true,
+                |left, right| left == right,
+            ),
+            Err(MemorySessionError::DeviceContentMismatch)
+        ));
+    }
+
+    #[test]
+    fn arbitrary_source_worker_spawn_and_panic_fail_closed_by_phase() {
+        let source = (0_u8..67).collect::<Vec<_>>();
+        let mut mapped = vec![0xff; source.len()];
+        assert!(matches!(
+            write_disjoint_source_partitions(
+                &mut mapped,
+                &source,
+                4,
+                |index| index != 2,
+                |destination, source| destination.copy_from_slice(source),
+            ),
+            Err(MemorySessionError::DeviceInitializationWriteFailed)
+        ));
+        assert!(matches!(
+            write_disjoint_source_partitions(
+                &mut mapped,
+                &source,
+                4,
+                |_| true,
+                |_, _| panic!("injected arbitrary-source writer panic"),
+            ),
+            Err(MemorySessionError::DeviceInitializationWriteFailed)
+        ));
+
+        mapped.copy_from_slice(&source);
+        assert!(matches!(
+            verify_disjoint_source_partitions(
+                &mapped,
+                &source,
+                4,
+                |index| index != 2,
+                |left, right| left == right,
+            ),
+            Err(MemorySessionError::DeviceInitializationVerificationFailed)
+        ));
+        assert!(matches!(
+            verify_disjoint_source_partitions(
+                &mapped,
+                &source,
+                4,
+                |_| true,
+                |_, _| panic!("injected arbitrary-source verifier panic"),
+            ),
+            Err(MemorySessionError::DeviceInitializationVerificationFailed)
+        ));
     }
 
     #[test]
@@ -6718,7 +7005,7 @@ mod tests {
             byte_len as usize,
             initialization.content(),
             |_| Err(MemorySessionError::DeviceInitializationWriteFailed),
-            false,
+            None,
         );
 
         assert!(matches!(
@@ -6732,12 +7019,11 @@ mod tests {
     }
 
     #[test]
-    fn arbitrary_owned_bytes_still_reject_a_readback_mismatch() {
+    fn arbitrary_partial_write_quarantines_before_cpu_unmap_or_gpu_map() {
         let mut engine = acquired();
         let (device, vm) = device_vm(7);
-        let bytes = vec![0x3c; 4097];
-        let role = crate::Gfx942DeviceContentRoleV1::new([0x62; 32], 8).unwrap();
-        let content = Gfx942DeviceContentDescriptorV1::from_bytes(role, &bytes).unwrap();
+        let bytes = vec![0x5a; 4097];
+        let descriptor = content(&bytes);
         let lease = engine
             .allocate_device_memory_with_flags(
                 device,
@@ -6747,10 +7033,54 @@ mod tests {
                 KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
             )
             .unwrap();
+
+        let result = engine.initialize_public_device_memory_after_preflight(
+            lease,
+            bytes.len(),
+            descriptor,
+            |mapped| {
+                mapped[..bytes.len() - 1].copy_from_slice(&bytes[..bytes.len() - 1]);
+                Ok(())
+            },
+            Some(&bytes),
+        );
+
+        assert!(matches!(
+            result,
+            Err(MemorySessionError::DeviceContentMismatch)
+        ));
+        assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
+        assert_eq!(engine.backend.map_gpu_calls, 0);
+        assert_eq!(
+            engine.backend.operations,
+            ["map_cpu", "prepare_cpu_mapping"]
+        );
+        assert!(engine.device_memory[0].mapping.is_some());
+        assert_eq!(engine.device_memory[0].phase, DeviceMemoryPhaseV1::Unmapped);
+    }
+
+    #[test]
+    fn arbitrary_owned_bytes_still_reject_a_readback_mismatch() {
+        let mut engine = acquired();
+        let (device, vm) = device_vm(7);
+        let bytes = vec![0x3c; 4097];
+        let role = crate::Gfx942DeviceContentRoleV1::new([0x62; 32], 8).unwrap();
+        let content = Gfx942DeviceContentDescriptorV1::from_bytes(role, &bytes).unwrap();
+        let byte_len = bytes.len();
+        let source = validate_initialization_source(bytes.into_boxed_slice(), content).unwrap();
+        let lease = engine
+            .allocate_device_memory_with_flags(
+                device,
+                vm,
+                byte_len as u64,
+                4096,
+                KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
+            )
+            .unwrap();
         engine.backend.corrupt_readback = true;
 
         assert!(matches!(
-            engine.initialize_public_device_memory(lease, &bytes, content),
+            engine.initialize_public_device_memory(lease, source),
             Err(MemorySessionError::DeviceContentMismatch)
         ));
         assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
@@ -6764,32 +7094,70 @@ mod tests {
     }
 
     #[test]
-    fn initialization_source_preflight_rejects_descriptor_substitution() {
-        let bytes = vec![0x5a; 4096];
-        let wrong = content(&vec![0xa5; 4096]);
+    fn initialization_source_preflight_rejects_digest_length_and_empty_substitution() {
+        let bytes = vec![0x5a; 4096].into_boxed_slice();
+        let descriptor = content(&bytes);
+        let wrong_digest = content(&vec![0xa5; 4096]);
+        let wrong_length = Gfx942DeviceContentDescriptorV1::new(
+            descriptor.role(),
+            descriptor.byte_len() - 1,
+            descriptor.sha256(),
+        )
+        .unwrap();
         assert!(matches!(
-            validate_initialization_source(&bytes, wrong),
+            validate_initialization_source(bytes.clone(), wrong_digest),
+            Err(MemorySessionError::DeviceContentMismatch)
+        ));
+        assert!(matches!(
+            validate_initialization_source(bytes, wrong_length),
+            Err(MemorySessionError::DeviceContentMismatch)
+        ));
+        assert!(matches!(
+            validate_initialization_source(Vec::new().into_boxed_slice(), descriptor),
             Err(MemorySessionError::DeviceContentMismatch)
         ));
     }
 
     #[test]
-    fn internal_post_allocation_descriptor_substitution_quarantines() {
+    fn initialization_source_preflight_rejects_mutation_before_ownership_transfer() {
+        let mut bytes = vec![0x5a; 4096];
+        let descriptor = content(&bytes);
+        bytes[2048] ^= 1;
+        assert!(matches!(
+            validate_initialization_source(bytes.into_boxed_slice(), descriptor),
+            Err(MemorySessionError::DeviceContentMismatch)
+        ));
+    }
+
+    #[test]
+    fn validated_initialization_source_takes_the_exact_box_without_copying() {
+        let bytes = vec![0x5a; 4096].into_boxed_slice();
+        let descriptor = content(&bytes);
+        let pointer = bytes.as_ptr();
+        let source = validate_initialization_source(bytes, descriptor).unwrap();
+        assert_eq!(source.bytes().as_ptr(), pointer);
+        assert_eq!(source.byte_len(), 4096);
+        assert_eq!(source.content(), descriptor);
+    }
+
+    #[test]
+    fn internal_post_allocation_length_substitution_quarantines() {
         let mut engine = acquired();
         let (device, vm) = device_vm(7);
         let bytes = vec![0x5a; 4096];
-        let wrong = content(&vec![0xa5; 4096]);
+        let descriptor = content(&bytes);
+        let source = validate_initialization_source(bytes.into_boxed_slice(), descriptor).unwrap();
         let lease = engine
             .allocate_device_memory_with_flags(
                 device,
                 vm,
-                bytes.len() as u64,
+                source.byte_len() + 1,
                 4096,
                 KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
             )
             .unwrap();
         assert!(matches!(
-            engine.initialize_public_device_memory(lease, &bytes, wrong),
+            engine.initialize_public_device_memory(lease, source),
             Err(MemorySessionError::DeviceContentMismatch)
         ));
         assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
@@ -6804,11 +7172,14 @@ mod tests {
             let (device, vm) = device_vm(7);
             let bytes = vec![0x3c; 4096];
             let descriptor = content(&bytes);
+            let byte_len = bytes.len();
+            let source =
+                validate_initialization_source(bytes.into_boxed_slice(), descriptor).unwrap();
             let lease = engine
                 .allocate_device_memory_with_flags(
                     device,
                     vm,
-                    bytes.len() as u64,
+                    byte_len as u64,
                     4096,
                     KfdAllocMemoryFlags::DEVICE_LOCAL_PUBLIC,
                 )
@@ -6816,12 +7187,78 @@ mod tests {
             engine.backend.fail_operation = Some(operation);
             assert!(
                 engine
-                    .initialize_public_device_memory(lease, &bytes, descriptor)
+                    .initialize_public_device_memory(lease, source)
                     .is_err()
             );
             assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
             assert_eq!(engine.backend.map_gpu_calls, 0);
         }
+    }
+
+    #[test]
+    fn arbitrary_source_has_one_preflight_hash_and_parallel_exact_readback() {
+        let source = include_str!("shared_memory.rs");
+        let validation = source
+            .split("fn validate_initialization_source(")
+            .nth(1)
+            .unwrap()
+            .split("fn device_memory_layout(")
+            .next()
+            .unwrap();
+        assert!(
+            validation.contains("bytes: Box<[u8]>") || validation.contains("bytes: Box<[u8]>,")
+        );
+        assert_eq!(validation.matches("Sha256::digest(&bytes)").count(), 1);
+
+        let initialization = source
+            .split("fn initialize_public_device_memory(")
+            .nth(1)
+            .unwrap()
+            .split("fn initialize_public_device_memory_repeated_byte(")
+            .next()
+            .unwrap();
+        assert!(initialization.contains("source: ValidatedInitializationSourceV1"));
+        assert!(!initialization.contains("Sha256::digest"));
+
+        let mapped_preflight = source
+            .split("fn initialize_public_device_memory_after_preflight(")
+            .nth(1)
+            .unwrap()
+            .split("fn with_unmapped_public_device_memory<R>(")
+            .next()
+            .unwrap();
+        assert!(!mapped_preflight.contains("Sha256::digest(mapped)"));
+        assert!(mapped_preflight.contains("verify_public_device_mapping(mapped, source)"));
+
+        let verification = source
+            .split("fn verify_public_device_mapping(")
+            .nth(1)
+            .unwrap()
+            .split("fn write_disjoint_source_partitions(")
+            .next()
+            .unwrap();
+        assert!(verification.contains("verify_disjoint_source_partitions"));
+
+        let workers = source
+            .split("fn write_disjoint_source_partitions(")
+            .nth(1)
+            .unwrap()
+            .split("fn verify_disjoint_source_partitions(")
+            .next()
+            .unwrap();
+        assert!(workers.contains("chunks_mut(plan.chunk_bytes)"));
+        assert!(workers.contains("source.chunks(plan.chunk_bytes)"));
+        assert!(workers.contains("spawn_scoped"));
+
+        let public_entry = source
+            .split("pub fn initialize_gfx942_device_memory(")
+            .nth(1)
+            .unwrap()
+            .split("pub fn initialize_gfx942_device_memory_repeated_byte(")
+            .next()
+            .unwrap();
+        assert!(public_entry.contains("validate_initialization_source(bytes, content)?"));
+        assert!(public_entry.contains("initialize_public_device_memory(lease, source)"));
     }
 
     #[test]

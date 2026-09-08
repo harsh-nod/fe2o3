@@ -1,0 +1,212 @@
+{
+  "schema": "fe2o3.gfx950.systems-sota-performance-audit.v1",
+  "recorded_on": "2026-09-05",
+  "claim_boundary": "The timings are exact fixed-shape fe2o3 Rust artifacts on one MI350X. Public libraries are architectural references unless every semantic, shape, precision, layout, fusion, oracle, and timer axis matches. No external state-of-the-art claim is made for an excluded comparison.",
+  "device": {
+    "host": "smci350-rck-g03-b19-03",
+    "physical_gpu": 5,
+    "market_name": "AMD Instinct MI350X",
+    "target": "gfx950:xnack-",
+    "rocr_visible_devices": "5",
+    "hip_visible_devices": "unset",
+    "rocm": "7.2.1",
+    "hip": "7.2.53211-e1a6bc5663",
+    "hsa_runtime": "1.18",
+    "clocks_locked": false
+  },
+  "protocol": {
+    "timer": "ROCr HSA dispatch timestamps at 1 GHz",
+    "processes_per_variant": 1,
+    "initial_warmups": 200,
+    "blocks": 5,
+    "samples_per_block": 100,
+    "block_rewarm": 20,
+    "samples_per_series": 500,
+    "launch": {"workgroup": [256, 1, 1], "grid": [4, 1, 1]},
+    "correctness": "Every timed artifact passed the independent CPU oracle, immutable-input checks, output canaries, preflight dispatch, and validation after every timing block.",
+    "systems_raw_samples_sha256": "1ad6cec0204c78b1d9306357d9ca20fe21c5eceea345d9840c4efe145273a320",
+    "route_ablation_raw_samples_sha256": "48d125aef1fc4b9a7a327be49eec17abf98691f17feafb8cdd17b422ab5bb789"
+  },
+  "public_candidate_review": [
+    {
+      "id": "rocm-aiter",
+      "repository": "https://github.com/ROCm/aiter",
+      "commit": "a3f5b628b42d25aec8899d31d0710d41c5119223",
+      "families": ["fused MoE", "low-precision GEMM", "attention"],
+      "verdict": "excluded",
+      "reason": "No kernel matches these bounded E4/top-2/K128/N16 route, expert, combine, transaction, N-gram, staging, or 4x4 Muon contracts."
+    },
+    {
+      "id": "rocm-composable-kernel",
+      "repository": "https://github.com/ROCm/composable_kernel",
+      "commit": "3df477638d05169dbe73f4d58e3a13ad3ca7b5da",
+      "families": ["low-precision GEMM", "grouped GEMM"],
+      "verdict": "excluded",
+      "reason": "The available primitives do not match the fused routing, expert selection, activation, ordering, and output semantics."
+    },
+    {
+      "id": "vllm",
+      "repository": "https://github.com/vllm-project/vllm",
+      "commit": "96242aa50d196993735854f03bd717496e88b7c3",
+      "families": ["speculative verification", "N-gram proposal", "fused MoE"],
+      "verdict": "excluded",
+      "reason": "Batching, cache/state ownership, table layout, fusion boundary, and outputs differ."
+    },
+    {
+      "id": "sglang",
+      "repository": "https://github.com/sgl-project/sglang",
+      "commit": "60f6d77a9836561d289d56cd3306e0fb00c949b6",
+      "families": ["speculative verification", "N-gram proposal", "fused MoE"],
+      "verdict": "excluded",
+      "reason": "It does not expose the same eight-candidate transaction or fixed three-token hash-table gather contracts."
+    },
+    {
+      "id": "official-gpt-oss-triton",
+      "repository": "https://github.com/openai/gpt-oss",
+      "commit": "7b583341fe16729127f6d5b94a7b09ccae97e1a1",
+      "families": ["GPT-OSS MXFP4 MoE"],
+      "verdict": "architectural-reference-only",
+      "reason": "It pins the real model dimensions and quantization, but has a different full-operator boundary from the bounded layer-tile megakernel."
+    }
+  ],
+  "results": [
+    {
+      "kernel": "gfx950_moe_route_fp4_t16_e4_k2_v1",
+      "shape": "16 batches x T16 x H128 x E4 x top-2",
+      "best_public_candidate": "AITER fused MoE routing family",
+      "external_comparison_verdict": "excluded-not-exact",
+      "exact_comparator": "route-redundant-lanes fe2o3 ablation",
+      "canonical": {"median_ns": 17320, "p95_ns": 17680, "hsaco_sha256": "7d7429d354f363c89998dcf1c4cba84338bf71a80f16c831cdc253798e7c2465"},
+      "ablation": {"median_ns": 21120, "p95_ns": 21480, "hsaco_sha256": "be250977be4513f3b7469c3201c6f2715506dca7e08551ba17998f5777e2df15"},
+      "optimization": "four-lane depth striping removes four-way redundant activation/router-weight traffic; twelve uniform broadcasts merge FP32 partial sums",
+      "contribution": {"speedup": 1.2194, "latency_reduction_percent": 17.9924, "median_ns_saved": 3800},
+      "correctness": "passed: expert IDs, counts, and dispatch exact; weights max_abs_error=2.980232239e-8",
+      "resource_floor_ns": 9.76,
+      "measured_over_floor": 1774.59,
+      "model_relevance": "MoE routing teaching proxy only; not shape-equivalent to Kimi-K3, DeepSeek-V4, or GLM-5.3."
+    },
+    {
+      "kernel": "gfx950_moe_expert_rank_fp4_fp8_v1",
+      "shape": "16 batches x M16 x N16 x K128, two routed plus one shared expert",
+      "best_public_candidate": "AITER fused MoE and CK grouped low-precision GEMM families",
+      "external_comparison_verdict": "excluded-not-exact",
+      "exact_comparator": "expert-serial fe2o3 ablation",
+      "canonical_rank_median_ns": [55440, 55620.5],
+      "canonical_rank_p95_ns": [63880, 63680],
+      "serial_rank_median_ns": [58660, 53260],
+      "decision": "rank-dependent result is inconclusive in this one-process campaign; retain eager independent MFMA scheduling based on the earlier controlled campaign, without a new superiority claim",
+      "correctness": "passed: rank-local expert output max_abs_error=9.536743164e-7",
+      "resource_floor_ns": 18.944,
+      "measured_over_floor": [2926.52, 2936.05],
+      "model_relevance": "Uses native gfx950 mixed FP4/FP8 MFMA, but its E4/K128/N16 teaching shape is not a production model expert shape."
+    },
+    {
+      "kernel": "gfx950_combine_expert_ranks_v1",
+      "shape": "four batches x two rank partials x 16 x 16 FP32",
+      "best_public_candidate": "framework-specific fused-MoE reductions",
+      "external_comparison_verdict": "excluded-not-exact",
+      "exact_comparator": null,
+      "canonical": {"median_ns": 5400, "p95_ns": 5600},
+      "decision": "direct coalesced fixed-order addition retained; the transpose ablation is verifier-rejected and no external kernel has the same boundary",
+      "correctness": "passed: all combine outputs exact",
+      "resource_floor_ns": 1.536,
+      "measured_over_floor": 3515.62,
+      "model_relevance": "Expert-parallel combine proxy; no whole-model latency impact is inferred."
+    },
+    {
+      "kernel": "gfx950_speculative_transaction_v1",
+      "shape": "16 batches x eight candidates x four draft steps x state width eight",
+      "best_public_candidate": "vLLM and SGLang speculative verification paths",
+      "external_comparison_verdict": "excluded-not-exact",
+      "exact_comparator": "speculative-recompute-prefix fe2o3 ablation",
+      "canonical": {"median_ns": 11120, "p95_ns": 12080},
+      "recompute_ablation": {"median_ns": 10960, "p95_ns": 11880},
+      "decision": "the 1.46% single-process reversal conflicts with earlier evidence favoring broadcast reuse, so it is not promoted or attributed as a stable gain",
+      "correctness": "passed: transaction status exact; state max_abs_error=1.192092896e-7",
+      "resource_floor_ns": 1.792,
+      "measured_over_floor": 6205.36,
+      "model_relevance": "MTP/speculative transaction proxy; serving implementations use different state and batching contracts."
+    },
+    {
+      "kernel": "gfx950_qwen_ngram_gather_v1",
+      "shape": "16 batches x eight queries x 3-gram x 16 table slots",
+      "best_public_candidate": "vLLM and SGLang N-gram proposal paths",
+      "external_comparison_verdict": "excluded-not-exact",
+      "exact_comparator": "ngram-reverse-probe fe2o3 ablation",
+      "canonical": {"median_ns": 12880, "p95_ns": 13920},
+      "reverse_probe_ablation": {"median_ns": 15160, "p95_ns": 15960},
+      "optimization": "ascending linear-probe order aligns with insertion/search order while preserving full-key collision checks and deterministic duplicate priority",
+      "contribution": {"speedup": 1.1770, "latency_reduction_percent": 15.0396, "median_ns_saved": 2280},
+      "correctness": "passed: every gathered result exact",
+      "resource_floor_ns": 1.152,
+      "measured_over_floor": 11180.6,
+      "model_relevance": "Qwen-style N-gram lookup proxy; it is not an end-to-end Qwen speculative decoder."
+    },
+    {
+      "kernel": "gfx950_stage_gradient_shard_v1",
+      "shape": "16 batches x 16 FP32 elements, measured separately for two shards",
+      "best_public_candidate": "HIP copy and collective staging primitives",
+      "external_comparison_verdict": "excluded-not-exact",
+      "exact_comparator": null,
+      "canonical": {"median_ns": [5480, 5480], "p95_ns": [6040, 6001]},
+      "decision": "direct coalesced copy retained; the tile/broadcast form is verifier-rejected and adds no reuse",
+      "correctness": "passed: both staged gradient shards exact",
+      "resource_floor_ns": 0.256,
+      "measured_over_floor": 21406.2,
+      "model_relevance": "Training transport staging microkernel; it does not represent model inference."
+    },
+    {
+      "kernel": "gfx950_muon_update_4x4_v1",
+      "shape": "16 batches x two 4x4 FP32 shards x five Newton-Schulz iterations",
+      "best_public_candidate": "distributed Muon implementations with larger matrices",
+      "external_comparison_verdict": "excluded-not-exact",
+      "exact_comparator": "muon-broadcast16 fe2o3 ablation",
+      "canonical": {"median_ns": 6800, "p95_ns": 7040},
+      "broadcast16_ablation": {"median_ns": 6800, "p95_ns": 7000},
+      "decision": "median tie; retain the canonical Wave64 reduction and do not fabricate a contribution below timer resolution",
+      "correctness": "passed: update max_abs_error=7.450580597e-9; norm max_abs_error=5.960464478e-8",
+      "resource_floor_ns": 0.392,
+      "measured_over_floor": 17346.9,
+      "model_relevance": "Training optimizer teaching profile; production Muon matrix sizes are not comparable."
+    },
+    {
+      "kernel": "gfx950_gpt_oss_120b_decode_megakernel_v1",
+      "shape": "16 independent batch-1 bounded GPT-OSS layer tiles; H2880, E128/top-4, GQA 8:1, context 16, one MXFP4 M16N16K128 expert tile",
+      "best_public_candidate": "official GPT-OSS Triton components and AITER operator families",
+      "external_comparison_verdict": "excluded-not-exact",
+      "exact_comparator": "three materialized fe2o3 Rust components at identical WG256/grid4 geometry",
+      "canonical": {"median_ns": 1075163.5, "p95_ns": 1086204, "hsaco_sha256": "62139f01f2394c208e37222b896cf5ffdda18b90116dcc3181ff330b7e9c6624"},
+      "ablations": {
+        "serial_router_median_ns": 64937745,
+        "held_fragments_median_ns": 1079923,
+        "interleaved_stores_median_ns": 1080123,
+        "materialized_router_attention_expert_median_sum_ns": 1081802
+      },
+      "optimization_contributions": [
+        {"optimization": "two router experts per Wave64 lane", "speedup": 60.398, "latency_reduction_percent": 98.3443},
+        {"optimization": "sequential MXFP4 fragment construction/consumption", "speedup": 1.00443, "latency_reduction_percent": 0.440726},
+        {"optimization": "grouped disjoint stores", "speedup": 1.00461, "latency_reduction_percent": 0.459161},
+        {"optimization": "router-attention-expert fusion versus sum of component medians", "speedup": 1.00617, "latency_reduction_percent": 0.613652}
+      ],
+      "correctness": "passed: attention 4096 values max_abs_error=1.192092896e-7; expert 4096 values exact; packed routes 1024 exact",
+      "resource_floor_ns": 3019.944,
+      "measured_over_floor": 356.021,
+      "model_relevance": "Dimensions and MXFP4 format are pinned to official GPT-OSS-120B, but the boundary is a bounded tile, not a full layer or whole-model decode. No tokens/s claim is inferred."
+    }
+  ],
+  "gpt_raw_samples_sha256": {
+    "optimized": "d659bec30b2f0516e5002bc41c08faf7e740897b85a361535d887e5c8199a22c",
+    "serial_router": "3e65b0cb87658ffb73f45442cf3b1270240740be25afa398c818d405a693286d",
+    "held_fragments": "8a41c718c4ef57d1a682849ab342ad593a252b5f47b3f8b1901c788ec15ea942",
+    "interleaved_stores": "9dd0b10367d7222eca77da1099cceb1c76629efff94492c5cb17f9d90b31b6c3",
+    "materialized_router": "48925861642fb563ab92b4051c19fdc2b7bf476e10d12eacc70936372aff15bb",
+    "materialized_attention": "abf78ecfe4a5604da5d1bd656d60e5be30cb047335d5960444eaa71725bb8ba8",
+    "materialized_expert": "1c6fb50510eb0aa5426fd4093405d4b8b880cb3e9c56bdb72499e5cfebef86c2"
+  },
+  "theoretical_bound": {
+    "bandwidth_bytes_per_second": 8000000000000,
+    "fp32_flops_per_second": 144200000000000,
+    "mxfp4_flops_per_second": 9200000000000000,
+    "derivation": "For each current batched launch: max(compulsory unique bytes / 8 TB/s, counted FP32 operations / 144.2 TFLOP/s, admitted low-precision operations / the named peak). This optimistic whole-device throughput floor excludes dispatch, dependencies, cache-line amplification, scalar/transcendental work, and occupancy limits."
+  }
+}

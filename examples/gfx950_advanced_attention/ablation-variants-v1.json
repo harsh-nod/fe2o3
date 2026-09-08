@@ -63,6 +63,24 @@
       "pipeline_assessment": "K=128 is exactly one native MFMA tile, leaving no next K tile for a useful ping-pong stage"
     },
     {
+      "feature": "kernel-deepseek-sparse-attention-leader-exp-v1",
+      "kernel_export": "gfx950_deepseek_sparse_attention",
+      "baseline_feature": "kernel-deepseek-sparse-attention",
+      "role": "measured counterexample retained for reproducibility",
+      "isolated_change": "evaluate four subgroup-invariant softmax exponentials on lane zero and broadcast the weights instead of evaluating them independently in all 16 lanes",
+      "shape": "64 independent FP32 indexed heads per launch; K=128; 16 candidate rows; top-k=4; 16 value channels",
+      "workgroup": [256, 1, 1],
+      "grid": [4, 1, 1],
+      "problems_per_launch": 64,
+      "unique_touched_global_bytes_per_problem": 3008,
+      "launch_unique_touched_global_bytes": 192512,
+      "lds_bytes": 0,
+      "lds_stages": 0,
+      "qualification": "2026-09-05 GPU4 HSA PASS; output max_absolute_error=5.215406418e-8; maximum max_absolute_error=1.490116119e-7; normalizer max_absolute_error=4.768371582e-7; forward-order HSACO SHA-256=4db5188090ead4e2dfe75d0ecf8166377aa05a670a9535793fa0b707d8954173",
+      "performance_decision": "reject: 13,400 ns versus 13,480 ns in forward order, but both medians were 13,080 ns and the 95% paired interval crossed 1.0 when order was reversed",
+      "pipeline_assessment": "top-k=4 has no streamed score tile; four lane exchanges can cost as much as the redundant OCML work at this bounded shape"
+    },
+    {
       "feature": "kernel-compressed-hybrid-attention-division-baseline-v1",
       "kernel_export": "gfx950_compressed_hybrid_attention",
       "production_feature": "kernel-compressed-hybrid-attention",

@@ -1,5 +1,203 @@
 use super::*;
 
+const CRATES_IO_REGISTRY_SOURCE: &str = "registry+https://github.com/rust-lang/crates.io-index";
+
+#[derive(serde::Deserialize)]
+struct BuildStdCargoLock {
+    package: Vec<BuildStdLockedPackage>,
+}
+
+#[derive(serde::Deserialize)]
+struct BuildStdLockedPackage {
+    name: String,
+    version: String,
+    source: Option<String>,
+    checksum: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct VendorPackageManifest {
+    package: VendorPackageIdentity,
+}
+
+#[derive(serde::Deserialize)]
+struct VendorPackageIdentity {
+    name: String,
+    version: String,
+}
+
+#[derive(serde::Deserialize)]
+struct VendorPackageChecksum {
+    package: Option<String>,
+}
+
+fn build_std_vendor_guidance() -> &'static str {
+    "construct it with the pinned nightly Cargo using `cargo vendor --locked --versioned-dirs \
+     --manifest-path <device-Cargo.toml> --sync \
+     <pinned-rustc-sysroot>/lib/rustlib/src/rust/library/Cargo.toml <vendor-directory>`"
+}
+
+pub(super) fn validate_build_std_vendor_closure(
+    rustc: &crate::PinnedRustc,
+    cargo_vendor: Option<&crate::rustc_lib_tree::PinnedRustcLibTree>,
+) -> Result<(), String> {
+    let vendor = cargo_vendor.ok_or_else(|| {
+        format!(
+            "engineering extraction requires --cargo-vendor with the complete pinned build-std \
+             dependency closure; {}",
+            build_std_vendor_guidance()
+        )
+    })?;
+    rustc.revalidate_lib_tree()?;
+    vendor.assert_unmutated()?;
+    let lock_path = rustc
+        .lib_tree_directory()
+        .child_path()
+        .join("rustlib/src/rust/library/Cargo.lock");
+    let lock_bytes = read_bounded_regular_file(&lock_path, MAX_BUILD_STD_LOCK_BYTES, false)
+        .map_err(|error| {
+            format!(
+                "cannot read the pinned build-std Cargo.lock; the declared rustc must include its \
+                 exact rust-src component: {error}"
+            )
+        })?;
+    let lock_source = std::str::from_utf8(&lock_bytes)
+        .map_err(|_| "pinned build-std Cargo.lock is not UTF-8".to_owned())?;
+    let lock: BuildStdCargoLock = toml::from_str(lock_source)
+        .map_err(|error| format!("cannot parse pinned build-std Cargo.lock: {error}"))?;
+    let mut registry_packages = 0_usize;
+    let mut seen = std::collections::BTreeSet::new();
+    for package in lock.package {
+        let Some(source) = package.source.as_deref() else {
+            continue;
+        };
+        if source != CRATES_IO_REGISTRY_SOURCE {
+            return Err(format!(
+                "pinned build-std Cargo.lock uses unsupported package source {source:?} for {} {}",
+                package.name, package.version
+            ));
+        }
+        registry_packages = registry_packages
+            .checked_add(1)
+            .filter(|count| *count <= MAX_BUILD_STD_REGISTRY_PACKAGES)
+            .ok_or_else(|| {
+                "pinned build-std registry closure exceeds its package bound".to_owned()
+            })?;
+        if !seen.insert((package.name.clone(), package.version.clone())) {
+            return Err(format!(
+                "pinned build-std Cargo.lock repeats package {} {}",
+                package.name, package.version
+            ));
+        }
+        let expected_checksum = package.checksum.as_deref().ok_or_else(|| {
+            format!(
+                "pinned build-std registry package {} {} has no checksum",
+                package.name, package.version
+            )
+        })?;
+        if expected_checksum.len() != 64
+            || !expected_checksum
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Err(format!(
+                "pinned build-std registry package {} {} has a noncanonical checksum",
+                package.name, package.version
+            ));
+        }
+        validate_build_std_vendor_package(vendor, &package, expected_checksum)?;
+    }
+    if registry_packages == 0 {
+        return Err("pinned build-std Cargo.lock contains no registry package closure".to_owned());
+    }
+    vendor.assert_unmutated()?;
+    Ok(())
+}
+
+fn validate_build_std_vendor_package(
+    vendor: &crate::rustc_lib_tree::PinnedRustcLibTree,
+    package: &BuildStdLockedPackage,
+    expected_checksum: &str,
+) -> Result<(), String> {
+    let component = format!("{}-{}", package.name, package.version);
+    let package_directory = vendor
+        .directory()
+        .open_child(&component, "versioned build-std vendor package")?
+        .ok_or_else(|| {
+            format!(
+                "engineering Cargo vendor is missing pinned build-std package {} {}; {}",
+                package.name,
+                package.version,
+                build_std_vendor_guidance()
+            )
+        })?;
+    let manifest_path = package_directory.child_path().join("Cargo.toml");
+    let manifest_bytes =
+        read_bounded_regular_file(&manifest_path, MAX_VENDOR_PACKAGE_MANIFEST_BYTES, false)?;
+    let manifest_source = std::str::from_utf8(&manifest_bytes).map_err(|_| {
+        format!(
+            "versioned build-std vendor package {} {} has a non-UTF-8 Cargo.toml",
+            package.name, package.version
+        )
+    })?;
+    let manifest: VendorPackageManifest = toml::from_str(manifest_source).map_err(|error| {
+        format!(
+            "cannot parse versioned build-std vendor package {} {}: {error}",
+            package.name, package.version
+        )
+    })?;
+    if manifest.package.name != package.name || manifest.package.version != package.version {
+        return Err(format!(
+            "versioned build-std vendor package {} {} has mismatched manifest identity {} {}",
+            package.name, package.version, manifest.package.name, manifest.package.version
+        ));
+    }
+    let checksum_path = package_directory.child_path().join(".cargo-checksum.json");
+    let checksum_bytes =
+        read_bounded_regular_file(&checksum_path, MAX_VENDOR_PACKAGE_CHECKSUM_BYTES, false)?;
+    let checksum: VendorPackageChecksum =
+        serde_json::from_slice(&checksum_bytes).map_err(|error| {
+            format!(
+                "cannot parse versioned build-std vendor checksum for {} {}: {error}",
+                package.name, package.version
+            )
+        })?;
+    if checksum.package.as_deref() != Some(expected_checksum) {
+        return Err(format!(
+            "versioned build-std vendor package {} {} does not match the pinned Cargo.lock checksum",
+            package.name, package.version
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn configure_isolated_build_std_cargo(
+    command: &mut Command,
+    options: &Options,
+    scratch: &Path,
+    cargo_home: &Path,
+) {
+    command
+        .env_clear()
+        .current_dir(scratch)
+        .arg("check")
+        .arg("--frozen")
+        .arg("-Zbuild-std=core")
+        .arg("--target")
+        .arg(CARGO_TARGET)
+        .arg("--target-dir")
+        .arg(scratch.join("cargo-target"))
+        .args(&options.cargo_args)
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
+        .env("HOME", scratch)
+        .env("CARGO_HOME", cargo_home)
+        .env("PATH", "/__fe2o3_engineering_no_ambient_tools__")
+        .env("RUSTC_WRAPPER", "")
+        .env("CARGO_BUILD_RUSTC_WRAPPER", "")
+        .stdin(Stdio::null());
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "the extraction boundary keeps each independently pinned tool and custody path explicit"
@@ -17,6 +215,7 @@ pub(super) fn run_extraction(
     scratch: &Path,
 ) -> Result<(), String> {
     rustc.revalidate_lib_tree()?;
+    validate_build_std_vendor_closure(rustc, cargo_vendor)?;
     let cargo_home = scratch.join("cargo-home");
     fs::DirBuilder::new()
         .mode(0o700)
@@ -69,25 +268,9 @@ pub(super) fn run_extraction(
             .directory()
             .inherit_for_child_at(command.as_command_mut(), VENDOR_CHILD_FD)?;
     }
+    configure_isolated_build_std_cargo(command.as_command_mut(), options, scratch, &cargo_home);
     command
         .as_command_mut()
-        .env_clear()
-        .current_dir(scratch)
-        .arg("check")
-        .arg("--frozen")
-        .arg("-Zbuild-std=core")
-        .arg("--target")
-        .arg(CARGO_TARGET)
-        .arg("--target-dir")
-        .arg(scratch.join("cargo-target"))
-        .args(&options.cargo_args)
-        .env("LANG", "C")
-        .env("LC_ALL", "C")
-        .env("HOME", scratch)
-        .env("CARGO_HOME", &cargo_home)
-        .env("PATH", "/__fe2o3_engineering_no_ambient_tools__")
-        .env("RUSTC_WRAPPER", "")
-        .env("CARGO_BUILD_RUSTC_WRAPPER", "")
         .env("RUSTC_WORKSPACE_WRAPPER", &extractor_path)
         .env("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", &extractor_path)
         .env(
@@ -102,8 +285,7 @@ pub(super) fn run_extraction(
         .env("FE2O3_HSA_RUNTIME_DISABLE", "1")
         .env("FE2O3_EXTRACT_CRATE_V1", &options.crate_name)
         .env("FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1", handoff)
-        .env(PROFILE.cargo_rustflags_env(), extraction_rustflags)
-        .stdin(Stdio::null());
+        .env(PROFILE.cargo_rustflags_env(), extraction_rustflags);
     command
         .as_command_mut()
         .env("FE2O3_HIP_SYS_DISABLE", "1")
