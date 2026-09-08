@@ -161,6 +161,7 @@ pub enum MemorySessionError {
     InvalidDeviceMemoryAlignment,
     DeviceContentMismatch,
     DeviceInitializationWriteFailed,
+    DeviceInitializationVerificationFailed,
     InvalidDeviceMemoryAuthority,
     DeviceMemoryQueueBindingRequired,
     InvalidProfileSize(&'static str),
@@ -230,6 +231,8 @@ impl fmt::Display for MemorySessionError {
             Self::DeviceInitializationWriteFailed => {
                 formatter.write_str("the bounded public device-memory initialization write failed")
             }
+            Self::DeviceInitializationVerificationFailed => formatter
+                .write_str("the bounded public device-memory initialization verification failed"),
             Self::InvalidDeviceMemoryAuthority => formatter
                 .write_str("the device-memory lease is stale, substituted, or in the wrong state"),
             Self::DeviceMemoryQueueBindingRequired => formatter

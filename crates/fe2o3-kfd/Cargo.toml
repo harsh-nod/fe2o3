@@ -29,6 +29,10 @@ name = "kfd-public-device-memory"
 required-features = ["live-validation"]
 
 [[example]]
+name = "kfd-public-device-memory-timing"
+required-features = ["live-validation"]
+
+[[example]]
 name = "kfd-compute-aql-queue"
 required-features = ["live-validation"]
 
