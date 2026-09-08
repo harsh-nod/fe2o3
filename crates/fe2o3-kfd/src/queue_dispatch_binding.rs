@@ -1291,12 +1291,7 @@ impl DispatchResourceOwnerV1 {
         destination: &mut [u8],
     ) -> Result<(), Gfx942DispatchBindingErrorV1> {
         validate_completed_read_request(&self.generation, &self.data_premises, request)?;
-        if u64::try_from(destination.len()).ok() != Some(request.byte_len) {
-            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
-                index: request.data_index,
-                detail: "completed read destination length",
-            });
-        }
+        validate_completed_read_destination(request, destination.len())?;
         let authority =
             self.data
                 .get(request.data_index)
@@ -1525,23 +1520,32 @@ fn validate_completed_read_request(
             detail: "completed read range",
         });
     }
-    let matching_ranges = premise
-        .writable_ranges
-        .iter()
-        .filter(|range| {
-            ranges_overlap_u64(
-                range.offset,
-                range.byte_len,
-                request.offset,
-                request.byte_len,
-            )
-        })
-        .collect::<Vec<_>>();
-    let writable_end = matching_ranges
-        .first()
-        .and_then(|range| range.offset.checked_add(range.byte_len));
-    if matching_ranges.len() != 1
-        || request.offset < matching_ranges[0].offset
+    let mut matching_range = None;
+    for range in &premise.writable_ranges {
+        if ranges_overlap_u64(
+            range.offset,
+            range.byte_len,
+            request.offset,
+            request.byte_len,
+        ) {
+            if matching_range.replace(range).is_some() {
+                return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                    index: request.data_index,
+                    detail: "completed read requires one inspected writable range",
+                });
+            }
+        }
+    }
+    let Some(matching_range) = matching_range else {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed read requires one inspected writable range",
+        });
+    };
+    let writable_end = matching_range
+        .offset
+        .checked_add(matching_range.byte_len);
+    if request.offset < matching_range.offset
         || writable_end.is_none_or(|writable_end| end > writable_end)
     {
         return Err(Gfx942DispatchBindingErrorV1::InvalidData {
@@ -1550,6 +1554,19 @@ fn validate_completed_read_request(
         });
     }
     Ok(generation)
+}
+
+fn validate_completed_read_destination(
+    request: Gfx942CompletedDispatchReadRequestV1,
+    destination_len: usize,
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    if u64::try_from(destination_len).ok() != Some(request.byte_len) {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed read destination length",
+        });
+    }
+    Ok(())
 }
 
 fn validate_completed_snapshot_request(
@@ -4546,6 +4563,10 @@ mod tests {
             validate_completed_read_request(&owner, &[valid()], request).unwrap(),
             generation
         );
+        assert!(validate_completed_read_destination(request, 64).is_ok());
+        for rejected_len in [0, 63, 65, usize::MAX] {
+            assert!(validate_completed_read_destination(request, rejected_len).is_err());
+        }
         for rejected in [
             Gfx942CompletedDispatchReadRequestV1::new(0, 0, 64, 64),
             Gfx942CompletedDispatchReadRequestV1::new(generation + 1, 0, 64, 64),

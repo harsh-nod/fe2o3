@@ -27,7 +27,7 @@ use crate::batch::ServiceFixedBatchV1;
 
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-addressless-fixed-queue-r20-v1\n",
+    "profile=fe2o3-service-addressless-fixed-queue-r21-v1\n",
     "source.compute_aql_session_sha256=09f9d032c2460c73531a960b1a8b39a877cb9daf0d75d1f8404b980510bddc10\n",
     "queue=one-live-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-live-rebind,quiescent-rollover-may-confirm-destroy-and-create-one-replacement-queue\n",
     "batch=1-through-8192-fixed-packets,conservative-wait-for-prior-ordering-default-with-explicit-independent-opt-in,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges,optional-initialized-enclosing-host-snapshot-associated-with-one-strict-interior\n",
@@ -37,7 +37,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
     "custody=prepared-published-completed-recycled-unbound-linear-service-types,consuming-poll-with-progress-returns-pending-or-completed-custody-plus-same-scan-redacted-counts-and-first-pending-index,terminal-timeout-failure-borrows-addressless-currentness-enveloped-execution-observation,never-published-prepared-returning-destroy-or-exact-completion-and-signal-recycle-before-detach-rebind-or-published-history-returning-destroy\n",
     "data=read-and-readwrite-require-sealed-full-initialization,write-only-may-consume-uninitialized-exclusive-storage,initialized-state-retained-after-generic-completion-without-stale-content-digest\n",
     "subleases=whole-native-allocation-owner-retained,partition-registry-transfers-with-ledger,partitioned-bindings-require-member-index-and-contained-offset-extent,detached-initialized-replacement-preflights-and-atomically-installs-an-exact-new-partition,replacement-denies-old-allocation-generation\n",
-    "readback=caller-can-mint-only-from-current-recycled-owner,request-binds-exact-dispatch-generation-and-owner-checked-host-allocation-generation,lower-owner-allows-an-ordinary-range-within-one-inspected-write-or-readwrite-binding-or-one-exact-declared-initialized-enclosing-snapshot-with-an-isolated-writable-interior-and-returns-owned-bytes,no-address-or-initialization-promotion\n",
+    "readback=caller-can-mint-only-from-current-recycled-owner,request-binds-exact-dispatch-generation-and-owner-checked-host-allocation-generation,lower-owner-allows-an-ordinary-range-within-one-inspected-write-or-readwrite-binding-or-one-exact-declared-initialized-enclosing-snapshot-with-an-isolated-writable-interior-and-returns-owned-bytes-or-fills-an-exact-caller-owned-destination,no-address-or-initialization-promotion\n",
     "rebind=same-native-queue-may-consume-a-different-fixed-cardinality-program-geometry-kernarg-and-addressless-data-binding-after-exact-recycle,unbound-device-partition-insertion-removal-or-replacement-and-host-visible-replacement-advance-private-ledgers-and-reissue-shifted-addressless-ranges,rollover-may-consume-a-new-ring-size-only-after-exact-detach-and-confirmed-old-native-destroy,dispatch-generation-strictly-advances-from-the-detached-predecessor-across-either-route,lower-owner-reclaims-authoritative-model-foundation-after-every-live-allocation-lifecycle-mutation\n",
     "release=return-never-published-prepared-or-exact-recycled-attached-or-exact-ordered-detached-data-custody,destroy-native-queue,restore-service-ledger,reverse-order-unmap-and-free\n",
     "qualification-fault-injection=feature-gated-post-recycle-before-completed-read-attempt-terminal-typestate,prior-attempt-rejects-and-returns-recycled-owner,ordinary-native-teardown-only,no-synthetic-kfd-error-or-hardware-fault-claim\n",
@@ -48,7 +48,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "c9100bbd01f12883449c2c295a3bc5c0424e02747ab421cb8984c3c20c23e90e";
+    "15bec641ae635775f4a5cab96402eef9ad1cff9045ee62117c279b9f8ca4178f";
 
 /// Feature-bound contract for deliberate service queue-transition faults.
 #[cfg(feature = "qualification-fault-injection")]
@@ -669,6 +669,14 @@ fn record_completed_read_attempt(completed_read_attempted: &mut bool) {
 ///     let _ = queue.read_completed_snapshot(todo!());
 /// }
 /// ```
+///
+/// ```compile_fail
+/// use fe2o3_service_host::ServiceQualificationFaultedQueueSessionV1;
+/// fn read_into<const N: usize>(mut queue: ServiceQualificationFaultedQueueSessionV1<N>) {
+///     let mut destination = [0_u8; 1];
+///     let _ = queue.read_completed_into(todo!(), &mut destination);
+/// }
+/// ```
 #[cfg(feature = "qualification-fault-injection")]
 #[must_use = "the deliberately faulted queue must be destroyed or retained"]
 pub struct ServiceQualificationFaultedQueueSessionV1<const N: usize> {
@@ -850,6 +858,42 @@ impl<const N: usize> ServiceRecycledQueueSessionV1<N> {
             ))
             .map_err(ServiceQueueErrorV1::Kfd)?;
         Ok(ServiceCompletedReadbackV1 { inner: readback })
+    }
+
+    /// Copies one exact inspected writable range into caller-owned bytes.
+    ///
+    /// The request receives the same generation, allocation, effect, kind, and
+    /// range validation as [`Self::read_completed`]. The destination length
+    /// must exactly equal the request extent. Every call records a completed
+    /// read attempt before validation, so even a rejected call closes the
+    /// qualification-only pre-read fault boundary.
+    pub fn read_completed_into(
+        &mut self,
+        request: ServiceCompletedReadRequestV1,
+        destination: &mut [u8],
+    ) -> Result<(), ServiceQueueErrorV1> {
+        record_completed_read_attempt(&mut self.completed_read_attempted);
+        if request.dispatch_generation != self.dispatch_generation {
+            return Err(ServiceQueueErrorV1::Kfd(
+                fe2o3_kfd::Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into(),
+            ));
+        }
+        self.owner
+            .ledger
+            .validate_range(ServiceDispatchRangeV1::HostVisible(request.range))
+            .map_err(ServiceQueueErrorV1::Allocation)?;
+        self.owner
+            .queue
+            .read_recycled_fixed_dispatch_data_into(
+                Gfx942CompletedDispatchReadRequestV1::new(
+                    request.dispatch_generation,
+                    request.range.data_index,
+                    request.range.offset_bytes,
+                    request.range.extent_bytes,
+                ),
+                destination,
+            )
+            .map_err(ServiceQueueErrorV1::Kfd)
     }
 
     /// Copies one exact admitted enclosing snapshot after completion and recycle.
@@ -2276,6 +2320,45 @@ mod tests {
                 2,
             >;
         let _ = method;
+    }
+
+    #[test]
+    fn caller_owned_completed_readback_is_exposed_through_kfd_and_service() {
+        let lower: fn(
+            &mut ComputeAqlQueueSessionV1,
+            Gfx942CompletedDispatchReadRequestV1,
+            &mut [u8],
+        ) -> Result<(), ComputeAqlQueueSessionErrorV1> =
+            ComputeAqlQueueSessionV1::read_recycled_fixed_dispatch_data_into;
+        let service: fn(
+            &mut ServiceRecycledQueueSessionV1<1>,
+            ServiceCompletedReadRequestV1,
+            &mut [u8],
+        ) -> Result<(), ServiceQueueErrorV1> =
+            ServiceRecycledQueueSessionV1::<1>::read_completed_into;
+        let _ = (lower, service);
+
+        let source = include_str!("queue.rs");
+        let method = source
+            .split_once("    pub fn read_completed_into(\n")
+            .expect("caller-owned completed read remains present")
+            .1
+            .split_once("\n    }\n\n    /// Copies one exact admitted enclosing snapshot")
+            .expect("caller-owned completed read remains independently bounded")
+            .0;
+        let attempt = method
+            .find("record_completed_read_attempt")
+            .expect("read attempt must be terminally recorded");
+        let generation = method
+            .find("request.dispatch_generation != self.dispatch_generation")
+            .expect("service generation must be checked");
+        let range = method
+            .find(".validate_range(ServiceDispatchRangeV1::HostVisible(request.range))")
+            .expect("service allocation generation and range must be checked");
+        let lower = method
+            .find(".read_recycled_fixed_dispatch_data_into(")
+            .expect("copy must delegate to caller-owned KFD readback");
+        assert!(attempt < generation && generation < range && range < lower);
     }
 
     #[cfg(feature = "qualification-fault-injection")]
