@@ -1542,9 +1542,7 @@ fn validate_completed_read_request(
             detail: "completed read requires one inspected writable range",
         });
     };
-    let writable_end = matching_range
-        .offset
-        .checked_add(matching_range.byte_len);
+    let writable_end = matching_range.offset.checked_add(matching_range.byte_len);
     if request.offset < matching_range.offset
         || writable_end.is_none_or(|writable_end| end > writable_end)
     {
