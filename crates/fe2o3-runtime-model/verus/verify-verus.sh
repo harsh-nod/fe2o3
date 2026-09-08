@@ -2400,7 +2400,7 @@ check_sources
 "$negative_quality_checker" --self-test \
     "$negative_quality_reject_fixture" \
     "$negative_quality_accept_fixture"
-"$negative_quality_checker" "$script_dir/negative"
+"$negative_quality_checker" "$script_dir/negative" "$script_dir/verify-verus.sh"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;

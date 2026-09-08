@@ -527,13 +527,31 @@ VERUS=/absolute/path/to/verus \
 then relies on this runner's executable and complete-closure pins before any
 proof result is accepted.
 
-The runner also authenticates and executes `check-negative-quality.py`. Its
-deterministic reject/accept fixtures ensure that a negative file cannot consist
-only of directly negating a zero-argument literal-true predicate, while still
-permitting an explicit omitted-coordinate mutant such as a relation that
-accepts unequal identities. This lexical gate excludes that name-only
-contradiction shape; it does not turn standalone countermodels into mutations
-of, or refinement proofs for, the positive sources.
+The runner also authenticates and executes `check-negative-quality.py`. The
+checker rejects every zero-argument Boolean spec function whose body is only a
+`true` or `false` literal, including redundant brace or parenthesis wrappers,
+independently of how another function consumes it. Its fixtures exercise both
+literal polarities through direct, braced, parenthesized, equality, assertion,
+and wrapper consumers. Comment, nested-comment, normal/raw/byte-string,
+character, byte-character, and lifetime decoys must remain accepted. An
+explicit omitted-coordinate relation over caller-supplied adverse values also
+remains accepted.
+
+The same checker fixes the expected-negative inventory at 535 and requires an
+exact bijection between regular `.rs` entries in `verus/negative`, runner source
+assignments, individual SHA-256 pin reads and checks, authenticated
+proof-source-checker arguments, expected-negative Verus calls, unique log
+labels, and the pinned transcript count. Its deterministic filesystem and
+runner mutation tests reject extra files, symlinks, non-Rust entries, absent or
+duplicate wiring at every stage, unavailable pins, and missing, duplicate, or
+incorrect counts. The runner audit accepts only its normalized canonical shell
+forms, rejects unparsed in-scope forms, and rejects active backslash-newline
+token splicing while retaining ordinary whitespace-separated continuations.
+It is not an analyzer for arbitrary shell indirection or `eval`. This is a
+lexical and exact-canonical-runner inventory-integrity gate. It does not
+establish broad semantic completeness or non-vacuity, and it does not turn
+standalone countermodels into mutations of, or refinement proofs for, the
+positive sources.
 
 The expected-negative files must fail at their named postconditions: release while retained,
 VM generation substitution, stale generation reuse, topology/render PCI
