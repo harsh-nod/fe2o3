@@ -958,6 +958,57 @@ pub(super) trait NativeCompletionSignalBackendV1 {
     fn reset_pending_release(&mut self, slot_index: u32) -> Result<(), Gfx942CompletionErrorV1>;
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(super) enum TestOnlyAmbiguousCompletionObservationV1 {
+    Pending,
+    Completed,
+}
+
+#[cfg(test)]
+struct TestOnlyFalseClosingCurrentnessBackendV1 {
+    observation: TestOnlyAmbiguousCompletionObservationV1,
+    currentness_checks: u8,
+    closing_current: bool,
+}
+
+#[cfg(test)]
+impl NativeCompletionSignalBackendV1 for TestOnlyFalseClosingCurrentnessBackendV1 {
+    fn check_currentness(&mut self) -> Result<(), Gfx942CompletionErrorV1> {
+        self.currentness_checks += 1;
+        if self.currentness_checks == 2 && !self.closing_current {
+            Err(Gfx942CompletionErrorV1::Currentness)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn observe_one_acquire_in_current_scope(
+        &mut self,
+        _slot_index: u32,
+    ) -> Result<AqlCompletionObservationV1, Gfx942CompletionErrorV1> {
+        Ok(match self.observation {
+            TestOnlyAmbiguousCompletionObservationV1::Pending => {
+                AqlCompletionObservationV1::Pending
+            }
+            TestOnlyAmbiguousCompletionObservationV1::Completed => {
+                AqlCompletionObservationV1::Completed
+            }
+        })
+    }
+
+    fn observe_batch_acquire_in_current_scope(
+        &mut self,
+        _slot_indices: &[u32],
+    ) -> Result<Vec<AqlCompletionObservationV1>, Gfx942CompletionErrorV1> {
+        unreachable!("three-binding persistent compute observes one packet")
+    }
+
+    fn reset_pending_release(&mut self, _slot_index: u32) -> Result<(), Gfx942CompletionErrorV1> {
+        unreachable!("false closing currentness cannot reach recycle")
+    }
+}
+
 pub(super) struct CompletionSignalArenaOwnerV1 {
     queue: QueueKeyV1,
     signal_mapping: MemoryMappingKeyV1,
@@ -1015,6 +1066,45 @@ impl CompletionSignalArenaOwnerV1 {
         Gfx942CompletedBatchV1 {
             retention: batch.retention,
         }
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::result_large_err)]
+    pub(super) fn observe_one_with_false_closing_currentness_for_test(
+        &mut self,
+        batch: Gfx942CompletionBatchV1<1>,
+        observation: TestOnlyAmbiguousCompletionObservationV1,
+    ) -> Result<
+        CompletionPollWithCurrentnessHandoffV1<1>,
+        (Gfx942CompletionErrorV1, Gfx942CompletionBatchV1<1>),
+    > {
+        let mut backend = TestOnlyFalseClosingCurrentnessBackendV1 {
+            observation,
+            currentness_checks: 0,
+            closing_current: false,
+        };
+        let result = self.observe_one_with_progress_current_handoff_retaining(batch, &mut backend);
+        debug_assert_eq!(backend.currentness_checks, 2);
+        result
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::result_large_err)]
+    pub(super) fn observe_one_pending_with_current_closing_for_test(
+        &mut self,
+        batch: Gfx942CompletionBatchV1<1>,
+    ) -> Result<
+        CompletionPollWithCurrentnessHandoffV1<1>,
+        (Gfx942CompletionErrorV1, Gfx942CompletionBatchV1<1>),
+    > {
+        let mut backend = TestOnlyFalseClosingCurrentnessBackendV1 {
+            observation: TestOnlyAmbiguousCompletionObservationV1::Pending,
+            currentness_checks: 0,
+            closing_current: true,
+        };
+        let result = self.observe_one_with_progress_current_handoff_retaining(batch, &mut backend);
+        debug_assert_eq!(backend.currentness_checks, 2);
+        result
     }
 
     #[cfg(test)]
@@ -3268,6 +3358,29 @@ mod tests {
         assert_eq!(backend.currentness_calls, 2);
         assert_eq!(backend.observe_calls, 1);
         assert_eq!(backend.reset_calls, 0);
+    }
+
+    #[test]
+    fn pending_with_false_closing_currentness_is_terminal_not_retryable() {
+        let mut owner = owner();
+        let batch = publish(&mut owner, [template(0)]);
+        let mut backend = MockBackend::pending();
+        backend.fail_currentness_at = Some(2);
+
+        let failure =
+            match owner.observe_one_with_progress_current_handoff_retaining(batch, &mut backend) {
+                Err(failure) => failure,
+                Ok(_) => panic!("closing currentness must precede pending classification"),
+            };
+        assert!(matches!(failure.0, Gfx942CompletionErrorV1::Currentness));
+        assert_eq!(backend.trace, ["currentness", "acquire", "currentness"]);
+        assert_eq!(backend.currentness_calls, 2);
+        assert_eq!(backend.observe_calls, 1);
+        assert_eq!(backend.reset_calls, 0);
+        assert!(matches!(
+            owner.ensure_releasable(),
+            Err(Gfx942CompletionErrorV1::Poisoned)
+        ));
     }
 
     #[test]

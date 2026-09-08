@@ -81,6 +81,44 @@ verifier remain open. The next major gates are:
 5. reproducible caching, stable diagnostics/API, CI hardware qualification,
    tutorials, and performance baselines for widespread use.
 
+## Runtime R57 bounded three-binding checkpoint
+
+R57 adds one exact persistent-device transaction to the direct-KFD runtime: two
+initialized full-extent HBM read bindings A/B and one distinct initialized
+full-extent HBM write binding C, all with equal byte lengths on the same
+device, VM, and primary gfx942 queue. The typed `RuntimeContextV1::launch`
+facade selects the existing fixed-dispatch binder for exactly one
+`WaitForPrior` packet. The internal attachment and terminal-custody rosters are
+bounded inline, while the N=1 and N=3 public receipts share private ledger
+publish, complete, recycle, cancellation, and quarantine transitions.
+
+Admission accepts authenticated H2D custody or an already fully initialized
+persistent replay for each binding. A write-only declaration does not prove
+full write coverage, so an uninitialized C remains rejected until a separate
+artifact/dispatch/extent-bound full-write certificate exists. Before
+submission custody is minted, a bounded `Read/Read/Write` intent guard rejects
+an invalid three-binding persistent shape without normalizing any retained H2D
+witness. Other three-binding metadata, including read-only launches, remains on
+the existing generic path.
+Recoverable clean prepublication rejection and explicit prepared cancellation
+restore all three exact owners. A terminal `RejectedBeforeSideEffect`, native
+preparation failure after consuming ownership, or consuming unwind retains or
+quarantines all three and poisons authority even when publication was
+impossible. After publication may have occurred, currentness, observation,
+recycle, detach, restore, or settle ambiguity is likewise terminal and the
+queue/process authority fails closed. Successful completion changes only C's
+effect/content generation and releases the incompatible detached control; it
+does not claim three-binding control reuse.
+
+This checkpoint is not a general N-binding API, multi-packet or auxiliary-lane
+contract, hardware numerical qualification, compiler-to-machine refinement,
+or performance result. HIP/HSA parity and any speedup remain open.
+The host tests enter the production N=3 binder through ABI, role, extent,
+identity, and packet-control validation, but they do not retain native code or
+kernarg authorities and do not submit, poll, or detach a native dispatch.
+Fault injection after entry 1 or 2 of the shared three-entry publish, complete,
+or recycle transitions also remains an explicit hardware-tranche gap.
+
 ## Issue #134/#135 Infrastructure and Scalar Checkpoint
 
 The 2026-08-18 ownership refactor makes issues
