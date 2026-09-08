@@ -476,6 +476,10 @@ enum KfdRuntimeLaunchGateV1 {
     #[cfg(feature = "hardware-qualification")]
     ExactGfx942Vecadd(crate::qualification_gfx942_vecadd_v1::AdmittedGfx942VecaddQualificationV1),
     #[cfg(feature = "hardware-qualification")]
+    ExactGfx942R57N3(
+        crate::qualification_gfx942_r57_n3_v1::AdmittedGfx942R57N3QualificationV1,
+    ),
+    #[cfg(feature = "hardware-qualification")]
     ExactGfx942InplaceTransform(
         crate::qualification_gfx942_inplace_transform_v1::AdmittedGfx942InplaceTransformQualificationV1,
     ),
@@ -494,6 +498,8 @@ impl fmt::Debug for KfdRuntimeLaunchGateV1 {
             #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942Vecadd(_) => formatter.write_str("ExactGfx942Vecadd"),
             #[cfg(feature = "hardware-qualification")]
+            Self::ExactGfx942R57N3(_) => formatter.write_str("ExactGfx942R57N3"),
+            #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942InplaceTransform(_) => {
                 formatter.write_str("ExactGfx942InplaceTransform")
             }
@@ -508,6 +514,8 @@ impl KfdRuntimeLaunchGateV1 {
             Self::Semantic(authority) => authority.authorize_launch_v1(request),
             #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942Vecadd(admitted) => admitted.authorizes_kfd_request_v1(request),
+            #[cfg(feature = "hardware-qualification")]
+            Self::ExactGfx942R57N3(admitted) => admitted.authorizes_kfd_request_v1(request),
             #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942InplaceTransform(admitted) => {
                 admitted.authorizes_kfd_request_v1(request)
@@ -1837,6 +1845,37 @@ impl KfdRuntimeBackendV1 {
             device_unique_id,
             KfdRuntimeLaunchGateV1::ExactGfx942Vecadd(admitted),
         )
+    }
+
+    #[cfg(feature = "hardware-qualification")]
+    /// Opens the exact repository-owned gfx942 DeviceLocal R57 N3 qualification backend.
+    ///
+    /// The returned observer exposes only the bounded authority-call count used
+    /// to prove that the initial uninitialized-C rejection precedes authority.
+    /// The retained gate admits exactly `A+B -> C` followed by `C+B -> D`.
+    pub fn open_gfx942_r57_n3_qualification_v1(
+        device_unique_id: u64,
+    ) -> Result<
+        (
+            Self,
+            crate::qualification_gfx942_r57_n3_v1::Gfx942R57N3QualificationAuthorityObservationV1,
+        ),
+        KfdRuntimeBackendErrorV1,
+    > {
+        let admitted = crate::qualification_gfx942_r57_n3_v1::admit_gfx942_r57_n3_qualification_v1(
+        )
+        .map_err(|error| {
+            KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                error.to_string(),
+            )
+        })?;
+        let observation = admitted.observation_v1();
+        let backend = Self::open_default_with_gate(
+            device_unique_id,
+            KfdRuntimeLaunchGateV1::ExactGfx942R57N3(admitted),
+        )?;
+        Ok((backend, observation))
     }
 
     #[cfg(feature = "hardware-qualification")]
@@ -18660,6 +18699,83 @@ mod tests {
         assert!(driver.is_exhausted());
         assert_eq!(driver.live_owner_count(), 0);
         assert_eq!(driver.unexpected_drops(), 0);
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[cfg(feature = "hardware-qualification")]
+    #[test]
+    fn r57_n3_qualification_preflight_rejects_uninitialized_c_before_authority() {
+        let byte_len = 64_u64;
+        let (mut context, stream, allocations, backend_allocations) =
+            scripted_three_binding_context_v1(byte_len);
+        let admitted =
+            crate::qualification_gfx942_r57_n3_v1::admit_gfx942_r57_n3_qualification_v1().unwrap();
+        let observation = admitted.observation_v1();
+        context.backend_mut_for_test_v1().launch_gate =
+            KfdRuntimeLaunchGateV1::ExactGfx942R57N3(admitted);
+        let device = context.devices()[0].id();
+        let module = context
+            .load_module(device, &synthetic_cov6::three_binding_module())
+            .unwrap();
+        let kernel = context
+            .resolve_kernel::<ThreeBindingCandidateContextArgumentsV1>(module, "vecadd")
+            .unwrap();
+        let c_witness = remove_three_binding_ready_witness_v1(
+            context
+                .backend_mut_for_test_v1()
+                .allocations
+                .get_mut(&backend_allocations[2])
+                .unwrap(),
+        );
+        let before = three_binding_prelaunch_snapshot_v1(context.backend(), backend_allocations);
+        let arguments = ThreeBindingCandidateContextArgumentsV1 {
+            allocations,
+            byte_offsets: [0; 3],
+            byte_lens: [byte_len; 3],
+            accesses: [
+                RuntimeAccessV1::Read,
+                RuntimeAccessV1::Read,
+                RuntimeAccessV1::Write,
+            ],
+        };
+        let geometry = crate::RuntimeLaunchGeometryV1 {
+            grid: [64, 1, 1],
+            workgroup: [64, 1, 1],
+            dynamic_shared_bytes: 0,
+        };
+        assert!(matches!(
+            context.launch(stream, &kernel, &arguments, geometry, &[]),
+            Err(crate::RuntimeErrorV1::BackendRejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch
+                    && error.detail().contains("exact R/R/W admission")
+        ));
+        assert_eq!(observation.authorization_calls_v1(), 0);
+        assert_eq!(
+            three_binding_prelaunch_snapshot_v1(context.backend(), backend_allocations),
+            before
+        );
+
+        restore_three_binding_ready_witness_v1(
+            context
+                .backend_mut_for_test_v1()
+                .allocations
+                .get_mut(&backend_allocations[2])
+                .unwrap(),
+            c_witness,
+        );
+        context.unload_module(module).unwrap();
+        for record in context.backend_mut_for_test_v1().allocations.values_mut() {
+            record.sdma_backed = false;
+        }
+        for allocation in allocations {
+            context.release_allocation(allocation).unwrap();
+        }
+        context.destroy_stream(stream).unwrap();
+        let mut backend = context.shutdown().unwrap();
+        assert_eq!(
+            backend.scripted_sdma.as_ref().unwrap().live_owner_count(),
+            0
+        );
         backend.shutdown_native_v1().unwrap();
     }
 

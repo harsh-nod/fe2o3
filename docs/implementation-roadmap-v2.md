@@ -119,6 +119,15 @@ kernarg authorities and do not submit, poll, or detach a native dispatch.
 Fault injection after entry 1 or 2 of the shared three-entry publish, complete,
 or recycle transitions also remains an explicit hardware-tranche gap.
 
+An additive `hardware-qualification` lane now pins a distinct R57 N3 sequence
+policy while independently revalidating the reviewed gfx942 vecadd source and
+COV6 identities. Its live runner expects one pre-authority uninitialized-C
+rejection, executes `A+B -> C` and resident `C+B -> D`, checks the exact R57
+performance observation, reads all four full buffers, and emits one PASS record
+only after cleanup. It is a pending qualification surface: no MI300X execution
+has been recorded, and partial-entry native fault injection, machine refinement,
+or comparative performance remain open.
+
 ## Issue #134/#135 Infrastructure and Scalar Checkpoint
 
 The 2026-08-18 ownership refactor makes issues
