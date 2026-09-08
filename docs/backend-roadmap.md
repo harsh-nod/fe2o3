@@ -609,10 +609,16 @@ and teardown stay blocked until every slot is vacant. First-claim and later
 errors terminally poison local state and process admission; proven
 `SignalPinned` recycle is the narrow retryable completed-custody case.
 
-This tranche is covered by production state-machine and mock fault tests. The
-existing runtime model is not a refinement of ordered shared-recipe epochs.
-General multi-recipe/shared-buffer DAGs, simultaneous kernel execution,
-hardware ordering truth, performance gains, and HIP/HSA parity remain open.
+This tranche is covered by production state-machine and mock fault tests. R60
+adds an independent executable model and a 46-obligation Verus abstraction of
+the bounded ordinary pipeline, including exact `WaitForPrior` early chaining,
+dependency polarity, retry atomicity, generation-protected epochs, contiguous
+commit, quarantine, and cancellation. This model excludes SDMA stream tails,
+cross-lane dependencies, and general multi-recipe scheduling.
+It supersedes R13 for that model-only surface, but is not a refinement of the
+production ordered shared-recipe epochs. General multi-recipe/shared-buffer
+DAGs, simultaneous kernel execution, hardware ordering truth, performance
+gains, and HIP/HSA parity remain open.
 See the [R52 claim boundary](../crates/fe2o3-kfd/docs/r52-native-fixed-dispatch-multi-inflight-v1.md).
 
 ## R56 two-native logical SDMA mux

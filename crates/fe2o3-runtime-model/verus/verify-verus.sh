@@ -50,6 +50,7 @@ r46_gfx942_striped_sdma_tail_wait_proof="$script_dir/r46_gfx942_striped_sdma_tai
 r48_retryable_striped_sdma_tail_wait_proof="$script_dir/r48_retryable_striped_sdma_tail_wait_v1.rs"
 r51_native_compute_dependency_lifecycle_proof="$script_dir/r51_native_compute_dependency_lifecycle_v1.rs"
 r56_two_native_sdma_mux_proof="$script_dir/r56_two_native_sdma_mux_v1.rs"
+r60_ordinary_fixed_dispatch_pipeline_proof="$script_dir/r60_ordinary_fixed_dispatch_pipeline_v1.rs"
 negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_published.rs"
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
@@ -585,6 +586,32 @@ negative_r56_slot_substitution="$script_dir/negative/r56_two_native_sdma_mux_v1_
 negative_r56_tail_substitution="$script_dir/negative/r56_two_native_sdma_mux_v1_tail_substitution.rs"
 negative_r56_timeout_custody="$script_dir/negative/r56_two_native_sdma_mux_v1_timeout_custody.rs"
 negative_r56_unstable_fifo="$script_dir/negative/r56_two_native_sdma_mux_v1_unstable_fifo.rs"
+negative_r60_admit_n1="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_admit_n1.rs"
+negative_r60_admit_n3="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_admit_n3.rs"
+negative_r60_capacity_65="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_capacity_65.rs"
+negative_r60_chain_recipe_mismatch="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_chain_recipe_mismatch.rs"
+negative_r60_completed_visible="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_completed_visible.rs"
+negative_r60_double_commit="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_double_commit.rs"
+negative_r60_early_retain_release="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_early_retain_release.rs"
+negative_r60_early_chain_blocked="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_early_chain_blocked.rs"
+negative_r60_explicit_failure_bypass="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_explicit_failure_bypass.rs"
+negative_r60_generation_aba="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_generation_aba.rs"
+negative_r60_foreign_wait_accepted="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_foreign_wait_accepted.rs"
+negative_r60_foreign_completion_no_quarantine="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_foreign_completion_no_quarantine.rs"
+negative_r60_live_completion_authority="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_live_completion_authority.rs"
+negative_r60_missing_wait_accepted="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_missing_wait_accepted.rs"
+negative_r60_non_tail_cancel="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_non_tail_cancel.rs"
+negative_r60_ordered_failure_gate="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_ordered_failure_gate.rs"
+negative_r60_out_of_order_commit="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_out_of_order_commit.rs"
+negative_r60_partial_quarantine="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_partial_quarantine.rs"
+negative_r60_published_cancel="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_published_cancel.rs"
+negative_r60_recipe_substitution="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_recipe_substitution.rs"
+negative_r60_retire_profile_visible="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_retire_profile_visible.rs"
+negative_r60_retire_releases_custody="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_retire_releases_custody.rs"
+negative_r60_retry_effect="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_retry_effect.rs"
+negative_r60_skip_prepared="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_skip_prepared.rs"
+negative_r60_storage_omission="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_storage_omission.rs"
+negative_r60_substituted_restore="$script_dir/negative/r60_ordinary_fixed_dispatch_pipeline_v1_substituted_restore.rs"
 pin_dir="$script_dir/pins"
 closure_manifest="$pin_dir/VERUS_CLOSURE_MANIFEST"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"
@@ -656,6 +683,7 @@ expected_r46_gfx942_striped_sdma_tail_wait=$(read_pin "$pin_dir/R46_GFX942_STRIP
 expected_r48_retryable_striped_sdma_tail_wait=$(read_pin "$pin_dir/R48_RETRYABLE_STRIPED_SDMA_TAIL_WAIT_SHA256")
 expected_r51_native_compute_dependency_lifecycle=$(read_pin "$pin_dir/R51_NATIVE_COMPUTE_DEPENDENCY_LIFECYCLE_SHA256")
 expected_r56_two_native_sdma_mux=$(read_pin "$pin_dir/R56_TWO_NATIVE_SDMA_MUX_SHA256")
+expected_r60_ordinary_fixed_dispatch_pipeline=$(read_pin "$pin_dir/R60_ORDINARY_FIXED_DISPATCH_PIPELINE_SHA256")
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
@@ -1191,6 +1219,32 @@ expected_negative_r56_slot_substitution=$(read_pin "$pin_dir/NEGATIVE_R56_SLOT_S
 expected_negative_r56_tail_substitution=$(read_pin "$pin_dir/NEGATIVE_R56_TAIL_SUBSTITUTION_SHA256")
 expected_negative_r56_timeout_custody=$(read_pin "$pin_dir/NEGATIVE_R56_TIMEOUT_CUSTODY_SHA256")
 expected_negative_r56_unstable_fifo=$(read_pin "$pin_dir/NEGATIVE_R56_UNSTABLE_FIFO_SHA256")
+expected_negative_r60_admit_n1=$(read_pin "$pin_dir/NEGATIVE_R60_ADMIT_N1_SHA256")
+expected_negative_r60_admit_n3=$(read_pin "$pin_dir/NEGATIVE_R60_ADMIT_N3_SHA256")
+expected_negative_r60_capacity_65=$(read_pin "$pin_dir/NEGATIVE_R60_CAPACITY_65_SHA256")
+expected_negative_r60_chain_recipe_mismatch=$(read_pin "$pin_dir/NEGATIVE_R60_CHAIN_RECIPE_MISMATCH_SHA256")
+expected_negative_r60_completed_visible=$(read_pin "$pin_dir/NEGATIVE_R60_COMPLETED_VISIBLE_SHA256")
+expected_negative_r60_double_commit=$(read_pin "$pin_dir/NEGATIVE_R60_DOUBLE_COMMIT_SHA256")
+expected_negative_r60_early_retain_release=$(read_pin "$pin_dir/NEGATIVE_R60_EARLY_RETAIN_RELEASE_SHA256")
+expected_negative_r60_early_chain_blocked=$(read_pin "$pin_dir/NEGATIVE_R60_EARLY_CHAIN_BLOCKED_SHA256")
+expected_negative_r60_explicit_failure_bypass=$(read_pin "$pin_dir/NEGATIVE_R60_EXPLICIT_FAILURE_BYPASS_SHA256")
+expected_negative_r60_generation_aba=$(read_pin "$pin_dir/NEGATIVE_R60_GENERATION_ABA_SHA256")
+expected_negative_r60_foreign_wait_accepted=$(read_pin "$pin_dir/NEGATIVE_R60_FOREIGN_WAIT_ACCEPTED_SHA256")
+expected_negative_r60_foreign_completion_no_quarantine=$(read_pin "$pin_dir/NEGATIVE_R60_FOREIGN_COMPLETION_NO_QUARANTINE_SHA256")
+expected_negative_r60_live_completion_authority=$(read_pin "$pin_dir/NEGATIVE_R60_LIVE_COMPLETION_AUTHORITY_SHA256")
+expected_negative_r60_missing_wait_accepted=$(read_pin "$pin_dir/NEGATIVE_R60_MISSING_WAIT_ACCEPTED_SHA256")
+expected_negative_r60_non_tail_cancel=$(read_pin "$pin_dir/NEGATIVE_R60_NON_TAIL_CANCEL_SHA256")
+expected_negative_r60_ordered_failure_gate=$(read_pin "$pin_dir/NEGATIVE_R60_ORDERED_FAILURE_GATE_SHA256")
+expected_negative_r60_out_of_order_commit=$(read_pin "$pin_dir/NEGATIVE_R60_OUT_OF_ORDER_COMMIT_SHA256")
+expected_negative_r60_partial_quarantine=$(read_pin "$pin_dir/NEGATIVE_R60_PARTIAL_QUARANTINE_SHA256")
+expected_negative_r60_published_cancel=$(read_pin "$pin_dir/NEGATIVE_R60_PUBLISHED_CANCEL_SHA256")
+expected_negative_r60_recipe_substitution=$(read_pin "$pin_dir/NEGATIVE_R60_RECIPE_SUBSTITUTION_SHA256")
+expected_negative_r60_retire_profile_visible=$(read_pin "$pin_dir/NEGATIVE_R60_RETIRE_PROFILE_VISIBLE_SHA256")
+expected_negative_r60_retire_releases_custody=$(read_pin "$pin_dir/NEGATIVE_R60_RETIRE_RELEASES_CUSTODY_SHA256")
+expected_negative_r60_retry_effect=$(read_pin "$pin_dir/NEGATIVE_R60_RETRY_EFFECT_SHA256")
+expected_negative_r60_skip_prepared=$(read_pin "$pin_dir/NEGATIVE_R60_SKIP_PREPARED_SHA256")
+expected_negative_r60_storage_omission=$(read_pin "$pin_dir/NEGATIVE_R60_STORAGE_OMISSION_SHA256")
+expected_negative_r60_substituted_restore=$(read_pin "$pin_dir/NEGATIVE_R60_SUBSTITUTED_RESTORE_SHA256")
 expected_closure=$(read_pin "$pin_dir/VERUS_CLOSURE_MANIFEST_SHA256")
 expected_source_checker=$(read_pin "$pin_dir/PROOF_SOURCE_CHECKER_SHA256")
 expected_transcript=$(read_pin "$pin_dir/TRANSCRIPT_SHA256")
@@ -1265,6 +1319,7 @@ check_sources() {
     check_digest "$expected_r48_retryable_striped_sdma_tail_wait" "$r48_retryable_striped_sdma_tail_wait_proof"
     check_digest "$expected_r51_native_compute_dependency_lifecycle" "$r51_native_compute_dependency_lifecycle_proof"
     check_digest "$expected_r56_two_native_sdma_mux" "$r56_two_native_sdma_mux_proof"
+    check_digest "$expected_r60_ordinary_fixed_dispatch_pipeline" "$r60_ordinary_fixed_dispatch_pipeline_proof"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
@@ -1800,6 +1855,32 @@ check_sources() {
     check_digest "$expected_negative_r56_tail_substitution" "$negative_r56_tail_substitution"
     check_digest "$expected_negative_r56_timeout_custody" "$negative_r56_timeout_custody"
     check_digest "$expected_negative_r56_unstable_fifo" "$negative_r56_unstable_fifo"
+    check_digest "$expected_negative_r60_admit_n1" "$negative_r60_admit_n1"
+    check_digest "$expected_negative_r60_admit_n3" "$negative_r60_admit_n3"
+    check_digest "$expected_negative_r60_capacity_65" "$negative_r60_capacity_65"
+    check_digest "$expected_negative_r60_chain_recipe_mismatch" "$negative_r60_chain_recipe_mismatch"
+    check_digest "$expected_negative_r60_completed_visible" "$negative_r60_completed_visible"
+    check_digest "$expected_negative_r60_double_commit" "$negative_r60_double_commit"
+    check_digest "$expected_negative_r60_early_retain_release" "$negative_r60_early_retain_release"
+    check_digest "$expected_negative_r60_early_chain_blocked" "$negative_r60_early_chain_blocked"
+    check_digest "$expected_negative_r60_explicit_failure_bypass" "$negative_r60_explicit_failure_bypass"
+    check_digest "$expected_negative_r60_generation_aba" "$negative_r60_generation_aba"
+    check_digest "$expected_negative_r60_foreign_wait_accepted" "$negative_r60_foreign_wait_accepted"
+    check_digest "$expected_negative_r60_foreign_completion_no_quarantine" "$negative_r60_foreign_completion_no_quarantine"
+    check_digest "$expected_negative_r60_live_completion_authority" "$negative_r60_live_completion_authority"
+    check_digest "$expected_negative_r60_missing_wait_accepted" "$negative_r60_missing_wait_accepted"
+    check_digest "$expected_negative_r60_non_tail_cancel" "$negative_r60_non_tail_cancel"
+    check_digest "$expected_negative_r60_ordered_failure_gate" "$negative_r60_ordered_failure_gate"
+    check_digest "$expected_negative_r60_out_of_order_commit" "$negative_r60_out_of_order_commit"
+    check_digest "$expected_negative_r60_partial_quarantine" "$negative_r60_partial_quarantine"
+    check_digest "$expected_negative_r60_published_cancel" "$negative_r60_published_cancel"
+    check_digest "$expected_negative_r60_recipe_substitution" "$negative_r60_recipe_substitution"
+    check_digest "$expected_negative_r60_retire_profile_visible" "$negative_r60_retire_profile_visible"
+    check_digest "$expected_negative_r60_retire_releases_custody" "$negative_r60_retire_releases_custody"
+    check_digest "$expected_negative_r60_retry_effect" "$negative_r60_retry_effect"
+    check_digest "$expected_negative_r60_skip_prepared" "$negative_r60_skip_prepared"
+    check_digest "$expected_negative_r60_storage_omission" "$negative_r60_storage_omission"
+    check_digest "$expected_negative_r60_substituted_restore" "$negative_r60_substituted_restore"
     check_digest "$expected_source_checker" "$source_checker"
 }
 
@@ -1855,6 +1936,7 @@ check_sources
     "$r48_retryable_striped_sdma_tail_wait_proof" \
     "$r51_native_compute_dependency_lifecycle_proof" \
     "$r56_two_native_sdma_mux_proof" \
+    "$r60_ordinary_fixed_dispatch_pipeline_proof" \
     "$negative_render" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
@@ -2386,7 +2468,33 @@ check_sources
     "$negative_r56_slot_substitution" \
     "$negative_r56_tail_substitution" \
     "$negative_r56_timeout_custody" \
-    "$negative_r56_unstable_fifo"
+    "$negative_r56_unstable_fifo" \
+    "$negative_r60_admit_n1" \
+    "$negative_r60_admit_n3" \
+    "$negative_r60_capacity_65" \
+    "$negative_r60_chain_recipe_mismatch" \
+    "$negative_r60_completed_visible" \
+    "$negative_r60_double_commit" \
+    "$negative_r60_early_retain_release" \
+    "$negative_r60_early_chain_blocked" \
+    "$negative_r60_explicit_failure_bypass" \
+    "$negative_r60_generation_aba" \
+    "$negative_r60_foreign_wait_accepted" \
+    "$negative_r60_foreign_completion_no_quarantine" \
+    "$negative_r60_live_completion_authority" \
+    "$negative_r60_missing_wait_accepted" \
+    "$negative_r60_non_tail_cancel" \
+    "$negative_r60_ordered_failure_gate" \
+    "$negative_r60_out_of_order_commit" \
+    "$negative_r60_partial_quarantine" \
+    "$negative_r60_published_cancel" \
+    "$negative_r60_recipe_substitution" \
+    "$negative_r60_retire_profile_visible" \
+    "$negative_r60_retire_releases_custody" \
+    "$negative_r60_retry_effect" \
+    "$negative_r60_skip_prepared" \
+    "$negative_r60_storage_omission" \
+    "$negative_r60_substituted_restore"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -2532,6 +2640,7 @@ check_positive "$r46_gfx942_striped_sdma_tail_wait_proof" 'verification results:
 check_positive "$r48_retryable_striped_sdma_tail_wait_proof" 'verification results:: 43 verified, 0 errors' r48-retryable-striped-sdma-tail-wait
 check_positive "$r51_native_compute_dependency_lifecycle_proof" 'verification results:: 31 verified, 0 errors' r51-native-compute-dependency-lifecycle
 check_positive "$r56_two_native_sdma_mux_proof" 'verification results:: 41 verified, 0 errors' r56-two-native-sdma-mux
+check_positive "$r60_ordinary_fixed_dispatch_pipeline_proof" 'verification results:: 46 verified, 0 errors' r60-ordinary-fixed-dispatch-pipeline
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -3067,13 +3176,39 @@ check_negative "$negative_r56_slot_substitution" mutated_slot_substitution_is_re
 check_negative "$negative_r56_tail_substitution" mutated_tail_substitution_is_rejected_v1 r56-tail-substitution
 check_negative "$negative_r56_timeout_custody" mutated_timeout_retains_exact_custody_v1 r56-timeout-custody
 check_negative "$negative_r56_unstable_fifo" mutated_unstable_fifo_is_rejected_v1 r56-unstable-fifo
+check_negative "$negative_r60_admit_n1" mutated_persistent_n1_is_excluded_v1 r60-admit-n1
+check_negative "$negative_r60_admit_n3" mutated_three_binding_n3_is_excluded_v1 r60-admit-n3
+check_negative "$negative_r60_capacity_65" mutated_sixty_fifth_epoch_is_rejected_v1 r60-capacity-65
+check_negative "$negative_r60_chain_recipe_mismatch" mutated_recipe_storage_mismatch_is_rejected_v1 r60-chain-recipe-mismatch
+check_negative "$negative_r60_completed_visible" mutated_completed_status_is_hidden_v1 r60-completed-visible
+check_negative "$negative_r60_double_commit" mutated_commit_is_exactly_once_v1 r60-double-commit
+check_negative "$negative_r60_early_retain_release" mutated_predecessor_retain_survives_retirement_v1 r60-early-retain-release
+check_negative "$negative_r60_early_chain_blocked" mutated_published_predecessor_allows_early_chain_v1 r60-early-chain-blocked
+check_negative "$negative_r60_explicit_failure_bypass" mutated_explicit_failure_is_blocked_v1 r60-explicit-failure-bypass
+check_negative "$negative_r60_generation_aba" mutated_fresh_generation_prevents_aba_v1 r60-generation-aba
+check_negative "$negative_r60_foreign_wait_accepted" mutated_foreign_wait_for_prior_is_rejected_v1 r60-foreign-wait-accepted
+check_negative "$negative_r60_foreign_completion_no_quarantine" mutated_foreign_completion_quarantines_lane_v1 r60-foreign-completion-no-quarantine
+check_negative "$negative_r60_live_completion_authority" mutated_live_completion_authority_is_rejected_v1 r60-live-completion-authority
+check_negative "$negative_r60_missing_wait_accepted" mutated_missing_wait_for_prior_is_rejected_v1 r60-missing-wait-accepted
+check_negative "$negative_r60_non_tail_cancel" mutated_non_tail_cancel_is_rejected_v1 r60-non-tail-cancel
+check_negative "$negative_r60_ordered_failure_gate" mutated_ordered_failure_is_completion_ready_v1 r60-ordered-failure-gate
+check_negative "$negative_r60_out_of_order_commit" mutated_nonfrontier_retirement_stays_hidden_v1 r60-out-of-order-commit
+check_negative "$negative_r60_partial_quarantine" mutated_lane_quarantine_is_complete_v1 r60-partial-quarantine
+check_negative "$negative_r60_published_cancel" mutated_published_cancel_is_too_late_v1 r60-published-cancel
+check_negative "$negative_r60_recipe_substitution" mutated_recipe_substitution_is_no_effect_v1 r60-recipe-substitution
+check_negative "$negative_r60_retire_profile_visible" mutated_retired_profile_is_hidden_v1 r60-retire-profile-visible
+check_negative "$negative_r60_retire_releases_custody" mutated_retirement_retains_custody_v1 r60-retire-releases-custody
+check_negative "$negative_r60_retry_effect" mutated_retry_is_exactly_no_effect_v1 r60-retry-effect
+check_negative "$negative_r60_skip_prepared" mutated_queued_cannot_publish_v1 r60-skip-prepared
+check_negative "$negative_r60_storage_omission" mutated_storage_substitution_is_rejected_v1 r60-storage-omission
+check_negative "$negative_r60_substituted_restore" mutated_substituted_restore_quarantines_v1 r60-substituted-restore
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 mutations=535'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 r60_ordinary_fixed_dispatch_pipeline_obligations=46 r60_ordinary_fixed_dispatch_pipeline_mutations=26 mutations=561'
 actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

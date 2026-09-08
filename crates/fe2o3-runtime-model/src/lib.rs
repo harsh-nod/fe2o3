@@ -63,6 +63,7 @@ mod r46_gfx942_striped_sdma_tail_wait;
 mod r48_retryable_striped_sdma_tail_wait;
 mod r51_native_compute_dependency_lifecycle;
 mod r56_two_native_sdma_mux;
+mod r60_ordinary_fixed_dispatch_pipeline;
 mod r9_native_evidence;
 mod typed_async;
 
@@ -113,6 +114,7 @@ pub use r46_gfx942_striped_sdma_tail_wait::*;
 pub use r48_retryable_striped_sdma_tail_wait::*;
 pub use r51_native_compute_dependency_lifecycle::*;
 pub use r56_two_native_sdma_mux::*;
+pub use r60_ordinary_fixed_dispatch_pipeline::*;
 pub use typed_async::*;
 
 #[cfg(test)]
@@ -203,6 +205,8 @@ mod r48_retryable_striped_sdma_tail_wait_tests;
 mod r51_native_compute_dependency_lifecycle_tests;
 #[cfg(test)]
 mod r56_two_native_sdma_mux_tests;
+#[cfg(test)]
+mod r60_ordinary_fixed_dispatch_pipeline_tests;
 #[cfg(test)]
 mod r9_native_evidence_tests;
 #[cfg(test)]

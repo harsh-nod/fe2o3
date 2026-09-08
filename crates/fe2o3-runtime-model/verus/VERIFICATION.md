@@ -19,8 +19,9 @@ policy, R40 gfx942 striped-SDMA aggregate, R41 persistent striped-SDMA
 aggregate, R42 compute-event signal-custody, R44 live-foundation
 invariant-certificate, R45 compute-dependency-publisher, and R46 gfx942
 striped-SDMA tail-wait, R48 retryable striped-SDMA tail-wait, R51 native
-compute-dependency lifecycle, and R56 two-native-SDMA mux models. The
-authenticated runner proves 1179 obligations and rejects 535
+compute-dependency lifecycle, R56 two-native-SDMA mux, and R60 ordinary
+fixed-dispatch pipeline models. The authenticated runner proves 1225
+obligations and rejects 561
 expected-negative mutations over finite
 abstract values and traces. The
 materialization input and image sequences are
@@ -2512,6 +2513,64 @@ carrier before such an unwind could be modeled as recoverable.
 | Failure and release custody | **Proved abstractly and checked** | Opening rejection and recoverable zero-effect have prefix zero; a first-native indeterminate outcome has exact first/untouched shard custody; second-native recoverable or indeterminate outcomes have the exact rotated prefix and coordinates; closing failure has prefix two without commit; post-commit timeout retains exact published custody; only direct equality with the exact ticket roster releases all requests once and in order. Post-effect panic is excluded. |
 | Boundary countermodels | **Rejected** | Twenty-five pinned mutations cover all ticket coordinates, tail substitution, singleton, missing/duplicate request, unstable FIFO, native and aggregate overflow, false striped-2 relabel, publication counts, recoverable native effect, first-native indeterminate shard custody, partial commit and coordinates, fixed publication order, closing-prefix loss, timeout phase/custody, and release-roster identity. |
 | Rust-to-Verus refinement, native queue implementation, packet/atomic truth, KFD/HSA/HIP behavior, hardware concurrency, progress, parity, or performance | **Not established** | Explicitly outside the standalone R56 model and proof boundary. |
+
+## R60 ordinary fixed-dispatch pipeline
+
+`r60_ordinary_fixed_dispatch_pipeline_v1.rs` verifies exactly 46 obligations
+over an independent finite abstraction of one ordinary physical compute lane.
+The runner pins that proof and 26 standalone expected-negative countermodels.
+The no-std executable model has 20 focused tests. R60 supersedes R13 only for
+this bounded ordinary fixed-dispatch pipeline story; R13 remains a separately
+authenticated general logical-stream abstraction.
+
+The model admits at most 64 live epochs on one exact lane. Every epoch has an
+exact slot, nonzero slot generation, monotonic logical epoch, submission, and
+immutable recipe/storage fingerprint. Reuse of a slot requires a strictly
+new generation, so an earlier identity cannot address the new incarnation.
+Persistent N=1 and three-binding N=3 execution classes are excluded before
+epoch or custody mutation.
+
+The admitted phase sequence is `Queued -> Prepared -> Published -> Completed
+-> PhysicallyRetired -> HostCommitted`; ambiguity instead makes the whole live
+lane `Quarantined`. A retryable publication and an exactly restored retirement
+attempt are exact no-effect transitions. A substituted completion or failed
+custody restore cannot produce reusable authority: every live epoch retains
+custody in the lane-wide quarantine state.
+
+An ordinary-compute ordered predecessor is separate from explicit success
+dependencies. An exact same-lane, same-recipe predecessor in `Published`,
+`Completed`, or `PhysicallyRetired` admits early successor publication only
+with an exact `WaitForPrior` identity witness; three and all 64 live epochs may
+therefore be `Published` before predecessor completion. A `HostCommitted`
+receipt is completion authority but never a physical-chain anchor. Its failure
+does not block ordinary same-stream ordering unless it is also named as an
+explicit success dependency, whose exact entry must have succeeded. This does
+not model SDMA stream tails, which production folds into success-gated
+dependencies, SDMA producers or successors, cross-lane dependencies, or
+general multi-recipe scheduling. Completion and physical retirement remain internal: host status,
+committed effects, profile visibility, and custody release appear only for the
+contiguous physically retired prefix, exactly once. Once a successor is
+published with `WaitForPrior`, its pending predecessor retain becomes deferred,
+survives through physical retirement, and is released only at successor host
+commit. Completion-gated publication releases the pending retain immediately.
+Cancelling an unpublished lane tail instead rolls its pending retain back;
+publication is too late to cancel.
+
+The Rust model and Verus file are deliberately independent. Matching type and
+transition names are review aids, not a machine-checked refinement bridge to
+`fe2o3-runtime`, `fe2o3-kfd`, packets, signals, firmware, or hardware.
+
+## R60 claim matrix
+
+| Surface | Status | Exact boundary |
+| --- | --- | --- |
+| Capacity and identity | **Proved abstractly and checked** | One exact lane, at most 64 live ordinary epochs, immutable recipe/storage identity, monotonically fresh slot generations, and no N=1/N=3 admission. |
+| Ordering and dependencies | **Proved abstractly and checked** | Exact ordinary same-recipe predecessors in `Published`, `Completed`, or `PhysicallyRetired` admit publication through a bound `WaitForPrior`; a retained committed receipt supplies completion authority but not physical-chain authority. Exact explicit dependencies independently require success. |
+| Retry and ambiguity custody | **Proved abstractly and checked** | Retryable/no-effect transitions preserve the exact prepared owner; restoration mismatch or ambiguity quarantines the complete live lane without host-visible release. |
+| Retirement and commit | **Proved abstractly and checked** | Out-of-order physical retirement remains host-hidden; only the contiguous prefix commits status, one effect, profile visibility, custody release, and the successor's deferred predecessor-retain release exactly once. |
+| Cancellation | **Proved abstractly and checked** | Only a queued or prepared tail can cancel; non-tail and published-or-later cancellation is rejected or too late. |
+| Boundary countermodels | **Rejected** | Twenty-six pinned mutations additionally reject completion-blocked early chaining, absent or foreign wait identity, mismatched chain recipe/storage, live-completion authority, and foreign-completion no-quarantine behavior, alongside the original capacity, identity, custody, commit, and cancellation boundaries. |
+| Production refinement, native truth, hardware, KFD/HSA/HIP behavior, progress, parity, or performance | **Not established** | No production snapshot is consumed by the proof and no machine-checked Rust-to-Verus or native refinement bridge exists. |
 
 The projection proof establishes the mathematical relation implemented by the
 pure canonical-record mapping; it is not a proof that the executable Rust
