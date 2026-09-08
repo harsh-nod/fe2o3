@@ -21,7 +21,11 @@ use std::path::{Path, PathBuf};
 use fe2o3_runtime_protocol::WorkerV3ApplicationHandoffProtocolErrorV1;
 
 /// A deliberately bounded read prevents a selected tool path from causing unbounded hashing work.
-pub(crate) const MAX_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
+///
+/// Debug builds of the production wrapper can exceed 512 MiB because they include the compiler
+/// and verification stack. Hashing and sealed-image capture remain fixed-memory streaming
+/// operations, so use the same explicit ceiling as the codegen-backend pin.
+pub(crate) const MAX_EXECUTABLE_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[derive(Debug)]
 pub(crate) enum PinExecutableError {

@@ -728,7 +728,7 @@ The managed binding wrapper uses a pinned-executable primitive for native
 - opens the selected path read-only with `O_NOFOLLOW`, `O_NONBLOCK`, and
   `O_CLOEXEC` so a FIFO or device cannot stall validation;
 - requires a non-empty regular file with execute permission and a size no
-  larger than 512 MiB;
+  larger than 1 GiB;
 - hashes exactly the opened object's reported length with SHA-256, rejects
   short reads, growth, and metadata changes during hashing, and rewinds it;
 - retains the opened descriptor; and
@@ -758,7 +758,7 @@ rustc image, backend image, and full compiler closure with the live process.
 The wrapper also contains a Linux primitive for the codegen-backend
 dynamic-library object. It applies the same final-component `O_NOFOLLOW` and
 nonblocking source-open policy, requires a non-empty regular file no larger
-than 512 MiB, and copies exactly the source bytes into an anonymous memfd while
+than 1 GiB, and copies exactly the source bytes into an anonymous memfd while
 hashing them. It rehashes the image, applies and verifies immutable
 write/grow/shrink/seal seals, drops the writable descriptor, and retains only a
 read-only `O_CLOEXEC` descriptor.
