@@ -622,6 +622,7 @@ dependencies = [
 name = "fe2o3-kfd"
 version = "0.1.0"
 dependencies = [
+ "arrayvec",
  "fe2o3-amdhsa-loader",
  "fe2o3-aql",
  "fe2o3-drm-uapi",
