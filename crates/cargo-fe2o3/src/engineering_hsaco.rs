@@ -817,6 +817,7 @@ mod tests {
 
     fn build_std_vendor_fixture(
         label: &str,
+        include_registry_package: bool,
         include_package: bool,
         vendor_checksum: &str,
     ) -> (
@@ -834,21 +835,19 @@ mod tests {
         let vendor = root.join("vendor");
         fs::create_dir_all(&library).unwrap();
         fs::create_dir(&vendor).unwrap();
-        fs::write(
-            library.join("Cargo.lock"),
-            concat!(
-                "version = 4\n\n",
-                "[[package]]\n",
-                "name = \"core\"\n",
-                "version = \"0.0.0\"\n\n",
-                "[[package]]\n",
+        let mut lock = String::from(
+            "version = 4\n\n[[package]]\nname = \"core\"\nversion = \"0.0.0\"\n",
+        );
+        if include_registry_package {
+            lock.push_str(concat!(
+                "\n[[package]]\n",
                 "name = \"rustc-literal-escaper\"\n",
                 "version = \"0.0.7\"\n",
                 "source = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
                 "checksum = \"1111111111111111111111111111111111111111111111111111111111111111\"\n",
-            ),
-        )
-        .unwrap();
+            ));
+        }
+        fs::write(library.join("Cargo.lock"), lock).unwrap();
         if include_package {
             let package = vendor.join("rustc-literal-escaper-0.0.7");
             fs::create_dir(&package).unwrap();
@@ -871,17 +870,20 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let executable_path = fs::canonicalize("/bin/true").unwrap();
-        let executable = crate::pinned_executable::PinnedExecutable::open(&executable_path)
-            .unwrap()
-            .seal_executable_image()
-            .unwrap();
         let rustc = crate::PinnedRustc {
-            executable,
+            executable: sealed_test_executable(),
             lib_tree: crate::RustcLibTree::Authority(rustc_tree),
         };
         let vendor = pin_vendor_tree(&fs::canonicalize(vendor).unwrap()).unwrap();
         (root, rustc, vendor)
+    }
+
+    fn sealed_test_executable() -> crate::pinned_executable::PinnedExecutable {
+        let executable_path = fs::canonicalize("/bin/true").unwrap();
+        crate::pinned_executable::PinnedExecutable::open(&executable_path)
+            .unwrap()
+            .seal_executable_image()
+            .unwrap()
     }
 
     #[test]
@@ -1068,7 +1070,7 @@ mod tests {
     #[test]
     fn complete_versioned_build_std_vendor_closure_is_admitted() {
         let checksum = "1".repeat(64);
-        let (root, rustc, vendor) = build_std_vendor_fixture("complete", true, &checksum);
+        let (root, rustc, vendor) = build_std_vendor_fixture("complete", true, true, &checksum);
         validate_build_std_vendor_closure(&rustc, Some(&vendor)).unwrap();
         drop(vendor);
         drop(rustc);
@@ -1078,10 +1080,28 @@ mod tests {
     #[test]
     fn incomplete_build_std_vendor_fails_before_extraction_command_preparation() {
         let checksum = "1".repeat(64);
-        let (root, rustc, vendor) = build_std_vendor_fixture("missing", false, &checksum);
-        let error = validate_build_std_vendor_closure(&rustc, Some(&vendor)).unwrap_err();
+        let (root, rustc, vendor) = build_std_vendor_fixture("missing", true, false, &checksum);
+        let scratch = root.join("scratch");
+        fs::create_dir(&scratch).unwrap();
+        let options = parse(&base_args(&root), &root).unwrap();
+        let tool = sealed_test_executable();
+        let error = run_extraction(
+            &options,
+            &tool,
+            &rustc,
+            &tool,
+            &tool,
+            &tool,
+            Some(&vendor),
+            &tool,
+            &root.join("handoff"),
+            &scratch,
+        )
+        .unwrap_err();
         assert!(error.contains("missing pinned build-std package rustc-literal-escaper 0.0.7"));
         assert!(error.contains("cargo vendor --locked --versioned-dirs"));
+        assert!(!scratch.join("cargo-home").exists());
+        drop(tool);
         drop(vendor);
         drop(rustc);
         fs::remove_dir_all(root).unwrap();
@@ -1090,9 +1110,20 @@ mod tests {
     #[test]
     fn build_std_vendor_checksum_substitution_is_rejected() {
         let checksum = "2".repeat(64);
-        let (root, rustc, vendor) = build_std_vendor_fixture("checksum", true, &checksum);
+        let (root, rustc, vendor) = build_std_vendor_fixture("checksum", true, true, &checksum);
         let error = validate_build_std_vendor_closure(&rustc, Some(&vendor)).unwrap_err();
         assert!(error.contains("does not match the pinned Cargo.lock checksum"));
+        drop(vendor);
+        drop(rustc);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn empty_build_std_registry_closure_is_rejected() {
+        let checksum = "1".repeat(64);
+        let (root, rustc, vendor) = build_std_vendor_fixture("empty", false, true, &checksum);
+        let error = validate_build_std_vendor_closure(&rustc, Some(&vendor)).unwrap_err();
+        assert!(error.contains("contains no registry package closure"));
         drop(vendor);
         drop(rustc);
         fs::remove_dir_all(root).unwrap();

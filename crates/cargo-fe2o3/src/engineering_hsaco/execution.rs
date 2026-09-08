@@ -107,6 +107,11 @@ pub(super) fn validate_build_std_vendor_closure(
         }
         validate_build_std_vendor_package(vendor, &package, expected_checksum)?;
     }
+    if registry_packages == 0 {
+        return Err(
+            "pinned build-std Cargo.lock contains no registry package closure".to_owned(),
+        );
+    }
     vendor.assert_unmutated()?;
     Ok(())
 }
