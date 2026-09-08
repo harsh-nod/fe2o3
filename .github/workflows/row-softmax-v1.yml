@@ -93,6 +93,10 @@ jobs:
           --package fe2o3-row-softmax-v1 -- --check
 
       - name: Build binding-aware Cargo driver
+        env:
+          # Keep the authenticated debug driver below its deliberate 512 MiB
+          # pinning bound without increasing that security/resource limit.
+          CARGO_PROFILE_DEV_DEBUG: "0"
         run: cargo build --locked -p cargo-fe2o3
 
       - name: Run debug tests
