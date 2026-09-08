@@ -1,8 +1,12 @@
 #!/bin/sh
 set -eu
 
+PATH=/usr/bin:/bin
+\readonly PATH IFS
+\export PATH
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH='' cd -- "$script_dir/../../.." && pwd)
+\readonly script_dir repo_root
 lifecycle_proof="$script_dir/runtime_lifecycle_v1.rs"
 identity_proof="$script_dir/device_identity_generation_v1.rs"
 projection_proof="$script_dir/device_projection_refinement_v1.rs"
@@ -592,6 +596,7 @@ source_checker="$repo_root/examples/wave64_collectives_v1/check-proof-source.py"
 negative_quality_checker="$script_dir/check-negative-quality.py"
 negative_quality_reject_fixture="$script_dir/tests/fixtures/negative-quality-direct-literal.rs"
 negative_quality_accept_fixture="$script_dir/tests/fixtures/negative-quality-adverse-input.rs"
+\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture
 verus_bin=${VERUS:-verus}
 
 if [ "$#" -ne 0 ]; then
@@ -1205,16 +1210,26 @@ case "$expected_version" in
     ''|*[!0-9A-Za-z.-]*) printf 'FAIL: invalid pinned Verus version\n' >&2; exit 1 ;;
 esac
 
-sha256_path=$(command -v sha256sum 2>/dev/null || true)
-timeout_path=$(command -v timeout 2>/dev/null || true)
-readlink_path=$(command -v readlink 2>/dev/null || true)
-if [ -z "$sha256_path" ] || [ -z "$timeout_path" ] || [ -z "$readlink_path" ]; then
+seal_authority() {
+    for authority_name in $(
+        \set | /usr/bin/sed -n \
+            -e 's/^\(expected_[A-Za-z0-9_]*\)=.*/\1/p' \
+            -e 's/^\(negative_[A-Za-z0-9_]*\)=.*/\1/p' \
+            -e 's/^\([A-Za-z_][A-Za-z0-9_]*_proof\)=.*/\1/p' \
+            -e 's/^\(verus_bin\)=.*/\1/p'
+    ); do
+        \readonly "$authority_name"
+    done
+}
+seal_authority
+
+if [ ! -x /usr/bin/sha256sum ] || [ ! -x /usr/bin/timeout ] || [ ! -x /usr/bin/readlink ]; then
     printf 'FAIL: sha256sum, timeout, and readlink are required\n' >&2
     exit 1
 fi
 
 check_digest() {
-    actual=$("$sha256_path" "$2" | awk '{ print $1 }')
+    actual=$(/usr/bin/sha256sum "$2" | /usr/bin/awk '{ print $1 }')
     if [ "$actual" != "$1" ]; then
         printf 'FAIL: SHA-256 substitution for %s\n' "$2" >&2
         exit 1
@@ -1813,7 +1828,7 @@ check_sources() {
 }
 
 check_sources
-"$source_checker" \
+/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$source_checker" \
     "$lifecycle_proof" \
     "$identity_proof" \
     "$projection_proof" \
@@ -2397,10 +2412,10 @@ check_sources
     "$negative_r56_timeout_custody" \
     "$negative_r56_unstable_fifo"
 
-"$negative_quality_checker" --self-test \
+/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$negative_quality_checker" --self-test \
     "$negative_quality_reject_fixture" \
     "$negative_quality_accept_fixture"
-"$negative_quality_checker" "$script_dir/negative" "$script_dir/verify-verus.sh"
+/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$negative_quality_checker" "$script_dir/negative" "$script_dir/verify-verus.sh"
 
 case "$verus_bin" in
     */*) [ -x "$verus_bin" ] && verus_path=$verus_bin || verus_path= ;;
@@ -2410,19 +2425,21 @@ if [ -z "$verus_path" ]; then
     printf 'FAIL: Verus is unavailable; set VERUS=/absolute/path/to/verus\n' >&2
     exit 1
 fi
-verus_path=$("$readlink_path" -f "$verus_path")
+verus_path=$(/usr/bin/readlink -f "$verus_path")
 if [ "$(basename "$verus_path")" != verus ]; then
     printf 'FAIL: pinned Verus executable must be named verus\n' >&2
     exit 1
 fi
 check_digest "$expected_verus" "$verus_path"
 verus_root=$(CDPATH='' cd -- "$(dirname -- "$verus_path")" && pwd)
+\readonly verus_path verus_root
 "$closure_checker" "$verus_root" "$closure_manifest"
 
 runner_home=${HOME:-/nonexistent}
-runner_path=${PATH:-/usr/local/bin:/usr/bin:/bin}
+runner_path="$runner_home/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
 runner_rustup_home=${RUSTUP_HOME:-"$runner_home/.rustup"}
 runner_cargo_home=${CARGO_HOME:-"$runner_home/.cargo"}
+\readonly runner_home runner_path runner_rustup_home runner_cargo_home
 actual_version=$(
     env -i \
         "HOME=$runner_home" \
@@ -2439,6 +2456,7 @@ if [ "$actual_version" != "$expected_version" ]; then
 fi
 
 timeout_seconds=${VERUS_TIMEOUT_SECONDS:-120}
+\readonly timeout_seconds
 case "$timeout_seconds" in
     ''|*[!0-9]*) printf 'FAIL: VERUS_TIMEOUT_SECONDS must be 1 through 300\n' >&2; exit 2 ;;
 esac
@@ -2448,10 +2466,11 @@ if [ "$timeout_seconds" -lt 1 ] || [ "$timeout_seconds" -gt 300 ]; then
 fi
 
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/fe2o3-runtime-model-verus.XXXXXX")
+\readonly tmp_dir
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 
 run_verus() {
-    "$timeout_path" --foreground --signal=TERM --kill-after=5 "$timeout_seconds" \
+    /usr/bin/timeout --foreground --signal=TERM --kill-after=5 "$timeout_seconds" \
         env -i \
         "HOME=$runner_home" \
         "PATH=$runner_path" \
@@ -3084,11 +3103,13 @@ check_negative "$negative_r56_unstable_fifo" mutated_unstable_fifo_is_rejected_v
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
+/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$negative_quality_checker" "$script_dir/negative" "$script_dir/verify-verus.sh"
+check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
 transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 expected_negative_files=535'
-actual_transcript=$(printf '%s\n' "$transcript" | "$sha256_path" | awk '{ print $1 }')
+actual_transcript=$(printf '%s\n' "$transcript" | /usr/bin/sha256sum | /usr/bin/awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2
     exit 1

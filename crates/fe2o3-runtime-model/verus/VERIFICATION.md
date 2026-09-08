@@ -527,15 +527,51 @@ VERUS=/absolute/path/to/verus \
 then relies on this runner's executable and complete-closure pins before any
 proof result is accepted.
 
-The runner also authenticates and executes `check-negative-quality.py`. The
-checker rejects every zero-argument Boolean spec function whose body is only a
-`true` or `false` literal, including redundant brace or parenthesis wrappers,
-independently of how another function consumes it. Its fixtures exercise both
-literal polarities through direct, braced, parenthesized, equality, assertion,
-and wrapper consumers. Comment, nested-comment, normal/raw/byte-string,
-character, byte-character, and lifetime decoys must remain accepted. An
-explicit omitted-coordinate relation over caller-supplied adverse values also
-remains accepted.
+The runner also authenticates and executes `check-negative-quality.py`. Its
+runner first replaces inherited `PATH` with `/usr/bin:/bin`, then makes it and
+`IFS` readonly with an alias-immune quoted special-builtin invocation. Its
+repository-root and checker-path bindings are likewise single canonical
+assignments made readonly before their first digest check or execution. Both
+Python source checkers run through exact `/usr/bin/env -i` invocations with only
+the canonical path and Python isolated mode. The closure manifest and checker share that immutable tool
+roster, and authenticated helpers call `sha256sum`, `timeout`, and `readlink`
+through fixed `/usr/bin` paths rather than mutable resolved bindings. The
+inventory checker
+requires those contiguous binding blocks, their digest checks, and the exact
+source-checker and negative-quality-checker invocation forms. It rejects shell
+aliasing, `eval`, and noncanonical function definitions, including split-line
+definitions, and authenticates the
+complete bodies of all seven runner helpers that read pins, check digests and
+sources, seal every proof/negative/expected-digest/Verus-selector authority,
+invoke Verus, and classify positive or negative results. Resolved Verus,
+toolchain-environment, timeout, and temporary-directory bindings have exact
+audited assignments and readonly seals before use. Before sealing, the checker
+requires the exact ordered digest and count of all 1176 authority assignments;
+duplicate, alternate, or indirect mutations fail closed. It also requires a
+hardcoded SHA-256 of the complete runner source, and the runner repeats that
+isolated audit between two source-digest passes after all proof invocations to
+detect replacement during the run without intentionally executing an unchecked
+replacement. That digest, the checker source, and their repository pins are a
+reviewed repository trust root; they detect post-review substitution but do not
+provide external authentication of a coordinated checker-and-pin change.
+The checker self-test authenticates each mutated runner before auditing it and
+requires every granular mutation to reach its named structured rejection code;
+only the dedicated raw-byte substitution case is expected to stop at the
+complete-runner digest. Production-shaped digest mutations deliberately
+re-authenticate the mutated `check_sources` helper before testing the inner
+roster audit. Focused lower-stage cases cover duplicate source and pin roster
+branches that the stronger outer authority audit intentionally rejects first.
+The
+checker rejects zero-argument spec functions with a syntactically direct
+`bool`, parenthesized `bool`, or qualified primitive-`bool` return whose body is
+only a `true` or `false` literal, including redundant brace or parenthesis body
+wrappers, independently of how another function consumes it. Non-ASCII Rust
+code fails closed rather than escaping the audited source grammar. Its fixtures
+exercise both literal polarities through direct, braced, parenthesized,
+qualified-return, equality, assertion, and wrapper consumers. Comment,
+nested-comment, normal/raw/byte-string, character, byte-character, and lifetime
+decoys must remain accepted. An explicit omitted-coordinate relation over
+caller-supplied adverse values also remains accepted.
 
 The same checker fixes the expected-negative inventory at 535 and requires an
 exact bijection between regular `.rs` entries in `verus/negative`, runner source
@@ -547,8 +583,13 @@ duplicate wiring at every stage, unavailable pins, and missing, duplicate, or
 incorrect counts. The runner audit accepts only its normalized canonical shell
 forms, rejects unparsed in-scope forms, and rejects active backslash-newline
 token splicing while retaining ordinary whitespace-separated continuations.
-It is not an analyzer for arbitrary shell indirection or `eval`. This is a
-lexical and exact-canonical-runner inventory-integrity gate. It does not
+Here-documents, here-strings, and quoted active negative assignments or commands
+fail closed because they are outside that grammar. Quote-fragmented sensitive
+tokens also fail closed, post-authentication root or checker-path replacement is
+rejected, and the checker authenticates the one canonical
+`check_negative` function body before accepting its calls. It is not an
+analyzer for arbitrary shell indirection or `eval`. This is a lexical and
+exact-canonical-runner inventory-integrity gate. It does not
 establish broad semantic completeness or non-vacuity, and it does not turn
 standalone countermodels into mutations of, or refinement proofs for, the
 positive sources.

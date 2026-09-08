@@ -8,6 +8,9 @@ pub open spec fn literal_false_equality_v1() -> bool { { false } }
 pub open spec fn literal_true_assert_v1() -> bool { ((true)) }
 pub open spec fn literal_false_wrapper_v1() -> bool { ({ false }) }
 pub open spec fn r#literal_raw_identifier_v1() -> bool { true }
+pub open spec fn literal_true_parenthesized_return_v1() -> (bool) { true }
+pub open spec fn literal_false_qualified_return_v1() -> core::primitive::bool { false }
+pub open spec fn literal_true_absolute_qualified_return_v1() -> (::core::primitive::bool) { true }
 
 pub open spec fn wrapper_v1(value: bool) -> bool { value }
 
