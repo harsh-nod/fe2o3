@@ -248,7 +248,18 @@ fn performance_audit_covers_every_kernel_without_overclaiming() {
         assert!(operator["canonical"]["median_ns"].as_u64().is_some());
         assert!(operator["canonical"]["p95_ns"].as_f64().is_some());
         assert!(operator["ablation"].is_object());
-        assert!(operator["resource_floor"]["floor_ns"].as_f64().is_some());
+        let floor = operator["resource_floor"]["floor_ns"]
+            .as_f64()
+            .expect("resource floor is numeric");
+        let canonical_median = operator["canonical"]["median_ns"]
+            .as_f64()
+            .expect("canonical median is numeric");
+        let canonical_over_floor = operator["resource_floor"]["canonical_measured_over_floor"]
+            .as_f64()
+            .expect("canonical resource ratio is numeric");
+        assert!((canonical_median / floor - canonical_over_floor).abs() <= 0.001);
+        assert!(operator["resource_floor"]["measured_over_floor"].is_null());
+        assert!(operator["resource_floor"]["fastest_measured_over_floor"].is_null());
         assert!(operator["model_claim"].is_string());
     }
     assert!(
