@@ -1644,31 +1644,22 @@ fn gfx950_exact_lowering_binds_cpu_features_layout_and_physical_barrier() {
 }
 
 #[test]
-fn gfx950_sqrt_uses_the_native_llvm_intrinsic_accepted_by_rocm() {
-    let gfx950 = exact_gfx950_xnack_minus(sqrt_module());
-    let llvm =
-        lower_kernel_to_gfx950_xnack_minus_llvm_ir(&gfx950, &KernelId::new("sqrt_kernel")).unwrap();
-    assert_occurrences(&llvm, "declare float @llvm.sqrt.f32(float)", 1);
-    assert_occurrences(&llvm, "call float @llvm.sqrt.f32(float %arg0)", 1);
-    assert!(!llvm.contains("llvm.experimental.constrained.sqrt.f32"));
-    assert!(llvm.contains("\"unsafe-fp-math\"=\"false\""));
-    assert!(llvm.contains("\"approx-func-fp-math\"=\"false\""));
-    assert!(llvm.contains("\"denormal-fp-math-f32\"=\"ieee,ieee\""));
-    assert!(!llvm.contains("call fast float @llvm.sqrt.f32"));
-
+fn exact_targets_use_the_native_sqrt_intrinsic_accepted_by_rocm() {
     let gfx942 = exact_gfx942_xnack_minus(sqrt_module());
-    let llvm =
-        lower_kernel_to_gfx942_xnack_minus_llvm_ir(&gfx942, &KernelId::new("sqrt_kernel")).unwrap();
-    assert_occurrences(
-        &llvm,
-        "declare float @llvm.experimental.constrained.sqrt.f32(float, metadata, metadata)",
-        1,
-    );
-    assert_occurrences(
-        &llvm,
-        "call float @llvm.experimental.constrained.sqrt.f32(float %arg0, metadata !\"round.tonearest\", metadata !\"fpexcept.ignore\")",
-        1,
-    );
+    let gfx950 = exact_gfx950_xnack_minus(sqrt_module());
+    let targets = [
+        lower_kernel_to_gfx942_xnack_minus_llvm_ir(&gfx942, &KernelId::new("sqrt_kernel")).unwrap(),
+        lower_kernel_to_gfx950_xnack_minus_llvm_ir(&gfx950, &KernelId::new("sqrt_kernel")).unwrap(),
+    ];
+    for llvm in targets {
+        assert_occurrences(&llvm, "declare float @llvm.sqrt.f32(float)", 1);
+        assert_occurrences(&llvm, "call float @llvm.sqrt.f32(float %arg0)", 1);
+        assert!(!llvm.contains("llvm.experimental.constrained.sqrt.f32"));
+        assert!(llvm.contains("\"unsafe-fp-math\"=\"false\""));
+        assert!(llvm.contains("\"approx-func-fp-math\"=\"false\""));
+        assert!(llvm.contains("\"denormal-fp-math-f32\"=\"ieee,ieee\""));
+        assert!(!llvm.contains("call fast float @llvm.sqrt.f32"));
+    }
 }
 
 #[test]

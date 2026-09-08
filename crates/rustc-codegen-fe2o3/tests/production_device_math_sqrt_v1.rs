@@ -80,8 +80,8 @@ fn compiler_authenticated_sqrt_reaches_exact_gfx942_and_gfx950_llvm() {
         (
             "gfx942",
             "gfx942:xnack-",
-            "call float @llvm.experimental.constrained.sqrt.f32(float",
             "call float @llvm.sqrt.f32(float",
+            "llvm.experimental.constrained.sqrt.f32",
         ),
         (
             "gfx950",
@@ -128,10 +128,7 @@ fn compiler_authenticated_sqrt_reaches_exact_gfx942_and_gfx950_llvm() {
             "production {target} sqrt LLVM used forbidden intrinsic {forbidden:?}:\n{llvm}",
         );
         assert!(
-            !llvm.contains("call fast float")
-                && (cpu != "gfx942"
-                    || llvm
-                        .contains("metadata !\"round.tonearest\", metadata !\"fpexcept.ignore\"",)),
+            !llvm.contains("call fast float"),
             "production {target} sqrt LLVM changed the authenticated IEEE policy:\n{llvm}",
         );
         assert_eq!(

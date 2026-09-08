@@ -1,0 +1,135 @@
+{
+  "schema": "fe2o3.gfx950.attention-performance-audit.v1",
+  "date_utc": "2026-09-05",
+  "claim_boundary": "Exact fixed-shape in-repository variants on one MI350X. No external SOTA or full-model performance claim is made because no external candidate matched shape, semantics, precision, ABI, cache regime, and timer.",
+  "machine": {
+    "host": "smci350-rck-g03-b19-03",
+    "device": "AMD Instinct MI350X",
+    "physical_gpu": 4,
+    "runtime_visible_ordinal": 0,
+    "target": "gfx950:xnack-",
+    "rocr_visible_devices": "4",
+    "hip_visible_devices": null,
+    "rocm": "7.2.1",
+    "hip": "7.2.53211-e1a6bc5663",
+    "amd_clang": "22.0.0git roc-7.2.1",
+    "clocks_locked": false
+  },
+  "protocol": {
+    "timer": "ROCr HSA dispatch timestamps",
+    "initial_warmups": 1000,
+    "blocks": 30,
+    "samples_per_block": 100,
+    "block_rewarm": 20,
+    "samples_per_artifact": 3000,
+    "statistic": "sample median and p95; paired bootstrap uses 10000 resamples with seed 950",
+    "cache_regime": "persistent allocations and repeated four-workgroup dispatch",
+    "correctness": "independent CPU reference, immutable inputs, guard canaries, preflight dispatch, and post-block validation",
+    "source_commit_primary": "dd802ce4fc5f759a49cb655ed530af664fe4bc61",
+    "source_tree_primary": "53268af7fc0b980d9911314c48abee7788727397",
+    "source_commit_deepseek_ablation": "85959068dc943d1439cd8a0d191a29f5cf303e57"
+  },
+  "roofline": {
+    "formula": "max(unique touched global bytes / 8e12, FP32 operations / 144.2e12, FP8 operations / 4.6e15)",
+    "input_source": "../../perf-evidence/mi350x-bound-inputs-v1.json",
+    "status": "provisional architecture resource floor; not a dispatch or instruction latency floor"
+  },
+  "operators": [
+    {
+      "id": "kda_decode",
+      "kernel_export": "gfx950_kda_decode",
+      "shape": "FP32 B=4 H=1 T=1 K=16 V=16",
+      "public_candidate": "FLA fused_recurrent_kda",
+      "exactly_comparable": false,
+      "comparability_reason": "the retained public comparator campaign is B=1 with a different timer while this artifact dispatches four problems",
+      "canonical": {"variant": "kda-wave16", "median_ns": 6920, "p95_ns": 7120, "max_state_error": 2.980232239e-8, "max_output_error": 7.450580597e-9, "hsaco_sha256": "cdaa830aef4302bc1ffa09442497cce3c63da405befe3c3d7fd2d01bee264e5e", "isa_sha256": "8b5340ee348631beb84ccdbf7718625454e97180755dc061b157ecbc204a64ee"},
+      "ablation": {"baseline": "kda-sequential", "baseline_median_ns": 7960, "candidate_median_ns": 6920, "paired_speedup": 1.1569767441860466, "latency_reduction_percent": 13.5678391959799, "ci95": [1.1551724137931034, 1.1609913793103446], "decision": "keep canonical"},
+      "resource_floor": {"unique_touched_bytes": 13328, "floor_ns": 1.666, "measured_over_floor": 4153.661},
+      "model_claim": "none; teaching K/V=16 is not a production Kimi model shape"
+    },
+    {
+      "id": "kda_chunkwise_prefill",
+      "kernel_export": "gfx950_kda_chunkwise_prefill",
+      "shape": "FP32 B=4 H=1 T=8 K=16 V=16, two C=4 chunks",
+      "public_candidate": "FLA chunk/recurrent KDA",
+      "exactly_comparable": false,
+      "comparability_reason": "current launch batches four problems and the public comparator uses a different timing granularity",
+      "canonical": {"variant": "prefill-wy", "median_ns": 14160, "p95_ns": 14560, "max_state_error": 1.490116119e-8, "max_chunk_error": 7.450580597e-9, "hsaco_sha256": "fd144e9e61a5b180906b06f42c21a92bb4cde40381c9735f8dbb1a9194622b4b", "isa_sha256": "64370708ea275485eee8747a9f566f46e2a05ab59a238a77d59ce9e349b9b077"},
+      "ablation": {"baseline": "prefill-sequential", "baseline_median_ns": 17880, "candidate_median_ns": 14160, "paired_speedup": 1.2625533527792885, "latency_reduction_percent": 20.79542635017782, "ci95": [1.2606232294617563, 1.2642045454545454], "decision": "keep canonical"},
+      "resource_floor": {"unique_touched_bytes": 24704, "floor_ns": 3.088, "measured_over_floor": 4585.492},
+      "model_claim": "none; teaching K/V=16 is not a production Kimi model shape"
+    },
+    {
+      "id": "content_sparse_attention",
+      "kernel_export": "gfx950_content_sparse_attention",
+      "shape": "E4M3 B=16 T=16 K=128 V=16, top-2 blocks and top-3 tokens",
+      "public_candidate": "FlashAttention or CK dense/block-sparse attention",
+      "exactly_comparable": false,
+      "comparability_reason": "the fe2o3 operator fuses content block selection, top-3 selection, gated softmax and PV",
+      "canonical": {"variant": "content-division", "median_ns": 30080, "p95_ns": 30520, "max_output_error": 5.820766091e-11, "selected_ids_exact": true, "hsaco_sha256": "23a162a249d77580608511d7d1eb364de87940eec9f327d72aa4a2bce77d8933", "isa_sha256": "dc73d9a191279ff6a4fd3815e9730e3a4d4b3a0337e59272544e4be34243abe0"},
+      "ablation": {"alternative": "content-reciprocal", "alternative_median_ns": 29920, "paired_speedup_alternative_over_canonical": 1.005325, "decision": "no promotion; sign conflicts with the prior GPU6 campaign"},
+      "resource_floor": {"unique_touched_bytes": 71872, "floor_ns": 8.984, "fastest_measured_over_floor": 3330.365},
+      "model_claim": "none; synthetic selection and shape do not match a released model"
+    },
+    {
+      "id": "deepseek_sparse_attention",
+      "kernel_export": "gfx950_deepseek_sparse_attention",
+      "shape": "FP32 B=64 T=16 top-k=4 K=128 V=16",
+      "public_candidate": "public DeepSeek sparse-attention or FlashMLA implementations",
+      "exactly_comparable": false,
+      "comparability_reason": "the tutorial consumes explicit top-4 indices over 16 rows and does not reproduce a production index domain or scheduler",
+      "canonical": {"variant": "lane-parallel-exp", "median_ns": 13480, "p95_ns": 13960, "max_output_error": 5.215406418e-8, "max_softmax_maximum_error": 1.490116119e-7, "max_softmax_normalizer_error": 4.768371582e-7, "hsaco_sha256": "c01609985a38a0860433785702ff2e2333ad10e974a5ebffa5238515896312cc", "isa_sha256": "1605051d5b24425899e104f279cffe61f9144e053c94496afdac373c8129d958"},
+      "ablation": {"alternative": "leader-exp-broadcast", "alternative_hsaco_sha256": "4db5188090ead4e2dfe75d0ecf8166377aa05a670a9535793fa0b707d8954173", "alternative_isa_sha256": "ffc50b710794ae4029dcd278d1b5e8f2bdd32aa64f86f4fb5d50b84aca7eac9f", "forward_order": {"canonical_median_ns": 13480, "alternative_median_ns": 13400, "paired_speedup": 1.0061170163622422, "ci95": [1.005952380952381, 1.0089820359281436]}, "reverse_order": {"canonical_median_ns": 13080, "alternative_median_ns": 13080, "paired_speedup": 1.0030395136778116, "ci95": [0.9970369655098845, 1.006060606060606]}, "decision": "reject as order-sensitive"},
+      "resource_floor": {"unique_touched_bytes": 192512, "floor_ns": 24.064, "fastest_measured_over_floor": 540.226},
+      "model_claim": "none; the teaching top-k/domain is not a released DeepSeek-v4 serving shape"
+    },
+    {
+      "id": "compressed_hybrid_attention",
+      "kernel_export": "gfx950_compressed_hybrid_attention",
+      "shape": "E4M3 B=16 T=16 K=128 V=16, three compressed blocks plus four-token local window",
+      "public_candidate": "FlashAttention sliding-window or block-sparse attention",
+      "exactly_comparable": false,
+      "comparability_reason": "no candidate matches the separate compressed/global and local softmaxes plus learned gate",
+      "canonical": {"variant": "hybrid-reciprocal", "median_ns": 28000, "p95_ns": 29322.95, "max_output_error": 5.960464478e-8, "hsaco_sha256": "18d86ac18aaf6c9f7640e4303693d785fa76cc300a753ad40395ad6c8ceb4cab", "isa_sha256": "00e735ca2df880d8805b500cee795ad8edbe20c8eef2873e60299af76f46ac9d"},
+      "ablation": {"baseline": "hybrid-division", "baseline_median_ns": 27600, "candidate_median_ns": 28000, "decision": "retain current source pending repeatability; sign conflicts with prior GPU6 campaign"},
+      "resource_floor": {"unique_touched_bytes": 71680, "floor_ns": 8.96, "fastest_measured_over_floor": 3080.357},
+      "model_claim": "none; no released GLM-5.3 or other model configuration is encoded"
+    },
+    {
+      "id": "attnres_aggregate",
+      "kernel_export": "gfx950_attnres_aggregate",
+      "shape": "FP32 B=64 depths=4 channels=16",
+      "public_candidate": "no exact standalone public kernel identified",
+      "exactly_comparable": false,
+      "comparability_reason": "no artifact with the same bounded four-depth ABI and timing protocol was found",
+      "canonical": {"variant": "attnres-loop", "median_ns": 5560, "p95_ns": 5840, "max_output_error": 4.470348358e-8, "hsaco_sha256": "d45cd7f3ffa4432178d7d47d06e15b8fdbefaac088f5eb739256fdeb93547e24", "isa_sha256": "24a639b63b9f14ba08b1a57ab0afecae8513895beb04a0ac5e819ffe16860ea1"},
+      "ablation": {"alternative": "attnres-explicit", "alternative_median_ns": 5600, "paired_ci_includes_one": true, "decision": "keep canonical"},
+      "resource_floor": {"unique_touched_bytes": 36864, "floor_ns": 4.608, "measured_over_floor": 1206.597},
+      "model_claim": "none; this is a bounded architecture tutorial"
+    },
+    {
+      "id": "four_branch_residual",
+      "kernel_export": "gfx950_four_branch_residual",
+      "shape": "FP32 B=64 branches=4 channels=16",
+      "public_candidate": "compiler-generated fused elementwise kernel",
+      "exactly_comparable": false,
+      "comparability_reason": "no published artifact with the same inputs, branch order and timer was identified",
+      "canonical": {"variant": "residual-loop", "median_ns": 5720, "p95_ns": 6282, "max_output_error": 1.490116119e-8, "hsaco_sha256": "1f390983a5b323812a327c245fd54ffea65870ec8edb51e0fef1c65c78600bf8", "isa_sha256": "410363e17ce2b22943fedeea66b87ad0c08880a2bf49a786e0514b13094ba6af"},
+      "ablation": {"alternative": "residual-explicit", "alternative_median_ns": 5640, "decision": "no promotion; prior GPU6 campaign tied"},
+      "resource_floor": {"unique_touched_bytes": 40960, "floor_ns": 5.12, "fastest_measured_over_floor": 1101.562},
+      "model_claim": "none; this is a generic fused residual teaching shape"
+    },
+    {
+      "id": "mhc_sinkhorn_mix",
+      "kernel_export": "gfx950_mhc_sinkhorn_mix",
+      "shape": "FP32 B=16 streams=4 channels=16, 4x4 matrix, three Sinkhorn iterations",
+      "public_candidate": "no exact standalone public kernel identified",
+      "exactly_comparable": false,
+      "comparability_reason": "no artifact with the same 4x4 Sinkhorn and stream-mix ABI was found",
+      "canonical": {"variant": "mhc-wave16", "median_ns": 6880, "p95_ns": 7120, "max_output_error": 6.705522537e-8, "hsaco_sha256": "d613e51895d9ea9307abf398c8a233e8abb4257bb1aeea04c7808aa091654fe8", "isa_sha256": "452a8595fd4a5ee9a058937f420c78a57132dda0789f9da5b90ca432617211cd"},
+      "ablation": {"baseline": "mhc-scalar", "baseline_median_ns": 9760, "candidate_median_ns": 6880, "paired_speedup": 1.4186046511627908, "latency_reduction_percent": 29.508196721311474, "ci95": [1.416184971098266, 1.4210526315789473], "decision": "keep canonical"},
+      "resource_floor": {"unique_touched_bytes": 9216, "floor_ns": 1.152, "measured_over_floor": 5972.222},
+      "model_claim": "none; this is a bounded architecture tutorial"
+    }
+  ]
+}

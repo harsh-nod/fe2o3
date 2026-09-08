@@ -5,10 +5,11 @@ use fe2o3_amdgcn_model::{
     lower_device_module_to_gfx942_xnack_minus_llvm_ir,
 };
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, Function, FunctionId, FunctionRole,
-    IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, Module, Operation, OperationKind,
-    Signature, TargetCapability, Terminator, Type, ValueDef, ValueId, VerifiedCanonicalKernelIrV9,
-    WaveWidth, WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
+    AccessMode, AddressSpace, Axis, BasicBlock, BinaryOp, BlockId, Function, FunctionId,
+    FunctionRole, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
+    Module, Operation, OperationKind, Signature, TargetCapability, Terminator, Type, ValueDef,
+    ValueId, VerifiedCanonicalKernelIrV9, WaveWidth, WorkgroupMemory, WorkgroupMemoryExtent,
+    WorkgroupSize,
 };
 
 fn returning_block(operations: Vec<Operation>, values: Vec<ValueId>) -> BasicBlock {
@@ -172,6 +173,51 @@ fn compiler_module() -> Module {
     module
 }
 
+fn helper_workgroup_geometry_module(kinds: &[IndexKind]) -> Module {
+    let operations = kinds
+        .iter()
+        .copied()
+        .flat_map(|kind| {
+            [Axis::X, Axis::Y, Axis::Z]
+                .into_iter()
+                .map(move |axis| (kind, axis))
+        })
+        .enumerate()
+        .map(|(result, (kind, axis))| {
+            Operation::effect_free(
+                ValueDef::new(ValueId(result as u32), Type::INDEX),
+                OperationKind::Intrinsic(IntrinsicOperation::new(
+                    IntrinsicKind::InvocationIndex { kind, axis },
+                    Type::INDEX,
+                )),
+            )
+        })
+        .collect();
+    let helper = Function::internal_helper(
+        "workgroup_geometry",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![returning_block(operations, vec![])],
+    );
+    let mut module = Module::new("tests::helper_workgroup_geometry");
+    module.functions = vec![void_entry("entry", &["workgroup_geometry"]), helper];
+    let mut grid_kernel = Kernel::new(
+        "grid_kernel",
+        "entry",
+        LaunchDomain::D3 {
+            x: LaunchExtent::Dynamic,
+            y: LaunchExtent::Dynamic,
+            z: LaunchExtent::Dynamic,
+        },
+    );
+    grid_kernel.workgroup_size = Some(WorkgroupSize::new(8, 4, 2));
+    grid_kernel
+        .required_capabilities
+        .insert(TargetCapability::WaveWidth(WaveWidth::Wave64));
+    module.kernels = vec![grid_kernel];
+    module
+}
+
 fn exact_gfx942_xnack_minus_compiler_module(mut module: Module) -> Module {
     let target = fe2o3_kernel_ir::gfx942_xnack_minus_target_capability();
     module.required_capabilities.insert(target.clone());
@@ -209,6 +255,93 @@ fn canonical_order_is_independent_of_module_vector_order() {
     assert_eq!(
         lower_compiler_module_to_llvm_ir(&permuted).unwrap(),
         baseline
+    );
+}
+
+#[test]
+fn outlined_device_helpers_read_workgroup_geometry_from_distinct_dispatch_fields() {
+    let llvm = lower_compiler_module_to_llvm_ir(&helper_workgroup_geometry_module(&[
+        IndexKind::WorkgroupCount,
+        IndexKind::WorkgroupSize,
+        IndexKind::Workgroup,
+    ]))
+    .unwrap();
+    for (result, workgroup_offset, grid_offset) in [(0, 4, 12), (1, 6, 16), (2, 8, 20)] {
+        assert!(llvm.contains(&format!(
+            "%v{result}.grid.ptr = getelementptr inbounds i8, ptr addrspace(4) %v{result}.dispatch, i64 {grid_offset}"
+        )));
+        assert!(llvm.contains(&format!(
+            "%v{result}.workgroup.ptr = getelementptr inbounds i8, ptr addrspace(4) %v{result}.dispatch, i64 {workgroup_offset}"
+        )));
+        assert!(llvm.contains(&format!(
+            "%v{result}.workgroup.i16 = load i16, ptr addrspace(4) %v{result}.workgroup.ptr, align 2"
+        )));
+        assert!(llvm.contains(&format!(
+            "%v{result} = udiv i64 %v{result}.rounded, %v{result}.workgroup"
+        )));
+    }
+    for (result, workgroup_offset, static_extent) in [(3, 4, 8), (4, 6, 4), (5, 8, 2)] {
+        assert!(llvm.contains(&format!(
+            "%v{result}.dispatch = call ptr addrspace(4) @llvm.amdgcn.dispatch.ptr()"
+        )));
+        assert!(llvm.contains(&format!(
+            "%v{result}.workgroup.ptr = getelementptr inbounds i8, ptr addrspace(4) %v{result}.dispatch, i64 {workgroup_offset}"
+        )));
+        assert!(llvm.contains(&format!(
+            "%v{result}.workgroup.i16 = load i16, ptr addrspace(4) %v{result}.workgroup.ptr, align 2"
+        )));
+        assert!(llvm.contains(&format!(
+            "%v{result} = zext i16 %v{result}.workgroup.i16 to i64"
+        )));
+        assert!(!llvm.contains(&format!("%v{result} = add i64 {static_extent}, 0")));
+        assert!(!llvm.contains(&format!("%v{result}.grid.ptr")));
+    }
+    for (result, axis) in [(6, "x"), (7, "y"), (8, "z")] {
+        assert!(llvm.contains(&format!(
+            "%v{result}.group.i32 = call i32 @llvm.amdgcn.workgroup.id.{axis}()"
+        )));
+        assert!(llvm.contains(&format!(
+            "%v{result}.group = zext i32 %v{result}.group.i32 to i64"
+        )));
+        assert!(llvm.contains(&format!("%v{result} = add i64 %v{result}.group, 0")));
+        assert_eq!(
+            llvm.matches(&format!("declare i32 @llvm.amdgcn.workgroup.id.{axis}()"))
+                .count(),
+            1
+        );
+    }
+    assert_eq!(
+        llvm.matches("declare ptr addrspace(4) @llvm.amdgcn.dispatch.ptr()")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn outlined_workgroup_size_helper_alone_declares_and_reads_the_dispatch_packet() {
+    let llvm = lower_compiler_module_to_llvm_ir(&helper_workgroup_geometry_module(&[
+        IndexKind::WorkgroupSize,
+    ]))
+    .unwrap();
+    for (result, workgroup_offset) in [(0, 4), (1, 6), (2, 8)] {
+        assert!(llvm.contains(&format!(
+            "%v{result}.dispatch = call ptr addrspace(4) @llvm.amdgcn.dispatch.ptr()"
+        )));
+        assert!(llvm.contains(&format!(
+            "%v{result}.workgroup.ptr = getelementptr inbounds i8, ptr addrspace(4) %v{result}.dispatch, i64 {workgroup_offset}"
+        )));
+        assert!(llvm.contains(&format!(
+            "%v{result}.workgroup.i16 = load i16, ptr addrspace(4) %v{result}.workgroup.ptr, align 2"
+        )));
+        assert!(llvm.contains(&format!(
+            "%v{result} = zext i16 %v{result}.workgroup.i16 to i64"
+        )));
+        assert!(!llvm.contains(&format!("%v{result}.grid.ptr")));
+    }
+    assert_eq!(
+        llvm.matches("declare ptr addrspace(4) @llvm.amdgcn.dispatch.ptr()")
+            .count(),
+        1
     );
 }
 

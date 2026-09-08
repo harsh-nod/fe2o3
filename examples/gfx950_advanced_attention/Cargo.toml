@@ -19,6 +19,7 @@ kernel-kda-prefill-baseline-v1 = ["kernel-kda-prefill"]
 kernel-content-sparse-attention = []
 kernel-content-sparse-attention-reciprocal-reuse-v1 = ["kernel-content-sparse-attention"]
 kernel-deepseek-sparse-attention = []
+kernel-deepseek-sparse-attention-leader-exp-v1 = ["kernel-deepseek-sparse-attention"]
 kernel-compressed-hybrid-attention = []
 kernel-compressed-hybrid-attention-division-baseline-v1 = ["kernel-compressed-hybrid-attention"]
 kernel-attnres-aggregate = []
@@ -36,6 +37,7 @@ fe2o3-device = { path = "../../crates/fe2o3-device" }
 fe2o3-host = { path = "../../crates/fe2o3-host" }
 
 [dev-dependencies]
+serde_json = "1"
 syn = { version = "2", features = ["full"] }
 
 [lib]

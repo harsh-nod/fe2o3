@@ -31,6 +31,7 @@ touch -- "$RECORDS"
 
 DEFAULT_SPECS=(
     kernel-moe-route:canonical
+    kernel-moe-route:route-redundant-lanes
     kernel-moe-expert-rank:canonical
     kernel-moe-expert-rank:expert-serial
     kernel-combine-expert-ranks:canonical

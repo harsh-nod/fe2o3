@@ -23,6 +23,8 @@ if [[ $SUITE == systems ]]; then
         kernel-combine-expert-ranks:canonical|kernel-speculative-transaction:canonical|\
         kernel-qwen-ngram-gather:canonical|kernel-stage-gradient-shard:canonical|\
         kernel-muon-update:canonical) ;;
+        kernel-moe-route:route-redundant-lanes)
+            EXTRA_FEATURE=ablation-route-redundant-lanes ;;
         kernel-moe-expert-rank:expert-serial) EXTRA_FEATURE=ablation-expert-serial ;;
         kernel-combine-expert-ranks:combine-transposed)
             EXTRA_FEATURE=ablation-combine-transposed ;;
@@ -59,6 +61,9 @@ case "$SUITE:$FEATURE" in
         SYMBOL=gfx950_content_sparse_attention; KERNARG=96; WG=256; LDS=8192; OCML=1
         TEST=gfx950_content_sparse_attention_rust_cov6_matches_cpu_reference; ISA=fp8_attention ;;
     attention:kernel-deepseek-sparse-attention)
+        SYMBOL=gfx950_deepseek_sparse_attention; KERNARG=112; WG=256; LDS=0; OCML=1
+        TEST=gfx950_deepseek_sparse_attention_rust_cov6_matches_cpu_reference; ISA=scalar ;;
+    attention:kernel-deepseek-sparse-attention-leader-exp-v1)
         SYMBOL=gfx950_deepseek_sparse_attention; KERNARG=112; WG=256; LDS=0; OCML=1
         TEST=gfx950_deepseek_sparse_attention_rust_cov6_matches_cpu_reference; ISA=scalar ;;
     attention:kernel-compressed-hybrid-attention)

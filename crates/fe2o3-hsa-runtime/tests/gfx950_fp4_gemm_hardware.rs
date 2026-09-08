@@ -394,11 +394,28 @@ unsafe fn dispatch_multigrid(
             0,
             kernarg,
         )?;
-        let completion = adapter.launch_and_wait(executable, kernel, geometry, kernarg)?;
-        require(
-            completion.completed(),
-            "gfx950 FP4 GEMM dispatch did not complete",
-        )?;
+        let mut session =
+            adapter.prepare_profiled_dispatch_session(executable, kernel, geometry, kernarg)?;
+        session.dispatch()?;
+
+        if std::env::var("FE2O3_GFX950_LOWP_PERF").as_deref() == Ok("1") {
+            const WARMUPS: usize = 1_000;
+            const SAMPLES: usize = 3_000;
+            for _ in 0..WARMUPS {
+                session.dispatch()?;
+            }
+            let mut durations = Vec::with_capacity(SAMPLES);
+            for _ in 0..SAMPLES {
+                durations.push(session.dispatch()?.duration_ns());
+            }
+            durations.sort_unstable();
+            println!(
+                "PERF gfx950_fp4_gemm_rust warmups={WARMUPS} samples={SAMPLES} p50_ns={} p05_ns={} p95_ns={}",
+                durations[SAMPLES / 2],
+                durations[SAMPLES / 20],
+                durations[SAMPLES * 19 / 20],
+            );
+        }
     }
     Ok(())
 }

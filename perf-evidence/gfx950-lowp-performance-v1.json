@@ -1,0 +1,149 @@
+{
+  "schema": "fe2o3.gfx950-lowp-performance.v1",
+  "recorded_at": "2026-09-05",
+  "host": "smci350-rck-g03-b19-03",
+  "accelerator": "AMD Instinct MI350X",
+  "target": "gfx950:xnack-",
+  "software": {
+    "rocm": "7.2.1",
+    "hipblaslt_version": "100202",
+    "hipblaslt_git_revision": "dabb6df2b9"
+  },
+  "protocol": {
+    "fe2o3_timer": "ROCr HSA dispatch timestamps",
+    "fe2o3_warmups": 1000,
+    "fe2o3_samples": 3000,
+    "hipblaslt_timer": "HIP event",
+    "hipblaslt_cold_iterations": 20,
+    "hipblaslt_iterations": 100,
+    "hipblaslt_search": "all 539 solutions",
+    "claim_boundary": "Results compare only matching shape, precision, layout, semantics, and timing. A missing eligible comparator is not a win. These fixed teaching slices do not establish full-model throughput or universal state of the art."
+  },
+  "fe2o3": [
+    {
+      "kernel": "gfx950_fp4_gemm_rust",
+      "shape": "batch=16,M=16,N=16,K=128",
+      "storage": "one byte per logical E2M1 value; low nibble consumed",
+      "p05_ns": 6800,
+      "p50_ns": 7400,
+      "p95_ns": 7640,
+      "pre_optimization_p50_ns": 19401,
+      "speedup_over_pre_optimization": 2.6218,
+      "max_absolute_error": 0.0,
+      "hsaco_sha256": "c24c1ef3fdcd28dd8e1a7275ae601f58ad7bda1db81e590004eb665570f2bcde"
+    },
+    {
+      "kernel": "gfx950_fp8_gemm_rust",
+      "shape": "batch=16,M=16,N=16,K=128",
+      "storage": "one byte per E4M3 value",
+      "p05_ns": 6680,
+      "p50_ns": 6800,
+      "p95_ns": 7040,
+      "pre_optimization_p50_ns": 17320,
+      "speedup_over_pre_optimization": 2.5471,
+      "max_absolute_error": 0.0,
+      "hsaco_sha256": "6763ef6ec95f85570b47b29984ed6922746ccd8c08dd9fed960a1fcde0499cbc"
+    },
+    {
+      "kernel": "gfx950_fp4_attention_rust",
+      "shape": "batch=16,Q=16,K=16,D=128,Dv=16",
+      "storage": "one byte per logical E2M1 Q/K/V value; low nibble consumed",
+      "p05_ns": 37680,
+      "p50_ns": 37920,
+      "p95_ns": 38480,
+      "pre_optimization_p50_ns": 39280,
+      "speedup_over_pre_optimization": 1.0359,
+      "max_absolute_error": 1.192092896e-7,
+      "hsaco_sha256": "cc25e739a12b1a889e42f522708d59b4e626908a2b351dc051f4d3df59a92e38"
+    },
+    {
+      "kernel": "gfx950_fp8_attention_rust",
+      "shape": "batch=16,Q=16,K=16,D=128,Dv=16",
+      "storage": "one byte per E4M3 Q/K/V value",
+      "p05_ns": 27040,
+      "p50_ns": 27240,
+      "p95_ns": 27600,
+      "pre_optimization_p50_ns": 27400,
+      "speedup_over_pre_optimization": 1.0059,
+      "max_absolute_error": 5.960464478e-8,
+      "hsaco_sha256": "a4e38b5373897569c55e745eff53f8ec4be8a3c923c1a4e84ef7bf25cd380ee7"
+    }
+  ],
+  "comparators": [
+    {
+      "kernel": "gfx950_fp8_gemm_rust",
+      "implementation": "hipBLASLt exhaustive winner",
+      "shape": "batch=16,M=16,N=16,K=128",
+      "precision": "E4M3 x E4M3 -> FP32",
+      "median_or_reported_us": 4.72681,
+      "solution_index": 458459,
+      "numerical_norm_error": 5.32461e-5,
+      "fe2o3_to_comparator_latency_ratio": 1.438588,
+      "verdict": "eligible comparator; fe2o3 is slower, therefore no fastest claim"
+    },
+    {
+      "kernel": "gfx950_fp4_gemm_rust",
+      "implementation": "hipBLASLt rocRoller MXFP4",
+      "shape": "M=16,N=16,K=128,batch=1 only",
+      "precision": "packed MXFP4 with E8M0 block scales",
+      "median_or_reported_us": 11.0704,
+      "solution_count": 1,
+      "numerical_norm_error": 0.0,
+      "verdict": "not eligible: hipBLASLt rejects the batch=16 contract and its packed block-scaled representation differs from fe2o3's logical-byte E2M1 input"
+    },
+    {
+      "kernel": "gfx950_fp4_attention_rust",
+      "implementation": "no exact external comparator admitted",
+      "verdict": "no fastest claim"
+    },
+    {
+      "kernel": "gfx950_fp8_attention_rust",
+      "implementation": "no exact external comparator admitted",
+      "verdict": "no fastest claim"
+    }
+  ],
+  "theoretical_floor": {
+    "source": "AMD MI350X product specifications",
+    "source_url": "https://www.amd.com/en/products/accelerators/instinct/mi350/mi350x.html",
+    "peak_hbm_bytes_per_second": 8000000000000,
+    "peak_mxfp4_flops_per_second": 9200000000000000,
+    "peak_fp8_flops_per_second": 4600000000000000,
+    "gemm_logical_bytes": 81920,
+    "gemm_hbm_floor_ns": 10.24,
+    "attention_logical_bytes": 86016,
+    "attention_hbm_floor_ns": 10.752,
+    "warning": "This optimistic whole-device cold-HBM normalization is not a dispatch-latency lower bound. Tiny fixed tiles cannot saturate all 256 CUs or peak HBM bandwidth."
+  },
+  "ablations": [
+    {
+      "name": "exact-tile proof-directed global loads",
+      "status": "retained",
+      "detail": "The checked exact-view proof removes 32 per-fragment guarded loads while partial tiles retain zero-fill guards. FP4 GEMM improved from 19401 ns to 7400 ns (2.6218x); FP8 GEMM improved from 17320 ns to 6800 ns (2.5471x). Attention shapes do not satisfy this GEMM-only proof and changed by less than four percent, providing a control for run-to-run variance."
+    },
+    {
+      "name": "four-waves-per-workgroup and four-workgroup grid",
+      "status": "retained",
+      "detail": "WG256/grid4 is the smallest currently proven multi-wave launch for these collective fragments."
+    },
+    {
+      "name": "two-waves-per-workgroup and eight-workgroup grid",
+      "status": "compiler rejected",
+      "detail": "The production verifier reported UnprovenBarrierConvergence for the MFMA collective; no runtime number is reported."
+    },
+    {
+      "name": "eight-waves-per-workgroup and two-workgroup grid",
+      "status": "front-end rejected",
+      "detail": "Typed V1 admits workgroup sizes only through 256; no runtime number is reported."
+    },
+    {
+      "name": "software-pipelined LDS double buffering",
+      "status": "not applicable to current shape",
+      "detail": "K=128 is exactly one native MFMA reduction tile. There is no next K tile to overlap, so a second LDS stage would duplicate the only tile."
+    },
+    {
+      "name": "pretransposed rhs through an 8 KiB LDS transpose tile",
+      "status": "rejected",
+      "detail": "The variant was numerically exact and exercised the gfx950 transpose path, but its FP8 GEMM median was 21001 ns versus 6800 ns for direct exact-tile global loads, a 3.0884x regression. Weight-prepack time was excluded from both measurements."
+    }
+  ]
+}

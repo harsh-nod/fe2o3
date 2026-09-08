@@ -121,6 +121,43 @@ and `f52d49e23917bc11ac4b2ea1f3d8205d200b9d6ed7365350fc1189392ee837d5`.
 This is an end-to-end compatibility and numerical record, not a performance
 measurement or state-of-the-art claim.
 
+## Current GPU-5 performance audit
+
+The 2026-09-05 campaign measured the current 16-item WG256/grid-`[4, 1, 1]`
+artifacts on physical GPU 5 of `ssh mi350`, using ROCr HSA dispatch timestamps
+after 200 warmups and five blocks of 100 samples with 20 block rewarms. Every
+timed artifact passed the independent CPU oracle before timing and after each
+block. The fused kernel matched 4,096 attention values with maximum absolute
+error `1.192092896e-7`, 4,096 expert values exactly, and 1,024 packed routes
+exactly.
+
+| Exact current artifact | Median / p95 | Contribution to fused result |
+| --- | ---: | ---: |
+| Fused canonical | `1.075164 / 1.086204 ms` | retained result |
+| Serial-router ablation | `64.937745 / 65.285206 ms` | lane-parallel router is `60.398x`, `98.344%` lower |
+| Held-fragment ablation | `1.079923 / 1.085563 ms` | sequential MXFP4 fragments are `1.00443x`, `0.441%` lower |
+| Interleaved-store ablation | `1.080123 / 1.088883 ms` | grouped disjoint stores are `1.00461x`, `0.459%` lower |
+| Materialized component median sum | `1.081802 ms` | fusion is `1.00617x`, `0.614%` lower |
+
+The materialized comparison sums the medians of three separately timed Rust
+components with the identical launch geometry and output contract: router
+`1.001962 ms`, attention `16.480 us`, and expert `63.360 us`. It isolates the
+two removed dispatch/materialization boundaries, but is not a serving-runtime
+or whole-model comparison. The current fused HSACO SHA-256 is
+`62139f01f2394c208e37222b896cf5ffdda18b90116dcc3181ff330b7e9c6624`.
+
+The current batched profile has an optimistic resource floor of
+`3.019944 us`, derived as the maximum of compulsory bytes at 8 TB/s, counted
+FP32 work at 144.2 TFLOP/s, and MXFP4 work at 9.2 PFLOP/s. The measured median
+is `356.021x` that floor because this bounded tile includes long serial router
+dependencies and cannot saturate the whole device. AITER, CK, the official
+GPT-OSS Triton kernels, vLLM, and SGLang do not match every shape, precision,
+layout, fusion, output, and timer axis, so they are architectural references,
+not admitted external performance comparators. The shared
+[`sota-performance-audit-v1.json`](../gfx950_advanced_systems/sota-performance-audit-v1.json)
+records the complete current campaign and raw-record hashes; no external SOTA
+or whole-model tokens/s claim is made.
+
 The following result is historical evidence for the former single-Wave64,
 grid-`[1, 1, 1]` kernel. It does not validate or measure the current
 WG256/grid-`[4, 1, 1]` compatibility update. That MI350X HSA qualification

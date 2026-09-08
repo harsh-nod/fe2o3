@@ -64,7 +64,13 @@
           "id": "canonical",
           "feature": null,
           "namespace": "bb933fcd1e3f8124227991b6743de97b6fa108551cc44c617d9450933ad98170",
-          "isolated_change": "pack all 16 top-2 route pairs into one u64 before dispatch"
+          "isolated_change": "stripe each token reduction across four lanes, merge partials with uniform Wave64 broadcasts, then pack all 16 top-2 route pairs into one u64"
+        },
+        {
+          "id": "route-redundant-lanes",
+          "feature": "ablation-route-redundant-lanes",
+          "isolated_change": "restore the former complete 128-element reduction independently in all four lanes assigned to each token",
+          "current_grid4_status": "production-hsa-pass and timed on physical GPU 5 on 2026-09-05"
         }
       ],
       "oracle": {

@@ -775,7 +775,8 @@ fn first_borrow_consumer_cause_v1(
                 "borrow for disjoint-slice operation"
             }
             SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. }
-            | SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { .. } => {
+            | SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { .. }
+            | SemanticCompilerIntrinsicOperationV1::DisjointBlockComponentIndex { .. } => {
                 "borrow for index-witness operation"
             }
             SemanticCompilerIntrinsicOperationV1::MathF32 { .. }
