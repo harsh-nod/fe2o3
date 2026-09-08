@@ -371,7 +371,12 @@ fn write_only_witness_mappings_retain_exact_ranked_predicates() {
     for (feature, required) in [
         (
             "write_only_grid_exclusive",
-            ["kernel.index_constant 7", "kernel.cond_br"].as_slice(),
+            [
+                "%2 = kernel.index_constant 7",
+                "%3 = kernel.index_binary Add %0, %2",
+                "kernel.cond_br",
+            ]
+            .as_slice(),
         ),
         (
             "write_only_blocked",
@@ -409,6 +414,74 @@ fn write_only_witness_mappings_retain_exact_ranked_predicates() {
             ),
         "write-only blocked dynamic geometry did not fail closed:\n{}",
         wrong_geometry.stderr,
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn dynamic_grid_exclusive_index_retains_leader_and_extent_guards() {
+    let target = ScratchTarget::new();
+    let output = run_feature_extraction(&target, "write_only_grid_exclusive_dynamic");
+    let lines = output.stderr.lines().map(str::trim).collect::<Vec<_>>();
+    let summed_index = lines.iter().find_map(|line| {
+        let (result, operation) = line.split_once(" = ")?;
+        (operation.starts_with("kernel.index_binary Add %0, %arg")).then_some(result)
+    });
+    let ranked_one = lines.iter().find_map(|line| {
+        let (result, operation) = line.split_once(" = ")?;
+        (operation == "kernel.index_constant 1").then_some(result)
+    });
+    let outer_leader_guard = ranked_one.and_then(|one| {
+        lines
+            .iter()
+            .position(|line| line.starts_with(&format!("kernel.cond_br %0 < {one} ")))
+    });
+    let access_leader_guard = ranked_one.and_then(|one| {
+        lines
+            .iter()
+            .position(|line| line.starts_with(&format!("kernel.index_lt_br_args %0, {one} ")))
+    });
+    let extent_guard = summed_index.and_then(|index| {
+        lines
+            .iter()
+            .position(|line| line.starts_with(&format!("kernel.index_lt_br_args {index}, %arg0 ")))
+    });
+    let write = summed_index.and_then(|index| {
+        lines.iter().position(|line| {
+            line.starts_with("kernel.access Write ") && line.ends_with(&format!("[{index}]"))
+        })
+    });
+    assert!(
+        output.status.success()
+            && output
+                .stderr
+                .contains("all mandatory kernel checks clean true")
+            && summed_index.is_some()
+            && ranked_one.is_some()
+            && outer_leader_guard.is_some()
+            && access_leader_guard.is_some()
+            && extent_guard.is_some()
+            && write.is_some()
+            && access_leader_guard < extent_guard
+            && extent_guard < write,
+        "dynamic grid-exclusive write lost its exact leader or bounds guard:\n{}",
+        output.stderr,
+    );
+
+    let forged = run_feature_extraction(
+        &ScratchTarget::new(),
+        "write_only_grid_exclusive_dynamic_forged",
+    );
+    assert!(
+        !forged.status.success()
+            && forged
+                .stderr
+                .contains("unsafe blocks are not allowed in ordinary #[kernel] bodies")
+            && !forged
+                .stderr
+                .contains("ranked PLIRON before accepted lowering"),
+        "forged dynamic grid-exclusive witness did not fail closed:\n{}",
+        forged.stderr,
     );
 }
 
