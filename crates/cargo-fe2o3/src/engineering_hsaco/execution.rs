@@ -1,7 +1,6 @@
 use super::*;
 
-const CRATES_IO_REGISTRY_SOURCE: &str =
-    "registry+https://github.com/rust-lang/crates.io-index";
+const CRATES_IO_REGISTRY_SOURCE: &str = "registry+https://github.com/rust-lang/crates.io-index";
 
 #[derive(serde::Deserialize)]
 struct BuildStdCargoLock {
@@ -81,7 +80,9 @@ pub(super) fn validate_build_std_vendor_closure(
         registry_packages = registry_packages
             .checked_add(1)
             .filter(|count| *count <= MAX_BUILD_STD_REGISTRY_PACKAGES)
-            .ok_or_else(|| "pinned build-std registry closure exceeds its package bound".to_owned())?;
+            .ok_or_else(|| {
+                "pinned build-std registry closure exceeds its package bound".to_owned()
+            })?;
         if !seen.insert((package.name.clone(), package.version.clone())) {
             return Err(format!(
                 "pinned build-std Cargo.lock repeats package {} {}",
@@ -128,11 +129,8 @@ fn validate_build_std_vendor_package(
             )
         })?;
     let manifest_path = package_directory.child_path().join("Cargo.toml");
-    let manifest_bytes = read_bounded_regular_file(
-        &manifest_path,
-        MAX_VENDOR_PACKAGE_MANIFEST_BYTES,
-        false,
-    )?;
+    let manifest_bytes =
+        read_bounded_regular_file(&manifest_path, MAX_VENDOR_PACKAGE_MANIFEST_BYTES, false)?;
     let manifest_source = std::str::from_utf8(&manifest_bytes).map_err(|_| {
         format!(
             "versioned build-std vendor package {} {} has a non-UTF-8 Cargo.toml",
@@ -152,17 +150,15 @@ fn validate_build_std_vendor_package(
         ));
     }
     let checksum_path = package_directory.child_path().join(".cargo-checksum.json");
-    let checksum_bytes = read_bounded_regular_file(
-        &checksum_path,
-        MAX_VENDOR_PACKAGE_CHECKSUM_BYTES,
-        false,
-    )?;
-    let checksum: VendorPackageChecksum = serde_json::from_slice(&checksum_bytes).map_err(|error| {
-        format!(
-            "cannot parse versioned build-std vendor checksum for {} {}: {error}",
-            package.name, package.version
-        )
-    })?;
+    let checksum_bytes =
+        read_bounded_regular_file(&checksum_path, MAX_VENDOR_PACKAGE_CHECKSUM_BYTES, false)?;
+    let checksum: VendorPackageChecksum =
+        serde_json::from_slice(&checksum_bytes).map_err(|error| {
+            format!(
+                "cannot parse versioned build-std vendor checksum for {} {}: {error}",
+                package.name, package.version
+            )
+        })?;
     if checksum.package.as_deref() != Some(expected_checksum) {
         return Err(format!(
             "versioned build-std vendor package {} {} does not match the pinned Cargo.lock checksum",
@@ -269,12 +265,7 @@ pub(super) fn run_extraction(
             .directory()
             .inherit_for_child_at(command.as_command_mut(), VENDOR_CHILD_FD)?;
     }
-    configure_isolated_build_std_cargo(
-        command.as_command_mut(),
-        options,
-        scratch,
-        &cargo_home,
-    );
+    configure_isolated_build_std_cargo(command.as_command_mut(), options, scratch, &cargo_home);
     command
         .as_command_mut()
         .env("RUSTC_WORKSPACE_WRAPPER", &extractor_path)

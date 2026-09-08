@@ -1047,12 +1047,16 @@ mod tests {
             .get_args()
             .map(|argument| argument.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
-        assert!(arguments.windows(3).any(|arguments| {
-            arguments == ["check", "--frozen", "-Zbuild-std=core"]
-        }));
-        assert!(arguments.windows(2).any(|arguments| {
-            arguments == ["--target", CARGO_TARGET]
-        }));
+        assert!(
+            arguments
+                .windows(3)
+                .any(|arguments| { arguments == ["check", "--frozen", "-Zbuild-std=core"] })
+        );
+        assert!(
+            arguments
+                .windows(2)
+                .any(|arguments| { arguments == ["--target", CARGO_TARGET] })
+        );
         let output = command.output().unwrap();
         assert!(output.status.success());
         assert_eq!(
