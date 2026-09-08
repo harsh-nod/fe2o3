@@ -106,6 +106,8 @@ replacement for the support matrix.
   screen](evidence/mi300x-r56-striped-spin-screen-2026-09-07.md)
 - [MI300X R56 two-native logical SDMA mux engineering
   screen](evidence/mi300x-r56-two-native-logical-mux-screen-2026-09-07.md)
+- [MI300X R57 N3 persistent-compute qualification
+  evidence](evidence/mi300x-r57-n3-qualification-2026-09-08.md)
 
 Evidence documents describe exact qualified observations. They do not silently
 upgrade an experimental target or path into a supported public interface.

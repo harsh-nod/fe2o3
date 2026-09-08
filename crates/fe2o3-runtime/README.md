@@ -507,8 +507,13 @@ authority callback, then admits only `A+B -> C` followed by `C+B -> D` over four
 whole DeviceLocal buffers. The runner requires `PersistentDeviceReused`, zero
 user-data materializations, no control reuse, exact full A/B/C/D readback, two
 authority calls, and explicit cleanup before its single bounded PASS record.
-This lane has not yet been run on MI300X and supplies no native numerical,
-refinement, latency, throughput, HIP/HSA parity, or speedup evidence.
+Two exact signed-archive executions on one idle MI300X GPU completed that
+sequence with identical full A/B/C/D readback digests and sole PASS records;
+see the [bounded qualification
+evidence](../../docs/evidence/mi300x-r57-n3-qualification-2026-09-08.md).
+This supplies native numerical evidence only for the fixed sequence and source
+product. It supplies no refinement, latency, throughput, HIP/HSA parity, or
+speedup evidence.
 
 The opt-in `gfx942-lds-diagnostic` executes one SHA-pinned, loader-inspected LDS
 reduction through this same transition using an explicitly unsafe diagnostic

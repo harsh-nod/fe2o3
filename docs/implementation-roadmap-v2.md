@@ -111,8 +111,8 @@ effect/content generation and releases the incompatible detached control; it
 does not claim three-binding control reuse.
 
 This checkpoint is not a general N-binding API, multi-packet or auxiliary-lane
-contract, hardware numerical qualification, compiler-to-machine refinement,
-or performance result. HIP/HSA parity and any speedup remain open.
+contract, compiler-to-machine refinement, or performance result. HIP/HSA
+parity and any speedup remain open.
 The host tests enter the production N=3 binder through ABI, role, extent,
 identity, and packet-control validation, but they do not retain native code or
 kernarg authorities and do not submit, poll, or detach a native dispatch.
@@ -124,9 +124,11 @@ policy while independently revalidating the reviewed gfx942 vecadd source and
 COV6 identities. Its live runner expects one pre-authority uninitialized-C
 rejection, executes `A+B -> C` and resident `C+B -> D`, checks the exact R57
 performance observation, reads all four full buffers, and emits one PASS record
-only after cleanup. It is a pending qualification surface: no MI300X execution
-has been recorded, and partial-entry native fault injection, machine refinement,
-or comparative performance remain open.
+only after cleanup. Two exact signed-archive executions on one idle MI300X GPU
+completed with identical full-buffer digests and sole PASS records; see the
+[bounded evidence](evidence/mi300x-r57-n3-qualification-2026-09-08.md).
+Partial-entry native fault injection, machine refinement, and comparative
+performance remain open.
 
 ## Issue #134/#135 Infrastructure and Scalar Checkpoint
 

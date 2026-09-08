@@ -1535,14 +1535,18 @@ publish, complete, and recycle transitions remains a hardware-tranche gap.
 R57 cannot infer initialization from write-only metadata. C must already carry
 authenticated H2D or fully initialized persistent replay custody; a fresh
 uninitialized C rejects because no artifact- and extent-bound full-write
-certificate is available. The tranche has no native numerical or performance
-measurement and makes no generic arity, three-binding control-replay,
-Rust/native refinement, HIP/HSA parity, or speedup claim.
+certificate is available. Two exact signed-archive executions on one idle
+MI300X GPU now supply native numerical evidence for the fixed R57 sequence,
+but no performance measurement. The tranche makes no generic arity,
+three-binding control-replay, Rust/native refinement, HIP/HSA parity, or
+speedup claim.
 
 The feature-gated `gfx942-runtime-r57-n3-qualification` example is now a
 dedicated live qualification surface with an independent policy/signature and
 authority sequence. It checks the pre-authority uninitialized-C rejection,
 then `A+B -> C` and `C+B -> D`, exact persistent-device reuse observations,
 full A/B/C/D readback digests, and cleanup before one bounded PASS record. The
-lane has not been executed on MI300X, so it does not change the hardware,
-refinement, or performance status above.
+lane completed twice with identical sole PASS records; see the [bounded MI300X
+evidence](evidence/mi300x-r57-n3-qualification-2026-09-08.md). This changes
+only the exact sequence's native numerical status, not its refinement or
+performance status.
