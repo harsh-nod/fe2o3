@@ -717,6 +717,13 @@ impl Gfx942PersistentDeviceAllocationV1 {
         self.cancel(lease, LedgerStateV1::Prepared)
     }
 
+    pub(crate) fn preflight_cancel_prepared(
+        &self,
+        lease: &Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+    ) -> Result<(), Gfx942PersistentUseErrorV1> {
+        self.validate_lease(lease, LedgerStateV1::Prepared)
+    }
+
     fn cancel<S: Gfx942PersistentUseStateV1>(
         &mut self,
         lease: Gfx942PersistentUseLeaseV1<S>,
@@ -781,6 +788,22 @@ impl Gfx942PersistentDeviceAllocationV1 {
         })
     }
 
+    pub(crate) fn preflight_settle(
+        &self,
+        lease: &Gfx942PersistentUseLeaseV1<Gfx942PersistentCompletedV1>,
+    ) -> Result<(), Gfx942PersistentUseErrorV1> {
+        self.validate_lease(lease, LedgerStateV1::Completed)?;
+        if self.ledger.iter().flatten().any(|record| {
+            record.sequence < lease.sequence && record.state != LedgerStateV1::Settled
+        }) {
+            return Err(Gfx942PersistentUseErrorV1::EarlierUseNotSettled);
+        }
+        self.frontier_generation
+            .checked_add(1)
+            .map(|_| ())
+            .ok_or(Gfx942PersistentUseErrorV1::GenerationExhausted)
+    }
+
     /// Retires settled history after the caller has established quiescence.
     /// This is a ledger transition only and performs no device operation.
     pub fn retire_settled_frontier(
@@ -808,6 +831,25 @@ impl Gfx942PersistentDeviceAllocationV1 {
             }
         }
         self.frontier_sequence = None;
+        Ok(())
+    }
+
+    pub(crate) fn preflight_retire_settled_frontier(
+        &self,
+        frontier: &Gfx942PersistentDependencyFrontierV1,
+    ) -> Result<(), Gfx942PersistentUseErrorV1> {
+        let current = Rc::ptr_eq(&frontier.incarnation, &self.incarnation)
+            && frontier.binding == self.binding
+            && frontier.generation == self.frontier_generation
+            && Some(frontier.through_sequence) == self.frontier_sequence;
+        let has_active = self
+            .ledger
+            .iter()
+            .flatten()
+            .any(|record| record.state != LedgerStateV1::Settled);
+        if !current || has_active || self.quarantine.is_some() {
+            return Err(Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration);
+        }
         Ok(())
     }
 
@@ -900,6 +942,22 @@ impl Gfx942PersistentDeviceAllocationV1 {
         self.restore_local_native_from_sdma(lease)
     }
 
+    pub(crate) fn preflight_restore_local_native_from_compute(
+        &self,
+        completed: &Gfx942PersistentUseLeaseV1<Gfx942PersistentCompletedV1>,
+        lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    ) -> Result<(), Gfx942PersistentUseErrorV1> {
+        self.validate_lease(completed, LedgerStateV1::Completed)?;
+        if completed.request.owner() != Gfx942PersistentUseOwnerV1::Compute
+            || self.native.is_some()
+            || lease.storage_identity() != self.binding
+            || lease.layout().requested_bytes() != self.byte_len
+        {
+            return Err(Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration);
+        }
+        Ok(())
+    }
+
     /// Restores a mapping detached for compute when the prepared dispatch was
     /// cancelled before native publication.
     #[allow(clippy::result_large_err)]
@@ -921,6 +979,22 @@ impl Gfx942PersistentDeviceAllocationV1 {
             return Err((Gfx942PersistentUseErrorV1::WrongState, lease));
         }
         self.restore_local_native_from_sdma(lease)
+    }
+
+    pub(crate) fn preflight_restore_local_native_from_cancelled_compute(
+        &self,
+        prepared: &Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>,
+        lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    ) -> Result<(), Gfx942PersistentUseErrorV1> {
+        self.validate_lease(prepared, LedgerStateV1::Prepared)?;
+        if prepared.request.owner() != Gfx942PersistentUseOwnerV1::Compute
+            || self.native.is_some()
+            || lease.storage_identity() != self.binding
+            || lease.layout().requested_bytes() != self.byte_len
+        {
+            return Err(Gfx942PersistentUseErrorV1::WrongOwnerOrGeneration);
+        }
+        Ok(())
     }
 
     /// Temporarily moves the exact local mapping into a queue record. The

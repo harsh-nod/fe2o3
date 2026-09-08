@@ -17,7 +17,16 @@ const SECTION_OFFSET: usize = 0x4200;
 /// Structurally valid loader fixture. Its entry bytes are not executable and
 /// must only be used with the no-device mock backend.
 pub(super) fn module() -> Vec<u8> {
-    let metadata = encode(&metadata_document());
+    module_with_metadata(metadata_document(), 272)
+}
+
+/// Structurally valid three-global-buffer fixture for the no-device backend.
+pub(super) fn three_binding_module() -> Vec<u8> {
+    module_with_metadata(three_binding_metadata_document(), 288)
+}
+
+fn module_with_metadata(metadata: Value, kernarg_segment_size: u32) -> Vec<u8> {
+    let metadata = encode(&metadata);
     let note = metadata_note(&metadata);
     assert!(NOTE_OFFSET + note.len() <= DESCRIPTOR_OFFSET);
 
@@ -35,7 +44,7 @@ pub(super) fn module() -> Vec<u8> {
     write_dynamic_table(&mut bytes);
     write_symbols(&mut bytes);
     write_sections(&mut bytes, note.len(), strtab.len(), shstrtab.len());
-    write_descriptor(&mut bytes);
+    write_descriptor(&mut bytes, kernarg_segment_size);
     bytes
 }
 
@@ -56,6 +65,23 @@ fn metadata_document() -> Value {
     ])
 }
 
+fn three_binding_metadata_document() -> Value {
+    Value::Map(vec![
+        (
+            Value::from("amdhsa.version"),
+            Value::Array(vec![Value::from(1), Value::from(2)]),
+        ),
+        (
+            Value::from("amdhsa.target"),
+            Value::from("amdgcn-amd-amdhsa--gfx942:xnack-"),
+        ),
+        (
+            Value::from("amdhsa.kernels"),
+            Value::Array(vec![three_binding_kernel_metadata()]),
+        ),
+    ])
+}
+
 fn kernel_metadata() -> Value {
     let mut arguments = vec![
         argument(Some("a_ptr"), 0, 8, "global_buffer", Some("global")),
@@ -67,6 +93,32 @@ fn kernel_metadata() -> Value {
         (".symbol", Value::from("vecadd.kd")),
         (".args", Value::Array(arguments)),
         (".kernarg_segment_size", Value::from(272)),
+        (".kernarg_segment_align", Value::from(8)),
+        (".group_segment_fixed_size", Value::from(0)),
+        (".private_segment_fixed_size", Value::from(16)),
+        (".wavefront_size", Value::from(64)),
+        (".sgpr_count", Value::from(14)),
+        (".vgpr_count", Value::from(11)),
+        (".agpr_count", Value::from(3)),
+        (".sgpr_spill_count", Value::from(2)),
+        (".vgpr_spill_count", Value::from(4)),
+        (".max_flat_workgroup_size", Value::from(1024)),
+    ])
+}
+
+fn three_binding_kernel_metadata() -> Value {
+    let mut arguments = vec![
+        argument(Some("a_ptr"), 0, 8, "global_buffer", Some("global")),
+        argument(Some("b_ptr"), 8, 8, "global_buffer", Some("global")),
+        argument(Some("c_ptr"), 16, 8, "global_buffer", Some("global")),
+        argument(Some("element_count"), 24, 8, "by_value", None),
+    ];
+    arguments.extend(hidden_arguments(32));
+    map(vec![
+        (".name", Value::from("vecadd")),
+        (".symbol", Value::from("vecadd.kd")),
+        (".args", Value::Array(arguments)),
+        (".kernarg_segment_size", Value::from(288)),
         (".kernarg_segment_align", Value::from(8)),
         (".group_segment_fixed_size", Value::from(0)),
         (".private_segment_fixed_size", Value::from(16)),
@@ -359,10 +411,10 @@ fn section(
     write_u64(bytes, base + 56, entry_size);
 }
 
-fn write_descriptor(bytes: &mut [u8]) {
+fn write_descriptor(bytes: &mut [u8], kernarg_segment_size: u32) {
     write_u32(bytes, DESCRIPTOR_OFFSET, 0);
     write_u32(bytes, DESCRIPTOR_OFFSET + 4, 16);
-    write_u32(bytes, DESCRIPTOR_OFFSET + 8, 272);
+    write_u32(bytes, DESCRIPTOR_OFFSET + 8, kernarg_segment_size);
     write_i64(bytes, DESCRIPTOR_OFFSET + 16, 0x3000);
     write_u32(bytes, DESCRIPTOR_OFFSET + 44, 1);
     write_u32(bytes, DESCRIPTOR_OFFSET + 48, 0x00af_0081);

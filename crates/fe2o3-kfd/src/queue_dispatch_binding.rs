@@ -10,6 +10,7 @@
 use core::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use arrayvec::ArrayVec;
 use fe2o3_amdhsa_loader::{KernelIdentityInputsV1, ValidatedKernelEnvelope};
 use fe2o3_aql::{
     AQL_MAX_FIXED_BATCH_PACKETS_V2, AqlDispatchGeometryV1, AqlDispatchOrderingV1,
@@ -801,8 +802,210 @@ impl PersistentFixedDispatchControlIdentityV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PersistentFixedDispatchControlStateV1 {
     Ordinary,
-    Attached(PersistentFixedDispatchControlIdentityV1),
-    DataDetached(PersistentFixedDispatchControlIdentityV1),
+    Attached(BoundedPersistentFixedDispatchControlIdentityV1),
+    DataDetached(BoundedPersistentFixedDispatchControlIdentityV1),
+}
+
+/// Immutable identity for the exact two-read/one-write persistent control.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ThreeBindingPersistentFixedDispatchControlIdentityV1 {
+    queue: QueueKeyV1,
+    semantic_sha256: [u8; 32],
+    content_roles: [Gfx942DeviceContentRoleV1; 3],
+    data_layouts: [Gfx942FixedDispatchDataLayoutV1; 3],
+    data_storage: [Gfx942SdmaBufferStorageIdentityV1; 3],
+    effects: [DeviceDataEffectV1; 3],
+}
+
+impl ThreeBindingPersistentFixedDispatchControlIdentityV1 {
+    pub(super) const fn effects(self) -> [DeviceDataEffectV1; 3] {
+        self.effects
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BoundedPersistentFixedDispatchControlIdentityV1 {
+    queue: QueueKeyV1,
+    semantic_sha256: [u8; 32],
+    binding_count: u8,
+    content_roles: [Option<Gfx942DeviceContentRoleV1>; MAX_DISPATCH_DATA_LEASES_V1],
+    data_layouts: [Option<Gfx942FixedDispatchDataLayoutV1>; MAX_DISPATCH_DATA_LEASES_V1],
+    data_storage: [Option<Gfx942SdmaBufferStorageIdentityV1>; MAX_DISPATCH_DATA_LEASES_V1],
+    effects: [Option<DeviceDataEffectV1>; MAX_DISPATCH_DATA_LEASES_V1],
+}
+
+impl BoundedPersistentFixedDispatchControlIdentityV1 {
+    fn from_single(identity: PersistentFixedDispatchControlIdentityV1) -> Self {
+        let mut bounded = Self {
+            queue: identity.queue,
+            semantic_sha256: identity.semantic_sha256,
+            binding_count: 1,
+            content_roles: [None; MAX_DISPATCH_DATA_LEASES_V1],
+            data_layouts: [None; MAX_DISPATCH_DATA_LEASES_V1],
+            data_storage: [None; MAX_DISPATCH_DATA_LEASES_V1],
+            effects: [None; MAX_DISPATCH_DATA_LEASES_V1],
+        };
+        bounded.content_roles[0] = Some(identity.content_role);
+        bounded.data_layouts[0] = Some(identity.data_layout);
+        bounded.data_storage[0] = Some(identity.data_storage);
+        bounded.effects[0] = Some(identity.effect);
+        bounded
+    }
+
+    fn from_three(identity: ThreeBindingPersistentFixedDispatchControlIdentityV1) -> Self {
+        let mut bounded = Self {
+            queue: identity.queue,
+            semantic_sha256: identity.semantic_sha256,
+            binding_count: 3,
+            content_roles: [None; MAX_DISPATCH_DATA_LEASES_V1],
+            data_layouts: [None; MAX_DISPATCH_DATA_LEASES_V1],
+            data_storage: [None; MAX_DISPATCH_DATA_LEASES_V1],
+            effects: [None; MAX_DISPATCH_DATA_LEASES_V1],
+        };
+        for index in 0..3 {
+            bounded.content_roles[index] = Some(identity.content_roles[index]);
+            bounded.data_layouts[index] = Some(identity.data_layouts[index]);
+            bounded.data_storage[index] = Some(identity.data_storage[index]);
+            bounded.effects[index] = Some(identity.effects[index]);
+        }
+        bounded
+    }
+
+    const fn binding_count(self) -> usize {
+        self.binding_count as usize
+    }
+
+    fn as_single(self) -> Option<PersistentFixedDispatchControlIdentityV1> {
+        (self.binding_count == 1).then(|| PersistentFixedDispatchControlIdentityV1 {
+            queue: self.queue,
+            semantic_sha256: self.semantic_sha256,
+            content_role: self.content_roles[0].expect("single persistent content role"),
+            data_layout: self.data_layouts[0].expect("single persistent data layout"),
+            data_storage: self.data_storage[0].expect("single persistent storage identity"),
+            effect: self.effects[0].expect("single persistent effect"),
+        })
+    }
+}
+
+pub(super) fn three_binding_persistent_fixed_dispatch_control_identity_v1(
+    queue: QueueKeyV1,
+    programs: &[ValidatedKernelEnvelope<'_>],
+    packets: &[Gfx942FixedDispatchPacketV1; 1],
+    data_layouts: [Gfx942FixedDispatchDataLayoutV1; 3],
+    initialized: [bool; 3],
+    content_roles: [Gfx942DeviceContentRoleV1; 3],
+    data_storage: [Gfx942SdmaBufferStorageIdentityV1; 3],
+) -> Result<ThreeBindingPersistentFixedDispatchControlIdentityV1, Gfx942DispatchBindingErrorV1> {
+    if data_layouts
+        .iter()
+        .any(|layout| layout.kind != Gfx942FixedDispatchDataKindV1::DeviceLocal)
+        || !initialized[0]
+        || !initialized[1]
+        || !initialized[2]
+        || data_layouts[0].requested_bytes != data_layouts[1].requested_bytes
+        || data_layouts[0].requested_bytes != data_layouts[2].requested_bytes
+        || packets[0].buffers.len() != 3
+        || packets[0]
+            .buffers
+            .iter()
+            .enumerate()
+            .any(|(index, buffer)| {
+                buffer.data_index != index
+                    || buffer.data_byte_offset != 0
+                    || buffer.byte_len != data_layouts[index].requested_bytes
+            })
+        || data_storage[0] == data_storage[1]
+        || data_storage[0] == data_storage[2]
+        || data_storage[1] == data_storage[2]
+    {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: 0,
+            detail: "three-binding persistent compute requires distinct full-extent device data in A/B/C order",
+        });
+    }
+    let plan =
+        plan_public_fixed_dispatch_resources(programs, packets, &data_layouts, &initialized)?;
+    let effects = [
+        DeviceDataEffectV1::ReadOnly,
+        DeviceDataEffectV1::ReadOnly,
+        DeviceDataEffectV1::WriteOnly,
+    ];
+    if plan.data.len() != effects.len()
+        || !plan
+            .data
+            .iter()
+            .zip(effects)
+            .all(|(data, expected)| data.effect == Some(expected))
+    {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: 0,
+            detail: "three-binding persistent compute requires metadata effects Read/Read/Write",
+        });
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"fe2o3-gfx942-three-binding-persistent-fixed-dispatch-control-v1\0");
+    digest.update((programs.len() as u64).to_le_bytes());
+    for program in programs {
+        let identity = program.identity_inputs();
+        digest.update(identity.object_sha256());
+        digest.update(identity.metadata_sha256());
+        digest.update(identity.descriptor_sha256());
+        digest.update(identity.entry_sha256());
+        digest.update(identity.closure_sha256());
+        match program.dispatch_abi_identity() {
+            Some(identity) => {
+                digest.update([1]);
+                digest.update(identity);
+            }
+            None => digest.update([0]),
+        }
+    }
+    for packet in packets {
+        digest.update((packet.program_index as u64).to_le_bytes());
+        for value in packet.geometry.grid() {
+            digest.update(value.to_le_bytes());
+        }
+        for value in packet.geometry.workgroup() {
+            digest.update(value.to_le_bytes());
+        }
+        digest.update(packet.geometry.dimensions().to_le_bytes());
+        digest.update(packet.ordering.header().to_le_bytes());
+        digest.update(packet.dynamic_group_segment_bytes.to_le_bytes());
+        digest.update((packet.kernarg_bytes.len() as u64).to_le_bytes());
+        digest.update(&packet.kernarg_bytes);
+        digest.update((packet.buffers.len() as u64).to_le_bytes());
+        for buffer in &packet.buffers {
+            digest.update((buffer.explicit_argument_index as u64).to_le_bytes());
+            digest.update((buffer.data_index as u64).to_le_bytes());
+            digest.update(buffer.data_byte_offset.to_le_bytes());
+            digest.update(buffer.byte_len.to_le_bytes());
+            match buffer.completed_snapshot {
+                Some(snapshot) => {
+                    digest.update([1]);
+                    digest.update(snapshot.offset.to_le_bytes());
+                    digest.update(snapshot.byte_len.to_le_bytes());
+                    digest.update(snapshot.interior_offset.to_le_bytes());
+                    digest.update(snapshot.interior_byte_len.to_le_bytes());
+                }
+                None => digest.update([0]),
+            }
+        }
+    }
+    for index in 0..3 {
+        digest.update(content_roles[index].identity());
+        digest.update(content_roles[index].ordinal().to_le_bytes());
+        digest.update(data_layouts[index].requested_bytes().to_le_bytes());
+        digest.update(data_layouts[index].alignment().to_le_bytes());
+        digest.update([u8::from(initialized[index] && effects[index].reads())]);
+    }
+    Ok(ThreeBindingPersistentFixedDispatchControlIdentityV1 {
+        queue,
+        semantic_sha256: digest.finalize().into(),
+        content_roles,
+        data_layouts,
+        data_storage,
+        effects,
+    })
 }
 
 pub(super) fn persistent_fixed_dispatch_control_identity_v1(
@@ -1026,6 +1229,7 @@ pub enum Gfx942DispatchBindingErrorV1 {
     StaleDispatchGeneration,
     ResourcePhase,
     DispatchEpochCapacity { maximum: usize },
+    HostAllocationCapacity { operation: &'static str },
     GenerationExhausted,
     Poisoned,
 }
@@ -1929,7 +2133,9 @@ impl DispatchResourceOwnerV1 {
             .expect("validated persistent replay premise");
         premise.initialized_content = input.initialized_content;
         premise.fully_initialized = input.fully_initialized || retained_initialized;
-        self.persistent_control = PersistentFixedDispatchControlStateV1::Attached(identity);
+        self.persistent_control = PersistentFixedDispatchControlStateV1::Attached(
+            BoundedPersistentFixedDispatchControlIdentityV1::from_single(identity),
+        );
         Ok(())
     }
 
@@ -1974,32 +2180,46 @@ impl DispatchResourceOwnerV1 {
         &mut self,
     ) -> Result<(u64, Vec<Gfx942FixedDispatchDataV1>), Gfx942DispatchBindingErrorV1> {
         let generation = self.generation.returned_generation()?;
-        let PersistentFixedDispatchControlStateV1::Attached(identity) = self.persistent_control
-        else {
-            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+        let expected_count = match self.persistent_control {
+            PersistentFixedDispatchControlStateV1::Attached(identity) => identity.binding_count(),
+            _ => return Err(Gfx942DispatchBindingErrorV1::ResourcePhase),
         };
-        if self.data.len() != 1 || self.data_premises.len() != 1 {
+        if self.data.len() != expected_count || self.data_premises.len() != expected_count {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
         }
-        let authority = self
-            .data
-            .pop()
-            .expect("validated persistent data authority");
-        let fully_initialized = self.data_premises[0].fully_initialized;
-        let data = dispatch_data_from_authority_v1(authority, fully_initialized);
-        debug_assert_eq!(data.is_fully_initialized(), fully_initialized);
-        self.persistent_control = PersistentFixedDispatchControlStateV1::DataDetached(identity);
-        Ok((generation, vec![data]))
+        let mut data = Vec::new();
+        data.try_reserve_exact(expected_count).map_err(|_| {
+            Gfx942DispatchBindingErrorV1::HostAllocationCapacity {
+                operation: "persistent dispatch data detach",
+            }
+        })?;
+        while let Some(authority) = self.data.pop() {
+            let premise = &self.data_premises[self.data.len()];
+            data.push(dispatch_data_from_authority_v1(
+                authority,
+                premise.fully_initialized,
+            ));
+        }
+        data.reverse();
+        self.persistent_control = match self.persistent_control {
+            PersistentFixedDispatchControlStateV1::Attached(identity) => {
+                PersistentFixedDispatchControlStateV1::DataDetached(identity)
+            }
+            _ => unreachable!("validated persistent control state"),
+        };
+        Ok((generation, data))
     }
 
-    pub(super) fn device_authorities(&self) -> Vec<&Gfx942DeviceMemoryDispatchAuthorityV1> {
-        self.data
-            .iter()
-            .filter_map(|authority| match authority {
-                DispatchDataAuthorityV1::Device(authority) => Some(authority),
-                DispatchDataAuthorityV1::HostVisible(_) => None,
-            })
-            .collect()
+    pub(super) fn device_authorities_inline_v1(
+        &self,
+    ) -> ArrayVec<&Gfx942DeviceMemoryDispatchAuthorityV1, MAX_DISPATCH_DATA_LEASES_V1> {
+        let mut authorities = ArrayVec::new();
+        for authority in &self.data {
+            if let DispatchDataAuthorityV1::Device(authority) = authority {
+                authorities.push(authority);
+            }
+        }
+        authorities
     }
 
     pub(super) fn bind_templates<const N: usize>(
@@ -2505,11 +2725,12 @@ fn validate_detached_persistent_control_release_state_v1(
     returned_generation: u64,
     expected_generation: u64,
 ) -> Result<(), Gfx942DispatchBindingErrorV1> {
-    if !matches!(
-        state,
-        PersistentFixedDispatchControlStateV1::DataDetached(_)
-    ) || data_authority_count != 0
-        || data_premise_count != 1
+    let expected_premises = match state {
+        PersistentFixedDispatchControlStateV1::DataDetached(identity) => identity.binding_count(),
+        _ => return Err(Gfx942DispatchBindingErrorV1::ResourcePhase),
+    };
+    if data_authority_count != 0
+        || data_premise_count != expected_premises
         || returned_generation != expected_generation
     {
         return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
@@ -2526,6 +2747,9 @@ fn validate_persistent_control_replay_v1(
     predecessor_generation: u64,
 ) -> Result<DeviceDataEffectV1, Gfx942DispatchBindingErrorV1> {
     let PersistentFixedDispatchControlStateV1::DataDetached(retained) = state else {
+        return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+    };
+    let Some(retained) = retained.as_single() else {
         return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
     };
     if retained.queue != requested.queue {
@@ -3474,7 +3698,52 @@ pub(super) fn prepare_persistent_fixed_dispatch_resources_v1(
         true,
     )?;
     owner.data_premises[0].role_identity = control_identity.content_role.identity();
-    owner.persistent_control = PersistentFixedDispatchControlStateV1::Attached(control_identity);
+    owner.persistent_control = PersistentFixedDispatchControlStateV1::Attached(
+        BoundedPersistentFixedDispatchControlIdentityV1::from_single(control_identity),
+    );
+    Ok(owner)
+}
+
+pub(super) fn prepare_three_binding_persistent_fixed_dispatch_resources_v1(
+    memory: &mut SharedGttMemorySessionV1,
+    programs: Vec<ValidatedKernelEnvelope<'_>>,
+    packets: [Gfx942FixedDispatchPacketV1; 1],
+    data: Vec<Gfx942FixedDispatchDataV1>,
+    predecessor_generation: Option<u64>,
+    control_identity: ThreeBindingPersistentFixedDispatchControlIdentityV1,
+) -> Result<DispatchResourceOwnerV1, PersistentFixedDispatchPreparationFailureV1> {
+    if data.len() != 3 {
+        return Err(PersistentFixedDispatchPreparationFailureV1 {
+            error: Gfx942DispatchBindingErrorV1::InvalidData {
+                index: data.len(),
+                detail: "three-binding persistent compute data cardinality",
+            },
+            data,
+        });
+    }
+    let generation = match predecessor_generation {
+        Some(predecessor) => DispatchGenerationOwnerV1::after_recycled(predecessor),
+        None => DispatchGenerationOwnerV1::new(),
+    };
+    let generation = match generation {
+        Ok(generation) => generation,
+        Err(error) => {
+            return Err(PersistentFixedDispatchPreparationFailureV1 { error, data });
+        }
+    };
+    let mut owner = prepare_public_fixed_dispatch_resources_with_generation(
+        memory, programs, packets, data, generation, true,
+    )?;
+    for (premise, role) in owner
+        .data_premises
+        .iter_mut()
+        .zip(control_identity.content_roles)
+    {
+        premise.role_identity = role.identity();
+    }
+    owner.persistent_control = PersistentFixedDispatchControlStateV1::Attached(
+        BoundedPersistentFixedDispatchControlIdentityV1::from_three(control_identity),
+    );
     Ok(owner)
 }
 
@@ -6031,7 +6300,9 @@ mod tests {
 
         assert!(matches!(
             validate_persistent_control_replay_v1(
-                PersistentFixedDispatchControlStateV1::DataDetached(expected),
+                PersistentFixedDispatchControlStateV1::DataDetached(
+                    BoundedPersistentFixedDispatchControlIdentityV1::from_single(expected)
+                ),
                 0,
                 1,
                 &generation,
@@ -6046,7 +6317,9 @@ mod tests {
         generation.recycle(first).unwrap();
         assert_eq!(
             validate_persistent_control_replay_v1(
-                PersistentFixedDispatchControlStateV1::DataDetached(expected),
+                PersistentFixedDispatchControlStateV1::DataDetached(
+                    BoundedPersistentFixedDispatchControlIdentityV1::from_single(expected)
+                ),
                 0,
                 1,
                 &generation,
@@ -6058,7 +6331,9 @@ mod tests {
         );
         assert!(matches!(
             validate_persistent_control_replay_v1(
-                PersistentFixedDispatchControlStateV1::DataDetached(expected),
+                PersistentFixedDispatchControlStateV1::DataDetached(
+                    BoundedPersistentFixedDispatchControlIdentityV1::from_single(expected)
+                ),
                 0,
                 1,
                 &generation,
@@ -6070,7 +6345,9 @@ mod tests {
         for (authorities, premises) in [(1, 1), (0, 0), (0, 2)] {
             assert!(matches!(
                 validate_persistent_control_replay_v1(
-                    PersistentFixedDispatchControlStateV1::DataDetached(expected),
+                    PersistentFixedDispatchControlStateV1::DataDetached(
+                        BoundedPersistentFixedDispatchControlIdentityV1::from_single(expected)
+                    ),
                     authorities,
                     premises,
                     &generation,
@@ -6123,7 +6400,9 @@ mod tests {
         for substituted in substitutions {
             assert!(
                 validate_persistent_control_replay_v1(
-                    PersistentFixedDispatchControlStateV1::DataDetached(expected),
+                    PersistentFixedDispatchControlStateV1::DataDetached(
+                        BoundedPersistentFixedDispatchControlIdentityV1::from_single(expected)
+                    ),
                     0,
                     1,
                     &generation,
@@ -6160,7 +6439,9 @@ mod tests {
             generation.recycle(current).unwrap();
             assert_eq!(
                 validate_persistent_control_replay_v1(
-                    PersistentFixedDispatchControlStateV1::DataDetached(expected),
+                    PersistentFixedDispatchControlStateV1::DataDetached(
+                        BoundedPersistentFixedDispatchControlIdentityV1::from_single(expected)
+                    ),
                     0,
                     1,
                     &generation,
@@ -6204,7 +6485,9 @@ mod tests {
         );
         assert!(
             validate_returning_destroy_control_state_v1(
-                PersistentFixedDispatchControlStateV1::Attached(identity),
+                PersistentFixedDispatchControlStateV1::Attached(
+                    BoundedPersistentFixedDispatchControlIdentityV1::from_single(identity)
+                ),
                 1,
                 1,
             )
@@ -6212,7 +6495,9 @@ mod tests {
         );
         assert!(matches!(
             validate_returning_destroy_control_state_v1(
-                PersistentFixedDispatchControlStateV1::DataDetached(identity),
+                PersistentFixedDispatchControlStateV1::DataDetached(
+                    BoundedPersistentFixedDispatchControlIdentityV1::from_single(identity)
+                ),
                 0,
                 1,
             ),
@@ -6220,7 +6505,9 @@ mod tests {
         ));
         assert!(matches!(
             validate_returning_destroy_control_state_v1(
-                PersistentFixedDispatchControlStateV1::Attached(identity),
+                PersistentFixedDispatchControlStateV1::Attached(
+                    BoundedPersistentFixedDispatchControlIdentityV1::from_single(identity)
+                ),
                 0,
                 1,
             ),
@@ -6239,7 +6526,9 @@ mod tests {
 
         assert!(
             validate_detached_persistent_control_release_state_v1(
-                PersistentFixedDispatchControlStateV1::DataDetached(identity),
+                PersistentFixedDispatchControlStateV1::DataDetached(
+                    BoundedPersistentFixedDispatchControlIdentityV1::from_single(identity)
+                ),
                 0,
                 1,
                 current,
@@ -6249,28 +6538,36 @@ mod tests {
         );
         for (state, authorities, premises, returned, expected) in [
             (
-                PersistentFixedDispatchControlStateV1::Attached(identity),
+                PersistentFixedDispatchControlStateV1::Attached(
+                    BoundedPersistentFixedDispatchControlIdentityV1::from_single(identity),
+                ),
                 0,
                 1,
                 current,
                 current,
             ),
             (
-                PersistentFixedDispatchControlStateV1::DataDetached(identity),
+                PersistentFixedDispatchControlStateV1::DataDetached(
+                    BoundedPersistentFixedDispatchControlIdentityV1::from_single(identity),
+                ),
                 1,
                 1,
                 current,
                 current,
             ),
             (
-                PersistentFixedDispatchControlStateV1::DataDetached(identity),
+                PersistentFixedDispatchControlStateV1::DataDetached(
+                    BoundedPersistentFixedDispatchControlIdentityV1::from_single(identity),
+                ),
                 0,
                 0,
                 current,
                 current,
             ),
             (
-                PersistentFixedDispatchControlStateV1::DataDetached(identity),
+                PersistentFixedDispatchControlStateV1::DataDetached(
+                    BoundedPersistentFixedDispatchControlIdentityV1::from_single(identity),
+                ),
                 0,
                 1,
                 current,
@@ -6329,7 +6626,9 @@ mod tests {
         }
         assert_eq!(
             validate_persistent_control_replay_v1(
-                PersistentFixedDispatchControlStateV1::DataDetached(identity),
+                PersistentFixedDispatchControlStateV1::DataDetached(
+                    BoundedPersistentFixedDispatchControlIdentityV1::from_single(identity)
+                ),
                 0,
                 1,
                 &generation,
@@ -6346,7 +6645,9 @@ mod tests {
         assert_eq!(generation.returning_destroy_generation().unwrap(), 7);
         assert!(matches!(
             validate_persistent_control_replay_v1(
-                PersistentFixedDispatchControlStateV1::Attached(identity),
+                PersistentFixedDispatchControlStateV1::Attached(
+                    BoundedPersistentFixedDispatchControlIdentityV1::from_single(identity)
+                ),
                 1,
                 1,
                 &generation,
@@ -6357,7 +6658,9 @@ mod tests {
         ));
         assert!(
             validate_returning_destroy_control_state_v1(
-                PersistentFixedDispatchControlStateV1::Attached(identity),
+                PersistentFixedDispatchControlStateV1::Attached(
+                    BoundedPersistentFixedDispatchControlIdentityV1::from_single(identity)
+                ),
                 1,
                 1,
             )

@@ -1507,3 +1507,34 @@ ordering/completion truth, native performance gains, and HIP/HSA parity remain
 open. The existing runtime model is not a refinement of this production state
 machine, and no MI300X benchmark evidence is attached. See the
 [R52 claim boundary](../crates/fe2o3-kfd/docs/r52-native-fixed-dispatch-multi-inflight-v1.md).
+
+## Runtime R57 Status
+
+R57 implements an exact production three-binding persistent-compute
+transaction through `KfdRuntimeBackendV1` and typed
+`RuntimeContextV1::launch`: initialized A/B read inputs and one distinct
+initialized C write output, equal full extents, one device/VM/primary gfx942
+queue, and one `WaitForPrior` packet. It reuses the existing fixed-dispatch
+binder and a bounded shared attachment/ledger core rather than minting a public
+generic authority constructor.
+
+Tests cover exact admission, two consecutive launches, custody-safe
+prepublication restoration and prepared cancellation, all-three restore preflight, and terminal closing-
+currentness ambiguity for either pending or completed signal observations.
+The public facade intercepts only exact three-binding `Read/Read/Write` intent,
+rejects invalid R57 candidates before submission or H2D witness normalization,
+and retains the exact three-owner prelaunch state for a corrected retry.
+Other three-binding metadata remains on the generic path.
+Generic queue submit, poll, recycle, detach, rebind, and destruction paths are
+excluded while either an N=1 or N=3 persistent roster is live.
+The production-binder host test reaches ABI, role, extent, storage-identity,
+and packet-control validation, but not native code/kernarg retention, submit,
+poll, or detach. Failure injection after entry 1 or 2 of the shared N=3
+publish, complete, and recycle transitions remains a hardware-tranche gap.
+
+R57 cannot infer initialization from write-only metadata. C must already carry
+authenticated H2D or fully initialized persistent replay custody; a fresh
+uninitialized C rejects because no artifact- and extent-bound full-write
+certificate is available. The tranche has no native numerical or performance
+measurement and makes no generic arity, three-binding control-replay,
+Rust/native refinement, HIP/HSA parity, or speedup claim.

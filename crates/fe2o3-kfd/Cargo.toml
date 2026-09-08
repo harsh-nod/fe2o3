@@ -40,6 +40,7 @@ name = "kfd-sdma-xgmi-peer-benchmark"
 required-features = ["live-validation"]
 
 [dependencies]
+arrayvec = "0.7.8"
 fe2o3-amdhsa-loader.workspace = true
 fe2o3-aql.workspace = true
 fe2o3-drm-uapi.workspace = true

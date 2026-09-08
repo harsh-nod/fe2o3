@@ -1091,6 +1091,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &self.backend
     }
 
+    #[cfg(test)]
+    pub(crate) fn backend_mut_for_test_v1(&mut self) -> &mut B {
+        &mut self.backend
+    }
+
     /// Performs one deterministic cleanup pass without discarding retained handles.
     ///
     /// Streams are destroyed first because a successful destroy, or a

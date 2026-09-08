@@ -473,6 +473,33 @@ broad Rust/device-language support; general `std`, allocation, unwind, dynamic
 dispatch, arbitrary inline assembly, and external calls remain outside the
 admitted device subset.
 
+R57 adds one exact persistent-device compute shape through the ordinary typed
+`RuntimeContextV1::launch` path: two initialized HBM read inputs and one
+distinct initialized HBM write output with equal full-allocation extents on the
+same device, VM, and primary gfx942 queue. It publishes one `WaitForPrior`
+packet through the existing fixed-dispatch binder. Authenticated H2D and fully
+initialized persistent replay are the only admitted input witnesses. In
+particular, `Write` access is not a full-write proof: an uninitialized output is
+rejected until an exact kernel/dispatch/allocation/extent certificate exists.
+
+Recoverable clean prepublication rejection or explicit prepared cancellation
+restores all three owners. A terminal `RejectedBeforeSideEffect`, native
+preparation failure after consuming ownership, or consuming unwind retains or
+quarantines all three and poisons authority even when publication was
+impossible. Once publication may have occurred, ambiguous currentness or
+lifecycle failure has the same terminal policy. Successful completion preserves A/B
+content generations, advances C's effect/content generation, records
+`PersistentDeviceReused` with zero user-data materializations, and releases the
+incompatible fixed control before another transaction. This is bounded N=3,
+not general typed asynchronous launch, three-binding control replay, a native
+numerical result, a Rust/native refinement theorem, or HIP/HSA performance
+parity.
+Host coverage enters the production binder through ABI and fixed-control
+validation but does not retain native code/kernarg authorities or exercise
+native submit, poll, and detach. Per-entry failure injection after entry 1 or
+2 of shared N=3 publish, complete, and recycle remains explicit follow-up work
+for the hardware tranche.
+
 The opt-in `gfx942-lds-diagnostic` executes one SHA-pinned, loader-inspected LDS
 reduction through this same transition using an explicitly unsafe diagnostic
 authority implementation. On the qualifying MI300X it completed with result

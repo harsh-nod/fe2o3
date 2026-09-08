@@ -180,6 +180,13 @@ pub(super) enum DirectionalSdmaDeviceOwnerV1 {
 
 #[cfg(test)]
 impl DirectionalSdmaDeviceOwnerV1 {
+    pub(crate) fn scripted_owner_id(&self) -> Option<u64> {
+        match self {
+            Self::Scripted(device) => Some(device.owner_id()),
+            Self::Native(_) => None,
+        }
+    }
+
     pub(crate) fn scripted_bytes(&self) -> Option<&[u8]> {
         match self {
             Self::Scripted(device) => Some(&device.bytes),
@@ -282,6 +289,14 @@ impl PersistentComputeReadyOwnerV1 {
                 authenticated_sha256,
                 ..
             } => *authenticated_sha256,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn scripted_owner_id(&self) -> Option<u64> {
+        match self {
+            Self::Scripted { device, .. } => Some(device.owner_id()),
+            Self::Native(_) => None,
         }
     }
 
@@ -2105,6 +2120,12 @@ mod scripted {
     pub(crate) struct ScriptedDeviceOwnerV1 {
         token: ScriptedOwnerTokenV1,
         pub(super) bytes: Vec<u8>,
+    }
+
+    impl ScriptedDeviceOwnerV1 {
+        pub(super) const fn owner_id(&self) -> u64 {
+            self.token.id
+        }
     }
 
     #[derive(Debug)]
