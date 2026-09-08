@@ -944,9 +944,11 @@ impl KfdRuntimeBackendV1 {
                 .as_ref()
                 .and_then(|active| active.execution.as_ref())
                 .is_some_and(|execution| match execution {
-                    ActiveComputeExecutionV1::Persistent { .. } => true,
+                    ActiveComputeExecutionV1::Persistent { .. }
+                    | ActiveComputeExecutionV1::ThreeBindingPersistent { .. } => true,
                     #[cfg(test)]
-                    ActiveComputeExecutionV1::ScriptedPersistent { .. } => true,
+                    ActiveComputeExecutionV1::ScriptedPersistent { .. }
+                    | ActiveComputeExecutionV1::ScriptedThreeBindingPersistent { .. } => true,
                     _ => false,
                 });
             if !waitable {
@@ -995,6 +997,49 @@ impl KfdRuntimeBackendV1 {
                         )
                         .map(Some)
                 }
+                ActiveComputeExecutionV1::ThreeBindingPersistent {
+                    admissions,
+                    restore_shells,
+                    dispatch,
+                } => {
+                    let Some(queue) = backend.queue.as_mut() else {
+                        backend.retain_terminal_sdma_custody_v1(
+                            KfdRuntimeTerminalSdmaCustodyV1::ThreeBindingPersistentComputePublished(
+                                dispatch,
+                            ),
+                        );
+                        return Err(backend.terminal_error(
+                            "published three-binding persistent submission lost its KFD queue",
+                        ));
+                    };
+                    let wait = queue
+                        .wait_and_recycle_three_binding_directional_persistent_fixed_dispatch_until_v1(
+                            dispatch, deadline,
+                        )
+                        .map(|wait| match wait {
+                            Gfx942ThreeBindingPersistentComputeWaitAndRecycleV1::Timeout {
+                                dispatch, ..
+                            } => Gfx942ThreeBindingPersistentComputePollAndRecycleV1::Pending(
+                                dispatch,
+                            ),
+                            Gfx942ThreeBindingPersistentComputeWaitAndRecycleV1::Recycled {
+                                recycled,
+                                completion_observed_at,
+                                ..
+                            } => Gfx942ThreeBindingPersistentComputePollAndRecycleV1::Recycled {
+                                recycled,
+                                completion_observed_at,
+                            },
+                        });
+                    backend
+                        .finish_three_binding_persistent_poll_and_recycle_v1(
+                            active,
+                            admissions,
+                            restore_shells,
+                            wait,
+                        )
+                        .map(Some)
+                }
                 #[cfg(test)]
                 ActiveComputeExecutionV1::ScriptedPersistent {
                     allocation,
@@ -1025,6 +1070,19 @@ impl KfdRuntimeBackendV1 {
                         attempts = attempts.saturating_add(1);
                     }
                 }
+                #[cfg(test)]
+                ActiveComputeExecutionV1::ScriptedThreeBindingPersistent {
+                    admissions,
+                    restore_shells,
+                    devices,
+                } => backend
+                    .finish_scripted_three_binding_persistent_compute_v1(
+                        active,
+                        admissions,
+                        restore_shells,
+                        devices,
+                    )
+                    .map(Some),
                 other => {
                     active.execution = Some(other);
                     backend.active = Some(active);

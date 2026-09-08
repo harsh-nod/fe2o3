@@ -1772,21 +1772,13 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             && record.phase == expected
     }
 
-    fn validate_dispatch_device_memory_set(
+    fn validate_dispatch_device_memory_authorities(
         &self,
         authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
         expected_device: DeviceKeyV1,
         expected_vm: VmKeyV1,
     ) -> Result<(), MemorySessionError> {
         self.require_active()?;
-        let retained: Vec<_> = self
-            .device_memory
-            .iter()
-            .filter(|record| record.phase != DeviceMemoryPhaseV1::Released)
-            .collect();
-        if retained.len() != authorities.len() {
-            return Err(MemorySessionError::DeviceMemoryQueueBindingRequired);
-        }
         for (index, authority) in authorities.iter().enumerate() {
             let facts = authority.facts();
             if facts.device != expected_device
@@ -1794,7 +1786,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                 || authorities[..index]
                     .iter()
                     .any(|prior| prior.facts().identity() == facts.identity())
-                || !retained.iter().any(|record| {
+                || !self.device_memory.iter().any(|record| {
                     record.id == facts.id
                         && record.generation == facts.generation
                         && record.device == facts.device
@@ -1812,6 +1804,25 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         Ok(())
     }
 
+    fn validate_complete_dispatch_device_memory_set(
+        &self,
+        authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
+        expected_device: DeviceKeyV1,
+        expected_vm: VmKeyV1,
+    ) -> Result<(), MemorySessionError> {
+        self.require_active()?;
+        if self
+            .device_memory
+            .iter()
+            .filter(|record| record.phase != DeviceMemoryPhaseV1::Released)
+            .count()
+            != authorities.len()
+        {
+            return Err(MemorySessionError::DeviceMemoryQueueBindingRequired);
+        }
+        self.validate_dispatch_device_memory_authorities(authorities, expected_device, expected_vm)
+    }
+
     fn validate_live_queue_dispatch_memory(
         &mut self,
         authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
@@ -1820,7 +1831,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
     ) -> Result<(), MemorySessionError> {
         self.require_active()?;
         self.check_currentness()?;
-        self.validate_dispatch_device_memory_set(authorities, expected_device, expected_vm)
+        self.validate_dispatch_device_memory_authorities(authorities, expected_device, expected_vm)
     }
 
     fn validate_persistent_replay_dispatch_memory(
@@ -1831,7 +1842,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
     ) -> Result<(), MemorySessionError> {
         self.require_active()?;
         self.check_operational_currentness()?;
-        self.validate_dispatch_device_memory_set(authorities, expected_device, expected_vm)
+        self.validate_dispatch_device_memory_authorities(authorities, expected_device, expected_vm)
     }
 
     fn map_device_memory(
@@ -4039,7 +4050,7 @@ impl SharedGttMemorySessionV1 {
         authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
     ) -> Result<QueueModelFoundationV1, MemorySessionError> {
         self.check_queue_currentness()?;
-        self.engine.validate_dispatch_device_memory_set(
+        self.engine.validate_complete_dispatch_device_memory_set(
             authorities,
             self.model_device.model_key(),
             self.vm,
@@ -4047,8 +4058,9 @@ impl SharedGttMemorySessionV1 {
         self.take_queue_model_foundation_after_device_memory_check()
     }
 
-    /// Revalidates the exact complete mapped device-memory set after queue
-    /// model ownership has already transferred into a live queue engine.
+    /// Revalidates the exact mapped device-memory subset used by a dispatch
+    /// after queue-model ownership has transferred into a live queue engine.
+    /// Other unbound allocations remain retained by the same memory session.
     pub(crate) fn validate_live_queue_dispatch_memory(
         &mut self,
         authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
@@ -4065,9 +4077,9 @@ impl SharedGttMemorySessionV1 {
     ///
     /// Persistent replay performs no allocation, mapping, or queue lifecycle
     /// transition. It therefore uses the active-queue operational fence while
-    /// retaining the same exact complete authority-set validation. Initial
-    /// control creation and ordinary detached rebinding continue to use the
-    /// full composite observation above. As documented by the underlying
+    /// retaining the same exact bound-subset validation. Initial queue-model
+    /// transfer continues to require the complete retained set. As documented
+    /// by the underlying
     /// currentness contract, the operational fence does not re-observe topology
     /// or apertures and cannot exclude reset-counter wrap or observation ABA.
     pub(crate) fn validate_persistent_replay_dispatch_memory(
@@ -7957,31 +7969,84 @@ mod tests {
         let exact_refs = [&exact[0], &exact[1]];
         assert!(
             engine
-                .validate_dispatch_device_memory_set(&exact_refs, device, vm)
+                .validate_complete_dispatch_device_memory_set(&exact_refs, device, vm)
                 .is_ok()
         );
         assert!(matches!(
-            engine.validate_dispatch_device_memory_set(&exact_refs[..1], device, vm),
+            engine.validate_complete_dispatch_device_memory_set(&exact_refs[..1], device, vm),
             Err(MemorySessionError::DeviceMemoryQueueBindingRequired)
         ));
 
         exact[1].facts = exact[0].facts;
         let exact_refs = [&exact[0], &exact[1]];
         assert!(matches!(
-            engine.validate_dispatch_device_memory_set(&exact_refs, device, vm),
+            engine.validate_complete_dispatch_device_memory_set(&exact_refs, device, vm),
             Err(MemorySessionError::DeviceMemoryQueueBindingRequired)
         ));
         exact[1].facts.generation += 1;
         let exact_refs = [&exact[0], &exact[1]];
         assert!(matches!(
-            engine.validate_dispatch_device_memory_set(&exact_refs, device, vm),
+            engine.validate_complete_dispatch_device_memory_set(&exact_refs, device, vm),
             Err(MemorySessionError::DeviceMemoryQueueBindingRequired)
         ));
         assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Active);
     }
 
     #[test]
-    fn persistent_replay_uses_only_operational_currentness_before_exact_set_validation() {
+    fn live_dispatch_validation_accepts_an_exact_bound_subset() {
+        let mut engine = acquired();
+        let (device, vm) = device_vm(7);
+        let bound = engine
+            .allocate_device_memory(device, vm, 4096, 4096)
+            .and_then(|lease| engine.map_device_memory(lease))
+            .unwrap();
+        let _unrelated = engine
+            .allocate_device_memory(device, vm, 8192, 4096)
+            .and_then(|lease| engine.map_device_memory(lease))
+            .unwrap();
+        let record = engine
+            .device_memory
+            .iter()
+            .find(|record| record.id == bound.id)
+            .unwrap();
+        let authority = Gfx942DeviceMemoryDispatchAuthorityV1 {
+            facts: Gfx942DeviceMemoryDispatchFactsV1 {
+                id: record.id,
+                generation: record.generation,
+                device: record.device,
+                vm: record.vm,
+                gpu_va: record.gpu_va,
+                layout: record.layout,
+            },
+            lease: bound,
+        };
+
+        assert!(matches!(
+            engine.validate_complete_dispatch_device_memory_set(&[&authority], device, vm),
+            Err(MemorySessionError::DeviceMemoryQueueBindingRequired)
+        ));
+        engine
+            .validate_live_queue_dispatch_memory(&[&authority], device, vm)
+            .unwrap();
+        engine
+            .validate_persistent_replay_dispatch_memory(&[&authority], device, vm)
+            .unwrap();
+
+        let mut foreign = authority.facts;
+        foreign.generation += 1;
+        let foreign = Gfx942DeviceMemoryDispatchAuthorityV1 {
+            facts: foreign,
+            lease: authority.lease,
+        };
+        assert!(matches!(
+            engine.validate_live_queue_dispatch_memory(&[&foreign], device, vm),
+            Err(MemorySessionError::DeviceMemoryQueueBindingRequired)
+        ));
+        assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Active);
+    }
+
+    #[test]
+    fn persistent_replay_uses_only_operational_currentness_before_bound_subset_validation() {
         let mut engine = acquired();
         let (device, vm) = device_vm(7);
         let full_before = engine.backend.currentness_calls;

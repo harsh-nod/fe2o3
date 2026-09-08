@@ -53,7 +53,8 @@ use fe2o3_kfd::{
     Gfx942ThreeBindingPersistentComputeCompletedV1, Gfx942ThreeBindingPersistentComputeDispatchV1,
     Gfx942ThreeBindingPersistentComputeInputsV1,
     Gfx942ThreeBindingPersistentComputePollAndRecycleFailureV1,
-    Gfx942ThreeBindingPersistentComputePollAndRecycleV1, Gfx942XgmiBatchSubmissionFailureV1,
+    Gfx942ThreeBindingPersistentComputePollAndRecycleV1,
+    Gfx942ThreeBindingPersistentComputeWaitAndRecycleV1, Gfx942XgmiBatchSubmissionFailureV1,
     Gfx942XgmiCopyFailureV1, Gfx942XgmiCopyPollV1, Gfx942XgmiMapRecoveryV1,
     Gfx942XgmiMappedDeviceMemoryV1, Gfx942XgmiSdmaCopyRequestV1, Gfx942XgmiUnmapRecoveryV1,
     HOST_VISIBLE_MEMORY_PAGE_BYTES_V1, OpenedKfd, SharedGttMemorySessionV1,
@@ -2283,9 +2284,11 @@ impl KfdRuntimeBackendV1 {
             .execution
             .as_ref()
             .is_some_and(|execution| match execution {
-                ActiveComputeExecutionV1::Persistent { .. } => true,
+                ActiveComputeExecutionV1::Persistent { .. }
+                | ActiveComputeExecutionV1::ThreeBindingPersistent { .. } => true,
                 #[cfg(test)]
-                ActiveComputeExecutionV1::ScriptedPersistent { .. } => true,
+                ActiveComputeExecutionV1::ScriptedPersistent { .. }
+                | ActiveComputeExecutionV1::ScriptedThreeBindingPersistent { .. } => true,
                 _ => false,
             });
         if published {
@@ -6610,14 +6613,15 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 deadline.saturating_duration_since(Instant::now()),
             );
         }
-        if let Some(lane) = self.published_persistent_compute_lane_v1(submission)
-            && let Some(status) = self.wait_published_persistent_compute_lane_v1(lane, deadline)?
-        {
-            return Ok(status);
-        }
         let mut attempts = 0_u32;
         let mut sleep = WAIT_INITIAL_SLEEP_V1;
         loop {
+            if let Some(lane) = self.published_persistent_compute_lane_v1(submission)
+                && let Some(status) =
+                    self.wait_published_persistent_compute_lane_v1(lane, deadline)?
+            {
+                return Ok(status);
+            }
             let status = self.poll_v1(submission)?;
             if status != BackendPollV1::Pending {
                 return Ok(status);
@@ -14737,7 +14741,13 @@ mod tests {
             allocations,
             byte_len as u64,
         );
-        assert_eq!(backend.poll_v1(first).unwrap(), BackendPollV1::Succeeded);
+        backend.flush_stream_v1(stream).unwrap();
+        assert_eq!(
+            backend
+                .wait_v1(first, Instant::now() + Duration::from_secs(1))
+                .unwrap(),
+            BackendPollV1::Succeeded
+        );
         let first_performance = backend.last_launch_performance_v1().unwrap();
         assert_eq!(
             first_performance.data_path(),
@@ -16143,12 +16153,24 @@ mod tests {
             1
         );
         assert_eq!(
+            wait.matches(
+                ".wait_and_recycle_three_binding_directional_persistent_fixed_dispatch_until_v1("
+            )
+            .count(),
+            1
+        );
+        assert_eq!(
             poll.matches("finish_persistent_compute_poll_and_recycle_v1")
                 .count(),
             1
         );
         assert_eq!(
             wait.matches("finish_persistent_compute_poll_and_recycle_v1")
+                .count(),
+            1
+        );
+        assert_eq!(
+            wait.matches("finish_three_binding_persistent_poll_and_recycle_v1")
                 .count(),
             1
         );
