@@ -1,0 +1,165 @@
+{
+  "schema": "fe2o3-gfx950-fp8-common-hip-event-v1",
+  "recorded_at": "2026-09-08",
+  "host": "mi350",
+  "device": {
+    "physical_gpu": 5,
+    "visible_device": 0,
+    "market_name": "AMD Instinct MI350X",
+    "target": "gfx950:sramecc+:xnack-",
+    "bdf": "0000:95:00.0",
+    "compute_units": 256,
+    "driver": "amdgpu 6.16.13"
+  },
+  "contract": {
+    "shape": {
+      "batch": 16,
+      "m": 16,
+      "n": 16,
+      "k": 128
+    },
+    "precision": "E4M3 x E4M3 -> FP32",
+    "lhs_layout": "row-major batch x M x K",
+    "rhs_layout": "row-major batch x K x N",
+    "output_layout": "row-major batch x M x N",
+    "alpha": 1.0,
+    "beta": 0.0,
+    "inputs": "one deterministic persistent allocation shared by both implementations",
+    "oracle": "independent scalar CPU E4M3 decode and FP32 GEMM",
+    "tolerance": {
+      "absolute": 0.00001,
+      "nonfinite": "reject"
+    }
+  },
+  "implementations": {
+    "fe2o3": {
+      "kernel": "gfx950_fp8_gemm_rust",
+      "launch": "grid=(4,1,1), workgroup=(256,1,1)",
+      "waves_per_workgroup": 4,
+      "hsaco_sha256": "393ac5891a09a9c5756c67452f7ba77dc70ef8a1ce830438cc1c2784ab889430",
+      "max_absolute_error": 0.0
+    },
+    "hipblaslt": {
+      "version": 100202,
+      "git_version": "dabb6df2b9",
+      "solution_index": 458429,
+      "selection": "winner of all 540 supported solutions in a fresh exhaustive hipblaslt-bench sweep",
+      "exhaustive_reported_us": 5.23842,
+      "exhaustive_raw_gzip": "perf-evidence/raw/gfx950-fp8-common-hip-event/hipblaslt-all-gpu5.log.gz",
+      "exhaustive_raw_gzip_sha256": "226e7af3ed3734fb59583628c551e763f42b7add7233d20cdef9bbd7d69c30de",
+      "max_absolute_error": 0.0
+    }
+  },
+  "common_protocol": {
+    "timer": "HIP events on one non-default stream",
+    "cache": "persistent cache-hot allocations",
+    "warmups_per_implementation": 1000,
+    "paired_order": "alternate fe2o3-first and hipBLASLt-first",
+    "synchronized_latency": {
+      "samples_per_implementation": 3000,
+      "launches_per_event_interval": 1
+    },
+    "queue_hot_amortized": {
+      "samples_per_implementation": 300,
+      "launches_per_event_interval": 100
+    },
+    "setup_excluded": [
+      "allocation",
+      "input initialization",
+      "HSACO loading",
+      "hipBLASLt descriptor creation",
+      "hipBLASLt algorithm initialization"
+    ]
+  },
+  "runs": [
+    {
+      "run": 1,
+      "synchronized_latency": {
+        "fe2o3_p05_us": 6.16,
+        "fe2o3_p50_us": 6.28,
+        "fe2o3_p95_us": 9.28,
+        "hipblaslt_p05_us": 7.72,
+        "hipblaslt_p50_us": 7.92,
+        "hipblaslt_p95_us": 11.44,
+        "fe2o3_speedup": 1.26115
+      },
+      "queue_hot_amortized": {
+        "fe2o3_p05_us": 2.458,
+        "fe2o3_p50_us": 2.5664,
+        "fe2o3_p95_us": 3.35761,
+        "hipblaslt_p05_us": 5.08441,
+        "hipblaslt_p50_us": 5.11601,
+        "hipblaslt_p95_us": 6.15242,
+        "fe2o3_speedup": 1.99346
+      },
+      "raw": "perf-evidence/raw/gfx950-fp8-common-hip-event/fp8-common-both-modes-gpu5-run1.csv",
+      "raw_sha256": "715f329a96cd7f1806fc4bf1296380e6a860f2534858e87c300f38d951bf70cb"
+    },
+    {
+      "run": 2,
+      "synchronized_latency": {
+        "fe2o3_p05_us": 6.36,
+        "fe2o3_p50_us": 6.48,
+        "fe2o3_p95_us": 10.88,
+        "hipblaslt_p05_us": 7.72,
+        "hipblaslt_p50_us": 7.96,
+        "hipblaslt_p95_us": 15.44,
+        "fe2o3_speedup": 1.2284
+      },
+      "queue_hot_amortized": {
+        "fe2o3_p05_us": 2.53841,
+        "fe2o3_p50_us": 2.70921,
+        "fe2o3_p95_us": 3.63721,
+        "hipblaslt_p05_us": 5.05601,
+        "hipblaslt_p50_us": 5.09321,
+        "hipblaslt_p95_us": 6.77482,
+        "fe2o3_speedup": 1.87996
+      },
+      "raw": "perf-evidence/raw/gfx950-fp8-common-hip-event/fp8-common-both-modes-gpu5-run2.csv",
+      "raw_sha256": "772dc66686f4edceda5fc563aaf517322979cf2f96be46ee51a701a7dae06406"
+    },
+    {
+      "run": 3,
+      "synchronized_latency": {
+        "fe2o3_p05_us": 6.16,
+        "fe2o3_p50_us": 6.32,
+        "fe2o3_p95_us": 9.56,
+        "hipblaslt_p05_us": 7.68,
+        "hipblaslt_p50_us": 7.92,
+        "hipblaslt_p95_us": 12.24,
+        "fe2o3_speedup": 1.25316
+      },
+      "queue_hot_amortized": {
+        "fe2o3_p05_us": 2.4576,
+        "fe2o3_p50_us": 2.5792,
+        "fe2o3_p95_us": 3.42361,
+        "hipblaslt_p05_us": 5.08521,
+        "hipblaslt_p50_us": 5.11561,
+        "hipblaslt_p95_us": 6.26241,
+        "fe2o3_speedup": 1.98341
+      },
+      "raw": "perf-evidence/raw/gfx950-fp8-common-hip-event/fp8-common-both-modes-gpu5-run3.csv",
+      "raw_sha256": "88183587773a26a3639fe391246d6339b428d576acf8925773eb17bfffe4443d"
+    }
+  ],
+  "verdict": {
+    "exact_matched_comparator": true,
+    "fe2o3_won_all_fresh_processes": true,
+    "synchronized_latency_speedup_range": [
+      1.2284,
+      1.26115
+    ],
+    "queue_hot_amortized_speedup_range": [
+      1.87996,
+      1.99346
+    ],
+    "claim": "For this exact cache-hot batch-16 M16/N16/K128 E4M3-to-FP32 contract on this MI350X, fe2o3 is faster than the exhaustive-sweep hipBLASLt winner under both common timer modes.",
+    "boundary": "This result is not a claim about other GEMM shapes, packed/block-scaled FP8 contracts, end-to-end model throughput, or every public implementation."
+  },
+  "reproduction": {
+    "environment": "ROCR_VISIBLE_DEVICES=5; HIP_VISIBLE_DEVICES unset",
+    "kernel_build": "FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/gfx950_low_precision/run-gemm-gfx950.sh fp8",
+    "comparison": "bash perf-evidence/run-gfx950-fp8-common-hip-event.sh <absolute-produced-hsaco> <raw.csv>",
+    "harness": "perf-evidence/gfx950-fp8-common-hip-event.cpp"
+  }
+}
