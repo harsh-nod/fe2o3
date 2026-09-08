@@ -835,9 +835,8 @@ mod tests {
         let vendor = root.join("vendor");
         fs::create_dir_all(&library).unwrap();
         fs::create_dir(&vendor).unwrap();
-        let mut lock = String::from(
-            "version = 4\n\n[[package]]\nname = \"core\"\nversion = \"0.0.0\"\n",
-        );
+        let mut lock =
+            String::from("version = 4\n\n[[package]]\nname = \"core\"\nversion = \"0.0.0\"\n");
         if include_registry_package {
             lock.push_str(concat!(
                 "\n[[package]]\n",
