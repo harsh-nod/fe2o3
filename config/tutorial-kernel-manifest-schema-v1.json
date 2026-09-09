@@ -517,13 +517,71 @@
         "sourcePaths": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/path" } }
       }
     },
+    "qualificationHardwareTarget": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["deterministicSemanticRunnerAvailability", "reason", "target"],
+          "properties": {
+            "deterministicSemanticRunnerAvailability": { "const": "unavailable" },
+            "reason": { "type": "string", "minLength": 1 },
+            "target": { "type": "string", "pattern": "^gfx[0-9]{3}$" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["lane", "status", "target"],
+          "properties": {
+            "lane": { "type": "string", "minLength": 1 },
+            "status": { "const": "required-qualified" },
+            "target": { "type": "string", "pattern": "^gfx[0-9]{3}$" }
+          }
+        }
+      ]
+    },
+    "qualificationCoverage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fixtureIds", "lessonId"],
+      "properties": {
+        "fixtureIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/slug" } },
+        "lessonId": { "$ref": "#/$defs/slug" }
+      }
+    },
+    "qualificationSuite": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["availability", "command", "coverage", "gate", "suiteId", "unavailableReason"],
+          "properties": {
+            "availability": { "const": "available" },
+            "command": { "$ref": "#/$defs/command" },
+            "coverage": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/qualificationCoverage" } },
+            "gate": { "enum": ["cpu-reference", "semantic-simulation"] },
+            "suiteId": { "$ref": "#/$defs/slug" },
+            "unavailableReason": { "type": "null" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["availability", "command", "coverage", "gate", "suiteId", "unavailableReason"],
+          "properties": {
+            "availability": { "const": "unavailable" },
+            "command": { "type": "null" },
+            "coverage": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/qualificationCoverage" } },
+            "gate": { "enum": ["cpu-reference", "semantic-simulation"] },
+            "suiteId": { "$ref": "#/$defs/slug" },
+            "unavailableReason": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
     "qualification": {
       "type": "object", "additionalProperties": false,
       "required": ["evidenceSchemaPath", "hardwareTargets", "suites"],
       "properties": {
         "evidenceSchemaPath": { "$ref": "#/$defs/path" },
-        "hardwareTargets": { "type": "array" },
-        "suites": { "type": "array" }
+        "hardwareTargets": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/qualificationHardwareTarget" } },
+        "suites": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/qualificationSuite" } }
       }
     }
   }

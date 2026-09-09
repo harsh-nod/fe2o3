@@ -22,7 +22,7 @@ use fe2o3_compiler_ffi::{
 };
 use fe2o3_compiler_lineage::{
     CheckedTargetMachineRefinementReceiptV1, TargetMachineRefinementReceiptErrorV1,
-    check_target_machine_refinement_receipt_v1,
+    TargetMachineRefinementReceiptV1, check_target_machine_refinement_receipt_v1,
 };
 use fe2o3_hsaco::CodeObjectVersion as InspectedCodeObjectVersion;
 use fe2o3_kernel_descriptor::{
@@ -214,6 +214,11 @@ pub struct MachineRefinementPendingFinalizedProtectedWorkerV3HsacoV1 {
 }
 
 impl MachineRefinementPendingFinalizedProtectedWorkerV3HsacoV1 {
+    /// Returns the exact raw linked object identity checked by the retained machine owner.
+    pub const fn raw_output_identity(&self) -> ContentIdentityV1 {
+        self.raw.linked_output_identity()
+    }
+
     /// Returns the deterministic finalized bytes that the verifier response must bind.
     pub fn exact_finalized_bytes(&self) -> &[u8] {
         self.finalized.as_bytes()
@@ -227,6 +232,22 @@ impl MachineRefinementPendingFinalizedProtectedWorkerV3HsacoV1 {
     /// Returns the independently checked machine-refinement identity.
     pub const fn machine_refinement_identity(&self) -> AmdMachineRefinementIdentityV1 {
         self.machine_refinement.identity()
+    }
+
+    /// Canonically materializes the #214 receipt from the still-live checked machine owner.
+    ///
+    /// The returned value is inert process-boundary evidence. This borrow does not consume or
+    /// serialize the checked owner; the pending finalizer retains that owner until the protected
+    /// response is correlated and authenticated.
+    pub fn machine_refinement_receipt_v1(
+        &self,
+    ) -> Result<TargetMachineRefinementReceiptV1, WorkerV3HsacoFinalizationError> {
+        let parts = self
+            .machine_refinement
+            .target_machine_refinement_receipt_parts_v1()
+            .map_err(WorkerV3HsacoFinalizationError::MachineRefinementReceipt)?;
+        TargetMachineRefinementReceiptV1::from_parts(parts)
+            .map_err(WorkerV3HsacoFinalizationError::MachineRefinementReceipt)
     }
 
     /// Returns the build attempt retained by the inspected Worker V3 output.

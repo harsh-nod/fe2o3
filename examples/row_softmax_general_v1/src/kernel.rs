@@ -106,7 +106,8 @@ fn normalize_row<'kernel, 'workgroup, Brand>(
     typed,
     launch(
         required = [64, 1, 1],
-        max = [262144, 1, 1],
+        max = [64, 1, 1],
+        max_grid = [4096, 1, 1],
         static_shared_memory_bytes = 256
     ),
     control_flow(loop_bounds(64))

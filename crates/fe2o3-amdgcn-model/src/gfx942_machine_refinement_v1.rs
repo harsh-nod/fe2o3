@@ -33,7 +33,7 @@ use crate::{CheckedGfx942ObjectToHsacoPreservationV1, CheckedGfx950ObjectToHsaco
 /// Canonical independent gfx942 ISA transcript magic.
 pub const GFX942_DECODED_ISA_TRANSCRIPT_MAGIC_V1: [u8; 8] = *b"F2G9ISA1";
 /// Canonical independent gfx942 ISA transcript version.
-pub const GFX942_DECODED_ISA_TRANSCRIPT_VERSION_V1: u16 = 1;
+pub const GFX942_DECODED_ISA_TRANSCRIPT_VERSION_V1: u16 = 2;
 /// Maximum canonical transcript bytes.
 pub const MAX_GFX942_DECODED_ISA_TRANSCRIPT_BYTES_V1: usize = 64 * 1024 * 1024;
 /// Maximum machine basic blocks.
@@ -62,6 +62,20 @@ const DISCRIMINATOR_BITWISE_AND: u32 = 1;
 const DISCRIMINATOR_BITWISE_OR: u32 = 2;
 const DISCRIMINATOR_BITWISE_XOR: u32 = 3;
 const DISCRIMINATOR_ATOMIC_ADD: u32 = 1;
+const DISCRIMINATOR_ATOMIC_SWAP: u32 = 2;
+const DISCRIMINATOR_ATOMIC_COMPARE_SWAP: u32 = 3;
+const DISCRIMINATOR_ATOMIC_SUBTRACT: u32 = 4;
+const DISCRIMINATOR_ATOMIC_UNSIGNED_MINIMUM: u32 = 5;
+const DISCRIMINATOR_ATOMIC_UNSIGNED_MAXIMUM: u32 = 6;
+const DISCRIMINATOR_ATOMIC_AND: u32 = 7;
+const DISCRIMINATOR_ATOMIC_OR: u32 = 8;
+const DISCRIMINATOR_ATOMIC_XOR: u32 = 9;
+const DISCRIMINATOR_ATOMIC_LOAD: u32 = 10;
+const DISCRIMINATOR_ATOMIC_STORE: u32 = 11;
+const DISCRIMINATOR_CACHE_WRITEBACK: u32 = 1;
+const DISCRIMINATOR_CACHE_INVALIDATE: u32 = 2;
+const CACHE_SCOPE_SC0: u32 = 1 << 8;
+const CACHE_SCOPE_SC1: u32 = 1 << 9;
 const DISCRIMINATOR_MFMA_F32_16X16X16_BF16: u32 = 1;
 const DISCRIMINATOR_MFMA_F32_16X16X128_FP8_E4M3: u32 = 2;
 const DISCRIMINATOR_MFMA_F32_16X16X128_FP8_E5M2: u32 = 3;
@@ -92,6 +106,27 @@ impl AmdMachineRefinementTargetV1 {
             Ok(Self::Gfx950)
         } else {
             Err(AmdMachineRefinementTargetErrorV1::UnsupportedTarget)
+        }
+    }
+
+    fn decode_instruction(
+        self,
+        instruction_offset: u64,
+        bytes: &[u8],
+    ) -> Result<BinaryDecodedGfx942InstructionV1, Gfx942MachineRefinementErrorV1> {
+        match self {
+            Self::Gfx942 => decode_gfx9_common_instruction_v1(instruction_offset, bytes),
+            Self::Gfx950 => decode_gfx950_instruction_v1(instruction_offset, bytes),
+        }
+    }
+
+    const fn instruction_len(self, first_word: u32) -> usize {
+        if is_gfx9_common_wide_instruction(first_word)
+            || matches!(self, Self::Gfx950) && first_word & 0xffff_f800 == 0xd3ad_8000
+        {
+            8
+        } else {
+            4
         }
     }
 }
@@ -320,6 +355,10 @@ pub enum Gfx942SemanticOpcodeV1 {
     Store,
     /// Atomic read/modify/write.
     Atomic,
+    /// Wait for selected asynchronous machine counters to reach zero.
+    Wait,
+    /// Explicit target cache writeback or invalidation primitive.
+    CacheControl,
     /// Memory fence.
     Fence,
     /// Workgroup or subgroup barrier.
@@ -375,6 +414,17 @@ pub enum Gfx942EffectiveAddressV1 {
         address_space: u32,
         /// Pointer arithmetic width.
         pointer_bits: u16,
+        /// Accessed byte width.
+        byte_width: u32,
+    },
+    /// `scalar_base + vector_byte_offset + displacement` GLOBAL addressing.
+    GlobalScalarBaseVectorOffset {
+        /// Low scalar register of the 64-bit base pair.
+        scalar_base: u16,
+        /// Per-lane vector byte offset.
+        vector_offset: u16,
+        /// Signed immediate byte displacement.
+        displacement: i64,
         /// Accessed byte width.
         byte_width: u32,
     },
@@ -538,6 +588,7 @@ impl Gfx942DecodedInstructionV1 {
     /// Creates one bounded decoded instruction.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        target: AmdMachineRefinementTargetV1,
         function: u32,
         machine_block: u32,
         object_offset: u64,
@@ -569,7 +620,7 @@ impl Gfx942DecodedInstructionV1 {
             memory,
             effective_address,
         };
-        validate_instruction_local(&instruction)?;
+        validate_instruction_local(target, &instruction)?;
         Ok(instruction)
     }
 
@@ -647,6 +698,8 @@ impl Gfx942DecodedInstructionV1 {
 /// Public canonical decoded-ISA transcript parts.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Gfx942DecodedIsaTranscriptPartsV1 {
+    /// Authenticated target selecting the independent decoder.
+    pub target: AmdMachineRefinementTargetV1,
     /// Exact generated object identity.
     pub generated_object: ExactCompilerStageContentIdentityV1,
     /// Exact final HSACO identity.
@@ -713,6 +766,7 @@ impl Gfx942DecodedIsaTranscriptV1 {
         if input.u16()? != GFX942_DECODED_ISA_TRANSCRIPT_VERSION_V1 {
             return Err(Gfx942MachineRefinementErrorV1::UnsupportedVersion);
         }
+        let target = decode_refinement_target(input.u8()?)?;
         let generated_object = input.content_identity()?;
         let final_code_object = input.content_identity()?;
         let mode = Gfx942FloatingModeV1::new(
@@ -746,10 +800,11 @@ impl Gfx942DecodedIsaTranscriptV1 {
         let instruction_count = input.count(MAX_GFX942_DECODED_ISA_INSTRUCTIONS_V1)?;
         let mut instructions = Vec::with_capacity(instruction_count);
         for _ in 0..instruction_count {
-            instructions.push(decode_instruction(&mut input)?);
+            instructions.push(decode_instruction(target, &mut input)?);
         }
         input.finish()?;
         let decoded = Self::from_parts(Gfx942DecodedIsaTranscriptPartsV1 {
+            target,
             generated_object,
             final_code_object,
             mode,
@@ -765,6 +820,11 @@ impl Gfx942DecodedIsaTranscriptV1 {
     /// Returns exact object identity.
     pub const fn generated_object(&self) -> ExactCompilerStageContentIdentityV1 {
         self.parts.generated_object
+    }
+
+    /// Returns the authenticated target that selected instruction decoding.
+    pub const fn target(&self) -> AmdMachineRefinementTargetV1 {
+        self.parts.target
     }
 
     /// Returns exact final-HSACO identity.
@@ -1316,7 +1376,9 @@ fn established_instruction_families(instruction: &Gfx942DecodedInstructionV1) ->
         Opcode::Atomic => {
             MachineRefinementFamilyV1::Atomic.bit() | memory_space_family(instruction.memory())
         }
-        Opcode::Fence | Opcode::Barrier => MachineRefinementFamilyV1::Barrier.bit(),
+        Opcode::Wait | Opcode::CacheControl | Opcode::Fence | Opcode::Barrier => {
+            MachineRefinementFamilyV1::Barrier.bit()
+        }
         Opcode::Branch
         | Opcode::BranchScc
         | Opcode::BranchVcc
@@ -1347,6 +1409,9 @@ pub fn check_gfx942_machine_refinement_v1(
     decoded_isa_bytes: &[u8],
 ) -> Result<CheckedGfx942MachineRefinementV1, Gfx942MachineRefinementErrorV1> {
     let isa = Gfx942DecodedIsaTranscriptV1::decode_canonical(decoded_isa_bytes)?;
+    if isa.target() != AmdMachineRefinementTargetV1::Gfx942 {
+        return Err(Gfx942MachineRefinementErrorV1::TargetMismatch);
+    }
     let stages = preservation.contents();
     if compiler.correspondence().architecture() != MachineRefinementArchitectureV1::AmdGcn {
         return Err(Gfx942MachineRefinementErrorV1::TargetMismatch);
@@ -1372,7 +1437,7 @@ pub fn check_gfx942_machine_refinement_v1(
     {
         return Err(Gfx942MachineRefinementErrorV1::CompilerIsaArtifactMismatch);
     }
-    let mode_words = crate::post_llvm_stage_custody_v1::decode_gfx942_hsaco_kernel_mode_words_v1(
+    let mode_words = crate::post_llvm_stage_custody_v1::decode_amdgpu_hsaco_kernel_mode_words_v1(
         stages.final_code_object(),
     )
     .map_err(|()| Gfx942MachineRefinementErrorV1::KernelModeUnavailable)?;
@@ -1423,6 +1488,9 @@ pub fn check_gfx950_machine_refinement_v1(
     decoded_isa_bytes: &[u8],
 ) -> Result<CheckedGfx950MachineRefinementV1, Gfx942MachineRefinementErrorV1> {
     let isa = Gfx942DecodedIsaTranscriptV1::decode_canonical(decoded_isa_bytes)?;
+    if isa.target() != AmdMachineRefinementTargetV1::Gfx950 {
+        return Err(Gfx942MachineRefinementErrorV1::TargetMismatch);
+    }
     let stages = preservation.contents();
     if compiler.correspondence().architecture() != MachineRefinementArchitectureV1::AmdGcn {
         return Err(Gfx942MachineRefinementErrorV1::TargetMismatch);
@@ -1448,7 +1516,7 @@ pub fn check_gfx950_machine_refinement_v1(
     {
         return Err(Gfx942MachineRefinementErrorV1::CompilerIsaArtifactMismatch);
     }
-    let mode_words = crate::post_llvm_stage_custody_v1::decode_gfx950_hsaco_kernel_mode_words_v1(
+    let mode_words = crate::post_llvm_stage_custody_v1::decode_amdgpu_hsaco_kernel_mode_words_v1(
         stages.final_code_object(),
     )
     .map_err(|()| Gfx942MachineRefinementErrorV1::KernelModeUnavailable)?;
@@ -1624,7 +1692,7 @@ fn validate_isa_parts(
         }
     }
     for instruction in &parts.instructions {
-        validate_instruction_local(instruction)?;
+        validate_instruction_local(parts.target, instruction)?;
         if !block_map.contains_key(&(instruction.function, instruction.machine_block)) {
             return Err(Gfx942MachineRefinementErrorV1::InvalidMachineCfg);
         }
@@ -1715,6 +1783,7 @@ const fn is_machine_terminator(semantics: Gfx942SemanticOpcodeV1) -> bool {
 }
 
 fn validate_instruction_local(
+    target: AmdMachineRefinementTargetV1,
     instruction: &Gfx942DecodedInstructionV1,
 ) -> Result<(), Gfx942MachineRefinementErrorV1> {
     if instruction.native_opcode == 0
@@ -1787,8 +1856,22 @@ fn validate_instruction_local(
     {
         return Err(Gfx942MachineRefinementErrorV1::AddressOrMemoryMismatch);
     }
+    if let Gfx942EffectiveAddressV1::GlobalScalarBaseVectorOffset {
+        scalar_base,
+        vector_offset,
+        byte_width,
+        ..
+    } = instruction.effective_address
+        && (scalar_base > 104
+            || scalar_base % 2 != 0
+            || vector_offset > 255
+            || byte_width != instruction.memory.byte_width()
+            || instruction.memory.address_space() != 1)
+    {
+        return Err(Gfx942MachineRefinementErrorV1::AddressOrMemoryMismatch);
+    }
     validate_control_registers(instruction)?;
-    let decoded = decode_gfx942_instruction_v1(
+    let decoded = target.decode_instruction(
         instruction.hsaco_offset,
         instruction.hsaco_encoding.as_ref(),
     )?;
@@ -1916,9 +1999,8 @@ impl IndependentlyDecodedAmdInstructionV1 {
 
 /// Decodes one exact instruction using a decoder selected from authenticated target data.
 ///
-/// gfx950 currently admits only encodings independently observed to be identical on the pinned
-/// gfx942 and gfx950 toolchains. Target-specific gfx950 scaled MFMA and transpose encodings remain
-/// unsupported and therefore fail closed.
+/// Common gfx9 encodings use one shared semantic decoder. The authenticated target selects only
+/// extensions whose bit layout or semantics differ, currently gfx950 low-precision MFMA.
 pub fn independently_decode_amd_instruction_v1(
     target: AmdTargetId,
     instruction_offset: u64,
@@ -1926,14 +2008,7 @@ pub fn independently_decode_amd_instruction_v1(
 ) -> Result<IndependentlyDecodedAmdInstructionV1, Gfx942MachineRefinementErrorV1> {
     let target = AmdMachineRefinementTargetV1::from_authenticated_target(target)
         .map_err(|_| Gfx942MachineRefinementErrorV1::TargetMismatch)?;
-    let decoded = match target {
-        AmdMachineRefinementTargetV1::Gfx942 => {
-            decode_gfx942_instruction_v1(instruction_offset, bytes)
-        }
-        AmdMachineRefinementTargetV1::Gfx950 => {
-            decode_gfx950_instruction_v1(instruction_offset, bytes)
-        }
-    }?;
+    let decoded = target.decode_instruction(instruction_offset, bytes)?;
     Ok(IndependentlyDecodedAmdInstructionV1 {
         target,
         native_opcode: decoded.native_opcode,
@@ -1945,13 +2020,6 @@ pub fn independently_decode_amd_instruction_v1(
         memory: decoded.memory,
         effective_address: decoded.effective_address,
     })
-}
-
-fn decode_gfx942_instruction_v1(
-    instruction_offset: u64,
-    bytes: &[u8],
-) -> Result<BinaryDecodedGfx942InstructionV1, Gfx942MachineRefinementErrorV1> {
-    decode_gfx9_common_instruction_v1(instruction_offset, bytes)
 }
 
 fn decode_gfx950_instruction_v1(
@@ -2010,7 +2078,21 @@ fn decode_gfx9_common_instruction_v1(
         let extension = second_instruction_word(bytes)?;
         return decode_global_v1(word, extension);
     }
+    if bytes.len() == 8 && matches!(word, 0xe0a0_8000 | 0xe0a0_c000 | 0xe0a4_8000 | 0xe0a4_c000) {
+        return decode_cache_control_v1(word, second_instruction_word(bytes)?);
+    }
     Err(Gfx942MachineRefinementErrorV1::UnsupportedMachineOpcode)
+}
+
+const fn is_gfx9_common_wide_instruction(first_word: u32) -> bool {
+    first_word & 0xfc00_0000 == 0xdc00_0000
+        || first_word & 0xfe00_0000 == 0xd800_0000
+        || first_word & 0xffff_7f00 == 0xd3e1_0000
+        || first_word >> 31 == 0 && first_word & 0x1ff == 0xfa
+        || matches!(
+            first_word,
+            0xe0a0_8000 | 0xe0a0_c000 | 0xe0a4_8000 | 0xe0a4_c000
+        )
 }
 
 fn second_instruction_word(bytes: &[u8]) -> Result<u32, Gfx942MachineRefinementErrorV1> {
@@ -2098,6 +2180,16 @@ fn decode_sopp_v1(
             Some(branch_target()?),
         )),
         10 if word as u16 == 0 => decode_s_barrier_v1(),
+        12 => Ok(BinaryDecodedGfx942InstructionV1 {
+            native_opcode: 0x18c,
+            semantics: Gfx942SemanticOpcodeV1::Wait,
+            semantic_discriminator: u32::from(word as u16),
+            definitions: Vec::new(),
+            uses: Vec::new(),
+            branch_target: None,
+            memory: CompilerMemoryEffectV1::none(),
+            effective_address: Gfx942EffectiveAddressV1::None,
+        }),
         _ => Err(Gfx942MachineRefinementErrorV1::UnsupportedMachineOpcode),
     }
 }
@@ -2442,6 +2534,44 @@ fn decode_gfx950_scaled_mfma_v1(
     })
 }
 
+fn decode_cache_control_v1(
+    word: u32,
+    extension: u32,
+) -> Result<BinaryDecodedGfx942InstructionV1, Gfx942MachineRefinementErrorV1> {
+    if extension != 0 {
+        return Err(Gfx942MachineRefinementErrorV1::UnsupportedMachineOpcode);
+    }
+    let (native_opcode, operation) = match word & !0x0000_c000 {
+        0xe0a0_0000 => (0x828, DISCRIMINATOR_CACHE_WRITEBACK),
+        0xe0a4_0000 => (0x829, DISCRIMINATOR_CACHE_INVALIDATE),
+        _ => return Err(Gfx942MachineRefinementErrorV1::UnsupportedMachineOpcode),
+    };
+    let scope = word & 0x0000_c000;
+    if !matches!(scope, 0x0000_8000 | 0x0000_c000) {
+        return Err(Gfx942MachineRefinementErrorV1::UnsupportedMachineOpcode);
+    }
+    Ok(BinaryDecodedGfx942InstructionV1 {
+        native_opcode,
+        semantics: Gfx942SemanticOpcodeV1::CacheControl,
+        semantic_discriminator: operation
+            | if scope & 0x0000_4000 != 0 {
+                CACHE_SCOPE_SC0
+            } else {
+                0
+            }
+            | if scope & 0x0000_8000 != 0 {
+                CACHE_SCOPE_SC1
+            } else {
+                0
+            },
+        definitions: Vec::new(),
+        uses: Vec::new(),
+        branch_target: None,
+        memory: CompilerMemoryEffectV1::none(),
+        effective_address: Gfx942EffectiveAddressV1::None,
+    })
+}
+
 fn decode_global_v1(
     word: u32,
     extension: u32,
@@ -2453,64 +2583,176 @@ fn decode_global_v1(
         encoded_displacement
     };
     let vector_address = (extension & 0xff) as u16;
-    let Some(vector_address_high) = vector_address.checked_add(1) else {
-        return Err(Gfx942MachineRefinementErrorV1::UnsupportedMachineOpcode);
+    let scalar_address = ((extension >> 16) & 0x7f) as u16;
+    let sc0 = word & 0x0001_0000 != 0;
+    let sc1 = word & 0x0200_0000 != 0;
+    let normalized = word & !(0x1fff | 0x0001_0000 | 0x0200_0000);
+    let atomic_scope = match (sc0, sc1) {
+        (false, false) => None,
+        (true, false) => Some(CompilerMemoryScopeV1::Workgroup),
+        (false, true) => Some(CompilerMemoryScopeV1::Agent),
+        (true, true) => Some(CompilerMemoryScopeV1::System),
     };
-    if (extension >> 16) & 0x7f != 0x7f {
-        return Err(Gfx942MachineRefinementErrorV1::UnsupportedMachineOpcode);
-    }
-    let memory = |kind| {
+    let memory = |kind, scope: Option<CompilerMemoryScopeV1>| {
         CompilerMemoryEffectV1::new(
             kind,
             1,
             4,
             4,
-            CompilerMemoryOrderingV1::NotAtomic,
-            CompilerMemoryScopeV1::None,
+            if scope.is_some() {
+                CompilerMemoryOrderingV1::Relaxed
+            } else {
+                CompilerMemoryOrderingV1::NotAtomic
+            },
+            scope.unwrap_or(CompilerMemoryScopeV1::None),
             false,
         )
         .map_err(|_| Gfx942MachineRefinementErrorV1::UnsupportedMachineOpcode)
     };
-    let address = Gfx942EffectiveAddressV1::BaseIndex {
-        base: Gfx942SemanticRegisterV1::Vector(vector_address),
-        index: None,
-        scale: 1,
-        displacement,
-        address_space: 1,
-        pointer_bits: 64,
-        byte_width: 4,
-    };
-    match word & !0x1fff {
-        0xdc50_8000 if extension & 0x00ff_ff00 == 0x007f_0000 => {
-            let destination = Gfx942SemanticRegisterV1::Vector((extension >> 24) as u16);
-            Ok(BinaryDecodedGfx942InstructionV1 {
-                native_opcode: 0x314,
-                semantics: Gfx942SemanticOpcodeV1::Load,
-                semantic_discriminator: 0,
-                definitions: vec![destination],
-                uses: vec![
+    let decode_address = |vector_address: u16| {
+        if scalar_address == 0x7f {
+            let vector_address_high = vector_address
+                .checked_add(1)
+                .ok_or(Gfx942MachineRefinementErrorV1::UnsupportedMachineOpcode)?;
+            Ok((
+                Gfx942EffectiveAddressV1::BaseIndex {
+                    base: Gfx942SemanticRegisterV1::Vector(vector_address),
+                    index: None,
+                    scale: 1,
+                    displacement,
+                    address_space: 1,
+                    pointer_bits: 64,
+                    byte_width: 4,
+                },
+                vec![
                     Gfx942SemanticRegisterV1::Vector(vector_address),
                     Gfx942SemanticRegisterV1::Vector(vector_address_high),
                 ],
+            ))
+        } else {
+            if scalar_address > 104 || scalar_address % 2 != 0 {
+                return Err(Gfx942MachineRefinementErrorV1::UnsupportedMachineOpcode);
+            }
+            Ok((
+                Gfx942EffectiveAddressV1::GlobalScalarBaseVectorOffset {
+                    scalar_base: scalar_address,
+                    vector_offset: vector_address,
+                    displacement,
+                    byte_width: 4,
+                },
+                vec![
+                    Gfx942SemanticRegisterV1::Scalar(scalar_address),
+                    Gfx942SemanticRegisterV1::Scalar(scalar_address + 1),
+                    Gfx942SemanticRegisterV1::Vector(vector_address),
+                ],
+            ))
+        }
+    };
+    let (address, address_uses) = decode_address(vector_address)?;
+    match normalized {
+        0xdc50_8000 if extension & 0x0000_ff00 == 0 => {
+            let destination = Gfx942SemanticRegisterV1::Vector((extension >> 24) as u16);
+            Ok(BinaryDecodedGfx942InstructionV1 {
+                native_opcode: 0x314,
+                semantics: if atomic_scope.is_some() {
+                    Gfx942SemanticOpcodeV1::Atomic
+                } else {
+                    Gfx942SemanticOpcodeV1::Load
+                },
+                semantic_discriminator: if atomic_scope.is_some() {
+                    DISCRIMINATOR_ATOMIC_LOAD
+                } else {
+                    0
+                },
+                definitions: vec![destination],
+                uses: address_uses,
                 branch_target: None,
-                memory: memory(CompilerMemoryEffectKindV1::Read)?,
+                memory: memory(CompilerMemoryEffectKindV1::Read, atomic_scope)?,
                 effective_address: address,
             })
         }
         0xdc70_8000 if extension & 0xff00_0000 == 0 => {
             let value = Gfx942SemanticRegisterV1::Vector(((extension >> 8) & 0xff) as u16);
+            let mut uses = address_uses;
+            uses.push(value);
             Ok(BinaryDecodedGfx942InstructionV1 {
                 native_opcode: 0x31c,
-                semantics: Gfx942SemanticOpcodeV1::Store,
-                semantic_discriminator: 0,
+                semantics: if atomic_scope.is_some() {
+                    Gfx942SemanticOpcodeV1::Atomic
+                } else {
+                    Gfx942SemanticOpcodeV1::Store
+                },
+                semantic_discriminator: if atomic_scope.is_some() {
+                    DISCRIMINATOR_ATOMIC_STORE
+                } else {
+                    0
+                },
                 definitions: Vec::new(),
-                uses: vec![
-                    Gfx942SemanticRegisterV1::Vector(vector_address),
-                    Gfx942SemanticRegisterV1::Vector(vector_address_high),
-                    value,
-                ],
+                uses,
                 branch_target: None,
-                memory: memory(CompilerMemoryEffectKindV1::Write)?,
+                memory: memory(CompilerMemoryEffectKindV1::Write, atomic_scope)?,
+                effective_address: address,
+            })
+        }
+        atomic_word
+            if matches!(
+                atomic_word,
+                0xdd00_8000
+                    | 0xdd04_8000
+                    | 0xdd0c_8000
+                    | 0xdd14_8000
+                    | 0xdd1c_8000
+                    | 0xdd20_8000
+                    | 0xdd24_8000
+                    | 0xdd28_8000
+            ) && scalar_address != 0x7f =>
+        {
+            let (native_opcode, discriminator, data_registers) = match atomic_word {
+                0xdd00_8000 => (0x340, DISCRIMINATOR_ATOMIC_SWAP, 1_u16),
+                0xdd04_8000 => (0x341, DISCRIMINATOR_ATOMIC_COMPARE_SWAP, 2_u16),
+                0xdd0c_8000 => (0x343, DISCRIMINATOR_ATOMIC_SUBTRACT, 1_u16),
+                0xdd14_8000 => (0x345, DISCRIMINATOR_ATOMIC_UNSIGNED_MINIMUM, 1_u16),
+                0xdd1c_8000 => (0x347, DISCRIMINATOR_ATOMIC_UNSIGNED_MAXIMUM, 1_u16),
+                0xdd20_8000 => (0x348, DISCRIMINATOR_ATOMIC_AND, 1_u16),
+                0xdd24_8000 => (0x349, DISCRIMINATOR_ATOMIC_OR, 1_u16),
+                0xdd28_8000 => (0x34a, DISCRIMINATOR_ATOMIC_XOR, 1_u16),
+                _ => return Err(Gfx942MachineRefinementErrorV1::UnsupportedMachineOpcode),
+            };
+            let data = ((extension >> 8) & 0xff) as u16;
+            if data.checked_add(data_registers - 1).is_none() {
+                return Err(Gfx942MachineRefinementErrorV1::UnsupportedMachineOpcode);
+            }
+            let destination = (extension & 0xff) as u16;
+            let atomic_vector_address = if sc0 {
+                (extension >> 24) as u16
+            } else {
+                if extension >> 24 != 0 {
+                    return Err(Gfx942MachineRefinementErrorV1::UnsupportedMachineOpcode);
+                }
+                destination
+            };
+            let (address, address_uses) = decode_address(atomic_vector_address)?;
+            let mut uses = address_uses;
+            uses.extend((data..data + data_registers).map(Gfx942SemanticRegisterV1::Vector));
+            Ok(BinaryDecodedGfx942InstructionV1 {
+                native_opcode,
+                semantics: Gfx942SemanticOpcodeV1::Atomic,
+                semantic_discriminator: discriminator,
+                definitions: if sc0 {
+                    vec![Gfx942SemanticRegisterV1::Vector(destination)]
+                } else {
+                    Vec::new()
+                },
+                uses,
+                branch_target: None,
+                memory: memory(
+                    CompilerMemoryEffectKindV1::ReadWrite,
+                    Some(if sc1 {
+                        CompilerMemoryScopeV1::System
+                    } else {
+                        CompilerMemoryScopeV1::Workgroup
+                    }),
+                )?,
                 effective_address: address,
             })
         }
@@ -2569,15 +2811,9 @@ fn decode_complete_executable_text_v1(
     artifact: &[u8],
     retain_final_branch_targets: bool,
 ) -> Result<Vec<CompleteDecodedGfx942InstructionV1<'_>>, Gfx942MachineRefinementErrorV1> {
-    let sections = match target {
-        AmdMachineRefinementTargetV1::Gfx942 => {
-            crate::post_llvm_stage_custody_v1::decode_gfx942_executable_sections_v1(artifact)
-        }
-        AmdMachineRefinementTargetV1::Gfx950 => {
-            crate::post_llvm_stage_custody_v1::decode_gfx950_executable_sections_v1(artifact)
-        }
-    }
-    .map_err(|()| Gfx942MachineRefinementErrorV1::ExecutableTextUnavailable)?;
+    let sections =
+        crate::post_llvm_stage_custody_v1::decode_amdgpu_executable_sections_v1(artifact)
+            .map_err(|()| Gfx942MachineRefinementErrorV1::ExecutableTextUnavailable)?;
     let mut result = Vec::new();
     for section in &sections {
         let mut cursor = 0_usize;
@@ -2590,16 +2826,7 @@ fn decode_complete_executable_text_v1(
                     .try_into()
                     .map_err(|_| Gfx942MachineRefinementErrorV1::UnsupportedMachineOpcode)?,
             );
-            let instruction_len = if first_word & 0xfc00_0000 == 0xdc00_0000
-                || first_word & 0xfe00_0000 == 0xd800_0000
-                || first_word & 0xffff_7f00 == 0xd3e1_0000
-                || first_word & 0xffff_f800 == 0xd3ad_8000
-                || first_word >> 31 == 0 && first_word & 0x1ff == 0xfa
-            {
-                8
-            } else {
-                4
-            };
+            let instruction_len = target.instruction_len(first_word);
             let encoding = section
                 .bytes
                 .get(cursor..cursor.saturating_add(instruction_len))
@@ -2608,14 +2835,7 @@ fn decode_complete_executable_text_v1(
                 .file_offset
                 .checked_add(cursor as u64)
                 .ok_or(Gfx942MachineRefinementErrorV1::ResourceLimit)?;
-            let mut decoded = match target {
-                AmdMachineRefinementTargetV1::Gfx942 => {
-                    decode_gfx942_instruction_v1(offset, encoding)
-                }
-                AmdMachineRefinementTargetV1::Gfx950 => {
-                    decode_gfx950_instruction_v1(offset, encoding)
-                }
-            }?;
+            let mut decoded = target.decode_instruction(offset, encoding)?;
             if !retain_final_branch_targets {
                 decoded.branch_target = None;
             }
@@ -2718,6 +2938,15 @@ fn validate_operation_mapping(
         return Err(Gfx942MachineRefinementErrorV1::ModeOrIeeeMismatch);
     }
     validate_machine_value_bindings(operation, instructions)?;
+    if matches!(
+        operation.kind(),
+        CompilerLlvmOperationKindV1::Atomic
+            | CompilerLlvmOperationKindV1::Fence
+            | CompilerLlvmOperationKindV1::Barrier
+    ) {
+        validate_synchronization_protocol(operation, instructions)?;
+        return Ok(());
+    }
     let primary = expected_primary_semantics(operation)?;
     if let Some(primary) = primary {
         let matched = instructions
@@ -2829,6 +3058,266 @@ fn validate_operation_numerics(
         }
     }
     Ok(())
+}
+
+fn validate_synchronization_protocol(
+    operation: &CompilerLlvmOperationV1,
+    instructions: &[&Gfx942DecodedInstructionV1],
+) -> Result<(), Gfx942MachineRefinementErrorV1> {
+    match operation.kind() {
+        CompilerLlvmOperationKindV1::Atomic => validate_atomic_protocol(operation, instructions),
+        CompilerLlvmOperationKindV1::Fence => validate_fence_protocol(operation, instructions),
+        CompilerLlvmOperationKindV1::Barrier => validate_barrier_protocol(operation, instructions),
+        _ => Err(Gfx942MachineRefinementErrorV1::SynchronizationMismatch),
+    }
+}
+
+fn validate_atomic_protocol(
+    operation: &CompilerLlvmOperationV1,
+    instructions: &[&Gfx942DecodedInstructionV1],
+) -> Result<(), Gfx942MachineRefinementErrorV1> {
+    if instructions.iter().any(|instruction| {
+        !matches!(
+            instruction.semantics,
+            Gfx942SemanticOpcodeV1::Atomic
+                | Gfx942SemanticOpcodeV1::Wait
+                | Gfx942SemanticOpcodeV1::CacheControl
+        )
+    }) {
+        return Err(Gfx942MachineRefinementErrorV1::SynchronizationMismatch);
+    }
+    let atomics = instructions
+        .iter()
+        .enumerate()
+        .filter(|(_, instruction)| instruction.semantics == Gfx942SemanticOpcodeV1::Atomic)
+        .collect::<Vec<_>>();
+    let [(atomic_index, atomic)] = atomics.as_slice() else {
+        return Err(Gfx942MachineRefinementErrorV1::SynchronizationMismatch);
+    };
+    let atomic_index = *atomic_index;
+    if atomic.semantic_discriminator != operation.semantic_discriminator()
+        || atomic.memory.kind() != operation.memory().kind()
+        || atomic.memory.address_space() != operation.memory().address_space()
+        || atomic.memory.byte_width() != operation.memory().byte_width()
+        || atomic.memory.ordering() != CompilerMemoryOrderingV1::Relaxed
+    {
+        return Err(Gfx942MachineRefinementErrorV1::SynchronizationMismatch);
+    }
+    let minimum_scope = atomic.memory.scope();
+    let scope = operation.memory().scope();
+    let scope_valid = match scope {
+        CompilerMemoryScopeV1::Workgroup => minimum_scope == CompilerMemoryScopeV1::Workgroup,
+        CompilerMemoryScopeV1::Agent => matches!(
+            minimum_scope,
+            CompilerMemoryScopeV1::Workgroup | CompilerMemoryScopeV1::Agent
+        ),
+        CompilerMemoryScopeV1::System => minimum_scope == CompilerMemoryScopeV1::System,
+        _ => false,
+    };
+    if !scope_valid {
+        return Err(Gfx942MachineRefinementErrorV1::SynchronizationMismatch);
+    }
+    validate_address_against_memory(atomic.effective_address, operation.memory())?;
+    validate_compiler_effective_address(operation, atomic)?;
+
+    let ordering = operation.memory().ordering();
+    let release = matches!(
+        ordering,
+        CompilerMemoryOrderingV1::Release
+            | CompilerMemoryOrderingV1::AcquireRelease
+            | CompilerMemoryOrderingV1::SequentiallyConsistent
+    );
+    let acquire = matches!(
+        ordering,
+        CompilerMemoryOrderingV1::Acquire
+            | CompilerMemoryOrderingV1::AcquireRelease
+            | CompilerMemoryOrderingV1::SequentiallyConsistent
+    );
+    if !matches!(
+        ordering,
+        CompilerMemoryOrderingV1::Relaxed
+            | CompilerMemoryOrderingV1::Acquire
+            | CompilerMemoryOrderingV1::Release
+            | CompilerMemoryOrderingV1::AcquireRelease
+            | CompilerMemoryOrderingV1::SequentiallyConsistent
+    ) {
+        return Err(Gfx942MachineRefinementErrorV1::SynchronizationMismatch);
+    }
+
+    let before = &instructions[..atomic_index];
+    let after = &instructions[atomic_index + 1..];
+    if release {
+        let cache = required_cache_control(scope, DISCRIMINATOR_CACHE_WRITEBACK);
+        let cache_index = match cache {
+            Some(expected) => Some(
+                before
+                    .iter()
+                    .position(|instruction| cache_control_matches(instruction, expected))
+                    .ok_or(Gfx942MachineRefinementErrorV1::SynchronizationMismatch)?,
+            ),
+            None => None,
+        };
+        if ordering == CompilerMemoryOrderingV1::SequentiallyConsistent {
+            let wait_index = before
+                .iter()
+                .rposition(|instruction| {
+                    wait_satisfies_address_space(instruction, operation.memory().address_space())
+                })
+                .ok_or(Gfx942MachineRefinementErrorV1::SynchronizationMismatch)?;
+            if cache_index.is_some_and(|index| index >= wait_index) {
+                return Err(Gfx942MachineRefinementErrorV1::SynchronizationMismatch);
+            }
+        }
+    }
+    if acquire {
+        let wait_index = after
+            .iter()
+            .position(|instruction| {
+                wait_satisfies_address_space(instruction, operation.memory().address_space())
+            })
+            .ok_or(Gfx942MachineRefinementErrorV1::SynchronizationMismatch)?;
+        if let Some(expected) = required_cache_control(scope, DISCRIMINATOR_CACHE_INVALIDATE) {
+            let cache_index = after
+                .iter()
+                .position(|instruction| cache_control_matches(instruction, expected))
+                .ok_or(Gfx942MachineRefinementErrorV1::SynchronizationMismatch)?;
+            if wait_index >= cache_index {
+                return Err(Gfx942MachineRefinementErrorV1::SynchronizationMismatch);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_fence_protocol(
+    operation: &CompilerLlvmOperationV1,
+    instructions: &[&Gfx942DecodedInstructionV1],
+) -> Result<(), Gfx942MachineRefinementErrorV1> {
+    if !matches!(
+        operation.memory().scope(),
+        CompilerMemoryScopeV1::Workgroup
+            | CompilerMemoryScopeV1::Agent
+            | CompilerMemoryScopeV1::System
+    ) || instructions.iter().any(|instruction| {
+        !matches!(
+            instruction.semantics,
+            Gfx942SemanticOpcodeV1::Wait | Gfx942SemanticOpcodeV1::CacheControl
+        )
+    }) {
+        return Err(Gfx942MachineRefinementErrorV1::SynchronizationMismatch);
+    }
+    let ordering = operation.memory().ordering();
+    let release = matches!(
+        ordering,
+        CompilerMemoryOrderingV1::Release
+            | CompilerMemoryOrderingV1::AcquireRelease
+            | CompilerMemoryOrderingV1::SequentiallyConsistent
+    );
+    let acquire = matches!(
+        ordering,
+        CompilerMemoryOrderingV1::Acquire
+            | CompilerMemoryOrderingV1::AcquireRelease
+            | CompilerMemoryOrderingV1::SequentiallyConsistent
+    );
+    let wait_index = instructions
+        .iter()
+        .position(|instruction| {
+            wait_satisfies_address_space(instruction, operation.memory().address_space())
+        })
+        .ok_or(Gfx942MachineRefinementErrorV1::SynchronizationMismatch)?;
+    if release
+        && let Some(expected) =
+            required_cache_control(operation.memory().scope(), DISCRIMINATOR_CACHE_WRITEBACK)
+    {
+        let index = instructions
+            .iter()
+            .position(|instruction| cache_control_matches(instruction, expected))
+            .ok_or(Gfx942MachineRefinementErrorV1::SynchronizationMismatch)?;
+        if index >= wait_index {
+            return Err(Gfx942MachineRefinementErrorV1::SynchronizationMismatch);
+        }
+    }
+    if acquire
+        && let Some(expected) =
+            required_cache_control(operation.memory().scope(), DISCRIMINATOR_CACHE_INVALIDATE)
+    {
+        let index = instructions
+            .iter()
+            .position(|instruction| cache_control_matches(instruction, expected))
+            .ok_or(Gfx942MachineRefinementErrorV1::SynchronizationMismatch)?;
+        if index <= wait_index {
+            return Err(Gfx942MachineRefinementErrorV1::SynchronizationMismatch);
+        }
+    }
+    if !release && !acquire {
+        return Err(Gfx942MachineRefinementErrorV1::SynchronizationMismatch);
+    }
+    Ok(())
+}
+
+fn validate_barrier_protocol(
+    operation: &CompilerLlvmOperationV1,
+    instructions: &[&Gfx942DecodedInstructionV1],
+) -> Result<(), Gfx942MachineRefinementErrorV1> {
+    if operation.memory().scope() != CompilerMemoryScopeV1::Workgroup
+        || operation.memory().ordering() != CompilerMemoryOrderingV1::AcquireRelease
+        || instructions.iter().any(|instruction| {
+            !matches!(
+                instruction.semantics,
+                Gfx942SemanticOpcodeV1::Wait | Gfx942SemanticOpcodeV1::Barrier
+            )
+        })
+    {
+        return Err(Gfx942MachineRefinementErrorV1::SynchronizationMismatch);
+    }
+    let barriers = instructions
+        .iter()
+        .enumerate()
+        .filter(|(_, instruction)| instruction.semantics == Gfx942SemanticOpcodeV1::Barrier)
+        .collect::<Vec<_>>();
+    let [(barrier_index, barrier)] = barriers.as_slice() else {
+        return Err(Gfx942MachineRefinementErrorV1::SynchronizationMismatch);
+    };
+    if barrier.memory != operation.memory()
+        || !instructions[..*barrier_index].iter().any(|instruction| {
+            wait_satisfies_address_space(instruction, operation.memory().address_space())
+        })
+    {
+        return Err(Gfx942MachineRefinementErrorV1::SynchronizationMismatch);
+    }
+    Ok(())
+}
+
+fn wait_satisfies_address_space(
+    instruction: &&Gfx942DecodedInstructionV1,
+    address_space: u32,
+) -> bool {
+    if instruction.semantics != Gfx942SemanticOpcodeV1::Wait {
+        return false;
+    }
+    let immediate = instruction.semantic_discriminator;
+    let waits_vector = immediate & 0xf == 0 && immediate >> 14 == 0;
+    let waits_scalar_or_lds = (immediate >> 8) & 0x3f == 0;
+    match address_space {
+        1 => waits_vector,
+        3 => waits_scalar_or_lds,
+        0 => waits_vector && waits_scalar_or_lds,
+        _ => false,
+    }
+}
+
+fn required_cache_control(scope: CompilerMemoryScopeV1, operation: u32) -> Option<u32> {
+    match scope {
+        CompilerMemoryScopeV1::Workgroup => None,
+        CompilerMemoryScopeV1::Agent => Some(operation | CACHE_SCOPE_SC1),
+        CompilerMemoryScopeV1::System => Some(operation | CACHE_SCOPE_SC0 | CACHE_SCOPE_SC1),
+        _ => None,
+    }
+}
+
+fn cache_control_matches(instruction: &&Gfx942DecodedInstructionV1, expected: u32) -> bool {
+    instruction.semantics == Gfx942SemanticOpcodeV1::CacheControl
+        && instruction.semantic_discriminator == expected
 }
 
 fn validate_machine_value_bindings(
@@ -2952,27 +3441,7 @@ fn validate_compiler_effective_address(
     let compiler = operation
         .effective_address()
         .ok_or(Gfx942MachineRefinementErrorV1::IncompleteValueBinding)?;
-    let Gfx942EffectiveAddressV1::BaseIndex {
-        base,
-        index,
-        scale,
-        displacement,
-        address_space,
-        pointer_bits,
-        byte_width,
-    } = instruction.effective_address
-    else {
-        return Err(Gfx942MachineRefinementErrorV1::AddressOrMemoryMismatch);
-    };
-    if index.is_some()
-        || scale != 1
-        || compiler.address_space() != address_space
-        || compiler.pointer_bits() != pointer_bits
-        || compiler.byte_width() != byte_width
-        || compiler.displacement() != displacement
-        || compiler.terms().len() != 1
-        || compiler.terms()[0].scale() != 1
-    {
+    if compiler.terms().len() != 1 || compiler.terms()[0].scale() != 1 {
         return Err(Gfx942MachineRefinementErrorV1::AddressOrMemoryMismatch);
     }
     let value = compiler.terms()[0].value();
@@ -2994,16 +3463,49 @@ fn validate_compiler_effective_address(
         })
         .collect::<Result<Vec<_>, _>>()?;
     registers.sort_unstable();
-    let mut expected = vec![base];
-    if pointer_bits == 64 {
-        let Gfx942SemanticRegisterV1::Vector(base) = base else {
-            return Err(Gfx942MachineRefinementErrorV1::AddressOrMemoryMismatch);
-        };
-        expected.push(Gfx942SemanticRegisterV1::Vector(
-            base.checked_add(1)
-                .ok_or(Gfx942MachineRefinementErrorV1::AddressOrMemoryMismatch)?,
-        ));
-    }
+    let mut expected = match instruction.effective_address {
+        Gfx942EffectiveAddressV1::BaseIndex {
+            base,
+            index: None,
+            scale: 1,
+            displacement,
+            address_space,
+            pointer_bits,
+            byte_width,
+        } if compiler.address_space() == address_space
+            && compiler.pointer_bits() == pointer_bits
+            && compiler.byte_width() == byte_width
+            && compiler.displacement() == displacement =>
+        {
+            let mut expected = vec![base];
+            if pointer_bits == 64 {
+                let Gfx942SemanticRegisterV1::Vector(base) = base else {
+                    return Err(Gfx942MachineRefinementErrorV1::AddressOrMemoryMismatch);
+                };
+                expected.push(Gfx942SemanticRegisterV1::Vector(
+                    base.checked_add(1)
+                        .ok_or(Gfx942MachineRefinementErrorV1::AddressOrMemoryMismatch)?,
+                ));
+            }
+            expected
+        }
+        Gfx942EffectiveAddressV1::GlobalScalarBaseVectorOffset {
+            scalar_base,
+            displacement,
+            byte_width,
+            ..
+        } if compiler.address_space() == 1
+            && compiler.pointer_bits() == 64
+            && compiler.byte_width() == byte_width
+            && compiler.displacement() == displacement =>
+        {
+            vec![
+                Gfx942SemanticRegisterV1::Scalar(scalar_base),
+                Gfx942SemanticRegisterV1::Scalar(scalar_base + 1),
+            ]
+        }
+        _ => return Err(Gfx942MachineRefinementErrorV1::AddressOrMemoryMismatch),
+    };
     expected.sort_unstable();
     if registers != expected {
         return Err(Gfx942MachineRefinementErrorV1::AddressOrMemoryMismatch);
@@ -3224,6 +3726,11 @@ fn validate_address_against_memory(
         } if address_space == memory.address_space()
             && byte_width == memory.byte_width()
             && matches!(pointer_bits, 32 | 64) =>
+        {
+            Ok(())
+        }
+        Gfx942EffectiveAddressV1::GlobalScalarBaseVectorOffset { byte_width, .. }
+            if memory.address_space() == 1 && byte_width == memory.byte_width() =>
         {
             Ok(())
         }
@@ -3458,6 +3965,7 @@ fn encode_isa_parts(
     let mut output = Vec::new();
     output.extend_from_slice(&GFX942_DECODED_ISA_TRANSCRIPT_MAGIC_V1);
     put_u16(&mut output, GFX942_DECODED_ISA_TRANSCRIPT_VERSION_V1);
+    output.push(refinement_target_tag(parts.target));
     for identity in [parts.generated_object, parts.final_code_object] {
         output.extend_from_slice(&identity.sha256());
         put_u64(&mut output, identity.byte_len());
@@ -3522,6 +4030,7 @@ fn encode_instruction(output: &mut Vec<u8>, instruction: &Gfx942DecodedInstructi
 }
 
 fn decode_instruction(
+    target: AmdMachineRefinementTargetV1,
     input: &mut Input<'_>,
 ) -> Result<Gfx942DecodedInstructionV1, Gfx942MachineRefinementErrorV1> {
     let function = input.u32()?;
@@ -3551,6 +4060,7 @@ fn decode_instruction(
     let memory = decode_memory(input)?;
     let effective_address = decode_address(input)?;
     Gfx942DecodedInstructionV1::new(
+        target,
         function,
         machine_block,
         object_offset,
@@ -3566,6 +4076,23 @@ fn decode_instruction(
         memory,
         effective_address,
     )
+}
+
+const fn refinement_target_tag(target: AmdMachineRefinementTargetV1) -> u8 {
+    match target {
+        AmdMachineRefinementTargetV1::Gfx942 => 1,
+        AmdMachineRefinementTargetV1::Gfx950 => 2,
+    }
+}
+
+fn decode_refinement_target(
+    tag: u8,
+) -> Result<AmdMachineRefinementTargetV1, Gfx942MachineRefinementErrorV1> {
+    match tag {
+        1 => Ok(AmdMachineRefinementTargetV1::Gfx942),
+        2 => Ok(AmdMachineRefinementTargetV1::Gfx950),
+        _ => Err(Gfx942MachineRefinementErrorV1::UnknownTag),
+    }
 }
 
 fn opcode_tag(opcode: Gfx942SemanticOpcodeV1) -> u8 {
@@ -3593,23 +4120,25 @@ fn opcode_tag(opcode: Gfx942SemanticOpcodeV1) -> u8 {
         Opcode::Load => 20,
         Opcode::Store => 21,
         Opcode::Atomic => 22,
-        Opcode::Fence => 23,
-        Opcode::Barrier => 24,
-        Opcode::Call => 25,
-        Opcode::Branch => 26,
-        Opcode::BranchScc => 27,
-        Opcode::BranchVcc => 28,
-        Opcode::ExecAndSave => 29,
-        Opcode::ExecAndNotSave => 30,
-        Opcode::ExecRestore => 31,
-        Opcode::BranchExecZero => 32,
-        Opcode::BranchExecNonZero => 33,
-        Opcode::Return => 34,
-        Opcode::InvocationIndex => 35,
-        Opcode::Collective => 36,
-        Opcode::Matrix => 37,
-        Opcode::InlineAssembly => 38,
-        Opcode::Trap => 39,
+        Opcode::Wait => 23,
+        Opcode::CacheControl => 24,
+        Opcode::Fence => 25,
+        Opcode::Barrier => 26,
+        Opcode::Call => 27,
+        Opcode::Branch => 28,
+        Opcode::BranchScc => 29,
+        Opcode::BranchVcc => 30,
+        Opcode::ExecAndSave => 31,
+        Opcode::ExecAndNotSave => 32,
+        Opcode::ExecRestore => 33,
+        Opcode::BranchExecZero => 34,
+        Opcode::BranchExecNonZero => 35,
+        Opcode::Return => 36,
+        Opcode::InvocationIndex => 37,
+        Opcode::Collective => 38,
+        Opcode::Matrix => 39,
+        Opcode::InlineAssembly => 40,
+        Opcode::Trap => 41,
     }
 }
 
@@ -3638,23 +4167,25 @@ fn decode_opcode(tag: u8) -> Result<Gfx942SemanticOpcodeV1, Gfx942MachineRefinem
         20 => Opcode::Load,
         21 => Opcode::Store,
         22 => Opcode::Atomic,
-        23 => Opcode::Fence,
-        24 => Opcode::Barrier,
-        25 => Opcode::Call,
-        26 => Opcode::Branch,
-        27 => Opcode::BranchScc,
-        28 => Opcode::BranchVcc,
-        29 => Opcode::ExecAndSave,
-        30 => Opcode::ExecAndNotSave,
-        31 => Opcode::ExecRestore,
-        32 => Opcode::BranchExecZero,
-        33 => Opcode::BranchExecNonZero,
-        34 => Opcode::Return,
-        35 => Opcode::InvocationIndex,
-        36 => Opcode::Collective,
-        37 => Opcode::Matrix,
-        38 => Opcode::InlineAssembly,
-        39 => Opcode::Trap,
+        23 => Opcode::Wait,
+        24 => Opcode::CacheControl,
+        25 => Opcode::Fence,
+        26 => Opcode::Barrier,
+        27 => Opcode::Call,
+        28 => Opcode::Branch,
+        29 => Opcode::BranchScc,
+        30 => Opcode::BranchVcc,
+        31 => Opcode::ExecAndSave,
+        32 => Opcode::ExecAndNotSave,
+        33 => Opcode::ExecRestore,
+        34 => Opcode::BranchExecZero,
+        35 => Opcode::BranchExecNonZero,
+        36 => Opcode::Return,
+        37 => Opcode::InvocationIndex,
+        38 => Opcode::Collective,
+        39 => Opcode::Matrix,
+        40 => Opcode::InlineAssembly,
+        41 => Opcode::Trap,
         _ => return Err(Gfx942MachineRefinementErrorV1::UnknownTag),
     })
 }
@@ -3813,6 +4344,18 @@ fn encode_address(output: &mut Vec<u8>, address: Gfx942EffectiveAddressV1) {
             put_u16(output, pointer_bits);
             put_u32(output, byte_width);
         }
+        Gfx942EffectiveAddressV1::GlobalScalarBaseVectorOffset {
+            scalar_base,
+            vector_offset,
+            displacement,
+            byte_width,
+        } => {
+            output.push(2);
+            put_u16(output, scalar_base);
+            put_u16(output, vector_offset);
+            output.extend_from_slice(&displacement.to_le_bytes());
+            put_u32(output, byte_width);
+        }
     }
 }
 
@@ -3838,6 +4381,12 @@ fn decode_address(
                 byte_width: input.u32()?,
             }
         }
+        2 => Gfx942EffectiveAddressV1::GlobalScalarBaseVectorOffset {
+            scalar_base: input.u16()?,
+            vector_offset: input.u16()?,
+            displacement: input.i64()?,
+            byte_width: input.u32()?,
+        },
         _ => return Err(Gfx942MachineRefinementErrorV1::UnknownTag),
     })
 }
@@ -4389,16 +4938,14 @@ mod tests {
                 .try_into()
                 .unwrap(),
         );
-        let encoding_len = if word & 0xfc00_0000 == 0xdc00_0000 {
-            8
-        } else {
-            4
-        };
+        let encoding_len = AmdMachineRefinementTargetV1::Gfx942.instruction_len(word);
         let encoding = &bytes[offset as usize..offset as usize + encoding_len];
-        let native_opcode = decode_gfx942_instruction_v1(offset, encoding)
+        let native_opcode = AmdMachineRefinementTargetV1::Gfx942
+            .decode_instruction(offset, encoding)
             .unwrap()
             .native_opcode;
         Gfx942DecodedInstructionV1::new(
+            AmdMachineRefinementTargetV1::Gfx942,
             0,
             block,
             offset,
@@ -4413,6 +4960,102 @@ mod tests {
             target,
             memory,
             address,
+        )
+        .unwrap()
+    }
+
+    fn decoded_instruction(
+        target: AmdMachineRefinementTargetV1,
+        offset: u64,
+        encoding: &[u8],
+    ) -> Gfx942DecodedInstructionV1 {
+        let decoded = target.decode_instruction(offset, encoding).unwrap();
+        Gfx942DecodedInstructionV1::new(
+            target,
+            0,
+            0,
+            offset,
+            offset,
+            decoded.native_opcode,
+            decoded.semantics,
+            decoded.semantic_discriminator,
+            encoding,
+            encoding,
+            decoded.definitions,
+            decoded.uses,
+            decoded.branch_target,
+            decoded.memory,
+            decoded.effective_address,
+        )
+        .unwrap()
+    }
+
+    fn synchronization_operation(
+        kind: CompilerLlvmOperationKindV1,
+        semantic_discriminator: u32,
+        memory: CompilerMemoryEffectV1,
+        machine_offsets: &[u64],
+        addressed_instruction_offset: Option<u64>,
+    ) -> CompilerLlvmOperationV1 {
+        let (operands, bindings, effective_address) =
+            if let Some(offset) = addressed_instruction_offset {
+                let location = |index| {
+                    CompilerMachineValueLocationV1::Register(CompilerMachineRegisterV1::new(
+                        CompilerMachineRegisterClassV1::Scalar,
+                        index,
+                    ))
+                };
+                let mut bindings = vec![
+                    CompilerMachineValueBindingV1::new(
+                        offset,
+                        1,
+                        CompilerMachineValueAccessV1::Use,
+                        location(4),
+                    )
+                    .unwrap(),
+                    CompilerMachineValueBindingV1::new(
+                        offset,
+                        1,
+                        CompilerMachineValueAccessV1::Use,
+                        location(5),
+                    )
+                    .unwrap(),
+                ];
+                bindings.sort_unstable();
+                (
+                    vec![1],
+                    bindings,
+                    Some(
+                        CompilerEffectiveAddressV1::new(
+                            1,
+                            64,
+                            4,
+                            0,
+                            [CompilerAddressTermV1::new(1, 1).unwrap()],
+                        )
+                        .unwrap(),
+                    ),
+                )
+            } else {
+                (Vec::new(), Vec::new(), None)
+            };
+        CompilerLlvmOperationV1::new(
+            CompilerLlvmOperationCoordinateV1::new(0, 0, 0),
+            1,
+            kind,
+            semantic_discriminator,
+            None,
+            CompilerLlvmValueTypeV1::Void,
+            operands,
+            [],
+            [],
+            [],
+            CompilerBranchDivergenceV1::None,
+            memory,
+            CompilerNumericalContractV1::Exact,
+            machine_offsets,
+            bindings,
+            effective_address,
         )
         .unwrap()
     }
@@ -4534,6 +5177,7 @@ mod tests {
         ];
         let bytes = artifact_bytes();
         Gfx942DecodedIsaTranscriptPartsV1 {
+            target: AmdMachineRefinementTargetV1::Gfx942,
             generated_object: ExactCompilerStageContentIdentityV1::calculate(&bytes).unwrap(),
             final_code_object: ExactCompilerStageContentIdentityV1::calculate(&bytes).unwrap(),
             mode: Gfx942FloatingModeV1::strict_ieee_binary32(),
@@ -4734,6 +5378,46 @@ mod tests {
                 byte_width: 4,
             }
         );
+
+        // `sc0` changes the operand layout: VADDR moves to the high byte and the low byte is VDST.
+        let returning_atomic = independently_decode_amd_instruction_v1(
+            gfx942,
+            64,
+            &[0x00, 0x80, 0x01, 0xdd, 0x07, 0x02, 0x04, 0x05],
+        )
+        .unwrap();
+        assert_eq!(
+            returning_atomic.definitions(),
+            &[Gfx942SemanticRegisterV1::Vector(7)]
+        );
+        assert_eq!(
+            returning_atomic.uses(),
+            &[
+                Gfx942SemanticRegisterV1::Scalar(4),
+                Gfx942SemanticRegisterV1::Scalar(5),
+                Gfx942SemanticRegisterV1::Vector(5),
+                Gfx942SemanticRegisterV1::Vector(2),
+            ]
+        );
+        assert_eq!(
+            returning_atomic.effective_address(),
+            Gfx942EffectiveAddressV1::GlobalScalarBaseVectorOffset {
+                scalar_base: 4,
+                vector_offset: 5,
+                displacement: 0,
+                byte_width: 4,
+            }
+        );
+        let system_atomic = independently_decode_amd_instruction_v1(
+            gfx942,
+            64,
+            &[0x00, 0x80, 0x01, 0xdf, 0x07, 0x02, 0x04, 0x05],
+        )
+        .unwrap();
+        assert_eq!(
+            system_atomic.memory().scope(),
+            CompilerMemoryScopeV1::System
+        );
     }
 
     #[test]
@@ -4822,6 +5506,7 @@ mod tests {
         let end_program = [0x00, 0x00, 0x81, 0xbf];
         let artifact = executable_elf(&end_program);
         let instruction = Gfx942DecodedInstructionV1::new(
+            AmdMachineRefinementTargetV1::Gfx942,
             0,
             0,
             64,
@@ -4988,6 +5673,203 @@ mod tests {
     }
 
     #[test]
+    fn phi_edge_transport_is_checked_against_decoded_defs_and_uses() {
+        let operation = |result_register: u16, move_offset: u64| {
+            CompilerLlvmOperationV1::new(
+                CompilerLlvmOperationCoordinateV1::new(0, 1, 0),
+                200,
+                CompilerLlvmOperationKindV1::Phi,
+                0,
+                Some(1),
+                CompilerLlvmValueTypeV1::Float(32),
+                [],
+                [CompilerPhiInputV1::new(0, 0)],
+                [CompilerPhiEdgeTransportV1::new(
+                    0,
+                    0,
+                    CompilerMachineValueLocationV1::Register(CompilerMachineRegisterV1::new(
+                        CompilerMachineRegisterClassV1::Vector,
+                        1,
+                    )),
+                    CompilerMachineRegisterV1::new(
+                        CompilerMachineRegisterClassV1::Vector,
+                        result_register,
+                    ),
+                    Some(move_offset),
+                )
+                .unwrap()],
+                [],
+                CompilerBranchDivergenceV1::None,
+                CompilerMemoryEffectV1::none(),
+                CompilerNumericalContractV1::Exact,
+                [move_offset],
+                [],
+                None,
+            )
+            .unwrap()
+        };
+        let isa = Gfx942DecodedIsaTranscriptV1::from_parts(isa_parts()).unwrap();
+        let instruction = isa
+            .instructions()
+            .iter()
+            .find(|instruction| instruction.hsaco_offset() == 36)
+            .unwrap();
+
+        validate_phi_edge_transports(&operation(2, 36), &[instruction]).unwrap();
+        assert_eq!(
+            validate_phi_edge_transports(&operation(3, 36), &[instruction]).unwrap_err(),
+            Gfx942MachineRefinementErrorV1::RegisterSemanticsMismatch
+        );
+        assert_eq!(
+            validate_phi_edge_transports(&operation(2, 40), &[instruction]).unwrap_err(),
+            Gfx942MachineRefinementErrorV1::IncompleteValueBinding
+        );
+    }
+
+    #[test]
+    fn shared_wait_cache_atomic_protocol_rejects_omission_reorder_and_scope_substitution() {
+        let memory = CompilerMemoryEffectV1::new(
+            CompilerMemoryEffectKindV1::ReadWrite,
+            1,
+            4,
+            4,
+            CompilerMemoryOrderingV1::AcquireRelease,
+            CompilerMemoryScopeV1::Agent,
+            false,
+        )
+        .unwrap();
+        let operation = synchronization_operation(
+            CompilerLlvmOperationKindV1::Atomic,
+            DISCRIMINATOR_ATOMIC_COMPARE_SWAP,
+            memory,
+            &[0, 8, 12, 20, 24],
+            Some(12),
+        );
+        for target in [
+            AmdMachineRefinementTargetV1::Gfx942,
+            AmdMachineRefinementTargetV1::Gfx950,
+        ] {
+            let instructions = [
+                decoded_instruction(target, 0, &[0x00, 0x80, 0xa0, 0xe0, 0, 0, 0, 0]),
+                decoded_instruction(target, 8, &[0, 0, 0x8c, 0xbf]),
+                decoded_instruction(
+                    target,
+                    12,
+                    &[0x00, 0x80, 0x04, 0xdd, 0x05, 0x02, 0x04, 0x00],
+                ),
+                decoded_instruction(target, 20, &[0x70, 0x0f, 0x8c, 0xbf]),
+                decoded_instruction(target, 24, &[0x00, 0x80, 0xa4, 0xe0, 0, 0, 0, 0]),
+            ];
+            let references = instructions.iter().collect::<Vec<_>>();
+            validate_atomic_protocol(&operation, &references).unwrap();
+
+            for hostile in [
+                vec![
+                    &instructions[0],
+                    &instructions[1],
+                    &instructions[2],
+                    &instructions[4],
+                ],
+                vec![
+                    &instructions[0],
+                    &instructions[1],
+                    &instructions[2],
+                    &instructions[4],
+                    &instructions[3],
+                ],
+            ] {
+                assert_eq!(
+                    validate_atomic_protocol(&operation, &hostile).unwrap_err(),
+                    Gfx942MachineRefinementErrorV1::SynchronizationMismatch
+                );
+            }
+            let system_writeback =
+                decoded_instruction(target, 0, &[0x00, 0xc0, 0xa0, 0xe0, 0, 0, 0, 0]);
+            let hostile = vec![
+                &system_writeback,
+                &instructions[1],
+                &instructions[2],
+                &instructions[3],
+                &instructions[4],
+            ];
+            assert_eq!(
+                validate_atomic_protocol(&operation, &hostile).unwrap_err(),
+                Gfx942MachineRefinementErrorV1::SynchronizationMismatch
+            );
+        }
+    }
+
+    #[test]
+    fn shared_fence_and_barrier_protocols_bind_wait_and_cache_order() {
+        for target in [
+            AmdMachineRefinementTargetV1::Gfx942,
+            AmdMachineRefinementTargetV1::Gfx950,
+        ] {
+            let fence_memory = CompilerMemoryEffectV1::new(
+                CompilerMemoryEffectKindV1::Fence,
+                1,
+                0,
+                0,
+                CompilerMemoryOrderingV1::AcquireRelease,
+                CompilerMemoryScopeV1::Agent,
+                false,
+            )
+            .unwrap();
+            let fence = synchronization_operation(
+                CompilerLlvmOperationKindV1::Fence,
+                0,
+                fence_memory,
+                &[0, 8, 12],
+                None,
+            );
+            let fence_instructions = [
+                decoded_instruction(target, 0, &[0x00, 0x80, 0xa0, 0xe0, 0, 0, 0, 0]),
+                decoded_instruction(target, 8, &[0x70, 0x0f, 0x8c, 0xbf]),
+                decoded_instruction(target, 12, &[0x00, 0x80, 0xa4, 0xe0, 0, 0, 0, 0]),
+            ];
+            let references = fence_instructions.iter().collect::<Vec<_>>();
+            validate_fence_protocol(&fence, &references).unwrap();
+            let reordered = vec![
+                &fence_instructions[1],
+                &fence_instructions[0],
+                &fence_instructions[2],
+            ];
+            assert_eq!(
+                validate_fence_protocol(&fence, &reordered).unwrap_err(),
+                Gfx942MachineRefinementErrorV1::SynchronizationMismatch
+            );
+
+            let barrier_memory = CompilerMemoryEffectV1::new(
+                CompilerMemoryEffectKindV1::Barrier,
+                3,
+                0,
+                0,
+                CompilerMemoryOrderingV1::AcquireRelease,
+                CompilerMemoryScopeV1::Workgroup,
+                false,
+            )
+            .unwrap();
+            let barrier = synchronization_operation(
+                CompilerLlvmOperationKindV1::Barrier,
+                0,
+                barrier_memory,
+                &[0, 4],
+                None,
+            );
+            let barrier_instructions = [
+                decoded_instruction(target, 0, &[0x7f, 0xc0, 0x8c, 0xbf]),
+                decoded_instruction(target, 4, &[0, 0, 0x8a, 0xbf]),
+            ];
+            let references = barrier_instructions.iter().collect::<Vec<_>>();
+            validate_barrier_protocol(&barrier, &references).unwrap();
+            assert_eq!(
+                validate_barrier_protocol(&barrier, &[&barrier_instructions[1]]).unwrap_err(),
+                Gfx942MachineRefinementErrorV1::SynchronizationMismatch
+            );
+        }
+    }
+
+    #[test]
     fn unsupported_atomic_bytes_and_invalid_fence_shape_fail_closed() {
         let atomic = CompilerMemoryEffectV1::new(
             CompilerMemoryEffectKindV1::ReadWrite,
@@ -5000,6 +5882,7 @@ mod tests {
         )
         .unwrap();
         let decoded = Gfx942DecodedInstructionV1::new(
+            AmdMachineRefinementTargetV1::Gfx942,
             0,
             0,
             0,

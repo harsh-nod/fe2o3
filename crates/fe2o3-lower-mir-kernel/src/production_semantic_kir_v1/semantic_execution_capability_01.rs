@@ -40,14 +40,7 @@ fn execution_element_layout_v1(
     let byte_alignment = u16::try_from(layout.alignment_bytes())
         .ok()
         .filter(|alignment| *alignment != 0 && alignment.is_power_of_two())
-        .ok_or_else(|| {
-            unsupported(
-                0,
-                None,
-                None,
-                "execution element alignment is unsupported",
-            )
-        })?;
+        .ok_or_else(|| unsupported(0, None, None, "execution element alignment is unsupported"))?;
     let layout = ExecutionElementLayoutV1 {
         byte_size,
         byte_alignment,
@@ -72,9 +65,7 @@ fn execution_scalar_v1(
         .ok_or_else(|| unsupported(0, None, None, "execution value is not a supported scalar"))
 }
 
-const fn lower_execution_scope_v1(
-    scope: SemanticExecutionMemoryScopeV1,
-) -> ExecutionMemoryScopeV1 {
+const fn lower_execution_scope_v1(scope: SemanticExecutionMemoryScopeV1) -> ExecutionMemoryScopeV1 {
     match scope {
         SemanticExecutionMemoryScopeV1::System => ExecutionMemoryScopeV1::System,
         SemanticExecutionMemoryScopeV1::Device => ExecutionMemoryScopeV1::Device,
@@ -433,7 +424,12 @@ fn lower_execution_operation_v1(
             pointer: id(pointer)?,
             length: id(length)?,
             extent: dynamic_extent.ok_or_else(|| {
-                unsupported(0, None, None, "raw-memory bind lacks a checked dynamic extent")
+                unsupported(
+                    0,
+                    None,
+                    None,
+                    "raw-memory bind lacks a checked dynamic extent",
+                )
             })?,
             view: id(view)?,
             element: id(element)?,
@@ -662,10 +658,7 @@ fn execution_result_types_v1(
         ],
         Op::WorkgroupBarrier {
             output_workgroup, ..
-        } => vec![cap(
-            *output_workgroup,
-            ExecutionCapabilityRoleV1::Workgroup,
-        )],
+        } => vec![cap(*output_workgroup, ExecutionCapabilityRoleV1::Workgroup)],
         Op::SubgroupBarrier {
             transition, width, ..
         } => vec![
@@ -915,8 +908,14 @@ fn execution_type_id_from_identity_v1(
                 "execution element identity is absent from semantic MIR",
             )
         })?;
-    let index = u32::try_from(index)
-        .map_err(|_| unsupported(0, None, None, "execution type index does not fit semantic MIR"))?;
+    let index = u32::try_from(index).map_err(|_| {
+        unsupported(
+            0,
+            None,
+            None,
+            "execution type index does not fit semantic MIR",
+        )
+    })?;
     Ok(SemanticTypeIdV1::from_index(index))
 }
 
@@ -953,6 +952,14 @@ impl SemanticFunctionLoweringV1<'_> {
         contract: SemanticExecutionCapabilityContractV1,
         callable_source_identity: SemanticFunctionIdentityV1,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        if self.execution_expansion_identity.is_some() {
+            return Err(unsupported(
+                self.semantic_function.index(),
+                Some(block.index()),
+                None,
+                "execution capability source V1 cannot encode checked call-instance coordinates",
+            ));
+        }
         let authenticated = self.kernel_context.ok_or_else(|| {
             unsupported(
                 self.semantic_function.index(),
@@ -990,7 +997,12 @@ impl SemanticFunctionLoweringV1<'_> {
         );
         let materialized_arguments = if raw_memory {
             source_arguments.len().checked_sub(1).ok_or_else(|| {
-                unsupported(0, Some(block.index()), None, "raw-memory signature is truncated")
+                unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "raw-memory signature is truncated",
+                )
             })?
         } else {
             source_arguments.len()
@@ -1014,90 +1026,89 @@ impl SemanticFunctionLoweringV1<'_> {
             operand_types.push(ty.clone());
         }
 
-        let dynamic_extent = if let SemanticExecutionCapabilityOperationV1::RawMemoryBind {
-            length,
-            element,
-            ..
-        } = contract.operation()
-        {
-            let length_type = execution_scalar_v1(self.types, length)?;
-            let layout = execution_element_layout_v1(self.types, element)?;
-            let upper_bound = execution_extent_ceiling_v1(
-                self.target_object_size_bound_bytes,
-                layout,
-                length_type,
-            )
-            .ok_or_else(|| {
-                unsupported(
-                    self.semantic_function.index(),
-                    Some(block.index()),
-                    None,
-                    "raw-memory extent has no nonzero target resource ceiling",
+        let dynamic_extent =
+            if let SemanticExecutionCapabilityOperationV1::RawMemoryBind {
+                length, element, ..
+            } = contract.operation()
+            {
+                let length_type = execution_scalar_v1(self.types, length)?;
+                let layout = execution_element_layout_v1(self.types, element)?;
+                let upper_bound = execution_extent_ceiling_v1(
+                    self.target_object_size_bound_bytes,
+                    layout,
+                    length_type,
                 )
-            })?;
-            let length_value = *operands.get(2).ok_or_else(|| {
-                unsupported(0, Some(block.index()), None, "raw-memory length is missing")
-            })?;
-            if operand_types.get(2) != Some(&Type::Scalar(length_type)) {
-                return Err(unsupported(
-                    0,
-                    Some(block.index()),
-                    None,
-                    "raw-memory length transport type changed",
-                ));
-            }
-            let bound = self.emit_id(
-                operations,
-                Type::Scalar(length_type),
-                OperationKind::Constant(integer_constant(
-                    &Type::Scalar(length_type),
-                    u128::from(upper_bound),
-                )?),
-            )?;
-            let upper_check = self.emit_id(
-                operations,
-                Type::BOOL,
-                OperationKind::Compare {
-                    predicate: ComparePredicate::LessThanOrEqual,
-                    lhs: length_value,
-                    rhs: bound,
-                },
-            )?;
-            operands.push(upper_check);
-            operand_types.push(Type::BOOL);
-            let nonnegative_check_operand = if length_type.is_signed_integer() {
-                let zero = self.emit_id(
+                .ok_or_else(|| {
+                    unsupported(
+                        self.semantic_function.index(),
+                        Some(block.index()),
+                        None,
+                        "raw-memory extent has no nonzero target resource ceiling",
+                    )
+                })?;
+                let length_value = *operands.get(2).ok_or_else(|| {
+                    unsupported(0, Some(block.index()), None, "raw-memory length is missing")
+                })?;
+                if operand_types.get(2) != Some(&Type::Scalar(length_type)) {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "raw-memory length transport type changed",
+                    ));
+                }
+                let bound = self.emit_id(
                     operations,
                     Type::Scalar(length_type),
-                    OperationKind::Constant(integer_constant(&Type::Scalar(length_type), 0)?),
+                    OperationKind::Constant(integer_constant(
+                        &Type::Scalar(length_type),
+                        u128::from(upper_bound),
+                    )?),
                 )?;
-                let check = self.emit_id(
+                let upper_check = self.emit_id(
                     operations,
                     Type::BOOL,
                     OperationKind::Compare {
-                        predicate: ComparePredicate::GreaterThanOrEqual,
+                        predicate: ComparePredicate::LessThanOrEqual,
                         lhs: length_value,
-                        rhs: zero,
+                        rhs: bound,
                     },
                 )?;
-                operands.push(check);
+                operands.push(upper_check);
                 operand_types.push(Type::BOOL);
-                Some(4)
+                let nonnegative_check_operand = if length_type.is_signed_integer() {
+                    let zero = self.emit_id(
+                        operations,
+                        Type::Scalar(length_type),
+                        OperationKind::Constant(integer_constant(&Type::Scalar(length_type), 0)?),
+                    )?;
+                    let check = self.emit_id(
+                        operations,
+                        Type::BOOL,
+                        OperationKind::Compare {
+                            predicate: ComparePredicate::GreaterThanOrEqual,
+                            lhs: length_value,
+                            rhs: zero,
+                        },
+                    )?;
+                    operands.push(check);
+                    operand_types.push(Type::BOOL);
+                    Some(4)
+                } else {
+                    None
+                };
+                Some(ExecutionDynamicExtentV1 {
+                    operand: 2,
+                    source_argument: 2,
+                    source_type: execution_type_identity_v1(self.types, length)?,
+                    value_type: length_type,
+                    upper_bound,
+                    bound_check_operand: 3,
+                    nonnegative_check_operand,
+                })
             } else {
                 None
             };
-            Some(ExecutionDynamicExtentV1 {
-                operand: 2,
-                source_argument: 2,
-                source_type: execution_type_identity_v1(self.types, length)?,
-                value_type: length_type,
-                upper_bound,
-                bound_check_operand: 3,
-                nonnegative_check_operand,
-            })
-        } else {
-            None
-        };
 
         let operation =
             lower_execution_operation_v1(self.types, contract.operation(), dynamic_extent)?;
@@ -1118,8 +1129,17 @@ impl SemanticFunctionLoweringV1<'_> {
                 .collect::<Result<Vec<_>, _>>()?,
             execution_type_identity_v1(self.types, contract.signature().output())?,
         )
-        .ok_or_else(|| unsupported(0, Some(block.index()), None, "execution signature is too wide"))?;
-        let workgroup_brand = contract.workgroup_brand().map(|identity| *identity.as_bytes());
+        .ok_or_else(|| {
+            unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "execution signature is too wide",
+            )
+        })?;
+        let workgroup_brand = contract
+            .workgroup_brand()
+            .map(|identity| *identity.as_bytes());
         let epoch_before = contract.epoch_before().map(|identity| *identity.as_bytes());
         let epoch_after = contract.epoch_after().map(|identity| *identity.as_bytes());
         let result_types = execution_result_types_v1(
@@ -1263,7 +1283,14 @@ impl SemanticFunctionLoweringV1<'_> {
         let shape = self
             .types
             .get(output.index() as usize)
-            .ok_or_else(|| unsupported(0, Some(block.index()), None, "execution result type is missing"))?
+            .ok_or_else(|| {
+                unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "execution result type is missing",
+                )
+            })?
             .shape();
         if matches!(shape, SemanticTypeShapeV1::Unit) {
             return if results.is_empty() {
@@ -1310,7 +1337,12 @@ impl SemanticFunctionLoweringV1<'_> {
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
         let (discriminant, variants) = semantic_enum_shape(self.types, option)?;
         let some_variant = unique_enum_variant_with_field(variants, payload).ok_or_else(|| {
-            unsupported(0, Some(block.index()), None, "execution result is not an exact Option payload")
+            unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "execution result is not an exact Option payload",
+            )
         })?;
         let mut none_variants = variants.iter().enumerate().filter_map(|(index, variant)| {
             variant.fields().fields().is_empty().then_some(index as u32)
@@ -1318,7 +1350,14 @@ impl SemanticFunctionLoweringV1<'_> {
         let none_variant = none_variants
             .next()
             .filter(|_| none_variants.next().is_none())
-            .ok_or_else(|| unsupported(0, Some(block.index()), None, "execution Option lacks one None variant"))?;
+            .ok_or_else(|| {
+                unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "execution Option lacks one None variant",
+                )
+            })?;
         let discriminant_type = lower_scalar_type(self.types, discriminant)?;
         let discriminant = if let Some(present) = present {
             let none = self.emit_id(

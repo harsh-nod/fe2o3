@@ -394,6 +394,23 @@ fn compiler_intrinsic_accepts_transparent_borrow_v1(
     source_type: SemanticTypeIdV1,
 ) -> bool {
     match operation {
+        SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindReadOnly { context, .. }
+        | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindExclusiveReadWrite {
+            context,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindDisjointWrite {
+            context, ..
+        } => argument == 0 && source_type == *context,
+        SemanticCompilerIntrinsicOperationV1::CapabilityGlobalLoad { view, .. }
+        | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveLoad { view, .. }
+        | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStore { view, .. }
+        | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveStore { view, .. } => {
+            argument == 0 && source_type == *view
+        }
+        SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStoreBlock {
+            view, witness, ..
+        } => (argument == 0 && source_type == *view) || (argument == 1 && source_type == *witness),
         SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent { scope, .. }
         | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate { scope, .. } => {
             argument == 0 && source_type == *scope
@@ -532,8 +549,53 @@ pub(super) fn semantic_function_ssa_input_v1(
     callables: &[SemanticCallableDeclV1],
     transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
 ) -> (SsaConstructionInputV1, Vec<SsaVariableIdV1>, usize) {
+    semantic_function_ssa_input_with_event_origins_v1(
+        function,
+        types,
+        callables,
+        transparent_borrows,
+        |_, _, _| {},
+    )
+}
+
+pub(super) fn semantic_function_ssa_input_with_event_origins_v1(
+    function: &SemanticFunctionDeclV1,
+    types: Option<&[SemanticTypeDeclV1]>,
+    callables: &[SemanticCallableDeclV1],
+    transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
+    record_events: impl FnMut(u32, Option<u32>, std::ops::Range<usize>),
+) -> (SsaConstructionInputV1, Vec<SsaVariableIdV1>, usize) {
+    semantic_function_ssa_input_with_frame_initializations_v1(
+        function,
+        types,
+        callables,
+        transparent_borrows,
+        &frame_initialization::FrameInitializationsV1::default(),
+        record_events,
+    )
+    .expect("an empty frame initialization relation has no markers to reject")
+}
+
+pub(super) fn semantic_function_ssa_input_with_frame_initializations_v1(
+    function: &SemanticFunctionDeclV1,
+    types: Option<&[SemanticTypeDeclV1]>,
+    callables: &[SemanticCallableDeclV1],
+    transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
+    initializations: &frame_initialization::FrameInitializationsV1,
+    mut record_events: impl FnMut(u32, Option<u32>, std::ops::Range<usize>),
+) -> Result<(SsaConstructionInputV1, Vec<SsaVariableIdV1>, usize), ProductionSemanticSsaErrorV1> {
+    initializations.verify_markers(function)?;
+    let mut initialization = initializations.entries().iter().peekable();
     let mut promotable = vec![true; function.locals().len()];
     classify_storage_observable_locals_v1(function, transparent_borrows, &mut promotable);
+    if initializations.entries().iter().any(|entry| {
+        !promotable
+            .get(entry.local().index() as usize)
+            .copied()
+            .unwrap_or(false)
+    }) {
+        return Err(ProductionSemanticSsaErrorV1::ReplayMismatch);
+    }
     let (elided_grid_leader_borrows, adapter_analysis_work) =
         authenticated_elided_grid_leader_borrow_sites_v1(
             function,
@@ -559,6 +621,7 @@ pub(super) fn semantic_function_ssa_input_v1(
         .map(|(block_index, block)| {
             let mut events = Vec::new();
             for (statement_index, statement) in block.statements().iter().enumerate() {
+                let start = events.len();
                 let site = SemanticTransparentBorrowSiteV1 {
                     block: block_index as u32,
                     statement: statement_index as u32,
@@ -571,8 +634,23 @@ pub(super) fn semantic_function_ssa_input_v1(
                 } else {
                     append_statement_events_v1(statement.kind(), &mut events);
                 }
+                if initialization.peek().is_some_and(|entry| {
+                    entry.block().index() == site.block && entry.statement() == site.statement
+                }) {
+                    let entry = initialization.next().expect("checked frame marker");
+                    events.push(SsaEventV1::Define(SsaVariableIdV1::new(
+                        entry.local().index(),
+                    )));
+                }
+                record_events(
+                    block_index as u32,
+                    Some(statement_index as u32),
+                    start..events.len(),
+                );
             }
+            let start = events.len();
             append_terminator_events_v1(block.terminator().kind(), return_local, &mut events);
+            record_events(block_index as u32, None, start..events.len());
             let mut edges = Vec::with_capacity(block.terminator().kind().edge_count());
             block
                 .terminator()
@@ -590,6 +668,9 @@ pub(super) fn semantic_function_ssa_input_v1(
             SsaBlockInputV1::new(events, edges)
         })
         .collect::<Vec<_>>();
+    if initialization.next().is_some() {
+        return Err(ProductionSemanticSsaErrorV1::ReplayMismatch);
+    }
     let implicit_entry_variables = authenticated_implicit_entry_variables_v1(
         function,
         types,
@@ -612,7 +693,7 @@ pub(super) fn semantic_function_ssa_input_v1(
             .then_some(SsaVariableIdV1::new(local as u32))
         })
         .collect();
-    (
+    Ok((
         SsaConstructionInputV1::new(
             SsaBlockIdV1::new(function.entry().index()),
             function.locals().len() as u32,
@@ -622,7 +703,7 @@ pub(super) fn semantic_function_ssa_input_v1(
         ),
         implicit_entry_variables,
         adapter_analysis_work,
-    )
+    ))
 }
 
 fn authenticated_elided_grid_leader_borrow_sites_v1(

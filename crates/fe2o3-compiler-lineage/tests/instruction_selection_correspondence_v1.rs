@@ -301,6 +301,67 @@ fn phi_predecessor_and_machine_offset_substitution_fail_closed() {
 }
 
 #[test]
+fn phi_edge_transport_rejects_predecessor_location_and_move_substitutions() {
+    let result = CompilerMachineRegisterV1::new(CompilerMachineRegisterClassV1::Vector, 1);
+    let incoming = CompilerMachineValueLocationV1::Register(result);
+    let transport = CompilerPhiEdgeTransportV1::new(0, 0, incoming, result, None).unwrap();
+    let build = |phi_inputs: &[CompilerPhiInputV1],
+                 transports: &[CompilerPhiEdgeTransportV1],
+                 offsets: &[u64]| {
+        CompilerLlvmOperationV1::new(
+            CompilerLlvmOperationCoordinateV1::new(0, 1, 0),
+            100,
+            CompilerLlvmOperationKindV1::Phi,
+            0,
+            Some(1),
+            CompilerLlvmValueTypeV1::Float(32),
+            [],
+            phi_inputs,
+            transports,
+            [],
+            CompilerBranchDivergenceV1::None,
+            CompilerMemoryEffectV1::none(),
+            CompilerNumericalContractV1::Exact,
+            offsets,
+            [],
+            None,
+        )
+    };
+
+    assert_eq!(
+        build(&[CompilerPhiInputV1::new(2, 0)], &[transport], &[]).unwrap_err(),
+        CompilerInstructionSelectionCorrespondenceErrorV1::InvalidOperation
+    );
+
+    let other = CompilerMachineRegisterV1::new(CompilerMachineRegisterClassV1::Vector, 2);
+    assert_eq!(
+        CompilerPhiEdgeTransportV1::new(
+            0,
+            0,
+            CompilerMachineValueLocationV1::Register(other),
+            result,
+            None,
+        )
+        .unwrap_err(),
+        CompilerInstructionSelectionCorrespondenceErrorV1::InvalidValueBinding
+    );
+
+    let moved = CompilerPhiEdgeTransportV1::new(
+        0,
+        0,
+        CompilerMachineValueLocationV1::Register(other),
+        result,
+        Some(80),
+    )
+    .unwrap();
+    assert_eq!(
+        build(&[CompilerPhiInputV1::new(0, 0)], &[moved], &[]).unwrap_err(),
+        CompilerInstructionSelectionCorrespondenceErrorV1::InvalidValueBinding
+    );
+    assert!(build(&[CompilerPhiInputV1::new(0, 0)], &[moved], &[80]).is_ok());
+}
+
+#[test]
 fn unknown_operation_tag_and_trailing_bytes_are_rejected() {
     let transcript = CompilerInstructionSelectionCorrespondenceV1::from_parts(parts()).unwrap();
     let mut unknown = transcript.canonical_bytes().to_vec();

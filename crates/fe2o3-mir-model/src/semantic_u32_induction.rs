@@ -292,6 +292,7 @@ impl SemanticU32InductionNoOverflowCertificateV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticU32InductionNoOverflowReportV1 {
     semantic_mir_sha256: InertSemanticMirSha256V1,
+    execution_view_identity: Option<[u8; 32]>,
     function: SemanticFunctionIdV1,
     function_identity: SemanticFunctionIdentityV1,
     checked_additions_examined: usize,
@@ -302,6 +303,11 @@ pub struct SemanticU32InductionNoOverflowReportV1 {
 impl SemanticU32InductionNoOverflowReportV1 {
     pub const fn semantic_mir_sha256(&self) -> InertSemanticMirSha256V1 {
         self.semantic_mir_sha256
+    }
+
+    /// Expanded coordinates require their own checked source correspondence.
+    pub const fn execution_view_identity(&self) -> Option<&[u8; 32]> {
+        self.execution_view_identity.as_ref()
     }
 
     pub const fn function(&self) -> SemanticFunctionIdV1 {
@@ -364,6 +370,56 @@ pub fn analyze_semantic_u32_induction_no_overflow_with_limits_v1(
     )
 }
 
+/// Analyzes only a compiler-derived execution view replayed against its exact source.
+/// Certificates remain inert and cannot use the original-coordinate V1 wire format.
+/// Bounds must remain ABI arguments with no MIR definitions or direct-copy aliases. Expanded
+/// helper parameters are defined temporaries; forwarding a root bound to a helper
+/// also creates an alias. Neither case is certified by this analysis version.
+pub fn analyze_expanded_semantic_u32_induction_no_overflow_v1(
+    semantic_mir: &AdmittedInertSemanticMirV1,
+    expansion: &crate::SemanticCallExpansionV1,
+    root: SemanticFunctionIdV1,
+) -> Result<SemanticU32InductionNoOverflowReportV1, SemanticU32InductionAnalysisErrorV1> {
+    analyze_expanded_semantic_u32_induction_no_overflow_with_limits_v1(
+        semantic_mir,
+        expansion,
+        root,
+        SemanticU32InductionAnalysisLimitsV1::default(),
+    )
+}
+
+/// Replays the original-to-execution relation, then applies caller-bounded analysis.
+/// Expansion retains its own cumulative hard limits, independent of induction work.
+pub fn analyze_expanded_semantic_u32_induction_no_overflow_with_limits_v1(
+    semantic_mir: &AdmittedInertSemanticMirV1,
+    expansion: &crate::SemanticCallExpansionV1,
+    root: SemanticFunctionIdV1,
+    limits: SemanticU32InductionAnalysisLimitsV1,
+) -> Result<SemanticU32InductionNoOverflowReportV1, SemanticU32InductionAnalysisErrorV1> {
+    validate_analysis_limits_v1(limits)?;
+    expansion.verify_replay(semantic_mir).map_err(|_| {
+        SemanticU32InductionAnalysisErrorV1::InvalidModel(
+            "execution view does not replay against the admitted semantic source",
+        )
+    })?;
+    let view = expansion
+        .root(root)
+        .ok_or(SemanticU32InductionAnalysisErrorV1::InvalidModel(
+            "execution view does not contain the requested root",
+        ))?;
+    let mut report = analyze_function_with_limits_v1(
+        semantic_mir.types(),
+        view.body(),
+        semantic_mir.semantic_sha256(),
+        view.source_body(),
+        limits,
+    )?;
+    if view.has_expanded_calls() {
+        report.execution_view_identity = Some(*view.identity());
+    }
+    Ok(report)
+}
+
 fn analyze_function_with_limits_v1(
     types: &[SemanticTypeDeclV1],
     declaration: &SemanticFunctionDeclV1,
@@ -371,17 +427,7 @@ fn analyze_function_with_limits_v1(
     function: SemanticFunctionIdV1,
     limits: SemanticU32InductionAnalysisLimitsV1,
 ) -> Result<SemanticU32InductionNoOverflowReportV1, SemanticU32InductionAnalysisErrorV1> {
-    if limits.work_units > MAX_SEMANTIC_U32_INDUCTION_WORK_V1
-        || limits.certificates > MAX_SEMANTIC_U32_INDUCTION_CERTIFICATES_V1
-    {
-        return Err(SemanticU32InductionAnalysisErrorV1::InvalidLimits {
-            requested_work: limits.work_units,
-            maximum_work: MAX_SEMANTIC_U32_INDUCTION_WORK_V1,
-            requested_certificates: limits.certificates,
-            maximum_certificates: MAX_SEMANTIC_U32_INDUCTION_CERTIFICATES_V1,
-        });
-    }
-
+    validate_analysis_limits_v1(limits)?;
     let mut budget = WorkBudgetV1::new(limits.work_units);
     let graph = SemanticCfgV1::analyze(declaration, &mut budget)?;
     let inventory = SemanticInventoryV1::analyze(declaration, &mut budget)?;
@@ -412,12 +458,29 @@ fn analyze_function_with_limits_v1(
     }
     Ok(SemanticU32InductionNoOverflowReportV1 {
         semantic_mir_sha256,
+        execution_view_identity: None,
         function,
         function_identity: declaration.identity(),
         checked_additions_examined: inventory.checked_additions.len(),
         certificates: certificates.into_boxed_slice(),
         work_units: budget.used,
     })
+}
+
+pub(crate) fn validate_analysis_limits_v1(
+    limits: SemanticU32InductionAnalysisLimitsV1,
+) -> Result<(), SemanticU32InductionAnalysisErrorV1> {
+    if limits.work_units > MAX_SEMANTIC_U32_INDUCTION_WORK_V1
+        || limits.certificates > MAX_SEMANTIC_U32_INDUCTION_CERTIFICATES_V1
+    {
+        return Err(SemanticU32InductionAnalysisErrorV1::InvalidLimits {
+            requested_work: limits.work_units,
+            maximum_work: MAX_SEMANTIC_U32_INDUCTION_WORK_V1,
+            requested_certificates: limits.certificates,
+            maximum_certificates: MAX_SEMANTIC_U32_INDUCTION_CERTIFICATES_V1,
+        });
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1213,6 +1276,7 @@ impl SemanticCfgV1 {
         avoided: Option<usize>,
         budget: &mut WorkBudgetV1,
     ) -> Result<Vec<bool>, SemanticU32InductionAnalysisErrorV1> {
+        budget.charge(self.successors.len())?;
         let mut visited = fallible_filled_vec(self.successors.len(), false)?;
         if avoided == Some(self.entry) {
             return Ok(visited);
@@ -2125,6 +2189,49 @@ mod tests {
     }
 
     #[test]
+    fn expanded_coordinates_cannot_be_serialized_as_original_induction_evidence() {
+        let semantic = admitted(Shape::default());
+        let mut report = report(&semantic);
+        report.execution_view_identity = Some([0x79; 32]);
+        assert!(matches!(
+            crate::InertCanonicalSemanticU32InductionEvidenceV1::from_report(&report),
+            Err(crate::SemanticU32InductionEvidenceErrorV1::ExecutionViewUnsupported),
+        ));
+    }
+
+    #[test]
+    fn unchanged_execution_view_preserves_induction_coordinates_and_rejects_other_source() {
+        let semantic = admitted(Shape::default());
+        let expansion = crate::SemanticCallExpansionV1::try_new(
+            &semantic,
+            crate::SemanticCallExpansionLimitsV1::default(),
+        )
+        .unwrap();
+        let root = SemanticFunctionIdV1::from_index(0);
+        let actual =
+            analyze_expanded_semantic_u32_induction_no_overflow_v1(&semantic, &expansion, root)
+                .unwrap();
+        assert_eq!(actual, report(&semantic));
+        assert!(actual.execution_view_identity().is_none());
+        assert!(
+            analyze_expanded_semantic_u32_induction_no_overflow_v1(
+                &semantic,
+                &expansion,
+                SemanticFunctionIdV1::from_index(1),
+            )
+            .is_err()
+        );
+        let other = admitted(Shape {
+            identity_seed: 1,
+            ..Shape::default()
+        });
+        assert!(
+            analyze_expanded_semantic_u32_induction_no_overflow_v1(&other, &expansion, root,)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn exact_guarded_checked_u32_induction_produces_one_bound_certificate() {
         let admitted = admitted(Shape::default());
         let report = report(&admitted);
@@ -2336,6 +2443,51 @@ mod tests {
             first.checked_addition().block().identity(),
             second.checked_addition().block().identity()
         );
+    }
+
+    #[test]
+    fn dominance_search_charges_initialization_even_when_avoiding_entry() {
+        let admitted = admitted(Shape::default());
+        let graph = SemanticCfgV1::analyze(
+            &admitted.functions()[0],
+            &mut WorkBudgetV1::new(MAX_SEMANTIC_U32_INDUCTION_WORK_V1),
+        )
+        .unwrap();
+        let blocks = graph.successors.len();
+        let mut short = WorkBudgetV1::new(blocks - 1);
+        assert_eq!(
+            graph.dominates(graph.entry, 1, &mut short),
+            Err(SemanticU32InductionAnalysisErrorV1::WorkLimit {
+                actual: blocks,
+                limit: blocks - 1,
+            })
+        );
+        let mut exact = WorkBudgetV1::new(blocks);
+        assert!(graph.dominates(graph.entry, 1, &mut exact).unwrap());
+        assert_eq!(exact.used, blocks);
+        assert_eq!(
+            graph.reachable_avoiding(Some(graph.entry), &mut exact),
+            Err(SemanticU32InductionAnalysisErrorV1::WorkLimit {
+                actual: blocks * 2,
+                limit: blocks,
+            })
+        );
+        let mut traversal = WorkBudgetV1::new(MAX_SEMANTIC_U32_INDUCTION_WORK_V1);
+        assert!(
+            graph
+                .reachable_avoiding(None, &mut traversal)
+                .unwrap()
+                .iter()
+                .all(|v| *v)
+        );
+        assert_eq!(
+            traversal.used,
+            blocks * 2 + graph.successors.iter().map(Vec::len).sum::<usize>()
+        );
+        assert!(matches!(
+            graph.reachable_avoiding(None, &mut WorkBudgetV1::new(traversal.used - 1)),
+            Err(SemanticU32InductionAnalysisErrorV1::WorkLimit { .. })
+        ));
     }
 
     #[test]

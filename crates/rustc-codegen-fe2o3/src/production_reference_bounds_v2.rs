@@ -1,4 +1,4 @@
-//! Compiler-owned full-domain discharge for safe-reference slice bounds.
+//! Compiler-owned domain and CPU-path discharge for safe-reference slice bounds.
 //!
 //! This stage joins exact reference-MIR bounds assertions to ranked view
 //! extents. It is workload neutral and accepts only relations derived from the
@@ -15,7 +15,9 @@ use fe2o3_pliron::{
 use crate::reference_effect_v1::{
     ReferenceArgumentRelationV1, ReferenceBinaryOpV1, ReferenceCastKindV1, ReferenceConstantV1,
     ReferenceEffectExpressionV1, ReferenceEffectIrV1, ReferenceOutputCoordinateV1,
-    ReferenceOutputWriteV1, ReferenceScalarTypeV1, ResolvedReferenceBoundsCheckV1,
+    ReferenceOutputWriteV1, ReferencePathPredicateV1, ReferenceScalarTypeV1,
+    ReferenceSymbolicWorkBudgetV2, ResolvedReferenceBoundsCheckV1,
+    reference_block_path_predicates_with_budget_v1, reference_boolean_guard_atom_v1,
 };
 
 const MAX_BOUND_NODES_V2: usize = 8_192;
@@ -49,7 +51,7 @@ impl ReferenceBoundsDischargeErrorV2 {
     }
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum ExtentExprV2 {
     Constant(u64),
     Argument(u32),
@@ -75,8 +77,8 @@ impl ExtentExprV2 {
                 match kind {
                     ExtentBinaryKindV2::Add => lhs.checked_add(rhs),
                     ExtentBinaryKindV2::Multiply => lhs.checked_mul(rhs),
-                    ExtentBinaryKindV2::Divide => (rhs != 0).then_some(lhs / rhs),
-                    ExtentBinaryKindV2::Remainder => (rhs != 0).then_some(lhs % rhs),
+                    ExtentBinaryKindV2::Divide => lhs.checked_div(rhs),
+                    ExtentBinaryKindV2::Remainder => lhs.checked_rem(rhs),
                 }
             }
         }
@@ -115,18 +117,31 @@ struct IntervalV2 {
     maximum: u64,
 }
 
-/// Discharges every retained slice check over every point in the exact ranked
-/// output domain. No check is treated as an assumption: the relation must be
-/// independently implied by the ranked extents.
+/// Discharges every retained slice check from the ranked point domain or its
+/// own CPU block-entry predicate. Bounds assertions never supply assumptions.
 pub(crate) fn discharge_reference_bounds_over_ranked_domains_v2(
     kernel: &ProductionRankedKernelV1,
     effect_ir: &ReferenceEffectIrV1,
     outputs: &[CompilerOwnedOutputDomainV2<'_>],
 ) -> Result<(), ReferenceBoundsDischargeErrorV2> {
-    let checks = effect_ir.resolved_bounds_checks_v1().map_err(|_| {
+    discharge_reference_bounds_with_budget_v2(
+        kernel,
+        effect_ir,
+        outputs,
+        &mut ReferenceSymbolicWorkBudgetV2::default(),
+    )
+}
+
+fn discharge_reference_bounds_with_budget_v2(
+    kernel: &ProductionRankedKernelV1,
+    effect_ir: &ReferenceEffectIrV1,
+    outputs: &[CompilerOwnedOutputDomainV2<'_>],
+    work: &mut ReferenceSymbolicWorkBudgetV2,
+) -> Result<(), ReferenceBoundsDischargeErrorV2> {
+    let checks = effect_ir.resolved_bounds_checks_with_budget_v1(work).map_err(|_| {
         ReferenceBoundsDischargeErrorV2::new(
             0,
-            "a retained safe-slice bounds assertion cannot be normalized",
+            "a retained safe-slice bounds assertion cannot be normalized within its work budget",
         )
     })?;
     let mut accesses = Vec::new();
@@ -156,7 +171,7 @@ pub(crate) fn discharge_reference_bounds_over_ranked_domains_v2(
         }
     }
     let definitions = definitions(kernel)?;
-    let domains = point_domains(kernel, outputs, &definitions)?;
+    let domains = point_domains(kernel, outputs, &definitions, work)?;
     if accesses.is_empty() && checks.is_empty() {
         return Ok(());
     }
@@ -173,15 +188,17 @@ pub(crate) fn discharge_reference_bounds_over_ranked_domains_v2(
     }
 
     let mut used = vec![false; normalized.len()];
+    let mut cpu_paths = None;
     for access in &accesses {
-        let matches = normalized
-            .iter()
-            .enumerate()
-            .filter(|(_, (check, argument))| {
-                *argument == access.reference_argument && check.index == access.index
-            })
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
+        let mut matches = Vec::new();
+        for (index, (check, argument)) in normalized.iter().enumerate() {
+            work.charge_v2(1)
+                .and_then(|_| work.charge_expression_v2(&check.index))
+                .map_err(|_| bounds_work_error_v2(check.block))?;
+            if *argument == access.reference_argument && check.index == access.index {
+                matches.push(index);
+            }
+        }
         if matches.is_empty() {
             return Err(ReferenceBoundsDischargeErrorV2::new(
                 access.block,
@@ -197,9 +214,44 @@ pub(crate) fn discharge_reference_bounds_over_ranked_domains_v2(
             access.reference_argument,
             &definitions,
             access.block,
+            work,
         )?;
-        prove_bound(access, &extent, &domains)?;
         for index in matches {
+            if used[index] {
+                continue;
+            }
+            let check = &normalized[index].0;
+            let checked_access = SliceAccessV2 {
+                block: check.block,
+                ..access.clone()
+            };
+            if let Err(domain_error) = prove_bound(&checked_access, &extent, &domains, work) {
+                if cpu_paths.is_none() {
+                    cpu_paths = Some(reference_block_path_predicates_with_budget_v1(effect_ir, work)
+                        .map_err(|_| ReferenceBoundsDischargeErrorV2::new(
+                            check.block,
+                            "CPU block-entry predicates cannot be derived within the bounded acyclic reference subset",
+                        ))?);
+                }
+                let path = cpu_paths
+                    .as_ref()
+                    .and_then(|paths| paths.get(check.block as usize))
+                    .ok_or_else(|| {
+                        ReferenceBoundsDischargeErrorV2::new(
+                            check.block,
+                            "bounds assertion has no exact CPU block-entry predicate",
+                        )
+                    })?;
+                if !cpu_path_proves_bound_v2(path, check, work)? {
+                    return Err(ReferenceBoundsDischargeErrorV2::new(
+                        check.block,
+                        format!(
+                            "{}; the exact bound is not a preceding CPU predicate on every path to this assertion",
+                            domain_error.detail()
+                        ),
+                    ));
+                }
+            }
             used[index] = true;
         }
     }
@@ -210,6 +262,31 @@ pub(crate) fn discharge_reference_bounds_over_ranked_domains_v2(
         ));
     }
     Ok(())
+}
+
+fn bounds_work_error_v2(block: u32) -> ReferenceBoundsDischargeErrorV2 {
+    ReferenceBoundsDischargeErrorV2::new(
+        block,
+        "CPU bounds discharge exceeds its cumulative work budget",
+    )
+}
+
+fn cpu_path_proves_bound_v2(
+    path: &ReferencePathPredicateV1,
+    check: &ResolvedReferenceBoundsCheckV1,
+    work: &mut ReferenceSymbolicWorkBudgetV2,
+) -> Result<bool, ReferenceBoundsDischargeErrorV2> {
+    work.charge_expression_v2(&check.condition)
+        .and_then(|_| work.charge_predicate_v2(path))
+        .and_then(|_| work.charge_v2(path.clauses.len()))
+        .map_err(|_| bounds_work_error_v2(check.block))?;
+    let expected = reference_boolean_guard_atom_v1(check.condition.clone(), true);
+    // Empty DNF is unreachable. Every other clause needs the exact positive
+    // comparison, not a guard at a later output or another bounds assertion.
+    Ok(path
+        .clauses
+        .iter()
+        .all(|clause| clause.atoms.contains(&expected)))
 }
 
 fn validate_check(
@@ -317,20 +394,22 @@ fn point_domains(
     kernel: &ProductionRankedKernelV1,
     outputs: &[CompilerOwnedOutputDomainV2<'_>],
     definitions: &BTreeMap<u32, &ProductionRankedOperationV1>,
+    work: &mut ReferenceSymbolicWorkBudgetV2,
 ) -> Result<BTreeMap<u32, ExtentExprV2>, ReferenceBoundsDischargeErrorV2> {
     let mut domains = BTreeMap::new();
     for output in outputs {
-        let shape = view_shape(
+        let mut shape = view_shape(
             kernel,
             output.ranked_view,
             definitions,
             output.reference.block,
+            work,
         )?;
         if let ReferenceOutputCoordinateV1::Dynamic(
             ReferenceEffectExpressionV1::PointCoordinate { axis },
         ) = &output.reference.coordinate
         {
-            let [extent] = shape.as_slice() else {
+            if shape.len() != 1 {
                 return Err(ReferenceBoundsDischargeErrorV2::new(
                     output.reference.block,
                     format!(
@@ -338,8 +417,13 @@ fn point_domains(
                         shape.len()
                     ),
                 ));
-            };
-            insert_domain(&mut domains, *axis, extent.clone(), output.reference.block)?;
+            }
+            insert_domain(
+                &mut domains,
+                *axis,
+                shape.pop().expect("checked rank"),
+                output.reference.block,
+            )?;
             continue;
         }
         let ReferenceOutputCoordinateV1::LogicalPoint(coordinates) = &output.reference.coordinate
@@ -377,13 +461,20 @@ fn insert_domain(
     extent: ExtentExprV2,
     block: u32,
 ) -> Result<(), ReferenceBoundsDischargeErrorV2> {
-    if let Some(previous) = domains.insert(axis, extent.clone())
-        && previous != extent
-    {
-        return Err(ReferenceBoundsDischargeErrorV2::new(
-            block,
-            format!("point axis {axis} has conflicting ranked extents {previous} and {extent}"),
-        ));
+    match domains.entry(axis) {
+        std::collections::btree_map::Entry::Vacant(slot) => {
+            slot.insert(extent);
+        }
+        std::collections::btree_map::Entry::Occupied(slot) if *slot.get() != extent => {
+            return Err(ReferenceBoundsDischargeErrorV2::new(
+                block,
+                format!(
+                    "point axis {axis} has conflicting ranked extents {} and {extent}",
+                    slot.get()
+                ),
+            ));
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -394,7 +485,16 @@ fn slice_extent(
     reference_argument: u32,
     definitions: &BTreeMap<u32, &ProductionRankedOperationV1>,
     block: u32,
+    work: &mut ReferenceSymbolicWorkBudgetV2,
 ) -> Result<ExtentExprV2, ReferenceBoundsDischargeErrorV2> {
+    // Mapping each candidate relation scans the ABI relations again.
+    let relation_work = effect_ir
+        .relations
+        .len()
+        .checked_mul(effect_ir.relations.len())
+        .ok_or_else(|| bounds_work_error_v2(block))?;
+    work.charge_v2(relation_work)
+        .map_err(|_| bounds_work_error_v2(block))?;
     let arguments = effect_ir
         .relations
         .iter()
@@ -421,11 +521,10 @@ fn slice_extent(
     let allocation_origin = u64::from(*argument).checked_add(1).ok_or_else(|| {
         ReferenceBoundsDischargeErrorV2::new(block, "slice allocation origin overflowed")
     })?;
-    let mut extents = kernel
-        .blocks()
-        .iter()
-        .flat_map(|ranked_block| ranked_block.operations())
-        .filter_map(|operation| match operation {
+    let mut extent = None;
+    for operation in kernel.blocks().iter().flat_map(|block| block.operations()) {
+        work.charge_v2(1).map_err(|_| bounds_work_error_v2(block))?;
+        let view = match operation {
             ProductionRankedOperationV1::View {
                 result,
                 allocation_origin: actual,
@@ -435,45 +534,39 @@ fn slice_extent(
                 result,
                 allocation_origin: actual,
                 ..
-            } if *actual == allocation_origin => Some(ProductionRankedValueV1::Local(*result)),
-            _ => None,
-        })
-        .map(|view| view_shape(kernel, view, definitions, block))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .map(|shape| match shape.as_slice() {
-            [extent] => Ok(extent.clone()),
-            _ => Err(ReferenceBoundsDischargeErrorV2::new(
+            } if *actual == allocation_origin => ProductionRankedValueV1::Local(*result),
+            _ => continue,
+        };
+        let mut shape = view_shape(kernel, view, definitions, block, work)?;
+        if shape.len() != 1 {
+            return Err(ReferenceBoundsDischargeErrorV2::new(
                 block,
                 format!(
                     "slice allocation origin {allocation_origin} has ranked view rank {} instead of 1",
                     shape.len()
                 ),
-            )),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    extents.sort();
-    extents.dedup();
-    match extents.as_slice() {
-        [extent] => Ok(extent.clone()),
-        [] => Err(ReferenceBoundsDischargeErrorV2::new(
+            ));
+        }
+        let candidate = shape.pop().expect("checked rank");
+        match &extent {
+            Some(previous) if *previous != candidate => {
+                return Err(ReferenceBoundsDischargeErrorV2::new(
+                    block,
+                    format!(
+                        "slice allocation origin {allocation_origin} has conflicting ranked extents: {previous}, {candidate}"
+                    ),
+                ));
+            }
+            None => extent = Some(candidate),
+            _ => {}
+        }
+    }
+    extent.ok_or_else(|| ReferenceBoundsDischargeErrorV2::new(
             block,
             format!(
                 "slice allocation origin {allocation_origin} has no ranked extent retained by the compiler"
             ),
-        )),
-        _ => Err(ReferenceBoundsDischargeErrorV2::new(
-            block,
-            format!(
-                "slice allocation origin {allocation_origin} has conflicting ranked extents: {}",
-                extents
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        )),
-    }
+        ))
 }
 
 fn view_shape(
@@ -481,7 +574,9 @@ fn view_shape(
     view: ProductionRankedValueV1,
     definitions: &BTreeMap<u32, &ProductionRankedOperationV1>,
     block: u32,
+    work: &mut ReferenceSymbolicWorkBudgetV2,
 ) -> Result<Vec<ExtentExprV2>, ReferenceBoundsDischargeErrorV2> {
+    work.charge_v2(1).map_err(|_| bounds_work_error_v2(block))?;
     let ProductionRankedValueV1::Local(view) = view else {
         return Err(ReferenceBoundsDischargeErrorV2::new(
             block,
@@ -525,8 +620,10 @@ fn view_shape(
                     &mut BTreeSet::new(),
                     0,
                     block,
+                    work,
                 )
             } else {
+                work.charge_v2(1).map_err(|_| bounds_work_error_v2(block))?;
                 Ok(ExtentExprV2::Constant(*extent))
             }
         })
@@ -546,7 +643,9 @@ fn extent_expr(
     visiting: &mut BTreeSet<u32>,
     depth: usize,
     block: u32,
+    work: &mut ReferenceSymbolicWorkBudgetV2,
 ) -> Result<ExtentExprV2, ReferenceBoundsDischargeErrorV2> {
+    work.charge_v2(1).map_err(|_| bounds_work_error_v2(block))?;
     if depth >= MAX_BOUND_DEPTH_V2 {
         return Err(ReferenceBoundsDischargeErrorV2::new(
             block,
@@ -581,8 +680,22 @@ fn extent_expr(
                             IndexBinaryKindAttr::Divide => ExtentBinaryKindV2::Divide,
                             IndexBinaryKindAttr::Remainder => ExtentBinaryKindV2::Remainder,
                         },
-                        Box::new(extent_expr(*lhs, definitions, visiting, depth + 1, block)?),
-                        Box::new(extent_expr(*rhs, definitions, visiting, depth + 1, block)?),
+                        Box::new(extent_expr(
+                            *lhs,
+                            definitions,
+                            visiting,
+                            depth + 1,
+                            block,
+                            work,
+                        )?),
+                        Box::new(extent_expr(
+                            *rhs,
+                            definitions,
+                            visiting,
+                            depth + 1,
+                            block,
+                            work,
+                        )?),
                     )
                 }
                 _ => {
@@ -605,7 +718,23 @@ fn prove_bound(
     access: &SliceAccessV2,
     input_extent: &ExtentExprV2,
     domains: &BTreeMap<u32, ExtentExprV2>,
+    work: &mut ReferenceSymbolicWorkBudgetV2,
 ) -> Result<(), ReferenceBoundsDischargeErrorV2> {
+    work.charge_expression_v2(&access.index)
+        .map_err(|_| bounds_work_error_v2(access.block))?;
+    // Charge every normalized node before equality, evaluation, or diagnostics.
+    let mut pending = domains
+        .values()
+        .chain(std::iter::once(input_extent))
+        .collect::<Vec<_>>();
+    while let Some(extent) = pending.pop() {
+        work.charge_v2(1)
+            .map_err(|_| bounds_work_error_v2(access.block))?;
+        if let ExtentExprV2::Binary(_, lhs, rhs) = extent {
+            pending.push(lhs);
+            pending.push(rhs);
+        }
+    }
     // A point coordinate is definitionally below its domain extent. Equality
     // with the independently retained input-view extent is therefore enough;
     // the bounds assertion itself does not participate in this proof.
@@ -1162,6 +1291,7 @@ mod tests {
             &access,
             &ExtentExprV2::Constant(0),
             &BTreeMap::from([(0, ExtentExprV2::Constant(0))]),
+            &mut ReferenceSymbolicWorkBudgetV2::default(),
         )
         .unwrap();
     }
@@ -1428,5 +1558,598 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.detail().contains("conflicting ranked extents"));
+    }
+
+    fn guarded_inputs_fixture(
+        extents: [TestExtent; 3],
+    ) -> (
+        ProductionRankedKernelV1,
+        ReferenceEffectIrV1,
+        ReferenceOutputWriteV1,
+    ) {
+        use crate::reference_effect_v1::ReferencePlaceProjectionV1;
+        let local = |local| ReferencePlaceV1 {
+            local,
+            projection: Box::default(),
+        };
+        let operand = |id| ReferenceOperandV1::Copy(local(id));
+        let condition = |length| ReferenceValueV1::Binary {
+            operation: ReferenceBinaryOpV1::LessThan,
+            lhs: operand(1),
+            rhs: operand(length),
+            checked: false,
+        };
+        let branch = |condition, yes, no| ReferenceTerminatorV1::Switch {
+            discriminant: operand(condition),
+            values: vec![(0, no)].into_boxed_slice(),
+            otherwise: yes,
+        };
+        let check = |condition, length, success| ReferenceTerminatorV1::Assert {
+            condition: operand(condition),
+            expected: true,
+            success,
+            bounds_check: Some(ReferenceBoundsCheckV1 {
+                index: operand(1),
+                length: operand(length),
+            }),
+        };
+        let load = |local| {
+            ReferenceOperandV1::Copy(ReferencePlaceV1 {
+                local,
+                projection: vec![
+                    ReferencePlaceProjectionV1::Dereference,
+                    ReferencePlaceProjectionV1::Index(1),
+                ]
+                .into_boxed_slice(),
+            })
+        };
+        let value = ReferenceValueV1::Binary {
+            operation: ReferenceBinaryOpV1::Add,
+            lhs: operand(9),
+            rhs: load(3),
+            checked: false,
+        };
+        let assignments = [
+            (
+                5,
+                ReferenceValueV1::InputLength {
+                    reference_argument: 1,
+                },
+            ),
+            (
+                6,
+                ReferenceValueV1::InputLength {
+                    reference_argument: 2,
+                },
+            ),
+            (7, condition(5)),
+            (8, condition(6)),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(statement, (destination, value))| ReferenceAssignmentV1 {
+            statement: statement as u32,
+            destination: local(destination),
+            value,
+        })
+        .collect::<Vec<_>>();
+        let output = ReferenceOutputWriteV1 {
+            argument: 2,
+            block: 4,
+            statement: 0,
+            coordinate: ReferenceOutputCoordinateV1::LogicalPoint(
+                vec![ReferenceEffectExpressionV1::PointCoordinate { axis: 0 }].into_boxed_slice(),
+            ),
+            // Deliberately not proof input: only the retained CPU CFG can supply guards.
+            guard: ReferencePathPredicateV1::unconditional_v1(),
+            rhs: binary(
+                ReferenceBinaryOpV1::Add,
+                ReferenceEffectExpressionV1::InputLoad {
+                    reference_argument: 1,
+                    index: Box::new(ReferenceEffectExpressionV1::PointCoordinate { axis: 0 }),
+                },
+                ReferenceEffectExpressionV1::InputLoad {
+                    reference_argument: 2,
+                    index: Box::new(ReferenceEffectExpressionV1::PointCoordinate { axis: 0 }),
+                },
+            ),
+            value: value.clone(),
+        };
+        let effect_ir = ReferenceEffectIrV1 {
+            argument_count: 4,
+            local_count: 10,
+            relations: vec![
+                ReferenceArgumentRelationV1::PointCoordinate {
+                    reference_argument: 0,
+                    axis: 0,
+                },
+                ReferenceArgumentRelationV1::SharedSliceInput {
+                    argument: 0,
+                    element: ReferenceScalarTypeV1::U32,
+                },
+                ReferenceArgumentRelationV1::SharedSliceInput {
+                    argument: 1,
+                    element: ReferenceScalarTypeV1::U32,
+                },
+                ReferenceArgumentRelationV1::DisjointOutputCoordinate {
+                    argument: 2,
+                    element: ReferenceScalarTypeV1::U32,
+                },
+            ]
+            .into_boxed_slice(),
+            blocks: vec![
+                ReferenceBlockV1 {
+                    block: 0,
+                    assignments: assignments.into_boxed_slice(),
+                    terminator: branch(7, 1, 5),
+                },
+                ReferenceBlockV1 {
+                    block: 1,
+                    assignments: Box::default(),
+                    terminator: branch(8, 2, 5),
+                },
+                ReferenceBlockV1 {
+                    block: 2,
+                    assignments: Box::default(),
+                    terminator: check(7, 5, 3),
+                },
+                ReferenceBlockV1 {
+                    block: 3,
+                    assignments: vec![ReferenceAssignmentV1 {
+                        statement: 0,
+                        destination: local(9),
+                        value: ReferenceValueV1::Use(load(2)),
+                    }]
+                    .into_boxed_slice(),
+                    terminator: check(8, 6, 4),
+                },
+                ReferenceBlockV1 {
+                    block: 4,
+                    assignments: vec![ReferenceAssignmentV1 {
+                        statement: 0,
+                        destination: ReferencePlaceV1 {
+                            local: 4,
+                            projection: vec![ReferencePlaceProjectionV1::Dereference]
+                                .into_boxed_slice(),
+                        },
+                        value,
+                    }]
+                    .into_boxed_slice(),
+                    terminator: ReferenceTerminatorV1::Return,
+                },
+                ReferenceBlockV1 {
+                    block: 5,
+                    assignments: Box::default(),
+                    terminator: ReferenceTerminatorV1::Return,
+                },
+            ]
+            .into_boxed_slice(),
+            loop_summaries: Box::default(),
+            observable_output_effects: vec![output.clone()].into_boxed_slice(),
+        };
+        let arguments = extents
+            .iter()
+            .filter_map(|extent| match extent {
+                TestExtent::Argument(argument) => Some(*argument as usize + 1),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
+        let operations = extents
+            .into_iter()
+            .enumerate()
+            .map(|(index, extent)| {
+                let (shape, dynamic_extents) = match extent {
+                    TestExtent::Static(value) => (vec![value], vec![]),
+                    TestExtent::Argument(argument) => (
+                        vec![DYNAMIC_EXTENT],
+                        vec![ProductionRankedValueV1::Argument(argument)],
+                    ),
+                };
+                ProductionRankedOperationV1::View {
+                    result: ProductionRankedValueIdV1::new(index as u32),
+                    element_width: 32,
+                    writable: index == 2,
+                    shape,
+                    dynamic_extents,
+                    allocation_origin: index as u64 + 1,
+                    noalias_class: index as u64 + 1,
+                }
+            })
+            .collect();
+        let kernel = ProductionRankedKernelV1::new(
+            "cpu_guard_bounds",
+            arguments,
+            vec![ProductionRankedBlockV1::new(
+                operations,
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap();
+        (kernel, effect_ir, output)
+    }
+
+    fn guarded_discharge(
+        kernel: &ProductionRankedKernelV1,
+        effect_ir: &ReferenceEffectIrV1,
+        output: &ReferenceOutputWriteV1,
+        work: &mut ReferenceSymbolicWorkBudgetV2,
+    ) -> Result<(), ReferenceBoundsDischargeErrorV2> {
+        discharge_reference_bounds_with_budget_v2(
+            kernel,
+            effect_ir,
+            &[CompilerOwnedOutputDomainV2 {
+                reference: output,
+                ranked_view: ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(2)),
+            }],
+            work,
+        )
+    }
+
+    #[test]
+    fn cpu_preceding_input_guards_discharge_independent_dynamic_and_unequal_extents() {
+        for extents in [
+            [
+                TestExtent::Argument(3),
+                TestExtent::Argument(4),
+                TestExtent::Argument(2),
+            ],
+            [
+                TestExtent::Static(4),
+                TestExtent::Static(9),
+                TestExtent::Static(16),
+            ],
+            [TestExtent::Static(16); 3],
+        ] {
+            let (kernel, effect_ir, output) = guarded_inputs_fixture(extents);
+            guarded_discharge(
+                &kernel,
+                &effect_ir,
+                &output,
+                &mut ReferenceSymbolicWorkBudgetV2::default(),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn cpu_guard_reversal_deletion_other_allocation_and_bypass_reject() {
+        for mutation in 0..4 {
+            let (kernel, mut effect_ir, output) = guarded_inputs_fixture([
+                TestExtent::Argument(3),
+                TestExtent::Argument(4),
+                TestExtent::Argument(2),
+            ]);
+            effect_ir.blocks[0].terminator = match mutation {
+                1 => ReferenceTerminatorV1::Goto { target: 1 },
+                _ => ReferenceTerminatorV1::Switch {
+                    discriminant: ReferenceOperandV1::Copy(ReferencePlaceV1 {
+                        local: if mutation == 2 { 8 } else { 7 },
+                        projection: Box::default(),
+                    }),
+                    values: vec![(0, if mutation == 0 || mutation == 3 { 1 } else { 5 })]
+                        .into_boxed_slice(),
+                    otherwise: if mutation == 0 { 5 } else { 1 },
+                },
+            };
+            let error = guarded_discharge(
+                &kernel,
+                &effect_ir,
+                &output,
+                &mut ReferenceSymbolicWorkBudgetV2::default(),
+            )
+            .unwrap_err();
+            assert_eq!(error.block(), 2, "mutation {mutation}: {error:?}");
+            assert!(
+                error.detail().contains("preceding CPU predicate"),
+                "{error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_cpu_path_clause_must_prove_the_bound() {
+        let (kernel, mut effect_ir, output) = guarded_inputs_fixture([
+            TestExtent::Argument(3),
+            TestExtent::Argument(4),
+            TestExtent::Argument(2),
+        ]);
+        // B selects two paths; each then independently checks A before joining.
+        effect_ir.blocks[0].terminator = ReferenceTerminatorV1::Switch {
+            discriminant: ReferenceOperandV1::Copy(ReferencePlaceV1 {
+                local: 8,
+                projection: Box::default(),
+            }),
+            values: vec![(0, 6)].into_boxed_slice(),
+            otherwise: 1,
+        };
+        effect_ir.blocks[1].terminator = ReferenceTerminatorV1::Switch {
+            discriminant: ReferenceOperandV1::Copy(ReferencePlaceV1 {
+                local: 7,
+                projection: Box::default(),
+            }),
+            values: vec![(0, 5)].into_boxed_slice(),
+            otherwise: 2,
+        };
+        let mut blocks = effect_ir.blocks.to_vec();
+        blocks.push(ReferenceBlockV1 {
+            block: 6,
+            assignments: Box::default(),
+            terminator: effect_ir.blocks[1].terminator.clone(),
+        });
+        // Only A is loaded in this test; B remains an unconstrained path selector.
+        blocks[3].terminator = ReferenceTerminatorV1::Goto { target: 4 };
+        effect_ir.blocks = blocks.into_boxed_slice();
+        let mut output = output;
+        output.rhs = ReferenceEffectExpressionV1::InputLoad {
+            reference_argument: 1,
+            index: Box::new(ReferenceEffectExpressionV1::PointCoordinate { axis: 0 }),
+        };
+        output.value = ReferenceValueV1::Use(ReferenceOperandV1::Copy(ReferencePlaceV1 {
+            local: 9,
+            projection: Box::default(),
+        }));
+        effect_ir.blocks[4].assignments[0].value = output.value.clone();
+        effect_ir.observable_output_effects = vec![output.clone()].into_boxed_slice();
+        let path =
+            crate::reference_effect_v1::reference_block_path_predicates_v1(&effect_ir).unwrap();
+        assert_eq!(path[2].clauses.len(), 2);
+        guarded_discharge(
+            &kernel,
+            &effect_ir,
+            &output,
+            &mut ReferenceSymbolicWorkBudgetV2::default(),
+        )
+        .unwrap();
+        effect_ir.blocks[6].terminator = ReferenceTerminatorV1::Goto { target: 2 };
+        assert_eq!(
+            guarded_discharge(
+                &kernel,
+                &effect_ir,
+                &output,
+                &mut ReferenceSymbolicWorkBudgetV2::default()
+            )
+            .unwrap_err()
+            .block(),
+            2
+        );
+    }
+
+    #[test]
+    fn later_guards_and_bounds_assertions_cannot_justify_an_earlier_duplicate_check() {
+        let (kernel, mut effect_ir, mut output) = guarded_inputs_fixture([
+            TestExtent::Argument(3),
+            TestExtent::Argument(4),
+            TestExtent::Argument(2),
+        ]);
+        let old_guard = effect_ir.blocks[0].terminator.clone();
+        let mut early_check = effect_ir.blocks[2].terminator.clone();
+        let ReferenceTerminatorV1::Assert { success, .. } = &mut early_check else {
+            unreachable!()
+        };
+        *success = 6;
+        effect_ir.blocks[0].terminator = early_check;
+        let mut blocks = effect_ir.blocks.to_vec();
+        blocks.push(ReferenceBlockV1 {
+            block: 6,
+            assignments: Box::default(),
+            terminator: old_guard,
+        });
+        effect_ir.blocks = blocks.into_boxed_slice();
+        output.guard = crate::reference_effect_v1::reference_block_path_predicates_v1(&effect_ir)
+            .unwrap()[4]
+            .clone();
+        assert_eq!(output.guard.clauses[0].atoms.len(), 2);
+        let error = guarded_discharge(
+            &kernel,
+            &effect_ir,
+            &output,
+            &mut ReferenceSymbolicWorkBudgetV2::default(),
+        )
+        .unwrap_err();
+        assert_eq!(error.block(), 0);
+        assert!(error.detail().contains("preceding CPU predicate"));
+    }
+
+    #[test]
+    fn cpu_guards_never_replace_a_deleted_or_reversed_bounds_assertion() {
+        for reverse in [false, true] {
+            let (kernel, mut effect_ir, output) = guarded_inputs_fixture([
+                TestExtent::Argument(3),
+                TestExtent::Argument(4),
+                TestExtent::Argument(2),
+            ]);
+            if reverse {
+                let ReferenceTerminatorV1::Assert { expected, .. } =
+                    &mut effect_ir.blocks[2].terminator
+                else {
+                    unreachable!()
+                };
+                *expected = false;
+            } else {
+                effect_ir.blocks[2].terminator = ReferenceTerminatorV1::Goto { target: 3 };
+            }
+            assert!(
+                guarded_discharge(
+                    &kernel,
+                    &effect_ir,
+                    &output,
+                    &mut ReferenceSymbolicWorkBudgetV2::default()
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn cpu_guard_proof_rejects_mid_work_budget_exhaustion() {
+        use crate::reference_effect_v1::MAX_REFERENCE_SYMBOLIC_WORK_NODES_V2;
+        let (kernel, effect_ir, output) = guarded_inputs_fixture([
+            TestExtent::Argument(3),
+            TestExtent::Argument(4),
+            TestExtent::Argument(2),
+        ]);
+        let mut failed_during_paths = false;
+        let mut succeeded = false;
+        for remaining in 1..=1_024 {
+            let mut work = ReferenceSymbolicWorkBudgetV2::default();
+            work.charge_v2(MAX_REFERENCE_SYMBOLIC_WORK_NODES_V2 - remaining)
+                .unwrap();
+            match guarded_discharge(&kernel, &effect_ir, &output, &mut work) {
+                Ok(()) => {
+                    succeeded = true;
+                    break;
+                }
+                Err(error) => {
+                    failed_during_paths |= error.detail().contains("CPU block-entry predicates")
+                }
+            }
+        }
+        assert!(failed_during_paths);
+        assert!(succeeded);
+    }
+
+    #[test]
+    fn shared_extent_dag_expansion_and_repeated_constructions_share_one_budget() {
+        use crate::reference_effect_v1::MAX_REFERENCE_SYMBOLIC_WORK_NODES_V2;
+        let mut operations = vec![ProductionRankedOperationV1::IndexConstant {
+            result: ProductionRankedValueIdV1::new(0),
+            value: 1,
+        }];
+        for index in 1..=32 {
+            let previous =
+                ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(index - 1));
+            operations.push(ProductionRankedOperationV1::IndexBinary {
+                result: ProductionRankedValueIdV1::new(index),
+                kind: IndexBinaryKindAttr::Add,
+                lhs: previous,
+                rhs: previous,
+            });
+        }
+        let definitions = operations
+            .iter()
+            .enumerate()
+            .map(|(index, operation)| (index as u32, operation))
+            .collect();
+        let normalize = |index, work: &mut ReferenceSymbolicWorkBudgetV2| {
+            extent_expr(
+                ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(index)),
+                &definitions,
+                &mut BTreeSet::new(),
+                0,
+                7,
+                work,
+            )
+        };
+        let mut work = ReferenceSymbolicWorkBudgetV2::default();
+        work.charge_v2(MAX_REFERENCE_SYMBOLIC_WORK_NODES_V2 - 64)
+            .unwrap();
+        let error = normalize(32, &mut work).unwrap_err();
+        assert_eq!(error.block(), 7);
+        assert!(error.detail().contains("cumulative work budget"));
+
+        let mut work = ReferenceSymbolicWorkBudgetV2::default();
+        // A depth-five expanded binary DAG constructs exactly 63 nodes.
+        work.charge_v2(MAX_REFERENCE_SYMBOLIC_WORK_NODES_V2 - 126)
+            .unwrap();
+        assert_eq!(normalize(5, &mut work).unwrap().constant_value(), Some(32));
+        assert_eq!(normalize(5, &mut work).unwrap().constant_value(), Some(32));
+        assert!(
+            normalize(0, &mut work)
+                .unwrap_err()
+                .detail()
+                .contains("cumulative work budget")
+        );
+    }
+
+    #[test]
+    fn extent_evaluation_is_charged_before_domain_proof_or_cpu_fallback() {
+        use crate::reference_effect_v1::MAX_REFERENCE_SYMBOLIC_WORK_NODES_V2;
+        let access = SliceAccessV2 {
+            block: 3,
+            reference_argument: 1,
+            index: ReferenceEffectExpressionV1::PointCoordinate { axis: 0 },
+        };
+        let extent = ExtentExprV2::Binary(
+            ExtentBinaryKindV2::Add,
+            Box::new(ExtentExprV2::Constant(4)),
+            Box::new(ExtentExprV2::Constant(4)),
+        );
+        let domains = BTreeMap::from([(0, ExtentExprV2::Constant(8))]);
+        let mut work = ReferenceSymbolicWorkBudgetV2::default();
+        prove_bound(&access, &extent, &domains, &mut work).unwrap();
+        let mut work = ReferenceSymbolicWorkBudgetV2::default();
+        work.charge_v2(MAX_REFERENCE_SYMBOLIC_WORK_NODES_V2 - 3)
+            .unwrap();
+        let error = prove_bound(&access, &extent, &domains, &mut work).unwrap_err();
+        assert!(error.detail().contains("cumulative work budget"));
+        let check = ResolvedReferenceBoundsCheckV1 {
+            block: 3,
+            expected: true,
+            index: access.index.clone(),
+            length: ReferenceEffectExpressionV1::InputLength {
+                reference_argument: 1,
+            },
+            condition: binary(
+                ReferenceBinaryOpV1::LessThan,
+                access.index,
+                ReferenceEffectExpressionV1::InputLength {
+                    reference_argument: 1,
+                },
+            ),
+        };
+        let path = crate::reference_effect_v1::reference_predicate_and_atom_v1(
+            &ReferencePathPredicateV1::unconditional_v1(),
+            reference_boolean_guard_atom_v1(check.condition.clone(), true),
+        )
+        .unwrap();
+        assert!(
+            cpu_path_proves_bound_v2(&path, &check, &mut work)
+                .unwrap_err()
+                .detail()
+                .contains("cumulative work budget")
+        );
+    }
+
+    #[test]
+    fn constant_extent_zero_division_and_remainder_fail_without_panicking() {
+        let access = SliceAccessV2 {
+            block: 0,
+            reference_argument: 1,
+            index: ReferenceEffectExpressionV1::PointCoordinate { axis: 0 },
+        };
+        for (operation, nonzero_result) in [
+            (ExtentBinaryKindV2::Divide, 3),
+            (ExtentBinaryKindV2::Remainder, 1),
+        ] {
+            let expression = |denominator| {
+                ExtentExprV2::Binary(
+                    operation,
+                    Box::new(ExtentExprV2::Constant(7)),
+                    Box::new(ExtentExprV2::Constant(denominator)),
+                )
+            };
+            assert_eq!(expression(2).constant_value(), Some(nonzero_result));
+            let invalid = expression(0);
+            assert_eq!(invalid.constant_value(), None);
+            assert!(
+                prove_bound(
+                    &access,
+                    &invalid,
+                    &BTreeMap::from([(0, ExtentExprV2::Constant(8))]),
+                    &mut ReferenceSymbolicWorkBudgetV2::default()
+                )
+                .is_err()
+            );
+            assert!(
+                prove_bound(
+                    &access,
+                    &ExtentExprV2::Constant(8),
+                    &BTreeMap::from([(0, invalid)]),
+                    &mut ReferenceSymbolicWorkBudgetV2::default()
+                )
+                .is_err()
+            );
+        }
     }
 }

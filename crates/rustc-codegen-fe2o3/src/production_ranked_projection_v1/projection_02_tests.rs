@@ -219,6 +219,7 @@
             induction_function_identity: SemanticFunctionIdentityV1::from_sha256(bytes(
                 semantic_identity.wrapping_add(0x40),
             )),
+            induction_execution_view_identity: None,
             induction_checked_additions_examined: 7 + u64::from(middle_end_identity),
             induction_certificate_count: 2,
             induction_work_units: 19 + u64::from(middle_end_identity),
@@ -303,6 +304,9 @@
         induction_identity[1].induction_function_identity =
             SemanticFunctionIdentityV1::from_sha256(bytes(0xec));
         substitutions.push(induction_identity);
+        let mut execution_view = exact;
+        execution_view[1].induction_execution_view_identity = Some(bytes(0xeb));
+        substitutions.push(execution_view);
         let mut induction_checked = exact;
         induction_checked[1].induction_checked_additions_examined += 1;
         substitutions.push(induction_checked);

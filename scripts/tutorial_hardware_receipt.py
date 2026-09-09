@@ -37,6 +37,9 @@ TRANSPORT_SCHEMA = "fe2o3-tutorial-hardware-archive-v1"
 ISA_OBSERVATION_SCHEMA = "fe2o3-tutorial-hardware-isa-observation-v1"
 RESOURCE_OBSERVATION_SCHEMA = "fe2o3-tutorial-hardware-resource-observation-v1"
 RESULT_OBSERVATION_SCHEMA = "fe2o3-tutorial-hardware-result-observation-v1"
+DRIVER_OBSERVATION_SCHEMA = "fe2o3-tutorial-hardware-driver-observation-v1"
+RUNTIME_OBSERVATION_SCHEMA = "fe2o3-tutorial-hardware-runtime-observation-v1"
+PRE_HARDWARE_RECORD_SCHEMA = "fe2o3-tutorial-pre-hardware-record-v1"
 TRANSPORT_NAME = "hardware-archive-v1.zip"
 INDEX_NAME = "index-v1.json"
 AUTHORITY = "authenticated-observation-no-independent-authority"
@@ -44,6 +47,7 @@ OPENSSL_PATH = Path("/usr/bin/openssl")
 RUN_DOMAIN = b"fe2o3-tutorial-hardware-run-receipt-v1\0"
 CLEANUP_DOMAIN = b"fe2o3-tutorial-hardware-cleanup-receipt-v1\0"
 TRANSPORT_DOMAIN = b"fe2o3-tutorial-hardware-archive-v1\0"
+PRE_HARDWARE_RECORD_DOMAIN = b"fe2o3-tutorial-pre-hardware-record-v1\0"
 SCRATCH_DOMAIN = b"fe2o3-tutorial-hardware-scratch-v1\0"
 COMMAND_DOMAIN = b"fe2o3-tutorial-semantic-command-v1\0"
 SIGNATURE_CONTEXT = b"fe2o3-tutorial-hardware-receipt-signature-v1\0"
@@ -64,18 +68,56 @@ COMPILER_OBSERVATION_KINDS = {
     "artifact": "artifact",
     "artifactInspection": "artifact-inspection",
     "compilerPolicy": "compiler-policy",
-    "driver": "driver-identity",
     "kir": "optimized-kir-v13",
     "llvm": "llvm-module",
     "numericalPolicy": "numerical-policy",
     "proof": "proof-evidence",
     "proofChecker": "proof-checker",
     "proofObligations": "proof-obligation-set",
-    "runtime": "runtime-identity",
     "source": "source-closure",
     "target": "target-identity",
     "targetDecision": "target-capability-decision",
 }
+VERIFIER_ONLY_COMPILER_KINDS = (
+    "sealed-production-receipt",
+    "simulation-bundle-v8",
+)
+PLATFORM_OBSERVATION_KINDS = {
+    "driver": "driver-identity",
+    "runtime": "runtime-identity",
+}
+PRE_HARDWARE_EVIDENCE_KINDS = {
+    "artifact",
+    "artifact-inspection",
+    "capability-analysis",
+    "capability-closure",
+    "compiler-input",
+    "compiler-policy",
+    "host-admission",
+    "launch-contract",
+    "llvm-module",
+    "lowering",
+    "machine-refinement",
+    "numerical-policy",
+    "optimized-kir-v13",
+    "proof-checker",
+    "proof-evidence",
+    "proof-obligation-set",
+    "sealed-production-receipt",
+    "semantic-mir",
+    "simulation-bundle-v8",
+    "simulator",
+    "source-closure",
+    "source-mir-to-kir-refinement",
+    "target-capability-decision",
+    "target-identity",
+}
+PENDING_EVIDENCE_KINDS = [
+    "driver-identity",
+    "hardware",
+    "negative-fixture-set",
+    "runtime-identity",
+]
 
 
 class HardwareReceiptError(ValueError):
@@ -107,11 +149,14 @@ def sha256(payload: bytes) -> str:
 
 
 def _domain_identity(domain: bytes, value: Any) -> str:
-    return sha256(domain + canonical(value))
+    return sha256(domain + canonical(value)[:-1])
 
 
 def _capability_result_set_identity(payload: bytes) -> str:
-    if not 48 <= len(payload) <= 1024 * 1024 or payload[:8] != CAPABILITY_RESULT_SET_MAGIC:
+    if (
+        not 48 <= len(payload) <= 1024 * 1024
+        or payload[:8] != CAPABILITY_RESULT_SET_MAGIC
+    ):
         _fail("proof evidence has an invalid typed result-set envelope")
     version, flags, declared = struct.unpack_from("<HHI", payload, 8)
     terminal = payload[-32:]
@@ -123,7 +168,9 @@ def _capability_result_set_identity(payload: bytes) -> str:
         )
     )
     if version != 1 or flags != 0 or declared != len(payload) or terminal != expected:
-        _fail("proof evidence typed result-set identity differs from its canonical body")
+        _fail(
+            "proof evidence typed result-set identity differs from its canonical body"
+        )
     return terminal.hex()
 
 
@@ -139,6 +186,11 @@ def _authenticated_checker_evidence_identity(payload: bytes) -> str:
 
 def _command_identity(command: Any) -> str:
     return sha256(COMMAND_DOMAIN + canonical(command)[:-1])
+
+
+def pre_hardware_record_identity(record: dict[str, Any]) -> str:
+    """Bind the exact compiler-only record consumed by the hardware phase."""
+    return sha256(PRE_HARDWARE_RECORD_DOMAIN + canonical(record))
 
 
 def _decode_unique(payload: bytes, label: str) -> Any:
@@ -186,19 +238,78 @@ def _digest(value: Any, label: str) -> str:
     return value
 
 
-def _read_regular(path: Path, label: str, maximum: int) -> bytes:
+def _file_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _open_regular(path: Path, label: str) -> tuple[int, os.stat_result]:
+    """Open a file through non-symlink directory descriptors."""
+    parts = path.parts
+    if not parts or path.name in {"", ".", ".."} or ".." in parts:
+        _fail(f"{label} path is not lexically safe")
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    directory = os.open("/" if path.is_absolute() else ".", directory_flags)
     try:
-        metadata = path.lstat()
-        if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
-            _fail(f"{label} must be a regular non-symlink file")
-        if metadata.st_size <= 0 or metadata.st_size > maximum:
-            _fail(f"{label} has an invalid byte length")
+        start = 1 if path.is_absolute() else 0
+        for component in parts[start:-1]:
+            if component in {"", "."}:
+                continue
+            child = os.open(component, directory_flags, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        metadata = os.stat(path.name, dir_fd=directory, follow_symlinks=False)
         descriptor = os.open(
-            path,
+            path.name,
             os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory,
         )
         try:
-            before = os.fstat(descriptor)
+            opened = os.fstat(descriptor)
+        except BaseException:
+            os.close(descriptor)
+            raise
+        if not stat.S_ISREG(metadata.st_mode) or _file_identity(
+            metadata
+        ) != _file_identity(opened):
+            os.close(descriptor)
+            _fail(f"{label} changed before it was opened")
+        return descriptor, opened
+    finally:
+        os.close(directory)
+
+
+def _read_regular(
+    path: Path,
+    label: str,
+    maximum: int,
+    *,
+    expected_owner: int | None = None,
+    expected_links: int | None = None,
+) -> bytes:
+    try:
+        descriptor, before = _open_regular(path, label)
+        try:
+            if before.st_size <= 0 or before.st_size > maximum:
+                _fail(f"{label} has an invalid byte length")
+            if (expected_owner is not None and before.st_uid != expected_owner) or (
+                expected_links is not None and before.st_nlink != expected_links
+            ):
+                _fail(f"{label} must be a new, owned, non-linked regular file")
             chunks: list[bytes] = []
             observed = 0
             while True:
@@ -214,12 +325,7 @@ def _read_regular(path: Path, label: str, maximum: int) -> bytes:
             os.close(descriptor)
     except OSError as error:
         _fail(f"cannot read {label}: {error}")
-    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
-        after.st_dev,
-        after.st_ino,
-        after.st_size,
-        after.st_mtime_ns,
-    ) or observed != metadata.st_size:
+    if _file_identity(before) != _file_identity(after) or observed != before.st_size:
         _fail(f"{label} changed while it was read")
     return b"".join(chunks)
 
@@ -280,6 +386,272 @@ def _binding(document: dict[str, Any], field: str, domain: bytes, label: str) ->
         _fail(f"{label} binding is stale")
 
 
+def _validate_pre_hardware_record(
+    request: dict[str, Any], record: dict[str, Any]
+) -> None:
+    """Require the exact compiler-only handoff admitted by the Rust verifier."""
+    _exact(
+        record,
+        {
+            "capabilityClosure",
+            "compilerInput",
+            "evidenceFiles",
+            "fixtureId",
+            "graph",
+            "hardware",
+            "kernelSymbol",
+            "lessonIds",
+            "pendingEvidence",
+            "preHardwareBindingSha256",
+            "productionEvidence",
+            "productionTransaction",
+            "proof",
+            "schema",
+            "simulator",
+            "target",
+            "targetDecision",
+        },
+        "pre-hardware record",
+    )
+    if record.get("schema") != PRE_HARDWARE_RECORD_SCHEMA:
+        _fail("pre-hardware record schema differs")
+    _binding(
+        record,
+        "preHardwareBindingSha256",
+        PRE_HARDWARE_RECORD_DOMAIN,
+        "pre-hardware record",
+    )
+    files = _object(record.get("evidenceFiles"), "pre-hardware record.evidenceFiles")
+    _exact(files, PRE_HARDWARE_EVIDENCE_KINDS, "pre-hardware record.evidenceFiles")
+    for kind in sorted(PRE_HARDWARE_EVIDENCE_KINDS):
+        validate_reference(files[kind], f"pre-hardware evidence {kind}")
+    if record.get("pendingEvidence") != PENDING_EVIDENCE_KINDS:
+        _fail("pre-hardware pending-evidence roster differs")
+
+    fixture = _object(request.get("fixture"), "transaction request.fixture")
+    kernel = _object(
+        request.get("capabilityKernel"), "transaction request.capabilityKernel"
+    )
+    if (
+        record.get("fixtureId") != fixture.get("fixtureId")
+        or record.get("target") != fixture.get("target")
+        or record.get("kernelSymbol") != kernel.get("kernelSymbol")
+        or record.get("lessonIds") != kernel.get("lessonIds")
+    ):
+        _fail("pre-hardware record is cross-fixture, cross-kernel, or cross-target")
+    hardware = _object(record.get("hardware"), "pre-hardware record.hardware")
+    _exact(
+        hardware,
+        {"commandSha256", "lane", "status", "target", "timeoutSeconds"},
+        "pre-hardware record.hardware",
+    )
+    command = _object(
+        fixture.get("hardwareCommand"), "transaction request.fixture.hardwareCommand"
+    )
+    if (
+        hardware.get("commandSha256") != _command_identity(command)
+        or hardware.get("lane") != fixture.get("hardwareLane")
+        or hardware.get("status") != "pending-authenticated-observation"
+        or hardware.get("target") != fixture.get("target")
+        or hardware.get("timeoutSeconds") != command.get("timeoutSeconds")
+    ):
+        _fail("pre-hardware hardware request is stale or cross-target")
+
+
+def _bounded_integer(value: Any, label: str, minimum: int, maximum: int) -> int:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < minimum
+        or value > maximum
+    ):
+        _fail(f"{label} is outside its integer bound")
+    return value
+
+
+def _absolute_path(value: Any, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value.encode("utf-8")) > 4096
+        or not PurePosixPath(value).is_absolute()
+        or str(PurePosixPath(value)) != value
+    ):
+        _fail(f"{label} is not an absolute normalized path")
+    return value
+
+
+def _validate_platform_observations(
+    request: dict[str, Any],
+    record: dict[str, Any],
+    observations: dict[str, dict[str, Any]],
+) -> None:
+    fixture = _object(request.get("fixture"), "transaction request.fixture")
+    challenge = _object(
+        request.get("hardwareReceiptChallenge"),
+        "transaction request.hardwareReceiptChallenge",
+    )
+    expected_common = {
+        "authority": AUTHORITY,
+        "challengeNonce": challenge.get("nonce"),
+        "preHardwareRecordSha256": pre_hardware_record_identity(record),
+        "target": fixture.get("target"),
+    }
+
+    driver = _canonical_observation(
+        _load_spooled_observation(observations, "driver"),
+        "hardware driver observation",
+    )
+    _exact(
+        driver,
+        {
+            "authority",
+            "challengeNonce",
+            "deviceNode",
+            "devices",
+            "kernel",
+            "module",
+            "preHardwareRecordSha256",
+            "schema",
+            "target",
+        },
+        "hardware driver observation",
+    )
+    device_node = _object(
+        driver.get("deviceNode"), "hardware driver observation.deviceNode"
+    )
+    _exact(device_node, {"major", "minor", "path"}, "hardware driver device node")
+    _absolute_path(device_node.get("path"), "hardware driver device node.path")
+    _bounded_integer(device_node.get("major"), "hardware driver major", 1, 1 << 20)
+    _bounded_integer(device_node.get("minor"), "hardware driver minor", 0, 1 << 20)
+    kernel = _object(driver.get("kernel"), "hardware driver observation.kernel")
+    _exact(kernel, {"machine", "release", "system"}, "hardware driver kernel")
+    if any(
+        not isinstance(kernel[field], str)
+        or not kernel[field]
+        or len(kernel[field].encode("utf-8")) > 1024
+        for field in kernel
+    ):
+        _fail("hardware driver kernel identity is malformed")
+    module = _object(driver.get("module"), "hardware driver observation.module")
+    _exact(module, {"name", "refCount", "sizeBytes", "state"}, "hardware driver module")
+    if module.get("name") != "amdgpu" or module.get("state") != "Live":
+        _fail("hardware driver module is not a live amdgpu module")
+    _bounded_integer(module.get("refCount"), "hardware driver refCount", 0, 1 << 31)
+    _bounded_integer(module.get("sizeBytes"), "hardware driver size", 1, 1 << 40)
+    devices = driver.get("devices")
+    expected_gfx_version = {"gfx942": 90402, "gfx950": 90500}.get(
+        str(fixture.get("target", "")).split(":", 1)[0]
+    )
+    if (
+        expected_gfx_version is None
+        or not isinstance(devices, list)
+        or not devices
+        or len(devices) > 64
+    ):
+        _fail("hardware driver device roster is malformed or unsupported")
+    node_ids: list[int] = []
+    for index, device in enumerate(devices):
+        item = _object(device, f"hardware driver device {index}")
+        _exact(
+            item,
+            {
+                "deviceId",
+                "gfxTargetVersion",
+                "nodeId",
+                "simdCount",
+                "vendorId",
+                "wavefrontSize",
+            },
+            f"hardware driver device {index}",
+        )
+        node_ids.append(
+            _bounded_integer(item.get("nodeId"), "hardware driver nodeId", 0, 4096)
+        )
+        _bounded_integer(item.get("deviceId"), "hardware driver deviceId", 1, 1 << 32)
+        _bounded_integer(item.get("simdCount"), "hardware driver simdCount", 1, 1 << 20)
+        if (
+            item.get("gfxTargetVersion") != expected_gfx_version
+            or item.get("vendorId") != 0x1002
+            or item.get("wavefrontSize") != 64
+        ):
+            _fail("hardware driver device is not the requested AMD target")
+    if node_ids != sorted(set(node_ids)):
+        _fail("hardware driver device roster is not sorted and unique")
+    if driver.get("schema") != DRIVER_OBSERVATION_SCHEMA or any(
+        driver.get(field) != value for field, value in expected_common.items()
+    ):
+        _fail("hardware driver observation is stale or cross-target")
+
+    runtime = _canonical_observation(
+        _load_spooled_observation(observations, "runtime"),
+        "hardware runtime observation",
+    )
+    _exact(
+        runtime,
+        {
+            "authority",
+            "challengeNonce",
+            "components",
+            "preHardwareRecordSha256",
+            "rocmRelease",
+            "rocmRoot",
+            "schema",
+            "target",
+        },
+        "hardware runtime observation",
+    )
+    root = _object(runtime.get("rocmRoot"), "hardware runtime observation.rocmRoot")
+    _exact(root, {"path", "resolvedPath"}, "hardware runtime ROCm root")
+    _absolute_path(root.get("path"), "hardware runtime ROCm root.path")
+    _absolute_path(
+        root.get("resolvedPath"), "hardware runtime ROCm root.resolvedPath"
+    )
+    logical_root = PurePosixPath(root["path"])
+    resolved_root = PurePosixPath(root["resolvedPath"])
+    components = _object(
+        runtime.get("components"), "hardware runtime observation.components"
+    )
+    _exact(
+        components,
+        {"hipRuntime", "hsaRuntime", "rocminfo", "rocmVersion"},
+        "hardware runtime components",
+    )
+    for name, component in components.items():
+        item = _object(component, f"hardware runtime component {name}")
+        _exact(
+            item,
+            {"bytes", "path", "resolvedPath", "sha256"},
+            f"hardware runtime component {name}",
+        )
+        _bounded_integer(
+            item.get("bytes"), f"hardware runtime component {name}.bytes", 1, MAX_OBJECT_BYTES
+        )
+        _absolute_path(item.get("path"), f"hardware runtime component {name}.path")
+        _absolute_path(
+            item.get("resolvedPath"),
+            f"hardware runtime component {name}.resolvedPath",
+        )
+        if (
+            not PurePosixPath(item["path"]).is_relative_to(logical_root)
+            or not PurePosixPath(item["resolvedPath"]).is_relative_to(resolved_root)
+        ):
+            _fail(f"hardware runtime component {name} escapes its ROCm root")
+        _digest(item.get("sha256"), f"hardware runtime component {name}.sha256")
+    release = runtime.get("rocmRelease")
+    if (
+        not isinstance(release, str)
+        or not release
+        or len(release.encode("ascii", errors="ignore")) != len(release)
+        or len(release) > 128
+    ):
+        _fail("hardware runtime ROCm release is malformed")
+    if runtime.get("schema") != RUNTIME_OBSERVATION_SCHEMA or any(
+        runtime.get(field) != value for field, value in expected_common.items()
+    ):
+        _fail("hardware runtime observation is stale or cross-target")
+
+
 def _measure_executable(path: Path) -> tuple[bytes, str]:
     payload = _read_regular(path, "OpenSSL verifier", 128 * 1024 * 1024)
     metadata = path.stat()
@@ -331,8 +703,10 @@ def load_trust_policy(path: Path) -> TrustPolicy:
     if not path.is_absolute() or path != Path(os.path.normpath(str(path))):
         _fail("hardware trust policy path must be absolute and lexically normalized")
     metadata = path.lstat()
-    if path.is_symlink() or path.resolve(strict=True) != path or not stat.S_ISREG(
-        metadata.st_mode
+    if (
+        path.is_symlink()
+        or path.resolve(strict=True) != path
+        or not stat.S_ISREG(metadata.st_mode)
     ):
         _fail("hardware trust policy must be an exact regular non-symlink file")
     if metadata.st_mode & 0o022:
@@ -689,7 +1063,9 @@ def _kernel_symbols(value: Any, label: str) -> list[str]:
         or len(value) > 1024
         or value != sorted(set(value))
         or any(
-            not isinstance(symbol, str) or not symbol or len(symbol.encode("utf-8")) > 1024
+            not isinstance(symbol, str)
+            or not symbol
+            or len(symbol.encode("utf-8")) > 1024
             for symbol in value
         )
     ):
@@ -713,17 +1089,19 @@ def _validate_runner_observations(
         "transaction request.fixture.hardwareReservation",
     )
     symbols = _kernel_symbols(
-        _object(fixture.get("compilerInput"), "transaction request.fixture.compilerInput").get(
-            "kernelSymbols"
-        ),
+        _object(
+            fixture.get("compilerInput"), "transaction request.fixture.compilerInput"
+        ).get("kernelSymbols"),
         "transaction request kernel symbols",
     )
     transaction_sha = _digest(
         _object(
-            record.get("productionTransaction"), "production record.productionTransaction"
+            record.get("productionTransaction"),
+            "production record.productionTransaction",
         ).get("transactionSha256"),
         "production transaction identity",
     )
+    _validate_platform_observations(request, record, observations)
     artifact_sha = observations["artifact"]["sha256"]
     llvm_sha = observations["llvm"]["sha256"]
     driver_sha = observations["driver"]["sha256"]
@@ -866,7 +1244,8 @@ def _validate_runner_observations(
         or result.get("authority") != "observation-only"
         or result.get("outcome") != "passed"
         or result.get("candidate") != candidate
-        or result.get("commandSha256") != _command_identity(fixture.get("hardwareCommand"))
+        or result.get("commandSha256")
+        != _command_identity(fixture.get("hardwareCommand"))
         or result.get("fixtureId") != fixture.get("fixtureId")
         or result.get("target") != target
         or result.get("lane") != lane
@@ -907,8 +1286,12 @@ def prepare_transport(
     spool: Path,
     attestor_identity: str,
     private_key: Path,
+    *,
+    driver_observation: bytes,
+    runtime_observation: bytes,
 ) -> bytes:
     """Sign and spool the pre-cleanup receipt while runner scratch still exists."""
+    _validate_pre_hardware_record(request, record)
     scratch, scratch_sha = _scratch_path(scratch_path, must_exist=True)
     spool_parent = spool.parent.resolve(strict=True)
     if spool_parent == scratch or spool_parent.is_relative_to(scratch):
@@ -949,6 +1332,7 @@ def prepare_transport(
         transaction.get("transactionSha256"),
         "production record.productionTransaction.transactionSha256",
     )
+    pre_hardware_record_sha = pre_hardware_record_identity(record)
     files = _object(record.get("evidenceFiles"), "production record.evidenceFiles")
     objects: dict[str, bytes] = {}
     observations: dict[str, dict[str, Any]] = {}
@@ -964,11 +1348,15 @@ def prepare_transport(
         )
         compiler_payloads[observation] = payload
     for name, payload in (
+        ("driver", driver_observation),
         ("isa", isa_observation),
         ("resource", resource_observation),
         ("result", result_observation),
+        ("runtime", runtime_observation),
     ):
-        observations[name] = _add_payload(objects, payload, f"hardware {name} observation")
+        observations[name] = _add_payload(
+            objects, payload, f"hardware {name} observation"
+        )
         observation_payloads[name] = payload
     validation_observations = {
         name: {**reference, "_payload": observation_payloads[name]}
@@ -984,21 +1372,17 @@ def prepare_transport(
         "artifactInspectionSha256": "artifactInspection",
         "artifactSha256": "artifact",
     }
-    if any(
-        production.get(field) != observations[name]["sha256"]
-        for field, name in expected_production_joins.items()
-    ) or production.get("proofEvidenceSha256") != _capability_result_set_identity(
-        compiler_payloads["proof"]
-    ) or production.get("proofCheckerSha256") != _authenticated_checker_evidence_identity(
-        compiler_payloads["proofChecker"]
+    if (
+        any(
+            production.get(field) != observations[name]["sha256"]
+            for field, name in expected_production_joins.items()
+        )
+        or production.get("proofEvidenceSha256")
+        != _capability_result_set_identity(compiler_payloads["proof"])
+        or production.get("proofCheckerSha256")
+        != _authenticated_checker_evidence_identity(compiler_payloads["proofChecker"])
     ):
         _fail("compiler-bound hardware input is stale or substituted")
-    hardware = _object(record.get("hardware"), "production record.hardware")
-    if (
-        hardware.get("driverIdentitySha256") != observations["driver"]["sha256"]
-        or hardware.get("runtimeIdentitySha256") != observations["runtime"]["sha256"]
-    ):
-        _fail("driver or runtime hardware input is stale or substituted")
     public_key = _derive_public_key(private_key)
     key_sha = sha256(public_key)
     run = {
@@ -1019,6 +1403,7 @@ def prepare_transport(
         "observations": observations,
         "outcome": "passed",
         "phase": "pre-cleanup",
+        "preHardwareRecordSha256": pre_hardware_record_sha,
         "receiptBindingSha256": "0" * 64,
         "requestBindingSha256": request.get("requestBindingSha256"),
         "reservationIdentity": reservation,
@@ -1045,6 +1430,7 @@ def prepare_transport(
         "fixtureId": fixture.get("fixtureId"),
         "lane": lane,
         "publicKeySha256": key_sha,
+        "preHardwareRecordSha256": pre_hardware_record_sha,
         "requestBindingSha256": request.get("requestBindingSha256"),
         "reservationIdentity": reservation,
         "runReceipt": run_reference,
@@ -1134,6 +1520,7 @@ def _finalize_transport(
             "fixtureId",
             "lane",
             "publicKeySha256",
+            "preHardwareRecordSha256",
             "requestBindingSha256",
             "reservationIdentity",
             "runReceipt",
@@ -1168,8 +1555,17 @@ def _finalize_transport(
         or request.get("fixture", {}).get("target") != state["target"]
         or record.get("productionTransaction", {}).get("transactionSha256")
         != state["transactionSha256"]
+        or pre_hardware_record_identity(record) != state["preHardwareRecordSha256"]
     ):
         _fail("cleanup received a substituted transaction or candidate")
+    files = _object(record.get("evidenceFiles"), "pre-hardware record.evidenceFiles")
+    for kind in VERIFIER_ONLY_COMPILER_KINDS:
+        reference = validate_reference(files.get(kind), f"production evidence {kind}")
+        payload = _load_export_object(
+            export_root, reference, f"production evidence {kind}"
+        )
+        if _add_payload(objects, payload, f"hardware verifier input {kind}") != reference:
+            _fail(f"production evidence {kind} changed during transport")
     run_document = _object(
         _decode_unique(run_payload, "hardware spool run receipt"),
         "hardware spool run receipt",
@@ -1262,6 +1658,7 @@ def _finalize_transport(
         "lane": state["lane"],
         "outcome": "passed",
         "phase": "post-cleanup",
+        "preHardwareRecordSha256": state["preHardwareRecordSha256"],
         "preCleanupCapsuleSha256": pre_cleanup_capsule_sha,
         "receiptBindingSha256": "0" * 64,
         "requestBindingSha256": state["requestBindingSha256"],
@@ -1293,6 +1690,7 @@ def _finalize_transport(
         "cleanupSignature": cleanup_signature,
         "fixtureId": state["fixtureId"],
         "lane": state["lane"],
+        "preHardwareRecordSha256": state["preHardwareRecordSha256"],
         "preCleanupCapsuleSha256": pre_cleanup_capsule_sha,
         "requestBindingSha256": state["requestBindingSha256"],
         "reservationIdentity": state["reservationIdentity"],
@@ -1334,6 +1732,7 @@ def finalize_transport(
 class ValidatedTransport:
     archive_reference: dict[str, Any]
     cleanup_receipt_sha256: str
+    hardware_evidence_reference: dict[str, Any]
     isa_inspection_sha256: str
     result_observation_sha256: str
     resource_usage_sha256: str
@@ -1425,6 +1824,7 @@ def validate_and_ingest(
     writer: ObjectWriter,
     seen_receipts: set[str],
 ) -> ValidatedTransport:
+    _validate_pre_hardware_record(request, record)
     _, active_verifier = _measure_executable(OPENSSL_PATH)
     if active_verifier != policy.verifier_sha256:
         _fail("pinned OpenSSL verifier identity changed")
@@ -1441,6 +1841,7 @@ def validate_and_ingest(
             "cleanupSignature",
             "fixtureId",
             "lane",
+            "preHardwareRecordSha256",
             "preCleanupCapsuleSha256",
             "requestBindingSha256",
             "reservationIdentity",
@@ -1481,6 +1882,7 @@ def validate_and_ingest(
         "challengeNonce": challenge.get("nonce"),
         "fixtureId": fixture.get("fixtureId"),
         "lane": fixture.get("hardwareLane"),
+        "preHardwareRecordSha256": pre_hardware_record_identity(record),
         "requestBindingSha256": request.get("requestBindingSha256"),
         "reservationIdentity": fixture.get("hardwareReservation"),
         "schema": TRANSPORT_SCHEMA,
@@ -1518,6 +1920,7 @@ def validate_and_ingest(
             "observations",
             "outcome",
             "phase",
+            "preHardwareRecordSha256",
             "receiptBindingSha256",
             "requestBindingSha256",
             "reservationIdentity",
@@ -1534,11 +1937,13 @@ def validate_and_ingest(
     attestor = _object(run["attestor"], "hardware run receipt.attestor")
     _exact(attestor, {"identity", "publicKeySha256"}, "hardware run receipt.attestor")
     observations = _object(run["observations"], "hardware run receipt.observations")
-    expected_observations = set(COMPILER_OBSERVATION_KINDS) | {
+    expected_observations = (
+        set(COMPILER_OBSERVATION_KINDS) | set(PLATFORM_OBSERVATION_KINDS) | {
         "isa",
         "resource",
         "result",
-    }
+        }
+    )
     _exact(observations, expected_observations, "hardware run receipt.observations")
     observation_references: dict[str, dict[str, Any]] = {}
     for name in sorted(expected_observations):
@@ -1546,11 +1951,12 @@ def validate_and_ingest(
             objects, observations[name], f"hardware {name} observation"
         )
         observation_references[name] = {**reference, "_payload": payload}
-    runner_observation_digests = {
-        observation_references[name]["sha256"] for name in ("isa", "resource", "result")
+    hardware_observation_digests = {
+        observation_references[name]["sha256"]
+        for name in ("driver", "isa", "resource", "result", "runtime")
     }
-    if len(runner_observation_digests) != 3:
-        _fail("hardware receipt conflates distinct runner observations")
+    if len(hardware_observation_digests) != 5:
+        _fail("hardware receipt conflates distinct hardware-owned observations")
     _validate_runner_observations(request, record, observation_references)
     observation_references = {
         name: {key: value for key, value in reference.items() if key != "_payload"}
@@ -1629,6 +2035,7 @@ def validate_and_ingest(
             "lane",
             "outcome",
             "phase",
+            "preHardwareRecordSha256",
             "preCleanupCapsuleSha256",
             "receiptBindingSha256",
             "requestBindingSha256",
@@ -1662,6 +2069,7 @@ def validate_and_ingest(
         "lane": fixture.get("hardwareLane"),
         "outcome": "passed",
         "phase": "post-cleanup",
+        "preHardwareRecordSha256": pre_hardware_record_identity(record),
         "preCleanupCapsuleSha256": index["preCleanupCapsuleSha256"],
         "requestBindingSha256": request.get("requestBindingSha256"),
         "reservationIdentity": fixture.get("hardwareReservation"),
@@ -1683,6 +2091,7 @@ def validate_and_ingest(
         "fixtureId": fixture.get("fixtureId"),
         "lane": fixture.get("hardwareLane"),
         "publicKeySha256": attestor["publicKeySha256"],
+        "preHardwareRecordSha256": pre_hardware_record_identity(record),
         "requestBindingSha256": request.get("requestBindingSha256"),
         "reservationIdentity": fixture.get("hardwareReservation"),
         "runReceipt": run_ref,
@@ -1730,7 +2139,7 @@ def validate_and_ingest(
         }
     ):
         _fail("hardware cleanup observation is malformed or substituted")
-    files = _object(record.get("evidenceFiles"), "production record.evidenceFiles")
+    files = _object(record.get("evidenceFiles"), "pre-hardware record.evidenceFiles")
     joins = COMPILER_OBSERVATION_KINDS
     referenced = {
         run_ref["sha256"],
@@ -1744,10 +2153,6 @@ def validate_and_ingest(
     hardware_reference = validate_reference(
         cleanup["hardwareEvidence"], "hardware cleanup summary evidence"
     )
-    if hardware_reference != validate_reference(
-        files.get("hardware"), "production evidence hardware"
-    ):
-        _fail("hardware cleanup summary evidence is substituted")
     _, hardware_payload, hardware_document = _archive_object(
         objects,
         hardware_reference,
@@ -1785,6 +2190,18 @@ def validate_and_ingest(
         ):
             _fail(f"hardware {observation} observation is substituted")
         referenced.add(reference["sha256"])
+    for observation in PLATFORM_OBSERVATION_KINDS:
+        referenced.add(
+            validate_reference(
+                observations[observation], f"hardware {observation} observation"
+            )["sha256"]
+        )
+    for kind in VERIFIER_ONLY_COMPILER_KINDS:
+        reference = validate_reference(
+            files.get(kind), f"pre-hardware verifier input {kind}"
+        )
+        _archive_object(objects, reference, f"pre-hardware verifier input {kind}")
+        referenced.add(reference["sha256"])
     isa = validate_reference(observations["isa"], "hardware ISA observation")
     resource = validate_reference(
         observations["resource"], "hardware resource observation"
@@ -1805,6 +2222,7 @@ def validate_and_ingest(
     return ValidatedTransport(
         archive_reference,
         cleanup_ref["sha256"],
+        hardware_reference,
         isa["sha256"],
         result["sha256"],
         resource["sha256"],
@@ -1826,6 +2244,7 @@ def main(arguments: list[str] | None = None) -> int:
     )
     prepare = subparsers.add_parser("prepare")
     prepare.add_argument("--attestor-identity", required=True)
+    prepare.add_argument("--driver-observation", required=True, type=Path)
     prepare.add_argument("--evidence-root", required=True, type=Path)
     prepare.add_argument("--isa-observation", required=True, type=Path)
     prepare.add_argument("--private-key", required=True, type=Path)
@@ -1833,6 +2252,7 @@ def main(arguments: list[str] | None = None) -> int:
     prepare.add_argument("--request", required=True, type=Path)
     prepare.add_argument("--resource-observation", required=True, type=Path)
     prepare.add_argument("--result-observation", required=True, type=Path)
+    prepare.add_argument("--runtime-observation", required=True, type=Path)
     prepare.add_argument("--scratch-path", required=True, type=Path)
     prepare.add_argument("--spool", required=True, type=Path)
     finalize = subparsers.add_parser("finalize")
@@ -1884,6 +2304,16 @@ def main(arguments: list[str] | None = None) -> int:
                     options.spool,
                     options.attestor_identity,
                     options.private_key,
+                    driver_observation=_read_regular(
+                        options.driver_observation,
+                        "driver observation",
+                        MAX_OBJECT_BYTES,
+                    ),
+                    runtime_observation=_read_regular(
+                        options.runtime_observation,
+                        "runtime observation",
+                        MAX_OBJECT_BYTES,
+                    ),
                 )
             )
         else:

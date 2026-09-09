@@ -12,6 +12,108 @@ that any #272 work package or milestone is implemented. A milestone is complete
 only when its linked issue dependencies and its end-to-end acceptance tests are
 complete on the one production route.
 
+## Integration checkpoint: 2026-09-09
+
+The capability migration remains incomplete: 0 of 47 tutorial fixtures have
+qualified through the new production path. No milestone is completed by the
+component tests below.
+
+The real context-based vecadd now passes CPU-reference binding and semantic
+MIR admission. Integration fixes preserve the borrowed invocation receiver,
+its root provenance, nominal disjoint index-space dependencies, and the exact
+physical payload of transparent typed memory views. Canonical V17 records
+retain the invocation-index operation; older wire versions reject it.
+
+Vecadd now passes checked direct-call expansion and SSA planning. The compiler
+retains the original admitted MIR and a separate, content-bound execution view
+shared by ranked analysis and KIR lowering. Expanded calls have distinct local
+and block coordinates, with exact argument-transfer, return, and source-origin
+records. Moves, borrows, context issuance, physical bindings, and control flow
+remain explicit. Recursive calls, unsupported call contracts, and exhausted
+resource budgets reject.
+
+Ranked projection now represents authenticated `Global<ReadOnly>` loads and
+identity-mapped `Global<DisjointWrite<Index1D>>` stores as indexed effects with
+exact allocation, extent, index, access, and predicate relations. Physical-view
+metadata remains tied to the authenticated allocation. Shared scalar slices
+retain read-only access even when rustc's ABI record omits a frozen-pointee
+flag; this refinement does not apply to raw pointers or interior-mutable data.
+Exclusive and nonidentity mappings remain unsupported in this ranked path.
+
+The real vecadd extraction now passes write-guard and expression matching and
+CPU-reference bounds discharge. For input arrays `a` and `b`, the CPU reference
+writes only when `point < a.len() && point < b.len()`. The GPU's checked-load
+branches independently produce those conditions as bounded disjunctive normal
+form. Input guards remain explicit even when their lengths happen to match.
+Only an exact output-bounds condition is discharged under the declared
+output-coordinate domain. Each CPU bounds assertion must follow from that
+domain or its own preceding CPU path conditions, never from itself, a later
+write's guard, or the GPU's guards.
+
+Extraction next rejects the absent protected functional-refinement runtime at
+`/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5`.
+The standalone cached Verus executable is not a replacement for that retained,
+pinned runtime closure. No source-reference proof, Bundle V8, HSACO, protected
+launch, or hardware qualification was produced by this extraction.
+
+Separately tested KIR value correlation accepts a guarded load as a source
+load only when its exact authenticated recipe is intact, the load precedes
+the consuming write, and every possible path or write predicate excludes
+using the fallback value. Unknown paths are retained conservatively; cycles
+and exhausted budgets reject. This component has not yet been exercised by
+the real vecadd extraction, which stops before proof admission. Mutable escapes
+invalidate scalar and physical-view provenance; a copied allocation length
+cannot silently retain its old meaning after rebinding through a borrow.
+
+SSA and KIR initialize authenticated ambient workgroup scopes at each helper
+call's exact frame-entry marker, not at the root entry. Distinct call instances
+retain distinct locals and definitions. Expanded SSA diagnostics report the
+original function, block, local, and call instance alongside execution-view
+coordinates, including synthetic argument and return transfers.
+
+SSA also recognizes the exact borrowed context, view, and blocked-witness
+receiver positions of typed global-memory intrinsics. Physical bind arguments
+and by-value indices do not become transparent borrows. Reference escape,
+multiple consumers, wrong argument positions, and wrong receiver types retain
+storage or reject; intrinsic admission still authenticates the full ABI,
+ownership, and capability contract.
+
+Execution-view replay detects changes to the retained derivation; it is not an
+independent semantic-equivalence proof. Canonical call-expansion evidence V1
+retains instance ancestry, local/block origins, parameter/return transfers,
+and frame lifetime markers. Induction evidence V2 binds the complete recomputed
+report to the original source, aggregate expansion, and selected execution
+view. Decoding these inert records does not prove the retained claims; replay
+checks exact source-derived records and rejects report subsets or substitutions.
+The induction analysis still does not certify helper-local bounds transported
+through expanded parameters. Original-coordinate induction V1 and correspondence
+V4/V5 continue to reject expanded coordinates. Production correspondence and
+lineage composition remain unimplemented; relabeling expanded blocks as
+original blocks is forbidden.
+
+The hardware protocol now admits compiler-only preparation separately from
+signed hardware observations. Rust verifies the newline-inclusive prepared
+record identity and preserves authenticated payload bytes. Python gathers
+driver/runtime facts on the target host. A real sealed V5/Bundle V8 archive
+has not yet passed the combined Python-to-Rust positive path. Finalization
+also lacks compiler-produced typed negative-fixture receipts; caller JSON
+claiming that negatives passed cannot authorize promotion.
+
+Current component validation passes 1,511 library tests: 634 compiler, 119 MIR
+model, 166 Pliron, 185 lowering, 51 AMD model, 130 kernel analysis, 104 KIR, and
+122 verifier tests. Four verifier tests are marked ignored in the top-level
+harness: three subprocess helpers and the provisioning-dependent proof-runtime
+test.
+All 14 transaction/batch CLI tests pass. These are component tests, not
+all-kernel equivalence or GPU evidence. Strict Clippy is not clean: existing
+style diagnostics remain in the MIR model and proof-contract dependency.
+The tutorial website passes 189 unit tests, 40 desktop/mobile browser tests,
+corpus validation, lint, type checking, and its production build; final wording
+also passes the focused desktop/mobile checks. Qualification status still
+comes from the unchanged migration manifest.
+The separate site-to-compiler manifest parity check still rejects this
+checkpoint; the website is not ready for deployment.
+
 ## Decision
 
 fe2o3 represents GPU execution authority as compiler-issued Rust capabilities.

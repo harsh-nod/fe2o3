@@ -4,7 +4,7 @@
 builtin.func @pipeline_dynamic_triple_buffer: builtin.function <(kernel.index ) -> ()>
 {
   ^entry_block1v1(bound_v6: kernel.index ):
-    v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Workgroup]: <() -> (kernel.ranked_view <16,true,[3,128]>)>;
+    v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Workgroup, kernel_allocation_origin: kernel.allocation_origin 1, kernel_noalias_class: kernel.noalias_class 1]: <() -> (kernel.ranked_view <16,true,[3,128]>)>;
     p1 = kernel.pipeline_create (v0) [] []: <(kernel.ranked_view <16,true,[3,128]>) -> (kernel.pipeline <3,2>)>;
     zero_v2 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 0]: <() -> (kernel.index )>;
     one_v3 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 1]: <() -> (kernel.index )>;

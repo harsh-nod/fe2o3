@@ -171,7 +171,7 @@ impl ProductionBackendTargetV1 {
         &self,
         neutral_kernel_ir: &[u8],
         target_module: &fe2o3_kernel_ir::Module,
-        target_optimization: &fe2o3_kernel_opt::KernelIrPlironOptimizationReportV2,
+        target_optimization: &fe2o3_kernel_opt::KernelIrTargetNeutralOptimizationReportV6,
         pre_descriptor_llvm: &str,
     ) -> Result<ProductionBackendLineageReplayV1, ProductionBackendErrorV1> {
         let inner = AmdProductionBackendV1::prepare_lineage_replay_v1(
@@ -460,7 +460,7 @@ trait ProductionBackendAdapterV1 {
         target: &Self::Target,
         neutral_kernel_ir: &[u8],
         target_module: &fe2o3_kernel_ir::Module,
-        target_optimization: &fe2o3_kernel_opt::KernelIrPlironOptimizationReportV2,
+        target_optimization: &fe2o3_kernel_opt::KernelIrTargetNeutralOptimizationReportV6,
         pre_descriptor_llvm: &str,
     ) -> Result<Self::LineageReplay, ProductionBackendErrorV1>;
     fn validate_frozen_v3_lineage_replay_v1(
@@ -606,11 +606,11 @@ impl ProductionBackendAdapterV1 for AmdProductionBackendV1 {
         target: &Self::Target,
         neutral_kernel_ir: &[u8],
         target_module: &fe2o3_kernel_ir::Module,
-        target_optimization: &fe2o3_kernel_opt::KernelIrPlironOptimizationReportV2,
+        target_optimization: &fe2o3_kernel_opt::KernelIrTargetNeutralOptimizationReportV6,
         pre_descriptor_llvm: &str,
     ) -> Result<Self::LineageReplay, ProductionBackendErrorV1> {
         let evidence =
-            dialect_amdgcn::CanonicalProductionKirToLlvmReplayEvidenceV1::from_optimized_live_inputs_v4(
+            dialect_amdgcn::CanonicalProductionKirToLlvmReplayEvidenceV1::from_optimized_live_inputs_v5(
                 neutral_kernel_ir,
                 target_module,
                 target_optimization,
@@ -869,7 +869,7 @@ mod tests {
             _target: &Self::Target,
             _neutral_kernel_ir: &[u8],
             _target_module: &fe2o3_kernel_ir::Module,
-            _target_optimization: &fe2o3_kernel_opt::KernelIrPlironOptimizationReportV2,
+            _target_optimization: &fe2o3_kernel_opt::KernelIrTargetNeutralOptimizationReportV6,
             _pre_descriptor_llvm: &str,
         ) -> Result<Self::LineageReplay, ProductionBackendErrorV1> {
             Err(ProductionBackendErrorV1::ObjectLoweringUnavailable {

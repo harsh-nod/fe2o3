@@ -34,7 +34,7 @@
   },
   "oracle": {
     "function": "lds_reduction_oracle_v1",
-    "inputSha256": "a21f84e8bc186376381042588e91c9f6b1fdd0ffdffd645ad1184f26b4401291",
+    "inputSha256": "7de1fa5f6a841e1241d8d4fb7e3cb5421b162fb9a6316ecb0e5490477aa9d3dc",
     "kind": "existing-rust-cpu-reference-v1"
   },
   "oracleSuiteId": "cpu-reference-workgroup-collectives",
@@ -48,7 +48,7 @@
         "name": "values"
       },
       {
-        "access": "read_write",
+        "access": "write_only",
         "element": "i32",
         "kind": "buffer",
         "name": "output"
@@ -86,7 +86,7 @@
         "kind": "buffer"
       },
       {
-        "access": "read_write",
+        "access": "write_only",
         "alignment": 4,
         "bytes": "0x19fcffff",
         "element": "i32",

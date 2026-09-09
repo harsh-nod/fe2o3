@@ -5936,9 +5936,12 @@ fn terminal_operation_v1<'tcx>(
                 ));
             }
             let raw_index = aggregate_field_v1(types, output, 0)?;
-            Ok(SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
+            Ok(SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d {
+                invocation: pointer_pointee_v1(types, inputs[0])?,
                 index_witness: output,
                 raw_index,
+                provenance: capability_memory_provenance_v1(root, kernel_contexts)?,
+                source_identity,
             })
         }
         ProductionTerminalExpansionV1::ThreadIndexGet

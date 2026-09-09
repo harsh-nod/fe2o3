@@ -6,7 +6,9 @@
 
 #![allow(missing_docs)] // The V1 kernel macro emits an undocumented helper module.
 
-use fe2o3_device::{ExclusiveReadWrite, Global, KernelContext, ReadOnly, kernel};
+use fe2o3_device::{
+    DisjointWrite, Global, GridExclusive, GridLeader, KernelContext, ReadOnly, kernel,
+};
 
 use crate::contract::{
     DROP_ROUTE_V1, MOE_EXPERT_CAPACITY_V1, MOE_EXPERTS_V1, MOE_LOGIT_ELEMENTS_V1,
@@ -32,20 +34,23 @@ fn candidate_precedes_v1(
         || (candidate_score == incumbent_score && candidate_expert < incumbent_expert)
 }
 
+fn load_or_trap_v1<Brand>(values: &Global<'_, f32, ReadOnly, Brand>, index: usize) -> f32 {
+    match values.load(index) {
+        Some(value) => value,
+        None => fe2o3_device::trap(),
+    }
+}
+
 fn select_top2_v1<Brand>(logits: &Global<'_, f32, ReadOnly, Brand>, token: usize) -> [u32; 2] {
     let mut best = usize::MAX;
     let mut second = usize::MAX;
     let mut expert = 0;
     while expert < MOE_EXPERTS_V1 {
-        let score = logits
-            .load(token * MOE_EXPERTS_V1 + expert)
-            .unwrap_or_else(|| fe2o3_device::trap());
+        let score = load_or_trap_v1(logits, token * MOE_EXPERTS_V1 + expert);
         let best_score = if best == usize::MAX {
             f32::NEG_INFINITY
         } else {
-            logits
-                .load(token * MOE_EXPERTS_V1 + best)
-                .unwrap_or_else(|| fe2o3_device::trap())
+            load_or_trap_v1(logits, token * MOE_EXPERTS_V1 + best)
         };
         if best == usize::MAX || candidate_precedes_v1(score, expert, best_score, best) {
             second = best;
@@ -54,9 +59,7 @@ fn select_top2_v1<Brand>(logits: &Global<'_, f32, ReadOnly, Brand>, token: usize
             || candidate_precedes_v1(
                 score,
                 expert,
-                logits
-                    .load(token * MOE_EXPERTS_V1 + second)
-                    .unwrap_or_else(|| fe2o3_device::trap()),
+                load_or_trap_v1(logits, token * MOE_EXPERTS_V1 + second),
                 second,
             )
         {
@@ -70,7 +73,11 @@ fn select_top2_v1<Brand>(logits: &Global<'_, f32, ReadOnly, Brand>, token: usize
 fn logits_are_finite_v1<Brand>(logits: &Global<'_, f32, ReadOnly, Brand>) -> bool {
     let mut index = 0;
     while index < MOE_LOGIT_ELEMENTS_V1 {
-        if !logits.load(index).is_some_and(f32::is_finite) {
+        let value = match logits.load(index) {
+            Some(value) => value,
+            None => return false,
+        };
+        if !value.is_finite() {
             return false;
         }
         index += 1;
@@ -79,11 +86,12 @@ fn logits_are_finite_v1<Brand>(logits: &Global<'_, f32, ReadOnly, Brand>) -> boo
 }
 
 fn write_value_v1<Brand>(
-    output: &mut Global<'_, u32, ExclusiveReadWrite, Brand>,
+    output: &mut Global<'_, u32, DisjointWrite<GridExclusive>, Brand>,
+    leader: &GridLeader<Brand>,
     index: usize,
     value: u32,
 ) {
-    if !output.store(index, value) {
+    if !output.store(leader.index(index), value) {
         fe2o3_device::trap();
     }
 }
@@ -107,17 +115,20 @@ fn write_value_v1<Brand>(
 pub fn moe_top2_route_f32_t8_e4_k2_c4_v1(
     context: KernelContext<'_>,
     logits: Global<'_, f32, ReadOnly>,
-    mut top2_experts: Global<'_, u32, ExclusiveReadWrite>,
-    mut requested_counts: Global<'_, u32, ExclusiveReadWrite>,
-    mut admitted_counts: Global<'_, u32, ExclusiveReadWrite>,
-    mut expert_offsets: Global<'_, u32, ExclusiveReadWrite>,
-    mut route_slots: Global<'_, u32, ExclusiveReadWrite>,
-    mut permutation: Global<'_, u32, ExclusiveReadWrite>,
-    mut inverse: Global<'_, u32, ExclusiveReadWrite>,
+    mut top2_experts: Global<'_, u32, DisjointWrite<GridExclusive>>,
+    mut requested_counts: Global<'_, u32, DisjointWrite<GridExclusive>>,
+    mut admitted_counts: Global<'_, u32, DisjointWrite<GridExclusive>>,
+    mut expert_offsets: Global<'_, u32, DisjointWrite<GridExclusive>>,
+    mut route_slots: Global<'_, u32, DisjointWrite<GridExclusive>>,
+    mut permutation: Global<'_, u32, DisjointWrite<GridExclusive>>,
+    mut inverse: Global<'_, u32, DisjointWrite<GridExclusive>>,
 ) {
-    if context.invocation().index_1d().get() != 0 {
+    let Some(grid) = context.grid() else {
+        fe2o3_device::trap();
+    };
+    let Some(leader) = grid.leader() else {
         return;
-    }
+    };
     if logits.len() != MOE_LOGIT_ELEMENTS_V1
         || top2_experts.len() != MOE_ROUTES_V1
         || requested_counts.len() != MOE_EXPERTS_V1
@@ -177,21 +188,27 @@ pub fn moe_top2_route_f32_t8_e4_k2_c4_v1(
 
     let mut index = 0;
     while index < MOE_ROUTES_V1 {
-        write_value_v1(&mut top2_experts, index, staged_top2[index]);
-        write_value_v1(&mut route_slots, index, staged_slots[index]);
-        write_value_v1(&mut permutation, index, staged_permutation[index]);
-        write_value_v1(&mut inverse, index, staged_inverse[index]);
+        write_value_v1(&mut top2_experts, &leader, index, staged_top2[index]);
+        write_value_v1(&mut route_slots, &leader, index, staged_slots[index]);
+        write_value_v1(&mut permutation, &leader, index, staged_permutation[index]);
+        write_value_v1(&mut inverse, &leader, index, staged_inverse[index]);
         index += 1;
     }
     index = 0;
     while index < MOE_EXPERTS_V1 {
-        write_value_v1(&mut requested_counts, index, staged_requested[index]);
-        write_value_v1(&mut admitted_counts, index, staged_admitted[index]);
-        write_value_v1(&mut expert_offsets, index, staged_offsets[index]);
+        write_value_v1(
+            &mut requested_counts,
+            &leader,
+            index,
+            staged_requested[index],
+        );
+        write_value_v1(&mut admitted_counts, &leader, index, staged_admitted[index]);
+        write_value_v1(&mut expert_offsets, &leader, index, staged_offsets[index]);
         index += 1;
     }
     write_value_v1(
         &mut expert_offsets,
+        &leader,
         MOE_EXPERTS_V1,
         staged_offsets[MOE_EXPERTS_V1],
     );

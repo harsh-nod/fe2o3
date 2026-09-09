@@ -7212,6 +7212,14 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         index_witness: SemanticTypeIdV1,
         raw_index: SemanticTypeIdV1,
     },
+    /// Derives an index from an immutable borrow of the authenticated invocation.
+    CapabilityInvocationIndex1d {
+        invocation: SemanticTypeIdV1,
+        index_witness: SemanticTypeIdV1,
+        raw_index: SemanticTypeIdV1,
+        provenance: SemanticKernelCapabilityProvenanceV1,
+        source_identity: SemanticFunctionIdentityV1,
+    },
     /// Extracts the backing integer from an immutable borrow of `index_witness`.
     ThreadIndexGet {
         index_witness: SemanticTypeIdV1,
@@ -9177,6 +9185,10 @@ fn compiler_intrinsic_source_identity_matches(
     binding: SemanticFunctionIdentityV1,
 ) -> bool {
     match operation {
+        SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d {
+            source_identity,
+            ..
+        } => source_identity == binding,
         SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindReadOnly {
             source_identity,
             ..
@@ -9480,9 +9492,10 @@ fn record_intrinsic_capability_claims(
         SemanticCompilerIntrinsicOperationV1::ExecutionCapability { contract } => {
             claims.record_execution_contract(contract)
         }
-        SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { index_witness, .. } => {
-            claims.claim_mapping(index_witness, SemanticDisjointIndexSpaceV1::Index1d)
-        }
+        SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { index_witness, .. }
+        | SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d {
+            index_witness, ..
+        } => claims.claim_mapping(index_witness, SemanticDisjointIndexSpaceV1::Index1d),
         SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
             input_witness,
             output_witness,
@@ -10682,6 +10695,23 @@ fn compiler_intrinsic_signature_matches(
                 && lhs.wave_width == rhs.wave_width
                 && lhs.wave_width == accumulator.wave_width
         }
+        SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d {
+            invocation,
+            index_witness,
+            raw_index,
+            provenance,
+            ..
+        } => {
+            inputs.len() == 1
+                && capability_memory_source_ownership_matches(
+                    abi,
+                    &[SemanticSourceArgumentOwnershipV1::SharedBorrow],
+                )
+                && shared_reference_to(request, inputs[0], invocation)
+                && output == index_witness
+                && transparent_index_witness_matches(request, index_witness, raw_index)
+                && kernel_capability_provenance_matches(request, provenance)
+        }
         SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
             index_witness,
             raw_index,
@@ -11107,16 +11137,48 @@ fn compiler_intrinsic_signature_matches(
 
 fn capability_memory_transport_layout_matches(
     request: &InertSemanticMirRequestV1,
-    physical: SemanticTypeIdV1,
+    physical_type: SemanticTypeIdV1,
     view: SemanticTypeIdV1,
 ) -> bool {
-    let Some(physical) = request.types.get(physical.0 as usize) else {
+    let Some(physical) = request.types.get(physical_type.0 as usize) else {
         return false;
     };
     let Some(view) = request.types.get(view.0 as usize) else {
         return false;
     };
-    physical.layout == view.layout && physical.abi_properties == view.abi_properties
+    let (SemanticTypeShapeV1::Aggregate(fields), SemanticTypeLayoutDetailsV1::Aggregate(layout)) =
+        (&view.shape, &view.layout.details)
+    else {
+        return false;
+    };
+    // Type admission already binds the rustc field table to these offsets.
+    // A transparent view adds only inert ZST brands to its exact physical payload.
+    let mut visiting = BTreeSet::new();
+    fields.fields.first() == Some(&physical_type)
+        && layout.field_offsets.first() == Some(&0)
+        && fields.fields.len() == layout.field_offsets.len()
+        && layout.padding.is_empty()
+        && fields
+            .fields
+            .iter()
+            .skip(1)
+            .zip(layout.field_offsets.iter().skip(1))
+            .all(|(field, offset)| {
+                exact_inert_zero_sized_marker_v1(&request.types, *field, &mut visiting)
+                    && view.layout.size_bytes.is_some_and(|size| *offset <= size)
+            })
+        && physical.layout.size_bytes.is_some_and(|size| size > 0)
+        && physical.layout.size_bytes == view.layout.size_bytes
+        && physical.layout.rustc_size_bytes == view.layout.rustc_size_bytes
+        && physical.layout.alignment_bytes == view.layout.alignment_bytes
+        && physical.layout.max_repr_alignment_bytes == view.layout.max_repr_alignment_bytes
+        && physical.layout.unadjusted_abi_alignment_bytes
+            == view.layout.unadjusted_abi_alignment_bytes
+        && physical.layout.backend_repr == view.layout.backend_repr
+        && physical.layout.largest_niche == view.layout.largest_niche
+        && !physical.layout.uninhabited
+        && !view.layout.uninhabited
+        && physical.abi_properties == view.abi_properties
 }
 
 fn capability_memory_source_ownership_matches(
@@ -18286,6 +18348,16 @@ fn enqueue_compiler_intrinsic_type_references(
             pending.push_back(rhs_fragment);
             pending.push_back(accumulator_fragment);
         }
+        SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d {
+            invocation,
+            index_witness,
+            raw_index,
+            ..
+        } => {
+            pending.push_back(invocation);
+            pending.push_back(index_witness);
+            pending.push_back(raw_index);
+        }
         SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
             index_witness,
             raw_index,
@@ -19137,7 +19209,8 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
                     SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindExclusiveReadWrite { .. }
                     | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveLoad { .. }
                     | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveStore { .. }
-                    | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStoreBlock { .. },
+                    | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStoreBlock { .. }
+                    | SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d { .. },
                 ..
             }
         )
@@ -19850,6 +19923,23 @@ fn encode_vtable(
     writer.u32(vtable.allocation.0)
 }
 
+/// Compiler-internal fragment commitment, not a document admission or source
+/// identity. Uses the existing encoder and a caller-tightened allocation bound.
+pub(crate) fn canonical_semantic_function_fragment_sha256_v1(
+    function: &SemanticFunctionDeclV1,
+    wire_version: SemanticMirWireVersionV1,
+    max_bytes: u64,
+) -> Result<([u8; 32], usize), SemanticMirErrorV1> {
+    let mut writer = CanonicalWriterV1::new(max_bytes.min(HARD_MAX_CANONICAL_BYTES_V1));
+    writer.u16(wire_version.as_u16())?;
+    encode_function(&mut writer, function, wire_version)?;
+    let bytes = writer.finish();
+    let mut digest = Sha256::new();
+    digest.update(b"FE2O3/SEMANTIC-FUNCTION-FRAGMENT/V1\0");
+    digest.update(&bytes);
+    Ok((digest.finalize().into(), bytes.len()))
+}
+
 fn encode_function(
     writer: &mut CanonicalWriterV1,
     function: &SemanticFunctionDeclV1,
@@ -20276,6 +20366,26 @@ fn encode_compiler_intrinsic_operation(
             }
             writer.u8(73)?;
             encode_execution_capability_contract(writer, contract)
+        }
+        SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d {
+            invocation,
+            index_witness,
+            raw_index,
+            provenance,
+            source_identity,
+        } => {
+            if wire_version != SemanticMirWireVersionV1::V17 {
+                return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                    requested: wire_version,
+                    required: SemanticMirWireVersionV1::V17,
+                });
+            }
+            writer.u8(78)?;
+            writer.u32(invocation.0)?;
+            writer.u32(index_witness.0)?;
+            writer.u32(raw_index.0)?;
+            encode_kernel_capability_provenance(writer, provenance)?;
+            writer.identity(source_identity.0)
         }
         SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
             index_witness,
@@ -24448,7 +24558,7 @@ mod private_tests {
             )
         };
         let fat_layout = SemanticTypeLayoutV1::new(Some(16), 8).unwrap();
-        let types = vec![
+        let mut types = vec![
             test_type(
                 80,
                 SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
@@ -24561,6 +24671,27 @@ mod private_tests {
                 ),
             ),
         ];
+        types[12].shape =
+            SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![]).unwrap());
+        types[12].layout = SemanticTypeLayoutV1::aggregate(
+            Some(0),
+            1,
+            SemanticAggregateLayoutV1::new(vec![], vec![]).unwrap(),
+        )
+        .unwrap();
+        types[12].abi_properties =
+            SemanticTypeAbiPropertiesV1::new(false, false).with_rustc_layout_is_noundef(true);
+        for (view, physical) in [(7, 6), (15, 14)] {
+            types[view].shape = SemanticTypeShapeV1::Aggregate(
+                SemanticAggregateTypeV1::new(vec![ids[physical], ids[12]]).unwrap(),
+            );
+            types[view].layout = SemanticTypeLayoutV1::aggregate(
+                Some(16),
+                8,
+                SemanticAggregateLayoutV1::new(vec![0, 16], vec![]).unwrap(),
+            )
+            .unwrap();
+        }
         let kernel_binding = SemanticKernelBindingIdentityV1::from_sha256([97; 32]);
         let root = direct_selection_root(98, ids[0]).with_kernel_entry(SemanticKernelEntryV1::new(
             SemanticLinkSymbolV1::new(b"capability_signature_root".to_vec()).unwrap(),
@@ -24611,6 +24742,163 @@ mod private_tests {
         .unwrap()
         .with_source_argument_ownership(ownership)
         .unwrap()
+    }
+
+    #[test]
+    fn typed_global_transport_requires_the_exact_physical_payload_and_only_zst_brands() {
+        let (request, ty, _) = capability_signature_fixture();
+        assert!(capability_memory_transport_layout_matches(
+            &request, ty[6], ty[7]
+        ));
+        assert!(capability_memory_transport_layout_matches(
+            &request, ty[14], ty[15]
+        ));
+        assert!(!capability_memory_transport_layout_matches(
+            &request, ty[14], ty[7]
+        ));
+        assert!(!capability_memory_transport_layout_matches(
+            &request, ty[6], ty[6]
+        ));
+
+        for (fields, offsets) in [
+            (vec![ty[6], ty[1]], vec![0, 16]),
+            (vec![ty[6], ty[12]], vec![8, 16]),
+            (vec![ty[6], ty[12]], vec![0, 17]),
+            (vec![ty[6], ty[12]], vec![0]),
+            (vec![ty[14], ty[12]], vec![0, 16]),
+        ] {
+            let mut hostile = request.clone();
+            hostile.types[7].shape =
+                SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(fields).unwrap());
+            hostile.types[7].layout.details = SemanticTypeLayoutDetailsV1::Aggregate(
+                SemanticAggregateLayoutV1::new(offsets, vec![]).unwrap(),
+            );
+            assert!(!capability_memory_transport_layout_matches(
+                &hostile, ty[6], ty[7]
+            ));
+        }
+
+        let mut hostile = request.clone();
+        hostile.types[12].layout.uninhabited = true;
+        assert!(!capability_memory_transport_layout_matches(
+            &hostile, ty[6], ty[7]
+        ));
+        let mut hostile = request.clone();
+        hostile.types[12].layout.alignment_bytes = 16;
+        assert!(!capability_memory_transport_layout_matches(
+            &hostile, ty[6], ty[7]
+        ));
+        let mut hostile = request.clone();
+        hostile.types[12].abi_properties = SemanticTypeAbiPropertiesV1::new(true, false);
+        assert!(!capability_memory_transport_layout_matches(
+            &hostile, ty[6], ty[7]
+        ));
+        let mut hostile = request.clone();
+        hostile.types[12].shape = SemanticTypeShapeV1::Opaque;
+        assert!(!capability_memory_transport_layout_matches(
+            &hostile, ty[6], ty[7]
+        ));
+    }
+
+    #[test]
+    fn typed_global_transport_preserves_payload_size_alignment_and_abi() {
+        let (request, ty, _) = capability_signature_fixture();
+        for mutation in 0..6 {
+            let mut hostile = request.clone();
+            let view = &mut hostile.types[7];
+            match mutation {
+                0 => view.layout.size_bytes = Some(24),
+                1 => view.layout.alignment_bytes = 16,
+                2 => view.layout.unadjusted_abi_alignment_bytes = 16,
+                3 => view.layout.backend_repr = request.types[1].layout.backend_repr,
+                4 => view.layout.uninhabited = true,
+                5 => view.abi_properties = SemanticTypeAbiPropertiesV1::new(true, false),
+                _ => unreachable!(),
+            }
+            assert!(
+                !capability_memory_transport_layout_matches(&hostile, ty[6], ty[7]),
+                "mutation {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn invocation_index_requires_a_borrowed_receiver_and_exact_root() {
+        let (mut request, ty, provenance) = capability_signature_fixture();
+        let mut layout = request.types[ty[2].index() as usize].layout.clone();
+        layout.details = SemanticTypeLayoutDetailsV1::Aggregate(
+            SemanticAggregateLayoutV1::new(vec![0, 8], vec![]).unwrap(),
+        );
+        request.types[ty[13].index() as usize].layout = layout;
+        request.types[ty[13].index() as usize].shape = SemanticTypeShapeV1::Aggregate(
+            SemanticAggregateTypeV1::new(vec![ty[2], ty[12]]).unwrap(),
+        );
+        let source_identity = SemanticFunctionIdentityV1::from_sha256([105; 32]);
+        let operation =
+            |provenance| SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d {
+                invocation: ty[3],
+                index_witness: ty[13],
+                raw_index: ty[2],
+                provenance,
+                source_identity,
+            };
+        let abi = capability_signature_abi(
+            106,
+            vec![ty[4]],
+            ty[13],
+            vec![SemanticSourceArgumentOwnershipV1::SharedBorrow],
+        );
+        assert!(compiler_intrinsic_signature_matches(
+            &request,
+            operation(provenance),
+            &abi
+        ));
+        for hostile in [
+            capability_signature_abi(107, vec![], ty[13], vec![]),
+            capability_signature_abi(
+                108,
+                vec![ty[8]],
+                ty[13],
+                vec![SemanticSourceArgumentOwnershipV1::SharedBorrow],
+            ),
+            capability_signature_abi(
+                109,
+                vec![ty[4]],
+                ty[2],
+                vec![SemanticSourceArgumentOwnershipV1::SharedBorrow],
+            ),
+            capability_signature_abi(
+                110,
+                vec![ty[4]],
+                ty[13],
+                vec![SemanticSourceArgumentOwnershipV1::ByValue],
+            ),
+        ] {
+            assert!(!compiler_intrinsic_signature_matches(
+                &request,
+                operation(provenance),
+                &hostile
+            ));
+        }
+        assert!(!compiler_intrinsic_signature_matches(
+            &request,
+            operation(capability_test_provenance(111)),
+            &abi
+        ));
+        assert!(compiler_intrinsic_source_identity_matches(
+            operation(provenance),
+            source_identity
+        ));
+        assert!(!compiler_intrinsic_source_identity_matches(
+            operation(provenance),
+            SemanticFunctionIdentityV1::from_sha256([112; 32])
+        ));
+        let mut claims = IntrinsicCapabilityClaimsV1::default();
+        assert!(record_intrinsic_capability_claims(
+            operation(provenance),
+            &mut claims
+        ));
+        assert!(!claims.claim_mapping(ty[13], SemanticDisjointIndexSpaceV1::GridExclusive));
     }
 
     #[test]

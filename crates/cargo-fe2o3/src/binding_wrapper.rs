@@ -68,8 +68,8 @@ use crate::inert_rustc_invocation_capture::{
 use crate::pinned_codegen_backend::PinnedCodegenBackend;
 use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
 use crate::production_capability_completion_v5::{
-    CompletedProductionCapabilityCompletionJoinV5, PendingProductionCapabilityCompletionJoinV5,
-    ProductionCapabilityCompletionExecutorV5, prepare_pending_capability_result_v1,
+    CompletedProductionCapabilityCompletionJoinV5, ProductionCapabilityCompletionExecutorV5,
+    prepare_pending_capability_result_v1,
 };
 use crate::project::PinnedDirectory;
 use crate::protected_compiler_handoff_v3::{
@@ -2426,38 +2426,17 @@ fn complete_fresh_production_artifact(
             "independent strict V3 raw-HSACO inspection failed: {error}"
         ))
     })?;
+    if capability_v5.is_some() {
+        return Err(CompletionFailure::Uncommitted(
+            "native V5 completion requires an independently checked target-machine refinement before canonical HSACO finalization"
+                .to_owned(),
+        ));
+    }
     let finalized = finalize_protected_worker_v3_hsaco_v1(inspected).map_err(|error| {
         CompletionFailure::Uncommitted(format!(
             "strict V3 canonical HSACO finalization failed: {error}"
         ))
     })?;
-    if let Some(capability) = capability_v5 {
-        let prepared = capability
-            .begin_completion(finalized.exact_finalized_bytes().to_vec())
-            .map_err(|error| {
-                CompletionFailure::Uncommitted(format!(
-                    "native V5 object completion preparation failed before publication: {error}"
-                ))
-            })?;
-        let join = PendingProductionCapabilityCompletionJoinV5::new(
-            prepared,
-            finalized,
-            compiler_execution,
-        )
-        .map_err(|error| {
-            CompletionFailure::Uncommitted(format!(
-                "native V5 pre-publication custody validation failed: {error}"
-            ))
-        })?;
-        let completed = join
-            .complete_with_available_authority(capability_completion)
-            .map_err(|error| {
-                CompletionFailure::Uncommitted(format!(
-                    "native V5 protected authority completion failed before publication: {error}"
-                ))
-            })?;
-        return complete_fresh_capability_artifact(managed, compiler_closure, completed);
-    }
     if capability_completion.is_some() {
         return Err(CompletionFailure::Uncommitted(
             "protected V5 completion authority was supplied without a native V5 compiler transaction"

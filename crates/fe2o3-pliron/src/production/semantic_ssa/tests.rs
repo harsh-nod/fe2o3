@@ -881,6 +881,7 @@ fn production_ssa_identity_binds_source_and_function_identity() {
             plan: plan.clone(),
             partial_moves: ProductionSemanticPartialMoveCertificateV1::default(),
             implicit_entry_variables: Box::new([]),
+            frame_initializations: frame_initialization::FrameInitializationsV1::default(),
             retained_cross_edge_variables: Box::new([]),
             auxiliary_resources: SemanticSsaAuxiliaryResourcesV1::default(),
         }];
@@ -1126,6 +1127,7 @@ fn module_accounting_exceeds_one_function_budget_then_fails_the_module_budget() 
         plan,
         partial_moves: ProductionSemanticPartialMoveCertificateV1::default(),
         implicit_entry_variables: Box::new([]),
+        frame_initializations: frame_initialization::FrameInitializationsV1::default(),
         retained_cross_edge_variables: Box::new([]),
         auxiliary_resources: SemanticSsaAuxiliaryResourcesV1::default(),
     };
@@ -1348,7 +1350,169 @@ fn semantic_ssa_owner_replays_under_the_fixed_module_envelope() {
         owner.source_semantic().functions().len()
     );
     assert!(!owner.grants_proof_or_artifact_authority());
+    let root = SemanticFunctionIdV1::from_index(0);
+    assert!(
+        !owner
+            .execution_view_for_root(root)
+            .unwrap()
+            .has_expanded_calls()
+    );
+    assert!(std::ptr::eq(
+        owner.execution_plan_for_root(root).unwrap(),
+        owner.plan_for_function(root).unwrap(),
+    ));
+    assert_eq!(owner.identity(), owner.source_identity);
 }
+
+pub(super) fn admitted_helper_semantic() -> AdmittedInertSemanticMirV1 {
+    let source = admitted_single_function_semantic();
+    let original = &source.functions()[0];
+    let unit = SemanticTypeIdV1::from_index(0);
+    let call = SemanticDirectCallV1::new_callable(
+        SemanticCallableIdV1::from_index(1),
+        vec![],
+        Some(SemanticCallDestinationV1::new(
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(0), vec![], unit).unwrap(),
+            SemanticControlFlowEdgeV1::new(
+                SemanticEdgeRoleV1::CallReturn,
+                SemanticBlockIdV1::from_index(1),
+            ),
+        )),
+        SemanticUnwindActionV1::Unreachable,
+    )
+    .unwrap();
+    let root = SemanticFunctionDeclV1::new(
+        original.identity(),
+        original.role(),
+        original.item_definition_identity(),
+        original.monomorphization_identity(),
+        original.generic_type_arguments_identity(),
+        original.const_generic_arguments_identity(),
+        original.source(),
+        original.abi().clone(),
+        original.locals().to_vec(),
+        original.entry(),
+        vec![
+            test_block(141, vec![], SemanticTerminatorKindV1::Call(call)),
+            test_block(144, vec![], SemanticTerminatorKindV1::Return),
+        ],
+    )
+    .unwrap()
+    .with_kernel_entry(original.kernel_entry().unwrap().clone());
+    let helper = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(test_bytes(150)),
+        SemanticFunctionRoleV1::InternalHelper,
+        SemanticItemDefinitionIdentityV1::from_sha256(test_bytes(151)),
+        SemanticMonomorphizationIdentityV1::from_sha256(test_bytes(152)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(test_bytes(153)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(test_bytes(154)),
+        original.source(),
+        SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1::from_sha256(test_bytes(155)),
+            SemanticLayoutIdentityV1::from_sha256(test_bytes(156)),
+            SemanticCanonAbiV1::Rust,
+            false,
+            false,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap(),
+        vec![test_local(157, 0, SemanticLocalRoleV1::Return)],
+        SemanticBlockIdV1::from_index(0),
+        vec![test_block(158, vec![], SemanticTerminatorKindV1::Return)],
+    )
+    .unwrap();
+    InertSemanticMirRequestV1::new(
+        source.target().clone(),
+        source.types().to_vec(),
+        vec![],
+        vec![],
+        vec![],
+        vec![root, helper],
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+    .admit_current_production(SemanticMirLimitsV1::default())
+    .unwrap()
+}
+
+#[test]
+fn execution_ssa_retains_original_source_and_distinct_expanded_plan() {
+    let semantic = admitted_helper_semantic();
+    let source_identity = *semantic.semantic_sha256().as_bytes();
+    let original = semantic.functions()[0].clone();
+    let owner = ProductionSemanticSsaOwnerV1::try_new(
+        ProductionSemanticMirOwnerV1::try_new(semantic, ProductionSemanticMirLimitsV1::default())
+            .unwrap(),
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap();
+    owner.verify_replay().unwrap();
+    let root = SemanticFunctionIdV1::from_index(0);
+    let view = owner.execution_view_for_root(root).unwrap();
+    assert!(view.has_expanded_calls());
+    assert_eq!(owner.source_semantic_sha256(), &source_identity);
+    assert_eq!(&owner.source_semantic().functions()[0], &original);
+    assert_ne!(view.body(), &original);
+    assert_ne!(owner.identity(), owner.source_identity);
+    assert!(owner.summary().input_blocks() > owner.source_summary.input_blocks());
+    assert_eq!(
+        owner
+            .execution_plan_for_root(root)
+            .unwrap()
+            .function_identity(),
+        view.body().identity()
+    );
+    assert!(
+        owner
+            .execution_plan_for_root(SemanticFunctionIdV1::from_index(1))
+            .is_none()
+    );
+}
+
+#[test]
+fn expanded_ssa_shares_the_source_module_resource_envelope() {
+    let semantic = admitted_helper_semantic();
+    let defaults = ProductionSemanticSsaLimitsV1::default();
+    let (_, source_summary, _) = construct_semantic_ssa_plans_v1(&semantic, defaults).unwrap();
+    let broad = defaults.module();
+    let module = ProductionSemanticSsaModuleLimitsV1::try_new(
+        broad.max_variables(),
+        source_summary.input_blocks(),
+        broad.max_edges(),
+        broad.max_events(),
+        broad.max_edge_definitions(),
+        broad.max_output_items(),
+        broad.max_storage_words(),
+        broad.max_work_units(),
+    )
+    .unwrap();
+    let error = ProductionSemanticSsaOwnerV1::try_new(
+        ProductionSemanticMirOwnerV1::try_new(semantic, ProductionSemanticMirLimitsV1::default())
+            .unwrap(),
+        ProductionSemanticSsaLimitsV1::with_module_limits(defaults.planner(), module),
+    )
+    .unwrap_err();
+    let ProductionSemanticSsaErrorV1::ExpandedExecution {
+        root,
+        source_block,
+        source_local,
+        error,
+        ..
+    } = error
+    else {
+        panic!("expanded module budget failure lost execution context");
+    };
+    assert_eq!(root, SemanticFunctionIdV1::from_index(0));
+    assert!(source_block.is_none());
+    assert!(source_local.is_none());
+    assert!(matches!(
+        *error,
+        ProductionSemanticSsaErrorV1::AggregateResourceLimit { .. }
+    ));
+}
+
+mod execution_diagnostics;
 
 #[test]
 fn semantic_adapter_resource_limits_are_inclusive_and_fail_closed() {
@@ -1666,6 +1830,219 @@ fn transparent_borrow_accepts_one_direct_compiler_intrinsic_consumer() {
     let callables = [test_intrinsic_callable(function.abi().clone())];
 
     assert!(source_is_promotable(&function, &callables));
+}
+
+// Classification uses the admitted operation's exact receiver type. Full ABI
+// and capability authentication are covered by MIR admission and lowering tests.
+fn typed_global_borrow_cases(
+    receiver: SemanticTypeIdV1,
+) -> Vec<(SemanticCompilerIntrinsicOperationV1, usize, u8)> {
+    use fe2o3_mir_model::semantic_mir_v1::*;
+    let data = SemanticTypeIdV1::from_index(2);
+    let provenance = SemanticKernelCapabilityProvenanceV1::new(
+        SemanticFunctionIdV1::from_index(0),
+        SemanticKernelBindingIdentityV1::from_sha256([1; 32]),
+        SemanticKernelCapabilityFrontendUnitIdentityV1::from_sha256([2; 32]),
+        SemanticTypeIdentityV1::from_sha256([3; 32]),
+        SemanticKernelCapabilityTargetBrandIdentityV1::from_sha256([4; 32]),
+        SemanticKernelCapabilityLaunchBrandIdentityV1::from_sha256([5; 32]),
+        SemanticKernelCapabilityIssuanceIdentityV1::from_sha256([6; 32]),
+    )
+    .unwrap();
+    let source_identity = SemanticFunctionIdentityV1::from_sha256([7; 32]);
+    let read = SemanticCapabilityMemoryContractV1::global_read_only();
+    let exclusive = SemanticCapabilityMemoryContractV1::global_exclusive_read_write();
+    let disjoint = SemanticCapabilityMemoryContractV1::global_disjoint_write(
+        data,
+        SemanticDisjointIndexSpaceV1::BlockedIndex1d {
+            lanes_per_block: 64,
+            elements_per_lane: 8,
+        },
+    );
+    vec![
+        (
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindReadOnly {
+                context: receiver,
+                physical: data,
+                view: data,
+                element: data,
+                contract: read,
+                provenance,
+                source_identity,
+            },
+            2,
+            1,
+        ),
+        (
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindExclusiveReadWrite {
+                context: receiver,
+                physical: data,
+                view: data,
+                element: data,
+                contract: exclusive,
+                provenance,
+                source_identity,
+            },
+            2,
+            1,
+        ),
+        (
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindDisjointWrite {
+                context: receiver,
+                physical: data,
+                view: data,
+                element: data,
+                contract: disjoint,
+                provenance,
+                source_identity,
+            },
+            2,
+            1,
+        ),
+        (
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalLoad {
+                view: receiver,
+                option: data,
+                element: data,
+                contract: read,
+                provenance,
+                source_identity,
+            },
+            2,
+            1,
+        ),
+        (
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveLoad {
+                view: receiver,
+                option: data,
+                element: data,
+                contract: exclusive,
+                provenance,
+                source_identity,
+            },
+            2,
+            1,
+        ),
+        (
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStore {
+                view: receiver,
+                witness: receiver,
+                element: data,
+                result: data,
+                contract: disjoint,
+                provenance,
+                source_identity,
+            },
+            3,
+            1,
+        ),
+        (
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveStore {
+                view: receiver,
+                index: receiver,
+                element: data,
+                result: data,
+                contract: exclusive,
+                provenance,
+                source_identity,
+            },
+            3,
+            1,
+        ),
+        (
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStoreBlock {
+                view: receiver,
+                witness: receiver,
+                component: data,
+                element: data,
+                result: data,
+                contract: disjoint,
+                lanes_per_block: 64,
+                elements_per_lane: 8,
+                provenance,
+                source_identity,
+            },
+            4,
+            3,
+        ),
+    ]
+}
+
+#[test]
+fn typed_global_borrows_preserve_exact_receiver_type_and_argument_role() {
+    for source_type in 0..=1 {
+        for (operation, arity, borrowed_arguments) in
+            typed_global_borrow_cases(SemanticTypeIdV1::from_index(source_type))
+        {
+            for argument in 0..arity {
+                let mut arguments = vec![SemanticOperandV1::Copy(test_scalar_place(3)); arity];
+                arguments[argument] = SemanticOperandV1::Copy(test_scalar_place(2));
+                let function = test_function(vec![test_block(
+                    64,
+                    vec![test_borrow(2, 1)],
+                    test_call(0, arguments, None),
+                )]);
+                let callables = [test_operation_callable(
+                    function.abi().clone(),
+                    operation,
+                    120,
+                )];
+                assert_eq!(
+                    source_is_promotable(&function, &callables),
+                    source_type == 0 && borrowed_arguments & (1 << argument) != 0,
+                    "operation {operation:?}, argument {argument}, type {source_type}",
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn typed_global_borrows_reject_escape_and_multiple_consumers() {
+    for (operation, arity, _) in typed_global_borrow_cases(SemanticTypeIdV1::from_index(0)) {
+        for escape in [false, true] {
+            let mut arguments = vec![SemanticOperandV1::Copy(test_scalar_place(3)); arity];
+            arguments[0] = SemanticOperandV1::Copy(test_scalar_place(2));
+            let mut statements = vec![test_borrow(2, 1)];
+            if escape {
+                statements.push(test_assign(
+                    0,
+                    SemanticOperandV1::Copy(test_scalar_place(2)),
+                ));
+            }
+            let mut blocks = vec![test_block(
+                64,
+                statements,
+                test_call(
+                    0,
+                    arguments.clone(),
+                    Some(SemanticCallDestinationV1::new(
+                        test_scalar_place(3),
+                        test_edge(SemanticEdgeRoleV1::CallReturn, 1),
+                    )),
+                ),
+            )];
+            blocks.push(test_block(
+                65,
+                vec![],
+                if escape {
+                    SemanticTerminatorKindV1::Return
+                } else {
+                    test_call(0, arguments, None)
+                },
+            ));
+            let function = test_function(blocks);
+            let callables = [test_operation_callable(
+                function.abi().clone(),
+                operation,
+                120,
+            )];
+            assert!(
+                !source_is_promotable(&function, &callables),
+                "{operation:?}, escape={escape}"
+            );
+        }
+    }
 }
 
 #[test]

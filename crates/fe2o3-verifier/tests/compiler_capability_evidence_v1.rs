@@ -16,9 +16,13 @@ use fe2o3_compiler_lineage::{
     InertRustcPreflightPlanReceiptV3, InertSemanticToLlvmReceiptV3,
     InertStaticCapabilityEvidenceAssociationErrorV1,
     InertStaticCapabilityEvidenceAssociationInputsV1, InertStaticCapabilityEvidenceAssociationV1,
-    InertTargetBindingReceiptV3, MultiRootCanonicalKirVersionV3, MultiRootNeutralKirIdentityV3,
-    MultiRootProofRosterInputsV3, MultiRootProofRosterKindV3, MultiRootProofRosterRootInputV3,
-    MultiRootProofRosterTranscriptV3, OrderedInertSemanticLineageReceiptsV3,
+    InertTargetBindingReceiptV3, MachineRefinementContentIdentityV1,
+    MultiRootCanonicalKirVersionV3, MultiRootNeutralKirIdentityV3, MultiRootProofRosterInputsV3,
+    MultiRootProofRosterKindV3, MultiRootProofRosterRootInputV3, MultiRootProofRosterTranscriptV3,
+    OrderedInertSemanticLineageReceiptsV3, TargetMachineRefinementReceiptPartsV1,
+    TargetMachineRefinementReceiptV1, TargetMachineRefinementTargetV1,
+    decode_compiler_instruction_selection_correspondence_identity_v1,
+    decode_post_llvm_stage_custody_identity_v1,
 };
 use fe2o3_functional_proof::{
     FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2,
@@ -408,6 +412,41 @@ fn opaque(label: &str) -> Vec<u8> {
     format!("fe2o3-capability/{label}").into_bytes()
 }
 
+fn machine_refinement_receipt(seed: u8) -> InertCapabilityRefinementReceiptV1 {
+    let receipt =
+        TargetMachineRefinementReceiptV1::from_parts(TargetMachineRefinementReceiptPartsV1 {
+            target: TargetMachineRefinementTargetV1::Gfx942,
+            post_llvm_custody: decode_post_llvm_stage_custody_identity_v1(
+                [seed; 32],
+                u64::from(seed) + 1,
+            )
+            .unwrap(),
+            instruction_selection:
+                decode_compiler_instruction_selection_correspondence_identity_v1(
+                    [seed.wrapping_add(1); 32],
+                    u64::from(seed) + 2,
+                )
+                .unwrap(),
+            decoded_isa: MachineRefinementContentIdentityV1::new(
+                [seed.wrapping_add(2); 32],
+                u64::from(seed) + 3,
+            )
+            .unwrap(),
+            final_code_object:
+                fe2o3_compiler_lineage::ExactCompilerStageContentIdentityV1::calculate(&[seed; 8])
+                    .unwrap(),
+            machine_refinement_sha256: [seed.wrapping_add(3); 32],
+            required_families: 1,
+            established_families: 1,
+        })
+        .unwrap();
+    InertCapabilityRefinementReceiptV1::from_canonical_preimage(
+        InertCapabilityRefinementReceiptKindV1::Machine,
+        receipt.canonical_bytes().to_vec(),
+    )
+    .unwrap()
+}
+
 fn subject(kir: [u8; 32], epoch: u64) -> CapabilitySubjectV1 {
     subject_with_context(
         kir,
@@ -713,13 +752,7 @@ fn fixture_with_context_subject(
         });
     let machine = properties
         .contains(&CapabilityPropertyIdV1::MACHINE_REFINEMENT)
-        .then(|| {
-            InertCapabilityRefinementReceiptV1::from_canonical_preimage(
-                InertCapabilityRefinementReceiptKindV1::Machine,
-                opaque("machine-refinement"),
-            )
-            .unwrap()
-        });
+        .then(|| machine_refinement_receipt(31));
     let (obligations, results) = capability_sets(
         subject,
         properties,
@@ -1514,12 +1547,7 @@ fn native_v5_owner_rejects_policy_and_refinement_receipt_substitution() {
         let replacement = if substitute_source {
             genuine_source_refinement_receipt([97; 32], 97).identity()
         } else {
-            InertCapabilityRefinementReceiptV1::from_canonical_preimage(
-                InertCapabilityRefinementReceiptKindV1::Machine,
-                opaque("other-machine"),
-            )
-            .unwrap()
-            .identity()
+            machine_refinement_receipt(32).identity()
         };
         replace_v5_inputs(
             &mut fixture,
@@ -1726,13 +1754,7 @@ fn capsule_proof_and_refinement_receipt_splicing_fail_closed() {
     ));
 
     let mut receipt_splice = fixture(&base_properties(), None, false, false);
-    receipt_splice.machine = Some(
-        InertCapabilityRefinementReceiptV1::from_canonical_preimage(
-            InertCapabilityRefinementReceiptKindV1::Machine,
-            opaque("other-machine-refinement"),
-        )
-        .unwrap(),
-    );
+    receipt_splice.machine = Some(machine_refinement_receipt(33));
     assert!(matches!(
         validate(receipt_splice),
         Err(CompilerCapabilityEvidenceValidationErrorV1::RefinementReceiptMismatch { .. })

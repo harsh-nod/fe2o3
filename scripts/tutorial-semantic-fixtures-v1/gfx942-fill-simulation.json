@@ -34,7 +34,7 @@
   },
   "oracle": {
     "function": "fe2o3_fill::fill_cpu_reference",
-    "inputSha256": "c1f92ddb133432b5fa5da4781946fb0ed89b5e40200f54fe39aefcd622627339",
+    "inputSha256": "4c6de4b400c05542640016445c97c10da29c0fe44a21f80ba696ecdc62036830",
     "kind": "existing-rust-cpu-reference-v1"
   },
   "oracleSuiteId": "cpu-reference-fill",
@@ -42,7 +42,7 @@
   "physicalAbi": {
     "arguments": [
       {
-        "access": "read_write",
+        "access": "write_only",
         "element": "f32",
         "kind": "buffer",
         "name": "out"
@@ -73,7 +73,7 @@
   "request": {
     "arguments": [
       {
-        "access": "read_write",
+        "access": "write_only",
         "alignment": 4,
         "bytes": "0x00e4404600e4404600e4404600e4404600e4404600e44046",
         "element": "f32",

@@ -1,198 +1,16 @@
 use fe2o3_target_spec::*;
 
-const PROFILE: TargetProfileSpecV1 = TargetProfileSpecV1::from_static_parts(
-    TargetVendorV1::Other,
-    TargetArchitectureFamilyV1::Other,
-    "synthetic-grid-v1",
-    None,
-    None,
-    TargetArtifactFormatV1::NativeObject,
-    TargetExecutionModelV1::GpuGrid,
-    None,
-    &[],
-);
-const MODEL: TargetCapabilityModelIdentityV1 =
-    TargetCapabilityModelIdentityV1::new_unchecked(PROFILE, "synthetic-capabilities-v1");
-
-#[derive(Clone, Copy)]
-struct SyntheticGridTarget;
-
-impl SyntheticGridTarget {
-    fn outcome(requirement: TargetCapabilityRequirementV1) -> TargetCapabilityDecisionOutcomeV1 {
-        use TargetCapabilityDecisionOutcomeV1::{
-            DynamicLaunchEvidenceRequired, Incomplete, Supported, Unreviewed, Unsupported,
-        };
-
-        match requirement {
-            TargetCapabilityRequirementV1::ScalarType(scalar) => {
-                if scalar.bit_width() <= 64 {
-                    Supported
-                } else {
-                    Unsupported
-                }
-            }
-            TargetCapabilityRequirementV1::SubgroupSize(16 | 32) => Supported,
-            TargetCapabilityRequirementV1::SubgroupSize(_) => Unsupported,
-            TargetCapabilityRequirementV1::AddressSpace(space, _) => match space {
-                TargetAddressSpaceV1::Global
-                | TargetAddressSpaceV1::Workgroup
-                | TargetAddressSpaceV1::Private
-                | TargetAddressSpaceV1::Constant => Supported,
-                TargetAddressSpaceV1::Generic => Unsupported,
-            },
-            TargetCapabilityRequirementV1::Atomic(atomic) => {
-                let integer32 = matches!(
-                    atomic.value_type().kind(),
-                    TargetScalarKindV1::SignedInteger | TargetScalarKindV1::UnsignedInteger
-                ) && atomic.value_type().bit_width() == 32;
-                let memory = matches!(
-                    atomic.address_space(),
-                    TargetAddressSpaceV1::Global | TargetAddressSpaceV1::Workgroup
-                );
-                let scope = matches!(
-                    atomic.scope(),
-                    TargetMemoryScopeV1::Subgroup
-                        | TargetMemoryScopeV1::Workgroup
-                        | TargetMemoryScopeV1::Device
-                );
-                let ordering = match atomic.operation() {
-                    TargetAtomicOperationV1::Load => matches!(
-                        atomic.ordering(),
-                        TargetMemoryOrderingV1::Relaxed
-                            | TargetMemoryOrderingV1::Acquire
-                            | TargetMemoryOrderingV1::SequentiallyConsistent
-                    ),
-                    TargetAtomicOperationV1::Store => matches!(
-                        atomic.ordering(),
-                        TargetMemoryOrderingV1::Relaxed
-                            | TargetMemoryOrderingV1::Release
-                            | TargetMemoryOrderingV1::SequentiallyConsistent
-                    ),
-                    _ => true,
-                };
-                if integer32 && memory && scope && ordering {
-                    Supported
-                } else {
-                    Unsupported
-                }
-            }
-            TargetCapabilityRequirementV1::Barrier(barrier) => {
-                if barrier.execution_scope() == TargetExecutionScopeV1::Workgroup
-                    && barrier.memory_scope() == TargetMemoryScopeV1::Workgroup
-                    && matches!(
-                        barrier.address_space(),
-                        TargetAddressSpaceV1::Global | TargetAddressSpaceV1::Workgroup
-                    )
-                {
-                    Supported
-                } else {
-                    Unsupported
-                }
-            }
-            TargetCapabilityRequirementV1::Fence(fence) => {
-                if fence.memory_scope() == TargetMemoryScopeV1::Workgroup
-                    && fence.address_space() == TargetAddressSpaceV1::Workgroup
-                    && fence.ordering() == TargetMemoryOrderingV1::AcquireRelease
-                {
-                    Supported
-                } else {
-                    Unsupported
-                }
-            }
-            TargetCapabilityRequirementV1::Collective(collective) => {
-                if collective.execution_scope() == TargetExecutionScopeV1::Subgroup
-                    && matches!(collective.participants(), 16 | 32)
-                    && collective.value_type().bit_width() == 32
-                {
-                    Supported
-                } else {
-                    Unsupported
-                }
-            }
-            TargetCapabilityRequirementV1::Matrix(_) => Unsupported,
-            TargetCapabilityRequirementV1::AsyncCopy(_) => Unsupported,
-            TargetCapabilityRequirementV1::AsyncWait(_) => Unsupported,
-            TargetCapabilityRequirementV1::Numerical(numerical)
-                if numerical.mode() == TargetNumericalModeV1::IeeeStrict =>
-            {
-                Supported
-            }
-            TargetCapabilityRequirementV1::Numerical(_) => Unsupported,
-            TargetCapabilityRequirementV1::Resource(resource) => {
-                match resource {
-                    TargetResourceRequirementV1::WorkgroupInvocationsAtMost(value) => {
-                        if value <= 192 { Supported } else { Unsupported }
-                    }
-                    TargetResourceRequirementV1::StaticSharedMemoryBytesAtMost(value) => {
-                        if value <= 48 * 1024 {
-                            Supported
-                        } else {
-                            Unsupported
-                        }
-                    }
-                    TargetResourceRequirementV1::DynamicSharedMemoryBytesAtMost(value) => {
-                        if value <= 48 * 1024 {
-                            DynamicLaunchEvidenceRequired(
-                                TargetLaunchEvidenceKindV1::DynamicSharedMemoryBytes,
-                            )
-                        } else {
-                            Unsupported
-                        }
-                    }
-                    TargetResourceRequirementV1::PrivateMemoryBytesPerInvocationAtMost(_) => {
-                        Incomplete
-                    }
-                    TargetResourceRequirementV1::WorkgroupDimensions { x, y, z } => {
-                        if x <= 192
-                            && y <= 192
-                            && z <= 64
-                            && x.checked_mul(y).and_then(|xy| xy.checked_mul(z)) <= Some(192)
-                        {
-                            Supported
-                        } else {
-                            Unsupported
-                        }
-                    }
-                    TargetResourceRequirementV1::SubgroupsPerWorkgroupAtMost(value) => {
-                        if value <= 12 { Supported } else { Unsupported }
-                    }
-                    TargetResourceRequirementV1::RegistersPerInvocationAtMost(_) => Unreviewed,
-                }
-            }
-            TargetCapabilityRequirementV1::Abi(abi) => match abi {
-                TargetAbiConstraintV1::PointerWidth(64)
-                | TargetAbiConstraintV1::Endianness(TargetEndiannessV1::Little)
-                | TargetAbiConstraintV1::KernelArgumentAlignmentAtMost(1 | 2 | 4 | 8 | 16) => {
-                    Supported
-                }
-                TargetAbiConstraintV1::KernelArgumentSegmentBytesAtMost(_) => Unreviewed,
-                _ => Unsupported,
-            },
-            TargetCapabilityRequirementV1::Object(object) => match object {
-                TargetObjectConstraintV1::Format(TargetObjectFormatV1::LoadableExecutable)
-                | TargetObjectConstraintV1::Relocatable(true) => Supported,
-                _ => Unsupported,
-            },
-        }
-    }
-}
-
-impl TargetCapabilityQueryV1 for SyntheticGridTarget {
-    fn model_identity(&self) -> TargetCapabilityModelIdentityV1 {
-        MODEL
-    }
-
-    fn query_outcome(
-        &self,
-        requirement: TargetCapabilityRequirementV1,
-    ) -> TargetCapabilityDecisionOutcomeV1 {
-        Self::outcome(requirement)
-    }
-}
+const PROFILE: TargetProfileSpecV1 = SYNTHETIC_CONFORMANCE_TARGET_PROFILE_V1;
+const MODEL: TargetCapabilityModelIdentityV1 = SYNTHETIC_CONFORMANCE_TARGET_MODEL_V1;
+const U16: TargetScalarTypeV1 = TargetScalarTypeV1::new(TargetScalarKindV1::UnsignedInteger, 16);
+const F32: TargetScalarTypeV1 = TargetScalarTypeV1::new(TargetScalarKindV1::Float, 32);
 
 fn outcome(requirement: TargetCapabilityRequirementV1) -> TargetCapabilityDecisionOutcomeV1 {
-    let decision = query_target_capability_v1(&SyntheticGridTarget, requirement)
+    let decision = query_target_capability_v1(&SyntheticConformanceTargetV1, requirement)
         .expect("synthetic target and test requirements are valid");
+    let replay = query_target_capability_v1(&SyntheticConformanceTargetV1, requirement)
+        .expect("synthetic target query replay must remain valid");
+    assert_eq!(decision, replay);
     assert_eq!(decision.model(), MODEL);
     assert_eq!(decision.requirement(), requirement);
     decision.outcome()
@@ -224,56 +42,39 @@ fn atomic(bit_width: u16) -> TargetCapabilityRequirementV1 {
     ))
 }
 
-fn atomic_store(ordering: TargetMemoryOrderingV1) -> TargetCapabilityRequirementV1 {
-    TargetCapabilityRequirementV1::Atomic(TargetAtomicRequirementV1::new(
-        TargetScalarTypeV1::new(TargetScalarKindV1::UnsignedInteger, 32),
-        TargetAtomicOperationV1::Store,
-        ordering,
-        TargetMemoryScopeV1::Device,
-        TargetAddressSpaceV1::Global,
+fn reviewed_matrix() -> TargetCapabilityRequirementV1 {
+    TargetCapabilityRequirementV1::Matrix(TargetMatrixRequirementV1::with_complete_contract(
+        TargetMatrixOperationV1::TensorContraction,
+        TargetMatrixShapeV1::new(8, 4, 2),
+        F32,
+        F32,
+        F32,
+        TargetMatrixLayoutsV1::new(
+            TargetMatrixLayoutV1::RowMajor,
+            TargetMatrixLayoutV1::RowMajor,
+            TargetMatrixLayoutV1::ColumnMajor,
+        ),
+        TargetNumericalModeV1::AllowContraction,
+        16,
+        8,
     ))
 }
 
 #[test]
 fn synthetic_target_accepts_its_reviewed_contract() {
+    assert_supported(TargetCapabilityRequirementV1::SubgroupSize(8));
     assert_supported(TargetCapabilityRequirementV1::SubgroupSize(16));
-    assert_supported(TargetCapabilityRequirementV1::ScalarType(
-        TargetScalarTypeV1::new(TargetScalarKindV1::Float, 32),
-    ));
-    assert_supported(TargetCapabilityRequirementV1::SubgroupSize(32));
+    assert_supported(TargetCapabilityRequirementV1::ScalarType(U16));
+    assert_supported(TargetCapabilityRequirementV1::ScalarType(F32));
     assert_supported(TargetCapabilityRequirementV1::AddressSpace(
         TargetAddressSpaceV1::Global,
         TargetMemoryAccessV1::ReadWrite,
     ));
-    assert_supported(atomic(32));
-    assert_supported(TargetCapabilityRequirementV1::Atomic(
-        TargetAtomicRequirementV1::new(
-            TargetScalarTypeV1::new(TargetScalarKindV1::UnsignedInteger, 32),
-            TargetAtomicOperationV1::Sub,
-            TargetMemoryOrderingV1::AcquireRelease,
-            TargetMemoryScopeV1::Device,
-            TargetAddressSpaceV1::Global,
-        ),
+    assert_supported(TargetCapabilityRequirementV1::AddressSpace(
+        TargetAddressSpaceV1::Constant,
+        TargetMemoryAccessV1::Read,
     ));
-    assert_supported(TargetCapabilityRequirementV1::Atomic(
-        TargetAtomicRequirementV1::new(
-            TargetScalarTypeV1::new(TargetScalarKindV1::UnsignedInteger, 32),
-            TargetAtomicOperationV1::Nand,
-            TargetMemoryOrderingV1::AcquireRelease,
-            TargetMemoryScopeV1::Device,
-            TargetAddressSpaceV1::Global,
-        ),
-    ));
-    assert_supported(TargetCapabilityRequirementV1::Atomic(
-        TargetAtomicRequirementV1::compare_exchange(
-            TargetScalarTypeV1::new(TargetScalarKindV1::UnsignedInteger, 32),
-            TargetMemoryOrderingV1::AcquireRelease,
-            TargetMemoryOrderingV1::Acquire,
-            TargetMemoryScopeV1::Device,
-            TargetAddressSpaceV1::Global,
-        ),
-    ));
-    assert_supported(atomic_store(TargetMemoryOrderingV1::Release));
+    assert_supported(atomic(16));
     assert_supported(TargetCapabilityRequirementV1::Barrier(
         TargetBarrierRequirementV1::new(
             TargetExecutionScopeV1::Workgroup,
@@ -294,43 +95,67 @@ fn synthetic_target_accepts_its_reviewed_contract() {
         TargetCollectiveRequirementV1::new(
             TargetExecutionScopeV1::Subgroup,
             TargetCollectiveOperationV1::ReduceAdd,
-            TargetScalarTypeV1::new(TargetScalarKindV1::Float, 32),
-            32,
+            U16,
+            16,
             TargetCollectiveParticipationV1::Full,
-            Some(TargetNumericalModeV1::IeeeStrict),
+            None,
+        ),
+    ));
+    assert_supported(reviewed_matrix());
+    assert_supported(TargetCapabilityRequirementV1::AsyncCopy(
+        TargetAsyncCopyRequirementV1::new(
+            TargetAddressSpaceV1::Global,
+            TargetAddressSpaceV1::Workgroup,
+            12,
+            4,
+        ),
+    ));
+    assert_supported(TargetCapabilityRequirementV1::AsyncWait(
+        TargetAsyncWaitRequirementV1::new(
+            TargetExecutionScopeV1::Workgroup,
+            TargetMemoryScopeV1::Workgroup,
+            TargetMemoryOrderingV1::Acquire,
+            1,
         ),
     ));
     assert_supported(TargetCapabilityRequirementV1::Numerical(
-        TargetNumericalRequirementV1::new(
-            TargetScalarTypeV1::new(TargetScalarKindV1::Float, 32),
-            TargetNumericalModeV1::IeeeStrict,
-        ),
+        TargetNumericalRequirementV1::new(F32, TargetNumericalModeV1::IeeeStrict),
     ));
     assert_supported(TargetCapabilityRequirementV1::Resource(
         TargetResourceRequirementV1::WorkgroupInvocationsAtMost(192),
     ));
     assert_supported(TargetCapabilityRequirementV1::Resource(
-        TargetResourceRequirementV1::StaticSharedMemoryBytesAtMost(48 * 1024),
+        TargetResourceRequirementV1::StaticSharedMemoryBytesAtMost(24 * 1024),
     ));
     assert_supported(TargetCapabilityRequirementV1::Resource(
-        TargetResourceRequirementV1::WorkgroupDimensions { x: 32, y: 2, z: 1 },
+        TargetResourceRequirementV1::WorkgroupDimensions { x: 96, y: 2, z: 1 },
     ));
     assert_supported(TargetCapabilityRequirementV1::Abi(
-        TargetAbiConstraintV1::PointerWidth(64),
+        TargetAbiConstraintV1::PointerWidth(32),
+    ));
+    assert_supported(TargetCapabilityRequirementV1::Abi(
+        TargetAbiConstraintV1::Endianness(TargetEndiannessV1::Big),
     ));
     assert_supported(TargetCapabilityRequirementV1::Object(
-        TargetObjectConstraintV1::Format(TargetObjectFormatV1::LoadableExecutable),
+        TargetObjectConstraintV1::Format(TargetObjectFormatV1::PortableModule),
+    ));
+    assert_supported(TargetCapabilityRequirementV1::Object(
+        TargetObjectConstraintV1::Relocatable(false),
     ));
 }
 
 #[test]
 fn every_unsupported_axis_is_rejected_independently() {
-    assert_unsupported(TargetCapabilityRequirementV1::SubgroupSize(64));
+    assert_unsupported(TargetCapabilityRequirementV1::SubgroupSize(32));
     assert_unsupported(TargetCapabilityRequirementV1::AddressSpace(
         TargetAddressSpaceV1::Generic,
         TargetMemoryAccessV1::Read,
     ));
-    assert_unsupported(atomic(64));
+    assert_unsupported(TargetCapabilityRequirementV1::AddressSpace(
+        TargetAddressSpaceV1::Constant,
+        TargetMemoryAccessV1::Write,
+    ));
+    assert_unsupported(atomic(32));
     assert_unsupported(TargetCapabilityRequirementV1::Barrier(
         TargetBarrierRequirementV1::new(
             TargetExecutionScopeV1::Grid,
@@ -370,17 +195,24 @@ fn every_unsupported_axis_is_rejected_independently() {
             TargetNumericalModeV1::IeeeStrict,
         ),
     ));
+    let TargetCapabilityRequirementV1::Matrix(matrix) = reviewed_matrix() else {
+        unreachable!()
+    };
     assert_unsupported(TargetCapabilityRequirementV1::Matrix(
-        TargetMatrixRequirementV1::tensor_contraction(
-            TargetMatrixShapeV1::new(16, 16, 16),
-            TargetScalarTypeV1::new(TargetScalarKindV1::Float, 16),
-            TargetScalarTypeV1::new(TargetScalarKindV1::Float, 32),
+        TargetMatrixRequirementV1::with_complete_contract(
+            matrix.operation(),
+            TargetMatrixShapeV1::new(matrix.m(), matrix.n(), matrix.k()),
+            matrix.lhs_type(),
+            matrix.rhs_type(),
+            matrix.accumulator_type(),
             TargetMatrixLayoutsV1::new(
-                TargetMatrixLayoutV1::RowMajor,
-                TargetMatrixLayoutV1::ColumnMajor,
-                TargetMatrixLayoutV1::RowMajor,
+                matrix.lhs_layout(),
+                matrix.rhs_layout(),
+                matrix.output_layout(),
             ),
-            TargetNumericalModeV1::IeeeStrict,
+            matrix.numerical_mode(),
+            matrix.subgroup_size(),
+            16,
         ),
     ));
     assert_unsupported(TargetCapabilityRequirementV1::AsyncCopy(
@@ -388,7 +220,7 @@ fn every_unsupported_axis_is_rejected_independently() {
             TargetAddressSpaceV1::Global,
             TargetAddressSpaceV1::Workgroup,
             16,
-            16,
+            4,
         ),
     ));
     assert_unsupported(TargetCapabilityRequirementV1::AsyncWait(
@@ -409,13 +241,22 @@ fn every_unsupported_axis_is_rejected_independently() {
         TargetResourceRequirementV1::WorkgroupInvocationsAtMost(193),
     ));
     assert_unsupported(TargetCapabilityRequirementV1::Resource(
-        TargetResourceRequirementV1::StaticSharedMemoryBytesAtMost(48 * 1024 + 1),
+        TargetResourceRequirementV1::StaticSharedMemoryBytesAtMost(24 * 1024 + 1),
+    ));
+    assert_unsupported(TargetCapabilityRequirementV1::Resource(
+        TargetResourceRequirementV1::DynamicSharedMemoryBytesAtMost(12 * 1024 + 1),
     ));
     assert_unsupported(TargetCapabilityRequirementV1::Abi(
-        TargetAbiConstraintV1::PointerWidth(32),
+        TargetAbiConstraintV1::PointerWidth(64),
+    ));
+    assert_unsupported(TargetCapabilityRequirementV1::Abi(
+        TargetAbiConstraintV1::Endianness(TargetEndiannessV1::Little),
     ));
     assert_unsupported(TargetCapabilityRequirementV1::Object(
-        TargetObjectConstraintV1::Format(TargetObjectFormatV1::PortableModule),
+        TargetObjectConstraintV1::Format(TargetObjectFormatV1::LoadableExecutable),
+    ));
+    assert_unsupported(TargetCapabilityRequirementV1::Object(
+        TargetObjectConstraintV1::Relocatable(true),
     ));
 }
 
@@ -445,28 +286,37 @@ fn nonfinal_outcomes_are_not_collapsed_into_support() {
 
 #[test]
 fn model_and_decision_identities_are_canonical_and_deterministic() {
+    assert_eq!(PROFILE.vendor(), TargetVendorV1::Other);
+    assert_eq!(
+        PROFILE.architecture_family(),
+        TargetArchitectureFamilyV1::Other
+    );
+    assert_eq!(PROFILE.rustc_target(), None);
+    assert_eq!(PROFILE.llvm_target(), None);
+    assert_eq!(PROFILE.data_layout(), None);
+    assert_eq!(PROFILE.artifact_format(), TargetArtifactFormatV1::Unknown);
     assert_eq!(MODEL.validate(), Ok(()));
     assert_eq!(
-        TargetCapabilityModelIdentityV1::new(PROFILE, "synthetic-capabilities-v1"),
+        TargetCapabilityModelIdentityV1::new(PROFILE, "synthetic-conformance-v1"),
         Ok(MODEL)
     );
-    assert_eq!(SyntheticGridTarget.model_identity(), MODEL);
+    assert_eq!(SyntheticConformanceTargetV1.model_identity(), MODEL);
     assert_eq!(
         MODEL.to_string(),
-        "fe2o3.target-capability-model.v1;profile-fingerprint=c5c795b66fd8340e77ac6e1ae7b32e564ad2f576959484084c5011f858f46cc9;revision-fingerprint=87654870ed8e4bd5f7175e31b6a70908380454bc93839b52658779444dde8033"
+        "fe2o3.target-capability-model.v1;profile-fingerprint=ca74f09fe4905e7c66e6bfafe4ee4ad23df167bac81f0007f325be6273f41411;revision-fingerprint=b447385124f03b7e4c5bae18c5df0c3460aa07f540247a8244ae20208fd83945"
     );
 
-    let requirement = atomic(32);
-    let first = query_target_capability_v1(&SyntheticGridTarget, requirement)
+    let requirement = atomic(16);
+    let first = query_target_capability_v1(&SyntheticConformanceTargetV1, requirement)
         .expect("valid query")
         .to_string();
-    let second = query_target_capability_v1(&SyntheticGridTarget, requirement)
+    let second = query_target_capability_v1(&SyntheticConformanceTargetV1, requirement)
         .expect("valid query")
         .to_string();
     assert_eq!(first, second);
     assert!(first.starts_with("fe2o3.target-capability-decision.v1;"));
     assert!(first.contains(
-        "requirement=[atomic:unsigned-integer:32:twos-complement:add:relaxed:<none>:device:global]"
+        "requirement=[atomic:unsigned-integer:16:twos-complement:add:relaxed:<none>:device:global]"
     ));
     assert!(first.ends_with(";outcome=supported"));
 }
@@ -546,25 +396,24 @@ fn invalid_models_and_requirements_cannot_mint_decisions() {
 
     for requirement in invalid_requirements {
         assert!(matches!(
-            query_target_capability_v1(&SyntheticGridTarget, requirement),
+            query_target_capability_v1(&SyntheticConformanceTargetV1, requirement),
             Err(TargetCapabilityQueryErrorV1::InvalidRequirement(_))
         ));
     }
 }
 
-const CLOSURE_SCALAR: TargetCapabilityRequirementV1 = TargetCapabilityRequirementV1::ScalarType(
-    TargetScalarTypeV1::new(TargetScalarKindV1::Float, 32),
-);
+const CLOSURE_SCALAR: TargetCapabilityRequirementV1 =
+    TargetCapabilityRequirementV1::ScalarType(U16);
 const CLOSURE_SUBGROUP: TargetCapabilityRequirementV1 =
-    TargetCapabilityRequirementV1::SubgroupSize(32);
+    TargetCapabilityRequirementV1::SubgroupSize(16);
 const CLOSURE_COLLECTIVE: TargetCapabilityRequirementV1 =
     TargetCapabilityRequirementV1::Collective(TargetCollectiveRequirementV1::new(
         TargetExecutionScopeV1::Subgroup,
         TargetCollectiveOperationV1::ReduceAdd,
-        TargetScalarTypeV1::new(TargetScalarKindV1::Float, 32),
-        32,
+        U16,
+        16,
         TargetCollectiveParticipationV1::Full,
-        Some(TargetNumericalModeV1::IeeeStrict),
+        None,
     ));
 const CLOSURE_DEPENDENCIES: &[TargetCapabilityRequirementV1] = &[CLOSURE_SCALAR, CLOSURE_SUBGROUP];
 const CLOSURE_ROOTS: &[TargetCapabilityRequirementV1] = &[CLOSURE_COLLECTIVE];
@@ -580,12 +429,16 @@ fn complete_closure_spec() -> TargetCapabilityClosureSpecV1<'static> {
 
 #[test]
 fn exact_closure_is_static_no_alloc_and_deterministic() {
-    let first =
-        admit_static_target_capability_closure_v1(&SyntheticGridTarget, complete_closure_spec())
-            .expect("synthetic closure must be statically admitted");
-    let second =
-        admit_static_target_capability_closure_v1(&SyntheticGridTarget, complete_closure_spec())
-            .expect("replayed synthetic closure must be admitted");
+    let first = admit_static_target_capability_closure_v1(
+        &SyntheticConformanceTargetV1,
+        complete_closure_spec(),
+    )
+    .expect("synthetic closure must be statically admitted");
+    let second = admit_static_target_capability_closure_v1(
+        &SyntheticConformanceTargetV1,
+        complete_closure_spec(),
+    )
+    .expect("replayed synthetic closure must be admitted");
 
     assert_eq!(first, second);
     assert_eq!(first.len(), 3);
@@ -604,10 +457,9 @@ fn exact_closure_is_static_no_alloc_and_deterministic() {
     let canonical = first.to_string();
     assert_eq!(canonical, second.to_string());
     assert!(canonical.starts_with("fe2o3.target-capability-closure.v1;"));
-    assert!(
-        canonical
-            .contains("collective:subgroup:reduce-add:float:32:ieee-binary:32:full:ieee-strict")
-    );
+    assert!(canonical.contains(
+        "collective:subgroup:reduce-add:unsigned-integer:16:twos-complement:16:full:<none>"
+    ));
     for forbidden in ["amd", "gfx", "hip", "hsa", "cuda", "spir-v", "spirv"] {
         assert!(
             !canonical.to_ascii_lowercase().contains(forbidden),
@@ -618,12 +470,193 @@ fn exact_closure_is_static_no_alloc_and_deterministic() {
 
 #[test]
 fn neutral_capability_source_and_records_have_no_backend_vocabulary_or_space_numbers() {
-    let source = include_str!("../src/capability_v1.rs").to_ascii_lowercase();
-    for forbidden in ["amd", "gfx", "hip", "hsa", "cuda", "spir-v", "spirv"] {
+    let neutral_sources = [
+        (
+            "target capability contract",
+            include_str!("../src/capability_v1.rs"),
+        ),
+        (
+            "synthetic conformance model",
+            include_str!("../src/synthetic_conformance_v1.rs"),
+        ),
+        (
+            "source memory capabilities",
+            include_str!("../../fe2o3-device/src/capability_memory.rs"),
+        ),
+        (
+            "source execution capabilities",
+            include_str!("../../fe2o3-device/src/execution.rs"),
+        ),
+        (
+            "source numerical capabilities",
+            include_str!("../../fe2o3-device/src/numerical.rs"),
+        ),
+        (
+            "canonical execution capability wrapper",
+            include_str!("../../fe2o3-kernel-ir/src/execution_capability_v1.rs"),
+        ),
+        (
+            "canonical KIR V13 owner",
+            include_str!("../../fe2o3-kernel-ir/src/canonical_kir_v13.rs"),
+        ),
+        (
+            "target-neutral optimization report",
+            include_str!("../../fe2o3-kernel-opt/src/optimization_v6.rs"),
+        ),
+        (
+            "target-neutral structural replay",
+            include_str!("../../fe2o3-kernel-opt/src/structural_replay_admission_v6.rs"),
+        ),
+        (
+            "target-neutral cost model",
+            include_str!("../../fe2o3-kernel-opt/src/target_neutral_cost_v1.rs"),
+        ),
+        (
+            "target-neutral module transform records",
+            include_str!("../../fe2o3-kernel-opt/src/target_neutral_module_transforms_v1.rs"),
+        ),
+        (
+            "transformation preservation records",
+            include_str!("../../fe2o3-kernel-opt/src/transformation_preservation_v1.rs"),
+        ),
+        (
+            "canonical capability evidence",
+            include_str!("../../fe2o3-proof-contracts/src/capability.rs"),
+        ),
+    ];
+    let forbidden_identifiers = [
+        "amd",
+        "amdgcn",
+        "amdhsa",
+        "hip",
+        "hsa",
+        "cuda",
+        "spirv",
+        "wave",
+        "wavefront",
+        "warp",
+        "mfma",
+        "s_barrier",
+        "buffer_load",
+        "buffer_store",
+    ];
+    let contains_identifier = |source: &str, identifier: &str| {
+        source.match_indices(identifier).any(|(start, _)| {
+            let is_identifier_byte = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+            let end = start + identifier.len();
+            !source[..start]
+                .bytes()
+                .next_back()
+                .is_some_and(is_identifier_byte)
+                && !source[end..].bytes().next().is_some_and(is_identifier_byte)
+        })
+    };
+    let contains_gfx_profile = |source: &str| {
+        source.match_indices("gfx").any(|(start, _)| {
+            source[start + 3..]
+                .bytes()
+                .next()
+                .is_some_and(|byte| byte.is_ascii_digit())
+        })
+    };
+    let forbidden_space_numbers = [
+        "addrspace(1)",
+        "addrspace(3)",
+        "addrspace(4)",
+        "addrspace(5)",
+        "address space 1",
+        "address space 3",
+        "address space 4",
+        "address space 5",
+    ];
+
+    for (layer, source) in neutral_sources {
+        let source = source.to_ascii_lowercase();
+        for forbidden in forbidden_identifiers {
+            assert!(
+                !contains_identifier(&source, forbidden),
+                "{layer} contains {forbidden}"
+            );
+        }
         assert!(
-            !source.contains(forbidden),
-            "neutral source contains {forbidden}"
+            !contains_gfx_profile(&source),
+            "{layer} contains a gfx profile"
         );
+        assert!(!source.contains("spir-v"), "{layer} contains spir-v");
+        for forbidden in forbidden_space_numbers {
+            assert!(!source.contains(forbidden), "{layer} contains {forbidden}");
+        }
+    }
+
+    let requirements = [
+        TargetCapabilityRequirementV1::ScalarType(F32),
+        TargetCapabilityRequirementV1::SubgroupSize(16),
+        TargetCapabilityRequirementV1::AddressSpace(
+            TargetAddressSpaceV1::Constant,
+            TargetMemoryAccessV1::Read,
+        ),
+        atomic(16),
+        TargetCapabilityRequirementV1::Barrier(TargetBarrierRequirementV1::new(
+            TargetExecutionScopeV1::Workgroup,
+            TargetMemoryScopeV1::Workgroup,
+            TargetAddressSpaceV1::Workgroup,
+            TargetMemoryOrderingV1::AcquireRelease,
+            TargetBarrierParticipationV1::Uniform,
+        )),
+        TargetCapabilityRequirementV1::Fence(TargetFenceRequirementV1::new(
+            TargetMemoryScopeV1::Workgroup,
+            TargetAddressSpaceV1::Workgroup,
+            TargetMemoryOrderingV1::AcquireRelease,
+        )),
+        TargetCapabilityRequirementV1::Collective(TargetCollectiveRequirementV1::new(
+            TargetExecutionScopeV1::Subgroup,
+            TargetCollectiveOperationV1::ReduceAdd,
+            U16,
+            16,
+            TargetCollectiveParticipationV1::Full,
+            None,
+        )),
+        reviewed_matrix(),
+        TargetCapabilityRequirementV1::AsyncCopy(TargetAsyncCopyRequirementV1::new(
+            TargetAddressSpaceV1::Global,
+            TargetAddressSpaceV1::Workgroup,
+            12,
+            4,
+        )),
+        TargetCapabilityRequirementV1::AsyncWait(TargetAsyncWaitRequirementV1::new(
+            TargetExecutionScopeV1::Workgroup,
+            TargetMemoryScopeV1::Workgroup,
+            TargetMemoryOrderingV1::Acquire,
+            1,
+        )),
+        TargetCapabilityRequirementV1::Numerical(TargetNumericalRequirementV1::new(
+            F32,
+            TargetNumericalModeV1::IeeeStrict,
+        )),
+        TargetCapabilityRequirementV1::Resource(
+            TargetResourceRequirementV1::WorkgroupInvocationsAtMost(192),
+        ),
+        TargetCapabilityRequirementV1::Abi(TargetAbiConstraintV1::PointerWidth(32)),
+        TargetCapabilityRequirementV1::Object(TargetObjectConstraintV1::Format(
+            TargetObjectFormatV1::PortableModule,
+        )),
+    ];
+    for requirement in requirements {
+        let record = requirement.to_string().to_ascii_lowercase();
+        for forbidden in forbidden_identifiers {
+            assert!(
+                !contains_identifier(&record, forbidden),
+                "{record} contains {forbidden}"
+            );
+        }
+        assert!(
+            !contains_gfx_profile(&record),
+            "{record} contains a gfx profile"
+        );
+        assert!(!record.contains("spir-v"), "{record} contains spir-v");
+        for forbidden in forbidden_space_numbers {
+            assert!(!record.contains(forbidden), "{record} contains {forbidden}");
+        }
     }
 
     for space in [
@@ -652,7 +685,7 @@ impl TargetCapabilityQueryV1 for OmittedTarget {
         &self,
         requirement: TargetCapabilityRequirementV1,
     ) -> TargetCapabilityDecisionOutcomeV1 {
-        SyntheticGridTarget::outcome(requirement)
+        SyntheticConformanceTargetV1.query_outcome(requirement)
     }
 
     fn query_outcome_checked(
@@ -720,7 +753,7 @@ fn closure_rejects_omitted_nondeterministic_and_nonfinal_answers() {
         [TargetCapabilityClosureNodeV1::new(INCOMPLETE[0], &[])];
     assert_eq!(
         query_target_capability_closure_v1(
-            &SyntheticGridTarget,
+            &SyntheticConformanceTargetV1,
             singleton_spec(&INCOMPLETE, &INCOMPLETE_NODES),
         ),
         Err(TargetCapabilityClosureErrorV1::Incomplete(INCOMPLETE[0]))
@@ -733,7 +766,7 @@ fn closure_rejects_omitted_nondeterministic_and_nonfinal_answers() {
         [TargetCapabilityClosureNodeV1::new(UNREVIEWED[0], &[])];
     assert_eq!(
         query_target_capability_closure_v1(
-            &SyntheticGridTarget,
+            &SyntheticConformanceTargetV1,
             singleton_spec(&UNREVIEWED, &UNREVIEWED_NODES),
         ),
         Err(TargetCapabilityClosureErrorV1::Unreviewed(UNREVIEWED[0]))
@@ -745,7 +778,7 @@ fn closure_rejects_omitted_nondeterministic_and_nonfinal_answers() {
         [TargetCapabilityClosureNodeV1::new(UNSUPPORTED[0], &[])];
     assert_eq!(
         query_target_capability_closure_v1(
-            &SyntheticGridTarget,
+            &SyntheticConformanceTargetV1,
             singleton_spec(&UNSUPPORTED, &UNSUPPORTED_NODES),
         ),
         Err(TargetCapabilityClosureErrorV1::Unsupported(UNSUPPORTED[0]))
@@ -760,7 +793,7 @@ fn launch_dependent_closure_is_resolved_but_not_statically_admitted() {
     const DYNAMIC_NODES: [TargetCapabilityClosureNodeV1<'static>; 1] =
         [TargetCapabilityClosureNodeV1::new(DYNAMIC[0], &[])];
     let spec = singleton_spec(&DYNAMIC, &DYNAMIC_NODES);
-    let closure = query_target_capability_closure_v1(&SyntheticGridTarget, spec).unwrap();
+    let closure = query_target_capability_closure_v1(&SyntheticConformanceTargetV1, spec).unwrap();
     assert_eq!(
         closure.first_dynamic_requirement(),
         Some((
@@ -769,7 +802,7 @@ fn launch_dependent_closure_is_resolved_but_not_statically_admitted() {
         ))
     );
     assert_eq!(
-        admit_static_target_capability_closure_v1(&SyntheticGridTarget, spec),
+        admit_static_target_capability_closure_v1(&SyntheticConformanceTargetV1, spec),
         Err(
             TargetCapabilityClosureErrorV1::DynamicLaunchEvidenceRequired {
                 requirement: DYNAMIC[0],
@@ -790,7 +823,7 @@ fn closure_graph_validation_rejects_cycles_omissions_and_noncanonical_graphs() {
     ];
     assert!(matches!(
         query_target_capability_closure_v1(
-            &SyntheticGridTarget,
+            &SyntheticConformanceTargetV1,
             TargetCapabilityClosureSpecV1::new(&CYCLE_ROOTS, &CYCLE_NODES),
         ),
         Err(TargetCapabilityClosureErrorV1::DependencyCycle(_))
@@ -804,7 +837,7 @@ fn closure_graph_validation_rejects_cycles_omissions_and_noncanonical_graphs() {
         )];
     assert_eq!(
         query_target_capability_closure_v1(
-            &SyntheticGridTarget,
+            &SyntheticConformanceTargetV1,
             TargetCapabilityClosureSpecV1::new(&MISSING_ROOTS, &MISSING_NODES),
         ),
         Err(TargetCapabilityClosureErrorV1::MissingDependency {
@@ -820,7 +853,7 @@ fn closure_graph_validation_rejects_cycles_omissions_and_noncanonical_graphs() {
     ];
     assert_eq!(
         query_target_capability_closure_v1(
-            &SyntheticGridTarget,
+            &SyntheticConformanceTargetV1,
             TargetCapabilityClosureSpecV1::new(&EXTRA_ROOTS, &EXTRA_NODES),
         ),
         Err(TargetCapabilityClosureErrorV1::UnreachableNode(
@@ -831,7 +864,7 @@ fn closure_graph_validation_rejects_cycles_omissions_and_noncanonical_graphs() {
     const UNSORTED_ROOTS: [TargetCapabilityRequirementV1; 2] = [CLOSURE_SUBGROUP, CLOSURE_SCALAR];
     assert_eq!(
         query_target_capability_closure_v1(
-            &SyntheticGridTarget,
+            &SyntheticConformanceTargetV1,
             TargetCapabilityClosureSpecV1::new(&UNSORTED_ROOTS, CLOSURE_NODES),
         ),
         Err(TargetCapabilityClosureErrorV1::NonCanonicalRootOrder)
@@ -843,7 +876,7 @@ fn closure_graph_validation_rejects_cycles_omissions_and_noncanonical_graphs() {
     ];
     assert_eq!(
         query_target_capability_closure_v1(
-            &SyntheticGridTarget,
+            &SyntheticConformanceTargetV1,
             TargetCapabilityClosureSpecV1::new(&EXTRA_ROOTS, &too_many),
         ),
         Err(TargetCapabilityClosureErrorV1::TooManyRequirements {
@@ -857,8 +890,9 @@ fn closure_graph_validation_rejects_cycles_omissions_and_noncanonical_graphs() {
 fn query_is_deterministic_across_a_bounded_requirement_property_matrix() {
     for width in 1..=128 {
         let requirement = TargetCapabilityRequirementV1::SubgroupSize(width);
-        let first = query_target_capability_v1(&SyntheticGridTarget, requirement).unwrap();
-        let second = query_target_capability_v1(&SyntheticGridTarget, requirement).unwrap();
+        let first = query_target_capability_v1(&SyntheticConformanceTargetV1, requirement).unwrap();
+        let second =
+            query_target_capability_v1(&SyntheticConformanceTargetV1, requirement).unwrap();
         assert_eq!(first, second, "subgroup width {width}");
     }
     for bits in [8, 16, 32, 64, 128] {
@@ -877,8 +911,8 @@ fn query_is_deterministic_across_a_bounded_requirement_property_matrix() {
                     TargetAddressSpaceV1::Global,
                 ));
             assert_eq!(
-                query_target_capability_v1(&SyntheticGridTarget, requirement),
-                query_target_capability_v1(&SyntheticGridTarget, requirement)
+                query_target_capability_v1(&SyntheticConformanceTargetV1, requirement),
+                query_target_capability_v1(&SyntheticConformanceTargetV1, requirement)
             );
         }
     }

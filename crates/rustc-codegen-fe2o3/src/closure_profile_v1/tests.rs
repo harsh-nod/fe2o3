@@ -34,6 +34,29 @@ fn host_registered(seed: u32) -> u32 {
 static HOST_REGISTRATION: fn(u32) -> u32 = host_registered;
 
 #[inline(never)]
+fn host_apply_second<F: FnOnce(u32) -> u32>(value: u32, closure: F) -> u32 {
+    closure(value)
+}
+
+#[inline(never)]
+fn host_registered_second(seed: u32) -> u32 {
+    let token = Token(seed);
+    let closure = move |delta: u32| consume(token).wrapping_add(delta);
+    host_apply_second(7, closure)
+}
+
+#[inline(never)]
+fn borrowed_apply<F: Fn(u32) -> u32>(closure: &F, value: u32) -> u32 {
+    closure(value)
+}
+
+#[inline(never)]
+fn borrowed_transport(seed: u32) -> u32 {
+    let closure = move |delta: u32| seed.wrapping_add(delta);
+    borrowed_apply(&closure, 1)
+}
+
+#[inline(never)]
 fn device_fn(seed: u32) -> u32 {
     let closure = move |delta: u32| seed.wrapping_add(delta);
     closure(1).wrapping_add(closure(2))
@@ -78,6 +101,16 @@ fn escaped(seed: u32) -> u32 {
 }
 
 #[inline(never)]
+fn wrapped_passthrough<F>(value: F) -> Option<F> { Some(value) }
+
+#[inline(never)]
+fn wrapped_escape(seed: u32) -> u32 {
+    let closure = move |delta: u32| seed.wrapping_add(delta);
+    let _escaped = wrapped_passthrough(closure);
+    0
+}
+
+#[inline(never)]
 fn raw_capture(pointer: *const u32) -> u32 {
     let closure = move || pointer as usize as u32;
     closure()
@@ -115,12 +148,17 @@ fn inline_asm_escape(seed: u32) -> u32 {
 
 #[derive(Clone, Debug)]
 struct DriverResults {
-    host: Gfx942ClosureLoweringV1,
-    device_fn: Gfx942ClosureLoweringV1,
-    device_fn_mut: Gfx942ClosureLoweringV1,
-    device_fn_once: Gfx942ClosureLoweringV1,
+    host: ProductionClosureLoweringV1,
+    transported: ProductionClosureLoweringV1,
+    transported_second: ProductionClosureLoweringV1,
+    device_fn: ProductionClosureLoweringV1,
+    device_fn_mut: ProductionClosureLoweringV1,
+    device_fn_once: ProductionClosureLoweringV1,
+    gfx950: ProductionClosureLoweringV1,
     host_ref_error: String,
     escape_error: String,
+    wrapped_escape_error: String,
+    borrowed_transport_error: String,
     raw_error: String,
     dynamic_error: String,
     return_error: String,
@@ -145,14 +183,14 @@ impl Callbacks for CaptureCallbacks {
         let device_fn_mut_instance = Instance::mono(tcx, local_function(tcx, "device_fn_mut"));
         let device_fn_once_instance = Instance::mono(tcx, local_function(tcx, "device_fn_once"));
 
-        let host_plan = analyze_gfx942_closures_v1(
+        let host_plan = analyze_production_closures_v1(
             tcx,
             host,
             ClosureOriginPolicyV1::HostArgument,
             "gfx942:xnack-",
         )
         .expect("host closure registration must be admitted");
-        let repeated = analyze_gfx942_closures_v1(
+        let repeated = analyze_production_closures_v1(
             tcx,
             host,
             ClosureOriginPolicyV1::HostArgument,
@@ -163,28 +201,49 @@ impl Callbacks for CaptureCallbacks {
 
         self.results = Some(DriverResults {
             host: host_plan,
-            device_fn: analyze_gfx942_closures_v1(
+            transported: analyze_production_closures_v1(
+                tcx,
+                host_registered,
+                ClosureOriginPolicyV1::DeviceInternal,
+                "gfx942:xnack-",
+            )
+            .expect("bounded by-value closure transport"),
+            transported_second: analyze_production_closures_v1(
+                tcx,
+                Instance::mono(tcx, local_function(tcx, "host_registered_second")),
+                ClosureOriginPolicyV1::DeviceInternal,
+                "gfx942:xnack-",
+            )
+            .expect("bounded by-value closure transport in argument one"),
+            device_fn: analyze_production_closures_v1(
                 tcx,
                 device_fn_instance,
                 ClosureOriginPolicyV1::DeviceInternal,
                 "gfx942",
             )
             .expect("device Fn closure"),
-            device_fn_mut: analyze_gfx942_closures_v1(
+            device_fn_mut: analyze_production_closures_v1(
                 tcx,
                 device_fn_mut_instance,
                 ClosureOriginPolicyV1::DeviceInternal,
                 "gfx942",
             )
             .expect("device FnMut closure"),
-            device_fn_once: analyze_gfx942_closures_v1(
+            device_fn_once: analyze_production_closures_v1(
                 tcx,
                 device_fn_once_instance,
                 ClosureOriginPolicyV1::DeviceInternal,
                 "gfx942",
             )
             .expect("device FnOnce closure"),
-            host_ref_error: analyze_gfx942_closures_v1(
+            gfx950: analyze_production_closures_v1(
+                tcx,
+                device_fn_instance,
+                ClosureOriginPolicyV1::DeviceInternal,
+                "gfx950:xnack-",
+            )
+            .expect("gfx950 uses the same target-bound closure profile"),
+            host_ref_error: analyze_production_closures_v1(
                 tcx,
                 host_ref,
                 ClosureOriginPolicyV1::HostArgument,
@@ -192,7 +251,7 @@ impl Callbacks for CaptureCallbacks {
             )
             .expect_err("host reference capture must require allocation authority")
             .to_string(),
-            escape_error: analyze_gfx942_closures_v1(
+            escape_error: analyze_production_closures_v1(
                 tcx,
                 Instance::mono(tcx, local_function(tcx, "escaped")),
                 ClosureOriginPolicyV1::DeviceInternal,
@@ -200,7 +259,23 @@ impl Callbacks for CaptureCallbacks {
             )
             .expect_err("escaping closure must fail")
             .to_string(),
-            raw_error: analyze_gfx942_closures_v1(
+            wrapped_escape_error: analyze_production_closures_v1(
+                tcx,
+                Instance::mono(tcx, local_function(tcx, "wrapped_escape")),
+                ClosureOriginPolicyV1::DeviceInternal,
+                "gfx942:xnack-",
+            )
+            .expect_err("transport must reject a closure-bearing return type")
+            .to_string(),
+            borrowed_transport_error: analyze_production_closures_v1(
+                tcx,
+                Instance::mono(tcx, local_function(tcx, "borrowed_transport")),
+                ClosureOriginPolicyV1::DeviceInternal,
+                "gfx942:xnack-",
+            )
+            .expect_err("ordinary helper transport must not borrow a closure")
+            .to_string(),
+            raw_error: analyze_production_closures_v1(
                 tcx,
                 Instance::mono(tcx, local_function(tcx, "raw_capture")),
                 ClosureOriginPolicyV1::DeviceInternal,
@@ -208,7 +283,7 @@ impl Callbacks for CaptureCallbacks {
             )
             .expect_err("raw capture must fail")
             .to_string(),
-            dynamic_error: analyze_gfx942_closures_v1(
+            dynamic_error: analyze_production_closures_v1(
                 tcx,
                 Instance::mono(tcx, local_function(tcx, "dynamic_dispatch")),
                 ClosureOriginPolicyV1::Either,
@@ -216,7 +291,7 @@ impl Callbacks for CaptureCallbacks {
             )
             .expect_err("dynamic dispatch must fail")
             .to_string(),
-            return_error: analyze_gfx942_closures_v1(
+            return_error: analyze_production_closures_v1(
                 tcx,
                 Instance::mono(tcx, local_function(tcx, "returned")),
                 ClosureOriginPolicyV1::DeviceInternal,
@@ -224,7 +299,7 @@ impl Callbacks for CaptureCallbacks {
             )
             .expect_err("returned closure must escape")
             .to_string(),
-            projected_error: analyze_gfx942_closures_v1(
+            projected_error: analyze_production_closures_v1(
                 tcx,
                 Instance::mono(tcx, local_function(tcx, "projected_reference")),
                 ClosureOriginPolicyV1::DeviceInternal,
@@ -232,7 +307,7 @@ impl Callbacks for CaptureCallbacks {
             )
             .expect_err("projected closure reference destination must fail")
             .to_string(),
-            asm_error: analyze_gfx942_closures_v1(
+            asm_error: analyze_production_closures_v1(
                 tcx,
                 Instance::mono(tcx, local_function(tcx, "inline_asm_escape")),
                 ClosureOriginPolicyV1::DeviceInternal,
@@ -240,7 +315,7 @@ impl Callbacks for CaptureCallbacks {
             )
             .expect_err("inline assembly closure use must fail")
             .to_string(),
-            origin_error: analyze_gfx942_closures_v1(
+            origin_error: analyze_production_closures_v1(
                 tcx,
                 device_fn_instance,
                 ClosureOriginPolicyV1::HostArgument,
@@ -248,7 +323,7 @@ impl Callbacks for CaptureCallbacks {
             )
             .expect_err("device closure must not satisfy host registration policy")
             .to_string(),
-            target_error: analyze_gfx942_closures_v1(
+            target_error: analyze_production_closures_v1(
                 tcx,
                 device_fn_instance,
                 ClosureOriginPolicyV1::DeviceInternal,
@@ -402,6 +477,36 @@ fn host_registration_has_exact_by_value_environment_and_static_once_call() {
 }
 
 #[test]
+fn concrete_closure_transport_is_target_bound_and_cannot_be_a_passthrough() {
+    let results = compiler_results();
+    for (argument_index, plan) in [&results.transported, &results.transported_second]
+        .into_iter()
+        .enumerate()
+    {
+        assert_eq!(plan.environments().len(), 1);
+        assert_eq!(plan.calls().len(), 0);
+        assert_eq!(plan.transport_calls().len(), 1);
+        let transport = &plan.transport_calls()[0];
+        assert_eq!(transport.argument_index, argument_index);
+        assert_eq!(transport.closure_local, plan.environments()[0].local);
+        assert_ne!(transport.target_function_identity, [0; 32]);
+        assert_ne!(transport.target_monomorphization_identity, [0; 32]);
+        assert_ne!(transport.target_mir_identity, [0; 32]);
+        assert_ne!(transport.target_fn_abi_identity, [0; 32]);
+        assert_eq!(plan.target(), "gfx942:xnack-");
+    }
+    assert_eq!(results.gfx950.target(), "gfx950:xnack-");
+    assert_ne!(results.device_fn.identity(), results.gfx950.identity());
+    assert!(
+        results
+            .wrapped_escape_error
+            .contains("returns a closure-bearing value"),
+        "{}",
+        results.wrapped_escape_error
+    );
+}
+
+#[test]
 fn device_internal_fn_fnmut_and_fnonce_lower_to_bounded_static_calls() {
     let results = compiler_results();
     let cases = [
@@ -454,6 +559,12 @@ fn unsupported_authority_escape_and_dispatch_paths_fail_closed() {
         results.escape_error.contains("closure escapes"),
         "{}",
         results.escape_error
+    );
+    // Pinned MIR forwards the borrowed receiver through an assignment rejected
+    // by the bounded alias rules before transport-call authentication.
+    assert_eq!(
+        results.borrowed_transport_error,
+        "production closure profile rejected MIR: closure value escapes through an unsupported assignment in bb0"
     );
     assert!(
         results.raw_error.contains("raw-pointer captures"),

@@ -34,6 +34,8 @@ SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 GIT_ID = re.compile(r"[0-9a-f]{40}\Z")
 SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 RUST_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+TARGET = re.compile(r"gfx[0-9]{3}\Z")
+DIAGNOSTIC = re.compile(r"FE2O3-[A-Z]+-[0-9]{3}\Z")
 TOP_LEVEL_KEYS = {
     "baseline",
     "capabilityContract",
@@ -44,6 +46,150 @@ TOP_LEVEL_KEYS = {
     "qualification",
     "roadmapIssue",
     "schema",
+}
+CAPABILITY_KERNEL_KEYS = {
+    "capabilityClosure",
+    "fixtureId",
+    "hardwareCommand",
+    "kernelSymbol",
+    "lessonIds",
+    "negativeFixtureCoverage",
+    "productionCapabilityPath",
+    "proofRequirements",
+    "requiredProperties",
+    "simulatorCommand",
+    "targetMatrix",
+}
+COMPILER_FIXTURE_KEYS = {
+    "compilerInput",
+    "fixtureId",
+    "matrix",
+    "target",
+    "testId",
+    "testPath",
+}
+COMPILER_INPUT_KEYS = {
+    "cargoLockPath",
+    "cargoLockSha256",
+    "cargoTarget",
+    "contractSha256",
+    "defaultFeatures",
+    "features",
+    "kernelSymbols",
+    "packageManifest",
+    "packageManifestSha256",
+    "sourceClosureSha256",
+    "sourcePaths",
+}
+ENTRY_KEYS = {
+    "classification",
+    "compilerFixtureIds",
+    "lessonId",
+    "packageManifest",
+    "requiredGates",
+    "siteEvidenceKind",
+    "sourcePaths",
+}
+PROOF_REQUIREMENT_KEYS = {
+    "checkerSha256",
+    "evidenceSha256",
+    "obligationSetSha256",
+    "properties",
+    "status",
+}
+NEGATIVE_CASE_KEYS = {
+    "category",
+    "diagnosticCode",
+    "failureStage",
+    "fixtureId",
+    "testPath",
+}
+NEGATIVE_FAILURE_STAGES = {
+    "artifact-inspection",
+    "host-preparation",
+    "kir-verification",
+    "macro-authentication",
+    "mir-admission",
+    "runtime-completion",
+    "sealed-verifier",
+    "static-analysis",
+    "target-legalization",
+}
+ENTRY_CLASSIFICATIONS = {
+    "compiler-produced",
+    "design-only",
+    "external-baseline",
+    "legacy-compiler-produced",
+    "simulator-only",
+    "unsupported",
+}
+ENTRY_GATES = {
+    "cpu-reference",
+    "hardware",
+    "production-compile",
+    "semantic-simulation",
+}
+QUALIFICATION_GATES = {"cpu-reference", "semantic-simulation"}
+SITE_EVIDENCE_KINDS = {
+    "compiler-checked",
+    "compiler-hsaco-observed",
+    "design-only",
+    "gpu-observed",
+    "runnable-now",
+    "source-example",
+    "source-model-verified",
+    "source-tested",
+}
+CAPABILITY_REQUIREMENTS = {
+    "abi.kernel-entry",
+    "address-space.global",
+    "address-space.private",
+    "address-space.workgroup",
+    "async-copy.global-to-workgroup",
+    "async-wait.completion",
+    "atomic.workgroup",
+    "barrier.workgroup",
+    "collective.subgroup",
+    "collective.workgroup",
+    "execution.invocation",
+    "matrix.multiply-accumulate",
+    "memory.global.read",
+    "memory.global.write",
+    "memory.private",
+    "memory.workgroup",
+    "numerical.bf16",
+    "numerical.f16",
+    "numerical.f32",
+    "numerical.fp4",
+    "numerical.fp8",
+    "numerical.integer",
+    "object.executable",
+    "resource.launch",
+    "subgroup.width.64",
+}
+REQUIRED_PROPERTIES = {
+    "abi-conformance",
+    "address-bounds",
+    "alias-legality",
+    "artifact-currentness",
+    "atomic-legality",
+    "barrier-convergence",
+    "capability-provenance",
+    "collective-participation",
+    "effect-legality",
+    "functional-refinement",
+    "happens-before",
+    "initialized-before-read",
+    "launch-preconditions",
+    "machine-refinement",
+    "numerical-policy",
+    "output-injectivity",
+    "race-freedom",
+    "resource-legality",
+    "source-mir-kir-refinement",
+    "target-capability-closure",
+    "tensor-layout",
+    "workgroup-memory-epochs",
 }
 PRODUCTION_EVIDENCE_KEYS = {
     "artifactSha256",
@@ -152,6 +298,15 @@ def _unique_strings(
         _fail(f"{label} must contain non-empty strings")
     if len(values) != len(set(values)):
         _fail(f"{label} contains duplicates")
+    return values
+
+
+def _sorted_unique_strings(
+    value: Any, label: str, *, nonempty: bool = False
+) -> list[str]:
+    values = _unique_strings(value, label, nonempty=nonempty)
+    if values != sorted(values):
+        _fail(f"{label} must be sorted")
     return values
 
 
@@ -331,6 +486,150 @@ def _required_negative_categories(required_properties: set[str]) -> set[str]:
     return categories
 
 
+def _validate_negative_case(raw: Any, label: str) -> dict[str, Any]:
+    case = _object(raw, label)
+    _exact_keys(case, NEGATIVE_CASE_KEYS, label)
+    fixture_id = _string(case["fixtureId"], f"{label}.fixtureId")
+    if SLUG.fullmatch(fixture_id) is None:
+        _fail(f"{label}.fixtureId is not a slug")
+    category = _string(case["category"], f"{label}.category")
+    if category not in PRODUCTION_NEGATIVE_CATEGORIES | {
+        "abi",
+        "alias",
+        "bounds",
+        "initialization",
+        "raw-pointer",
+        "synchronization",
+    }:
+        _fail(f"{label}.category is invalid")
+    diagnostic = _string(case["diagnosticCode"], f"{label}.diagnosticCode")
+    if DIAGNOSTIC.fullmatch(diagnostic) is None:
+        _fail(f"{label}.diagnosticCode is invalid")
+    if case["failureStage"] not in NEGATIVE_FAILURE_STAGES:
+        _fail(f"{label}.failureStage is invalid")
+    _relative_path(case["testPath"], f"{label}.testPath")
+    return case
+
+
+def _validate_kernel_shape(
+    record: dict[str, Any], label: str, fixture: dict[str, Any]
+) -> None:
+    _exact_keys(record, CAPABILITY_KERNEL_KEYS, label)
+    if record["fixtureId"] != fixture["fixtureId"]:
+        _fail(f"{label} fixture identity differs")
+    symbol = _string(record["kernelSymbol"], f"{label}.kernelSymbol")
+    if RUST_IDENTIFIER.fullmatch(symbol) is None:
+        _fail(f"{label}.kernelSymbol is not a Rust identifier")
+    _sorted_unique_strings(record["lessonIds"], f"{label}.lessonIds", nonempty=True)
+    required_properties = _sorted_unique_strings(
+        record["requiredProperties"], f"{label}.requiredProperties", nonempty=True
+    )
+    if not set(required_properties) <= REQUIRED_PROPERTIES:
+        _fail(f"{label}.requiredProperties contains an unknown property")
+
+    closure = _object(record["capabilityClosure"], f"{label}.capabilityClosure")
+    _exact_keys(closure, {"requirements", "sha256", "status"}, f"{label}.capabilityClosure")
+    requirements = _sorted_unique_strings(
+        closure["requirements"], f"{label}.capabilityClosure.requirements", nonempty=True
+    )
+    if not set(requirements) <= CAPABILITY_REQUIREMENTS:
+        _fail(f"{label}.capabilityClosure.requirements contains an unknown capability")
+    if closure["status"] == "complete":
+        _sha256(closure["sha256"], f"{label}.capabilityClosure.sha256")
+    elif closure["status"] in {"incomplete", "not-produced", "unsupported"}:
+        if closure["sha256"] is not None:
+            _fail(f"{label} incomplete capability closure carries an identity")
+    else:
+        _fail(f"{label}.capabilityClosure.status is invalid")
+
+    path = _object(record["productionCapabilityPath"], f"{label}.productionCapabilityPath")
+    _exact_keys(path, {"evidence", "path", "status"}, f"{label}.productionCapabilityPath")
+    expected_path = {
+        "complete": "canonical-capability",
+        "incomplete": "canonical-capability",
+        "legacy-only": "legacy",
+        "unsupported": "none",
+    }.get(path["status"])
+    if expected_path is None or path["path"] != expected_path:
+        _fail(f"{label}.productionCapabilityPath state is incoherent")
+    if path["status"] != "complete" and path["evidence"] is not None:
+        _fail(f"{label} incomplete production path carries evidence")
+
+    proof = _object(record["proofRequirements"], f"{label}.proofRequirements")
+    _exact_keys(proof, PROOF_REQUIREMENT_KEYS, f"{label}.proofRequirements")
+    proof_properties = _sorted_unique_strings(
+        proof["properties"], f"{label}.proofRequirements.properties", nonempty=True
+    )
+    if not PRODUCTION_PROOF_PROPERTIES <= set(proof_properties):
+        _fail(f"{label} omits a mandatory production proof property")
+    if not set(proof_properties) <= set(required_properties):
+        _fail(f"{label} proof requirements exceed requiredProperties")
+    proof_identities = ("checkerSha256", "evidenceSha256", "obligationSetSha256")
+    if proof["status"] == "complete":
+        for key in proof_identities:
+            _sha256(proof[key], f"{label}.proofRequirements.{key}")
+    elif proof["status"] in {"missing", "unsupported"}:
+        if any(proof[key] is not None for key in proof_identities):
+            _fail(f"{label} incomplete proof requirements carry identities")
+    else:
+        _fail(f"{label}.proofRequirements.status is invalid")
+
+    matrix = _array(record["targetMatrix"], f"{label}.targetMatrix")
+    if len(matrix) != 2:
+        _fail(f"{label}.targetMatrix must contain neutral and backend records")
+    neutral = _object(matrix[0], f"{label}.targetMatrix[0]")
+    _exact_keys(neutral, {"kind", "requirements", "status", "target"}, f"{label}.targetMatrix[0]")
+    if (
+        neutral["kind"] != "neutral"
+        or neutral["target"] != "target-neutral"
+        or neutral["status"] not in {"not-evaluated", "requirements-derived"}
+        or _sorted_unique_strings(
+            neutral["requirements"], f"{label}.targetMatrix[0].requirements", nonempty=True
+        )
+        != requirements
+    ):
+        _fail(f"{label} target-neutral requirements differ from its capability closure")
+    backend = _object(matrix[1], f"{label}.targetMatrix[1]")
+    _exact_keys(
+        backend,
+        {"capabilityDecisionSha256", "kind", "status", "target", "targetIdentitySha256"},
+        f"{label}.targetMatrix[1]",
+    )
+    if backend["kind"] != "backend" or backend["target"] != fixture["target"]:
+        _fail(f"{label} backend target differs from its compiler fixture")
+    target_identities = ("capabilityDecisionSha256", "targetIdentitySha256")
+    if backend["status"] == "capability-complete":
+        for key in target_identities:
+            _sha256(backend[key], f"{label}.targetMatrix[1].{key}")
+    elif backend["status"] in {"legacy-only", "not-evaluated", "unsupported"}:
+        if any(backend[key] is not None for key in target_identities):
+            _fail(f"{label} incomplete backend decision carries identities")
+    else:
+        _fail(f"{label}.targetMatrix[1].status is invalid")
+
+    negatives = _object(
+        record["negativeFixtureCoverage"], f"{label}.negativeFixtureCoverage"
+    )
+    _exact_keys(negatives, {"cases", "status"}, f"{label}.negativeFixtureCoverage")
+    cases = _array(negatives["cases"], f"{label}.negativeFixtureCoverage.cases")
+    case_ids: list[str] = []
+    for offset, raw_case in enumerate(cases):
+        case = _validate_negative_case(
+            raw_case, f"{label}.negativeFixtureCoverage.cases[{offset}]"
+        )
+        case_ids.append(case["fixtureId"])
+    if len(case_ids) != len(set(case_ids)):
+        _fail(f"{label} negative fixture identities must be unique")
+    if negatives["status"] == "complete":
+        if not cases:
+            _fail(f"{label} complete negative coverage has no cases")
+    elif negatives["status"] in {"legacy-only", "missing"}:
+        if cases:
+            _fail(f"{label} incomplete negative coverage carries cases")
+    else:
+        _fail(f"{label}.negativeFixtureCoverage.status is invalid")
+
+
 def _expected_simulator_commands(
     qualification: dict[str, Any], lesson_ids: set[str], fixture_id: str
 ) -> list[dict[str, Any]]:
@@ -501,6 +800,118 @@ def _validate_complete_kernel(
         _fail(f"{label} negative-fixture identity is stale against production evidence")
 
 
+def _validate_qualification(
+    qualification: dict[str, Any],
+    entries: dict[str, dict[str, Any]],
+    fixtures: dict[str, dict[str, Any]],
+    *,
+    qualified: bool,
+) -> None:
+    _exact_keys(
+        qualification,
+        {"evidenceSchemaPath", "hardwareTargets", "suites"},
+        "qualification",
+    )
+    if qualification["evidenceSchemaPath"] != f"config/{EVIDENCE_SCHEMA_NAME}":
+        _fail("qualification names the wrong semantic evidence schema")
+
+    fixture_targets = {fixture["target"] for fixture in fixtures.values()}
+    hardware_targets: set[str] = set()
+    for offset, raw in enumerate(
+        _array(qualification["hardwareTargets"], "qualification.hardwareTargets", nonempty=True)
+    ):
+        label = f"qualification.hardwareTargets[{offset}]"
+        target = _string(_object(raw, label).get("target"), f"{label}.target")
+        if target in hardware_targets:
+            _fail(f"duplicate qualification hardware target {target!r}")
+        hardware_targets.add(target)
+        record = _object(raw, label)
+        if qualified:
+            _exact_keys(record, {"lane", "status", "target"}, label)
+            if record["status"] != "required-qualified":
+                _fail(f"{label} is not required-qualified")
+            _string(record["lane"], f"{label}.lane")
+        else:
+            _exact_keys(
+                record,
+                {"deterministicSemanticRunnerAvailability", "reason", "target"},
+                label,
+            )
+            if record["deterministicSemanticRunnerAvailability"] != "unavailable":
+                _fail(f"{label} claims hardware availability without qualification")
+            _string(record["reason"], f"{label}.reason")
+    if hardware_targets != fixture_targets:
+        _fail("qualification hardware targets differ from compiler fixture targets")
+
+    fixture_lessons = {
+        fixture_id: {
+            lesson_id
+            for lesson_id, entry in entries.items()
+            if fixture_id in entry["compilerFixtureIds"]
+        }
+        for fixture_id in fixtures
+    }
+    covered: set[tuple[str, str, str]] = set()
+    suite_ids: set[str] = set()
+    for offset, raw in enumerate(
+        _array(qualification["suites"], "qualification.suites", nonempty=True)
+    ):
+        label = f"qualification.suites[{offset}]"
+        suite = _object(raw, label)
+        _exact_keys(
+            suite,
+            {"availability", "command", "coverage", "gate", "suiteId", "unavailableReason"},
+            label,
+        )
+        suite_id = _string(suite["suiteId"], f"{label}.suiteId")
+        if SLUG.fullmatch(suite_id) is None or suite_id in suite_ids:
+            _fail(f"{label}.suiteId is invalid or duplicated")
+        suite_ids.add(suite_id)
+        gate = _string(suite["gate"], f"{label}.gate")
+        if gate not in QUALIFICATION_GATES:
+            _fail(f"{label}.gate is invalid")
+        if suite["availability"] == "available":
+            _validate_command(_object(suite["command"], f"{label}.command"), f"{label}.command")
+            if suite["unavailableReason"] is not None:
+                _fail(f"{label} is available but carries an unavailable reason")
+        elif suite["availability"] == "unavailable":
+            if suite["command"] is not None:
+                _fail(f"{label} is unavailable but carries a command")
+            _string(suite["unavailableReason"], f"{label}.unavailableReason")
+        else:
+            _fail(f"{label}.availability is invalid")
+        for coverage_offset, coverage_raw in enumerate(
+            _array(suite["coverage"], f"{label}.coverage", nonempty=True)
+        ):
+            coverage_label = f"{label}.coverage[{coverage_offset}]"
+            coverage = _object(coverage_raw, coverage_label)
+            _exact_keys(coverage, {"fixtureIds", "lessonId"}, coverage_label)
+            lesson_id = _string(coverage["lessonId"], f"{coverage_label}.lessonId")
+            if lesson_id not in entries:
+                _fail(f"{coverage_label} names unknown lesson {lesson_id!r}")
+            for fixture_id in _sorted_unique_strings(
+                coverage["fixtureIds"], f"{coverage_label}.fixtureIds", nonempty=True
+            ):
+                if fixture_id not in fixtures:
+                    _fail(f"{coverage_label} names unknown fixture {fixture_id!r}")
+                if lesson_id not in fixture_lessons[fixture_id]:
+                    _fail(f"{coverage_label} crosses fixture lesson ownership")
+                key = (gate, lesson_id, fixture_id)
+                if key in covered:
+                    _fail(f"duplicate qualification coverage {key!r}")
+                covered.add(key)
+
+    for lesson_id, entry in entries.items():
+        if "semantic-simulation" not in entry["requiredGates"]:
+            continue
+        for fixture_id in entry["compilerFixtureIds"]:
+            if ("semantic-simulation", lesson_id, fixture_id) not in covered:
+                _fail(
+                    "qualification omits semantic-simulation coverage for lesson "
+                    f"{lesson_id!r} fixture {fixture_id!r}"
+                )
+
+
 def validate_document(
     document: dict[str, Any], *, require_qualified: bool = False
 ) -> dict[str, int]:
@@ -522,6 +933,20 @@ def validate_document(
         _fail("production contract permits drift, selection, or fallback")
 
     capability_contract = _object(document["capabilityContract"], "capabilityContract")
+    _exact_keys(
+        capability_contract,
+        {
+            "allowsExactProfileFallback",
+            "allowsLegacyFallback",
+            "completeClassification",
+            "legacyClassification",
+            "neutralTarget",
+            "roadmapIssue",
+            "schema",
+            "status",
+        },
+        "capabilityContract",
+    )
     if (
         capability_contract.get("schema") != "fe2o3-tutorial-capability-status-v1"
         or capability_contract.get("roadmapIssue") != "https://github.com/harsh-nod/fe2o3/issues/272"
@@ -535,21 +960,13 @@ def validate_document(
         _fail("capability contract differs from issue #272")
 
     baseline = _object(document["baseline"], "baseline")
+    _exact_keys(baseline, {"compilerCommit", "compilerTree", "status"}, "baseline")
     commit = _string(baseline.get("compilerCommit"), "baseline.compilerCommit")
     tree = _string(baseline.get("compilerTree"), "baseline.compilerTree")
     if GIT_ID.fullmatch(commit) is None or GIT_ID.fullmatch(tree) is None:
         _fail("baseline compiler commit/tree identities are malformed")
     if baseline.get("status") not in {"migration", "qualified"}:
         _fail("baseline status is invalid")
-
-    qualification = _object(document["qualification"], "qualification")
-    _exact_keys(
-        qualification,
-        {"evidenceSchemaPath", "hardwareTargets", "suites"},
-        "qualification",
-    )
-    if qualification["evidenceSchemaPath"] != f"config/{EVIDENCE_SCHEMA_NAME}":
-        _fail("qualification names the wrong semantic evidence schema")
 
     fixtures = _index(document["compilerFixtures"], "fixtureId", "compilerFixtures")
     entries = _index(document["entries"], "lessonId", "entries")
@@ -560,41 +977,123 @@ def validate_document(
     fixture_lessons: dict[str, set[str]] = {identity: set() for identity in fixtures}
     production_entries = 0
     for lesson_id, entry in entries.items():
+        _exact_keys(entry, ENTRY_KEYS, f"entry {lesson_id}")
         if SLUG.fullmatch(lesson_id) is None:
             _fail(f"entry lessonId {lesson_id!r} is not a slug")
         classification = _string(entry.get("classification"), f"entry {lesson_id}.classification")
-        fixture_ids = _unique_strings(entry.get("compilerFixtureIds"), f"entry {lesson_id}.compilerFixtureIds")
+        if classification not in ENTRY_CLASSIFICATIONS:
+            _fail(f"entry {lesson_id}.classification is invalid")
+        fixture_ids = _sorted_unique_strings(
+            entry.get("compilerFixtureIds"), f"entry {lesson_id}.compilerFixtureIds"
+        )
+        _relative_path(entry["packageManifest"], f"entry {lesson_id}.packageManifest")
+        for offset, source in enumerate(
+            _sorted_unique_strings(
+                entry["sourcePaths"], f"entry {lesson_id}.sourcePaths", nonempty=True
+            )
+        ):
+            _relative_path(source, f"entry {lesson_id}.sourcePaths[{offset}]")
+        gates = _sorted_unique_strings(
+            entry["requiredGates"], f"entry {lesson_id}.requiredGates", nonempty=True
+        )
+        if not set(gates) <= ENTRY_GATES:
+            _fail(f"entry {lesson_id}.requiredGates contains an invalid gate")
+        site_evidence = _string(
+            entry["siteEvidenceKind"], f"entry {lesson_id}.siteEvidenceKind"
+        )
+        if site_evidence not in SITE_EVIDENCE_KINDS:
+            _fail(f"entry {lesson_id}.siteEvidenceKind is invalid")
         for fixture_id in fixture_ids:
             if fixture_id not in fixtures:
                 _fail(f"entry {lesson_id} names unknown fixture {fixture_id}")
             fixture_lessons[fixture_id].add(lesson_id)
         if classification == "compiler-produced":
             production_entries += 1
-            if not fixture_ids or "production-compile" not in _unique_strings(
-                entry.get("requiredGates"), f"entry {lesson_id}.requiredGates", nonempty=True
-            ):
+            if not fixture_ids or "production-compile" not in gates:
                 _fail(f"compiler-produced entry {lesson_id} lacks its production gate")
         elif classification == "legacy-compiler-produced" and not fixture_ids:
             _fail(f"legacy compiler entry {lesson_id} has no fixture")
 
     for fixture_id, fixture in fixtures.items():
+        _exact_keys(fixture, COMPILER_FIXTURE_KEYS, f"fixture {fixture_id}")
+        if SLUG.fullmatch(fixture_id) is None:
+            _fail(f"fixture identity {fixture_id!r} is not a slug")
         target = _string(fixture.get("target"), f"fixture {fixture_id}.target")
+        if TARGET.fullmatch(target) is None:
+            _fail(f"fixture {fixture_id}.target is invalid")
+        _string(fixture["testId"], f"fixture {fixture_id}.testId")
+        _relative_path(fixture["testPath"], f"fixture {fixture_id}.testPath")
+        matrix = fixture["matrix"]
+        if matrix is not None:
+            matrix = _object(matrix, f"fixture {fixture_id}.matrix")
+            _exact_keys(
+                matrix,
+                {"artifactName", "caseId", "environment", "runnerArguments", "runnerPath"},
+                f"fixture {fixture_id}.matrix",
+            )
+            case_id = _string(matrix["caseId"], f"fixture {fixture_id}.matrix.caseId")
+            if SLUG.fullmatch(case_id) is None:
+                _fail(f"fixture {fixture_id}.matrix.caseId is not a slug")
+            artifact = _string(
+                matrix["artifactName"], f"fixture {fixture_id}.matrix.artifactName"
+            )
+            if "/" in artifact or not artifact.endswith(".hsaco"):
+                _fail(f"fixture {fixture_id}.matrix.artifactName is invalid")
+            _relative_path(matrix["runnerPath"], f"fixture {fixture_id}.matrix.runnerPath")
+            _unique_strings(
+                matrix["runnerArguments"], f"fixture {fixture_id}.matrix.runnerArguments"
+            )
+            _unique_strings(
+                matrix["environment"], f"fixture {fixture_id}.matrix.environment"
+            )
+
         compiler_input = _object(fixture.get("compilerInput"), f"fixture {fixture_id}.compilerInput")
-        symbols = _unique_strings(compiler_input.get("kernelSymbols"), f"fixture {fixture_id}.kernelSymbols", nonempty=True)
+        _exact_keys(
+            compiler_input, COMPILER_INPUT_KEYS, f"fixture {fixture_id}.compilerInput"
+        )
+        symbols = _sorted_unique_strings(
+            compiler_input.get("kernelSymbols"),
+            f"fixture {fixture_id}.kernelSymbols",
+            nonempty=True,
+        )
         if any(RUST_IDENTIFIER.fullmatch(symbol) is None for symbol in symbols):
             _fail(f"fixture {fixture_id} contains an invalid kernel symbol")
         for key in ("packageManifest", "cargoLockPath"):
             _relative_path(compiler_input.get(key), f"fixture {fixture_id}.{key}")
+        for offset, source in enumerate(
+            _sorted_unique_strings(
+                compiler_input["sourcePaths"],
+                f"fixture {fixture_id}.sourcePaths",
+                nonempty=True,
+            )
+        ):
+            _relative_path(source, f"fixture {fixture_id}.sourcePaths[{offset}]")
+        _sorted_unique_strings(compiler_input["features"], f"fixture {fixture_id}.features")
+        if not isinstance(compiler_input["defaultFeatures"], bool):
+            _fail(f"fixture {fixture_id}.defaultFeatures must be boolean")
+        cargo_target = _object(
+            compiler_input["cargoTarget"], f"fixture {fixture_id}.cargoTarget"
+        )
+        _exact_keys(cargo_target, {"kind", "name", "sourcePath"}, f"fixture {fixture_id}.cargoTarget")
+        if cargo_target["kind"] != "lib" or RUST_IDENTIFIER.fullmatch(
+            _string(cargo_target["name"], f"fixture {fixture_id}.cargoTarget.name")
+        ) is None:
+            _fail(f"fixture {fixture_id}.cargoTarget is invalid")
+        _relative_path(
+            cargo_target["sourcePath"], f"fixture {fixture_id}.cargoTarget.sourcePath"
+        )
         for key in ("packageManifestSha256", "cargoLockSha256", "sourceClosureSha256", "contractSha256"):
             _sha256(compiler_input.get(key), f"fixture {fixture_id}.{key}")
         if compiler_input["contractSha256"] != _fixture_input_contract_sha256(fixture):
             _fail(f"fixture {fixture_id}.compilerInput.contractSha256 is stale")
 
         kernel = kernels[fixture_id]
-        symbol = _string(kernel.get("kernelSymbol"), f"capability kernel {fixture_id}.kernelSymbol")
+        label = f"capability kernel {fixture_id}"
+        _validate_kernel_shape(kernel, label, fixture)
+        symbol = kernel["kernelSymbol"]
         if symbol not in symbols:
             _fail(f"capability kernel {fixture_id} symbol is absent from its compiler input")
-        lesson_ids = set(_unique_strings(kernel.get("lessonIds"), f"capability kernel {fixture_id}.lessonIds", nonempty=True))
+        lesson_ids = set(kernel["lessonIds"])
         if lesson_ids != fixture_lessons[fixture_id]:
             _fail(f"capability kernel {fixture_id} lesson ownership differs from entries")
 
@@ -605,10 +1104,10 @@ def validate_document(
                 _fail(f"fixture {fixture_id} mixes production and non-production lessons")
             _validate_complete_kernel(
                 kernel,
-                f"capability kernel {fixture_id}",
+                label,
                 fixture,
                 baseline,
-                qualification,
+                document["qualification"],
             )
         elif kernel.get("productionCapabilityPath", {}).get("status") == "complete":
             _fail(f"non-production fixture {fixture_id} carries production authority")
@@ -623,13 +1122,13 @@ def validate_document(
             )
             _validate_capability_command(
                 simulator,
-                f"capability kernel {fixture_id}.simulatorCommand",
+                f"{label}.simulatorCommand",
                 target,
                 complete=False,
             )
             _validate_capability_command(
                 hardware,
-                f"capability kernel {fixture_id}.hardwareCommand",
+                f"{label}.hardwareCommand",
                 target,
                 complete=False,
             )
@@ -639,9 +1138,19 @@ def validate_document(
                     "against the compiler fixture matrix"
                 )
 
+    qualification = _object(document["qualification"], "qualification")
+    _validate_qualification(
+        qualification,
+        entries,
+        fixtures,
+        qualified=baseline["status"] == "qualified",
+    )
+
     if baseline["status"] == "qualified":
         if capability_contract["status"] != "qualified" or production_entries != len(entries):
             _fail("qualified baseline does not classify every entry as compiler-produced")
+    elif capability_contract["status"] != "migration":
+        _fail("migration baseline must retain migration capability status")
     if require_qualified and (
         baseline["status"] != "qualified"
         or capability_contract["status"] != "qualified"

@@ -321,7 +321,7 @@ const fn map_admitted_kir_version(
     match version {
         ProductionReplayKernelIrVersionV1::V8 => Ok(SourceIsaObservationKirVersionV1::V8),
         ProductionReplayKernelIrVersionV1::V9 => Ok(SourceIsaObservationKirVersionV1::V9),
-        ProductionReplayKernelIrVersionV1::V11 => {
+        ProductionReplayKernelIrVersionV1::V11 | ProductionReplayKernelIrVersionV1::V13 => {
             Err(SourceIsaObservationFrameErrorV1::InvalidClaim)
         }
     }
@@ -1245,7 +1245,7 @@ mod tests {
     }
 
     #[test]
-    fn admitted_kir_version_mapping_rejects_unprojectable_v11() {
+    fn admitted_kir_version_mapping_rejects_unprojectable_versions() {
         assert_eq!(
             map_admitted_kir_version(ProductionReplayKernelIrVersionV1::V8),
             Ok(SourceIsaObservationKirVersionV1::V8)
@@ -1256,6 +1256,10 @@ mod tests {
         );
         assert_eq!(
             map_admitted_kir_version(ProductionReplayKernelIrVersionV1::V11),
+            Err(SourceIsaObservationFrameErrorV1::InvalidClaim)
+        );
+        assert_eq!(
+            map_admitted_kir_version(ProductionReplayKernelIrVersionV1::V13),
             Err(SourceIsaObservationFrameErrorV1::InvalidClaim)
         );
     }

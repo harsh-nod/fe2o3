@@ -127,7 +127,7 @@ pub struct CollectedFunction<'tcx> {
         Option<crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1>,
     /// Compiler-private observation derived from this exact monomorphized MIR.
     pub(crate) dead_branches: Option<crate::monomorphization_dead::CompilerDeadBranchObservationV1>,
-    pub(crate) closure_plan: Option<crate::closure_profile_v1::Gfx942ClosureLoweringV1>,
+    pub(crate) closure_plan: Option<crate::closure_profile_v1::ProductionClosureLoweringV1>,
 }
 
 /// Source-level kernel contract authenticated against one exact rustc instance.
@@ -2965,7 +2965,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                     None,
                 )
             })? {
-                let closure_plan = crate::closure_profile_v1::analyze_gfx942_closures_v1(
+                let closure_plan = crate::closure_profile_v1::analyze_production_closures_v1(
                     self.tcx,
                     function.instance,
                     crate::closure_profile_v1::ClosureOriginPolicyV1::Either,
@@ -2974,15 +2974,17 @@ impl<'tcx> DeviceCollector<'tcx> {
                 .map_err(|error| {
                     self.reachable_error(
                         &function.instance,
-                        &format!("bounded gfx942 closure admission failed: {error}"),
+                        &format!("bounded production closure admission failed: {error}"),
                         None,
                     )
                 })?;
                 if self.verbose {
                     eprintln!(
-                        "[collector] gfx942 closure profile: {} environment(s), {} static call(s), {} authenticated higher-order capability call(s), identity {}",
+                        "[collector] production closure profile target {}: {} environment(s), {} static call(s), {} transported call(s), {} authenticated higher-order capability call(s), identity {}",
+                        closure_plan.target(),
                         closure_plan.environments().len(),
                         closure_plan.calls().len(),
+                        closure_plan.transport_calls().len(),
                         closure_plan.higher_order_calls().len(),
                         encode_lower_hex(&closure_plan.identity()),
                     );

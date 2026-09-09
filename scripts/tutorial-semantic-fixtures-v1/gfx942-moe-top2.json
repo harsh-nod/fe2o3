@@ -70,7 +70,7 @@
   },
   "oracle": {
     "function": "moe_top2_oracle_v1",
-    "inputSha256": "e0013ee3c76963bb5a65a0c4c2f51e04cdcd920b2ccafb7615462dd0ebc305e8",
+    "inputSha256": "a6e9d46a2eb98639ba01229f3174064aeb6f3d3c0e4139b56b8002439db844bb",
     "kind": "existing-rust-cpu-reference-v1"
   },
   "oracleSuiteId": "cpu-reference-moe-top2",
@@ -84,50 +84,50 @@
         "name": "logits"
       },
       {
-        "access": "read_write",
+        "access": "write_only",
         "element": "u32",
         "kind": "buffer",
         "name": "top2_experts"
       },
       {
-        "access": "read_write",
+        "access": "write_only",
         "element": "u32",
         "kind": "buffer",
         "name": "requested_counts"
       },
       {
-        "access": "read_write",
+        "access": "write_only",
         "element": "u32",
         "kind": "buffer",
         "name": "admitted_counts"
       },
       {
-        "access": "read_write",
+        "access": "write_only",
         "element": "u32",
         "kind": "buffer",
         "name": "expert_offsets"
       },
       {
-        "access": "read_write",
+        "access": "write_only",
         "element": "u32",
         "kind": "buffer",
         "name": "route_slots"
       },
       {
-        "access": "read_write",
+        "access": "write_only",
         "element": "u32",
         "kind": "buffer",
         "name": "permutation"
       },
       {
-        "access": "read_write",
+        "access": "write_only",
         "element": "u32",
         "kind": "buffer",
         "name": "inverse"
       }
     ],
     "schema": "fe2o3-physical-kernel-abi-v1",
-    "signatureSha256": "ba2ca7f658b83ff6acb01eed468e2697c473a99cb7cd1f6282ffbec222c31afd",
+    "signatureSha256": "d5b1fcb35b99d6bccc542caf146fdfc6a8ae506cff6b172b4dbb1140b1bcda89",
     "sourcePath": "examples/moe_top2_v1/src/kernel.rs"
   },
   "productionExport": {
@@ -158,49 +158,49 @@
         "kind": "buffer"
       },
       {
-        "access": "read_write",
+        "access": "write_only",
         "alignment": 4,
         "bytes": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
         "element": "u32",
         "kind": "buffer"
       },
       {
-        "access": "read_write",
+        "access": "write_only",
         "alignment": 4,
         "bytes": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
         "element": "u32",
         "kind": "buffer"
       },
       {
-        "access": "read_write",
+        "access": "write_only",
         "alignment": 4,
         "bytes": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
         "element": "u32",
         "kind": "buffer"
       },
       {
-        "access": "read_write",
+        "access": "write_only",
         "alignment": 4,
         "bytes": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
         "element": "u32",
         "kind": "buffer"
       },
       {
-        "access": "read_write",
+        "access": "write_only",
         "alignment": 4,
         "bytes": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
         "element": "u32",
         "kind": "buffer"
       },
       {
-        "access": "read_write",
+        "access": "write_only",
         "alignment": 4,
         "bytes": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
         "element": "u32",
         "kind": "buffer"
       },
       {
-        "access": "read_write",
+        "access": "write_only",
         "alignment": 4,
         "bytes": "0xa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
         "element": "u32",

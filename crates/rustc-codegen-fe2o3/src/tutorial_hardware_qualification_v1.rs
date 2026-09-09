@@ -31,11 +31,12 @@ const ISA_SCHEMA: &str = "fe2o3-tutorial-hardware-isa-observation-v1";
 const RESOURCE_SCHEMA: &str = "fe2o3-tutorial-hardware-resource-observation-v1";
 const RESULT_SCHEMA: &str = "fe2o3-tutorial-hardware-result-observation-v1";
 const HARDWARE_SCHEMA: &str = "fe2o3-tutorial-hardware-qualification-evidence-v1";
+const PRE_HARDWARE_RECORD_SCHEMA: &str = "fe2o3-tutorial-pre-hardware-record-v1";
 const AUTHORITY: &str = "authenticated-observation-no-independent-authority";
 const OPENSSL_PATH: &str = "/usr/bin/openssl";
 
 const REQUEST_DOMAIN: &[u8] = b"fe2o3-tutorial-production-transaction-request-v1\0";
-const RECORD_DOMAIN: &[u8] = b"fe2o3-tutorial-capability-record-v1\0";
+const PRE_HARDWARE_RECORD_DOMAIN: &[u8] = b"fe2o3-tutorial-pre-hardware-record-v1\0";
 const RUN_DOMAIN: &[u8] = b"fe2o3-tutorial-hardware-run-receipt-v1\0";
 const CLEANUP_DOMAIN: &[u8] = b"fe2o3-tutorial-hardware-cleanup-receipt-v1\0";
 const TRANSPORT_DOMAIN: &[u8] = b"fe2o3-tutorial-hardware-archive-v1\0";
@@ -49,44 +50,43 @@ const MAX_OBJECT_BYTES: usize = 512 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES: usize = 1024 * 1024 * 1024;
 const MAX_ARCHIVE_OBJECTS: usize = 32;
 
-const COMPILER_OBSERVATIONS: &[(&str, &str)] = &[
+const RUN_COMPILER_OBSERVATIONS: &[(&str, &str)] = &[
     ("artifact", "artifact"),
     ("artifactInspection", "artifact-inspection"),
     ("compilerPolicy", "compiler-policy"),
-    ("driver", "driver-identity"),
     ("kir", "optimized-kir-v13"),
     ("llvm", "llvm-module"),
     ("numericalPolicy", "numerical-policy"),
     ("proof", "proof-evidence"),
     ("proofChecker", "proof-checker"),
     ("proofObligations", "proof-obligation-set"),
-    ("runtime", "runtime-identity"),
     ("source", "source-closure"),
     ("target", "target-identity"),
     ("targetDecision", "target-capability-decision"),
 ];
 
-const EVIDENCE_KINDS: &[&str] = &[
+const VERIFIER_ONLY_COMPILER_OBJECTS: &[&str] =
+    &["sealed-production-receipt", "simulation-bundle-v8"];
+
+const HARDWARE_OBSERVATIONS: &[&str] = &["driver", "isa", "resource", "result", "runtime"];
+
+const PRE_HARDWARE_EVIDENCE_KINDS: &[&str] = &[
     "artifact",
     "artifact-inspection",
     "capability-analysis",
     "capability-closure",
     "compiler-input",
     "compiler-policy",
-    "driver-identity",
-    "hardware",
     "host-admission",
     "launch-contract",
     "llvm-module",
     "lowering",
     "machine-refinement",
-    "negative-fixture-set",
     "numerical-policy",
     "optimized-kir-v13",
     "proof-checker",
     "proof-evidence",
     "proof-obligation-set",
-    "runtime-identity",
     "sealed-production-receipt",
     "semantic-mir",
     "simulation-bundle-v8",
@@ -97,12 +97,19 @@ const EVIDENCE_KINDS: &[&str] = &[
     "target-identity",
 ];
 
+const PENDING_EVIDENCE_KINDS: &[&str] = &[
+    "driver-identity",
+    "hardware",
+    "negative-fixture-set",
+    "runtime-identity",
+];
+
 /// Complete immutable inputs to one tutorial hardware-receipt verification.
 pub struct TutorialHardwareQualificationReceiptInputV1<'a> {
     /// Exact canonical request JSON, including its single trailing newline.
     pub request: &'a [u8],
-    /// Exact canonical production record JSON, including its single trailing newline.
-    pub production_record: &'a [u8],
+    /// Exact canonical pre-hardware record JSON, including its single trailing newline.
+    pub pre_hardware_record: &'a [u8],
     /// Exact canonical trust-policy JSON, including its single trailing newline.
     pub trust_policy: &'a [u8],
     /// Exact canonical ZIP transport emitted after terminal cleanup.
@@ -130,13 +137,35 @@ impl TutorialHardwareReceiptReplayLedgerV1 {
 pub struct VerifiedTutorialHardwareQualificationReceiptV1 {
     archive_sha256: [u8; 32],
     cleanup_receipt_sha256: [u8; 32],
+    pre_hardware_record_sha256: [u8; 32],
     isa_observation_sha256: [u8; 32],
     resource_observation_sha256: [u8; 32],
     result_observation_sha256: [u8; 32],
     run_receipt_sha256: [u8; 32],
     transaction_sha256: [u8; 32],
+    hardware_evidence: AuthenticatedArchiveObjectV1,
+    driver_identity: AuthenticatedArchiveObjectV1,
+    runtime_identity: AuthenticatedArchiveObjectV1,
+    sealed_production_receipt: AuthenticatedArchiveObjectV1,
+    simulation_bundle_v8: AuthenticatedArchiveObjectV1,
     fixture_id: String,
     target: String,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+struct AuthenticatedArchiveObjectV1 {
+    sha256: [u8; 32],
+    payload: Box<[u8]>,
+}
+
+impl fmt::Debug for AuthenticatedArchiveObjectV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthenticatedArchiveObjectV1")
+            .field("sha256", &encode_hex(&self.sha256))
+            .field("bytes", &self.payload.len())
+            .finish()
+    }
 }
 
 impl VerifiedTutorialHardwareQualificationReceiptV1 {
@@ -146,6 +175,10 @@ impl VerifiedTutorialHardwareQualificationReceiptV1 {
 
     pub const fn cleanup_receipt_sha256(&self) -> &[u8; 32] {
         &self.cleanup_receipt_sha256
+    }
+
+    pub const fn pre_hardware_record_sha256(&self) -> &[u8; 32] {
+        &self.pre_hardware_record_sha256
     }
 
     pub const fn run_receipt_sha256(&self) -> &[u8; 32] {
@@ -166,6 +199,46 @@ impl VerifiedTutorialHardwareQualificationReceiptV1 {
 
     pub const fn result_observation_sha256(&self) -> &[u8; 32] {
         &self.result_observation_sha256
+    }
+
+    pub const fn hardware_evidence_sha256(&self) -> &[u8; 32] {
+        &self.hardware_evidence.sha256
+    }
+
+    pub fn hardware_evidence_payload(&self) -> &[u8] {
+        &self.hardware_evidence.payload
+    }
+
+    pub const fn driver_identity_sha256(&self) -> &[u8; 32] {
+        &self.driver_identity.sha256
+    }
+
+    pub fn driver_identity_payload(&self) -> &[u8] {
+        &self.driver_identity.payload
+    }
+
+    pub const fn runtime_identity_sha256(&self) -> &[u8; 32] {
+        &self.runtime_identity.sha256
+    }
+
+    pub fn runtime_identity_payload(&self) -> &[u8] {
+        &self.runtime_identity.payload
+    }
+
+    pub const fn sealed_production_receipt_sha256(&self) -> &[u8; 32] {
+        &self.sealed_production_receipt.sha256
+    }
+
+    pub fn sealed_production_receipt_payload(&self) -> &[u8] {
+        &self.sealed_production_receipt.payload
+    }
+
+    pub const fn simulation_bundle_v8_sha256(&self) -> &[u8; 32] {
+        &self.simulation_bundle_v8.sha256
+    }
+
+    pub fn simulation_bundle_v8_payload(&self) -> &[u8] {
+        &self.simulation_bundle_v8.payload
     }
 
     pub fn fixture_id(&self) -> &str {
@@ -222,10 +295,12 @@ pub fn verify_tutorial_hardware_qualification_receipt_v1(
     replay: &mut TutorialHardwareReceiptReplayLedgerV1,
 ) -> Result<VerifiedTutorialHardwareQualificationReceiptV1, TutorialHardwareQualificationErrorV1> {
     let request = parse_canonical_document(input.request, "transaction request")?;
-    let record = parse_canonical_document(input.production_record, "production record")?;
+    let record = parse_canonical_document(input.pre_hardware_record, "pre-hardware record")?;
     let policy = parse_canonical_document(input.trust_policy, "hardware trust policy")?;
     let request_object = object(&request, "transaction request")?;
-    let record_object = object(&record, "production record")?;
+    let record_object = object(&record, "pre-hardware record")?;
+    let pre_hardware_record_sha256 =
+        domain_document_sha256(PRE_HARDWARE_RECORD_DOMAIN, input.pre_hardware_record);
 
     validate_request_binding(request_object)?;
     let trust = load_trust_policy(&policy)?;
@@ -240,6 +315,7 @@ pub fn verify_tutorial_hardware_qualification_receipt_v1(
             "cleanupSignature",
             "fixtureId",
             "lane",
+            "preHardwareRecordSha256",
             "preCleanupCapsuleSha256",
             "requestBindingSha256",
             "reservationIdentity",
@@ -286,8 +362,12 @@ pub fn verify_tutorial_hardware_qualification_receipt_v1(
     }
 
     let transaction = object(
-        required(record_object, "productionTransaction", "production record")?,
-        "production record.productionTransaction",
+        required(
+            record_object,
+            "productionTransaction",
+            "pre-hardware record",
+        )?,
+        "pre-hardware record.productionTransaction",
     )?;
     exact_keys(
         transaction,
@@ -316,7 +396,8 @@ pub fn verify_tutorial_hardware_qualification_receipt_v1(
         return fail("record did not use the sole sealed production transaction");
     }
     let transaction_sha = digest_field(transaction, "transactionSha256", "transaction")?;
-    let expected_index: [(&str, &Value); 9] = [
+    let pre_hardware_record_identity = Value::String(encode_hex(&pre_hardware_record_sha256));
+    let expected_index: [(&str, &Value); 10] = [
         (
             "candidate",
             required(request_object, "candidate", "request")?,
@@ -330,6 +411,7 @@ pub fn verify_tutorial_hardware_qualification_receipt_v1(
             fixture.get("fixtureId").expect("checked field"),
         ),
         ("lane", fixture.get("hardwareLane").expect("checked field")),
+        ("preHardwareRecordSha256", &pre_hardware_record_identity),
         (
             "requestBindingSha256",
             required(request_object, "requestBindingSha256", "request")?,
@@ -354,18 +436,18 @@ pub fn verify_tutorial_hardware_qualification_receipt_v1(
     }
 
     let evidence_files = object(
-        required(record_object, "evidenceFiles", "production record")?,
-        "production record.evidenceFiles",
+        required(record_object, "evidenceFiles", "pre-hardware record")?,
+        "pre-hardware record.evidenceFiles",
     )?;
-    validate_record_binding_to_request_and_archive(
+    validate_pre_hardware_record(
         record_object,
         request_object,
         evidence_files,
         &archive.objects,
     )?;
     let production = object(
-        required(record_object, "productionEvidence", "production record")?,
-        "production record.productionEvidence",
+        required(record_object, "productionEvidence", "pre-hardware record")?,
+        "pre-hardware record.productionEvidence",
     )?;
     let typed = verify_compiler_transaction(
         evidence_files,
@@ -373,7 +455,7 @@ pub fn verify_tutorial_hardware_qualification_receipt_v1(
         &archive.objects,
         transaction_sha,
         target,
-        string_field(record_object, "kernelSymbol", "production record")?,
+        string_field(record_object, "kernelSymbol", "pre-hardware record")?,
     )?;
 
     let run_ref = reference_field(index, "runReceipt", "archive index")?;
@@ -388,6 +470,7 @@ pub fn verify_tutorial_hardware_qualification_receipt_v1(
         &archive.objects,
         lane_trust,
         typed,
+        pre_hardware_record_sha256,
     )?;
     let run_signature = reference_field(index, "runSignature", "archive index")?;
     verify_signature(
@@ -406,9 +489,9 @@ pub fn verify_tutorial_hardware_qualification_receipt_v1(
         run_object,
         request_object,
         record_object,
-        evidence_files,
         &archive.objects,
         lane_trust,
+        pre_hardware_record_sha256,
     )?;
     let cleanup_signature = reference_field(index, "cleanupSignature", "archive index")?;
     verify_signature(
@@ -421,6 +504,39 @@ pub fn verify_tutorial_hardware_qualification_receipt_v1(
     if referenced != archive.objects.keys().copied().collect() {
         return fail("hardware archive contains omitted or unreferenced objects");
     }
+    let hardware_evidence = authenticated_archive_object(
+        &archive.objects,
+        &observed.hardware,
+        "hardware summary evidence",
+    )?;
+    let driver_identity = authenticated_archive_object(
+        &archive.objects,
+        &observed.driver,
+        "driver identity observation",
+    )?;
+    let runtime_identity = authenticated_archive_object(
+        &archive.objects,
+        &observed.runtime,
+        "runtime identity observation",
+    )?;
+    let sealed_production_receipt = authenticated_archive_object(
+        &archive.objects,
+        &reference_field(
+            evidence_files,
+            "sealed-production-receipt",
+            "pre-hardware record.evidenceFiles",
+        )?,
+        "sealed V5 production result",
+    )?;
+    let simulation_bundle_v8 = authenticated_archive_object(
+        &archive.objects,
+        &reference_field(
+            evidence_files,
+            "simulation-bundle-v8",
+            "pre-hardware record.evidenceFiles",
+        )?,
+        "simulation Bundle V8",
+    )?;
     if replay.seen_run_receipts.contains(&run_ref.sha256) {
         return fail("hardware run receipt replay detected");
     }
@@ -429,17 +545,23 @@ pub fn verify_tutorial_hardware_qualification_receipt_v1(
     Ok(VerifiedTutorialHardwareQualificationReceiptV1 {
         archive_sha256: sha256(input.archive),
         cleanup_receipt_sha256: cleanup_ref.sha256,
-        isa_observation_sha256: observed.isa,
-        resource_observation_sha256: observed.resource,
-        result_observation_sha256: observed.result,
+        pre_hardware_record_sha256,
+        isa_observation_sha256: observed.isa.sha256,
+        resource_observation_sha256: observed.resource.sha256,
+        result_observation_sha256: observed.result.sha256,
         run_receipt_sha256: run_ref.sha256,
         transaction_sha256: transaction_sha,
+        hardware_evidence,
+        driver_identity,
+        runtime_identity,
+        sealed_production_receipt,
+        simulation_bundle_v8,
         fixture_id: fixture_id.to_owned(),
         target: target.to_owned(),
     })
 }
 
-fn validate_record_binding_to_request_and_archive(
+fn validate_pre_hardware_record(
     record: &Map<String, Value>,
     request: &Map<String, Value>,
     files: &Map<String, Value>,
@@ -456,26 +578,43 @@ fn validate_record_binding_to_request_and_archive(
             "hardware",
             "kernelSymbol",
             "lessonIds",
-            "negativeFixtures",
+            "pendingEvidence",
+            "preHardwareBindingSha256",
             "productionEvidence",
             "productionTransaction",
             "proof",
-            "recordBindingSha256",
+            "schema",
             "simulator",
             "target",
             "targetDecision",
         ],
-        "production record",
+        "pre-hardware record",
     )?;
+    if string_field(record, "schema", "pre-hardware record")? != PRE_HARDWARE_RECORD_SCHEMA {
+        return fail("pre-hardware record schema differs");
+    }
     validate_binding(
         record,
-        "recordBindingSha256",
-        RECORD_DOMAIN,
-        "production record",
+        "preHardwareBindingSha256",
+        PRE_HARDWARE_RECORD_DOMAIN,
+        "pre-hardware record",
     )?;
-    exact_keys(files, EVIDENCE_KINDS, "production record.evidenceFiles")?;
-    for kind in EVIDENCE_KINDS {
-        reference_field(files, kind, "production record.evidenceFiles")?;
+    exact_keys(
+        files,
+        PRE_HARDWARE_EVIDENCE_KINDS,
+        "pre-hardware record.evidenceFiles",
+    )?;
+    for kind in PRE_HARDWARE_EVIDENCE_KINDS {
+        reference_field(files, kind, "pre-hardware record.evidenceFiles")?;
+    }
+    let expected_pending = Value::Array(
+        PENDING_EVIDENCE_KINDS
+            .iter()
+            .map(|kind| Value::String((*kind).to_owned()))
+            .collect(),
+    );
+    if required(record, "pendingEvidence", "pre-hardware record")? != &expected_pending {
+        return fail("pre-hardware pending-evidence roster differs");
     }
 
     let fixture = object(required(request, "fixture", "request")?, "request.fixture")?;
@@ -488,11 +627,11 @@ fn validate_record_binding_to_request_and_archive(
         || record.get("kernelSymbol") != kernel.get("kernelSymbol")
         || record.get("lessonIds") != kernel.get("lessonIds")
     {
-        return fail("production record is cross-fixture, cross-kernel, or cross-target");
+        return fail("pre-hardware record is cross-fixture, cross-kernel, or cross-target");
     }
     let record_input = object(
-        required(record, "compilerInput", "record")?,
-        "record.compilerInput",
+        required(record, "compilerInput", "pre-hardware record")?,
+        "pre-hardware record.compilerInput",
     )?;
     exact_keys(
         record_input,
@@ -502,7 +641,7 @@ fn validate_record_binding_to_request_and_archive(
             "packageManifestSha256",
             "sourceClosureSha256",
         ],
-        "record.compilerInput",
+        "pre-hardware record.compilerInput",
     )?;
     let request_input = object(
         required(fixture, "compilerInput", "fixture")?,
@@ -511,14 +650,14 @@ fn validate_record_binding_to_request_and_archive(
     for field in record_input.keys() {
         if record_input.get(field) != request_input.get(field) {
             return fail(format!(
-                "production record compiler input {field} is substituted"
+                "pre-hardware record compiler input {field} is substituted"
             ));
         }
     }
 
     let production = object(
-        required(record, "productionEvidence", "record")?,
-        "record.productionEvidence",
+        required(record, "productionEvidence", "pre-hardware record")?,
+        "pre-hardware record.productionEvidence",
     )?;
     exact_keys(
         production,
@@ -527,65 +666,207 @@ fn validate_record_binding_to_request_and_archive(
             "artifactSha256",
             "capabilityAnalysisSha256",
             "capabilityClosureSha256",
-            "compilerCommit",
             "compilerPolicySha256",
-            "compilerTree",
             "finalOptimizedKirSha256",
-            "hardwareEvidenceSha256",
-            "hostAdmissionSha256",
             "launchContractSha256",
             "loweringIdentitySha256",
             "machineRefinementSha256",
-            "negativeFixtureSetSha256",
-            "numericalPolicySha256",
+            "numericalPolicyEvidenceSha256",
             "proofCheckerSha256",
             "proofEvidenceSha256",
             "proofObligationSetSha256",
-            "simulatorEvidenceSha256",
+            "sealedResultSha256",
             "sourceMirIdentitySha256",
             "sourceMirToKirRefinementSha256",
-            "targetCapabilityDecisionSha256",
             "targetIdentitySha256",
         ],
-        "record.productionEvidence",
+        "pre-hardware record.productionEvidence",
     )?;
-    let candidate = object(
-        required(request, "candidate", "request")?,
-        "request.candidate",
-    )?;
-    if production.get("compilerCommit") != candidate.get("compilerCommit")
-        || production.get("compilerTree") != candidate.get("compilerTree")
-    {
-        return fail("production evidence compiler candidate is substituted");
+    for field in production.keys() {
+        digest_field(production, field, "pre-hardware production evidence")?;
     }
     const JOINS: &[(&str, &str)] = &[
         ("artifactSha256", "artifact"),
         ("artifactInspectionSha256", "artifact-inspection"),
         ("capabilityAnalysisSha256", "capability-analysis"),
-        ("capabilityClosureSha256", "capability-closure"),
-        ("compilerPolicySha256", "compiler-policy"),
-        ("hardwareEvidenceSha256", "hardware"),
-        ("hostAdmissionSha256", "host-admission"),
-        ("launchContractSha256", "launch-contract"),
-        ("negativeFixtureSetSha256", "negative-fixture-set"),
-        ("numericalPolicySha256", "numerical-policy"),
-        ("simulatorEvidenceSha256", "simulator"),
-        (
-            "targetCapabilityDecisionSha256",
-            "target-capability-decision",
-        ),
-        ("targetIdentitySha256", "target-identity"),
+        ("numericalPolicyEvidenceSha256", "numerical-policy"),
     ];
     for (claim, kind) in JOINS {
-        if digest_field(production, claim, "production evidence")?
-            != reference_field(files, kind, "record.evidenceFiles")?.sha256
+        if digest_field(production, claim, "pre-hardware production evidence")?
+            != reference_field(files, kind, "pre-hardware record.evidenceFiles")?.sha256
         {
-            return fail(format!("production evidence {claim} differs from {kind}"));
+            return fail(format!(
+                "pre-hardware production evidence {claim} differs from {kind}"
+            ));
         }
     }
-    for (_, kind) in COMPILER_OBSERVATIONS {
-        let reference = reference_field(files, kind, "record.evidenceFiles")?;
+    if files.get("simulator") != request.get("simulatorEvidence") {
+        return fail("pre-hardware record substituted request-bound simulator evidence");
+    }
+    for (_, kind) in RUN_COMPILER_OBSERVATIONS {
+        let reference = reference_field(files, kind, "pre-hardware record.evidenceFiles")?;
         archive_object(objects, &reference, kind)?;
+    }
+    for kind in VERIFIER_ONLY_COMPILER_OBJECTS {
+        let reference = reference_field(files, kind, "pre-hardware record.evidenceFiles")?;
+        archive_object(objects, &reference, kind)?;
+    }
+
+    let hardware = object(
+        required(record, "hardware", "pre-hardware record")?,
+        "pre-hardware record.hardware",
+    )?;
+    exact_keys(
+        hardware,
+        &[
+            "commandSha256",
+            "lane",
+            "status",
+            "target",
+            "timeoutSeconds",
+        ],
+        "pre-hardware record.hardware",
+    )?;
+    let command = object(
+        required(fixture, "hardwareCommand", "request.fixture")?,
+        "request.fixture.hardwareCommand",
+    )?;
+    if digest_field(hardware, "commandSha256", "pre-hardware hardware")?
+        != domain_sha256(COMMAND_DOMAIN, &Value::Object(command.clone()))?
+        || hardware.get("lane") != fixture.get("hardwareLane")
+        || hardware.get("target") != fixture.get("target")
+        || hardware.get("timeoutSeconds") != command.get("timeoutSeconds")
+        || string_field(hardware, "status", "pre-hardware hardware")?
+            != "pending-authenticated-observation"
+    {
+        return fail("pre-hardware hardware request is stale or predicts an observation");
+    }
+
+    validate_pre_hardware_semantic_summaries(record, request, production)?;
+    Ok(())
+}
+
+fn validate_pre_hardware_semantic_summaries(
+    record: &Map<String, Value>,
+    request: &Map<String, Value>,
+    production: &Map<String, Value>,
+) -> ResultV1<()> {
+    let kernel = object(
+        required(request, "capabilityKernel", "request")?,
+        "request.capabilityKernel",
+    )?;
+    let closure = object(
+        required(record, "capabilityClosure", "pre-hardware record")?,
+        "pre-hardware record.capabilityClosure",
+    )?;
+    exact_keys(
+        closure,
+        &["requirements", "sha256", "status"],
+        "pre-hardware record.capabilityClosure",
+    )?;
+    let requested_closure = object(
+        required(kernel, "capabilityClosure", "request.capabilityKernel")?,
+        "request.capabilityKernel.capabilityClosure",
+    )?;
+    if closure.get("requirements") != requested_closure.get("requirements")
+        || closure.get("sha256") != production.get("capabilityClosureSha256")
+        || string_field(closure, "status", "pre-hardware capability closure")?
+            != "compiler-complete"
+    {
+        return fail("pre-hardware capability closure is stale or substituted");
+    }
+
+    let graph = object(
+        required(record, "graph", "pre-hardware record")?,
+        "pre-hardware record.graph",
+    )?;
+    exact_keys(
+        graph,
+        &[
+            "bundleContentIdentitySha256",
+            "finalGraphEpoch",
+            "kernelCount",
+            "productionKirIdentitySha256",
+            "semanticMirIdentitySha256",
+        ],
+        "pre-hardware record.graph",
+    )?;
+    for field in [
+        "bundleContentIdentitySha256",
+        "productionKirIdentitySha256",
+        "semanticMirIdentitySha256",
+    ] {
+        digest_field(graph, field, "pre-hardware graph")?;
+    }
+    u64_field(graph, "finalGraphEpoch", "pre-hardware graph")?;
+    if u64_field(graph, "kernelCount", "pre-hardware graph")? == 0
+        || graph.get("productionKirIdentitySha256") != production.get("finalOptimizedKirSha256")
+        || graph.get("semanticMirIdentitySha256") != production.get("sourceMirIdentitySha256")
+    {
+        return fail("pre-hardware graph summary differs from production evidence");
+    }
+
+    let proof = object(
+        required(record, "proof", "pre-hardware record")?,
+        "pre-hardware record.proof",
+    )?;
+    exact_keys(
+        proof,
+        &[
+            "checkerSha256",
+            "evidenceSha256",
+            "obligationSetSha256",
+            "properties",
+            "status",
+        ],
+        "pre-hardware record.proof",
+    )?;
+    if proof.get("checkerSha256") != production.get("proofCheckerSha256")
+        || proof.get("evidenceSha256") != production.get("proofEvidenceSha256")
+        || proof.get("obligationSetSha256") != production.get("proofObligationSetSha256")
+        || proof.get("properties") != kernel.get("requiredProperties")
+        || string_field(proof, "status", "pre-hardware proof")? != "compiler-complete"
+    {
+        return fail("pre-hardware proof summary differs from compiler evidence");
+    }
+
+    let simulator = object(
+        required(record, "simulator", "pre-hardware record")?,
+        "pre-hardware record.simulator",
+    )?;
+    exact_keys(
+        simulator,
+        &["commandSha256", "evidenceSha256", "status", "subjectSha256"],
+        "pre-hardware record.simulator",
+    )?;
+    digest_field(simulator, "commandSha256", "pre-hardware simulator")?;
+    if simulator.get("evidenceSha256")
+        != object(
+            required(request, "simulatorEvidence", "request")?,
+            "request.simulatorEvidence",
+        )?
+        .get("sha256")
+        || simulator.get("subjectSha256") != production.get("finalOptimizedKirSha256")
+        || string_field(simulator, "status", "pre-hardware simulator")?
+            != "request-bound-external-observation"
+    {
+        return fail("pre-hardware simulator summary is stale or substituted");
+    }
+
+    let target = object(
+        required(record, "targetDecision", "pre-hardware record")?,
+        "pre-hardware record.targetDecision",
+    )?;
+    exact_keys(
+        target,
+        &["capabilityClosureSha256", "status", "targetIdentitySha256"],
+        "pre-hardware record.targetDecision",
+    )?;
+    if target.get("capabilityClosureSha256") != production.get("capabilityClosureSha256")
+        || target.get("targetIdentitySha256") != production.get("targetIdentitySha256")
+        || string_field(target, "status", "pre-hardware target decision")? != "compiler-complete"
+    {
+        return fail("pre-hardware target decision differs from compiler evidence");
     }
     Ok(())
 }
@@ -679,6 +960,7 @@ fn verify_compiler_transaction(
         return fail("KIR, obligation, and capability-result rosters differ");
     }
     let association = &result.capability_associations().entries()[kernel_ordinal];
+    let subject = handoff.subjects()[kernel_ordinal];
     let checker_reference = reference_field(files, "proof-checker", "evidence files")?;
     let checker_identity = authenticated_compiler_capability_evidence_identity_v5(archive_object(
         objects,
@@ -691,6 +973,21 @@ fn verify_compiler_transaction(
         ))
     })?;
     let typed_identities = [
+        ("sealedResultSha256", result.identity().sha256()),
+        ("compilerPolicySha256", handoff.inputs().compiler_policy()),
+        (
+            "capabilityClosureSha256",
+            handoff.target_closure().closure_identity(),
+        ),
+        (
+            "launchContractSha256",
+            *subject.launch_contract().digest().as_bytes(),
+        ),
+        ("sourceMirIdentitySha256", bundle.semantic_mir_identity()),
+        (
+            "targetIdentitySha256",
+            *subject.target_model().digest().as_bytes(),
+        ),
         (
             "loweringIdentitySha256",
             *handoff
@@ -744,6 +1041,7 @@ fn validate_run_receipt(
     objects: &BTreeMap<[u8; 32], Vec<u8>>,
     trust: &LaneTrust,
     typed: TypedCompilerTransaction,
+    pre_hardware_record_sha256: [u8; 32],
 ) -> ResultV1<()> {
     exact_keys(
         run,
@@ -762,6 +1060,7 @@ fn validate_run_receipt(
             "observations",
             "outcome",
             "phase",
+            "preHardwareRecordSha256",
             "receiptBindingSha256",
             "requestBindingSha256",
             "reservationIdentity",
@@ -796,11 +1095,13 @@ fn validate_run_receipt(
         return fail("run receipt names an untrusted attestor");
     }
 
-    let expected: [(&str, &Value); 9] = [
+    let pre_hardware_record_identity = Value::String(encode_hex(&pre_hardware_record_sha256));
+    let expected: [(&str, &Value); 10] = [
         ("candidate", required(request, "candidate", "request")?),
         ("challengeNonce", required(challenge, "nonce", "challenge")?),
         ("fixtureId", required(fixture, "fixtureId", "fixture")?),
         ("lane", required(fixture, "hardwareLane", "fixture")?),
+        ("preHardwareRecordSha256", &pre_hardware_record_identity),
         (
             "requestBindingSha256",
             required(request, "requestBindingSha256", "request")?,
@@ -868,29 +1169,30 @@ fn validate_run_receipt(
     }
 
     let observations = object(required(run, "observations", "run")?, "run.observations")?;
-    let mut observation_keys = COMPILER_OBSERVATIONS
+    let mut observation_keys = RUN_COMPILER_OBSERVATIONS
         .iter()
         .map(|(name, _)| *name)
         .collect::<Vec<_>>();
-    observation_keys.extend(["isa", "resource", "result"]);
+    observation_keys.extend(HARDWARE_OBSERVATIONS.iter().copied());
     exact_keys(observations, &observation_keys, "run.observations")?;
-    for (name, kind) in COMPILER_OBSERVATIONS {
+    for (name, kind) in RUN_COMPILER_OBSERVATIONS {
         let observed = reference_field(observations, name, "run.observations")?;
-        let compiler = reference_field(files, kind, "record.evidenceFiles")?;
+        let compiler = reference_field(files, kind, "pre-hardware record.evidenceFiles")?;
         if observed != compiler || archive_object(objects, &observed, name)?.is_empty() {
             return fail(format!(
                 "run observation {name} substituted compiler evidence {kind}"
             ));
         }
     }
-    let runner_digests = ["isa", "resource", "result"]
-        .into_iter()
+    let hardware_digests = HARDWARE_OBSERVATIONS
+        .iter()
+        .copied()
         .map(|name| {
             reference_field(observations, name, "run.observations").map(|value| value.sha256)
         })
         .collect::<Result<BTreeSet<_>, _>>()?;
-    if runner_digests.len() != 3 {
-        return fail("hardware receipt conflates distinct ISA, resource, and result observations");
+    if hardware_digests.len() != HARDWARE_OBSERVATIONS.len() {
+        return fail("hardware receipt conflates distinct hardware-owned observations");
     }
     let artifact = reference_field(observations, "artifact", "run.observations")?;
     let artifact_inspection =
@@ -1054,7 +1356,6 @@ fn validate_result_observation(
         required(record, "productionTransaction", "record")?,
         "record.productionTransaction",
     )?;
-    let hardware = object(required(record, "hardware", "record")?, "record.hardware")?;
     let checks = object(required(result, "checks", "result")?, "result.checks")?;
     exact_keys(
         checks,
@@ -1127,8 +1428,6 @@ fn validate_result_observation(
             != reference_field(observations, "driver", "run.observations")?.sha256
         || digest_field(result, "runtimeIdentitySha256", "result")?
             != reference_field(observations, "runtime", "run.observations")?.sha256
-        || result.get("driverIdentitySha256") != hardware.get("driverIdentitySha256")
-        || result.get("runtimeIdentitySha256") != hardware.get("runtimeIdentitySha256")
         || digest_field(result, "commandSha256", "result")?
             != domain_sha256(
                 COMMAND_DOMAIN,
@@ -1140,10 +1439,13 @@ fn validate_result_observation(
     Ok(())
 }
 
-struct RunnerObservationIdentities {
-    isa: [u8; 32],
-    resource: [u8; 32],
-    result: [u8; 32],
+struct AuthenticatedObservationReferencesV1 {
+    hardware: ObjectReference,
+    driver: ObjectReference,
+    runtime: ObjectReference,
+    isa: ObjectReference,
+    resource: ObjectReference,
+    result: ObjectReference,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1153,10 +1455,10 @@ fn validate_cleanup_receipt(
     run: &Map<String, Value>,
     request: &Map<String, Value>,
     record: &Map<String, Value>,
-    files: &Map<String, Value>,
     objects: &BTreeMap<[u8; 32], Vec<u8>>,
     trust: &LaneTrust,
-) -> ResultV1<RunnerObservationIdentities> {
+    pre_hardware_record_sha256: [u8; 32],
+) -> ResultV1<AuthenticatedObservationReferencesV1> {
     exact_keys(
         cleanup,
         &[
@@ -1171,6 +1473,7 @@ fn validate_cleanup_receipt(
             "lane",
             "outcome",
             "phase",
+            "preHardwareRecordSha256",
             "preCleanupCapsuleSha256",
             "receiptBindingSha256",
             "requestBindingSha256",
@@ -1215,12 +1518,14 @@ fn validate_cleanup_receipt(
             return fail(format!("terminal cleanup check {field} did not pass"));
         }
     }
-    let expected: [(&str, &Value); 14] = [
+    let pre_hardware_record_identity = Value::String(encode_hex(&pre_hardware_record_sha256));
+    let expected: [(&str, &Value); 15] = [
         ("attestor", required(run, "attestor", "run")?),
         ("candidate", required(request, "candidate", "request")?),
         ("challengeNonce", required(challenge, "nonce", "challenge")?),
         ("fixtureId", required(fixture, "fixtureId", "fixture")?),
         ("lane", required(fixture, "hardwareLane", "fixture")?),
+        ("preHardwareRecordSha256", &pre_hardware_record_identity),
         (
             "preCleanupCapsuleSha256",
             required(index, "preCleanupCapsuleSha256", "index")?,
@@ -1276,7 +1581,7 @@ fn validate_cleanup_receipt(
 
     validate_pre_cleanup_capsule(index, run, objects)?;
     validate_cleanup_observation(cleanup, run, objects)?;
-    validate_hardware_summary(cleanup, run, request, record, files, objects, trust)
+    validate_hardware_summary(cleanup, run, request, record, objects, trust)
 }
 
 fn validate_pre_cleanup_capsule(
@@ -1284,6 +1589,18 @@ fn validate_pre_cleanup_capsule(
     run: &Map<String, Value>,
     objects: &BTreeMap<[u8; 32], Vec<u8>>,
 ) -> ResultV1<()> {
+    let encoded_sha256 = pre_cleanup_capsule_sha256(index, run, objects)?;
+    if digest_field(index, "preCleanupCapsuleSha256", "archive index")? != encoded_sha256 {
+        return fail("pre-cleanup capsule identity is stale or substituted");
+    }
+    Ok(())
+}
+
+fn pre_cleanup_capsule_sha256(
+    index: &Map<String, Value>,
+    run: &Map<String, Value>,
+    objects: &BTreeMap<[u8; 32], Vec<u8>>,
+) -> ResultV1<[u8; 32]> {
     let attestor = object(required(run, "attestor", "run")?, "run.attestor")?;
     let pre_index = object_value([
         (
@@ -1300,6 +1617,10 @@ fn validate_pre_cleanup_capsule(
         (
             "publicKeySha256",
             required(attestor, "publicKeySha256", "attestor")?.clone(),
+        ),
+        (
+            "preHardwareRecordSha256",
+            required(run, "preHardwareRecordSha256", "run")?.clone(),
         ),
         (
             "requestBindingSha256",
@@ -1330,25 +1651,18 @@ fn validate_pre_cleanup_capsule(
     ]);
     let observations = object(required(run, "observations", "run")?, "run.observations")?;
     let mut pre_objects = BTreeMap::new();
-    for field in observations
-        .keys()
-        .map(String::as_str)
-        .chain(["runReceipt", "runSignature"])
-    {
-        let owner = if field.starts_with("run") {
-            index
-        } else {
-            observations
-        };
-        let reference = reference_field(owner, field, "pre-cleanup object")?;
+    for field in observations.keys() {
+        let reference = reference_field(observations, field, "pre-cleanup observation")?;
+        let payload = archive_object(objects, &reference, "pre-cleanup observation")?;
+        pre_objects.insert(reference.sha256, payload.to_vec());
+    }
+    for field in ["runReceipt", "runSignature"] {
+        let reference = reference_field(index, field, "pre-cleanup control object")?;
         let payload = archive_object(objects, &reference, "pre-cleanup object")?;
         pre_objects.insert(reference.sha256, payload.to_vec());
     }
     let encoded = encode_canonical_archive(&pre_index, &pre_objects)?;
-    if digest_field(index, "preCleanupCapsuleSha256", "archive index")? != sha256(&encoded) {
-        return fail("pre-cleanup capsule identity is stale or substituted");
-    }
-    Ok(())
+    Ok(sha256(&encoded))
 }
 
 fn validate_cleanup_observation(
@@ -1387,14 +1701,10 @@ fn validate_hardware_summary(
     run: &Map<String, Value>,
     request: &Map<String, Value>,
     record: &Map<String, Value>,
-    files: &Map<String, Value>,
     objects: &BTreeMap<[u8; 32], Vec<u8>>,
     trust: &LaneTrust,
-) -> ResultV1<RunnerObservationIdentities> {
+) -> ResultV1<AuthenticatedObservationReferencesV1> {
     let reference = reference_field(cleanup, "hardwareEvidence", "cleanup")?;
-    if reference != reference_field(files, "hardware", "record.evidenceFiles")? {
-        return fail("cleanup hardware summary differs from the production evidence reference");
-    }
     let value = parse_canonical_document(
         archive_object(objects, &reference, "hardware summary")?,
         "hardware summary",
@@ -1428,9 +1738,11 @@ fn validate_hardware_summary(
         "hardware summary",
     )?;
     let observations = object(required(run, "observations", "run")?, "run.observations")?;
-    let isa = reference_field(observations, "isa", "run.observations")?.sha256;
-    let resource = reference_field(observations, "resource", "run.observations")?.sha256;
-    let result = reference_field(observations, "result", "run.observations")?.sha256;
+    let driver = reference_field(observations, "driver", "run.observations")?;
+    let runtime = reference_field(observations, "runtime", "run.observations")?;
+    let isa = reference_field(observations, "isa", "run.observations")?;
+    let resource = reference_field(observations, "resource", "run.observations")?;
+    let result = reference_field(observations, "result", "run.observations")?;
     let fixture = object(required(request, "fixture", "request")?, "request.fixture")?;
     let compiler_input = object(
         required(fixture, "compilerInput", "fixture")?,
@@ -1494,7 +1806,6 @@ fn validate_hardware_summary(
         required(record, "productionEvidence", "record")?,
         "production evidence",
     )?;
-    let hardware = object(required(record, "hardware", "record")?, "record.hardware")?;
     let expected_joins = [
         ("artifactInspectionSha256", "artifactInspection"),
         ("artifactSha256", "artifact"),
@@ -1510,9 +1821,9 @@ fn validate_hardware_summary(
             ));
         }
     }
-    if digest_field(value, "isaInspectionSha256", "hardware summary")? != isa
-        || digest_field(value, "resourceUsageSha256", "hardware summary")? != resource
-        || digest_field(value, "resultSha256", "hardware summary")? != result
+    if digest_field(value, "isaInspectionSha256", "hardware summary")? != isa.sha256
+        || digest_field(value, "resourceUsageSha256", "hardware summary")? != resource.sha256
+        || digest_field(value, "resultSha256", "hardware summary")? != result.sha256
         || value.get("candidate") != request.get("candidate")
         || value.get("fixtureId") != fixture.get("fixtureId")
         || value.get("target") != fixture.get("target")
@@ -1522,8 +1833,6 @@ fn validate_hardware_summary(
         || value.get("commandSha256") != run.get("commandSha256")
         || value.get("launchContractSha256") != production.get("launchContractSha256")
         || value.get("targetIdentitySha256") != production.get("targetIdentitySha256")
-        || value.get("driverIdentitySha256") != hardware.get("driverIdentitySha256")
-        || value.get("runtimeIdentitySha256") != hardware.get("runtimeIdentitySha256")
         || string_field(value, "schema", "hardware summary")? != HARDWARE_SCHEMA
         || string_field(value, "authority", "hardware summary")?
             != "verification-input-no-independent-authority"
@@ -1542,7 +1851,10 @@ fn validate_hardware_summary(
     {
         return fail("hardware summary is stale, cross-target, or cross-run");
     }
-    Ok(RunnerObservationIdentities {
+    Ok(AuthenticatedObservationReferencesV1 {
+        hardware: reference,
+        driver,
+        runtime,
         isa,
         resource,
         result,
@@ -1571,12 +1883,16 @@ fn referenced_archive_objects(
     for field in observations.keys() {
         referenced.insert(reference_field(observations, field, "run.observations")?.sha256);
     }
-    for (name, kind) in COMPILER_OBSERVATIONS {
+    for (name, kind) in RUN_COMPILER_OBSERVATIONS {
         if reference_field(observations, name, "run.observations")?
-            != reference_field(files, kind, "record.evidenceFiles")?
+            != reference_field(files, kind, "pre-hardware record.evidenceFiles")?
         {
             return fail(format!("compiler observation {name} differs from {kind}"));
         }
+    }
+    for kind in VERIFIER_ONLY_COMPILER_OBJECTS {
+        referenced
+            .insert(reference_field(files, kind, "pre-hardware record.evidenceFiles")?.sha256);
     }
     Ok(referenced)
 }
@@ -2251,6 +2567,17 @@ fn archive_object<'a>(
     Ok(payload)
 }
 
+fn authenticated_archive_object(
+    objects: &BTreeMap<[u8; 32], Vec<u8>>,
+    reference: &ObjectReference,
+    label: &str,
+) -> ResultV1<AuthenticatedArchiveObjectV1> {
+    Ok(AuthenticatedArchiveObjectV1 {
+        sha256: reference.sha256,
+        payload: archive_object(objects, reference, label)?.into(),
+    })
+}
+
 fn validate_binding(
     value: &Map<String, Value>,
     field: &str,
@@ -2594,6 +2921,13 @@ fn domain_sha256(domain: &[u8], value: &Value) -> ResultV1<[u8; 32]> {
     Ok(digest.finalize().into())
 }
 
+fn domain_document_sha256(domain: &[u8], canonical_document: &[u8]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    digest.update(canonical_document);
+    digest.finalize().into()
+}
+
 fn sha256(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
@@ -2662,6 +2996,20 @@ fn fail<T>(message: impl Into<String>) -> ResultV1<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn add_archive_object(objects: &mut BTreeMap<[u8; 32], Vec<u8>>, payload: &[u8]) -> Value {
+        let digest = sha256(payload);
+        objects.insert(digest, payload.to_vec());
+        let encoded = encode_hex(&digest);
+        object_value([
+            ("bytes", Value::from(payload.len() as u64)),
+            (
+                "path",
+                Value::String(format!("{OBJECT_PREFIX}/{}/{encoded}", &encoded[..2])),
+            ),
+            ("sha256", Value::String(encoded)),
+        ])
+    }
 
     fn canonical_archive_vector() -> Vec<u8> {
         let payload = b"x".to_vec();
@@ -2771,12 +3119,154 @@ mod tests {
     }
 
     #[test]
-    fn malformed_archive_does_not_consume_replay_state() {
+    fn pre_hardware_record_identity_matches_the_newline_inclusive_contract() {
+        let record = b"{\"schema\":\"fe2o3-tutorial-pre-hardware-record-v1\"}\n";
+        assert_eq!(
+            encode_hex(&domain_document_sha256(PRE_HARDWARE_RECORD_DOMAIN, record)),
+            "9219608a6604c431f1be286f69998c153f34f6ae059619d1397ba8efd351e78d"
+        );
+        assert_ne!(
+            domain_document_sha256(PRE_HARDWARE_RECORD_DOMAIN, record),
+            domain_document_sha256(
+                PRE_HARDWARE_RECORD_DOMAIN,
+                record.strip_suffix(b"\n").unwrap(),
+            )
+        );
+    }
+
+    #[test]
+    fn internal_pre_hardware_binding_is_distinct_from_the_signed_document_identity() {
+        let mut record = object_value([
+            ("preHardwareBindingSha256", Value::String("0".repeat(64))),
+            (
+                "schema",
+                Value::String(PRE_HARDWARE_RECORD_SCHEMA.to_owned()),
+            ),
+        ]);
+        let mut subject = object(&record, "record").unwrap().clone();
+        subject.remove("preHardwareBindingSha256");
+        let binding = domain_sha256(PRE_HARDWARE_RECORD_DOMAIN, &Value::Object(subject)).unwrap();
+        record.as_object_mut().unwrap().insert(
+            "preHardwareBindingSha256".to_owned(),
+            Value::String(encode_hex(&binding)),
+        );
+        validate_binding(
+            object(&record, "record").unwrap(),
+            "preHardwareBindingSha256",
+            PRE_HARDWARE_RECORD_DOMAIN,
+            "record",
+        )
+        .unwrap();
+        let mut document = canonical_json(&record).unwrap();
+        document.push(b'\n');
+        assert_ne!(
+            binding,
+            domain_document_sha256(PRE_HARDWARE_RECORD_DOMAIN, &document)
+        );
+    }
+
+    #[test]
+    fn pre_cleanup_capsule_binds_pre_hardware_identity_and_runtime_observation() {
+        let mut objects = BTreeMap::new();
+        let runtime = add_archive_object(&mut objects, b"runtime observation\n");
+        let run_receipt = add_archive_object(&mut objects, b"run receipt\n");
+        let run_signature = add_archive_object(&mut objects, b"run signature\n");
+        let mut index = object_value([
+            ("runReceipt", run_receipt),
+            ("runSignature", run_signature),
+            ("preCleanupCapsuleSha256", Value::String("0".repeat(64))),
+        ]);
+        let mut run = object_value([
+            (
+                "attestor",
+                object_value([
+                    ("identity", Value::String("attestor".to_owned())),
+                    ("publicKeySha256", Value::String("1".repeat(64))),
+                ]),
+            ),
+            ("candidate", Value::String("candidate".to_owned())),
+            ("challengeNonce", Value::String("2".repeat(64))),
+            ("fixtureId", Value::String("fixture".to_owned())),
+            ("lane", Value::String("mi350".to_owned())),
+            ("observations", object_value([("runtime", runtime)])),
+            ("preHardwareRecordSha256", Value::String("3".repeat(64))),
+            ("requestBindingSha256", Value::String("4".repeat(64))),
+            (
+                "reservationIdentity",
+                Value::String("reservation".to_owned()),
+            ),
+            ("scratchIdentitySha256", Value::String("5".repeat(64))),
+            ("target", Value::String("gfx950".to_owned())),
+            ("transactionSha256", Value::String("6".repeat(64))),
+        ]);
+        let capsule = pre_cleanup_capsule_sha256(
+            object(&index, "index").unwrap(),
+            object(&run, "run").unwrap(),
+            &objects,
+        )
+        .unwrap();
+        index.as_object_mut().unwrap().insert(
+            "preCleanupCapsuleSha256".to_owned(),
+            Value::String(encode_hex(&capsule)),
+        );
+        validate_pre_cleanup_capsule(
+            object(&index, "index").unwrap(),
+            object(&run, "run").unwrap(),
+            &objects,
+        )
+        .unwrap();
+
+        run.as_object_mut().unwrap().insert(
+            "preHardwareRecordSha256".to_owned(),
+            Value::String("7".repeat(64)),
+        );
+        assert!(
+            validate_pre_cleanup_capsule(
+                object(&index, "index").unwrap(),
+                object(&run, "run").unwrap(),
+                &objects,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn authenticated_archive_object_retains_exact_nonconstructible_payload() {
+        let payload = b"exact hardware-owned identity\n".to_vec();
+        let reference = ObjectReference {
+            bytes: payload.len(),
+            sha256: sha256(&payload),
+        };
+        let objects = BTreeMap::from([(reference.sha256, payload.clone())]);
+        let authenticated = authenticated_archive_object(&objects, &reference, "identity").unwrap();
+        assert_eq!(authenticated.sha256, reference.sha256);
+        assert_eq!(authenticated.payload.as_ref(), payload.as_slice());
+
+        let substituted = ObjectReference {
+            bytes: reference.bytes,
+            sha256: sha256(b"substituted"),
+        };
+        assert!(authenticated_archive_object(&objects, &substituted, "identity").is_err());
+    }
+
+    #[test]
+    fn hardware_admission_rosters_keep_authority_owned_evidence_pending() {
+        assert!(PRE_HARDWARE_EVIDENCE_KINDS.contains(&"sealed-production-receipt"));
+        assert!(PRE_HARDWARE_EVIDENCE_KINDS.contains(&"simulation-bundle-v8"));
+        for kind in PENDING_EVIDENCE_KINDS {
+            assert!(!PRE_HARDWARE_EVIDENCE_KINDS.contains(kind));
+        }
+        assert!(HARDWARE_OBSERVATIONS.contains(&"driver"));
+        assert!(HARDWARE_OBSERVATIONS.contains(&"runtime"));
+    }
+
+    #[test]
+    fn failed_admission_does_not_consume_replay_state() {
         let mut replay = TutorialHardwareReceiptReplayLedgerV1::new();
         let result = verify_tutorial_hardware_qualification_receipt_v1(
             TutorialHardwareQualificationReceiptInputV1 {
                 request: b"{}\n",
-                production_record: b"{}\n",
+                pre_hardware_record: b"{}\n",
                 trust_policy: b"{}\n",
                 archive: b"not-a-zip",
             },

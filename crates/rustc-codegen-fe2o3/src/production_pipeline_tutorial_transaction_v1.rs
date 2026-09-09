@@ -32,18 +32,10 @@ use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Number, Value};
 use sha2::{Digest, Sha256};
 
-use crate::{
-    TutorialHardwareQualificationReceiptInputV1, TutorialHardwareReceiptReplayLedgerV1,
-    verify_tutorial_hardware_qualification_receipt_v1,
-};
-
 const REQUEST_SCHEMA: &str = "fe2o3-tutorial-production-transaction-request-v1";
-const EXPORT_SCHEMA: &str = "fe2o3-tutorial-production-transaction-export-v1";
 const PIPELINE_ENTRY: &str = "rustc-codegen-fe2o3::production_pipeline";
 const ROADMAP_ISSUE: &str = "https://github.com/harsh-nod/fe2o3/issues/272";
 const MANIFEST_PATH: &str = "config/tutorial-kernel-manifest-v1.json";
-const RESULT_NAME: &str = "transaction-export-v1.json";
-const HARDWARE_ARCHIVE_NAME: &str = "hardware-archive-v1.zip";
 const OBJECT_PREFIX: &str = "objects/sha256";
 const REQUEST_DOMAIN: &[u8] = b"fe2o3-tutorial-production-transaction-request-v1\0";
 const RECORD_DOMAIN: &[u8] = b"fe2o3-tutorial-capability-record-v1\0";
@@ -245,7 +237,6 @@ pub enum TutorialProductionTransactionErrorCodeV1 {
     HardwareReceipt,
     OutputPath,
     Publication,
-    QualificationSchemaConflict,
 }
 
 impl TutorialProductionTransactionErrorCodeV1 {
@@ -265,7 +256,6 @@ impl TutorialProductionTransactionErrorCodeV1 {
             Self::HardwareReceipt => "FE2O3-TUTORIAL-TXN-012",
             Self::OutputPath => "FE2O3-TUTORIAL-TXN-013",
             Self::Publication => "FE2O3-TUTORIAL-TXN-014",
-            Self::QualificationSchemaConflict => "FE2O3-TUTORIAL-TXN-015",
         }
     }
 }
@@ -303,17 +293,6 @@ impl fmt::Display for TutorialProductionTransactionErrorV1 {
 impl std::error::Error for TutorialProductionTransactionErrorV1 {}
 
 type ResultV1<T> = Result<T, TutorialProductionTransactionErrorV1>;
-
-/// Exact completed inputs supplied by the protected compiler/Cargo owner.
-///
-/// `evidence_objects` contains every archive kind except `simulator`; that object is already owned
-/// by the outer qualification producer and is retained by its request reference.
-#[derive(Debug)]
-pub struct TutorialProductionTransactionAssemblyV1 {
-    pub production_record: Value,
-    pub evidence_objects: BTreeMap<String, Vec<u8>>,
-    pub hardware_archive: Vec<u8>,
-}
 
 /// Identity of one atomically published transaction export.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -363,10 +342,9 @@ struct RequestContext {
     repository: PathBuf,
 }
 
-/// Produces one transaction through the sole protected Cargo/rustc entrypoint.
-pub fn produce_tutorial_capability_qualification_transaction_v1(
+/// Prepares one transaction through the sole protected Cargo/rustc entrypoint.
+pub fn prepare_tutorial_capability_qualification_transaction_v1(
     cargo_fe2o3: &Path,
-    hardware_trust_policy: &Path,
     request: &Path,
     output_directory: &Path,
 ) -> ResultV1<TutorialProductionTransactionReceiptV1> {
@@ -379,7 +357,6 @@ pub fn produce_tutorial_capability_qualification_transaction_v1(
     let repository = real_directory(&repository, "compiler repository")?;
     let request_bytes = read_regular(request, MAX_JSON_BYTES, "transaction request")?;
     let context = preflight_request(&repository, request_bytes, true)?;
-    let _policy = read_operator_policy(&repository, hardware_trust_policy)?;
     require_external_output_path(&repository, output_directory)?;
     let build = run_protected_fixture_build_v1(
         cargo_fe2o3,
@@ -392,24 +369,7 @@ pub fn produce_tutorial_capability_qualification_transaction_v1(
     )?;
     let recovered = recover_protected_fixture_result_v1(&build.output_root)?;
     recovered.revalidate_currentness()?;
-    let result = recovered.production_result();
-    let result_identity = hex32(result.identity().sha256());
-    let unavailable = unavailable_manifest_qualification_prerequisites_v1(&context)?;
-    if !unavailable.is_empty() {
-        return fail(
-            TutorialProductionTransactionErrorCodeV1::QualificationSchemaConflict,
-            format!(
-                "protected Cargo completed native V5 result {result_identity}, but the admitted tutorial manifest does not yet authorize production transaction assembly: {}",
-                unavailable.join(", "),
-            ),
-        );
-    }
-    Err(TutorialProductionTransactionErrorV1::new(
-        TutorialProductionTransactionErrorCodeV1::QualificationSchemaConflict,
-        format!(
-            "protected Cargo completed native V5 result {result_identity} and its current ancillary journal, but the manifest claims production readiness without a compiler-owned transaction-assembly package",
-        ),
-    ))
+    assemble_pre_hardware_transaction_v1(&context, &recovered, output_directory)
 }
 
 #[derive(Debug)]
@@ -499,80 +459,6 @@ impl RecoveredProtectedFixtureResultV1 {
         }
         Ok(())
     }
-}
-
-fn unavailable_manifest_qualification_prerequisites_v1(
-    context: &RequestContext,
-) -> ResultV1<Vec<String>> {
-    let request = object(&context.document, "request")?;
-    let requested_kernel = object(
-        required(request, "capabilityKernel", "request")?,
-        "request.capabilityKernel",
-    )?;
-    let manifest_bytes = read_repository_file(&context.repository, MANIFEST_PATH, MAX_JSON_BYTES)?;
-    let manifest = parse_repository_document(&manifest_bytes, "tutorial manifest")?;
-    let manifest = object(&manifest, "tutorial manifest")?;
-    let kernel = find_fixture(
-        required(manifest, "capabilityKernels", "tutorial manifest")?,
-        &context.fixture_id,
-        "tutorial manifest.capabilityKernels",
-    )?;
-    let mut unavailable = Vec::new();
-    let closure = object(
-        required(
-            requested_kernel,
-            "capabilityClosure",
-            "request.capabilityKernel",
-        )?,
-        "request.capabilityKernel.capabilityClosure",
-    )?;
-    if closure.get("status").and_then(Value::as_str) != Some("complete")
-        || closure.get("sha256").and_then(Value::as_str).is_none()
-    {
-        unavailable.push("capability closure is not produced".to_owned());
-    }
-    let path = object(
-        required(
-            kernel,
-            "productionCapabilityPath",
-            "tutorial capability kernel",
-        )?,
-        "tutorial capability kernel.productionCapabilityPath",
-    )?;
-    if path.get("status").and_then(Value::as_str) != Some("compiler-produced")
-        || path.get("path").and_then(Value::as_str) != Some("production")
-        || path.get("evidence").is_none_or(Value::is_null)
-    {
-        unavailable.push("production capability path is not promoted".to_owned());
-    }
-    let proof = object(
-        required(kernel, "proofRequirements", "tutorial capability kernel")?,
-        "tutorial capability kernel.proofRequirements",
-    )?;
-    if proof.get("status").and_then(Value::as_str) != Some("complete")
-        || ["obligationSetSha256", "checkerSha256", "evidenceSha256"]
-            .iter()
-            .any(|field| proof.get(*field).and_then(Value::as_str).is_none())
-    {
-        unavailable.push("proof requirement set is not complete".to_owned());
-    }
-    let negative = object(
-        required(
-            kernel,
-            "negativeFixtureCoverage",
-            "tutorial capability kernel",
-        )?,
-        "tutorial capability kernel.negativeFixtureCoverage",
-    )?;
-    if negative.get("status").and_then(Value::as_str) != Some("passed")
-        || negative
-            .get("cases")
-            .and_then(Value::as_array)
-            .is_none_or(Vec::is_empty)
-    {
-        unavailable.push("capability-negative fixture coverage is unavailable".to_owned());
-    }
-    Ok(unavailable)
 }
 
 fn run_protected_fixture_build_v1(
@@ -858,95 +744,9 @@ fn read_bounded_optional_file(path: &Path, maximum: u64, label: &str) -> ResultV
     Ok(bytes)
 }
 
-/// Validates and atomically publishes a transaction after protected completion exists.
-///
-/// This is the narrow handoff for the pending Cargo authority transfer. Every compiler-owned byte
-/// is checked against the decoded V5 result before hardware authentication and publication.
-pub fn assemble_tutorial_capability_qualification_transaction_v1(
-    repository: &Path,
-    hardware_trust_policy: &Path,
-    request: &Path,
-    output_directory: &Path,
-    assembly: TutorialProductionTransactionAssemblyV1,
-) -> ResultV1<TutorialProductionTransactionReceiptV1> {
-    let repository = real_directory(repository, "compiler repository")?;
-    let request_bytes = read_regular(request, MAX_JSON_BYTES, "transaction request")?;
-    let context = preflight_request(&repository, request_bytes, true)?;
-    let policy_bytes = read_operator_policy(&repository, hardware_trust_policy)?;
-    require_external_output_path(&repository, output_directory)?;
-    validate_local_evidence_roster(&assembly.evidence_objects)?;
-    validate_source_evidence(&context, &assembly.evidence_objects)?;
-
-    let sealed = evidence(&assembly.evidence_objects, "sealed-production-receipt")?;
-    let result = InertProductionCapabilityResultV5::decode(sealed).map_err(|error| {
-        TutorialProductionTransactionErrorV1::new(
-            TutorialProductionTransactionErrorCodeV1::InvalidProductionResult,
-            format!("sealed native V5 result failed typed decoding: {error}"),
-        )
-    })?;
-    if result.canonical_bytes() != sealed {
-        return fail(
-            TutorialProductionTransactionErrorCodeV1::InvalidProductionResult,
-            "sealed native V5 result is not canonical",
-        );
-    }
-    let kernel_ordinal = validate_typed_evidence(&context, &result, &assembly.evidence_objects)?;
-    let record_bytes = validate_record(
-        &context,
-        &result,
-        kernel_ordinal,
-        &assembly.production_record,
-        &assembly.evidence_objects,
-    )?;
-
-    let mut replay = TutorialHardwareReceiptReplayLedgerV1::new();
-    verify_tutorial_hardware_qualification_receipt_v1(
-        TutorialHardwareQualificationReceiptInputV1 {
-            request: &context.canonical_bytes,
-            production_record: &record_bytes,
-            trust_policy: &policy_bytes,
-            archive: &assembly.hardware_archive,
-        },
-        &mut replay,
-    )
-    .map_err(|error| {
-        TutorialProductionTransactionErrorV1::new(
-            TutorialProductionTransactionErrorCodeV1::HardwareReceipt,
-            format!("authenticated hardware archive was rejected: {error}"),
-        )
-    })?;
-
-    let transaction_sha256 = hex32(result.transaction().identity().sha256());
-    let envelope = serde_json::json!({
-        "candidate": required(object(&context.document, "request")?, "candidate", "request")?,
-        "fixtureId": context.fixture_id,
-        "record": assembly.production_record,
-        "requestBindingSha256": context.request_binding_sha256,
-        "schema": EXPORT_SCHEMA,
-    });
-    let export_bytes = canonical_document(&envelope)?;
-    publish_export(
-        output_directory,
-        &export_bytes,
-        &assembly.evidence_objects,
-        &assembly.hardware_archive,
-    )?;
-    Ok(TutorialProductionTransactionReceiptV1 {
-        fixture_id: string_field(&envelope, "fixtureId", "transaction export")?.to_owned(),
-        request_binding_sha256: string_field(
-            &envelope,
-            "requestBindingSha256",
-            "transaction export",
-        )?
-        .to_owned(),
-        transaction_sha256,
-        export_sha256: hex_sha256(&export_bytes),
-        output_directory: output_directory.to_path_buf(),
-    })
-}
-
 include!("production_pipeline_tutorial_transaction_request_v1.rs");
 include!("production_pipeline_tutorial_transaction_evidence_v1.rs");
+include!("production_pipeline_tutorial_transaction_pre_hardware_v1.rs");
 include!("production_pipeline_tutorial_transaction_io_v1.rs");
 #[cfg(test)]
 include!("production_pipeline_tutorial_transaction_tests_v1.rs");

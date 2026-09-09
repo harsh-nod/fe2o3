@@ -44,7 +44,7 @@ static NEXT_SCRATCH: AtomicU64 = AtomicU64::new(0);
 pub struct ScratchDirectory(PathBuf);
 
 impl ScratchDirectory {
-    fn new(label: &str) -> Self {
+    pub fn new(label: &str) -> Self {
         let target = workspace().join("target/issue272-qualification");
         fs::create_dir_all(&target).expect("create shared qualification root");
         let path = target.join(format!(
@@ -78,21 +78,22 @@ pub struct ProtectedCompileResult {
 
 pub fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("canonical workspace")
+        .ancestors()
+        .find(|ancestor| ancestor.join(".git").exists())
+        .expect("test manifest must be inside the fe2o3 checkout")
+        .to_path_buf()
 }
 
 pub fn fixture_source() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/single-codegen-ownership-v1/src/lib.rs")
+    workspace()
+        .join("crates/rustc-codegen-fe2o3/tests/fixtures/single-codegen-ownership-v1/src/lib.rs")
         .canonicalize()
         .expect("canonical issue 272 fixture")
 }
 
 pub fn forged_source() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/single-codegen-ownership-v1/forged-prefix.rs")
+    workspace()
+        .join("crates/rustc-codegen-fe2o3/tests/fixtures/single-codegen-ownership-v1/forged-prefix.rs")
         .canonicalize()
         .expect("canonical forged fixture")
 }

@@ -1,4 +1,4 @@
-//! Compiler-authenticated bounded closure admission for the gfx942 pilot.
+//! Compiler-authenticated bounded closure admission for production GPU targets.
 //!
 //! This profile recognizes concrete rustc closure types, records their
 //! physical capture layout, and emits a static-call lowering plan only when
@@ -8,6 +8,7 @@
 use crate::rust_type_layout_general::{TypeLayoutFacts, extract_general_layout};
 use rustc_abi::ExternAbi;
 use rustc_hir::Mutability;
+use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{
     AggregateKind, Body, InlineAsmOperand, Local, NonDivergingIntrinsic, Operand, Place, Rvalue,
@@ -24,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 const MAX_CLOSURES: usize = 8;
-const MAX_CAPTURES: usize = 8;
+const MAX_CAPTURES: usize = 16;
 const MAX_ENVIRONMENT_BYTES: u64 = 256;
 const MAX_ENVIRONMENT_ALIGNMENT: u64 = 16;
 const MAX_CALL_ARGUMENTS: usize = 8;
@@ -91,6 +92,22 @@ pub(crate) struct StaticClosureCallV1 {
     pub(crate) target_definition_hash: [u8; 16],
 }
 
+/// Exact by-value custody transfer into one recursively collected,
+/// monomorphized Rust callee. The callee is independently closure-profiled,
+/// so this record does not grant a generic higher-order escape.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ClosureTransportCallV1 {
+    pub(crate) block: usize,
+    pub(crate) closure_local: usize,
+    pub(crate) argument_index: usize,
+    pub(crate) target_definition_hash: [u8; 16],
+    pub(crate) target_function_identity: [u8; 32],
+    pub(crate) target_monomorphization_identity: [u8; 32],
+    pub(crate) target_mir_identity: [u8; 32],
+    pub(crate) target_fn_abi_identity: [u8; 32],
+    pub(crate) call_source_identity: [u8; 32],
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HigherOrderCapabilityTerminalV1 {
     WithWorkgroup,
@@ -124,20 +141,30 @@ pub(crate) struct HigherOrderCapabilityCallV1 {
 
 /// Compiler-sealed plan for direct environment reconstruction and static call.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Gfx942ClosureLoweringV1 {
+pub(crate) struct ProductionClosureLoweringV1 {
+    target: String,
     environments: Vec<ClosureEnvironmentV1>,
     calls: Vec<StaticClosureCallV1>,
+    transport_calls: Vec<ClosureTransportCallV1>,
     higher_order_calls: Vec<HigherOrderCapabilityCallV1>,
     identity: [u8; 32],
 }
 
-impl Gfx942ClosureLoweringV1 {
+impl ProductionClosureLoweringV1 {
+    pub(crate) fn target(&self) -> &str {
+        &self.target
+    }
+
     pub(crate) fn environments(&self) -> &[ClosureEnvironmentV1] {
         &self.environments
     }
 
     pub(crate) fn calls(&self) -> &[StaticClosureCallV1] {
         &self.calls
+    }
+
+    pub(crate) fn transport_calls(&self) -> &[ClosureTransportCallV1] {
+        &self.transport_calls
     }
 
     pub(crate) fn higher_order_calls(&self) -> &[HigherOrderCapabilityCallV1] {
@@ -179,31 +206,35 @@ impl ClosureProfileErrorV1 {
 
 impl fmt::Display for ClosureProfileErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "gfx942 closure profile rejected MIR: {}", self.0)
+        write!(
+            formatter,
+            "production closure profile rejected MIR: {}",
+            self.0
+        )
     }
 }
 
 impl std::error::Error for ClosureProfileErrorV1 {}
 
-pub(crate) fn analyze_gfx942_closures_v1<'tcx>(
+pub(crate) fn analyze_production_closures_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     policy: ClosureOriginPolicyV1,
     selected_target: &str,
-) -> Result<Gfx942ClosureLoweringV1, ClosureProfileErrorV1> {
+) -> Result<ProductionClosureLoweringV1, ClosureProfileErrorV1> {
     let processor = selected_target
         .split(':')
         .next()
         .unwrap_or(selected_target)
         .trim();
-    if processor != "gfx942" {
+    if !matches!(processor, "gfx942" | "gfx950") {
         return Err(ClosureProfileErrorV1::new(format!(
-            "the bounded closure profile supports gfx942, not `{selected_target}`"
+            "the bounded closure profile supports gfx942 and gfx950 production targets, not `{selected_target}`"
         )));
     }
     if tcx.sess.target.pointer_width != 64 {
         return Err(ClosureProfileErrorV1::new(
-            "the bounded gfx942 profile requires a 64-bit compiler target",
+            "the bounded production GPU profile requires a 64-bit compiler target",
         ));
     }
     let body = tcx.instance_mir(instance.def);
@@ -371,7 +402,7 @@ pub(crate) fn analyze_gfx942_closures_v1<'tcx>(
     }
     environments.sort_by_key(|environment| environment.local);
     let aliases = closure_reference_aliases(body, &closure_locals, &value_aliases)?;
-    let (calls, higher_order_calls) = validate_uses_and_calls(
+    let (calls, transport_calls, higher_order_calls) = validate_uses_and_calls(
         tcx,
         instance,
         body,
@@ -379,10 +410,18 @@ pub(crate) fn analyze_gfx942_closures_v1<'tcx>(
         &closure_locals,
         &aliases,
     )?;
-    let identity = lowering_identity(&environments, &calls, &higher_order_calls);
-    Ok(Gfx942ClosureLoweringV1 {
+    let identity = lowering_identity(
+        selected_target,
+        &environments,
+        &calls,
+        &transport_calls,
+        &higher_order_calls,
+    );
+    Ok(ProductionClosureLoweringV1 {
+        target: selected_target.to_owned(),
         environments,
         calls,
+        transport_calls,
         higher_order_calls,
         identity,
     })
@@ -654,12 +693,20 @@ fn validate_uses_and_calls<'tcx>(
     environments: &[ClosureEnvironmentV1],
     closure_locals: &BTreeSet<Local>,
     aliases: &BTreeMap<Local, Local>,
-) -> Result<(Vec<StaticClosureCallV1>, Vec<HigherOrderCapabilityCallV1>), ClosureProfileErrorV1> {
+) -> Result<
+    (
+        Vec<StaticClosureCallV1>,
+        Vec<ClosureTransportCallV1>,
+        Vec<HigherOrderCapabilityCallV1>,
+    ),
+    ClosureProfileErrorV1,
+> {
     let by_local = environments
         .iter()
         .map(|environment| (Local::from_usize(environment.local), environment))
         .collect::<BTreeMap<_, _>>();
     let mut calls = Vec::new();
+    let mut transport_calls = Vec::new();
     let mut higher_order_calls = Vec::new();
     let mut call_counts = BTreeMap::<Local, usize>::new();
     for (block_index, block) in body.basic_blocks.iter_enumerated() {
@@ -708,7 +755,9 @@ fn validate_uses_and_calls<'tcx>(
                         *call_counts.entry(Local::from_usize(*local)).or_default() += 1;
                     }
                     higher_order_calls.push(call);
-                    if calls.len() + higher_order_calls.len() > MAX_STATIC_CALLS {
+                    if calls.len() + transport_calls.len() + higher_order_calls.len()
+                        > MAX_STATIC_CALLS
+                    {
                         return Err(ClosureProfileErrorV1::new(format!(
                             "closure call count exceeds {MAX_STATIC_CALLS}"
                         )));
@@ -720,9 +769,44 @@ fn validate_uses_and_calls<'tcx>(
                     .and_then(|argument| operand_local(&argument.node));
                 let closure_local =
                     receiver.and_then(|local| resolve_alias_root(local, closure_locals, aliases));
-                if let Some(closure_local) = closure_local {
+                // Argument zero may carry an environment into an ordinary Rust
+                // helper; only the resolved callable can establish invocation.
+                let invocation = match closure_local {
+                    Some(local) => {
+                        let target = resolve_direct_call(tcx, instance, func)?;
+                        closure_invocation_kind_v1(tcx, func, target)?
+                            .map(|kind| (local, target, kind))
+                    }
+                    None => None,
+                };
+                if invocation.is_none()
+                    && let Some(call) = authenticate_closure_transport_call_v1(
+                        tcx,
+                        instance,
+                        body,
+                        block_index.as_usize(),
+                        terminator.source_info.span,
+                        func,
+                        args,
+                        closure_locals,
+                        aliases,
+                    )?
+                {
+                    *call_counts
+                        .entry(Local::from_usize(call.closure_local))
+                        .or_default() += 1;
+                    transport_calls.push(call);
+                    if calls.len() + transport_calls.len() + higher_order_calls.len()
+                        > MAX_STATIC_CALLS
+                    {
+                        return Err(ClosureProfileErrorV1::new(format!(
+                            "closure call count exceeds {MAX_STATIC_CALLS}"
+                        )));
+                    }
+                    continue;
+                }
+                if let Some((closure_local, target, call_kind)) = invocation {
                     let environment = by_local[&closure_local];
-                    let call_kind = declared_call_kind(tcx, func)?;
                     if !call_kind_allowed(environment.call_kind, call_kind) {
                         return Err(ClosureProfileErrorV1::new(
                             "closure invoked through an incompatible Fn trait",
@@ -739,7 +823,6 @@ fn validate_uses_and_calls<'tcx>(
                             "closure call argument count exceeds {MAX_CALL_ARGUMENTS}"
                         )));
                     }
-                    let target = resolve_direct_call(tcx, instance, func)?;
                     if tcx.def_path_hash(target.def_id()).0.to_le_bytes()
                         != environment.definition_hash
                         && !matches!(target.def, InstanceKind::ClosureOnceShim { .. })
@@ -763,7 +846,9 @@ fn validate_uses_and_calls<'tcx>(
                         argument_count,
                         target_definition_hash: tcx.def_path_hash(target.def_id()).0.to_le_bytes(),
                     });
-                    if calls.len() > MAX_STATIC_CALLS {
+                    if calls.len() + transport_calls.len() + higher_order_calls.len()
+                        > MAX_STATIC_CALLS
+                    {
                         return Err(ClosureProfileErrorV1::new(format!(
                             "closure call count exceeds {MAX_STATIC_CALLS}"
                         )));
@@ -849,8 +934,140 @@ fn validate_uses_and_calls<'tcx>(
         }
     }
     calls.sort_by_key(|call| (call.block, call.closure_local));
+    transport_calls.sort_by_key(|call| (call.block, call.argument_index, call.closure_local));
     higher_order_calls.sort_by_key(|call| call.block);
-    Ok((calls, higher_order_calls))
+    Ok((calls, transport_calls, higher_order_calls))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_closure_transport_call_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    caller: Instance<'tcx>,
+    body: &Body<'tcx>,
+    block: usize,
+    span: Span,
+    func: &Operand<'tcx>,
+    args: &[Spanned<Operand<'tcx>>],
+    closure_locals: &BTreeSet<Local>,
+    aliases: &BTreeMap<Local, Local>,
+) -> Result<Option<ClosureTransportCallV1>, ClosureProfileErrorV1> {
+    let transported = args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, argument)| {
+            operand_local(&argument.node)
+                .and_then(|local| resolve_alias_root(local, closure_locals, aliases))
+                .map(|local| (index, local))
+        })
+        .collect::<Vec<_>>();
+    let [(argument_index, closure_local)] = transported.as_slice() else {
+        if transported.is_empty() {
+            return Ok(None);
+        }
+        return Err(ClosureProfileErrorV1::new(
+            "one call may transport only one closure environment",
+        ));
+    };
+
+    let target = resolve_direct_call(tcx, caller, func)?;
+    if target.args.has_param() || target.args.has_escaping_bound_vars() {
+        return Err(ClosureProfileErrorV1::new(
+            "closure transport target did not resolve to one monomorphic instance",
+        ));
+    }
+    if !matches!(target.def, InstanceKind::Item(_)) || !tcx.is_mir_available(target.def_id()) {
+        return Err(ClosureProfileErrorV1::new(
+            "closure transport target has no recursively traversable Rust MIR",
+        ));
+    }
+    let signature = tcx.normalize_erasing_regions(
+        TypingEnv::fully_monomorphized(),
+        tcx.instantiate_bound_regions_with_erased(
+            tcx.fn_sig(target.def_id()).instantiate(tcx, target.args),
+        ),
+    );
+    if signature.safety != rustc_hir::Safety::Safe
+        || signature.abi != ExternAbi::Rust
+        || signature.c_variadic
+        || signature.inputs().len() != args.len()
+    {
+        return Err(ClosureProfileErrorV1::new(
+            "closure transport target changed its safe Rust ABI",
+        ));
+    }
+    if contains_closure_type_v1(signature.output()) {
+        return Err(ClosureProfileErrorV1::new(
+            "closure transport target returns a closure-bearing value",
+        ));
+    }
+    let closure_ty = normalized_ty(
+        tcx,
+        caller,
+        args[*argument_index].node.ty(body, tcx),
+        "transported closure argument",
+    )?;
+    if signature.inputs()[*argument_index] != closure_ty
+        || !matches!(closure_ty.kind(), TyKind::Closure(..))
+    {
+        return Err(ClosureProfileErrorV1::new(
+            "closure transport must preserve one exact by-value closure type",
+        ));
+    }
+    if signature
+        .inputs()
+        .iter()
+        .enumerate()
+        .any(|(index, input)| index != *argument_index && contains_closure_type_v1(*input))
+    {
+        return Err(ClosureProfileErrorV1::new(
+            "closure transport target has an additional closure-bearing input",
+        ));
+    }
+
+    let query = TypingEnv::fully_monomorphized().as_query_input((target, ty::List::empty()));
+    let fn_abi = tcx.fn_abi_of_instance(query).map_err(|error| {
+        ClosureProfileErrorV1::new(format!(
+            "closure transport target FnAbi is unavailable: {error:?}"
+        ))
+    })?;
+    let identities =
+        crate::rustc_semantic_adapter_v1::canonical_function_identities_v1(tcx, target);
+    let source = crate::rustc_semantic_adapter_v1::canonical_source_provenance_v1(
+        tcx,
+        span,
+        MAX_MACRO_EXPANSION_DEPTH,
+    )
+    .map_err(|error| {
+        ClosureProfileErrorV1::new(format!(
+            "closure transport call has invalid source provenance: {error}"
+        ))
+    })?;
+    Ok(Some(ClosureTransportCallV1 {
+        block,
+        closure_local: closure_local.as_usize(),
+        argument_index: *argument_index,
+        target_definition_hash: tcx.def_path_hash(target.def_id()).0.to_le_bytes(),
+        target_function_identity: *identities.function().as_bytes(),
+        target_monomorphization_identity: *identities.monomorphization().as_bytes(),
+        target_mir_identity: crate::rustc_semantic_adapter_v1::rustc_mir_body_sha256_v1(
+            tcx, target,
+        ),
+        target_fn_abi_identity: crate::rustc_semantic_adapter_v1::rustc_fn_abi_sha256_v1(
+            tcx, fn_abi,
+        ),
+        call_source_identity: source.expansion_chain_sha256(),
+    }))
+}
+
+fn contains_closure_type_v1(ty: Ty<'_>) -> bool {
+    ty.walk()
+        .filter_map(|argument| argument.as_type())
+        .any(|component| {
+            matches!(
+                component.kind(),
+                TyKind::Closure(..) | TyKind::CoroutineClosure(..)
+            )
+        })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1287,10 +1504,11 @@ fn operand_local(operand: &Operand<'_>) -> Option<Local> {
     }
 }
 
-fn declared_call_kind(
-    tcx: TyCtxt<'_>,
+fn closure_invocation_kind_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
     func: &Operand<'_>,
-) -> Result<ClosureCallKindV1, ClosureProfileErrorV1> {
+    target: Instance<'tcx>,
+) -> Result<Option<ClosureCallKindV1>, ClosureProfileErrorV1> {
     let Operand::Constant(constant) = func else {
         return Err(ClosureProfileErrorV1::new(
             "indirect closure calls are forbidden",
@@ -1301,19 +1519,44 @@ fn declared_call_kind(
             "closure call operand is not a concrete Fn trait method",
         ));
     };
-    let trait_id = tcx
-        .trait_of_assoc(*def_id)
-        .ok_or_else(|| ClosureProfileErrorV1::new("closure call is not a trait method"))?;
-    if Some(trait_id) == tcx.lang_items().fn_trait() {
-        Ok(ClosureCallKindV1::Fn)
-    } else if Some(trait_id) == tcx.lang_items().fn_mut_trait() {
-        Ok(ClosureCallKindV1::FnMut)
-    } else if Some(trait_id) == tcx.lang_items().fn_once_trait() {
-        Ok(ClosureCallKindV1::FnOnce)
+    if let Some(trait_id) = tcx.trait_of_assoc(*def_id) {
+        if Some(trait_id) == tcx.lang_items().fn_trait() {
+            return Ok(Some(ClosureCallKindV1::Fn));
+        }
+        if Some(trait_id) == tcx.lang_items().fn_mut_trait() {
+            return Ok(Some(ClosureCallKindV1::FnMut));
+        }
+        if Some(trait_id) == tcx.lang_items().fn_once_trait() {
+            return Ok(Some(ClosureCallKindV1::FnOnce));
+        }
+    }
+    if matches!(target.def, InstanceKind::ClosureOnceShim { .. }) {
+        Ok(Some(ClosureCallKindV1::FnOnce))
+    } else if tcx.def_kind(target.def_id()) == DefKind::Closure {
+        let signature = tcx.normalize_erasing_regions(
+            TypingEnv::fully_monomorphized(),
+            tcx.instantiate_bound_regions_with_erased(
+                tcx.fn_sig(target.def_id()).instantiate(tcx, target.args),
+            ),
+        );
+        match signature.inputs().first().map(|receiver| receiver.kind()) {
+            Some(TyKind::Ref(_, closure, Mutability::Not))
+                if matches!(closure.kind(), TyKind::Closure(..)) =>
+            {
+                Ok(Some(ClosureCallKindV1::Fn))
+            }
+            Some(TyKind::Ref(_, closure, Mutability::Mut))
+                if matches!(closure.kind(), TyKind::Closure(..)) =>
+            {
+                Ok(Some(ClosureCallKindV1::FnMut))
+            }
+            Some(TyKind::Closure(..)) => Ok(Some(ClosureCallKindV1::FnOnce)),
+            _ => Err(ClosureProfileErrorV1::new(
+                "compiler-generated closure body has an invalid receiver ABI",
+            )),
+        }
     } else {
-        Err(ClosureProfileErrorV1::new(
-            "callable trait is not Fn, FnMut, or FnOnce",
-        ))
+        Ok(None)
     }
 }
 
@@ -1376,12 +1619,16 @@ fn tuple_argument_count<'tcx>(
 }
 
 fn lowering_identity(
+    target: &str,
     environments: &[ClosureEnvironmentV1],
     calls: &[StaticClosureCallV1],
+    transport_calls: &[ClosureTransportCallV1],
     higher_order_calls: &[HigherOrderCapabilityCallV1],
 ) -> [u8; 32] {
     let mut hash = Sha256::new();
-    hash.update(b"fe2o3.gfx942-closure-lowering.v2\0");
+    hash.update(b"fe2o3.production-closure-lowering.v3\0");
+    hash.update((target.len() as u64).to_le_bytes());
+    hash.update(target.as_bytes());
     hash.update((environments.len() as u64).to_le_bytes());
     for environment in environments {
         hash.update((environment.local as u64).to_le_bytes());
@@ -1407,6 +1654,18 @@ fn lowering_identity(
         hash.update([call.call_kind as u8]);
         hash.update((call.argument_count as u64).to_le_bytes());
         hash.update(call.target_definition_hash);
+    }
+    hash.update((transport_calls.len() as u64).to_le_bytes());
+    for call in transport_calls {
+        hash.update((call.block as u64).to_le_bytes());
+        hash.update((call.closure_local as u64).to_le_bytes());
+        hash.update((call.argument_index as u64).to_le_bytes());
+        hash.update(call.target_definition_hash);
+        hash.update(call.target_function_identity);
+        hash.update(call.target_monomorphization_identity);
+        hash.update(call.target_mir_identity);
+        hash.update(call.target_fn_abi_identity);
+        hash.update(call.call_source_identity);
     }
     hash.update((higher_order_calls.len() as u64).to_le_bytes());
     for call in higher_order_calls {

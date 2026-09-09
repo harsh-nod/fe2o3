@@ -1,14 +1,15 @@
 use fe2o3_proof_contracts::{
-    ArtifactIdentityV1, CapabilityCodecErrorV1, CapabilityCompositionErrorV1,
-    CapabilityDiagnosticIdV1, CapabilityObligationSpecV1, CapabilityOutcomeKindV1,
-    CapabilityOutcomeV1, CapabilityPropertyIdV1, CapabilityRecordKindV1, CapabilityResourceV1,
-    CapabilityResultSpecV1, CapabilitySubjectFieldV1, CapabilitySubjectV1, DigestV1,
-    EvidenceIdentityV1, ExactToolIdentityV1, ExecutableKirIdentityV1,
-    InertCapabilityObligationSetV1, InertCapabilityResultSetV1, KernelIdentityV1,
-    KernelRootIdentityV1, LaunchContractIdentityV1, MAX_CAPABILITY_OBLIGATIONS_V1,
-    MAX_CAPABILITY_REJECTED_WITNESS_BYTES_V1, MAX_CAPABILITY_RESULT_SET_BYTES_V1,
-    MAX_CAPABILITY_WITNESS_BYTES_V1, StatementIdentityV1, TargetModelIdentityV1,
-    validate_capability_composition_v1,
+    ArtifactIdentityV1, CapabilityAnalysisReportIdentityV1, CapabilityCheckerIdentityV1,
+    CapabilityCodecErrorV1, CapabilityCompositionErrorV1, CapabilityDiagnosticIdV1,
+    CapabilityObligationSpecV1, CapabilityOutcomeKindV1, CapabilityOutcomeV1,
+    CapabilityPropertyIdV1, CapabilityRecordKindV1, CapabilityRefinementKindV1,
+    CapabilityRefinementReceiptIdentityV1, CapabilityResourceV1, CapabilityResultSpecV1,
+    CapabilitySubjectFieldV1, CapabilitySubjectV1, DigestV1, EvidenceIdentityV1,
+    ExactToolIdentityV1, ExecutableKirIdentityV1, InertCapabilityObligationSetV1,
+    InertCapabilityResultSetV1, KernelIdentityV1, KernelRootIdentityV1, LaunchContractIdentityV1,
+    MAX_CAPABILITY_OBLIGATIONS_V1, MAX_CAPABILITY_REJECTED_WITNESS_BYTES_V1,
+    MAX_CAPABILITY_RESULT_SET_BYTES_V1, MAX_CAPABILITY_WITNESS_BYTES_V1, StatementIdentityV1,
+    TargetModelIdentityV1, validate_capability_composition_v1,
 };
 
 fn digest(byte: u8) -> DigestV1 {
@@ -123,6 +124,7 @@ fn canonical_roundtrip_binds_all_five_outcomes() {
 
     assert_eq!(decoded_obligations, obligations);
     assert_eq!(decoded_results, results);
+    assert_eq!(decoded_results.schema_version(), 1);
     assert_eq!(
         decoded_results
             .results()
@@ -141,6 +143,117 @@ fn canonical_roundtrip_binds_all_five_outcomes() {
         validate_capability_composition_v1(subject(), &obligations, &results),
         Ok(())
     );
+}
+
+#[test]
+fn checked_and_refinement_receipt_are_distinct_v2_outcomes() {
+    let subject = subject();
+    let obligations = InertCapabilityObligationSetV1::from_specs(
+        subject,
+        vec![
+            CapabilityObligationSpecV1::new(CapabilityPropertyIdV1::BOUNDS, statement(60)),
+            CapabilityObligationSpecV1::new(
+                CapabilityPropertyIdV1::MACHINE_REFINEMENT,
+                statement(61),
+            ),
+        ],
+    )
+    .unwrap();
+    let specs: Vec<_> = obligations
+        .obligations()
+        .iter()
+        .map(|obligation| {
+            let outcome = if obligation.property() == CapabilityPropertyIdV1::BOUNDS {
+                CapabilityOutcomeV1::Checked {
+                    evidence: EvidenceIdentityV1::from_untrusted_digest(digest(62)),
+                    checker: CapabilityCheckerIdentityV1::from_untrusted_digest(digest(63)),
+                    report: CapabilityAnalysisReportIdentityV1::from_untrusted_digest(digest(64)),
+                    executable_kir: subject.executable_kir(),
+                    executable_kir_epoch: subject.executable_kir_epoch(),
+                    analysis_epoch: 9,
+                }
+            } else {
+                CapabilityOutcomeV1::RefinementReceipt {
+                    kind: CapabilityRefinementKindV1::Machine,
+                    receipt: CapabilityRefinementReceiptIdentityV1::from_untrusted_parts(
+                        digest(65),
+                        4096,
+                    ),
+                }
+            };
+            CapabilityResultSpecV1::new(obligation.identity(), outcome)
+        })
+        .collect();
+    assert!(matches!(
+        InertCapabilityResultSetV1::from_specs(subject, obligations.identity(), specs.clone(),),
+        Err(CapabilityCodecErrorV1::UnknownOutcome { tag: 6 | 7, .. })
+    ));
+    let results =
+        InertCapabilityResultSetV1::from_specs_v2(subject, obligations.identity(), specs).unwrap();
+    assert_eq!(results.schema_version(), 2);
+    let decoded = InertCapabilityResultSetV1::decode_canonical(results.canonical_bytes()).unwrap();
+    assert!(
+        decoded
+            .results()
+            .iter()
+            .any(|result| { result.outcome().kind() == CapabilityOutcomeKindV1::Checked })
+    );
+    assert!(
+        decoded.results().iter().any(|result| {
+            result.outcome().kind() == CapabilityOutcomeKindV1::RefinementReceipt
+        })
+    );
+
+    let mut downgraded = results.canonical_bytes().to_vec();
+    downgraded[8..10].copy_from_slice(&1_u16.to_le_bytes());
+    assert!(matches!(
+        InertCapabilityResultSetV1::decode_canonical(&downgraded),
+        Err(CapabilityCodecErrorV1::UnknownOutcome { tag: 6 | 7, .. })
+    ));
+}
+
+#[test]
+fn checked_result_identity_binds_checker_report_graph_and_both_epochs() {
+    let subject = subject();
+    let obligations = InertCapabilityObligationSetV1::from_specs(
+        subject,
+        vec![CapabilityObligationSpecV1::new(
+            CapabilityPropertyIdV1::BOUNDS,
+            statement(70),
+        )],
+    )
+    .unwrap();
+    let make = |checker, report, kir, final_epoch, analysis_epoch| {
+        InertCapabilityResultSetV1::from_specs_v2(
+            subject,
+            obligations.identity(),
+            vec![CapabilityResultSpecV1::new(
+                obligations.obligations()[0].identity(),
+                CapabilityOutcomeV1::Checked {
+                    evidence: EvidenceIdentityV1::from_untrusted_digest(digest(71)),
+                    checker: CapabilityCheckerIdentityV1::from_untrusted_digest(digest(checker)),
+                    report: CapabilityAnalysisReportIdentityV1::from_untrusted_digest(digest(
+                        report,
+                    )),
+                    executable_kir: ExecutableKirIdentityV1::from_untrusted_digest(digest(kir)),
+                    executable_kir_epoch: final_epoch,
+                    analysis_epoch,
+                },
+            )],
+        )
+        .unwrap()
+        .identity()
+    };
+    let exact = make(72, 73, 3, 7, 9);
+    for substituted in [
+        make(74, 73, 3, 7, 9),
+        make(72, 74, 3, 7, 9),
+        make(72, 73, 4, 7, 9),
+        make(72, 73, 3, 8, 9),
+        make(72, 73, 3, 7, 10),
+    ] {
+        assert_ne!(exact, substituted);
+    }
 }
 
 #[test]

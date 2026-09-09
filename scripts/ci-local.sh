@@ -30,6 +30,8 @@ readonly WORKSPACE_DEPENDENCY_POLICY="${REPO_ROOT}/scripts/workspace-dependency-
 readonly WORKSPACE_DEPENDENCY_POLICY_TESTS="${REPO_ROOT}/scripts/tests/workspace_dependency_policy.py"
 readonly TUTORIAL_KERNEL_MANIFEST_CHECKER="${REPO_ROOT}/scripts/tutorial_kernel_manifest.py"
 readonly TUTORIAL_KERNEL_MANIFEST_TESTS="${REPO_ROOT}/scripts/tests/tutorial_kernel_manifest.py"
+readonly TUTORIAL_CAPABILITY_PROMOTION_TESTS="${REPO_ROOT}/scripts/tests/tutorial_capability_promotion.py"
+readonly TUTORIAL_CAPABILITY_PRODUCER_TESTS="${REPO_ROOT}/scripts/tests/produce-tutorial-capability-qualification.py"
 readonly TUTORIAL_CPU_REFERENCE_TESTS="${REPO_ROOT}/scripts/tests/tutorial-cpu-reference.sh"
 readonly TUTORIAL_SEMANTIC_SIMULATION_TESTS="${REPO_ROOT}/scripts/tests/tutorial_semantic_simulation.py"
 readonly TUTORIAL_SEMANTIC_QUALIFICATION_TESTS="${REPO_ROOT}/scripts/tests/tutorial_semantic_qualification.py"
@@ -1212,6 +1214,10 @@ run_generic_core() {
     python3 "${TUTORIAL_KERNEL_MANIFEST_CHECKER}"
   run_step tutorial-kernel-manifest-tests \
     python3 "${TUTORIAL_KERNEL_MANIFEST_TESTS}"
+  run_step tutorial-capability-promotion-tests \
+    python3 -I "${TUTORIAL_CAPABILITY_PROMOTION_TESTS}"
+  run_step tutorial-capability-producer-tests \
+    python3 -I "${TUTORIAL_CAPABILITY_PRODUCER_TESTS}"
   run_step tutorial-cpu-reference-tests \
     bash "${TUTORIAL_CPU_REFERENCE_TESTS}"
   run_step tutorial-semantic-simulation-tests \

@@ -989,6 +989,14 @@ impl ProductionSemanticAnchorKirIdentityV1 {
         }
     }
 
+    pub fn from_v13(owner: &VerifiedCanonicalKernelIrV13) -> Self {
+        Self {
+            version: 13,
+            sha256: *owner.identity().digest(),
+            byte_len: owner.identity().canonical_length(),
+        }
+    }
+
     pub const fn version(self) -> u8 {
         self.version
     }
@@ -1610,6 +1618,8 @@ fn validate_semantic_anchor_identity_v1(
             .is_ok_and(|owner| ProductionSemanticAnchorKirIdentityV1::from_v11(&owner) == expected),
         12 => VerifiedCanonicalKernelIrV12::from_module(module.clone())
             .is_ok_and(|owner| ProductionSemanticAnchorKirIdentityV1::from_v12(&owner) == expected),
+        13 => VerifiedCanonicalKernelIrV13::from_module(module.clone())
+            .is_ok_and(|owner| ProductionSemanticAnchorKirIdentityV1::from_v13(&owner) == expected),
         _ => unreachable!("semantic anchor identities have a closed version constructor"),
     };
     if !matches {

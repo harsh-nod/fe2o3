@@ -44,6 +44,7 @@ const MAX_MANIFEST_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_TYPED_EVIDENCE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_EVIDENCE_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_EVIDENCE_TOTAL_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+const PRODUCTION_NEGATIVE_FIXTURE_RECEIPT_INCOMPLETE_V1: &str = "production negative-fixture qualification remains pending: no compiler-produced typed production negative-fixture receipt is available";
 
 const BATCH_KEYS: &[&str] = &[
     "batchBindingSha256",
@@ -1160,6 +1161,20 @@ fn validate_status_records(
     snapshots: &BTreeMap<String, Snapshot>,
     label: &str,
 ) -> Result<(), String> {
+    validate_non_negative_status_records(record, production, snapshots, label)?;
+    validate_production_negative_fixture_receipt(
+        required(record, "negativeFixtures", label)?,
+        snapshot(snapshots, "negative-fixture-set", label)?,
+        label,
+    )
+}
+
+fn validate_non_negative_status_records(
+    record: &Map<String, Value>,
+    production: &Map<String, Value>,
+    snapshots: &BTreeMap<String, Snapshot>,
+    label: &str,
+) -> Result<(), String> {
     let proof = object(required(record, "proof", label)?, label)?;
     if string_field(proof, "status", label)? != "complete"
         || string_field(proof, "checkerSha256", label)?
@@ -1183,6 +1198,17 @@ fn validate_status_records(
         }
     }
     Ok(())
+}
+
+fn validate_production_negative_fixture_receipt(
+    _claimed_summary: &Value,
+    _archived_evidence: &Snapshot,
+    label: &str,
+) -> Result<(), String> {
+    // Replace this gate only with strict decoding and revalidation of compiler-produced evidence.
+    Err(format!(
+        "{label} {PRODUCTION_NEGATIVE_FIXTURE_RECEIPT_INCOMPLETE_V1}"
+    ))
 }
 
 fn snapshot_reference(root: &Path, value: &Value, label: &str) -> Result<Snapshot, String> {
@@ -1773,6 +1799,60 @@ mod tests {
         ])
     }
 
+    fn status_fixture() -> (
+        Map<String, Value>,
+        Map<String, Value>,
+        BTreeMap<String, Snapshot>,
+    ) {
+        let [checker, proof, obligations, simulator, hardware, negative] =
+            ['1', '2', '3', '4', '5', '6'].map(identity);
+        let record = serde_json::json!({
+            "hardware": {"evidenceSha256": hardware, "status": "passed"},
+            "negativeFixtures": {
+                "cases": [{"evidenceSha256": negative, "status": "passed"}],
+                "setSha256": negative,
+                "status": "passed",
+            },
+            "proof": {
+                "checkerSha256": checker,
+                "evidenceSha256": proof,
+                "obligationSetSha256": obligations,
+                "status": "complete",
+            },
+            "simulator": {"evidenceSha256": simulator, "status": "passed"},
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let production = serde_json::json!({
+            "negativeFixtureSetSha256": negative,
+            "proofCheckerSha256": checker,
+            "proofEvidenceSha256": proof,
+            "proofObligationSetSha256": obligations,
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let snapshots = [
+            ("simulator", simulator),
+            ("hardware", hardware),
+            ("negative-fixture-set", negative),
+        ]
+        .into_iter()
+        .map(|(kind, sha256)| {
+            (
+                kind.to_owned(),
+                Snapshot {
+                    path: PathBuf::from(kind),
+                    bytes: 1,
+                    sha256,
+                },
+            )
+        })
+        .collect();
+        (record, production, snapshots)
+    }
+
     #[test]
     fn options_are_closed_and_required() {
         let options = parse_options(vec![
@@ -1803,6 +1883,41 @@ mod tests {
         assert!(parse_unique_json(br#"{"a":1,"a":2}"#, "fixture").is_err());
         assert!(parse_unique_json(br#"{"a":1.25}"#, "fixture").is_err());
         assert!(parse_unique_json("{\"a\":\"snowman ☃\"}".as_bytes(), "fixture").is_err());
+    }
+
+    #[test]
+    fn non_negative_status_receipts_remain_independently_checked() {
+        let (record, production, snapshots) = status_fixture();
+        validate_non_negative_status_records(&record, &production, &snapshots, "record").unwrap();
+
+        let mut substituted = record;
+        substituted
+            .get_mut("hardware")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("evidenceSha256".to_owned(), Value::String(identity('9')));
+        assert!(
+            validate_non_negative_status_records(&substituted, &production, &snapshots, "record")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn self_consistent_negative_json_cannot_promote_without_typed_receipt() {
+        let (record, production, snapshots) = status_fixture();
+        let claimed = record["negativeFixtures"]["setSha256"].as_str().unwrap();
+        assert_eq!(
+            production["negativeFixtureSetSha256"].as_str(),
+            Some(claimed)
+        );
+        assert_eq!(snapshots["negative-fixture-set"].sha256, claimed);
+        let error = validate_status_records(&record, &production, &snapshots, "record")
+            .expect_err("untyped negative evidence must remain pending");
+        assert_eq!(
+            error,
+            format!("record {PRODUCTION_NEGATIVE_FIXTURE_RECEIPT_INCOMPLETE_V1}")
+        );
     }
 
     #[test]

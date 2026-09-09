@@ -40,6 +40,12 @@ mod host {
     }
 }
 
+#[cfg(feature = "device-symbol-collision")]
+#[unsafe(export_name = "owned_kernel")]
+pub extern "C" fn colliding_host_export(value: u32) -> u32 {
+    value
+}
+
 #[cfg(feature = "device-global-asm")]
 core::arch::global_asm!(
     ".globl issue272_device_global_asm",

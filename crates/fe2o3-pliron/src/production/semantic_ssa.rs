@@ -12,6 +12,9 @@ use std::{
 };
 
 use fe2o3_mir_model::{
+    SemanticCallExpansionErrorV1, SemanticCallExpansionLimitsV1, SemanticCallExpansionV1,
+    SemanticCallInstanceIdV1, SemanticExpandedLocalOriginV1, SemanticExpandedRootV1,
+    SemanticExpandedStatementOriginV1, SemanticExpandedTerminatorOriginV1,
     SemanticOptionDominanceV1, SsaBlockIdV1, SsaBlockInputV1, SsaConstructionInputV1,
     SsaConstructionPlanV1, SsaEdgeInputV1, SsaEdgeRoleV1, SsaEventV1, SsaPlannerErrorV1,
     SsaPlannerLimitsV1, SsaPlannerResourceReportV1, SsaPlannerResourceV1, SsaVariableIdV1,
@@ -217,9 +220,31 @@ impl ProductionSemanticSsaLimitsV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProductionSemanticSsaErrorV1 {
     SemanticOwner(ProductionSemanticMirErrorV1),
+    CallExpansion(SemanticCallExpansionErrorV1),
     Planner {
         function: SemanticFunctionIdV1,
         error: SsaPlannerErrorV1,
+    },
+    /// The cause uses execution coordinates, not coordinates in the admitted source.
+    /// Block tuples are (call instance, source function, source block). Missing
+    /// locations remain absent; diagnostics never infer a source coordinate.
+    ExpandedExecution {
+        root: SemanticFunctionIdV1,
+        execution_view_identity: [u8; 32],
+        source_block: Option<(
+            SemanticCallInstanceIdV1,
+            SemanticFunctionIdV1,
+            SemanticBlockIdV1,
+        )>,
+        source_target: Option<(
+            SemanticCallInstanceIdV1,
+            SemanticFunctionIdV1,
+            SemanticBlockIdV1,
+        )>,
+        source_statement: Option<SemanticExpandedStatementOriginV1>,
+        source_terminator: Option<SemanticExpandedTerminatorOriginV1>,
+        source_local: Option<SemanticExpandedLocalOriginV1>,
+        error: Box<ProductionSemanticSsaErrorV1>,
     },
     ResourceOverflow,
     AggregateResourceLimit {
@@ -275,11 +300,62 @@ impl fmt::Display for ProductionSemanticSsaErrorV1 {
                     "production semantic SSA source owner failed: {error}"
                 )
             }
+            Self::CallExpansion(error) => write!(
+                formatter,
+                "production semantic call expansion failed: {error}",
+            ),
             Self::Planner { function, error } => write!(
                 formatter,
                 "production semantic SSA planning failed for function {}: {error}",
                 function.index(),
             ),
+            Self::ExpandedExecution {
+                root,
+                execution_view_identity,
+                source_block,
+                source_target,
+                source_statement,
+                source_terminator,
+                source_local,
+                error,
+            } => {
+                write!(
+                    formatter,
+                    "production semantic SSA execution root {} view ",
+                    root.index()
+                )?;
+                for byte in execution_view_identity {
+                    write!(formatter, "{byte:02x}")?;
+                }
+                for (label, origin) in [("source", source_block), ("target source", source_target)]
+                {
+                    if let Some((instance, function, block)) = origin {
+                        write!(
+                            formatter,
+                            "; {label} instance {} function {} block {}",
+                            instance.index(),
+                            function.index(),
+                            block.index()
+                        )?;
+                    }
+                }
+                if let Some(statement) = source_statement {
+                    write!(formatter, " statement origin {statement:?}")?;
+                }
+                if let Some(terminator) = source_terminator {
+                    write!(formatter, " terminator origin {terminator:?}")?;
+                }
+                if let Some(local) = source_local {
+                    write!(
+                        formatter,
+                        "; local source instance {} function {} local {}",
+                        local.instance().index(),
+                        local.function().index(),
+                        local.local().index()
+                    )?;
+                }
+                write!(formatter, "; execution-coordinate cause: {error}")
+            }
             Self::ResourceOverflow => formatter
                 .write_str("production semantic SSA aggregate resource accounting overflowed"),
             Self::AggregateResourceLimit {
@@ -325,7 +401,9 @@ impl Error for ProductionSemanticSsaErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::SemanticOwner(error) => Some(error),
+            Self::CallExpansion(error) => Some(error),
             Self::Planner { error, .. } => Some(error),
+            Self::ExpandedExecution { error, .. } => Some(error.as_ref()),
             Self::ResourceOverflow
             | Self::AggregateResourceLimit { .. }
             | Self::PartialMove { .. }
@@ -357,7 +435,7 @@ impl ProductionSemanticPartialMoveCertificateV1 {
     }
 }
 
-/// Identity of the unchanged semantic source and its exact per-function plans.
+/// Identity of the unchanged source, checked execution views, and exact SSA plans.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ProductionSemanticSsaIdentityV1([u8; 32]);
 
@@ -367,7 +445,7 @@ impl ProductionSemanticSsaIdentityV1 {
     }
 }
 
-/// Aggregate bounded-work summary for all semantic functions.
+/// Aggregate SSA work for original functions and additional execution views.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ProductionSemanticSsaSummaryV1 {
     function_count: usize,
@@ -447,6 +525,7 @@ pub struct ProductionSemanticSsaFunctionPlanV1 {
     plan: SsaConstructionPlanV1,
     partial_moves: ProductionSemanticPartialMoveCertificateV1,
     implicit_entry_variables: Box<[SsaVariableIdV1]>,
+    frame_initializations: frame_initialization::FrameInitializationsV1,
     retained_cross_edge_variables: Box<[SsaVariableIdV1]>,
     auxiliary_resources: SemanticSsaAuxiliaryResourcesV1,
 }
@@ -484,6 +563,12 @@ impl ProductionSemanticSsaFunctionPlanV1 {
         &self.implicit_entry_variables
     }
 
+    /// Ambient source certificates instantiated after exact frame-entry storage kills.
+    /// These are not function-entry definitions; lowering must honor each recorded site.
+    pub fn frame_initializations(&self) -> &[ProductionSemanticSsaFrameInitializationV1] {
+        self.frame_initializations.entries()
+    }
+
     /// Returns storage-retained locals that need state across a reachable CFG
     /// edge. KIR lowering must either materialize these locals or reject them.
     pub fn retained_cross_edge_variables(&self) -> &[SsaVariableIdV1] {
@@ -491,8 +576,8 @@ impl ProductionSemanticSsaFunctionPlanV1 {
     }
 }
 
-/// Move-only custody of unchanged semantic MIR and one replayable SSA plan per
-/// semantic function.
+/// Move-only custody of original semantic MIR and replayable SSA plans for its
+/// source functions and checked call-expanded execution views.
 ///
 /// This owner grants no proof, compiler-artifact, publication, load, launch,
 /// or execution authority. The planner records structural SSA placement only.
@@ -507,9 +592,10 @@ pub struct ProductionSemanticSsaOwnerV1 {
     source_owner: ProductionSemanticMirOwnerV1,
     source_semantic_sha256: [u8; 32],
     limits: ProductionSemanticSsaLimitsV1,
-    plans: Box<[ProductionSemanticSsaFunctionPlanV1]>,
-    summary: ProductionSemanticSsaSummaryV1,
-    identity: ProductionSemanticSsaIdentityV1,
+    source_plans: Box<[ProductionSemanticSsaFunctionPlanV1]>,
+    source_summary: ProductionSemanticSsaSummaryV1,
+    source_identity: ProductionSemanticSsaIdentityV1,
+    execution: execution::ExecutionSsaPlansV1,
 }
 
 impl fmt::Debug for ProductionSemanticSsaOwnerV1 {
@@ -517,8 +603,8 @@ impl fmt::Debug for ProductionSemanticSsaOwnerV1 {
         formatter
             .debug_struct("ProductionSemanticSsaOwnerV1")
             .field("source_semantic_sha256", &self.source_semantic_sha256)
-            .field("summary", &self.summary)
-            .field("identity", &self.identity)
+            .field("summary", &self.summary())
+            .field("identity", &self.identity())
             .finish_non_exhaustive()
     }
 }
@@ -534,13 +620,21 @@ impl ProductionSemanticSsaOwnerV1 {
         let source_semantic_sha256 = *source_owner.semantic().semantic_sha256().as_bytes();
         let (plans, summary, identity) =
             construct_semantic_ssa_plans_v1(source_owner.semantic(), limits)?;
+        let execution = execution::ExecutionSsaPlansV1::try_new(
+            source_owner.semantic(),
+            &plans,
+            limits,
+            summary,
+            identity,
+        )?;
         Ok(Self {
             source_owner,
             source_semantic_sha256,
             limits,
-            plans,
-            summary,
-            identity,
+            source_plans: plans,
+            source_summary: summary,
+            source_identity: identity,
+            execution,
         })
     }
 
@@ -555,9 +649,19 @@ impl ProductionSemanticSsaOwnerV1 {
         }
         let (plans, summary, identity) =
             construct_semantic_ssa_plans_v1(self.source_semantic(), self.limits)?;
-        if plans != self.plans || summary != self.summary || identity != self.identity {
+        if plans != self.source_plans
+            || summary != self.source_summary
+            || identity != self.source_identity
+        {
             return Err(ProductionSemanticSsaErrorV1::ReplayMismatch);
         }
+        self.execution.verify_replay(
+            self.source_semantic(),
+            &plans,
+            self.limits,
+            summary,
+            identity,
+        )?;
         Ok(())
     }
 
@@ -573,8 +677,9 @@ impl ProductionSemanticSsaOwnerV1 {
         &self.source_semantic_sha256
     }
 
+    /// Original-coordinate plans; execution consumers use [`Self::execution_plan_for_root`].
     pub fn plans(&self) -> &[ProductionSemanticSsaFunctionPlanV1] {
-        &self.plans
+        &self.source_plans
     }
 
     /// Borrows the plan bound to one exact semantic function identity.
@@ -582,17 +687,42 @@ impl ProductionSemanticSsaOwnerV1 {
         &self,
         function: SemanticFunctionIdV1,
     ) -> Option<&ProductionSemanticSsaFunctionPlanV1> {
-        self.plans
+        self.source_plans
             .get(function.index() as usize)
             .filter(|plan| plan.function == function)
     }
 
     pub const fn summary(&self) -> ProductionSemanticSsaSummaryV1 {
-        self.summary
+        self.execution.summary()
     }
 
     pub const fn identity(&self) -> ProductionSemanticSsaIdentityV1 {
-        self.identity
+        self.execution.identity()
+    }
+
+    /// Borrows the replayed source-to-execution relation without replacing source custody.
+    pub const fn execution_expansion(&self) -> &SemanticCallExpansionV1 {
+        self.execution.expansion()
+    }
+
+    pub fn execution_view_for_root(
+        &self,
+        root: SemanticFunctionIdV1,
+    ) -> Option<&SemanticExpandedRootV1> {
+        self.execution.expansion().root(root)
+    }
+
+    /// Returns a plan in the selected execution view's coordinate space.
+    pub fn execution_plan_for_root(
+        &self,
+        root: SemanticFunctionIdV1,
+    ) -> Option<&ProductionSemanticSsaFunctionPlanV1> {
+        let view = self.execution_view_for_root(root)?;
+        if view.has_expanded_calls() {
+            self.execution.plan(root)
+        } else {
+            self.plan_for_function(view.source_body())
+        }
     }
 
     pub const fn grants_proof_or_artifact_authority(&self) -> bool {
@@ -633,6 +763,7 @@ fn construct_semantic_ssa_plans_v1(
             semantic.callables(),
             limits,
             &transparent_borrows,
+            None,
         )?;
         accumulate_summary_v1(
             &mut summary,
@@ -665,6 +796,7 @@ pub fn plan_semantic_function_ssa_v1(
         &[],
         limits,
         &BTreeSet::new(),
+        None,
     )
 }
 
@@ -684,6 +816,7 @@ pub fn plan_semantic_function_ssa_with_callables_v1(
         callables,
         limits,
         &transparent_borrows,
+        None,
     )
 }
 
@@ -704,6 +837,7 @@ pub fn plan_semantic_function_ssa_with_module_v1(
         callables,
         limits,
         &transparent_borrows,
+        None,
     )
 }
 
@@ -714,53 +848,97 @@ fn plan_semantic_function_ssa_with_borrow_sites_v1(
     callables: &[SemanticCallableDeclV1],
     limits: ProductionSemanticSsaLimitsV1,
     transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
+    execution_view: Option<(
+        &SemanticExpandedRootV1,
+        frame_initialization::FrameInitializationsV1,
+    )>,
 ) -> Result<ProductionSemanticSsaFunctionPlanV1, ProductionSemanticSsaErrorV1> {
-    let (input, implicit_entry_variables, adapter_analysis_work) =
-        semantic_function_ssa_input_v1(function, types, callables, transparent_borrows);
-    let mut auxiliary_resources = semantic_ssa_auxiliary_resources_v1(function, &input)?;
-    auxiliary_resources.work_units = auxiliary_resources
-        .work_units
-        .checked_add(adapter_analysis_work)
-        .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
-    enforce_function_resource_limit_v1(function_id, auxiliary_resources, limits)?;
-    let plan = plan_ssa_with_limits_v1(&input, limits.planner()).map_err(|error| {
-        ProductionSemanticSsaErrorV1::Planner {
+    let mut event_origins = execution::ExecutionEventOriginsV1::default();
+    let (view, frame_initializations) = match execution_view {
+        Some((view, relation)) => (Some(view), relation),
+        None => (
+            None,
+            frame_initialization::FrameInitializationsV1::default(),
+        ),
+    };
+    let (input, implicit_entry_variables, adapter_analysis_work) = if let Some(view) = view {
+        frame_initializations
+            .verify_view(view)
+            .map_err(|error| execution::wrap_error(view, &event_origins, error))?;
+        adapter::semantic_function_ssa_input_with_frame_initializations_v1(
+            function,
+            types,
+            callables,
+            transparent_borrows,
+            &frame_initializations,
+            |block, statement, events| {
+                event_origins.record(block, statement, events);
+            },
+        )
+        .map_err(|error| execution::wrap_error(view, &event_origins, error))?
+    } else {
+        semantic_function_ssa_input_v1(function, types, callables, transparent_borrows)
+    };
+    let result = (|| {
+        let mut auxiliary_resources = semantic_ssa_auxiliary_resources_v1(function, &input)?;
+        let diagnostic_resources = event_origins.resources()?;
+        let initialization_resources = frame_initializations.resources();
+        auxiliary_resources.storage_words = auxiliary_resources
+            .storage_words
+            .checked_add(diagnostic_resources.storage_words)
+            .and_then(|words| words.checked_add(initialization_resources.storage_words))
+            .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
+        auxiliary_resources.work_units = auxiliary_resources
+            .work_units
+            .checked_add(adapter_analysis_work)
+            .and_then(|work| work.checked_add(diagnostic_resources.work_units))
+            .and_then(|work| work.checked_add(initialization_resources.work_units))
+            .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?;
+        enforce_function_resource_limit_v1(function_id, auxiliary_resources, limits)?;
+        let plan = plan_ssa_with_limits_v1(&input, limits.planner()).map_err(|error| {
+            ProductionSemanticSsaErrorV1::Planner {
+                function: function_id,
+                error,
+            }
+        })?;
+        enforce_function_resource_limit_v1(
+            function_id,
+            SemanticSsaAuxiliaryResourcesV1 {
+                storage_words: auxiliary_resources
+                    .storage_words
+                    .checked_add(plan.resources().storage_words())
+                    .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?,
+                work_units: auxiliary_resources
+                    .work_units
+                    .checked_add(plan.resources().work_units())
+                    .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?,
+            },
+            limits,
+        )?;
+        let partial_moves = validate_partial_moves_v1(
+            function_id,
+            function,
+            types,
+            &plan,
+            auxiliary_resources,
+            limits,
+        )?;
+        let retained_cross_edge_variables =
+            retained_cross_edge_variables_v1(&input, &plan).into_boxed_slice();
+        Ok(ProductionSemanticSsaFunctionPlanV1 {
             function: function_id,
-            error,
-        }
-    })?;
-    enforce_function_resource_limit_v1(
-        function_id,
-        SemanticSsaAuxiliaryResourcesV1 {
-            storage_words: auxiliary_resources
-                .storage_words
-                .checked_add(plan.resources().storage_words())
-                .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?,
-            work_units: auxiliary_resources
-                .work_units
-                .checked_add(plan.resources().work_units())
-                .ok_or(ProductionSemanticSsaErrorV1::ResourceOverflow)?,
-        },
-        limits,
-    )?;
-    let partial_moves = validate_partial_moves_v1(
-        function_id,
-        function,
-        types,
-        &plan,
-        auxiliary_resources,
-        limits,
-    )?;
-    let retained_cross_edge_variables =
-        retained_cross_edge_variables_v1(&input, &plan).into_boxed_slice();
-    Ok(ProductionSemanticSsaFunctionPlanV1 {
-        function: function_id,
-        function_identity: function.identity(),
-        plan,
-        partial_moves,
-        implicit_entry_variables: implicit_entry_variables.into_boxed_slice(),
-        retained_cross_edge_variables,
-        auxiliary_resources,
+            function_identity: function.identity(),
+            plan,
+            partial_moves,
+            implicit_entry_variables: implicit_entry_variables.into_boxed_slice(),
+            frame_initializations,
+            retained_cross_edge_variables,
+            auxiliary_resources,
+        })
+    })();
+    result.map_err(|error| match view {
+        Some(view) => execution::wrap_error(view, &event_origins, error),
+        None => error,
     })
 }
 
@@ -878,6 +1056,8 @@ fn enforce_function_resource_limit_v1(
 
 mod accounting;
 mod adapter;
+mod execution;
+mod frame_initialization;
 mod partial_moves;
 
 use accounting::{
@@ -887,6 +1067,7 @@ pub use adapter::authenticated_ambient_workgroup_lds_scope_zst_v1;
 use adapter::{
     SemanticTransparentBorrowSiteV1, semantic_function_ssa_input_v1, transparent_borrow_sites_v1,
 };
+pub use frame_initialization::ProductionSemanticSsaFrameInitializationV1;
 use partial_moves::{projected_local_move_metrics_v1, validate_partial_moves_v1};
 
 #[cfg(test)]

@@ -275,6 +275,15 @@ impl PreparedProductionW4CapabilityCarriageV5 {
             *self.final_canonical.identity().digest(),
             self.final_canonical.identity().canonical_length(),
             self.w4_subject.final_epoch(),
+            witness.analysis_schedule().pliron_epoch(),
+            *witness.analysis_schedule().checker_identity(),
+            *witness.analysis_schedule().identity(),
+            witness
+                .analysis_schedule()
+                .obligations()
+                .iter()
+                .map(|obligation| *obligation.evidence_identity())
+                .collect::<Vec<_>>(),
             witness.canonical_encoding().to_vec(),
         )
         .map_err(ProductionWorkerHandoffError::CapabilityCarriage)?;

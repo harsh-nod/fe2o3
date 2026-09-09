@@ -32,7 +32,8 @@ pub use protocol_v2::{
     WorkerV3VerificationTerminalFrameV2,
 };
 pub use protocol_v5::{
-    ExactIdentityCoordinateV5, InertWorkerV3ProtectedCompilerInputV5,
+    ExactIdentityCoordinateV5, InertWorkerV3MachineRefinedFinalizationV5,
+    InertWorkerV3ProtectedCompilerInputV5, MAX_WORKER_V3_MACHINE_REFINED_FINALIZATION_BYTES_V5,
     MAX_WORKER_V3_PROTECTED_COMPILER_INPUT_BYTES_V5,
     MAX_WORKER_V3_VERIFICATION_CAPABILITY_REQUEST_BYTES_V5,
     MAX_WORKER_V3_VERIFICATION_CAPABILITY_RESPONSE_BYTES_V5,

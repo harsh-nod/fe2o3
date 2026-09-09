@@ -217,7 +217,11 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
             evidence.validate_against_neutral_kernel_ir(receipts.kernel_ir().canonical_preimage())
         })
         .map_err(|_| ProductionSemanticAnchorErrorV1::InvalidKirToLlvmReplay)?;
-        if replay.llvm_mode() != ProductionKirToLlvmReplayModeV1::SemanticAnchorsV1 {
+        if !matches!(
+            replay.llvm_mode(),
+            ProductionKirToLlvmReplayModeV1::SemanticAnchorsV1
+                | ProductionKirToLlvmReplayModeV1::CapabilityClosedV13
+        ) {
             return Ok(ProductionSemanticAnchorAdmissionV1::Unavailable(
                 ProductionSemanticAnchorUnavailableV1::LegacyUninstrumentedReplay,
             ));
@@ -392,6 +396,7 @@ fn parse_llvm_absence_v1(
         "8" => ProductionReplayKernelIrVersionV1::V8,
         "9" => ProductionReplayKernelIrVersionV1::V9,
         "11" => ProductionReplayKernelIrVersionV1::V11,
+        "13" => ProductionReplayKernelIrVersionV1::V13,
         _ => return Err(ProductionSemanticAnchorErrorV1::BindingMismatch),
     };
     let byte_len = parse_i64_field(fields[3])?;
@@ -458,6 +463,7 @@ fn parse_llvm_manifest_v1(
         "8" => ProductionReplayKernelIrVersionV1::V8,
         "9" => ProductionReplayKernelIrVersionV1::V9,
         "11" => ProductionReplayKernelIrVersionV1::V11,
+        "13" => ProductionReplayKernelIrVersionV1::V13,
         _ => return Err(ProductionSemanticAnchorErrorV1::BindingMismatch),
     };
     let kir_bytes = parse_i64_field(fields[2])?;
@@ -1363,6 +1369,7 @@ fn anchor_digest(domain: &[u8], input: AnchorDigestInputV1<'_>) -> u64 {
         ProductionReplayKernelIrVersionV1::V8 => 8,
         ProductionReplayKernelIrVersionV1::V9 => 9,
         ProductionReplayKernelIrVersionV1::V11 => 11,
+        ProductionReplayKernelIrVersionV1::V13 => 13,
     }]);
     hasher.update(input.kir);
     hasher.update(input.kir_bytes.to_le_bytes());
@@ -1393,6 +1400,7 @@ fn semantic_operation_identity(
         ProductionReplayKernelIrVersionV1::V8 => 8,
         ProductionReplayKernelIrVersionV1::V9 => 9,
         ProductionReplayKernelIrVersionV1::V11 => 11,
+        ProductionReplayKernelIrVersionV1::V13 => 13,
     }]);
     hasher.update(kir);
     hasher.update(kir_bytes.to_le_bytes());

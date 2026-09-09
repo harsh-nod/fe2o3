@@ -31,10 +31,9 @@ mod production_bundle_transaction_v8;
 mod tutorial_transaction_v1;
 
 pub use tutorial_transaction_v1::{
-    TutorialProductionTransactionAssemblyV1, TutorialProductionTransactionErrorCodeV1,
-    TutorialProductionTransactionErrorV1, TutorialProductionTransactionReceiptV1,
-    assemble_tutorial_capability_qualification_transaction_v1,
-    produce_tutorial_capability_qualification_transaction_v1,
+    TutorialProductionTransactionErrorCodeV1, TutorialProductionTransactionErrorV1,
+    TutorialProductionTransactionReceiptV1,
+    prepare_tutorial_capability_qualification_transaction_v1,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

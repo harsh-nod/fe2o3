@@ -16,6 +16,7 @@ use fe2o3_artifact_transaction::{
 };
 use fe2o3_compiler_closure_capability::CompilerExecutionClientProfileCapabilityV1;
 use fe2o3_compiler_execution_protocol::CompilerExecutionReceiptCarriageV1;
+use fe2o3_compiler_ffi::InertProductionCapabilityTransactionV5;
 use fe2o3_compiler_lineage::MultiRootProofRosterKindV3;
 use fe2o3_hsaco_finalize::{
     MachineRefinementPendingFinalizedProtectedWorkerV3HsacoV1,
@@ -34,6 +35,7 @@ use fe2o3_worker_v3_verification_client::{
     production_worker_v3_verifier_measurement_identity_v5,
 };
 use fe2o3_worker_v3_verification_protocol::{
+    ExactIdentityCoordinateV5, InertWorkerV3MachineRefinedFinalizationV5,
     InertWorkerV3ProtectedCompilerInputV5, MAX_WORKER_V3_PROTECTED_COMPILER_INPUT_BYTES_V5,
     MAX_WORKER_V3_VERIFICATION_CAPABILITY_RESPONSE_BYTES_V5,
     WorkerV3VerificationCapabilityRequestIdentityV5, WorkerV3VerificationCapabilityRequestV5,
@@ -221,7 +223,7 @@ fn prepare_protected_exchange_v5(
         .map_err(ProductionCapabilityCompletionJoinErrorV5::ClientProfileChanged)?;
     let attempt = verification_attempt_v5(join.prepared.attempt())?;
     let package = recover_protected_compiler_input_v5(input_root, attempt)?;
-    validate_protected_compiler_input_v5(&package, &join.prepared, attempt)?;
+    let transaction = validate_protected_compiler_input_v5(&package, &join.prepared, attempt)?;
 
     let handoff = join.prepared.handoff();
     let roster = handoff
@@ -304,13 +306,41 @@ fn prepare_protected_exchange_v5(
     .map_err(|error| {
         ProductionCapabilityCompletionJoinErrorV5::CanonicalRequest(error.to_string())
     })?;
+    let machine_receipt = join
+        .finalized
+        .machine_refinement_receipt_v1()
+        .map_err(|error| {
+            ProductionCapabilityCompletionJoinErrorV5::MachineRefinement(error.to_string())
+        })?;
+    let raw_object = join.finalized.raw_output_identity();
+    let finalized_object = join.finalized.finalized_output_identity();
+    let subject = handoff.inputs().subject();
+    let finalization = InertWorkerV3MachineRefinedFinalizationV5::new(
+        attempt,
+        *join.prepared.transaction_identity().as_bytes(),
+        ExactIdentityCoordinateV5::new(handoff.identity().sha256(), handoff.identity().byte_len())
+            .map_err(|error| {
+                ProductionCapabilityCompletionJoinErrorV5::CanonicalRequest(error.to_string())
+            })?,
+        ExactIdentityCoordinateV5::new(*raw_object.sha256(), raw_object.byte_len()).map_err(
+            |error| ProductionCapabilityCompletionJoinErrorV5::CanonicalRequest(error.to_string()),
+        )?,
+        ExactIdentityCoordinateV5::new(*finalized_object.sha256(), finalized_object.byte_len())
+            .map_err(|error| {
+                ProductionCapabilityCompletionJoinErrorV5::CanonicalRequest(error.to_string())
+            })?,
+        *subject.target_model().digest().as_bytes(),
+        *subject.launch_contract().digest().as_bytes(),
+        handoff.inputs().compiler_policy(),
+        machine_receipt.canonical_bytes(),
+    )
+    .map_err(|error| {
+        ProductionCapabilityCompletionJoinErrorV5::CanonicalRequest(error.to_string())
+    })?;
     let protected = WorkerV3ProtectedCompletionRequestV5::new(
         plan.protected_evidence_binding(),
-        handoff,
-        join.prepared.simulation_bundle(),
-        package.proof_owner_bytes(),
-        package.association_bytes(),
-        package.machine_refinement_bytes(),
+        &transaction,
+        &finalization,
     )
     .map_err(|error| {
         ProductionCapabilityCompletionJoinErrorV5::CanonicalRequest(error.to_string())
@@ -380,7 +410,7 @@ fn validate_protected_compiler_input_v5(
     package: &InertWorkerV3ProtectedCompilerInputV5,
     prepared: &PreparedCompilerCapabilityCompletionV5,
     attempt: WorkerV3VerificationProductionAttemptV5,
-) -> Result<(), ProductionCapabilityCompletionJoinErrorV5> {
+) -> Result<InertProductionCapabilityTransactionV5, ProductionCapabilityCompletionJoinErrorV5> {
     let handoff = prepared.handoff().identity();
     if package.attempt() != attempt
         || package.transaction_identity() != *prepared.transaction_identity().as_bytes()
@@ -392,7 +422,28 @@ fn validate_protected_compiler_input_v5(
                 .to_owned(),
         ));
     }
-    Ok(())
+    if package.production_transaction_bytes() != prepared.production_transaction().canonical_bytes()
+    {
+        return Err(
+            ProductionCapabilityCompletionJoinErrorV5::ProtectedCompilerInput(
+                "protected compiler transaction bytes differ from live Cargo custody".to_owned(),
+            ),
+        );
+    }
+    let transaction =
+        InertProductionCapabilityTransactionV5::decode(package.production_transaction_bytes())
+            .map_err(|error| {
+                ProductionCapabilityCompletionJoinErrorV5::ProtectedCompilerInput(error.to_string())
+            })?;
+    if transaction.identity() != prepared.production_transaction().identity() {
+        return Err(
+            ProductionCapabilityCompletionJoinErrorV5::ProtectedCompilerInput(
+                "protected compiler transaction identity differs from live Cargo custody"
+                    .to_owned(),
+            ),
+        );
+    }
+    Ok(transaction)
 }
 
 fn recover_protected_compiler_input_v5(

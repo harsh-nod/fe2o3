@@ -40,13 +40,15 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAbiPointeeKindV1, SemanticAggregateKindV1, SemanticAssertMessageV1,
     SemanticAtomicAccessV1, SemanticAtomicOrderingV1, SemanticAtomicScopeV1,
     SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBinaryOpV1, SemanticBlockIdV1,
-    SemanticBorrowKindV1, SemanticCallableDeclV1, SemanticCallableIdV1, SemanticCastKindV1,
-    SemanticCheckedBinaryOpV1, SemanticCheckedBinaryRvalueV1, SemanticCompilerIntrinsicOperationV1,
-    SemanticConstantValueV1, SemanticDirectCallV1, SemanticDirectTailCallV1,
-    SemanticDisjointIndexSpaceV1, SemanticEdgeRoleV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
-    SemanticFunctionIdentityV1, SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1,
-    SemanticKernelBodySelectionV1, SemanticLocalIdV1, SemanticLocalRoleV1,
-    SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
+    SemanticBorrowKindV1, SemanticCallableDeclV1, SemanticCallableIdV1,
+    SemanticCapabilityMemoryAccessV1, SemanticCapabilityMemoryAliasingV1,
+    SemanticCapabilityMemoryContractV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
+    SemanticCheckedBinaryRvalueV1, SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1,
+    SemanticDirectCallV1, SemanticDirectTailCallV1, SemanticDisjointIndexSpaceV1,
+    SemanticEdgeRoleV1, SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionIdentityV1,
+    SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1, SemanticKernelBindingIdentityV1,
+    SemanticKernelBodySelectionV1, SemanticKernelCapabilityProvenanceV1, SemanticLocalIdV1,
+    SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
     SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1,
     SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticMutabilityV1,
     SemanticOperandV1, SemanticPlaceV1, SemanticPointerKindV1, SemanticPointerMetadataV1,
@@ -104,6 +106,8 @@ const PRIVATE_ALLOCATION_ORIGIN_TAG_V1: u64 = 1_u64 << 63;
 const TENSOR_CAPABILITY_ROOT_DOMAIN_V1: &[u8] = b"FE2O3/TENSOR-CAPABILITY-ROOT/V1\0";
 const RANKED_KERNEL_ROSTER_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/PRODUCTION-RANKED-KERNEL-ROSTER-IDENTITY/V1\0";
+const EXPANDED_RANKED_KERNEL_ROSTER_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/PRODUCTION-EXPANDED-RANKED-KERNEL-ROSTER-IDENTITY/V1\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ProjectedAccessSourceV1 {
@@ -195,7 +199,7 @@ enum CapabilityEdgeKindV1 {
         construction_block: usize,
         availability: SemanticEnumPayloadAvailabilityV1,
     },
-    IntoDisjoint {
+    PreserveMapping {
         mapping: SemanticDisjointIndexSpaceV1,
     },
     CheckedShift {
@@ -277,6 +281,8 @@ struct IntrinsicProjectionV1 {
     read_view_effects: Vec<Option<GuardedRankedAccessV1>>,
     direct_read_effects: Vec<Option<GuardedRankedAccessV1>>,
     direct_write_effects: Vec<Option<GuardedRankedAccessV1>>,
+    global_uses: ProjectedGlobalSemanticUsesV1,
+    global_views: Vec<Option<ProjectedGlobalViewV1>>,
     pipeline_effects: Vec<Option<ProjectedPipelineEffectV1>>,
     generated_terminator_effects: Vec<Option<Vec<ProjectedGeneratedExecutableEffectV1>>>,
     extent_argument_count: usize,
@@ -475,6 +481,7 @@ struct ProjectedCapabilityTerminatorEffectsV1 {
     global_read: Option<AllocationContractV1>,
     transpose_workgroup: Option<ProjectedTransposeWorkgroupEffectV1>,
     read_view: Option<ProjectedReadViewAccessV1>,
+    global_view: Option<ProjectedGlobalViewV1>,
 }
 
 struct ProjectedCapabilityEffectsV1 {
@@ -482,6 +489,19 @@ struct ProjectedCapabilityEffectsV1 {
     global_reads: Vec<Option<AllocationContractV1>>,
     transpose_workgroups: Vec<Option<ProjectedTransposeWorkgroupEffectV1>>,
     read_views: Vec<Option<ProjectedReadViewAccessV1>>,
+    global_views: Vec<Option<ProjectedGlobalViewV1>>,
+    global_uses: ProjectedGlobalSemanticUsesV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectedGlobalViewV1 {
+    view: SemanticTypeIdV1,
+    physical: SemanticTypeIdV1,
+    element: SemanticTypeIdV1,
+    contract: SemanticCapabilityMemoryContractV1,
+    provenance: SemanticKernelCapabilityProvenanceV1,
+    allocation: AllocationContractV1,
+    borrow: Option<SemanticBorrowKindV1>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -525,8 +545,30 @@ struct AuthenticatedTensorInstructionV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProjectedCapabilityOriginV1 {
-    MatrixContext { root: u64 },
-    Lane { root: u64, wave_width: u32 },
+    KernelContext {
+        context: SemanticTypeIdV1,
+        shared_borrow: bool,
+    },
+    GlobalView(ProjectedGlobalViewV1),
+    GlobalPhysical {
+        view: ProjectedGlobalViewV1,
+        ty: SemanticTypeIdV1,
+        borrowed: bool,
+    },
+    GlobalExtent(AllocationContractV1),
+    GlobalLoadResult {
+        block: usize,
+    },
+    GlobalLoadedScalar {
+        block: usize,
+    },
+    MatrixContext {
+        root: u64,
+    },
+    Lane {
+        root: u64,
+        wave_width: u32,
+    },
     ViewResult(ProjectedMfmaViewV1),
     View(ProjectedMfmaViewV1),
     Operand(ProjectedMfmaOperandV1),
@@ -1214,6 +1256,7 @@ struct RankedRosterIdentityRecordV1<'a> {
     induction_semantic_mir_sha256: [u8; 32],
     induction_function: SemanticFunctionIdV1,
     induction_function_identity: SemanticFunctionIdentityV1,
+    induction_execution_view_identity: Option<[u8; 32]>,
     induction_checked_additions_examined: u64,
     induction_certificate_count: u64,
     induction_work_units: u64,
@@ -1261,8 +1304,15 @@ fn derive_ranked_kernel_roster_identity_v1(
         fe2o3_kernel_descriptor::KernelId::from_bytes(records[*index].kernel_binding)
     });
 
+    let expanded = records
+        .iter()
+        .any(|record| record.induction_execution_view_identity.is_some());
     let mut hasher = Sha256::new();
-    hasher.update(RANKED_KERNEL_ROSTER_IDENTITY_DOMAIN_V1);
+    hasher.update(if expanded {
+        EXPANDED_RANKED_KERNEL_ROSTER_IDENTITY_DOMAIN_V1
+    } else {
+        RANKED_KERNEL_ROSTER_IDENTITY_DOMAIN_V1
+    });
     hasher.update(
         u64::try_from(records.len())
             .unwrap_or(u64::MAX)
@@ -1287,6 +1337,15 @@ fn derive_ranked_kernel_roster_identity_v1(
             &record.induction_function.index().to_le_bytes(),
         );
         update_roster_identity_frame_v1(&mut hasher, record.induction_function_identity.as_bytes());
+        if expanded {
+            update_roster_identity_frame_v1(
+                &mut hasher,
+                record
+                    .induction_execution_view_identity
+                    .as_ref()
+                    .map_or(&[][..], |identity| identity.as_slice()),
+            );
+        }
         update_roster_identity_frame_v1(
             &mut hasher,
             &record.induction_checked_additions_examined.to_le_bytes(),
@@ -1468,6 +1527,7 @@ fn ranked_roster_identity_records_v1(
                 induction_semantic_mir_sha256: *induction.semantic_mir_sha256().as_bytes(),
                 induction_function: induction.function(),
                 induction_function_identity: induction.function_identity(),
+                induction_execution_view_identity: induction.execution_view_identity().copied(),
                 induction_checked_additions_examined: u64::try_from(
                     induction.checked_additions_examined(),
                 )
@@ -1481,18 +1541,15 @@ fn ranked_roster_identity_records_v1(
 }
 
 fn validate_ranked_root_induction_custody_v1(
-    semantic_owner: &ProductionSemanticMirOwnerV1,
+    semantic_ssa_owner: &ProductionSemanticSsaOwnerV1,
     root: &ProductionRankedVerifiedRootCandidateV1,
 ) -> Result<(), ProductionRankedVerificationErrorV1> {
-    let semantic = semantic_owner.semantic();
-    let selection = semantic
-        .select_kernel_body_for_root_v1(root.semantic_root())
-        .ok_or(ProductionRankedVerificationErrorV1::RosterMetadata(
-            "a ranked root without one exact semantic body",
-        ))?;
-    let expected =
-        fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(semantic, selection.body())
-            .map_err(ProductionRankedVerificationErrorV1::SemanticU32Induction)?;
+    let expected = fe2o3_mir_model::analyze_expanded_semantic_u32_induction_no_overflow_v1(
+        semantic_ssa_owner.source_semantic(),
+        semantic_ssa_owner.execution_expansion(),
+        root.semantic_root(),
+    )
+    .map_err(ProductionRankedVerificationErrorV1::SemanticU32Induction)?;
     let retained = root.verification().semantic_u32_induction();
     if retained != &expected
         || retained.grants_authority()
@@ -1526,8 +1583,8 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
             .collect::<Vec<_>>();
         validate_ranked_roster_semantic_bindings_v1(semantic_owner, &semantic_bindings)?;
         for root in &self.source_order_roots {
-            fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
-                semantic_owner,
+            fe2o3_lower_mir_kernel::validate_borrowed_ssa_ranked_semantic_projection_candidate_with_generated_effects_v1(
+                &self.semantic_ssa_owner,
                 root.semantic_root,
                 &root.lowering,
                 &root.ranked_ir,
@@ -1561,7 +1618,7 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
                     "changed per-root ranked verification custody",
                 ));
             }
-            validate_ranked_root_induction_custody_v1(semantic_owner, root)?;
+            validate_ranked_root_induction_custody_v1(&self.semantic_ssa_owner, root)?;
         }
         let records = ranked_roster_identity_records_v1(&self.source_order_roots);
         require_exact_ranked_kernel_roster_identity_v1(
@@ -1699,8 +1756,8 @@ impl ProductionRankedSemanticProgramV1 {
 
         let mut verified_roots = Vec::with_capacity(roots.len());
         for root in roots.into_vec() {
-            fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
-                semantic_owner,
+            fe2o3_lower_mir_kernel::validate_borrowed_ssa_ranked_semantic_projection_candidate_with_generated_effects_v1(
+                &semantic_ssa_owner,
                 root.semantic_root,
                 &root.lowering,
                 &root.ranked_ir,
@@ -2945,7 +3002,6 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     semantic_ssa_owner
         .verify_replay()
         .map_err(ProductionRankedProjectionErrorV1::SemanticSsa)?;
-    let semantic_owner = semantic_ssa_owner.source_owner();
     let semantic = semantic_ssa_owner.source_semantic();
     let callable_effects = derive_defined_callable_empty_effect_summaries_v1(
         semantic.types(),
@@ -2995,7 +3051,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
                 "a semantic KernelRoot without one direct body or transparent Result wrapper",
             ))?;
         let root = project_and_verify_ranked_root_v1(
-            semantic,
+            &semantic_ssa_owner,
             &callable_effects,
             selection,
             &input.logical_name,
@@ -3007,8 +3063,8 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
                 "a projected ranked root with a substituted kernel binding",
             ));
         }
-        fe2o3_lower_mir_kernel::validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
-            semantic_owner,
+        fe2o3_lower_mir_kernel::validate_borrowed_ssa_ranked_semantic_projection_candidate_with_generated_effects_v1(
+            &semantic_ssa_owner,
             semantic_root,
             &root.lowering,
             &root.ranked_ir,
@@ -3103,28 +3159,44 @@ fn match_ranked_root_bindings_v1(
 }
 
 fn project_and_verify_ranked_root_v1(
-    semantic: &AdmittedInertSemanticMirV1,
+    semantic_ssa_owner: &ProductionSemanticSsaOwnerV1,
     callable_effects: &DefinedCallableEmptyEffectSummariesV1,
     selection: SemanticKernelBodySelectionV1,
     logical_name: &str,
     source_launch: &LaunchContract,
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
+    let semantic = semantic_ssa_owner.source_semantic();
+    let view = semantic_ssa_owner
+        .execution_view_for_root(selection.root())
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "a ranked root without its retained checked execution view",
+        ))?;
+    if view.source_body() != selection.body()
+        || semantic_ssa_owner
+            .execution_plan_for_root(selection.root())
+            .is_none_or(|plan| plan.function_identity() != view.body().identity())
+    {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "a ranked execution view differs from its source selection or SSA plan",
+        ));
+    }
     let semantic_u32_induction =
-        fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(semantic, selection.body())
-            .map_err(ProductionRankedProjectionErrorV1::SemanticU32Induction)?;
+        fe2o3_mir_model::analyze_expanded_semantic_u32_induction_no_overflow_v1(
+            semantic,
+            semantic_ssa_owner.execution_expansion(),
+            selection.root(),
+        )
+        .map_err(ProductionRankedProjectionErrorV1::SemanticU32Induction)?;
     let root_function = semantic
         .functions()
         .get(selection.root().index() as usize)
         .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
             "an out-of-range semantic kernel root",
         ))?;
-    let function = semantic
-        .functions()
-        .get(selection.body().index() as usize)
-        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-            "an out-of-range semantic kernel body",
-        ))?;
+    // Execution coordinates remain nested beneath the shared SSA owner. Only
+    // its checked expansion maps these sites back to original source MIR.
+    let function = view.body();
     if root_function.role() != SemanticFunctionRoleV1::KernelRoot {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "a root without the KernelRoot role",
@@ -3186,6 +3258,13 @@ fn project_and_verify_ranked_root_v1(
         callable_effects,
         semantic.types(),
         function,
+        root_invocation_provenance_v1(
+            semantic.types(),
+            semantic.callables(),
+            function,
+            selection.root(),
+            SemanticKernelBindingIdentityV1::from_sha256(kernel_binding),
+        )?,
         bounded_linear_launch_extent_v1(source_launch),
         &constants,
         &mut entry_operations,
@@ -3469,8 +3548,14 @@ fn project_and_verify_ranked_root_v1(
         entry_operations,
         projected_blocks,
     )?;
-    let reference_writes =
-        projected_reference_gpu_writes_v2(semantic.types(), function, &blocks, &sources)?;
+    let reference_writes = projected_reference_gpu_writes_v2(
+        semantic.types(),
+        semantic.callables(),
+        function,
+        &intrinsic,
+        &blocks,
+        &sources,
+    )?;
     let access_sources = production_access_sources(&blocks, &sources)?;
     let system_coherent_allocations = intrinsic
         .local_contracts
@@ -3545,7 +3630,9 @@ fn project_and_verify_ranked_root_v1(
 
 fn projected_reference_gpu_writes_v2(
     types: &[SemanticTypeDeclV1],
+    callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
+    intrinsic: &IntrinsicProjectionV1,
     blocks: &[ProductionRankedBlockV1],
     sources: &[ProjectedAccessSourceV1],
 ) -> Result<
@@ -3574,8 +3661,9 @@ fn projected_reference_gpu_writes_v2(
         }
     }
     let mut writes = Vec::new();
-    let mut expressions =
-        GpuSemanticExpressionResolverV2::with_ranked_reads(types, function, blocks, sources)?;
+    let mut expressions = GpuSemanticExpressionResolverV2::with_ranked_reads(
+        types, callables, function, intrinsic, blocks, sources,
+    )?;
     for source in sources
         .iter()
         .filter(|source| source.access.writes_memory())
@@ -3614,19 +3702,48 @@ fn projected_reference_gpu_writes_v2(
                 "a projected write view has no exact allocation origin",
             ),
         )?;
-        let value = source
-            .semantic_site
-            .and_then(|site| site.statement.map(|statement| (site.block, statement)))
-            .and_then(|(block, statement)| {
-                function
-                    .blocks()
-                    .get(block)
-                    .and_then(|block| block.statements().get(statement))
-            })
-            .map_or(
-                Err("GPU write has no authenticated semantic MIR statement"),
-                |statement| expressions.resolve_store_v2(statement.kind()),
-            );
+        let value = match source.semantic_site {
+            Some(ProjectedSemanticAccessSiteV1 {
+                block,
+                statement: Some(statement),
+            }) => function
+                .blocks()
+                .get(block)
+                .and_then(|block| block.statements().get(statement))
+                .ok_or("GPU write has no authenticated semantic MIR statement")
+                .and_then(|statement| expressions.resolve_store_v2(statement.kind())),
+            Some(ProjectedSemanticAccessSiteV1 {
+                statement: None, ..
+            }) => typed_global_source_call_v1(
+                function,
+                callables,
+                intrinsic,
+                source,
+                view,
+                &indices,
+                AccessKindAttr::Write,
+            )
+            .and_then(|(call, _, bound)| {
+                if bound.allocation.allocation_origin != allocation_origin {
+                    return Err(
+                        "typed global store allocation differs from its authenticated binding",
+                    );
+                }
+                if sources
+                    .iter()
+                    .filter(|candidate| {
+                        candidate.semantic_site == source.semantic_site
+                            && candidate.access.writes_memory()
+                    })
+                    .count()
+                    != 1
+                {
+                    return Err("typed global store has ambiguous ranked source custody");
+                }
+                expressions.resolve_operand_v2(&call.arguments()[2], 0)
+            }),
+            None => Err("GPU write has no authenticated semantic MIR site"),
+        };
         writes.push(
             crate::production_reference_effect_join_v2::RankedGpuWriteV2 {
                 block: source.block,
@@ -3646,6 +3763,7 @@ struct GpuSemanticExpressionResolverV2<'a> {
     function: &'a SemanticFunctionDeclV1,
     definitions: HashMap<u32, &'a SemanticRvalueV1>,
     ambiguous: HashSet<u32>,
+    address_escaped: HashSet<usize>,
     visiting: HashSet<u32>,
     work: usize,
     loads: HashMap<*const SemanticRvalueV1, ProductionSemanticLoadV2>,
@@ -3701,6 +3819,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
     fn new(types: &'a [SemanticTypeDeclV1], function: &'a SemanticFunctionDeclV1) -> Self {
         let mut definitions = HashMap::new();
         let mut ambiguous = HashSet::new();
+        let mut address_escaped = HashSet::new();
         for statement in function
             .blocks()
             .iter()
@@ -3709,6 +3828,9 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
                 continue;
             };
+            if let Some(local) = address_escaped_local_index_v1(assignment.value().kind()) {
+                address_escaped.insert(local);
+            }
             if !assignment.destination().projections().is_empty() {
                 continue;
             }
@@ -3722,6 +3844,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             function,
             definitions,
             ambiguous,
+            address_escaped,
             visiting: HashSet::new(),
             work: 0,
             loads: HashMap::new(),
@@ -3731,7 +3854,9 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
 
     fn with_ranked_reads(
         types: &'a [SemanticTypeDeclV1],
+        callables: &[SemanticCallableDeclV1],
         function: &'a SemanticFunctionDeclV1,
+        intrinsic: &IntrinsicProjectionV1,
         blocks: &[ProductionRankedBlockV1],
         sources: &[ProjectedAccessSourceV1],
     ) -> Result<Self, ProductionRankedProjectionErrorV1> {
@@ -3767,6 +3892,14 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                 continue;
             };
             let Some(statement_index) = site.statement else {
+                resolver.bind_typed_global_read_v2(
+                    callables,
+                    intrinsic,
+                    blocks,
+                    sources,
+                    source,
+                    &allocation_origins,
+                )?;
                 continue;
             };
             let Some(SemanticStatementKindV1::Assign(assignment)) = function
@@ -3970,6 +4103,11 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         let local = place.local().index();
         if !place.projections().is_empty() {
             return Err("GPU semantic scalar operand uses an unsupported place projection");
+        }
+        // A use-specific load fact is checked above. A historical assignment
+        // cannot reconstruct a later value after mutation through an alias.
+        if self.address_escaped.contains(&(local as usize)) {
+            return Err("GPU semantic scalar local escapes through a mutable reference or address");
         }
         let declaration = self
             .function
@@ -4686,6 +4824,7 @@ fn exact_less_than_definition_v1(
 }
 
 fn project_authenticated_capabilities_v1(
+    types: &[SemanticTypeDeclV1],
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
@@ -4702,6 +4841,7 @@ fn project_authenticated_capabilities_v1(
     let mut work = 0_usize;
     let pipeline_owners = workgroup_pipeline_local_owners_v1(callables, function)?;
     let initial_entries = propagate_capability_dataflow_v1(
+        types,
         callables,
         function,
         enum_payload_dominance,
@@ -4713,6 +4853,7 @@ fn project_authenticated_capabilities_v1(
         &mut work,
     )?;
     let pipeline_payloads = collect_workgroup_pipeline_payloads_v1(
+        types,
         callables,
         function,
         enum_payload_dominance,
@@ -4721,6 +4862,7 @@ fn project_authenticated_capabilities_v1(
         &mut work,
     )?;
     let entries = propagate_capability_dataflow_v1(
+        types,
         callables,
         function,
         enum_payload_dominance,
@@ -4736,6 +4878,8 @@ fn project_authenticated_capabilities_v1(
     let mut global_reads = vec![None; block_count];
     let mut transpose_workgroups = vec![None; block_count];
     let mut read_views = vec![None; block_count];
+    let mut global_views = vec![None; block_count];
+    let mut global_uses = ProjectedGlobalSemanticUsesV1::default();
     for (block_index, entry_state) in entries.into_iter().enumerate() {
         let Some(mut state) = entry_state else {
             continue;
@@ -4751,11 +4895,25 @@ fn project_authenticated_capabilities_v1(
                 ))?,
         )?;
         transfer_capability_statements_v1(
+            types,
             function,
             block_index,
             &mut state,
             enum_payload_dominance,
+            Some(&mut global_uses),
         )?;
+        if let SemanticTerminatorKindV1::Call(call) =
+            function.blocks()[block_index].terminator().kind()
+        {
+            for operand in call.arguments() {
+                global_uses.record_load_operand(
+                    operand,
+                    &state,
+                    enum_payload_dominance,
+                    block_index,
+                )?;
+            }
+        }
         let effects = transfer_capability_terminator_v1(
             callables,
             function,
@@ -4771,12 +4929,15 @@ fn project_authenticated_capabilities_v1(
         global_reads[block_index] = effects.global_read;
         transpose_workgroups[block_index] = effects.transpose_workgroup;
         read_views[block_index] = effects.read_view;
+        global_views[block_index] = effects.global_view;
     }
     Ok(ProjectedCapabilityEffectsV1 {
         layouts,
         global_reads,
         transpose_workgroups,
         read_views,
+        global_views,
+        global_uses,
     })
 }
 
@@ -4869,6 +5030,7 @@ fn propagate_workgroup_pipeline_aliases_v1(
 
 #[allow(clippy::too_many_arguments)]
 fn propagate_capability_dataflow_v1(
+    types: &[SemanticTypeDeclV1],
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
@@ -4897,10 +5059,12 @@ fn propagate_capability_dataflow_v1(
         )?;
         let mut state = try_clone_capability_state_v1(entry_state)?;
         transfer_capability_statements_v1(
+            types,
             function,
             block_index,
             &mut state,
             enum_payload_dominance,
+            None,
         )?;
         transfer_capability_terminator_v1(
             callables,
@@ -4970,6 +5134,7 @@ fn propagate_capability_dataflow_v1(
 }
 
 fn collect_workgroup_pipeline_payloads_v1(
+    types: &[SemanticTypeDeclV1],
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
@@ -4995,10 +5160,12 @@ fn collect_workgroup_pipeline_payloads_v1(
         charge_capability_dataflow_work_v1(work, entry.len().saturating_add(1))?;
         let mut state = try_clone_capability_state_v1(entry)?;
         transfer_capability_statements_v1(
+            types,
             function,
             block_index,
             &mut state,
             enum_payload_dominance,
+            None,
         )?;
         let [receiver, _, _, value] = call.arguments() else {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -5282,19 +5449,30 @@ fn charged_unique_capability_successors_v1(
 }
 
 fn transfer_capability_statements_v1(
+    types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     block_index: usize,
     state: &mut ProjectedCapabilityStateV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
+    mut global_uses: Option<&mut ProjectedGlobalSemanticUsesV1>,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     let block = &function.blocks()[block_index];
     let use_block = SemanticBlockIdV1::from_index(block_index as u32);
-    for statement in block.statements() {
+    for (statement_index, statement) in block.statements().iter().enumerate() {
         match statement.kind() {
             SemanticStatementKindV1::Assign(assignment) => {
+                if let Some(uses) = global_uses.as_deref_mut() {
+                    uses.record_assignment(
+                        assignment,
+                        state,
+                        enum_payload_dominance,
+                        block_index,
+                        statement_index,
+                    )?;
+                }
                 let destination = assignment.destination().local().index() as usize;
                 let origin = if assignment.destination().projections().is_empty() {
-                    match assignment.value().kind() {
+                    global_metadata_assignment_v1(types, function, state, assignment).or_else(|| match assignment.value().kind() {
                         SemanticRvalueKindV1::Use(operand) => {
                             capability_origin_from_assignment_operand_v1(
                                 operand,
@@ -5303,25 +5481,64 @@ fn transfer_capability_statements_v1(
                                 use_block,
                             )
                         }
-                        SemanticRvalueKindV1::Borrow { place, .. }
-                        | SemanticRvalueKindV1::AddressOf { place, .. }
+                        SemanticRvalueKindV1::Borrow { place, kind } => {
+                            capability_borrow_origin_v1(state, place, *kind)
+                        }
+                        SemanticRvalueKindV1::AddressOf { place, .. }
                             if place.projections().is_empty() =>
                         {
-                            state.get(&(place.local().index() as usize)).copied()
-                        }
-                        SemanticRvalueKindV1::Aggregate(aggregate) => {
-                            capability_origin_from_enum_aggregate_v1(
-                                aggregate,
-                                state,
-                                enum_payload_dominance,
-                                use_block,
-                            )?
+                            state
+                                .get(&(place.local().index() as usize))
+                                .copied()
+                                .filter(|value| {
+                                    !matches!(
+                                        value,
+                                        ProjectedCapabilityValueV1::Known(
+                                            ProjectedCapabilityOriginV1::KernelContext { .. }
+                                                | ProjectedCapabilityOriginV1::GlobalView(_)
+                                                | ProjectedCapabilityOriginV1::GlobalPhysical { .. }
+                                                | ProjectedCapabilityOriginV1::GlobalExtent(_)
+                                                | ProjectedCapabilityOriginV1::GlobalLoadResult { .. }
+                                                | ProjectedCapabilityOriginV1::GlobalLoadedScalar { .. }
+                                        )
+                                    )
+                                })
                         }
                         _ => None,
-                    }
+                    })
                 } else {
                     None
                 };
+                let origin = if origin.is_none()
+                    && assignment.destination().projections().is_empty()
+                    && let SemanticRvalueKindV1::Aggregate(aggregate) = assignment.value().kind()
+                {
+                    capability_origin_from_enum_aggregate_v1(
+                        aggregate,
+                        state,
+                        enum_payload_dominance,
+                        use_block,
+                    )?
+                } else {
+                    origin
+                };
+                if let SemanticRvalueKindV1::Borrow {
+                    kind: SemanticBorrowKindV1::Mutable,
+                    place,
+                }
+                | SemanticRvalueKindV1::AddressOf { place, .. } = assignment.value().kind()
+                    && matches!(
+                        state.get(&(place.local().index() as usize)),
+                        Some(ProjectedCapabilityValueV1::Known(
+                            ProjectedCapabilityOriginV1::GlobalPhysical { .. }
+                                | ProjectedCapabilityOriginV1::GlobalExtent(_)
+                                | ProjectedCapabilityOriginV1::GlobalLoadResult { .. }
+                                | ProjectedCapabilityOriginV1::GlobalLoadedScalar { .. }
+                        ))
+                    )
+                {
+                    invalidate_capability_place_v1(state, place);
+                }
                 consume_capability_rvalue_operands_v1(assignment.value().kind(), state);
                 if !assignment.destination().projections().is_empty() {
                     invalidate_capability_local_v1(state, destination);
@@ -5365,6 +5582,8 @@ fn transfer_capability_statements_v1(
     Ok(())
 }
 
+include!("production_ranked_projection_v1/typed_global_semantics_v1.rs");
+
 fn consume_capability_rvalue_operands_v1(
     rvalue: &SemanticRvalueKindV1,
     state: &mut ProjectedCapabilityStateV1,
@@ -5373,6 +5592,50 @@ fn consume_capability_rvalue_operands_v1(
         consume_capability_operand_v1(state, operand);
         Ok(())
     });
+}
+
+fn capability_borrow_origin_v1(
+    state: &ProjectedCapabilityStateV1,
+    place: &SemanticPlaceV1,
+    kind: SemanticBorrowKindV1,
+) -> Option<ProjectedCapabilityValueV1> {
+    let origin = *state.get(&(place.local().index() as usize))?;
+    let dereference = matches!(place.projections(), [projection]
+        if matches!(projection.kind(), SemanticProjectionKindV1::Dereference));
+    let known = match origin {
+        ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::KernelContext {
+            context,
+            shared_borrow,
+        }) if kind == SemanticBorrowKindV1::Shared
+            && ((!shared_borrow && place.projections().is_empty())
+                || (shared_borrow && dereference)) =>
+        {
+            ProjectedCapabilityOriginV1::KernelContext {
+                context,
+                shared_borrow: true,
+            }
+        }
+        ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::GlobalView(mut view))
+            if kind != SemanticBorrowKindV1::Fake
+                && ((view.borrow.is_none() && place.projections().is_empty())
+                    || (view.borrow.is_some() && dereference))
+                && !(view.borrow == Some(SemanticBorrowKindV1::Shared)
+                    && kind == SemanticBorrowKindV1::Mutable) =>
+        {
+            view.borrow = Some(kind);
+            ProjectedCapabilityOriginV1::GlobalView(view)
+        }
+        ProjectedCapabilityValueV1::Known(
+            ProjectedCapabilityOriginV1::KernelContext { .. }
+            | ProjectedCapabilityOriginV1::GlobalView(_)
+            | ProjectedCapabilityOriginV1::GlobalPhysical { .. }
+            | ProjectedCapabilityOriginV1::GlobalExtent(_)
+            | ProjectedCapabilityOriginV1::GlobalLoadResult { .. }
+            | ProjectedCapabilityOriginV1::GlobalLoadedScalar { .. },
+        ) => return None,
+        _ => return place.projections().is_empty().then_some(origin),
+    };
+    Some(ProjectedCapabilityValueV1::Known(known))
 }
 
 fn consume_capability_operand_v1(
@@ -5398,8 +5661,18 @@ fn projected_value_is_shared_read_v1(value: &ProjectedCapabilityValueV1) -> bool
     matches!(
         value,
         ProjectedCapabilityValueV1::Known(
-            ProjectedCapabilityOriginV1::ReadViewResult(_)
+            ProjectedCapabilityOriginV1::KernelContext {
+                shared_borrow: true,
+                ..
+            } | ProjectedCapabilityOriginV1::GlobalView(ProjectedGlobalViewV1 {
+                borrow: Some(SemanticBorrowKindV1::Shared),
+                ..
+            }) | ProjectedCapabilityOriginV1::ReadViewResult(_)
                 | ProjectedCapabilityOriginV1::ReadView(_)
+                | ProjectedCapabilityOriginV1::GlobalPhysical { .. }
+                | ProjectedCapabilityOriginV1::GlobalExtent(_)
+                | ProjectedCapabilityOriginV1::GlobalLoadResult { .. }
+                | ProjectedCapabilityOriginV1::GlobalLoadedScalar { .. }
         ) | ProjectedCapabilityValueV1::ConstructedEnum(ProjectedCapabilityEnumEnvelopeV1 {
             origin: ProjectedCapabilityOriginV1::ReadViewResult(_)
                 | ProjectedCapabilityOriginV1::ReadView(_),
@@ -5455,6 +5728,19 @@ fn capability_origin_from_assignment_operand_v1(
     }
     let (carrier, variant) = enum_payload_projection(place)?;
     match state.get(&carrier).copied()? {
+        ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::GlobalLoadResult {
+            block,
+        }) if variant == 1
+            && enum_payload_dominance
+                .availability(SemanticLocalIdV1::from_index(carrier as u32), 1)
+                .is_some_and(|availability| {
+                    enum_payload_dominance.allows(availability, use_block)
+                }) =>
+        {
+            Some(ProjectedCapabilityValueV1::Known(
+                ProjectedCapabilityOriginV1::GlobalLoadedScalar { block },
+            ))
+        }
         ProjectedCapabilityValueV1::ConstructedEnum(envelope) => {
             unwrap_capability_enum_value_v1(envelope, variant)
         }
@@ -5832,6 +6118,85 @@ fn transfer_capability_terminator_v1(
         Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) => Some(operation),
         _ => None,
     };
+    if let Some(operation) = intrinsic_operation {
+        if let SemanticCompilerIntrinsicOperationV1::DisjointSliceLen {
+            disjoint_slice,
+            element,
+            raw_index,
+            index_space,
+        }
+        | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen {
+            disjoint_slice,
+            element,
+            raw_index,
+            index_space,
+        } = operation
+            && let [receiver] = call.arguments()
+            && let Some(ProjectedCapabilityOriginV1::GlobalPhysical {
+                view,
+                ty,
+                borrowed: true,
+            }) = capability_known_origin_v1(state, receiver)
+            && ty == *disjoint_slice
+            && view.physical == ty
+            && view.element == *element
+            && view.contract.aliasing()
+                == SemanticCapabilityMemoryAliasingV1::Disjoint(*index_space)
+            && let Some(destination) = call.destination()
+            && destination.place().projections().is_empty()
+            && destination.place().ty() == *raw_index
+            && !matches!(call.unwind(), SemanticUnwindActionV1::Cleanup(_))
+        {
+            consume_capability_operands_v1(state, call.arguments());
+            state.insert(
+                destination.place().local().index() as usize,
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::GlobalExtent(
+                    view.allocation,
+                )),
+            );
+            return Ok(ProjectedCapabilityTerminatorEffectsV1::default());
+        }
+        if matches!(
+            operation,
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindExclusiveReadWrite { .. }
+                | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveLoad { .. }
+                | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveStore { .. }
+                | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStoreBlock { .. }
+        ) {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "typed global exclusive or blocked memory requires an exact ranked access relation",
+            ));
+        }
+        if let Some(contract) = global_access_contract_v1(operation) {
+            let global_view = authenticate_global_access_v1(
+                &callables[call.callee().index() as usize],
+                call,
+                state,
+                contract,
+            );
+            consume_capability_operands_v1(state, call.arguments());
+            if let Some(destination) = call.destination() {
+                invalidate_capability_place_v1(state, destination.place());
+                if global_view.is_some() && contract.access == AccessKindAttr::Read {
+                    state.insert(
+                        destination.place().local().index() as usize,
+                        ProjectedCapabilityValueV1::Known(
+                            ProjectedCapabilityOriginV1::GlobalLoadResult { block: block_index },
+                        ),
+                    );
+                }
+            }
+            if global_view.is_none() && require_authenticated_site {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a typed global access lacks its exact bound allocation, borrow, or source contract",
+                ));
+            }
+            return Ok(ProjectedCapabilityTerminatorEffectsV1 {
+                global_view,
+                ..ProjectedCapabilityTerminatorEffectsV1::default()
+            });
+        }
+    }
     if matches!(
         intrinsic_operation,
         Some(SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. })
@@ -5924,6 +6289,31 @@ fn transfer_capability_terminator_v1(
     }
     let root = ((block_index as u64) << 32) | destination_local as u64;
     let (origin, layout) = match operation {
+        SemanticCompilerIntrinsicOperationV1::KernelContextIssue { context } => (
+            if call.arguments().is_empty() && destination.place().ty() == *context {
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::KernelContext {
+                    context: *context,
+                    shared_borrow: false,
+                })
+            } else {
+                ProjectedCapabilityValueV1::Invalid
+            },
+            None,
+        ),
+        SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindReadOnly { .. }
+        | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindDisjointWrite { .. } => (
+            authenticate_global_bind_v1(
+                &callables[call.callee().index() as usize],
+                call,
+                function,
+                state,
+                local_allocations,
+            )
+            .map(ProjectedCapabilityOriginV1::GlobalView)
+            .map(ProjectedCapabilityValueV1::Known)
+            .unwrap_or(ProjectedCapabilityValueV1::Invalid),
+            None,
+        ),
         SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice {
             result,
             element,
@@ -6338,7 +6728,284 @@ fn transfer_capability_terminator_v1(
         global_read,
         transpose_workgroup,
         read_view: None,
+        global_view: None,
     })
+}
+
+#[derive(Clone, Copy)]
+struct ProjectedGlobalAccessContractV1 {
+    view: SemanticTypeIdV1,
+    element: SemanticTypeIdV1,
+    contract: SemanticCapabilityMemoryContractV1,
+    provenance: SemanticKernelCapabilityProvenanceV1,
+    source_identity: SemanticFunctionIdentityV1,
+    result: SemanticTypeIdV1,
+    access: AccessKindAttr,
+}
+
+fn global_access_contract_v1(
+    operation: &SemanticCompilerIntrinsicOperationV1,
+) -> Option<ProjectedGlobalAccessContractV1> {
+    let (view, element, contract, provenance, source_identity, result, access) = match *operation {
+        SemanticCompilerIntrinsicOperationV1::CapabilityGlobalLoad {
+            view,
+            element,
+            contract,
+            provenance,
+            source_identity,
+            option,
+        } => (
+            view,
+            element,
+            contract,
+            provenance,
+            source_identity,
+            option,
+            AccessKindAttr::Read,
+        ),
+        SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStore {
+            view,
+            element,
+            contract,
+            provenance,
+            source_identity,
+            result,
+            ..
+        } => (
+            view,
+            element,
+            contract,
+            provenance,
+            source_identity,
+            result,
+            AccessKindAttr::Write,
+        ),
+        _ => return None,
+    };
+    Some(ProjectedGlobalAccessContractV1 {
+        view,
+        element,
+        contract,
+        provenance,
+        source_identity,
+        result,
+        access,
+    })
+}
+
+fn authenticate_global_bind_v1(
+    callable: &SemanticCallableDeclV1,
+    call: &SemanticDirectCallV1,
+    function: &SemanticFunctionDeclV1,
+    state: &ProjectedCapabilityStateV1,
+    allocations: &[Option<AllocationContractV1>],
+) -> Option<ProjectedGlobalViewV1> {
+    let SemanticCallableDeclV1::CompilerIntrinsic {
+        binding, operation, ..
+    } = callable
+    else {
+        return None;
+    };
+    let (context, physical, view, element, contract, provenance, source_identity, ownership) =
+        match *operation {
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindReadOnly {
+                context,
+                physical,
+                view,
+                element,
+                contract,
+                provenance,
+                source_identity,
+            } if contract == SemanticCapabilityMemoryContractV1::global_read_only() => (
+                context,
+                physical,
+                view,
+                element,
+                contract,
+                provenance,
+                source_identity,
+                SemanticSourceArgumentOwnershipV1::SharedBorrow,
+            ),
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindDisjointWrite {
+                context,
+                physical,
+                view,
+                element,
+                contract,
+                provenance,
+                source_identity,
+            } if contract.index_space_type().is_some_and(|space| {
+                contract
+                    == SemanticCapabilityMemoryContractV1::global_disjoint_write(
+                        space,
+                        SemanticDisjointIndexSpaceV1::Index1d,
+                    )
+            }) =>
+            {
+                (
+                    context,
+                    physical,
+                    view,
+                    element,
+                    contract,
+                    provenance,
+                    source_identity,
+                    SemanticSourceArgumentOwnershipV1::ExclusiveOwner,
+                )
+            }
+            _ => return None,
+        };
+    let [receiver, storage] = call.arguments() else {
+        return None;
+    };
+    let destination = call.destination()?.place();
+    let allocation = allocations
+        .get(simple_operand_local(storage)?.index() as usize)
+        .copied()??;
+    let argument = usize::try_from(allocation.allocation_origin.checked_sub(1)?).ok()?;
+    if source_identity != binding.identity()
+        || destination.ty() != view
+        || !destination.projections().is_empty()
+        || storage.ty() != physical
+        || function.abi().source_input_types().get(argument) != Some(&physical)
+        || function.abi().source_argument_ownership().get(argument) != Some(&ownership)
+        || capability_known_origin_v1(state, receiver)
+            != Some(ProjectedCapabilityOriginV1::KernelContext {
+                context,
+                shared_borrow: true,
+            })
+        || binding.abi().source_input_types() != [receiver.ty(), physical]
+        || binding.abi().source_argument_ownership()
+            != [SemanticSourceArgumentOwnershipV1::SharedBorrow, ownership]
+        || binding.abi().return_type() != view
+        || match ownership {
+            SemanticSourceArgumentOwnershipV1::SharedBorrow => {
+                allocation.writable || allocation.noalias_class != 1
+            }
+            SemanticSourceArgumentOwnershipV1::ExclusiveOwner => {
+                !allocation.writable || allocation.noalias_class <= 1
+            }
+            _ => true,
+        }
+    {
+        return None;
+    }
+    Some(ProjectedGlobalViewV1 {
+        view,
+        physical,
+        element,
+        contract,
+        provenance,
+        allocation,
+        borrow: None,
+    })
+}
+
+fn authenticate_global_access_v1(
+    callable: &SemanticCallableDeclV1,
+    call: &SemanticDirectCallV1,
+    state: &ProjectedCapabilityStateV1,
+    contract: ProjectedGlobalAccessContractV1,
+) -> Option<ProjectedGlobalViewV1> {
+    let SemanticCallableDeclV1::CompilerIntrinsic { binding, .. } = callable else {
+        return None;
+    };
+    let ProjectedCapabilityOriginV1::GlobalView(view) =
+        capability_known_origin_v1(state, call.arguments().first()?)?
+    else {
+        return None;
+    };
+    let write = contract.access == AccessKindAttr::Write;
+    let destination = call.destination()?.place();
+    if binding.identity() != contract.source_identity
+        || view.view != contract.view
+        || view.element != contract.element
+        || view.contract != contract.contract
+        || view.provenance != contract.provenance
+        || view.borrow
+            != Some(if write {
+                SemanticBorrowKindV1::Mutable
+            } else {
+                SemanticBorrowKindV1::Shared
+            })
+        || call.arguments().len() != if write { 3 } else { 2 }
+        || destination.ty() != contract.result
+        || !destination.projections().is_empty()
+        || (write && call.arguments().get(2)?.ty() != contract.element)
+        || matches!(call.unwind(), SemanticUnwindActionV1::Cleanup(_))
+    {
+        return None;
+    }
+    Some(view)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_global_ranked_view_v1(
+    types: &[SemanticTypeDeclV1],
+    bound: ProjectedGlobalViewV1,
+    extent: ProductionRankedValueV1,
+    views: &mut [Option<ProjectedViewV1>],
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+    ranked_ir: &mut String,
+) -> Result<ProductionRankedValueIdV1, ProductionRankedProjectionErrorV1> {
+    let element_width = type_width(types, bound.element)?;
+    let writable = bound.contract.access() != SemanticCapabilityMemoryAccessV1::ReadOnly;
+    let allocation = bound.allocation;
+    let slot = usize::try_from(allocation.allocation_origin)
+        .ok()
+        .and_then(|origin| views.get_mut(origin))
+        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+            "typed global allocation is outside the root table",
+        ))?;
+    if let Some(view) = slot {
+        if view.element_width != element_width
+            || view.writable != writable
+            || view.shape != [DYNAMIC_EXTENT]
+            || view.dynamic_extents != [extent]
+            || view.memory_space != MemorySpaceAttr::Global
+            || view.allocation_origin != allocation.allocation_origin
+            || view.noalias_class != allocation.noalias_class
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "typed global allocation was projected with conflicting layout, extent, or ownership",
+            ));
+        }
+        return Ok(view.result);
+    }
+    reserve_operation(operations)?;
+    let result = next_value_id(next_value)?;
+    operations.push(ProductionRankedOperationV1::ViewInSpace {
+        result,
+        element_width,
+        writable,
+        shape: vec![DYNAMIC_EXTENT],
+        dynamic_extents: vec![extent],
+        memory_space: MemorySpaceAttr::Global,
+        allocation_origin: allocation.allocation_origin,
+        noalias_class: allocation.noalias_class,
+    });
+    push_ranked_ir(
+        ranked_ir,
+        &format!(
+            "  %{} = kernel.ranked_view <{}, {}, [dynamic], Global>({})\n",
+            result.get(),
+            element_width,
+            writable,
+            ranked_value_text_v1(extent),
+        ),
+    )?;
+    *slot = Some(ProjectedViewV1 {
+        result,
+        element_width,
+        writable,
+        shape: vec![DYNAMIC_EXTENT],
+        dynamic_extents: vec![extent],
+        memory_space: MemorySpaceAttr::Global,
+        allocation_origin: allocation.allocation_origin,
+        noalias_class: allocation.noalias_class,
+    });
+    Ok(result)
 }
 
 fn authenticate_tensor_load_v1(
@@ -6801,12 +7468,21 @@ fn is_exact_shared_reference_to_v1(
     reference: SemanticTypeIdV1,
     pointee: SemanticTypeIdV1,
 ) -> bool {
+    is_exact_reference_to_v1(types, reference, pointee, SemanticMutabilityV1::Immutable)
+}
+
+fn is_exact_reference_to_v1(
+    types: &[SemanticTypeDeclV1],
+    reference: SemanticTypeIdV1,
+    pointee: SemanticTypeIdV1,
+    mutability: SemanticMutabilityV1,
+) -> bool {
     matches!(
         types.get(reference.index() as usize).map(SemanticTypeDeclV1::shape),
         Some(SemanticTypeShapeV1::Pointer(pointer))
             if pointer.pointee() == pointee
                 && pointer.kind() == SemanticPointerKindV1::Reference
-                && pointer.mutability() == SemanticMutabilityV1::Immutable
+                && pointer.mutability() == mutability
                 && pointer.address_space() == 0
                 && pointer.pointer_width_bits() == 64
                 && pointer.metadata() == SemanticPointerMetadataV1::None
@@ -7051,11 +7727,162 @@ fn project_generated_terminator_effects_v1(
     Ok(projected)
 }
 
+// The imported root's context bind is the independent MIR anchor, never the
+// invocation terminal itself. Lowering must still join the retained compiler
+// context custody before granting final-KIR authority.
+fn root_invocation_provenance_v1(
+    types: &[SemanticTypeDeclV1],
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    root: SemanticFunctionIdV1,
+    kernel_binding: SemanticKernelBindingIdentityV1,
+) -> Result<Option<SemanticKernelCapabilityProvenanceV1>, ProductionRankedProjectionErrorV1> {
+    let called_intrinsics = || {
+        function.blocks().iter().filter_map(|block| {
+            let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+                return None;
+            };
+            match callables.get(call.callee().index() as usize)? {
+                SemanticCallableDeclV1::CompilerIntrinsic {
+                    binding, operation, ..
+                } => Some((call, binding, operation)),
+                _ => None,
+            }
+        })
+    };
+    if !called_intrinsics().any(|(_, _, operation)| {
+        matches!(
+            operation,
+            SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d { .. }
+                | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindReadOnly { .. }
+                | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindDisjointWrite { .. }
+                | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalLoad { .. }
+                | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStore { .. }
+        )
+    }) {
+        return Ok(None);
+    }
+    let mut context = None;
+    for (call, _, operation) in called_intrinsics() {
+        if let SemanticCompilerIntrinsicOperationV1::KernelContextIssue { context: issued } =
+            operation
+            && (context.replace(*issued).is_some()
+                || !call.arguments().is_empty()
+                || call
+                    .destination()
+                    .map(|destination| destination.place().ty())
+                    != Some(*issued))
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "an invocation index requires one exact root context issuance",
+            ));
+        }
+    }
+    let mut expected = None;
+    for (call, binding, operation) in called_intrinsics() {
+        let (SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindReadOnly {
+            context: bound,
+            provenance,
+            source_identity,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindExclusiveReadWrite {
+            context: bound,
+            provenance,
+            source_identity,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindDisjointWrite {
+            context: bound,
+            provenance,
+            source_identity,
+            ..
+        }) = operation
+        else {
+            continue;
+        };
+        if context != Some(*bound)
+            || !call.arguments().first().is_some_and(|receiver| {
+                is_exact_shared_reference_to_v1(types, receiver.ty(), *bound)
+            })
+            || provenance.root() != root
+            || provenance.kernel_binding() != kernel_binding
+            || *source_identity != binding.identity()
+            || expected.is_some_and(|previous| previous != *provenance)
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "an invocation index has conflicting root context provenance",
+            ));
+        }
+        expected = Some(*provenance);
+    }
+    expected
+        .map(Some)
+        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+            "an invocation index lacks an independent root context bind",
+        ))
+}
+
+fn validate_capability_invocation_index_v1(
+    types: &[SemanticTypeDeclV1],
+    callable: &SemanticCallableDeclV1,
+    call: &SemanticDirectCallV1,
+    expected: Option<SemanticKernelCapabilityProvenanceV1>,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    let SemanticCallableDeclV1::CompilerIntrinsic {
+        binding,
+        operation:
+            SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d {
+                invocation,
+                index_witness,
+                raw_index,
+                provenance,
+                source_identity,
+            },
+        ..
+    } = callable
+    else {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "an invocation index requires its exact capability terminal",
+        ));
+    };
+    if expected != Some(*provenance) || *source_identity != binding.identity() {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "an invocation index changed its root provenance or source binding",
+        ));
+    }
+    let abi = binding.abi();
+    let [receiver] = call.arguments() else {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "an invocation index requires one shared borrowed receiver",
+        ));
+    };
+    if !is_exact_shared_reference_to_v1(types, receiver.ty(), *invocation)
+        || abi.source_input_types() != [receiver.ty()]
+        || abi.adjusted_arguments().len() != 1
+        || abi.source_output_type() != *index_witness
+        || abi.return_type() != *index_witness
+        || abi.source_argument_ownership() != [SemanticSourceArgumentOwnershipV1::SharedBorrow]
+        || !abi.hidden_arguments().is_empty()
+        || call
+            .destination()
+            .map(|destination| destination.place().ty())
+            != Some(*index_witness)
+        || unsigned_index_bits_v1(types, *raw_index) != Some(64)
+    {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "an invocation index changed its borrowed receiver or witness ABI",
+        ));
+    }
+    Ok(())
+}
+
 fn project_intrinsic_contracts(
     callables: &[SemanticCallableDeclV1],
     callable_effects: &DefinedCallableEmptyEffectSummariesV1,
     types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
+    invocation_provenance: Option<SemanticKernelCapabilityProvenanceV1>,
     linear_launch_upper_bound: Option<u64>,
     constants: &[Option<u64>],
     operations: &mut Vec<ProductionRankedOperationV1>,
@@ -7089,6 +7916,7 @@ fn project_intrinsic_contracts(
     )?;
     let local_allocations = local_allocation_contracts(types, function, &allocation_origins)?;
     let capability_effects = project_authenticated_capabilities_v1(
+        types,
         callables,
         function,
         &enum_payload_dominance,
@@ -7100,6 +7928,8 @@ fn project_intrinsic_contracts(
     let tensor_layouts = capability_effects.layouts;
     let transpose_workgroup_effects = capability_effects.transpose_workgroups;
     let read_view_sources = capability_effects.read_views;
+    let global_view_sources = capability_effects.global_views;
+    let global_uses = capability_effects.global_uses;
     let mut edge_count = 0_usize;
     let mut borrowed_locals = Vec::new();
     let mut runtime_index_arguments = vec![None; local_count];
@@ -7224,13 +8054,13 @@ fn project_intrinsic_contracts(
             continue;
         };
         let kind = match operation {
-            SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. }
-            | SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { .. } => {
+            SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. } => {
                 CapabilityEdgeKindV1::Alias
             }
-            SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
+            SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { index_space, .. }
+            | SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
                 index_space, ..
-            } => CapabilityEdgeKindV1::IntoDisjoint {
+            } => CapabilityEdgeKindV1::PreserveMapping {
                 mapping: *index_space,
             },
             SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift {
@@ -7436,7 +8266,7 @@ fn project_intrinsic_contracts(
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
             continue;
         };
-        let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
+        let Some(callable @ SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
             callables.get(call.callee().index() as usize)
         else {
             continue;
@@ -7444,9 +8274,16 @@ fn project_intrinsic_contracts(
         if !matches!(
             operation,
             SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. }
+                | SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d { .. }
                 | SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { .. }
         ) {
             continue;
+        }
+        if matches!(
+            operation,
+            SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d { .. }
+        ) {
+            validate_capability_invocation_index_v1(types, callable, call, invocation_provenance)?;
         }
         let destination = simple_call_destination(call)?;
         let destination = destination.index() as usize;
@@ -7475,7 +8312,8 @@ fn project_intrinsic_contracts(
             ),
         )?;
         match operation {
-            SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. } => {
+            SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. }
+            | SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d { .. } => {
                 require_index_scalar_custody_v1(
                     destination,
                     &local_definitions,
@@ -7613,8 +8451,13 @@ fn project_intrinsic_contracts(
                         ..input
                     }
                 }
-                CapabilityEdgeKindV1::IntoDisjoint { mapping } => {
-                    ProjectedDisjointIndexV1 { mapping, ..input }
+                CapabilityEdgeKindV1::PreserveMapping { mapping } => {
+                    if mapping != input.mapping {
+                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                            "an index identity transform changed its mapping",
+                        ));
+                    }
+                    input
                 }
                 CapabilityEdgeKindV1::CheckedShift {
                     mapping,
@@ -7847,6 +8690,7 @@ fn project_intrinsic_contracts(
     let mut guarded_accesses = Vec::new();
     let mut direct_read_effects = vec![None; function.blocks().len()];
     let mut direct_write_effects = vec![None; function.blocks().len()];
+    let mut direct_switch_predicates = vec![None; local_count];
     for (block_index, block) in function.blocks().iter().enumerate() {
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
             continue;
@@ -7856,6 +8700,116 @@ fn project_intrinsic_contracts(
         else {
             continue;
         };
+        if let Some(contract) = global_access_contract_v1(operation) {
+            let bound = global_view_sources[block_index].ok_or(
+                ProductionRankedProjectionErrorV1::Incomplete(
+                    "a typed global access has no authenticated receiver in its execution block",
+                ),
+            )?;
+            let write = contract.access == AccessKindAttr::Write;
+            if invocation_provenance != Some(bound.provenance)
+                || !is_exact_reference_to_v1(
+                    types,
+                    call.arguments()[0].ty(),
+                    bound.view,
+                    if write {
+                        SemanticMutabilityV1::Mutable
+                    } else {
+                        SemanticMutabilityV1::Immutable
+                    },
+                )
+            {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a typed global access changed its root provenance or receiver borrow type",
+                ));
+            }
+            let local = call.arguments().get(1).and_then(simple_operand_local);
+            let projected = match local.and_then(|local| index_values[local.index() as usize]) {
+                Some(_) => Some(projected_disjoint_operand_v1(
+                    call,
+                    1,
+                    &index_values,
+                    &option_dominance,
+                    &enum_payload_dominance,
+                    block_index,
+                )?),
+                None => None,
+            };
+            if write
+                && (!matches!(
+                    bound.contract.aliasing(),
+                    SemanticCapabilityMemoryAliasingV1::Disjoint(
+                        SemanticDisjointIndexSpaceV1::Index1d
+                    )
+                ) || !projected
+                    .is_some_and(|index| index.mapping == SemanticDisjointIndexSpaceV1::Index1d))
+            {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a typed global store requires its exact identity disjoint index witness",
+                ));
+            }
+            let index = match projected {
+                Some(index) => index.value,
+                None => project_runtime_index_operand_v1(
+                    call.arguments().get(1),
+                    constants,
+                    &stable_argument_origins,
+                    &mut runtime_index_arguments,
+                    &mut next_runtime_argument,
+                    operations,
+                    next_value,
+                )?,
+            };
+            let argument = usize::try_from(bound.allocation.allocation_origin)
+                .ok()
+                .and_then(|origin| origin.checked_sub(1))
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "typed global allocation lacks a root argument",
+                ))?;
+            let extent = project_allocation_extent_argument_v1(
+                argument,
+                &mut runtime_slice_extent_arguments,
+                &mut next_runtime_argument,
+            )?;
+            let view = project_global_ranked_view_v1(
+                types,
+                bound,
+                extent,
+                &mut views_by_origin,
+                operations,
+                next_value,
+                ranked_ir,
+            )?;
+            let mut comparisons = Vec::with_capacity(2);
+            if let Some(precondition) = projected.and_then(|index| index.precondition) {
+                comparisons.push(precondition);
+            }
+            comparisons.push((index, extent));
+            let access = GuardedRankedAccessV1 {
+                view,
+                indices: vec![index],
+                checked_success: None,
+                comparisons,
+                access: contract.access,
+                memory_space: MemorySpaceAttr::Global,
+                source: block.terminator().source(),
+                semantic_site: None,
+            };
+            let destination = simple_call_destination(call)?.index() as usize;
+            // The effect belongs to this call, even when its result joins an else value.
+            // Only a unique, unescaped result can name the call's bounds predicate.
+            let predicate = (local_definitions.get(destination).copied() == Some(1)
+                && scalar_inventory.address_escaped.get(destination).copied() == Some(false))
+            .then(|| GuardPredicateV1::for_access(&access));
+            if write {
+                direct_switch_predicates[destination] = predicate;
+                direct_write_effects[block_index] = Some(access);
+            } else {
+                option_predicates[destination] = predicate;
+                direct_read_effects[block_index] = Some(access);
+            }
+            continue;
+        }
         let write_only_effect = matches!(
             operation,
             SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite { .. }
@@ -8686,7 +9640,100 @@ fn project_intrinsic_contracts(
         guarded_accesses.push(access);
     }
 
-    let mut direct_switch_predicates = vec![None; local_count];
+    for (&(block_index, statement_index), allocation) in &global_uses.comparisons {
+        let SemanticStatementKindV1::Assign(assignment) =
+            function.blocks()[block_index].statements()[statement_index].kind()
+        else {
+            unreachable!();
+        };
+        let SemanticRvalueKindV1::Binary {
+            operation: SemanticBinaryOpV1::LessThan,
+            left,
+            right,
+        } = assignment.value().kind()
+        else {
+            unreachable!();
+        };
+        let destination = assignment.destination().local().index() as usize;
+        if local_definitions[destination] != 1
+            || scalar_inventory.address_escaped[destination]
+            || ![left.ty(), right.ty()].iter().all(|ty| {
+                matches!(
+                    types
+                        .get(ty.index() as usize)
+                        .map(SemanticTypeDeclV1::shape),
+                    Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                        signed: false,
+                        bits: 64
+                    }))
+                )
+            })
+        {
+            continue;
+        }
+        let Some(index) =
+            simple_operand_local(left).and_then(|local| index_values[local.index() as usize])
+        else {
+            continue;
+        };
+        if index.precondition.is_some()
+            || !index.availability.is_none_or(|availability| {
+                capability_availability_allows(
+                    &option_dominance,
+                    &enum_payload_dominance,
+                    availability,
+                    SemanticBlockIdV1::from_index(block_index as u32),
+                )
+            })
+        {
+            continue;
+        }
+        let origin = usize::try_from(allocation.allocation_origin)
+            .ok()
+            .and_then(|origin| origin.checked_sub(1))
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "typed global extent lacks its physical allocation",
+            ))?;
+        let extent = project_allocation_extent_argument_v1(
+            origin,
+            &mut runtime_slice_extent_arguments,
+            &mut next_runtime_argument,
+        )?;
+        retain_identical_direct_switch_predicate_v1(
+            &mut direct_switch_predicates[destination],
+            GuardPredicateV1 {
+                comparisons: vec![(index.value, extent)],
+            },
+        )?;
+    }
+    for (&(block_index, statement_index), producer) in &global_uses.discriminants {
+        let SemanticStatementKindV1::Assign(assignment) =
+            function.blocks()[block_index].statements()[statement_index].kind()
+        else {
+            unreachable!();
+        };
+        let SemanticRvalueKindV1::Discriminant(source) = assignment.value().kind() else {
+            unreachable!();
+        };
+        let destination = assignment.destination().local().index() as usize;
+        if local_definitions[destination] != 1
+            || scalar_inventory.address_escaped[destination]
+            || option_predicates[source.local().index() as usize].is_some()
+        {
+            continue;
+        }
+        let access = direct_read_effects
+            .get(*producer)
+            .and_then(Option::as_ref)
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "typed global discriminant lacks its exact read effect",
+            ))?;
+        retain_identical_direct_switch_predicate_v1(
+            &mut direct_switch_predicates[destination],
+            GuardPredicateV1::for_access(access),
+        )?;
+    }
+
     for block in function.blocks() {
         for statement in block.statements() {
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
@@ -8847,6 +9894,8 @@ fn project_intrinsic_contracts(
         read_view_effects,
         direct_read_effects,
         direct_write_effects,
+        global_uses,
+        global_views: global_view_sources,
         pipeline_effects,
         generated_terminator_effects,
     })
@@ -17532,6 +18581,14 @@ fn project_runtime_slice_extent_argument_v1(
         .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
             "a volatile load slice length without one stable kernel-argument origin",
         ))? as usize;
+    project_allocation_extent_argument_v1(origin, arguments, next_argument)
+}
+
+fn project_allocation_extent_argument_v1(
+    origin: usize,
+    arguments: &mut [Option<u32>],
+    next_argument: &mut usize,
+) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
     let slot = arguments
         .get_mut(origin)
         .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
@@ -18178,11 +19235,27 @@ fn local_allocation_contracts(
         let Some(pointee) = pointee else {
             continue;
         };
-        let abi_contract = allocation_contract_from_pointee(
+        let mut abi_contract = allocation_contract_from_pointee(
             pointee.kind(),
             first_pointer_noalias,
             allocation_origin,
         );
+        // Conservative FnAbi metadata need not advertise Freeze. The exact
+        // admitted shared scalar-slice type independently excludes mutation.
+        if let SemanticTypeShapeV1::Pointer(pointer) = type_decl.shape()
+            && let Some(SemanticTypeShapeV1::Slice { element }) = types
+                .get(pointer.pointee().index() as usize)
+                .map(SemanticTypeDeclV1::shape)
+            && volatile_load_frozen_shared_scalar_type_v1(
+                types,
+                ty,
+                source_ownership[argument_index],
+                pointee.kind(),
+                *element,
+            )
+        {
+            abi_contract.writable = false;
+        }
         let singleton_object = matches!(
             source_ownership[argument_index],
             SemanticSourceArgumentOwnershipV1::ExclusiveOwner
@@ -23455,6 +24528,9 @@ fn indent_ir(ir: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    include!("production_ranked_projection_v1/execution_view_tests.rs");
+    include!("production_ranked_projection_v1/typed_global_tests.rs");
+    include!("production_ranked_projection_v1/typed_global_source_tests.rs");
     include!("production_ranked_projection_v1/projection_01_tests.rs");
     include!("production_ranked_projection_v1/projection_02_tests.rs");
     include!("production_ranked_projection_v1/projection_03_tests.rs");
@@ -36848,6 +37924,7 @@ mod tests {
         let local_allocations = vec![None; function.locals().len()];
         let constants = constant_locals(&function).unwrap();
         project_authenticated_capabilities_v1(
+            &types,
             &[],
             &function,
             &enum_payload_dominance,

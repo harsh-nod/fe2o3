@@ -2085,6 +2085,7 @@ dependencies = [
  "fe2o3-compiler-ffi",
  "fe2o3-compiler-lineage",
  "fe2o3-external-anchor-protocol",
+ "fe2o3-hsaco-finalize",
  "fe2o3-kernel-analysis",
  "fe2o3-kernel-ir",
  "fe2o3-verifier",

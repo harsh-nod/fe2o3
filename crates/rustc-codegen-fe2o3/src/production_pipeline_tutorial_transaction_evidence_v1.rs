@@ -390,16 +390,14 @@ fn validate_record(
     }
     let handoff = result.handoff();
     let association = &result.capability_associations().entries()[kernel_ordinal];
-    let checker_identity = authenticated_compiler_capability_evidence_identity_v5(evidence(
-        objects,
-        "proof-checker",
-    )?)
-    .map_err(|error| {
-        TutorialProductionTransactionErrorV1::new(
-            TutorialProductionTransactionErrorCodeV1::EvidenceMismatch,
-            format!("checker evidence identity derivation failed: {error}"),
-        )
-    })?;
+    let checker_identity =
+        authenticated_compiler_capability_evidence_identity_v5(evidence(objects, "proof-checker")?)
+            .map_err(|error| {
+                TutorialProductionTransactionErrorV1::new(
+                    TutorialProductionTransactionErrorCodeV1::EvidenceMismatch,
+                    format!("checker evidence identity derivation failed: {error}"),
+                )
+            })?;
     let typed_identities = [
         (
             "loweringIdentitySha256",
@@ -434,10 +432,7 @@ fn validate_record(
             "proofEvidenceSha256",
             hex32(*association.result_set_identity().digest().as_bytes()),
         ),
-        (
-            "proofCheckerSha256",
-            hex32(checker_identity.sha256()),
-        ),
+        ("proofCheckerSha256", hex32(checker_identity.sha256())),
     ];
     for (claim, expected) in typed_identities {
         if production.get(claim) != Some(&Value::String(expected)) {
@@ -458,7 +453,24 @@ fn validate_record(
             "production record binding is stale",
         );
     }
+    validate_production_negative_fixture_receipt_v1(
+        required(record_object, "negativeFixtures", "production record")?,
+        evidence(objects, "negative-fixture-set")?,
+    )?;
     canonical_document(record)
+}
+
+const PRODUCTION_NEGATIVE_FIXTURE_RECEIPT_INCOMPLETE_V1: &str = "production negative-fixture qualification remains pending: no compiler-produced typed production negative-fixture receipt is available";
+
+fn validate_production_negative_fixture_receipt_v1(
+    _claimed_summary: &Value,
+    _archived_evidence: &[u8],
+) -> ResultV1<()> {
+    // JSON claims and a content-addressed payload cannot replace a compiler-produced receipt.
+    fail(
+        TutorialProductionTransactionErrorCodeV1::ProtectedCompletionUnavailable,
+        PRODUCTION_NEGATIVE_FIXTURE_RECEIPT_INCOMPLETE_V1,
+    )
 }
 
 fn validate_record_summaries(
@@ -613,112 +625,6 @@ fn validate_record_summaries(
                 format!("proof summary typed identity {field} is substituted"),
             );
         }
-    }
-    let negative = object(
-        required(record, "negativeFixtures", "production record")?,
-        "production record.negativeFixtures",
-    )?;
-    exact_keys(
-        negative,
-        &["cases", "setSha256", "status"],
-        "production record.negativeFixtures",
-    )?;
-    if negative.get("status") != Some(&Value::String("passed".to_owned())) {
-        return fail(
-            TutorialProductionTransactionErrorCodeV1::EvidenceMismatch,
-            "negative fixture set is not complete",
-        );
-    }
-    let cases = required(negative, "cases", "production record.negativeFixtures")?
-        .as_array()
-        .ok_or_else(|| {
-            TutorialProductionTransactionErrorV1::new(
-                TutorialProductionTransactionErrorCodeV1::EvidenceMismatch,
-                "production record negativeFixtures.cases must be an array",
-            )
-        })?;
-    if cases.is_empty() {
-        return fail(
-            TutorialProductionTransactionErrorCodeV1::EvidenceMismatch,
-            "production record negative fixture set is empty",
-        );
-    }
-    let mut manifest_cases = Vec::with_capacity(cases.len());
-    let mut previous = String::new();
-    for case in cases {
-        let case = object(case, "production record negative fixture")?;
-        exact_keys(
-            case,
-            &[
-                "category",
-                "diagnosticCode",
-                "evidenceSha256",
-                "failureStage",
-                "fixtureId",
-                "testPath",
-                "testSha256",
-            ],
-            "production record negative fixture",
-        )?;
-        let case_value = Value::Object(case.clone());
-        let case_id = identity_field(
-            &case_value,
-            "fixtureId",
-            "production record negative fixture",
-        )?;
-        if case_id <= previous.as_str() {
-            return fail(
-                TutorialProductionTransactionErrorCodeV1::EvidenceMismatch,
-                "negative fixture identities are not sorted and unique",
-            );
-        }
-        previous = case_id.to_owned();
-        sha_field(
-            &case_value,
-            "evidenceSha256",
-            "production record negative fixture",
-        )?;
-        let test_path = string_field(
-            &case_value,
-            "testPath",
-            "production record negative fixture",
-        )?;
-        let test_bytes = read_repository_file(&context.repository, test_path, MAX_JSON_BYTES)?;
-        if hex_sha256(&test_bytes)
-            != sha_field(
-                &case_value,
-                "testSha256",
-                "production record negative fixture",
-            )?
-        {
-            return fail(
-                TutorialProductionTransactionErrorCodeV1::SourceMismatch,
-                format!("negative fixture source {test_path:?} is stale"),
-            );
-        }
-        manifest_cases.push(serde_json::json!({
-            "category": required(case, "category", "negative fixture")?,
-            "diagnosticCode": required(case, "diagnosticCode", "negative fixture")?,
-            "failureStage": required(case, "failureStage", "negative fixture")?,
-            "fixtureId": required(case, "fixtureId", "negative fixture")?,
-            "testPath": required(case, "testPath", "negative fixture")?,
-        }));
-    }
-    let negative_subject =
-        serde_json::json!({"cases": manifest_cases, "fixtureId": context.fixture_id});
-    let negative_sha = domain_sha256(NEGATIVE_FIXTURE_DOMAIN, &negative_subject)?;
-    if negative.get("setSha256") != Some(&Value::String(negative_sha))
-        || negative.get("setSha256")
-            != object(
-                required(references, "negative-fixture-set", "evidence references")?,
-                "negative fixture reference",
-            )?
-            .get("sha256")
-    {
-        return fail(
-            TutorialProductionTransactionErrorCodeV1::EvidenceMismatch,
-            "negative fixture set identity is stale",
-        );
     }
     for summary in ["simulator", "hardware"] {
         let summary_record = object(

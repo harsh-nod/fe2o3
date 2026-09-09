@@ -280,6 +280,10 @@ impl<R: CompilerGeneratedKernelExpectationRosterV1>
             fe2o3_kernel_descriptor::KernelDescriptorDigest::calculate(descriptor),
             descriptor.entry_name().as_str(),
             ordinal,
+            *self
+                .roster
+                .dynamic_precondition_roster_identity()
+                .as_bytes(),
             result,
         )
         .map_err(CapabilityGeneratedHostAdmissionErrorV1::Contract)?;

@@ -635,6 +635,9 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
                                 ProductionReplayKernelIrVersionV1::V8 => unreachable!(
                                     "the source-projection branch admits only KIR V9 or V11"
                                 ),
+                                ProductionReplayKernelIrVersionV1::V13 => unreachable!(
+                                    "the legacy source-projection branch excludes KIR V13"
+                                ),
                             },
                         ))
                     }

@@ -53,6 +53,32 @@ mod tests {
     }
 
     #[test]
+    fn final_record_negative_fixture_claims_remain_explicitly_incomplete() {
+        let apparently_complete = serde_json::json!({
+            "cases": [{
+                "diagnosticCode": "FE2O3-NEG-0001",
+                "status": "passed",
+            }],
+            "setSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "status": "passed",
+        });
+        let error = validate_production_negative_fixture_receipt_v1(
+            &apparently_complete,
+            b"self-consistent-but-untyped-negative-evidence",
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.code(),
+            TutorialProductionTransactionErrorCodeV1::ProtectedCompletionUnavailable
+        );
+        assert_eq!(
+            error.message(),
+            PRODUCTION_NEGATIVE_FIXTURE_RECEIPT_INCOMPLETE_V1
+        );
+    }
+
+    #[test]
     fn genuine_stage_receipt_accepts_only_exact_artifact_bytes() {
         let artifact = b"genuine-object";
         let receipt = InertCompilerStageOutputReceiptV5::from_stage_output(
@@ -98,12 +124,13 @@ mod tests {
     }
 
     #[test]
-    fn real_manifest_fixture_completes_source_and_contract_preflight() {
-        let repository = test_repository();
+    fn real_migration_manifest_is_admitted_without_requiring_promotion() {
+        let fixture_id = "gfx942-fill-simulation";
+        let snapshot = current_migration_fixture(&test_repository(), fixture_id);
+        let repository = snapshot.path().canonicalize().unwrap();
         let manifest_bytes = fs::read(repository.join(MANIFEST_PATH)).unwrap();
         let manifest = parse_repository_document(&manifest_bytes, "tutorial manifest").unwrap();
         let manifest_object = manifest.as_object().unwrap();
-        let fixture_id = "gfx942-fill-simulation";
         let fixture = find_fixture(
             manifest_object.get("compilerFixtures").unwrap(),
             fixture_id,
@@ -169,20 +196,97 @@ mod tests {
             "simulatorEvidence": object_reference(simulator_payload),
         });
         bind_request(&mut request);
-        let context =
-            preflight_request(&repository, canonical_document(&request).unwrap(), false).unwrap();
+        let request_bytes = canonical_document(&request).unwrap();
+        let context = preflight_request(&repository, request_bytes.clone(), false).unwrap();
         assert_eq!(context.fixture_id, fixture_id);
         assert_eq!(context.target, "gfx942");
         assert!(!context.source_closure_preimage.is_empty());
-        assert_eq!(
-            unavailable_manifest_qualification_prerequisites_v1(&context).unwrap(),
-            [
-                "capability closure is not produced",
-                "production capability path is not promoted",
-                "proof requirement set is not complete",
-                "capability-negative fixture coverage is unavailable",
-            ]
-        );
+        assert_eq!(kernel["productionCapabilityPath"]["status"], "legacy-only");
+        assert_eq!(kernel["proofRequirements"]["status"], "missing");
+
+        let input = &fixture["compilerInput"];
+        for (relative, message) in [
+            (
+                input["packageManifest"].as_str().unwrap(),
+                "package manifest or Cargo.lock changed after fixture admission",
+            ),
+            (
+                input["cargoLockPath"].as_str().unwrap(),
+                "package manifest or Cargo.lock changed after fixture admission",
+            ),
+            (
+                input["sourcePaths"][0].as_str().unwrap(),
+                "Rust source closure changed after fixture admission",
+            ),
+        ] {
+            let path = repository.join(relative);
+            let original = fs::read(&path).unwrap();
+            let mut changed = original.clone();
+            changed.push(b'\n');
+            fs::write(&path, changed).unwrap();
+            let error = preflight_request(&repository, request_bytes.clone(), false).unwrap_err();
+            assert_eq!(
+                error.code(),
+                TutorialProductionTransactionErrorCodeV1::SourceMismatch
+            );
+            assert_eq!(error.message(), message);
+            fs::write(path, original).unwrap();
+        }
+    }
+
+    fn current_migration_fixture(
+        source: &Path,
+        fixture_id: &str,
+    ) -> crate::test_temp_dir::TestTempDir {
+        let snapshot = crate::test_temp_dir::TestTempDir::create("fe2o3-tutorial-migration");
+        let repository = snapshot.path().canonicalize().unwrap();
+        let mut manifest = parse_repository_document(
+            &fs::read(source.join(MANIFEST_PATH)).unwrap(),
+            "tutorial manifest",
+        )
+        .unwrap();
+        let fixture = manifest["compilerFixtures"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|fixture| fixture["fixtureId"].as_str() == Some(fixture_id))
+            .unwrap();
+        let input = &mut fixture["compilerInput"];
+        let package = PathBuf::from(input["packageManifest"].as_str().unwrap());
+        let lock = PathBuf::from(input["cargoLockPath"].as_str().unwrap());
+        let mut files = Vec::new();
+        collect_rust_sources(&source.join(package.parent().unwrap()), &mut files).unwrap();
+        files.extend([source.join(&package), source.join(&lock)]);
+        for file in files {
+            let destination = repository.join(file.strip_prefix(source).unwrap());
+            fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            fs::copy(file, destination).unwrap();
+        }
+
+        // Match the input refresh tool without rewriting historical evidence or promotion state.
+        input["packageManifestSha256"] =
+            hex_sha256(&fs::read(repository.join(&package)).unwrap()).into();
+        input["cargoLockSha256"] = hex_sha256(&fs::read(repository.join(&lock)).unwrap()).into();
+        input["sourceClosureSha256"] = hex_sha256(
+            &source_closure_preimage(&repository, &repository.join(package.parent().unwrap()))
+                .unwrap(),
+        )
+        .into();
+        let mut contract_input = input.as_object().unwrap().clone();
+        contract_input.remove("contractSha256");
+        let contract = serde_json::json!({
+            "compilerInput": contract_input,
+            "fixtureId": fixture["fixtureId"],
+            "matrix": fixture["matrix"],
+            "target": fixture["target"],
+        });
+        fixture["compilerInput"]["contractSha256"] = domain_sha256(FIXTURE_INPUT_DOMAIN, &contract)
+            .unwrap()
+            .into();
+        let path = repository.join(MANIFEST_PATH);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, canonical_document(&manifest).unwrap()).unwrap();
+        snapshot
     }
 
     #[test]
@@ -315,6 +419,111 @@ mod tests {
                 "{typed_identity} must not be treated as a raw archive hash"
             );
         }
+    }
+
+    #[test]
+    fn exact_compiler_evidence_package_rejects_mutation_and_omission() {
+        let expected = test_compiler_evidence_package();
+        validate_exact_evidence_package_v1(&expected, &expected).unwrap();
+
+        let mut mutated = test_compiler_evidence_package();
+        mutated.get_mut("artifact").unwrap()[0] ^= 1;
+        assert_eq!(
+            validate_exact_evidence_package_v1(&expected, &mutated)
+                .unwrap_err()
+                .code(),
+            TutorialProductionTransactionErrorCodeV1::EvidenceMismatch
+        );
+
+        let mut omitted = test_compiler_evidence_package();
+        omitted.remove("compiler-policy");
+        assert_eq!(
+            validate_exact_evidence_package_v1(&expected, &omitted)
+                .unwrap_err()
+                .code(),
+            TutorialProductionTransactionErrorCodeV1::MissingEvidence
+        );
+    }
+
+    #[test]
+    fn pre_hardware_references_exclude_hardware_owned_identity() {
+        let objects = test_compiler_evidence_package();
+        let simulator = object_reference(b"external simulator observation");
+        let mut references = objects
+            .iter()
+            .map(|(kind, payload)| (kind.clone(), object_reference(payload)))
+            .collect::<Map<_, _>>();
+        references.insert("simulator".to_owned(), simulator.clone());
+        validate_evidence_references_v1(&Value::Object(references.clone()), &objects, &simulator)
+            .unwrap();
+        for hardware_owned in PENDING_EVIDENCE_KINDS {
+            assert!(!references.contains_key(*hardware_owned));
+        }
+
+        references.remove("proof-checker");
+        assert_eq!(
+            validate_evidence_references_v1(&Value::Object(references), &objects, &simulator)
+                .unwrap_err()
+                .code(),
+            TutorialProductionTransactionErrorCodeV1::MissingEvidence
+        );
+    }
+
+    #[test]
+    fn transaction_surface_has_no_caller_assembly_authority_or_stub() {
+        let transaction = include_str!("production_pipeline_tutorial_transaction_v1.rs");
+        let pipeline = include_str!("production_pipeline.rs");
+        assert!(
+            transaction
+                .contains("pub fn prepare_tutorial_capability_qualification_transaction_v1(")
+        );
+        assert!(!transaction.contains("produce_tutorial_capability_qualification_transaction_v1"));
+        assert!(!transaction.contains("_hardware_trust_policy"));
+        assert!(pipeline.contains("prepare_tutorial_capability_qualification_transaction_v1"));
+        assert!(!pipeline.contains("produce_tutorial_capability_qualification_transaction_v1"));
+        assert!(!transaction.contains(concat!("FE2O3-TUTORIAL-TXN-", "015")));
+        assert!(!transaction.contains(concat!("TutorialProductionTransaction", "AssemblyV1")));
+        assert!(!pipeline.contains(concat!(
+            "assemble_tutorial_capability_qualification_",
+            "transaction_v1"
+        )));
+    }
+
+    #[test]
+    fn compiler_only_prepare_publishes_exact_export_without_hardware() {
+        let parent = std::env::temp_dir().join(format!(
+            "fe2o3-tutorial-prepare-test-{}-{}",
+            std::process::id(),
+            STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&parent).unwrap();
+        let output = parent.join("prepared");
+        let objects = test_compiler_evidence_package();
+        let envelope = b"{\"schema\":\"test-pre-hardware\"}\n";
+
+        publish_transaction_export(&output, PRE_HARDWARE_RESULT_NAME, envelope, &objects, None)
+            .unwrap();
+
+        assert_eq!(
+            fs::read(output.join(PRE_HARDWARE_RESULT_NAME)).unwrap(),
+            envelope
+        );
+        assert!(!output.join("hardware-archive-v1.zip").exists());
+        for payload in objects.values() {
+            let reference = object_reference(payload);
+            assert_eq!(
+                fs::read(output.join(reference["path"].as_str().unwrap())).unwrap(),
+                *payload
+            );
+        }
+        fs::remove_dir_all(parent).unwrap();
+    }
+
+    fn test_compiler_evidence_package() -> BTreeMap<String, Vec<u8>> {
+        COMPILER_EVIDENCE_KINDS
+            .iter()
+            .map(|kind| (kind.to_string(), format!("exact:{kind}\n").into_bytes()))
+            .collect()
     }
 
     fn minimal_bound_request(target: &str) -> Value {

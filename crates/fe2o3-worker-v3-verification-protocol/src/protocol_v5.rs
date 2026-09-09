@@ -23,11 +23,13 @@ const REQUEST_KIND: u16 = 2;
 const COMPLETION_KIND: u16 = 3;
 const RESPONSE_KIND: u16 = 4;
 const PROTECTED_INPUT_KIND: u16 = 5;
+const MACHINE_FINALIZATION_KIND: u16 = 6;
 const CARRIAGE_FIELDS: usize = 21;
 const REQUEST_FIELDS: usize = 3;
 const COMPLETION_FIELDS: usize = 8;
 const RESPONSE_FIELDS: usize = 5;
 const PROTECTED_INPUT_FIELDS: usize = 6;
+const MACHINE_FINALIZATION_FIELDS: usize = 10;
 const CARRIAGE_DOMAIN: &[u8] = b"FE2O3/WORKER-V3/CAPABILITY-CARRIAGE/EXACT-V13/V5\0";
 const REQUEST_DOMAIN: &[u8] = b"FE2O3/WORKER-V3/CAPABILITY-REQUEST/EXACT-V13/V5\0";
 const COMPLETION_DOMAIN: &[u8] = b"FE2O3/WORKER-V3/CAPABILITY-COMPLETION/EXACT-V13/V5\0";
@@ -40,6 +42,12 @@ const PROTECTED_EVIDENCE_BINDING_DOMAIN: &[u8] = b"FE2O3/WORKER-V3/PROTECTED-EVI
 const PROTECTED_INPUT_DOMAIN: &[u8] = b"FE2O3/WORKER-V3/PROTECTED-COMPILER-INPUT/V5\0";
 const PROTECTED_INPUT_IDENTITY_DOMAIN: &[u8] =
     b"FE2O3/WORKER-V3/PROTECTED-COMPILER-INPUT-IDENTITY/V5\0";
+const MACHINE_FINALIZATION_DOMAIN: &[u8] = b"FE2O3/WORKER-V3/MACHINE-REFINED-FINALIZATION/V5\0";
+const MACHINE_FINALIZATION_IDENTITY_DOMAIN: &[u8] =
+    b"FE2O3/WORKER-V3/MACHINE-REFINED-FINALIZATION-IDENTITY/V5\0";
+
+/// Maximum canonical raw-to-finalized transition accepted by the protected verifier.
+pub const MAX_WORKER_V3_MACHINE_REFINED_FINALIZATION_BYTES_V5: usize = 8 * 1024;
 
 /// Exact nonzero digest/length pair. The enclosing field tag supplies its semantic role.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -625,6 +633,162 @@ impl InertWorkerV3ProtectedCompilerInputV5 {
 
     pub const fn identity(&self) -> [u8; 32] {
         self.identity
+    }
+}
+
+/// Inert process-boundary record for one checked raw-object to finalized-HSACO transition.
+///
+/// This record deliberately carries exact coordinates and the complete typed machine receipt,
+/// but no Rust ownership or verifier authority. The protected service must rederive the raw
+/// object from the finalized payload, decode the receipt, and correlate every transaction,
+/// handoff, target, launch, and policy axis before it may construct the sole #213 owner.
+#[derive(Debug, Eq, PartialEq)]
+pub struct InertWorkerV3MachineRefinedFinalizationV5 {
+    attempt: WorkerV3VerificationProductionAttemptV5,
+    transaction: [u8; 32],
+    handoff: ExactIdentityCoordinateV5,
+    raw_object: ExactIdentityCoordinateV5,
+    finalized_object: ExactIdentityCoordinateV5,
+    target: [u8; 32],
+    launch: [u8; 32],
+    compiler_policy: [u8; 32],
+    machine_receipt: Box<[u8]>,
+    canonical_bytes: Box<[u8]>,
+    identity: [u8; 32],
+}
+
+impl InertWorkerV3MachineRefinedFinalizationV5 {
+    /// Encodes exact phase-two custody without granting completion authority.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        attempt: WorkerV3VerificationProductionAttemptV5,
+        transaction: [u8; 32],
+        handoff: ExactIdentityCoordinateV5,
+        raw_object: ExactIdentityCoordinateV5,
+        finalized_object: ExactIdentityCoordinateV5,
+        target: [u8; 32],
+        launch: [u8; 32],
+        compiler_policy: [u8; 32],
+        machine_receipt: &[u8],
+    ) -> Result<Self, WorkerV3VerificationCapabilityProtocolErrorV5> {
+        if transaction == [0; 32]
+            || target == [0; 32]
+            || launch == [0; 32]
+            || compiler_policy == [0; 32]
+            || machine_receipt.is_empty()
+        {
+            return Err(WorkerV3VerificationCapabilityProtocolErrorV5::ZeroIdentity);
+        }
+        let attempt_bytes = attempt.encode();
+        let handoff_bytes = handoff.encode();
+        let raw_object_bytes = raw_object.encode();
+        let finalized_object_bytes = finalized_object.encode();
+        let fields: [&[u8]; MACHINE_FINALIZATION_FIELDS] = [
+            MACHINE_FINALIZATION_DOMAIN,
+            &attempt_bytes,
+            &transaction,
+            &handoff_bytes,
+            &raw_object_bytes,
+            &finalized_object_bytes,
+            &target,
+            &launch,
+            &compiler_policy,
+            machine_receipt,
+        ];
+        Self::decode_canonical(&encode_record(
+            MACHINE_FINALIZATION_KIND,
+            &fields,
+            MAX_WORKER_V3_MACHINE_REFINED_FINALIZATION_BYTES_V5,
+            MACHINE_FINALIZATION_IDENTITY_DOMAIN,
+        )?)
+    }
+
+    /// Strictly decodes one complete phase-two transition without granting authority.
+    pub fn decode_canonical(
+        bytes: &[u8],
+    ) -> Result<Self, WorkerV3VerificationCapabilityProtocolErrorV5> {
+        let record = decode_record(
+            bytes,
+            MACHINE_FINALIZATION_KIND,
+            MACHINE_FINALIZATION_FIELDS,
+            MAX_WORKER_V3_MACHINE_REFINED_FINALIZATION_BYTES_V5,
+            MACHINE_FINALIZATION_DOMAIN,
+            MACHINE_FINALIZATION_IDENTITY_DOMAIN,
+        )?;
+        for field in [
+            record.fields[2],
+            record.fields[6],
+            record.fields[7],
+            record.fields[8],
+        ] {
+            require_len(field, 32)?;
+            require_nonzero_32(field)?;
+        }
+        if record.fields[9].is_empty() {
+            return Err(WorkerV3VerificationCapabilityProtocolErrorV5::ZeroIdentity);
+        }
+        Ok(Self {
+            attempt: WorkerV3VerificationProductionAttemptV5::decode(record.fields[1])?,
+            transaction: copy_32(record.fields[2])?,
+            handoff: ExactIdentityCoordinateV5::decode(record.fields[3])?,
+            raw_object: ExactIdentityCoordinateV5::decode(record.fields[4])?,
+            finalized_object: ExactIdentityCoordinateV5::decode(record.fields[5])?,
+            target: copy_32(record.fields[6])?,
+            launch: copy_32(record.fields[7])?,
+            compiler_policy: copy_32(record.fields[8])?,
+            machine_receipt: record.fields[9].to_vec().into_boxed_slice(),
+            canonical_bytes: bytes.to_vec().into_boxed_slice(),
+            identity: terminal_identity(bytes)?,
+        })
+    }
+
+    pub const fn attempt(&self) -> WorkerV3VerificationProductionAttemptV5 {
+        self.attempt
+    }
+
+    pub const fn transaction_identity(&self) -> [u8; 32] {
+        self.transaction
+    }
+
+    pub const fn handoff_identity(&self) -> ExactIdentityCoordinateV5 {
+        self.handoff
+    }
+
+    pub const fn raw_object_identity(&self) -> ExactIdentityCoordinateV5 {
+        self.raw_object
+    }
+
+    pub const fn finalized_object_identity(&self) -> ExactIdentityCoordinateV5 {
+        self.finalized_object
+    }
+
+    pub const fn target_identity(&self) -> [u8; 32] {
+        self.target
+    }
+
+    pub const fn launch_identity(&self) -> [u8; 32] {
+        self.launch
+    }
+
+    pub const fn compiler_policy_identity(&self) -> [u8; 32] {
+        self.compiler_policy
+    }
+
+    pub fn machine_receipt_bytes(&self) -> &[u8] {
+        &self.machine_receipt
+    }
+
+    pub fn canonical_bytes(&self) -> &[u8] {
+        &self.canonical_bytes
+    }
+
+    pub const fn identity(&self) -> [u8; 32] {
+        self.identity
+    }
+
+    /// This inert transition never authenticates the machine checker or grants completion.
+    pub const fn grants_completion_authority(&self) -> bool {
+        false
     }
 }
 
@@ -1398,6 +1562,21 @@ mod tests {
         .unwrap()
     }
 
+    fn machine_finalization(seed: u8) -> InertWorkerV3MachineRefinedFinalizationV5 {
+        InertWorkerV3MachineRefinedFinalizationV5::new(
+            WorkerV3VerificationProductionAttemptV5::new(7, [seed; 16], id(seed + 1)).unwrap(),
+            id(seed + 2),
+            ExactIdentityCoordinateV5::new(id(seed + 3), 300).unwrap(),
+            ExactIdentityCoordinateV5::new(id(seed + 4), 400).unwrap(),
+            ExactIdentityCoordinateV5::new(id(seed + 5), 500).unwrap(),
+            id(seed + 6),
+            id(seed + 7),
+            id(seed + 8),
+            b"typed-machine-receipt",
+        )
+        .unwrap()
+    }
+
     #[test]
     fn identity_coordinate_rejects_sentinels() {
         assert_eq!(
@@ -1653,5 +1832,136 @@ mod tests {
             ),
             Err(WorkerV3VerificationCapabilityProtocolErrorV5::CompletionMismatch)
         ));
+    }
+
+    #[test]
+    fn machine_finalization_round_trip_and_splice_axes_are_exact() {
+        let original = machine_finalization(31);
+        let decoded =
+            InertWorkerV3MachineRefinedFinalizationV5::decode_canonical(original.canonical_bytes())
+                .unwrap();
+        assert_eq!(decoded, original);
+        assert!(!decoded.grants_completion_authority());
+
+        let base = |attempt, transaction, handoff, raw, finalized, target, launch, policy| {
+            InertWorkerV3MachineRefinedFinalizationV5::new(
+                attempt,
+                transaction,
+                handoff,
+                raw,
+                finalized,
+                target,
+                launch,
+                policy,
+                b"typed-machine-receipt",
+            )
+            .unwrap()
+        };
+        let attempt = WorkerV3VerificationProductionAttemptV5::new(7, [31; 16], id(32)).unwrap();
+        let handoff = ExactIdentityCoordinateV5::new(id(34), 300).unwrap();
+        let raw = ExactIdentityCoordinateV5::new(id(35), 400).unwrap();
+        let finalized = ExactIdentityCoordinateV5::new(id(36), 500).unwrap();
+        for substituted in [
+            base(
+                WorkerV3VerificationProductionAttemptV5::new(8, [31; 16], id(32)).unwrap(),
+                id(33),
+                handoff,
+                raw,
+                finalized,
+                id(37),
+                id(38),
+                id(39),
+            ),
+            base(
+                attempt,
+                id(40),
+                handoff,
+                raw,
+                finalized,
+                id(37),
+                id(38),
+                id(39),
+            ),
+            base(
+                attempt,
+                id(33),
+                ExactIdentityCoordinateV5::new(id(41), 300).unwrap(),
+                raw,
+                finalized,
+                id(37),
+                id(38),
+                id(39),
+            ),
+            base(
+                attempt,
+                id(33),
+                handoff,
+                ExactIdentityCoordinateV5::new(id(42), 400).unwrap(),
+                finalized,
+                id(37),
+                id(38),
+                id(39),
+            ),
+            base(
+                attempt,
+                id(33),
+                handoff,
+                raw,
+                ExactIdentityCoordinateV5::new(id(43), 500).unwrap(),
+                id(37),
+                id(38),
+                id(39),
+            ),
+            base(
+                attempt,
+                id(33),
+                handoff,
+                raw,
+                finalized,
+                id(44),
+                id(38),
+                id(39),
+            ),
+            base(
+                attempt,
+                id(33),
+                handoff,
+                raw,
+                finalized,
+                id(37),
+                id(45),
+                id(39),
+            ),
+            base(
+                attempt,
+                id(33),
+                handoff,
+                raw,
+                finalized,
+                id(37),
+                id(38),
+                id(46),
+            ),
+        ] {
+            assert_ne!(substituted.identity(), original.identity());
+        }
+
+        let substituted_receipt = InertWorkerV3MachineRefinedFinalizationV5::new(
+            attempt,
+            id(33),
+            handoff,
+            raw,
+            finalized,
+            id(37),
+            id(38),
+            id(39),
+            b"substituted-machine-receipt",
+        )
+        .unwrap();
+        assert_ne!(substituted_receipt.identity(), original.identity());
+
+        let mut omitted = original.canonical_bytes().to_vec();
+        omitted.truncate(omitted.len() - IDENTITY_BYTES - 1);
+        assert!(InertWorkerV3MachineRefinedFinalizationV5::decode_canonical(&omitted).is_err());
     }
 }

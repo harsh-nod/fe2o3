@@ -26,6 +26,7 @@ mod compiler_proof_owner_v5;
 mod compiler_target_lineage_v1;
 mod control_flow_binding;
 mod executor;
+mod final_kir_advanced_semantics_v1;
 mod final_kir_output_equivalence_v1;
 mod functional_refinement_receipt_v2;
 mod functional_refinement_runtime_v1;
@@ -84,9 +85,9 @@ pub use compiler_proof_binding_v3::{
     validate_compiler_proof_inputs_v4,
 };
 pub use compiler_proof_owner_v5::{
-    CompilerProofInputValidationErrorV5, ValidatedCompilerMultiRootProofInputsV5,
-    ValidatedCompilerProofInputsV5, validate_compiler_multi_root_proof_inputs_v5,
-    validate_compiler_proof_inputs_v5,
+    CompilerProofInputValidationErrorV5, ProtectedCompilerMultiRootProofInputsV5,
+    ValidatedCompilerMultiRootProofInputsV5, ValidatedCompilerProofInputsV5,
+    validate_compiler_multi_root_proof_inputs_v5, validate_compiler_proof_inputs_v5,
 };
 // Deprecated compatibility exports. Despite their Verus-oriented names, these
 // authenticate and execute only the recorder; they do not show that Verus or a
@@ -227,7 +228,7 @@ pub use proof_capsule::{
     ProofCapsulePolicyV1, ProofCapsuleResultV1, ProofCapsuleTargetV1, ProofCapsuleV1,
 };
 pub use protected_compiler_completion_v5::{
-    ProtectedCompilerCompletionInputErrorV5, validate_protected_compiler_completion_inputs_v5,
+    ProtectedCompilerCompletionInputErrorV5, compose_protected_compiler_completion_inputs_v5,
 };
 pub use result::{
     MAX_RESULT_BYTES, ProofResultV1, RecorderTermination, ResultError, parse_recorder_result,

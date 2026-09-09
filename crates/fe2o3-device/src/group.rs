@@ -177,6 +177,16 @@ impl<'invocation, Brand> Grid<'invocation, Brand> {
             _not_send_sync: PhantomData,
         })
     }
+
+    /// Returns grid-exclusive authority only to invocation zero of this exact
+    /// context-derived grid.
+    pub fn leader(&self) -> Option<crate::GridLeader<Brand>> {
+        if self.thread_rank == 0 {
+            Some(crate::GridLeader::from_grid())
+        } else {
+            None
+        }
+    }
 }
 
 impl<Brand> fmt::Debug for Grid<'_, Brand> {

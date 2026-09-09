@@ -184,6 +184,79 @@ class TutorialKernelManifestTests(unittest.TestCase):
             {"entries": 25, "fixtures": 47, "production_entries": 0}, stats
         )
 
+    def test_all_47_records_remain_explicitly_unqualified(self) -> None:
+        document = manifest()
+        self.assertEqual(
+            {"gfx942": 10, "gfx950": 37},
+            {
+                target: sum(
+                    fixture["target"] == target
+                    for fixture in document["compilerFixtures"]
+                )
+                for target in {"gfx942", "gfx950"}
+            },
+        )
+        self.assertEqual(
+            {"legacy-compiler-produced"},
+            {entry["classification"] for entry in document["entries"]},
+        )
+        for kernel in document["capabilityKernels"]:
+            with self.subTest(fixture=kernel["fixtureId"]):
+                self.assertEqual("not-produced", kernel["capabilityClosure"]["status"])
+                self.assertIsNone(kernel["capabilityClosure"]["sha256"])
+                self.assertEqual("legacy-only", kernel["productionCapabilityPath"]["status"])
+                self.assertIsNone(kernel["productionCapabilityPath"]["evidence"])
+                self.assertEqual("missing", kernel["proofRequirements"]["status"])
+                self.assertEqual("not-evaluated", kernel["targetMatrix"][0]["status"])
+                self.assertEqual("legacy-only", kernel["targetMatrix"][1]["status"])
+                self.assertEqual("missing", kernel["negativeFixtureCoverage"]["status"])
+                self.assertEqual([], kernel["negativeFixtureCoverage"]["cases"])
+
+    def test_rejects_incomplete_record_omission_and_identity_substitution(self) -> None:
+        mutations = (
+            (
+                "fields differ",
+                lambda kernel: kernel.pop("proofRequirements"),
+            ),
+            (
+                "incomplete proof requirements carry identities",
+                lambda kernel: kernel["proofRequirements"].update(
+                    checkerSha256="f" * 64
+                ),
+            ),
+            (
+                "incomplete backend decision carries identities",
+                lambda kernel: kernel["targetMatrix"][1].update(
+                    targetIdentitySha256="f" * 64
+                ),
+            ),
+            (
+                "incomplete negative coverage carries cases",
+                lambda kernel: kernel["negativeFixtureCoverage"]["cases"].append(
+                    {
+                        "category": "evidence",
+                        "diagnosticCode": "FE2O3-CAP-001",
+                        "failureStage": "sealed-verifier",
+                        "fixtureId": "forged-evidence",
+                        "testPath": "scripts/tests/tutorial_kernel_manifest.py",
+                    }
+                ),
+            ),
+        )
+        for expected, mutate in mutations:
+            document = manifest()
+            mutate(document["capabilityKernels"][0])
+            with self.subTest(expected=expected):
+                with self.assertRaisesRegex(CHECKER.ManifestError, expected):
+                    CHECKER.validate_document(document)
+
+    def test_rejects_qualification_coverage_substitution(self) -> None:
+        document = manifest()
+        coverage = document["qualification"]["suites"][0]["coverage"][0]
+        coverage["fixtureIds"] = ["gfx942-flash-attention"]
+        with self.assertRaisesRegex(CHECKER.ManifestError, "crosses fixture lesson ownership"):
+            CHECKER.validate_document(document)
+
     def test_release_gate_rejects_migration_manifest(self) -> None:
         with self.assertRaisesRegex(
             CHECKER.ManifestError, "release requires a fully qualified capability manifest"

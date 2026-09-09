@@ -213,6 +213,28 @@ def validate(value: dict, *, output: str = "0x0000803fa5a5a5a5", bundle: bytes =
 
 
 class TutorialSemanticSimulationTests(unittest.TestCase):
+    def test_source_abi_maps_only_exact_macro_capability_roles(self) -> None:
+        expected = {
+            "Global<'_, f32, ReadOnly>": ("f32", "read_only"),
+            "Global<'_, u32, DisjointWrite<GridExclusive>>": ("u32", "write_only"),
+            "Global<'_, f32, ExclusiveReadWrite>": ("f32", "read_write"),
+            "Global<'_, u32, AtomicReadWrite<SystemScope>>": ("u32", "read_write"),
+            "WriteOnlyDisjointSlice<u32, GridExclusive>": ("u32", "write_only"),
+        }
+        for source_type, abi in expected.items():
+            with self.subTest(source_type=source_type):
+                self.assertEqual(abi, RUNNER._source_buffer_abi(source_type))
+        for source_type in (
+            "Global<'_, f32, UnknownRole>",
+            "Global<'_, f32, DisjointWrite<Index1D, Index1D>>",
+            "Global<'_, f32, AtomicReadWrite<>>",
+        ):
+            with self.subTest(source_type=source_type), self.assertRaisesRegex(
+                RUNNER.SimulationQualificationError,
+                "unsupported Global capability role",
+            ):
+                RUNNER._source_buffer_abi(source_type)
+
     def test_manifest_roster_has_one_exact_command_for_all_47_fixtures(self) -> None:
         manifest = real_manifest()
         roster = RUNNER.manifest_simulation_roster(manifest)

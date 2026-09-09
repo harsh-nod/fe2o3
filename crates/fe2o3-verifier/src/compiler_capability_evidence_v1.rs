@@ -9,6 +9,8 @@ use std::{error::Error, fmt};
 
 use fe2o3_compiler_ffi::{
     InertProductionCapabilityResultIdentityV5, InertProductionCapabilityResultV5,
+    InertProductionFinalGraphReportV5, InertProductionTargetCapabilityClosureV5,
+    PRODUCTION_W4_CHECKED_EVIDENCE_COUNT_V5,
 };
 use fe2o3_compiler_lineage::{
     InertCanonicalKernelIrV13ReceiptV5, InertCapabilityRefinementReceiptIdentityV1,
@@ -21,20 +23,22 @@ use fe2o3_kernel_ir::{
     Module, OperationKind, Type, VerifiedCanonicalKernelIrErrorV13, VerifiedCanonicalKernelIrV13,
 };
 use fe2o3_proof_contracts::{
-    CapabilityCodecErrorV1, CapabilityCompositionErrorV1, CapabilityOutcomeKindV1,
-    CapabilityOutcomeV1, CapabilityPropertyIdV1, CapabilitySubjectFieldV1, CapabilitySubjectV1,
-    InertCapabilityObligationSetIdentityV1, InertCapabilityObligationSetV1,
+    CAPABILITY_RESULT_SET_VERSION_V2, CapabilityCodecErrorV1, CapabilityCompositionErrorV1,
+    CapabilityOutcomeKindV1, CapabilityOutcomeV1, CapabilityPropertyIdV1,
+    CapabilityRefinementKindV1, CapabilitySubjectFieldV1, CapabilitySubjectV1, DigestV1,
+    EvidenceIdentityV1, InertCapabilityObligationSetIdentityV1, InertCapabilityObligationSetV1,
     InertCapabilityResultSetV1, validate_capability_composition_v1,
 };
+use sha2::{Digest as _, Sha256};
 
 use crate::{ValidatedCompilerProofInputsV4, ValidatedCompilerProofInputsV5};
 
 /// Move-only, independently decoded static capability evidence for one exact compiler subject.
 ///
 /// Possession establishes canonical composition, exact frozen-capsule association, exact verified
-/// KIR V13 identity, and complete `Proven` outcomes. It does not authenticate the compiler or the
-/// opaque refinement-receipt issuers, establish publication/currentness, discharge dynamic launch
-/// preconditions, or grant load/launch authority.
+/// KIR V13 identity, and the admitted result class for every obligation. It does not authenticate
+/// the compiler or typed refinement-receipt issuers, establish publication/currentness, discharge
+/// dynamic launch preconditions, or grant load/launch authority.
 ///
 /// ```compile_fail
 /// use fe2o3_verifier::ValidatedCompilerCapabilityEvidenceV1;
@@ -209,7 +213,7 @@ impl ValidatedCompilerCapabilityEvidenceV1 {
         &self.obligations
     }
 
-    /// Returns the one-to-one complete result set whose outcomes are all `Proven`.
+    /// Returns the one-to-one complete result set with its exact admitted outcome classes.
     pub const fn results(&self) -> &InertCapabilityResultSetV1 {
         &self.results
     }
@@ -219,12 +223,12 @@ impl ValidatedCompilerCapabilityEvidenceV1 {
         &self.kernel_ir
     }
 
-    /// Returns retained opaque source/MIR-to-KIR refinement bytes when that property is required.
+    /// Returns the retained typed source/MIR-to-KIR receipt when that property is required.
     pub const fn source_refinement(&self) -> Option<&InertCapabilityRefinementReceiptV1> {
         self.source_refinement.as_ref()
     }
 
-    /// Returns retained opaque final-machine refinement bytes when that property is required.
+    /// Returns the retained typed final-machine receipt when that property is required.
     pub const fn machine_refinement(&self) -> Option<&InertCapabilityRefinementReceiptV1> {
         self.machine_refinement.as_ref()
     }
@@ -248,6 +252,69 @@ pub fn validate_compiler_capability_evidence_v1(
     expected_obligation_set: InertCapabilityObligationSetIdentityV1,
     source_refinement: Option<InertCapabilityRefinementReceiptV1>,
     machine_refinement: Option<InertCapabilityRefinementReceiptV1>,
+) -> Result<ValidatedCompilerCapabilityEvidenceV1, CompilerCapabilityEvidenceValidationErrorV1> {
+    validate_compiler_capability_evidence(
+        association_bytes,
+        capsule,
+        executable_kir_receipt,
+        expected_subject,
+        expected_obligation_set,
+        source_refinement,
+        machine_refinement,
+        CapabilityEvidenceAdmissionV1::LegacyAllProven,
+    )
+}
+
+/// Admits only exact V2 checked-analysis and typed refinement-receipt outcomes.
+///
+/// This path is crate-private so only the sealed protected composer can supply the retained W4
+/// report and target-closure custody. Neither clean W4 bytes nor this function alone grant
+/// publication, load, or launch authority.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn validate_compiler_capability_evidence_v2(
+    association_bytes: &[u8],
+    capsule: &InertProductionSemanticCapsuleV3,
+    executable_kir_receipt: &InertCanonicalKernelIrV13ReceiptV5,
+    expected_subject: CapabilitySubjectV1,
+    expected_obligation_set: InertCapabilityObligationSetIdentityV1,
+    source_refinement: Option<InertCapabilityRefinementReceiptV1>,
+    machine_refinement: Option<InertCapabilityRefinementReceiptV1>,
+    report: &InertProductionFinalGraphReportV5,
+    target_closure: &InertProductionTargetCapabilityClosureV5,
+) -> Result<ValidatedCompilerCapabilityEvidenceV1, CompilerCapabilityEvidenceValidationErrorV1> {
+    validate_compiler_capability_evidence(
+        association_bytes,
+        capsule,
+        executable_kir_receipt,
+        expected_subject,
+        expected_obligation_set,
+        source_refinement,
+        machine_refinement,
+        CapabilityEvidenceAdmissionV1::ExactCheckedV2 {
+            report,
+            target_closure,
+        },
+    )
+}
+
+enum CapabilityEvidenceAdmissionV1<'a> {
+    LegacyAllProven,
+    ExactCheckedV2 {
+        report: &'a InertProductionFinalGraphReportV5,
+        target_closure: &'a InertProductionTargetCapabilityClosureV5,
+    },
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_compiler_capability_evidence(
+    association_bytes: &[u8],
+    capsule: &InertProductionSemanticCapsuleV3,
+    executable_kir_receipt: &InertCanonicalKernelIrV13ReceiptV5,
+    expected_subject: CapabilitySubjectV1,
+    expected_obligation_set: InertCapabilityObligationSetIdentityV1,
+    source_refinement: Option<InertCapabilityRefinementReceiptV1>,
+    machine_refinement: Option<InertCapabilityRefinementReceiptV1>,
+    admission: CapabilityEvidenceAdmissionV1<'_>,
 ) -> Result<ValidatedCompilerCapabilityEvidenceV1, CompilerCapabilityEvidenceValidationErrorV1> {
     let association = InertStaticCapabilityEvidenceAssociationV1::decode(association_bytes)
         .map_err(CompilerCapabilityEvidenceValidationErrorV1::Association)?;
@@ -290,15 +357,17 @@ pub fn validate_compiler_capability_evidence_v1(
         .zip(results.results())
         .enumerate()
     {
-        let outcome = result.outcome().kind();
-        if outcome != CapabilityOutcomeKindV1::Proven {
-            return Err(
-                CompilerCapabilityEvidenceValidationErrorV1::OutcomeNotProven {
-                    index,
-                    property: obligation.property(),
-                    outcome,
-                },
-            );
+        if matches!(&admission, CapabilityEvidenceAdmissionV1::LegacyAllProven) {
+            let outcome = result.outcome().kind();
+            if outcome != CapabilityOutcomeKindV1::Proven {
+                return Err(
+                    CompilerCapabilityEvidenceValidationErrorV1::OutcomeNotProven {
+                        index,
+                        property: obligation.property(),
+                        outcome,
+                    },
+                );
+            }
         }
         match obligation.property() {
             CapabilityPropertyIdV1::SOURCE_MIR_TO_KIR_REFINEMENT => {
@@ -329,18 +398,34 @@ pub fn validate_compiler_capability_evidence_v1(
         inputs.machine_refinement(),
         machine_refinement,
     )?;
-    validate_refinement_evidence_identity(
-        &obligations,
-        &results,
-        CapabilityPropertyIdV1::SOURCE_MIR_TO_KIR_REFINEMENT,
-        source_refinement.as_ref(),
-    )?;
-    validate_refinement_evidence_identity(
-        &obligations,
-        &results,
-        CapabilityPropertyIdV1::MACHINE_REFINEMENT,
-        machine_refinement.as_ref(),
-    )?;
+    match admission {
+        CapabilityEvidenceAdmissionV1::LegacyAllProven => {
+            validate_refinement_evidence_identity(
+                &obligations,
+                &results,
+                CapabilityPropertyIdV1::SOURCE_MIR_TO_KIR_REFINEMENT,
+                source_refinement.as_ref(),
+            )?;
+            validate_refinement_evidence_identity(
+                &obligations,
+                &results,
+                CapabilityPropertyIdV1::MACHINE_REFINEMENT,
+                machine_refinement.as_ref(),
+            )?;
+        }
+        CapabilityEvidenceAdmissionV1::ExactCheckedV2 {
+            report,
+            target_closure,
+        } => validate_exact_checked_outcomes_v2(
+            expected_subject,
+            &obligations,
+            &results,
+            report,
+            target_closure,
+            source_refinement.as_ref(),
+            machine_refinement.as_ref(),
+        )?,
+    }
 
     Ok(ValidatedCompilerCapabilityEvidenceV1 {
         association,
@@ -428,6 +513,559 @@ fn validate_capsule_coordinates(
         }
     }
     Ok(())
+}
+
+const CHECKED_PROPERTY_EVIDENCE_DOMAIN_V2: &[u8] =
+    b"FE2O3/CAPABILITY/CHECKED-PROPERTY-EVIDENCE/V2\0";
+
+pub(crate) const REQUIRED_CHECKED_PROPERTIES_V2: [CapabilityPropertyIdV1; 13] = [
+    CapabilityPropertyIdV1::TYPING,
+    CapabilityPropertyIdV1::BOUNDS,
+    CapabilityPropertyIdV1::INITIALIZATION,
+    CapabilityPropertyIdV1::HIERARCHICAL_OWNERSHIP,
+    CapabilityPropertyIdV1::DATA_RACE_FREEDOM,
+    CapabilityPropertyIdV1::ATOMIC_LEGALITY,
+    CapabilityPropertyIdV1::UNIFORMITY,
+    CapabilityPropertyIdV1::BARRIER_CONVERGENCE,
+    CapabilityPropertyIdV1::WORKGROUP_MEMORY_EPOCHS,
+    CapabilityPropertyIdV1::TENSOR_LAYOUT,
+    CapabilityPropertyIdV1::EFFECTS,
+    CapabilityPropertyIdV1::RESOURCE_LEGALITY,
+    CapabilityPropertyIdV1::TARGET_CAPABILITY_CLOSURE,
+];
+
+const CHECKED_EVIDENCE_INDEXES_V2: [&[usize]; 13] = [
+    &[0],
+    &[5],
+    &[13],
+    &[9],
+    &[7, 8, 14],
+    &[6],
+    &[3, 16],
+    &[10, 11],
+    &[15],
+    &[4],
+    &[17, 18],
+    &[2, 12],
+    &[1],
+];
+
+const _: () = {
+    let mut counts = [0_u8; PRODUCTION_W4_CHECKED_EVIDENCE_COUNT_V5];
+    let mut property = 0;
+    while property < CHECKED_EVIDENCE_INDEXES_V2.len() {
+        let indexes = CHECKED_EVIDENCE_INDEXES_V2[property];
+        let mut index = 0;
+        while index < indexes.len() {
+            let evidence = indexes[index];
+            assert!(evidence < PRODUCTION_W4_CHECKED_EVIDENCE_COUNT_V5);
+            counts[evidence] += 1;
+            index += 1;
+        }
+        property += 1;
+    }
+    let mut evidence = 0;
+    while evidence < counts.len() {
+        assert!(counts[evidence] == 1);
+        evidence += 1;
+    }
+};
+
+#[allow(clippy::too_many_arguments)]
+fn validate_exact_checked_outcomes_v2(
+    subject: CapabilitySubjectV1,
+    obligations: &InertCapabilityObligationSetV1,
+    results: &InertCapabilityResultSetV1,
+    report: &InertProductionFinalGraphReportV5,
+    target_closure: &InertProductionTargetCapabilityClosureV5,
+    source_refinement: Option<&InertCapabilityRefinementReceiptV1>,
+    machine_refinement: Option<&InertCapabilityRefinementReceiptV1>,
+) -> Result<(), CompilerCapabilityEvidenceValidationErrorV1> {
+    if results.schema_version() != CAPABILITY_RESULT_SET_VERSION_V2 {
+        return Err(
+            CompilerCapabilityEvidenceValidationErrorV1::ResultSchemaDowngrade {
+                observed: results.schema_version(),
+            },
+        );
+    }
+    if report.final_graph() != *subject.executable_kir().digest().as_bytes()
+        || report.final_epoch() != subject.executable_kir_epoch()
+        || target_closure.neutral_graph() != report.final_graph()
+        || target_closure.neutral_graph_bytes() != report.final_graph_bytes()
+        || target_closure.neutral_epoch() != report.final_epoch()
+        || target_closure.target_model() != subject.target_model()
+        || report.checked_evidence().len() != PRODUCTION_W4_CHECKED_EVIDENCE_COUNT_V5
+    {
+        return Err(CompilerCapabilityEvidenceValidationErrorV1::CheckedAnalysisContextMismatch);
+    }
+
+    for (index, (obligation, result)) in obligations
+        .obligations()
+        .iter()
+        .zip(results.results())
+        .enumerate()
+    {
+        let property = obligation.property();
+        match property {
+            CapabilityPropertyIdV1::SOURCE_MIR_TO_KIR_REFINEMENT => {
+                validate_exact_refinement_outcome_v2(
+                    index,
+                    property,
+                    result.outcome(),
+                    CapabilityRefinementKindV1::SourceMirToKir,
+                    source_refinement,
+                )?;
+            }
+            CapabilityPropertyIdV1::MACHINE_REFINEMENT => {
+                validate_exact_refinement_outcome_v2(
+                    index,
+                    property,
+                    result.outcome(),
+                    CapabilityRefinementKindV1::Machine,
+                    machine_refinement,
+                )?;
+            }
+            CapabilityPropertyIdV1::DYNAMIC_LAUNCH_PRECONDITIONS => {
+                return Err(
+                    CompilerCapabilityEvidenceValidationErrorV1::DynamicLaunchClaimInStaticEvidence,
+                );
+            }
+            _ => {
+                let CapabilityOutcomeV1::Checked {
+                    evidence,
+                    checker,
+                    report: result_report,
+                    executable_kir,
+                    executable_kir_epoch,
+                    analysis_epoch,
+                } = result.outcome()
+                else {
+                    return Err(
+                        CompilerCapabilityEvidenceValidationErrorV1::WrongOutcomeClass {
+                            index,
+                            property,
+                            expected: CapabilityOutcomeKindV1::Checked,
+                            actual: result.outcome().kind(),
+                        },
+                    );
+                };
+                let expected =
+                    derive_checked_property_evidence_v2(property, report, target_closure)?;
+                if *evidence != expected
+                    || checker.digest().as_bytes() != &report.checker_identity()
+                    || result_report.digest().as_bytes() != &report.report_identity()
+                    || *executable_kir != subject.executable_kir()
+                    || *executable_kir_epoch != subject.executable_kir_epoch()
+                    || *analysis_epoch != report.analysis_epoch()
+                {
+                    return Err(
+                        CompilerCapabilityEvidenceValidationErrorV1::CheckedEvidenceMismatch {
+                            index,
+                            property,
+                        },
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_exact_refinement_outcome_v2(
+    index: usize,
+    property: CapabilityPropertyIdV1,
+    outcome: &CapabilityOutcomeV1,
+    expected_kind: CapabilityRefinementKindV1,
+    receipt: Option<&InertCapabilityRefinementReceiptV1>,
+) -> Result<(), CompilerCapabilityEvidenceValidationErrorV1> {
+    let CapabilityOutcomeV1::RefinementReceipt {
+        kind,
+        receipt: claimed,
+    } = outcome
+    else {
+        return Err(
+            CompilerCapabilityEvidenceValidationErrorV1::WrongOutcomeClass {
+                index,
+                property,
+                expected: CapabilityOutcomeKindV1::RefinementReceipt,
+                actual: outcome.kind(),
+            },
+        );
+    };
+    let receipt = receipt.ok_or(
+        CompilerCapabilityEvidenceValidationErrorV1::MissingRefinementReceipt {
+            kind: match expected_kind {
+                CapabilityRefinementKindV1::SourceMirToKir => {
+                    InertCapabilityRefinementReceiptKindV1::SourceMirToKir
+                }
+                CapabilityRefinementKindV1::Machine => {
+                    InertCapabilityRefinementReceiptKindV1::Machine
+                }
+            },
+        },
+    )?;
+    let identity = receipt.identity();
+    if *kind != expected_kind
+        || claimed.digest().as_bytes() != &identity.sha256()
+        || claimed.byte_len() != identity.byte_len()
+    {
+        return Err(
+            CompilerCapabilityEvidenceValidationErrorV1::RefinementOutcomeMismatch {
+                index,
+                property,
+            },
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn derive_checked_property_evidence_v2(
+    property: CapabilityPropertyIdV1,
+    report: &InertProductionFinalGraphReportV5,
+    target_closure: &InertProductionTargetCapabilityClosureV5,
+) -> Result<EvidenceIdentityV1, CompilerCapabilityEvidenceValidationErrorV1> {
+    let indexes = checked_evidence_indexes_v2(property).ok_or(
+        CompilerCapabilityEvidenceValidationErrorV1::PropertyNotDischargeableByCheckedAnalysis {
+            property,
+        },
+    )?;
+    if report.checked_evidence().len() != PRODUCTION_W4_CHECKED_EVIDENCE_COUNT_V5 {
+        return Err(CompilerCapabilityEvidenceValidationErrorV1::CheckedAnalysisContextMismatch);
+    }
+    let mut digest = Sha256::new();
+    digest.update(CHECKED_PROPERTY_EVIDENCE_DOMAIN_V2);
+    digest.update(property.namespace().as_bytes());
+    digest.update(property.schema_version().to_le_bytes());
+    digest.update(property.code().to_le_bytes());
+    digest.update(report.checker_identity());
+    digest.update(report.report_identity());
+    digest.update(report.final_graph());
+    digest.update(report.final_graph_bytes().to_le_bytes());
+    digest.update(report.final_epoch().to_le_bytes());
+    digest.update(report.analysis_epoch().to_le_bytes());
+    digest.update(report.schedule_identity());
+    digest.update(target_closure.closure_identity());
+    digest.update((indexes.len() as u64).to_le_bytes());
+    for index in indexes {
+        digest.update(report.checked_evidence()[*index]);
+    }
+    Ok(EvidenceIdentityV1::from_untrusted_digest(
+        DigestV1::from_untrusted_bytes(digest.finalize().into()),
+    ))
+}
+
+const fn checked_evidence_indexes_v2(property: CapabilityPropertyIdV1) -> Option<&'static [usize]> {
+    match property {
+        CapabilityPropertyIdV1::TYPING => Some(CHECKED_EVIDENCE_INDEXES_V2[0]),
+        CapabilityPropertyIdV1::BOUNDS => Some(CHECKED_EVIDENCE_INDEXES_V2[1]),
+        CapabilityPropertyIdV1::INITIALIZATION => Some(CHECKED_EVIDENCE_INDEXES_V2[2]),
+        CapabilityPropertyIdV1::HIERARCHICAL_OWNERSHIP => Some(CHECKED_EVIDENCE_INDEXES_V2[3]),
+        CapabilityPropertyIdV1::DATA_RACE_FREEDOM => Some(CHECKED_EVIDENCE_INDEXES_V2[4]),
+        CapabilityPropertyIdV1::ATOMIC_LEGALITY => Some(CHECKED_EVIDENCE_INDEXES_V2[5]),
+        CapabilityPropertyIdV1::UNIFORMITY => Some(CHECKED_EVIDENCE_INDEXES_V2[6]),
+        CapabilityPropertyIdV1::BARRIER_CONVERGENCE => Some(CHECKED_EVIDENCE_INDEXES_V2[7]),
+        CapabilityPropertyIdV1::WORKGROUP_MEMORY_EPOCHS => Some(CHECKED_EVIDENCE_INDEXES_V2[8]),
+        CapabilityPropertyIdV1::TENSOR_LAYOUT => Some(CHECKED_EVIDENCE_INDEXES_V2[9]),
+        CapabilityPropertyIdV1::EFFECTS => Some(CHECKED_EVIDENCE_INDEXES_V2[10]),
+        CapabilityPropertyIdV1::RESOURCE_LEGALITY => Some(CHECKED_EVIDENCE_INDEXES_V2[11]),
+        CapabilityPropertyIdV1::TARGET_CAPABILITY_CLOSURE => Some(CHECKED_EVIDENCE_INDEXES_V2[12]),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod checked_evidence_mapping_tests {
+    use super::*;
+    use fe2o3_compiler_ffi::{
+        InertProductionFinalGraphReportV5, InertProductionTargetCapabilityClosureV5,
+    };
+    use fe2o3_proof_contracts::{
+        ArtifactIdentityV1, CapabilityAnalysisReportIdentityV1, CapabilityCheckerIdentityV1,
+        CapabilityObligationSpecV1, CapabilityResultSpecV1, ExactToolIdentityV1,
+        ExecutableKirIdentityV1, KernelIdentityV1, KernelRootIdentityV1, LaunchContractIdentityV1,
+        StatementIdentityV1, TargetModelIdentityV1,
+    };
+
+    const GRAPH: [u8; 32] = [41; 32];
+    const FINAL_EPOCH: u64 = 7;
+    const ANALYSIS_EPOCH: u64 = 11;
+
+    fn digest(seed: u8) -> DigestV1 {
+        DigestV1::from_untrusted_bytes([seed; 32])
+    }
+
+    fn w4_witness() -> Vec<u8> {
+        const DOMAIN: &[u8] = b"FE2O3/PRODUCTION-W4-FINAL-GRAPH-CAPABILITY-WITNESS/V1\0";
+        const CHECKSUM_DOMAIN: &[u8] = b"FE2O3/PRODUCTION-W4-WITNESS-CHECKSUM/V1\0";
+        let mut bytes = DOMAIN.to_vec();
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(b"checked-evidence-mapping-test");
+        let mut checksum = Sha256::new();
+        checksum.update(CHECKSUM_DOMAIN);
+        checksum.update(&bytes);
+        bytes.extend_from_slice(&checksum.finalize());
+        bytes
+    }
+
+    fn checked_evidence() -> Vec<[u8; 32]> {
+        (1..=PRODUCTION_W4_CHECKED_EVIDENCE_COUNT_V5)
+            .map(|index| [index as u8; 32])
+            .collect()
+    }
+
+    fn make_report(
+        graph: [u8; 32],
+        final_epoch: u64,
+        analysis_epoch: u64,
+        evidence: Vec<[u8; 32]>,
+    ) -> InertProductionFinalGraphReportV5 {
+        InertProductionFinalGraphReportV5::new(
+            graph,
+            4096,
+            final_epoch,
+            analysis_epoch,
+            [51; 32],
+            [52; 32],
+            evidence,
+            w4_witness(),
+        )
+        .unwrap()
+    }
+
+    fn subject(target: u8) -> CapabilitySubjectV1 {
+        CapabilitySubjectV1::new(
+            KernelIdentityV1::from_untrusted_digest(digest(61)),
+            KernelRootIdentityV1::from_untrusted_digest(digest(62)),
+            ExecutableKirIdentityV1::from_untrusted_digest(DigestV1::from_untrusted_bytes(GRAPH)),
+            FINAL_EPOCH,
+            TargetModelIdentityV1::from_untrusted_digest(digest(target)),
+            LaunchContractIdentityV1::from_untrusted_digest(digest(64)),
+        )
+        .unwrap()
+    }
+
+    fn closure(target: u8) -> InertProductionTargetCapabilityClosureV5 {
+        InertProductionTargetCapabilityClosureV5::new(
+            [71; 32],
+            GRAPH,
+            4096,
+            FINAL_EPOCH,
+            TargetModelIdentityV1::from_untrusted_digest(digest(target)),
+            LaunchContractIdentityV1::from_untrusted_digest(digest(72)),
+            b"exact target decisions".to_vec(),
+        )
+        .unwrap()
+    }
+
+    fn obligations(subject: CapabilitySubjectV1) -> InertCapabilityObligationSetV1 {
+        InertCapabilityObligationSetV1::from_specs(
+            subject,
+            REQUIRED_CHECKED_PROPERTIES_V2
+                .into_iter()
+                .enumerate()
+                .map(|(index, property)| {
+                    CapabilityObligationSpecV1::new(
+                        property,
+                        StatementIdentityV1::from_untrusted_digest(digest(80 + index as u8)),
+                    )
+                })
+                .collect(),
+        )
+        .unwrap()
+    }
+
+    fn checked_specs(
+        subject: CapabilitySubjectV1,
+        obligations: &InertCapabilityObligationSetV1,
+        report: &InertProductionFinalGraphReportV5,
+        closure: &InertProductionTargetCapabilityClosureV5,
+    ) -> Vec<CapabilityResultSpecV1> {
+        obligations
+            .obligations()
+            .iter()
+            .map(|obligation| {
+                CapabilityResultSpecV1::new(
+                    obligation.identity(),
+                    CapabilityOutcomeV1::Checked {
+                        evidence: derive_checked_property_evidence_v2(
+                            obligation.property(),
+                            report,
+                            closure,
+                        )
+                        .unwrap(),
+                        checker: CapabilityCheckerIdentityV1::from_untrusted_digest(
+                            DigestV1::from_untrusted_bytes(report.checker_identity()),
+                        ),
+                        report: CapabilityAnalysisReportIdentityV1::from_untrusted_digest(
+                            DigestV1::from_untrusted_bytes(report.report_identity()),
+                        ),
+                        executable_kir: subject.executable_kir(),
+                        executable_kir_epoch: subject.executable_kir_epoch(),
+                        analysis_epoch: report.analysis_epoch(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn all_w4_evidence_has_one_checked_property_owner() {
+        assert_eq!(REQUIRED_CHECKED_PROPERTIES_V2.len(), 13);
+        let mut seen = [0_u8; PRODUCTION_W4_CHECKED_EVIDENCE_COUNT_V5];
+        for property in REQUIRED_CHECKED_PROPERTIES_V2 {
+            for index in checked_evidence_indexes_v2(property).unwrap() {
+                seen[*index] += 1;
+            }
+        }
+        assert_eq!(seen, [1; PRODUCTION_W4_CHECKED_EVIDENCE_COUNT_V5]);
+    }
+
+    #[test]
+    fn checked_is_not_proven_and_wrong_evidence_is_rejected() {
+        let subject = subject(63);
+        let report = make_report(GRAPH, FINAL_EPOCH, ANALYSIS_EPOCH, checked_evidence());
+        let closure = closure(63);
+        let obligations = obligations(subject);
+        let mut specs = checked_specs(subject, &obligations, &report, &closure);
+        specs[0] = CapabilityResultSpecV1::new(
+            obligations.obligations()[0].identity(),
+            CapabilityOutcomeV1::Proven {
+                evidence: EvidenceIdentityV1::from_untrusted_digest(digest(101)),
+                tool: ExactToolIdentityV1::new(digest(102), digest(103)),
+                proof_artifact: ArtifactIdentityV1::new(digest(104), digest(105)),
+            },
+        );
+        let proven =
+            InertCapabilityResultSetV1::from_specs_v2(subject, obligations.identity(), specs)
+                .unwrap();
+        assert!(matches!(
+            validate_exact_checked_outcomes_v2(
+                subject,
+                &obligations,
+                &proven,
+                &report,
+                &closure,
+                None,
+                None,
+            ),
+            Err(
+                CompilerCapabilityEvidenceValidationErrorV1::WrongOutcomeClass {
+                    expected: CapabilityOutcomeKindV1::Checked,
+                    actual: CapabilityOutcomeKindV1::Proven,
+                    ..
+                }
+            )
+        ));
+
+        let mut specs = checked_specs(subject, &obligations, &report, &closure);
+        let property = obligations.obligations()[0].property();
+        specs[0] = CapabilityResultSpecV1::new(
+            obligations.obligations()[0].identity(),
+            CapabilityOutcomeV1::Checked {
+                evidence: EvidenceIdentityV1::from_untrusted_digest(digest(106)),
+                checker: CapabilityCheckerIdentityV1::from_untrusted_digest(digest(51)),
+                report: CapabilityAnalysisReportIdentityV1::from_untrusted_digest(
+                    DigestV1::from_untrusted_bytes(report.report_identity()),
+                ),
+                executable_kir: subject.executable_kir(),
+                executable_kir_epoch: subject.executable_kir_epoch(),
+                analysis_epoch: report.analysis_epoch(),
+            },
+        );
+        let wrong =
+            InertCapabilityResultSetV1::from_specs_v2(subject, obligations.identity(), specs)
+                .unwrap();
+        assert!(matches!(
+            validate_exact_checked_outcomes_v2(
+                subject,
+                &obligations,
+                &wrong,
+                &report,
+                &closure,
+                None,
+                None,
+            ),
+            Err(CompilerCapabilityEvidenceValidationErrorV1::CheckedEvidenceMismatch {
+                property: actual,
+                ..
+            }) if actual == property
+        ));
+    }
+
+    #[test]
+    fn graph_epochs_evidence_order_and_target_are_exact() {
+        let subject = subject(63);
+        let report = make_report(GRAPH, FINAL_EPOCH, ANALYSIS_EPOCH, checked_evidence());
+        let closure = closure(63);
+        let obligations = obligations(subject);
+        let results = InertCapabilityResultSetV1::from_specs_v2(
+            subject,
+            obligations.identity(),
+            checked_specs(subject, &obligations, &report, &closure),
+        )
+        .unwrap();
+        assert!(
+            validate_exact_checked_outcomes_v2(
+                subject,
+                &obligations,
+                &results,
+                &report,
+                &closure,
+                None,
+                None,
+            )
+            .is_ok()
+        );
+
+        let mut reordered = checked_evidence();
+        reordered.swap(0, 1);
+        for hostile in [
+            make_report([42; 32], FINAL_EPOCH, ANALYSIS_EPOCH, checked_evidence()),
+            make_report(GRAPH, FINAL_EPOCH + 1, ANALYSIS_EPOCH, checked_evidence()),
+        ] {
+            assert!(matches!(
+                validate_exact_checked_outcomes_v2(
+                    subject,
+                    &obligations,
+                    &results,
+                    &hostile,
+                    &closure,
+                    None,
+                    None,
+                ),
+                Err(CompilerCapabilityEvidenceValidationErrorV1::CheckedAnalysisContextMismatch)
+            ));
+        }
+        for hostile in [
+            make_report(GRAPH, FINAL_EPOCH, ANALYSIS_EPOCH + 1, checked_evidence()),
+            make_report(GRAPH, FINAL_EPOCH, ANALYSIS_EPOCH, reordered),
+        ] {
+            assert!(matches!(
+                validate_exact_checked_outcomes_v2(
+                    subject,
+                    &obligations,
+                    &results,
+                    &hostile,
+                    &closure,
+                    None,
+                    None,
+                ),
+                Err(CompilerCapabilityEvidenceValidationErrorV1::CheckedEvidenceMismatch { .. })
+            ));
+        }
+        assert!(matches!(
+            validate_exact_checked_outcomes_v2(
+                subject,
+                &obligations,
+                &results,
+                &report,
+                &self::closure(65),
+                None,
+                None,
+            ),
+            Err(CompilerCapabilityEvidenceValidationErrorV1::CheckedAnalysisContextMismatch)
+        ));
+    }
 }
 
 fn validate_proof_binding_coordinates(
@@ -660,17 +1298,40 @@ pub enum CompilerCapabilityEvidenceValidationErrorV1 {
         property: CapabilityPropertyIdV1,
         outcome: CapabilityOutcomeKindV1,
     },
+    /// The protected checked-evidence route received a legacy result schema.
+    ResultSchemaDowngrade { observed: u16 },
+    /// A property used an evidence class not permitted by sealed policy.
+    WrongOutcomeClass {
+        index: usize,
+        property: CapabilityPropertyIdV1,
+        expected: CapabilityOutcomeKindV1,
+        actual: CapabilityOutcomeKindV1,
+    },
+    /// Checked evidence names a stale or cross-spliced checker, report, graph, or epoch.
+    CheckedEvidenceMismatch {
+        index: usize,
+        property: CapabilityPropertyIdV1,
+    },
+    /// The retained W4 report and target closure do not describe one exact analysis occurrence.
+    CheckedAnalysisContextMismatch,
+    /// Sealed policy does not permit static checked analysis to discharge this property.
+    PropertyNotDischargeableByCheckedAnalysis { property: CapabilityPropertyIdV1 },
+    /// A source or machine property names a different receipt class or exact receipt.
+    RefinementOutcomeMismatch {
+        index: usize,
+        property: CapabilityPropertyIdV1,
+    },
     /// Per-dispatch launch evidence was incorrectly represented as static proof.
     DynamicLaunchClaimInStaticEvidence,
-    /// A required opaque refinement receipt is absent.
+    /// A required typed refinement receipt is absent.
     MissingRefinementReceipt {
         kind: InertCapabilityRefinementReceiptKindV1,
     },
-    /// An unrequired opaque refinement receipt was injected.
+    /// An unrequired typed refinement receipt was injected.
     UnexpectedRefinementReceipt {
         kind: InertCapabilityRefinementReceiptKindV1,
     },
-    /// An opaque receipt was supplied for the wrong refinement boundary.
+    /// A typed receipt was supplied for the wrong refinement boundary.
     WrongRefinementReceiptKind {
         expected: InertCapabilityRefinementReceiptKindV1,
         actual: InertCapabilityRefinementReceiptKindV1,
@@ -728,6 +1389,34 @@ impl fmt::Display for CompilerCapabilityEvidenceValidationErrorV1 {
             } => write!(
                 formatter,
                 "capability result {index} for {property:?} is {outcome:?}, not Proven"
+            ),
+            Self::ResultSchemaDowngrade { observed } => write!(
+                formatter,
+                "checked capability composition requires result schema V2, observed V{observed}"
+            ),
+            Self::WrongOutcomeClass {
+                index,
+                property,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "capability result {index} for {property:?} is {actual:?}, expected {expected:?}"
+            ),
+            Self::CheckedEvidenceMismatch { index, property } => write!(
+                formatter,
+                "checked capability result {index} for {property:?} substituted its evidence occurrence"
+            ),
+            Self::CheckedAnalysisContextMismatch => formatter.write_str(
+                "checked capability evidence names a stale or cross-spliced W4 analysis context",
+            ),
+            Self::PropertyNotDischargeableByCheckedAnalysis { property } => write!(
+                formatter,
+                "sealed capability policy does not discharge {property:?} with checked analysis"
+            ),
+            Self::RefinementOutcomeMismatch { index, property } => write!(
+                formatter,
+                "refinement result {index} for {property:?} names a different receipt boundary or identity"
             ),
             Self::DynamicLaunchClaimInStaticEvidence => formatter.write_str(
                 "dynamic launch preconditions cannot be discharged by static capability evidence",

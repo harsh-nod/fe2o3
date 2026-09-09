@@ -614,6 +614,9 @@ fn encode_correspondence_root_payload_v1(
     ordinal: u32,
     induction: &[u8],
 ) -> Result<Vec<u8>, ProductionSemanticLineageErrorV3> {
+    if correspondence.has_expanded_calls() {
+        return Err(ProductionSemanticLineageErrorV3::ExpandedCallCorrespondenceUnavailable);
+    }
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"F2MRCOP2");
     bytes.extend_from_slice(&2_u16.to_le_bytes());
@@ -1244,7 +1247,17 @@ impl PreparedProductionSemanticLineageV3 {
                 "semantic lineage V6 replay changed the exact source/final graph or epoch",
             ));
         }
-        let backend_lowering_replay = None;
+        let backend_lowering_replay = Some(
+            rustc_target
+                .backend()
+                .prepare_lineage_replay_v1(
+                    neutral_kir,
+                    target_module,
+                    target_optimization,
+                    pre_descriptor_llvm,
+                )
+                .map_err(ProductionSemanticLineageErrorV3::Backend)?,
+        );
 
         let PreparedLineageEvidenceV1 {
             middle_end,
@@ -2207,6 +2220,7 @@ pub(crate) enum ProductionSemanticLineageErrorV3 {
     Backend(crate::production_backend_v1::ProductionBackendErrorV1),
     V6StructuralReplay(fe2o3_kernel_opt::KernelIrTargetNeutralStructuralReplayAdmissionErrorV6),
     NativeV13TargetLoweringReceiptUnavailable,
+    ExpandedCallCorrespondenceUnavailable,
     MultiRootProofValidation(CompilerMultiRootProofValidationErrorV1),
     MultiRootTargetLineageValidation(CompilerTargetLineageValidationErrorV1),
     Receipt(LineageErrorV3),
@@ -2276,6 +2290,9 @@ impl fmt::Display for ProductionSemanticLineageErrorV3 {
             ),
             Self::NativeV13TargetLoweringReceiptUnavailable => formatter.write_str(
                 "production native V13/V6 lowering has no exact receipt slot in the frozen V3 semantic capsule",
+            ),
+            Self::ExpandedCallCorrespondenceUnavailable => formatter.write_str(
+                "production source correspondence cannot yet encode expanded call instances",
             ),
             Self::MultiRootProofValidation(error) => write!(
                 formatter,
@@ -2596,7 +2613,10 @@ mod layout_tests {
 
     #[test]
     fn production_capsule_retains_exact_v6_replay_and_rejects_missing_native_lowering_receipt() {
-        let source = include_str!("production_semantic_lineage_v3.rs");
+        let source = include_str!("production_semantic_lineage_v3.rs")
+            .split_once("\n#[cfg(test)]\nmod layout_tests {")
+            .expect("semantic lineage test module boundary")
+            .0;
         assert!(source.contains("admit_production_kernel_ir_structural_replay_v6("));
         assert!(source.contains("KernelIrTargetNeutralStructuralReplayAdmissionV6"));
         assert!(source.contains("NativeV13TargetLoweringReceiptUnavailable"));

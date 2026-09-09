@@ -369,13 +369,13 @@ impl ReferencePathPredicateV1 {
         }
     }
 
-    fn unreachable_v1() -> Self {
+    pub(crate) fn unreachable_v1() -> Self {
         Self {
             clauses: Box::default(),
         }
     }
 
-    fn is_unreachable_v1(&self) -> bool {
+    pub(crate) fn is_unreachable_v1(&self) -> bool {
         self.clauses.is_empty()
     }
 }
@@ -404,12 +404,15 @@ pub(crate) struct ReferenceOutputWriteV1 {
 }
 
 impl ReferenceEffectIrV1 {
-    pub(crate) fn resolved_bounds_checks_v1(
+    pub(crate) fn resolved_bounds_checks_with_budget_v1(
         &self,
+        budget: &mut ReferenceSymbolicWorkBudgetV2,
     ) -> Result<Vec<ResolvedReferenceBoundsCheckV1>, ReferenceBindingErrorV1> {
+        charge_reference_cfg_v1(self, budget)?;
         let resolver = ReferenceExpressionResolverV1::new(self)?;
         let mut checks = Vec::new();
         for block in &self.blocks {
+            budget.charge_v2(1)?;
             let ReferenceTerminatorV1::Assert {
                 condition,
                 expected,
@@ -422,24 +425,9 @@ impl ReferenceEffectIrV1 {
             checks.push(ResolvedReferenceBoundsCheckV1 {
                 block: block.block,
                 expected: *expected,
-                condition: resolver.resolve_operand_inner_v1(
-                    condition,
-                    &mut BTreeSet::new(),
-                    &mut 0,
-                    1,
-                )?,
-                index: resolver.resolve_operand_inner_v1(
-                    &bounds_check.index,
-                    &mut BTreeSet::new(),
-                    &mut 0,
-                    1,
-                )?,
-                length: resolver.resolve_operand_inner_v1(
-                    &bounds_check.length,
-                    &mut BTreeSet::new(),
-                    &mut 0,
-                    1,
-                )?,
+                condition: resolve_predicate_operand_v1(&resolver, condition, budget)?,
+                index: resolve_predicate_operand_v1(&resolver, &bounds_check.index, budget)?,
+                length: resolve_predicate_operand_v1(&resolver, &bounds_check.length, budget)?,
             });
         }
         Ok(checks)
@@ -694,12 +682,12 @@ struct ReferenceSymbolicStateV2 {
 }
 
 #[derive(Default)]
-struct ReferenceSymbolicWorkBudgetV2 {
+pub(crate) struct ReferenceSymbolicWorkBudgetV2 {
     charged_nodes: usize,
 }
 
 impl ReferenceSymbolicWorkBudgetV2 {
-    fn charge_v2(&mut self, nodes: usize) -> Result<(), ReferenceBindingErrorV1> {
+    pub(crate) fn charge_v2(&mut self, nodes: usize) -> Result<(), ReferenceBindingErrorV1> {
         self.charged_nodes = self.charged_nodes.checked_add(nodes).ok_or_else(|| {
             ReferenceBindingErrorV1::new("reference symbolic work-node accounting overflowed")
         })?;
@@ -711,7 +699,7 @@ impl ReferenceSymbolicWorkBudgetV2 {
         Ok(())
     }
 
-    fn charge_expression_v2(
+    pub(crate) fn charge_expression_v2(
         &mut self,
         expression: &ReferenceEffectExpressionV1,
     ) -> Result<(), ReferenceBindingErrorV1> {
@@ -725,7 +713,7 @@ impl ReferenceSymbolicWorkBudgetV2 {
         self.charge_v2(symbolic_environment_nodes_v2(environment)?)
     }
 
-    fn charge_predicate_v2(
+    pub(crate) fn charge_predicate_v2(
         &mut self,
         predicate: &ReferencePathPredicateV1,
     ) -> Result<(), ReferenceBindingErrorV1> {
@@ -2687,7 +2675,8 @@ fn logical_abi_relation_v1<'tcx>(
             relations.push(ReferenceArgumentRelationV1::SharedSliceInput { argument, element });
             continue;
         }
-        if let Some((element_ty, element, output_kind)) = disjoint_output_element_v1(tcx, kernel_ty)
+        if let Some((element_ty, element, output_kind)) =
+            disjoint_output_element_v1(tcx, kernel_ty)?
         {
             match (output_kind, *reference_ty.kind()) {
                 (
@@ -2783,28 +2772,52 @@ enum DisjointOutputKernelTypeV1 {
 fn disjoint_output_element_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
-) -> Option<(Ty<'tcx>, ReferenceScalarTypeV1, DisjointOutputKernelTypeV1)> {
+) -> Result<
+    Option<(Ty<'tcx>, ReferenceScalarTypeV1, DisjointOutputKernelTypeV1)>,
+    ReferenceBindingErrorV1,
+> {
     let TyKind::Adt(definition, arguments) = *ty.kind() else {
-        return None;
+        return Ok(None);
     };
-    let element = arguments.first()?.as_type()?;
-    let scalar = scalar_type_v1(element)?;
-    match trusted_device_items::classify(tcx, definition.did())? {
+    let Some(element) = arguments.first().and_then(|argument| argument.as_type()) else {
+        return Ok(None);
+    };
+    let Some(scalar) = scalar_type_v1(element) else {
+        return Ok(None);
+    };
+    let Some(item) = trusted_device_items::classify(tcx, definition.did()) else {
+        if let Some(rejected) = trusted_device_items::rejected_provider(tcx, definition.did()) {
+            return Err(ReferenceBindingErrorV1::new(format!(
+                "cannot authenticate reference output '{ty}': {}",
+                rejected.reason,
+            )));
+        }
+        return Ok(None);
+    };
+    Ok(match item {
         TrustedDeviceItem::DisjointSlice => Some((
             element,
             scalar,
             DisjointOutputKernelTypeV1::LegacyMutableSlice,
         )),
         TrustedDeviceItem::WriteOnlyDisjointSlice => {
-            let index_space = arguments.get(1)?.as_type()?;
-            trusted_device_items::is_authenticated_index_space_1d_v1(tcx, index_space).then_some((
-                element,
-                scalar,
-                DisjointOutputKernelTypeV1::InvocationIndex1D,
-            ))
+            let Some(index_space) = arguments.get(1).and_then(|argument| argument.as_type()) else {
+                return Ok(None);
+            };
+            trusted_device_items::check_authenticated_index_space_1d_v1(tcx, index_space)
+                .map_err(|reason| {
+                    ReferenceBindingErrorV1::new(format!(
+                        "cannot authenticate reference output '{ty}': {reason}"
+                    ))
+                })?
+                .then_some((
+                    element,
+                    scalar,
+                    DisjointOutputKernelTypeV1::InvocationIndex1D,
+                ))
         }
         _ => None,
-    }
+    })
 }
 
 fn lower_reference_effect_ir_v1<'tcx>(
@@ -3474,12 +3487,16 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
                     [ReferencePlaceProjectionV1::Field(0)]
                 ) =>
             {
-                let value = self.definitions.get(&place.local).ok_or_else(|| {
-                    ReferenceBindingErrorV1::new(format!(
-                        "reference checked scalar pair _{} has no unique definition",
-                        place.local,
-                    ))
-                })?;
+                let value = self
+                    .definitions
+                    .get(&place.local)
+                    .filter(|_| !self.ambiguous_definitions.contains(&place.local))
+                    .ok_or_else(|| {
+                        ReferenceBindingErrorV1::new(format!(
+                            "reference checked scalar pair _{} has no unique definition",
+                            place.local,
+                        ))
+                    })?;
                 match value {
                     ReferenceValueV1::Binary { checked: true, .. } => {
                         self.resolve_value_inner_v1(value, visiting, work, depth + 1)
@@ -3714,9 +3731,43 @@ fn substitute_helper_summary_v2(
     })
 }
 
-fn reference_block_path_predicates_v1(
+pub(crate) fn reference_block_path_predicates_v1(
     effect_ir: &ReferenceEffectIrV1,
 ) -> Result<Vec<ReferencePathPredicateV1>, ReferenceBindingErrorV1> {
+    reference_block_path_predicates_with_budget_v1(
+        effect_ir,
+        &mut ReferenceSymbolicWorkBudgetV2::default(),
+    )
+}
+
+fn charge_reference_cfg_v1(
+    effect_ir: &ReferenceEffectIrV1,
+    budget: &mut ReferenceSymbolicWorkBudgetV2,
+) -> Result<(), ReferenceBindingErrorV1> {
+    if effect_ir.blocks.len() > MAX_REFERENCE_BLOCKS_V1 {
+        return Err(ReferenceBindingErrorV1::new(
+            "reference CFG exceeds its block limit",
+        ));
+    }
+    budget.charge_v2(effect_ir.blocks.len())?;
+    let mut statements = 0_usize;
+    for block in &effect_ir.blocks {
+        statements = statements
+            .checked_add(block.assignments.len())
+            .filter(|count| *count <= MAX_REFERENCE_STATEMENTS_V1)
+            .ok_or_else(|| {
+                ReferenceBindingErrorV1::new("reference CFG exceeds its statement limit")
+            })?;
+        budget.charge_v2(block.assignments.len())?;
+    }
+    Ok(())
+}
+
+pub(crate) fn reference_block_path_predicates_with_budget_v1(
+    effect_ir: &ReferenceEffectIrV1,
+    budget: &mut ReferenceSymbolicWorkBudgetV2,
+) -> Result<Vec<ReferencePathPredicateV1>, ReferenceBindingErrorV1> {
+    charge_reference_cfg_v1(effect_ir, budget)?;
     let block_count = effect_ir.blocks.len();
     if block_count == 0 {
         return Err(ReferenceBindingErrorV1::new(
@@ -3734,7 +3785,12 @@ fn reference_block_path_predicates_v1(
     let mut successors = vec![BTreeSet::new(); block_count];
     let mut indegree = vec![0_usize; block_count];
     for block in &effect_ir.blocks {
+        budget.charge_v2(match &block.terminator {
+            ReferenceTerminatorV1::Switch { values, .. } => values.len(),
+            _ => 0,
+        })?;
         for target in reference_successors_v1(&block.terminator) {
+            budget.charge_v2(1)?;
             let target_index = target as usize;
             if target_index >= block_count {
                 return Err(ReferenceBindingErrorV1::new(
@@ -3758,15 +3814,32 @@ fn reference_block_path_predicates_v1(
     predicates[0] = ReferencePathPredicateV1::unconditional_v1();
     let mut visited = 0_usize;
     while let Some(block_index) = pending.pop_front() {
+        budget.charge_v2(1)?;
         visited += 1;
+        budget.charge_predicate_v2(&predicates[block_index])?;
         let source = predicates[block_index].clone();
-        for (target, atom) in
-            reference_guarded_edges_v1(&effect_ir.blocks[block_index].terminator, &resolver)?
-        {
+        for (target, atom) in reference_guarded_edges_v1(
+            &effect_ir.blocks[block_index].terminator,
+            &resolver,
+            budget,
+        )? {
+            budget.charge_v2(1)?;
+            budget.charge_predicate_v2(&source)?;
             let contribution = match atom {
-                Some(atom) => reference_predicate_and_atom_v1(&source, atom)?,
+                Some(atom) => {
+                    let expression = match &atom {
+                        ReferenceGuardAtomV1::SwitchValueSet { discriminant, .. } => discriminant,
+                        ReferenceGuardAtomV1::Assert { condition, .. } => condition,
+                    };
+                    for _ in &source.clauses {
+                        budget.charge_expression_v2(expression)?;
+                    }
+                    reference_predicate_and_atom_v1(&source, atom)?
+                }
                 None => source.clone(),
             };
+            budget.charge_predicate_v2(&predicates[target as usize])?;
+            budget.charge_predicate_v2(&contribution)?;
             reference_predicate_or_assign_v1(&mut predicates[target as usize], contribution)?;
         }
         for target in &successors[block_index] {
@@ -3802,6 +3875,7 @@ fn reference_successors_v1(terminator: &ReferenceTerminatorV1) -> Vec<u32> {
 fn reference_guarded_edges_v1(
     terminator: &ReferenceTerminatorV1,
     resolver: &ReferenceExpressionResolverV1<'_>,
+    budget: &mut ReferenceSymbolicWorkBudgetV2,
 ) -> Result<Vec<(u32, Option<ReferenceGuardAtomV1>)>, ReferenceBindingErrorV1> {
     match terminator {
         ReferenceTerminatorV1::Return => Ok(Vec::new()),
@@ -3817,12 +3891,7 @@ fn reference_guarded_edges_v1(
                 None
             } else {
                 Some(ReferenceGuardAtomV1::Assert {
-                    condition: resolver.resolve_operand_inner_v1(
-                        condition,
-                        &mut BTreeSet::new(),
-                        &mut 0,
-                        1,
-                    )?,
+                    condition: resolve_predicate_operand_v1(resolver, condition, budget)?,
                     expected: *expected,
                 })
             },
@@ -3832,8 +3901,8 @@ fn reference_guarded_edges_v1(
             values,
             otherwise,
         } => {
-            let expression =
-                resolver.resolve_operand_inner_v1(discriminant, &mut BTreeSet::new(), &mut 0, 1)?;
+            let expression = resolve_predicate_operand_v1(resolver, discriminant, budget)?;
+            budget.charge_v2(values.len())?;
             let mut by_target = BTreeMap::<u32, Vec<u128>>::new();
             let mut all_values = Vec::with_capacity(values.len());
             for (value, target) in values {
@@ -3844,6 +3913,7 @@ fn reference_guarded_edges_v1(
             all_values.dedup();
             let mut edges = Vec::with_capacity(by_target.len() + 1);
             for (target, mut accepted) in by_target {
+                budget.charge_expression_v2(&expression)?;
                 accepted.sort_unstable();
                 accepted.dedup();
                 edges.push((
@@ -3868,7 +3938,20 @@ fn reference_guarded_edges_v1(
     }
 }
 
-fn reference_predicate_and_atom_v1(
+fn resolve_predicate_operand_v1(
+    resolver: &ReferenceExpressionResolverV1<'_>,
+    operand: &ReferenceOperandV1,
+    budget: &mut ReferenceSymbolicWorkBudgetV2,
+) -> Result<ReferenceEffectExpressionV1, ReferenceBindingErrorV1> {
+    budget.charge_v2(1)?;
+    let mut work = 0;
+    let expression =
+        resolver.resolve_operand_inner_v1(operand, &mut BTreeSet::new(), &mut work, 1)?;
+    budget.charge_v2(work)?;
+    Ok(expression)
+}
+
+pub(crate) fn reference_predicate_and_atom_v1(
     predicate: &ReferencePathPredicateV1,
     atom: ReferenceGuardAtomV1,
 ) -> Result<ReferencePathPredicateV1, ReferenceBindingErrorV1> {
@@ -3885,7 +3968,7 @@ fn reference_predicate_and_atom_v1(
     reference_normalize_predicate_v1(clauses)
 }
 
-fn reference_predicate_or_assign_v1(
+pub(crate) fn reference_predicate_or_assign_v1(
     target: &mut ReferencePathPredicateV1,
     source: ReferencePathPredicateV1,
 ) -> Result<(), ReferenceBindingErrorV1> {
@@ -3898,6 +3981,34 @@ fn reference_predicate_or_assign_v1(
 fn reference_normalize_predicate_v1(
     mut clauses: Vec<ReferenceGuardClauseV1>,
 ) -> Result<ReferencePathPredicateV1, ReferenceBindingErrorV1> {
+    for clause in &mut clauses {
+        let mut atoms = clause.atoms.to_vec();
+        for atom in &mut atoms {
+            let (condition, accepted) = match &*atom {
+                ReferenceGuardAtomV1::SwitchValueSet {
+                    discriminant,
+                    values,
+                    inside_set,
+                } if reference_boolean_expression_v1(discriminant) => {
+                    let false_accepted = values.contains(&0) == *inside_set;
+                    let true_accepted = values.contains(&1) == *inside_set;
+                    if false_accepted == true_accepted {
+                        continue;
+                    }
+                    (discriminant.clone(), true_accepted)
+                }
+                ReferenceGuardAtomV1::Assert {
+                    condition,
+                    expected,
+                } if reference_boolean_expression_v1(condition) => (condition.clone(), *expected),
+                _ => continue,
+            };
+            *atom = reference_boolean_guard_atom_v1(condition, accepted);
+        }
+        atoms.sort();
+        atoms.dedup();
+        clause.atoms = atoms.into_boxed_slice();
+    }
     clauses.sort();
     clauses.dedup();
     if clauses.len() > MAX_REFERENCE_GUARD_CLAUSES_V1 {
@@ -3917,6 +4028,33 @@ fn reference_normalize_predicate_v1(
     Ok(ReferencePathPredicateV1 {
         clauses: clauses.into_boxed_slice(),
     })
+}
+
+/// Canonical polarity for a known Boolean condition, shared by CPU and GPU CFGs.
+pub(crate) fn reference_boolean_guard_atom_v1(
+    condition: ReferenceEffectExpressionV1,
+    expected: bool,
+) -> ReferenceGuardAtomV1 {
+    ReferenceGuardAtomV1::SwitchValueSet {
+        discriminant: condition,
+        values: vec![0].into_boxed_slice(),
+        inside_set: !expected,
+    }
+}
+
+fn reference_boolean_expression_v1(expression: &ReferenceEffectExpressionV1) -> bool {
+    matches!(
+        expression,
+        ReferenceEffectExpressionV1::Binary {
+            operation: ReferenceBinaryOpV1::Equal
+                | ReferenceBinaryOpV1::NotEqual
+                | ReferenceBinaryOpV1::LessThan
+                | ReferenceBinaryOpV1::LessEqual
+                | ReferenceBinaryOpV1::GreaterThan
+                | ReferenceBinaryOpV1::GreaterEqual,
+            ..
+        }
+    )
 }
 
 fn reject_cycles_v1(tcx: TyCtxt<'_>, body: &Body<'_>) -> Result<(), ReferenceBindingErrorV1> {
@@ -4521,6 +4659,162 @@ fn digest_terminator(digest: &mut Sha256, terminator: &ReferenceTerminatorV1) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn checked_pair_reassignment_cannot_rewrite_an_earlier_guard_or_bounds_check() {
+        use super::*;
+        let constant = |bits| {
+            ReferenceOperandV1::Constant(ReferenceConstantV1::Scalar {
+                scalar: ReferenceScalarTypeV1::Usize,
+                bits,
+            })
+        };
+        let place = |local| ReferencePlaceV1 {
+            local,
+            projection: Box::default(),
+        };
+        let pair = |bits| ReferenceAssignmentV1 {
+            statement: 0,
+            destination: place(1),
+            value: ReferenceValueV1::Binary {
+                operation: ReferenceBinaryOpV1::Add,
+                lhs: constant(bits),
+                rhs: constant(1),
+                checked: true,
+            },
+        };
+        for moved in [false, true] {
+            let field = ReferencePlaceV1 {
+                local: 1,
+                projection: vec![ReferencePlaceProjectionV1::Field(0)].into_boxed_slice(),
+            };
+            let index = if moved {
+                ReferenceOperandV1::Move(field)
+            } else {
+                ReferenceOperandV1::Copy(field)
+            };
+            let mut effect_ir = ReferenceEffectIrV1 {
+                argument_count: 0,
+                local_count: 3,
+                relations: Box::default(),
+                blocks: vec![
+                    ReferenceBlockV1 {
+                        block: 0,
+                        assignments: vec![
+                            pair(9),
+                            ReferenceAssignmentV1 {
+                                statement: 1,
+                                destination: place(2),
+                                value: ReferenceValueV1::Binary {
+                                    operation: ReferenceBinaryOpV1::LessThan,
+                                    lhs: index.clone(),
+                                    rhs: constant(8),
+                                    checked: false,
+                                },
+                            },
+                        ]
+                        .into_boxed_slice(),
+                        terminator: ReferenceTerminatorV1::Switch {
+                            discriminant: ReferenceOperandV1::Copy(place(2)),
+                            values: vec![(0, 2)].into_boxed_slice(),
+                            otherwise: 1,
+                        },
+                    },
+                    ReferenceBlockV1 {
+                        block: 1,
+                        assignments: Box::default(),
+                        terminator: ReferenceTerminatorV1::Assert {
+                            condition: ReferenceOperandV1::Copy(place(2)),
+                            expected: true,
+                            success: 2,
+                            bounds_check: Some(ReferenceBoundsCheckV1 {
+                                index,
+                                length: constant(8),
+                            }),
+                        },
+                    },
+                    ReferenceBlockV1 {
+                        block: 2,
+                        assignments: Box::default(),
+                        terminator: ReferenceTerminatorV1::Return,
+                    },
+                ]
+                .into_boxed_slice(),
+                loop_summaries: Box::default(),
+                observable_output_effects: Box::default(),
+            };
+            let checks =
+                effect_ir
+                    .resolved_bounds_checks_with_budget_v1(
+                        &mut ReferenceSymbolicWorkBudgetV2::default(),
+                    )
+                    .unwrap();
+            assert!(matches!(
+                checks[0].index,
+                ReferenceEffectExpressionV1::Binary { checked: true, .. }
+            ));
+            reference_block_path_predicates_v1(&effect_ir).unwrap();
+            effect_ir.blocks[2].assignments = vec![pair(0)].into_boxed_slice();
+            let error =
+                effect_ir
+                    .resolved_bounds_checks_with_budget_v1(
+                        &mut ReferenceSymbolicWorkBudgetV2::default(),
+                    )
+                    .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("checked scalar pair _1 has no unique definition"),
+                "{error}"
+            );
+            let error = reference_block_path_predicates_v1(&effect_ir).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("checked scalar pair _1 has no unique definition"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn comparison_guard_polarity_is_shared_by_switches_and_asserts() {
+        use super::*;
+        let condition = ReferenceEffectExpressionV1::Binary {
+            operation: ReferenceBinaryOpV1::LessThan,
+            lhs: Box::new(ReferenceEffectExpressionV1::PointCoordinate { axis: 0 }),
+            rhs: Box::new(ReferenceEffectExpressionV1::InputLength {
+                reference_argument: 1,
+            }),
+            checked: false,
+        };
+        let normalize = |atom| {
+            reference_predicate_and_atom_v1(&ReferencePathPredicateV1::unconditional_v1(), atom)
+                .unwrap()
+        };
+        for expected in [false, true] {
+            let canonical = normalize(reference_boolean_guard_atom_v1(condition.clone(), expected));
+            assert_eq!(
+                canonical,
+                normalize(ReferenceGuardAtomV1::Assert {
+                    condition: condition.clone(),
+                    expected,
+                })
+            );
+            assert_eq!(
+                canonical,
+                normalize(ReferenceGuardAtomV1::SwitchValueSet {
+                    discriminant: condition.clone(),
+                    values: vec![1].into_boxed_slice(),
+                    inside_set: expected,
+                })
+            );
+        }
+        assert_ne!(
+            normalize(reference_boolean_guard_atom_v1(condition.clone(), true)),
+            normalize(reference_boolean_guard_atom_v1(condition, false)),
+        );
+    }
+
     use super::*;
 
     fn scalar_constant(bits: u128) -> ReferenceConstantV1 {

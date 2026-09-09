@@ -1345,12 +1345,12 @@ const fn fingerprint_field(mut state: [u64; 4], field: &[u8]) -> [u64; 4] {
     let mut index = 0;
     while index < field.len() {
         let byte = field[index] as u64;
-        let mut lane = 0;
-        while lane < state.len() {
-            state[lane] ^= byte.wrapping_add((lane as u64) << 8);
-            state[lane] = state[lane].wrapping_mul(0x0000_0100_0000_01b3);
-            state[lane] ^= state[lane] >> (29 + lane);
-            lane += 1;
+        let mut word = 0;
+        while word < state.len() {
+            state[word] ^= byte.wrapping_add((word as u64) << 8);
+            state[word] = state[word].wrapping_mul(0x0000_0100_0000_01b3);
+            state[word] ^= state[word] >> (29 + word);
+            word += 1;
         }
         index += 1;
     }
@@ -1362,12 +1362,12 @@ const fn fingerprint_u64(mut state: [u64; 4], value: u64) -> [u64; 4] {
     let mut index = 0;
     while index < bytes.len() {
         let byte = bytes[index] as u64;
-        let mut lane = 0;
-        while lane < state.len() {
-            state[lane] ^= byte.wrapping_add((lane as u64) << 8);
-            state[lane] = state[lane].wrapping_mul(0x0000_0100_0000_01b3);
-            state[lane] ^= state[lane] >> (29 + lane);
-            lane += 1;
+        let mut word = 0;
+        while word < state.len() {
+            state[word] ^= byte.wrapping_add((word as u64) << 8);
+            state[word] = state[word].wrapping_mul(0x0000_0100_0000_01b3);
+            state[word] ^= state[word] >> (29 + word);
+            word += 1;
         }
         index += 1;
     }
@@ -2296,7 +2296,9 @@ impl fmt::Display for TargetCapabilityRequirementV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ScalarType(scalar) => write!(formatter, "scalar-type:{scalar}"),
-            Self::SubgroupSize(lanes) => write!(formatter, "subgroup-size:{lanes}"),
+            Self::SubgroupSize(participants) => {
+                write!(formatter, "subgroup-size:{participants}")
+            }
             Self::AddressSpace(space, access) => {
                 write!(formatter, "address-space:{space}:{access}")
             }

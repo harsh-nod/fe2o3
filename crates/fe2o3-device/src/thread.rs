@@ -585,16 +585,34 @@ pub struct DisjointRowStripe2D<
 
 /// Proof that the current invocation is the unique leader of the full grid.
 ///
-/// Safe construction is available only through [`grid_leader`], which checks
-/// the compiler-issued global invocation index. The capability permits
-/// arbitrary sequential accesses, but grants no cross-invocation
-/// synchronization or host/device launch authority. It is neither `Copy`,
-/// `Clone`, `Send`, nor `Sync`.
+/// Safe branded construction is available only through
+/// [`crate::Grid::leader`], which checks a grid derived from one authenticated
+/// kernel context. [`grid_leader`] retains the unbranded migration spelling.
+/// The capability permits arbitrary sequential accesses, but grants no
+/// cross-invocation synchronization or host/device launch authority. It is
+/// neither `Copy`, `Clone`, `Send`, nor `Sync`.
 #[must_use = "exclusive grid authority is lost when the leader is discarded"]
 #[rustc_diagnostic_item = "fe2o3_device_grid_leader"]
-pub struct GridLeader {
+pub struct GridLeader<Brand = UnbrandedCapability> {
     _private: (),
+    _brand: PhantomData<fn(Brand) -> Brand>,
     _not_send_sync: PhantomData<*mut ()>,
+}
+
+impl<Brand> GridLeader<Brand> {
+    pub(crate) fn from_grid() -> Self {
+        Self {
+            _private: (),
+            _brand: PhantomData,
+            _not_send_sync: PhantomData,
+        }
+    }
+
+    /// Authorizes one arbitrary output index for this kernel's grid-exclusive
+    /// memory views.
+    pub fn index(&self, index: usize) -> DisjointIndex<GridExclusive, Brand> {
+        DisjointIndex::from_capability_index(index)
+    }
 }
 
 impl<IndexSpace, Brand> ThreadIndex<IndexSpace, Brand> {
@@ -723,6 +741,15 @@ impl<IndexSpace, Brand> fmt::Debug for ThreadIndex<IndexSpace, Brand> {
 }
 
 impl<IndexSpace, Brand> DisjointIndex<IndexSpace, Brand> {
+    pub(crate) const fn from_capability_index(raw: usize) -> Self {
+        Self {
+            raw,
+            _index_space: PhantomData,
+            _brand: PhantomData,
+            _not_send_sync: PhantomData,
+        }
+    }
+
     /// Returns the mapped element index as coordinate data.
     ///
     /// The integer does not carry the disjoint-write authority of `self`.
@@ -934,7 +961,7 @@ impl<IndexSpace, const LANES_PER_BLOCK: usize, const ELEMENTS_PER_LANE: usize, B
     }
 }
 
-impl fmt::Debug for GridLeader {
+impl<Brand> fmt::Debug for GridLeader<Brand> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.debug_struct("GridLeader").finish_non_exhaustive()
     }
@@ -945,6 +972,7 @@ impl GridLeader {
     pub(crate) fn for_host_test() -> Self {
         Self {
             _private: (),
+            _brand: PhantomData,
             _not_send_sync: PhantomData,
         }
     }
@@ -998,6 +1026,7 @@ pub fn grid_leader() -> Option<GridLeader> {
     if global_id_1d() == 0 {
         Some(GridLeader {
             _private: (),
+            _brand: PhantomData,
             _not_send_sync: PhantomData,
         })
     } else {

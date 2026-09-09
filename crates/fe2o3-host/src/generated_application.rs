@@ -140,6 +140,7 @@ impl Error for GeneratedApplicationProviderErrorV1 {}
 pub enum GeneratedApplicationPrepareErrorV1 {
     Contract(CapabilityGeneratedHostAdmissionErrorV1),
     Dynamic(GeneratedHostPrepareErrorV2),
+    CurrentPublication(crate::RecoveredWorkerV3AdmissionErrorV1),
     UnsupportedTarget { target: AmdTargetId },
     Provider(GeneratedApplicationProviderErrorV1),
 }
@@ -150,6 +151,9 @@ impl fmt::Display for GeneratedApplicationPrepareErrorV1 {
             Self::Contract(error) => write!(formatter, "generated host admission failed: {error}"),
             Self::Dynamic(error) => {
                 write!(formatter, "generated dynamic admission failed: {error}")
+            }
+            Self::CurrentPublication(error) => {
+                write!(formatter, "artifact publication changed before preparation: {error}")
             }
             Self::UnsupportedTarget { target } => {
                 write!(
@@ -167,6 +171,7 @@ impl Error for GeneratedApplicationPrepareErrorV1 {
         match self {
             Self::Contract(error) => Some(error),
             Self::Dynamic(error) => Some(error),
+            Self::CurrentPublication(error) => Some(error),
             Self::Provider(error) => Some(error),
             Self::UnsupportedTarget { .. } => None,
         }
@@ -353,6 +358,8 @@ where
                 GeneratedApplicationProviderErrorV1::DeviceResource("completion timeout"),
             ));
         }
+        self.revalidate_currentness()
+            .map_err(GeneratedApplicationPrepareErrorV1::CurrentPublication)?;
 
         let target = self.roster().target();
         if provider_matches::<Gfx942DirectKfdProviderV1>(target) {
@@ -594,6 +601,9 @@ mod hip {
                 _checked,
                 _roster: _,
             } = self;
+            application
+                .revalidate_currentness()
+                .map_err(GeneratedApplicationExecutionErrorV1::CurrentPublication)?;
             let started = Instant::now();
             let mut terminal = Event::new(&context)
                 .map_err(|error| provider_backend_error(&error))

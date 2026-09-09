@@ -16,7 +16,7 @@ use crate::{
 
 pub const KERNEL_IR_TARGET_NEUTRAL_PRODUCTION_POLICY_VERSION_V6: u16 = 6;
 
-/// The loop/memory wave always follows the complete V5 policy and is never
+/// The loop/memory phase sequence always follows the complete V5 policy and is never
 /// assembled from caller-selected passes.
 pub const KERNEL_IR_TARGET_NEUTRAL_PRODUCTION_PHASE_ORDER_V6: [ProductionTransformationV1; 7] = [
     ProductionTransformationV1::LoopCanonicalization,

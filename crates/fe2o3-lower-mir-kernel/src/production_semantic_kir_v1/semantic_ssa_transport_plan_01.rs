@@ -1,3 +1,80 @@
+fn require_ambient_scope_local_v1(
+    types: &[SemanticTypeDeclV1],
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    compiler_issued_bindings: &BTreeMap<SemanticTypeIdV1, SemanticPromotedBindingV1>,
+    local: SemanticLocalIdV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let declaration = function
+        .locals()
+        .get(local.index() as usize)
+        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+    if declaration.role() != SemanticLocalRoleV1::Temporary
+        || !authenticated_ambient_workgroup_lds_scope_zst_v1(types, callables, declaration.ty())
+        || compiler_issued_bindings.get(&declaration.ty())
+            != Some(&SemanticPromotedBindingV1::WorkgroupLdsScope)
+    {
+        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+    }
+    Ok(())
+}
+
+fn plan_frame_initializations_v1(
+    types: &[SemanticTypeDeclV1],
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    semantic_ssa: &ProductionSemanticSsaFunctionPlanV1,
+    transport: &SemanticControlFlowSsaPlanV1,
+) -> Result<
+    BTreeMap<(u32, u32), ProductionSemanticSsaFrameInitializationV1>,
+    ProductionSemanticKirErrorV1,
+> {
+    if semantic_ssa.function_identity() != function.identity() {
+        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+    }
+    let reachable = semantic_ssa
+        .plan()
+        .reverse_postorder()
+        .iter()
+        .map(|block| block.get())
+        .collect::<BTreeSet<_>>();
+    let mut pending = BTreeMap::new();
+    let mut previous = None;
+    for initialization in semantic_ssa.frame_initializations() {
+        let site = (initialization.block().index(), initialization.statement());
+        let marker = function
+            .blocks()
+            .get(site.0 as usize)
+            .and_then(|block| block.statements().get(site.1 as usize));
+        if previous.is_some_and(|previous| previous >= site)
+            || !matches!(marker.map(|statement| statement.kind()),
+                Some(SemanticStatementKindV1::StorageLive(local))
+                    if *local == initialization.local())
+        {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+        previous = Some(site);
+        require_ambient_scope_local_v1(
+            types,
+            callables,
+            function,
+            &transport.compiler_issued_bindings,
+            initialization.local(),
+        )?;
+        // Unreachable source markers retain custody in SSA, but emit no KIR.
+        if reachable.contains(&site.0) {
+            if !transport
+                .ssa_value_locals
+                .contains(&initialization.local().index())
+            {
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+            }
+            pending.insert(site, *initialization);
+        }
+    }
+    Ok(pending)
+}
+
 fn promoted_transport_descriptor_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -192,22 +269,16 @@ impl SemanticControlFlowSsaPlanV1 {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
         for local in &implicit_entry_locals {
-            let declaration = function
-                .locals()
-                .get(*local as usize)
-                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-            if !shared_promoted.contains(local)
-                || declaration.role() != SemanticLocalRoleV1::Temporary
-                || !authenticated_ambient_workgroup_lds_scope_zst_v1(
-                    types,
-                    callables,
-                    declaration.ty(),
-                )
-                || compiler_issued_bindings.get(&declaration.ty())
-                    != Some(&SemanticPromotedBindingV1::WorkgroupLdsScope)
-            {
+            if !shared_promoted.contains(local) {
                 return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
             }
+            require_ambient_scope_local_v1(
+                types,
+                callables,
+                function,
+                &compiler_issued_bindings,
+                SemanticLocalIdV1::from_index(*local),
+            )?;
         }
         let entry = function.entry().index();
         if shared

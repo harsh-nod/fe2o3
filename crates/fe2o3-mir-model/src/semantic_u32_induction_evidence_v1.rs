@@ -25,7 +25,7 @@ const PLACE_BYTES_V1: usize = 72;
 const BLOCK_SITE_BYTES_V1: usize = 36;
 const STATEMENT_SITE_BYTES_V1: usize = 40;
 const OPTIONAL_STATEMENT_SITE_BYTES_V1: usize = 44;
-const CERTIFICATE_BYTES_V1: usize = PLACE_BYTES_V1 * 5
+pub(crate) const CERTIFICATE_BYTES_V1: usize = PLACE_BYTES_V1 * 5
     + BLOCK_SITE_BYTES_V1 * 4
     + STATEMENT_SITE_BYTES_V1 * 4
     + OPTIONAL_STATEMENT_SITE_BYTES_V1;
@@ -191,6 +191,9 @@ impl InertCanonicalSemanticU32InductionEvidenceV1 {
     pub fn from_report(
         report: &SemanticU32InductionNoOverflowReportV1,
     ) -> Result<Self, SemanticU32InductionEvidenceErrorV1> {
+        if report.execution_view_identity().is_some() {
+            return Err(SemanticU32InductionEvidenceErrorV1::ExecutionViewUnsupported);
+        }
         if report.certificates().iter().any(|certificate| {
             certificate.semantic_mir_sha256() != report.semantic_mir_sha256()
                 || certificate.function() != report.function()
@@ -359,6 +362,8 @@ impl InertCanonicalSemanticU32InductionEvidenceV1 {
 /// Fail-closed canonical report custody error.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SemanticU32InductionEvidenceErrorV1 {
+    /// V1 does not encode the source relation for expanded call instances.
+    ExecutionViewUnsupported,
     /// Input exceeds the fixed wire budget.
     TooLarge,
     /// Header magic, version, policy, flags, or reserved bytes are invalid.
@@ -382,6 +387,9 @@ pub enum SemanticU32InductionEvidenceErrorV1 {
 impl fmt::Display for SemanticU32InductionEvidenceErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::ExecutionViewUnsupported => {
+                "semantic induction V1 evidence cannot represent expanded call coordinates"
+            }
             Self::TooLarge => "semantic induction evidence exceeds its byte limit",
             Self::InvalidHeader => "semantic induction evidence header is invalid",
             Self::InvalidLength => "semantic induction evidence length is invalid",
@@ -397,7 +405,7 @@ impl fmt::Display for SemanticU32InductionEvidenceErrorV1 {
 
 impl Error for SemanticU32InductionEvidenceErrorV1 {}
 
-fn certificate_from_live(
+pub(crate) fn certificate_from_live(
     certificate: SemanticU32InductionNoOverflowCertificateV1,
 ) -> SemanticU32InductionNoOverflowCertificateEvidenceV1 {
     SemanticU32InductionNoOverflowCertificateEvidenceV1 {
@@ -449,7 +457,7 @@ fn statement_from_live(
     }
 }
 
-fn validate_report(
+pub(crate) fn validate_report(
     semantic_mir_sha256: &[u8; 32],
     function_identity: &[u8; 32],
     checked_additions_examined: u32,
@@ -582,7 +590,7 @@ fn encode(
     Ok(bytes)
 }
 
-fn encode_certificate(
+pub(crate) fn encode_certificate(
     bytes: &mut Vec<u8>,
     certificate: &SemanticU32InductionNoOverflowCertificateEvidenceV1,
 ) {
@@ -633,7 +641,7 @@ fn encode_statement(bytes: &mut Vec<u8>, site: SemanticU32InductionStatementSite
     bytes.extend_from_slice(&site.statement.to_le_bytes());
 }
 
-fn decode_certificate(
+pub(crate) fn decode_certificate(
     reader: &mut ReaderV1<'_>,
 ) -> Result<SemanticU32InductionNoOverflowCertificateEvidenceV1, SemanticU32InductionEvidenceErrorV1>
 {
@@ -711,7 +719,9 @@ fn decode_statement(
     })
 }
 
-fn require_nonzero(identity: &[u8; 32]) -> Result<(), SemanticU32InductionEvidenceErrorV1> {
+pub(crate) fn require_nonzero(
+    identity: &[u8; 32],
+) -> Result<(), SemanticU32InductionEvidenceErrorV1> {
     if identity.iter().all(|byte| *byte == 0) {
         Err(SemanticU32InductionEvidenceErrorV1::ZeroIdentity)
     } else {
@@ -727,21 +737,23 @@ fn evidence_identity(bytes: &[u8]) -> [u8; 32] {
     digest.finalize().into()
 }
 
-struct ReaderV1<'a> {
+pub(crate) struct ReaderV1<'a> {
     bytes: &'a [u8],
     offset: usize,
 }
 
 impl<'a> ReaderV1<'a> {
-    const fn new(bytes: &'a [u8]) -> Self {
+    pub(crate) const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, offset: 0 }
     }
 
-    fn remaining(&self) -> usize {
+    pub(crate) fn remaining(&self) -> usize {
         self.bytes.len().saturating_sub(self.offset)
     }
 
-    fn fixed<const N: usize>(&mut self) -> Result<[u8; N], SemanticU32InductionEvidenceErrorV1> {
+    pub(crate) fn fixed<const N: usize>(
+        &mut self,
+    ) -> Result<[u8; N], SemanticU32InductionEvidenceErrorV1> {
         let end = self
             .offset
             .checked_add(N)
@@ -760,19 +772,19 @@ impl<'a> ReaderV1<'a> {
         Ok(self.fixed::<1>()?[0])
     }
 
-    fn u16(&mut self) -> Result<u16, SemanticU32InductionEvidenceErrorV1> {
+    pub(crate) fn u16(&mut self) -> Result<u16, SemanticU32InductionEvidenceErrorV1> {
         Ok(u16::from_le_bytes(self.fixed()?))
     }
 
-    fn u32(&mut self) -> Result<u32, SemanticU32InductionEvidenceErrorV1> {
+    pub(crate) fn u32(&mut self) -> Result<u32, SemanticU32InductionEvidenceErrorV1> {
         Ok(u32::from_le_bytes(self.fixed()?))
     }
 
-    fn u64(&mut self) -> Result<u64, SemanticU32InductionEvidenceErrorV1> {
+    pub(crate) fn u64(&mut self) -> Result<u64, SemanticU32InductionEvidenceErrorV1> {
         Ok(u64::from_le_bytes(self.fixed()?))
     }
 
-    fn finish(self) -> Result<(), SemanticU32InductionEvidenceErrorV1> {
+    pub(crate) fn finish(self) -> Result<(), SemanticU32InductionEvidenceErrorV1> {
         if self.offset == self.bytes.len() {
             Ok(())
         } else {

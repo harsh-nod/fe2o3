@@ -1650,7 +1650,7 @@ impl<'a> CanonicalDecoderV1<'a> {
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
         let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V17 {
-            77
+            78
         } else if self.wire_version == SemanticMirWireVersionV1::V16 {
             72
         } else if self.wire_version == SemanticMirWireVersionV1::V15 {
@@ -2124,6 +2124,13 @@ impl<'a> CanonicalDecoderV1<'a> {
                 element: SemanticTypeIdV1(self.u32()?),
                 result: SemanticTypeIdV1(self.u32()?),
                 contract: self.capability_memory_contract()?,
+                provenance: self.kernel_capability_provenance()?,
+                source_identity: SemanticFunctionIdentityV1(self.identity()?),
+            },
+            78 => SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d {
+                invocation: SemanticTypeIdV1(self.u32()?),
+                index_witness: SemanticTypeIdV1(self.u32()?),
+                raw_index: SemanticTypeIdV1(self.u32()?),
                 provenance: self.kernel_capability_provenance()?,
                 source_identity: SemanticFunctionIdentityV1(self.identity()?),
             },
@@ -4888,7 +4895,7 @@ mod tests {
     }
 
     #[test]
-    fn exclusive_and_blocked_typed_global_terminals_are_exactly_v17() {
+    fn invocation_and_extended_typed_global_terminals_are_exactly_v17() {
         let ty = |index| SemanticTypeIdV1::from_index(index);
         let source_identity = SemanticFunctionIdentityV1(identity(110));
         let provenance = SemanticKernelCapabilityProvenanceV1::new(
@@ -4948,10 +4955,36 @@ mod tests {
                 provenance,
                 source_identity,
             },
+            SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d {
+                invocation: ty(1),
+                index_witness: ty(10),
+                raw_index: ty(7),
+                provenance,
+                source_identity,
+            },
         ];
-        for (operation, tag) in operations.into_iter().zip(74_u8..=77) {
+        for (operation, tag) in operations.into_iter().zip(74_u8..=78) {
             let encoded = compiler_intrinsic_round_trip(operation, SemanticMirWireVersionV1::V17);
             assert_eq!(encoded[0], tag);
+            assert_eq!(
+                minimum_wire_version(&version_selection_request([operation])),
+                SemanticMirWireVersionV1::V17,
+            );
+            for end in 0..encoded.len() {
+                let mut decoder =
+                    CanonicalDecoderV1::new(&encoded[..end], SemanticMirLimitsV1::default());
+                decoder.wire_version = SemanticMirWireVersionV1::V17;
+                assert!(
+                    decoder.compiler_intrinsic().is_err(),
+                    "tag {tag} truncated at {end}"
+                );
+            }
+            let mut decoder = CanonicalDecoderV1::new(&encoded, SemanticMirLimitsV1::default());
+            decoder.wire_version = SemanticMirWireVersionV1::V16;
+            assert!(
+                decoder.compiler_intrinsic().is_err(),
+                "V16 accepted tag {tag}"
+            );
             let mut writer = CanonicalWriterV1::new(HARD_MAX_CANONICAL_BYTES_V1);
             assert_eq!(
                 encode_compiler_intrinsic_operation(

@@ -47,9 +47,19 @@ fn exact_ordinary_attributed_kernel_is_discovered() {
     assert!(arguments.contains("loop_bounds (8 , 4 , 16 , 16 , 4)"));
     assert!(SOURCE.contains("context: KernelContext<'_>"));
     assert!(SOURCE.contains("logits: Global<'_, f32, ReadOnly>"));
-    assert!(SOURCE.matches("ExclusiveReadWrite").count() >= 8);
-    assert!(SOURCE.contains("context.invocation().index_1d().get()"));
-    assert!(SOURCE.contains("output.store(index, value)"));
+    assert!(
+        SOURCE
+            .matches("Global<'_, u32, DisjointWrite<GridExclusive>>")
+            .count()
+            >= 7
+    );
+    assert!(SOURCE.matches("GridExclusive").count() >= 8);
+    assert!(SOURCE.contains("let Some(grid) = context.grid()"));
+    assert!(SOURCE.contains("let Some(leader) = grid.leader()"));
+    assert!(SOURCE.contains("output.store(leader.index(index), value)"));
+    assert!(SOURCE.contains("fn write_value_v1<Brand>("));
+    assert!(!SOURCE.contains("WriteOnlyDisjointSlice"));
+    assert!(!SOURCE.contains("thread::grid_leader"));
     assert!(SOURCE.contains("let mut staged_permutation"));
     assert!(file.items.iter().all(|item| !matches!(
         item,

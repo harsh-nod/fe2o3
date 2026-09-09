@@ -10,20 +10,22 @@ use fe2o3_artifact_transaction::{
 };
 use fe2o3_compiler_ffi::{
     InertProductionCapabilityHandoffErrorV5, InertProductionCapabilityHandoffV5,
-    InertSimulationBundleV8, MAX_INERT_PRODUCTION_CAPABILITY_HANDOFF_BYTES_V5,
-    MAX_INERT_SIMULATION_BUNDLE_BYTES_V8,
+    InertProductionCapabilityTransactionV5, MAX_INERT_PRODUCTION_CAPABILITY_TRANSACTION_BYTES_V5,
 };
 use fe2o3_compiler_lineage::{
-    MAX_CAPABILITY_REFINEMENT_RECEIPT_BYTES_V1, MAX_INERT_COMPILER_PROOF_OWNER_BYTES_V5,
-    MAX_INERT_MULTI_ROOT_STATIC_CAPABILITY_EVIDENCE_BYTES_V1,
+    MultiRootProofRosterKindV3, TargetMachineRefinementReceiptErrorV1,
+    TargetMachineRefinementReceiptV1, TargetMachineRefinementTargetV1,
 };
+use fe2o3_hsaco_finalize::derive_unfinalized_hsaco_from_finalized_v1;
 use fe2o3_verifier::{
-    ProtectedCompilerCompletionInputErrorV5, validate_protected_compiler_completion_inputs_v5,
+    ProtectedCompilerCompletionInputErrorV5, ProtectedCompilerMultiRootProofInputsV5,
+    compose_protected_compiler_completion_inputs_v5,
 };
 use fe2o3_worker_v3_verification_protocol::{
-    ExactIdentityCoordinateV5, WorkerV3VerificationCapabilityCompletionV5,
-    WorkerV3VerificationCapabilityProtocolErrorV5, WorkerV3VerificationCapabilityRequestV5,
-    WorkerV3VerificationCapabilityResponseV5,
+    ExactIdentityCoordinateV5, InertWorkerV3MachineRefinedFinalizationV5,
+    MAX_WORKER_V3_MACHINE_REFINED_FINALIZATION_BYTES_V5,
+    WorkerV3VerificationCapabilityCompletionV5, WorkerV3VerificationCapabilityProtocolErrorV5,
+    WorkerV3VerificationCapabilityRequestV5, WorkerV3VerificationCapabilityResponseV5,
     WorkerV3VerificationProtectedEvidenceBindingIdentityV5,
 };
 use rustix::fs::{FileType, OFlags, SealFlags};
@@ -32,7 +34,7 @@ use sha2::{Digest as _, Sha256};
 const REQUEST_MAGIC: [u8; 8] = *b"F2WVPR05";
 const RESPONSE_MAGIC: [u8; 8] = *b"F2WVPS05";
 const VERSION: u16 = 5;
-const REQUEST_FIELDS: u16 = 7;
+const REQUEST_FIELDS: u16 = 4;
 const RESPONSE_FIELDS: u16 = 6;
 const HEADER_BYTES: usize = 24;
 const FIELD_HEADER_BYTES: usize = 8;
@@ -43,7 +45,6 @@ const REQUEST_IDENTITY_DOMAIN: &[u8] =
     b"FE2O3/WORKER-V3/PROTECTED-COMPLETION-REQUEST-IDENTITY/V5\0";
 const RESPONSE_IDENTITY_DOMAIN: &[u8] =
     b"FE2O3/WORKER-V3/PROTECTED-COMPLETION-RESPONSE-IDENTITY/V5\0";
-const SIMULATION_BUNDLE_IDENTITY_DOMAIN_V8: &[u8] = b"FE2O3/SIMULATION-BUNDLE-CONTENT/V8\0";
 const REQUIRED_KEY_SEALS: SealFlags = SealFlags::WRITE
     .union(SealFlags::GROW)
     .union(SealFlags::SHRINK)
@@ -54,11 +55,8 @@ pub const MAX_WORKER_V3_PROTECTED_COMPLETION_REQUEST_BYTES_V5: usize = HEADER_BY
     + FIELD_HEADER_BYTES * REQUEST_FIELDS as usize
     + REQUEST_DOMAIN.len()
     + 32
-    + MAX_INERT_PRODUCTION_CAPABILITY_HANDOFF_BYTES_V5
-    + MAX_INERT_SIMULATION_BUNDLE_BYTES_V8
-    + MAX_INERT_COMPILER_PROOF_OWNER_BYTES_V5
-    + MAX_INERT_MULTI_ROOT_STATIC_CAPABILITY_EVIDENCE_BYTES_V1
-    + MAX_CAPABILITY_REFINEMENT_RECEIPT_BYTES_V1
+    + MAX_INERT_PRODUCTION_CAPABILITY_TRANSACTION_BYTES_V5
+    + MAX_WORKER_V3_MACHINE_REFINED_FINALIZATION_BYTES_V5
     + TERMINAL_BYTES;
 
 pub const MAX_WORKER_V3_PROTECTED_COMPLETION_RESPONSE_BYTES_V5: usize = HEADER_BYTES
@@ -74,33 +72,23 @@ pub const MAX_WORKER_V3_PROTECTED_COMPLETION_RESPONSE_BYTES_V5: usize = HEADER_B
 #[derive(Debug)]
 pub struct WorkerV3ProtectedCompletionRequestV5 {
     request_binding: [u8; 32],
-    handoff: InertProductionCapabilityHandoffV5,
-    bundle: InertSimulationBundleV8,
-    proof_owner: Box<[u8]>,
-    associations: Box<[u8]>,
-    machine_refinement: Box<[u8]>,
+    transaction: InertProductionCapabilityTransactionV5,
+    finalization: InertWorkerV3MachineRefinedFinalizationV5,
     canonical_bytes: Box<[u8]>,
     identity: [u8; 32],
 }
 
 impl WorkerV3ProtectedCompletionRequestV5 {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         request_binding: WorkerV3VerificationProtectedEvidenceBindingIdentityV5,
-        handoff: &InertProductionCapabilityHandoffV5,
-        bundle: &InertSimulationBundleV8,
-        proof_owner: &[u8],
-        associations: &[u8],
-        machine_refinement: &[u8],
+        transaction: &InertProductionCapabilityTransactionV5,
+        finalization: &InertWorkerV3MachineRefinedFinalizationV5,
     ) -> Result<Self, WorkerV3ProtectedCompletionErrorV5> {
         let fields: [&[u8]; REQUEST_FIELDS as usize] = [
             REQUEST_DOMAIN,
             request_binding.as_bytes(),
-            handoff.canonical_bytes(),
-            bundle.canonical_bytes(),
-            proof_owner,
-            associations,
-            machine_refinement,
+            transaction.canonical_bytes(),
+            finalization.canonical_bytes(),
         ];
         Self::decode(&encode_record(
             REQUEST_MAGIC,
@@ -126,20 +114,13 @@ impl WorkerV3ProtectedCompletionRequestV5 {
         if request_binding == [0; 32] {
             return Err(WorkerV3ProtectedCompletionErrorV5::InvalidIdentity);
         }
-        let handoff = InertProductionCapabilityHandoffV5::decode(record.fields[2])?;
-        let bundle_bytes = record.fields[3];
-        let bundle = InertSimulationBundleV8::from_verified_canonical_bytes(
-            simulation_bundle_identity(bundle_bytes),
-            bundle_bytes.to_vec(),
-        )
-        .map_err(InertProductionCapabilityHandoffErrorV5::from)?;
+        let transaction = InertProductionCapabilityTransactionV5::decode(record.fields[2])?;
+        let finalization =
+            InertWorkerV3MachineRefinedFinalizationV5::decode_canonical(record.fields[3])?;
         Ok(Self {
             request_binding,
-            handoff,
-            bundle,
-            proof_owner: record.fields[4].to_vec().into_boxed_slice(),
-            associations: record.fields[5].to_vec().into_boxed_slice(),
-            machine_refinement: record.fields[6].to_vec().into_boxed_slice(),
+            transaction,
+            finalization,
             canonical_bytes: bytes.to_vec().into_boxed_slice(),
             identity: record.identity,
         })
@@ -150,11 +131,15 @@ impl WorkerV3ProtectedCompletionRequestV5 {
     }
 
     pub const fn handoff(&self) -> &InertProductionCapabilityHandoffV5 {
-        &self.handoff
+        self.transaction.handoff()
     }
 
-    pub const fn bundle(&self) -> &InertSimulationBundleV8 {
-        &self.bundle
+    pub const fn transaction(&self) -> &InertProductionCapabilityTransactionV5 {
+        &self.transaction
+    }
+
+    pub const fn finalization(&self) -> &InertWorkerV3MachineRefinedFinalizationV5 {
+        &self.finalization
     }
 
     pub fn canonical_bytes(&self) -> &[u8] {
@@ -356,26 +341,40 @@ pub fn issue_worker_v3_protected_completion_v5(
     object_bytes: &[u8],
     signer: &ProtectedWorkerV3VerifierSigningKeyV5,
 ) -> Result<WorkerV3ProtectedCompletionResponseV5, WorkerV3ProtectedCompletionErrorV5> {
+    let transaction = &evidence.transaction;
+    let handoff = transaction.handoff();
+    let bundle = transaction.simulation_bundle();
+    let finalization = &evidence.finalization;
     if evidence.request_binding != *request.protected_evidence_binding()?.as_bytes()
-        || evidence.handoff.identity().sha256() != request.carriage().handoff_identity().sha256()
-        || evidence.handoff.identity().byte_len()
-            != request.carriage().handoff_identity().byte_len()
+        || handoff.identity().sha256() != request.carriage().handoff_identity().sha256()
+        || handoff.identity().byte_len() != request.carriage().handoff_identity().byte_len()
         || Sha256::digest(object_bytes).as_slice() != request.carriage().object_identity().sha256()
         || object_bytes.len() as u64 != request.carriage().object_identity().byte_len()
     {
         return Err(WorkerV3ProtectedCompletionErrorV5::CorrelationMismatch);
     }
+    validate_transaction_against_request_v5(request, transaction)?;
+    validate_finalization_against_request_v5(request, handoff, finalization, object_bytes)?;
 
-    let validated = validate_protected_compiler_completion_inputs_v5(
-        &evidence.handoff,
-        &evidence.proof_owner,
-        &evidence.associations,
-        &evidence.machine_refinement,
-    )?;
+    let machine_receipt =
+        TargetMachineRefinementReceiptV1::decode(finalization.machine_receipt_bytes())?;
+    let raw_object = derive_unfinalized_hsaco_from_finalized_v1(object_bytes)
+        .map_err(WorkerV3ProtectedCompletionErrorV5::Finalization)?;
+    if !coordinate_matches(finalization.raw_object_identity(), &raw_object)
+        || !machine_receipt
+            .parts()
+            .final_code_object
+            .matches(&raw_object)
+        || !machine_target_matches_handoff(machine_receipt.parts().target, handoff)
+    {
+        return Err(WorkerV3ProtectedCompletionErrorV5::CorrelationMismatch);
+    }
+
+    let validated = admit_exact_capability_result_evidence_v5(request, transaction, finalization)?;
     let (proof_owner, associations, machine_refinement) = validated
         .into_completion_parts()
         .map_err(WorkerV3ProtectedCompletionErrorV5::NativeOwner)?;
-    if machine_refinement.canonical_preimage() != evidence.machine_refinement.as_ref() {
+    if machine_refinement.canonical_preimage() != finalization.machine_receipt_bytes() {
         return Err(WorkerV3ProtectedCompletionErrorV5::CorrelationMismatch);
     }
 
@@ -384,12 +383,12 @@ pub fn issue_worker_v3_protected_completion_v5(
     let machine_identity = coordinate(machine_refinement.canonical_preimage())?;
     let verifier_response = InertCompilerCapabilityVerifierResponseV5::new(
         request.carriage().transaction_identity(),
-        &evidence.handoff,
-        &evidence.bundle,
+        handoff,
+        bundle,
         object_bytes,
         proof_owner,
         associations,
-        evidence.machine_refinement.into_vec(),
+        finalization.machine_receipt_bytes().to_vec(),
     )?;
     let signing_message = verifier_response.signing_message()?;
     let signature = signer.key.sign(&signing_message).to_bytes();
@@ -421,12 +420,131 @@ pub fn issue_worker_v3_protected_completion_v5(
     )
 }
 
-fn simulation_bundle_identity(bytes: &[u8]) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(SIMULATION_BUNDLE_IDENTITY_DOMAIN_V8);
-    digest.update((bytes.len() as u64).to_le_bytes());
-    digest.update(bytes);
-    digest.finalize().into()
+fn validate_transaction_against_request_v5(
+    request: &WorkerV3VerificationCapabilityRequestV5,
+    transaction: &InertProductionCapabilityTransactionV5,
+) -> Result<(), WorkerV3ProtectedCompletionErrorV5> {
+    let carriage = request.carriage();
+    let handoff = transaction.handoff();
+    let transaction_identity = transaction.identity();
+    let handoff_identity = handoff.identity();
+    let legacy_identity = handoff.legacy_handoff().identity();
+    let report = handoff.final_graph_report();
+    let closure = handoff.target_closure();
+    let source = handoff.source_refinement().identity();
+    let kir = handoff.executable_kir().identity();
+    let subject = handoff
+        .subjects()
+        .first()
+        .ok_or(WorkerV3ProtectedCompletionErrorV5::CorrelationMismatch)?;
+    if carriage.transaction_identity() != transaction_identity.sha256()
+        || carriage.handoff_identity().sha256() != handoff_identity.sha256()
+        || carriage.handoff_identity().byte_len() != handoff_identity.byte_len()
+        || carriage.paired_v3_identity().sha256() != *legacy_identity.sha256()
+        || carriage.paired_v3_identity().byte_len() != legacy_identity.byte_len()
+        || carriage.final_graph_version() != 13
+        || carriage.final_graph().sha256() != report.final_graph()
+        || carriage.final_graph().byte_len() != report.final_graph_bytes()
+        || carriage.final_epoch() != report.final_epoch()
+        || carriage.kernel_identity() != *subject.kernel().digest().as_bytes()
+        || carriage.root_identity() != *subject.root().digest().as_bytes()
+        || carriage.target_identity() != *subject.target_model().digest().as_bytes()
+        || carriage.launch_identity() != *subject.launch_contract().digest().as_bytes()
+        || carriage.target_closure_identity() != closure.closure_identity()
+        || carriage.target_closure_record_identity().sha256()
+            != Sha256::digest(closure.canonical_bytes()).as_slice()
+        || carriage.target_closure_record_identity().byte_len()
+            != closure.canonical_bytes().len() as u64
+        || carriage.w4_report_identity() != report.report_identity()
+        || carriage.source_receipt_identity().sha256() != source.sha256()
+        || carriage.source_receipt_identity().byte_len() != source.byte_len()
+        || carriage.semantic_mir_identity() != handoff.inputs().semantic_mir_identity()
+        || carriage.compiler_policy_identity() != handoff.inputs().compiler_policy()
+        || carriage.executable_kir_receipt_identity().sha256() != kir.sha256()
+        || carriage.executable_kir_receipt_identity().byte_len() != kir.byte_len()
+        || handoff.subjects().len() != handoff.obligation_roster().len()
+    {
+        return Err(WorkerV3ProtectedCompletionErrorV5::CorrelationMismatch);
+    }
+
+    let roster = handoff
+        .proof_lineage()
+        .roster(MultiRootProofRosterKindV3::MiddleEnd);
+    if roster.root_count() != request.base_request().entries().len()
+        || roster.root_count() != handoff.subjects().len()
+    {
+        return Err(WorkerV3ProtectedCompletionErrorV5::CorrelationMismatch);
+    }
+    for (ordinal, entry) in request.base_request().entries().iter().enumerate() {
+        let root = roster
+            .root(ordinal)
+            .ok_or(WorkerV3ProtectedCompletionErrorV5::CorrelationMismatch)?;
+        if usize::try_from(entry.ordinal()).ok() != Some(ordinal)
+            || entry.logical_name() != root.logical_name()
+            || entry.export_name() != root.export_symbol()
+            || entry.lineage_identity() != &root.semantic_root_identity()
+            || entry.marker_binding_identity() != &root.kernel_binding()
+        {
+            return Err(WorkerV3ProtectedCompletionErrorV5::CorrelationMismatch);
+        }
+    }
+    Ok(())
+}
+
+fn validate_finalization_against_request_v5(
+    request: &WorkerV3VerificationCapabilityRequestV5,
+    handoff: &InertProductionCapabilityHandoffV5,
+    finalization: &InertWorkerV3MachineRefinedFinalizationV5,
+    object_bytes: &[u8],
+) -> Result<(), WorkerV3ProtectedCompletionErrorV5> {
+    let carriage = request.carriage();
+    let handoff_identity = handoff.identity();
+    if finalization.attempt() != carriage.attempt()
+        || finalization.transaction_identity() != carriage.transaction_identity()
+        || finalization.handoff_identity().sha256() != handoff_identity.sha256()
+        || finalization.handoff_identity().byte_len() != handoff_identity.byte_len()
+        || !coordinate_matches(finalization.finalized_object_identity(), object_bytes)
+        || finalization.finalized_object_identity() != carriage.object_identity()
+        || finalization.target_identity() != carriage.target_identity()
+        || finalization.launch_identity() != carriage.launch_identity()
+        || finalization.compiler_policy_identity() != carriage.compiler_policy_identity()
+    {
+        return Err(WorkerV3ProtectedCompletionErrorV5::CorrelationMismatch);
+    }
+    Ok(())
+}
+
+fn admit_exact_capability_result_evidence_v5(
+    request: &WorkerV3VerificationCapabilityRequestV5,
+    transaction: &InertProductionCapabilityTransactionV5,
+    finalization: &InertWorkerV3MachineRefinedFinalizationV5,
+) -> Result<ProtectedCompilerMultiRootProofInputsV5, WorkerV3ProtectedCompletionErrorV5> {
+    if transaction.handoff().subjects().len() != request.base_request().entries().len()
+        || finalization.machine_receipt_bytes().is_empty()
+    {
+        return Err(WorkerV3ProtectedCompletionErrorV5::CorrelationMismatch);
+    }
+    compose_protected_compiler_completion_inputs_v5(
+        transaction.handoff(),
+        finalization.machine_receipt_bytes(),
+    )
+    .map_err(WorkerV3ProtectedCompletionErrorV5::ProtectedInput)
+}
+
+fn coordinate_matches(coordinate: ExactIdentityCoordinateV5, bytes: &[u8]) -> bool {
+    coordinate.byte_len() == bytes.len() as u64
+        && coordinate.sha256() == Sha256::digest(bytes).as_slice()
+}
+
+fn machine_target_matches_handoff(
+    target: TargetMachineRefinementTargetV1,
+    handoff: &InertProductionCapabilityHandoffV5,
+) -> bool {
+    let configured = handoff.legacy_handoff().capsule().target().to_string();
+    match target {
+        TargetMachineRefinementTargetV1::Gfx942 => configured.starts_with("gfx942:"),
+        TargetMachineRefinementTargetV1::Gfx950 => configured.starts_with("gfx950:"),
+    }
 }
 
 fn coordinate(
@@ -455,6 +573,8 @@ pub enum WorkerV3ProtectedCompletionErrorV5 {
     CorrelationMismatch,
     InvalidSigningKeyDescriptor,
     Handoff(InertProductionCapabilityHandoffErrorV5),
+    MachineReceipt(TargetMachineRefinementReceiptErrorV1),
+    Finalization(fe2o3_hsaco_finalize::FinalizationError),
     ProtectedInput(ProtectedCompilerCompletionInputErrorV5),
     NativeOwner(fe2o3_verifier::CompilerProofInputValidationErrorV5),
     Protocol(WorkerV3VerificationCapabilityProtocolErrorV5),
@@ -471,6 +591,8 @@ impl Error for WorkerV3ProtectedCompletionErrorV5 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Handoff(source) => Some(source),
+            Self::MachineReceipt(source) => Some(source),
+            Self::Finalization(source) => Some(source),
             Self::ProtectedInput(source) => Some(source),
             Self::NativeOwner(source) => Some(source),
             Self::Protocol(source) => Some(source),
@@ -480,15 +602,15 @@ impl Error for WorkerV3ProtectedCompletionErrorV5 {
     }
 }
 
-impl From<InertProductionCapabilityHandoffErrorV5> for WorkerV3ProtectedCompletionErrorV5 {
-    fn from(source: InertProductionCapabilityHandoffErrorV5) -> Self {
-        Self::Handoff(source)
+impl From<TargetMachineRefinementReceiptErrorV1> for WorkerV3ProtectedCompletionErrorV5 {
+    fn from(source: TargetMachineRefinementReceiptErrorV1) -> Self {
+        Self::MachineReceipt(source)
     }
 }
 
-impl From<ProtectedCompilerCompletionInputErrorV5> for WorkerV3ProtectedCompletionErrorV5 {
-    fn from(source: ProtectedCompilerCompletionInputErrorV5) -> Self {
-        Self::ProtectedInput(source)
+impl From<InertProductionCapabilityHandoffErrorV5> for WorkerV3ProtectedCompletionErrorV5 {
+    fn from(source: InertProductionCapabilityHandoffErrorV5) -> Self {
+        Self::Handoff(source)
     }
 }
 
@@ -691,7 +813,12 @@ mod tests {
 
     #[test]
     fn record_decoder_rejects_truncation_mutation_and_noncanonical_tags() {
-        let fields = [REQUEST_DOMAIN, &[9; 32][..], b"a", b"b", b"c", b"d", b"e"];
+        let fields = [
+            REQUEST_DOMAIN,
+            &[9; 32][..],
+            b"transaction",
+            b"finalization",
+        ];
         let encoded = encode_record(
             REQUEST_MAGIC,
             REQUEST_FIELDS,

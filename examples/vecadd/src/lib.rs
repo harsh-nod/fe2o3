@@ -50,6 +50,31 @@ mod tests {
     const SHARED_BODY: &str = include_str!("vecadd_body.rs");
 
     #[test]
+    fn cpu_reference_checks_each_input_extent_before_writing() {
+        let a: [f32; 65] = std::array::from_fn(|i| i as f32 + 1.0);
+        let b: [f32; 65] = std::array::from_fn(|i| i as f32 * 2.0);
+        let untouched = f32::from_bits(0x7fc0_0123);
+        for a_len in [0, 1, 63, 64, 65] {
+            for b_len in [0, 1, 63, 64, 65] {
+                for point in (0..=65).chain(std::iter::once(usize::MAX)) {
+                    let mut output = untouched;
+                    super::vecadd_cpu_reference(point, &a[..a_len], &b[..b_len], &mut output);
+                    let expected = if point < a_len && point < b_len {
+                        a[point] + b[point]
+                    } else {
+                        untouched
+                    };
+                    assert_eq!(
+                        output.to_bits(),
+                        expected.to_bits(),
+                        "point={point}, a_len={a_len}, b_len={b_len}",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn library_kernel_uses_one_hierarchy_root_and_typed_global_capabilities() {
         let production_source = KERNEL_SOURCE
             .split_once("#[cfg(test)]")

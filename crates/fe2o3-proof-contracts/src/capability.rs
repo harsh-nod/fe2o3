@@ -13,6 +13,8 @@ use crate::{
 pub const CAPABILITY_OBLIGATION_SET_VERSION_V1: u16 = 1;
 /// Exact wire version for inert capability-result sets.
 pub const CAPABILITY_RESULT_SET_VERSION_V1: u16 = 1;
+/// Exact wire version that adds checked-analysis and refinement-receipt outcomes.
+pub const CAPABILITY_RESULT_SET_VERSION_V2: u16 = 2;
 /// Maximum obligations in one kernel-root capability contract.
 pub const MAX_CAPABILITY_OBLIGATIONS_V1: usize = 128;
 /// Maximum canonical bytes in one capability-obligation set.
@@ -39,6 +41,8 @@ const OBLIGATION_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/INERT-CAPABILITY-OBLIGATION
 const OBLIGATION_SET_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/INERT-CAPABILITY-OBLIGATION-SET/V1\0";
 const RESULT_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/INERT-CAPABILITY-RESULT/V1\0";
 const RESULT_SET_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/INERT-CAPABILITY-RESULT-SET/V1\0";
+const RESULT_IDENTITY_DOMAIN_V2: &[u8] = b"FE2O3/INERT-CAPABILITY-RESULT/V2\0";
+const RESULT_SET_IDENTITY_DOMAIN_V2: &[u8] = b"FE2O3/INERT-CAPABILITY-RESULT-SET/V2\0";
 
 const fn namespace_digest(bytes: &[u8]) -> DigestV1 {
     let mut digest = [0_u8; 32];
@@ -118,6 +122,47 @@ capability_identity!(
     /// Domain-separated identity of one canonical result set.
     InertCapabilityResultSetIdentityV1
 );
+capability_identity!(
+    /// Exact identity of the checker that produced one checked-analysis result.
+    CapabilityCheckerIdentityV1
+);
+capability_identity!(
+    /// Exact identity of the complete analysis report containing one checked result.
+    CapabilityAnalysisReportIdentityV1
+);
+
+/// The refinement boundary named by an exact receipt-backed result.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum CapabilityRefinementKindV1 {
+    SourceMirToKir,
+    Machine,
+}
+
+/// Exact domain-separated coordinates of a typed refinement receipt.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct CapabilityRefinementReceiptIdentityV1 {
+    digest: DigestV1,
+    byte_len: u64,
+}
+
+impl CapabilityRefinementReceiptIdentityV1 {
+    /// Constructs opaque receipt coordinates for validation by the owning sealed composer.
+    pub const fn from_untrusted_parts(digest: DigestV1, byte_len: u64) -> Self {
+        Self { digest, byte_len }
+    }
+
+    pub const fn digest(self) -> DigestV1 {
+        self.digest
+    }
+
+    pub const fn byte_len(self) -> u64 {
+        self.byte_len
+    }
+
+    const fn is_valid(self) -> bool {
+        !self.digest.is_zero() && self.byte_len != 0
+    }
+}
 
 /// Exact immutable subject shared by an obligation set and its results.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -332,10 +377,12 @@ pub struct InertCapabilityObligationSetV1 {
     canonical_bytes: Vec<u8>,
 }
 
-/// The five exact analysis dispositions required by issue #272 W4/W6.
+/// Exact authority-free result classes carried from analysis and refinement stages.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CapabilityOutcomeKindV1 {
     Proven,
+    Checked,
+    RefinementReceipt,
     Rejected,
     Incomplete,
     Unsupported,
@@ -349,6 +396,25 @@ pub enum CapabilityOutcomeV1 {
         evidence: EvidenceIdentityV1,
         tool: ExactToolIdentityV1,
         proof_artifact: ArtifactIdentityV1,
+    },
+    /// A static checker discharged its documented obligation on one exact graph epoch.
+    ///
+    /// This is not proof evidence and never grants authority by itself.
+    Checked {
+        evidence: EvidenceIdentityV1,
+        checker: CapabilityCheckerIdentityV1,
+        report: CapabilityAnalysisReportIdentityV1,
+        executable_kir: ExecutableKirIdentityV1,
+        executable_kir_epoch: u64,
+        analysis_epoch: u64,
+    },
+    /// An exact typed receipt crosses one independently owned refinement boundary.
+    ///
+    /// The sealed composer must decode and validate the receipt bytes; these coordinates alone
+    /// are inert and are not a `Proven` result.
+    RefinementReceipt {
+        kind: CapabilityRefinementKindV1,
+        receipt: CapabilityRefinementReceiptIdentityV1,
     },
     Rejected {
         diagnostic: CapabilityDiagnosticIdV1,
@@ -372,6 +438,8 @@ impl CapabilityOutcomeV1 {
     pub const fn kind(&self) -> CapabilityOutcomeKindV1 {
         match self {
             Self::Proven { .. } => CapabilityOutcomeKindV1::Proven,
+            Self::Checked { .. } => CapabilityOutcomeKindV1::Checked,
+            Self::RefinementReceipt { .. } => CapabilityOutcomeKindV1::RefinementReceipt,
             Self::Rejected { .. } => CapabilityOutcomeKindV1::Rejected,
             Self::Incomplete { .. } => CapabilityOutcomeKindV1::Incomplete,
             Self::Unsupported { .. } => CapabilityOutcomeKindV1::Unsupported,
@@ -427,6 +495,7 @@ impl CapabilityResultV1 {
 /// whether another authority-bearing transition is justified.
 #[derive(Debug, Eq, PartialEq)]
 pub struct InertCapabilityResultSetV1 {
+    schema_version: u16,
     subject: CapabilitySubjectV1,
     obligation_set: InertCapabilityObligationSetIdentityV1,
     results: Vec<CapabilityResultV1>,
@@ -529,6 +598,9 @@ pub enum CapabilityIdentityFieldV1 {
     Evidence,
     Tool,
     Artifact,
+    Checker,
+    Report,
+    Receipt,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -8040,6 +8040,11 @@ pub(crate) mod semantic_v5 {
             self.transaction.simulation_bundle()
         }
 
+        /// Returns the exact phase-one compiler transaction retained by this completion owner.
+        pub const fn production_transaction(&self) -> &InertProductionCapabilityTransactionV5 {
+            &self.transaction
+        }
+
         pub fn worker_v3_preflight_compatibility(
             &self,
         ) -> Result<
@@ -8226,6 +8231,11 @@ pub(crate) mod semantic_v5 {
 
         pub const fn simulation_bundle(&self) -> &InertSimulationBundleV8 {
             self.transaction.simulation_bundle()
+        }
+
+        /// Returns the exact phase-one compiler transaction retained by this completion owner.
+        pub const fn production_transaction(&self) -> &InertProductionCapabilityTransactionV5 {
+            &self.transaction
         }
 
         pub fn object_bytes(&self) -> &[u8] {
@@ -10289,6 +10299,10 @@ pub(crate) mod semantic_v5 {
                     kir,
                     kir_len,
                     epoch,
+                    epoch,
+                    [34; 32],
+                    [35; 32],
+                    vec![[36; 32]; 19],
                     w4_witness(&payload("final-report", seed)),
                 )
                 .unwrap(),

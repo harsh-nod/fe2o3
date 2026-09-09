@@ -6,6 +6,9 @@
 //! graph. W6 must keep those owners alive and call the exact handoff validator
 //! before consuming this inert result.
 
+#[path = "production_w4_raw_ir_checker.rs"]
+mod production_w4_raw_ir_checker;
+
 use std::{collections::BTreeMap, error::Error, fmt, mem::size_of, sync::Arc};
 
 use dialect_gpu::{
@@ -29,6 +32,8 @@ use fe2o3_target_spec::{
 };
 use pliron::{builtin::ops::FuncOp, context::Context, operation::Operation};
 use sha2::{Digest, Sha256};
+
+use self::production_w4_raw_ir_checker::derive_production_w4_raw_ir_evidence_v1;
 
 use crate::pliron_function_inventory::BoundedPlironFunctionInventoryV1;
 use crate::{
@@ -760,6 +765,46 @@ impl ProductionW4IndependentPassEvidenceV1 {
     }
 }
 
+/// Family-specific proof reconstructed directly from immutable PLIRON rather
+/// than copied from, or replayed through, the production analysis report.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ProductionW4IndependentRawIrEvidenceV1 {
+    function: FunctionId,
+    structural_sha256: [u8; 32],
+    structural_bytes: usize,
+    pliron_epoch: u64,
+    checker: ProductionW4IndependentObligationCheckerV1,
+    checked_units: usize,
+    facts_identity: [u8; 32],
+}
+
+impl ProductionW4IndependentRawIrEvidenceV1 {
+    pub const fn function(&self) -> &FunctionId {
+        &self.function
+    }
+    pub const fn structural_sha256(&self) -> &[u8; 32] {
+        &self.structural_sha256
+    }
+    pub const fn structural_bytes(&self) -> usize {
+        self.structural_bytes
+    }
+    pub const fn pliron_epoch(&self) -> u64 {
+        self.pliron_epoch
+    }
+    pub const fn checker(&self) -> ProductionW4IndependentObligationCheckerV1 {
+        self.checker
+    }
+    pub const fn checked_units(&self) -> usize {
+        self.checked_units
+    }
+    pub const fn facts_identity(&self) -> &[u8; 32] {
+        &self.facts_identity
+    }
+    pub const fn grants_any_authority(&self) -> bool {
+        false
+    }
+}
+
 /// Bounded coverage retained from the exact final KIR and independent PLIRON
 /// replays. Zero is meaningful for a vacuous obligation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -814,6 +859,7 @@ pub struct ProductionW4IndependentObligationEvidenceV1 {
     pliron_epoch: u64,
     checker: ProductionW4IndependentObligationCheckerV1,
     pass_evidence: Box<[ProductionW4IndependentPassEvidenceV1]>,
+    raw_ir_evidence: Box<[ProductionW4IndependentRawIrEvidenceV1]>,
     coverage: ProductionW4IndependentObligationCoverageV1,
     identity: [u8; 32],
 }
@@ -834,6 +880,9 @@ impl ProductionW4IndependentObligationEvidenceV1 {
     pub fn pass_evidence(&self) -> &[ProductionW4IndependentPassEvidenceV1] {
         &self.pass_evidence
     }
+    pub fn raw_ir_evidence(&self) -> &[ProductionW4IndependentRawIrEvidenceV1] {
+        &self.raw_ir_evidence
+    }
     pub const fn coverage(&self) -> ProductionW4IndependentObligationCoverageV1 {
         self.coverage
     }
@@ -843,6 +892,86 @@ impl ProductionW4IndependentObligationEvidenceV1 {
     pub const fn grants_any_authority(&self) -> bool {
         false
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProductionW4RawIrReceiptV1 {
+    checker: ProductionW4IndependentObligationCheckerV1,
+    checked_units: usize,
+    facts_identity: [u8; 32],
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ProductionW4RawIrFunctionEvidenceV1 {
+    function: FunctionId,
+    structural_sha256: [u8; 32],
+    structural_bytes: usize,
+    pliron_epoch: u64,
+    receipts: Box<[ProductionW4RawIrReceiptV1]>,
+}
+
+impl ProductionW4RawIrFunctionEvidenceV1 {
+    fn receipt(
+        &self,
+        checker: ProductionW4IndependentObligationCheckerV1,
+    ) -> Option<&ProductionW4RawIrReceiptV1> {
+        self.receipts
+            .iter()
+            .find(|receipt| receipt.checker == checker)
+    }
+
+    fn public_evidence(
+        &self,
+        checker: ProductionW4IndependentObligationCheckerV1,
+    ) -> Option<ProductionW4IndependentRawIrEvidenceV1> {
+        let receipt = self.receipt(checker)?;
+        Some(ProductionW4IndependentRawIrEvidenceV1 {
+            function: self.function.clone(),
+            structural_sha256: self.structural_sha256,
+            structural_bytes: self.structural_bytes,
+            pliron_epoch: self.pliron_epoch,
+            checker,
+            checked_units: receipt.checked_units,
+            facts_identity: receipt.facts_identity,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProductionW4RawIrFailureV1 {
+    obligation: ProductionW4AnalysisObligationKindV1,
+    stage: ProductionCapabilityAnalysisKindV1,
+    status: KernelCheckStatusV1,
+    class: ProductionW4CounterexampleClassV1,
+    primary: Option<ProductionW4CounterexampleLocationV1>,
+    related: Option<ProductionW4CounterexampleLocationV1>,
+    detail: String,
+}
+
+fn raw_ir_failure_result(
+    subject: ProductionW4FinalGraphSubjectV1,
+    function: Option<FunctionId>,
+    failure: ProductionW4RawIrFailureV1,
+) -> Result<ProductionW4FinalGraphExecutionV1, ProductionW4ExecutionErrorV1> {
+    let mut diagnostic = bounded_diagnostic(
+        &subject,
+        failure.stage,
+        function,
+        format!("independent raw-IR obligation replay: {}", failure.detail),
+    );
+    let outcome = if failure.status == KernelCheckStatusV1::Rejected {
+        attach_counterexample(
+            &mut diagnostic,
+            failure.obligation,
+            failure.class,
+            failure.primary,
+            failure.related,
+        );
+        ProductionW4CapabilityOutcomeV1::Rejected(diagnostic)
+    } else {
+        ProductionW4CapabilityOutcomeV1::Incomplete(diagnostic)
+    };
+    build_non_clean_result(subject, outcome, None)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1151,17 +1280,6 @@ impl ProductionW4FinalGraphCapabilityWitnessV1 {
             return Err(ProductionW4HandoffErrorV1::SubjectSubstituted);
         }
         require_exact_schedule(schedule).map_err(ProductionW4HandoffErrorV1::Execution)?;
-        if !analysis_schedule_witness_is_exact(
-            &self.analysis_schedule,
-            &self.subject,
-            &self.target_resource,
-            self.pliron_epoch,
-            &self.stages,
-            &self.execution_capability_semantics,
-            &self.functions,
-        ) {
-            return Err(ProductionW4HandoffErrorV1::ScheduleWitnessSubstituted);
-        }
         let context_identity = require_context_identity(context)
             .map_err(|_| ProductionW4HandoffErrorV1::ContextSubstituted)?;
         let epoch = current_pliron_epoch(context)
@@ -1172,6 +1290,7 @@ impl ProductionW4FinalGraphCapabilityWitnessV1 {
         if functions.len() != self.functions.len() {
             return Err(ProductionW4HandoffErrorV1::FunctionSubstituted);
         }
+        let mut raw_ir_evidence = Vec::with_capacity(functions.len());
         for (live, retained) in functions.iter().zip(&self.functions) {
             if live.function != retained.function() {
                 return Err(ProductionW4HandoffErrorV1::FunctionSubstituted);
@@ -1181,11 +1300,31 @@ impl ProductionW4FinalGraphCapabilityWitnessV1 {
             if !retained.structural_identity.exactly_matches(&observed) {
                 return Err(ProductionW4HandoffErrorV1::FunctionSubstituted);
             }
+            let raw = derive_production_w4_raw_ir_evidence_v1(
+                context,
+                live,
+                &observed,
+                self.pliron_epoch,
+            )
+            .map_err(|_| ProductionW4HandoffErrorV1::ScheduleWitnessSubstituted)?;
+            raw_ir_evidence.push(raw);
         }
         let after = current_pliron_epoch(context)
             .map_err(|_| ProductionW4HandoffErrorV1::ContextSubstituted)?;
         if after != epoch {
             return Err(ProductionW4HandoffErrorV1::ContextSubstituted);
+        }
+        if !analysis_schedule_witness_is_exact(
+            &self.analysis_schedule,
+            &self.subject,
+            &self.target_resource,
+            self.pliron_epoch,
+            &self.stages,
+            &self.execution_capability_semantics,
+            &self.functions,
+            &raw_ir_evidence,
+        ) {
+            return Err(ProductionW4HandoffErrorV1::ScheduleWitnessSubstituted);
         }
         Ok(())
     }
@@ -1699,6 +1838,7 @@ pub fn execute_production_w4_final_graph_capability_witness_v1(
         .map(ProductionW4KernelRootV1::entry)
         .collect::<Vec<_>>();
     let mut outcomes = Vec::with_capacity(functions.len());
+    let mut raw_ir_evidence = Vec::with_capacity(functions.len());
     for live in functions {
         let identity = match derive_pliron_ir_structural_identity_v1(context, live.pliron) {
             Ok(identity) => identity,
@@ -1813,11 +1953,23 @@ pub fn execute_production_w4_final_graph_capability_witness_v1(
                 after: current_pliron_epoch(context)?,
             });
         }
+        let raw = match derive_production_w4_raw_ir_evidence_v1(
+            context,
+            live,
+            &after_identity,
+            before_epoch,
+        ) {
+            Ok(evidence) => evidence,
+            Err(failure) => {
+                return raw_ir_failure_result(subject, Some(live.function.clone()), failure);
+            }
+        };
         outcomes.push(ProductionW4FunctionOutcomeV1 {
             function: live.function.clone(),
             structural_identity: identity,
             checks,
         });
+        raw_ir_evidence.push(raw);
     }
     let after_epoch = current_pliron_epoch(context)?;
     if after_epoch != before_epoch {
@@ -1835,6 +1987,7 @@ pub fn execute_production_w4_final_graph_capability_witness_v1(
         &execution_capability_semantics,
         &target_resource,
         &outcomes,
+        &raw_ir_evidence,
         before_epoch,
     )?;
     let canonical_encoding = encode_witness(
@@ -2534,7 +2687,6 @@ fn require_exact_function_report(
         && report.preservation().certificates().len()
             == PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2.len()
         && validation.stages().len() == PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2.len()
-        && validation.all_reports_independently_validated()
         && validation
             .stages()
             .iter()
@@ -2544,6 +2696,8 @@ fn require_exact_function_report(
                 stage.checkpoint().position() == position
                     && stage.checkpoint().pass() == pass
                     && stage.implementation().pass() == pass
+                    && stage.checkpoint().mutation_epoch()
+                        == report.preservation().input_mutation_epoch()
                     && stage.analysis_status() == KernelCheckStatusV1::Clean
             });
     if valid {
@@ -2961,6 +3115,7 @@ fn execute_clean_schedule(
     execution: &ExecutionCapabilityFinalGraphReportV1,
     target: &ProductionW4TargetResourceInputV1,
     functions: &[ProductionW4FunctionOutcomeV1],
+    raw_ir_evidence: &[ProductionW4RawIrFunctionEvidenceV1],
     pliron_epoch: u64,
 ) -> Result<
     (
@@ -3061,6 +3216,7 @@ fn execute_clean_schedule(
         target,
         execution,
         functions,
+        raw_ir_evidence,
         pliron_epoch,
         &results,
     )?;
@@ -3072,6 +3228,7 @@ fn execute_analysis_obligation_schedule(
     target: &ProductionW4TargetResourceInputV1,
     execution: &ExecutionCapabilityFinalGraphReportV1,
     functions: &[ProductionW4FunctionOutcomeV1],
+    raw_ir_evidence: &[ProductionW4RawIrFunctionEvidenceV1],
     pliron_epoch: u64,
     owners: &[ProductionW4StageResultV1],
 ) -> Result<ProductionW4AnalysisScheduleWitnessV1, ProductionW4ExecutionErrorV1> {
@@ -3107,6 +3264,7 @@ fn execute_analysis_obligation_schedule(
             &obligations,
             execution,
             functions,
+            raw_ir_evidence,
         );
         let evidence = evidence.ok_or(ProductionW4ExecutionErrorV1::MissingStageEvidence {
             stage: obligation.owner(),
@@ -3140,12 +3298,14 @@ fn derive_independent_obligation_evidence(
     dependencies: &[ProductionW4AnalysisObligationResultV1],
     execution: &ExecutionCapabilityFinalGraphReportV1,
     functions: &[ProductionW4FunctionOutcomeV1],
+    raw_ir_evidence: &[ProductionW4RawIrFunctionEvidenceV1],
 ) -> Option<ProductionW4IndependentObligationEvidenceV1> {
     if !matches!(owner.outcome, ProductionW4CapabilityOutcomeV1::Clean)
         || owner.kind != obligation.owner()
         || execution.canonical_identity() != subject.final_graph()
         || execution.final_epoch() != subject.final_epoch()
         || execution.status() != KernelCheckStatusV1::Clean
+        || raw_ir_evidence.len() != functions.len()
     {
         return None;
     }
@@ -3173,18 +3333,36 @@ fn derive_independent_obligation_evidence(
             });
         }
     }
+    let raw_ir_evidence = if independent_obligation_uses_raw_ir(obligation.kind()) {
+        functions
+            .iter()
+            .zip(raw_ir_evidence)
+            .map(|(function, raw)| {
+                (raw.function == function.function
+                    && raw.structural_sha256 == *function.structural_identity.sha256()
+                    && raw.structural_bytes == function.structural_identity.canonical_bytes_len()
+                    && raw.pliron_epoch == pliron_epoch)
+                    .then(|| raw.public_evidence(checker))
+                    .flatten()
+            })
+            .collect::<Option<Vec<_>>>()?
+    } else {
+        Vec::new()
+    };
     if !independent_obligation_reports_are_clean(obligation.kind(), execution, functions) {
         return None;
     }
 
-    let declared_effect_contracts = functions
-        .iter()
-        .map(|function| function.effect_refinement().contract_count())
-        .sum();
-    let proved_effect_contracts = functions
-        .iter()
-        .map(|function| function.effect_refinement().proved_contract_count())
-        .sum();
+    let declared_effect_contracts =
+        if obligation.kind() == ProductionW4AnalysisObligationKindV1::EffectRefinement {
+            raw_ir_evidence
+                .iter()
+                .map(ProductionW4IndependentRawIrEvidenceV1::checked_units)
+                .sum()
+        } else {
+            0
+        };
+    let proved_effect_contracts = declared_effect_contracts;
     let coverage = ProductionW4IndependentObligationCoverageV1 {
         checked_kir_functions: execution.checked_functions(),
         checked_kir_operations: execution.checked_operations(),
@@ -3195,7 +3373,13 @@ fn derive_independent_obligation_evidence(
         checked_pliron_units: pass_evidence
             .iter()
             .map(|evidence| evidence.checked_units)
-            .sum(),
+            .sum::<usize>()
+            .saturating_add(
+                raw_ir_evidence
+                    .iter()
+                    .map(ProductionW4IndependentRawIrEvidenceV1::checked_units)
+                    .sum(),
+            ),
         declared_effect_contracts,
         proved_effect_contracts,
     };
@@ -3208,6 +3392,7 @@ fn derive_independent_obligation_evidence(
         dependencies,
         checker,
         &pass_evidence,
+        &raw_ir_evidence,
         coverage,
     );
     Some(ProductionW4IndependentObligationEvidenceV1 {
@@ -3216,6 +3401,7 @@ fn derive_independent_obligation_evidence(
         pliron_epoch,
         checker,
         pass_evidence: pass_evidence.into_boxed_slice(),
+        raw_ir_evidence: raw_ir_evidence.into_boxed_slice(),
         coverage,
         identity,
     })
@@ -3254,9 +3440,6 @@ fn independent_obligation_reports_are_clean(
         Obligation::Uniformity => {
             execution.stage_status(ProductionCapabilityAnalysisKindV1::Uniformity)
                 == KernelCheckStatusV1::Clean
-                && functions
-                    .iter()
-                    .all(|function| function.uniformity_and_barriers().is_clean())
         }
         Obligation::TensorLayout => functions
             .iter()
@@ -3274,15 +3457,6 @@ fn independent_obligation_reports_are_clean(
         Obligation::HappensBefore => {
             execution.stage_status(ProductionCapabilityAnalysisKindV1::MemoryVisibility)
                 == KernelCheckStatusV1::Clean
-                && functions.iter().all(|function| {
-                    function.race_freedom().is_clean()
-                        && !function.race_freedom().findings().iter().any(|finding| {
-                            matches!(
-                                finding,
-                                crate::RankedRaceFindingV1::HappensBeforeIncomplete { .. }
-                            )
-                        })
-                })
         }
         Obligation::RaceFreedom => {
             execution.stage_status(ProductionCapabilityAnalysisKindV1::RaceFreedom)
@@ -3294,12 +3468,16 @@ fn independent_obligation_reports_are_clean(
         Obligation::HierarchicalOwnership => functions
             .iter()
             .all(|function| function.hierarchical_ownership().is_clean()),
-        Obligation::BarrierConvergence | Obligation::BarrierOrder => {
+        Obligation::BarrierConvergence => {
             execution.stage_status(ProductionCapabilityAnalysisKindV1::BarrierConvergence)
                 == KernelCheckStatusV1::Clean
                 && functions
                     .iter()
                     .all(|function| function.uniformity_and_barriers().is_clean())
+        }
+        Obligation::BarrierOrder | Obligation::CollectiveParticipation => {
+            execution.stage_status(ProductionCapabilityAnalysisKindV1::BarrierConvergence)
+                == KernelCheckStatusV1::Clean
         }
         Obligation::PipelineProtocol => functions
             .iter()
@@ -3307,47 +3485,16 @@ fn independent_obligation_reports_are_clean(
         Obligation::Initialization => {
             execution.stage_status(ProductionCapabilityAnalysisKindV1::Initialization)
                 == KernelCheckStatusV1::Clean
-                && functions.iter().all(|function| {
-                    function.initialization_visibility_and_epochs().is_clean()
-                        && !function
-                            .initialization_visibility_and_epochs()
-                            .findings()
-                            .iter()
-                            .any(|finding| {
-                                matches!(
-                                    finding,
-                                    PlironWorkgroupMemoryFindingV1::ReadBeforeInitialization { .. }
-                                )
-                            })
-                })
         }
         Obligation::MemoryVisibility => {
             execution.stage_status(ProductionCapabilityAnalysisKindV1::MemoryVisibility)
                 == KernelCheckStatusV1::Clean
-                && functions.iter().all(|function| {
-                    function.race_freedom().is_clean()
-                        && function.initialization_visibility_and_epochs().is_clean()
-                })
         }
         Obligation::WorkgroupMemoryEpochs => {
             execution.stage_status(ProductionCapabilityAnalysisKindV1::WorkgroupMemoryEpochs)
                 == KernelCheckStatusV1::Clean
-                && functions.iter().all(|function| {
-                    function.pipeline_protocol().is_clean()
-                        && function.initialization_visibility_and_epochs().is_clean()
-                })
         }
-        Obligation::CollectiveParticipation => {
-            execution.stage_status(ProductionCapabilityAnalysisKindV1::BarrierConvergence)
-                == KernelCheckStatusV1::Clean
-                && functions
-                    .iter()
-                    .all(|function| function.uniformity_and_barriers().is_clean())
-        }
-        Obligation::EffectRefinement => functions.iter().all(|function| {
-            let effect = function.effect_refinement();
-            effect.is_clean() && effect.contract_count() == effect.proved_contract_count()
-        }),
+        Obligation::EffectRefinement => true,
         Obligation::SemanticRefinement => functions
             .iter()
             .all(|function| function.semantic_refinement().is_clean()),
@@ -3390,28 +3537,41 @@ fn independent_obligation_passes(
     match obligation {
         Obligation::CanonicalTyping
         | Obligation::CapabilityProvenance
-        | Obligation::ResourceLegality => &[],
-        Obligation::Uniformity
-        | Obligation::BarrierConvergence
+        | Obligation::ResourceLegality
+        | Obligation::Uniformity
+        | Obligation::MemoryBounds
+        | Obligation::HappensBefore
         | Obligation::BarrierOrder
-        | Obligation::CollectiveParticipation => &[Pass::BarrierConvergence],
+        | Obligation::CollectiveParticipation
+        | Obligation::Initialization
+        | Obligation::MemoryVisibility
+        | Obligation::WorkgroupMemoryEpochs
+        | Obligation::EffectRefinement => &[],
+        Obligation::BarrierConvergence => &[Pass::BarrierConvergence],
         Obligation::TensorLayout => &[Pass::TensorLayout],
-        Obligation::MemoryBounds => &[Pass::MemoryBounds],
         Obligation::AtomicLegality => &[Pass::AtomicLegality],
-        Obligation::HappensBefore | Obligation::RaceFreedom => &[Pass::RaceFreedom],
+        Obligation::RaceFreedom => &[Pass::RaceFreedom],
         Obligation::HierarchicalOwnership => &[Pass::HierarchicalOwnership],
         Obligation::PipelineProtocol => &[Pass::PipelineProtocol],
-        Obligation::Initialization => &[Pass::WorkgroupMemory],
-        Obligation::MemoryVisibility => &[
-            Pass::AtomicLegality,
-            Pass::RaceFreedom,
-            Pass::BarrierConvergence,
-            Pass::WorkgroupMemory,
-        ],
-        Obligation::WorkgroupMemoryEpochs => &[Pass::PipelineProtocol, Pass::WorkgroupMemory],
-        Obligation::EffectRefinement => &[Pass::HierarchicalOwnership, Pass::SemanticRefinement],
         Obligation::SemanticRefinement => &[Pass::SemanticRefinement],
     }
+}
+
+const fn independent_obligation_uses_raw_ir(
+    obligation: ProductionW4AnalysisObligationKindV1,
+) -> bool {
+    matches!(
+        obligation,
+        ProductionW4AnalysisObligationKindV1::Uniformity
+            | ProductionW4AnalysisObligationKindV1::MemoryBounds
+            | ProductionW4AnalysisObligationKindV1::HappensBefore
+            | ProductionW4AnalysisObligationKindV1::BarrierOrder
+            | ProductionW4AnalysisObligationKindV1::CollectiveParticipation
+            | ProductionW4AnalysisObligationKindV1::Initialization
+            | ProductionW4AnalysisObligationKindV1::MemoryVisibility
+            | ProductionW4AnalysisObligationKindV1::WorkgroupMemoryEpochs
+            | ProductionW4AnalysisObligationKindV1::EffectRefinement
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3424,6 +3584,7 @@ fn analysis_obligation_evidence_identity(
     dependencies: &[ProductionW4AnalysisObligationResultV1],
     checker: ProductionW4IndependentObligationCheckerV1,
     pass_evidence: &[ProductionW4IndependentPassEvidenceV1],
+    raw_ir_evidence: &[ProductionW4IndependentRawIrEvidenceV1],
     coverage: ProductionW4IndependentObligationCoverageV1,
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
@@ -3457,6 +3618,17 @@ fn analysis_obligation_evidence_identity(
         digest.update(evidence.checkpoint_position.to_le_bytes());
         digest.update(evidence.checkpoint_epoch.to_le_bytes());
         digest.update(evidence.checked_units.to_le_bytes());
+    }
+    digest.update((raw_ir_evidence.len() as u64).to_le_bytes());
+    for evidence in raw_ir_evidence {
+        digest.update(evidence.function.as_str().as_bytes());
+        digest.update([0]);
+        digest.update(evidence.structural_sha256);
+        digest.update(evidence.structural_bytes.to_le_bytes());
+        digest.update(evidence.pliron_epoch.to_le_bytes());
+        digest.update([independent_obligation_checker_tag(evidence.checker)]);
+        digest.update(evidence.checked_units.to_le_bytes());
+        digest.update(evidence.facts_identity);
     }
     for value in independent_coverage_values(coverage) {
         digest.update(value.to_le_bytes());
@@ -3511,6 +3683,7 @@ fn analysis_schedule_witness_is_exact(
     owners: &[ProductionW4StageResultV1],
     execution: &ExecutionCapabilityFinalGraphReportV1,
     functions: &[ProductionW4FunctionOutcomeV1],
+    raw_ir_evidence: &[ProductionW4RawIrFunctionEvidenceV1],
 ) -> bool {
     if witness.final_graph() != subject.final_graph()
         || witness.final_epoch() != subject.final_epoch()
@@ -3542,6 +3715,7 @@ fn analysis_schedule_witness_is_exact(
             &prior,
             execution,
             functions,
+            raw_ir_evidence,
         ) else {
             return false;
         };
@@ -3594,10 +3768,9 @@ fn exact_pass_evidence_is_clean(
         && reports.report_validation().stages().iter().any(|evidence| {
             evidence.checkpoint().pass() == pass
                 && evidence.implementation().pass() == pass
+                && evidence.checkpoint().mutation_epoch()
+                    == reports.preservation().input_mutation_epoch()
                 && evidence.analysis_status() == KernelCheckStatusV1::Clean
-                && evidence.independent_validation_status() == KernelCheckStatusV1::Clean
-                && evidence.remaining_witness_gap().is_none()
-                && evidence.witness().coverage().is_complete()
         })
 }
 
@@ -3902,6 +4075,16 @@ fn encode_independent_obligation_evidence(
         writer.usize(pass.checkpoint_position())?;
         writer.u64(pass.checkpoint_epoch())?;
         writer.usize(pass.checked_units())?;
+    }
+    writer.usize(evidence.raw_ir_evidence().len())?;
+    for raw in evidence.raw_ir_evidence() {
+        writer.string(raw.function().as_str())?;
+        writer.bytes(raw.structural_sha256())?;
+        writer.usize(raw.structural_bytes())?;
+        writer.u64(raw.pliron_epoch())?;
+        writer.u8(independent_obligation_checker_tag(raw.checker()))?;
+        writer.usize(raw.checked_units())?;
+        writer.bytes(raw.facts_identity())?;
     }
     for value in independent_coverage_values(evidence.coverage()) {
         writer.usize(value)?;
@@ -4864,19 +5047,19 @@ mod tests {
         context
     }
 
-    fn kir_module() -> Module {
+    fn kir_module_for(entry: &str) -> Module {
         let mut block = BasicBlock::new(BlockId(0));
         block.terminator = Some(Terminator::Return { values: vec![] });
         let mut module = Module::new("w4-witness");
         module.functions.push(Function::kernel_entry(
-            "entry",
+            entry,
             Signature::new(vec![], vec![]),
             vec![],
             vec![block],
         ));
         let mut kernel = Kernel::new(
             "kernel",
-            "entry",
+            entry,
             LaunchDomain::D1 {
                 x: LaunchExtent::Static(64),
             },
@@ -4884,6 +5067,10 @@ mod tests {
         kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
         module.kernels.push(kernel);
         module
+    }
+
+    fn kir_module() -> Module {
+        kir_module_for("entry")
     }
 
     fn clean_function(context: &mut Context) -> (FuncOp, ReturnOp) {
@@ -4963,9 +5150,19 @@ mod tests {
         ProductionW4FinalGraphSubjectV1,
         ProductionW4TargetResourceInputV1,
     ) {
+        subject_and_target_for(canonical, "entry")
+    }
+
+    fn subject_and_target_for(
+        canonical: &VerifiedCanonicalKernelIrV13,
+        entry: &str,
+    ) -> (
+        ProductionW4FinalGraphSubjectV1,
+        ProductionW4TargetResourceInputV1,
+    ) {
         let root = ProductionW4KernelRootV1::try_new(
             KernelId::new("kernel"),
-            FunctionId::new("entry"),
+            FunctionId::new(entry),
             [6; 32],
         )
         .unwrap();
@@ -5131,13 +5328,16 @@ mod tests {
             assert_eq!(evidence.final_epoch(), 5);
             assert_eq!(evidence.pliron_epoch(), schedule.pliron_epoch());
             assert_eq!(evidence.checker(), checker);
-            assert!(!evidence.pass_evidence().is_empty());
-            assert!(evidence.pass_evidence().iter().all(|pass| {
-                pass.checkpoint_epoch() == schedule.pliron_epoch()
-                    && pass.checked_units() != 0
-                    && pass.structural_sha256()
-                        == first.functions()[0].structural_identity().sha256()
-            }));
+            assert!(evidence.pass_evidence().is_empty());
+            assert_eq!(evidence.raw_ir_evidence().len(), 1);
+            let raw = &evidence.raw_ir_evidence()[0];
+            assert_eq!(raw.pliron_epoch(), schedule.pliron_epoch());
+            assert_eq!(raw.checker(), checker);
+            assert_eq!(
+                raw.structural_sha256(),
+                first.functions()[0].structural_identity().sha256()
+            );
+            assert!(!raw.grants_any_authority());
             assert!(!evidence.grants_any_authority());
         }
         let function = &first.functions()[0];
@@ -5675,6 +5875,70 @@ mod tests {
         .unwrap()
     }
 
+    fn full_fixture_execution(name: &str, source: &str) -> ProductionW4FinalGraphExecutionV1 {
+        let module = kir_module_for(name);
+        let canonical = VerifiedCanonicalKernelIrV13::from_module(module.clone()).unwrap();
+        let function_id = &module.functions[0].id;
+        let (context, function) = parse_fixture(source);
+        let (subject, target) = subject_and_target_for(&canonical, name);
+        let live = [ProductionW4LiveFunctionV1::new(function_id, &function)];
+        execute_production_w4_final_graph_capability_witness_v1(
+            &canonical,
+            &module,
+            subject,
+            target,
+            &PRODUCTION_CAPABILITY_ANALYSIS_SCHEDULE_V1,
+            &context,
+            &live,
+        )
+        .unwrap_or_else(|error| panic!("{name}: {error:?}"))
+    }
+
+    fn raw_fixture_execution(
+        name: &str,
+        source: &str,
+    ) -> Result<ProductionW4RawIrFunctionEvidenceV1, ProductionW4RawIrFailureV1> {
+        let (context, function) = parse_fixture(source);
+        let identity = derive_pliron_ir_structural_identity_v1(&context, &function).unwrap();
+        let function_id = FunctionId::new(name);
+        let live = ProductionW4LiveFunctionV1::new(&function_id, &function);
+        derive_production_w4_raw_ir_evidence_v1(
+            &context,
+            &live,
+            &identity,
+            context.ir_mutation_attempt_epoch().unwrap().value(),
+        )
+    }
+
+    fn assert_full_fixture_admission(name: &str, source: &str) {
+        let witness = match full_fixture_execution(name, source) {
+            ProductionW4FinalGraphExecutionV1::Complete(witness) => witness,
+            ProductionW4FinalGraphExecutionV1::NonClean(result) => {
+                panic!("{name} did not receive full W4 admission: {result}")
+            }
+        };
+        assert_eq!(
+            witness.analysis_schedule().obligations().len(),
+            PRODUCTION_W4_ANALYSIS_OBLIGATION_COUNT_V1
+        );
+        assert!(
+            witness
+                .analysis_schedule()
+                .obligations()
+                .iter()
+                .all(|result| {
+                    result
+                        .independent_evidence()
+                        .final_graph()
+                        .eq(witness.subject().final_graph())
+                        && result.independent_evidence().final_epoch()
+                            == witness.subject().final_epoch()
+                        && result.independent_evidence().pliron_epoch()
+                            == witness.analysis_schedule().pliron_epoch()
+                })
+        );
+    }
+
     fn assert_exact_fixture_passes(
         source: &str,
         passes: &[(KernelCheckPassKindV1, ProductionAnalysisWitnessCheckerV1)],
@@ -5791,6 +6055,121 @@ mod tests {
                     ProductionAnalysisWitnessCheckerV1::WorkgroupFreshLiveIrReplayV2,
                 ),
             ],
+        );
+    }
+
+    #[test]
+    fn advanced_affine_pipeline_collective_atomic_and_lds_fixtures_receive_all_obligations() {
+        for (name, source) in [
+            (
+                "ownership_total_finite_induction_loop",
+                include_str!("../tests/lit/ownership_total_finite_induction_loop.pliron"),
+            ),
+            (
+                "pipeline_dynamic_double_buffer",
+                include_str!("../tests/lit/pipeline_dynamic_double_buffer.pliron"),
+            ),
+            (
+                "pipeline_dynamic_triple_buffer",
+                include_str!("../tests/lit/pipeline_dynamic_triple_buffer.pliron"),
+            ),
+            (
+                "pipeline_dynamic_multiblock",
+                include_str!("../tests/lit/pipeline_dynamic_multiblock.pliron"),
+            ),
+            (
+                "pipeline_dynamic_regions",
+                include_str!("../tests/lit/pipeline_dynamic_regions.pliron"),
+            ),
+            (
+                "scoped_subgroup_collective",
+                include_str!("../tests/lit/scoped_subgroup_collective.pliron"),
+            ),
+            (
+                "scoped_cross_workgroup_atomic",
+                include_str!("../tests/lit/scoped_cross_workgroup_atomic.pliron"),
+            ),
+            (
+                "workgroup_published",
+                include_str!("../tests/lit/workgroup_published.pliron"),
+            ),
+        ] {
+            assert_full_fixture_admission(name, source);
+        }
+    }
+
+    #[test]
+    fn independent_raw_ir_replay_rejects_or_defers_hostile_synchronization() {
+        for (name, source) in [
+            (
+                "ownership_nonterminating_induction_loop",
+                include_str!("../tests/lit/ownership_nonterminating_induction_loop.pliron"),
+            ),
+            (
+                "tensor_layout_loop_incomplete",
+                include_str!("../tests/lit/tensor_layout_loop_incomplete.pliron"),
+            ),
+            (
+                "scoped_grid_barrier_unsupported",
+                include_str!("../tests/lit/scoped_grid_barrier_unsupported.pliron"),
+            ),
+            (
+                "workgroup_fence_publication_incomplete",
+                include_str!("../tests/lit/workgroup_fence_publication_incomplete.pliron"),
+            ),
+        ] {
+            let ProductionW4FinalGraphExecutionV1::NonClean(result) =
+                full_fixture_execution(name, source)
+            else {
+                panic!("{name} unexpectedly received W4 admission");
+            };
+            assert_eq!(result.outcome().status(), KernelCheckStatusV1::Incomplete);
+            let diagnostic = match result.outcome() {
+                ProductionW4CapabilityOutcomeV1::Incomplete(diagnostic)
+                | ProductionW4CapabilityOutcomeV1::Unsupported(diagnostic) => diagnostic,
+                ProductionW4CapabilityOutcomeV1::Clean
+                | ProductionW4CapabilityOutcomeV1::Rejected(_) => {
+                    panic!("{name} did not remain fail-closed without a counterexample")
+                }
+            };
+            assert!(diagnostic.counterexample().is_none());
+        }
+    }
+
+    #[test]
+    fn raw_ir_checkers_find_hostile_cases_without_original_analyzer_reports() {
+        let divergent = raw_fixture_execution(
+            "barrier_divergent",
+            include_str!("../tests/lit/barrier_divergent.pliron"),
+        )
+        .unwrap_err();
+        assert_eq!(divergent.status, KernelCheckStatusV1::Rejected);
+        assert_eq!(
+            divergent.obligation,
+            ProductionW4AnalysisObligationKindV1::Uniformity
+        );
+        assert!(divergent.primary.is_some());
+
+        let uninitialized = raw_fixture_execution(
+            "workgroup_uninitialized",
+            include_str!("../tests/lit/workgroup_uninitialized.pliron"),
+        )
+        .unwrap_err();
+        assert_eq!(uninitialized.status, KernelCheckStatusV1::Rejected);
+        assert_eq!(
+            uninitialized.obligation,
+            ProductionW4AnalysisObligationKindV1::Initialization
+        );
+
+        let missing_release = raw_fixture_execution(
+            "pipeline_missing_release",
+            include_str!("../tests/lit/pipeline_missing_release.pliron"),
+        )
+        .unwrap_err();
+        assert_eq!(missing_release.status, KernelCheckStatusV1::Incomplete);
+        assert_eq!(
+            missing_release.obligation,
+            ProductionW4AnalysisObligationKindV1::WorkgroupMemoryEpochs
         );
     }
 

@@ -1,5 +1,5 @@
 use fe2o3_host::{
-    AqlDispatchGeometryV1, GeneratedHostReadSliceV1, GeneratedHostReadWriteSliceV1,
+    AqlDispatchGeometryV1, GeneratedHostReadSliceV1, GeneratedHostWriteSliceV1,
     TutorialRuntimeLaunchIdentityV1, TutorialRuntimeSemanticRegionsV1,
 };
 use fe2o3_moe_top2_v1::kernel::moe_top2_route_f32_t8_e4_k2_c4_v1_gpu;
@@ -21,13 +21,13 @@ fn generated_arguments<'allocation>(
 ) -> moe_top2_route_f32_t8_e4_k2_c4_v1_gpu::Arguments<'allocation> {
     moe_top2_route_f32_t8_e4_k2_c4_v1_gpu::Arguments::new(
         GeneratedHostReadSliceV1::new(logits),
-        GeneratedHostReadWriteSliceV1::new(top2_experts),
-        GeneratedHostReadWriteSliceV1::new(requested_counts),
-        GeneratedHostReadWriteSliceV1::new(admitted_counts),
-        GeneratedHostReadWriteSliceV1::new(expert_offsets),
-        GeneratedHostReadWriteSliceV1::new(route_slots),
-        GeneratedHostReadWriteSliceV1::new(permutation),
-        GeneratedHostReadWriteSliceV1::new(inverse),
+        GeneratedHostWriteSliceV1::new(top2_experts),
+        GeneratedHostWriteSliceV1::new(requested_counts),
+        GeneratedHostWriteSliceV1::new(admitted_counts),
+        GeneratedHostWriteSliceV1::new(expert_offsets),
+        GeneratedHostWriteSliceV1::new(route_slots),
+        GeneratedHostWriteSliceV1::new(permutation),
+        GeneratedHostWriteSliceV1::new(inverse),
     )
 }
 

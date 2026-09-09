@@ -1469,10 +1469,15 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                     }
                 }
                 TyKind::Adt(definition, arguments) => {
-                    // The semantic catalog is the exact layout-reachable type
-                    // graph. Nominal-only arguments remain authenticated by
-                    // the rustc type identity; substituted field types add
-                    // every argument that has physical semantics.
+                    // Retain nominal contract references, not unrelated phantom
+                    // brands: the canonical type table must be exactly reachable.
+                    if let Some(index_space) =
+                        crate::trusted_device_items::capability_memory_index_space_type_v1(
+                            self.tcx, ty,
+                        )
+                    {
+                        self.queue_type(&mut pending, index_space)?;
+                    }
                     let variants = definition.variants();
                     self.require_type_cardinality(variants.len())?;
                     if definition.is_enum() {

@@ -74,7 +74,7 @@ const HANDOFF_FIELDS: usize = 12;
 const RESULT_FIELDS: usize = 8;
 const TRANSACTION_FIELDS: usize = 5;
 const TARGET_CLOSURE_FIELDS: usize = 8;
-const FINAL_GRAPH_REPORT_FIELDS: usize = 6;
+const FINAL_GRAPH_REPORT_FIELDS: usize = 10;
 const OUTPUT_RECEIPT_FIELDS: usize = 4;
 const MAX_TARGET_DECISION_BYTES: usize = 2 * 1024 * 1024;
 const MAX_OUTPUT_RECEIPT_BYTES: usize = 512;
@@ -100,6 +100,8 @@ const LAUNCH_ROSTER_IDENTITY_DOMAIN: &[u8] =
 const W4_WITNESS_DOMAIN_V1: &[u8] = b"FE2O3/PRODUCTION-W4-FINAL-GRAPH-CAPABILITY-WITNESS/V1\0";
 const W4_WITNESS_CHECKSUM_DOMAIN_V1: &[u8] = b"FE2O3/PRODUCTION-W4-WITNESS-CHECKSUM/V1\0";
 const W4_WITNESS_VERSION_V1: u16 = 1;
+/// Frozen number of independently checked obligations in the production W4 schedule.
+pub const PRODUCTION_W4_CHECKED_EVIDENCE_COUNT_V5: usize = 19;
 const LIVE_TARGET_CLOSURE_MAGIC_V1: &[u8; 8] = b"F2TCAP01";
 const LIVE_TARGET_CLOSURE_VERSION_V1: u16 = 1;
 const LIVE_TARGET_CLOSURE_HEADER_BYTES_V1: usize = 157;
@@ -270,6 +272,7 @@ impl InertProductionTargetCapabilityClosureV5 {
         if closure_identity == [0; 32]
             || neutral_graph == [0; 32]
             || neutral_graph_bytes == 0
+            || neutral_epoch == 0
             || target_model.digest().is_zero()
             || launch_contract.digest().is_zero()
         {
@@ -400,6 +403,10 @@ pub struct InertProductionFinalGraphReportV5 {
     final_graph: [u8; 32],
     final_graph_bytes: u64,
     final_epoch: u64,
+    analysis_epoch: u64,
+    checker_identity: [u8; 32],
+    schedule_identity: [u8; 32],
+    checked_evidence: Box<[[u8; 32]]>,
     report_identity: [u8; 32],
     w4_witness: InertProductionW4WitnessV5,
     canonical_bytes: Box<[u8]>,
@@ -411,22 +418,41 @@ impl InertProductionFinalGraphReportV5 {
         final_graph: [u8; 32],
         final_graph_bytes: u64,
         final_epoch: u64,
+        analysis_epoch: u64,
+        checker_identity: [u8; 32],
+        schedule_identity: [u8; 32],
+        checked_evidence: impl Into<Vec<[u8; 32]>>,
         canonical_results: impl Into<Vec<u8>>,
     ) -> Result<Self, InertProductionCapabilityHandoffErrorV5> {
+        let checked_evidence = checked_evidence.into();
         let w4_witness =
             InertProductionW4WitnessV5::from_canonical_encoding(canonical_results.into())?;
-        if final_graph == [0; 32] || final_graph_bytes == 0 || final_epoch == 0 {
+        if final_graph == [0; 32]
+            || final_graph_bytes == 0
+            || final_epoch == 0
+            || analysis_epoch == 0
+            || checker_identity == [0; 32]
+            || schedule_identity == [0; 32]
+            || checked_evidence.len() != PRODUCTION_W4_CHECKED_EVIDENCE_COUNT_V5
+            || checked_evidence.iter().any(|identity| identity == &[0; 32])
+        {
             return Err(InertProductionCapabilityHandoffErrorV5::ZeroIdentity);
         }
         let canonical_results = w4_witness.canonical_encoding();
         let report_identity = derive_blob_identity(FINAL_GRAPH_REPORT_DOMAIN, canonical_results);
         let graph_len = final_graph_bytes.to_le_bytes();
         let epoch = final_epoch.to_le_bytes();
+        let analysis_epoch_bytes = analysis_epoch.to_le_bytes();
+        let checked_evidence_bytes = encode_checked_evidence_roster(&checked_evidence);
         let fields: [&[u8]; FINAL_GRAPH_REPORT_FIELDS] = [
             FINAL_GRAPH_REPORT_DOMAIN,
             &final_graph,
             &graph_len,
             &epoch,
+            &analysis_epoch_bytes,
+            &checker_identity,
+            &schedule_identity,
+            &checked_evidence_bytes,
             &report_identity,
             &canonical_results,
         ];
@@ -441,6 +467,10 @@ impl InertProductionFinalGraphReportV5 {
             final_graph,
             final_graph_bytes,
             final_epoch,
+            analysis_epoch,
+            checker_identity,
+            schedule_identity,
+            checked_evidence: checked_evidence.into_boxed_slice(),
             report_identity,
             w4_witness,
             canonical_bytes,
@@ -459,16 +489,20 @@ impl InertProductionFinalGraphReportV5 {
             FINAL_GRAPH_REPORT_IDENTITY_DOMAIN,
         )?;
         require_lengths(
-            &record.fields[..5],
-            &[FINAL_GRAPH_REPORT_DOMAIN.len(), 32, 8, 8, 32],
+            &record.fields[..7],
+            &[FINAL_GRAPH_REPORT_DOMAIN.len(), 32, 8, 8, 8, 32, 32],
         )?;
         let decoded = Self::new(
             copy_32(record.fields[1])?,
             read_u64_exact(record.fields[2])?,
             read_u64_exact(record.fields[3])?,
-            record.fields[5].to_vec(),
+            read_u64_exact(record.fields[4])?,
+            copy_32(record.fields[5])?,
+            copy_32(record.fields[6])?,
+            decode_checked_evidence_roster(record.fields[7])?,
+            record.fields[9].to_vec(),
         )?;
-        if decoded.report_identity != copy_32(record.fields[4])? {
+        if decoded.report_identity != copy_32(record.fields[8])? {
             return Err(InertProductionCapabilityHandoffErrorV5::IdentityMismatch(
                 "final graph report results",
             ));
@@ -490,6 +524,26 @@ impl InertProductionFinalGraphReportV5 {
     /// Returns the exact final optimization epoch.
     pub const fn final_epoch(&self) -> u64 {
         self.final_epoch
+    }
+
+    /// Returns the exact live PLIRON epoch checked by W4.
+    pub const fn analysis_epoch(&self) -> u64 {
+        self.analysis_epoch
+    }
+
+    /// Returns the exact W4 checker implementation identity.
+    pub const fn checker_identity(&self) -> [u8; 32] {
+        self.checker_identity
+    }
+
+    /// Returns the identity of the complete ordered W4 obligation schedule result.
+    pub const fn schedule_identity(&self) -> [u8; 32] {
+        self.schedule_identity
+    }
+
+    /// Returns each exact W4 obligation evidence identity in frozen schedule order.
+    pub fn checked_evidence(&self) -> &[[u8; 32]] {
+        &self.checked_evidence
     }
 
     /// Returns the identity of the exact canonical analysis result bytes.
@@ -1764,6 +1818,28 @@ fn encode_subject_roster(
     Ok(bytes)
 }
 
+fn encode_checked_evidence_roster(evidence: &[[u8; 32]]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(4 + evidence.len() * 32);
+    bytes.extend_from_slice(&(evidence.len() as u32).to_le_bytes());
+    for identity in evidence {
+        bytes.extend_from_slice(identity);
+    }
+    bytes
+}
+
+fn decode_checked_evidence_roster(
+    bytes: &[u8],
+) -> Result<Vec<[u8; 32]>, InertProductionCapabilityHandoffErrorV5> {
+    if bytes.len() != 4 + PRODUCTION_W4_CHECKED_EVIDENCE_COUNT_V5 * 32
+        || read_u32(bytes, 0)? as usize != PRODUCTION_W4_CHECKED_EVIDENCE_COUNT_V5
+    {
+        return Err(InertProductionCapabilityHandoffErrorV5::InvalidRosterCount);
+    }
+    (0..PRODUCTION_W4_CHECKED_EVIDENCE_COUNT_V5)
+        .map(|index| copy_32(&bytes[4 + index * 32..4 + (index + 1) * 32]))
+        .collect()
+}
+
 fn decode_subject_roster(
     bytes: &[u8],
 ) -> Result<Vec<CapabilitySubjectV1>, InertProductionCapabilityHandoffErrorV5> {
@@ -2652,11 +2728,27 @@ mod tests {
                 .canonical_bytes(),
             closure.canonical_bytes()
         );
+        assert!(matches!(
+            InertProductionTargetCapabilityClosureV5::new(
+                [1; 32],
+                [3; 32],
+                122,
+                0,
+                TargetModelIdentityV1::from_untrusted_digest(digest(31)),
+                LaunchContractIdentityV1::from_untrusted_digest(digest(32)),
+                b"canonical decisions".to_vec(),
+            ),
+            Err(InertProductionCapabilityHandoffErrorV5::ZeroIdentity)
+        ));
 
         let report = InertProductionFinalGraphReportV5::new(
             [2; 32],
             123,
             9,
+            7,
+            [4; 32],
+            [5; 32],
+            vec![[6; 32]; PRODUCTION_W4_CHECKED_EVIDENCE_COUNT_V5],
             w4_witness(b"canonical report results"),
         )
         .unwrap();
@@ -2672,6 +2764,19 @@ mod tests {
                 .canonical_bytes(),
             report.canonical_bytes()
         );
+        assert!(matches!(
+            InertProductionFinalGraphReportV5::new(
+                [2; 32],
+                123,
+                9,
+                0,
+                [4; 32],
+                [5; 32],
+                vec![[6; 32]; PRODUCTION_W4_CHECKED_EVIDENCE_COUNT_V5],
+                w4_witness(b"canonical report results"),
+            ),
+            Err(InertProductionCapabilityHandoffErrorV5::ZeroIdentity)
+        ));
 
         for stage in [
             ProductionCompilerOutputStageV5::Llvm,
@@ -2694,6 +2799,10 @@ mod tests {
             [2; 32],
             123,
             9,
+            7,
+            [4; 32],
+            [5; 32],
+            vec![[6; 32]; PRODUCTION_W4_CHECKED_EVIDENCE_COUNT_V5],
             w4_witness(b"canonical report results"),
         )
         .unwrap();
@@ -2783,7 +2892,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_root_roster_rejects_omission_permutation_substitution_and_stale_graph() {
+    fn multi_root_roster_rejects_nonselected_corruption_omission_reordering_and_stale_graph() {
         let kir_bytes = b"candidate canonical KIR V13".to_vec();
         let kir_digest: [u8; 32] = Sha256::digest(&kir_bytes).into();
         let epoch = 7;

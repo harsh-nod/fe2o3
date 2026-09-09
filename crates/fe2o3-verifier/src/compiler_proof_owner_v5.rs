@@ -30,12 +30,26 @@ pub struct ValidatedCompilerProofInputsV5 {
 /// [`fe2o3_proof_contracts::CapabilitySubjectV1`] coordinates, not by a workload name. All four
 /// proof rosters remain retained so downstream protected verification cannot project a singleton
 /// owner and discard other roots.
+/// Authority-free legacy validation result.
+///
+/// This validates the selected capability and retains the structural all-root roster, but cannot
+/// be consumed into protected completion.
 #[derive(Debug)]
 #[must_use = "dropping the multi-root V5 owner abandons the complete proof roster"]
 pub struct ValidatedCompilerMultiRootProofInputsV5 {
     selected: ValidatedCompilerProofInputsV5,
     proof_lineage: InertMultiRootProofLineageV3,
     capability_associations: InertMultiRootStaticCapabilityEvidenceAssociationV1,
+}
+
+/// Complete all-root V2 admission accepted by the sole protected composer.
+///
+/// This type cannot be constructed by the public legacy `Proven` validator. It is the only
+/// verifier output that can be consumed into protected completion parts.
+#[derive(Debug)]
+#[must_use = "dropping protected compiler inputs abandons complete all-root custody"]
+pub struct ProtectedCompilerMultiRootProofInputsV5 {
+    validated: ValidatedCompilerMultiRootProofInputsV5,
 }
 
 impl ValidatedCompilerMultiRootProofInputsV5 {
@@ -61,8 +75,15 @@ impl ValidatedCompilerMultiRootProofInputsV5 {
         self.selected.association().selected_subject_ordinal()
     }
 
-    /// Consumes the validated owner into the only three inert records accepted by the sealed
-    /// completion response. No singleton association projection is exposed.
+    pub(crate) fn into_protected_compiler_completion_v5(
+        self,
+    ) -> ProtectedCompilerMultiRootProofInputsV5 {
+        ProtectedCompilerMultiRootProofInputsV5 { validated: self }
+    }
+}
+
+impl ProtectedCompilerMultiRootProofInputsV5 {
+    /// Consumes protected V2 custody into the records accepted by the sealed completion response.
     pub fn into_completion_parts(
         self,
     ) -> Result<
@@ -73,11 +94,11 @@ impl ValidatedCompilerMultiRootProofInputsV5 {
         ),
         CompilerProofInputValidationErrorV5,
     > {
-        let Self {
+        let ValidatedCompilerMultiRootProofInputsV5 {
             selected,
             capability_associations,
             ..
-        } = self;
+        } = self.validated;
         let ValidatedCompilerProofInputsV5 {
             association,
             capability,

@@ -2,8 +2,8 @@
 
 `fe2o3-target-spec` defines target-neutral profile metadata and semantic
 capability queries without importing a vendor runtime, linker, or lowering
-model. It is `no_std`; exact target crates implement the query contract and
-return immutable, replayable decisions.
+model. It is `no_std`; production target crates implement the query contract
+and return immutable, replayable decisions.
 
 The crate owns the reusable shape of a target profile:
 
@@ -52,6 +52,12 @@ continues to parse AMD target IDs, derive AMD capability records, and gate
 `gfx942` or `gfx950` production facts. This crate only gives those facts a
 portable envelope so generic compiler, proof, and host APIs can refer to target
 profiles without depending on AMD-specific types.
+
+`SyntheticConformanceTargetV1` is a reusable portability fixture. Its unusual
+subgroup, ABI, matrix, transfer, and resource choices expose assumptions copied
+from a production target. It has no compiler target, lowering, artifact writer,
+runtime, or launch implementation; a positive query result never claims a
+backend exists.
 
 ```rust
 use fe2o3_target_spec::{

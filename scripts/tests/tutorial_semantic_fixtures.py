@@ -146,6 +146,27 @@ class TutorialSemanticFixtureTests(unittest.TestCase):
             expected = json.dumps(record, ensure_ascii=True, indent=2, allow_nan=False).encode("ascii") + b"\n"
             self.assertEqual(expected, (RUNNER.FIXTURE_ROOT / f"{identity}.json").read_bytes())
 
+    def test_generator_maps_only_exact_macro_capability_roles(self) -> None:
+        expected = {
+            "Global<'_, f32, ReadOnly>": ("f32", "read_only"),
+            "Global<'_, u32, DisjointWrite<GridExclusive>>": ("u32", "write_only"),
+            "Global<'_, f32, ExclusiveReadWrite>": ("f32", "read_write"),
+            "Global<'_, u32, AtomicReadWrite<SystemScope>>": ("u32", "read_write"),
+            "WriteOnlyDisjointSlice<u32, GridExclusive>": ("u32", "write_only"),
+        }
+        for source_type, abi in expected.items():
+            with self.subTest(source_type=source_type):
+                self.assertEqual(abi, GENERATOR.source_buffer_abi(source_type))
+        for source_type in (
+            "Global<'_, f32, UnknownRole>",
+            "Global<'_, f32, DisjointWrite<Index1D, Index1D>>",
+            "Global<'_, f32, AtomicReadWrite<>>",
+        ):
+            with self.subTest(source_type=source_type), self.assertRaisesRegex(
+                ValueError, "unsupported Global capability role"
+            ):
+                GENERATOR.source_buffer_abi(source_type)
+
     def test_generator_consumes_probe_results_without_hardcoded_blocker(self) -> None:
         diagnostic = "FE2O3-TUTORIAL-TXN-007: probe-derived test blocker"
         export = GENERATOR._blocked_export(

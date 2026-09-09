@@ -274,7 +274,8 @@ struct ProductionV13StaticAssociationV2 {
     capability_closure_identity: [u8; 32],
     capability_association_identity: [u8; 32],
     capability_association_bytes: u64,
-    numerical_policy_identity: [u8; 32],
+    dynamic_precondition_roster_identity: [u8; 32],
+    compiler_policy_identity: [u8; 32],
     identity: [u8; 32],
 }
 
@@ -298,6 +299,7 @@ impl ProductionV13StaticAssociationV2 {
     fn from_production_result(
         production_result: InertProductionCapabilityResultV5,
         kernel_ordinal: usize,
+        dynamic_precondition_roster_identity: [u8; 32],
     ) -> Result<Self, GeneratedHostContractErrorV2> {
         let handoff = production_result.handoff();
         let carried_subject = *handoff
@@ -341,7 +343,7 @@ impl ProductionV13StaticAssociationV2 {
         let capability_closure_identity = target_closure.closure_identity();
         let capability_association_identity = capability_association.sha256();
         let capability_association_bytes = capability_association.byte_len();
-        let numerical_policy_identity = handoff.inputs().compiler_policy();
+        let compiler_policy_identity = handoff.inputs().compiler_policy();
         Self::new(
             final_graph,
             Some(production_result),
@@ -349,7 +351,8 @@ impl ProductionV13StaticAssociationV2 {
             capability_closure_identity,
             capability_association_identity,
             capability_association_bytes,
-            numerical_policy_identity,
+            dynamic_precondition_roster_identity,
+            compiler_policy_identity,
             Some((result_identity.sha256(), result_identity.byte_len())),
         )
     }
@@ -364,7 +367,8 @@ impl ProductionV13StaticAssociationV2 {
         capability_closure_identity: [u8; 32],
         capability_association_identity: [u8; 32],
         capability_association_bytes: u64,
-        numerical_policy_identity: [u8; 32],
+        dynamic_precondition_roster_identity: [u8; 32],
+        compiler_policy_identity: [u8; 32],
     ) -> Result<Self, GeneratedHostContractErrorV2> {
         let subject = GeneratedHostExecutionSubjectV2::from_v13(
             &final_graph,
@@ -379,7 +383,8 @@ impl ProductionV13StaticAssociationV2 {
             capability_closure_identity,
             capability_association_identity,
             capability_association_bytes,
-            numerical_policy_identity,
+            dynamic_precondition_roster_identity,
+            compiler_policy_identity,
             None,
         )
     }
@@ -392,13 +397,15 @@ impl ProductionV13StaticAssociationV2 {
         capability_closure_identity: [u8; 32],
         capability_association_identity: [u8; 32],
         capability_association_bytes: u64,
-        numerical_policy_identity: [u8; 32],
+        dynamic_precondition_roster_identity: [u8; 32],
+        compiler_policy_identity: [u8; 32],
         production_result_identity: Option<([u8; 32], u64)>,
     ) -> Result<Self, GeneratedHostContractErrorV2> {
         if capability_closure_identity == [0; 32]
             || capability_association_identity == [0; 32]
             || capability_association_bytes == 0
-            || numerical_policy_identity == [0; 32]
+            || dynamic_precondition_roster_identity == [0; 32]
+            || compiler_policy_identity == [0; 32]
         {
             return Err(GeneratedHostContractErrorV2::InvalidProductionEvidence);
         }
@@ -412,7 +419,8 @@ impl ProductionV13StaticAssociationV2 {
         digest.update(capability_closure_identity);
         digest.update(capability_association_identity);
         digest.update(capability_association_bytes.to_le_bytes());
-        digest.update(numerical_policy_identity);
+        digest.update(dynamic_precondition_roster_identity);
+        digest.update(compiler_policy_identity);
         if let Some((sha256, byte_len)) = production_result_identity {
             digest.update(sha256);
             digest.update(byte_len.to_le_bytes());
@@ -425,7 +433,8 @@ impl ProductionV13StaticAssociationV2 {
             capability_closure_identity,
             capability_association_identity,
             capability_association_bytes,
-            numerical_policy_identity,
+            dynamic_precondition_roster_identity,
+            compiler_policy_identity,
             identity,
         })
     }
@@ -467,6 +476,7 @@ impl ProductionGeneratedHostFactsV2 {
         descriptor_identity: KernelDescriptorDigest,
         entry_name: impl Into<Box<str>>,
         kernel_ordinal: usize,
+        dynamic_precondition_roster_identity: [u8; 32],
         production_result: InertProductionCapabilityResultV5,
     ) -> Result<Self, GeneratedHostContractErrorV2> {
         let descriptor_target = descriptor_target.into();
@@ -490,6 +500,7 @@ impl ProductionGeneratedHostFactsV2 {
             static_association: ProductionV13StaticAssociationV2::from_production_result(
                 production_result,
                 kernel_ordinal,
+                dynamic_precondition_roster_identity,
             )?,
             memory: None,
         })
@@ -513,7 +524,8 @@ impl ProductionGeneratedHostFactsV2 {
         capability_closure_identity: [u8; 32],
         capability_association_identity: [u8; 32],
         capability_association_bytes: u64,
-        numerical_policy_identity: [u8; 32],
+        dynamic_precondition_roster_identity: [u8; 32],
+        compiler_policy_identity: [u8; 32],
         memory: impl Into<Vec<GeneratedHostMemoryConstraintV2>>,
     ) -> Result<Self, GeneratedHostContractErrorV2> {
         let descriptor_target = descriptor_target.into();
@@ -551,7 +563,8 @@ impl ProductionGeneratedHostFactsV2 {
                 capability_closure_identity,
                 capability_association_identity,
                 capability_association_bytes,
-                numerical_policy_identity,
+                dynamic_precondition_roster_identity,
+                compiler_policy_identity,
             )?,
             memory: Some(memory.into_boxed_slice()),
         })
@@ -590,8 +603,17 @@ impl<K> AdmittedGeneratedHostContractV2<K> {
         )
     }
 
-    pub fn numerical_policy_identity(&self) -> [u8; 32] {
-        self.static_association.numerical_policy_identity
+    /// Returns the complete protected compiler-policy identity.
+    ///
+    /// Operation-level numerical requirements remain part of the exact canonical KIR subject and
+    /// authenticated target-capability closure; they are not projected out into a second policy.
+    pub fn compiler_policy_identity(&self) -> [u8; 32] {
+        self.static_association.compiler_policy_identity
+    }
+
+    pub fn dynamic_precondition_roster_identity(&self) -> [u8; 32] {
+        self.static_association
+            .dynamic_precondition_roster_identity
     }
 
     pub const fn packing_plan(&self) -> &GeneratedArgumentPackingPlanV1 {
@@ -643,7 +665,8 @@ impl<K> AdmittedGeneratedHostContractV2<K> {
             runtime,
             subject: self.subject(),
             capability_closure_identity: self.capability_closure_identity(),
-            numerical_policy_identity: self.numerical_policy_identity(),
+            dynamic_precondition_roster_identity: self.dynamic_precondition_roster_identity(),
+            compiler_policy_identity: self.compiler_policy_identity(),
             static_association_identity: self.static_association.identity,
             artifact_identity: self.artifact_identity,
             descriptor_table_identity: self.descriptor_table_identity,
@@ -1248,7 +1271,8 @@ pub struct GeneratedHostDispatchEvidenceV2 {
     runtime: GeneratedHostRuntimeCoordinatesV2,
     subject: GeneratedHostExecutionSubjectV2,
     capability_closure_identity: [u8; 32],
-    numerical_policy_identity: [u8; 32],
+    dynamic_precondition_roster_identity: [u8; 32],
+    compiler_policy_identity: [u8; 32],
     static_association_identity: [u8; 32],
     artifact_identity: CanonicalCodeObjectDigest,
     descriptor_table_identity: DeviceDescriptorTableDigest,
@@ -1459,8 +1483,13 @@ impl<K> CheckedGeneratedHostDispatchV2<K> {
         )
     }
 
-    pub(crate) fn numerical_policy_identity(&self) -> [u8; 32] {
-        self.static_association.numerical_policy_identity
+    pub(crate) fn dynamic_precondition_roster_identity(&self) -> [u8; 32] {
+        self.static_association
+            .dynamic_precondition_roster_identity
+    }
+
+    pub(crate) fn compiler_policy_identity(&self) -> [u8; 32] {
+        self.static_association.compiler_policy_identity
     }
 
     pub(crate) fn memory_bindings(&self) -> &[GeneratedHostMemoryBindingV2] {
@@ -1607,8 +1636,13 @@ fn validate_dispatch_coordinates<K>(
     if evidence.capability_closure_identity != admitted.capability_closure_identity() {
         return Err(GeneratedHostPrepareErrorV2::CapabilityClosureMismatch);
     }
-    if evidence.numerical_policy_identity != admitted.numerical_policy_identity() {
-        return Err(GeneratedHostPrepareErrorV2::NumericalPolicyMismatch);
+    if evidence.dynamic_precondition_roster_identity
+        != admitted.dynamic_precondition_roster_identity()
+    {
+        return Err(GeneratedHostPrepareErrorV2::DynamicPreconditionRosterMismatch);
+    }
+    if evidence.compiler_policy_identity != admitted.compiler_policy_identity() {
+        return Err(GeneratedHostPrepareErrorV2::CompilerPolicyMismatch);
     }
     if evidence.static_association_identity != admitted.static_association.identity
         || evidence.artifact_identity != admitted.artifact_identity
@@ -1823,6 +1857,10 @@ where
         self.checked.capability_association_identity()
     }
 
+    pub fn dynamic_precondition_roster_identity(&self) -> [u8; 32] {
+        self.checked.dynamic_precondition_roster_identity()
+    }
+
     pub fn v13_static_association_identity(&self) -> [u8; 32] {
         self.checked.static_association_identity()
     }
@@ -1904,6 +1942,13 @@ where
             .as_ref()
             .expect("pending invocation retains checked host facts")
             .capability_association_identity()
+    }
+
+    pub fn dynamic_precondition_roster_identity(&self) -> [u8; 32] {
+        self.checked
+            .as_ref()
+            .expect("pending invocation retains checked host facts")
+            .dynamic_precondition_roster_identity()
     }
 
     pub fn v13_static_association_identity(&self) -> [u8; 32] {
@@ -2013,8 +2058,12 @@ impl<K, Arguments> CompletedGeneratedHostInvocationV2<K, Arguments> {
         self.checked.capability_association_identity()
     }
 
-    pub fn numerical_policy_identity(&self) -> [u8; 32] {
-        self.checked.numerical_policy_identity()
+    pub fn dynamic_precondition_roster_identity(&self) -> [u8; 32] {
+        self.checked.dynamic_precondition_roster_identity()
+    }
+
+    pub fn compiler_policy_identity(&self) -> [u8; 32] {
+        self.checked.compiler_policy_identity()
     }
 
     pub fn v13_static_association_identity(&self) -> [u8; 32] {
@@ -2069,7 +2118,7 @@ pub enum GeneratedHostContractErrorV2 {
     StaleCapabilityClosure,
     CrossTargetCapabilityClosure,
     CrossLaunchCapabilityClosure,
-    NumericalPolicyMismatch,
+    CompilerPolicyMismatch,
     GeneratedLayout(GeneratedArgumentLayoutError),
     DescriptorAbi(GeneratedArgumentPackingError),
     DescriptorLaunchMismatch,
@@ -2119,7 +2168,8 @@ pub enum GeneratedHostPrepareErrorV2 {
     StreamMismatch,
     SubjectMismatch,
     CapabilityClosureMismatch,
-    NumericalPolicyMismatch,
+    DynamicPreconditionRosterMismatch,
+    CompilerPolicyMismatch,
     StaticAssociationMismatch,
     LaunchGeometry,
     MemoryBindingCount,
@@ -2541,6 +2591,7 @@ mod tests {
             [24; 32],
             [25; 32],
             512,
+            [27; 32],
             [26; 32],
             constraints(),
         )
@@ -2580,6 +2631,28 @@ mod tests {
             assert_eq!(constraint.axes()[0].minimum_stride(), 1);
             assert_eq!(constraint.axes()[0].maximum_stride(), 1);
         }
+    }
+
+    #[test]
+    fn static_association_commits_dynamic_roster_and_compiler_policy() {
+        let association = |dynamic_preconditions, compiler_policy| {
+            ProductionV13StaticAssociationV2::for_test_only(
+                v13_graph(),
+                7,
+                [22; 32],
+                [23; 32],
+                [24; 32],
+                [25; 32],
+                512,
+                dynamic_preconditions,
+                compiler_policy,
+            )
+            .unwrap()
+            .identity
+        };
+        let baseline = association([27; 32], [26; 32]);
+        assert_ne!(baseline, association([47; 32], [26; 32]));
+        assert_ne!(baseline, association([27; 32], [46; 32]));
     }
 
     fn runtime() -> GeneratedHostRuntimeCoordinatesV2 {
@@ -2817,8 +2890,17 @@ mod tests {
         );
 
         let mut evidence = dispatch_evidence();
-        evidence.numerical_policy_identity = [45; 32];
-        rejected_before_submission(bindings(), evidence, geometry(), "NumericalPolicyMismatch");
+        evidence.dynamic_precondition_roster_identity = [47; 32];
+        rejected_before_submission(
+            bindings(),
+            evidence,
+            geometry(),
+            "DynamicPreconditionRosterMismatch",
+        );
+
+        let mut evidence = dispatch_evidence();
+        evidence.compiler_policy_identity = [45; 32];
+        rejected_before_submission(bindings(), evidence, geometry(), "CompilerPolicyMismatch");
 
         let mut evidence = dispatch_evidence();
         evidence.subject.final_epoch += 1;
@@ -2926,6 +3008,7 @@ mod tests {
         assert_eq!(prepared.subject(), subject());
         assert_eq!(prepared.geometry(), geometry());
         assert_eq!(prepared.capability_association_identity(), ([25; 32], 512));
+        assert_eq!(prepared.dynamic_precondition_roster_identity(), [27; 32]);
         assert_eq!(
             prepared.v13_static_association_identity(),
             static_association
@@ -2939,6 +3022,7 @@ mod tests {
         let pending = prepared.submit().unwrap();
         assert_eq!(pending.runtime_coordinates(), runtime());
         assert_eq!(pending.capability_association_identity(), ([25; 32], 512));
+        assert_eq!(pending.dynamic_precondition_roster_identity(), [27; 32]);
         assert_eq!(
             pending.v13_static_association_identity(),
             static_association
@@ -2962,10 +3046,14 @@ mod tests {
         assert_eq!(completion.geometry(), geometry());
         assert_eq!(completion.capability_closure_identity(), [24; 32]);
         assert_eq!(
+            completion.dynamic_precondition_roster_identity(),
+            [27; 32]
+        );
+        assert_eq!(
             completion.capability_association_identity(),
             ([25; 32], 512)
         );
-        assert_eq!(completion.numerical_policy_identity(), [26; 32]);
+        assert_eq!(completion.compiler_policy_identity(), [26; 32]);
         assert_eq!(
             completion.v13_static_association_identity(),
             static_association

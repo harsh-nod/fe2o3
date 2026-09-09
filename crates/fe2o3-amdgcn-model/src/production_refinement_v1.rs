@@ -57,6 +57,7 @@ pub struct ProductionTargetStructuralBindingV1 {
     neutral_kernel_ir: ProductionReplayKernelIrIdentityV1,
     target_bound_kernel_ir: ProductionReplayKernelIrIdentityV1,
     counts: ProductionTargetStructuralCountsV1,
+    preserves_coordinates: bool,
 }
 
 impl ProductionTargetStructuralBindingV1 {
@@ -85,7 +86,7 @@ impl ProductionTargetStructuralBindingV1 {
     }
 
     pub const fn preserves_function_block_operation_coordinates(self) -> bool {
-        true
+        self.preserves_coordinates
     }
 
     pub const fn proves_semantic_refinement(self) -> bool {
@@ -147,6 +148,7 @@ impl ProductionTargetBoundKernelIrV1 {
             ProductionReplayKernelIrVersionV1::V8 => 8,
             ProductionReplayKernelIrVersionV1::V9 => 9,
             ProductionReplayKernelIrVersionV1::V11 => 11,
+            ProductionReplayKernelIrVersionV1::V13 => 13,
         }]);
         for identity in [neutral_kernel_ir, target_bound_kernel_ir] {
             digest.update(identity.sha256());
@@ -179,8 +181,71 @@ impl ProductionTargetBoundKernelIrV1 {
             neutral_kernel_ir,
             target_bound_kernel_ir,
             counts,
+            preserves_coordinates: true,
         })
     }
+}
+
+/// Binds the exact endpoints of a successfully replayed V6 optimization.
+///
+/// Unlike target capability insertion, V6 may change graph coordinates. The
+/// returned record therefore exposes final-graph counts and explicitly does
+/// not claim coordinate preservation; transformation and W4 receipts own that
+/// proof obligation.
+pub(crate) fn admit_exact_v6_replayed_structural_binding_v1(
+    neutral_module: &Module,
+    target_module: &Module,
+    profile: ProductionAmdTargetProfileV1,
+    neutral_kernel_ir: ProductionReplayKernelIrIdentityV1,
+    target_bound_kernel_ir: ProductionReplayKernelIrIdentityV1,
+) -> Result<ProductionTargetStructuralBindingV1, ProductionTargetStructuralBindingErrorV1> {
+    if neutral_kernel_ir.version() != ProductionReplayKernelIrVersionV1::V13
+        || target_bound_kernel_ir.version() != ProductionReplayKernelIrVersionV1::V13
+        || neutral_module.kernels.len() != target_module.kernels.len()
+        || neutral_module
+            .kernels
+            .iter()
+            .zip(&target_module.kernels)
+            .any(|(neutral, target)| neutral.id != target.id || neutral.entry != target.entry)
+    {
+        return Err(ProductionTargetStructuralBindingErrorV1::CoordinateShapeMismatch);
+    }
+    let source_counts = structural_counts(neutral_module)?;
+    let counts = structural_counts(target_module)?;
+    let mut digest = Sha256::new();
+    digest.update((STRUCTURAL_BINDING_DOMAIN_V1.len() as u32).to_le_bytes());
+    digest.update(STRUCTURAL_BINDING_DOMAIN_V1);
+    digest.update(b"V6-REPLAYED-GRAPH\0");
+    digest.update([match profile {
+        ProductionAmdTargetProfileV1::Gfx942 => 1,
+        ProductionAmdTargetProfileV1::Gfx950 => 2,
+    }]);
+    digest.update([13]);
+    for identity in [neutral_kernel_ir, target_bound_kernel_ir] {
+        digest.update(identity.sha256());
+        digest.update(identity.byte_len().to_le_bytes());
+    }
+    for count in [
+        source_counts.functions,
+        source_counts.defined_bodies,
+        source_counts.blocks,
+        source_counts.operations,
+        counts.functions,
+        counts.defined_bodies,
+        counts.blocks,
+        counts.operations,
+    ] {
+        digest.update(count.to_le_bytes());
+    }
+    Ok(ProductionTargetStructuralBindingV1 {
+        identity: digest.finalize().into(),
+        profile,
+        version: ProductionReplayKernelIrVersionV1::V13,
+        neutral_kernel_ir,
+        target_bound_kernel_ir,
+        counts,
+        preserves_coordinates: false,
+    })
 }
 
 fn same_coordinate_shape(neutral: &Module, target: &Module) -> bool {

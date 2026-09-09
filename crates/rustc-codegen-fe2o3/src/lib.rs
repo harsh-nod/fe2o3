@@ -627,9 +627,15 @@ mod tests {
     };
     use std::path::{Path, PathBuf};
     #[test]
-    fn admitted_protected_modules_publish_only_through_strict_v3() {
-        let backend = include_str!("lib.rs");
-        let production_pipeline = include_str!("production_pipeline.rs");
+    fn admitted_protected_modules_publish_only_through_capability_v5() {
+        let backend = include_str!("lib.rs")
+            .split_once("\n#[cfg(test)]\nmod tests {")
+            .expect("backend test module boundary")
+            .0;
+        let production_pipeline = include_str!("production_pipeline.rs")
+            .split_once("\n#[cfg(test)]\nmod tests {")
+            .expect("production pipeline test module boundary")
+            .0;
         let production = backend
             .split("let mut production_device_transaction_complete")
             .nth(1)
@@ -654,8 +660,13 @@ mod tests {
         assert!(!production.contains("QualificationOracle"));
         assert!(!production.contains("qualification_selection"));
         assert!(!production_pipeline.contains("Option<BuildAttempt>"));
-        assert!(production_pipeline.contains("publish_compiler_module_handoff_v3"));
-        assert!(production_pipeline.contains("publish_compiler_execution_receipt_transport_v1"));
+        assert!(production_pipeline.contains("publish_compiler_capability_handoff_v5("));
+        assert!(
+            production_pipeline
+                .contains("publish_compiler_execution_receipt_transport_for_capability_v5(")
+        );
+        assert!(!production_pipeline.contains("publish_compiler_module_handoff_v3("));
+        assert!(!production_pipeline.contains("publish_compiler_execution_receipt_transport_v1("));
         let admission = backend
             .find("let mut production_device_admission")
             .expect("production device admission");
@@ -702,7 +713,10 @@ mod tests {
             "<host-only:production-target-not-authenticated>"
         );
 
-        let backend = include_str!("lib.rs");
+        let backend = include_str!("lib.rs")
+            .split_once("\n#[cfg(test)]\nmod tests {")
+            .expect("backend test module boundary")
+            .0;
         assert!(!backend.contains("Self::new(\"gfx1100\")"));
         assert!(!backend.contains("inert exact gfx942:xnack- LLVM handoff"));
         assert!(backend.contains("let authenticated_target_name = target.canonical_name()"));

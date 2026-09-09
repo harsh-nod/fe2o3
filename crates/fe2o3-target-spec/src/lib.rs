@@ -6,6 +6,7 @@
 use core::fmt;
 
 mod capability_v1;
+mod synthetic_conformance_v1;
 
 pub use capability_v1::{
     MAX_TARGET_CAPABILITY_CLOSURE_REQUIREMENTS_V1, TargetAbiConstraintV1, TargetAddressSpaceV1,
@@ -25,6 +26,10 @@ pub use capability_v1::{
     TargetResourceRequirementV1, TargetScalarEncodingV1, TargetScalarKindV1, TargetScalarTypeV1,
     admit_static_target_capability_closure_v1, query_target_capability_closure_v1,
     query_target_capability_v1,
+};
+pub use synthetic_conformance_v1::{
+    SYNTHETIC_CONFORMANCE_TARGET_MODEL_V1, SYNTHETIC_CONFORMANCE_TARGET_PROFILE_V1,
+    SyntheticConformanceTargetV1,
 };
 
 const ABSENT_PROFILE_FIELD: &str = "<absent>";

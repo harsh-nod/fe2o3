@@ -36,10 +36,7 @@ fn runner_enters_only_the_bounded_production_application_route() {
 #[test]
 fn host_binds_all_eight_arguments_through_the_generated_adapter() {
     assert_eq!(HOST.matches("GeneratedHostReadSliceV1::new").count(), 1);
-    assert_eq!(
-        HOST.matches("GeneratedHostReadWriteSliceV1::new").count(),
-        7
-    );
+    assert_eq!(HOST.matches("GeneratedHostWriteSliceV1::new").count(), 7);
     assert!(HOST.contains("moe_top2_route_f32_t8_e4_k2_c4_v1_gpu::Arguments::new"));
     assert!(HOST.contains("run_generated_application_v1"));
     assert!(HOST.contains("prepare_generated_application_invocation_v1"));

@@ -46,7 +46,7 @@
   },
   "oracle": {
     "function": "fe2o3_vecadd::vecadd_cpu_oracle",
-    "inputSha256": "a6876aec0e91a8080cbc0d0652bebdd4fd4c39f0b79131a9bfd3d4eb4986ed86",
+    "inputSha256": "597995a9dd6f1811f964315ab582d49df7604c58f9b76785e135209441c27117",
     "kind": "existing-rust-cpu-reference-v1"
   },
   "oracleSuiteId": "cpu-reference-typed-vecadd",
@@ -66,7 +66,7 @@
         "name": "b"
       },
       {
-        "access": "read_write",
+        "access": "write_only",
         "element": "f32",
         "kind": "buffer",
         "name": "c"
@@ -111,7 +111,7 @@
         "kind": "buffer"
       },
       {
-        "access": "read_write",
+        "access": "write_only",
         "alignment": 4,
         "bytes": "0x00e4404600e4404600e4404600e4404600e4404600e44046",
         "element": "f32",

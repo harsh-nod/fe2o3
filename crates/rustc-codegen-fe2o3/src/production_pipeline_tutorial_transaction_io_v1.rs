@@ -1,10 +1,13 @@
-fn publish_export(
+fn publish_transaction_export(
     destination: &Path,
+    result_name: &str,
     envelope: &[u8],
     objects: &BTreeMap<String, Vec<u8>>,
-    hardware_archive: &[u8],
+    hardware_archive: Option<&[u8]>,
 ) -> ResultV1<()> {
-    if hardware_archive.is_empty() || hardware_archive.len() > MAX_EVIDENCE_BYTES {
+    if hardware_archive
+        .is_some_and(|archive| archive.is_empty() || archive.len() > MAX_EVIDENCE_BYTES)
+    {
         return fail(
             TutorialProductionTransactionErrorCodeV1::MissingEvidence,
             "hardware archive is empty or oversized",
@@ -30,8 +33,10 @@ fn publish_export(
         )
     })?;
     let outcome = (|| {
-        write_new_file(&stage.join(RESULT_NAME), envelope)?;
-        write_new_file(&stage.join(HARDWARE_ARCHIVE_NAME), hardware_archive)?;
+        write_new_file(&stage.join(result_name), envelope)?;
+        if let Some(archive) = hardware_archive {
+            write_new_file(&stage.join("hardware-archive-v1.zip"), archive)?;
+        }
         let mut written = BTreeMap::<String, &[u8]>::new();
         for payload in objects.values() {
             let digest = hex_sha256(payload);

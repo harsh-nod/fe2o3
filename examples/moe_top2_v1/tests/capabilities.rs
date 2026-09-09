@@ -39,7 +39,12 @@ fn compile(case: &str, source: &str) -> Output {
     std::fs::write(scratch.0.join("src/lib.rs"), source).unwrap();
     Command::new(env!("CARGO"))
         .current_dir(&scratch.0)
-        .env("CARGO_TARGET_DIR", scratch.0.join("target"))
+        .env(
+            "CARGO_TARGET_DIR",
+            std::env::var_os("CARGO_TARGET_DIR")
+                .expect("managed tests require the shared CARGO_TARGET_DIR"),
+        )
+        .env("CARGO_INCREMENTAL", "0")
         .env("RUSTUP_TOOLCHAIN", "nightly-2026-04-03")
         .env_remove("RUSTC")
         .env_remove("RUSTC_WRAPPER")
@@ -55,21 +60,22 @@ fn attributed_source_has_no_ambient_or_legacy_memory_authority() {
     for required in [
         "context: KernelContext<'_>",
         "logits: Global<'_, f32, ReadOnly>",
-        "context.invocation().index_1d().get()",
-        "output.store(index, value)",
+        "let Some(grid) = context.grid()",
+        "let Some(leader) = grid.leader()",
+        "output.store(leader.index(index), value)",
     ] {
         assert!(source.contains(required), "missing {required}");
     }
     assert!(
         source
-            .matches("Global<'_, u32, ExclusiveReadWrite>")
+            .matches("Global<'_, u32, DisjointWrite<GridExclusive>>")
             .count()
             >= 7
     );
     for forbidden in [
-        "DisjointSlice",
-        "GridLeader",
-        "thread::",
+        "ExclusiveReadWrite",
+        "WriteOnlyDisjointSlice",
+        "thread::grid_leader",
         "::current()",
         "logits: &[",
     ] {
@@ -78,10 +84,10 @@ fn attributed_source_has_no_ambient_or_legacy_memory_authority() {
 }
 
 #[test]
-fn read_only_input_and_exclusive_output_shape_typechecks() {
+fn read_only_input_and_grid_exclusive_output_shape_typechecks() {
     let output = compile(
         "pass",
-        "use fe2o3_device::{ExclusiveReadWrite,Global,ReadOnly}; fn f<B>(i:&Global<'_,f32,ReadOnly,B>,o:&mut Global<'_,u32,ExclusiveReadWrite,B>){if i.load(0).is_some(){let _=o.store(0,1);}}",
+        "use fe2o3_device::{DisjointWrite,Global,GridExclusive,GridLeader,ReadOnly}; fn f<B>(i:&Global<'_,f32,ReadOnly,B>,o:&mut Global<'_,u32,DisjointWrite<GridExclusive>,B>,leader:&GridLeader<B>){if i.load(0).is_some(){let _=o.store(leader.index(0),1);}}",
     );
     assert!(
         output.status.success(),
@@ -92,7 +98,7 @@ fn read_only_input_and_exclusive_output_shape_typechecks() {
 
 #[test]
 fn forgery_wrong_role_brand_and_host_use_fail() {
-    const CASES: [(&str, &str, &str); 4] = [
+    const CASES: [(&str, &str, &str); 5] = [
         (
             "forgery",
             "use fe2o3_device::KernelContext; fn f(){let _:KernelContext<'static>=KernelContext::__compiler_issue();}",
@@ -106,6 +112,11 @@ fn forgery_wrong_role_brand_and_host_use_fail() {
         (
             "brand",
             "use fe2o3_device::{ExclusiveReadWrite,Global}; fn take<B>(_:&Global<'_,u32,ExclusiveReadWrite,B>){} fn f<A,B>(x:&Global<'_,u32,ExclusiveReadWrite,A>){take::<B>(x);}",
+            "mismatched types",
+        ),
+        (
+            "leader-brand",
+            "use fe2o3_device::{DisjointWrite,Global,GridExclusive,GridLeader}; fn f<A,B>(x:&mut Global<'_,u32,DisjointWrite<GridExclusive>,A>,leader:&GridLeader<B>){let _=x.store(leader.index(0),1);}",
             "mismatched types",
         ),
         (

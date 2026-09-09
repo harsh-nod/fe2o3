@@ -3,6 +3,7 @@ mod executable;
 mod executable_wire;
 mod mem2reg;
 mod semantic_constant;
+pub mod semantic_direct_call_expansion_v1;
 mod semantic_memory;
 pub mod semantic_mir_v1;
 mod semantic_option_dominance;
@@ -10,6 +11,7 @@ mod semantic_type;
 pub mod semantic_type_v2;
 mod semantic_u32_induction;
 mod semantic_u32_induction_evidence_v1;
+mod semantic_u32_induction_evidence_v2;
 mod ssa;
 
 pub use control_flow::{
@@ -54,6 +56,15 @@ pub use semantic_constant::{
     MirPointerRelocation, MirPointerWidth, MirPromotedIdentity, MirSemanticConstantPool,
     MirStaticIdentity, MirSymbolIdentity,
 };
+pub use semantic_direct_call_expansion_v1::{
+    InertCanonicalSemanticCallExpansionEvidenceV1, MAX_SEMANTIC_CALL_EXPANSION_EVIDENCE_BYTES_V1,
+    SEMANTIC_CALL_EXPANSION_EVIDENCE_POLICY_V1, SEMANTIC_CALL_EXPANSION_EVIDENCE_VERSION_V1,
+    SemanticCallExpansionErrorV1, SemanticCallExpansionEvidenceErrorV1,
+    SemanticCallExpansionLimitsV1, SemanticCallExpansionResourceV1, SemanticCallExpansionV1,
+    SemanticCallInstanceIdV1, SemanticCallInstanceV1, SemanticExpandedBlockOriginV1,
+    SemanticExpandedLocalOriginV1, SemanticExpandedRootEvidenceV1, SemanticExpandedRootV1,
+    SemanticExpandedStatementOriginV1, SemanticExpandedTerminatorOriginV1,
+};
 pub use semantic_memory::{
     MAX_MEMORY_OPERATION_WIRE_BYTES, MirCopyNonOverlappingContract, MirElementCount,
     MirMemoryAccessContract, MirMemoryContractDecodeError, MirMemoryContractValidationError,
@@ -83,7 +94,9 @@ pub use semantic_u32_induction::{
     SemanticU32InductionAnalysisErrorV1, SemanticU32InductionAnalysisLimitsV1,
     SemanticU32InductionBlockSiteV1, SemanticU32InductionNoOverflowCertificateV1,
     SemanticU32InductionNoOverflowReportV1, SemanticU32InductionPlaceBindingV1,
-    SemanticU32InductionStatementSiteV1, analyze_semantic_u32_induction_no_overflow_v1,
+    SemanticU32InductionStatementSiteV1, analyze_expanded_semantic_u32_induction_no_overflow_v1,
+    analyze_expanded_semantic_u32_induction_no_overflow_with_limits_v1,
+    analyze_semantic_u32_induction_no_overflow_v1,
     analyze_semantic_u32_induction_no_overflow_with_limits_v1,
 };
 pub use semantic_u32_induction_evidence_v1::{
@@ -92,6 +105,11 @@ pub use semantic_u32_induction_evidence_v1::{
     SemanticU32InductionBlockSiteEvidenceV1, SemanticU32InductionEvidenceErrorV1,
     SemanticU32InductionNoOverflowCertificateEvidenceV1, SemanticU32InductionPlaceEvidenceV1,
     SemanticU32InductionStatementSiteEvidenceV1,
+};
+pub use semantic_u32_induction_evidence_v2::{
+    InertCanonicalSemanticU32InductionEvidenceV2, MAX_SEMANTIC_U32_INDUCTION_EVIDENCE_BYTES_V2,
+    MAX_SEMANTIC_U32_INDUCTION_EVIDENCE_CODEC_WORK_V2, SEMANTIC_U32_INDUCTION_EVIDENCE_POLICY_V2,
+    SEMANTIC_U32_INDUCTION_EVIDENCE_VERSION_V2, SemanticU32InductionEvidenceErrorV2,
 };
 pub use ssa::{
     HARD_MAX_SSA_BLOCKS_V1, HARD_MAX_SSA_EDGE_DEFINITIONS_V1, HARD_MAX_SSA_EDGES_V1,

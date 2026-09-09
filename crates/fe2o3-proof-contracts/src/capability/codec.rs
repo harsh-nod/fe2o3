@@ -147,6 +147,34 @@ impl InertCapabilityResultSetV1 {
         obligation_set: InertCapabilityObligationSetIdentityV1,
         specs: Vec<CapabilityResultSpecV1>,
     ) -> Result<Self, CapabilityCodecErrorV1> {
+        Self::from_specs_with_version(
+            CAPABILITY_RESULT_SET_VERSION_V1,
+            subject,
+            obligation_set,
+            specs,
+        )
+    }
+
+    /// Constructs the additive V2 result format supporting checked and typed-receipt outcomes.
+    pub fn from_specs_v2(
+        subject: CapabilitySubjectV1,
+        obligation_set: InertCapabilityObligationSetIdentityV1,
+        specs: Vec<CapabilityResultSpecV1>,
+    ) -> Result<Self, CapabilityCodecErrorV1> {
+        Self::from_specs_with_version(
+            CAPABILITY_RESULT_SET_VERSION_V2,
+            subject,
+            obligation_set,
+            specs,
+        )
+    }
+
+    fn from_specs_with_version(
+        schema_version: u16,
+        subject: CapabilitySubjectV1,
+        obligation_set: InertCapabilityObligationSetIdentityV1,
+        specs: Vec<CapabilityResultSpecV1>,
+    ) -> Result<Self, CapabilityCodecErrorV1> {
         validate_subject(subject)?;
         if !obligation_set.is_valid() {
             return Err(CapabilityCodecErrorV1::InvalidIdentity {
@@ -169,9 +197,15 @@ impl InertCapabilityResultSetV1 {
                     index: Some(index),
                 });
             }
+            validate_outcome_version(schema_version, &spec.outcome, index)?;
             validate_outcome(&spec.outcome, index, &mut witness_bytes)?;
-            let identity =
-                derive_result_identity(subject, obligation_set, spec.obligation, &spec.outcome)?;
+            let identity = derive_result_identity(
+                schema_version,
+                subject,
+                obligation_set,
+                spec.obligation,
+                &spec.outcome,
+            )?;
             results.push(CapabilityResultV1 {
                 identity,
                 obligation: spec.obligation,
@@ -180,7 +214,7 @@ impl InertCapabilityResultSetV1 {
         }
         results.sort_unstable_by_key(|record| record.obligation);
         validate_result_records(&results)?;
-        encode_result_set(subject, obligation_set, results)
+        encode_result_set(schema_version, subject, obligation_set, results)
     }
 
     pub fn decode_canonical(bytes: &[u8]) -> Result<Self, CapabilityCodecErrorV1> {
@@ -192,12 +226,7 @@ impl InertCapabilityResultSetV1 {
             });
         }
         let mut reader = Reader::new(bytes);
-        decode_header(
-            &mut reader,
-            CapabilityRecordKindV1::ResultSet,
-            RESULT_MAGIC_V1,
-            CAPABILITY_RESULT_SET_VERSION_V1,
-        )?;
+        let schema_version = decode_result_header(&mut reader)?;
         let subject = decode_subject(&mut reader)?;
         let obligation_set =
             InertCapabilityObligationSetIdentityV1::from_untrusted_digest(reader.digest()?);
@@ -232,8 +261,16 @@ impl InertCapabilityResultSetV1 {
                     index: Some(index),
                 });
             }
-            let outcome = decode_outcome(&mut reader, index, &mut witness_bytes)?;
-            if identity != derive_result_identity(subject, obligation_set, obligation, &outcome)? {
+            let outcome = decode_outcome(&mut reader, schema_version, index, &mut witness_bytes)?;
+            if identity
+                != derive_result_identity(
+                    schema_version,
+                    subject,
+                    obligation_set,
+                    obligation,
+                    &outcome,
+                )?
+            {
                 return Err(CapabilityCodecErrorV1::IdentityMismatch {
                     record: CapabilityRecordKindV1::Result,
                     index: Some(index),
@@ -256,7 +293,10 @@ impl InertCapabilityResultSetV1 {
         }
         reader.finish()?;
         if identity.digest()
-            != derive_identity(RESULT_SET_IDENTITY_DOMAIN_V1, &bytes[..terminal_offset])
+            != derive_identity(
+                result_set_identity_domain(schema_version),
+                &bytes[..terminal_offset],
+            )
         {
             return Err(CapabilityCodecErrorV1::IdentityMismatch {
                 record: CapabilityRecordKindV1::ResultSet,
@@ -264,6 +304,7 @@ impl InertCapabilityResultSetV1 {
             });
         }
         Ok(Self {
+            schema_version,
             subject,
             obligation_set,
             results,
@@ -274,6 +315,11 @@ impl InertCapabilityResultSetV1 {
 
     pub const fn subject(&self) -> CapabilitySubjectV1 {
         self.subject
+    }
+
+    /// Returns the exact canonical result-set wire version.
+    pub const fn schema_version(&self) -> u16 {
+        self.schema_version
     }
 
     pub const fn obligation_set(&self) -> InertCapabilityObligationSetIdentityV1 {
@@ -291,6 +337,24 @@ impl InertCapabilityResultSetV1 {
     pub fn canonical_bytes(&self) -> &[u8] {
         &self.canonical_bytes
     }
+}
+
+fn validate_outcome_version(
+    schema_version: u16,
+    outcome: &CapabilityOutcomeV1,
+    index: usize,
+) -> Result<(), CapabilityCodecErrorV1> {
+    let v2_tag = match outcome {
+        CapabilityOutcomeV1::Checked { .. } => Some(6),
+        CapabilityOutcomeV1::RefinementReceipt { .. } => Some(7),
+        _ => None,
+    };
+    if schema_version == CAPABILITY_RESULT_SET_VERSION_V1 {
+        if let Some(tag) = v2_tag {
+            return Err(CapabilityCodecErrorV1::UnknownOutcome { index, tag });
+        }
+    }
+    Ok(())
 }
 
 fn encode_obligation_set(
@@ -339,6 +403,7 @@ fn encode_obligation_set(
 }
 
 fn encode_result_set(
+    schema_version: u16,
     subject: CapabilitySubjectV1,
     obligation_set: InertCapabilityObligationSetIdentityV1,
     results: Vec<CapabilityResultV1>,
@@ -359,12 +424,7 @@ fn encode_result_set(
         MAX_CAPABILITY_RESULT_SET_BYTES_V1,
     )?;
     let mut writer = Writer::new(total, CapabilityResourceV1::ResultSetBytes)?;
-    encode_header(
-        &mut writer,
-        RESULT_MAGIC_V1,
-        CAPABILITY_RESULT_SET_VERSION_V1,
-        total,
-    )?;
+    encode_header(&mut writer, RESULT_MAGIC_V1, schema_version, total)?;
     encode_subject(&mut writer, subject);
     writer.digest(obligation_set.digest());
     writer.count(results.len())?;
@@ -374,12 +434,13 @@ fn encode_result_set(
         encode_outcome(&mut writer, &result.outcome)?;
     }
     let identity = InertCapabilityResultSetIdentityV1::from_untrusted_digest(derive_identity(
-        RESULT_SET_IDENTITY_DOMAIN_V1,
+        result_set_identity_domain(schema_version),
         writer.bytes(),
     ));
     writer.digest(identity.digest());
     let canonical_bytes = writer.finish(total)?;
     Ok(InertCapabilityResultSetV1 {
+        schema_version,
         subject,
         obligation_set,
         results,
@@ -514,6 +575,42 @@ fn validate_outcome(
                 });
             }
         }
+        CapabilityOutcomeV1::Checked {
+            evidence,
+            checker,
+            report,
+            executable_kir,
+            executable_kir_epoch,
+            analysis_epoch,
+        } => {
+            for (valid, field) in [
+                (evidence.is_valid(), CapabilityIdentityFieldV1::Evidence),
+                (checker.is_valid(), CapabilityIdentityFieldV1::Checker),
+                (report.is_valid(), CapabilityIdentityFieldV1::Report),
+                (
+                    executable_kir.is_valid(),
+                    CapabilityIdentityFieldV1::ExecutableKir,
+                ),
+            ] {
+                if !valid {
+                    return Err(CapabilityCodecErrorV1::InvalidIdentity {
+                        field,
+                        index: Some(index),
+                    });
+                }
+            }
+            if *executable_kir_epoch == 0 || *analysis_epoch == 0 {
+                return Err(CapabilityCodecErrorV1::InvalidKirEpoch);
+            }
+        }
+        CapabilityOutcomeV1::RefinementReceipt { receipt, .. } => {
+            if !receipt.is_valid() {
+                return Err(CapabilityCodecErrorV1::InvalidIdentity {
+                    field: CapabilityIdentityFieldV1::Receipt,
+                    index: Some(index),
+                });
+            }
+        }
         CapabilityOutcomeV1::Rejected {
             diagnostic,
             witness,
@@ -572,6 +669,7 @@ fn derive_obligation_identity(
 }
 
 fn derive_result_identity(
+    schema_version: u16,
     subject: CapabilitySubjectV1,
     obligation_set: InertCapabilityObligationSetIdentityV1,
     obligation: CapabilityObligationIdentityV1,
@@ -586,7 +684,7 @@ fn derive_result_identity(
     writer.digest(obligation.digest());
     encode_outcome(&mut writer, outcome)?;
     Ok(CapabilityResultIdentityV1::from_untrusted_digest(
-        derive_identity(RESULT_IDENTITY_DOMAIN_V1, writer.bytes()),
+        derive_identity(result_identity_domain(schema_version), writer.bytes()),
     ))
 }
 
@@ -657,6 +755,32 @@ fn decode_header(
     Ok(())
 }
 
+fn decode_result_header(reader: &mut Reader<'_>) -> Result<u16, CapabilityCodecErrorV1> {
+    let record = CapabilityRecordKindV1::ResultSet;
+    if reader.fixed::<8>()? != RESULT_MAGIC_V1 {
+        return Err(CapabilityCodecErrorV1::InvalidMagic { record });
+    }
+    let version = reader.u16()?;
+    if !matches!(
+        version,
+        CAPABILITY_RESULT_SET_VERSION_V1 | CAPABILITY_RESULT_SET_VERSION_V2
+    ) {
+        return Err(CapabilityCodecErrorV1::UnsupportedVersion { record, version });
+    }
+    let flags = reader.u16()?;
+    if flags != 0 {
+        return Err(CapabilityCodecErrorV1::UnsupportedFlags { record, flags });
+    }
+    let declared = reader.u32()? as usize;
+    if declared > reader.bytes.len() {
+        return Err(CapabilityCodecErrorV1::Truncated);
+    }
+    if declared < reader.bytes.len() {
+        return Err(CapabilityCodecErrorV1::TrailingBytes);
+    }
+    Ok(version)
+}
+
 fn encode_subject(writer: &mut Writer, subject: CapabilitySubjectV1) {
     writer.digest(subject.kernel.digest());
     writer.digest(subject.root.digest());
@@ -721,6 +845,8 @@ fn decode_diagnostic(
 fn outcome_encoded_len(outcome: &CapabilityOutcomeV1) -> Result<usize, CapabilityCodecErrorV1> {
     let payload = match outcome {
         CapabilityOutcomeV1::Proven { .. } => 32 + 64 + 64,
+        CapabilityOutcomeV1::Checked { .. } => 32 * 4 + 8 + 8,
+        CapabilityOutcomeV1::RefinementReceipt { .. } => 8 + 32 + 8,
         CapabilityOutcomeV1::Rejected { witness, .. } => STABLE_ID_BYTES_V1 + 4 + witness.len(),
         CapabilityOutcomeV1::Incomplete { .. }
         | CapabilityOutcomeV1::Unsupported { .. }
@@ -745,6 +871,32 @@ fn encode_outcome(
             writer.digest(evidence.digest());
             encode_tool(writer, *tool);
             encode_artifact(writer, *proof_artifact);
+        }
+        CapabilityOutcomeV1::Checked {
+            evidence,
+            checker,
+            report,
+            executable_kir,
+            executable_kir_epoch,
+            analysis_epoch,
+        } => {
+            encode_outcome_header(writer, 6);
+            writer.digest(evidence.digest());
+            writer.digest(checker.digest());
+            writer.digest(report.digest());
+            writer.digest(executable_kir.digest());
+            writer.u64(*executable_kir_epoch);
+            writer.u64(*analysis_epoch);
+        }
+        CapabilityOutcomeV1::RefinementReceipt { kind, receipt } => {
+            encode_outcome_header(writer, 7);
+            writer.u8(match kind {
+                CapabilityRefinementKindV1::SourceMirToKir => 1,
+                CapabilityRefinementKindV1::Machine => 2,
+            });
+            writer.raw(&[0; 7]);
+            writer.digest(receipt.digest());
+            writer.u64(receipt.byte_len());
         }
         CapabilityOutcomeV1::Rejected {
             diagnostic,
@@ -801,6 +953,7 @@ fn encode_artifact(writer: &mut Writer, artifact: ArtifactIdentityV1) {
 
 fn decode_outcome(
     reader: &mut Reader<'_>,
+    schema_version: u16,
     index: usize,
     aggregate_witness_bytes: &mut usize,
 ) -> Result<CapabilityOutcomeV1, CapabilityCodecErrorV1> {
@@ -848,11 +1001,55 @@ fn decode_outcome(
             diagnostic: decode_diagnostic(reader, index)?,
             detail: decode_artifact(reader)?,
         },
+        6 if schema_version == CAPABILITY_RESULT_SET_VERSION_V2 => CapabilityOutcomeV1::Checked {
+            evidence: EvidenceIdentityV1::from_untrusted_digest(reader.digest()?),
+            checker: CapabilityCheckerIdentityV1::from_untrusted_digest(reader.digest()?),
+            report: CapabilityAnalysisReportIdentityV1::from_untrusted_digest(reader.digest()?),
+            executable_kir: ExecutableKirIdentityV1::from_untrusted_digest(reader.digest()?),
+            executable_kir_epoch: reader.u64()?,
+            analysis_epoch: reader.u64()?,
+        },
+        7 if schema_version == CAPABILITY_RESULT_SET_VERSION_V2 => {
+            let kind = match reader.u8()? {
+                1 => CapabilityRefinementKindV1::SourceMirToKir,
+                2 => CapabilityRefinementKindV1::Machine,
+                tag => return Err(CapabilityCodecErrorV1::UnknownOutcome { index, tag }),
+            };
+            if reader.fixed::<7>()? != [0; 7] {
+                return Err(CapabilityCodecErrorV1::NonzeroReserved {
+                    record: CapabilityRecordKindV1::Result,
+                    index: Some(index),
+                });
+            }
+            CapabilityOutcomeV1::RefinementReceipt {
+                kind,
+                receipt: CapabilityRefinementReceiptIdentityV1::from_untrusted_parts(
+                    reader.digest()?,
+                    reader.u64()?,
+                ),
+            }
+        }
         _ => return Err(CapabilityCodecErrorV1::UnknownOutcome { index, tag }),
     };
     let mut local_witness_bytes = 0;
     validate_outcome(&outcome, index, &mut local_witness_bytes)?;
     Ok(outcome)
+}
+
+const fn result_identity_domain(schema_version: u16) -> &'static [u8] {
+    match schema_version {
+        CAPABILITY_RESULT_SET_VERSION_V1 => RESULT_IDENTITY_DOMAIN_V1,
+        CAPABILITY_RESULT_SET_VERSION_V2 => RESULT_IDENTITY_DOMAIN_V2,
+        _ => unreachable!(),
+    }
+}
+
+const fn result_set_identity_domain(schema_version: u16) -> &'static [u8] {
+    match schema_version {
+        CAPABILITY_RESULT_SET_VERSION_V1 => RESULT_SET_IDENTITY_DOMAIN_V1,
+        CAPABILITY_RESULT_SET_VERSION_V2 => RESULT_SET_IDENTITY_DOMAIN_V2,
+        _ => unreachable!(),
+    }
 }
 
 fn decode_tool(reader: &mut Reader<'_>) -> Result<ExactToolIdentityV1, CapabilityCodecErrorV1> {

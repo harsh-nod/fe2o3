@@ -589,6 +589,52 @@ def function_parameters(source: str, symbol: str) -> str | None:
     return source[start : cursor - 1]
 
 
+def _single_role_argument(role: str, constructor: str) -> bool:
+    prefix = f"{constructor}<"
+    if not role.startswith(prefix) or not role.endswith(">"):
+        return False
+    argument = role[len(prefix) : -1].strip()
+    if not argument:
+        return False
+    depth = 0
+    for character in argument:
+        if character in "<([":
+            depth += 1
+        elif character in ">)]":
+            depth -= 1
+            if depth < 0:
+                return False
+        elif character == "," and depth == 0:
+            return False
+    return depth == 0
+
+
+def source_buffer_abi(source_type: str) -> tuple[str, str] | None:
+    global_match = re.fullmatch(
+        r"Global<'_,\s*(u8|u16|u32|u64|i32|f32),\s*(.+)>", source_type
+    )
+    if global_match is not None:
+        element, role = global_match.groups()
+        if role == "ReadOnly":
+            return element, "read_only"
+        if _single_role_argument(role, "DisjointWrite"):
+            return element, "write_only"
+        if role == "ExclusiveReadWrite":
+            return element, "read_write"
+        if _single_role_argument(role, "AtomicReadWrite"):
+            return element, "read_write"
+        raise ValueError(f"unsupported Global capability role in physical ABI: {role}")
+
+    write_only_match = re.fullmatch(
+        r"WriteOnlyDisjointSlice<(u8|u16|u32|u64|i32|f32),\s*.+>", source_type
+    )
+    if write_only_match is not None:
+        return write_only_match.group(1), "write_only"
+    if source_type.startswith(("Global<", "WriteOnlyDisjointSlice<")):
+        raise ValueError(f"malformed capability buffer type in physical ABI: {source_type}")
+    return None
+
+
 FEATURE_SOURCE = {
     "kernel-attnres-aggregate-explicit-reuse-v1": "src/ablation.rs",
     "kernel-compressed-hybrid-attention-division-baseline-v1": "src/ablation.rs",
@@ -637,12 +683,12 @@ def physical_abi(fixture: dict[str, Any], symbol: str) -> dict[str, Any]:
         name, ty = name.strip(), " ".join(ty.split())
         if ty.startswith("KernelContext<"):
             continue
-        global_match = re.fullmatch(r"Global<'_,\s*(u8|u16|u32|u64|i32|f32),\s*(.+)>", ty)
-        if global_match:
-            element, capability = global_match.groups()
+        buffer_abi = source_buffer_abi(ty)
+        if buffer_abi is not None:
+            element, access = buffer_abi
             arguments.append(
                 {
-                    "access": "read_only" if capability == "ReadOnly" else "read_write",
+                    "access": access,
                     "element": element,
                     "kind": "buffer",
                     "name": name,
@@ -665,8 +711,16 @@ def make_args(abi: dict[str, Any], values: dict[str, dict[str, Any]]) -> list[di
     names = [item["name"] for item in abi["arguments"]]
     if set(names) != set(values):
         raise ValueError(f"ABI values differ: missing={set(names)-set(values)} extra={set(values)-set(names)}")
-    result = [values[name] for name in names]
+    result = [copy.deepcopy(values[name]) for name in names]
     for specification, argument in zip(abi["arguments"], result):
+        if specification["kind"] == "buffer":
+            source_is_input = specification["access"] == "read_only"
+            fixture_is_input = argument.get("access") == "read_only"
+            if source_is_input != fixture_is_input:
+                raise ValueError(
+                    f"argument {specification['name']} differs at input/output direction"
+                )
+            argument["access"] = specification["access"]
         for key in ("kind", "element", "access", "type"):
             if key in specification and argument.get(key) != specification[key]:
                 raise ValueError(f"argument {specification['name']} differs at {key}")
@@ -872,7 +926,7 @@ def top2_fixture(_: str) -> Built:
     outputs = top2_outputs(logits)
     values = {"logits": buffer(logits, "f32", "read_only")}
     sizes = {"top2_experts": 16, "requested_counts": 4, "admitted_counts": 4, "expert_offsets": 5, "route_slots": 16, "permutation": 16, "inverse": 16}
-    values.update({name: buffer([SENTINEL_U32] * size, "u32", "read_write") for name, size in sizes.items()})
+    values.update({name: buffer([SENTINEL_U32] * size, "u32", "write_only") for name, size in sizes.items()})
     return Built(values, outputs, grid=[64, 1, 1], workgroup=[64, 1, 1], oracle="moe_top2_oracle_v1")
 
 

@@ -237,6 +237,9 @@ impl InertCanonicalMirToKirCorrespondenceEvidenceV4 {
         owner: &ProductionSemanticKirOwnerV1,
         induction_report: &SemanticU32InductionNoOverflowReportV1,
     ) -> Result<Self, ProductionCorrespondenceEvidenceErrorV4> {
+        if owner.correspondence().has_expanded_calls() {
+            return Err(ProductionCorrespondenceEvidenceErrorV4::ExecutionViewUnsupported);
+        }
         owner.verify_equivalence().map_err(|error| {
             ProductionCorrespondenceEvidenceErrorV4::LiveOwner(error.to_string())
         })?;
@@ -543,6 +546,8 @@ impl InertCanonicalMirToKirCorrespondenceEvidenceV4 {
 /// Fail-closed lossless correspondence evidence error.
 #[derive(Debug)]
 pub enum ProductionCorrespondenceEvidenceErrorV4 {
+    /// This wire version cannot compose execution coordinates with source call instances.
+    ExecutionViewUnsupported,
     /// Live equivalence replay failed.
     LiveOwner(String),
     /// Nested semantic induction report evidence failed.
@@ -574,6 +579,9 @@ pub enum ProductionCorrespondenceEvidenceErrorV4 {
 impl fmt::Display for ProductionCorrespondenceEvidenceErrorV4 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ExecutionViewUnsupported => formatter.write_str(
+                "MIR-to-KIR correspondence V4 cannot represent expanded call coordinates",
+            ),
             Self::LiveOwner(error) => write!(formatter, "live semantic-KIR owner failed: {error}"),
             Self::Induction(error) => {
                 write!(formatter, "semantic induction evidence failed: {error}")

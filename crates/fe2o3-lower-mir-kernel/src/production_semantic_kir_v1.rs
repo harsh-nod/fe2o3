@@ -38,15 +38,14 @@ use fe2o3_kernel_ir::{
     VerifiedCanonicalKernelIrIdentityV12, VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
     VerifiedCanonicalKernelIrV11, VerifiedCanonicalKernelIrV12, VerifiedCanonicalKernelIrV13,
     WaveF32ReductionKindV1, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
-    WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize, analyze_interprocedural_effects_v1,
-    plan_integer_cast_v1, verify_module,
+    WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize, plan_integer_cast_v1, verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
-    AdmittedInertSemanticMirV1, SemanticAbiArgumentRoleV1, SemanticAbiExtensionV1,
-    SemanticAbiPassModeV1, SemanticAbiPointeeKindV1, SemanticAbiPointerCaptureV1,
-    SemanticAbiRegisterKindV1, SemanticAggregateKindV1, SemanticAssertMessageV1,
-    SemanticAtomicOrderingV1, SemanticAtomicRmwOpV1, SemanticAtomicRmwV1, SemanticAtomicScopeV1,
-    SemanticAxisV1, SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBackendScalarV1,
+    AdmittedInertSemanticMirV1, SemanticAbiExtensionV1, SemanticAbiPassModeV1,
+    SemanticAbiPointeeKindV1, SemanticAbiPointerCaptureV1, SemanticAbiRegisterKindV1,
+    SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAtomicOrderingV1,
+    SemanticAtomicRmwOpV1, SemanticAtomicRmwV1, SemanticAtomicScopeV1, SemanticAxisV1,
+    SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBackendScalarV1,
     SemanticBf16ConversionKindV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticBorrowKindV1,
     SemanticCallableDeclV1, SemanticCanonAbiV1, SemanticCapabilityMemoryAccessV1,
     SemanticCapabilityMemoryAddressSpaceV1, SemanticCapabilityMemoryAliasingV1,
@@ -75,8 +74,9 @@ use fe2o3_mir_model::semantic_mir_v1::{
     semantic_direct_enum_variant_v1, semantic_scalar_enum_variant_v1,
 };
 use fe2o3_mir_model::{
-    SemanticEnumPayloadDominanceV1, SemanticOptionAvailabilityV1, SemanticOptionDominanceV1,
-    SsaArgumentV1, SsaBlockIdV1, SsaResolvedEventV1, SsaValueV1, semantic_option_producers_v1,
+    SemanticCallExpansionLimitsV1, SemanticCallExpansionV1, SemanticEnumPayloadDominanceV1,
+    SemanticExpandedRootV1, SemanticOptionAvailabilityV1, SemanticOptionDominanceV1, SsaArgumentV1,
+    SsaBlockIdV1, SsaResolvedEventV1, SsaValueV1, semantic_option_producers_v1,
 };
 #[cfg(test)]
 use fe2o3_pliron::plan_semantic_function_ssa_with_module_v1;
@@ -87,9 +87,10 @@ use fe2o3_pliron::{
     ProductionRankedValueV1, ProductionSemanticBinaryOpV2, ProductionSemanticCastV2,
     ProductionSemanticComparisonV2, ProductionSemanticExpressionV2, ProductionSemanticMirErrorV1,
     ProductionSemanticMirOwnerV1, ProductionSemanticScalarTypeV2, ProductionSemanticSsaErrorV1,
-    ProductionSemanticSsaFunctionPlanV1, ProductionSemanticSsaIdentityV1,
-    ProductionSemanticSsaLimitsV1, ProductionSemanticSsaOwnerV1, ProductionSemanticSsaSummaryV1,
-    ProductionSemanticUnaryOpV2, authenticated_ambient_workgroup_lds_scope_zst_v1,
+    ProductionSemanticSsaFrameInitializationV1, ProductionSemanticSsaFunctionPlanV1,
+    ProductionSemanticSsaIdentityV1, ProductionSemanticSsaLimitsV1, ProductionSemanticSsaOwnerV1,
+    ProductionSemanticSsaSummaryV1, ProductionSemanticUnaryOpV2,
+    authenticated_ambient_workgroup_lds_scope_zst_v1,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -598,9 +599,15 @@ impl SemanticKirSyntheticOperationSpanV1 {
 /// construct. Semantic authority remains with [`ProductionSemanticKirOwnerV1`],
 /// whose equivalence check replays lowering and compares the complete module
 /// and trace.
+///
+/// When [`Self::has_expanded_calls`] is true, all block, statement, and local
+/// IDs are execution-view coordinates, scoped by `correspondence_owner`.
+/// The original function and call instance must be recovered through the
+/// checked expansion mapping, never by indexing the admitted source with them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticKirCorrespondenceV1 {
     semantic_sha256: [u8; 32],
+    execution_expansion_identity: Option<[u8; 32]>,
     function_count: usize,
     lowered_functions: Box<[SemanticKirFunctionCorrespondenceV1]>,
     blocks: Box<[SemanticKirBlockCorrespondenceV1]>,
@@ -634,11 +641,24 @@ impl SemanticKirCorrespondenceV1 {
         &self.semantic_sha256
     }
 
+    /// Whether block, statement, and local coordinates refer to checked execution views.
+    ///
+    /// Such coordinates are not original MIR locations. Source evidence must compose them
+    /// with the owner-held expansion mapping; source-only serializers must reject them.
+    pub const fn has_expanded_calls(&self) -> bool {
+        self.execution_expansion_identity.is_some()
+    }
+
+    /// Identifies the checked expansion whose coordinates this correspondence uses.
+    /// `None` means lowering did not expand any defined call.
+    pub const fn execution_expansion_identity(&self) -> Option<&[u8; 32]> {
+        self.execution_expansion_identity.as_ref()
+    }
+
     /// Returns the number of functions retained by the admitted semantic MIR.
     ///
-    /// For a `KernelResult` entry this includes both the exact unit-ABI wrapper
-    /// and its ordinary Rust body, even though only the selected body produces
-    /// Kernel IR operations.
+    /// Includes helper declarations retained in the immutable source even when
+    /// their call instances are expanded into a physical root's execution view.
     pub const fn function_count(&self) -> usize {
         self.function_count
     }
@@ -648,12 +668,12 @@ impl SemanticKirCorrespondenceV1 {
         &self.lowered_functions
     }
 
-    /// Returns source-to-Kernel-IR block evidence in lowering order.
+    /// Returns coordinate-space-tagged block evidence in lowering order.
     pub fn blocks(&self) -> &[SemanticKirBlockCorrespondenceV1] {
         &self.blocks
     }
 
-    /// Returns exact source-statement operation spans in lowering order.
+    /// Returns exact statement operation spans in the retained coordinate space.
     ///
     /// Zero-operation statements are represented by an explicit zero-length
     /// span at the current operation ordinal.
@@ -661,7 +681,7 @@ impl SemanticKirCorrespondenceV1 {
         &self.statement_operation_spans
     }
 
-    /// Returns exact source-terminator operation spans in lowering order.
+    /// Returns exact terminator operation spans in the retained coordinate space.
     pub fn terminator_operation_spans(&self) -> &[SemanticKirTerminatorOperationSpanV1] {
         &self.terminator_operation_spans
     }
@@ -1405,8 +1425,9 @@ impl ProductionRankedSemanticProjectionModuleReceiptV1 {
                     "ranked projection roster has a duplicate, missing, or invalid root identity",
                 ));
             }
-            validate_borrowed_ranked_semantic_projection_candidate_with_generated_effects_v1(
-                semantic_ssa.source_owner(),
+            validate_ranked_execution_candidate_v1(
+                document,
+                execution_function_for_root_v1(&semantic_ssa, root.selected_root)?,
                 root.selected_root,
                 &root.lowering,
                 &root.ranked_ir,
@@ -1484,6 +1505,62 @@ pub fn validate_borrowed_ranked_semantic_projection_candidate_with_generated_eff
     semantic
         .verify_equivalence()
         .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
+    let expansion = SemanticCallExpansionV1::try_new(
+        semantic.semantic(),
+        SemanticCallExpansionLimitsV1::default(),
+    )
+    .map_err(|error| {
+        ProductionSemanticKirErrorV1::SemanticSsa(ProductionSemanticSsaErrorV1::CallExpansion(
+            error,
+        ))
+    })?;
+    let view = expansion
+        .root(selected_root)
+        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+    validate_ranked_execution_candidate_v1(
+        semantic.semantic(),
+        checked_execution_function_v1(semantic.semantic(), view)?,
+        selected_root,
+        lowering,
+        ranked_ir,
+        access_sources,
+        executable_effect_sources,
+    )
+}
+
+/// Validates a ranked candidate in the exact execution view retained by its SSA owner.
+/// No execution coordinate becomes original-source evidence or export authority here.
+pub fn validate_borrowed_ssa_ranked_semantic_projection_candidate_with_generated_effects_v1(
+    semantic_ssa: &ProductionSemanticSsaOwnerV1,
+    selected_root: SemanticFunctionIdV1,
+    lowering: &ProductionRankedKernelLoweringInputV1,
+    ranked_ir: &str,
+    access_sources: &[ProductionRankedAccessSourceV1],
+    executable_effect_sources: &[ProductionRankedExecutableEffectSourceV1],
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    semantic_ssa
+        .verify_replay()
+        .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
+    validate_ranked_execution_candidate_v1(
+        semantic_ssa.source_semantic(),
+        execution_function_for_root_v1(semantic_ssa, selected_root)?,
+        selected_root,
+        lowering,
+        ranked_ir,
+        access_sources,
+        executable_effect_sources,
+    )
+}
+
+fn validate_ranked_execution_candidate_v1(
+    document: &AdmittedInertSemanticMirV1,
+    execution: &SemanticFunctionDeclV1,
+    selected_root: SemanticFunctionIdV1,
+    lowering: &ProductionRankedKernelLoweringInputV1,
+    ranked_ir: &str,
+    access_sources: &[ProductionRankedAccessSourceV1],
+    executable_effect_sources: &[ProductionRankedExecutableEffectSourceV1],
+) -> Result<(), ProductionSemanticKirErrorV1> {
     if !mandatory_generic_checks_are_clean(lowering) {
         return Err(unsupported(
             0,
@@ -1516,7 +1593,27 @@ pub fn validate_borrowed_ranked_semantic_projection_candidate_with_generated_eff
             "ranked projection receipt has invalid generated-effect correspondence",
         ));
     }
-    let document = semantic.semantic();
+    for source in access_sources {
+        if execution
+            .blocks()
+            .get(source.semantic_block as usize)
+            .is_none_or(|block| {
+                source
+                    .semantic_statement
+                    .is_some_and(|statement| statement as usize >= block.statements().len())
+            })
+        {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+    }
+    if executable_effect_sources.iter().any(|source| {
+        execution
+            .blocks()
+            .get(source.semantic_block as usize)
+            .is_none()
+    }) {
+        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+    }
     let root = document
         .roots()
         .binary_search(&selected_root)
@@ -2021,7 +2118,10 @@ impl ProductionSemanticKirOwnerV1 {
         for root in roots.into_vec() {
             let function_name = root.function_name().to_owned();
             let translation_validation = validate_mir_pliron_translation_with_semantic_v1(
-                Some(semantic.semantic()),
+                Some(SemanticKirExecutionInputV1::for_root(
+                    &semantic_ssa,
+                    root.selected_root,
+                )?),
                 &module,
                 &correspondence,
                 &function_name,
@@ -2095,8 +2195,7 @@ impl ProductionSemanticKirOwnerV1 {
                 || generic_checks.ranked_ir.is_empty()
                 || self
                     .semantic_ssa
-                    .source_semantic()
-                    .select_kernel_body_for_root_v1(generic_checks.selected_root)
+                    .execution_view_for_root(generic_checks.selected_root)
                     .is_none()
                 || self.launch_roots.as_deref().is_none_or(|roots| {
                     !roots.iter().any(|root| {
@@ -2117,7 +2216,10 @@ impl ProductionSemanticKirOwnerV1 {
                 return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
             }
             let revalidated = validate_mir_pliron_translation_with_semantic_v1(
-                Some(self.semantic_ssa.source_semantic()),
+                Some(SemanticKirExecutionInputV1::for_root(
+                    &self.semantic_ssa,
+                    generic_checks.selected_root,
+                )?),
                 &self.module,
                 &self.correspondence,
                 &generic_checks.function_name,
@@ -2147,6 +2249,16 @@ impl ProductionSemanticKirOwnerV1 {
     /// Returns aggregate planner work and mixed SSA/memory classification.
     pub const fn semantic_ssa_summary(&self) -> ProductionSemanticSsaSummaryV1 {
         self.semantic_ssa.summary()
+    }
+
+    /// Whether this lowering requires checked call-expansion correspondence composition.
+    pub const fn has_expanded_calls(&self) -> bool {
+        self.correspondence.has_expanded_calls()
+    }
+
+    /// Borrows the execution-coordinate identity without granting source or export authority.
+    pub const fn execution_expansion_identity(&self) -> Option<&[u8; 32]> {
+        self.correspondence.execution_expansion_identity()
     }
 
     /// Borrows the structurally verified Kernel IR module.
@@ -2514,9 +2626,16 @@ impl ProductionSemanticKirOwnerV1 {
                     )
             })?;
         let semantic = self.semantic_ssa.source_semantic();
-        let function = semantic
-            .functions()
-            .get(span.semantic_function().index() as usize)?;
+        if self
+            .semantic_ssa
+            .execution_view_for_root(correspondence_owner)?
+            .source_body()
+            != span.semantic_function()
+        {
+            return None;
+        }
+        let function =
+            execution_function_for_root_v1(&self.semantic_ssa, correspondence_owner).ok()?;
         let block = function
             .blocks()
             .get(span.semantic_block().index() as usize)?;
@@ -3675,26 +3794,28 @@ fn index_ranked_correlation(
                 ProductionRankedOperationV1::View {
                     result,
                     allocation_origin,
+                    noalias_class,
                     ..
                 } => Some((
                     *result,
                     RankedViewDefinitionV1 {
                         allocation_origin: *allocation_origin,
                         memory_space: dialect_kernel::MemorySpaceAttr::Global,
-                        noalias_class: 0,
+                        noalias_class: *noalias_class,
                     },
                 )),
                 ProductionRankedOperationV1::ViewInSpace {
                     result,
                     memory_space,
                     allocation_origin,
+                    noalias_class,
                     ..
                 } => Some((
                     *result,
                     RankedViewDefinitionV1 {
                         allocation_origin: *allocation_origin,
                         memory_space: *memory_space,
-                        noalias_class: 0,
+                        noalias_class: *noalias_class,
                     },
                 )),
                 _ => None,
@@ -4050,10 +4171,12 @@ fn normalize_ranked_expression_v1(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn normalize_kir_expression_v1(
     function: &Function,
     kir: &KirCorrelationIndexV1<'_>,
     semantic_sites: &BTreeMap<(FunctionOperationLocation, u32), SemanticAccessSiteV1>,
+    use_context: &KirScalarUseContextV1<'_>,
     value: ValueId,
     depth: usize,
     visiting: &mut BTreeSet<ValueId>,
@@ -4067,6 +4190,7 @@ fn normalize_kir_expression_v1(
         function,
         kir,
         semantic_sites,
+        use_context,
         value,
         depth,
         visiting,
@@ -4076,10 +4200,12 @@ fn normalize_kir_expression_v1(
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 fn normalize_kir_expression_inner_v1(
     function: &Function,
     kir: &KirCorrelationIndexV1<'_>,
     semantic_sites: &BTreeMap<(FunctionOperationLocation, u32), SemanticAccessSiteV1>,
+    use_context: &KirScalarUseContextV1<'_>,
     value: ValueId,
     depth: usize,
     visiting: &mut BTreeSet<ValueId>,
@@ -4111,6 +4237,7 @@ fn normalize_kir_expression_inner_v1(
             function,
             kir,
             semantic_sites,
+            use_context,
             operand,
             next,
             visiting,
@@ -4185,6 +4312,17 @@ fn normalize_kir_expression_inner_v1(
             let location = *kir.definition_locations.get(&value)?;
             let site = *semantic_sites.get(&(location, 0))?;
             NormalizedScalarExpressionV1::Load { site, scalar }
+        }
+        OperationKind::GuardedLoad { .. } => {
+            let location = *kir.definition_locations.get(&value)?;
+            let site = *semantic_sites.get(&(location, 0))?;
+            checked_guarded_scalar_load_v1(function, kir, use_context, location, site, budget)?;
+            NormalizedScalarExpressionV1::Load { site, scalar }
+        }
+        OperationKind::GlobalCapabilityIndex(_) => {
+            let operand =
+                checked_global_index_operand_v1(kir, use_context.authority, value, budget)?;
+            recurse(operand, visiting, budget)?
         }
         _ => return None,
     })
@@ -4505,16 +4643,17 @@ fn neutral_workgroup_recipe_identity_from_semantic_v1(
 }
 
 fn neutral_workgroup_recipe_contracts_v1(
-    semantic: &AdmittedInertSemanticMirV1,
+    execution: SemanticKirExecutionInputV1<'_>,
     correspondence: &SemanticKirCorrespondenceV1,
     correspondence_owner: SemanticFunctionIdV1,
     semantic_function: SemanticFunctionIdV1,
 ) -> Result<BTreeMap<u32, NeutralWorkgroupRecipeContractV1>, ProductionMirPlironTranslationErrorV1>
 {
-    let function = semantic
-        .functions()
-        .get(semantic_function.index() as usize)
-        .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?;
+    let semantic = execution.source;
+    let function = execution.function;
+    if execution.root != correspondence_owner || execution.source_body != semantic_function {
+        return Err(ProductionMirPlironTranslationErrorV1::KernelShape);
+    }
     let mut contracts = BTreeMap::new();
     for (consumer_block, block) in function.blocks().iter().enumerate() {
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
@@ -5905,7 +6044,7 @@ fn replay_neutral_workgroup_recipe_v1(
 
 #[allow(clippy::too_many_arguments)]
 fn validate_generated_executable_effect_relations_v1(
-    semantic: Option<&AdmittedInertSemanticMirV1>,
+    semantic: Option<SemanticKirExecutionInputV1<'_>>,
     correspondence_owner: SemanticFunctionIdV1,
     semantic_function: SemanticFunctionIdV1,
     body: &FunctionBody,
@@ -6109,7 +6248,7 @@ fn validate_mir_pliron_translation_v1(
 
 #[allow(clippy::too_many_arguments)]
 fn validate_mir_pliron_translation_with_semantic_v1(
-    semantic: Option<&AdmittedInertSemanticMirV1>,
+    semantic: Option<SemanticKirExecutionInputV1<'_>>,
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
     kernel_id: &str,
@@ -6118,6 +6257,14 @@ fn validate_mir_pliron_translation_with_semantic_v1(
     executable_effect_sources: &[ProductionRankedExecutableEffectSourceV1],
     max_operations: usize,
 ) -> Result<ProductionMirPlironTranslationValidationV1, ProductionMirPlironTranslationErrorV1> {
+    if semantic.map_or(None, |input| input.expansion_identity)
+        != correspondence.execution_expansion_identity
+        || semantic.is_some_and(|input| {
+            input.source.semantic_sha256().as_bytes() != correspondence.semantic_sha256()
+        })
+    {
+        return Err(ProductionMirPlironTranslationErrorV1::KernelShape);
+    }
     let Some(kernel) = module
         .kernels
         .iter()
@@ -6152,6 +6299,11 @@ fn validate_mir_pliron_translation_with_semantic_v1(
         })
         .map(|record| (record.correspondence_owner(), record.semantic_function()))
         .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?;
+    if semantic.is_some_and(|input| {
+        input.root != correspondence_owner || input.source_body != semantic_function
+    }) {
+        return Err(ProductionMirPlironTranslationErrorV1::KernelShape);
+    }
     let generated_memory_effects = validate_generated_executable_effect_relations_v1(
         semantic,
         correspondence_owner,
@@ -6172,6 +6324,14 @@ fn validate_mir_pliron_translation_with_semantic_v1(
     .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
     let ranked = index_ranked_correlation(lowering, sources, max_operations, &mut budget)
         .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+    let scalar_authority = checked_kir_scalar_authority_v1(
+        semantic,
+        correspondence,
+        &kir,
+        &semantic_sites,
+        &mut budget,
+    )
+    .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?;
     if let Some(location) = kir.unmodeled_memory_effects.first().copied() {
         return Err(
             ProductionMirPlironTranslationErrorV1::UnattributedExecutableEffect { location },
@@ -6316,15 +6476,7 @@ fn validate_mir_pliron_translation_with_semantic_v1(
                 },
             )?;
             let source_parameter = match semantic {
-                Some(semantic) => {
-                    let semantic_function = semantic
-                        .functions()
-                        .get(semantic_function.index() as usize)
-                        .ok_or(
-                            ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch {
-                                location: consumer.location,
-                            },
-                        )?;
+                Some(execution) => {
                     let value = body.parameters.get(parameter as usize).copied().ok_or(
                         ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch {
                             location: consumer.location,
@@ -6333,7 +6485,7 @@ fn validate_mir_pliron_translation_with_semantic_v1(
                     semantic_source_argument_for_kir_parameter_v1(
                         correspondence,
                         correspondence_owner,
-                        semantic_function,
+                        execution.function,
                         value,
                     )
                     .ok_or(
@@ -6415,6 +6567,10 @@ fn validate_mir_pliron_translation_with_semantic_v1(
                 function,
                 &kir,
                 &semantic_sites,
+                &KirScalarUseContextV1 {
+                    consumer: consumer.location,
+                    authority: &scalar_authority,
+                },
                 executable_value,
                 0,
                 &mut BTreeSet::new(),
@@ -7013,6 +7169,7 @@ fn external_allocation_parameter_v1(
         }
         if let Some(operation) = kir.definitions.get(&value) {
             match &operation.kind {
+                OperationKind::GlobalCapabilityBind(bind) => pending.push(bind.physical),
                 OperationKind::SliceData { slice } => pending.push(*slice),
                 OperationKind::GetElementPointer { base, .. } => pending.push(*base),
                 OperationKind::Cast { value, .. } => pending.push(*value),
@@ -7667,6 +7824,7 @@ fn validate_semantic_kir_correspondence(
         .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
     let semantic = owner.source_semantic();
     if correspondence.semantic_sha256 != *semantic.semantic_sha256().as_bytes()
+        || correspondence.execution_expansion_identity != execution_expansion_identity_v1(owner)
         || correspondence.function_count != semantic.functions().len()
     {
         return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
@@ -7697,7 +7855,6 @@ fn validate_semantic_kir_correspondence(
         return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
     }
     let mut expected_entries = Vec::with_capacity(module.kernels.len());
-    let mut expected_helpers = Vec::new();
     let mut retained_correspondence = BTreeSet::new();
     let mut closure_budget = ReachableClosureBlockBudgetV1::new(max_blocks);
     for (kernel, expected_root_id) in module.kernels.iter().zip(expected_roots) {
@@ -7708,51 +7865,27 @@ fn validate_semantic_kir_correspondence(
         if root_id != *expected_root_id || kernel.entry.as_str() != kernel.id.as_str() {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
-        let selection = semantic
-            .select_kernel_body_for_root_v1(root_id)
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        let closure = reachable_defined_closure_v1(
-            semantic,
-            selection.body(),
-            correspondence.function_count,
-            &mut closure_budget,
-        )
-        .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        let entry_function = closure
-            .first()
-            .copied()
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let execution = execution_function_for_root_v1(owner, root_id)?;
+        let source_body = owner
+            .execution_view_for_root(root_id)
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
+            .source_body();
+        closure_budget.charge(execution.blocks().len())?;
         if !retained_correspondence.insert((
             root_id,
-            entry_function,
+            source_body,
             FunctionId::new(kernel.id.as_str()),
         )) {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
         expected_entries.push(SemanticKirFunctionCorrespondenceV1 {
             correspondence_owner: root_id,
-            semantic_function: entry_function,
+            semantic_function: source_body,
             kernel_ir_function: FunctionId::new(kernel.id.as_str()),
             role: SemanticKirFunctionRoleV1::KernelEntry,
         });
-        for function_id in closure.into_iter().skip(1) {
-            let function = semantic
-                .functions()
-                .get(function_id.index() as usize)
-                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-            let kernel_ir_function = helper_function_id_v1(function_id, function);
-            if retained_correspondence.insert((root_id, function_id, kernel_ir_function.clone())) {
-                expected_helpers.push(SemanticKirFunctionCorrespondenceV1 {
-                    correspondence_owner: root_id,
-                    semantic_function: function_id,
-                    kernel_ir_function,
-                    role: SemanticKirFunctionRoleV1::InternalHelper,
-                });
-            }
-        }
     }
-    let mut expected_functions = expected_entries;
-    expected_functions.extend(expected_helpers);
+    let expected_functions = expected_entries;
     if correspondence.lowered_functions.as_ref() != expected_functions.as_slice()
         || module
             .functions
@@ -7783,10 +7916,7 @@ fn validate_semantic_kir_correspondence(
                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
             SemanticKirFunctionRoleV1::InternalHelper => expected_function.correspondence_owner,
         };
-        let semantic_function = semantic
-            .functions()
-            .get(expected_function.semantic_function.index() as usize)
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let semantic_function = execution_function_for_root_v1(owner, correspondence_owner)?;
         let target = module
             .function(&expected_function.kernel_ir_function)
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
@@ -7807,7 +7937,7 @@ fn validate_semantic_kir_correspondence(
             .as_ref()
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
         let order = owner
-            .plan_for_function(expected_function.semantic_function)
+            .execution_plan_for_root(correspondence_owner)
             .filter(|plan| plan.function_identity() == semantic_function.identity())
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
             .plan()
@@ -9762,6 +9892,7 @@ impl ReachableClosureBlockBudgetV1 {
     }
 }
 
+#[cfg(test)]
 fn direct_defined_callees_v1(
     semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
     function_id: SemanticFunctionIdV1,
@@ -9834,6 +9965,7 @@ fn direct_defined_callees_v1(
     Ok(callees.into_iter().collect())
 }
 
+#[cfg(test)]
 fn reachable_defined_closure_v1(
     semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
     entry: SemanticFunctionIdV1,
@@ -9952,298 +10084,11 @@ fn semantic_function_parameters_v1(
     Ok(parameters)
 }
 
-fn direct_scalar_helper_plan_v1(
-    types: &[SemanticTypeDeclV1],
-    callables: &[SemanticCallableDeclV1],
-    correspondence_owner: SemanticFunctionIdV1,
-    function_id: SemanticFunctionIdV1,
-    function: &SemanticFunctionDeclV1,
-    kernel_ir_function: FunctionId,
-    kernel_context: Option<&RootKernelContextLoweringV1>,
-) -> Result<LoweredFunctionPlanV1, ProductionSemanticKirErrorV1> {
-    if function.role() != SemanticFunctionRoleV1::InternalHelper || function.export().is_some() {
-        return Err(unsupported(
-            function_id.index(),
-            None,
-            None,
-            "reachable helper has an exported or non-helper semantic role",
-        ));
-    }
-    let abi = function.abi();
-    let parameters = semantic_function_parameters_v1(function_id, function)?;
-    if abi.can_unwind()
-        || abi.c_variadic()
-        || !abi.hidden_arguments().is_empty()
-        || abi.adjusted_arguments().len() != parameters.len()
-        || abi.source_input_types().len() != parameters.len()
-        || usize::try_from(abi.fixed_count()) != Ok(parameters.len())
-    {
-        return Err(unsupported(
-            function_id.index(),
-            None,
-            None,
-            "helper does not have an exact non-unwinding direct scalar ABI",
-        ));
-    }
-    let mut parameter_types = Vec::with_capacity(parameters.len());
-    let mut parameter_values = Vec::with_capacity(parameters.len());
-    let mut parameter_local_bindings = Vec::new();
-    parameter_local_bindings
-        .try_reserve_exact(parameters.len())
-        .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
-            resource: ProductionSemanticKirResourceV1::DebugBindings,
-        })?;
-    let mut parameter_component_bindings = Vec::new();
-    parameter_component_bindings
-        .try_reserve_exact(parameters.len())
-        .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
-            resource: ProductionSemanticKirResourceV1::DebugBindings,
-        })?;
-    for (((source_argument, local, local_ty), argument), source_ty) in parameters
-        .iter()
-        .zip(abi.adjusted_arguments())
-        .zip(abi.source_input_types())
-    {
-        if local_ty != source_ty || argument.ty() != *source_ty {
-            return Err(unsupported(
-                function_id.index(),
-                None,
-                None,
-                "helper parameter is not an exact direct scalar or scalar carrier",
-            ));
-        }
-        let value = u32::try_from(*local).map(ValueId).map_err(|_| {
-            unsupported(
-                function_id.index(),
-                None,
-                None,
-                "helper local identity exceeds Kernel IR",
-            )
-        })?;
-        if kernel_context.is_some_and(|context| context.semantic_type == *source_ty) {
-            let declaration = types.get(source_ty.index() as usize).ok_or_else(|| {
-                unsupported(
-                    function_id.index(),
-                    None,
-                    None,
-                    "kernel-context type is missing",
-                )
-            })?;
-            if argument.role() != SemanticAbiArgumentRoleV1::Source
-                || !matches!(argument.mode(), SemanticAbiPassModeV1::Ignore)
-                || argument.value().adjusted().is_some()
-                || argument.value().pointee_override().is_some()
-                || abi
-                    .source_argument_ownership()
-                    .get(*source_argument as usize)
-                    != Some(&SemanticSourceArgumentOwnershipV1::ByValue)
-                || declaration.layout().size_bytes() != Some(0)
-                || declaration.layout().is_uninhabited()
-                || !matches!(declaration.shape(), SemanticTypeShapeV1::Aggregate(_))
-            {
-                return Err(unsupported(
-                    function_id.index(),
-                    None,
-                    None,
-                    "logical kernel-context helper parameter changed its ignored ZST ABI",
-                ));
-            }
-            let parameter_ty = Type::KernelContext(
-                kernel_context
-                    .expect("context checked above")
-                    .context_type
-                    .clone(),
-            );
-            parameter_types.push(parameter_ty.clone());
-            parameter_values.push(value);
-            parameter_local_bindings.push(PlannedParameterLocalBindingV1::Direct {
-                local: *local,
-                value,
-                ty: parameter_ty,
-            });
-            continue;
-        }
-        if let Some((element, contract, provenance)) =
-            global_capability_descriptor_v1(callables, *source_ty)
-        {
-            let authenticated = kernel_context.ok_or_else(|| {
-                unsupported(
-                    function_id.index(),
-                    None,
-                    None,
-                    "global-capability helper parameter lacks authenticated root identity",
-                )
-            })?;
-            if !global_capability_provenance_matches_v1(authenticated, provenance)
-                || argument.role() != SemanticAbiArgumentRoleV1::Source
-                || !matches!(argument.mode(), SemanticAbiPassModeV1::Pair { .. })
-                || argument.value().adjusted().is_some()
-                || argument.value().pointee_override().is_some()
-                || abi
-                    .source_argument_ownership()
-                    .get(*source_argument as usize)
-                    != Some(&SemanticSourceArgumentOwnershipV1::ByValue)
-            {
-                return Err(unsupported(
-                    function_id.index(),
-                    None,
-                    None,
-                    "global-capability helper parameter changed its authenticated slice ABI",
-                ));
-            }
-            let capability = lower_global_capability_type_v1(
-                types,
-                element,
-                contract,
-                &authenticated.context_type,
-            )?;
-            let parameter_ty = Type::GlobalCapability(capability);
-            parameter_types.push(parameter_ty.clone());
-            parameter_values.push(value);
-            parameter_local_bindings.push(PlannedParameterLocalBindingV1::Direct {
-                local: *local,
-                value,
-                ty: parameter_ty,
-            });
-            continue;
-        }
-        if argument.value().adjusted().is_some()
-            || !matches!(argument.mode(), SemanticAbiPassModeV1::Direct(_))
-        {
-            return Err(unsupported(
-                function_id.index(),
-                None,
-                None,
-                "helper parameter is not an exact direct scalar or scalar carrier",
-            ));
-        }
-        let (parameter_ty, local_binding) = match lower_scalar_type(types, *source_ty) {
-            Ok(parameter_ty) => (
-                parameter_ty.clone(),
-                PlannedParameterLocalBindingV1::Direct {
-                    local: *local,
-                    value,
-                    ty: parameter_ty,
-                },
-            ),
-            Err(scalar_error) => {
-                let Some(field) = exact_transparent_scalar_carrier_field_v1(types, *source_ty)
-                else {
-                    return Err(scalar_error);
-                };
-                if argument.role() != SemanticAbiArgumentRoleV1::Source
-                    || argument.value().pointee_override().is_some()
-                    || abi
-                        .source_argument_ownership()
-                        .get(*source_argument as usize)
-                        != Some(&SemanticSourceArgumentOwnershipV1::ByValue)
-                {
-                    return Err(unsupported(
-                        function_id.index(),
-                        None,
-                        None,
-                        "helper scalar carrier lacks an exact by-value source ABI",
-                    ));
-                }
-                let parameter_ty = lower_scalar_type(types, field)?;
-                parameter_component_bindings.push(SemanticKirParameterComponentBindingV1 {
-                    correspondence_owner,
-                    semantic_function: function_id,
-                    semantic_local: SemanticLocalIdV1::from_index(*local as u32),
-                    semantic_component_type: field,
-                    projection: vec![SemanticKirParameterProjectionV1::Field(0)].into_boxed_slice(),
-                    kernel_ir_value: value,
-                });
-                (
-                    parameter_ty.clone(),
-                    PlannedParameterLocalBindingV1::Flattened {
-                        local: *local,
-                        semantic_type: *source_ty,
-                        values: vec![ValueDef::new(value, parameter_ty)],
-                    },
-                )
-            }
-        };
-        parameter_types.push(parameter_ty);
-        parameter_values.push(value);
-        parameter_local_bindings.push(local_binding);
-    }
-
-    let return_locals = function
-        .locals()
-        .iter()
-        .enumerate()
-        .filter(|(_, local)| local.role() == SemanticLocalRoleV1::Return)
-        .collect::<Vec<_>>();
-    let [(_, return_declaration)] = return_locals.as_slice() else {
-        return Err(unsupported(
-            function_id.index(),
-            None,
-            None,
-            "helper must have one return local",
-        ));
-    };
-    if return_declaration.ty() != abi.source_output_type()
-        || abi.return_value().ty() != abi.source_output_type()
-        || abi.return_value().adjusted().is_some()
-    {
-        return Err(unsupported(
-            function_id.index(),
-            None,
-            None,
-            "helper return ABI type changed",
-        ));
-    }
-    let result_types = match abi.return_value().mode() {
-        SemanticAbiPassModeV1::Ignore
-            if types[abi.source_output_type().index() as usize]
-                .layout()
-                .size_bytes()
-                == Some(0) =>
-        {
-            Vec::new()
-        }
-        SemanticAbiPassModeV1::Direct(_) => {
-            vec![lower_scalar_type(types, abi.source_output_type())?]
-        }
-        _ => {
-            return Err(unsupported(
-                function_id.index(),
-                None,
-                None,
-                "helper return is not one ignored zero-sized value or one direct scalar",
-            ));
-        }
-    };
-    Ok(LoweredFunctionPlanV1 {
-        correspondence_owner,
-        semantic_function: function_id,
-        kernel_ir_function,
-        role: SemanticKirFunctionRoleV1::InternalHelper,
-        parameter_declarations: parameters,
-        parameter_types,
-        parameter_values,
-        parameter_local_bindings,
-        parameter_component_bindings,
-        ignored_parameter_bindings: Vec::new(),
-        result_types,
-    })
-}
-
-fn helper_function_id_v1(
-    function_id: SemanticFunctionIdV1,
-    function: &SemanticFunctionDeclV1,
-) -> FunctionId {
-    FunctionId::new(format!(
-        "__fe2o3_internal_helper_v1_f{}_{}",
-        function_id.index(),
-        hex_identity(function.identity().as_bytes())
-    ))
-}
-
 #[allow(clippy::too_many_arguments)]
 fn lower_one_semantic_function_v1(
     semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    function: &SemanticFunctionDeclV1,
+    execution_expansion_identity: Option<[u8; 32]>,
     plan: &LoweredFunctionPlanV1,
     semantic_ssa: &ProductionSemanticSsaFunctionPlanV1,
     defined_function_ids: &BTreeMap<SemanticFunctionIdV1, FunctionId>,
@@ -10256,17 +10101,11 @@ fn lower_one_semantic_function_v1(
     is_kernel_entry: bool,
     max_operations: usize,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
-    let function = semantic
-        .functions()
-        .get(plan.semantic_function.index() as usize)
-        .ok_or_else(|| {
-            unsupported(
-                plan.semantic_function.index(),
-                None,
-                None,
-                "lowered semantic function is missing",
-            )
-        })?;
+    if semantic_ssa.function() != plan.semantic_function
+        || semantic_ssa.function_identity() != function.identity()
+    {
+        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+    }
     let has_runtime_assert = semantic_requires_runtime_assert_failure(
         function,
         semantic.callables(),
@@ -10329,6 +10168,7 @@ fn lower_one_semantic_function_v1(
         semantic.target().object_size_bound_bytes(),
         max_operations,
     )?;
+    lowering.execution_expansion_identity = execution_expansion_identity;
 
     let order = semantic_ssa
         .plan()
@@ -10448,6 +10288,7 @@ fn lower_one_semantic_function_v1(
         lowering.semantic_function.index(),
         &lowering.pending_semantic_ssa_definitions,
     )?;
+    lowering.require_frame_initializations_consumed()?;
     if let Some(failure_block) = lowering.assert_failure_block {
         let mut block = BasicBlock::new(failure_block);
         let first = block.operations.len();
@@ -10625,27 +10466,12 @@ fn validate_kernel_context_inputs_v1(
     let mut expected_bodies = BTreeSet::new();
     let mut ordered = Vec::new();
     for root in semantic.roots().iter().copied() {
-        let selection = semantic
-            .select_kernel_body_for_root_v1(root)
-            .ok_or_else(|| {
-                unsupported(root.index(), None, None, "kernel root body is unavailable")
-            })?;
-        let count = issuances
-            .get(&selection.body())
-            .map_or(0, |types| types.len());
+        let count = issuances.get(&root).map_or(0, |types| types.len());
         let input = by_root.remove(&root);
         match (input, count) {
-            (Some(input), 1) if selection.root() == selection.body() => {
-                expected_bodies.insert(selection.body());
+            (Some(input), 1) => {
+                expected_bodies.insert(root);
                 ordered.push(input);
-            }
-            (Some(_), 1) => {
-                return Err(unsupported(
-                    root.index(),
-                    None,
-                    None,
-                    "kernel-context issuance cannot be hidden by a transparent root wrapper",
-                ));
             }
             (Some(_), 0) => {
                 return Err(unsupported(
@@ -10704,23 +10530,23 @@ fn lower_module(
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
     let semantic = owner.source_semantic();
     let Some(authenticated_launch_roots) = authenticated_launch_roots else {
-        let selection = semantic.select_kernel_body_v1().ok_or_else(|| {
-            unsupported(
+        let [selected_root] = semantic.roots() else {
+            return Err(unsupported(
                 0,
                 None,
                 None,
-                "one direct kernel body or an exact transparent KernelResult wrapper is required",
-            )
-        })?;
+                "one exact physical kernel root is required",
+            ));
+        };
         let mut closure_budget = ReachableClosureBlockBudgetV1::new(limits.max_blocks);
         return lower_single_root_module(
             owner,
             limits,
-            selection.root(),
+            *selected_root,
             None,
             kernel_contexts
                 .iter()
-                .find(|context| context.selected_root == selection.root()),
+                .find(|context| context.selected_root == *selected_root),
             &mut closure_budget,
             true,
         );
@@ -11038,6 +10864,7 @@ fn lower_module(
     )?;
     let correspondence = SemanticKirCorrespondenceV1 {
         semantic_sha256: *semantic.semantic_sha256().as_bytes(),
+        execution_expansion_identity: execution_expansion_identity_v1(owner),
         function_count: semantic.functions().len(),
         lowered_functions: lowered_functions.into_boxed_slice(),
         blocks: blocks.into_boxed_slice(),
@@ -11447,16 +11274,11 @@ fn lower_single_root_module(
         semantic.functions().len(),
         limits.max_functions,
     )?;
-    let selection = semantic
-        .select_kernel_body_for_root_v1(selected_root)
-        .ok_or_else(|| {
-        unsupported(
-            0,
-            None,
-            None,
-            "the selected direct kernel body or exact transparent KernelResult wrapper is unavailable",
-        )
-    })?;
+    let body = execution_function_for_root_v1(owner, selected_root)?;
+    let view = owner
+        .execution_view_for_root(selected_root)
+        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+    let source_body = view.source_body();
     if !semantic.allocations().is_empty()
         || !semantic.statics().is_empty()
         || !semantic.vtables().is_empty()
@@ -11470,30 +11292,21 @@ fn lower_single_root_module(
     }
     let root = semantic
         .functions()
-        .get(selection.root().index() as usize)
+        .get(selected_root.index() as usize)
         .ok_or_else(|| unsupported(0, None, None, "the selected kernel root is missing"))?;
     let entry = root
         .kernel_entry()
         .ok_or_else(|| unsupported(0, None, None, "kernel export metadata is missing"))?;
     let symbol = std::str::from_utf8(entry.export_symbol().as_bytes())
         .map_err(|_| unsupported(0, None, None, "kernel export symbol is not UTF-8"))?;
-    let closure = reachable_defined_closure_v1(
-        semantic,
-        selection.body(),
-        limits.max_functions,
-        closure_budget,
-    )?;
-    let body = semantic
-        .functions()
-        .get(selection.body().index() as usize)
-        .ok_or_else(|| unsupported(0, None, None, "the selected kernel body is missing"))?;
+    closure_budget.charge(body.blocks().len())?;
     let kernel_context = match kernel_context_input {
         Some(input) => {
             if input.selected_root != selected_root {
                 return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
             }
             let issuances = semantic_kernel_context_issuances_v1(semantic)?;
-            let Some([semantic_type]) = issuances.get(&selection.body()).map(Vec::as_slice) else {
+            let Some([semantic_type]) = issuances.get(&selected_root).map(Vec::as_slice) else {
                 return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
             };
             Some(RootKernelContextLoweringV1 {
@@ -11507,7 +11320,9 @@ fn lower_single_root_module(
                 ),
                 source: KernelContextSourceIdentityV1::new(
                     input.frontend_unit_identity,
-                    *body.identity().as_bytes(),
+                    *semantic.functions()[source_body.index() as usize]
+                        .identity()
+                        .as_bytes(),
                     *entry.kernel_binding_identity().as_bytes(),
                     input.issuance_identity,
                 ),
@@ -11515,25 +11330,10 @@ fn lower_single_root_module(
         }
         None => None,
     };
-    let mut defined_function_ids = BTreeMap::new();
-    defined_function_ids.insert(selection.body(), FunctionId::new(symbol));
-    for function_id in closure.iter().copied().skip(1) {
-        let function = semantic
-            .functions()
-            .get(function_id.index() as usize)
-            .ok_or_else(|| unsupported(function_id.index(), None, None, "helper is missing"))?;
-        defined_function_ids.insert(function_id, helper_function_id_v1(function_id, function));
-    }
-    if defined_function_ids.values().collect::<BTreeSet<_>>().len() != defined_function_ids.len() {
-        return Err(unsupported(
-            selection.body().index(),
-            None,
-            None,
-            "deterministic helper symbol construction collided",
-        ));
-    }
+    // Defined calls belong to the checked expansion, never an independent KIR inliner.
+    let defined_function_ids = BTreeMap::new();
 
-    let entry_parameters = semantic_function_parameters_v1(selection.body(), body)?;
+    let entry_parameters = semantic_function_parameters_v1(source_body, body)?;
     let mut entry_parameter_types = Vec::new();
     let mut entry_parameter_values = Vec::new();
     let mut entry_parameter_local_bindings = Vec::new();
@@ -11561,7 +11361,7 @@ fn lower_single_root_module(
         })?;
     let mut next_component_value = u32::try_from(body.locals().len()).map_err(|_| {
         unsupported(
-            selection.body().index(),
+            selected_root.index(),
             None,
             None,
             "local count does not fit Kernel IR",
@@ -11579,7 +11379,7 @@ fn lower_single_root_module(
             Ok(parameter_ty) => {
                 let value = u32::try_from(*local).map(ValueId).map_err(|_| {
                     unsupported(
-                        selection.body().index(),
+                        selected_root.index(),
                         None,
                         None,
                         "local identity does not fit Kernel IR",
@@ -11621,7 +11421,7 @@ fn lower_single_root_module(
         if components.is_empty() {
             entry_ignored_parameter_bindings.push(SemanticKirIgnoredParameterBindingV1 {
                 correspondence_owner: selected_root,
-                semantic_function: selection.body(),
+                semantic_function: source_body,
                 semantic_local: SemanticLocalIdV1::from_index(*local as u32),
                 semantic_type: *ty,
             });
@@ -11645,7 +11445,7 @@ fn lower_single_root_module(
             let value = if component_index == 0 {
                 ValueId(u32::try_from(*local).map_err(|_| {
                     unsupported(
-                        selection.body().index(),
+                        selected_root.index(),
                         None,
                         None,
                         "aggregate local identity does not fit Kernel IR",
@@ -11655,7 +11455,7 @@ fn lower_single_root_module(
                 let value = ValueId(next_component_value);
                 next_component_value = next_component_value.checked_add(1).ok_or_else(|| {
                     unsupported(
-                        selection.body().index(),
+                        selected_root.index(),
                         None,
                         None,
                         "aggregate parameter value identity overflow",
@@ -11668,7 +11468,7 @@ fn lower_single_root_module(
             values.push(ValueDef::new(value, parameter_ty));
             entry_parameter_component_bindings.push(SemanticKirParameterComponentBindingV1 {
                 correspondence_owner: selected_root,
-                semantic_function: selection.body(),
+                semantic_function: source_body,
                 semantic_local: SemanticLocalIdV1::from_index(*local as u32),
                 semantic_component_type: component_type,
                 projection: projection.into_boxed_slice(),
@@ -11681,10 +11481,9 @@ fn lower_single_root_module(
             values,
         });
     }
-    let mut plans = Vec::with_capacity(closure.len());
-    plans.push(LoweredFunctionPlanV1 {
+    let plans = [LoweredFunctionPlanV1 {
         correspondence_owner: selected_root,
-        semantic_function: selection.body(),
+        semantic_function: source_body,
         kernel_ir_function: FunctionId::new(symbol),
         role: SemanticKirFunctionRoleV1::KernelEntry,
         parameter_declarations: entry_parameters,
@@ -11694,36 +11493,8 @@ fn lower_single_root_module(
         parameter_component_bindings: entry_parameter_component_bindings,
         ignored_parameter_bindings: entry_ignored_parameter_bindings,
         result_types: Vec::new(),
-    });
-    for function_id in closure.iter().copied().skip(1) {
-        let function = &semantic.functions()[function_id.index() as usize];
-        plans.push(direct_scalar_helper_plan_v1(
-            semantic.types(),
-            semantic.callables(),
-            selected_root,
-            function_id,
-            function,
-            defined_function_ids[&function_id].clone(),
-            kernel_context.as_ref(),
-        )?);
-    }
-    let defined_function_signatures = plans
-        .iter()
-        .map(|plan| {
-            (
-                plan.semantic_function,
-                LoweredFunctionSignatureV1 {
-                    parameter_semantic_types: plan
-                        .parameter_declarations
-                        .iter()
-                        .map(|(_, _, ty)| *ty)
-                        .collect(),
-                    parameter_types: plan.parameter_types.clone(),
-                    result_types: plan.result_types.clone(),
-                },
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
+    }];
+    let defined_function_signatures = BTreeMap::new();
 
     let required_workgroup = entry
         .source_contract()
@@ -11742,7 +11513,7 @@ fn lower_single_root_module(
     let mut total_blocks = 0_usize;
     let mut total_statements = 0_usize;
     for (index, plan) in plans.iter().enumerate() {
-        let function = &semantic.functions()[plan.semantic_function.index() as usize];
+        let function = execution_function_for_root_v1(owner, plan.correspondence_owner)?;
         let infallible = if index == 0 {
             &entry_infallible_asserts
         } else {
@@ -11803,10 +11574,12 @@ fn lower_single_root_module(
     let mut remaining_operations = limits.max_operations;
     for (index, plan) in plans.iter().enumerate() {
         let semantic_ssa = owner
-            .plan_for_function(plan.semantic_function)
+            .execution_plan_for_root(plan.correspondence_owner)
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
         let lowered = lower_one_semantic_function_v1(
             semantic,
+            body,
+            view.has_expanded_calls().then(|| *view.identity()),
             plan,
             semantic_ssa,
             &defined_function_ids,
@@ -11871,7 +11644,7 @@ fn lower_single_root_module(
             .any(|function| function.id == declaration.id)
         {
             return Err(unsupported(
-                selection.body().index(),
+                selected_root.index(),
                 None,
                 None,
                 "helper identity collides with a compiler intrinsic declaration",
@@ -11932,24 +11705,9 @@ fn lower_single_root_module(
         append_portable_execution_requirements_v1(&mut module)?;
     }
 
-    let effects = analyze_interprocedural_effects_v1(&module)
-        .map_err(ProductionSemanticKirErrorV1::InvalidKernelIr)?;
-    for plan in plans.iter().skip(1) {
-        if !effects
-            .function(&plan.kernel_ir_function)
-            .is_some_and(|decision| decision.is_complete_and_pure())
-        {
-            return Err(unsupported(
-                plan.semantic_function.index(),
-                None,
-                None,
-                "reachable deterministic scalar helper is not interprocedurally complete and pure",
-            ));
-        }
-    }
-
     let correspondence = SemanticKirCorrespondenceV1 {
         semantic_sha256: *semantic.semantic_sha256().as_bytes(),
+        execution_expansion_identity: execution_expansion_identity_v1(owner),
         function_count: semantic.functions().len(),
         lowered_functions: lowered_functions.into_boxed_slice(),
         blocks: correspondence_blocks.into_boxed_slice(),
@@ -12020,11 +11778,15 @@ include!("production_semantic_kir_v1/semantic_ssa_intrinsics_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_plan_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_enum_values_01.rs");
 include!("production_semantic_kir_v1/semantic_execution_capability_01.rs");
+include!("production_semantic_kir_v1/semantic_execution_view_01.rs");
+include!("production_semantic_kir_v1/semantic_global_metadata_01.rs");
+include!("production_semantic_kir_v1/semantic_guarded_value_01.rs");
 
 struct SemanticFunctionLoweringV1<'a> {
     types: &'a [SemanticTypeDeclV1],
     callables: &'a [SemanticCallableDeclV1],
     function: &'a SemanticFunctionDeclV1,
+    execution_expansion_identity: Option<[u8; 32]>,
     correspondence_owner: SemanticFunctionIdV1,
     semantic_function: SemanticFunctionIdV1,
     defined_function_ids: BTreeMap<SemanticFunctionIdV1, FunctionId>,
@@ -12048,6 +11810,7 @@ struct SemanticFunctionLoweringV1<'a> {
     block_parameters: BTreeMap<u32, BTreeMap<u32, Vec<ValueDef>>>,
     semantic_ssa_bindings: BTreeMap<SsaValueV1, SemanticValueBindingV1>,
     pending_semantic_ssa_definitions: BTreeMap<(u32, u32), VecDeque<SsaValueV1>>,
+    pending_frame_initializations: BTreeMap<(u32, u32), ProductionSemanticSsaFrameInitializationV1>,
     next_value: u32,
     assert_failure_block: Option<BlockId>,
     required_workgroup: Option<[u32; 3]>,
@@ -12292,10 +12055,18 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             .iter()
             .map(|(site, values)| (*site, values.iter().copied().collect()))
             .collect();
+        let pending_frame_initializations = plan_frame_initializations_v1(
+            types,
+            callables,
+            function,
+            semantic_ssa,
+            &control_flow_ssa,
+        )?;
         Ok(Self {
             types,
             callables,
             function,
+            execution_expansion_identity: None,
             correspondence_owner,
             semantic_function,
             defined_function_ids,
@@ -12318,6 +12089,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             block_parameters,
             semantic_ssa_bindings: BTreeMap::new(),
             pending_semantic_ssa_definitions,
+            pending_frame_initializations,
             next_value,
             assert_failure_block,
             required_workgroup,
@@ -12896,6 +12668,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         Ok(arguments)
     }
 
+    fn require_frame_initializations_consumed(&self) -> Result<(), ProductionSemanticKirErrorV1> {
+        if !self.pending_frame_initializations.is_empty() {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+        Ok(())
+    }
+
     fn lower_statement(
         &mut self,
         block: SemanticBlockIdV1,
@@ -12955,9 +12734,31 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticStatementKindV1::StorageLive(local)
             | SemanticStatementKindV1::StorageDead(local) => {
-                let local = self.require_local(block, statement, local.index())?;
-                self.locals[local] = None;
-                self.retained_local_initialized.remove(&(local as u32));
+                let index = self.require_local(block, statement, local.index())?;
+                self.locals[index] = None;
+                self.retained_local_initialized.remove(&(index as u32));
+                if let Some(statement) = statement
+                    && let Some(initialization) = self
+                        .pending_frame_initializations
+                        .get(&(block.index(), statement))
+                        .copied()
+                {
+                    if initialization.block() != block
+                        || initialization.statement() != statement
+                        || initialization.local() != *local
+                        || !matches!(kind, SemanticStatementKindV1::StorageLive(_))
+                    {
+                        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                    }
+                    let ty = self.function.locals()[index].ty();
+                    let binding = SemanticPromotedBindingV1::WorkgroupLdsScope
+                        .binding_from_transport(self.types, ty, &[])?;
+                    let destination = SemanticPlaceV1::new(*local, vec![], ty)
+                        .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+                    self.bind_destination(block, Some(statement), &destination, binding)?;
+                    self.pending_frame_initializations
+                        .remove(&(block.index(), statement));
+                }
                 Ok(())
             }
             SemanticStatementKindV1::Deinitialize(place)
@@ -13273,18 +13074,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 }
             }
             SemanticRvalueKindV1::Length(place) => {
-                let (slice, ty) = self
-                    .resolve_place(block, statement, place, operations)?
-                    .value()
-                    .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
-                if !matches!(ty, Type::Slice(_)) {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        statement,
-                        "semantic length source is not a lowered slice",
-                    ));
-                }
+                let binding = self.resolve_place(block, statement, place, operations)?;
+                let slice = slice_metadata_carrier_v1(self.types, place.ty(), &binding, false)
+                    .ok_or_else(|| {
+                        unsupported(
+                            0,
+                            Some(block.index()),
+                            statement,
+                            "semantic length source is not a lowered slice",
+                        )
+                    })?;
                 self.emit(
                     operations,
                     Type::INDEX,
@@ -13293,6 +13092,27 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticRvalueKindV1::Unary { operation, operand } => {
                 let input = self.lower_operand(block, statement, operand, operations)?;
+                if *operation == SemanticUnaryOpV1::PointerMetadata {
+                    let slice = slice_metadata_carrier_v1(
+                        self.types,
+                        semantic_operand_type(operand),
+                        &input,
+                        true,
+                    )
+                    .ok_or_else(|| {
+                        unsupported(
+                            0,
+                            Some(block.index()),
+                            statement,
+                            "pointer metadata is available only for lowered slices",
+                        )
+                    })?;
+                    return self.emit(
+                        operations,
+                        Type::INDEX,
+                        OperationKind::SliceLength { slice },
+                    );
+                }
                 let (input, input_ty) = input
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
@@ -13313,19 +13133,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                             operand: input,
                         },
                     ),
-                    SemanticUnaryOpV1::PointerMetadata if matches!(input_ty, Type::Slice(_)) => {
-                        self.emit(
-                            operations,
-                            Type::INDEX,
-                            OperationKind::SliceLength { slice: input },
-                        )
-                    }
-                    SemanticUnaryOpV1::PointerMetadata => Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        statement,
-                        "pointer metadata is available only for lowered slices",
-                    )),
+                    SemanticUnaryOpV1::PointerMetadata => unreachable!("metadata handled above"),
                 }
             }
             SemanticRvalueKindV1::Binary {
@@ -13826,7 +13634,11 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 {
                     return Ok(binding);
                 }
-                if matches!(binding, SemanticValueBindingV1::WorkgroupPipeline { .. }) {
+                if matches!(
+                    binding,
+                    SemanticValueBindingV1::WorkgroupPipeline { .. }
+                        | SemanticValueBindingV1::GlobalCapability { .. }
+                ) {
                     return Ok(binding);
                 }
                 let (pointer, pointer_ty) = binding
@@ -16781,14 +16593,47 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     }
                 }
             }
-            SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. } => {
-                if !call.arguments().is_empty() {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        None,
-                        "thread index intrinsic has arguments",
-                    ));
+            SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. }
+            | SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d { .. } => {
+                if let SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d {
+                    invocation,
+                    index_witness,
+                    provenance,
+                    source_identity,
+                    ..
+                } = operation
+                {
+                    self.require_call_argument_count(block, call, 1)?;
+                    let authenticated = self.kernel_context.ok_or_else(|| {
+                        unsupported(
+                            0,
+                            Some(block.index()),
+                            None,
+                            "invocation index lacks kernel context",
+                        )
+                    })?;
+                    if *source_identity != callable_source_identity
+                        || !global_capability_provenance_matches_v1(authenticated, *provenance)
+                        || !semantic_shared_reference_to_v1(
+                            self.types,
+                            semantic_operand_type(&call.arguments()[0]),
+                            *invocation,
+                        )
+                        || call
+                            .destination()
+                            .map(|destination| destination.place().ty())
+                            != Some(*index_witness)
+                    {
+                        return Err(unsupported(
+                            0,
+                            Some(block.index()),
+                            None,
+                            "invocation index changed its authenticated receiver or root",
+                        ));
+                    }
+                    self.lower_operand(block, None, &call.arguments()[0], operations)?;
+                } else {
+                    self.require_call_argument_count(block, call, 0)?;
                 }
                 let (id, _) = self
                     .emit(
@@ -17058,14 +16903,20 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             SemanticCompilerIntrinsicOperationV1::GridDimension(axis) => {
                 self.emit_launch_index_v1(operations, IndexKind::WorkgroupCount, lower_axis(*axis))?
             }
-            SemanticCompilerIntrinsicOperationV1::DisjointSliceLen { .. }
-            | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen { .. } => {
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceLen { element, .. }
+            | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen { element, .. } => {
                 self.require_call_argument_count(block, call, 1)?;
-                let (slice, slice_ty) = self
-                    .lower_operand(block, None, &call.arguments()[0], operations)?
+                let binding = self.lower_operand(block, None, &call.arguments()[0], operations)?;
+                let (slice, slice_ty) = binding
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                if !matches!(slice_ty, Type::Slice(_)) {
+                let physical_metadata = matches!(
+                    &binding,
+                    SemanticValueBindingV1::Value { ty: Type::GlobalCapability(capability), .. }
+                        if matches!(capability.role(), GlobalCapabilityRoleV1::DisjointWrite(_))
+                            && lower_scalar_type(self.types, *element)? == *capability.element()
+                );
+                if !matches!(slice_ty, Type::Slice(_)) && !physical_metadata {
                     return Err(unsupported(
                         0,
                         Some(block.index()),
@@ -19905,6 +19756,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     "global store element has no alignment",
                 )
             })?;
+        let mut access = MemoryAccess::new(AddressSpace::Global, alignment);
+        access.volatile = capability_type.role() == GlobalCapabilityRoleV1::ExclusiveReadWrite;
         self.push_operation(operations, || {
             Operation::new(
                 vec![],
@@ -19912,7 +19765,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     pointer,
                     predicate: present,
                     value,
-                    access: MemoryAccess::new(AddressSpace::Global, alignment),
+                    access,
                 },
             )
         })?;
@@ -22090,6 +21943,25 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 ) => context,
                 (
                     capability @ SemanticValueBindingV1::GlobalCapability { .. },
+                    SemanticProjectionKindV1::Field(0),
+                ) => global_capability_physical_field_v1(
+                    self.types,
+                    self.callables,
+                    self.kernel_context,
+                    current_type,
+                    projection.result_type(),
+                    &capability,
+                )
+                .ok_or_else(|| {
+                    unsupported(
+                        self.semantic_function.index(),
+                        Some(block.index()),
+                        statement,
+                        "global metadata requires the exact authenticated physical field",
+                    )
+                })?,
+                (
+                    capability @ SemanticValueBindingV1::GlobalCapability { .. },
                     SemanticProjectionKindV1::Dereference
                     | SemanticProjectionKindV1::OpaqueCast
                     | SemanticProjectionKindV1::Subtype,
@@ -22223,6 +22095,27 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     | SemanticProjectionKindV1::Subtype,
                 ) => binding,
                 (
+                    binding @ SemanticValueBindingV1::Value {
+                        ty: Type::GlobalCapability(_),
+                        ..
+                    },
+                    SemanticProjectionKindV1::Dereference,
+                ) => binding,
+                (
+                    SemanticValueBindingV1::Value {
+                        ty: Type::GlobalCapability(_),
+                        ..
+                    },
+                    _,
+                ) => {
+                    return Err(unsupported(
+                        self.semantic_function.index(),
+                        Some(block.index()),
+                        statement,
+                        "global physical metadata carrier cannot erase another field or cast",
+                    ));
+                }
+                (
                     binding @ SemanticValueBindingV1::Value { .. },
                     SemanticProjectionKindV1::Dereference
                     | SemanticProjectionKindV1::Field(0)
@@ -22275,6 +22168,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     });
                 }
             };
+            current_type = projection.result_type();
             projection_index += 1;
         }
         let availability = match &binding {
@@ -26577,6 +26471,10 @@ fn hex_identity(bytes: &[u8; 32]) -> String {
 mod resource_tests {
     include!("production_semantic_kir_v1/resource_01_tests.rs");
     include!("production_semantic_kir_v1/semantic_ssa_01_tests.rs");
+    include!("production_semantic_kir_v1/semantic_execution_view_01_tests.rs");
+    include!("production_semantic_kir_v1/semantic_global_metadata_01_tests.rs");
+    include!("production_semantic_kir_v1/semantic_frame_initialization_01_tests.rs");
+    include!("production_semantic_kir_v1/semantic_guarded_value_01_tests.rs");
 
     #[test]
     fn wave_f32_reduction_requirements_match_the_canonical_operation_kinds() {
@@ -30308,6 +30206,7 @@ mod resource_tests {
         ));
         let correspondence = SemanticKirCorrespondenceV1 {
             semantic_sha256: [7; 32],
+            execution_expansion_identity: None,
             function_count: 1,
             lowered_functions: vec![SemanticKirFunctionCorrespondenceV1 {
                 correspondence_owner: SemanticFunctionIdV1::from_index(0),
@@ -30417,6 +30316,7 @@ mod resource_tests {
         let semantic_function = SemanticFunctionIdV1::from_index(0);
         let correspondence = SemanticKirCorrespondenceV1 {
             semantic_sha256: [8; 32],
+            execution_expansion_identity: None,
             function_count: 1,
             lowered_functions: vec![SemanticKirFunctionCorrespondenceV1 {
                 correspondence_owner,
@@ -31438,6 +31338,7 @@ mod resource_tests {
         ));
         let correspondence = SemanticKirCorrespondenceV1 {
             semantic_sha256: [10; 32],
+            execution_expansion_identity: None,
             function_count: 1,
             lowered_functions: vec![SemanticKirFunctionCorrespondenceV1 {
                 correspondence_owner: SemanticFunctionIdV1::from_index(0),
@@ -31675,6 +31576,7 @@ mod resource_tests {
         let body = function.body.as_ref().unwrap();
         let correspondence = SemanticKirCorrespondenceV1 {
             semantic_sha256: [9; 32],
+            execution_expansion_identity: None,
             function_count: 1,
             lowered_functions: vec![SemanticKirFunctionCorrespondenceV1 {
                 correspondence_owner: SemanticFunctionIdV1::from_index(0),
@@ -31971,6 +31873,7 @@ mod resource_tests {
         verify_module(&module).expect("value translation Kernel IR must verify");
         let correspondence = SemanticKirCorrespondenceV1 {
             semantic_sha256: [8; 32],
+            execution_expansion_identity: None,
             function_count: 1,
             lowered_functions: vec![SemanticKirFunctionCorrespondenceV1 {
                 correspondence_owner: SemanticFunctionIdV1::from_index(0),
@@ -32600,6 +32503,7 @@ mod resource_tests {
         .expect("the neutral recipe fixture has a body");
         let correspondence = SemanticKirCorrespondenceV1 {
             semantic_sha256: [191; 32],
+            execution_expansion_identity: None,
             function_count: 1,
             lowered_functions: vec![SemanticKirFunctionCorrespondenceV1 {
                 correspondence_owner: semantic_function,
@@ -33073,6 +32977,93 @@ mod resource_tests {
     }
 
     #[test]
+    fn global_store_preserves_role_specific_volatility_and_bounds() {
+        let owner = noop_semantic_owner(&["global_store"]);
+        let source = owner.semantic();
+        let index_space = GlobalDisjointIndexContractV1::new(
+            [4; 32],
+            lower_global_disjoint_index_space_v1(SemanticDisjointIndexSpaceV1::Index1d),
+        );
+        for (role, mapping, volatile) in [
+            (GlobalCapabilityRoleV1::ExclusiveReadWrite, None, true),
+            (
+                GlobalCapabilityRoleV1::DisjointWrite(index_space),
+                Some(index_space),
+                false,
+            ),
+        ] {
+            let capability = GlobalCapabilityTypeV1::new(
+                Type::Scalar(ScalarType::F32),
+                KernelContextTypeV1::new("global_store", [1; 32], [2; 32], [3; 32]),
+                role,
+            );
+            let mut lowering = SemanticFunctionLoweringV1::new(
+                source.types(),
+                source.callables(),
+                &source.functions()[0],
+                SemanticParameterBindingsV1 {
+                    declarations: &[],
+                    values: &[],
+                    types: &[],
+                    local_bindings: None,
+                },
+                None,
+                None,
+                BTreeSet::new(),
+                1,
+                false,
+                32,
+            )
+            .unwrap();
+            lowering.next_value = 3;
+            let mut operations = Vec::new();
+            let result = lowering
+                .lower_global_capability_guarded_store_v1(
+                    SemanticBlockIdV1::from_index(0),
+                    &mut operations,
+                    ValueId(0),
+                    &capability,
+                    ValueId(1),
+                    mapping,
+                    None,
+                    ValueId(2),
+                )
+                .unwrap();
+            let predicate = result.value().unwrap().0;
+            assert!(matches!(operations[0].kind,
+                OperationKind::GlobalCapabilityIndex(ref projected)
+                if projected.capability == ValueId(0) && projected.index == ValueId(1)
+                    && projected.index_space == mapping));
+            assert!(matches!(
+                operations[2].kind,
+                OperationKind::Compare {
+                    predicate: ComparePredicate::LessThan,
+                    ..
+                }
+            ));
+            assert_eq!(operations[2].results[0].id, predicate);
+            let stores = operations
+                .iter()
+                .filter_map(|operation| match &operation.kind {
+                    OperationKind::GuardedStore {
+                        predicate,
+                        value,
+                        access,
+                        ..
+                    } => Some((*predicate, *value, access)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(stores.len(), 1);
+            assert_eq!(stores[0].0, predicate);
+            assert_eq!(stores[0].1, ValueId(2));
+            assert_eq!(stores[0].2.address_space, AddressSpace::Global);
+            assert_eq!(stores[0].2.alignment, 4);
+            assert_eq!(stores[0].2.volatile, volatile);
+        }
+    }
+
+    #[test]
     fn production_v13_rejects_global_capability_in_external_import_abi() {
         let capability = GlobalCapabilityTypeV1::read_only(
             Type::Scalar(ScalarType::F32),
@@ -33387,6 +33378,11 @@ mod resource_tests {
     }
 
     fn helper_closure_semantic_owner() -> ProductionSemanticMirOwnerV1 {
+        helper_closure_semantic_owner_with_calls(1)
+    }
+
+    fn helper_closure_semantic_owner_with_calls(calls: u8) -> ProductionSemanticMirOwnerV1 {
+        assert!((1..=3).contains(&calls));
         let unit = SemanticTypeIdV1::from_index(0);
         let source = SemanticSourceProvenanceV1::unavailable();
         let abi = |tag, canon_abi, extern_abi| {
@@ -33421,19 +33417,21 @@ mod resource_tests {
             .unwrap()
         };
 
-        let root_call = SemanticDirectCallV1::new(
-            SemanticFunctionIdV1::from_index(1),
-            vec![],
-            Some(SemanticCallDestinationV1::new(
-                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(0), vec![], unit).unwrap(),
-                SemanticControlFlowEdgeV1::new(
-                    SemanticEdgeRoleV1::CallReturn,
-                    SemanticBlockIdV1::from_index(1),
-                ),
-            )),
-            SemanticUnwindActionV1::Unreachable,
-        )
-        .unwrap();
+        let root_call = |continuation| {
+            SemanticDirectCallV1::new(
+                SemanticFunctionIdV1::from_index(1),
+                vec![],
+                Some(SemanticCallDestinationV1::new(
+                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(0), vec![], unit).unwrap(),
+                    SemanticControlFlowEdgeV1::new(
+                        SemanticEdgeRoleV1::CallReturn,
+                        SemanticBlockIdV1::from_index(continuation),
+                    ),
+                )),
+                SemanticUnwindActionV1::Unreachable,
+            )
+            .unwrap()
+        };
         let root = SemanticFunctionDeclV1::new(
             SemanticFunctionIdentityV1::from_sha256([201; 32]),
             SemanticFunctionRoleV1::KernelRoot,
@@ -33449,10 +33447,18 @@ mod resource_tests {
             ),
             vec![local(207)],
             SemanticBlockIdV1::from_index(0),
-            vec![
-                block(208, SemanticTerminatorKindV1::Call(root_call)),
-                block(209, SemanticTerminatorKindV1::Return),
-            ],
+            (0..calls)
+                .map(|index| {
+                    block(
+                        208 + index,
+                        SemanticTerminatorKindV1::Call(root_call(u32::from(index) + 1)),
+                    )
+                })
+                .chain(std::iter::once(block(
+                    208 + calls,
+                    SemanticTerminatorKindV1::Return,
+                )))
+                .collect(),
         )
         .unwrap()
         .with_kernel_entry(SemanticKernelEntryV1::new(

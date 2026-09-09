@@ -132,6 +132,7 @@ pub enum ProductionSourceIsaCatalogKirVersionV1 {
     V8,
     V9,
     V11,
+    V13,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -1531,6 +1532,7 @@ fn structural_snapshot(
         ProductionReplayKernelIrVersionV1::V8 => ProductionSourceIsaCatalogKirVersionV1::V8,
         ProductionReplayKernelIrVersionV1::V9 => ProductionSourceIsaCatalogKirVersionV1::V9,
         ProductionReplayKernelIrVersionV1::V11 => ProductionSourceIsaCatalogKirVersionV1::V11,
+        ProductionReplayKernelIrVersionV1::V13 => ProductionSourceIsaCatalogKirVersionV1::V13,
     };
     let neutral = binding.neutral_kernel_ir();
     let target_bound = binding.target_bound_kernel_ir();
@@ -1887,6 +1889,7 @@ fn encode_structural_binding(
         ProductionSourceIsaCatalogKirVersionV1::V8 => 8,
         ProductionSourceIsaCatalogKirVersionV1::V9 => 9,
         ProductionSourceIsaCatalogKirVersionV1::V11 => 11,
+        ProductionSourceIsaCatalogKirVersionV1::V13 => 13,
     });
     output.extend_from_slice(&[0; 6]);
     encode_catalog_content_identity(output, binding.neutral_kernel_ir);
@@ -2191,6 +2194,7 @@ fn decode_kir_version(
         8 => Ok(ProductionSourceIsaCatalogKirVersionV1::V8),
         9 => Ok(ProductionSourceIsaCatalogKirVersionV1::V9),
         11 => Ok(ProductionSourceIsaCatalogKirVersionV1::V11),
+        13 => Ok(ProductionSourceIsaCatalogKirVersionV1::V13),
         _ => Err(ProductionSourceIsaCatalogErrorV1::InvalidStructuralBinding),
     }
 }

@@ -27,14 +27,13 @@ fn direct_index_witness_contract_v1(
 ) -> Option<SemanticPromotedBindingV1> {
     match operation {
         SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { index_witness, .. }
-            if *index_witness == witness_type =>
-        {
-            Some(SemanticPromotedBindingV1::IndexWitness {
-                index_space: SemanticDisjointIndexSpaceV1::Index1d,
-                disjoint: false,
-                availability: None,
-            })
-        }
+        | SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d {
+            index_witness, ..
+        } if *index_witness == witness_type => Some(SemanticPromotedBindingV1::IndexWitness {
+            index_space: SemanticDisjointIndexSpaceV1::Index1d,
+            disjoint: false,
+            availability: None,
+        }),
         SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint {
             output_witness,
             index_space,

@@ -95,6 +95,52 @@ def _fail(message: str) -> None:
     raise SimulationQualificationError(message)
 
 
+def _single_role_argument(role: str, constructor: str) -> bool:
+    prefix = f"{constructor}<"
+    if not role.startswith(prefix) or not role.endswith(">"):
+        return False
+    argument = role[len(prefix) : -1].strip()
+    if not argument:
+        return False
+    depth = 0
+    for character in argument:
+        if character in "<([":
+            depth += 1
+        elif character in ">)]":
+            depth -= 1
+            if depth < 0:
+                return False
+        elif character == "," and depth == 0:
+            return False
+    return depth == 0
+
+
+def _source_buffer_abi(source_type: str) -> tuple[str, str] | None:
+    source_global = re.fullmatch(
+        r"Global<'_,\s*(u8|u16|u32|u64|i32|f32),\s*(.+)>", source_type
+    )
+    if source_global is not None:
+        element, role = source_global.groups()
+        if role == "ReadOnly":
+            return element, "read_only"
+        if _single_role_argument(role, "DisjointWrite"):
+            return element, "write_only"
+        if role == "ExclusiveReadWrite":
+            return element, "read_write"
+        if _single_role_argument(role, "AtomicReadWrite"):
+            return element, "read_write"
+        _fail(f"unsupported Global capability role in physical ABI: {role}")
+
+    source_write_only = re.fullmatch(
+        r"WriteOnlyDisjointSlice<(u8|u16|u32|u64|i32|f32),\s*.+>", source_type
+    )
+    if source_write_only is not None:
+        return source_write_only.group(1), "write_only"
+    if source_type.startswith(("Global<", "WriteOnlyDisjointSlice<")):
+        _fail(f"malformed capability buffer type in physical ABI: {source_type}")
+    return None
+
+
 def _canonical(value: Any) -> bytes:
     try:
         return json.dumps(
@@ -608,15 +654,13 @@ def _validate_physical_abi(
             _exact_keys(specification, {"access", "element", "kind", "name"}, f"physical ABI argument {index}")
             _exact_keys(argument, {"access", "alignment", "bytes", "element", "kind"}, f"request argument {index}")
             _exact_keys(wanted, {"bytes", "element", "kind"}, f"expected argument {index}")
-            source_global = re.fullmatch(
-                r"Global<'_,\s*(u8|u16|u32|u64|i32|f32),\s*(.+)>", source_type
+            source_buffer_abi = _source_buffer_abi(source_type)
+            source_element, source_access = (
+                source_buffer_abi if source_buffer_abi is not None else (None, None)
             )
-            source_access = None
-            if source_global is not None:
-                source_access = "read_only" if source_global.group(2) == "ReadOnly" else "read_write"
             if (
-                source_global is None
-                or source_global.group(1) != specification.get("element")
+                source_element is None
+                or source_element != specification.get("element")
                 or source_access != specification.get("access")
                 or argument.get("element") != specification.get("element")
                 or argument.get("access") != specification.get("access")

@@ -1187,15 +1187,7 @@ fn parse_section_header(
     })
 }
 
-pub(crate) fn decode_gfx942_hsaco_kernel_mode_words_v1(bytes: &[u8]) -> Result<Box<[u32]>, ()> {
-    decode_hsaco_kernel_mode_words_v1(bytes)
-}
-
-pub(crate) fn decode_gfx950_hsaco_kernel_mode_words_v1(bytes: &[u8]) -> Result<Box<[u32]>, ()> {
-    decode_hsaco_kernel_mode_words_v1(bytes)
-}
-
-fn decode_hsaco_kernel_mode_words_v1(bytes: &[u8]) -> Result<Box<[u32]>, ()> {
+pub(crate) fn decode_amdgpu_hsaco_kernel_mode_words_v1(bytes: &[u8]) -> Result<Box<[u32]>, ()> {
     let inventory = parse_elf_inventory(bytes)?;
     let mut descriptors = Vec::<(String, u32)>::new();
     for symbol_table in &inventory.sections {
@@ -1268,19 +1260,9 @@ fn decode_hsaco_kernel_mode_words_v1(bytes: &[u8]) -> Result<Box<[u32]>, ()> {
         .into_boxed_slice())
 }
 
-pub(crate) fn decode_gfx942_executable_sections_v1(
+pub(crate) fn decode_amdgpu_executable_sections_v1(
     bytes: &[u8],
 ) -> Result<Box<[Gfx942ExecutableSectionV1<'_>]>, ()> {
-    decode_executable_sections_v1(bytes)
-}
-
-pub(crate) fn decode_gfx950_executable_sections_v1(
-    bytes: &[u8],
-) -> Result<Box<[Gfx942ExecutableSectionV1<'_>]>, ()> {
-    decode_executable_sections_v1(bytes)
-}
-
-fn decode_executable_sections_v1(bytes: &[u8]) -> Result<Box<[Gfx942ExecutableSectionV1<'_>]>, ()> {
     let inventory = parse_elf_inventory(bytes)?;
     let mut sections = inventory
         .sections

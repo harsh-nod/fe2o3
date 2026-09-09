@@ -204,6 +204,11 @@ fn map_binding(
                     ProductionSourceIsaCharacteristicProjectionErrorV1::InvalidProducerEvidence,
                 );
             }
+            ProductionSourceIsaCatalogKirVersionV1::V13 => {
+                return Err(
+                    ProductionSourceIsaCharacteristicProjectionErrorV1::InvalidProducerEvidence,
+                );
+            }
         },
         *producer.structural_binding_identity(),
         SourceIsaCharacteristicStructuralCountsV1 {

@@ -1,20 +1,22 @@
 use core::mem::{align_of, size_of};
 
 use fe2o3_device::{
-    CurrentTarget, DeviceMath, DynamicLds, Grid, Group, Invocation3D, KernelCapabilityBrand,
-    KernelContext, KernelContextTypeV1, LdsUninitialized, MatrixCapability, RegisteredLaunch,
-    SubgroupTile, Wave64, WaveLane, Workgroup, WorkgroupCollectives, WorkgroupLdsScope,
-    WorkgroupSynchronization,
+    CurrentTarget, DeviceMath, DisjointIndex, DynamicLds, Grid, GridExclusive, GridLeader, Group,
+    Invocation3D, KernelCapabilityBrand, KernelContext, KernelContextTypeV1, LdsUninitialized,
+    MatrixCapability, RegisteredLaunch, SubgroupTile, Wave64, WaveLane, Workgroup,
+    WorkgroupCollectives, WorkgroupLdsScope, WorkgroupSynchronization,
 };
 
 enum KernelA {}
 
-type Brand<'kernel> =
-    KernelCapabilityBrand<'kernel, KernelA, CurrentTarget, RegisteredLaunch>;
+type Brand<'kernel> = KernelCapabilityBrand<'kernel, KernelA, CurrentTarget, RegisteredLaunch>;
 
 fn capability_surface<'kernel>(mut context: KernelContext<'kernel, KernelA>) {
     let invocation: Invocation3D<Brand<'kernel>> = context.invocation();
     let grid: Grid<'kernel, Brand<'kernel>> = context.grid().unwrap();
+    let leader: Option<GridLeader<Brand<'kernel>>> = grid.leader();
+    let exclusive: Option<DisjointIndex<GridExclusive, Brand<'kernel>>> =
+        leader.as_ref().map(|leader| leader.index(7));
     let workgroup: Workgroup<'kernel, Brand<'kernel>> = context.workgroup();
     let lane: WaveLane<Wave64, Brand<'kernel>> = context.lane::<Wave64>();
     let subgroup: SubgroupTile<'kernel, 32, Brand<'kernel>> = context.wave64_tile::<32>();
@@ -27,6 +29,7 @@ fn capability_surface<'kernel>(mut context: KernelContext<'kernel, KernelA>) {
     assert!(workgroup.thread_rank() < workgroup.size());
     assert!(lane.get() < 64);
     assert!(subgroup.thread_rank() < subgroup.size());
+    let _ = exclusive;
 
     let mut lds_scope: WorkgroupLdsScope<'_, Brand<'kernel>> = context.workgroup_lds();
     let scratch: DynamicLds<'_, u32, LdsUninitialized, Brand<'kernel>> =

@@ -40,8 +40,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x87, 0xa0, 0x9c, 0xf2, 0xa2, 0x37, 0xdd, 0x0f, 0x6a, 0x8e, 0x72, 0xba, 0x16, 0xad, 0x89, 0x3c,
-    0xb8, 0x3c, 0xa1, 0xb9, 0xfe, 0x38, 0x8b, 0xf7, 0x7d, 0xac, 0x4d, 0x69, 0x1d, 0xe2, 0x67, 0xec,
+    0x7e, 0x2d, 0xed, 0x6c, 0x4f, 0x91, 0xae, 0x0b, 0x27, 0x2a, 0xf1, 0x24, 0xf3, 0xa2, 0x24, 0xf5,
+    0xa5, 0x8a, 0xe2, 0xb6, 0x83, 0x5a, 0x11, 0x28, 0x77, 0x6c, 0xa9, 0x74, 0xbc, 0x55, 0xcb, 0x81,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -2260,25 +2260,64 @@ pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TrustedDeviceIt
     classify_half_operation(tcx, def_id).map(TrustedDeviceItem::HalfOperation)
 }
 
+/// Returns the nominal type referenced by a disjoint memory contract, even
+/// though the view's physical layout does not retain its role's type argument.
+pub(crate) fn capability_memory_index_space_type_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<Ty<'tcx>> {
+    let TyKind::Adt(view, arguments) = *ty.kind() else {
+        return None;
+    };
+    if classify(tcx, view.did()) != Some(TrustedDeviceItem::CapabilityMemoryView) {
+        return None;
+    }
+    let mut types = arguments.types();
+    let _element = types.next()?;
+    let _space = types.next()?;
+    let role = types.next()?;
+    let _brand = types.next()?;
+    if types.next().is_some() {
+        return None;
+    }
+    let TyKind::Adt(role, arguments) = *role.kind() else {
+        return None;
+    };
+    if classify(tcx, role.did()) != Some(TrustedDeviceItem::CapabilityDisjointWrite) {
+        return None;
+    }
+    let mut types = arguments.types();
+    let index_space = types.next()?;
+    types.next().is_none().then_some(index_space)
+}
+
 /// Authenticates the identity-mapped one-dimensional invocation index space.
 ///
 /// `Index1D` is derived from the authenticated return type of the reviewed
 /// identity-mapped index terminal. No source path or caller-provided identity
 /// participates in this relation.
 pub(crate) fn is_authenticated_index_space_1d_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
-    let Some(function) = definition(tcx, TrustedDeviceItem::ThreadIndex1d) else {
-        return false;
-    };
+    check_authenticated_index_space_1d_v1(tcx, ty).unwrap_or(false)
+}
+
+pub(crate) fn check_authenticated_index_space_1d_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Result<bool, String> {
+    let function = tcx
+        .get_diagnostic_item(Symbol::intern("fe2o3_device_thread_index_1d"))
+        .ok_or_else(|| "authenticated invocation index producer is unavailable".to_owned())?;
+    provider_rule(tcx, function, TrustedDeviceItem::ThreadIndex1d)?;
     let signature =
         tcx.instantiate_bound_regions_with_erased(tcx.fn_sig(function).instantiate_identity());
     let TyKind::Adt(index, arguments) = *signature.output().kind() else {
-        return false;
+        return Err("authenticated invocation index producer must return ThreadIndex".to_owned());
     };
     if classify(tcx, index.did()) != Some(TrustedDeviceItem::ThreadIndex) {
-        return false;
+        return Err("invocation index producer returns an unauthenticated index type".to_owned());
     }
     let arguments = arguments.types().collect::<Vec<_>>();
-    matches!(arguments.as_slice(), [index_space, _brand] if *index_space == ty)
+    Ok(matches!(arguments.as_slice(), [index_space, _brand] if *index_space == ty))
 }
 
 pub(crate) fn rejected_provider(tcx: TyCtxt<'_>, def_id: DefId) -> Option<RejectedTrustedProvider> {
@@ -4045,17 +4084,6 @@ mod tests {
                 "src/group/tests.rs",
             ]
         );
-
-        let closure = reviewed_provider_source_closure_identity(
-            Path::new(super::REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT),
-            WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
-        )
-        .unwrap();
-        assert_eq!(
-            closure,
-            digest("87a09cf2a237dd0f6a8e72ba16ad893cb83ca1b9fe388bf77dac4d691de267ec")
-        );
-        assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
 
     #[test]

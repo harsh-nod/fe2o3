@@ -2,9 +2,9 @@
 """Produce an all-or-nothing tutorial capability qualification batch.
 
 The orchestrator owns scheduling, bounded archival, and batch publication. It
-does not manufacture production records. One compiler-owned transaction export
-is required for every manifest fixture, and the sealed compiler verifier must
-authenticate the assembled batch before either output is published.
+does not manufacture production records. Every fixture crosses an explicit
+compiler-only, authenticated-hardware, compiler-finalization sequence before
+the sealed compiler verifier can authorize batch publication.
 """
 
 from __future__ import annotations
@@ -18,12 +18,12 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
-import signal
 import secrets
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Callable, Iterator
 
 
@@ -32,17 +32,23 @@ MANIFEST_RELATIVE = "config/tutorial-kernel-manifest-v1.json"
 ROADMAP_ISSUE = "https://github.com/harsh-nod/fe2o3/issues/272"
 REQUEST_SCHEMA = "fe2o3-tutorial-production-transaction-request-v1"
 EXPORT_SCHEMA = "fe2o3-tutorial-production-transaction-export-v1"
+PRE_HARDWARE_EXPORT_SCHEMA = "fe2o3-tutorial-pre-hardware-transaction-export-v1"
 HARDWARE_SCHEMA = "fe2o3-tutorial-hardware-qualification-evidence-v1"
 BATCH_SCHEMA = "fe2o3-tutorial-capability-qualification-batch-v1"
-TRANSACTION_EXPORT_API = (
+TRANSACTION_PREPARE_API = (
     "rustc-codegen-fe2o3::production_pipeline::"
-    "produce_tutorial_capability_qualification_transaction_v1"
+    "prepare_tutorial_capability_qualification_transaction_v1"
+)
+TRANSACTION_FINALIZE_API = (
+    "rustc-codegen-fe2o3::production_pipeline::"
+    "finalize_tutorial_capability_qualification_transaction_v1"
 )
 HARDWARE_VERIFICATION_API = (
     "rustc-codegen-fe2o3::verify_tutorial_hardware_qualification_receipt_v1"
 )
 TRANSACTION_EXPORT_BINARY = "fe2o3-produce-tutorial-production-transaction-v1"
 RESULT_NAME = "transaction-export-v1.json"
+PRE_HARDWARE_RESULT_NAME = "pre-hardware-transaction-export-v1.json"
 EXPECTED_FIXTURE_COUNT = 47
 REQUEST_DOMAIN = b"fe2o3-tutorial-production-transaction-request-v1\0"
 OBJECT_PREFIX = PurePosixPath("objects/sha256")
@@ -52,9 +58,42 @@ MAX_ARCHIVE_BYTES = 64 * 1024 * 1024 * 1024
 MAX_ARCHIVE_FILES = 4096
 MAX_PROCESS_STDOUT = 1024 * 1024
 MAX_PROCESS_STDERR = 8 * 1024 * 1024
+MAX_PROCESS_TIMEOUT = 24 * 60 * 60
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 ENVIRONMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.+\Z")
 HARDWARE_LANES = {"gfx942": "mi300x", "gfx950": "mi350"}
+PRE_HARDWARE_RECORD_KEYS = {
+    "capabilityClosure",
+    "compilerInput",
+    "evidenceFiles",
+    "fixtureId",
+    "graph",
+    "hardware",
+    "kernelSymbol",
+    "lessonIds",
+    "negativeFixtures",
+    "preHardwareBindingSha256",
+    "productionEvidence",
+    "productionTransaction",
+    "proof",
+    "simulator",
+    "target",
+    "targetDecision",
+}
+PRE_HARDWARE_SUMMARY_KEYS = {
+    "artifactInspectionSha256",
+    "artifactSha256",
+    "commandSha256",
+    "driverIdentitySha256",
+    "lane",
+    "launchContractSha256",
+    "runtimeIdentitySha256",
+    "subjectSha256",
+    "target",
+    "targetIdentitySha256",
+    "timeoutSeconds",
+}
+PRE_HARDWARE_RECORD_DOMAIN = b"fe2o3-tutorial-pre-hardware-record-v1\0"
 SCRUBBED_ENVIRONMENT = {
     "CARGO_BUILD_RUSTC",
     "CARGO_BUILD_RUSTC_WRAPPER",
@@ -98,6 +137,11 @@ hardware_receipt_contract = _load_sibling(
     "fe2o3_tutorial_hardware_receipt_for_qualification",
     "tutorial_hardware_receipt.py",
 )
+hardware_runner_contract = _load_sibling(
+    "fe2o3_tutorial_hardware_runner_for_qualification",
+    "run-tutorial-authenticated-hardware.py",
+)
+PRE_HARDWARE_EVIDENCE_KINDS = promotion_contract.ARCHIVE_KINDS - {"hardware"}
 
 
 def _fail(message: str) -> None:
@@ -166,39 +210,9 @@ def _sha(value: Any, label: str) -> str:
 
 def _read_regular(path: Path, label: str, maximum: int = MAX_JSON_BYTES) -> bytes:
     try:
-        metadata = path.lstat()
-        if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
-            _fail(f"{label} must be a regular non-symlink file")
-        if metadata.st_size <= 0 or metadata.st_size > maximum:
-            _fail(f"{label} has an invalid byte length")
-        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(path, flags)
-        try:
-            before = os.fstat(descriptor)
-            chunks: list[bytes] = []
-            observed = 0
-            while True:
-                chunk = os.read(descriptor, min(1024 * 1024, maximum - observed + 1))
-                if not chunk:
-                    break
-                observed += len(chunk)
-                if observed > maximum:
-                    _fail(f"{label} exceeds its byte bound")
-                chunks.append(chunk)
-            after = os.fstat(descriptor)
-        finally:
-            os.close(descriptor)
-    except OSError as error:
-        _fail(f"cannot read {label}: {error}")
-    stable = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) == (
-        after.st_dev,
-        after.st_ino,
-        after.st_size,
-        after.st_mtime_ns,
-    )
-    if not stable or observed != metadata.st_size:
-        _fail(f"{label} changed while it was read")
-    return b"".join(chunks)
+        return hardware_receipt_contract._read_regular(path, label, maximum)
+    except hardware_receipt_contract.HardwareReceiptError as error:
+        _fail(str(error))
 
 
 def _load_canonical_json(path: Path, label: str) -> dict[str, Any]:
@@ -222,6 +236,8 @@ def _operator_policy_path(repository: Path, path: Path) -> Path:
         _fail("hardware trust policy must be an exact regular non-symlink file")
     if path.is_relative_to(repository):
         _fail("hardware trust policy must be operator-provisioned outside the worktree")
+    if path.name == "proposed-trust-policy-v1.json":
+        _fail("a generated proposed policy must be independently installed before use")
     return path
 
 
@@ -357,6 +373,12 @@ def _run_bounded(
     stdout_limit: int = MAX_PROCESS_STDOUT,
     stderr_limit: int = MAX_PROCESS_STDERR,
 ) -> tuple[bytes, bytes]:
+    if (
+        not isinstance(timeout_seconds, int)
+        or isinstance(timeout_seconds, bool)
+        or not 0 < timeout_seconds <= MAX_PROCESS_TIMEOUT
+    ):
+        _fail("command timeout is outside the protected bound")
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
         process = subprocess.Popen(
             command,
@@ -367,15 +389,29 @@ def _run_bounded(
             stderr=stderr,
             start_new_session=True,
         )
-        try:
-            status = process.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired as error:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
-            _fail(f"command exceeded its {timeout_seconds} second timeout: {error}")
-        stdout_size, stderr_size = stdout.tell(), stderr.tell()
+        deadline = time.monotonic() + timeout_seconds
+        reason: str | None = None
+        while process.poll() is None:
+            stdout_size = os.fstat(stdout.fileno()).st_size
+            stderr_size = os.fstat(stderr.fileno()).st_size
+            if stdout_size > stdout_limit or stderr_size > stderr_limit:
+                reason = "command exceeded its output bounds"
+                break
+            if time.monotonic() >= deadline:
+                reason = f"command exceeded its {timeout_seconds} second timeout"
+                break
+            time.sleep(0.05)
+        if reason is not None:
+            hardware_runner_contract._kill_process_group(process)
+            _fail(reason)
+        status = process.wait()
+        stdout_size = os.fstat(stdout.fileno()).st_size
+        stderr_size = os.fstat(stderr.fileno()).st_size
         if stdout_size > stdout_limit or stderr_size > stderr_limit:
             _fail("command exceeded its output bounds")
+        hardware_runner_contract._reject_live_descendants(
+            process, "qualification command"
+        )
         stdout.seek(0)
         stderr.seek(0)
         output, errors = stdout.read(), stderr.read()
@@ -558,6 +594,156 @@ def request_binding_sha256(request: dict[str, Any]) -> str:
     return _domain_sha256(REQUEST_DOMAIN, subject)
 
 
+def pre_hardware_binding_sha256(record: dict[str, Any]) -> str:
+    subject = {
+        key: value for key, value in record.items() if key != "preHardwareBindingSha256"
+    }
+    return _domain_sha256(PRE_HARDWARE_RECORD_DOMAIN, subject)
+
+
+def _expected_pre_hardware_summary(
+    request: dict[str, Any], record: dict[str, Any]
+) -> dict[str, Any]:
+    fixture = request["fixture"]
+    evidence = record["productionEvidence"]
+    files = record["evidenceFiles"]
+    return {
+        "artifactInspectionSha256": evidence["artifactInspectionSha256"],
+        "artifactSha256": evidence["artifactSha256"],
+        "commandSha256": promotion_contract.command_sha256(fixture["hardwareCommand"]),
+        "driverIdentitySha256": files["driver-identity"]["sha256"],
+        "lane": fixture["hardwareLane"],
+        "launchContractSha256": evidence["launchContractSha256"],
+        "runtimeIdentitySha256": files["runtime-identity"]["sha256"],
+        "subjectSha256": evidence["artifactSha256"],
+        "target": fixture["target"],
+        "targetIdentitySha256": evidence["targetIdentitySha256"],
+        "timeoutSeconds": fixture["hardwareCommand"]["timeoutSeconds"],
+    }
+
+
+def validate_pre_hardware_export(
+    export_root: Path, request: dict[str, Any]
+) -> dict[str, Any]:
+    """Admit compiler evidence that contains no hardware-derived identity."""
+    if request.get("requestBindingSha256") != request_binding_sha256(request):
+        _fail("production transaction request binding is stale")
+    envelope = _load_canonical_json(
+        export_root / PRE_HARDWARE_RESULT_NAME, "pre-hardware transaction export"
+    )
+    _exact_keys(
+        envelope,
+        {"candidate", "fixtureId", "record", "requestBindingSha256", "schema"},
+        "pre-hardware transaction export",
+    )
+    fixture = request["fixture"]
+    if (
+        envelope["schema"] != PRE_HARDWARE_EXPORT_SCHEMA
+        or envelope["candidate"] != request["candidate"]
+        or envelope["fixtureId"] != fixture["fixtureId"]
+        or envelope["requestBindingSha256"] != request["requestBindingSha256"]
+    ):
+        _fail("pre-hardware transaction export is stale or substituted")
+    record = _object(envelope["record"], "pre-hardware transaction export.record")
+    _exact_keys(record, PRE_HARDWARE_RECORD_KEYS, "pre-hardware record")
+    if record["preHardwareBindingSha256"] != pre_hardware_binding_sha256(record):
+        _fail("pre-hardware record binding is stale")
+    kernel = request["capabilityKernel"]
+    if (
+        record["fixtureId"] != fixture["fixtureId"]
+        or record["target"] != fixture["target"]
+        or record["kernelSymbol"] != kernel["kernelSymbol"]
+        or record["lessonIds"] != kernel["lessonIds"]
+        or record["compilerInput"]
+        != {
+            key: fixture["compilerInput"][key]
+            for key in (
+                "cargoLockSha256",
+                "contractSha256",
+                "packageManifestSha256",
+                "sourceClosureSha256",
+            )
+        }
+    ):
+        _fail("pre-hardware record is stale, reordered, or cross-target")
+    files = _object(record["evidenceFiles"], "pre-hardware record.evidenceFiles")
+    _exact_keys(files, PRE_HARDWARE_EVIDENCE_KINDS, "pre-hardware evidence")
+    production = _object(
+        record["productionEvidence"], "pre-hardware record.productionEvidence"
+    )
+    _exact_keys(
+        production,
+        manifest_contract.PRODUCTION_EVIDENCE_KEYS - {"hardwareEvidenceSha256"},
+        "pre-hardware production evidence",
+    )
+    hardware = _object(record["hardware"], "pre-hardware record.hardware")
+    _exact_keys(hardware, PRE_HARDWARE_SUMMARY_KEYS, "pre-hardware summary")
+    if hardware != _expected_pre_hardware_summary(request, record):
+        _fail("pre-hardware summary is stale, cross-target, or predicts execution")
+    simulator = _validate_reference(request["simulatorEvidence"], "simulator evidence")
+    if files["simulator"] != simulator:
+        _fail("pre-hardware record substituted semantic simulator evidence")
+
+    expected_files = {PRE_HARDWARE_RESULT_NAME}
+    for kind, raw_reference in files.items():
+        reference = _validate_reference(raw_reference, f"pre-hardware evidence {kind}")
+        path = _resolve_object(export_root, reference, f"pre-hardware evidence {kind}")
+        if kind == "simulator" and not path.exists():
+            continue
+        payload = _read_regular(path, f"pre-hardware evidence {kind}", MAX_FILE_BYTES)
+        if (
+            len(payload) != reference["bytes"]
+            or _sha256(payload) != reference["sha256"]
+        ):
+            _fail(f"pre-hardware evidence {kind} content differs")
+        expected_files.add(reference["path"])
+    actual_files = {
+        str(path.relative_to(export_root))
+        for path in export_root.rglob("*")
+        if path.is_file() or path.is_symlink()
+    }
+    if any(path.is_symlink() for path in export_root.rglob("*")):
+        _fail("pre-hardware transaction export contains a symlink")
+    if actual_files != expected_files:
+        _fail("pre-hardware transaction export contains omitted or unexpected files")
+    return record
+
+
+def complete_pre_hardware_record(
+    pre_record: dict[str, Any],
+    hardware_reference: dict[str, Any],
+    hardware: dict[str, Any],
+) -> dict[str, Any]:
+    """Derive the sole final record admitted by the two-phase protocol."""
+    reference = _validate_reference(hardware_reference, "hardware evidence")
+    checks = _object(hardware["checks"], "hardware evidence.checks")
+    record = json.loads(_canonical(pre_record))
+    record.pop("preHardwareBindingSha256")
+    record["evidenceFiles"]["hardware"] = reference
+    record["productionEvidence"]["hardwareEvidenceSha256"] = reference["sha256"]
+    record["hardware"] = {
+        "artifactInspectionSha256": hardware["artifactInspectionSha256"],
+        "artifactSha256": hardware["artifactSha256"],
+        "canariesChecked": checks["canariesChecked"],
+        "commandSha256": hardware["commandSha256"],
+        "driverIdentitySha256": hardware["driverIdentitySha256"],
+        "evidenceSha256": reference["sha256"],
+        "fullOutputChecked": checks["completeOutputChecked"],
+        "inputsUnchangedChecked": checks["inputsUnchangedChecked"],
+        "lane": hardware["lane"],
+        "launchContractSha256": hardware["launchContractSha256"],
+        "paddingChecked": checks["paddingChecked"],
+        "runtimeIdentitySha256": hardware["runtimeIdentitySha256"],
+        "status": "passed",
+        "subjectSha256": hardware["artifactSha256"],
+        "target": hardware["target"],
+        "targetIdentitySha256": hardware["targetIdentitySha256"],
+        "timeoutSeconds": hardware["timeoutSeconds"],
+    }
+    record["recordBindingSha256"] = promotion_contract.record_binding_sha256(record)
+    return record
+
+
 def _validate_hardware_evidence(
     evidence_root: Path,
     record: dict[str, Any],
@@ -653,6 +839,8 @@ def _validate_hardware_evidence(
 
 def validate_transaction_export(
     export_root: Path,
+    pre_export_root: Path,
+    pre_record: dict[str, Any],
     request: dict[str, Any],
     destination_root: Path,
     hardware_policy: hardware_receipt_contract.TrustPolicy,
@@ -675,81 +863,56 @@ def validate_transaction_export(
         or envelope["requestBindingSha256"] != request["requestBindingSha256"]
     ):
         _fail("production transaction export is stale or substituted")
-    record = _object(envelope["record"], "production transaction export.record")
-    expected_record_fields = {
-        "capabilityClosure",
-        "compilerInput",
-        "evidenceFiles",
-        "fixtureId",
-        "graph",
-        "hardware",
-        "kernelSymbol",
-        "lessonIds",
-        "negativeFixtures",
-        "productionEvidence",
-        "productionTransaction",
-        "proof",
-        "recordBindingSha256",
-        "simulator",
-        "target",
-        "targetDecision",
-    }
-    _exact_keys(record, expected_record_fields, "production transaction export.record")
-    kernel = request["capabilityKernel"]
-    if (
-        record["fixtureId"] != fixture["fixtureId"]
-        or record["target"] != fixture["target"]
-        or record["kernelSymbol"] != kernel["kernelSymbol"]
-        or record["lessonIds"] != kernel["lessonIds"]
-        or record["compilerInput"]
-        != {
-            key: fixture["compilerInput"][key]
-            for key in (
-                "cargoLockSha256",
-                "contractSha256",
-                "packageManifestSha256",
-                "sourceClosureSha256",
-            )
-        }
-    ):
-        _fail("production transaction record is stale, reordered, or cross-target")
-    if record["recordBindingSha256"] != promotion_contract.record_binding_sha256(
-        record
-    ):
-        _fail("production transaction record binding is stale")
-    files = _object(
-        record["evidenceFiles"], "production transaction record.evidenceFiles"
-    )
-    _exact_keys(
-        files, promotion_contract.ARCHIVE_KINDS, "production transaction evidence"
-    )
-    simulator = _validate_reference(request["simulatorEvidence"], "simulator evidence")
-    if files["simulator"] != simulator:
-        _fail("production transaction substituted the semantic simulator evidence")
-    for kind in sorted(files):
-        reference = _validate_reference(files[kind], f"production evidence {kind}")
-        source = _resolve_object(export_root, reference, f"production evidence {kind}")
-        if not source.exists():
-            destination = _resolve_object(
-                destination_root, reference, f"existing production evidence {kind}"
-            )
-            if kind != "simulator" or not destination.exists():
-                _fail(f"production transaction omitted evidence object {kind}")
-            continue
-        _copy_object(
-            export_root, destination_root, reference, f"production evidence {kind}"
-        )
     try:
         transport = hardware_receipt_contract.validate_and_ingest(
             export_root / hardware_receipt_contract.TRANSPORT_NAME,
             request,
-            record,
+            pre_record,
             hardware_policy,
             lambda payload: _write_object(destination_root, payload),
             seen_hardware_receipts,
         )
     except hardware_receipt_contract.HardwareReceiptError as error:
         _fail(f"authenticated hardware archive rejected: {error}")
+    hardware_path = _resolve_object(
+        destination_root, transport.hardware_evidence_reference, "hardware evidence"
+    )
+    hardware = _load_canonical_json(hardware_path, "hardware evidence")
+    record = _object(envelope["record"], "production transaction export.record")
+    expected_record = complete_pre_hardware_record(
+        pre_record, transport.hardware_evidence_reference, hardware
+    )
+    if record != expected_record:
+        _fail("final production record is not the exact authenticated completion")
+    files = _object(record["evidenceFiles"], "production transaction evidence")
+    _exact_keys(
+        files, promotion_contract.ARCHIVE_KINDS, "production transaction evidence"
+    )
+    for kind in sorted(files):
+        reference = _validate_reference(files[kind], f"production evidence {kind}")
+        sources = (
+            (export_root, _resolve_object(export_root, reference, f"final {kind}")),
+            (
+                pre_export_root,
+                _resolve_object(pre_export_root, reference, f"pre-hardware {kind}"),
+            ),
+            (
+                destination_root,
+                _resolve_object(destination_root, reference, f"ingested {kind}"),
+            ),
+        )
+        for source_root, source in sources:
+            if source.exists():
+                if source_root != destination_root:
+                    _copy_object(
+                        source_root,
+                        destination_root,
+                        reference,
+                        f"production evidence {kind}",
+                    )
+                break
+        else:
+            _fail(f"production transaction omitted evidence object {kind}")
     _validate_hardware_evidence(destination_root, record, request, transport)
     actual_files: set[str] = set()
     for current, directories, filenames in os.walk(export_root, followlinks=False):
@@ -817,8 +980,9 @@ def production_transaction_command(
         metadata = source.lstat()
     except OSError:
         _fail(
-            f"production compiler does not export required API `{TRANSACTION_EXPORT_API}`; "
-            f"expected compiler-owned binary source {source}. The sealed verifier must also "
+            "production compiler does not export the required two-phase APIs "
+            f"`{TRANSACTION_PREPARE_API}` and `{TRANSACTION_FINALIZE_API}`; expected "
+            f"compiler-owned binary source {source}. The sealed verifier must also "
             f"implement typed hardware receipt API `{HARDWARE_VERIFICATION_API}`"
         )
     if source.is_symlink() or not stat.S_ISREG(metadata.st_mode):
@@ -871,21 +1035,20 @@ def _transaction_environment() -> dict[str, str]:
     return environment
 
 
-def invoke_transaction(
+def invoke_compiler_phase(
     producer_command: list[str],
     repository: Path,
     request_path: Path,
     output_directory: Path,
     timeout_seconds: int,
-    hardware_trust_policy: Path,
 ) -> None:
     if output_directory.exists():
         _fail("production transaction output directory already exists")
     output, _ = _run_bounded(
         [
             *producer_command,
-            "--hardware-trust-policy",
-            str(hardware_trust_policy),
+            "--phase",
+            "prepare",
             "--request",
             str(request_path),
             "--output-directory",
@@ -896,9 +1059,43 @@ def invoke_transaction(
         timeout_seconds=timeout_seconds,
     )
     if output:
-        _fail(
-            "production transaction producer must publish records, not stdout authority"
-        )
+        _fail("compiler phase must publish evidence, not stdout authority")
+
+
+def invoke_finalization_phase(
+    producer_command: list[str],
+    repository: Path,
+    request_path: Path,
+    pre_hardware_directory: Path,
+    hardware_archive: Path,
+    output_directory: Path,
+    timeout_seconds: int,
+    hardware_trust_policy: Path,
+) -> None:
+    if output_directory.exists():
+        _fail("final production transaction output directory already exists")
+    output, _ = _run_bounded(
+        [
+            *producer_command,
+            "--phase",
+            "finalize",
+            "--hardware-trust-policy",
+            str(hardware_trust_policy),
+            "--request",
+            str(request_path),
+            "--pre-hardware-directory",
+            str(pre_hardware_directory),
+            "--hardware-archive",
+            str(hardware_archive),
+            "--output-directory",
+            str(output_directory),
+        ],
+        cwd=repository,
+        environment=_transaction_environment(),
+        timeout_seconds=timeout_seconds,
+    )
+    if output:
+        _fail("finalization phase must publish evidence, not stdout authority")
 
 
 @contextmanager
@@ -911,7 +1108,14 @@ def qualification_workspace(parent: Path) -> Iterator[Path]:
         os.chmod(workspace, 0o700)
         yield workspace
     finally:
-        shutil.rmtree(workspace, ignore_errors=True)
+        try:
+            shutil.rmtree(workspace)
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            _fail(f"cannot remove qualification workspace: {error}")
+        if workspace.exists() or workspace.is_symlink():
+            _fail("qualification workspace cleanup left residue")
 
 
 def _publish_new_file(path: Path, payload: bytes) -> None:
@@ -1023,6 +1227,7 @@ def produce(
     verifier_timeout_seconds: int,
     hardware_trust_policy: Path,
     cargo_fe2o3: Path,
+    remote_private_keys: dict[str, str],
     verifier: Verifier = promotion_contract.run_producer_verifier,
 ) -> dict[str, int]:
     repository = repository.resolve(strict=True)
@@ -1066,47 +1271,84 @@ def produce(
         seen_hardware_receipts: set[str] = set()
         transactions = workspace / "transactions"
         transactions.mkdir(mode=0o700)
-        for fixture_id in fixture_ids:
-            unit = transactions / fixture_id
-            unit.mkdir(mode=0o700)
-            fixture = fixtures[fixture_id]
-            lane = HARDWARE_LANES.get(fixture["target"])
-            trust = hardware_policy.lanes.get((lane, fixture["target"]))
-            if trust is None:
-                _fail(
-                    f"fixture {fixture_id} has no exact trusted lane/target reservation"
+        with hardware_runner_contract.RemoteHardwareSession(
+            repository, workspace, candidate, remote_private_keys
+        ) as hardware_session:
+            for fixture_id in fixture_ids:
+                unit = transactions / fixture_id
+                unit.mkdir(mode=0o700)
+                fixture = fixtures[fixture_id]
+                lane = HARDWARE_LANES.get(fixture["target"])
+                trust = hardware_policy.lanes.get((lane, fixture["target"]))
+                if trust is None:
+                    _fail(
+                        f"fixture {fixture_id} has no exact trusted lane/target reservation"
+                    )
+                request = transaction_request(
+                    fixture,
+                    kernels[fixture_id],
+                    candidate,
+                    manifest_identity,
+                    simulator_references[fixture_id],
+                    trust.reservation_identity,
                 )
-            request = transaction_request(
-                fixture,
-                kernels[fixture_id],
-                candidate,
-                manifest_identity,
-                simulator_references[fixture_id],
-                trust.reservation_identity,
-            )
-            request_path = unit / "request-v1.json"
-            request_payload = _canonical(request) + b"\n"
-            _publish_new_file(request_path, request_payload)
-            export_root = unit / "export"
-            invoke_transaction(
-                producer_command,
-                repository,
-                request_path,
-                export_root,
-                transaction_timeout_seconds,
-                hardware_trust_policy,
-            )
-            if _read_regular(request_path, "transaction request") != request_payload:
-                _fail(f"production transaction changed request {fixture_id}")
-            records.append(
-                validate_transaction_export(
+                request_path = unit / "request-v1.json"
+                request_payload = _canonical(request) + b"\n"
+                _publish_new_file(request_path, request_payload)
+                pre_export_root = unit / "pre-hardware"
+                invoke_compiler_phase(
+                    producer_command,
+                    repository,
+                    request_path,
+                    pre_export_root,
+                    transaction_timeout_seconds,
+                )
+                pre_export_payload = _read_regular(
+                    pre_export_root / PRE_HARDWARE_RESULT_NAME,
+                    "pre-hardware transaction export",
+                )
+                pre_record = validate_pre_hardware_export(pre_export_root, request)
+                hardware_archive = unit / hardware_receipt_contract.TRANSPORT_NAME
+                _publish_new_file(
+                    hardware_archive,
+                    hardware_session.run(
+                        request, pre_record, pre_export_root, trust.attestor_identity
+                    ),
+                )
+                export_root = unit / "final"
+                invoke_finalization_phase(
+                    producer_command,
+                    repository,
+                    request_path,
+                    pre_export_root,
+                    hardware_archive,
                     export_root,
-                    request,
-                    archive,
-                    hardware_policy,
-                    seen_hardware_receipts,
+                    transaction_timeout_seconds,
+                    hardware_trust_policy,
                 )
-            )
+                if (
+                    _read_regular(request_path, "transaction request")
+                    != request_payload
+                    or _read_regular(
+                        pre_export_root / PRE_HARDWARE_RESULT_NAME,
+                        "pre-hardware transaction export",
+                    )
+                    != pre_export_payload
+                ):
+                    _fail(
+                        f"production transaction changed request or pre-record {fixture_id}"
+                    )
+                records.append(
+                    validate_transaction_export(
+                        export_root,
+                        pre_export_root,
+                        pre_record,
+                        request,
+                        archive,
+                        hardware_policy,
+                        seen_hardware_receipts,
+                    )
+                )
         batch = assemble_batch(
             records,
             candidate,
@@ -1152,16 +1394,18 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--evidence-output", required=True, type=Path)
     parser.add_argument("--hardware-trust-policy", required=True, type=Path)
     parser.add_argument("--cargo-fe2o3", required=True, type=Path)
+    parser.add_argument("--mi300x-attestor-private-key", required=True)
+    parser.add_argument("--mi350-attestor-private-key", required=True)
     parser.add_argument("--repository", default=REPO_ROOT, type=Path)
     parser.add_argument("--transaction-timeout-seconds", default=3600, type=int)
     parser.add_argument("--verifier-timeout-seconds", default=3600, type=int)
     options = parser.parse_args(arguments)
     if (
-        options.transaction_timeout_seconds <= 0
-        or options.verifier_timeout_seconds <= 0
+        not 0 < options.transaction_timeout_seconds <= MAX_PROCESS_TIMEOUT
+        or not 0 < options.verifier_timeout_seconds <= MAX_PROCESS_TIMEOUT
     ):
         print(
-            "tutorial qualification producer: timeouts must be positive",
+            "tutorial qualification producer: timeouts are outside the protected bound",
             file=sys.stderr,
         )
         return 1
@@ -1174,10 +1418,15 @@ def main(arguments: list[str] | None = None) -> int:
             options.verifier_timeout_seconds,
             options.hardware_trust_policy,
             options.cargo_fe2o3,
+            {
+                "mi300x": options.mi300x_attestor_private_key,
+                "mi350": options.mi350_attestor_private_key,
+            },
         )
     except (
         OSError,
         QualificationProducerError,
+        hardware_runner_contract.RunnerError,
         hardware_receipt_contract.HardwareReceiptError,
         manifest_contract.ManifestError,
         promotion_contract.PromotionError,
