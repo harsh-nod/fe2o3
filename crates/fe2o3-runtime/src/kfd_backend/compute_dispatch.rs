@@ -16,6 +16,21 @@ pub(super) fn three_binding_persistent_compute_access_shape_v1(
             ]
 }
 
+pub(super) fn three_binding_requires_persistent_admission_v1(
+    semantic_launch: KfdRuntimeSemanticLaunchV1,
+    bindings: &[BackendBindingV1],
+    allocations: &HashMap<u64, AllocationRecordV1>,
+) -> bool {
+    // Only fully resolved host-visible rosters may use ordinary materialization.
+    // Mixed or device-local candidates still require authenticated persistence.
+    three_binding_persistent_compute_access_shape_v1(semantic_launch, bindings)
+        && !bindings.iter().all(|binding| {
+            allocations
+                .get(&binding.region.allocation)
+                .is_some_and(|allocation| allocation.kind == RuntimeMemoryKindV1::HostVisible)
+        })
+}
+
 pub(super) fn three_binding_persistent_compute_admission_v1(
     semantic_launch: KfdRuntimeSemanticLaunchV1,
     bindings: &[BackendBindingV1],
@@ -379,10 +394,13 @@ impl KfdRuntimeBackendV1 {
                 ));
             }
         }
-        if three_binding_persistent_compute_access_shape_v1(launch.semantic_launch, launch.bindings)
-            && self
-                .three_binding_persistent_admission_for_launch_v1(*launch)
-                .is_none()
+        if three_binding_requires_persistent_admission_v1(
+            launch.semantic_launch,
+            launch.bindings,
+            &self.allocations,
+        ) && self
+            .three_binding_persistent_admission_for_launch_v1(*launch)
+            .is_none()
         {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::InvalidLaunch,
@@ -2253,8 +2271,11 @@ impl KfdRuntimeBackendV1 {
         })?;
         let persistent_admission = self.persistent_full_range_admission_for_launch_v1(launch);
         let three_binding_admission = self.three_binding_persistent_admission_for_launch_v1(launch);
-        if three_binding_persistent_compute_access_shape_v1(launch.semantic_launch, launch.bindings)
-            && three_binding_admission.is_none()
+        if three_binding_requires_persistent_admission_v1(
+            launch.semantic_launch,
+            launch.bindings,
+            &self.allocations,
+        ) && three_binding_admission.is_none()
         {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::InvalidLaunch,

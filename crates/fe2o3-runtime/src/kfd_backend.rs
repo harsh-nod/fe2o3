@@ -14118,6 +14118,177 @@ mod tests {
         disarm_scripted_drop_after_inspection_v1(&mut backend);
     }
 
+    fn host_visible_three_binding_launch_v1() -> (KfdRuntimeBackendV1, OwnedComputeLaunchV1) {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        let stream = backend.create_stream_v1(7).unwrap();
+        let module = backend
+            .load_module_v1(7, &synthetic_cov6::three_binding_module())
+            .unwrap();
+        let kernel = backend
+            .resolve_kernel_v1(module, "vecadd", [7; 32])
+            .unwrap();
+        let bindings = [
+            RuntimeAccessV1::Read,
+            RuntimeAccessV1::Read,
+            RuntimeAccessV1::Write,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, access)| {
+            let allocation = backend
+                .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 64, 8)
+                .unwrap();
+            backend
+                .write_allocation_v1(allocation, 0, &[0x31 + index as u8; 64])
+                .unwrap();
+            let record = backend.allocations.get_mut(&allocation).unwrap();
+            record.sdma_backed = true;
+            record.sdma_initialized = true;
+            BackendBindingV1 {
+                region: BackendMemoryRegionV1 {
+                    allocation,
+                    access,
+                    byte_offset: 0,
+                    byte_len: 64,
+                },
+                kernarg_byte_offset: (index * 8) as u32,
+            }
+        })
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+        let mut explicit_kernarg = vec![0; 32];
+        explicit_kernarg[24..].copy_from_slice(&16_u64.to_le_bytes());
+        let launch = OwnedComputeLaunchV1 {
+            stream,
+            kernel,
+            explicit_kernarg: explicit_kernarg.into_boxed_slice(),
+            bindings,
+            geometry: crate::RuntimeLaunchGeometryV1 {
+                grid: [64, 1, 1],
+                workgroup: [64, 1, 1],
+                dynamic_shared_bytes: 0,
+            },
+            semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
+        };
+        (backend, launch)
+    }
+
+    #[test]
+    fn three_binding_host_visible_validates_and_prepares_materialized_launch() {
+        let (mut backend, launch) = host_visible_three_binding_launch_v1();
+        assert!(
+            backend
+                .three_binding_persistent_admission_for_launch_v1(launch.borrowed())
+                .is_none()
+        );
+        backend
+            .validate_compute_launch_v1(&launch.borrowed(), &[])
+            .unwrap();
+        for reuse_bound_recipe in [false, true] {
+            let prepared = backend
+                .prepare_launch(launch.borrowed(), false, reuse_bound_recipe)
+                .unwrap();
+            let PreparedLaunchStorageV1::Materialized(data) = &prepared.storage else {
+                panic!("host-visible R/R/W must select ordinary materialization")
+            };
+            assert_eq!(data.len(), 3);
+            for (index, (data, binding)) in data.iter().zip(&launch.bindings).enumerate() {
+                assert_eq!(data.allocation, binding.region.allocation);
+                assert_eq!(data.kind, RuntimeMemoryKindV1::HostVisible);
+                assert_eq!(data.bytes(), &[0x31 + index as u8; 64]);
+            }
+            assert_eq!(prepared.writebacks.len(), 1);
+            assert_eq!(
+                prepared.writebacks[0].allocation,
+                launch.bindings[2].region.allocation
+            );
+            let program =
+                build_program_v1(&prepared.program, prepared.signature, &prepared.abi_rows)
+                    .unwrap();
+            assert!(program.dispatch_abi_identity().is_some());
+        }
+        assert_runtime_compute_pipeline_empty_v1(&backend);
+        assert!(backend.allocation_custody.is_empty());
+        assert_eq!(backend.compute_completion_reservations, 0);
+        for binding in launch.bindings.iter().rev() {
+            backend
+                .release_allocation_v1(binding.region.allocation)
+                .unwrap();
+        }
+        backend
+            .unload_module_v1(backend.kernels[&launch.kernel].module)
+            .unwrap();
+        backend.destroy_stream_v1(launch.stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn three_binding_host_visible_exemption_rejects_mixed_device_local_and_unknown_rosters() {
+        let (mut backend, mut launch) = host_visible_three_binding_launch_v1();
+        for device_mask in 1..8 {
+            for (index, binding) in launch.bindings.iter().enumerate() {
+                backend
+                    .allocations
+                    .get_mut(&binding.region.allocation)
+                    .unwrap()
+                    .kind = if device_mask & (1 << index) != 0 {
+                    RuntimeMemoryKindV1::DeviceLocal
+                } else {
+                    RuntimeMemoryKindV1::HostVisible
+                };
+            }
+            assert!(matches!(
+                backend.validate_compute_launch_v1(&launch.borrowed(), &[]),
+                Err(RuntimeBackendFailureV1::Rejected(error))
+                    if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch
+                        && error.detail().contains("exact R/R/W admission")
+            ));
+            for reuse_bound_recipe in [false, true] {
+                assert!(matches!(
+                    backend.prepare_launch(launch.borrowed(), false, reuse_bound_recipe),
+                    Err(RuntimeBackendFailureV1::Rejected(error))
+                        if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch
+                            && error.detail().contains("exact R/R/W admission")
+                ));
+            }
+        }
+        for binding in &launch.bindings {
+            backend
+                .allocations
+                .get_mut(&binding.region.allocation)
+                .unwrap()
+                .kind = RuntimeMemoryKindV1::HostVisible;
+        }
+        for index in 0..3 {
+            let allocation = launch.bindings[index].region.allocation;
+            launch.bindings[index].region.allocation = u64::MAX;
+            assert!(matches!(
+                backend.validate_compute_launch_v1(&launch.borrowed(), &[]),
+                Err(RuntimeBackendFailureV1::Rejected(_))
+            ));
+            assert!(matches!(
+                backend.prepare_launch(launch.borrowed(), false, false),
+                Err(RuntimeBackendFailureV1::Rejected(error))
+                    if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch
+                        && error.detail().contains("exact R/R/W admission")
+            ));
+            launch.bindings[index].region.allocation = allocation;
+        }
+        assert_runtime_compute_pipeline_empty_v1(&backend);
+        assert!(backend.allocation_custody.is_empty());
+        assert_eq!(backend.compute_completion_reservations, 0);
+        for binding in launch.bindings.iter().rev() {
+            backend
+                .release_allocation_v1(binding.region.allocation)
+                .unwrap();
+        }
+        backend
+            .unload_module_v1(backend.kernels[&launch.kernel].module)
+            .unwrap();
+        backend.destroy_stream_v1(launch.stream).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
     #[test]
     fn three_binding_admission_requires_exact_authenticated_initialized_roster() {
         let byte_len = 64_usize;
