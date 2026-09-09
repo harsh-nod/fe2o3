@@ -25,6 +25,8 @@ const EXTRACT_AMDGPU_LLVM_PATH_ENV_V1: &str = "FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1
 const EXTRACT_GFX942_LLVM_PATH_ENV_V1: &str = "FE2O3_EXTRACT_GFX942_LLVM_PATH_V1";
 const EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1: &str =
     "FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1";
+const EXTRACT_AMDGPU_COMPILER_HANDOFF_PATH_ENV_V1: &str =
+    "FE2O3_EXTRACT_AMDGPU_COMPILER_HANDOFF_PATH_V1";
 const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V1: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1";
 const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V2: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V2";
 const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V3: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V3";
@@ -54,18 +56,29 @@ fn main() {
             std::process::exit(1);
         }
     };
+    let (handoff_output, generic_handoff) = match select_compiler_handoff_output(
+        env::var_os(EXTRACT_AMDGPU_COMPILER_HANDOFF_PATH_ENV_V1),
+        env::var_os(EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1),
+    ) {
+        Ok(selected) => selected,
+        Err(error) => {
+            eprintln!("fe2o3 rustc extraction: {error}");
+            std::process::exit(1);
+        }
+    };
     let prepared = prepare(
         env::args_os().collect(),
         env::var_os(EXTRACT_CRATE_ENV_V1),
         env::var_os(EXTRACT_RANKED_MEMORY_ENV_V1),
         env::var_os(EXTRACT_AMDGPU_LLVM_PATH_ENV_V1),
         env::var_os(EXTRACT_GFX942_LLVM_PATH_ENV_V1),
-        env::var_os(EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1),
+        handoff_output,
         simulation_output,
         env::var_os(EXTRACT_CRATE_BINDING_PATH_ENV_V1),
         None,
     )
-    .map(|prepared| select_simulation_mode(prepared, version));
+    .map(|prepared| select_simulation_mode(prepared, version))
+    .map(|prepared| select_compiler_handoff_mode(prepared, generic_handoff));
     let code = match prepared.and_then(execute) {
         Ok(code) => code,
         Err(error) => {
@@ -114,12 +127,42 @@ enum ExtractionModeV1 {
     AmdgpuLlvm(OsString),
     Gfx942Llvm(OsString),
     Gfx942CompilerHandoff(OsString),
+    AmdgpuCompilerHandoff(OsString),
     SimulationBundle(OsString),
     SimulationBundleV2(OsString),
     SimulationBundleV3(OsString),
     SimulationBundleV4(OsString),
     SimulationBundleV5(OsString),
     SimulationBundleV6(OsString),
+}
+
+fn select_compiler_handoff_output(
+    generic: Option<OsString>,
+    legacy: Option<OsString>,
+) -> Result<(Option<OsString>, bool), String> {
+    match (generic, legacy) {
+        (Some(_), Some(_)) => Err(format!(
+            "{EXTRACT_AMDGPU_COMPILER_HANDOFF_PATH_ENV_V1} and {EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1} are mutually exclusive"
+        )),
+        (Some(output), None) if output.is_empty() => Err(format!(
+            "{EXTRACT_AMDGPU_COMPILER_HANDOFF_PATH_ENV_V1} must not be empty"
+        )),
+        (Some(output), None) => Ok((Some(output), true)),
+        (None, legacy) => Ok((legacy, false)),
+    }
+}
+
+fn select_compiler_handoff_mode(
+    mut prepared: PreparedExtractionV1,
+    generic: bool,
+) -> PreparedExtractionV1 {
+    if generic
+        && let PreparedExtractionV1::Selected(selected) = &mut prepared
+        && let ExtractionModeV1::Gfx942CompilerHandoff(output) = &mut selected.mode
+    {
+        selected.mode = ExtractionModeV1::AmdgpuCompilerHandoff(std::mem::take(output));
+    }
+    prepared
 }
 
 fn select_simulation_output(
@@ -494,6 +537,12 @@ fn execute_selected(selected: SelectedExtractionV1) -> Result<i32, String> {
         }
         ExtractionModeV1::Gfx942CompilerHandoff(output) => {
             rustc_codegen_fe2o3::run_production_gfx942_compiler_handoff_extraction_driver_v1(
+                &selected.args,
+                std::path::Path::new(&output),
+            )?;
+        }
+        ExtractionModeV1::AmdgpuCompilerHandoff(output) => {
+            rustc_codegen_fe2o3::run_production_amdgpu_compiler_handoff_extraction_driver_v1(
                 &selected.args,
                 std::path::Path::new(&output),
             )?;
@@ -1064,6 +1113,60 @@ mod tests {
         assert_eq!(
             empty_path,
             format!("{EXTRACT_CRATE_BINDING_PATH_ENV_V1} must not be empty")
+        );
+    }
+
+    #[test]
+    fn generic_handoff_selection_preserves_legacy_mode_and_rejects_conflicts() {
+        let output = OsString::from("generic.handoff");
+        let (selected, generic) =
+            select_compiler_handoff_output(Some(output.clone()), None).unwrap();
+        assert!(generic);
+        let prepared = prepare(
+            compile_argv("unit", &["metadata"]),
+            Some(OsString::from("unit")),
+            None,
+            None,
+            None,
+            selected,
+            None,
+            None,
+            Some(package_identity("1.0.0", 1)),
+        )
+        .unwrap();
+        assert!(matches!(
+            select_compiler_handoff_mode(prepared, generic),
+            PreparedExtractionV1::Selected(SelectedExtractionV1 {
+                mode: ExtractionModeV1::AmdgpuCompilerHandoff(path), ..
+            }) if path == output
+        ));
+        assert_eq!(
+            select_compiler_handoff_output(None, Some(output.clone())).unwrap(),
+            (Some(output.clone()), false)
+        );
+        assert_eq!(
+            select_compiler_handoff_output(None, None).unwrap(),
+            (None, false)
+        );
+        assert!(select_compiler_handoff_output(Some(OsString::new()), None).is_err());
+        assert!(
+            select_compiler_handoff_output(Some(output.clone()), Some(output.clone())).is_err()
+        );
+        let (selected, _) = select_compiler_handoff_output(Some(output), None).unwrap();
+        assert!(
+            prepare(
+                compile_argv("unit", &["metadata"]),
+                Some(OsString::from("unit")),
+                None,
+                Some("other.ll".into()),
+                None,
+                selected,
+                None,
+                None,
+                Some(package_identity("1.0.0", 1)),
+            )
+            .unwrap_err()
+            .contains("mutually exclusive")
         );
     }
 

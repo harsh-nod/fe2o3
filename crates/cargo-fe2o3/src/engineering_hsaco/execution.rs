@@ -171,6 +171,15 @@ fn validate_build_std_vendor_package(
     Ok(())
 }
 
+pub(super) fn extraction_rustflags(profile: ProductionAmdTargetProfileV1) -> String {
+    // Keep engineering MIR extraction at O0 without changing the selected target contract.
+    format!(
+        "-Zalways-encode-mir -Zinline-mir=no -Zmir-enable-passes=-JumpThreading -Copt-level=0 -Ctarget-cpu={} -Ctarget-feature={}",
+        profile.cpu(),
+        profile.rustc_features()
+    )
+}
+
 pub(super) fn configure_isolated_build_std_cargo(
     command: &mut Command,
     options: &Options,
@@ -184,7 +193,7 @@ pub(super) fn configure_isolated_build_std_cargo(
         .arg("--frozen")
         .arg("-Zbuild-std=core")
         .arg("--target")
-        .arg(CARGO_TARGET)
+        .arg(options.profile.rustc_target())
         .arg("--target-dir")
         .arg(scratch.join("cargo-target"))
         .args(&options.cargo_args)
@@ -229,13 +238,6 @@ pub(super) fn run_extraction(
     let loader_path =
         env::join_paths([tool_directory.as_path(), Path::new("/proc/self/fd/193")])
             .map_err(|error| format!("cannot construct extraction loader path: {error}"))?;
-    let extraction_rustflags = format!(
-        // MIR extraction intentionally uses O0 and disables MIR inlining; target identity and
-        // feature spelling still come from the single canonical gfx942 profile.
-        "-Zalways-encode-mir -Zinline-mir=no -Zmir-enable-passes=-JumpThreading -Copt-level=0 -Ctarget-cpu={} -Ctarget-feature={}",
-        PROFILE.cpu(),
-        PROFILE.rustc_features()
-    );
     let mut command = cargo
         .command()
         .map_err(|error| format!("cannot prepare pinned Cargo executable: {error}"))?;
@@ -284,14 +286,11 @@ pub(super) fn run_extraction(
         .env("FE2O3_HIP_SYS_DISABLE", "1")
         .env("FE2O3_HSA_RUNTIME_DISABLE", "1")
         .env("FE2O3_EXTRACT_CRATE_V1", &options.crate_name)
-        .env("FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1", handoff)
-        .env(PROFILE.cargo_rustflags_env(), extraction_rustflags);
-    command
-        .as_command_mut()
-        .env("FE2O3_HIP_SYS_DISABLE", "1")
-        .env("FE2O3_HSA_RUNTIME_DISABLE", "1")
-        .env("FE2O3_EXTRACT_CRATE_V1", &options.crate_name)
-        .env("FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1", handoff);
+        .env("FE2O3_EXTRACT_AMDGPU_COMPILER_HANDOFF_PATH_V1", handoff)
+        .env(
+            options.profile.cargo_rustflags_env(),
+            extraction_rustflags(options.profile),
+        );
     crate::configure_pinned_rustc_child(command.as_command_mut(), rustc)?;
     crate::remove_dynamic_loader_environment(command.as_command_mut());
     command.as_command_mut().env("LD_LIBRARY_PATH", loader_path);

@@ -84,6 +84,7 @@ pub use production_ranked_projection_v1::ProductionRankedSemanticProjectionRoste
 
 #[doc(hidden)]
 pub use production_rustc_driver_v1::{
+    run_production_amdgpu_compiler_handoff_extraction_driver_v1,
     run_production_amdgpu_llvm_extraction_driver_v1, run_production_extraction_driver_v1,
     run_production_gfx942_compiler_handoff_extraction_driver_v1,
     run_production_gfx942_llvm_extraction_driver_v1, run_production_ranked_extraction_driver_v1,

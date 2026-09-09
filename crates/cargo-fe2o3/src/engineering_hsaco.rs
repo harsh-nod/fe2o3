@@ -10,6 +10,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, EngineeringHsacoObservationV1, MAX_WORKER_EXECUTABLE_BYTES,
     MAX_WORKER_OUTPUT_BYTES, MAX_WORKER_RESPONSE_BYTES, PinnedWorkerV1, WorkerExecutionLimitsV1,
@@ -27,10 +28,6 @@ use support::*;
 
 const NAMESPACE: &str = "fe2o3-engineering-v1";
 const MANIFEST_SCHEMA: &str = "EngineeringHsacoObservationV1";
-const PROFILE: fe2o3_amd_target::ProductionAmdTargetProfileV1 =
-    fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942;
-const TARGET: &str = PROFILE.device_target();
-const CARGO_TARGET: &str = PROFILE.rustc_target();
 const CODE_OBJECT_VERSION: u8 = 6;
 const MAX_HANDOFF_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_TOOL_BYTES: u64 = 1024 * 1024 * 1024;
@@ -85,6 +82,7 @@ pub(crate) fn command(args: &[OsString]) -> ExitCode {
 
 #[derive(Debug)]
 struct Options {
+    profile: ProductionAmdTargetProfileV1,
     crate_name: String,
     output_root: PathBuf,
     extractor: FileClaim,
@@ -362,9 +360,8 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
         ));
     }
     let target = target.ok_or_else(|| "missing required --target".to_owned())?;
-    if target != TARGET {
-        return Err(format!("--target must be exactly {TARGET}"));
-    }
+    let profile = ProductionAmdTargetProfileV1::from_device_target(&target)
+        .ok_or_else(|| "--target must be exactly gfx942:xnack- or gfx950:xnack-".to_owned())?;
     let code_object_version =
         code_object_version.ok_or_else(|| "missing required --code-object-version".to_owned())?;
     if code_object_version != CODE_OBJECT_VERSION.to_string() {
@@ -412,6 +409,7 @@ fn parse(args: &[OsString], current_dir: &Path) -> Result<Options, String> {
     )?;
 
     Ok(Options {
+        profile,
         crate_name,
         output_root,
         extractor: required_file_claim(
@@ -750,7 +748,7 @@ fn conflicting_environment_name(name: &OsStr) -> bool {
 }
 
 const fn usage() -> &'static str {
-    "usage: cargo fe2o3 engineering hsaco --crate <rustc-crate-name> --output-root </fresh/fe2o3-engineering-v1> --target gfx942:xnack- --code-object-version 6 --extractor <absolute-path> --extractor-sha256 <hex> --extractor-backend <absolute-path> --extractor-backend-sha256 <hex> --worker <absolute-path> --worker-sha256 <hex> --worker-build-id <id> --llvm-build-id <id> --cargo <absolute-path> --cargo-sha256 <hex> --rustc <absolute-path> --rustc-sha256 <hex> --host-linker <absolute-clang-path> --host-linker-sha256 <hex> --host-lld <absolute-lld-path> --host-lld-sha256 <hex> --host-lld-proxy <absolute-proxy-path> --host-lld-proxy-sha256 <hex> --cargo-vendor <absolute-versioned-directory> [--cargo-git-source <https://URL@40-hex-rev>]... [--provider <llvm-bitcode|llvm-ir|amdgpu-relocatable>:<sha256>:<absolute-path>] [--timeout-seconds <1..600>] [--max-output-bytes <bytes>] -- [Cargo package/feature args]"
+    "usage: cargo fe2o3 engineering hsaco --crate <rustc-crate-name> --output-root </fresh/fe2o3-engineering-v1> --target <gfx942:xnack-|gfx950:xnack-> --code-object-version 6 --extractor <absolute-path> --extractor-sha256 <hex> --extractor-backend <absolute-path> --extractor-backend-sha256 <hex> --worker <absolute-path> --worker-sha256 <hex> --worker-build-id <id> --llvm-build-id <id> --cargo <absolute-path> --cargo-sha256 <hex> --rustc <absolute-path> --rustc-sha256 <hex> --host-linker <absolute-clang-path> --host-linker-sha256 <hex> --host-lld <absolute-lld-path> --host-lld-sha256 <hex> --host-lld-proxy <absolute-proxy-path> --host-lld-proxy-sha256 <hex> --cargo-vendor <absolute-versioned-directory> [--cargo-git-source <https://URL@40-hex-rev>]... [--provider <llvm-bitcode|llvm-ir|amdgpu-relocatable>:<sha256>:<absolute-path>] [--timeout-seconds <1..600>] [--max-output-bytes <bytes>] -- [Cargo package/feature args]"
 }
 
 #[cfg(test)]
@@ -766,7 +764,7 @@ mod tests {
             "--output-root".into(),
             root.join(NAMESPACE).into_os_string(),
             "--target".into(),
-            TARGET.into(),
+            "gfx942:xnack-".into(),
             "--code-object-version".into(),
             "6".into(),
             "--extractor".into(),
@@ -886,10 +884,11 @@ mod tests {
     }
 
     #[test]
-    fn parses_only_the_fixed_target_cov_and_namespace() {
+    fn parses_only_exact_target_profiles_cov_and_namespace() {
         let root = env::temp_dir();
         let options = parse(&base_args(&root), &root).unwrap();
         assert_eq!(options.crate_name, "aggregate_device");
+        assert_eq!(options.profile, ProductionAmdTargetProfileV1::Gfx942);
         assert_eq!(options.output_root, root.join(NAMESPACE));
         assert_eq!(options.max_output_bytes, MAX_WORKER_OUTPUT_BYTES as u64);
         assert_eq!(options.host_linker.path, Path::new("/tools/clang"));
@@ -903,11 +902,23 @@ mod tests {
             .unwrap()
             + 1;
         wrong_target[index] = "gfx950:xnack-".into();
-        assert!(
-            parse(&wrong_target, &root)
-                .unwrap_err()
-                .contains("gfx942:xnack-")
+        assert_eq!(
+            parse(&wrong_target, &root).unwrap().profile,
+            ProductionAmdTargetProfileV1::Gfx950
         );
+        for rejected in [
+            "gfx942",
+            "gfx950",
+            "gfx950:xnack+",
+            "gfx942:xnack+",
+            "gfx950:sramecc+:xnack-",
+            "gfx951:xnack-",
+            "GFX950:xnack-",
+            "",
+        ] {
+            wrong_target[index] = rejected.into();
+            assert!(parse(&wrong_target, &root).is_err(), "accepted {rejected}");
+        }
 
         let mut wrong_cov = base_args(&root);
         let index = wrong_cov
@@ -1005,6 +1016,63 @@ mod tests {
     }
 
     #[test]
+    fn manifest_profile_guard_rejects_both_cross_target_directions() {
+        for requested in [
+            ProductionAmdTargetProfileV1::Gfx942,
+            ProductionAmdTargetProfileV1::Gfx950,
+        ] {
+            for observed in [
+                ProductionAmdTargetProfileV1::Gfx942,
+                ProductionAmdTargetProfileV1::Gfx950,
+            ] {
+                assert_eq!(
+                    validate_observation_profile(requested, observed).is_ok(),
+                    requested == observed
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn extraction_flags_follow_the_requested_profile_without_cargo_overrides() {
+        let root = env::temp_dir();
+        for profile in [
+            ProductionAmdTargetProfileV1::Gfx942,
+            ProductionAmdTargetProfileV1::Gfx950,
+        ] {
+            let mut args = base_args(&root);
+            let target_index = args.iter().position(|value| value == "--target").unwrap() + 1;
+            args[target_index] = profile.device_target().into();
+            args.extend([
+                "--no-default-features".into(),
+                "--features".into(),
+                profile.cpu().into(),
+            ]);
+            let options = parse(&args, &root).unwrap();
+            assert_eq!(options.profile, profile);
+            let flags = extraction_rustflags(options.profile);
+            let flags: Vec<_> = flags.split_whitespace().collect();
+            let cpus: Vec<_> = flags
+                .iter()
+                .filter(|flag| flag.starts_with("-Ctarget-cpu="))
+                .collect();
+            let features: Vec<_> = flags
+                .iter()
+                .filter(|flag| flag.starts_with("-Ctarget-feature="))
+                .collect();
+            assert_eq!(
+                cpus,
+                vec![&format!("-Ctarget-cpu={}", profile.cpu()).as_str()]
+            );
+            assert_eq!(
+                features,
+                vec![&format!("-Ctarget-feature={}", profile.rustc_features()).as_str()]
+            );
+            assert!(flags.contains(&"-Copt-level=0"));
+        }
+    }
+
+    #[test]
     fn rejects_loader_and_cargo_selection_environment() {
         for name in [
             "LD_PRELOAD",
@@ -1056,7 +1124,7 @@ mod tests {
         assert!(
             arguments
                 .windows(2)
-                .any(|arguments| { arguments == ["--target", CARGO_TARGET] })
+                .any(|arguments| { arguments == ["--target", options.profile.rustc_target()] })
         );
         let output = command.output().unwrap();
         assert!(output.status.success());

@@ -106,6 +106,7 @@ pub(super) fn canonical_manifest(
     extractor: &[u8],
     extractor_backend: &[u8],
 ) -> Result<Vec<u8>, String> {
+    validate_observation_profile(options.profile, observation.target_profile())?;
     let providers = observation
         .providers()
         .iter()
@@ -121,7 +122,7 @@ pub(super) fn canonical_manifest(
         authority: observation.authority(),
         artifact: "observation.hsaco",
         crate_name: &options.crate_name,
-        target: TARGET,
+        target: observation.target_profile().device_target(),
         code_object_version: CODE_OBJECT_VERSION,
         compiler_handoff: identity(observation.handoff_identity()),
         tools: Tools {
@@ -178,6 +179,18 @@ pub(super) fn canonical_manifest(
     }
     bytes.push(b'\n');
     Ok(bytes)
+}
+
+pub(super) fn validate_observation_profile(
+    requested: ProductionAmdTargetProfileV1,
+    observed: ProductionAmdTargetProfileV1,
+) -> Result<(), String> {
+    if requested != observed {
+        return Err(
+            "engineering observation target differs from the requested compiler profile".to_owned(),
+        );
+    }
+    Ok(())
 }
 
 fn identity(identity: ContentIdentityV1) -> Identity {

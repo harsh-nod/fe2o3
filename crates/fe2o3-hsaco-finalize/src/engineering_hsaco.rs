@@ -6,6 +6,7 @@
 
 use std::{error::Error, fmt};
 
+use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 use fe2o3_kernel_descriptor::CodeObjectVersion;
 use sha2::{Digest, Sha256};
 
@@ -27,7 +28,6 @@ use crate::{
 
 const ENGINEERING_REQUEST_DOMAIN_V1: &[u8] =
     b"FE2O3/NON-AUTHORITATIVE-ENGINEERING-HSACO-REQUEST/V1\0";
-const GFX942_XNACK_MINUS: &str = "gfx942:xnack-";
 const MAX_ENGINEERING_NO_OUTPUT_ERROR_BYTES: usize =
     "engineering exact replay produced no HSACO at OutputInspection".len()
         + 2 * MAX_WORKER_DIAGNOSTICS
@@ -64,6 +64,7 @@ impl EngineeringProviderObservationV1 {
 /// ```
 #[derive(Debug, Eq, PartialEq)]
 pub struct EngineeringHsacoObservationV1 {
+    target_profile: ProductionAmdTargetProfileV1,
     finalized_hsaco: Vec<u8>,
     handoff: ContentIdentityV1,
     worker: WorkerMeasurementV1,
@@ -78,6 +79,11 @@ pub struct EngineeringHsacoObservationV1 {
 }
 
 impl EngineeringHsacoObservationV1 {
+    /// Exact profile shared by the compiler handoff and inspected output object.
+    pub const fn target_profile(&self) -> ProductionAmdTargetProfileV1 {
+        self.target_profile
+    }
+
     pub fn hsaco_bytes(&self) -> &[u8] {
         &self.finalized_hsaco
     }
@@ -192,7 +198,8 @@ impl From<FinalizationError> for EngineeringHsacoErrorV1 {
 /// Executes an inert compiler handoff twice through one measured worker and finalizes the exact
 /// matching output for descriptive inspection only.
 ///
-/// The target and options are fixed to `gfx942:xnack-`, COV6, O2, strip-debug, and verify-each.
+/// The handoff selects exactly `gfx942:xnack-` or `gfx950:xnack-`; the output must
+/// match that same profile. Options remain COV6, O2, strip-debug, and verify-each.
 /// No production receipt, carriage, currentness, publication, load, or launch value is accepted
 /// or returned.
 pub fn observe_engineering_hsaco_v1(
@@ -203,12 +210,7 @@ pub fn observe_engineering_hsaco_v1(
     limits: WorkerExecutionLimitsV1,
 ) -> Result<EngineeringHsacoObservationV1, EngineeringHsacoErrorV1> {
     let decoded = decode_compiler_module_handoff_v2(handoff_bytes)?;
-    if decoded.target().to_string() != GFX942_XNACK_MINUS {
-        return Err(EngineeringHsacoErrorV1(format!(
-            "engineering route requires exact target {GFX942_XNACK_MINUS}, handoff selected {}",
-            decoded.target()
-        )));
-    }
+    let target_profile = engineering_target_profile(&decoded.target().to_string())?;
     if decoded.code_object_version() != CodeObjectVersion::V6 {
         return Err(EngineeringHsacoErrorV1(
             "engineering route requires code-object version 6".to_owned(),
@@ -301,14 +303,12 @@ pub fn observe_engineering_hsaco_v1(
 
     let finalized = finalize_unfinalized(bootstrap_output.bytes())?;
     let inspection = finalized.inspection();
-    if inspection.hsaco().target().to_string() != GFX942_XNACK_MINUS
-        || inspection.hsaco().code_object_version().number() != 6
-        || inspection.hsaco().kernels().is_empty()
-    {
-        return Err(EngineeringHsacoErrorV1(
-            "engineering output is not a nonempty gfx942:xnack- COV6 HSACO".to_owned(),
-        ));
-    }
+    validate_engineering_output_profile(
+        target_profile,
+        &inspection.hsaco().target().to_string(),
+        inspection.hsaco().code_object_version().number(),
+        inspection.hsaco().kernels().len(),
+    )?;
     let canonical_descriptor_digest = *inspection.digest().as_bytes();
     let kernel_names = inspection
         .hsaco()
@@ -320,6 +320,7 @@ pub fn observe_engineering_hsaco_v1(
     let finalized_hsaco_identity = ContentIdentityV1::calculate(&finalized_hsaco);
 
     Ok(EngineeringHsacoObservationV1 {
+        target_profile,
         finalized_hsaco,
         handoff: handoff_identity,
         worker: worker.measurement().clone(),
@@ -332,6 +333,31 @@ pub fn observe_engineering_hsaco_v1(
         canonical_descriptor_digest,
         kernel_names,
     })
+}
+
+fn engineering_target_profile(
+    target: &str,
+) -> Result<ProductionAmdTargetProfileV1, EngineeringHsacoErrorV1> {
+    ProductionAmdTargetProfileV1::from_device_target(target).ok_or_else(|| {
+        EngineeringHsacoErrorV1(format!(
+            "engineering route requires exact target gfx942:xnack- or gfx950:xnack-, handoff selected {target}"
+        ))
+    })
+}
+
+fn validate_engineering_output_profile(
+    expected: ProductionAmdTargetProfileV1,
+    target: &str,
+    code_object_version: u8,
+    kernel_count: usize,
+) -> Result<(), EngineeringHsacoErrorV1> {
+    if target != expected.device_target() || code_object_version != 6 || kernel_count == 0 {
+        return Err(EngineeringHsacoErrorV1(format!(
+            "engineering output is not a nonempty {} COV6 HSACO",
+            expected.device_target()
+        )));
+    }
+    Ok(())
 }
 
 fn missing_hsaco_error(
@@ -465,6 +491,70 @@ fn hash_blob(hasher: &mut Sha256, bytes: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_exact_supported_handoff_profiles_are_admitted() {
+        for profile in [
+            ProductionAmdTargetProfileV1::Gfx942,
+            ProductionAmdTargetProfileV1::Gfx950,
+        ] {
+            assert_eq!(
+                engineering_target_profile(profile.device_target()).unwrap(),
+                profile
+            );
+        }
+        for target in [
+            "gfx942",
+            "gfx950",
+            "gfx950:xnack+",
+            "gfx942:xnack+",
+            "gfx950:sramecc+:xnack-",
+            "gfx951:xnack-",
+            "GFX950:xnack-",
+            "",
+        ] {
+            assert!(
+                engineering_target_profile(target).is_err(),
+                "accepted {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn output_must_match_the_handoff_target_cov_and_nonempty_roster() {
+        for expected in [
+            ProductionAmdTargetProfileV1::Gfx942,
+            ProductionAmdTargetProfileV1::Gfx950,
+        ] {
+            for actual in [
+                ProductionAmdTargetProfileV1::Gfx942,
+                ProductionAmdTargetProfileV1::Gfx950,
+            ] {
+                assert_eq!(
+                    validate_engineering_output_profile(expected, actual.device_target(), 6, 12)
+                        .is_ok(),
+                    actual == expected
+                );
+            }
+            for target in [
+                "gfx942",
+                "gfx950",
+                "gfx950:xnack+",
+                "gfx942:xnack+",
+                "gfx950:sramecc+:xnack-",
+            ] {
+                assert!(validate_engineering_output_profile(expected, target, 6, 12).is_err());
+            }
+            assert!(
+                validate_engineering_output_profile(expected, expected.device_target(), 5, 12)
+                    .is_err()
+            );
+            assert!(
+                validate_engineering_output_profile(expected, expected.device_target(), 6, 0)
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn observation_type_is_explicitly_non_authoritative() {

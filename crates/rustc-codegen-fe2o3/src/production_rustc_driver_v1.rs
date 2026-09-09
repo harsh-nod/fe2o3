@@ -20,7 +20,7 @@ struct ProductionExtractionCallbacksV1 {
     ranked_memory: bool,
     amdgpu_llvm_output: Option<PathBuf>,
     expected_llvm_target: Option<&'static str>,
-    gfx942_compiler_handoff_output: Option<PathBuf>,
+    compiler_handoff_output: Option<(PathBuf, Option<&'static str>)>,
     simulation_bundle_output: Option<PathBuf>,
     simulation_bundle_version: u16,
     result: Option<Result<(), String>>,
@@ -38,8 +38,8 @@ impl Callbacks for ProductionExtractionCallbacksV1 {
                     2 => extract_simulation_bundle_in_active_session_v2(tcx, output),
                     _ => extract_simulation_bundle_in_active_session_v1(tcx, output),
                 }
-            } else if let Some(output) = self.gfx942_compiler_handoff_output.as_deref() {
-                extract_gfx942_compiler_handoff_in_active_session_v1(tcx, output)
+            } else if let Some((output, expected_target)) = self.compiler_handoff_output.as_ref() {
+                extract_amdgpu_compiler_handoff_in_active_session_v1(tcx, output, *expected_target)
             } else if let Some(output) = self.amdgpu_llvm_output.as_deref() {
                 extract_amdgpu_llvm_in_active_session_v1(tcx, output, self.expected_llvm_target)
             } else if self.ranked_memory {
@@ -263,12 +263,17 @@ fn extract_amdgpu_llvm_in_active_session_v1(
     Ok(())
 }
 
-fn extract_gfx942_compiler_handoff_in_active_session_v1(
+fn extract_amdgpu_compiler_handoff_in_active_session_v1(
     tcx: TyCtxt<'_>,
     output: &Path,
+    expected_target: Option<&str>,
 ) -> Result<(), String> {
     if env::var_os(EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1).is_some() {
-        return extract_gfx942_semantic_compiler_handoff_in_active_session_v3(tcx, output);
+        return extract_amdgpu_semantic_compiler_handoff_in_active_session_v3(
+            tcx,
+            output,
+            expected_target,
+        );
     }
     let lowered = transaction_in_active_session_v1(
         tcx,
@@ -276,13 +281,8 @@ fn extract_gfx942_compiler_handoff_in_active_session_v1(
     )?
     .lower_production_target()
     .map_err(|error| error.to_string())?;
-    if lowered.target_name() != fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1 {
-        return Err(format!(
-            "production gfx942 compiler handoff expected live target {:?}; found {:?}",
-            fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1,
-            lowered.target_name()
-        ));
-    }
+    validate_compiler_handoff_target(lowered.target_name(), expected_target)?;
+    let target_name = lowered.target_name().to_owned();
     let canonical_kernel_ir_version = lowered.canonical_kernel_ir_version();
     let guarded_store_count = lowered.guarded_store_count();
     let handoff = lowered
@@ -295,17 +295,19 @@ fn extract_gfx942_compiler_handoff_in_active_session_v1(
         )
     })?;
     eprintln!(
-        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR V{} with {} GuardedStore operation(s) -> composed formal/ranked memory -> gfx942 LLVM -> compiler-bound inert handoff; {} handoff byte(s), artifact/launch authority false",
+        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR V{} with {} GuardedStore operation(s) -> composed formal/ranked memory -> {} LLVM -> compiler-bound inert handoff; {} handoff byte(s), artifact/launch authority false",
         canonical_kernel_ir_version,
         guarded_store_count,
+        target_name,
         handoff.canonical_bytes().len(),
     );
     Ok(())
 }
 
-fn extract_gfx942_semantic_compiler_handoff_in_active_session_v3(
+fn extract_amdgpu_semantic_compiler_handoff_in_active_session_v3(
     tcx: TyCtxt<'_>,
     output: &Path,
+    expected_target: Option<&str>,
 ) -> Result<(), String> {
     let invocation = inert_extraction_invocation_v3()?;
     let lowered = transaction_in_active_session_v1(
@@ -314,13 +316,8 @@ fn extract_gfx942_semantic_compiler_handoff_in_active_session_v3(
     )?
     .lower_production_target()
     .map_err(|error| error.to_string())?;
-    if lowered.target_name() != fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1 {
-        return Err(format!(
-            "production gfx942 semantic compiler handoff expected live target {:?}; found {:?}",
-            fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1,
-            lowered.target_name()
-        ));
-    }
+    validate_compiler_handoff_target(lowered.target_name(), expected_target)?;
+    let target_name = lowered.target_name().to_owned();
     let canonical_kernel_ir_version = lowered.canonical_kernel_ir_version();
     let guarded_store_count = lowered.guarded_store_count();
     let handoff = lowered
@@ -333,11 +330,28 @@ fn extract_gfx942_semantic_compiler_handoff_in_active_session_v3(
         )
     })?;
     eprintln!(
-        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR V{} with {} GuardedStore operation(s) -> composed formal/ranked memory -> gfx942 LLVM -> proof-carrying semantic compiler-bound inert handoff; {} handoff byte(s), artifact/launch authority false",
+        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR V{} with {} GuardedStore operation(s) -> composed formal/ranked memory -> {} LLVM -> proof-carrying semantic compiler-bound inert handoff; {} handoff byte(s), artifact/launch authority false",
         canonical_kernel_ir_version,
         guarded_store_count,
+        target_name,
         handoff.canonical_bytes().len(),
     );
+    Ok(())
+}
+
+fn validate_compiler_handoff_target(target: &str, expected: Option<&str>) -> Result<(), String> {
+    if fe2o3_amd_target::ProductionAmdTargetProfileV1::from_device_target(target).is_none() {
+        return Err(format!(
+            "production compiler handoff has unsupported live target {target:?}"
+        ));
+    }
+    if let Some(expected) = expected
+        && target != expected
+    {
+        return Err(format!(
+            "production compiler handoff expected live target {expected:?}; found {target:?}"
+        ));
+    }
     Ok(())
 }
 
@@ -648,7 +662,7 @@ pub fn run_production_ranked_extraction_driver_v1(args: &[String]) -> Result<(),
         ranked_memory: true,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
-        gfx942_compiler_handoff_output: None,
+        compiler_handoff_output: None,
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
         result: None,
@@ -670,7 +684,7 @@ pub fn run_production_amdgpu_llvm_extraction_driver_v1(
         ranked_memory: false,
         amdgpu_llvm_output: Some(output.to_path_buf()),
         expected_llvm_target: None,
-        gfx942_compiler_handoff_output: None,
+        compiler_handoff_output: None,
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
         result: None,
@@ -691,7 +705,7 @@ pub fn run_production_gfx942_llvm_extraction_driver_v1(
         ranked_memory: false,
         amdgpu_llvm_output: Some(output.to_path_buf()),
         expected_llvm_target: Some(fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1),
-        gfx942_compiler_handoff_output: None,
+        compiler_handoff_output: None,
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
         result: None,
@@ -703,9 +717,28 @@ pub fn run_production_gfx942_llvm_extraction_driver_v1(
     )
 }
 
+/// Emits the live gfx942 or gfx950 production target's inert compiler handoff.
+/// Target authentication remains in the production transaction; this entry
+/// does not provide publication, artifact, load, or launch authority.
+pub fn run_production_amdgpu_compiler_handoff_extraction_driver_v1(
+    args: &[String],
+    output: &Path,
+) -> Result<(), String> {
+    let callbacks = ProductionExtractionCallbacksV1 {
+        compiler_handoff_output: Some((output.to_path_buf(), None)),
+        ..ProductionExtractionCallbacksV1::default()
+    };
+    run_production_driver_v1(
+        args,
+        callbacks,
+        "production AMDGPU compiler-handoff extraction callback did not reach rustc analysis",
+    )
+}
+
 /// Runs the complete production analysis and lowering transaction and emits
 /// its compiler-bound nested handoff for inert worker integration testing.
 /// The result carries no publication, artifact, load, or launch authority.
+/// This compatibility entry continues to reject every target other than gfx942.
 pub fn run_production_gfx942_compiler_handoff_extraction_driver_v1(
     args: &[String],
     output: &Path,
@@ -714,7 +747,10 @@ pub fn run_production_gfx942_compiler_handoff_extraction_driver_v1(
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
-        gfx942_compiler_handoff_output: Some(output.to_path_buf()),
+        compiler_handoff_output: Some((
+            output.to_path_buf(),
+            Some(fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1),
+        )),
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
         result: None,
@@ -737,7 +773,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v1(
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
-        gfx942_compiler_handoff_output: None,
+        compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 1,
         result: None,
@@ -759,7 +795,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v2(
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
-        gfx942_compiler_handoff_output: None,
+        compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 2,
         result: None,
@@ -781,7 +817,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v3(
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
-        gfx942_compiler_handoff_output: None,
+        compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 3,
         result: None,
@@ -803,7 +839,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v4(
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
-        gfx942_compiler_handoff_output: None,
+        compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 4,
         result: None,
@@ -825,7 +861,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v5(
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
-        gfx942_compiler_handoff_output: None,
+        compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 5,
         result: None,
@@ -847,7 +883,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v6(
         ranked_memory: false,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
-        gfx942_compiler_handoff_output: None,
+        compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 6,
         result: None,
@@ -907,6 +943,27 @@ fn require_canonical_overflow_checks_v1(args: &[String]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn generic_handoff_accepts_exact_targets_and_legacy_remains_gfx942_only() {
+        use super::validate_compiler_handoff_target;
+        for target in ["gfx942:xnack-", "gfx950:xnack-"] {
+            assert!(validate_compiler_handoff_target(target, None).is_ok());
+            assert_eq!(
+                validate_compiler_handoff_target(target, Some("gfx942:xnack-")).is_ok(),
+                target == "gfx942:xnack-"
+            );
+        }
+        for target in [
+            "gfx942",
+            "gfx950",
+            "gfx950:xnack+",
+            "gfx950:sramecc+:xnack-",
+            "gfx951:xnack-",
+        ] {
+            assert!(validate_compiler_handoff_target(target, None).is_err());
+        }
+    }
+
     use super::*;
 
     #[test]

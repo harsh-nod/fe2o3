@@ -168,7 +168,9 @@ for the component commands, exact-KIR fixture, debugger, and cleanup behavior.
 
 For compiler engineering only, `cargo fe2o3 engineering hsaco` can extract one
 explicitly selected device crate and run its inert handoff twice through an
-exactly measured native worker. It writes only a fresh
+exactly measured native worker. The exact `--target` selects `gfx942:xnack-`
+or `gfx950:xnack-` throughout extraction and COV6 object inspection; the
+observation is rejected if the requested and emitted targets differ. It writes only a fresh
 `fe2o3-engineering-v1/<content-id>/` observation with `"authority":"none"`.
 This command does not contact the production compiler-execution supervisor and
 its output cannot be adopted as a production generation, publication, load, or
