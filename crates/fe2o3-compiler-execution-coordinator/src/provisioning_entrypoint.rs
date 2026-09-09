@@ -1342,6 +1342,7 @@ mod tests {
 
     #[test]
     fn provisioning_is_idempotent_and_generation_substitution_fails_closed() {
+        let _guard = crate::tests::process_spawn_fixture_guard();
         let fixture = tempfile::tempdir().unwrap();
         let uid = rustix::process::geteuid().as_raw();
         let gid = rustix::process::getegid().as_raw();

@@ -239,6 +239,7 @@ mod tests {
 
     #[test]
     fn last_open_file_description_reference_releases_the_lease() {
+        let _guard = crate::tests::process_spawn_fixture_guard();
         let fixture = tempfile::tempdir().unwrap();
         let path = fixture.path().join("lifecycle");
         std::fs::write(&path, []).unwrap();

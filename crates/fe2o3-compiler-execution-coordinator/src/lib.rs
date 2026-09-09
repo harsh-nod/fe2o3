@@ -1120,6 +1120,7 @@ impl Error for CompilerExecutionCoordinatorErrorV1 {
 #[cfg(test)]
 mod tests {
     use std::process::{Child, Command};
+    use std::sync::{Mutex, MutexGuard};
 
     use ed25519_dalek::SigningKey;
     use fe2o3_compiler_execution_protocol::{
@@ -1128,6 +1129,14 @@ mod tests {
     use rustix::net::SendFlags;
 
     use super::*;
+
+    pub(super) fn process_spawn_fixture_guard() -> MutexGuard<'static, ()> {
+        // A concurrent pre-exec child can retain a flock's last open description.
+        static GUARD: Mutex<()> = Mutex::new(());
+        GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     #[test]
     fn deployment_timeout_is_strictly_bounded() {
@@ -1276,6 +1285,7 @@ mod tests {
     }
 
     fn live_test_child() -> (Child, RootOwnedProtectedServiceChildV1) {
+        let _guard = process_spawn_fixture_guard();
         let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
         let pid = rustix::process::Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap();
         let pidfd = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).unwrap();
