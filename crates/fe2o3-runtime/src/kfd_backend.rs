@@ -5507,6 +5507,28 @@ fn wait_with_deadline_tracking_progress_by_v1<E>(
     }
 }
 
+fn continue_pending_compute_wait_v1(
+    prior_reservations: usize,
+    current_reservations: usize,
+    attempts: &mut u32,
+    sleep: &mut Duration,
+    deadline: Instant,
+    backoff: impl FnOnce(u32, &mut Duration, Instant) -> bool,
+) -> bool {
+    if Instant::now() >= deadline {
+        return false;
+    }
+    // Logical settlement is finite progress under wait's exclusive borrow.
+    // Physical retirement or another observation of Pending is not progress.
+    if current_reservations < prior_reservations {
+        *attempts = 0;
+        *sleep = WAIT_INITIAL_SLEEP_V1;
+        return true;
+    }
+    *attempts = attempts.saturating_add(1);
+    backoff(*attempts, sleep, deadline)
+}
+
 fn apply_wait_backoff_v1(attempts: u32, sleep: &mut Duration, deadline: Instant) -> bool {
     if Instant::now() >= deadline {
         return false;
@@ -6701,12 +6723,19 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             {
                 return Ok(status);
             }
+            let prior_reservations = self.compute_completion_reservations;
             let status = self.poll_v1(submission)?;
             if status != BackendPollV1::Pending {
                 return Ok(status);
             }
-            attempts = attempts.saturating_add(1);
-            if !apply_wait_backoff_v1(attempts, &mut sleep, deadline) {
+            if !continue_pending_compute_wait_v1(
+                prior_reservations,
+                self.compute_completion_reservations,
+                &mut attempts,
+                &mut sleep,
+                deadline,
+                apply_wait_backoff_v1,
+            ) {
                 return Ok(BackendPollV1::Pending);
             }
         }
@@ -22966,6 +22995,125 @@ mod tests {
         .unwrap();
         assert_eq!(status, BackendPollV1::Succeeded);
         assert_eq!(backoffs, 3);
+    }
+
+    #[test]
+    fn compute_pending_wait_policy_accepts_64_consecutive_settlements_without_backoff() {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut attempts = 0;
+        let mut sleep = WAIT_INITIAL_SLEEP_V1;
+        for prior in (1..=64).rev() {
+            assert!(continue_pending_compute_wait_v1(
+                prior,
+                prior - 1,
+                &mut attempts,
+                &mut sleep,
+                deadline,
+                |_, _, _| panic!("logical settlement must not enter backoff"),
+            ));
+            assert_eq!(attempts, 0);
+            assert_eq!(sleep, WAIT_INITIAL_SLEEP_V1);
+        }
+    }
+
+    #[test]
+    fn compute_pending_wait_stalls_preserve_escalation_and_absolute_deadline() {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut attempts = 0;
+        let mut sleep = WAIT_INITIAL_SLEEP_V1;
+        for expected in 1..=64 {
+            assert!(continue_pending_compute_wait_v1(
+                64,
+                64,
+                &mut attempts,
+                &mut sleep,
+                deadline,
+                |attempt, sleep, observed_deadline| {
+                    assert_eq!(attempt, expected);
+                    assert_eq!(observed_deadline, deadline);
+                    if attempt >= WAIT_SPINS_V1 + WAIT_YIELDS_V1 {
+                        *sleep = sleep.saturating_mul(2).min(WAIT_MAX_SLEEP_V1);
+                    }
+                    true
+                },
+            ));
+        }
+        assert!(sleep > WAIT_INITIAL_SLEEP_V1);
+        assert!(continue_pending_compute_wait_v1(
+            64,
+            63,
+            &mut attempts,
+            &mut sleep,
+            deadline,
+            |_, _, _| panic!("progress must reset escalated backoff"),
+        ));
+        assert_eq!(attempts, 0);
+        assert_eq!(sleep, WAIT_INITIAL_SLEEP_V1);
+        assert!(!continue_pending_compute_wait_v1(
+            63,
+            64,
+            &mut attempts,
+            &mut sleep,
+            deadline,
+            |attempt, sleep, observed_deadline| {
+                assert_eq!(attempt, 1);
+                assert_eq!(*sleep, WAIT_INITIAL_SLEEP_V1);
+                assert_eq!(observed_deadline, deadline);
+                false
+            },
+        ));
+    }
+
+    #[test]
+    fn compute_pending_wait_progress_never_renews_an_expired_deadline() {
+        let deadline = Instant::now();
+        for current in [0, 1, 2] {
+            let mut attempts = 64;
+            let mut sleep = WAIT_MAX_SLEEP_V1;
+            assert!(!continue_pending_compute_wait_v1(
+                1,
+                current,
+                &mut attempts,
+                &mut sleep,
+                deadline,
+                |_, _, _| panic!("expired waits must stop before backoff"),
+            ));
+            assert_eq!(attempts, 64);
+            assert_eq!(sleep, WAIT_MAX_SLEEP_V1);
+        }
+    }
+
+    #[test]
+    fn compute_pending_wait_production_wiring_tracks_poll_settlement_after_native_routes() {
+        let body = include_str!("kfd_backend.rs")
+            .split("fn wait_v1(")
+            .nth(1)
+            .unwrap()
+            .split("fn release_submission_v1")
+            .next()
+            .unwrap();
+        let ordered_fragments = [
+            "return self.wait_published_sdma_v1(",
+            "self.wait_published_persistent_compute_lane_v1(lane, deadline)?",
+            "let prior_reservations = self.compute_completion_reservations;",
+            "let status = self.poll_v1(submission)?;",
+            "if status != BackendPollV1::Pending {",
+            "return Ok(status);",
+            "continue_pending_compute_wait_v1(",
+            "prior_reservations,",
+            "self.compute_completion_reservations,",
+            "&mut attempts,",
+            "&mut sleep,",
+            "deadline,",
+            "apply_wait_backoff_v1,",
+        ];
+        let mut remaining = body;
+        for fragment in ordered_fragments {
+            let (_, tail) = remaining.split_once(fragment).unwrap();
+            remaining = tail;
+        }
+        assert_eq!(body.matches("self.poll_v1(submission)?").count(), 1);
+        assert_eq!(body.matches("continue_pending_compute_wait_v1(").count(), 1);
     }
 
     #[test]
