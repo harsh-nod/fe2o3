@@ -99,6 +99,15 @@ qualify the canary artifact, not every downstream application or libc itself.
 The final link uses an explicit compiler driver and BFD selector; its invocation
 and the compiler/driver/linker identities are retained and rechecked.
 
+The first musl hardware attempt exposed an existing SDMA extent bug: a new
+non-page-sized device buffer retained only its logical size as mapped authority,
+so directional promotion rejected it despite rounded native backing. Device
+SDMA allocation now requests the checked page-rounded extent from the existing
+memory allocator and preserves the original logical copy length. Host buffers,
+promotion admission, copy/window bounds, and compute authority are unchanged.
+Full-initialization compute bridges still reject logical/physical mismatches;
+unwritten allocation padding never becomes initialized compute data.
+
 ## Remaining Acceptance
 
 #182 must remain open until its full acceptance matrix is met:

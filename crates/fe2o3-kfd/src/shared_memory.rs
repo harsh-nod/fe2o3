@@ -3310,7 +3310,7 @@ fn validate_initialization_source(
     })
 }
 
-fn device_memory_layout(
+pub(crate) fn device_memory_layout(
     requested_bytes: u64,
     alignment: u64,
     flags: KfdAllocMemoryFlags,
@@ -7479,6 +7479,138 @@ mod tests {
         assert_eq!(engine.backend.release_va_calls, 1);
         assert_eq!(engine.retained_device_memory_bytes, 0);
         assert_eq!(engine.device_memory[0].phase, DeviceMemoryPhaseV1::Released);
+    }
+
+    #[test]
+    fn rounded_sdma_device_backing_preserves_custody_and_logical_copy_bounds() {
+        use crate::persistent_directional_sdma::*;
+        use crate::sdma::{Gfx942SdmaBufferStorageV1, Gfx942SdmaBufferV1};
+        use fe2o3_runtime_model::{QueueGenerationV1, QueueInstanceIdV1, QueueKeyV1};
+
+        for bytes in [1, 4097, 1_048_832] {
+            let mut engine = acquired();
+            let (device, vm) = device_vm(7);
+            let queue = QueueKeyV1 {
+                vm,
+                id: QueueInstanceIdV1(17),
+                generation: QueueGenerationV1(3),
+            };
+            let (logical, physical) =
+                crate::sdma::device_buffer_allocation_extents_v1(bytes, 4096).unwrap();
+            let lease = engine
+                .allocate_device_memory(device, vm, physical, 4096)
+                .unwrap();
+            let lease = engine.map_device_memory(lease).unwrap();
+            let identity = lease.storage_identity();
+            assert_eq!(lease.layout().requested_bytes(), physical);
+            assert_eq!(lease.layout().backing_bytes(), physical);
+            let buffer = Gfx942SdmaBufferV1::from_bridge_parts(
+                Gfx942SdmaBufferStorageV1::Device(lease),
+                queue,
+                1,
+                logical,
+            );
+            assert!(directional_persistent_sdma_extents_are_admitted_v1(
+                buffer.requested_bytes(),
+                buffer.physical_bytes(),
+                buffer.pool_generation(),
+            ));
+            let pair = Gfx942PersistentDirectionalSdmaPairV1 {
+                host_to_device_queue_id: 21,
+                device_to_host_queue_id: 22,
+            };
+            let (allocation, debit) =
+                promote_directional_persistent_sdma_custody_v1(buffer, pair, 1).unwrap();
+            assert_eq!(allocation.byte_len(), bytes);
+            assert_eq!(allocation.physical_byte_len(), physical);
+            assert_eq!(debit, 1);
+            let host = Gfx942SdmaBufferV1::from_bridge_parts(
+                Gfx942SdmaBufferStorageV1::Host(mapped_host_for_persistent_sdma_test(
+                    100,
+                    physical as usize,
+                )),
+                queue,
+                1,
+                physical,
+            );
+            let (allocation, host) = crate::queue::admit_directional_persistent_sdma_copy_input_v1(
+                queue,
+                false,
+                allocation,
+                crate::Gfx942PersistentSdmaDirectionV1::HostToDevice,
+                host,
+                0,
+                bytes - 1,
+                1,
+            )
+            .unwrap_or_else(|_| panic!("last logical byte must remain copyable"));
+            let failure = crate::queue::admit_directional_persistent_sdma_copy_input_v1(
+                queue,
+                false,
+                allocation,
+                crate::Gfx942PersistentSdmaDirectionV1::HostToDevice,
+                host,
+                0,
+                bytes,
+                1,
+            )
+            .err()
+            .expect("padding is outside the logical copy extent");
+            let Gfx942DirectionalPersistentSdmaSubmissionCustodyV1::Retryable { allocation, host } =
+                failure.into_parts().1
+            else {
+                panic!("range rejection must return exact custody");
+            };
+            let (allocation, host, packets) =
+                crate::queue::admit_directional_persistent_sdma_window_input_v1(
+                    queue,
+                    false,
+                    allocation,
+                    crate::Gfx942PersistentSdmaDirectionV1::HostToDevice,
+                    host,
+                    0,
+                    bytes - 1,
+                    1,
+                )
+                .unwrap_or_else(|_| panic!("last logical byte must remain window-copyable"));
+            assert_eq!(packets, 1);
+            let failure = crate::queue::admit_directional_persistent_sdma_window_input_v1(
+                queue,
+                false,
+                allocation,
+                crate::Gfx942PersistentSdmaDirectionV1::HostToDevice,
+                host,
+                0,
+                bytes,
+                1,
+            )
+            .err()
+            .expect("window admission cannot copy padding either");
+            let Gfx942DirectionalPersistentSdmaWindowSubmissionCustodyV1::Retryable {
+                allocation,
+                host: _,
+            } = failure.into_parts().1
+            else {
+                panic!("window range rejection must return exact custody");
+            };
+            let (buffer, debit) =
+                demote_directional_persistent_sdma_custody_v1(allocation, debit).unwrap();
+            assert_eq!(debit, 1);
+            assert_eq!(buffer.requested_bytes(), bytes);
+            assert_eq!(buffer.physical_bytes(), physical);
+            assert_eq!(buffer.pool_generation(), 2);
+            let (Gfx942SdmaBufferStorageV1::Device(lease), _, _, _) = buffer.into_bridge_parts()
+            else {
+                panic!("device custody changed kind");
+            };
+            assert_eq!(lease.storage_identity(), identity);
+            let lease = engine.unmap_device_memory(lease).unwrap();
+            engine.release_device_memory(lease).unwrap();
+            assert_eq!(engine.backend.unmap_gpu_calls, 1);
+            assert_eq!(engine.backend.free_calls, 1);
+            assert_eq!(engine.backend.release_va_calls, 1);
+            assert_eq!(engine.retained_device_memory_bytes, 0);
+        }
     }
 
     fn allocate_public_device_memory(

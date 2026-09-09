@@ -6001,19 +6001,34 @@ pub(crate) fn allocate_host_buffer(
     })
 }
 
+pub(crate) fn device_buffer_allocation_extents_v1(
+    logical_bytes: u64,
+    alignment: u64,
+) -> Result<(u64, u64), Gfx942SdmaErrorV1> {
+    let layout = crate::shared_memory::device_memory_layout(
+        logical_bytes,
+        alignment,
+        fe2o3_kfd_uapi::KfdAllocMemoryFlags::DEVICE_LOCAL,
+    )?;
+    Ok((logical_bytes, layout.backing_bytes()))
+}
+
 pub(crate) fn allocate_device_buffer(
     memory: &mut SharedGttMemorySessionV1,
     owner: QueueKeyV1,
     bytes: u64,
     alignment: u64,
 ) -> Result<Gfx942SdmaBufferV1, Gfx942SdmaErrorV1> {
-    let lease = memory.allocate_gfx942_device_memory(bytes, alignment)?;
+    // Promotion needs exact mapped authority for the rounded backing. Copies
+    // still use the original logical extent, never the allocation's padding.
+    let (logical_bytes, physical_bytes) = device_buffer_allocation_extents_v1(bytes, alignment)?;
+    let lease = memory.allocate_gfx942_device_memory(physical_bytes, alignment)?;
     let lease = memory.map_gfx942_device_memory(lease)?;
     Ok(Gfx942SdmaBufferV1 {
         storage: Gfx942SdmaBufferStorageV1::Device(lease),
         owner,
         pool_generation: 1,
-        logical_bytes: bytes,
+        logical_bytes,
         host_content_certificate: None,
     })
 }
@@ -6318,6 +6333,52 @@ mod tests {
         VmIdV1, VmKeyV1,
     };
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn device_buffer_allocation_extents_preserve_logical_bounds() {
+        for (logical, physical) in [
+            (1, 4096),
+            (4095, 4096),
+            (4096, 4096),
+            (4097, 8192),
+            (1_048_832, 1_052_672),
+            (256 << 20, 256 << 20),
+        ] {
+            assert_eq!(
+                device_buffer_allocation_extents_v1(logical, 4096).unwrap(),
+                (logical, physical)
+            );
+            assert!(crate::persistent_directional_sdma::directional_persistent_sdma_extents_are_admitted_v1(logical, physical, 1));
+        }
+        let (logical, physical) =
+            device_buffer_allocation_extents_v1((256 << 20) + 1, 4096).unwrap();
+        assert!(!crate::persistent_directional_sdma::directional_persistent_sdma_extents_are_admitted_v1(logical, physical, 1));
+        for bytes in [
+            0,
+            crate::shared_memory::MAX_GFX942_DEVICE_MEMORY_BYTES_V1 + 1,
+            u64::MAX,
+        ] {
+            assert!(device_buffer_allocation_extents_v1(bytes, 4096).is_err());
+        }
+        for alignment in [0, 3, 8192, u64::MAX] {
+            assert!(device_buffer_allocation_extents_v1(4097, alignment).is_err());
+        }
+    }
+
+    #[test]
+    fn device_buffer_allocation_wires_rounded_backing_and_original_logical_extent() {
+        let body = include_str!("sdma.rs")
+            .split("pub(crate) fn allocate_device_buffer(")
+            .nth(1)
+            .unwrap()
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(body.contains("device_buffer_allocation_extents_v1(bytes, alignment)?"));
+        assert!(body.contains("allocate_gfx942_device_memory(physical_bytes, alignment)?"));
+        assert!(body.contains("logical_bytes,"));
+        assert!(!body.contains("logical_bytes: physical_bytes"));
+    }
 
     fn word(packet: &Gfx942SdmaCopySubmissionV1, index: usize) -> u32 {
         let offset = index * 4;
