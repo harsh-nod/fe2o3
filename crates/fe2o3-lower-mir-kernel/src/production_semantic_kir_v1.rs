@@ -94,6 +94,10 @@ use fe2o3_pliron::{
 };
 use sha2::{Digest as _, Sha256};
 
+#[path = "production_correspondence_evidence_v6.rs"]
+mod correspondence_evidence_v6;
+pub use correspondence_evidence_v6::*;
+
 const DEFAULT_MAX_FUNCTIONS_V1: usize = 1_024;
 const DEFAULT_MAX_BLOCKS_V1: usize = 16_384;
 const DEFAULT_MAX_STATEMENTS_V1: usize = 1_048_576;
@@ -2239,6 +2243,11 @@ impl ProductionSemanticKirOwnerV1 {
     /// Borrows the retained exact semantic owner.
     pub const fn semantic(&self) -> &ProductionSemanticMirOwnerV1 {
         self.semantic_ssa.source_owner()
+    }
+
+    /// Borrows the checked source and per-root execution SSA used by this exact lowering.
+    pub const fn semantic_ssa(&self) -> &ProductionSemanticSsaOwnerV1 {
+        &self.semantic_ssa
     }
 
     /// Returns the exact production SSA identity consumed by KIR lowering.
@@ -33083,7 +33092,7 @@ mod resource_tests {
         );
     }
 
-    fn noop_ranked_root(
+    pub(super) fn noop_ranked_root(
         selected_root: SemanticFunctionIdV1,
         export: &str,
     ) -> ProductionRankedSemanticProjectionRootV1 {
@@ -33366,7 +33375,7 @@ mod resource_tests {
         noop_semantic_owner_candidate_with_workgroup(exports, cross_root_call, [64, 1, 1])
     }
 
-    fn noop_semantic_owner(exports: &[&str]) -> ProductionSemanticMirOwnerV1 {
+    pub(super) fn noop_semantic_owner(exports: &[&str]) -> ProductionSemanticMirOwnerV1 {
         noop_semantic_owner_candidate(exports, false).unwrap()
     }
 
@@ -33381,7 +33390,9 @@ mod resource_tests {
         helper_closure_semantic_owner_with_calls(1)
     }
 
-    fn helper_closure_semantic_owner_with_calls(calls: u8) -> ProductionSemanticMirOwnerV1 {
+    pub(super) fn helper_closure_semantic_owner_with_calls(
+        calls: u8,
+    ) -> ProductionSemanticMirOwnerV1 {
         assert!((1..=3).contains(&calls));
         let unit = SemanticTypeIdV1::from_index(0);
         let source = SemanticSourceProvenanceV1::unavailable();

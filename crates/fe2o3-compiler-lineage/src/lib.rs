@@ -8,6 +8,7 @@ mod error;
 mod instruction_selection_correspondence_v1;
 mod machine_refinement_receipt_v1;
 mod multi_root_correspondence_payload_v2;
+mod multi_root_correspondence_payload_v3;
 mod multi_root_proof_lineage_v3;
 mod multi_root_proof_roster_v2;
 mod multi_root_proof_roster_v3;
@@ -22,10 +23,12 @@ mod structured_kir_to_llvm_v1;
 mod target_lineage_v3;
 
 pub use capability_evidence_v1::{
+    EXPANDED_SOURCE_EVIDENCE_MAGIC_V2, ExpandedSourceRootV2,
     INERT_STATIC_CAPABILITY_EVIDENCE_ASSOCIATION_MAGIC_V1,
     INERT_STATIC_CAPABILITY_EVIDENCE_ASSOCIATION_VERSION_V1,
     InertCapabilityRefinementReceiptIdentityV1, InertCapabilityRefinementReceiptKindV1,
-    InertCapabilityRefinementReceiptV1, InertMultiRootStaticCapabilityEvidenceAssociationV1,
+    InertCapabilityRefinementReceiptV1, InertExpandedSourceEvidenceV2,
+    InertMultiRootStaticCapabilityEvidenceAssociationV1,
     InertStaticCapabilityEvidenceAssociationErrorV1,
     InertStaticCapabilityEvidenceAssociationIdentityV1,
     InertStaticCapabilityEvidenceAssociationInputsV1, InertStaticCapabilityEvidenceAssociationV1,
@@ -51,6 +54,11 @@ pub use multi_root_correspondence_payload_v2::{
     MultiRootCorrespondencePayloadV2, MultiRootCorrespondenceStatementV2,
     MultiRootCorrespondenceSyntheticRuleV2, MultiRootCorrespondenceSyntheticV2,
     MultiRootCorrespondenceTerminatorV2,
+};
+pub use multi_root_correspondence_payload_v3::{
+    MULTI_ROOT_CORRESPONDENCE_PAYLOAD_BYTES_V3, MULTI_ROOT_CORRESPONDENCE_PAYLOAD_MAGIC_V3,
+    MultiRootCorrespondenceInputsV3, MultiRootCorrespondencePayloadErrorV3,
+    MultiRootCorrespondencePayloadV3, MultiRootInductionKindV3,
 };
 pub use multi_root_proof_lineage_v3::{
     InertMultiRootProofLineageIdentityV3, InertMultiRootProofLineageV3,

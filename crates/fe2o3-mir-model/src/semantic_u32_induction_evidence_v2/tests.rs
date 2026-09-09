@@ -523,6 +523,14 @@ fn induction_v2_transparent_result_wrapper_retains_distinct_source_body() {
         SemanticSourceProvenanceV1::unavailable(),
     );
     let mut body_blocks = original.functions()[1].blocks().to_vec();
+    for (index, slot) in body_blocks.iter_mut().enumerate().take(6).skip(4) {
+        *slot = block(
+            1,
+            index as u32,
+            vec![],
+            helper_call(2, index as u32 + 1, copy(1, U32), place(5, UNIT)),
+        );
+    }
     body_blocks[6] = block(
         1,
         6,
@@ -563,15 +571,15 @@ fn induction_v2_transparent_result_wrapper_retains_distinct_source_body() {
             ),
         ),
     );
-    let f = Fixture::from_source(admit_variant(
-        &original,
-        types,
-        vec![wrapper, body, original.functions()[2].clone()],
-    ));
+    let mut helper_blocks = loop_blocks(2, 0, 2, 1);
+    helper_blocks.push(block(2, 4, vec![], SemanticTerminatorKindV1::Return));
+    let helper = function(2, SemanticFunctionRoleV1::KernelRoot, helper_blocks)
+        .with_role(SemanticFunctionRoleV1::InternalHelper);
+    let f = Fixture::from_source(admit_variant(&original, types, vec![wrapper, body, helper]));
     let selection = f.source.select_kernel_body_for_root_v1(ROOT).unwrap();
     assert!(selection.has_transparent_result_wrapper());
     assert_eq!(selection.body(), SemanticFunctionIdV1::from_index(1));
-    assert_eq!(f.report.certificates().len(), 1);
+    assert_eq!(f.report.certificates().len(), 3);
     let evidence = f.evidence();
     assert_eq!(evidence.root(), ROOT);
     assert_eq!(evidence.function(), 1);
@@ -658,7 +666,7 @@ fn induction_v2_rejects_swapped_certificate_order_and_helper_instance_bindings()
 }
 
 #[test]
-fn expanded_helper_argument_bounds_remain_unsupported_defined_temporaries() {
+fn expanded_helper_argument_bounds_use_exact_repeated_parameter_transfers() {
     let original = source(0, false, 2, 1);
     let caller = function(
         0,
@@ -690,7 +698,7 @@ fn expanded_helper_argument_bounds_remain_unsupported_defined_temporaries() {
     assert_eq!(source_report.certificates().len(), 1);
     let f = Fixture::from_source(source);
     assert_eq!(f.report.checked_additions_examined(), 2);
-    assert!(f.report.certificates().is_empty());
+    assert_eq!(f.report.certificates().len(), 2);
     let view = f.expansion.root(ROOT).unwrap();
     for instance in &view.instances()[1..] {
         let argument = SemanticLocalIdV1::from_index(instance.local_start() + 1);
@@ -709,6 +717,14 @@ fn expanded_helper_argument_bounds_remain_unsupported_defined_temporaries() {
             })
             .count();
         assert_eq!(definitions, 1);
+        assert_eq!(
+            f.report
+                .certificates()
+                .iter()
+                .filter(|certificate| certificate.bound().local() == argument)
+                .count(),
+            1
+        );
     }
     assert!(matches!(
         InertCanonicalSemanticU32InductionEvidenceV2::from_expanded_report(
@@ -725,7 +741,7 @@ fn expanded_helper_argument_bounds_remain_unsupported_defined_temporaries() {
 }
 
 #[test]
-fn expanded_root_bound_forwarded_to_helper_remains_unsupported_alias() {
+fn expanded_root_bound_forwarded_to_helper_preserves_original_argument() {
     let original = source(0, true, 1, 1);
     let mut blocks = original.functions()[0].blocks().to_vec();
     for (index, slot) in blocks.iter_mut().enumerate().take(6).skip(4) {
@@ -751,7 +767,7 @@ fn expanded_root_bound_forwarded_to_helper_remains_unsupported_alias() {
     );
     let f = Fixture::from_source(source);
     assert_eq!(f.report.checked_additions_examined(), 1);
-    assert!(f.report.certificates().is_empty());
+    assert_eq!(f.report.certificates().len(), 1);
     let view = f.expansion.root(ROOT).unwrap();
     assert_eq!(
         view.body().locals()[1].role(),
@@ -765,6 +781,459 @@ fn expanded_root_bound_forwarded_to_helper_remains_unsupported_alias() {
         }).count();
     assert_eq!(forwarded, 2);
     assert_eq!(f.replay(&f.evidence()).unwrap(), f.report);
+}
+
+fn helper_loop_source(
+    depth: u32,
+    repeated: bool,
+    argument: SemanticOperandV1,
+) -> AdmittedInertSemanticMirV1 {
+    let original = source(0, false, 1, 1);
+    let functions = (0..=depth)
+        .map(|index| {
+            let mut blocks = if index == depth {
+                loop_blocks(index, 0, 2, 1)
+            } else {
+                (0..if repeated { 2 } else { 1 })
+                    .map(|call| {
+                        block(
+                            index,
+                            call,
+                            vec![],
+                            helper_call(index + 1, call + 1, argument.clone(), place(5, UNIT)),
+                        )
+                    })
+                    .collect()
+            };
+            blocks.push(block(
+                index,
+                blocks.len() as u32,
+                vec![],
+                SemanticTerminatorKindV1::Return,
+            ));
+            function(index, SemanticFunctionRoleV1::KernelRoot, blocks).with_role(if index == 0 {
+                SemanticFunctionRoleV1::KernelRoot
+            } else {
+                SemanticFunctionRoleV1::InternalHelper
+            })
+        })
+        .collect();
+    admit_variant(&original, original.types().to_vec(), functions)
+}
+
+fn change_helper_function(
+    source: &AdmittedInertSemanticMirV1,
+    index: usize,
+    change: impl FnOnce(&mut Vec<SemanticLocalDeclV1>, &mut Vec<SemanticBasicBlockV1>),
+) -> AdmittedInertSemanticMirV1 {
+    let mut functions = source.functions().to_vec();
+    let mut locals = functions[index].locals().to_vec();
+    let mut blocks = functions[index].blocks().to_vec();
+    change(&mut locals, &mut blocks);
+    functions[index] = function_with_output(
+        index as u32,
+        functions[index].role(),
+        locals,
+        blocks,
+        SemanticAbiValueV1::new(UNIT, SemanticAbiPassModeV1::Ignore),
+    );
+    admit_variant(source, source.types().to_vec(), functions)
+}
+
+fn prepend_helper_statements(
+    source: &AdmittedInertSemanticMirV1,
+    function: usize,
+    target: usize,
+    mut statements: Vec<SemanticStatementV1>,
+) -> AdmittedInertSemanticMirV1 {
+    change_helper_function(source, function, |_, blocks| {
+        statements.extend_from_slice(blocks[target].statements());
+        blocks[target] = block(
+            function as u32,
+            target as u32,
+            statements,
+            blocks[target].terminator().kind().clone(),
+        );
+    })
+}
+
+#[test]
+fn expanded_helper_bounds_follow_nested_instances_and_reject_evidence_substitution() {
+    let f = Fixture::from_source(helper_loop_source(2, true, copy(1, U32)));
+    let view = f.expansion.root(ROOT).unwrap();
+    assert_eq!(view.instances().len(), 7);
+    assert_eq!(f.report.certificates().len(), 4);
+    let instances: std::collections::BTreeSet<_> = f
+        .report
+        .certificates()
+        .iter()
+        .map(|certificate| {
+            let bound = view.local_origins()[certificate.bound().local().index() as usize];
+            assert_eq!(bound.function(), SemanticFunctionIdV1::from_index(2));
+            assert_eq!(bound.local(), SemanticLocalIdV1::from_index(1));
+            assert_eq!(
+                view.block_origins()[certificate.guard().block().block().index() as usize]
+                    .instance(),
+                bound.instance()
+            );
+            bound.instance().index()
+        })
+        .collect();
+    assert_eq!(instances.len(), 4);
+    let evidence = f.evidence();
+    assert_eq!(f.replay(&evidence).unwrap(), f.report);
+    assert_eq!(
+        InertCanonicalSemanticU32InductionEvidenceV1::from_report(&f.report),
+        Err(SemanticU32InductionEvidenceErrorV1::ExecutionViewUnsupported)
+    );
+    let omitted = encode(
+        evidence.binding,
+        evidence.checked_additions_examined,
+        evidence.work_units,
+        &evidence.certificates[..3],
+        &mut CodecBudget::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        f.replay(&InertCanonicalSemanticU32InductionEvidenceV2::decode(&omitted).unwrap()),
+        Err(SemanticU32InductionEvidenceErrorV2::ReportMismatch)
+    );
+    let other = f.report.certificates()[1].bound();
+    let mut bytes = evidence.canonical_bytes().to_vec();
+    let offset = HEADER_BYTES + 2 * 72;
+    bytes[offset..offset + 4].copy_from_slice(&other.local().index().to_le_bytes());
+    bytes[offset + 4..offset + 36].copy_from_slice(
+        view.body().locals()[other.local().index() as usize]
+            .identity()
+            .as_bytes(),
+    );
+    assert_eq!(
+        f.replay(&InertCanonicalSemanticU32InductionEvidenceV2::decode(&bytes).unwrap()),
+        Err(SemanticU32InductionEvidenceErrorV2::ReportMismatch)
+    );
+}
+
+#[test]
+fn expanded_helper_bounds_reject_rewrites_and_ordinary_aliases() {
+    let source = helper_loop_source(2, false, copy(1, U32));
+    assert_eq!(
+        Fixture::from_source(helper_loop_source(2, false, copy(1, U32)))
+            .report
+            .certificates()
+            .len(),
+        1
+    );
+    for (function, target) in [(0, 0), (1, 0), (2, 0), (2, 1), (2, 3)] {
+        let rewritten = prepend_helper_statements(
+            &source,
+            function,
+            target,
+            vec![assign(1, U32, SemanticRvalueKindV1::Use(constant(9)))],
+        );
+        assert!(
+            Fixture::from_source(rewritten)
+                .report
+                .certificates()
+                .is_empty(),
+            "rewritten {function}:{target}"
+        );
+    }
+    for function in 0..=2 {
+        let aliased = change_helper_function(&source, function, |locals, blocks| {
+            locals.push(SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(identity(function as u32, 26)),
+                U32,
+                SemanticLocalRoleV1::Temporary,
+                SemanticSourceProvenanceV1::unavailable(),
+            ));
+            let mut statements = vec![assign(6, U32, SemanticRvalueKindV1::Use(copy(1, U32)))];
+            statements.extend_from_slice(blocks[0].statements());
+            blocks[0] = block(
+                function as u32,
+                0,
+                statements,
+                blocks[0].terminator().kind().clone(),
+            );
+        });
+        assert!(
+            Fixture::from_source(aliased)
+                .report
+                .certificates()
+                .is_empty(),
+            "aliased {function}"
+        );
+    }
+    let temporary = change_helper_function(&source, 0, |_, blocks| {
+        blocks[0] = block(
+            0,
+            0,
+            vec![assign(2, U32, SemanticRvalueKindV1::Use(copy(1, U32)))],
+            helper_call(1, 1, copy(2, U32), place(5, UNIT)),
+        );
+    });
+    assert!(
+        Fixture::from_source(temporary)
+            .report
+            .certificates()
+            .is_empty()
+    );
+}
+
+#[test]
+fn expanded_helper_bounds_preserve_move_and_storage_availability() {
+    let moved = SemanticOperandV1::Move(place(1, U32));
+    let once = Fixture::from_source(helper_loop_source(2, false, moved.clone()));
+    assert_eq!(once.report.certificates().len(), 1);
+    let repeated = Fixture::from_source(helper_loop_source(2, true, moved));
+    assert_eq!(repeated.report.checked_additions_examined(), 4);
+    assert_eq!(repeated.report.certificates().len(), 1);
+    assert_eq!(
+        repeated.replay(&repeated.evidence()).unwrap(),
+        repeated.report
+    );
+    let source = helper_loop_source(1, false, copy(1, U32));
+    for function in 0..=1 {
+        for kind in [
+            SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(1)),
+            SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(1)),
+        ] {
+            let dead = prepend_helper_statements(
+                &source,
+                function,
+                0,
+                vec![SemanticStatementV1::new(
+                    SemanticSourceProvenanceV1::unavailable(),
+                    kind,
+                )],
+            );
+            assert!(
+                Fixture::from_source(dead).report.certificates().is_empty(),
+                "dead argument {function}"
+            );
+        }
+    }
+    let moved_in_guard = change_helper_function(&source, 1, |_, blocks| {
+        blocks[1] = block(
+            1,
+            1,
+            vec![assign(
+                3,
+                BOOL,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::LessThan,
+                    left: copy(2, U32),
+                    right: SemanticOperandV1::Move(place(1, U32)),
+                },
+            )],
+            blocks[1].terminator().kind().clone(),
+        );
+    });
+    assert!(
+        Fixture::from_source(moved_in_guard)
+            .report
+            .certificates()
+            .is_empty()
+    );
+}
+
+#[test]
+fn expanded_helper_bounds_reinitialize_static_frames_on_caller_backedges() {
+    for (argument, expected) in [
+        (copy(1, U32), 2),
+        (SemanticOperandV1::Move(place(1, U32)), 0),
+    ] {
+        let source = helper_loop_source(1, false, argument.clone());
+        let source = change_helper_function(&source, 0, |_, blocks| {
+            *blocks = loop_blocks(0, 0, 2, 1);
+            let checked = blocks[2].clone();
+            blocks[2] = block(0, 2, vec![], helper_call(1, 5, argument, place(5, UNIT)));
+            blocks.push(block(0, 4, vec![], SemanticTerminatorKindV1::Return));
+            blocks.push(block(
+                0,
+                5,
+                checked.statements().to_vec(),
+                checked.terminator().kind().clone(),
+            ));
+        });
+        let f = Fixture::from_source(source);
+        assert_eq!(f.expansion.root(ROOT).unwrap().instances().len(), 2);
+        assert_eq!(f.report.checked_additions_examined(), 2);
+        assert_eq!(f.report.certificates().len(), expected);
+        assert_eq!(f.replay(&f.evidence()).unwrap(), f.report);
+    }
+}
+
+#[test]
+fn expanded_helper_bounds_allow_early_return_not_guard_bypass_or_conditional_death() {
+    let source = helper_loop_source(1, false, copy(1, U32));
+    for variant in 0..3 {
+        let source = change_helper_function(&source, 1, |locals, blocks| {
+            locals.push(SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(identity(1, 26)),
+                BOOL,
+                SemanticLocalRoleV1::Temporary,
+                SemanticSourceProvenanceV1::unavailable(),
+            ));
+            *blocks = vec![block(
+                1,
+                0,
+                vec![assign(
+                    6,
+                    BOOL,
+                    SemanticRvalueKindV1::Binary {
+                        operation: SemanticBinaryOpV1::LessThan,
+                        left: constant(0),
+                        right: copy(1, U32),
+                    },
+                )],
+                SemanticTerminatorKindV1::SwitchInt {
+                    discriminant: copy(6, BOOL),
+                    targets: SemanticSwitchTargetsV1::new(
+                        vec![SemanticSwitchTargetV1::new(
+                            0,
+                            edge(
+                                SemanticEdgeRoleV1::SwitchValue,
+                                if variant == 1 { 3 } else { 6 },
+                            ),
+                        )],
+                        edge(SemanticEdgeRoleV1::SwitchOtherwise, 1),
+                    )
+                    .unwrap(),
+                },
+            )];
+            blocks.extend(loop_blocks(1, 1, 2, 1));
+            blocks.push(block(1, 5, vec![], SemanticTerminatorKindV1::Return));
+            if variant != 1 {
+                blocks.push(block(
+                    1,
+                    6,
+                    if variant == 2 {
+                        vec![SemanticStatementV1::new(
+                            SemanticSourceProvenanceV1::unavailable(),
+                            SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(1)),
+                        )]
+                    } else {
+                        vec![]
+                    },
+                    if variant == 2 {
+                        SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 1))
+                    } else {
+                        SemanticTerminatorKindV1::Return
+                    },
+                ));
+            }
+        });
+        let f = Fixture::from_source(source);
+        assert_eq!(
+            f.report.certificates().len(),
+            usize::from(variant == 0),
+            "variant {variant}"
+        );
+    }
+}
+
+#[test]
+fn expanded_helper_bounds_reject_projected_arguments_and_signed_types() {
+    let source = helper_loop_source(1, false, copy(1, U32));
+    let projected = change_helper_function(&source, 0, |_, blocks| {
+        blocks[0] = block(
+            0,
+            0,
+            vec![assign(
+                4,
+                PAIR,
+                SemanticRvalueKindV1::aggregate(
+                    SemanticAggregateKindV1::Tuple,
+                    vec![
+                        constant(8),
+                        SemanticOperandV1::Constant(SemanticConstantV1::new(
+                            BOOL,
+                            SemanticConstantValueV1::Scalar(
+                                SemanticScalarValueV1::new(0, 1).unwrap(),
+                            ),
+                        )),
+                    ],
+                )
+                .unwrap(),
+            )],
+            helper_call(1, 1, field(4, 0, U32), place(5, UNIT)),
+        );
+    });
+    assert!(
+        Fixture::from_source(projected)
+            .report
+            .certificates()
+            .is_empty()
+    );
+    let mut types = source.types().to_vec();
+    types[0] = SemanticTypeDeclV1::new(
+        types[0].identity(),
+        types[0].layout_identity(),
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(4),
+            4,
+            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                SemanticBackendPrimitiveV1::integer(true, 32, 4),
+                SemanticScalarValidityRangeV1::new(0, u128::from(u32::MAX)),
+            )),
+            false,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            signed: true,
+            bits: 32,
+        }),
+    );
+    let signed = admit_variant(&source, types, source.functions().to_vec());
+    assert!(
+        Fixture::from_source(signed)
+            .report
+            .certificates()
+            .is_empty()
+    );
+}
+
+#[test]
+fn expanded_helper_bounds_share_cumulative_work_and_certificate_limits() {
+    let f = Fixture::from_source(helper_loop_source(2, true, copy(1, U32)));
+    let evidence = f.evidence();
+    let work = f.report.work_units();
+    assert_eq!(f.report.certificates().len(), 4);
+    assert_eq!(
+        evidence
+            .verify_replay(
+                &f.source,
+                &f.expansion,
+                &f.origins,
+                SemanticU32InductionAnalysisLimitsV1::new(work, 4)
+            )
+            .unwrap(),
+        f.report
+    );
+    for limit in [0, work / 2, work - 1] {
+        assert!(matches!(
+            evidence.verify_replay(
+                &f.source,
+                &f.expansion,
+                &f.origins,
+                SemanticU32InductionAnalysisLimitsV1::new(limit, 4)
+            ),
+            Err(SemanticU32InductionEvidenceErrorV2::Analysis(
+                SemanticU32InductionAnalysisErrorV1::WorkLimit { .. }
+            ))
+        ));
+    }
+    assert!(matches!(
+        evidence.verify_replay(
+            &f.source,
+            &f.expansion,
+            &f.origins,
+            SemanticU32InductionAnalysisLimitsV1::new(work, 3)
+        ),
+        Err(SemanticU32InductionEvidenceErrorV2::Analysis(
+            SemanticU32InductionAnalysisErrorV1::CertificateLimit { .. }
+        ))
+    ));
 }
 
 #[test]

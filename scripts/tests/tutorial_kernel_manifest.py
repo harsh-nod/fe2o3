@@ -178,11 +178,98 @@ def promote_fill(document: dict) -> dict:
 
 
 class TutorialKernelManifestTests(unittest.TestCase):
+    def test_source_closure_matches_production_rust_component_order_vector(self) -> None:
+        # Shared with production_pipeline_tutorial_transaction_tests_v1.rs.
+        # Component order differs from both root-first walk and string sort.
+        files = (
+            ("package/a/z.rs", b"// nested\n"),
+            ("package/a.rs", b"// sibling\n"),
+            ("package/z.rs", b"// root\n"),
+        )
+        expected = "64bb18500b041f175dc8c2eb304349a0facc1a170281e62feac3d821cfd84224"
+        for creation_order in (files, tuple(reversed(files))):
+            with self.subTest(creation_order=creation_order), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for relative, payload in creation_order:
+                    path = root / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(payload)
+                self.assertEqual(
+                    expected,
+                    CHECKER._package_rust_source_closure(root, root / "package", "vector"),
+                )
+
+    def test_source_closure_skips_only_target_directories(self) -> None:
+        self.assertEqual({"target"}, CHECKER.IGNORED_PACKAGE_DIRECTORIES)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "package"
+            package.mkdir()
+            (package / "lib.rs").write_bytes(b"// source\n")
+            before = CHECKER._package_rust_source_closure(root, package, "vector")
+            for relative in ("target/ignored.rs", "nested/target/ignored.rs"):
+                path = package / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"\xff")
+            self.assertEqual(before, CHECKER._package_rust_source_closure(root, package, "vector"))
+            for name in (".git", "build", "node_modules", "target-sibling"):
+                with self.subTest(directory=name):
+                    path = package / name / "included.rs"
+                    path.parent.mkdir()
+                    path.write_bytes(b"// included\n")
+                    self.assertNotEqual(
+                        before, CHECKER._package_rust_source_closure(root, package, "vector")
+                    )
+                    path.unlink()
+
+    def test_source_closure_rejects_symlinks_including_non_sources_and_target(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "package"
+            package.mkdir()
+            (package / "lib.rs").write_bytes(b"// source\n")
+            for name, target in (("link.rs", "lib.rs"), ("data.txt", "lib.rs"), ("target", ".")):
+                with self.subTest(name=name):
+                    link = package / name
+                    link.symlink_to(target)
+                    with self.assertRaisesRegex(CHECKER.ManifestError, "symlink"):
+                        CHECKER._package_rust_source_closure(root, package, "vector")
+                    link.unlink()
+
+    def test_source_closure_rejects_directory_enumeration_errors(self) -> None:
+        def unreadable(*args, onerror, **kwargs):
+            onerror(PermissionError("unreadable nested directory"))
+            return iter(())
+
+        with patch.object(CHECKER.os, "walk", side_effect=unreadable):
+            with self.assertRaisesRegex(CHECKER.ManifestError, "cannot enumerate"):
+                CHECKER._package_rust_source_closure(ROOT, ROOT / "package", "vector")
+
     def test_checked_in_manifest_is_valid(self) -> None:
         stats = CHECKER.validate_repository(ROOT)
         self.assertEqual(
             {"entries": 25, "fixtures": 47, "production_entries": 0}, stats
         )
+
+    def test_migration_candidate_input_closure_is_current_without_qualification(self) -> None:
+        before = manifest()
+        self.assertEqual(
+            {"entries": 25, "fixtures": 47, "production_entries": 0},
+            CHECKER.validate_repository(ROOT, check_inputs=True),
+        )
+        self.assertEqual("migration", before["baseline"]["status"])
+        self.assertEqual(before, manifest())
+
+    def test_input_closure_rejects_stale_hashes_even_with_a_consistent_fixture_contract(self) -> None:
+        for field in ("packageManifestSha256", "cargoLockSha256", "sourceClosureSha256"):
+            with self.subTest(field=field):
+                document = manifest()
+                fixture = document["compilerFixtures"][0]
+                fixture["compilerInput"][field] = "0" * 64
+                fixture["compilerInput"]["contractSha256"] = CHECKER._fixture_input_contract_sha256(fixture)
+                CHECKER.validate_document(document)
+                with self.assertRaisesRegex(CHECKER.ManifestError, f"{field} is stale"):
+                    CHECKER._validate_qualified_repository_inputs(ROOT, document)
 
     def test_all_47_records_remain_explicitly_unqualified(self) -> None:
         document = manifest()
@@ -425,7 +512,7 @@ class TutorialKernelManifestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             site = Path(temporary)
             (site / "config").mkdir()
-            for name in (
+            names = (
                 CHECKER.MANIFEST_NAME,
                 CHECKER.MANIFEST_NAME.replace(".json", ".sha256"),
                 CHECKER.SCHEMA_NAME,
@@ -438,11 +525,54 @@ class TutorialKernelManifestTests(unittest.TestCase):
                 CHECKER.CAPABILITY_QUALIFICATION_SCHEMA_NAME.replace(
                     ".json", ".sha256"
                 ),
-            ):
+            )
+            for name in names:
                 (site / "config" / name).write_bytes((ROOT / "config" / name).read_bytes())
-            (site / "config" / CHECKER.MANIFEST_NAME).write_text("{}\n")
-            with self.assertRaisesRegex(CHECKER.ManifestError, "differs byte-for-byte"):
-                CHECKER.validate_repository(ROOT, site)
+            self.assertEqual(CHECKER.validate_repository(ROOT, site)["production_entries"], 0)
+            for name in names:
+                with self.subTest(name=name):
+                    path = site / "config" / name
+                    original = path.read_bytes()
+                    path.write_bytes(original + b"\n")
+                    try:
+                        with self.assertRaisesRegex(CHECKER.ManifestError, "differs byte-for-byte"):
+                            CHECKER.validate_repository(ROOT, site)
+                    finally:
+                        path.write_bytes(original)
+            with patch.object(CHECKER, "_validate_committed_contract") as committed:
+                stats = CHECKER.validate_repository(ROOT, site, committed_parity=True)
+                self.assertEqual(stats["production_entries"], 0)
+                self.assertEqual([call.args[0] for call in committed.call_args_list], [ROOT, site])
+                for call in committed.call_args_list:
+                    self.assertEqual(set(call.args[1]), set(names))
+
+    def test_committed_parity_requires_both_repositories(self) -> None:
+        with self.assertRaisesRegex(CHECKER.ManifestError, "requires a tutorial repository"):
+            CHECKER.validate_repository(ROOT, committed_parity=True)
+
+    def test_committed_contract_checks_exact_head_bytes_not_worktree(self) -> None:
+        path = ROOT / "config" / CHECKER.MANIFEST_NAME
+        committed_bytes = CHECKER.subprocess.run(
+            ["git", "-C", str(ROOT), "show", f"HEAD:config/{path.name}"],
+            check=True,
+            stdout=CHECKER.subprocess.PIPE,
+        ).stdout
+        CHECKER._validate_committed_contract(ROOT, {path.name: committed_bytes})
+        for name, payload in (
+            (path.name, committed_bytes + b"\n"),
+            ("nonexistent-contract.json", b"{}\n"),
+        ):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(CHECKER.ManifestError, "differs byte-for-byte from committed"):
+                    CHECKER._validate_committed_contract(ROOT, {name: payload})
+
+    def test_baseline_is_a_stable_ancestor_not_a_recursive_head_pin(self) -> None:
+        baseline = manifest()["baseline"]
+        self.assertNotEqual(baseline["compilerCommit"], CHECKER._git(ROOT, "rev-parse", "HEAD"))
+        self.assertEqual(CHECKER.validate_repository(ROOT)["production_entries"], 0)
+        with patch.object(CHECKER, "_git", return_value="0" * 40):
+            with self.assertRaisesRegex(CHECKER.ManifestError, "does not own the recorded tree"):
+                CHECKER.validate_repository(ROOT)
 
 
 if __name__ == "__main__":

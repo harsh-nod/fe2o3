@@ -23,13 +23,16 @@ die() {
 usage() {
     cat >&2 <<'EOF'
 usage:
-  functional-refinement-verus-runtime-v1.sh audit-source VERUS_DIST RUST_TOOLCHAIN RUSTUP
-  functional-refinement-verus-runtime-v1.sh provision VERUS_DIST RUST_TOOLCHAIN RUSTUP DESTINATION
+  functional-refinement-verus-runtime-v1.sh audit-source VERUS_DIST RUST_TOOLCHAIN RUSTUP [SYSTEM_LIB_DIRECTORY]
+  functional-refinement-verus-runtime-v1.sh provision VERUS_DIST RUST_TOOLCHAIN RUSTUP DESTINATION [SYSTEM_LIB_DIRECTORY]
   functional-refinement-verus-runtime-v1.sh audit-installed RUNTIME_ROOT
 
 `provision` must run as root and accepts only a new destination beneath
 /opt/fe2o3/verus-runtime-v2/. The Verus launcher and rustup are audited as
 excluded provenance; neither is copied into the executable closure.
+SYSTEM_LIB_DIRECTORY optionally supplies all eight pinned libraries by their
+manifest basenames instead of the host library paths. Exact byte pins still
+apply, and the host ELF interpreter must still match; no system file is replaced.
 These commands grant no proof authority. The typed Rust entry point separately
 admits and retains the installed closure, revalidates it around every bounded
 proof process, and returns only non-authoritative refinement evidence.
@@ -64,17 +67,23 @@ require_regular_source() {
 }
 
 system_source() {
+    local source
     case "$1" in
-        system-lib/libc.so.6) printf '%s\n' /usr/lib/x86_64-linux-gnu/libc.so.6 ;;
-        system-lib/libdl.so.2) printf '%s\n' /usr/lib/x86_64-linux-gnu/libdl.so.2 ;;
-        system-lib/libgcc_s.so.1) printf '%s\n' /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 ;;
-        system-lib/libm.so.6) printf '%s\n' /usr/lib/x86_64-linux-gnu/libm.so.6 ;;
-        system-lib/libpthread.so.0) printf '%s\n' /usr/lib/x86_64-linux-gnu/libpthread.so.0 ;;
-        system-lib/librt.so.1) printf '%s\n' /usr/lib/x86_64-linux-gnu/librt.so.1 ;;
-        system-lib/libstdc++.so.6) printf '%s\n' /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.33 ;;
-        system-lib/libz.so.1) printf '%s\n' /usr/lib/x86_64-linux-gnu/libz.so.1.3 ;;
+        system-lib/libc.so.6) source=/usr/lib/x86_64-linux-gnu/libc.so.6 ;;
+        system-lib/libdl.so.2) source=/usr/lib/x86_64-linux-gnu/libdl.so.2 ;;
+        system-lib/libgcc_s.so.1) source=/usr/lib/x86_64-linux-gnu/libgcc_s.so.1 ;;
+        system-lib/libm.so.6) source=/usr/lib/x86_64-linux-gnu/libm.so.6 ;;
+        system-lib/libpthread.so.0) source=/usr/lib/x86_64-linux-gnu/libpthread.so.0 ;;
+        system-lib/librt.so.1) source=/usr/lib/x86_64-linux-gnu/librt.so.1 ;;
+        system-lib/libstdc++.so.6) source=/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.33 ;;
+        system-lib/libz.so.1) source=/usr/lib/x86_64-linux-gnu/libz.so.1.3 ;;
         *) die "manifest names an unsupported system DSO: $1" ;;
     esac
+    if [[ -n "${2:-}" ]]; then
+        require_absolute_directory "$2" SYSTEM_LIB_DIRECTORY
+        source="$2/${1#system-lib/}"
+    fi
+    printf '%s\n' "$source"
 }
 
 source_for_file() {
@@ -84,7 +93,7 @@ source_for_file() {
     case "$relative" in
         dist/*) printf '%s/%s\n' "$distribution" "${relative#dist/}" ;;
         toolchain/*) printf '%s/%s\n' "$toolchain" "${relative#toolchain/}" ;;
-        system-lib/*) system_source "$relative" ;;
+        system-lib/*) system_source "$relative" "${4:-}" ;;
         *) die "manifest file is outside the closed layout: $relative" ;;
     esac
 }
@@ -147,6 +156,7 @@ audit_source() {
     local distribution=$1
     local toolchain=$2
     local rustup=$3
+    local system_lib_directory=${4:-}
     require_absolute_directory "$distribution" VERUS_DIST
     require_absolute_directory "$toolchain" RUST_TOOLCHAIN
     [[ "$rustup" == /* ]] || die "RUSTUP must be absolute"
@@ -164,7 +174,7 @@ audit_source() {
 
     while IFS='|' read -r _ mode size digest relative; do
         local source
-        source="$(source_for_file "$relative" "$distribution" "$toolchain")"
+        source="$(source_for_file "$relative" "$distribution" "$toolchain" "$system_lib_directory")"
         verify_file "$source" "$mode" "$size" "$digest" false
     done < <(awk -F '|' '$1 == "file"' "$MANIFEST")
     while IFS=' ' read -r digest name; do
@@ -232,11 +242,12 @@ provision() {
     local toolchain=$2
     local rustup=$3
     local destination=$4
+    local system_lib_directory=${5:-}
     [[ "$EUID" == 0 ]] || die "provision must run as root"
     [[ "$destination" =~ ^/opt/fe2o3/verus-runtime-v2/[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
         || die "destination must be one canonical child of /opt/fe2o3/verus-runtime-v2"
     [[ ! -e "$destination" && ! -L "$destination" ]] || die "destination already exists"
-    audit_source "$distribution" "$toolchain" "$rustup"
+    audit_source "$distribution" "$toolchain" "$rustup" "$system_lib_directory"
 
     umask 077
     install -d -o root -g root -m 0755 -- "$destination"
@@ -245,7 +256,7 @@ provision() {
     done < <(awk -F '|' '$1 == "directory"' "$MANIFEST")
     while IFS='|' read -r _ mode _ _ relative; do
         local source
-        source="$(source_for_file "$relative" "$distribution" "$toolchain")"
+        source="$(source_for_file "$relative" "$distribution" "$toolchain" "$system_lib_directory")"
         install -o root -g root -m "${mode#0}" -- "$source" "$destination/$relative"
     done < <(awk -F '|' '$1 == "file"' "$MANIFEST")
     while IFS=' ' read -r _ name; do
@@ -259,18 +270,24 @@ provision() {
     audit_installed "$destination"
 }
 
-case "${1:-}" in
-    audit-source)
-        [[ $# == 4 ]] || usage
-        audit_source "$2" "$3" "$4"
-        ;;
-    provision)
-        [[ $# == 5 ]] || usage
-        provision "$2" "$3" "$4" "$5"
-        ;;
-    audit-installed)
-        [[ $# == 2 ]] || usage
-        audit_installed "$2"
-        ;;
-    *) usage ;;
-esac
+main() {
+    case "${1:-}" in
+        audit-source)
+            [[ $# == 4 || ( $# == 5 && -n "$5" ) ]] || usage
+            audit_source "$2" "$3" "$4" "${5:-}"
+            ;;
+        provision)
+            [[ $# == 5 || ( $# == 6 && -n "$6" ) ]] || usage
+            provision "$2" "$3" "$4" "$5" "${6:-}"
+            ;;
+        audit-installed)
+            [[ $# == 2 ]] || usage
+            audit_installed "$2"
+            ;;
+        *) usage ;;
+    esac
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

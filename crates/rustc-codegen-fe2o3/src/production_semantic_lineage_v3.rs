@@ -45,7 +45,6 @@ use fe2o3_lower_mir_kernel::{
     ProductionCanonicalKernelIrIdentityV1, ProductionCanonicalKernelIrVersionV1,
     ProductionCorrespondenceEvidenceErrorV4, ProductionCorrespondenceEvidenceErrorV5,
     ProductionFormalMemoryEvidenceErrorV4, ProductionFormalMemoryOwnerV1,
-    ProductionSourceRefinementEvidenceV1,
 };
 use fe2o3_mir_model::InertCanonicalSemanticU32InductionEvidenceV1;
 use fe2o3_pliron::InertProductionMiddleEndEvidenceV5;
@@ -66,6 +65,9 @@ use crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRoste
 use crate::protected_rustc_invocation::{
     FinishedProtectedRustcInvocationV3, ProtectedRustcInvocationErrorV1,
 };
+
+mod expanded_source_v2;
+use expanded_source_v2::PreparedExpandedSourceV2;
 
 fn validate_final_llvm_layout(
     llvm: &str,
@@ -209,7 +211,7 @@ enum PreparedLineageRosterCustodyV1 {
     },
     NativeV13 {
         proof_lineage: InertMultiRootProofLineageV3,
-        source_refinement_evidence: Box<[u8]>,
+        source_refinement_evidence: PreparedExpandedSourceV2,
     },
 }
 
@@ -316,6 +318,29 @@ fn prepare_lineage_evidence_v1(
         ));
     }
 
+    let expanded_source = if neutral_kir.version() == ProductionCanonicalKernelIrVersionV1::V13 {
+        if admitted.semantic_kir().canonical_kernel_ir_identity() != neutral_kir {
+            return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "native source correspondence names a different source KIR",
+            ));
+        }
+        let reports = ranked
+            .roots()
+            .iter()
+            .map(|root| {
+                (
+                    root.semantic_root(),
+                    root.verification().semantic_u32_induction(),
+                )
+            })
+            .collect::<Vec<_>>();
+        Some(PreparedExpandedSourceV2::from_live_owner(
+            admitted.semantic_kir(),
+            &reports,
+        )?)
+    } else {
+        None
+    };
     let roster_identity = *ranked.canonical_roster_identity().as_bytes();
     let canonical_kernel_order = ranked.canonical_kernel_order().to_vec().into_boxed_slice();
     let mut roots = Vec::with_capacity(ranked.root_count());
@@ -359,8 +384,10 @@ fn prepare_lineage_evidence_v1(
             || ranked_root.source_rank() != kernel.domain.rank()
             || induction.semantic_mir_sha256() != semantic.semantic_sha256()
             || induction.function() != selected.body()
-            || induction.function_identity()
-                != semantic.functions()[selected.body().index() as usize].identity()
+            || (expanded_source.is_none()
+                && (induction.execution_view_identity().is_some()
+                    || induction.function_identity()
+                        != semantic.functions()[selected.body().index() as usize].identity()))
             || induction.grants_authority()
             || induction.authorizes_compiler_transform()
             || kernel.id.as_str() != std::str::from_utf8(ranked_root.export_symbol()).unwrap_or("")
@@ -386,18 +413,30 @@ fn prepare_lineage_evidence_v1(
                 "per-root Verus execution names a different middle-end record",
             ));
         }
-        let induction =
-            fe2o3_mir_model::InertCanonicalSemanticU32InductionEvidenceV1::from_report(induction)
-                .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
         let formal_receipt =
             InertCanonicalFormalMemoryObligationReceiptV1::from_obligations(formal.obligations())
                 .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
-        let correspondence = encode_correspondence_root_payload_v1(
-            admitted.semantic_kir().correspondence(),
-            *semantic_root,
-            ordinal,
-            induction.canonical_bytes(),
-        )?;
+        let correspondence = if let Some(source) = &expanded_source {
+            source
+                .source()
+                .roots()
+                .get(ordinal as usize)
+                .ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
+                    "native source root disappeared",
+                ))?
+                .coordinates()
+                .canonical_bytes()
+                .to_vec()
+        } else {
+            let induction = InertCanonicalSemanticU32InductionEvidenceV1::from_report(induction)
+                .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
+            encode_correspondence_root_payload_v1(
+                admitted.semantic_kir().correspondence(),
+                *semantic_root,
+                ordinal,
+                induction.canonical_bytes(),
+            )?
+        };
         roots.push(PreparedLineageRootV1 {
             logical_name: ranked_root.logical_name().to_owned(),
             export_symbol: ranked_root.export_symbol().to_vec().into_boxed_slice(),
@@ -428,19 +467,10 @@ fn prepare_lineage_evidence_v1(
             final_v13.ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
                 "native V13 lineage lost the exact final graph or epoch",
             ))?;
-        let induction = ranked
-            .roots()
-            .first()
-            .ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
-                "native V13 lineage has no authenticated semantic root",
-            ))?
-            .verification()
-            .semantic_u32_induction();
-        let source_refinement_evidence = ProductionSourceRefinementEvidenceV1::from_live_owner(
-            admitted.semantic_kir(),
-            induction,
-        )
-        .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
+        let source_refinement_evidence =
+            expanded_source.ok_or(ProductionSemanticLineageErrorV3::AxisMismatch(
+                "native V13 lineage lost live source replay",
+            ))?;
         let native_kir = MultiRootNeutralKirIdentityV3::new(
             MultiRootCanonicalKirVersionV3::V13,
             final_kir.canonical_length(),
@@ -481,6 +511,7 @@ fn prepare_lineage_evidence_v1(
         )?;
         let proof_lineage =
             InertMultiRootProofLineageV3::new(middle_end, correspondence, formal_memory, verus)?;
+        source_refinement_evidence.revalidate(&proof_lineage)?;
         return Ok(PreparedLineageEvidenceV1 {
             middle_end: InertMiddleEndReceiptV3::from_canonical_preimage(
                 proof_lineage
@@ -505,10 +536,7 @@ fn prepare_lineage_evidence_v1(
                 .into_boxed_slice(),
             roster_custody: PreparedLineageRosterCustodyV1::NativeV13 {
                 proof_lineage,
-                source_refinement_evidence: source_refinement_evidence
-                    .canonical_bytes()
-                    .to_vec()
-                    .into_boxed_slice(),
+                source_refinement_evidence,
             },
             workgroups,
         });
@@ -1565,7 +1593,11 @@ impl PreparedProductionSemanticLineageV3 {
                     LineageRosterPayloadV1::VerusExecution,
                 )?;
             }
-            PreparedLineageRosterCustodyV1::NativeV13 { proof_lineage, .. } => {
+            PreparedLineageRosterCustodyV1::NativeV13 {
+                proof_lineage,
+                source_refinement_evidence,
+            } => {
+                source_refinement_evidence.revalidate(proof_lineage)?;
                 let decoded =
                     InertMultiRootProofLineageV3::decode(proof_lineage.canonical_bytes())?;
                 if decoded.identity() != proof_lineage.identity()
@@ -1889,8 +1921,8 @@ impl PreparedProductionSemanticLineageV3 {
                 source_refinement_evidence,
             } => {
                 let source_refinement =
-                    InertCapabilityRefinementReceiptV1::from_checked_source_evidence_v1(
-                        &source_refinement_evidence,
+                    InertCapabilityRefinementReceiptV1::from_checked_source_evidence_v2(
+                        source_refinement_evidence.source().canonical_bytes(),
                         &proof_lineage,
                     )
                     .map_err(|error| {

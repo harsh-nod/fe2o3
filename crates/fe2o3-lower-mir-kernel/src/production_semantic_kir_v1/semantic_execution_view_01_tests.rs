@@ -1,4 +1,4 @@
-mod checked_execution_view_tests {
+pub(super) mod checked_execution_view_tests {
     use super::*;
     use fe2o3_mir_model::semantic_mir_v1::{
         SemanticAbiCastV1, SemanticAbiRegisterV1, SemanticAbiUniformV1,
@@ -207,7 +207,8 @@ mod checked_execution_view_tests {
         lowered.verify_equivalence().unwrap();
     }
 
-    fn transparent_result_wrapper_owner() -> ProductionSemanticMirOwnerV1 {
+    pub(in crate::production_semantic_kir_v1) fn transparent_result_wrapper_owner()
+    -> ProductionSemanticMirOwnerV1 {
         let baseline = helper_closure_semantic_owner();
         let source = baseline.semantic();
         let provenance = SemanticSourceProvenanceV1::unavailable();

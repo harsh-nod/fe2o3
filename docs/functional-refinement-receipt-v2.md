@@ -81,6 +81,24 @@ absent from both this manifest and the generated proof child's inherited
 descriptors. A loose Verus installation or the general-GEMM proof closure is not
 silently substituted.
 
+The provisioning script accepts an optional `SYSTEM_LIB_DIRECTORY` after the
+ordinary `audit-source` or `provision` arguments. This supports recovering the
+exact pinned libraries after a host package upgrade without replacing shared
+system libraries. The directory supplies all eight libraries using their
+`system-lib/` manifest basenames; each must be a regular, single-link file with
+the exact pinned size and SHA-256. There is no fallback to host libraries when
+a staged file is absent or different. The installed closure is independently
+audited after copying, and the system ELF interpreter and its path chain must
+still match the existing pins. A different loader requires a compatible host,
+not a source-directory override.
+
+For this manifest, the excluded rustup provenance matches the official 1.29.0
+`x86_64-unknown-linux-gnu/rustup-init` archive. The pinned zlib bytes match
+Ubuntu's `zlib1g_1.3.dfsg-3.1ubuntu2.1_amd64.deb`; extracting that package into a
+private staging directory does not install it. These version labels aid
+recovery only: the manifest byte pins, not package names, decide admission.
+Source audit success does not establish proof execution or artifact authority.
+
 ## Remaining boundaries
 
 The compiler frontend derives one reference output location/formula and one GPU

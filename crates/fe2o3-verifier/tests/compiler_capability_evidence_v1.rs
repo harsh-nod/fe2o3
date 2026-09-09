@@ -40,8 +40,8 @@ use fe2o3_kernel_ir::{
     Terminator, ValueId, VerifiedCanonicalKernelIrV13, VerifiedSimulationBundleV8,
 };
 use fe2o3_lower_mir_kernel::{
-    ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
-    ProductionSourceRefinementEvidenceV1,
+    InertCanonicalMirToKirCorrespondenceEvidenceV4, ProductionSemanticKirLimitsV1,
+    ProductionSemanticKirOwnerV1, ProductionSourceRefinementEvidenceV1,
 };
 use fe2o3_mir_model::semantic_mir_v1 as sm;
 use fe2o3_pliron::InertProductionMiddleEndEvidenceV5;
@@ -59,7 +59,8 @@ use fe2o3_rustc_invocation::{
 };
 use fe2o3_verifier::{
     CanonicalProductionMirPlironVerusExecutionEvidenceV1,
-    CompilerCapabilityEvidenceValidationErrorV1, CompilerProofInputValidationErrorV5,
+    CompilerCapabilityEvidenceValidationErrorV1, CompilerProofInputValidationErrorV3,
+    CompilerProofInputValidationErrorV4, CompilerProofInputValidationErrorV5,
     ProductionMirPlironVerusExecutionClaimsV1, ValidatedCompilerCapabilityEvidenceV1,
     ValidatedCompilerProofInputsV4, validate_compiler_capability_evidence_v1,
     validate_compiler_multi_root_proof_inputs_v5, validate_compiler_proof_inputs_v4,
@@ -69,7 +70,10 @@ use sha2::{Digest as _, Sha256};
 
 #[path = "../../../tests/support/compiler_proof_inputs_v3.rs"]
 mod compiler_proof_inputs_v3;
-use compiler_proof_inputs_v3::frozen_compiler_proof_inputs_v4;
+use compiler_proof_inputs_v3::{
+    CanonicalCompilerProofInputsV3, current_compiler_proof_inputs_v4_from_frozen_source,
+    frozen_compiler_proof_inputs_v4,
+};
 
 const TARGET: &str = "gfx942:sramecc+:xnack-";
 const EPOCH: u64 = 7;
@@ -160,7 +164,12 @@ fn signed_v4_source_evidence(
 }
 
 fn validated_v4_source_owner() -> ValidatedCompilerProofInputsV4 {
-    let canonical = frozen_compiler_proof_inputs_v4();
+    validate_v4_source_owner(&current_compiler_proof_inputs_v4_from_frozen_source()).unwrap()
+}
+
+fn validate_v4_source_owner(
+    canonical: &CanonicalCompilerProofInputsV3,
+) -> Result<ValidatedCompilerProofInputsV4, CompilerProofInputValidationErrorV4> {
     let semantic_mir =
         InertCanonicalSemanticMirReceiptV3::from_canonical_preimage(canonical.semantic_mir())
             .unwrap();
@@ -212,7 +221,6 @@ fn validated_v4_source_owner() -> ValidatedCompilerProofInputsV4 {
         &correspondence,
         &formal_memory,
     )
-    .unwrap()
 }
 
 fn os_entries(entries: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
@@ -1215,6 +1223,58 @@ fn multi_root_owner(
 
 fn replace_v5_inputs(fixture: &mut NativeV5Fixture, inputs: InertCompilerProofOwnerInputsV5) {
     fixture.association = InertCompilerProofOwnerV5::new(inputs).unwrap();
+}
+
+#[test]
+fn current_v4_source_fixture_preserves_frozen_payloads_and_replays() {
+    let frozen = frozen_compiler_proof_inputs_v4();
+    let current = current_compiler_proof_inputs_v4_from_frozen_source();
+    assert_eq!(current.semantic_mir(), frozen.semantic_mir());
+    assert_eq!(current.middle_end(), frozen.middle_end());
+    assert_eq!(current.kernel_ir(), frozen.kernel_ir());
+    assert_eq!(current.formal_memory(), frozen.formal_memory());
+    let old =
+        InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(frozen.correspondence()).unwrap();
+    let new =
+        InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(current.correspondence()).unwrap();
+    let start =
+        frozen.correspondence().len() - old.semantic_u32_induction().canonical_bytes().len();
+    assert_eq!(
+        &current.correspondence()[..start],
+        &frozen.correspondence()[..start]
+    );
+    assert_eq!(
+        current.correspondence().len(),
+        frozen.correspondence().len()
+    );
+    assert_ne!(
+        new.semantic_u32_induction().work_units(),
+        old.semantic_u32_induction().work_units()
+    );
+    assert_ne!(new.identity(), old.identity());
+    drop(validate_v4_source_owner(&current).unwrap());
+}
+
+#[test]
+fn historical_v4_source_fixture_rejects_stale_induction_work() {
+    let frozen = frozen_compiler_proof_inputs_v4();
+    let correspondence =
+        InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(frozen.correspondence()).unwrap();
+    assert_eq!(correspondence.semantic_u32_induction().work_units(), 12);
+    assert!(
+        correspondence
+            .semantic_u32_induction()
+            .certificates()
+            .is_empty()
+    );
+    assert!(matches!(
+        validate_v4_source_owner(&frozen),
+        Err(CompilerProofInputValidationErrorV4::Stage(
+            CompilerProofInputValidationErrorV3::StructuralCorrespondence {
+                detail: "retained semantic induction report differs from deterministic replay"
+            }
+        ))
+    ));
 }
 
 #[test]

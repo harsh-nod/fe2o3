@@ -17,6 +17,8 @@ use crate::semantic_mir_v1::{
     SemanticUnwindActionV1,
 };
 
+mod expanded_bounds;
+
 /// Maximum independently charged CFG, inventory, candidate, and reachability work.
 pub const MAX_SEMANTIC_U32_INDUCTION_WORK_V1: usize = 4_000_000;
 
@@ -367,14 +369,15 @@ pub fn analyze_semantic_u32_induction_no_overflow_with_limits_v1(
         semantic_mir.semantic_sha256(),
         function,
         limits,
+        None,
     )
 }
 
 /// Analyzes only a compiler-derived execution view replayed against its exact source.
 /// Certificates remain inert and cannot use the original-coordinate V1 wire format.
-/// Bounds must remain ABI arguments with no MIR definitions or direct-copy aliases. Expanded
-/// helper parameters are defined temporaries; forwarding a root bound to a helper
-/// also creates an alias. Neither case is certified by this analysis version.
+/// Helper bounds require an exact, dominating per-instance parameter transfer from
+/// a `u32` constant or unchanged parent argument, with live storage at every use.
+/// Ordinary aliases, reassignment and address exposure remain unsupported.
 pub fn analyze_expanded_semantic_u32_induction_no_overflow_v1(
     semantic_mir: &AdmittedInertSemanticMirV1,
     expansion: &crate::SemanticCallExpansionV1,
@@ -413,6 +416,7 @@ pub fn analyze_expanded_semantic_u32_induction_no_overflow_with_limits_v1(
         semantic_mir.semantic_sha256(),
         view.source_body(),
         limits,
+        view.has_expanded_calls().then_some((semantic_mir, view)),
     )?;
     if view.has_expanded_calls() {
         report.execution_view_identity = Some(*view.identity());
@@ -426,11 +430,15 @@ fn analyze_function_with_limits_v1(
     semantic_mir_sha256: InertSemanticMirSha256V1,
     function: SemanticFunctionIdV1,
     limits: SemanticU32InductionAnalysisLimitsV1,
+    execution: Option<(&AdmittedInertSemanticMirV1, &crate::SemanticExpandedRootV1)>,
 ) -> Result<SemanticU32InductionNoOverflowReportV1, SemanticU32InductionAnalysisErrorV1> {
     validate_analysis_limits_v1(limits)?;
     let mut budget = WorkBudgetV1::new(limits.work_units);
     let graph = SemanticCfgV1::analyze(declaration, &mut budget)?;
     let inventory = SemanticInventoryV1::analyze(declaration, &mut budget)?;
+    let expanded_bounds = execution
+        .map(|(source, view)| expanded_bounds::ExpandedBoundsV1::analyze(source, view, &mut budget))
+        .transpose()?;
     let mut certificates = Vec::new();
     certificates
         .try_reserve(inventory.checked_additions.len().min(limits.certificates))
@@ -442,6 +450,7 @@ fn analyze_function_with_limits_v1(
         function_id: function,
         graph: &graph,
         inventory: &inventory,
+        expanded_bounds: expanded_bounds.as_ref(),
     };
     for candidate in &inventory.checked_additions {
         budget.charge(1)?;
@@ -540,6 +549,7 @@ struct CandidateProofContextV1<'a> {
     function_id: SemanticFunctionIdV1,
     graph: &'a SemanticCfgV1,
     inventory: &'a SemanticInventoryV1,
+    expanded_bounds: Option<&'a expanded_bounds::ExpandedBoundsV1<'a>>,
 }
 
 struct SemanticInventoryV1 {
@@ -728,6 +738,7 @@ fn prove_candidate_v1(
         function_id,
         graph,
         inventory,
+        expanded_bounds,
     } = *context;
     let Some(candidate_block) = function.blocks().get(candidate.block) else {
         return Err(SemanticU32InductionAnalysisErrorV1::InvalidModel(
@@ -971,10 +982,7 @@ fn prove_candidate_v1(
         || !is_exact_u32(types, bound_ty)
         || bound_ty != induction_ty
         || bound_decl.ty() != bound_ty
-        || !matches!(bound_decl.role(), SemanticLocalRoleV1::Argument(_))
-        || definition(inventory, bound)?.count != 0
         || local(inventory.address_or_projection_hazard.as_slice(), bound)?
-        || local(inventory.direct_copy_alias.as_slice(), bound)?
         || !guard_assignment.destination().projections().is_empty()
         || guard_assignment.value().result_type() != predicate_ty
         || !is_exact_bool(types, predicate_ty)
@@ -982,6 +990,13 @@ fn prove_candidate_v1(
         || predicate_decl.role() != SemanticLocalRoleV1::Temporary
         || !definition(inventory, predicate)?.is_unique_at(guard_definition)
         || use_count(inventory, predicate)? != 1
+    {
+        return Ok(None);
+    }
+    if expanded_bounds.is_none()
+        && (!matches!(bound_decl.role(), SemanticLocalRoleV1::Argument(_))
+            || definition(inventory, bound)?.count != 0
+            || local(inventory.direct_copy_alias.as_slice(), bound)?)
     {
         return Ok(None);
     }
@@ -1082,6 +1097,35 @@ fn prove_candidate_v1(
     };
     if !definition(inventory, induction)?.is_exact_pair(initialization_site, update_site) {
         return Ok(None);
+    }
+
+    if let Some(expanded) = expanded_bounds {
+        if !expanded.same_frame(
+            bound,
+            &[induction, guard_induction, predicate, result_local],
+            &[
+                preheader_index,
+                header_index,
+                body_entry_index,
+                exit_index,
+                candidate.block,
+                update_block_index,
+            ],
+            &[
+                Some(initialization_site),
+                Some(guard_definition),
+                Some(candidate_definition),
+                Some(update_site),
+                guard_induction_snapshot,
+            ],
+        ) {
+            return Ok(None);
+        }
+        for site in [initialization_site, guard_definition, candidate_definition] {
+            if !expanded.proves_bound(bound, site, inventory, graph, budget)? {
+                return Ok(None);
+            }
+        }
     }
 
     let Some(exit) = function.blocks().get(exit_index) else {

@@ -1178,6 +1178,22 @@ def _git(repository: Path, *arguments: str) -> str:
     return result.stdout.strip()
 
 
+def _validate_committed_contract(root: Path, shared_files: dict[str, bytes]) -> None:
+    head = _git(root, "rev-parse", "--verify", "HEAD")
+    if GIT_ID.fullmatch(head) is None:
+        _fail("repository HEAD is not a full Git identity")
+    for name, expected in shared_files.items():
+        path = f"config/{name}"
+        result = subprocess.run(
+            ["git", "-C", str(root), "show", f"{head}:{path}"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if result.returncode != 0 or result.stdout != expected:
+            _fail(f"{root} {path} differs byte-for-byte from committed {head}:{path}")
+
+
 def _repository_path(root: Path, relative: Any, label: str) -> Path:
     portable = _relative_path(relative, label)
     current = root
@@ -1223,10 +1239,13 @@ def _repository_file(
 
 
 def _package_rust_source_closure(root: Path, package_root: Path, label: str) -> str:
-    digest = hashlib.sha256(SOURCE_CLOSURE_DIGEST_DOMAIN)
-    file_count = 0
-    total_bytes = 0
-    for directory, directory_names, file_names in os.walk(package_root, followlinks=False):
+    def walk_error(error: OSError) -> None:
+        _fail(f"cannot enumerate {label} package sources: {error}")
+
+    files: list[Path] = []
+    for directory, directory_names, file_names in os.walk(
+        package_root, followlinks=False, onerror=walk_error
+    ):
         directory_path = Path(directory)
         directory_names.sort()
         file_names.sort()
@@ -1238,29 +1257,39 @@ def _package_rust_source_closure(root: Path, package_root: Path, label: str) -> 
             name for name in directory_names if name not in IGNORED_PACKAGE_DIRECTORIES
         ]
         for name in file_names:
+            candidate = directory_path / name
+            if candidate.is_symlink():
+                _fail(f"{label} package contains a symlink")
             if not name.endswith(".rs"):
                 continue
-            candidate = directory_path / name
-            if candidate.is_symlink() or not candidate.is_file():
+            if not candidate.is_file():
                 _fail(f"{label} source is not a regular non-symlink file")
-            try:
-                payload = candidate.read_bytes()
-                payload.decode("utf-8")
-            except (OSError, UnicodeError) as error:
-                _fail(f"cannot read {label} source: {error}")
-            file_count += 1
-            total_bytes += len(payload)
-            if file_count > MAX_PACKAGE_SOURCE_FILES:
+            files.append(candidate)
+            if len(files) > MAX_PACKAGE_SOURCE_FILES:
                 _fail(f"{label} package source closure exceeds its file bound")
-            if total_bytes > MAX_PACKAGE_SOURCE_BYTES:
-                _fail(f"{label} package source closure exceeds its byte bound")
-            relative = candidate.relative_to(root).as_posix().encode("utf-8")
-            digest.update(len(relative).to_bytes(4, "little"))
-            digest.update(relative)
-            digest.update(len(payload).to_bytes(8, "little"))
-            digest.update(payload)
-    if file_count == 0:
+    if not files:
         _fail(f"{label} package has no Rust source files")
+
+    digest = hashlib.sha256(SOURCE_CLOSURE_DIGEST_DOMAIN)
+    total_bytes = 0
+    # Rust PathBuf::sort compares components, not flattened path strings.
+    for candidate in sorted(files, key=lambda path: path.parts):
+        relative_path = candidate.relative_to(root).as_posix()
+        _, payload = _repository_file(
+            root, relative_path, f"{label} source", maximum_bytes=MAX_PACKAGE_SOURCE_BYTES
+        )
+        try:
+            payload.decode("utf-8")
+        except UnicodeError as error:
+            _fail(f"cannot read {label} source: {error}")
+        total_bytes += len(payload)
+        if total_bytes > MAX_PACKAGE_SOURCE_BYTES:
+            _fail(f"{label} package source closure exceeds its byte bound")
+        relative = relative_path.encode("utf-8")
+        digest.update(len(relative).to_bytes(4, "little"))
+        digest.update(relative)
+        digest.update(len(payload).to_bytes(8, "little"))
+        digest.update(payload)
     return digest.hexdigest()
 
 
@@ -1428,7 +1457,11 @@ def validate_repository(
     site_repository: Path | None = None,
     *,
     require_qualified: bool = False,
+    committed_parity: bool = False,
+    check_inputs: bool = False,
 ) -> dict[str, int]:
+    if committed_parity and site_repository is None:
+        _fail("committed parity requires a tutorial repository")
     manifest_path = root / "config" / MANIFEST_NAME
     schema_path = root / "config" / SCHEMA_NAME
     manifest_bytes = _read_content_addressed(manifest_path, manifest_path.with_suffix(".sha256"))
@@ -1481,7 +1514,7 @@ def validate_repository(
     _, document = _load_json_unique(manifest_path)
     stats = validate_document(document, require_qualified=require_qualified)
     _validate_hardware_runner_inputs(root, document)
-    if require_qualified:
+    if require_qualified or check_inputs:
         _validate_qualified_repository_inputs(root, document)
 
     baseline = document["baseline"]
@@ -1500,6 +1533,7 @@ def validate_repository(
         if not stat.S_ISDIR(site_metadata.st_mode) or site_repository.is_symlink():
             _fail("tutorial repository must be a real directory")
         site_root = site_repository.resolve(strict=True)
+        shared_files = {}
         for name, expected in (
             (MANIFEST_NAME, manifest_bytes),
             (SCHEMA_NAME, schema_bytes),
@@ -1515,8 +1549,14 @@ def validate_repository(
                 _fail(f"tutorial repository config/{name} differs byte-for-byte")
             digest = candidate.with_suffix(".sha256")
             compiler_digest = root / "config" / digest.name
-            if digest.read_bytes() != compiler_digest.read_bytes():
+            digest_bytes = compiler_digest.read_bytes()
+            if digest.read_bytes() != digest_bytes:
                 _fail(f"tutorial repository config/{digest.name} differs byte-for-byte")
+            shared_files[name] = expected
+            shared_files[digest.name] = digest_bytes
+        if committed_parity:
+            _validate_committed_contract(root, shared_files)
+            _validate_committed_contract(site_root, shared_files)
 
     return stats
 
@@ -1525,6 +1565,16 @@ def main(arguments: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", type=Path, default=REPO_ROOT)
     parser.add_argument("--site-repository", type=Path)
+    parser.add_argument(
+        "--check-inputs",
+        action="store_true",
+        help="verify candidate package/lock/source inputs without upgrading qualification",
+    )
+    parser.add_argument(
+        "--committed-parity",
+        action="store_true",
+        help="also require all shared contracts in both repositories' committed HEADs",
+    )
     parser.add_argument(
         "--require-qualified",
         action="store_true",
@@ -1536,6 +1586,8 @@ def main(arguments: list[str] | None = None) -> int:
             options.repository.resolve(),
             options.site_repository,
             require_qualified=options.require_qualified,
+            committed_parity=options.committed_parity,
+            check_inputs=options.check_inputs,
         )
     except (ManifestError, OSError) as error:
         print(f"tutorial kernel manifest: {error}", file=sys.stderr)

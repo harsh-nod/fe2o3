@@ -12,8 +12,10 @@ use fe2o3_lower_mir_kernel::{
     InertCanonicalMirToKirCorrespondenceEvidenceV3, InertCanonicalMirToKirCorrespondenceEvidenceV4,
     ProductionFormalMemoryOwnerV1, ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
 };
-use fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1;
 use fe2o3_mir_model::semantic_mir_v1::*;
+use fe2o3_mir_model::{
+    InertCanonicalSemanticU32InductionEvidenceV1, analyze_semantic_u32_induction_no_overflow_v1,
+};
 use fe2o3_pliron::{
     InertProductionMiddleEndEvidenceV5, PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V5,
     PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V5, ProductionSemanticMirLimitsV1,
@@ -101,6 +103,61 @@ pub(crate) fn frozen_compiler_proof_inputs_v4() -> CanonicalCompilerProofInputsV
         correspondence: decode_frozen_hex(FROZEN_V4_CORRESPONDENCE_HEX),
         formal_memory: decode_frozen_hex(FROZEN_V4_FORMAL_MEMORY_HEX),
     }
+}
+
+/// Current induction replay over the historical original MIR, not a new V8 lowering.
+/// The frozen inputs remain unchanged; only this separate fixture's complete nested
+/// report is refreshed. Consumers must still validate all stages and their association.
+#[allow(
+    dead_code,
+    reason = "used by native V13 compiler-owner integration tests"
+)]
+pub(crate) fn current_compiler_proof_inputs_v4_from_frozen_source() -> CanonicalCompilerProofInputsV3
+{
+    let mut current = frozen_compiler_proof_inputs_v4();
+    let semantic = AdmittedInertSemanticMirV1::decode_current_production_canonical(
+        &current.semantic_mir,
+        SemanticMirLimitsV1::default(),
+    )
+    .unwrap();
+    let original =
+        InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(&current.correspondence).unwrap();
+    let retained = original.semantic_u32_induction();
+    let report = analyze_semantic_u32_induction_no_overflow_v1(
+        &semantic,
+        SemanticFunctionIdV1::from_index(retained.function()),
+    )
+    .unwrap();
+    let replay = InertCanonicalSemanticU32InductionEvidenceV1::from_report(&report).unwrap();
+    assert_eq!(
+        original.semantic_sha256(),
+        semantic.semantic_sha256().as_bytes()
+    );
+    assert_eq!(retained.semantic_mir_sha256(), replay.semantic_mir_sha256());
+    assert_eq!(retained.function(), replay.function());
+    assert_eq!(retained.function_identity(), replay.function_identity());
+    assert_eq!(retained.checked_additions_examined(), 0);
+    assert_eq!(replay.checked_additions_examined(), 0);
+    assert!(retained.certificates().is_empty());
+    assert!(replay.certificates().is_empty());
+    assert_eq!(
+        retained.canonical_bytes().len(),
+        replay.canonical_bytes().len()
+    );
+
+    // V4 ends with the complete length-delimited V1 report. Equal lengths leave
+    // every header, correspondence row and KIR binding byte unchanged.
+    let start = current
+        .correspondence
+        .len()
+        .checked_sub(retained.canonical_bytes().len())
+        .unwrap();
+    assert_eq!(&current.correspondence[start..], retained.canonical_bytes());
+    current.correspondence[start..].copy_from_slice(replay.canonical_bytes());
+    let decoded =
+        InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(&current.correspondence).unwrap();
+    assert_eq!(decoded.semantic_u32_induction(), &replay);
+    current
 }
 
 #[allow(dead_code, reason = "decodes canonical frozen source-proof fixtures")]

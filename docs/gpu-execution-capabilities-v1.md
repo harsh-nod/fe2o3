@@ -55,6 +55,10 @@ Extraction next rejects the absent protected functional-refinement runtime at
 The standalone cached Verus executable is not a replacement for that retained,
 pinned runtime closure. No source-reference proof, Bundle V8, HSACO, protected
 launch, or hardware qualification was produced by this extraction.
+The exact runtime source audit now passes on mi300x using privately staged
+pinned libraries and rustup provenance, without changing system libraries or
+manifest pins. The protected runtime has not been installed. The available
+mi350 host has a different system loader and does not match this runtime pin.
 
 Separately tested KIR value correlation accepts a guarded load as a source
 load only when its exact authenticated recipe is intact, the load precedes
@@ -85,11 +89,24 @@ and frame lifetime markers. Induction evidence V2 binds the complete recomputed
 report to the original source, aggregate expansion, and selected execution
 view. Decoding these inert records does not prove the retained claims; replay
 checks exact source-derived records and rejects report subsets or substitutions.
-The induction analysis still does not certify helper-local bounds transported
-through expanded parameters. Original-coordinate induction V1 and correspondence
-V4/V5 continue to reject expanded coordinates. Production correspondence and
-lineage composition remain unimplemented; relabeling expanded blocks as
-original blocks is forbidden.
+The induction analysis now certifies helper-local bounds transferred from exact
+`u32` constants or unchanged parent arguments. It checks each call instance,
+unique definitions, dominance, storage and move availability, and frame
+reinitialization. Reassignment, ordinary aliases, projected bounds, and
+unsupported loop shapes still reject.
+
+Correspondence V6 composes original source, checked expansion, complete per-root
+V1/V2 induction, SSA, and exact KIR through mandatory live replay. Native V13
+lineage retains distinct physical-root, selected-body, and execution-view
+identities in a versioned source envelope. Original-coordinate induction V1 and
+correspondence V4/V5 continue to reject expanded coordinates; no old wire format
+is reinterpreted. These checks do not independently prove CPU/GPU equivalence.
+
+Three native backend tests exercise V13, optimizer V6, target lowering, the
+existing opaque receipt, and independent KIR-to-LLVM replay for gfx942 and
+gfx950. Source, target, and final-graph substitutions reject. This receipt path
+already existed; no new outer capsule version was needed. The tests do not
+establish source-proof execution, machine refinement, or a GPU observation.
 
 The hardware protocol now admits compiler-only preparation separately from
 signed hardware observations. Rust verifies the newline-inclusive prepared
@@ -99,20 +116,32 @@ has not yet passed the combined Python-to-Rust positive path. Finalization
 also lacks compiler-produced typed negative-fixture receipts; caller JSON
 claiming that negatives passed cannot authorize promotion.
 
-Current component validation passes 1,511 library tests: 634 compiler, 119 MIR
-model, 166 Pliron, 185 lowering, 51 AMD model, 130 kernel analysis, 104 KIR, and
-122 verifier tests. Four verifier tests are marked ignored in the top-level
-harness: three subprocess helpers and the provisioning-dependent proof-runtime
-test.
-All 14 transaction/batch CLI tests pass. These are component tests, not
-all-kernel equivalence or GPU evidence. Strict Clippy is not clean: existing
-style diagnostics remain in the MIR model and proof-contract dependency.
-The tutorial website passes 189 unit tests, 40 desktop/mobile browser tests,
-corpus validation, lint, type checking, and its production build; final wording
-also passes the focused desktop/mobile checks. Qualification status still
-comes from the unchanged migration manifest.
-The separate site-to-compiler manifest parity check still rejects this
-checkpoint; the website is not ready for deployment.
+Python and Rust now hash package sources in the same component order, excluding
+only `target` directories. A shared digest vector covers prefix collisions and
+creation order; all 47 checked-in fixture input contracts pass the Rust
+production admission check without rewriting their expected hashes in the test.
+The 37 refreshed input contracts do not create fresh production observations:
+retained export diagnostics are explicitly historical and all kernels remain
+unqualified. `--check-inputs` validates current inputs without promoting them;
+`--committed-parity` additionally requires exact shared contract bytes in both
+repositories' committed HEADs.
+
+Current component validation passes 1,585 library tests: 645 compiler, 128 MIR
+model, 166 Pliron, 200 lowering, 51 AMD model, 130 kernel analysis, 104 KIR,
+39 shared lineage, and 122 verifier tests. Four verifier tests remain ignored:
+three subprocess helpers and the provisioning-dependent proof-runtime test.
+The selected native capability verifier integration suite passes 17 tests,
+including rejection of unchanged historical evidence with a stale work report.
+This is not a full-workspace test result or all-kernel equivalence evidence.
+Strict Clippy is not clean: existing style diagnostics remain in the MIR model
+and proof-contract dependency.
+
+The tutorial website passes 198 unit tests, corpus validation, lint, type
+checking, and its production build. The updated capability page also passes
+desktop/mobile browser checks and overflow checks. Qualification remains 0 of
+47; neither these component results nor contract parity establishes a complete
+source-proof, machine-refinement, artifact, and hardware chain. No deployment
+is claimed by this checkpoint.
 
 ## Decision
 

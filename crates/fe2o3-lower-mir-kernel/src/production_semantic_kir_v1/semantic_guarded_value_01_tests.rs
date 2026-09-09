@@ -1,4 +1,4 @@
-mod guarded_value_tests {
+pub(super) mod guarded_value_tests {
     use super::*;
     use fe2o3_kernel_ir::{GlobalCapabilityBindV1, GlobalCapabilityIndexV1, IntegerSwitchCase};
     use fe2o3_mir_model::semantic_mir_v1::*;
@@ -869,7 +869,8 @@ mod guarded_value_tests {
         assert_eq!(exact.remaining, 0);
     }
 
-    fn admitted_global_load_owner() -> ProductionSemanticKirOwnerV1 {
+    pub(in crate::production_semantic_kir_v1) fn admitted_global_load_owner()
+    -> ProductionSemanticKirOwnerV1 {
         let [
             unit,
             element,

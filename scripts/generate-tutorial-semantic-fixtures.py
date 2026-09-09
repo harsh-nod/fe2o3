@@ -397,6 +397,8 @@ def diagnostic_identity_sha256(
 def bind_production_export(
     fixture: dict[str, Any], kernel: dict[str, Any], export: dict[str, Any]
 ) -> dict[str, Any]:
+    # Retained blocked diagnostics may be historical after an input-only refresh.
+    # Rebinding checks metadata consistency, not fresh observation or reproduction.
     bound = copy.deepcopy(export)
     if bound["status"] == "blocked":
         bound["diagnosticIdentitySha256"] = diagnostic_identity_sha256(

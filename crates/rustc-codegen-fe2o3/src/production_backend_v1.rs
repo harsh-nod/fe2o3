@@ -762,6 +762,8 @@ mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
 
+    include!("production_backend_v1/native_lineage_tests.rs");
+
     struct SyntheticBackendV1;
 
     #[derive(Clone, Copy)]

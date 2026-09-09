@@ -70,6 +70,11 @@ const CORRESPONDENCE_V5_MAGIC: [u8; 8] = *b"F2M2K5\0\0";
 const CORRESPONDENCE_V5_IDENTITY_DOMAIN: &[u8] =
     b"FE2O3/EXACT-FUNCTION-MIR-TO-KIR-CORRESPONDENCE-EVIDENCE/V5\0";
 
+mod expanded_source_evidence_v2;
+pub use expanded_source_evidence_v2::{
+    EXPANDED_SOURCE_EVIDENCE_MAGIC_V2, ExpandedSourceRootV2, InertExpandedSourceEvidenceV2,
+};
+
 /// The two refinement boundaries whose exact receipt bytes may be associated by W6.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InertCapabilityRefinementReceiptKindV1 {
@@ -152,7 +157,11 @@ impl InertCapabilityRefinementReceiptV1 {
             return Err(InertStaticCapabilityEvidenceAssociationErrorV1::RefinementReceiptTooLarge);
         }
         if kind == InertCapabilityRefinementReceiptKindV1::SourceMirToKir {
-            ParsedSourceRefinementJoinV1::decode(&canonical_preimage)?;
+            if canonical_preimage.starts_with(&expanded_source_evidence_v2::JOIN_MAGIC) {
+                expanded_source_evidence_v2::decode_join(&canonical_preimage)?;
+            } else {
+                ParsedSourceRefinementJoinV1::decode(&canonical_preimage)?;
+            }
         }
         let typed_machine_refinement =
             if kind == InertCapabilityRefinementReceiptKindV1::Machine {
@@ -254,7 +263,8 @@ impl InertCapabilityRefinementReceiptV1 {
         self.typed_machine_refinement.as_ref()
     }
 
-    /// Revalidates a source receipt against the exact final lineage and ordered subject roster.
+    /// Revalidates a version-tagged source receipt against final lineage and ordered subjects.
+    /// V1 and expanded V2 inner schemas remain distinct; neither decoder grants authority.
     pub fn validate_source_subject_roster_v1(
         &self,
         final_lineage: &InertMultiRootProofLineageV3,
@@ -263,18 +273,45 @@ impl InertCapabilityRefinementReceiptV1 {
         if self.kind != InertCapabilityRefinementReceiptKindV1::SourceMirToKir {
             return Err(InertStaticCapabilityEvidenceAssociationErrorV1::WrongRefinementKind);
         }
+        if self
+            .canonical_preimage
+            .starts_with(&expanded_source_evidence_v2::JOIN_MAGIC)
+        {
+            return expanded_source_evidence_v2::validate_receipt(
+                &self.canonical_preimage,
+                final_lineage,
+                subjects,
+            );
+        }
         let join = ParsedSourceRefinementJoinV1::decode(&self.canonical_preimage)?;
         let source = ParsedSourceEvidenceV1::decode(join.source_evidence)?;
         validate_source_evidence_against_lineage_v1(&source, final_lineage)?;
+        join.validate_subjects(
+            final_lineage,
+            subjects,
+            source.semantic_mir_sha256,
+            source.roots.len(),
+        )
+    }
+}
+
+impl ParsedSourceRefinementJoinV1<'_> {
+    fn validate_subjects(
+        &self,
+        final_lineage: &InertMultiRootProofLineageV3,
+        subjects: &[CapabilitySubjectV1],
+        semantic_mir_sha256: [u8; 32],
+        root_count: usize,
+    ) -> Result<(), InertStaticCapabilityEvidenceAssociationErrorV1> {
         let lineage = final_lineage.identity();
         let neutral = final_lineage.neutral_kir();
-        if join.lineage != lineage
-            || join.semantic_mir_sha256 != source.semantic_mir_sha256
-            || join.final_kir_sha256 != neutral.digest()
-            || join.final_kir_bytes != neutral.canonical_length()
-            || join.final_epoch != neutral.graph_epoch()
-            || join.root_count != source.roots.len()
-            || subjects.len() != source.roots.len()
+        if self.lineage != lineage
+            || self.semantic_mir_sha256 != semantic_mir_sha256
+            || self.final_kir_sha256 != neutral.digest()
+            || self.final_kir_bytes != neutral.canonical_length()
+            || self.final_epoch != neutral.graph_epoch()
+            || self.root_count != root_count
+            || subjects.len() != root_count
         {
             return Err(InertStaticCapabilityEvidenceAssociationErrorV1::RefinementSubjectMismatch);
         }
@@ -315,6 +352,21 @@ struct ParsedSourceRefinementJoinV1<'a> {
 
 impl<'a> ParsedSourceRefinementJoinV1<'a> {
     fn decode(bytes: &'a [u8]) -> Result<Self, InertStaticCapabilityEvidenceAssociationErrorV1> {
+        Self::decode_frame(
+            bytes,
+            SOURCE_REFINEMENT_JOIN_MAGIC_V1,
+            SOURCE_REFINEMENT_JOIN_VERSION_V1,
+            SOURCE_REFINEMENT_JOIN_IDENTITY_DOMAIN_V1,
+        )
+    }
+
+    // Only framing is shared. Callers select an exact version and validate its own source schema.
+    fn decode_frame(
+        bytes: &'a [u8],
+        magic: [u8; 8],
+        version: u16,
+        domain: &[u8],
+    ) -> Result<Self, InertStaticCapabilityEvidenceAssociationErrorV1> {
         if bytes.len() > MAX_CAPABILITY_REFINEMENT_RECEIPT_BYTES_V1
             || bytes.len()
                 < SOURCE_REFINEMENT_JOIN_HEADER_BYTES_V1 + SOURCE_REFINEMENT_JOIN_TERMINAL_BYTES_V1
@@ -324,8 +376,8 @@ impl<'a> ParsedSourceRefinementJoinV1<'a> {
             );
         }
         let mut reader = SourceEvidenceReaderV1::new(bytes);
-        if reader.fixed::<8>()? != SOURCE_REFINEMENT_JOIN_MAGIC_V1
-            || reader.u16()? != SOURCE_REFINEMENT_JOIN_VERSION_V1
+        if reader.fixed::<8>()? != magic
+            || reader.u16()? != version
             || reader.u16()? != SOURCE_REFINEMENT_JOIN_POLICY_V1
             || reader.u32()? != 0
             || reader.usize_u32()? != bytes.len()
@@ -366,12 +418,7 @@ impl<'a> ParsedSourceRefinementJoinV1<'a> {
         let terminal = reader.fixed::<SOURCE_REFINEMENT_JOIN_TERMINAL_BYTES_V1>()?;
         reader.finish()?;
         let preimage_len = bytes.len() - SOURCE_REFINEMENT_JOIN_TERMINAL_BYTES_V1;
-        if terminal
-            != derive_identity(
-                SOURCE_REFINEMENT_JOIN_IDENTITY_DOMAIN_V1,
-                &bytes[..preimage_len],
-            )
-        {
+        if terminal != derive_identity(domain, &bytes[..preimage_len]) {
             return Err(
                 InertStaticCapabilityEvidenceAssociationErrorV1::InvalidSourceRefinementReceipt,
             );

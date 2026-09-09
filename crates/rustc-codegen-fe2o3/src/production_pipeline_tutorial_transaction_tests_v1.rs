@@ -7,6 +7,50 @@ mod tests {
     };
 
     #[test]
+    fn source_closure_matches_python_component_order_vector() {
+        // Shared with scripts/tests/tutorial_kernel_manifest.py; neither walk order
+        // nor flattened string order gives this component-ordered preimage.
+        let files = [
+            ("package/a/z.rs", b"// nested\n".as_slice()),
+            ("package/a.rs", b"// sibling\n".as_slice()),
+            ("package/z.rs", b"// root\n".as_slice()),
+        ];
+        let mut reversed = files;
+        reversed.reverse();
+        for order in [files, reversed] {
+            let root = crate::test_temp_dir::TestTempDir::create("fe2o3-source-order");
+            for (relative, payload) in order {
+                let path = root.path().join(relative);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, payload).unwrap();
+            }
+            assert_eq!(
+                hex_sha256(
+                    &source_closure_preimage(root.path(), &root.path().join("package")).unwrap()
+                ),
+                "64bb18500b041f175dc8c2eb304349a0facc1a170281e62feac3d821cfd84224"
+            );
+        }
+    }
+
+    #[test]
+    fn every_checked_in_fixture_input_matches_production_admission() {
+        let repository = test_repository();
+        let manifest = parse_repository_document(
+            &fs::read(repository.join(MANIFEST_PATH)).unwrap(),
+            "tutorial manifest",
+        )
+        .unwrap();
+        let fixtures = manifest["compilerFixtures"].as_array().unwrap();
+        assert_eq!(fixtures.len(), 47);
+        for fixture in fixtures {
+            let request = serde_json::json!({"fixture": fixture});
+            validate_compiler_inputs(&repository, &request)
+                .unwrap_or_else(|error| panic!("{}: {error}", fixture["fixtureId"]));
+        }
+    }
+
+    #[test]
     fn stale_request_binding_has_stable_diagnostic() {
         let request = serde_json::json!({
             "candidate": {},

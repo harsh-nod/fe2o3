@@ -775,6 +775,8 @@ run_auxiliary_tests() {
     bash scripts/tests/compiler-execution-deployment-bundle.sh
   run_step compiler-execution-qualification-base-contract \
     bash scripts/tests/compiler-execution-qualification-base.sh
+  run_step functional-refinement-runtime-sources \
+    python3 scripts/tests/functional_refinement_runtime_sources.py
   run_step s09-debug-checker bash scripts/tests/s09-debug.sh
 }
 
