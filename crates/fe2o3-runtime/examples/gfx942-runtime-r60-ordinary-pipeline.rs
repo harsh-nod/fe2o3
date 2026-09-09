@@ -42,7 +42,10 @@ mod enabled {
         or: gfx942-runtime-r60-ordinary-pipeline UNIQUE_ID benchmark SOURCE_COMMIT RUN_ID";
 
     fn failure(error: impl core::fmt::Debug) -> String {
-        format!("{error:?}")
+        let message = format!("{error:?}");
+        // Live native custody can require abort-on-drop before main sees this error.
+        eprintln!("R60 operation failed before cleanup: {message}");
+        message
     }
 
     fn unique_id(text: &str) -> Result<u64, String> {
@@ -151,7 +154,7 @@ mod enabled {
             if !submissions.is_empty() || submissions.capacity() < DEPTH {
                 return Err("submission storage must be empty and preallocated".to_owned());
             }
-            for _ in 0..DEPTH {
+            for index in 0..DEPTH {
                 submissions.push(
                     self.context
                         .launch(
@@ -161,10 +164,12 @@ mod enabled {
                             GFX942_VECADD_QUALIFICATION_GEOMETRY_V1,
                             &[],
                         )
-                        .map_err(failure)?,
+                        .map_err(|error| failure(format!("launch {index}: {error:?}")))?,
                 );
-                // Launch enqueues; flush publishes without observing completion.
-                self.context.flush_stream(self.stream).map_err(failure)?;
+                // Flush also covers launches needing explicit host publication progress.
+                self.context
+                    .flush_stream(self.stream)
+                    .map_err(|error| failure(format!("flush {index}: {error:?}")))?;
             }
             Ok(())
         }
@@ -186,7 +191,7 @@ mod enabled {
                 .map_err(failure)?
                 != RuntimePollV1::Succeeded
             {
-                return Err("pipeline tail did not succeed before the deadline".to_owned());
+                return Err(failure("pipeline tail did not succeed before the deadline"));
             }
             let performance = self
                 .context
@@ -197,13 +202,13 @@ mod enabled {
                 || performance.user_data_materializations() != 0
                 || performance.persistent_control_reused()
             {
-                return Err(format!(
+                return Err(failure(format!(
                     "unexpected ordinary pipeline data path: {performance:?}"
-                ));
+                )));
             }
             for submission in &mut submissions {
                 if self.context.poll(submission).map_err(failure)? != RuntimePollV1::Succeeded {
-                    return Err("submission did not succeed after tail completion".to_owned());
+                    return Err(failure("submission did not succeed after tail completion"));
                 }
             }
             self.context
@@ -280,11 +285,13 @@ mod enabled {
                 let remaining = COMPLETION_TIMEOUT.saturating_sub(issued.duration_since(started));
                 if self.context.wait(tail, remaining).map_err(failure)? != RuntimePollV1::Succeeded
                 {
-                    return Err("benchmark tail did not succeed before the deadline".to_owned());
+                    return Err(failure(
+                        "benchmark tail did not succeed before the deadline",
+                    ));
                 }
                 let completed = Instant::now();
                 if completed.duration_since(started) > COMPLETION_TIMEOUT {
-                    return Err("benchmark batch exceeded the deadline".to_owned());
+                    return Err(failure("benchmark batch exceeded the deadline"));
                 }
                 for submission in &mut submissions {
                     if self.context.poll(submission).map_err(failure)? != RuntimePollV1::Succeeded {

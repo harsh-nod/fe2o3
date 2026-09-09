@@ -11,11 +11,9 @@ fn each_enqueued_launch_is_explicitly_published_without_observing_completion() {
         .split("fn qualify(")
         .next()
         .unwrap();
-    let loop_start = issue.find("for _ in 0..DEPTH {").unwrap();
+    let loop_start = issue.find("for index in 0..DEPTH {").unwrap();
     let launch = issue.find(".launch(").unwrap();
-    let flush = issue
-        .find("self.context.flush_stream(self.stream)")
-        .unwrap();
+    let flush = issue.find(".flush_stream(self.stream)").unwrap();
     let loop_end = issue.rfind("}\n            Ok(())").unwrap();
     assert!(loop_start < launch && launch < flush && flush < loop_end);
     assert_eq!(issue.matches(".launch(").count(), 1);

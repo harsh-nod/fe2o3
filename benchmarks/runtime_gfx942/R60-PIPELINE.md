@@ -46,7 +46,9 @@ barrier bit. It checks queue capacity before timing without spinning for space.
 HIP uses one `hipStreamNonBlocking` stream, the exact module bytes already
 hashed in memory, and `hipHostMallocMapped | hipHostMallocCoherent` buffers.
 KFD performs 64 public `launch` calls and 64 `flush_stream` calls inside issue
-timing, because launch alone enqueues host work. Its
+timing to cover work needing explicit host publication progress. Eligible
+launches may already publish during `launch`; any resulting no-op flush remains
+included in this benchmark. Its
 `issue_api_calls_per_batch` is therefore 128. HSA reports 192: each
 publication calls `hsa_signal_store_screlease` to rearm its completion signal,
 `hsa_queue_add_write_index_relaxed` to reserve its slot, and
