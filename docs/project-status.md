@@ -1504,8 +1504,12 @@ Every recipe packet uses `WaitForPrior`, so R52 does not claim concurrent
 kernel execution. The shared completion arena and ring capacity can impose a
 lower practical bound. General multi-recipe or shared-buffer DAGs, hardware
 ordering/completion truth, native performance gains, and HIP/HSA parity remain
-open. The existing runtime model is not a refinement of this production state
-machine, and no MI300X benchmark evidence is attached. See the
+open. R60 adds an independent executable and 46-obligation Verus model for this
+bounded ordinary pipeline, including exact same-recipe `WaitForPrior` early
+publication, and supersedes the older R13 model only on that abstract surface.
+SDMA stream tails, cross-lane dependencies, and general multi-recipe scheduling
+remain excluded. It does not refine this production state machine, and no
+MI300X benchmark evidence is attached. See the
 [R52 claim boundary](../crates/fe2o3-kfd/docs/r52-native-fixed-dispatch-multi-inflight-v1.md).
 
 ## Runtime R57 Status

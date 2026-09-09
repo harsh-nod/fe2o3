@@ -174,8 +174,15 @@ model and Verus development cover bounded abstract multi-queue custody,
 generation, dependency, cancellation, drain, and currentness properties only;
 the model's larger configurable queue bound is not a runtime capability. R13
 adds a separate abstract logical-stream leasing model; it likewise is not a
-Rust-to-Verus refinement of the concrete scheduler. These
-proofs are not a refinement proof of the Rust KFD implementation and make no
+Rust-to-Verus refinement of the concrete scheduler. R60 supersedes R13 only
+for an independent bounded ordinary fixed-dispatch pipeline model: it separates
+exact ordinary same-recipe `WaitForPrior` chaining from explicit success
+dependencies and proves abstract
+64-epoch, exact-recipe, retry, quarantine, contiguous-commit, and cancellation
+properties. SDMA stream tails, SDMA producers and successors, cross-lane
+dependencies, and general multi-recipe scheduling remain outside R60. It does
+not consume a production snapshot or add a machine-checked Rust-to-Verus
+bridge. These proofs are not a refinement proof of the Rust KFD implementation and make no
 Rust-to-Verus, compiler-to-ISA, firmware, or hardware refinement claim. The
 runtime therefore remains below this parity profile. The additive R16 Worker V5
 model raises the authenticated totals to 193 obligations and 121 rejected
