@@ -18,6 +18,50 @@ const PT_GNU_STACK: u32 = 0x6474_e551;
 const PT_GNU_RELRO: u32 = 0x6474_e552;
 
 #[test]
+fn gfx950_envelope_is_explicit_and_never_admitted_as_gfx942() {
+    let gfx942 = fixture();
+    let mut gfx950 = fixture();
+    write_u32(&mut gfx950, 48, 0x64f);
+    let profile = AdmittedProfile::Gfx950XnackOffCov6;
+    let admitted = validate(&gfx950, profile).unwrap();
+    assert_eq!(admitted.plan().profile(), profile);
+    assert_eq!(profile.target(), "gfx950:xnack-");
+    assert_eq!(profile.elf_flags(), 0x64f);
+    assert_eq!(
+        profile.profile_id(),
+        fe2o3_amdhsa_loader::GFX950_LOADER_PROFILE_ID
+    );
+    assert_ne!(profile.profile_id(), fe2o3_amdhsa_loader::LOADER_PROFILE_ID);
+    assert!(matches!(
+        plan(&gfx950, AdmittedProfile::Gfx942XnackOffCov6),
+        Err(PlanError::UnsupportedElfFlags(0x64f))
+    ));
+    assert!(matches!(
+        plan(&gfx942, profile),
+        Err(PlanError::UnsupportedElfFlags(0x64c))
+    ));
+    let owned = validate_owned(gfx950, profile).unwrap();
+    assert_eq!(owned.validated().plan().profile(), profile);
+}
+
+#[test]
+fn gfx950_rejects_target_feature_variants_and_truncated_inputs() {
+    let profile = AdmittedProfile::Gfx950XnackOffCov6;
+    let mut bytes = fixture();
+    for flags in [0x4f, 0x54f, 0x74f, 0xa4f, 0xe4f, 0x0100_064f] {
+        write_u32(&mut bytes, 48, flags);
+        assert!(matches!(
+            plan(&bytes, profile),
+            Err(PlanError::UnsupportedElfFlags(actual)) if actual == flags
+        ));
+    }
+    write_u32(&mut bytes, 48, profile.elf_flags());
+    for end in [0, 63, 64, 0x213, bytes.len() - 1] {
+        assert!(plan(&bytes[..end], profile).is_err());
+    }
+}
+
+#[test]
 fn builds_a_canonical_inert_plan() {
     let bytes = fixture();
     let plan = plan(&bytes, AdmittedProfile::Gfx942XnackOffCov6).unwrap();

@@ -19,6 +19,18 @@ partition constant without losing the observed values. The fixed
 kernel-owned render and PCI symlinks are resolved deliberately; symlinks in
 the KFD topology tree and regular-file inputs remain prohibited.
 
+`topology::discover_default_topology_for_target(GfxTarget::Gfx950)` adds the
+same bounded, correlated read-only discovery for a homogeneous gfx950 host.
+`discover_default_topology()` remains gfx942-only; either explicit target
+rejects a mixed-target inventory rather than hiding other GPUs. The
+`kfd-topology [gfx942|gfx950]` example exposes this selection without opening
+device descriptors. This is not MI350 device, XNACK, memory, queue, or dispatch
+admission. Gfx950 observations cannot obtain the gfx942 queue-resource plan or
+gfx942 XGMI-route token, and gfx950 loader closures reject at both gfx942
+executable-preparation paths. An MI350 execution profile still requires its
+own reviewed device/driver/firmware admission, queue-resource geometry,
+currentness, and memory/queue integration; see issue #274.
+
 The public safe API does not expose file descriptors or raw ioctl arguments.
 The R1 composition path consumes an explicitly selected unique ID and returns a
 non-cloneable `CheckedGfx942XnackMinusDevice`. It retains `/dev/kfd` and the

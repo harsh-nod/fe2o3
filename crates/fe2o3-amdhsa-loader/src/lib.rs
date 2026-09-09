@@ -35,6 +35,7 @@ const ELF_ABI_VERSION_COV6: u8 = 4;
 const ELF_TYPE_DYNAMIC: u16 = 3;
 const ELF_MACHINE_AMDGPU: u16 = 224;
 const ELF_FLAGS_GFX942_XNACK_OFF: u32 = 0x64c;
+const ELF_FLAGS_GFX950_XNACK_OFF: u32 = 0x64f;
 
 const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
@@ -93,6 +94,8 @@ const AMDGPU_NOTE_NAME: &[u8] = b"AMDGPU\0";
 
 /// Stable name of this data-only parser/planner profile.
 pub const LOADER_PROFILE_ID: &str = "fe2o3-amdhsa-cov6-gfx942-xnack-off-envelope-v1";
+/// Data-only gfx950 envelope profile, not KFD device or queue admission.
+pub const GFX950_LOADER_PROFILE_ID: &str = "fe2o3-amdhsa-cov6-gfx950-xnack-off-envelope-v1";
 /// Largest byte slice accepted by the parser (64 MiB).
 pub const MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
 /// Largest number of ELF program headers accepted before profile checks.
@@ -108,11 +111,14 @@ pub const LOAD_ALIGNMENT: u64 = 4096;
 /// Largest total virtual span covered by the admitted load plan (64 MiB).
 pub const MAX_IMAGE_SPAN_BYTES: u64 = 64 * 1024 * 1024;
 
-/// The only code-object envelope admitted by this foundation.
+/// Exact code-object envelopes admitted by this data-only foundation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AdmittedProfile {
     /// AMDHSA COV6 for `gfx942:xnack-`, with SRAM-ECC left unspecified.
     Gfx942XnackOffCov6,
+    /// AMDHSA COV6 for `gfx950:xnack-`, with SRAM-ECC left unspecified.
+    /// This grants no compatibility with the gfx942 KFD execution profile.
+    Gfx950XnackOffCov6,
 }
 
 impl AdmittedProfile {
@@ -120,6 +126,7 @@ impl AdmittedProfile {
     pub const fn target(self) -> &'static str {
         match self {
             Self::Gfx942XnackOffCov6 => "gfx942:xnack-",
+            Self::Gfx950XnackOffCov6 => "gfx950:xnack-",
         }
     }
 
@@ -127,6 +134,22 @@ impl AdmittedProfile {
     pub const fn elf_flags(self) -> u32 {
         match self {
             Self::Gfx942XnackOffCov6 => ELF_FLAGS_GFX942_XNACK_OFF,
+            Self::Gfx950XnackOffCov6 => ELF_FLAGS_GFX950_XNACK_OFF,
+        }
+    }
+
+    /// Profile-specific domain separator for the selected-kernel closure.
+    pub const fn profile_id(self) -> &'static str {
+        match self {
+            Self::Gfx942XnackOffCov6 => LOADER_PROFILE_ID,
+            Self::Gfx950XnackOffCov6 => GFX950_LOADER_PROFILE_ID,
+        }
+    }
+
+    const fn processor(self) -> &'static str {
+        match self {
+            Self::Gfx942XnackOffCov6 => "gfx942",
+            Self::Gfx950XnackOffCov6 => "gfx950",
         }
     }
 }
