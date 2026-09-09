@@ -1344,6 +1344,38 @@ enum FixedDispatchSubmissionFailureV1 {
     Terminal(ComputeAqlQueueSessionErrorV1),
 }
 
+/// Classified result of publishing an already-bound ordinary fixed dispatch.
+///
+/// A rejected or retryable failure proves that no packet became visible. A
+/// retryable failure additionally proves that the immutable binding was
+/// restored after a transient reservation failure. A terminal failure means
+/// the queue and process-global KFD gate were poisoned; callers must retain all
+/// logical custody until process teardown.
+#[derive(Debug)]
+pub enum Gfx942FixedDispatchSubmissionFailureV1 {
+    RejectedBeforeSideEffect(ComputeAqlQueueSessionErrorV1),
+    RetryableBeforeSideEffect(ComputeAqlQueueSessionErrorV1),
+    Terminal(ComputeAqlQueueSessionErrorV1),
+}
+
+impl Gfx942FixedDispatchSubmissionFailureV1 {
+    pub const fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        match self {
+            Self::RejectedBeforeSideEffect(error)
+            | Self::RetryableBeforeSideEffect(error)
+            | Self::Terminal(error) => error,
+        }
+    }
+
+    pub fn into_error(self) -> ComputeAqlQueueSessionErrorV1 {
+        match self {
+            Self::RejectedBeforeSideEffect(error)
+            | Self::RetryableBeforeSideEffect(error)
+            | Self::Terminal(error) => error,
+        }
+    }
+}
+
 impl FixedDispatchSubmissionFailureV1 {
     fn into_error(self) -> ComputeAqlQueueSessionErrorV1 {
         match self {
@@ -4286,6 +4318,12 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
         &mut self,
     ) -> Result<Gfx942DispatchBatchV1<N>, ComputeAqlQueueSessionErrorV1> {
         self.session.submit_fixed_dispatch::<N>()
+    }
+
+    pub fn submit_fixed_dispatch_classified_v1<const N: usize>(
+        &mut self,
+    ) -> Result<Gfx942DispatchBatchV1<N>, Gfx942FixedDispatchSubmissionFailureV1> {
+        self.session.submit_fixed_dispatch_classified_v1::<N>()
     }
 
     /// Publishes a real fixed batch and records one addressless source event
@@ -15922,6 +15960,17 @@ mod tests {
                     Gfx942DispatchBindingErrorV1::ResourcePhase
                 ))
             ));
+            assert!(matches!(
+                session.submit_fixed_dispatch_classified_v1::<1>(),
+                Err(
+                    Gfx942FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(
+                        ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                            Gfx942DispatchBindingErrorV1::ResourcePhase
+                        )
+                    )
+                )
+            ));
+            assert!(!session.terminal_poisoned);
             assert!(matches!(
                 session.detach_recycled_fixed_dispatch(),
                 Err(ComputeAqlQueueSessionErrorV1::DispatchBinding(

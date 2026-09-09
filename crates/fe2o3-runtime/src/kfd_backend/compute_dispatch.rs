@@ -186,6 +186,59 @@ pub(super) fn admitted_compute_lane_v1(
     }
 }
 
+pub(super) fn early_pipeline_access_is_admitted_v1(bindings: &[BackendBindingV1]) -> bool {
+    bindings.iter().all(|binding| {
+        binding.region.access != RuntimeAccessV1::ReadWrite
+            && !bindings.iter().any(|other| {
+                other.region.allocation == binding.region.allocation
+                    && other.region.access != binding.region.access
+            })
+    })
+}
+
+pub(super) fn early_pipeline_launch_is_admitted_v1(
+    semantic_launch: KfdRuntimeSemanticLaunchV1,
+    bindings: &[BackendBindingV1],
+) -> bool {
+    semantic_launch == KfdRuntimeSemanticLaunchV1::Ordinary
+        && early_pipeline_access_is_admitted_v1(bindings)
+}
+
+#[cfg(test)]
+pub(super) const fn explicit_dependency_succeeded_v1(status: BackendPollV1) -> bool {
+    matches!(status, BackendPollV1::Succeeded)
+}
+
+pub(super) const fn ordered_predecessor_completed_v1(status: BackendPollV1) -> bool {
+    !matches!(status, BackendPollV1::Pending)
+}
+
+pub(super) const fn ordered_successor_lane_matches_v1(
+    stream_lane: Option<usize>,
+    predecessor_lane: usize,
+) -> bool {
+    matches!(stream_lane, Some(lane) if lane == predecessor_lane)
+}
+
+pub(super) fn ordinary_compute_recipes_match_v1(
+    left: &OwnedComputeLaunchV1,
+    right: &OwnedComputeLaunchV1,
+) -> bool {
+    left == right
+}
+
+pub(super) fn retain_unique_native_dirty_extent_v1(
+    dirty: &mut Vec<NativeDirtyExtentV1>,
+    extent: NativeDirtyExtentV1,
+) -> bool {
+    if dirty.contains(&extent) {
+        false
+    } else {
+        dirty.push(extent);
+        true
+    }
+}
+
 pub(super) fn apply_persistent_compute_effect_v1(
     record: &mut AllocationRecordV1,
     effect: Gfx942PersistentComputeEffectV1,
@@ -222,16 +275,14 @@ pub(super) fn recycled_dispatch_reuse_is_admitted_v1(
 impl KfdRuntimeBackendV1 {
     pub(super) fn collect_compute_dependencies_v1(
         &self,
-        stream: u64,
         dependencies: &[u64],
-    ) -> Result<Vec<u64>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+    ) -> Result<Box<[u64]>, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         if dependencies.len() > MAX_RUNTIME_DEPENDENCIES_V1 {
             return Err(Self::capacity("KFD compute dependency capacity exceeded"));
         }
-        let extra_tail = usize::from(self.stream_submission_tails.contains_key(&stream));
         let mut submissions = Vec::new();
         submissions
-            .try_reserve_exact(dependencies.len().saturating_add(extra_tail))
+            .try_reserve_exact(dependencies.len())
             .map_err(|_| Self::capacity("KFD compute dependency allocation failed"))?;
         for event_handle in dependencies {
             let event = self.events.get(event_handle).ok_or_else(|| {
@@ -273,27 +324,7 @@ impl KfdRuntimeBackendV1 {
             }
             submissions.push(event.submission);
         }
-        if let Some(tail) = self.stream_submission_tails.get(&stream).copied()
-            && !submissions.contains(&tail)
-        {
-            if submissions.len() == MAX_RUNTIME_DEPENDENCIES_V1 {
-                return Err(Self::capacity(
-                    "KFD compute dependency capacity exceeded by stream ordering",
-                ));
-            }
-            if self
-                .submissions
-                .get(&tail)
-                .is_some_and(|record| matches!(record.status, BackendPollV1::Failed { .. }))
-            {
-                return Err(Self::rejected(
-                    KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                    "prior work in the KFD stream completed with failure",
-                ));
-            }
-            submissions.push(tail);
-        }
-        Ok(submissions)
+        Ok(submissions.into_boxed_slice())
     }
 
     pub(super) fn validate_compute_launch_v1(
@@ -705,25 +736,178 @@ impl KfdRuntimeBackendV1 {
         lane: usize,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.with_compute_lane_state_v1(lane, |backend| {
-            let mut active = backend.active.take().expect("selected active lane");
-            let execution = active
-                .execution
-                .take()
-                .expect("active submission retains execution custody");
+            let ordinary_native_lane = if backend
+                .active
+                .as_ref()
+                .and_then(|active| active.execution.as_ref())
+                .is_some_and(|execution| {
+                    matches!(
+                        execution,
+                        ActiveComputeExecutionV1::MaterializedPrepared { .. }
+                            | ActiveComputeExecutionV1::Materialized(_)
+                    )
+                }) {
+                Some(backend.selected_native_compute_lane_v1().map_err(|_| {
+                    backend.terminal_error(
+                        "published KFD submission lost its exact physical compute lane",
+                    )
+                })?)
+            } else {
+                None
+            };
+            let Some(mut active) = backend.active.take() else {
+                return Err(backend
+                    .terminal_error("selected KFD compute lane lost its logical frontier owner"));
+            };
+            let Some(execution) = active.execution.take() else {
+                backend.active = Some(active);
+                return Err(
+                    backend.terminal_error("active KFD submission lost its execution custody")
+                );
+            };
             match execution {
+                ActiveComputeExecutionV1::MaterializedPrepared { profile } => {
+                    let native_lane = ordinary_native_lane
+                        .expect("prepared materialized execution validated its native lane");
+                    let publication_started = Instant::now();
+                    let publication =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            backend
+                                .queue
+                                .as_mut()
+                                .expect("prepared materialized submission retains queue")
+                                .with_compute_lane_v1(native_lane, |queue| {
+                                    queue.submit_fixed_dispatch_classified_v1::<1>()
+                                })
+                        }));
+                    let publication = match publication {
+                        Ok(Ok(publication)) => publication,
+                        Ok(Err(error)) => {
+                            active.execution = Some(
+                                ActiveComputeExecutionV1::MaterializedPrepared { profile },
+                            );
+                            backend.active = Some(active);
+                            return Err(backend.terminal_error(format!(
+                                "KFD compute-lane selection before prepared publication: {error}"
+                            )));
+                        }
+                        Err(payload) => {
+                            active.execution = Some(
+                                ActiveComputeExecutionV1::MaterializedPrepared { profile },
+                            );
+                            backend.active = Some(active);
+                            let _ = backend.terminal_error(
+                                "KFD prepared materialized publication unwound with logical custody",
+                            );
+                            std::panic::resume_unwind(payload);
+                        }
+                    };
+                    let batch = match publication {
+                        Ok(batch) => batch,
+                        Err(
+                            Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(_),
+                        ) => {
+                            active.performance.publication += publication_started.elapsed();
+                            active.execution = Some(
+                                ActiveComputeExecutionV1::MaterializedPrepared { profile },
+                            );
+                            backend.active = Some(active);
+                            return Ok(BackendPollV1::Pending);
+                        }
+                        Err(Gfx942FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(
+                            error,
+                        )) => {
+                            active.execution = Some(
+                                ActiveComputeExecutionV1::MaterializedPrepared { profile },
+                            );
+                            backend.active = Some(active);
+                            return Err(backend.terminal_error(format!(
+                                "KFD retained prepared dispatch was rejected before publication: {error}"
+                            )));
+                        }
+                        Err(Gfx942FixedDispatchSubmissionFailureV1::Terminal(error)) => {
+                            active.execution = Some(
+                                ActiveComputeExecutionV1::MaterializedPrepared { profile },
+                            );
+                            backend.active = Some(active);
+                            return Err(backend.terminal_error(format!(
+                                "KFD prepared dispatch publication became indeterminate: {error}"
+                            )));
+                        }
+                    };
+                    active.performance.publication += publication_started.elapsed();
+                    active.published_at = Instant::now();
+                    active.execution = Some(ActiveComputeExecutionV1::Materialized(batch));
+                    let id = active.id;
+                    let stream = active.stream;
+                    let kernel = active.kernel;
+                    let dispatch_shape_sha256 = active.dispatch_shape_sha256;
+                    backend.active = Some(active);
+                    let profiling =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            backend.observe_materialized_dispatch_published_v1(
+                                id,
+                                stream,
+                                kernel,
+                                dispatch_shape_sha256,
+                                profile,
+                            );
+                        }));
+                    if let Err(payload) = profiling {
+                        let _ = backend.terminal_error(
+                            "KFD prepared dispatch profiling unwound after publication",
+                        );
+                        std::panic::resume_unwind(payload);
+                    }
+                    Ok(BackendPollV1::Pending)
+                }
                 ActiveComputeExecutionV1::Materialized(batch) => {
-                    let native_lane = backend.selected_native_compute_lane_v1()?;
-                    let poll = backend
-                        .queue
-                        .as_mut()
-                        .expect("active submission retains queue")
-                        .with_compute_lane_v1(native_lane, |queue| queue.poll_fixed_dispatch(batch))
-                        .map_err(|error| {
-                            backend.terminal_error(format!("KFD completion observation: {error}"))
-                        })?
-                        .map_err(|error| {
-                            backend.terminal_error(format!("KFD completion observation: {error}"))
-                        })?;
+                    let native_lane = ordinary_native_lane
+                        .expect("materialized execution validated its native lane");
+                    let mut batch_owner = Some(batch);
+                    let observation =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            backend
+                                .queue
+                                .as_mut()
+                                .expect("active submission retains queue")
+                                .with_compute_lane_v1(native_lane, |queue| {
+                                    queue.poll_fixed_dispatch(
+                                        batch_owner.take().expect(
+                                            "selected lane consumes the batch exactly once",
+                                        ),
+                                    )
+                                })
+                        }));
+                    let poll = match observation {
+                        Ok(Ok(Ok(poll))) => poll,
+                        Ok(Ok(Err(error))) => {
+                            backend.active = Some(active);
+                            return Err(backend
+                                .terminal_error(format!("KFD completion observation: {error}")));
+                        }
+                        Ok(Err(error)) => {
+                            if let Some(batch) = batch_owner.take() {
+                                active.execution =
+                                    Some(ActiveComputeExecutionV1::Materialized(batch));
+                            }
+                            backend.active = Some(active);
+                            return Err(backend.terminal_error(format!(
+                                "KFD compute-lane selection after publication: {error}"
+                            )));
+                        }
+                        Err(payload) => {
+                            if let Some(batch) = batch_owner.take() {
+                                active.execution =
+                                    Some(ActiveComputeExecutionV1::Materialized(batch));
+                            }
+                            backend.active = Some(active);
+                            let _ = backend.terminal_error(
+                                "KFD completion observation unwound with published custody",
+                            );
+                            std::panic::resume_unwind(payload);
+                        }
+                    };
                     match poll {
                         Gfx942DispatchPollV1::Pending(batch) => {
                             active.execution = Some(ActiveComputeExecutionV1::Materialized(batch));
@@ -734,6 +918,9 @@ impl KfdRuntimeBackendV1 {
                             backend.finish_completed(active, completed)
                         }
                     }
+                }
+                ActiveComputeExecutionV1::MaterializedCompleted(completed) => {
+                    backend.finish_completed(active, completed)
                 }
                 ActiveComputeExecutionV1::PersistentPrepared {
                     allocation,
@@ -933,6 +1120,275 @@ impl KfdRuntimeBackendV1 {
         })
     }
 
+    pub(super) fn poll_compute_submission_v1(
+        &mut self,
+        lane: usize,
+        submission: u64,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let is_frontier = if lane == 0 {
+            self.active
+                .as_ref()
+                .is_some_and(|active| active.id == submission)
+        } else {
+            self.auxiliary_compute_lanes[lane - 1]
+                .active
+                .as_ref()
+                .is_some_and(|active| active.id == submission)
+        };
+        if is_frontier {
+            return self.poll_compute_lane_v1(lane);
+        }
+        let status = self.with_compute_lane_state_v1(lane, |backend| {
+            backend.poll_pipelined_compute_submission_v1(submission)
+        })?;
+        if status == BackendPollV1::Pending
+            && self
+                .active_compute_lane_v1(submission)
+                .is_some_and(|owner| owner == lane)
+        {
+            // A waiter on a recycled successor must also own bounded progress
+            // of the earlier logical frontier; otherwise the successor could
+            // remain Pending forever after its physical retirement.
+            let _ = self.poll_compute_lane_v1(lane)?;
+            if let Some(record) = self.submissions.get(&submission) {
+                return Ok(record.status);
+            }
+        }
+        Ok(status)
+    }
+
+    // Recycle failures retain their exact completed token inline. Boxing that
+    // token would add allocation failure to a linear-custody recovery path.
+    #[allow(clippy::result_large_err)]
+    fn poll_pipelined_compute_submission_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        match self.compute_pipeline.phase(submission) {
+            Some(RuntimeComputePipelinePhaseV1::PhysicallyRetired) => {
+                return Ok(BackendPollV1::Pending);
+            }
+            Some(RuntimeComputePipelinePhaseV1::Quarantined) => {
+                return Err(self.terminal_error(
+                    "KFD pipelined submission is quarantined after an indeterminate transition",
+                ));
+            }
+            Some(
+                RuntimeComputePipelinePhaseV1::Published | RuntimeComputePipelinePhaseV1::Completed,
+            ) => {}
+            None => {
+                return Err(Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::UnknownHandle,
+                    "unknown KFD pipelined submission",
+                ));
+            }
+        }
+        let native_lane = self.selected_native_compute_lane_v1().map_err(|_| {
+            self.terminal_error("pipelined KFD submission lost its exact physical compute lane")
+        })?;
+        let Some((identity, mut active)) = self.compute_pipeline.take_physical_owner(submission)
+        else {
+            return Err(
+                self.terminal_error("published KFD pipeline phase lost its exact slot owner")
+            );
+        };
+        let Some(execution) = active.execution.take() else {
+            if self
+                .compute_pipeline
+                .restore(identity, RuntimeComputePipelinePhaseV1::Quarantined, active)
+                .is_err()
+            {
+                std::process::abort();
+            }
+            return Err(self
+                .terminal_error("published KFD pipeline entry lost its native execution custody"));
+        };
+        let completed = match execution {
+            ActiveComputeExecutionV1::Materialized(batch) => {
+                let mut batch_owner = Some(batch);
+                let observation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.queue
+                        .as_mut()
+                        .expect("pipelined submission retains queue")
+                        .with_compute_lane_v1(native_lane, |queue| {
+                            queue.poll_fixed_dispatch(
+                                batch_owner
+                                    .take()
+                                    .expect("selected lane consumes the batch exactly once"),
+                            )
+                        })
+                }));
+                let poll = match observation {
+                    Ok(Ok(poll)) => poll,
+                    Ok(Err(error)) => {
+                        if let Some(batch) = batch_owner.take() {
+                            active.execution = Some(ActiveComputeExecutionV1::Materialized(batch));
+                        }
+                        if self
+                            .compute_pipeline
+                            .restore(identity, RuntimeComputePipelinePhaseV1::Quarantined, active)
+                            .is_err()
+                        {
+                            std::process::abort();
+                        }
+                        return Err(self.terminal_error(format!(
+                            "KFD compute-lane selection after pipelined publication: {error}"
+                        )));
+                    }
+                    Err(payload) => {
+                        if let Some(batch) = batch_owner.take() {
+                            active.execution = Some(ActiveComputeExecutionV1::Materialized(batch));
+                        }
+                        if self
+                            .compute_pipeline
+                            .restore(identity, RuntimeComputePipelinePhaseV1::Quarantined, active)
+                            .is_err()
+                        {
+                            std::process::abort();
+                        }
+                        let _ = self.terminal_error(
+                            "KFD pipelined completion observation unwound with published custody",
+                        );
+                        std::panic::resume_unwind(payload);
+                    }
+                };
+                match poll {
+                    Ok(Gfx942DispatchPollV1::Pending(batch)) => {
+                        active.execution = Some(ActiveComputeExecutionV1::Materialized(batch));
+                        if self
+                            .compute_pipeline
+                            .restore(identity, RuntimeComputePipelinePhaseV1::Published, active)
+                            .is_err()
+                        {
+                            std::process::abort();
+                        }
+                        return Ok(BackendPollV1::Pending);
+                    }
+                    Ok(Gfx942DispatchPollV1::Ready(completed)) => completed,
+                    Err(error) => {
+                        if self
+                            .compute_pipeline
+                            .restore(identity, RuntimeComputePipelinePhaseV1::Quarantined, active)
+                            .is_err()
+                        {
+                            std::process::abort();
+                        }
+                        return Err(self.terminal_error(format!(
+                            "KFD pipelined completion observation: {error}"
+                        )));
+                    }
+                }
+            }
+            ActiveComputeExecutionV1::MaterializedCompleted(completed) => completed,
+            _ => {
+                if self
+                    .compute_pipeline
+                    .restore(identity, RuntimeComputePipelinePhaseV1::Quarantined, active)
+                    .is_err()
+                {
+                    std::process::abort();
+                }
+                return Err(self.terminal_error(
+                    "KFD runtime pipeline retained a non-ordinary execution owner",
+                ));
+            }
+        };
+        active.performance.publish_to_completion = active.published_at.elapsed();
+        let recycle_started = Instant::now();
+        let mut completed_owner = Some(completed);
+        let recycling = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.queue
+                .as_mut()
+                .expect("completed pipeline entry retains queue")
+                .with_compute_lane_v1(native_lane, |queue| {
+                    queue.recycle_fixed_dispatch(
+                        completed_owner
+                            .take()
+                            .expect("selected lane consumes completed custody exactly once"),
+                    )
+                })
+        }));
+        let recycle = match recycling {
+            Ok(Ok(recycle)) => recycle,
+            Ok(Err(error)) => {
+                if let Some(completed) = completed_owner.take() {
+                    active.execution =
+                        Some(ActiveComputeExecutionV1::MaterializedCompleted(completed));
+                }
+                if self
+                    .compute_pipeline
+                    .restore(identity, RuntimeComputePipelinePhaseV1::Quarantined, active)
+                    .is_err()
+                {
+                    std::process::abort();
+                }
+                return Err(self.terminal_error(format!(
+                    "KFD compute-lane selection after pipelined completion: {error}"
+                )));
+            }
+            Err(payload) => {
+                if let Some(completed) = completed_owner.take() {
+                    active.execution =
+                        Some(ActiveComputeExecutionV1::MaterializedCompleted(completed));
+                }
+                if self
+                    .compute_pipeline
+                    .restore(identity, RuntimeComputePipelinePhaseV1::Quarantined, active)
+                    .is_err()
+                {
+                    std::process::abort();
+                }
+                let _ = self.terminal_error(
+                    "KFD pipelined completion recycle unwound with completed custody",
+                );
+                std::panic::resume_unwind(payload);
+            }
+        };
+        match recycle {
+            Ok(_) => {
+                active.performance.completed_readback = Duration::ZERO;
+                active.performance.completion_signal_recycle = recycle_started.elapsed();
+                active.performance.completion_detach_restore = Duration::ZERO;
+                if self
+                    .compute_pipeline
+                    .restore(
+                        identity,
+                        RuntimeComputePipelinePhaseV1::PhysicallyRetired,
+                        active,
+                    )
+                    .is_err()
+                {
+                    std::process::abort();
+                }
+                Ok(BackendPollV1::Pending)
+            }
+            Err(failure) => {
+                let (error, retryable) = failure.into_parts();
+                let phase = if let Some(completed) = retryable {
+                    active.execution =
+                        Some(ActiveComputeExecutionV1::MaterializedCompleted(completed));
+                    RuntimeComputePipelinePhaseV1::Completed
+                } else {
+                    RuntimeComputePipelinePhaseV1::Quarantined
+                };
+                if self
+                    .compute_pipeline
+                    .restore(identity, phase, active)
+                    .is_err()
+                {
+                    std::process::abort();
+                }
+                if phase == RuntimeComputePipelinePhaseV1::Completed {
+                    Ok(BackendPollV1::Pending)
+                } else {
+                    Err(self.terminal_error(format!(
+                        "KFD pipelined completion recycle became indeterminate: {error}"
+                    )))
+                }
+            }
+        }
+    }
+
     pub(super) fn wait_published_persistent_compute_lane_v1(
         &mut self,
         lane: usize,
@@ -1105,7 +1561,11 @@ impl KfdRuntimeBackendV1 {
             self.pending_compute.insert(pending.id, pending);
             return Ok(BackendPollV1::Pending);
         }
-        while let Some(dependency) = pending.dependencies.get(pending.dependency_cursor).copied() {
+        while let Some(dependency) = pending
+            .explicit_success_dependencies
+            .get(pending.explicit_dependency_cursor)
+            .copied()
+        {
             let status = match self.poll_v1(dependency) {
                 Ok(status) => status,
                 Err(RuntimeBackendFailureV1::Quiescent(_)) => {
@@ -1121,7 +1581,7 @@ impl KfdRuntimeBackendV1 {
                 }
             };
             match status {
-                BackendPollV1::Succeeded => pending.dependency_cursor += 1,
+                BackendPollV1::Succeeded => pending.explicit_dependency_cursor += 1,
                 BackendPollV1::Pending => {
                     self.pending_compute.insert(pending.id, pending);
                     return Ok(BackendPollV1::Pending);
@@ -1133,6 +1593,87 @@ impl KfdRuntimeBackendV1 {
                     ));
                 }
             }
+        }
+        if let Some(predecessor) = pending.ordered_predecessor
+            && !self
+                .submissions
+                .get(&predecessor)
+                .is_some_and(|record| record.status != BackendPollV1::Pending)
+        {
+            if let Some(lane) = self.active_compute_lane_v1(predecessor) {
+                let same_physical_stream = ordered_successor_lane_matches_v1(
+                    self.stream_compute_lanes
+                        .get(&pending.launch.stream)
+                        .copied(),
+                    lane,
+                );
+                if same_physical_stream {
+                    let publication =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            self.with_compute_lane_state_v1(lane, |backend| {
+                                backend.try_publish_ordered_successor_v1(&pending, predecessor)
+                            })
+                        }));
+                    let publication = match publication {
+                        Ok(publication) => publication,
+                        Err(payload) => {
+                            if self.active_compute_lane_v1(pending.id).is_some() {
+                                self.remove_pending_compute_from_stream_v1(
+                                    pending.launch.stream,
+                                    pending.id,
+                                );
+                                self.release_compute_dependency_retains_v1(
+                                    &pending.explicit_success_dependencies,
+                                );
+                            } else {
+                                self.pending_compute.insert(pending.id, pending);
+                            }
+                            let _ = self.terminal_error(
+                                "KFD ordered-successor publication unwound while native custody was live",
+                            );
+                            std::panic::resume_unwind(payload);
+                        }
+                    };
+                    match publication {
+                        Ok(true) => {
+                            self.remove_pending_compute_from_stream_v1(
+                                pending.launch.stream,
+                                pending.id,
+                            );
+                            self.release_compute_dependency_retains_v1(
+                                &pending.explicit_success_dependencies,
+                            );
+                            return Ok(BackendPollV1::Pending);
+                        }
+                        Ok(false) => {}
+                        Err(failure) => {
+                            self.pending_compute.insert(pending.id, pending);
+                            return Err(failure);
+                        }
+                    }
+                }
+            }
+            let status = match self.poll_v1(predecessor) {
+                Ok(status) => status,
+                Err(RuntimeBackendFailureV1::Quiescent(_)) => {
+                    return Ok(self.settle_unpublished_compute_v1(
+                        pending,
+                        BackendPollV1::Failed { code: -1 },
+                    ));
+                }
+                Err(failure @ RuntimeBackendFailureV1::Rejected(_))
+                | Err(failure @ RuntimeBackendFailureV1::Terminal(_)) => {
+                    self.pending_compute.insert(pending.id, pending);
+                    return Err(failure);
+                }
+            };
+            if !ordered_predecessor_completed_v1(status) {
+                self.pending_compute.insert(pending.id, pending);
+                return Ok(BackendPollV1::Pending);
+            }
+            // Stream ordering observes completion, not success. A failed
+            // ordered predecessor therefore does not fail this launch unless
+            // the same identity also appeared in the explicit dependency set.
         }
         let persistent_selected = self
             .persistent_full_range_admission_for_launch_v1(pending.launch.borrowed())
@@ -1166,12 +1707,18 @@ impl KfdRuntimeBackendV1 {
             return Ok(BackendPollV1::Pending);
         };
         let conflicting_compute_lane = (0..self.native_compute_lanes.len()).find(|lane| {
-            let active = if *lane == 0 {
-                self.active.as_ref()
+            if *lane == 0 {
+                launch_overlaps_active_compute_v1(
+                    &pending.launch.bindings,
+                    self.active.iter().chain(self.compute_pipeline.iter()),
+                )
             } else {
-                self.auxiliary_compute_lanes[*lane - 1].active.as_ref()
-            };
-            launch_overlaps_active_compute_v1(&pending.launch.bindings, active.into_iter())
+                let state = &self.auxiliary_compute_lanes[*lane - 1];
+                launch_overlaps_active_compute_v1(
+                    &pending.launch.bindings,
+                    state.active.iter().chain(state.pipeline.iter()),
+                )
+            }
         });
         if let Some(conflicting_lane) = conflicting_compute_lane {
             self.pending_compute.insert(pending.id, pending);
@@ -1232,20 +1779,41 @@ impl KfdRuntimeBackendV1 {
             };
         }
         self.lease_compute_lane_v1(pending.launch.stream, lane);
-        let publication = self.with_compute_lane_state_v1(lane, |backend| {
-            let prepared =
-                backend.prepare_launch(pending.launch.borrowed(), persistent_selected)?;
-            backend.publish(
-                pending.id,
-                pending.dependency_depth,
-                pending.prior_stream_submission,
-                prepared,
-            )
-        });
+        let publication = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.with_compute_lane_state_v1(lane, |backend| {
+                let prepared = backend.prepare_launch(
+                    pending.launch.borrowed(),
+                    persistent_selected,
+                    false,
+                )?;
+                backend.publish(
+                    pending.id,
+                    pending.dependency_depth,
+                    pending.ordered_predecessor,
+                    Arc::clone(&pending.launch),
+                    prepared,
+                )
+            })
+        }));
+        let publication = match publication {
+            Ok(publication) => publication,
+            Err(payload) => {
+                if self.active_compute_lane_v1(pending.id).is_some() {
+                    self.remove_pending_compute_from_stream_v1(pending.launch.stream, pending.id);
+                    self.release_pending_compute_dependency_retains_v1(&pending);
+                } else {
+                    self.pending_compute.insert(pending.id, pending);
+                }
+                let _ = self.terminal_error(
+                    "KFD compute publication unwound while logical custody was retained",
+                );
+                std::panic::resume_unwind(payload);
+            }
+        };
         match publication {
             Ok(()) => {
                 self.remove_pending_compute_from_stream_v1(pending.launch.stream, pending.id);
-                self.release_compute_dependency_retains_v1(&pending.dependencies);
+                self.release_pending_compute_dependency_retains_v1(&pending);
                 Ok(BackendPollV1::Pending)
             }
             Err(RuntimeBackendFailureV1::Rejected(_) | RuntimeBackendFailureV1::Quiescent(_)) => {
@@ -1272,7 +1840,11 @@ impl KfdRuntimeBackendV1 {
             self.pending_compute.insert(pending.id, pending);
             return Ok(BackendPollV1::Pending);
         }
-        while let Some(dependency) = pending.dependencies.get(pending.dependency_cursor).copied() {
+        while let Some(dependency) = pending
+            .explicit_success_dependencies
+            .get(pending.explicit_dependency_cursor)
+            .copied()
+        {
             let status = match self.poll_v1(dependency) {
                 Ok(status) => status,
                 Err(RuntimeBackendFailureV1::Quiescent(_)) => {
@@ -1293,7 +1865,7 @@ impl KfdRuntimeBackendV1 {
                 }
             };
             match status {
-                BackendPollV1::Succeeded => pending.dependency_cursor += 1,
+                BackendPollV1::Succeeded => pending.explicit_dependency_cursor += 1,
                 BackendPollV1::Pending => {
                     self.pending_compute.insert(pending.id, pending);
                     return Ok(BackendPollV1::Pending);
@@ -1306,15 +1878,263 @@ impl KfdRuntimeBackendV1 {
                 }
             }
         }
+        if let Some(predecessor) = pending.ordered_predecessor
+            && !self
+                .submissions
+                .get(&predecessor)
+                .is_some_and(|record| record.status != BackendPollV1::Pending)
+        {
+            match self.poll_v1(predecessor) {
+                Ok(_) => {}
+                Err(RuntimeBackendFailureV1::Quiescent(_)) => {
+                    return Ok(self.settle_unpublished_compute_v1(
+                        pending,
+                        BackendPollV1::Failed { code: -1 },
+                    ));
+                }
+                Err(RuntimeBackendFailureV1::Rejected(error)) => {
+                    self.pending_compute.insert(pending.id, pending);
+                    return Err(self.terminal_error(format!(
+                        "KFD pending compute retained an ordered predecessor that was rejected during observation: {error}"
+                    )));
+                }
+                Err(failure @ RuntimeBackendFailureV1::Terminal(_)) => {
+                    self.pending_compute.insert(pending.id, pending);
+                    return Err(failure);
+                }
+            }
+        }
         self.pending_compute.insert(pending.id, pending);
         Ok(BackendPollV1::Pending)
+    }
+
+    pub(super) fn try_publish_ordered_successor_v1(
+        &mut self,
+        pending: &PendingComputeSubmissionV1,
+        predecessor: u64,
+    ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if !self.compute_pipeline.has_successor_capacity()
+            || !early_pipeline_launch_is_admitted_v1(
+                pending.launch.semantic_launch,
+                &pending.launch.bindings,
+            )
+            || pending.explicit_success_dependencies.contains(&predecessor)
+            || self
+                .persistent_full_range_admission_for_launch_v1(pending.launch.borrowed())
+                .is_some()
+            || self
+                .three_binding_persistent_admission_for_launch_v1(pending.launch.borrowed())
+                .is_some()
+        {
+            return Ok(false);
+        }
+        let expected_shape =
+            dispatch_shape_sha256_v1(&pending.launch.borrowed(), pending.launch.semantic_launch);
+        let active_predecessor_matches = self
+            .active
+            .as_ref()
+            .filter(|active| active.id == predecessor)
+            .is_some_and(|active| {
+                active.stream == pending.launch.stream
+                    && active.ordinary_recipe.as_deref().is_some_and(|recipe| {
+                        ordinary_compute_recipes_match_v1(recipe, pending.launch.as_ref())
+                    })
+                    && active.dispatch_shape_sha256 == expected_shape
+                    && matches!(
+                        active.execution,
+                        Some(
+                            ActiveComputeExecutionV1::Materialized(_)
+                                | ActiveComputeExecutionV1::MaterializedCompleted(_)
+                        )
+                    )
+            });
+        let pipelined_predecessor_matches =
+            self.compute_pipeline
+                .get(predecessor)
+                .is_some_and(|active| {
+                    let phase = self.compute_pipeline.phase(predecessor);
+                    let physical_owner_matches = matches!(
+                        (phase, active.execution.as_ref()),
+                        (
+                            Some(RuntimeComputePipelinePhaseV1::Published),
+                            Some(ActiveComputeExecutionV1::Materialized(_)),
+                        ) | (
+                            Some(RuntimeComputePipelinePhaseV1::Completed),
+                            Some(ActiveComputeExecutionV1::MaterializedCompleted(_)),
+                        ) | (Some(RuntimeComputePipelinePhaseV1::PhysicallyRetired), None)
+                    );
+                    physical_owner_matches
+                        && active.stream == pending.launch.stream
+                        && active.ordinary_recipe.as_deref().is_some_and(|recipe| {
+                            ordinary_compute_recipes_match_v1(recipe, pending.launch.as_ref())
+                        })
+                        && active.dispatch_shape_sha256 == expected_shape
+                });
+        if !active_predecessor_matches && !pipelined_predecessor_matches {
+            return Ok(false);
+        }
+
+        // Preparation still authenticates this exact logical invocation. It
+        // deliberately does not reconcile or overwrite storage because the
+        // retained immutable recipe is live on this physical queue.
+        let prepared = match self.prepare_launch(pending.launch.borrowed(), false, true) {
+            Ok(prepared) => prepared,
+            Err(RuntimeBackendFailureV1::Rejected(_) | RuntimeBackendFailureV1::Quiescent(_)) => {
+                return Ok(false);
+            }
+            Err(failure @ RuntimeBackendFailureV1::Terminal(_)) => return Err(failure),
+        };
+        let ordinary_recipe = Arc::clone(&pending.launch);
+        let PreparedLaunchV1 {
+            stream,
+            kernel,
+            storage,
+            allocations,
+            writebacks,
+            dispatch_shape_sha256,
+            profile_launch,
+            profile_semantic_contract,
+            profile_bindings,
+            mut performance,
+            ..
+        } = prepared;
+        let PreparedLaunchStorageV1::Materialized(data) = storage else {
+            return Ok(false);
+        };
+        let resident_descriptors = resident_descriptors_v1(&data)?;
+        let recipe_still_matches = self
+            .active
+            .as_ref()
+            .filter(|active| active.id == predecessor)
+            .or_else(|| self.compute_pipeline.get(predecessor))
+            .is_some_and(|active| {
+                active.stream == stream
+                    && active.kernel == kernel
+                    && active.ordinary_recipe.as_deref().is_some_and(|recipe| {
+                        ordinary_compute_recipes_match_v1(recipe, ordinary_recipe.as_ref())
+                    })
+                    && active.dispatch_shape_sha256 == dispatch_shape_sha256
+                    && same_resident_storage_shape_v1(
+                        &active.resident_descriptors,
+                        &resident_descriptors,
+                    )
+            });
+        if !recipe_still_matches || !self.compute_pipeline.has_successor_capacity() {
+            return Ok(false);
+        }
+        for (index, writeback) in writebacks.iter().enumerate() {
+            if writebacks[..index]
+                .iter()
+                .any(|prior| prior.allocation == writeback.allocation)
+            {
+                continue;
+            }
+            let required = writebacks[index..]
+                .iter()
+                .filter(|candidate| candidate.allocation == writeback.allocation)
+                .count();
+            self.allocations
+                .get_mut(&writeback.allocation)
+                .expect("prepared writeback allocation remains retained")
+                .native_dirty
+                .try_reserve(required)
+                .map_err(|_| Self::capacity("KFD native-dirty extent reservation failed"))?;
+        }
+
+        let publication_started = Instant::now();
+        let native_lane = self.selected_native_compute_lane_v1().map_err(|_| {
+            self.terminal_error(
+                "ordered predecessor lost its exact physical compute lane before successor publication",
+            )
+        })?;
+        let publication = self
+            .queue
+            .as_mut()
+            .expect("ordered predecessor retains its physical queue")
+            .with_compute_lane_v1(native_lane, |queue| {
+                queue.submit_fixed_dispatch_classified_v1::<1>()
+            })
+            .map_err(|error| self.terminal_error(format!("KFD compute-lane selection: {error}")))?;
+        let batch = match publication {
+            Ok(batch) => batch,
+            Err(Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(_)) => {
+                return Ok(false);
+            }
+            Err(Gfx942FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(error)) => {
+                return Err(self.terminal_error(format!(
+                    "KFD retained ordered-successor recipe was rejected before publication: {error}"
+                )));
+            }
+            Err(Gfx942FixedDispatchSubmissionFailureV1::Terminal(error)) => {
+                return Err(self.terminal_error(format!(
+                    "KFD ordered-successor publication became indeterminate: {error}"
+                )));
+            }
+        };
+        performance.publication = publication_started.elapsed();
+        performance.native_binding = Duration::ZERO;
+        performance.data_path = KfdRuntimeLaunchDataPathV1::ResidentReused;
+        performance.user_data_materializations = 0;
+        let active = ActiveSubmissionV1 {
+            id: pending.id,
+            stream,
+            ordered_predecessor: Some(predecessor),
+            deferred_ordered_predecessor_retain: true,
+            kernel,
+            dependency_depth: pending.dependency_depth,
+            allocations,
+            writebacks,
+            resident_descriptors,
+            ordinary_recipe: Some(ordinary_recipe),
+            dispatch_shape_sha256,
+            published_at: Instant::now(),
+            performance,
+            execution: Some(ActiveComputeExecutionV1::Materialized(batch)),
+        };
+        if let Err(_active) = self.compute_pipeline.insert_published(active) {
+            // Capacity and generation were checked with no intervening roster
+            // mutation. Native publication already happened, so a violated
+            // internal invariant must not unwind and drop its linear token.
+            std::process::abort();
+        }
+
+        let profile_dispatch =
+            self.profile_resource_v1(KfdProfileResourceKindV1::Dispatch, pending.id);
+        let profile_queue = self.profile_resource_v1(
+            KfdProfileResourceKindV1::NativeQueue,
+            KFD_PROFILE_NATIVE_QUEUE_ORDINAL_V1 + self.selected_compute_lane as u64,
+        );
+        let profile_stream = self.profile_resource_v1(KfdProfileResourceKindV1::Stream, stream);
+        let profile_kernel = self.profile_resource_v1(KfdProfileResourceKindV1::Kernel, kernel);
+        let profile_shape = self.profile_content_v1(&dispatch_shape_sha256);
+        let profile_event = match profile_bindings {
+            Some(Ok(bindings)) => profile_dispatch
+                .zip(profile_queue)
+                .zip(profile_stream)
+                .zip(profile_kernel)
+                .zip(profile_shape)
+                .map(|((((dispatch, queue), stream), kernel), dispatch_shape)| {
+                    KfdRuntimeProfileEventKindV1::DispatchPublished {
+                        dispatch,
+                        queue,
+                        stream,
+                        kernel,
+                        dispatch_shape,
+                        launch: profile_launch,
+                        bindings,
+                    }
+                }),
+            Some(Err(())) | None => None,
+        };
+        self.observe_profile_dispatch_v1(profile_event, profile_semantic_contract);
+        Ok(true)
     }
 
     pub(super) fn pending_compute_can_publish_under_deadline_v1(&self, submission: u64) -> bool {
         let Some(pending) = self.pending_compute.get(&submission) else {
             return false;
         };
-        if pending.dependency_cursor != pending.dependencies.len()
+        if pending.explicit_dependency_cursor != pending.explicit_success_dependencies.len()
             || self.native_dirty_extents != 0
             || !pending.launch.bindings.iter().all(|binding| {
                 self.allocations
@@ -1323,6 +2143,16 @@ impl KfdRuntimeBackendV1 {
                         !allocation.sdma_shadow_dirty && allocation.native_dirty.is_empty()
                     })
             })
+        {
+            return false;
+        }
+        if pending.ordered_predecessor.is_some()
+            && (self
+                .persistent_full_range_admission_for_launch_v1(pending.launch.borrowed())
+                .is_some()
+                || self
+                    .three_binding_persistent_admission_for_launch_v1(pending.launch.borrowed())
+                    .is_some())
         {
             return false;
         }
@@ -1383,6 +2213,7 @@ impl KfdRuntimeBackendV1 {
         &mut self,
         launch: BackendLaunchV1<'_>,
         persistent_selected: bool,
+        reuse_bound_recipe: bool,
     ) -> Result<PreparedLaunchV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let preparation_started = Instant::now();
         let dispatch_shape_sha256 = dispatch_shape_sha256_v1(&launch, launch.semantic_launch);
@@ -1440,7 +2271,7 @@ impl KfdRuntimeBackendV1 {
         if persistent_selected && (replaces_retained_control || three_binding_admission.is_some()) {
             self.release_retained_persistent_control_v1()?;
         }
-        if !persistent_selected {
+        if !persistent_selected && !reuse_bound_recipe {
             self.release_retained_persistent_control_v1()?;
             let mut synchronized = HashSet::new();
             for binding in launch.bindings {
@@ -1739,7 +2570,8 @@ impl KfdRuntimeBackendV1 {
         &mut self,
         id: u64,
         dependency_depth: usize,
-        prior_stream_submission: Option<u64>,
+        ordered_predecessor: Option<u64>,
+        ordinary_recipe: Arc<OwnedComputeLaunchV1>,
         prepared: PreparedLaunchV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         if matches!(
@@ -1754,14 +2586,14 @@ impl KfdRuntimeBackendV1 {
                 return self.publish_three_binding_persistent_v1(
                     id,
                     dependency_depth,
-                    prior_stream_submission,
+                    ordered_predecessor,
                     prepared,
                 );
             }
             return self.publish_persistent_full_range_v1(
                 id,
                 dependency_depth,
-                prior_stream_submission,
+                ordered_predecessor,
                 prepared,
             );
         }
@@ -1816,12 +2648,14 @@ impl KfdRuntimeBackendV1 {
             self.active = Some(ActiveSubmissionV1 {
                 id,
                 stream,
-                prior_stream_submission,
+                ordered_predecessor,
+                deferred_ordered_predecessor_retain: false,
                 kernel,
                 dependency_depth,
                 allocations,
                 writebacks,
                 resident_descriptors,
+                ordinary_recipe: Some(ordinary_recipe),
                 dispatch_shape_sha256,
                 published_at: Instant::now(),
                 performance,
@@ -2074,31 +2908,92 @@ impl KfdRuntimeBackendV1 {
             );
         }
 
+        let publication_profile = PersistentPublicationProfileV1 {
+            launch: profile_launch,
+            semantic_contract: profile_semantic_contract,
+            bindings: profile_bindings,
+        };
         let publication_started = Instant::now();
         let native_lane = self.selected_native_compute_lane_v1()?;
         let batch = self
             .queue
             .as_mut()
             .expect("queue was created or rebound")
-            .with_compute_lane_v1(native_lane, |queue| queue.submit_fixed_dispatch::<1>())
-            .map_err(|error| self.terminal_error(format!("KFD compute-lane selection: {error}")))?
-            .map_err(|error| self.terminal_error(format!("KFD dispatch publication: {error}")))?;
+            .with_compute_lane_v1(native_lane, |queue| {
+                queue.submit_fixed_dispatch_classified_v1::<1>()
+            })
+            .map_err(|error| self.terminal_error(format!("KFD compute-lane selection: {error}")))?;
+        let batch = match batch {
+            Ok(batch) => batch,
+            Err(Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(_)) => {
+                performance.publication += publication_started.elapsed();
+                self.active = Some(ActiveSubmissionV1 {
+                    id,
+                    stream,
+                    ordered_predecessor,
+                    deferred_ordered_predecessor_retain: false,
+                    kernel,
+                    dependency_depth,
+                    allocations,
+                    writebacks,
+                    resident_descriptors,
+                    ordinary_recipe: Some(ordinary_recipe),
+                    dispatch_shape_sha256,
+                    published_at: Instant::now(),
+                    performance,
+                    execution: Some(ActiveComputeExecutionV1::MaterializedPrepared {
+                        profile: publication_profile,
+                    }),
+                });
+                return Ok(());
+            }
+            Err(Gfx942FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(error)) => {
+                return Err(self.terminal_error(format!(
+                    "KFD retained dispatch binding was rejected before publication: {error}"
+                )));
+            }
+            Err(Gfx942FixedDispatchSubmissionFailureV1::Terminal(error)) => {
+                return Err(self.terminal_error(format!(
+                    "KFD dispatch publication became indeterminate: {error}"
+                )));
+            }
+        };
         performance.publication = publication_started.elapsed();
         let published_at = Instant::now();
         self.active = Some(ActiveSubmissionV1 {
             id,
             stream,
-            prior_stream_submission,
+            ordered_predecessor,
+            deferred_ordered_predecessor_retain: false,
             kernel,
             dependency_depth,
             allocations,
             writebacks,
             resident_descriptors,
+            ordinary_recipe: Some(ordinary_recipe),
             dispatch_shape_sha256,
             published_at,
             performance,
             execution: Some(ActiveComputeExecutionV1::Materialized(batch)),
         });
+        self.observe_materialized_dispatch_published_v1(
+            id,
+            stream,
+            kernel,
+            dispatch_shape_sha256,
+            publication_profile,
+        );
+        Ok(())
+    }
+
+    pub(super) fn observe_materialized_dispatch_published_v1(
+        &mut self,
+        id: u64,
+        stream: u64,
+        kernel: u64,
+        dispatch_shape_sha256: [u8; 32],
+        profile: PersistentPublicationProfileV1,
+    ) {
         let profile_dispatch = self.profile_resource_v1(KfdProfileResourceKindV1::Dispatch, id);
         let profile_queue = self.profile_resource_v1(
             KfdProfileResourceKindV1::NativeQueue,
@@ -2107,7 +3002,7 @@ impl KfdRuntimeBackendV1 {
         let profile_stream = self.profile_resource_v1(KfdProfileResourceKindV1::Stream, stream);
         let profile_kernel = self.profile_resource_v1(KfdProfileResourceKindV1::Kernel, kernel);
         let profile_shape = self.profile_content_v1(&dispatch_shape_sha256);
-        let profile_event = match profile_bindings {
+        let profile_event = match profile.bindings {
             Some(Ok(bindings)) => profile_dispatch
                 .zip(profile_queue)
                 .zip(profile_stream)
@@ -2120,15 +3015,13 @@ impl KfdRuntimeBackendV1 {
                         stream,
                         kernel,
                         dispatch_shape,
-                        launch: profile_launch,
+                        launch: profile.launch,
                         bindings,
                     }
                 }),
-            Some(Err(())) => None,
-            None => None,
+            Some(Err(())) | None => None,
         };
-        self.observe_profile_dispatch_v1(profile_event, profile_semantic_contract);
-        Ok(())
+        self.observe_profile_dispatch_v1(profile_event, profile.semantic_contract);
     }
 
     pub(super) fn observe_persistent_dispatch_published_v1(
@@ -2173,7 +3066,7 @@ impl KfdRuntimeBackendV1 {
         &mut self,
         id: u64,
         dependency_depth: usize,
-        prior_stream_submission: Option<u64>,
+        ordered_predecessor: Option<u64>,
         prepared: PreparedLaunchV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let PreparedLaunchV1 {
@@ -2261,12 +3154,14 @@ impl KfdRuntimeBackendV1 {
             self.active = Some(ActiveSubmissionV1 {
                 id,
                 stream,
-                prior_stream_submission,
+                ordered_predecessor,
+                deferred_ordered_predecessor_retain: false,
                 kernel,
                 dependency_depth,
                 allocations,
                 writebacks,
                 resident_descriptors: persistent.descriptors,
+                ordinary_recipe: None,
                 dispatch_shape_sha256,
                 published_at,
                 performance,
@@ -2408,12 +3303,14 @@ impl KfdRuntimeBackendV1 {
         self.active = Some(ActiveSubmissionV1 {
             id,
             stream,
-            prior_stream_submission,
+            ordered_predecessor,
+            deferred_ordered_predecessor_retain: false,
             kernel,
             dependency_depth,
             allocations,
             writebacks,
             resident_descriptors: persistent.descriptors,
+            ordinary_recipe: None,
             dispatch_shape_sha256,
             published_at,
             performance,
@@ -2437,7 +3334,7 @@ impl KfdRuntimeBackendV1 {
         &mut self,
         id: u64,
         dependency_depth: usize,
-        prior_stream_submission: Option<u64>,
+        ordered_predecessor: Option<u64>,
         prepared: PreparedLaunchV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         let PreparedLaunchV1 {
@@ -2511,12 +3408,14 @@ impl KfdRuntimeBackendV1 {
                 self.active = Some(ActiveSubmissionV1 {
                     id,
                     stream,
-                    prior_stream_submission,
+                    ordered_predecessor,
+                    deferred_ordered_predecessor_retain: false,
                     kernel,
                     dependency_depth,
                     allocations,
                     writebacks,
                     resident_descriptors: persistent.descriptors,
+                    ordinary_recipe: None,
                     dispatch_shape_sha256,
                     published_at: Instant::now(),
                     performance,
@@ -2539,12 +3438,14 @@ impl KfdRuntimeBackendV1 {
             self.active = Some(ActiveSubmissionV1 {
                 id,
                 stream,
-                prior_stream_submission,
+                ordered_predecessor,
+                deferred_ordered_predecessor_retain: false,
                 kernel,
                 dependency_depth,
                 allocations,
                 writebacks,
                 resident_descriptors: persistent.descriptors,
+                ordinary_recipe: None,
                 dispatch_shape_sha256,
                 published_at: Instant::now(),
                 performance,
@@ -2657,12 +3558,14 @@ impl KfdRuntimeBackendV1 {
                 self.active = Some(ActiveSubmissionV1 {
                     id,
                     stream,
-                    prior_stream_submission,
+                    ordered_predecessor,
+                    deferred_ordered_predecessor_retain: false,
                     kernel,
                     dependency_depth,
                     allocations,
                     writebacks,
                     resident_descriptors: persistent.descriptors,
+                    ordinary_recipe: None,
                     dispatch_shape_sha256,
                     published_at: Instant::now(),
                     performance,
@@ -2683,12 +3586,14 @@ impl KfdRuntimeBackendV1 {
         self.active = Some(ActiveSubmissionV1 {
             id,
             stream,
-            prior_stream_submission,
+            ordered_predecessor,
+            deferred_ordered_predecessor_retain: false,
             kernel,
             dependency_depth,
             allocations,
             writebacks,
             resident_descriptors: persistent.descriptors,
+            ordinary_recipe: None,
             dispatch_shape_sha256,
             published_at,
             performance,
@@ -2715,45 +3620,113 @@ impl KfdRuntimeBackendV1 {
         completed: fe2o3_kfd::Gfx942CompletedDispatchBatchV1<1>,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         active.performance.publish_to_completion = active.published_at.elapsed();
-        let compute_lane = self.selected_compute_lane;
-        let native_lane = self.selected_native_compute_lane_v1()?;
-        let native_result = (|| -> Result<_, String> {
-            let queue = self
-                .queue
+        let native_lane = match self.selected_native_compute_lane_v1() {
+            Ok(native_lane) => native_lane,
+            Err(_) => {
+                active.execution = Some(ActiveComputeExecutionV1::MaterializedCompleted(completed));
+                self.active = Some(active);
+                return Err(self.terminal_error(
+                    "completed KFD submission lost its exact physical compute lane",
+                ));
+            }
+        };
+        let recycle_started = Instant::now();
+        let mut completed_owner = Some(completed);
+        let recycling = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.queue
                 .as_mut()
-                .expect("active submission retains queue");
-            let recycle_started = Instant::now();
-            queue
-                .with_compute_lane_v1(native_lane, |queue| queue.recycle_fixed_dispatch(completed))
-                .map_err(|error| format!("KFD compute-lane selection: {error}"))?
-                .map_err(|error| format!("KFD completion recycle: {error}"))?;
-            let initial_recycle = recycle_started.elapsed();
-            Ok(initial_recycle)
-        })();
-        let recycle = match native_result {
-            Ok(result) => result,
-            Err(detail) => return Err(self.terminal_error(detail)),
+                .expect("active submission retains queue")
+                .with_compute_lane_v1(native_lane, |queue| {
+                    queue.recycle_fixed_dispatch(
+                        completed_owner
+                            .take()
+                            .expect("selected lane consumes completed custody exactly once"),
+                    )
+                })
+        }));
+        let recycle = match recycling {
+            Ok(Ok(recycle)) => recycle,
+            Ok(Err(error)) => {
+                if let Some(completed) = completed_owner.take() {
+                    active.execution =
+                        Some(ActiveComputeExecutionV1::MaterializedCompleted(completed));
+                }
+                self.active = Some(active);
+                return Err(self.terminal_error(format!(
+                    "KFD compute-lane selection after completion: {error}"
+                )));
+            }
+            Err(payload) => {
+                if let Some(completed) = completed_owner.take() {
+                    active.execution =
+                        Some(ActiveComputeExecutionV1::MaterializedCompleted(completed));
+                }
+                self.active = Some(active);
+                let _ =
+                    self.terminal_error("KFD completion recycle unwound with completed custody");
+                std::panic::resume_unwind(payload);
+            }
+        };
+        match recycle {
+            Ok(_) => {}
+            Err(failure) => {
+                let (error, retryable) = failure.into_parts();
+                if let Some(completed) = retryable {
+                    active.execution =
+                        Some(ActiveComputeExecutionV1::MaterializedCompleted(completed));
+                    self.active = Some(active);
+                    return Ok(BackendPollV1::Pending);
+                }
+                self.active = Some(active);
+                return Err(self.terminal_error(format!(
+                    "KFD completion recycle became indeterminate: {error}"
+                )));
+            }
         };
         active.performance.completed_readback = Duration::ZERO;
-        active.performance.completion_signal_recycle = recycle;
+        active.performance.completion_signal_recycle = recycle_started.elapsed();
         active.performance.completion_detach_restore = Duration::ZERO;
+        let stream = active.stream;
+        let commit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.commit_materialized_compute_v1(&mut active);
+        }));
+        if let Err(payload) = commit {
+            self.active = Some(active);
+            let _ = self.terminal_error(
+                "KFD logical completion commit unwound while host custody was retained",
+            );
+            std::panic::resume_unwind(payload);
+        }
+        self.advance_materialized_commit_frontier_v1(stream);
+        Ok(BackendPollV1::Succeeded)
+    }
+
+    fn commit_materialized_compute_v1(&mut self, active: &mut ActiveSubmissionV1) {
+        let deferred_ordered_predecessor = active.deferred_ordered_predecessor_retain.then(|| {
+            active
+                .ordered_predecessor
+                .expect("deferred ordering retain names its exact predecessor")
+        });
+        let compute_lane = self.selected_compute_lane;
         for writeback in &active.writebacks {
-            self.native_dirty_extents = self
-                .native_dirty_extents
-                .checked_add(1)
-                .expect("native-dirty extent count is memory-bounded");
             let record = self
                 .allocations
                 .get_mut(&writeback.allocation)
                 .expect("active allocation remains retained");
             record.content_sha256 = None;
-            record.native_dirty.push(NativeDirtyExtentV1 {
+            let extent = NativeDirtyExtentV1 {
                 compute_lane,
                 data_index: writeback.data_index,
                 allocation_offset: writeback.allocation_offset,
                 data_offset: writeback.data_offset,
                 byte_len: writeback.byte_len,
-            });
+            };
+            if retain_unique_native_dirty_extent_v1(&mut record.native_dirty, extent) {
+                self.native_dirty_extents = self
+                    .native_dirty_extents
+                    .checked_add(1)
+                    .expect("native-dirty extent count is memory-bounded");
+            }
             if let Some(descriptor) = active.resident_descriptors.get_mut(writeback.data_index) {
                 descriptor.device_may_have_modified = true;
                 descriptor.host_content_sha256 = None;
@@ -2783,7 +3756,6 @@ impl KfdRuntimeBackendV1 {
             .compute_completion_reservations
             .checked_sub(1)
             .expect("published compute reserves one completion slot");
-        self.release_compute_lane_lease_v1(active.stream, compute_lane);
         self.last_launch_performance = Some(active.performance);
         let profile_dispatch =
             self.profile_resource_v1(KfdProfileResourceKindV1::Dispatch, active.id);
@@ -2793,8 +3765,46 @@ impl KfdRuntimeBackendV1 {
                 host_timing: profile_host_timing_v1(active.performance),
             }
         }));
+        if let Some(predecessor) = deferred_ordered_predecessor {
+            self.release_compute_dependency_retains_v1(core::slice::from_ref(&predecessor));
+        }
         active.execution = None;
-        Ok(status)
+    }
+
+    fn advance_materialized_commit_frontier_v1(&mut self, stream: u64) {
+        loop {
+            let Some((phase, active)) = self.compute_pipeline.take_commit_frontier() else {
+                self.release_compute_lane_lease_v1(stream, self.selected_compute_lane);
+                return;
+            };
+            match phase {
+                RuntimeComputePipelinePhaseV1::Published
+                | RuntimeComputePipelinePhaseV1::Completed => {
+                    self.active = Some(active);
+                    return;
+                }
+                RuntimeComputePipelinePhaseV1::PhysicallyRetired => {
+                    let mut active = active;
+                    let commit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        self.commit_materialized_compute_v1(&mut active);
+                    }));
+                    if let Err(payload) = commit {
+                        self.active = Some(active);
+                        let _ = self.terminal_error(
+                            "KFD pipelined logical commit unwound while host custody was retained",
+                        );
+                        std::panic::resume_unwind(payload);
+                    }
+                }
+                RuntimeComputePipelinePhaseV1::Quarantined => {
+                    self.active = Some(active);
+                    let _ = self.terminal_error(
+                        "KFD logical commit frontier reached quarantined physical custody",
+                    );
+                    return;
+                }
+            }
+        }
     }
 
     pub(super) fn finish_persistent_full_range_recycled_v1(
