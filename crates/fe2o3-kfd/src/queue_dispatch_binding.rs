@@ -4371,7 +4371,7 @@ mod tests {
             ))
         ));
         assert!(matches!(
-            preflight_gfx942_fixed_dispatch_replacement(4096, &programs, &packets, &[], 0),
+            preflight_gfx942_fixed_dispatch_replacement(4096, &programs, &packets, &[], 1),
             Err(Gfx942DispatchBindingErrorV1::InvalidCode(
                 "executable target is not gfx942:xnack-"
             ))
