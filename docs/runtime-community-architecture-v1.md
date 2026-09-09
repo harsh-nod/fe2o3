@@ -83,7 +83,7 @@ frames, and worker abort as terminal backend loss.
 
 | Backend | Devices and queues | Memory | Unsupported |
 | --- | --- | --- | --- |
-| KFD | The direct runtime backend owns one admitted `gfx942:xnack-` device, exactly two reusable native compute lanes, directional SDMA queues, and at most 65,536 logical streams with bounded caller-driven FIFO scheduling. The lower-level `fe2o3-kfd` compute session additionally supports an even 2-through-16 striped SDMA set, which is not yet wired into `KfdRuntimeBackendV1`. At most one dispatch occupies each compute lane, and concurrent native work must use disjoint allocations. `KfdMultiDeviceRuntimeBackendV1` admits every selected device before queue creation and routes one child per device. `KfdNativeXgmiRuntimeBackendV1` is a separate exact two-device, copy-only facade backend. Exact atomic/collective contracts can use a separate unsafe semantic-authority constructor; ordinary constructors remain fail-closed. | Logical allocations retain pooled native host-coherent or HBM SDMA buffers. Device-local buffers are zero-initialized before publication and scrubbed before recycle; explicit shutdown trims the pool. Fixed-dispatch compute storage remains separate and is synchronized lazily. Generic peer copy remains bounded host staging; the XGMI backend retains reusable PUBLIC-HBM mappings to the exact two-GPU roster and publishes ready copies in batches of at most 63. Lower-level production striped submission prepares every bounded shard before publication and reports exact partial custody without rollback. | Native queue-side dependency packets, more than two in-flight compute dispatches, runtime-facade striped SDMA integration, unified persistent compute/SDMA/XGMI storage, unified compute plus native XGMI, a concrete production semantic authority, broader atomic/collective profiles, formal native refinement, clean hardware evidence |
+| KFD | The direct runtime backend owns one admitted `gfx942:xnack-` device, exactly two reusable native compute lanes, directional SDMA queues, and at most 65,536 logical streams with bounded caller-driven FIFO scheduling. The lower-level `fe2o3-kfd` compute session additionally supports an even 2-through-16 striped SDMA set, which is not yet wired into `KfdRuntimeBackendV1`. R60 admits up to 64 ordered ordinary shared-recipe epochs per compute lane; concurrent work on different lanes must use disjoint allocations. `KfdMultiDeviceRuntimeBackendV1` admits every selected device before queue creation and routes one child per device. `KfdNativeXgmiRuntimeBackendV1` is a separate exact two-device, copy-only facade backend. Exact atomic/collective contracts can use a separate unsafe semantic-authority constructor; ordinary constructors remain fail-closed. | Logical allocations retain pooled native host-coherent or HBM SDMA buffers. Device-local buffers are zero-initialized before publication and scrubbed before recycle; explicit shutdown trims the pool. Fixed-dispatch compute storage remains separate and is synchronized lazily. Generic peer copy remains bounded host staging; the XGMI backend retains reusable PUBLIC-HBM mappings to the exact two-GPU roster and publishes ready copies in batches of at most 63. Lower-level production striped submission prepares every bounded shard before publication and reports exact partial custody without rollback. | General native queue-side dependency packets, general same-lane multi-recipe scheduling, runtime-facade striped SDMA integration, unified persistent compute/SDMA/XGMI storage, unified compute plus native XGMI, a concrete production semantic authority, broader atomic/collective profiles, formal native refinement, broad hardware parity evidence |
 | HSA, deprecated qualification only | One HIP-correlated gfx942 or gfx950 HSA device with persistent per-stream queues | Host-visible allocations only | Production use, device-local allocation, peer copy, multi-device, atomics, collectives |
 
 The V1 facade's multi-device KFD router advertises peer copy through host
@@ -194,8 +194,9 @@ deadline expires. Rejected and quiescent wait errors are remembered while later
 pending submissions receive their one observation; terminal ambiguity stops
 the operation immediately. These operations do not create independent native
 streams: the current direct-KFD backend multiplexes logical streams over exactly
-two native lanes, with caller-driven FIFO scheduling and at most one active
-dispatch per lane.
+two native lanes, with caller-driven FIFO scheduling and up to 64 retained
+ordinary shared-recipe epochs per lane. Ordered publication does not imply
+simultaneous kernel execution within a lane.
 
 `launch_atomic` and `launch_collective` match their contracts against the
 argument type before admission. Compare-exchange binds its success order,
@@ -544,7 +545,8 @@ not a Rust/native correspondence theorem or hardware evidence.
 
 The remaining community-launch blockers are material. Direct KFD owns exactly
 two compute lanes per child, but has no background native-publication scheduler,
-queue-side dependency packets, or more than two in-flight compute dispatches.
+general queue-side dependency packets, or general same-lane multi-recipe
+scheduling. R60's 64-epoch ordinary pipeline does not remove those limits.
 Native XGMI is owned by a separate exact two-device, copy-only backend; there is
 no unified native multi-device compute owner. R20 joins one persistent owner to
 the runtime facade's exact directional local-SDMA pair, but the direct backend

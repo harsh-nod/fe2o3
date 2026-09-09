@@ -616,7 +616,15 @@ dependency polarity, retry atomicity, generation-protected epochs, contiguous
 commit, quarantine, and cancellation. This model excludes SDMA stream tails,
 cross-lane dependencies, and general multi-recipe scheduling.
 It supersedes R13 for that model-only surface, but is not a refinement of the
-production ordered shared-recipe epochs. General multi-recipe/shared-buffer
+production ordered shared-recipe epochs. The runtime separately integrates
+up to 64 ordinary retained epochs per lane for the exact same stream, kernel,
+arguments, storage, and geometry. Explicit dependencies remain success-gated;
+same-stream predecessors are completion-only. Native retirement precedes
+contiguous logical receipt commit, and data custody remains retained until the
+entire recipe is quiescent. The
+[R60 benchmark protocol](../benchmarks/runtime_gfx942/R60-PIPELINE.md) qualifies
+that exact integration and compares matched KFD/HSA/HIP batches without
+changing the independent model's proof scope. General multi-recipe/shared-buffer
 DAGs, simultaneous kernel execution, hardware ordering truth, performance
 gains, and HIP/HSA parity remain open.
 See the [R52 claim boundary](../crates/fe2o3-kfd/docs/r52-native-fixed-dispatch-multi-inflight-v1.md).

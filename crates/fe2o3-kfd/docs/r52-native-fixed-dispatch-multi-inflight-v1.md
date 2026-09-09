@@ -75,10 +75,14 @@ exact no-effect rollback, panic and typed-terminal disposition, mutation and
 teardown refusal, and maximum-size linear validation. Mock completion helpers
 used by these tests perform no hardware operation.
 
-The current runtime model rejects overlapping writable retained resources and
-does not represent ordered shared-recipe epochs, the 64-slot table, exact
-completion commitments, or out-of-order host observation. R52 therefore has no
-Rust-to-Verus refinement claim. General multi-recipe execution, shared-buffer
+The earlier R13 runtime model rejects overlapping writable retained resources
+and does not represent ordered shared-recipe epochs, the 64-slot table, exact
+completion commitments, or out-of-order host observation. R60 adds a separate
+[ordinary-pipeline model](../../fe2o3-runtime-model/src/r60_ordinary_fixed_dispatch_pipeline.rs)
+and runtime integration for that bounded surface. Neither supplies a
+Rust-to-Verus refinement of R52's native implementation. General multi-recipe execution, shared-buffer
 DAGs, hardware ordering and completion truth, performance improvement, and
-HIP/HSA parity remain outside this tranche. No MI300X benchmark evidence is
-attached.
+HIP/HSA parity remain outside this tranche. R52 itself attaches no MI300X
+benchmark evidence; the separately versioned
+[R60 benchmark protocol](../../../benchmarks/runtime_gfx942/R60-PIPELINE.md)
+tests the integrated ordinary path.

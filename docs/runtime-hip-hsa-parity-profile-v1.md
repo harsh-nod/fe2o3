@@ -63,14 +63,21 @@ event, payload, runtime, and resource teardown order as the primary queue. The
 lane callback surface exposes only admitted fixed-dispatch and observation
 operations, not session-global SDMA or lifecycle control.
 
-At most one dispatch per lane may be in flight. Accepted compute work retains
+R60 admits up to 64 retained ordinary dispatch epochs per lane for one exact
+shared recipe. `WaitForPrior` orders their execution; this is not simultaneous
+same-lane kernel execution. Early chaining excludes persistent N1/N3,
+`ReadWrite`, mixed read/write bindings to one allocation, and a predecessor named as an
+explicit success dependency. Accepted compute work retains
 owned kernarg, binding, dependency, module, allocation, submission, and stream
 custody in a bounded per-stream FIFO until it can lease the lowest available
 lane. Compute and copy operations on one logical stream gain an implicit tail
 dependency; cross-stream overlapping allocation use still requires an explicit
-event dependency. Publication requires a FIFO head whose dependencies
-succeeded, an available lane, and allocation disjointness from active native
-work. Dependency count and transitive unpublished depth are capped at 256.
+event dependency. Explicit dependencies are success-gated; the implicit
+same-stream predecessor is completion-only, including ordinary failure.
+Publication requires an eligible FIFO head and an available lane, or an exact
+ordinary shared-recipe successor admitted for early `WaitForPrior` publication
+on its predecessor's lane. Other active lanes require allocation disjointness.
+Dependency count and transitive unpublished depth are capped at 256.
 Prepublication cancellation removes owned work and restores the prior stream
 tail; published work remains too late to cancel.
 
@@ -87,8 +94,8 @@ otherwise fails closed. Runtime transport versioning is separate from
 compiler/proof Worker V3. Additive Runtime Worker V5 retains the V4 operations
 and transports exact typed atomic/collective contracts; this does not supply a
 production semantic authority or native proof. There is no background
-native-publication scheduler, queue-side dependency packet,
-or more than one in-flight dispatch per native lane. Consequently the new
+native-publication scheduler, general queue-side dependency packet,
+or general multi-recipe same-lane scheduling. Consequently the new
 logical-stream surface removes the third-stream capacity failure but is not
 general HIP/HSA stream scheduling parity. The
 `concurrent_compute` capability still means exact two-lane, disjoint-allocation

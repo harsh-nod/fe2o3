@@ -123,9 +123,14 @@ The current single-device KFD adapter admits one gfx942 device and at most
 lanes. Logical stream creation does not lease a lane. Accepted compute launches
 own their kernarg, bindings, dependencies, and retained resources in bounded
 per-stream FIFOs until the lowest available lane can publish the FIFO head.
-At most one dispatch occupies each lane, and concurrent native work must use
-disjoint allocations. This is bounded two-lane concurrency, not arbitrary
-same-device compute concurrency.
+R60 permits up to 64 retained ordinary dispatch epochs per lane when every
+successor uses the exact same stream, kernel, arguments, storage, and geometry.
+Early chaining excludes persistent N1/N3, `ReadWrite`, mixed read/write bindings
+to one allocation, and a predecessor named as an explicit success dependency.
+Their `WaitForPrior` packets execute in order; host completion and receipt
+commit remain distinct. Native work on different lanes must use disjoint
+allocations. This is bounded ordinary pipelining and two-lane concurrency,
+not arbitrary same-device compute concurrency.
 
 Compute and same-device copy operations on one logical stream gain an implicit
 tail dependency. Cross-stream overlapping allocation use requires an explicit
@@ -491,9 +496,9 @@ lifecycle failure has the same terminal policy. Successful completion preserves 
 content generations, advances C's effect/content generation, records
 `PersistentDeviceReused` with zero user-data materializations, and releases the
 incompatible fixed control before another transaction. This is bounded N=3,
-not general typed asynchronous launch, three-binding control replay, a native
-numerical result, a Rust/native refinement theorem, or HIP/HSA performance
-parity.
+not general typed asynchronous launch or three-binding control replay. The
+model and host tests alone establish neither native numerical results nor a
+Rust/native refinement theorem or HIP/HSA performance parity.
 Host coverage enters the production binder through ABI and fixed-control
 validation but does not retain native code/kernarg authorities or exercise
 native submit, poll, and detach. Per-entry failure injection after entry 1 or
