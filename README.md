@@ -172,9 +172,25 @@ exactly measured native worker. It writes only a fresh
 `fe2o3-engineering-v1/<content-id>/` observation with `"authority":"none"`.
 This command does not contact the production compiler-execution supervisor and
 its output cannot be adopted as a production generation, publication, load, or
-launch owner. Non-path dependencies require an explicit `cargo vendor` tree;
-the command measures, retains, and revalidates that tree while Cargo runs with
-a fresh home, frozen resolution, no ambient configuration, and no network.
+launch owner. The command requires a versioned `cargo vendor` tree containing
+both the selected device crate's dependencies and the pinned nightly rust-src
+workspace's complete `-Zbuild-std=core` registry closure. Construct it with the
+same pinned nightly Cargo and rustc passed to the command:
+
+```console
+toolchain=nightly-2026-04-03
+sysroot="$(rustup run "$toolchain" rustc --print sysroot)"
+rustup run "$toolchain" cargo vendor --locked --versioned-dirs \
+  --manifest-path /absolute/device/Cargo.toml \
+  --sync "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" \
+  /absolute/cargo-vendor
+```
+
+The command checks the pinned rust-src lock against that measured vendor before
+preparing the compiler child, then retains and revalidates both trees while
+Cargo runs with a fresh home, frozen resolution, no ambient configuration, and
+no network. In particular, caller `RUSTC_BOOTSTRAP`, rustup selectors, and
+toolchain overrides remain rejected rather than filling a missing closure.
 Host build scripts and proc macros are linked through separately declared,
 SHA-256-bound clang, lld, and lld argv proxy executable images. The proxy invokes
 the sealed lld descriptor directly with GNU linker identity; these sealed
