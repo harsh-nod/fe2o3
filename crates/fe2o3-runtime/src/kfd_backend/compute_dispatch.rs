@@ -1548,6 +1548,34 @@ impl KfdRuntimeBackendV1 {
         })
     }
 
+    fn settle_failed_compute_after_ordering_v1(
+        &mut self,
+        pending: PendingComputeSubmissionV1,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        // A failed unpublished node still orders its successor after the entire
+        // stream prefix. Keep its custody until that predecessor has completed.
+        if let Some(predecessor) = pending.ordered_predecessor
+            && !self
+                .submissions
+                .get(&predecessor)
+                .is_some_and(|record| ordered_predecessor_completed_v1(record.status))
+        {
+            match self.poll_v1(predecessor) {
+                Ok(BackendPollV1::Pending) => {
+                    self.pending_compute.insert(pending.id, pending);
+                    return Ok(BackendPollV1::Pending);
+                }
+                Ok(BackendPollV1::Succeeded | BackendPollV1::Failed { .. })
+                | Err(RuntimeBackendFailureV1::Quiescent(_)) => {}
+                Err(failure) => {
+                    self.pending_compute.insert(pending.id, pending);
+                    return Err(failure);
+                }
+            }
+        }
+        Ok(self.settle_unpublished_compute_v1(pending, BackendPollV1::Failed { code: -1 }))
+    }
+
     pub(super) fn progress_pending_compute_v1(
         &mut self,
         mut pending: PendingComputeSubmissionV1,
@@ -1569,10 +1597,7 @@ impl KfdRuntimeBackendV1 {
             let status = match self.poll_v1(dependency) {
                 Ok(status) => status,
                 Err(RuntimeBackendFailureV1::Quiescent(_)) => {
-                    return Ok(self.settle_unpublished_compute_v1(
-                        pending,
-                        BackendPollV1::Failed { code: -1 },
-                    ));
+                    return self.settle_failed_compute_after_ordering_v1(pending);
                 }
                 Err(failure @ RuntimeBackendFailureV1::Rejected(_))
                 | Err(failure @ RuntimeBackendFailureV1::Terminal(_)) => {
@@ -1587,10 +1612,7 @@ impl KfdRuntimeBackendV1 {
                     return Ok(BackendPollV1::Pending);
                 }
                 BackendPollV1::Failed { .. } => {
-                    return Ok(self.settle_unpublished_compute_v1(
-                        pending,
-                        BackendPollV1::Failed { code: -1 },
-                    ));
+                    return self.settle_failed_compute_after_ordering_v1(pending);
                 }
             }
         }
@@ -1848,10 +1870,7 @@ impl KfdRuntimeBackendV1 {
             let status = match self.poll_v1(dependency) {
                 Ok(status) => status,
                 Err(RuntimeBackendFailureV1::Quiescent(_)) => {
-                    return Ok(self.settle_unpublished_compute_v1(
-                        pending,
-                        BackendPollV1::Failed { code: -1 },
-                    ));
+                    return self.settle_failed_compute_after_ordering_v1(pending);
                 }
                 Err(RuntimeBackendFailureV1::Rejected(error)) => {
                     self.pending_compute.insert(pending.id, pending);
@@ -1871,10 +1890,7 @@ impl KfdRuntimeBackendV1 {
                     return Ok(BackendPollV1::Pending);
                 }
                 BackendPollV1::Failed { .. } => {
-                    return Ok(self.settle_unpublished_compute_v1(
-                        pending,
-                        BackendPollV1::Failed { code: -1 },
-                    ));
+                    return self.settle_failed_compute_after_ordering_v1(pending);
                 }
             }
         }

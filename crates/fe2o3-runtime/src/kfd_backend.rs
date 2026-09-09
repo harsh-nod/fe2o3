@@ -19934,6 +19934,123 @@ mod tests {
     }
 
     #[test]
+    fn runtime_compute_failed_explicit_dependency_preserves_stream_prefix_ordering() {
+        for observe_only in [false, true] {
+            for quiescent_dependency in [false, true] {
+                for predecessor_status in
+                    [BackendPollV1::Succeeded, BackendPollV1::Failed { code: -9 }]
+                {
+                    let mut backend = KfdRuntimeBackendV1::mock();
+                    let stream = backend.create_stream_v1(7).unwrap();
+                    let foreign_stream = backend.create_stream_v1(7).unwrap();
+                    let allocation = backend
+                        .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+                        .unwrap();
+                    let successor_allocation = backend
+                        .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+                        .unwrap();
+                    // The completion receipt for A stays pending while the
+                    // foreign dependency of B fails; C must remain behind B.
+                    for (id, owner_stream) in [(40, stream), (50, foreign_stream)] {
+                        backend.submissions.insert(
+                            id,
+                            SubmissionRecordV1 {
+                                stream: owner_stream,
+                                status: BackendPollV1::Pending,
+                                profile_dispatch_published: false,
+                            },
+                        );
+                    }
+                    let mut failed = pending_compute_for_test_v1(41, stream, allocation, vec![50]);
+                    failed.ordered_predecessor = Some(40);
+                    let mut successor =
+                        pending_compute_for_test_v1(42, stream, successor_allocation, vec![]);
+                    successor.ordered_predecessor = Some(41);
+                    backend.pending_compute.insert(41, failed);
+                    backend.pending_compute.insert(42, successor);
+                    backend
+                        .pending_compute_streams
+                        .insert(stream, VecDeque::from([41, 42]));
+                    for id in [41, 42] {
+                        index_pending_compute_custody_for_test_v1(&mut backend, id);
+                    }
+                    backend.compute_completion_reservations = 2;
+                    for dependency in [40, 41, 50] {
+                        backend
+                            .compute_dependency_retain_counts
+                            .insert(dependency, 1);
+                    }
+                    backend.stream_submission_tails.insert(stream, 42);
+                    backend.submissions.get_mut(&50).unwrap().status =
+                        BackendPollV1::Failed { code: -2 };
+                    if quiescent_dependency {
+                        backend.quiescent_sdma_submissions.insert(50);
+                    }
+                    let progress = |backend: &mut KfdRuntimeBackendV1, id| {
+                        let pending = backend.pending_compute.remove(&id).unwrap();
+                        if observe_only {
+                            backend.observe_pending_compute_v1(pending)
+                        } else {
+                            backend.progress_pending_compute_v1(pending)
+                        }
+                    };
+
+                    for _ in 0..2 {
+                        assert_eq!(progress(&mut backend, 41).unwrap(), BackendPollV1::Pending);
+                        assert_eq!(progress(&mut backend, 42).unwrap(), BackendPollV1::Pending);
+                        assert_eq!(backend.pending_compute_streams[&stream], [41, 42]);
+                        assert!(!backend.submissions.contains_key(&41));
+                        assert!(!backend.submissions.contains_key(&42));
+                        assert_eq!(backend.compute_completion_reservations, 2);
+                        assert_eq!(backend.compute_module_retain_counts[&9], 2);
+                        for dependency in [40, 41, 50] {
+                            assert_eq!(backend.compute_dependency_retain_counts[&dependency], 1);
+                        }
+                        assert!(matches!(
+                            backend.release_allocation_v1(allocation),
+                            Err(RuntimeBackendFailureV1::Rejected(error))
+                                if error.kind() == KfdRuntimeBackendErrorKindV1::Busy
+                        ));
+                        assert!(!backend.any_compute_active_v1());
+                    }
+
+                    backend.submissions.get_mut(&40).unwrap().status = predecessor_status;
+                    assert_eq!(
+                        progress(&mut backend, 41).unwrap(),
+                        BackendPollV1::Failed { code: -1 }
+                    );
+                    assert_eq!(backend.pending_compute_streams[&stream], [42]);
+                    assert_eq!(backend.compute_completion_reservations, 1);
+                    assert_eq!(backend.compute_module_retain_counts[&9], 1);
+                    assert!(!backend.compute_dependency_retain_counts.contains_key(&40));
+                    assert!(!backend.compute_dependency_retain_counts.contains_key(&50));
+                    assert_eq!(backend.compute_dependency_retain_counts[&41], 1);
+
+                    // The failed ordered receipt does not fail C: observation
+                    // leaves this now-eligible launch ready for publication.
+                    let successor = backend.pending_compute.remove(&42).unwrap();
+                    assert_eq!(
+                        backend.observe_pending_compute_v1(successor).unwrap(),
+                        BackendPollV1::Pending
+                    );
+                    assert_eq!(
+                        backend.cancel_v1(42).unwrap(),
+                        crate::BackendCancellationV1::Cancelled
+                    );
+                    for id in [40, 41, 42, 50] {
+                        backend.release_submission_v1(id).unwrap();
+                    }
+                    backend.release_allocation_v1(allocation).unwrap();
+                    backend.release_allocation_v1(successor_allocation).unwrap();
+                    backend.destroy_stream_v1(stream).unwrap();
+                    backend.destroy_stream_v1(foreign_stream).unwrap();
+                    backend.shutdown_native_v1().unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
     fn runtime_compute_failed_ordered_predecessor_is_not_an_explicit_failure() {
         let make_backend = || {
             let mut backend = KfdRuntimeBackendV1::mock();
