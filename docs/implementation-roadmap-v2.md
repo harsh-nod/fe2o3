@@ -130,6 +130,17 @@ completed with identical full-buffer digests and sole PASS records; see the
 Partial-entry native fault injection, machine refinement, and comparative
 performance remain open.
 
+## R60 Ordinary Pipeline Checkpoint
+
+The ordinary runtime now retains up to 64 ordered epochs per lane for one exact
+HostVisible recipe. Explicit dependencies remain success-gated; ordinary
+same-stream predecessors require completion. Separate
+[MI300X evidence](evidence/mi300x-r60-ordinary-pipeline-2026-09-09/README.md)
+records exact output, publication/completion order, native cleanup, matched
+HIP/HSA timings, and measured cache/wait changes. This is a bounded performance
+checkpoint, not general concurrency, full parity, or production machine
+refinement. The independent R60 Verus model's claim boundary is unchanged.
+
 ## Issue #134/#135 Infrastructure and Scalar Checkpoint
 
 The 2026-08-18 ownership refactor makes issues

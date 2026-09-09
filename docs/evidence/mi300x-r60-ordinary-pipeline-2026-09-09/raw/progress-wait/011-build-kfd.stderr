@@ -1,0 +1,44 @@
+   Compiling typenum v1.20.1
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling serde_core v1.0.229
+   Compiling zmij v1.0.23
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.1
+   Compiling rustix v1.1.4
+   Compiling hybrid-array v0.4.14
+   Compiling syn v3.0.4
+   Compiling serde_json v1.0.151
+   Compiling fe2o3-target-spec v0.1.0 (/dev/shm/fe2o3-r60-pipeline.B20Wpg/staging/fe2o3-r60.1a23d5p3/source/crates/fe2o3-target-spec)
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling autocfg v1.5.1
+   Compiling serde v1.0.229
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling num-traits v0.2.19
+   Compiling fe2o3-amd-target v0.1.0 (/dev/shm/fe2o3-r60-pipeline.B20Wpg/staging/fe2o3-r60.1a23d5p3/source/crates/fe2o3-amd-target)
+   Compiling serde_derive v1.0.229
+   Compiling memchr v2.8.3
+   Compiling linux-raw-sys v0.12.1
+   Compiling itoa v1.0.18
+   Compiling bitflags v2.13.1
+   Compiling libc v0.2.189
+   Compiling fe2o3-hsaco v0.1.0 (/dev/shm/fe2o3-r60-pipeline.B20Wpg/staging/fe2o3-r60.1a23d5p3/source/crates/fe2o3-hsaco)
+   Compiling spin v0.12.3
+   Compiling fe2o3-runtime-model v0.1.0 (/dev/shm/fe2o3-r60-pipeline.B20Wpg/staging/fe2o3-r60.1a23d5p3/source/crates/fe2o3-runtime-model)
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/dev/shm/fe2o3-r60-pipeline.B20Wpg/staging/fe2o3-r60.1a23d5p3/source/crates/fe2o3-amdhsa-loader)
+   Compiling zeroize v1.9.0
+   Compiling arrayvec v0.7.8
+   Compiling fe2o3-kfd-uapi v0.1.0 (/dev/shm/fe2o3-r60-pipeline.B20Wpg/staging/fe2o3-r60.1a23d5p3/source/crates/fe2o3-kfd-uapi)
+   Compiling fe2o3-drm-uapi v0.1.0 (/dev/shm/fe2o3-r60-pipeline.B20Wpg/staging/fe2o3-r60.1a23d5p3/source/crates/fe2o3-drm-uapi)
+   Compiling fe2o3-aql v0.1.0 (/dev/shm/fe2o3-r60-pipeline.B20Wpg/staging/fe2o3-r60.1a23d5p3/source/crates/fe2o3-aql)
+   Compiling rmp v0.8.15
+   Compiling fe2o3-profiler-protocol v0.1.0 (/dev/shm/fe2o3-r60-pipeline.B20Wpg/staging/fe2o3-r60.1a23d5p3/source/crates/fe2o3-profiler-protocol)
+   Compiling fe2o3-host-api v0.1.0 (/dev/shm/fe2o3-r60-pipeline.B20Wpg/staging/fe2o3-r60.1a23d5p3/source/crates/fe2o3-host-api)
+   Compiling rmpv v1.3.1
+   Compiling fe2o3-debug-protocol v0.1.0 (/dev/shm/fe2o3-r60-pipeline.B20Wpg/staging/fe2o3-r60.1a23d5p3/source/crates/fe2o3-debug-protocol)
+   Compiling fe2o3-kfd v0.1.0 (/dev/shm/fe2o3-r60-pipeline.B20Wpg/staging/fe2o3-r60.1a23d5p3/source/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/dev/shm/fe2o3-r60-pipeline.B20Wpg/staging/fe2o3-r60.1a23d5p3/source/crates/fe2o3-runtime)
+    Finished `release` profile [optimized] target(s) in 45.42s

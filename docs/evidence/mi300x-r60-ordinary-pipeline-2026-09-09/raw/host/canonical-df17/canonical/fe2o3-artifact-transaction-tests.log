@@ -1,0 +1,593 @@
+   Compiling fe2o3-artifact-transaction v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-artifact-transaction)
+    Finished `test` profile [unoptimized] target(s) in 8.99s
+     Running unittests src/lib.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/fe2o3_artifact_transaction-1eac3a362383889f)
+
+running 207 tests
+test attempt::tests::build_attempt_env_value_is_strict_and_canonical ... ok
+test attempt::tests::build_invocation_is_strict_lowercase_hex ... ok
+test attempt::tests::build_session_is_strict_lowercase_hex ... ok
+test attempt::tests::codec_has_stable_golden_bytes ... ok
+test attempt::tests::codec_roundtrips_all_states_in_source_order ... ok
+test attempt::tests::completed_phase_has_stable_canonical_tag ... ok
+test attempt::tests::decoder_rejects_malformed_truncated_and_trailing_input ... ok
+test attempt::tests::compiler_closure_binding_has_stable_golden_and_complete_mutation_coverage ... ok
+test attempt::tests::decoder_rejects_noncanonical_and_invalid_records ... ok
+test attempt::tests::decoder_rejects_text_and_registry_limits ... ok
+test attempt::tests::different_session_supersedes_with_a_new_generation ... ok
+test attempt::tests::failed_state_is_idempotent_and_cannot_complete_or_authorize ... ok
+test attempt::tests::generation_exhaustion_never_mutates_registry ... ok
+test attempt::tests::mutation_input_validation_is_fail_closed ... ok
+test attempt::tests::remove_session_only_removes_exact_session_and_keeps_watermark ... ok
+test attempt::tests::direct_allocations_are_zero_session_and_always_new ... ok
+test attempt::tests::same_session_resumes_or_reuses_and_terminal_states_fail_closed ... ok
+test attempt::tests::transitions_and_authorization_require_the_exact_token ... ok
+test attempt::tests::v3_completion_requires_the_exact_valid_pending_receipt ... ok
+test attempt::tests::v3_receipt_accessors_preserve_the_binding_and_remain_inert ... ok
+test compiler_artifact_generation_v1::tests::allocation_failure_identity_path_matches_canonical_manifest_identity ... ok
+test attempt::tests::v3_pending_and_completed_registry_tags_have_exact_canonical_payloads ... ok
+test attempt::tests::v3_registry_decoder_rejects_corrupt_binding_and_cross_axis_identity ... ok
+test compiler_artifact_generation_v1::tests::aggregate_length_overflow_is_rejected_without_wrapping ... ok
+test compiler_execution_subject::tests::canonical_subject_round_trips_every_field_without_authority ... ok
+test compiler_execution_subject::tests::independently_resealed_noncanonical_axes_fail_closed ... ok
+test compiler_execution_subject::tests::malformed_header_and_lengths_are_rejected_before_content_use ... ok
+test compiler_execution_subject::tests::every_semantic_axis_changes_the_subject_identity ... ok
+test compiler_module_handoff::protected_v2::tests::compiler_closure_digest_roles_cannot_be_swapped ... ok
+test compiler_module_handoff::protected_v2::tests::canonical_closure_preimage_receipt_and_consumed_value_are_exact_and_inert ... ok
+test compiler_module_handoff::protected_v2::tests::identity_binds_closure_attempt_producer_and_module_bytes ... ok
+test compiler_module_handoff::protected_v2::tests::hostile_payload_record_and_closure_mutations_fail_closed ... ok
+test attempt::tests::load_readiness_capacity_is_preflighted_before_persistence ... ok
+test compiler_module_handoff::protected_v2::tests::v1_record_downgrade_is_rejected_by_v2_recovery_and_consume ... ok
+test compiler_module_handoff::protected_v2::tests::unknown_record_version_and_closure_protocol_fail_closed ... ok
+test compiler_module_handoff::protected_v2::tests::v2_schema_has_exactly_one_production_slot ... ok
+test compiler_module_handoff::protected_v2::tests::wrong_closure_fails_without_consuming_the_committed_bytes ... ok
+test compiler_module_handoff::protected_v2::tests::v2_consumption_crashes_are_exactly_once_or_retryable_at_the_commit_boundary ... ok
+test compiler_module_handoff::semantic_v3::tests::committed_publication_survives_transient_lease_mint_failure ... ok
+test compiler_execution_subject::tests::every_canonical_byte_is_identity_bound ... ok
+test compiler_module_handoff::semantic_v3::tests::compiler_execution_receipt_transport_rejects_absence_conflict_and_substitution ... ok
+test compiler_module_handoff::semantic_v3::tests::compiler_execution_receipt_transport_is_read_under_the_exact_currentness_token ... ok
+test compiler_module_handoff::semantic_v3::tests::compiler_execution_receipt_transport_is_subject_bound_and_restart_recoverable ... ok
+test compiler_module_handoff::protected_v2::tests::v2_publish_crash_residue_recovers_or_preserves_committed_state ... ok
+test compiler_module_handoff::semantic_v3::tests::compiler_execution_receipt_transport_rejects_path_substitution ... ok
+test compiler_module_handoff::semantic_v3::tests::compiler_execution_subject_rejects_substituted_strict_handoff ... ok
+test compiler_module_handoff::semantic_v3::tests::compiler_execution_subject_is_identical_at_publication_and_consumption ... ok
+test compiler_module_handoff::semantic_v3::tests::concurrent_recovery_and_publication_never_expose_partial_state ... ok
+test compiler_module_handoff::semantic_v3::tests::concurrent_v3_publish_and_consume_have_single_winners ... ok
+test compiler_module_handoff::semantic_v3::tests::independently_rehashed_noncanonical_payload_fails_before_tombstone ... ok
+test compiler_module_handoff::semantic_v3::tests::payload_tamper_is_rejected_by_exact_transaction_digest ... ok
+test compiler_module_handoff::semantic_v3::tests::only_one_concurrent_currentness_token_holds_the_v3_lock ... ok
+test compiler_module_handoff::semantic_v3::tests::currentness_token_consumes_once_and_preserves_inert_semantics ... ok
+test compiler_module_handoff::semantic_v3::tests::per_version_bounds_preserve_v1_and_v2_without_allocating_the_v3_limit ... ok
+test compiler_module_handoff::semantic_v3::tests::oversized_v3_record_is_rejected_before_payload_allocation ... ok
+test compiler_module_handoff::protected_v2::tests::concurrent_v2_publish_and_consume_have_single_winners ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_enforces_independently_observed_fd197_identity ... ok
+test compiler_module_handoff::semantic_v3::tests::currentness_rejects_file_tamper_and_file_or_directory_replacement ... ok
+test compiler_module_handoff::semantic_v3::tests::prior_lease_rejects_a_newer_committed_attempt_generation ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_rejects_external_flock_holder_decoy ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_imports_and_revalidates_exact_v3_custody ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_rejects_external_ofd_holder_decoy ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_rejects_named_module_replacement ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_rejects_attempt_registry_mutations ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_rejects_missing_and_extra_descriptors ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_rejects_ready_record_tamper ... ok
+test attempt::tests::capacity_fails_closed_without_evicting_or_mutating ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_rejects_released_artifact_lock ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_rejects_producer_and_slot_roster_growth ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_rejects_released_root_lock ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_rejects_o_path_and_writable_payloads ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_rejects_module_metadata_mutations ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_rejects_same_ofd_holder_probe_alias ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_rejects_weak_ofd_read_lock_without_upgrading_it ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_rejects_swapped_roles ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_rejects_weak_shared_flock_without_upgrading_it ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_rejects_wrong_remote_root_snapshot ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_revalidation_rejects_artifact_ofd_lock_loss ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_revalidation_rejects_module_digest_tamper ... ok
+test compiler_module_handoff::semantic_v3::tests::publication_object_inventory_revalidation_rejects_root_flock_loss ... ok
+test compiler_module_handoff::semantic_v3::tests::v3_decode_working_set_has_an_exact_maximum_and_fallible_input_allocation ... ok
+test compiler_module_handoff::semantic_v3::tests::record_identity_splice_is_rejected_even_with_valid_checksum ... ok
+test compiler_module_handoff::semantic_v3::tests::receipt_recovery_is_exact_inert_repeatable_and_nonconsuming ... ok
+test compiler_module_handoff::semantic_v3::tests::receipt_recovery_rejects_absent_consumed_and_wrong_bindings ... ok
+test compiler_module_handoff::semantic_v3::tests::v3_schema_has_exactly_one_production_slot ... ok
+test compiler_module_handoff::semantic_v3::tests::v3_schema_decode_retains_one_shared_canonical_payload_allocation ... ok
+test compiler_module_handoff::semantic_v3::tests::v3_round_trip_binds_exact_bytes_identities_and_attempt ... ok
+test compiler_module_handoff::semantic_v3::tests::receipt_recovery_rejects_symlink_and_replacement ... ok
+test compiler_module_handoff::semantic_v3::tests::v3_namespaces_never_fall_back_to_v1_or_v2 ... ok
+test compiler_module_handoff::tests::completed_attempt_has_a_typed_not_claimable_error ... ok
+test compiler_module_handoff::semantic_v3::tests::v3_working_set_rejection_is_retryable_before_tombstone ... ok
+test compiler_module_handoff::tests::conflicting_republication_and_corrupt_tombstone_fail_closed ... ok
+test compiler_module_handoff::tests::consumption_before_tombstone_is_retryable ... ok
+test compiler_module_handoff::semantic_v3::tests::v3_wrong_expected_identity_is_retryable_and_same_publish_is_idempotent ... ok
+test compiler_module_handoff::tests::handoff_schema_slot_cardinality_is_exact ... ok
+test compiler_module_handoff::tests::empty_and_oversize_handoffs_are_rejected_before_slot_creation ... ok
+test compiler_module_handoff::semantic_v3::tests::receipt_recovery_rejects_record_payload_and_identity_tamper ... ok
+test compiler_module_handoff::semantic_v3::tests::v3_strict_decode_fault_boundary_is_retryable_only_before_tombstone ... ok
+test compiler_module_handoff::tests::happy_path_is_private_digest_bound_and_exactly_once ... ok
+test compiler_module_handoff::tests::host_backend_receipt_cannot_enter_simulation_kir_custody ... ok
+test compiler_module_handoff::tests::consumption_crash_after_tombstone_never_replays_bytes ... ok
+test compiler_module_handoff::tests::newer_attempt_cleans_private_stale_slot ... ok
+test compiler_module_handoff::tests::non_utf8_residue_is_statted_exactly_without_touching_its_utf8_alias ... ok
+test compiler_module_handoff::tests::poisoned_crash_residue_is_rejected_before_any_cleanup ... ok
+test compiler_module_handoff::tests::concurrent_publish_and_consume_have_single_winners ... ok
+test compiler_module_handoff::tests::in_place_mutation_and_record_corruption_are_rejected ... ok
+test compiler_module_handoff::tests::simulation_kir_uses_backend_claimed_custody_and_authority_free_completion ... ok
+test compiler_module_handoff::tests::recovery_cleanup_enforces_the_exact_slot_bound_without_partial_mutation ... ok
+test compiler_module_handoff::tests::stale_attempt_and_mismatched_producer_are_rejected ... ok
+test compiler_module_handoff::semantic_v3::tests::receipt_recovery_handles_every_publication_crash_boundary ... ok
+test compiler_module_handoff::tests::slot_and_parent_substitution_fail_without_following_symlinks ... ok
+test durable_published_claim::tests::v3_claim_binds_finalized_length_to_the_published_file ... ok
+test durable_published_claim::tests::full_v3_claim_round_trips_under_only_the_v3_schema ... ok
+test durable_published_claim::tests::v3_claim_codec_rejects_truncation_trailing_and_corruption ... ok
+test managed_invocation_capability::tests::every_single_byte_mutation_fails_or_changes_the_request ... ok
+test managed_invocation_capability::tests::requests_round_trip_and_bind_attempt_to_argv ... ok
+test managed_invocation_capability::tests::v1_wire_vectors_are_frozen_and_v2_is_a_distinct_fixed_width_request ... ok
+test compiler_module_handoff::tests::stale_cleanup_unlinks_non_utf8_names_and_utf8_aliases_exactly ... ok
+test durable_published_claim::tests::v3_claim_encoding_uses_fallible_exact_reservation_without_changing_bytes ... ok
+test managed_invocation_capability::tests::v2_request_rejects_zero_claims_and_every_single_byte_mutation ... ok
+test retained_durable_directory::tests::recommit_resumes_after_final_is_renamed_or_staged_name_is_synced ... ok
+test retained_durable_directory::tests::recovery_recommits_and_rereads_an_ambiguous_canonical_name ... ok
+test retained_durable_directory::tests::recovery_barrier_rejects_post_sync_canonical_or_redo_substitution ... ok
+test retained_durable_directory::tests::staged_name_substitution_before_final_rename_is_rejected ... ok
+test retained_durable_directory::tests::recovery_barrier_hook_failures_return_no_revalidated_bytes ... ok
+test retained_durable_directory::tests::recovery_specific_and_legacy_hook_failures_return_no_revalidated_bytes ... ok
+test retained_durable_directory::tests::visible_artifact_after_directory_fsync_eio_requires_a_fresh_rename_commit ... ok
+test retained_durable_directory::tests::recovery_returns_no_bytes_when_any_directory_fsync_returns_eio ... ok
+test tests::abandoned_staging_is_scavenged_without_touching_noncanonical_files ... ok
+test tests::compile_failure_cleans_all_staged_outputs_and_publishes_nothing ... ok
+test tests::committed_cleanup_failure_is_reported_without_rollback ... ok
+test tests::composite_error_preserves_primary_invalidation_and_cleanup_failures ... ok
+
+running 1 test
+
+running 1 test
+test tests::filesystem_path_guard_configuration_subprocess_helper ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.00s
+
+test tests::filesystem_path_guard_configuration_subprocess_helper ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.00s
+
+
+running 1 test
+test tests::configured_path_guard_serializes_distinct_absolute_aliases ... ok
+
+running 1 test
+test tests::filesystem_path_guard_configuration_subprocess_helper ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.00s
+
+
+running 1 test
+test tests::filesystem_path_guard_configuration_subprocess_helper ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.00s
+
+
+running 1 test
+test tests::filesystem_path_guard_configuration_subprocess_helper ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.00s
+
+
+running 1 test
+test tests::filesystem_path_guard_configuration_subprocess_helper ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.00s
+
+
+running 1 test
+test tests::filesystem_path_guard_configuration_subprocess_helper ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.00s
+
+test compiler_module_handoff::tests::stale_slot_overflow_fails_before_removing_any_slot ... ok
+
+running 1 test
+test tests::filesystem_path_guard_configuration_subprocess_helper ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.00s
+
+
+running 1 test
+
+running 1 test
+test tests::filesystem_path_guard_configuration_subprocess_helper ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.00s
+
+test tests::filesystem_path_guard_configuration_subprocess_helper ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.00s
+
+test tests::default_path_guard_replacement_after_admission_fails_closed ... ok
+
+running 1 test
+test tests::filesystem_path_guard_configuration_subprocess_helper ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.00s
+
+test tests::filesystem_path_guard_configuration_subprocess_helper ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.02s
+
+test tests::configured_path_guard_requires_a_preprovisioned_private_directory ... ok
+test tests::configured_path_guard_serializes_distinct_outputs_across_processes ... ok
+test tests::filesystem_path_guard_configuration_subprocess_helper ... ok
+test tests::filesystem_path_guard_directory_is_private_and_service_owned ... ok
+test attempt::tests::canonical_byte_limit_fails_closed_without_mutating ... ok
+test tests::final_identity_failure_reports_committed_publication ... ok
+test tests::final_identity_and_cleanup_failures_report_committed_with_cleanup_failure ... ok
+test compiler_module_handoff::tests::symlink_and_replacement_attacks_fail_closed ... ok
+test tests::coordinated_fork_exec_does_not_leak_inherited_lock_aliases ... ok
+test tests::failure_before_kernel_discovery_invalidates_previous_outputs ... ok
+test tests::hardlinked_lock_is_rejected_without_mutating_the_other_inode ... ok
+test tests::entire_collection_is_preflighted_before_compile_and_stale_outputs_are_invalidated ... ok
+test tests::lock_release_waits_for_every_active_process_spawn ... ok
+test tests::invalid_snapshot_sizes_fail_before_publication ... ok
+test tests::missing_compiler_output_fails_closed ... ok
+test tests::output_symlink_is_rejected_without_touching_its_target ... ok
+test tests::interrupted_control_commits_never_reopen_a_consumed_backend_claim ... ok
+test tests::parent_directory_path_is_rejected_before_creating_any_prefix ... ok
+test tests::nonblocking_lock_reports_immediate_busy_under_intentional_contention ... ok
+test tests::fully_absent_foreign_ownership_tombstone_is_pruned ... ok
+test tests::interrupted_failure_commit_leaves_the_prior_backend_claim_closed ... ok
+test tests::concurrent_generations_are_serialized_and_never_mix ... ok
+test tests::parent_component_symlink_is_rejected_without_touching_its_target ... ok
+test tests::ownership_publish_failure_rolls_back_all_final_artifacts ... ok
+test compiler_module_handoff::tests::publish_crash_residue_recovers_or_preserves_committed_state ... ok
+test tests::pre_registry_artifacts_are_invalidated_on_preflight_failure ... ok
+test tests::pinned_directory_substitution_fails_without_writing_replacement ... ok
+test tests::pinned_parent_substitution_fails_without_writing_replacement ... ok
+test tests::pre_registry_artifacts_are_replaced_and_adopted ... ok
+test tests::proc_self_fd_output_requires_canonical_directory_descriptor ... ok
+test tests::registry_is_bounded_canonical_and_non_authoritative_bookkeeping ... ok
+test tests::private_staging_and_subprocess_boundary_publish_successfully ... ok
+test tests::proc_self_fd_output_stays_bound_to_retained_directory ... ok
+test tests::relative_output_is_rejected_before_descriptor_or_path_guard_identity_can_diverge ... ok
+test tests::paused_raw_child_cannot_retain_parent_lock_aliases ... ok
+test tests::partial_publish_is_rolled_back_and_reports_progress ... ok
+test tests::pre_registry_removed_and_renamed_kernels_are_scavenged ... ok
+test tests::rejects_unsafe_and_case_folded_duplicate_names_before_compile ... ok
+test tests::rustc_compile_producer_preserves_the_exact_source_spelling ... ok
+test tests::retained_directory_clones_are_close_on_exec ... ok
+test tests::producers_reconcile_only_their_owned_sets_including_zero_kernels ... ok
+test tests::snapshots_survive_final_path_replacement_without_reopening ... ok
+test tests::renamed_kernel_removes_the_previous_owned_generation ... ok
+test worker_v3_load_readiness::tests::codecs_reserve_fallibly_and_reject_unbounded_lengths ... ok
+test worker_v3_load_readiness::tests::durable_custody_is_not_descriptor_authentication_or_load_admission ... ok
+test worker_v3_load_readiness::tests::publication_headroom_reserves_three_finals_and_one_transient_entry ... ok
+test worker_v3_load_readiness::tests::schema_neutral_binding_uses_raw_sha256_and_strict_independent_codec ... ok
+test worker_v3_load_readiness::tests::tag_eight_contains_exact_v3_backend_then_exact_readiness_receipt ... ok
+
+running 1 test
+test worker_v3_load_readiness::tests::terminal_receipt_is_fixed_canonical_and_cross_version_fail_closed ... ok
+test worker_v3_publication_binding::tests::binding_is_inert ... ok
+test worker_v3_publication_binding::tests::canonical_round_trip_preserves_every_axis ... ok
+test tests::staging_setup_cleanup_failure_is_reported_and_scavenged ... ok
+test worker_v3_publication_binding::tests::rejects_zero_identity_and_out_of_range_lengths ... ok
+test tests::snapshots_remain_bound_to_their_exact_generation_after_republish ... ok
+test tests::staging_creation_failure_repairs_and_persists_ownership ... ok
+test worker_v3_publication_intent::tests::codec_enforces_payload_bounds_without_allocating_limit_sized_buffers ... ok
+test worker_v3_publication_binding::tests::hostile_codec_inputs_fail_closed ... ok
+test worker_v3_publication_intent::tests::codec_rederives_the_occurrence_key_from_producer_and_attempt ... ok
+test worker_v3_publication_intent::tests::codec_rejects_mutated_plan_commitment_and_duplicate_output_hash ... ok
+test tests::termination_claim_failure_never_reports_or_performs_revocation ... ok
+test worker_v3_publication_intent::tests::codec_round_trip_binds_exact_storage_bytes_without_authority_claims ... ok
+test worker_v3_publication_intent::tests::codec_rejects_zero_and_over_limit_lengths_even_with_a_valid_checksum ... ok
+test tests::subprocess_fd_is_not_redirected_by_staging_name_substitution ... ok
+test worker_v3_publication_intent::tests::final_entry_headroom_accepts_limit_minus_five_and_rejects_one_more ... ok
+test worker_v3_publication_intent::tests::oversized_spare_provider_capacities_are_rejected_without_payload_bytes ... ok
+test worker_v3_publication_intent::tests::codec_rejects_truncation_trailing_checksum_magic_and_version_mutation ... ok
+test worker_v3_publication_intent::tests::pinned_cleanup_rejects_same_name_replacement ... ok
+test worker_v3_publication_intent::tests::recovery_working_set_uses_checked_independent_budget_accounting ... ok
+test worker_v3_publication_intent::tests::provider_archive_hash_binds_order_boundaries_and_exact_bytes ... ok
+test worker_v3_publication_intent::tests::retired_intent_sizes_and_current_size_collisions_fail_closed ... ok
+test worker_v3_publication_intent::tests::transcript_and_owner_capacity_formulas_are_independent_and_checked ... ok
+test tests::uncoordinated_fork_inherits_publication_lock_until_cloexec ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 206 filtered out; finished in 0.01s
+
+test tests::uncoordinated_fork_inherits_publication_lock_until_cloexec ... ok
+
+test result: ok. 207 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+
+     Running tests/attempt_scoped_hsaco_publication_v3.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/attempt_scoped_hsaco_publication_v3-f2e798d72170a6f9)
+
+running 9 tests
+test completed_binding_plan_and_producer_substitutions_fail_without_registry_mutation ... ok
+test finalized_length_substitution_fails_before_registry_mutation ... ok
+test missing_and_substituted_intents_fail_before_registry_mutation ... ok
+test fresh_publish_read_claim_recover_and_reacquire_round_trip ... ok
+test pending_binding_plan_and_producer_substitutions_are_rejected ... ok
+test newer_generation_invalidates_the_old_current_lease_and_claim ... ok
+test retired_receipt_size_collisions_fail_as_malformed_without_mutation ... ok
+test exact_retry_reconciles_pending_and_final_receipt_commit_boundaries ... ok
+test retired_v1_and_v2_receipt_tags_never_enter_v3_apis ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/build_attempt_protocol.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/build_attempt_protocol-2f24d627c6d5c5be)
+
+running 13 tests
+test backend_claim_survives_process_like_unwind_and_is_not_reusable ... ok
+test direct_backend_is_rejected_while_wrapped_attempt_is_active ... ok
+test distinct_invocation_fingerprint_supersedes_instead_of_aliasing ... ok
+test begin_invalidates_only_the_selected_producers_owned_triplets ... ok
+test control_registry_survives_reload_and_retains_generation_watermark ... ok
+test different_session_supersedes_and_stale_token_is_rejected_without_mutation ... ok
+test failed_attempt_is_terminal_for_the_same_session ... ok
+test concurrent_orderings_never_leave_a_stale_publication ... ok
+test finish_without_backend_fails_closed_and_leaves_owned_artifacts_removed ... ok
+test successful_backend_then_finish_preserves_the_published_generation ... ok
+test same_invocation_begin_is_idempotent_until_the_backend_claims_it ... ok
+test backend_failure_marks_attempt_failed_and_invalidates_staged_output ... ok
+test cleanup_failure_after_claim_revokes_the_token_before_returning ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/build_attempt_recovery.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/build_attempt_recovery-b78a0bb19dbe84a5)
+
+running 5 tests
+test failed_recovery_is_replayed_before_backend_authorization ... ok
+test malformed_private_recovery_poisons_authorization_until_repaired ... ok
+test completed_recovery_makes_finish_idempotent_and_preserves_artifacts ... ok
+test completed_managed_record_rejects_direct_backend_without_mutation ... ok
+test one_token_authorizes_only_one_backend_publication ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/compiler_artifact_generation_v1.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/compiler_artifact_generation_v1-1b8f7a0addc8637c)
+
+running 53 tests
+test compiler_artifact_generation_subprocess_helper ... ok
+test canonical_manifest_is_deterministic_domain_separated_and_round_trips ... ok
+test actual_allocated_bytes_are_rejected_before_scope_record_promotion ... ok
+test corrupted_large_sparse_object_is_rejected_before_payload_allocation ... ok
+test complete_reader_rejects_blob_manifest_and_scope_record_mutation ... ok
+test configured_byte_and_entry_quotas_fail_before_commit_and_preserve_active ... ok
+test abrupt_death_after_canonical_rename_requires_restart_durability_recovery ... ok
+test abrupt_death_after_reused_object_is_staged_recovers_on_restart ... ok
+test canonical_only_recovery_recommits_without_entry_quota_headroom ... ok
+test existing_canonical_and_identical_redo_faults_never_report_not_committed ... ok
+test foreign_scope_over_quota_redo_cannot_block_root_admission ... ok
+test faults_before_redo_visibility_are_not_committed_and_retry_cleanly ... ok
+test four_and_five_role_generations_publish_with_one_scope_commit ... ok
+test foreign_scope_recovery_record_is_reconciled_before_admission ... ok
+test generation_two_recovery_record_restarts_without_predecessor_wedge ... ok
+test identical_redo_recovers_but_stale_predecessor_fails_closed ... ok
+test incomplete_redo_never_becomes_the_canonical_generation ... ok
+test manifest_decoder_rejects_missing_duplicate_reordered_unknown_and_trailing_roles ... ok
+test every_object_publication_fault_leaves_no_mixed_generation_and_retries ... ok
+test open_fault_never_returns_a_partial_lease ... ok
+test persistent_lock_inode_replacement_is_rejected ... ok
+test preexisting_recoverable_requested_redo_is_indeterminate_on_recovery_fault ... ok
+test prior_move_only_lease_remains_exact_after_scope_replacement ... ok
+test quota_projection_deduplicates_shared_incoming_content_addresses_at_exact_boundaries ... ok
+test reclamation_resolves_redo_before_pruning_its_predecessor_closure ... ok
+test reclamation_revalidates_a_shared_manifest_for_every_referencing_scope ... ok
+test redo_name_is_private_single_link_and_consumed_by_recovery ... ok
+test cross_process_fresh_store_cannot_bypass_an_active_replaced_named_lock ... ok
+test cross_process_store_on_replacement_root_waits_for_displaced_root_transaction ... ok
+test cross_process_store_waits_when_the_output_parent_is_replaced ... ok
+test redo_symlink_hardlink_and_mode_attacks_fail_closed ... ok
+test referenced_staged_object_recovers_without_quota_headroom ... ok
+test referenced_staged_tamper_symlink_and_hardlink_fail_closed ... ok
+test redo_promotion_recovery_survives_every_exposed_commit_boundary ... ok
+test redo_only_and_post_commit_ambiguity_recover_to_the_exact_generation ... ok
+test restart_discards_an_over_quota_redo_and_preserves_the_committed_generation ... ok
+test reused_visible_object_crosses_a_fresh_rename_boundary ... ok
+test root_path_substitution_during_commit_never_publishes_into_replacement ... ok
+test reused_object_recommit_stranding_is_recovered_and_retryable ... ok
+test root_symlinks_wrong_modes_content_symlinks_and_hardlinks_fail_closed ... ok
+test staged_object_recovery_is_itself_retryable_after_final_rename ... ok
+test fresh_store_on_replacement_root_waits_for_displaced_root_transaction ... ok
+test stale_object_and_record_temporaries_are_reclaimed_under_lock ... ok
+test two_scopes_share_the_root_without_cross_publishing ... ok
+test unreferenced_valid_staged_object_is_reclaimed_not_promoted ... ok
+test visible_canonical_error_is_never_upgraded_inside_the_originating_publish ... ok
+test role_and_aggregate_bounds_are_checked_before_publication ... ok
+test concurrent_publishers_and_readers_observe_only_complete_generations ... ok
+test subprocess_contention_and_restart_recovery_use_one_persistent_lock ... ok
+test same_process_fresh_store_cannot_bypass_an_active_replaced_named_lock ... ok
+test sixty_four_simultaneous_publishers_serialize_to_complete_generations ... ok
+test many_retained_leases_do_not_retain_deleted_open_blocks_or_bypass_quota ... ok
+test dropping_duplicate_store_never_releases_an_active_ofd_lock ... ok
+
+test result: ok. 53 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+
+     Running tests/durable_link_publication.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/durable_link_publication-647062479d476802)
+
+running 34 tests
+test callback_cannot_forge_a_crash_to_bypass_terminal_invalidation ... ok
+test conservative_v1_never_deletes_unreferenced_managed_entries ... ok
+test conflicting_same_generation_redo_never_replaces_canonical_active_state ... ok
+test current_lease_retains_exact_descriptor_snapshot_and_revalidates_under_lock ... ok
+test current_token_is_bound_to_exact_lease ... ok
+test durable_envelope_is_deterministic_and_checksum_bound ... ok
+test finalized_bytes_must_match_validated_sha256_identity ... ok
+test lease_revalidation_rejects_output_parent_substitution ... ok
+test crash_retry_requires_the_complete_plan_and_preserves_the_recovered_prefix ... ok
+test malformed_truncated_and_oversized_records_fail_closed_without_path_mutation ... ok
+test missing_output_directory_is_rejected_without_creating_topology ... ok
+test newer_planned_or_failed_generation_invalidates_old_lease_currentness ... ok
+test higher_generation_redo_accepts_scope_skips_but_rejects_conflicting_state ... ok
+test lease_revalidation_rejects_symlink_hardlink_and_in_place_artifact_changes ... ok
+test process_current_token_contender_child ... ok
+test output_directory_substitution_never_redirects_publication ... ok
+test publishes_recovers_and_exact_replay_skips_work ... ok
+test normal_failure_is_invalidated_and_preserves_prior_publication ... ok
+test record_and_artifact_path_replacement_with_identical_bytes_fail_closed ... ok
+test recursive_current_token_child ... ok
+test record_symlink_and_hardlink_substitution_fail_closed_without_deleting_target ... ok
+test resumed_finalized_callback_without_bytes_is_durably_terminal ... ok
+test every_artifact_boundary_before_and_after_leaves_no_visible_failed_publication ... ok
+test stale_attempt_request_and_scope_are_isolated ... ok
+test invalidation_is_terminal_only_after_its_complete_record_is_exposed ... ok
+test stale_valid_redo_cannot_replace_a_newer_canonical_publication ... ok
+test recursive_current_token_returns_busy_before_timeout ... ok
+test symlink_and_hardlink_artifact_substitution_fail_closed ... ok
+test process_current_token_contention_returns_busy ... ok
+test transient_snapshot_failure_does_not_mutate_or_poison_publication ... ok
+test thread_current_token_contention_returns_busy ... ok
+test current_token_serializes_future_cooperating_publication ... ok
+test exclusive_artifact_lock_is_held_through_callback_and_commit ... ok
+test every_journal_boundary_recovers_or_replays_idempotently ... ok
+
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/link_publication_protocol.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/link_publication_protocol-fd6aa84a235a11a9)
+
+running 12 tests
+test codec_rejects_truncation_trailing_data_and_reordered_state_tags ... ok
+test active_and_invalidated_phase_records_have_a_stable_golden_transcript ... ok
+test crash_recovery_invalidates_incomplete_attempt_and_preserves_prior_and_unrelated_artifacts ... ok
+test newer_attempt_isolates_stale_record_and_preserves_current_authority ... ok
+test every_ordered_state_has_a_canonical_restart_record ... ok
+test publication_is_exactly_once_and_scoped ... ok
+test published_identity_mutation_cannot_remove_the_valid_publication ... ok
+test published_restart_requires_exact_catalog_identity ... ok
+test reordered_transitions_and_parent_mutations_fail_without_state_changes ... ok
+test stale_linked_output_cannot_be_finalized_or_published ... ok
+test same_attempt_request_but_different_publication_cannot_claim_catalog_ownership ... ok
+test same_attempt_different_request_stale_recovery_preserves_valid_publication ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/worker_v3_load_readiness.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/worker_v3_load_readiness-669067501278fec7)
+
+running 13 tests
+test abrupt_crash_child_terminates_at_one_exact_boundary ... ok
+test process_restart_child_revalidates_terminal_custody ... ok
+
+running 1 test
+
+running 1 test
+test current_retirement_crash_resumes_only_with_the_same_readiness ... ok
+test process_restart_child_revalidates_terminal_custody ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+test process_restart_recovery_uses_only_durable_state ... ok
+test exact_publication_retry_and_restart_recovery_are_idempotent_and_inert ... ok
+test only_exact_durable_readiness_retires_current_intent_without_admitting_load ... ok
+test superseded_custody_is_scavenged_but_current_custody_is_retained ... ok
+test wrong_authority_claim_envelope_and_stale_generation_fail_closed ... ok
+test readiness_debug_is_bounded_and_omits_exact_envelope_bytes ... ok
+
+running 1 test
+test missing_and_inode_substituted_terminal_files_fail_closed ... ok
+test retirement_preserves_intent_when_the_separate_publication_artifact_is_not_exact ... ok
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+test crash_sides_reconcile_to_one_exact_terminal_receipt ... ok
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+
+running 1 test
+test every_boundary_survives_abrupt_process_death_and_exact_retry ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
+
+     Running tests/worker_v3_publication_intent.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/worker_v3_publication_intent-200815ed30502e38)
+
+running 26 tests
+test compact_replay_inputs_and_output_round_trip_inertly_after_restart ... ok
+test current_retirement_stays_blocked_after_an_exact_worker_v3_receipt ... ok
+test current_retirement_stays_blocked_with_a_receipt_for_another_plan ... ok
+test current_redo_intent_stays_replayable_after_backend_publication ... ok
+test current_retirement_stays_blocked_after_an_exact_protected_v2_receipt ... ok
+test conflicts_stale_occurrences_and_plan_attempt_cross_use_fail_closed ... ok
+test current_retirement_stays_blocked_after_an_exact_v1_receipt ... ok
+test concurrent_exact_callers_commit_one_record_and_recover_identical_bytes ... ok
+test marker_only_retirement_crash_helper ... ok
+test current_retirement_touches_no_protocol_names_before_load_readiness ... ok
+test different_input_retry_replaces_the_complete_uncommitted_attachment_set ... ok
+test persist_rejects_oversized_spare_output_capacity_before_writing ... ok
+test marker_only_resume_does_not_start_canonical_retirement ... ok
+test recovery_rejects_attachment_truncation_and_trailing_bytes ... ok
+test recovery_reports_provider_payload_and_archive_checksum_mutation_separately ... ok
+test recovery_remains_inert_after_the_exact_backend_claim_is_durable ... ok
+test durable_marker_resumes_after_identity_owner_process_is_lost ... ok
+test recovery_rejects_independent_attachment_mutation ... ok
+test same_input_retry_revalidates_and_reuses_every_canonical_attachment ... ok
+test marker_only_resume_cleans_quarantined_attachment_and_terminal_marker ... ok
+test superseded_same_producer_can_scavenge_only_an_uncommitted_exact_namespace ... ok
+test scavenge_rejects_wrong_authority_and_unsafe_exact_entries_without_partial_cleanup ... ok
+test successor_scavenge_resumes_an_interrupted_receipt_bound_retirement ... ok
+test recovery_rejects_record_mutation_truncation_and_every_attachment_symlink ... ok
+test every_durable_boundary_is_idempotently_recoverable ... ok
+test every_retirement_boundary_is_restart_safe ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+   Doc-tests fe2o3_artifact_transaction
+
+running 11 tests
+test crates/fe2o3-artifact-transaction/src/compiler_artifact_generation_v1.rs - compiler_artifact_generation_v1::CompilerArtifactGenerationLeaseV1 (line 876) - compile fail ... ok
+test crates/fe2o3-artifact-transaction/src/durable_link_publication.rs - durable_link_publication::DurableCurrentLinkPublicationLeaseV1 (line 369) - compile fail ... ok
+test crates/fe2o3-artifact-transaction/src/attempt_scoped_hsaco_publication.rs - attempt_scoped_hsaco_publication::VerifiedWorkerV3PublicationAuthorityV1 (line 88) - compile fail ... ok
+test crates/fe2o3-artifact-transaction/src/attempt_scoped_hsaco_publication.rs - attempt_scoped_hsaco_publication::VerifiedWorkerV3PublicationAuthorityV1 (line 99) - compile fail ... ok
+test crates/fe2o3-artifact-transaction/src/durable_link_publication.rs - durable_link_publication::DurableCurrentLinkPublicationLeaseV1 (line 359) - compile fail ... ok
+test crates/fe2o3-artifact-transaction/src/durable_link_publication.rs - durable_link_publication::DurableCurrentLinkPublicationTokenV1 (line 506) - compile fail ... ok
+test crates/fe2o3-artifact-transaction/src/compiler_module_handoff.rs - compiler_module_handoff::semantic_v3::CompilerModuleHandoffCurrentnessLeaseV3 (line 3583) - compile fail ... ok
+test crates/fe2o3-artifact-transaction/src/compiler_module_handoff.rs - compiler_module_handoff::semantic_v3::CompilerModuleHandoffConsumptionTokenV3 (line 3705) - compile fail ... ok
+test crates/fe2o3-artifact-transaction/src/durable_published_claim.rs - durable_published_claim::DurablePublishedHsacoClaimV3 (line 234) - compile fail ... ok
+test crates/fe2o3-artifact-transaction/src/publication_object_inventory_v1.rs - publication_object_inventory_v1::CompilerModuleHandoffPublicationObjectInventoryV1 (line 337) - compile fail ... ok
+test crates/fe2o3-artifact-transaction/src/publication_object_inventory_v1.rs - publication_object_inventory_v1::CompilerModuleHandoffPublicationObjectInventoryV1 (line 329) - compile fail ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+

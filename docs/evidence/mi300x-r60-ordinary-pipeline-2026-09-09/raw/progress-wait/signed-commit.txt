@@ -1,0 +1,14 @@
+tree e4d0d6d72d52367e2958fbb12b7fbec0305c141f
+parent 63822487edb4cf784e272ec5b3dfbb95468d8652
+author Harsh Noda <3144552+harsh-nod@users.noreply.github.com> 1788966845 -0700
+committer Harsh Noda <3144552+harsh-nod@users.noreply.github.com> 1788966845 -0700
+gpgsig -----BEGIN SSH SIGNATURE-----
+ U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgIhPOhXrjN3i1h5mG86L6afBBrE
+ QjisW9d4LcfGKV4FIAAAADZ2l0AAAAAAAAAAZzaGE1MTIAAABTAAAAC3NzaC1lZDI1NTE5
+ AAAAQD3sWUMDBMSBpOO9xZgI9OlSPm2fs3rLvvLNUUu8udN7sSst4tJI+MlqD/n0NTii4W
+ X8Nb5nWiFxkBshSMF84wg=
+ -----END SSH SIGNATURE-----
+
+Reset compute wait backoff after logical pipeline settlement
+
+Signed-off-by: Harsh Noda <3144552+harsh-nod@users.noreply.github.com>

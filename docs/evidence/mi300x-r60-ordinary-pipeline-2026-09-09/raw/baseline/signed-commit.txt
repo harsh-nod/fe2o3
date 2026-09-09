@@ -1,0 +1,14 @@
+tree 60bf4e2334bae7b6cbe3a8d0d5735142057b7173
+parent 4abde484f02ae19ed59beb22149b9277c625b557
+author Harsh Noda <3144552+harsh-nod@users.noreply.github.com> 1788965002 -0700
+committer Harsh Noda <3144552+harsh-nod@users.noreply.github.com> 1788965002 -0700
+gpgsig -----BEGIN SSH SIGNATURE-----
+ U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgIhPOhXrjN3i1h5mG86L6afBBrE
+ QjisW9d4LcfGKV4FIAAAADZ2l0AAAAAAAAAAZzaGE1MTIAAABTAAAAC3NzaC1lZDI1NTE5
+ AAAAQFHPIYmXd8vjMlbNq9lGjVSBMKGYclhsMHHNAF+KJCiv2LPPdf6Brz6CpjwxDP5N6k
+ 3hlNDj0WiYng4CNjYw0Q4=
+ -----END SSH SIGNATURE-----
+
+fix(bench): honor HSA kernarg buffer alignment
+
+Signed-off-by: Harsh Noda <3144552+harsh-nod@users.noreply.github.com>

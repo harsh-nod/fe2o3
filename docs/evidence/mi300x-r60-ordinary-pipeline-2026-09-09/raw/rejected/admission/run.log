@@ -1,0 +1,2 @@
+R60 runner rejected: monitor-qualification-0 exited 2: /usr/bin/timeout: the monitored command dumped core
+r26-host-guard: target command exited with status -6

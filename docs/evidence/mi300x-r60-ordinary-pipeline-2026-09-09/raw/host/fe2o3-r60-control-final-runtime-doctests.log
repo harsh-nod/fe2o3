@@ -1,0 +1,47 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s
+   Doc-tests fe2o3_kfd
+
+running 27 tests
+test crates/fe2o3-kfd/src/persistent_allocation.rs - persistent_allocation::Gfx942PersistentUseLeaseV1 (line 259) - compile fail ... ok
+test crates/fe2o3-kfd/src/persistent_directional_sdma.rs - persistent_directional_sdma::Gfx942DirectionalQueuePersistentAllocationV1 (line 165) - compile fail ... ok
+test crates/fe2o3-kfd/src/persistent_allocation.rs - persistent_allocation::Gfx942PersistentUseLeaseV1 (line 252) - compile fail ... ok
+test crates/fe2o3-kfd/src/persistent_sdma.rs - persistent_sdma::Gfx942QueuePersistentAllocationV1 (line 110) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_live.rs - queue::live::Gfx942ComputeDependencyDispatchV1 (line 3827) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_live.rs - queue::live::Gfx942ComputeDependencyEventV1 (line 3772) - compile fail ... ok
+test crates/fe2o3-kfd/src/persistent_compute.rs - persistent_compute::Gfx942PersistentComputeWaitAndRecycleV1 (line 501) - compile fail ... ok
+test crates/fe2o3-kfd/src/persistent_allocation.rs - persistent_allocation::Gfx942PersistentDeviceAllocationV1 (line 442) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_dispatch_binding.rs - queue::dispatch_binding::Gfx942FixedDispatchDataV1 (line 323) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_completion.rs - queue::completion::Gfx942CompletionBatchV1 (line 563) - compile fail ... ok
+test crates/fe2o3-kfd/src/persistent_allocation.rs - persistent_allocation::Gfx942PersistentDeviceAllocationV1 (line 435) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_completion.rs - queue::completion::Gfx942CompletedBatchV1 (line 617) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_dispatch_binding.rs - queue::dispatch_binding::Gfx942DispatchBatchV1 (line 2957) - compile fail ... ok
+test crates/fe2o3-kfd/src/shared_memory.rs - shared_memory::Gfx942InitializedDeviceMemoryV1 (line 406) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_dispatch_binding.rs - queue::dispatch_binding::Gfx942FixedDispatchPacketV1 (line 149) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_dispatch_binding.rs - queue::dispatch_binding::Gfx942DispatchBatchV1 (line 2967) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_live.rs - queue::live::ComputeAqlQueueLaneDispatchV1 (line 4254) - compile fail ... ok
+test crates/fe2o3-kfd/src/shared_memory.rs - shared_memory::Gfx942DeviceMemoryLeaseV1 (line 191) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_completion.rs - queue::completion::Gfx942CompletionBatchV1 (line 553) - compile fail ... ok
+test crates/fe2o3-kfd/src/shared_memory.rs - shared_memory::Gfx942DeviceMemoryLeaseV1 (line 202) - compile fail ... ok
+test crates/fe2o3-kfd/src/shared_memory.rs - shared_memory::Gfx942InitializedDeviceMemoryV1 (line 414) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_dispatch_binding.rs - queue::dispatch_binding::Gfx942DispatchBatchV1 (line 2975) - compile fail ... ok
+test crates/fe2o3-kfd/src/persistent_directional_sdma.rs - persistent_directional_sdma::Gfx942DirectionalQueuePersistentAllocationV1 (line 158) - compile fail ... ok
+test crates/fe2o3-kfd/src/persistent_sdma.rs - persistent_sdma::Gfx942QueuePersistentAllocationV1 (line 103) - compile fail ... ok
+test crates/fe2o3-kfd/src/shared_memory.rs - shared_memory::SharedGttAllocationV1 (line 731) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_dispatch_binding.rs - queue::dispatch_binding::Gfx942CompletedDispatchBatchV1 (line 3001) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_device_content.rs - queue::device_content::Gfx942DeviceContentDescriptorV1 (line 77) - compile fail ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+
+   Doc-tests fe2o3_runtime
+
+running 7 tests
+test crates/fe2o3-runtime/src/worker.rs - worker::RuntimeWorkerBackendV1 (line 2197) - compile fail ... ok
+test crates/fe2o3-runtime/src/worker.rs - worker::RuntimeWorkerV1ImmediateProgressBackendV1 (line 1378) - compile fail ... ok
+test crates/fe2o3-runtime/src/kfd_backend.rs - kfd_backend::KfdRuntimeLaunchAuthorityV1 (line 434) - compile fail ... ok
+test crates/fe2o3-runtime/src/worker.rs - worker::RuntimeWorkerBackendV4 (line 2323) - compile fail ... ok
+test crates/fe2o3-runtime/src/worker.rs - worker::RuntimeWorkerV1ImmediateProgressBackendV1 (line 1384) - compile fail ... ok
+test crates/fe2o3-runtime/src/worker.rs - worker::RuntimeWorkerV1ImmediateProgressBackendV1 (line 1390) - compile fail ... ok
+test crates/fe2o3-runtime/src/authorized_execution.rs - authorized_execution::WorkerV3Gfx942ExecutionAuthorityV1 (line 34) - compile fail ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+

@@ -1,0 +1,58 @@
+
+
+============================ ROCm System Management Interface ============================
+=============================== Current clock frequencies ================================
+GPU[0]		: fclk clock level: 0: (1300Mhz)
+GPU[0]		: mclk clock level: 0: (900Mhz)
+GPU[0]		: sclk clock level: 1: (2107Mhz)
+GPU[0]		: socclk clock level: S: (28Mhz)
+GPU[1]		: fclk clock level: 0: (1300Mhz)
+GPU[1]		: mclk clock level: 0: (900Mhz)
+GPU[1]		: sclk clock level: S: (132Mhz)
+GPU[1]		: socclk clock level: S: (28Mhz)
+GPU[2]		: fclk clock level: 0: (1300Mhz)
+GPU[2]		: mclk clock level: 0: (900Mhz)
+GPU[2]		: sclk clock level: S: (131Mhz)
+GPU[2]		: socclk clock level: S: (28Mhz)
+GPU[3]		: fclk clock level: 0: (1300Mhz)
+GPU[3]		: mclk clock level: 0: (900Mhz)
+GPU[3]		: sclk clock level: S: (132Mhz)
+GPU[3]		: socclk clock level: S: (28Mhz)
+GPU[4]		: fclk clock level: 0: (1300Mhz)
+GPU[4]		: mclk clock level: 0: (900Mhz)
+GPU[4]		: sclk clock level: S: (132Mhz)
+GPU[4]		: socclk clock level: S: (28Mhz)
+GPU[5]		: fclk clock level: 0: (1300Mhz)
+GPU[5]		: mclk clock level: 0: (900Mhz)
+GPU[5]		: sclk clock level: S: (131Mhz)
+GPU[5]		: socclk clock level: S: (28Mhz)
+GPU[6]		: fclk clock level: 0: (1300Mhz)
+GPU[6]		: mclk clock level: 0: (900Mhz)
+GPU[6]		: sclk clock level: S: (132Mhz)
+GPU[6]		: socclk clock level: S: (28Mhz)
+GPU[7]		: fclk clock level: 0: (1300Mhz)
+GPU[7]		: mclk clock level: 0: (900Mhz)
+GPU[7]		: sclk clock level: S: (132Mhz)
+GPU[7]		: socclk clock level: S: (28Mhz)
+==========================================================================================
+=================================== Power Consumption ====================================
+GPU[0]		: Current Socket Graphics Package Power (W): 178.0
+GPU[1]		: Current Socket Graphics Package Power (W): 139.0
+GPU[2]		: Current Socket Graphics Package Power (W): 148.0
+GPU[3]		: Current Socket Graphics Package Power (W): 138.0
+GPU[4]		: Current Socket Graphics Package Power (W): 154.0
+GPU[5]		: Current Socket Graphics Package Power (W): 139.0
+GPU[6]		: Current Socket Graphics Package Power (W): 141.0
+GPU[7]		: Current Socket Graphics Package Power (W): 139.0
+==========================================================================================
+=================================== % time GPU is busy ===================================
+GPU[0]		: GPU use (%): 0
+GPU[1]		: GPU use (%): 0
+GPU[2]		: GPU use (%): 0
+GPU[3]		: GPU use (%): 0
+GPU[4]		: GPU use (%): 0
+GPU[5]		: GPU use (%): 0
+GPU[6]		: GPU use (%): 0
+GPU[7]		: GPU use (%): 0
+==========================================================================================
+================================== End of ROCm SMI Log ===================================

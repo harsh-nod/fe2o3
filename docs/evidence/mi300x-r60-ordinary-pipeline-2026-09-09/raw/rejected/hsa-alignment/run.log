@@ -1,0 +1,2 @@
+R60 runner rejected: monitor-slot-0-hsa exited 2: R60 benchmark failed: HSA kernel metadata differs from the frozen vecadd ABI
+r26-host-guard: target command exited with status 2

@@ -1,0 +1,3 @@
+R60 runner rejected: monitor-qualification-0 exited 2: R60 qualification phase=pre-cleanup output_byte_exact=true cleanup=pending
+R60 ordinary pipeline qualification failed: incomplete qualification profile
+r26-host-guard: target command exited with status 1

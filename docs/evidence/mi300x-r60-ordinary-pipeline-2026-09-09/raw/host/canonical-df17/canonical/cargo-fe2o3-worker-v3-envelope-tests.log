@@ -1,0 +1,84 @@
+   Compiling find-msvc-tools v0.1.11
+   Compiling shlex v2.0.1
+   Compiling cc v1.4.4
+   Compiling autocfg v1.5.1
+   Compiling num-traits v0.2.19
+   Compiling rmp v0.8.15
+   Compiling fe2o3-hip-sys v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-hip-sys)
+   Compiling fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-completion)
+warning: fe2o3-hip-sys@0.1.0: HIP headers not found; device-property discovery will return HIP_ERROR_NOT_SUPPORTED
+   Compiling fe2o3-service-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-service-host)
+   Compiling fe2o3-core v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-core)
+   Compiling rmpv v1.3.1
+   Compiling fe2o3-hsa-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-hsa-runtime)
+   Compiling fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-host)
+   Compiling cargo-fe2o3 v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/cargo-fe2o3)
+    Finished `test` profile [unoptimized] target(s) in 28.24s
+     Running tests/worker_v3_load_envelope_vertical.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/worker_v3_load_envelope_vertical-0909241731ea8a6f)
+
+running 62 tests
+test authenticated_v3_executable_retains_verifier_entry_currentness_until_drop ... ok
+test authenticated_v3_roster_retains_verifier_entry_currentness_until_drop ... ok
+test borrowed_v3_audit_preserves_exact_admission_custody_without_authority ... ok
+test cargo_supervisor_and_static_host_consumer_complete_strict_v3_handoff ... ok
+test cargo_supervisor_and_static_host_consumer_complete_strict_v3_roster_handoff ... ok
+test completed_v3_publication_is_inert_and_synthetic_verification_cannot_reach_hsa ... ok
+test protected_roster_verifier_authenticates_one_artifact_and_borrowed_typed_entries ... ok
+test protected_roster_verifier_rejection_retains_exact_owner_for_retry ... ok
+test protected_roster_verifier_rejects_common_and_per_entry_substitution ... ok
+test protected_roster_verifier_rejects_same_hsaco_from_foreign_finalizer_derivation ... ok
+test protected_verifier_adapter_rejects_substituted_and_zero_evidence ... ok
+test protected_verifier_rejects_same_hsaco_from_foreign_finalizer_derivation ... ok
+test protected_verifier_without_current_compiler_evidence_cannot_reach_hsa ... ok
+test refining_protected_verifier_adapter_contains_backend_panics ... ok
+test refining_protected_verifier_adapter_joins_exact_isa_and_consumes_receipt ... ok
+test refining_protected_verifier_adapter_propagates_semantic_rejection_without_receipt ... ok
+test refining_protected_verifier_adapter_rejects_protected_failure_and_substitution ... ok
+test refining_protected_verifier_adapter_revalidates_currentness_after_semantic_backend ... ok
+test stale_authenticated_v3_transition_cannot_reach_hsa_authorization ... ok
+test strict_v3_handoff_closes_unrelated_inheritable_descriptors ... ok
+test strict_v3_handoff_rejects_a_symlinked_envelope_before_spawn ... ok
+test strict_v3_handoff_rejects_child_protocol_substitution_and_omission ... ok
+test strict_v3_handoff_rejects_replaced_generation_directory ... ok
+test strict_v3_handoff_rejects_stale_envelope_after_publication_turnover ... ok
+test strict_v3_handoff_rejects_truncated_and_extended_envelopes_before_spawn ... ok
+test strict_v3_host_consumer_rejects_substituted_commitment ... ok
+test strict_v3_public_ack_does_not_claim_child_currentness_authority ... ok
+test strict_v3_seccomp_rejects_process_and_session_escape ... ok
+test strict_v3_seccomp_rejects_static_and_dynamic_exec_replacement ... ok
+test strict_v3_stalled_ack_times_out_without_spinning_and_reaps_application ... ok
+test synthetic_v3_evidence_cannot_probe_a_substituting_hsa_adapter ... ok
+test synthetic_v3_hsa_authorization_fails_before_environment_validation ... ok
+test v3_host_admission_rejects_an_unknown_kernel_identity ... ok
+test v3_host_roster_admission_retains_one_inert_envelope_for_the_exact_table ... ok
+test v3_host_roster_admission_uses_canonical_descriptor_order_not_source_or_elf_order ... ok
+test v3_verification_rejects_a_substituted_finalized_hsaco_identity ... ok
+test v3_verification_rejects_every_compiler_execution_substitution_and_missing_authority ... ok
+test worker_v3_fixture::shared::borrowed_finalizer_revalidation_retains_exact_stage_custody_without_payloads_or_authority ... ok
+test worker_v3_fixture::shared::invocation_closure_transaction_plan_and_worker_axes_cannot_be_dropped ... ok
+test worker_v3_fixture::shared::native_v3_finalization_fails_closed_without_descriptor_source_evidence ... ok
+test worker_v3_fixture::shared::native_v3_finalization_rejects_a_different_canonical_descriptor_source ... ok
+test worker_v3_fixture::shared::native_v3_finalization_rejects_a_different_export_manifest_receipt ... ok
+test worker_v3_fixture::shared::native_v3_finalizer_admits_only_the_exact_artifact_and_bounded_isa_interval ... ok
+test worker_v3_fixture::shared::native_v3_inspection_retains_every_boundary_axis_without_authority ... ok
+test worker_v3_fixture::shared::native_v3_publication_persists_and_reconstructs_exact_lineage_after_restart ... ok
+test worker_v3_fixture::shared::native_v3_publication_rejects_a_different_producer ... ok
+test worker_v3_fixture::shared::production_profiler_kir_archive_replays_finalizer_and_preserves_typed_unavailability ... ok
+test worker_v3_fixture::shared::production_semantic_anchors_admit_real_worker_gfx942_and_gfx950 ... ignored, requires FE2O3_TEST_REAL_WORKER, FE2O3_TEST_REAL_WORKER_BUILD_ID, and FE2O3_TEST_REAL_LLVM_BUILD_ID
+test worker_v3_fixture::shared::production_semantic_debug_legacy_and_unavailable_states_are_typed ... ok
+test worker_v3_fixture::shared::production_semantic_debug_rejects_canonically_resealed_correspondence_substitution ... ok
+test worker_v3_fixture::shared::production_semantic_debug_rejects_changed_v7_projection_and_replay_target ... ok
+test worker_v3_fixture::shared::production_source_isa_catalog_admits_real_worker_kernel_family_matrix ... ignored, requires FE2O3_TEST_REAL_WORKER, FE2O3_TEST_REAL_WORKER_BUILD_ID, and FE2O3_TEST_REAL_LLVM_BUILD_ID
+test worker_v3_fixture::shared::production_source_isa_kernel_family_fixtures_are_distinct_canonical_kir_v8 ... ok
+test worker_v3_fixture::shared::raw_bytes_and_every_structural_hsaco_axis_are_checked ... ok
+test worker_v3_fixture::shared::semantic_anchor_admission_rejects_resealed_cross_spliced_association_by_default ... ok
+test worker_v3_fixture::shared::singleton_target_lineage_accepts_semantic_debug_receipt_extensions ... ok
+test worker_v3_fixture::shared::singleton_target_lineage_rejects_cross_spliced_semantic_debug_receipt_extension ... ok
+test worker_v3_fixture::shared::singleton_target_lineage_rejects_malformed_semantic_debug_receipt_extension ... ok
+test worker_v3_fixture::shared::singleton_target_lineage_rejects_rehashed_cross_compilation_splices ... ok
+test worker_v3_fixture::shared::source_isa_correlation_preserves_exact_source_carrier_unavailability ... ok
+test worker_v3_fixture::shared::strict_v3_gfx942_no_ffi_rejects_external_provider_input ... ok
+test worker_v3_fixture::shared::strict_v3_inspection_derives_wg256_from_the_bound_descriptor ... ok
+
+test result: ok. 60 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 493.38s
+

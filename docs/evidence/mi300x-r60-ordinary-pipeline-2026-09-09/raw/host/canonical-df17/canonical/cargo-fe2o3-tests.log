@@ -1,0 +1,871 @@
+   Compiling typenum v1.20.1
+   Compiling unicode-ident v1.0.24
+   Compiling cfg-if v1.0.4
+   Compiling proc-macro2 v1.0.107
+   Compiling hybrid-array v0.4.14
+   Compiling cpufeatures v0.3.1
+   Compiling quote v1.0.47
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling bitflags v2.13.1
+   Compiling fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-target-spec)
+   Compiling version_check v0.9.5
+   Compiling digest v0.11.3
+   Compiling fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-amd-target)
+   Compiling sha2 v0.11.0
+   Compiling memchr v2.8.3
+   Compiling libc v0.2.189
+   Compiling syn v2.0.119
+   Compiling syn v3.0.4
+   Compiling serde_core v1.0.229
+   Compiling const_fn v0.4.12
+   Compiling equivalent v1.0.2
+   Compiling awint_internals v0.19.0
+   Compiling generic-array v0.14.7
+   Compiling linux-raw-sys v0.12.1
+   Compiling zmij v1.0.23
+   Compiling hashbrown v0.17.1
+   Compiling indexmap v2.14.1
+   Compiling awint_core v0.19.0
+   Compiling serde v1.0.229
+   Compiling itoa v1.0.18
+   Compiling scopeguard v1.2.0
+   Compiling serde_json v1.0.151
+   Compiling recasting v0.2.3
+   Compiling triple_arena v0.15.1
+   Compiling lock_api v0.4.14
+   Compiling awint_ext v0.19.0
+   Compiling serde_derive v1.0.229
+   Compiling spin v0.12.3
+   Compiling semver v1.0.28
+   Compiling bytemuck v1.25.2
+   Compiling arrayvec v0.7.8
+   Compiling linkme-impl v0.3.37
+   Compiling safe_arch v1.2.0
+   Compiling rustc_version v0.4.1
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling awint_macro_internals v0.19.0
+   Compiling aho-corasick v1.1.5
+   Compiling slotmap v1.1.1
+   Compiling zeroize v1.9.0
+   Compiling bytes v1.12.1
+   Compiling rustc_apfloat v0.2.3+llvm-462a31f5a5ab
+   Compiling rustix v1.1.4
+   Compiling unicode-segmentation v1.13.3
+   Compiling foldhash v0.2.0
+   Compiling thiserror v2.0.16
+   Compiling allocator-api2 v0.2.21
+   Compiling regex-syntax v0.8.11
+   Compiling linkme v0.3.37
+   Compiling convert_case v0.11.0
+   Compiling combine v4.6.8
+   Compiling regex-automata v0.4.18
+   Compiling awint_macros v0.19.0
+   Compiling digest v0.10.7
+   Compiling curve25519-dalek v4.1.3
+   Compiling wide v1.7.0
+   Compiling thiserror-impl v2.0.16
+   Compiling fe2o3-kernel-descriptor v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-kernel-descriptor)
+   Compiling fe2o3-build-authority v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-build-authority)
+   Compiling smallvec v1.15.2
+   Compiling cpufeatures v0.2.17
+   Compiling rustc-hash v2.1.3
+   Compiling pliron-derive v0.17.0 (https://github.com/harsh-nod/pliron.git?rev=5bdf861bf03e7f20242b25717fb653336d02e487#5bdf861b)
+   Compiling hi_sparse_bitset v0.9.0
+   Compiling fe2o3-rustc-invocation v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-rustc-invocation)
+   Compiling awint v0.19.0
+   Compiling regex v1.13.1
+   Compiling utf8-chars v3.0.7
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling getrandom v0.2.17
+   Compiling dyn-clone v1.0.20
+   Compiling once_vec v0.4.0
+   Compiling subtle v2.6.1
+   Compiling downcast-rs v2.0.2
+   Compiling signature v2.2.0
+   Compiling log v0.4.34
+   Compiling pliron v0.17.0 (https://github.com/harsh-nod/pliron.git?rev=5bdf861bf03e7f20242b25717fb653336d02e487#5bdf861b)
+   Compiling ed25519 v2.2.3
+   Compiling rand_core v0.6.4
+   Compiling sha2 v0.10.9
+   Compiling ed25519-dalek v2.2.0
+   Compiling fe2o3-compiler-lineage v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-compiler-lineage)
+   Compiling reserved-fe2o3-symbols v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/reserved-fe2o3-symbols)
+   Compiling fe2o3-compiler-ffi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-compiler-ffi)
+   Compiling fe2o3-pliron-owner-core v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-pliron-owner-core)
+   Compiling fe2o3-kernel-ir v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-kernel-ir)
+   Compiling dialect-gpu v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/dialect-gpu)
+   Compiling dialect-kernel v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/dialect-kernel)
+   Compiling dialect-proof v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/dialect-proof)
+   Compiling fe2o3-mir-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-mir-model)
+   Compiling fe2o3-proof-contracts v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-proof-contracts)
+   Compiling fe2o3-functional-proof v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-functional-proof)
+   Compiling fe2o3-kernel-analysis v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-kernel-analysis)
+   Compiling dialect-mir v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/dialect-mir)
+   Compiling fe2o3-artifact-transaction v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-artifact-transaction)
+   Compiling fe2o3-pliron v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-pliron)
+   Compiling fe2o3-llvm-handoff v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-llvm-handoff)
+   Compiling fe2o3-hsaco v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-hsaco)
+   Compiling fe2o3-kernel-opt v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-kernel-opt)
+   Compiling fe2o3-amdgcn-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-amdgcn-model)
+   Compiling object v0.39.1
+   Compiling fe2o3-lower-mir-kernel v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-lower-mir-kernel)
+   Compiling dialect-amdgcn v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/dialect-amdgcn)
+   Compiling fe2o3-external-anchor-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-external-anchor-protocol)
+   Compiling io-lifetimes v2.0.4
+   Compiling io-lifetimes v3.0.1
+   Compiling fe2o3-compiler-execution-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-compiler-execution-protocol)
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-amdhsa-loader)
+   Compiling fe2o3-llvm-text v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-llvm-text)
+   Compiling fe2o3-source-isa-observation v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-source-isa-observation)
+   Compiling fe2o3-process-identity v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-process-identity)
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-runtime-model)
+   Compiling csv-core v0.1.13
+   Compiling fe2o3-aql v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-aql)
+   Compiling io-extras v0.19.0
+   Compiling fe2o3-drm-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-drm-uapi)
+   Compiling fe2o3-kfd-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-kfd-uapi)
+   Compiling winnow v1.0.4
+   Compiling ryu v1.0.23
+   Compiling csv v1.4.0
+   Compiling toml_parser v1.1.3+spec-1.1.0
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-kfd)
+   Compiling fe2o3-hsaco-finalize v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-hsaco-finalize)
+   Compiling fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-profiler-protocol)
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling serde_spanned v1.1.1
+   Compiling once_cell v1.21.4
+   Compiling fe2o3-host-api v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-host-api)
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling fe2o3-semantic-trace v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-semantic-trace)
+   Compiling cap-primitives v4.0.2
+   Compiling toml v1.1.4+spec-1.1.0
+   Compiling fe2o3-semantic-import v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-semantic-import)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-runtime)
+   Compiling rustix-linux-procfs v0.1.1
+   Compiling fs-set-times v0.20.3
+   Compiling fe2o3-compiler-closure-capability v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-compiler-closure-capability)
+   Compiling fe2o3-artifacts v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-artifacts)
+   Compiling ambient-authority v0.0.2
+   Compiling ipnet v2.12.1
+   Compiling maybe-owned v0.3.4
+   Compiling fe2o3-compiler-execution-client v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-compiler-execution-client)
+   Compiling fe2o3-semantic-query v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-semantic-query)
+   Compiling fe2o3-runtime-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-runtime-protocol)
+   Compiling toml_edit v0.25.13+spec-1.1.0
+   Compiling proc-macro-crate v3.5.0
+   Compiling fe2o3-rustc-front v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-rustc-front)
+   Compiling fe2o3-macros v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-macros)
+   Compiling fe2o3-contracts v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-contracts)
+   Compiling fe2o3-verifier v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-verifier)
+   Compiling fe2o3-device v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-device)
+   Compiling cargo-fe2o3 v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/cargo-fe2o3)
+    Finished `test` profile [unoptimized] target(s) in 3m 18s
+     Running unittests src/main.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/cargo_fe2o3-8e02c77a3250c33d)
+
+running 399 tests
+test application_exec::tests::only_connected_cloexec_seqpacket_descriptors_are_exposed ... ok
+test application_handoff::tests::ack_poll_requests_the_full_remaining_deadline_once_without_retrying ... ok
+test application_handoff::tests::ack_poll_rounds_submillisecond_deadlines_up_without_overflow ... ok
+test application_handoff::tests::artifact_scan_fails_closed_on_entry_error ... ok
+test application_handoff::tests::ack_poll_recomputes_the_deadline_after_every_interruption ... ok
+test application_handoff::tests::artifact_scan_accepts_exact_total_entry_bound ... ok
+test application_handoff::tests::artifact_scan_finds_v3_envelopes_and_ignores_v3_readiness_siblings ... ok
+test application_handoff::tests::artifact_scan_preserves_deterministic_duplicate_candidates ... ok
+test application_handoff::tests::application_handoff_rejects_retired_v2_even_beside_v3 ... ok
+test application_handoff::tests::artifact_scan_does_not_retain_huge_unrelated_names ... ok
+test application_handoff::tests::artifact_scan_counts_mixed_entries_and_sorts_canonical_candidates ... ok
+test application_handoff::tests::ack_exit_observation_retries_eintr_and_echild_fails_closed ... ok
+test application_handoff::tests::compiler_service_exposure_is_mandatory_outside_explicit_test_mode ... ok
+test application_handoff::tests::artifact_scan_rejects_limit_plus_one_unrelated_entry_early ... ok
+test application_handoff::tests::exit_observation_keeps_process_group_leader_unreaped ... ok
+test application_handoff::tests::early_exit_without_ack_remains_waitable_until_cleanup ... ok
+test application_sandbox::tests::inherited_connected_service_operations_are_narrowly_allowlisted ... ok
+test application_handoff::tests::sole_schema_policy_rejects_worker_v2_and_accepts_worker_v3 ... ok
+test application_handoff::tests::session_setup_fails_closed_for_a_process_group_leader ... ok
+test application_sandbox::tests::dropping_pending_launch_without_listener_is_bounded ... ok
+test application_handoff::tests::successful_leader_exit_still_contains_session_descendants ... ok
+test application_supervisor::tests::supervisor_protocol_rejects_challenge_substitution ... ok
+test application_handoff::tests::short_test_timeouts_are_internal_and_distinct_from_production ... ok
+test application_supervisor::tests::supervisor_rejects_noncanonical_slot_and_wrong_peer_identity ... ok
+test application_handoff::tests::nonblocking_group_reap_retries_eintr_and_reports_pending_and_complete ... ok
+test application_handoff::tests::terminal_process_group_is_never_reused_for_sandbox_only_polling ... ok
+test application_sandbox::tests::dropping_stalled_pending_admission_never_joins ... ok
+test application_handoff::tests::worker_start_failure_never_publishes_a_reservation ... ok
+test application_sandbox::tests::filter_kills_foreign_architectures_and_denies_unknown_syscalls ... ok
+test application_handoff::tests::successful_wait_observation_error_still_transfers_and_reaps ... ok
+test application_handoff::tests::unrelated_same_session_process_cannot_join_or_be_killed ... ok
+test authority_release::tests::compiler_observation_wire_requires_the_exact_v2_preimage ... ok
+test application_handoff::tests::bounded_supervisor_saturates_recovers_and_uses_one_worker ... ok
+test authority_release::tests::aliases_environment_drift_and_closure_drift_change_identity ... ok
+test authority_release::tests::launcher_substitution_and_backing_replacement_are_rejected ... ok
+test authority_release::tests::transcript_is_bound_to_attempt_process_and_contract ... ok
+test authority_release::tests::legacy_contract_headers_fail_closed ... ok
+test authority_release::tests::contract_round_trips_canonically ... ok
+test authorized_kernel_closure::tests::build_closure_excludes_dev_only_dependencies ... ok
+test authority_release::tests::closure_wrapper_must_equal_the_contract_child_image ... ok
+
+running 1 test
+test application_supervisor::tests::supervisor_admission_has_fixed_capacity_and_recovers ... ok
+test authorized_kernel_closure::tests::build_closure_rejects_unknown_or_malformed_dependency_kinds ... ok
+test authorized_kernel_closure::tests::host_code_policy_rejects_custom_build_proc_macro_and_native_links ... ok
+test authorized_kernel_closure::tests::package_selection_is_exact_and_rejects_non_utf8_arguments ... ok
+test authorized_kernel_closure::tests::canonical_closure_identity_covers_manifests_and_nested_sources ... ok
+test authorized_kernel_closure::tests::proc_macro_mutation_after_preflight_fails_revalidation ... ok
+test application_sandbox::tests::process_creation_and_exec_replacement_are_not_allowlisted ... ok
+test authority_release::tests::descriptor_substitution_reuse_and_cwd_drift_are_rejected ... ok
+test authorized_kernel_closure::tests::reviewed_awint_macros_0_19_requires_exact_registry_identity ... ok
+test authorized_kernel_closure::tests::restored_proc_macro_mutation_remains_in_the_journal ... ok
+test binding_check_projection::tests::canonical_projection_round_trips_and_rejects_malformed_encodings ... ok
+test binding_check_projection::tests::duplicate_target_ownership_and_non_rs_targets_fail_closed ... ok
+test authority_release::tests::argv_environment_and_closure_drift_are_rejected ... ok
+test binding_check_wrapper::tests::backend_selectors_are_never_binding_only_checks ... ok
+
+running 1 test
+test authorized_kernel_closure::tests::reviewed_external_proc_macros_require_exact_source_and_content_identity ... ok
+test application_sandbox::tests::shutdown_before_listener_delivery_terminates_and_joins ... ok
+test authorized_kernel_closure::tests::tampered_registry_build_script_changes_the_reviewed_content_identity ... ok
+test binding_check_wrapper::tests::portable_binding_still_requires_explicit_raw_cargo_metadata ... ok
+test binding_check_wrapper::tests::qualification_environment_is_parent_prohibited_and_child_cleared ... ok
+test binding_check_wrapper::tests::target_lookup_is_logarithmic_over_the_canonical_source_order ... ok
+test binding_check_wrapper::tests::raw_cargo_salts_do_not_change_the_portable_binding ... ok
+test binding_wrapper::lifecycle_tests::release_lifecycle_preserves_v1_and_nonselected_v2_ordering ... ok
+test application_handoff::tests::invalid_ack_early_exit_retains_leader_until_bounded_group_cleanup ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 398 filtered out; finished in 0.00s
+
+test binding_wrapper::lifecycle_tests::observation_emission_failures_are_nonfatal_and_still_consume_the_sink ... ok
+test binding_wrapper::lifecycle_tests::observation_emission_is_one_shot_for_repeated_lifecycle_entries ... ok
+test binding_wrapper::lifecycle_tests::selected_v2_release_failure_revokes_the_real_managed_attempt ... ok
+test binding_wrapper::lifecycle_tests::selected_v2_release_is_deferred_and_exact_attempt_bound ... ok
+test application_handoff::tests::stalled_sandbox_shutdown_does_not_block_unrelated_reaps ... ok
+test binding_check_wrapper::tests::rustc_target_paths_are_normalized_without_following_names ... ok
+test capability_broker::platform::tests::canonical_collection_length_is_bounded_and_fallible ... ok
+test build_config::tests::production_v1_schema_identity_and_inert_observer_behavior_are_frozen ... ok
+test capability_broker::platform::tests::characteristic_collector_requires_byte_identical_duplicate_recovery ... ok
+test capability_broker::platform::tests::collector_deduplicates_exact_recovery_and_preserves_partial_failure ... ok
+test build_config::tests::production_v2_observation_is_exact_and_has_a_distinct_identity_domain ... ok
+test application_handoff::tests::worker_panic_is_observable_fails_closed_and_uses_process_fallback ... ok
+test binding_check_wrapper::tests::portable_binding_separates_semantic_compile_and_package_identity ... ok
+test capability_broker::platform::tests::observer_frame_requires_exact_request_config_unit_and_attempt ... ok
+test capability_broker::platform::tests::canonical_collection_decoder_rejects_hostile_framing_and_payloads ... ok
+test binding_wrapper::lifecycle_tests::spawned_rustc_cleanup_kills_and_reaps_the_child ... ok
+test application_handoff::tests::retryable_reap_error_is_observable_and_retains_capacity_until_recovery ... ok
+test capability_broker::platform::tests::collector_reports_missing_selected_units_without_discarding_frames ... ok
+test cargo_invocation_boundary::platform::tests::any_later_exec_notification_revokes_the_old_process_permit ... ok
+test capability_broker::platform::tests::all_missing_collection_retains_exact_config_and_session ... ok
+test capability_broker::platform::tests::invocation_request_dispatch_preserves_v1_and_accepts_exact_v2_width ... ok
+test cargo_invocation_boundary::platform::tests::proc_self_and_execveat_empty_paths_are_resolved_in_the_tracee ... ok
+test cargo_invocation_boundary::platform::tests::clone_parent_and_non_cargo_images_cannot_qualify_as_cargo_launches ... ok
+test authorized_kernel_closure::tests::reviewed_workspace_host_code_requires_exact_local_or_git_revision_identity ... ok
+test application_handoff::tests::invalid_ack_early_exit_retains_leader_until_bounded_group_cleanup ... ok
+test cargo_invocation_boundary::platform::tests::pidfd_pins_the_current_kernel_process_lifetime ... ok
+test application_supervisor::tests::supervisor_adoption_closes_originals_and_protects_owned_duplicates ... ok
+test cargo_invocation_boundary::platform::tests::protected_cargo_trampoline_and_wrapper_roles_require_distinct_images ... ok
+test cargo_invocation_boundary::platform::tests::authorization_is_one_use_and_process_specific ... ok
+test cargo_invocation_boundary::platform::tests::wrapper_authority_requires_the_same_admitted_trampoline_process ... ok
+test clean::tests::dry_run_preserves_generated_directory_and_reports_intent ... ok
+test cargo_invocation_boundary::platform::tests::non_leader_thread_is_normalized_to_process_tgid ... ok
+test clean::tests::missing_directory_is_idempotent ... ok
+test clean::tests::parses_clean_options_strictly ... ok
+test clean::tests::parses_project_cleanup_options_and_rejects_broad_selectors ... ok
+test clean::tests::refuses_file_at_cleanup_root ... ok
+test clean::tests::preserves_unrelated_target_artifacts ... ok
+test clean::tests::refuses_file_in_cleanup_path ... ok
+test clean::tests::refuses_symlinked_cleanup_root_to_outside ... ok
+test application_handoff::tests::repeated_signals_cannot_extend_the_ack_poll_deadline ... ok
+test cargo_invocation_boundary::platform::tests::dead_wrapper_permits_are_pruned_before_capacity_accounting ... ok
+test clean::tests::opened_workspace_root_cannot_be_redirected_by_path_substitution ... ok
+test clean::tests::opened_directory_substitution_cannot_redirect_removal ... ok
+test authority_release::tests::every_contract_byte_is_identity_bound ... ok
+test compiler_toolchain::tests::compiler_closure_is_content_only_and_binds_every_component ... ok
+test clean::tests::removes_generated_directory_and_reports_action ... ok
+test clean::tests::ordinary_directory_substitution_after_open_cannot_switch_target ... ok
+test compiler_toolchain::tests::compiler_closure_v2_binds_both_wrapper_images ... ok
+test clean::tests::refuses_symlinked_parent_resolving_inside_workspace ... ok
+test compiler_execution_boundary::tests::exact_readiness_is_retained_and_revalidated_without_authority ... ok
+test clean::tests::does_not_follow_internal_symlink_during_removal ... ok
+test compiler_toolchain::tests::content_only_compiler_closure_golden_vector ... ok
+test clean::tests::refuses_symlinked_parent_resolving_outside_workspace ... ok
+test compiler_execution_boundary::tests::selected_child_and_supervisor_must_have_distinct_exact_identities ... ok
+test application_handoff::tests::cleanup_pending_returns_within_injected_bound_and_eventually_reaps ... ok
+test compiler_execution_boundary::tests::policy_and_readiness_substitutions_fail_closed ... ok
+test capability_broker::platform::tests::invocation_request_dispatch_rejects_unknown_and_every_truncated_width ... ok
+test binding_check_projection::tests::duplicated_projection_consumers_never_share_a_stream_offset ... ok
+test compiler_toolchain::tests::retained_object_binding_is_separate_from_the_canonical_closure ... ok
+test authorized_kernel_closure::tests::reviewed_workspace_host_code_trees_match_their_complete_pins ... ok
+test doctor::tests::topology_rejects_noncanonical_nodes ... ok
+test engineering_hsaco::tests::content_namespace_binds_manifest_and_hsaco ... ok
+test doctor::tests::requirement_parser_is_closed ... ok
+test doctor::tests::execution_requirement_remains_closed ... ok
+test engineering_hsaco::tests::parses_only_the_fixed_target_cov_and_namespace ... ok
+test doctor::tests::topology_rejects_duplicate_properties ... ok
+test engineering_hsaco::tests::publication_failure_retains_partial_output_without_cleanup ... ok
+test doctor::tests::bounded_reader_rejects_observed_content_over_its_limit ... ok
+test engineering_hsaco::tests::isolated_build_std_command_clears_caller_channel_and_owns_fixed_arguments ... ok
+test doctor::tests::topology_fixture_reports_target_and_render_unavailability ... ok
+test engineering_hsaco::tests::output_namespace_is_fresh_and_never_uses_production_names ... ok
+test engineering_hsaco::tests::rejects_hostile_identities_providers_limits_and_cargo_overrides ... ok
+test engineering_hsaco::tests::source_has_no_production_or_supervisor_adoption_path ... ok
+test engineering_hsaco::tests::rejects_loader_and_cargo_selection_environment ... ok
+test example_manifest::tests::cpu_test_partition_is_sorted_disjoint_and_exhaustive ... ok
+test engineering_hsaco::tests::vendor_configuration_is_closed_and_injection_resistant ... ok
+test example_manifest::tests::complete_package_scan_finds_feature_gated_and_shared_test_sources ... ok
+test engineering_hsaco::tests::build_std_vendor_checksum_substitution_is_rejected ... ok
+test example_manifest::tests::external_path_and_include_edges_conservatively_select_the_package ... ok
+test capability_broker::platform::tests::v1_release_waits_for_the_frozen_prepared_ack_and_rejects_substitution ... ok
+test example_manifest::tests::cargo_target_roots_remain_strictly_parseable_rust ... ok
+test example_manifest::tests::edge_into_nested_cargo_root_is_an_uninspected_selection_boundary ... ok
+test engineering_hsaco::tests::substituted_scratch_path_is_never_removed ... ok
+test example_manifest::tests::observed_fallback_wins_over_unrelated_external_edges_but_not_managed_sources ... ok
+test example_manifest::tests::rejects_malformed_manifest_structure_and_fields ... ok
+test example_manifest::tests::rejects_missing_extra_and_drifted_workspace_projection ... ok
+test example_manifest::tests::macro_token_bodies_cannot_hide_generated_binding_or_include_edges ... ok
+test example_manifest::tests::metadata_paths_must_remain_in_their_canonical_workspace_and_package ... ok
+test capability_broker::platform::tests::observer_sink_is_returned_only_after_exact_server_preparation ... ok
+test example_manifest::tests::non_target_proof_syntax_conservatively_selects_the_wrapper ... ok
+test engineering_hsaco::tests::empty_build_std_registry_closure_is_rejected ... ok
+test engineering_hsaco::tests::complete_versioned_build_std_vendor_closure_is_admitted ... ok
+test application_supervisor::tests::supervisor_startup_deadline_bounds_partial_frame_slow_drip ... ok
+test example_manifest::tests::parses_strict_example_manifest_and_lane_projection ... ok
+test engineering_hsaco::tests::claimed_host_linker_path_swap_cannot_change_executed_bytes ... ok
+test engineering_hsaco::tests::incomplete_build_std_vendor_fails_before_extraction_command_preparation ... ok
+test example_manifest::tests::source_collection_rejects_a_symlink_root ... ok
+test example_manifest::tests::rejects_unsafe_names_duplicates_and_inconsistent_lanes ... ok
+test example_manifest::tests::structurally_detects_sources_that_require_wrapper_bindings ... ok
+test example_manifest::tests::structurally_detects_explicit_kernel_namespaces ... ok
+test example_manifest::tests::unrelated_macro_tokens_do_not_conflict_with_an_explicit_fallback_namespace ... ok
+test example_manifest::tests::resolved_internal_edges_preserve_explicit_fallback_namespace_packages ... ok
+test example_manifest::tests::validates_manifest_against_workspace_projection ... ok
+test example_manifest::tests::structurally_detects_external_module_edges ... ok
+test example_manifest::tests::structured_artifact_projection_rejects_bad_syntax_and_unsafe_names ... ok
+test example_manifest::tests::unrelated_nested_cargo_root_does_not_select_the_parent_package ... ok
+test example_manifest::tests::sibling_namespace_attributes_do_not_create_a_package_binding_conflict ... ok
+test generation::tests::malformed_or_unsafe_marker_preserves_committed_artifacts ... ok
+test example_manifest::tests::retained_target_recheck_rejects_intermediate_directory_substitution ... ok
+test example_manifest::tests::package_scan_rejects_intermediate_symlinks_and_entry_replacement ... ok
+test example_manifest::tests::structurally_extracts_and_canonicalizes_source_artifacts ... ok
+test example_manifest::tests::retained_manifest_path_rejects_name_substitution ... ok
+test generation::tests::semantic_v5_preserves_the_v1_marker_wire ... ok
+test generation::tests::snapshot_counter_overflow_is_fallible ... ok
+test example_manifest::tests::cargo_metadata_capture_drains_and_rejects_each_output_overflow ... ok
+test generation::tests::generation_semantics_bind_both_v2_wrapper_images ... ok
+test example_manifest::tests::workspace_shared_modules_are_uninspected_external_selection_boundaries ... ok
+test generation::tests::hostile_entry_and_io_marker_scan_errors_preserve_committed_artifacts ... ok
+test inspect::tests::detects_only_supported_magic_values ... ok
+test generation::tests::snapshot_enforces_independent_work_limit ... ok
+test generation::tests::snapshot_rejects_sparse_payload_above_byte_limit_before_reading ... ok
+test generation::tests::snapshot_rejects_symlinks_special_files_and_io_failures ... ok
+test inert_rustc_invocation_capture::tests::argv_order_and_backend_path_mutations_change_the_capture ... ok
+test inert_rustc_invocation_capture::tests::rejects_non_utf8_and_noncanonical_process_inputs ... ok
+test inert_rustc_invocation_capture::tests::protected_capture_upgrades_the_exact_v2_process_to_v3 ... ok
+test generation::tests::depth_and_byte_marker_scan_errors_preserve_committed_artifacts ... ok
+test generation::tests::valid_snapshot_mismatch_is_the_only_destructive_rebuild_path ... ok
+test inspect::tests::rejects_missing_duplicate_and_unknown_options ... ok
+test inert_rustc_invocation_capture::tests::captures_exact_scalar_worker_inputs_without_granting_authority ... ok
+test inert_rustc_invocation_capture::tests::protected_capture_rejects_closure_process_pin_mismatches ... ok
+test inert_rustc_invocation_capture::tests::pinned_object_digest_mutations_change_the_capture ... ok
+test inspect::tests::parses_strict_inspect_options ... ok
+test inert_rustc_invocation_capture::tests::prepared_capture_selects_v2_or_v3_without_conflating_schemas ... ok
+test non_production_reproduction::tests::canonicalizes_only_cargo_codegen_identity_fields ... ok
+test inert_rustc_invocation_capture::tests::cwd_target_output_verification_and_environment_mutations_are_bound ... ok
+test inspect::tests::malformed_inputs_return_format_specific_diagnostics ... ok
+test inspect::tests::source_isa_inspection_preserves_typed_error_without_admitted_payload ... ok
+test non_production_reproduction::tests::reproduction_requires_both_exact_non_production_gates ... ok
+test observer_telemetry::tests::production_writer_reports_zero_and_partial_io_failures_without_panicking ... ok
+test inspect::tests::source_isa_inspection_rejects_corruption_and_trailing_bytes ... ok
+test inspect::tests::source_isa_inspection_preserves_missing_extension_as_unavailable ... ok
+test inspect::tests::synthetic_source_isa_six_frame_fixture_preserves_targets_structures_and_non_authority ... ok
+test non_production_reproduction::tests::deterministic_labels_are_stable_and_distinct ... ok
+test observer_telemetry::tests::production_writer_emits_one_exact_line ... ok
+test pinned_codegen_backend::platform::tests::close_on_exec_is_explicitly_not_ready_for_child_inheritance ... ok
+test pinned_codegen_backend::platform::tests::deliberate_child_descriptor_close_aborts_spawn ... ok
+test pinned_codegen_backend::platform::tests::descriptor_lives_with_the_pin_and_closes_when_the_pin_drops ... ok
+test pinned_codegen_backend::platform::tests::child_reads_the_pinned_object_after_pathname_substitution ... ok
+test pinned_codegen_backend::platform::tests::digest_is_computed_from_exact_opened_bytes ... ok
+test generation::tests::snapshot_depth_plus_one_fails_on_a_small_thread_stack ... ok
+test pinned_codegen_backend::platform::tests::empty_backend_is_rejected ... ok
+test pinned_codegen_backend::platform::tests::exact_copy_and_hash_policies_reject_short_and_growing_streams ... ok
+test pinned_codegen_backend::platform::tests::non_regular_object_is_rejected ... ok
+test pinned_codegen_backend::platform::tests::non_backend_arguments_are_preserved_before_the_sole_selector ... ok
+test pinned_codegen_backend::platform::tests::oversized_backend_is_rejected_before_it_is_read ... ok
+test pinned_codegen_backend::platform::tests::option_terminator_cannot_hide_the_managed_backend_selector ... ok
+test pinned_codegen_backend::platform::tests::prepared_command_appends_the_exact_descriptor_argument ... ok
+test pinned_codegen_backend::platform::tests::procfs_cannot_create_a_write_capability_for_the_sealed_image ... ok
+test pinned_codegen_backend::platform::tests::procfs_reference_has_the_open_descriptor_identity ... ok
+test pinned_codegen_backend::platform::tests::retained_descriptor_is_read_only ... ok
+test pinned_codegen_backend::platform::tests::pathname_substitution_does_not_change_the_descriptor_object ... ok
+test pinned_codegen_backend::platform::tests::descriptor_stays_close_on_exec_in_parent_before_and_after_spawn ... ok
+test pinned_codegen_backend::platform::tests::preexisting_split_backend_selectors_are_rejected ... ok
+test pinned_codegen_backend::platform::tests::preexisting_joined_backend_selectors_are_rejected ... ok
+test pinned_codegen_backend::platform::tests::retained_image_has_exact_immutable_seals ... ok
+test pinned_codegen_backend::platform::tests::retained_image_rejects_write_resize_and_new_seals ... ok
+test pinned_executable::platform::tests::accepts_only_fully_sealed_inherited_descriptors ... ok
+test pinned_codegen_backend::platform::tests::unrelated_children_do_not_inherit_the_backend_descriptor ... ok
+test pinned_executable::platform::tests::digest_is_computed_from_the_opened_object ... ok
+test pinned_codegen_backend::platform::tests::source_mutation_after_capture_cannot_change_the_sealed_image ... ok
+test pinned_codegen_backend::platform::tests::final_symlink_is_rejected_without_following_it ... ok
+test pinned_executable::platform::tests::descriptor_lives_through_command_and_closes_with_pin ... ok
+test pinned_executable::platform::tests::exact_hash_policy_rejects_short_and_growing_streams ... ok
+test pinned_executable::platform::tests::empty_executable_is_rejected ... ok
+test pinned_codegen_backend::platform::tests::unexpectedly_inheritable_descriptor_fails_closed ... ok
+test pinned_codegen_backend::platform::tests::in_place_source_mutation_after_preparation_cannot_affect_child ... ok
+test pinned_executable::platform::tests::non_regular_object_is_rejected ... ok
+test pinned_codegen_backend::platform::tests::source_mutation_after_initial_snapshot_fails_capture ... ok
+test pinned_executable::platform::tests::final_symlink_is_rejected_without_following_it ... ok
+test pinned_codegen_backend::platform::tests::response_files_cannot_hide_a_second_backend_selector ... ok
+test pinned_executable::platform::tests::oversized_file_is_rejected_before_it_is_read ... ok
+test pinned_codegen_backend::platform::tests::source_mutation_before_preparation_cannot_affect_image ... ok
+test pinned_executable::platform::tests::regular_file_without_execute_bits_is_rejected ... ok
+test pinned_executable::platform::tests::sealed_executable_image_is_independent_of_later_source_mutation ... ok
+test pinned_executable::platform::tests::sealed_static_command_rejects_descriptor_identity_substitution ... ok
+test pinned_executable::platform::tests::sealed_static_snapshot_rejects_write_resize_and_new_seals ... ok
+test pinned_executable::platform::tests::sealed_static_snapshot_is_exact_immutable_and_source_independent ... ok
+test pinned_executable_test_directory::tests::directory_is_private_to_the_current_user ... ok
+test process_execution::tests::capture_output_collects_stdout_and_stderr ... ok
+test pinned_executable::platform::tests::sealed_executable_is_inherited_at_one_verified_fixed_child_descriptor ... ok
+test pinned_executable::platform::tests::retained_descriptor_prevents_path_trampoline ... ok
+test process_execution::tests::capture_output_command_remains_reusable ... ok
+test pinned_executable::platform::tests::sealed_static_v3_identity_matches_the_shared_derivation ... ok
+test process_execution::tests::capture_output_propagates_pre_exec_failure ... ok
+test pinned_executable::platform::tests::same_inode_mutation_is_fail_closed_at_every_snapshot_barrier ... ok
+test pinned_executable::platform::tests::same_size_mutation_with_restored_mtime_is_rejected_by_ctime ... ok
+test process_execution::tests::executable_busy_retry_is_bounded_to_the_exact_transient_error ... ok
+test process_execution::tests::configured_output_preserves_explicit_stdout_and_stderr ... ok
+test production_source_isa_characteristic_matrix_v2::production_adapter_v2::ordinary_source_units_preserve_characteristic_facts_on_both_targets_v2 ... ignored, requires the protected authority service and measured Worker V3 environment
+test production_source_isa_characteristic_matrix_v2::complete_zero_characteristic_scan_is_observed_without_missing_surrogates ... ok
+test production_cargo_plan::tests::build_has_one_fixed_device_phase_then_one_fixed_host_phase ... ok
+test production_source_isa_unit_matrix_v1::ordinary_source_units_round_trip_through_the_production_observer_on_both_targets ... ignored, requires the protected production V2 authority service and a measured real Worker V3
+test production_source_isa_characteristic_matrix_v2::eliminated_optional_source_and_duplicate_multiplicity_are_exact ... ok
+test production_cargo_plan::tests::caller_target_selection_and_build_payloads_are_rejected ... ok
+test production_cargo_plan::tests::non_utf8_cargo_and_application_arguments_are_preserved ... ok
+test profile_command::tests::artifact_enumeration_bound_counts_directories_and_zero_byte_files ... ok
+test production_cargo_plan::tests::run_arguments_exist_only_in_the_host_phase ... ok
+test production_source_isa_characteristic_matrix_v2::structural_target_with_zero_catalog_correlations_is_queryable_without_a_fact ... ok
+test profile_command::tests::direct_kfd_target_profile_mapping_is_exact_and_typed ... ok
+test capability_broker::platform::tests::collector_deduplicates_exact_recovery_at_the_unit_bound ... ok
+test production_source_isa_characteristic_matrix_v2::broker_v3_is_bounded_length_prefixed_transport_bound_and_exact_eof ... ok
+test profile_command::tests::dispatch_source_admission_propagates_internal_failures ... ok
+test profile_command::tests::collector_cannot_precreate_live_qualification_transaction_members ... ok
+test profile_command::tests::dispatch_import_readiness_prioritizes_kir_admission_before_hardware ... ok
+test profile_command::tests::artifact_final_reopen_fifo_substitution_is_rejected_without_blocking ... ok
+test production_source_isa_unit_matrix_v1::collection_stderr_parser_protocol_contract_is_bounded_and_rejects_hostile_mutations ... ok
+test profile_command::tests::capture_retains_final_bytes_after_normal_leader_exit ... ok
+test profile_command::tests::durable_record_fifo_substitution_is_rejected_without_blocking ... ok
+test profile_command::tests::installed_adapter_is_closed_stable_and_removes_role_environment ... ok
+test profile_command::tests::kfd_properties_reject_duplicates_and_noncanonical_values ... ok
+test profile_command::tests::installed_release_allowlist_identities_are_exact ... ok
+test production_source_isa_unit_matrix_v1::unit_matrix_protocol_contract_names_only_exact_ordinary_compiler_unit_roots ... ok
+test production_source_isa_characteristic_matrix_v2::production_adapter_v2::reconstructed_archive_rejects_every_hostile_binding_and_fact_substitution ... ok
+test profile_command::tests::kir_compatibility_is_ready_only_for_one_matching_family_and_wave64 ... ok
+test profile_command::tests::kir_compatibility_rejects_empty_mixed_and_wave_mismatch ... ok
+test profile_command::tests::kir_compatibility_rejects_every_unavailable_kfd_profile ... ok
+test production_source_isa_characteristic_matrix_v2::characteristic_matrix_v2_contract_is_lossless_and_production_adapter_is_wired ... ok
+test profile_command::tests::owned_child_is_revoked_before_exactly_one_reap ... ok
+test profile_command::tests::pc_cli_is_closed_and_requires_independent_collection_acknowledgements ... ok
+test profile_command::tests::pc_capture_keeps_same_target_kir_to_source_map_join_unavailable ... ok
+test profile_command::tests::parser_is_closed_and_authorization_is_canonical ... ok
+test profile_command::tests::pc_capability_observation_is_closed_bounded_and_exact ... ok
+test profile_command::tests::absolute_node_mapping_is_authorized_and_revalidated ... ok
+test profile_command::tests::pc_json_requires_an_exact_dispatch_process_agent_projection ... ok
+test profile_command::tests::fast_exit_stdout_overflow_is_authoritative ... ok
+test profile_command::tests::real_pc_plan_and_fake_collector_publish_the_exact_query_tuple ... ignored, uses real direct-KFD topology and safe rocprofv3-avail, but a fake collector
+test profile_command::tests::ownership_guard_fifo_substitution_is_rejected_without_blocking ... ok
+test profile_command::tests::real_pc_plan_probes_capability_without_running_beta_capture ... ignored, safe read-only qualification requires rocprofv3-avail and direct KFD GPUs
+test profile_command::tests::pc_source_admission_propagates_internal_failures ... ok
+test profile_command::tests::relative_artifact_paths_are_closed ... ok
+test profile_command::tests::runtime_capture_admission_requires_one_new_exact_target_argument ... ok
+test profile_command::tests::fast_exit_stderr_overflow_is_authoritative ... ok
+test profile_command::tests::runtime_capture_symlink_substitution_is_rejected ... ok
+test profile_command::tests::semantic_configuration_identity_binds_measurement_kind_and_target_records ... ok
+test profile_command::tests::unauthorised_pc_probe_never_executes_caller_selected_avail ... ignored, requires direct KFD topology but must not execute the hostile capability tool
+test profile_command::tests::target_profile_record_is_canonical_bounded_and_authorized ... ok
+test profile_command::tests::retained_source_fifo_substitution_is_rejected_without_blocking ... ok
+test profile_command::tests::topology_discovery_reobserves_target_profile_substitutions ... ok
+test profile_command::tests::sealed_images_are_read_only_content_exact_and_distinct_from_provenance ... ok
+test profile_live_qualification_v1::tests::checked_in_mi300x_evidence_is_canonical_and_content_bound ... ok
+test profile_live_qualification_v1::tests::artifact_inventory_cannot_be_removed_without_recomputing_outcome ... ok
+test profile_live_qualification_v1::tests::no_artifact_run_is_exactly_scoped_not_a_universal_claim ... ok
+test profile_live_qualification_v1::tests::runtime_without_dispatch_is_not_upgraded_to_dispatch_evidence ... ok
+test profile_dispatch_import_v1::tests::source_and_binding_substitution_fail_closed ... ok
+test profile_wrapper_overhead_v1::tests::canonical_round_trip_and_summary_are_deterministic ... ok
+test profile_wrapper_overhead_v1::tests::swapped_or_stale_trials_and_self_approval_are_rejected ... ok
+test profile_dispatch_import_v1::tests::exact_import_codec_preserves_declared_and_unavailable_boundaries ... ok
+test profile_live_qualification_v1::tests::artifact_paths_are_component_validated ... ok
+test profile_wrapper_overhead_v1::tests::truncation_makes_summary_unavailable ... ok
+test profile_wrapper_overhead_v1::tests::unadmitted_artifacts_do_not_become_capture_overhead ... ok
+test profile_live_qualification_v1::tests::stale_runtime_and_qualification_substitutions_are_rejected ... ok
+test generation::tests::over_limit_marker_scan_error_preserves_committed_artifacts ... ok
+test profile_wrapper_overhead_v1::tests::inconsistent_exit_and_duplicate_artifact_records_are_rejected ... ok
+test project::tests::joined_routing_preserves_non_utf8_path_bytes ... ok
+test profile_dispatch_import_v1::tests::receipt_rejects_resealed_authority_and_identity_substitution ... ok
+test profile_wrapper_overhead_v1::tests::warmup_failure_suppresses_the_summary ... ok
+test project::tests::lexical_paths_are_resolved_without_filesystem_canonicalization ... ok
+test project::tests::routing_stops_at_the_application_separator ... ok
+test profile_wrapper_overhead_v1::tests::checked_in_mi300x_record_is_canonical_and_non_authoritative ... ok
+test project::tests::transferred_artifact_requires_a_cloexec_directory_descriptor ... ok
+test project::tests::routing_forwards_invocation_configuration_to_metadata ... ok
+test project::tests::retained_directory_rejects_rename_and_symlink_substitution ... ok
+test project::tests::routing_rejects_ambiguous_or_missing_paths ... ok
+test profile_dispatch_import_v1::tests::receipt_rejects_impossible_process_pid_relations_and_tuple_substitution ... ok
+test source_isa_observation::tests::admitted_kir_version_mapping_rejects_unprojectable_v11 ... ok
+test source_isa_observation::tests::ready_state_has_a_typed_canonical_unavailable_frame ... ok
+test tests::authority_cargo_selection_never_resolves_a_rustup_proxy ... ok
+test source_isa_observation::tests::unavailable_mapping_is_exact_and_exhaustive ... ok
+test tests::authority_rejects_configured_cargo_environment_before_child_execution ... ok
+test source_isa_observation::tests::characteristic_broker_v3_config_identity_is_frozen ... ok
+test profile_wrapper_overhead_v1::tests::unknown_fields_and_noncanonical_json_are_rejected ... ok
+test tests::binding_clippy_arguments_follow_the_clippy_driver_protocol ... ok
+test pinned_executable_test_directory::tests::duplicate_module_counters_allocate_unique_directories_under_concurrency ... ok
+test tests::binding_host_modes_select_only_the_exact_cargo_command ... ok
+test tests::binding_check_parent_clears_ambient_cargo_unit_identity ... ok
+test rustc_lib_tree::tests::transient_same_bytes_lib_tree_mutation_is_recorded ... ok
+test tests::binding_host_test_requires_the_closed_cargo_argument_profile ... ok
+test tests::binding_host_target_is_bounded_and_toml_quoted ... ok
+test tests::binding_host_test_custody_precedes_test_binary_arguments ... ok
+test tests::first_post_spawn_check_becomes_primary_after_cargo_success ... ok
+test tests::internal_short_timeout_runner_context_selects_short_policy ... ok
+test tests::compiler_execution_profile_identity_is_generation_semantic_input ... ok
+test tests::max_observer_line_and_raii_finish_ignore_zero_and_partial_writer_failures ... ok
+test tests::obsolete_pipeline_environment_is_rejected ... ok
+test tests::normalizes_direct_and_cargo_subcommand_invocations ... ok
+test tests::post_spawn_failures_preserve_primary_and_append_checks_in_order ... ok
+test rustc_lib_tree::tests::persistent_lib_tree_content_substitution_fails_revalidation ... ok
+test rustc_lib_tree::tests::lib_tree_subdirectory_replacement_is_recorded_even_when_content_matches ... ok
+test tests::production_cargo_tool_environment_replaces_the_caller_path ... ok
+test tests::rustup_cargo_output_requires_one_absolute_path_line ... ok
+test tests::production_target_profile_is_exact_and_parent_owned ... ok
+test tests::source_isa_collection_hex_is_lowercase_bounded_and_fallible ... ok
+test tool_commands::tests::debug_batch_is_fixed_and_interactive_is_separate ... ok
+test tests::run_target_routing_is_strict_and_stops_at_separator ... ok
+test tool_commands::tests::discovery_order_prefers_native_reviewed_binaries ... ok
+test tests::production_is_the_unselected_route_and_has_no_selector ... ok
+test source_isa_observation::tests::all_correlation_errors_map_to_distinct_canonical_codes ... ok
+test tests::production_target_selection_is_owned_by_the_orchestrator ... ok
+test tool_commands::tests::preserves_a_program_separator_as_a_target_argument ... ok
+test tool_commands::tests::unavailable_coverage_fails_closed ... ok
+test tool_commands::tests::unavailable_diagnostics_do_not_overstate_checker_coverage ... ok
+test tool_commands::tests::target_status_parser_is_explicit ... ok
+test tool_commands::tests::parses_bounded_execution_without_reinterpreting_target_arguments ... ok
+test profile_dispatch_import_v1::tests::malformed_noncanonical_and_oversized_receipts_are_rejected ... ok
+test tool_commands::tests::rejects_malformed_and_unbounded_options ... ok
+test tool_commands::tests::sanitize_plan_states_exact_coverage_limitations ... ok
+test generation::tests::snapshot_accepts_exact_real_entry_limit_and_rejects_limit_plus_one ... ok
+test pinned_codegen_backend::platform::tests::fifo_is_rejected_without_waiting_for_a_writer ... ok
+test pinned_executable::platform::tests::fifo_is_rejected_without_waiting_for_a_writer ... ok
+test example_manifest::tests::checked_in_manifest_matches_current_repository ... ok
+test profile_command::tests::escaped_pipe_holder_cannot_block_capture_completion ... ok
+test profile_command::tests::generic_core_collects_imports_and_publishes_without_host_kfd ... ok
+test profile_command::tests::att_plan_discloses_sealed_decoder_boundary_and_collection_fails_closed ... ok
+test profile_command::tests::capture_worker_spawn_failures_revoke_join_and_prevent_publication ... ok
+test example_manifest::tests::non_target_rust_still_obeys_structural_bounds ... ok
+test application_handoff::tests::successful_wait_contains_before_reaping_leader ... ok
+test example_manifest::tests::package_scan_enforces_file_depth_and_aggregate_bounds ... ok
+test application_supervisor::tests::supervisor_process_retains_admission_after_frontend_result ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 398 filtered out; finished in 2.00s
+
+test application_supervisor::tests::supervisor_process_retains_admission_after_frontend_result ... ok
+test compiler_execution_boundary::tests::application_verifier_gets_service_channel_without_policy_capability ... ok
+test compiler_execution_boundary::tests::preparation_installs_exact_policy_and_child_created_service_channel ... ok
+test production_source_isa_unit_matrix_v1::bounded_command_does_not_join_an_escaped_descendant_holding_stderr ... ok
+test profile_command::tests::inherited_sigchld_dispositions_preserve_collector_ownership ... ok
+test build_config::tests::v2_hostile_schema_matrix_is_rejected_before_worker_admission ... ok
+test build_config::tests::characteristic_observation_rejects_multi_unit_configuration ... ok
+test build_config::tests::v1_manifest_retains_no_observer_policy ... ok
+test build_config::tests::complete_v2_manifest_binds_identity_units_and_observer_policy ... ok
+test build_config::tests::expected_identity_namespaces_reject_orphans_wrong_versions_and_dual_values ... ok
+
+test result: ok. 394 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 11.58s
+
+     Running unittests src/bin/fe2o3-engineering-lld-proxy.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/fe2o3_engineering_lld_proxy-61168906aefe70a2)
+
+running 2 tests
+test tests::replaces_only_argv_zero_and_preserves_remaining_bytes ... ok
+test tests::rejects_oversized_argument_bytes ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/bin/fe2o3-rustc-wrapper.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/fe2o3_rustc_wrapper-19dbc9b24084f608)
+
+running 41 tests
+test pinned_executable_test_directory::tests::directory_is_private_to_the_current_user ... ok
+test process_execution::tests::executable_busy_retry_is_bounded_to_the_exact_transient_error ... ok
+test process_execution::tests::capture_output_propagates_pre_exec_failure ... ok
+test process_execution::tests::configured_output_preserves_explicit_stdout_and_stderr ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::descriptor_lives_with_the_pin_and_closes_when_the_pin_drops ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::close_on_exec_is_explicitly_not_ready_for_child_inheritance ... ok
+test process_execution::tests::capture_output_collects_stdout_and_stderr ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::child_reads_the_pinned_object_after_pathname_substitution ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::digest_is_computed_from_exact_opened_bytes ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::empty_backend_is_rejected ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::deliberate_child_descriptor_close_aborts_spawn ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::exact_copy_and_hash_policies_reject_short_and_growing_streams ... ok
+test process_execution::tests::capture_output_command_remains_reusable ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::final_symlink_is_rejected_without_following_it ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::descriptor_stays_close_on_exec_in_parent_before_and_after_spawn ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::non_backend_arguments_are_preserved_before_the_sole_selector ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::non_regular_object_is_rejected ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::option_terminator_cannot_hide_the_managed_backend_selector ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::oversized_backend_is_rejected_before_it_is_read ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::pathname_substitution_does_not_change_the_descriptor_object ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::preexisting_joined_backend_selectors_are_rejected ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::preexisting_split_backend_selectors_are_rejected ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::prepared_command_appends_the_exact_descriptor_argument ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::procfs_cannot_create_a_write_capability_for_the_sealed_image ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::procfs_reference_has_the_open_descriptor_identity ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::in_place_source_mutation_after_preparation_cannot_affect_child ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::retained_descriptor_is_read_only ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::response_files_cannot_hide_a_second_backend_selector ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::retained_image_rejects_write_resize_and_new_seals ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::source_mutation_after_initial_snapshot_fails_capture ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::retained_image_has_exact_immutable_seals ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::unexpectedly_inheritable_descriptor_fails_closed ... ok
+test rustc_wrapper::tests::cargo_probe_and_terminal_modes_plan_lossless_passthrough ... ok
+test rustc_wrapper::tests::compile_plan_preserves_original_arguments ... ok
+test rustc_wrapper::tests::malformed_compile_and_response_files_fail_closed ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::source_mutation_after_capture_cannot_change_the_sealed_image ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::source_mutation_before_preparation_cannot_affect_image ... ok
+test rustc_wrapper::tests::query_plan_rejects_options_outside_the_bootstrap_grammar ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::unrelated_children_do_not_inherit_the_backend_descriptor ... ok
+test pinned_executable_test_directory::tests::duplicate_module_counters_allocate_unique_directories_under_concurrency ... ok
+test rustc_wrapper::pinned_codegen_backend::platform::tests::fifo_is_rejected_without_waiting_for_a_writer ... ok
+
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+     Running tests/binding_host_test_cli.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/binding_host_test_cli-e64142a8e2863c41)
+
+running 8 tests
+test internal_binding_host_runner_rejects_missing_pinned_toolchain_descriptors ... ok
+    Blocking    Blocking waiting for file lock on package cache
+ waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+test binding_host_test_rejects_nonexecuting_cargo_modes_before_test_spawn ... ok
+test binding_host_test_rejects_forced_loader_configuration_before_construction ... ok
+test binding_host_test_rejects_persistent_post_query_config_swap ... ok
+test literal_binding_host_test_executes_only_through_the_pinned_runner ... ok
+test binding_host_test_rejects_every_runner_and_unstable_config_channel ... ok
+test binding_is_portable_across_absolute_workspace_roots ... ok
+test binding_host_clippy_runs_lints_with_the_compiler_derived_binding ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.24s
+
+     Running tests/clean_cli.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/clean_cli-67d479c12d7c3b5b)
+
+running 16 tests
+test all_target_is_rejected_without_removing_any_output ... ok
+test explicit_custom_target_scopes_cleanup_to_fe2o3_artifacts ... ok
+test clean_never_removes_the_complete_selected_target ... ok
+test dry_run_preserves_every_target_output ... ok
+test manifest_path_is_honored_and_package_cleanup_is_rejected ... ok
+test direct_and_cargo_prefixed_help_are_equivalent ... ok
+test inherited_cargo_target_dir_is_cleaned_without_touching_workspace_target ... ok
+test clean_refuses_a_symlinked_explicit_target ... ok
+test missing_split_path_never_consumes_dry_run ... ok
+test cargo_prefixed_invocation_deletes_only_fe2o3_output ... ok
+test direct_invocation_dry_run_discovers_standalone_project ... ok
+test virtual_workspace_is_discovered_from_member_directory ... ok
+test invocation_config_controls_metadata_and_cleanup_target_consistently ... ok
+test generated_clean_rejects_unowned_directory_even_in_dry_run ... ok
+test clean_never_grants_parent_deletion_for_root_or_project_targets ... ok
+test stale_root_guards_in_project_descendants_never_authorize_parent_deletion ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/doctor_cli.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/doctor_cli-1107d2ceb7098049)
+
+running 4 tests
+test gfx942_requirement_is_explicitly_hardware_gated ... ok
+test doctor_help_and_option_surface_are_closed ... ok
+test execution_requirement_fails_at_the_worker_v3_boundary ... ok
+test default_doctor_is_a_host_independent_kfd_first_diagnostic ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/external_device_dependency.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/external_device_dependency-30b8d3afcee67d45)
+
+running 1 test
+test external_git_consumers_cannot_select_a_device_impostor_fixture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/inspect_cli.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/inspect_cli-26570c3cca32f5b3)
+
+running 7 tests
+test explicit_format_mismatch_fails_closed ... ok
+test resealed_characteristic_substitution_remains_an_unauthenticated_archive ... ok
+test malformed_and_unknown_inputs_fail_without_execution ... ok
+test characteristic_archive_cli_serves_all_bounded_query_planes ... ok
+test auto_inspects_manifest_container_and_bundle_fixtures ... ok
+test source_isa_collection_cli_supports_auto_explicit_and_hostile_inputs ... ok
+test characteristic_archive_cli_rejects_hostile_files_and_requests ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.03s
+
+     Running tests/production_build_config.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/production_build_config-57b1fc4932bfb52c)
+
+running 19 tests
+test cargo_and_application_routes_use_fixed_production_types ... ok
+test cargo_finishes_and_exposes_observer_collection_nonfatally ... ok
+test cargo_package_has_no_worker_v2_compiler_surface ... ok
+test ordinary_host_phase_has_no_device_compiler_controls ... ok
+test production_managed_transaction_has_no_qualification_dispatch ... ok
+test production_build_has_one_fixed_device_then_host_plan ... ok
+test production_config_versions_are_mutually_exclusive_before_either_manifest_is_read ... ok
+test production_capability_release_preserves_v1_and_defers_only_selected_v2 ... ok
+test production_configuration_has_no_compatibility_type_alias ... ok
+test production_run_has_one_worker_v3_application_path ... ok
+test production_worker_v3_verifier_is_sealed_and_synthetic_authority_is_test_only ... ok
+test production_driver_rejects_qualification_before_target_preparation ... ok
+test production_driver_rejects_caller_target_selection ... ok
+test source_isa_observer_lifecycle_is_one_shot_and_prepublication ... ok
+test production_manifest_rejects_qualification_envelope_fields ... ok
+test production_v2_manifest_requires_the_exact_source_isa_observation ... ok
+test production_receipt_is_carried_by_one_v2_envelope_through_host_admission ... ok
+test production_rejects_worker_v2_namespace_before_reading_its_manifest ... ok
+test production_runner_rejects_no_envelope_marker ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/production_dependency_closure.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/production_dependency_closure-e5f436f8ae433215)
+
+running 4 tests
+test production_binary_has_no_gpu_runtime_dynamic_dependency ... ok
+test production_binary_has_no_simulation_command ... ok
+test production_dependency_graph_excludes_optional_runtime_and_oracle_crates ... ok
+test direct_kfd_example_has_no_legacy_runtime_dynamic_dependency has been running for over 60 seconds
+test direct_kfd_example_has_no_legacy_runtime_dynamic_dependency ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 74.83s
+
+     Running tests/profile_cli.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/profile_cli-da2c75418abc0eda)
+
+running 21 tests
+test in_process_json_and_csv_import_publish_bundle_receipt_then_manifest ... ok
+test malformed_source_is_unavailable_and_generated_budget_failure_cleans ... ok
+test canonical_output_through_non_utf8_parent_is_rejected ... ok
+test installed_collector_executes_sealed_entry_images_without_role_env_leakage ... ok
+test schema_source_ambiguity_is_not_resolved_by_kfd_compatibility ... ok
+test existing_symlink_output_and_symlink_tool_are_rejected ... ok
+test duplicates_and_bounds_fail_before_any_output_creation ... ok
+test att_plan_is_unavailable_without_a_mutation_proof_sealed_decoder_route ... ok
+test legacy_wave_declaration_cannot_bypass_canonical_kir_admission ... ok
+test legacy_kir_declaration_never_emits_an_import_recipe ... ok
+test dry_run_is_inert_and_reports_capabilities_without_claiming_observation ... ok
+test authorization_is_bound_to_exact_target_argv_and_output_path ... ok
+test collector_failure_cleans_only_the_owned_new_directory ... ok
+test semantic_configuration_excludes_output_routing_but_authorization_binds_it ... ok
+test successful_collector_exit_kills_descendants_and_completes_publication ... ok
+test exact_authorization_collects_without_a_shell_and_writes_a_bounded_manifest ... ok
+test live_qualification_archives_exact_runtime_bytes_and_rejects_stale_input ... ok
+test output_and_storage_overflow_are_bounded_and_cleaned ... ok
+test timeout_kills_the_collector_process_group_and_cleans_output ... ok
+test reserved_generated_names_are_rejected_and_cleaned ... ok
+test wrapper_host_wall_comparison_requires_separate_acknowledgement_and_is_non_authoritative ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.04s
+
+     Running tests/rustc_wrapper_cli.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/rustc_wrapper_cli-266bb2299bd91de4)
+
+running 10 tests
+test passthrough_preserves_a_non_utf8_executable_path ... ok
+test passthrough_preserves_nonzero_exit_status ... ok
+test passthrough_preserves_signal_status ... ok
+test unsafe_passthrough_options_fail_before_rustc_is_spawned ... ok
+test passthrough_retries_a_transiently_busy_executable ... ok
+test compile_shapes_fail_before_the_rustc_process_is_spawned ... ok
+test real_rustc_treats_managed_options_after_terminator_as_input_paths ... ok
+test real_rustc_version_query_passes_through_wrapper_mode ... ok
+test real_cargo_probe_shape_passes_through_wrapper_mode ... ok
+test passthrough_fails_after_bounded_retries_for_a_busy_executable ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+     Running tests/safe_kernel_catalog.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/safe_kernel_catalog-df2bb9a628ea497a)
+
+running 1 test
+test positive_example_kernels_use_only_safe_rust ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.97s
+
+     Running tests/static_preexec_launcher.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/static_preexec_launcher-e32acd1f9c01b079)
+
+running 1 test
+test static_preexec_launcher_cmake_suite ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.55s
+
+     Running tests/tool_cli.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/tool_cli-4947a601975501c2)
+
+running 3 tests
+test unavailable_explicit_tool_is_diagnostic ... ok
+test sanitize_and_debug_print_plans_without_executing_the_tool ... ok
+test malformed_cli_is_rejected_before_discovery ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/tool_execution_cli.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/tool_execution_cli-584c0332c8d289bf)
+
+running 9 tests
+test real_rocgdb_batch_smoke_is_explicitly_gated ... ignored, set FE2O3_RUN_ROCGDB_SMOKE=1 and request this ignored test explicitly
+test execute_modes_and_bounds_fail_closed_before_spawn ... ok
+test target_arguments_never_become_debugger_or_shell_commands ... ok
+test descendants_cannot_hold_capture_pipes_open ... ok
+test execution_clears_unapproved_environment_and_records_deterministically ... ok
+test symlink_and_path_replacement_are_rejected ... ok
+test sanitizer_reports_diagnostics_without_claiming_memory_or_race_safety ... ok
+test timeout_and_output_overflow_are_distinct_and_bounded ... ok
+test tool_and_target_failures_have_distinct_evidence ... ok
+
+test result: ok. 8 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.73s
+
+     Running tests/unsafe_source_policy.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/unsafe_source_policy-6c5b5b8cd9983414)
+
+running 6 tests
+test additions_removals_and_moves_require_baseline_review ... ok
+test refresh_reviewed_unsafe_inventory ... ignored, explicit maintenance command; review the resulting baseline diff
+test comments_literals_and_documentation_do_not_count ... ok
+test all_constructs_and_macro_templates_are_counted ... ok
+test malformed_tokens_fail_closed ... ok
+test unsafe_source_matches_reviewed_inventory ... ok
+
+test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 11.33s
+
+     Running tests/worker_v3_load_envelope_v2.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/worker_v3_load_envelope_v2-12d7cfb58552409f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/worker_v3_load_envelope_vertical.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/worker_v3_load_envelope_vertical-ef35940408e60ac1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/wrapper_managed_projection_cli.rs (/home/harsh/.codex-tmp/fe2o3-runtime-integration-r43/target/debug/deps/wrapper_managed_projection_cli-a529788645b3946f)
+
+running 6 tests
+test inherited_projection_rejects_named_unsealed_and_wrong_name_files ... ok
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking    Blocking waiting for file lock on package cache
+ waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+test literal_cli_rejects_non_rs_declared_target_roots ... ok
+wrapper-managed projection: 4 package(s)
+rustc-codegen fixture projection: 1 package(s)
+test literal_cli_discovers_and_revalidates_the_complete_codegen_fixture_set ... ok
+test literal_cli_computes_disjoint_exhaustive_cpu_test_partitions ... ok
+test nonvirtual_root_package_excludes_its_generated_target_directory_on_repeat ... ok
+test literal_cli_discovers_and_revalidates_the_real_exact_managed_set ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.49s
+

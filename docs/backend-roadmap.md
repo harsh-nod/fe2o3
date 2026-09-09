@@ -624,9 +624,12 @@ contiguous logical receipt commit, and data custody remains retained until the
 entire recipe is quiescent. The
 [R60 benchmark protocol](../benchmarks/runtime_gfx942/R60-PIPELINE.md) qualifies
 that exact integration and compares matched KFD/HSA/HIP batches without
-changing the independent model's proof scope. General multi-recipe/shared-buffer
-DAGs, simultaneous kernel execution, hardware ordering truth, performance
-gains, and HIP/HSA parity remain open.
+changing the independent model's proof scope. Separate
+[exact-source MI300X results](evidence/mi300x-r60-ordinary-pipeline-2026-09-09/README.md)
+retain numerical/order/cleanup checks and bounded measured cache/wait gains.
+General multi-recipe/shared-buffer DAGs, simultaneous kernel execution, a
+machine-ordering theorem, general performance gains, and HIP/HSA parity remain
+open.
 See the [R52 claim boundary](../crates/fe2o3-kfd/docs/r52-native-fixed-dispatch-multi-inflight-v1.md).
 
 ## R56 two-native logical SDMA mux

@@ -1,0 +1,1 @@
+PASS schema=fe2o3.runtime.gfx942-r60-ordinary-pipeline-qualification.v1 launches=64 publication_prefix=64 completion_order=contiguous execution_order=wait-for-prior concurrent_kernel_execution=false data_path_last=ResidentReused user_data_materializations_last=0 readbacks=1 output_sha256=79fd0768604fe9de0ced87297f7d653343e998926b59e2cce7df5e38194c52b3 cleanup=complete

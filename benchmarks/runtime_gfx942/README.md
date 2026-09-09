@@ -29,6 +29,14 @@ Every temporary build artifact is placed under one unique directory and
 removed by an exit and signal trap. The runner requires a clean checkout so the
 printed Git commit identifies every host source and checked fixture byte.
 
+## R60 Ordered Pipeline
+
+The separate [R60 protocol](R60-PIPELINE.md) compares 64 ordered ordinary
+launches using the public KFD runtime, HIP module launch and raw HSA AQL with
+matched coherent HostVisible buffers. It does not use the deprecated oracle
+scopes below. [Exact-source MI300X evidence](../../docs/evidence/mi300x-r60-ordinary-pipeline-2026-09-09/README.md)
+retains all accepted measurements, qualifiers, guards and the remaining gap.
+
 ## Measurement Scopes
 
 The output is a line-oriented `key=value` stream. Percentiles are computed over

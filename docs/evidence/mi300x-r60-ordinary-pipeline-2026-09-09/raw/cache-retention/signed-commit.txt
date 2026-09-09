@@ -1,0 +1,14 @@
+tree f4d871df0b1ed56a2598e9c43c7758563f2c3680
+parent f1e2bc04a7c8dc0fb75a81f6c19361d92a08f79c
+author Harsh Noda <3144552+harsh-nod@users.noreply.github.com> 1788966549 -0700
+committer Harsh Noda <3144552+harsh-nod@users.noreply.github.com> 1788966549 -0700
+gpgsig -----BEGIN SSH SIGNATURE-----
+ U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgIhPOhXrjN3i1h5mG86L6afBBrE
+ QjisW9d4LcfGKV4FIAAAADZ2l0AAAAAAAAAAZzaGE1MTIAAABTAAAAC3NzaC1lZDI1NTE5
+ AAAAQCo5TaSuFW3KA2woXTMJvfGwu5DS4HXvNS692b1Bwe01ADHzg/P3sb02MLgcbAAXGU
+ BNb/juM+Fba11tBqzvyQk=
+ -----END SSH SIGNATURE-----
+
+Retain quiescent HostVisible native data across full host writes
+
+Signed-off-by: Harsh Noda <3144552+harsh-nod@users.noreply.github.com>

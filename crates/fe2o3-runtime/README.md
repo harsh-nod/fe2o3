@@ -478,6 +478,13 @@ broad Rust/device-language support; general `std`, allocation, unwind, dynamic
 dispatch, arbitrary inline assembly, and external calls remain outside the
 admitted device subset.
 
+The R60 ordinary 64-launch pipeline has separate
+[MI300X numerical and matched timing evidence](../../docs/evidence/mi300x-r60-ordinary-pipeline-2026-09-09/README.md).
+It covers ordered publication/completion of one fixed HostVisible vecadd recipe,
+not concurrent kernel execution or full HIP/HSA parity. The evidence separates
+the original baseline from measured cache and wait optimizations, retains exact
+source identities, and reports the remaining performance gap.
+
 R57 adds one exact persistent-device compute shape through the ordinary typed
 `RuntimeContextV1::launch` path: two initialized HBM read inputs and one
 distinct initialized HBM write output with equal full-allocation extents on the

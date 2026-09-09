@@ -1,0 +1,155 @@
+   Compiling typenum v1.20.1
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling hybrid-array v0.4.14
+   Compiling quote v1.0.47
+   Compiling cfg-if v1.0.4
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling digest v0.11.3
+   Compiling cpufeatures v0.3.1
+   Compiling sha2 v0.11.0
+   Compiling version_check v0.9.5
+   Compiling memchr v2.8.3
+   Compiling bitflags v2.13.1
+   Compiling fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-target-spec)
+   Compiling fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-amd-target)
+   Compiling syn v3.0.4
+   Compiling serde_core v1.0.229
+   Compiling syn v2.0.119
+   Compiling const_fn v0.4.12
+   Compiling generic-array v0.14.7
+   Compiling zmij v1.0.23
+   Compiling awint_internals v0.19.0
+   Compiling serde_json v1.0.151
+   Compiling scopeguard v1.2.0
+   Compiling itoa v1.0.18
+   Compiling serde v1.0.229
+   Compiling lock_api v0.4.14
+   Compiling awint_core v0.19.0
+   Compiling serde_derive v1.0.229
+   Compiling recasting v0.2.3
+   Compiling equivalent v1.0.2
+   Compiling triple_arena v0.15.1
+   Compiling awint_ext v0.19.0
+   Compiling spin v0.12.3
+   Compiling arrayvec v0.7.8
+   Compiling linkme-impl v0.3.37
+   Compiling semver v1.0.28
+   Compiling bytemuck v1.25.2
+   Compiling safe_arch v1.2.0
+   Compiling rustc_version v0.4.1
+   Compiling awint_macro_internals v0.19.0
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling aho-corasick v1.1.5
+   Compiling slotmap v1.1.1
+   Compiling foldhash v0.2.0
+   Compiling bytes v1.12.1
+   Compiling hashbrown v0.17.1
+   Compiling thiserror v2.0.16
+   Compiling unicode-segmentation v1.13.3
+   Compiling regex-syntax v0.8.11
+   Compiling zeroize v1.9.0
+   Compiling allocator-api2 v0.2.21
+   Compiling rustc_apfloat v0.2.3+llvm-462a31f5a5ab
+   Compiling rustix v1.1.4
+   Compiling linkme v0.3.37
+   Compiling regex-automata v0.4.18
+   Compiling convert_case v0.11.0
+   Compiling indexmap v2.14.1
+   Compiling combine v4.6.8
+   Compiling digest v0.10.7
+   Compiling awint_macros v0.19.0
+   Compiling curve25519-dalek v4.1.3
+   Compiling wide v1.7.0
+   Compiling thiserror-impl v2.0.16
+   Compiling libc v0.2.189
+   Compiling cpufeatures v0.2.17
+   Compiling rustc-hash v2.1.3
+   Compiling linux-raw-sys v0.12.1
+   Compiling smallvec v1.15.2
+   Compiling pliron-derive v0.17.0 (https://github.com/harsh-nod/pliron.git?rev=5bdf861bf03e7f20242b25717fb653336d02e487#5bdf861b)
+   Compiling hi_sparse_bitset v0.9.0
+   Compiling awint v0.19.0
+   Compiling regex v1.13.1
+   Compiling utf8-chars v3.0.7
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling downcast-rs v2.0.2
+   Compiling once_vec v0.4.0
+   Compiling log v0.4.34
+   Compiling signature v2.2.0
+   Compiling subtle v2.6.1
+   Compiling dyn-clone v1.0.20
+   Compiling pliron v0.17.0 (https://github.com/harsh-nod/pliron.git?rev=5bdf861bf03e7f20242b25717fb653336d02e487#5bdf861b)
+   Compiling ed25519 v2.2.3
+   Compiling sha2 v0.10.9
+   Compiling ed25519-dalek v2.2.0
+   Compiling fe2o3-pliron-owner-core v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-pliron-owner-core)
+   Compiling fe2o3-kernel-ir v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-kernel-ir)
+   Compiling fe2o3-kernel-descriptor v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-kernel-descriptor)
+   Compiling fe2o3-build-authority v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-build-authority)
+   Compiling fe2o3-rustc-invocation v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-rustc-invocation)
+   Compiling dialect-kernel v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/dialect-kernel)
+   Compiling dialect-proof v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/dialect-proof)
+   Compiling fe2o3-compiler-lineage v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-compiler-lineage)
+   Compiling dialect-gpu v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/dialect-gpu)
+   Compiling fe2o3-mir-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-mir-model)
+   Compiling reserved-fe2o3-symbols v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/reserved-fe2o3-symbols)
+   Compiling fe2o3-proof-contracts v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-proof-contracts)
+   Compiling fe2o3-functional-proof v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-functional-proof)
+   Compiling fe2o3-compiler-ffi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-compiler-ffi)
+   Compiling dialect-mir v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/dialect-mir)
+   Compiling fe2o3-kernel-analysis v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-kernel-analysis)
+   Compiling fe2o3-pliron v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-pliron)
+   Compiling fe2o3-artifact-transaction v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-artifact-transaction)
+   Compiling fe2o3-hsaco v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-hsaco)
+   Compiling fe2o3-llvm-handoff v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-llvm-handoff)
+   Compiling fe2o3-kernel-opt v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-kernel-opt)
+   Compiling object v0.39.1
+   Compiling fe2o3-amdgcn-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-amdgcn-model)
+   Compiling fe2o3-external-anchor-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-external-anchor-protocol)
+   Compiling io-lifetimes v3.0.1
+   Compiling io-lifetimes v2.0.4
+   Compiling fe2o3-compiler-execution-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-compiler-execution-protocol)
+   Compiling dialect-amdgcn v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/dialect-amdgcn)
+   Compiling fe2o3-llvm-text v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-llvm-text)
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-amdhsa-loader)
+   Compiling fe2o3-lower-mir-kernel v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-lower-mir-kernel)
+   Compiling fe2o3-process-identity v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-process-identity)
+   Compiling fe2o3-source-isa-observation v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-source-isa-observation)
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-runtime-model)
+   Compiling csv-core v0.1.13
+   Compiling io-extras v0.19.0
+   Compiling fe2o3-aql v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-aql)
+   Compiling ryu v1.0.23
+   Compiling fe2o3-kfd-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-kfd-uapi)
+   Compiling fe2o3-drm-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-drm-uapi)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-kfd)
+   Compiling csv v1.4.0
+   Compiling fe2o3-hsaco-finalize v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-hsaco-finalize)
+   Compiling fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-profiler-protocol)
+   Compiling once_cell v1.21.4
+   Compiling winnow v1.0.4
+   Compiling fe2o3-host-api v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-host-api)
+   Compiling cap-primitives v4.0.2
+   Compiling fe2o3-semantic-trace v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-semantic-trace)
+   Compiling fe2o3-semantic-import v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-semantic-import)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-runtime)
+   Compiling toml_parser v1.1.3+spec-1.1.0
+   Compiling rustix-linux-procfs v0.1.1
+   Compiling fs-set-times v0.20.3
+   Compiling fe2o3-compiler-closure-capability v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-compiler-closure-capability)
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling serde_spanned v1.1.1
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling ambient-authority v0.0.2
+   Compiling maybe-owned v0.3.4
+   Compiling ipnet v2.12.1
+   Compiling toml v1.1.4+spec-1.1.0
+   Compiling fe2o3-compiler-execution-client v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-compiler-execution-client)
+   Compiling fe2o3-semantic-query v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-semantic-query)
+   Compiling fe2o3-runtime-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-runtime-protocol)
+   Compiling fe2o3-artifacts v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/fe2o3-artifacts)
+   Compiling cargo-fe2o3 v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r60-reconcile/crates/cargo-fe2o3)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7m 14s
