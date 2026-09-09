@@ -22,6 +22,23 @@ namespace {
 
 using namespace fe2o3::r60;
 
+// HSA reports max(16, argument alignment), not the ELF metadata alignment.
+constexpr std::uint32_t kHsaKernargAlignment = 16;
+
+constexpr bool matches_kernel_abi(bool object_present, std::uint32_t size,
+                                  std::uint32_t alignment,
+                                  std::uint32_t group_size,
+                                  std::uint32_t private_size) {
+  return object_present && size == 48 && alignment == kHsaKernargAlignment &&
+         group_size == 0 && private_size == 0;
+}
+static_assert(matches_kernel_abi(true, 48, 16, 0, 0));
+static_assert(!matches_kernel_abi(true, 48, 8, 0, 0));
+static_assert(!matches_kernel_abi(true, 64, 16, 0, 0));
+static_assert(!matches_kernel_abi(true, 48, 16, 16, 0));
+static_assert(!matches_kernel_abi(true, 48, 16, 0, 16));
+static_assert(!matches_kernel_abi(false, 48, 16, 0, 0));
+
 struct Agents {
   std::vector<hsa_agent_t> cpus;
   std::vector<hsa_agent_t> gpus;
@@ -81,7 +98,8 @@ hsa_status_t collect_pool(hsa_amd_memory_pool_t pool, void *data) {
       (pools.data.handle == 0 || pool.handle < pools.data.handle))
     pools.data = pool;
   if ((flags & HSA_AMD_MEMORY_POOL_GLOBAL_FLAG_KERNARG_INIT) != 0 &&
-      maximum >= 48 && alignment >= 8 &&
+      maximum >= 48 && alignment >= kHsaKernargAlignment &&
+      alignment % kHsaKernargAlignment == 0 &&
       (pools.kernarg.handle == 0 || pool.handle < pools.kernarg.handle))
     pools.kernarg = pool;
   return HSA_STATUS_SUCCESS;
@@ -128,9 +146,14 @@ Kernel load_kernel(const std::vector<char> &code, hsa_agent_t gpu) {
   HSA_CHECK(hsa_executable_symbol_get_info(
       symbol, HSA_EXECUTABLE_SYMBOL_INFO_KERNEL_PRIVATE_SEGMENT_SIZE,
       &private_size));
-  if (kernel.object == 0 || size != 48 || alignment != 8 || group_size != 0 ||
-      private_size != 0)
+  if (!matches_kernel_abi(kernel.object != 0, size, alignment, group_size,
+                           private_size)) {
+    std::fprintf(stderr,
+                 "HSA kernel ABI: object_present=%d size=%u alignment=%u "
+                 "group_size=%u private_size=%u\n",
+                 kernel.object != 0, size, alignment, group_size, private_size);
     fail("HSA kernel metadata differs from the frozen vecadd ABI");
+  }
   return kernel;
 }
 
@@ -143,12 +166,12 @@ struct Kernarg {
   std::uint64_t output_length;
 };
 static_assert(sizeof(Kernarg) == 48 && alignof(Kernarg) == 8);
-static_assert(offsetof(Kernarg, left_length) == 8 &&
+static_assert(offsetof(Kernarg, left) == 0 &&
+              offsetof(Kernarg, left_length) == 8 &&
               offsetof(Kernarg, right) == 16 &&
               offsetof(Kernarg, right_length) == 24 &&
               offsetof(Kernarg, output) == 32 &&
               offsetof(Kernarg, output_length) == 40);
-
 } // namespace
 
 int main(int argc, char **argv) {
@@ -208,7 +231,7 @@ int main(int argc, char **argv) {
   HSA_CHECK(hsa_amd_memory_pool_allocate(pools.kernarg, sizeof(Kernarg), 0,
                                          &kernarg));
   HSA_CHECK(hsa_amd_agents_allow_access(1, &gpu, nullptr, kernarg));
-  if (reinterpret_cast<std::uintptr_t>(kernarg) % alignof(Kernarg) != 0)
+  if (reinterpret_cast<std::uintptr_t>(kernarg) % kHsaKernargAlignment != 0)
     fail("HSA kernarg allocation is misaligned");
   const Kernarg arguments{buffers[0], kElements, buffers[1], kElements,
                           buffers[2], kElements};

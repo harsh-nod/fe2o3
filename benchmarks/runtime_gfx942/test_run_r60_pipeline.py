@@ -322,6 +322,18 @@ class RunnerTests(unittest.TestCase):
         confirmations = source.index("for (auto signal : signals)", done)
         self.assertLess(done, confirmations)
 
+    def test_hsa_uses_api_kernarg_alignment_for_metadata_pool_and_pointer(self):
+        source = (HERE / "r60_pipeline_hsa.cpp").read_text()
+        self.assertIn("constexpr std::uint32_t kHsaKernargAlignment = 16;", source)
+        self.assertIn("alignof(Kernarg) == 8", source)
+        self.assertIn("alignment == kHsaKernargAlignment", source)
+        self.assertIn("if (!matches_kernel_abi(kernel.object != 0, size, alignment", source)
+        self.assertIn("alignment >= kHsaKernargAlignment", source)
+        self.assertIn("alignment % kHsaKernargAlignment == 0", source)
+        self.assertIn("reinterpret_cast<std::uintptr_t>(kernarg) % kHsaKernargAlignment", source)
+        self.assertNotIn("alignment != 8", source)
+        self.assertNotIn("% alignof(Kernarg)", source)
+
 
 if __name__ == "__main__":
     unittest.main()

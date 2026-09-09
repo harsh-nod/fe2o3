@@ -70,6 +70,11 @@ JSONL evidence is emitted, so a failing cleanup cannot leave an accepted log.
 
 Both sources require C++17 and OpenSSL libcrypto development files. HIP and HSA
 must come from the same installed ROCm release used by the final runner.
+The retained ELF argument layout is 48 bytes with 8-byte alignment; HSA's
+executable-symbol API requires a 16-byte-aligned kernarg buffer for this layout.
+The HSA baseline checks that API value, its pool guarantee, and the allocated
+pointer separately from the C++ argument-structure layout, as specified by the
+[ROCr API](https://rocm.docs.amd.com/projects/ROCR-Runtime/en/latest/api-reference/api.html).
 
 ```sh
 hipcc -O3 -std=c++17 -Wall -Wextra -Werror \
