@@ -437,6 +437,11 @@ struct SyntheticOcmlOptions {
   bool WrongAbi = false;
   bool UnresolvedDependency = false;
   uint8_t CodeObjectVersion = 5;
+  StringRef RootFeatures;
+  StringRef HelperFeatures;
+  StringRef HelperCpu;
+  StringRef DecoyFeatures;
+  StringRef DecoyCpu;
 };
 
 std::vector<uint8_t>
@@ -460,6 +465,10 @@ makeSyntheticOcmlBitcode(const SyntheticOcmlOptions &Options = {}) {
                        "__fe2o3_required_ocml_helper", ModuleValue);
   Helper->setVisibility(GlobalValue::HiddenVisibility);
   Helper->addFnAttr(Attribute::NoInline);
+  if (!Options.HelperFeatures.empty())
+    Helper->addFnAttr("target-features", Options.HelperFeatures);
+  if (!Options.HelperCpu.empty())
+    Helper->addFnAttr("target-cpu", Options.HelperCpu);
   BasicBlock *HelperBlock = BasicBlock::Create(Context, "entry", Helper);
   IRBuilder<> HelperBuilder(HelperBlock);
   HelperBuilder.CreateRet(
@@ -473,6 +482,8 @@ makeSyntheticOcmlBitcode(const SyntheticOcmlOptions &Options = {}) {
       Function::Create(RootSignature, GlobalValue::LinkOnceODRLinkage,
                        "__ocml_sin_f32", ModuleValue);
   Root->setVisibility(GlobalValue::HiddenVisibility);
+  if (!Options.RootFeatures.empty())
+    Root->addFnAttr("target-features", Options.RootFeatures);
   BasicBlock *RootBlock = BasicBlock::Create(Context, "entry", Root);
   IRBuilder<> RootBuilder(RootBlock);
   if (Options.WrongAbi) {
@@ -508,6 +519,10 @@ makeSyntheticOcmlBitcode(const SyntheticOcmlOptions &Options = {}) {
       Function::Create(F32Signature, GlobalValue::LinkOnceODRLinkage,
                        "__ocml_dead_decoy", ModuleValue);
   Decoy->setVisibility(GlobalValue::HiddenVisibility);
+  if (!Options.DecoyFeatures.empty())
+    Decoy->addFnAttr("target-features", Options.DecoyFeatures);
+  if (!Options.DecoyCpu.empty())
+    Decoy->addFnAttr("target-cpu", Options.DecoyCpu);
   BasicBlock *DecoyBlock = BasicBlock::Create(Context, "entry", Decoy);
   IRBuilder<>(DecoyBlock).CreateRet(Decoy->getArg(0));
 
@@ -1417,6 +1432,52 @@ void testSyntheticOcmlPipeline() {
           "required OCML helper was removed from the closure");
   require(!hasObjectSymbol(Linked.LinkedOutput->Bytes, "__ocml_dead_decoy"),
           "dead OCML provider definition escaped global DCE");
+
+  SyntheticDeviceLibraryDirectory UnusedIsaDirectory;
+  SyntheticOcmlOptions UnusedIsaOptions;
+  UnusedIsaOptions.DecoyFeatures = "+cumode,+gfx1250-insts";
+  UnusedIsaOptions.DecoyCpu = "gfx1250";
+  Gfx942DeviceLibraryPolicy UnusedIsaPolicy = makeSyntheticPolicy(
+      UnusedIsaDirectory, makeSyntheticOcmlBitcode(UnusedIsaOptions));
+  Response UnusedIsa = runSuccessWithPolicy(Valid, UnusedIsaPolicy,
+                                            {"__ocml_sin_f32", "ocml_entry"});
+  require(!hasObjectSymbol(UnusedIsa.LinkedOutput->Bytes, "__ocml_dead_decoy"),
+          "unselected incompatible provider helper escaped the link closure");
+
+  SyntheticDeviceLibraryDirectory RootIsaDirectory;
+  SyntheticOcmlOptions RootIsaOptions;
+  RootIsaOptions.RootFeatures = "+cumode,+gfx1250-insts";
+  Gfx942DeviceLibraryPolicy RootIsaPolicy = makeSyntheticPolicy(
+      RootIsaDirectory, makeSyntheticOcmlBitcode(RootIsaOptions));
+  requireDiagnostic(
+      requireFailureWithPolicy(Valid, RootIsaPolicy, Stage::BitcodeLink),
+      "'__ocml_sin_f32' target features are incompatible with target");
+
+  SyntheticDeviceLibraryDirectory HelperIsaDirectory;
+  SyntheticOcmlOptions HelperIsaOptions;
+  HelperIsaOptions.HelperFeatures = "+cumode,+gfx1250-insts";
+  Gfx942DeviceLibraryPolicy HelperIsaPolicy = makeSyntheticPolicy(
+      HelperIsaDirectory, makeSyntheticOcmlBitcode(HelperIsaOptions));
+  requireDiagnostic(
+      requireFailureWithPolicy(Valid, HelperIsaPolicy, Stage::BitcodeLink),
+      "'__fe2o3_required_ocml_helper' target features are incompatible with "
+      "target");
+  Request WithoutOptionalVerification = Valid;
+  WithoutOptionalVerification.LinkOptions.VerifyEach = false;
+  requireDiagnostic(
+      requireFailureWithPolicy(WithoutOptionalVerification, HelperIsaPolicy,
+                               Stage::BitcodeLink),
+      "'__fe2o3_required_ocml_helper' target features are incompatible with "
+      "target");
+
+  SyntheticDeviceLibraryDirectory HelperCpuDirectory;
+  SyntheticOcmlOptions HelperCpuOptions;
+  HelperCpuOptions.HelperCpu = "gfx950";
+  Gfx942DeviceLibraryPolicy HelperCpuPolicy = makeSyntheticPolicy(
+      HelperCpuDirectory, makeSyntheticOcmlBitcode(HelperCpuOptions));
+  requireDiagnostic(
+      requireFailureWithPolicy(Valid, HelperCpuPolicy, Stage::BitcodeLink),
+      "'__fe2o3_required_ocml_helper' target CPU does not match request");
 
   Request Cov6Exp = makeOcmlRequest("__ocml_exp_f32", 6);
   Response Cov6Linked = runSuccessWithPolicy(Cov6Exp, ValidPolicy,
