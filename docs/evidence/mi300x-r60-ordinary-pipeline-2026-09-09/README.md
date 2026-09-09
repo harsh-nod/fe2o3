@@ -87,7 +87,7 @@ randomized against each other and do not establish a universal speedup.
 
 The wait change further improves same-slot KFD median total by
 1.23405-1.25288x versus data retention alone, and its tail interval by
-5.29278-5.46934x. Relative to the original baseline, final median total improves
+5.29278-5.46934x. Relative to the original baseline, that variant's median total improves
 2.39811-2.42737x (58.30-58.80% lower). That variant still takes 9.90312-10.11312x HIP's
 and 9.95959-10.25471x HSA's median total time. The shorter host tail observation
 does not imply faster GPU kernels.
