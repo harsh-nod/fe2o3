@@ -1,6 +1,7 @@
 //! Best-effort Linux thread-cost observations for the profiled striped-tail wait.
 
 use core::mem::MaybeUninit;
+use rustix::time::{ClockId, DynamicClockId, Timespec, clock_gettime_dynamic};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ThreadWaitCpuSnapshotV1 {
@@ -93,13 +94,9 @@ fn thread_wait_cpu_delta_v1(
 }
 
 fn observe_thread_wait_cpu_snapshot_v1() -> ThreadWaitCpuSnapshotOutcomeV1 {
-    let mut clock = MaybeUninit::<libc::timespec>::zeroed();
-    // SAFETY: `clock` is writable storage for one timespec and the clock id owns no resources.
-    if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, clock.as_mut_ptr()) } != 0 {
+    let Ok(clock) = clock_gettime_dynamic(DynamicClockId::Known(ClockId::ThreadCPUTime)) else {
         return ThreadWaitCpuSnapshotOutcomeV1::Unavailable;
-    }
-    // SAFETY: successful clock_gettime initialized the timespec.
-    let clock = unsafe { clock.assume_init() };
+    };
     let Some(thread_cpu_ns) = timespec_ns_v1(clock) else {
         return ThreadWaitCpuSnapshotOutcomeV1::Invalid;
     };
@@ -124,7 +121,7 @@ fn observe_thread_wait_cpu_snapshot_v1() -> ThreadWaitCpuSnapshotOutcomeV1 {
     })
 }
 
-fn timespec_ns_v1(clock: libc::timespec) -> Option<u64> {
+fn timespec_ns_v1(clock: Timespec) -> Option<u64> {
     let seconds = u64::try_from(clock.tv_sec).ok()?;
     let nanoseconds = u64::try_from(clock.tv_nsec).ok()?;
     if nanoseconds >= 1_000_000_000 {
@@ -142,6 +139,7 @@ mod tests {
         finish_thread_wait_cpu_measurement_with_v1, profile_thread_wait_cpu_snapshot_with_v1,
         thread_wait_cpu_delta_v1, timespec_ns_v1,
     };
+    use rustix::time::Timespec;
     use std::cell::Cell;
 
     #[test]
@@ -208,29 +206,29 @@ mod tests {
     #[test]
     fn snapshot_conversion_rejects_negative_invalid_and_overflowing_clocks() {
         assert_eq!(
-            timespec_ns_v1(libc::timespec {
+            timespec_ns_v1(Timespec {
                 tv_sec: 2,
                 tv_nsec: 7,
             }),
             Some(2_000_000_007)
         );
         assert_eq!(
-            timespec_ns_v1(libc::timespec {
+            timespec_ns_v1(Timespec {
                 tv_sec: -1,
                 tv_nsec: 0,
             }),
             None
         );
         assert_eq!(
-            timespec_ns_v1(libc::timespec {
+            timespec_ns_v1(Timespec {
                 tv_sec: 0,
                 tv_nsec: 1_000_000_000,
             }),
             None
         );
         assert_eq!(
-            timespec_ns_v1(libc::timespec {
-                tv_sec: libc::time_t::MAX,
+            timespec_ns_v1(Timespec {
+                tv_sec: rustix::time::Secs::MAX,
                 tv_nsec: 0,
             }),
             None

@@ -700,6 +700,9 @@
   "crates/fe2o3-kfd/src/queue_submit.rs": {
     "block": 7
   },
+  "crates/fe2o3-kfd/src/sdma/multi_queue/tail_wait_cpu.rs": {
+    "block": 2
+  },
   "crates/fe2o3-kfd/src/stopped_state_v1.rs": {
     "block": 2
   },
@@ -786,6 +789,9 @@
   "crates/fe2o3-runtime/examples/gfx942-lds-diagnostic.rs": {
     "impl": 1
   },
+  "crates/fe2o3-runtime/examples/gfx942-runtime-d2d-window-benchmark.rs": {
+    "impl": 1
+  },
   "crates/fe2o3-runtime/examples/gfx942-runtime-directional-window-benchmark.rs": {
     "impl": 1
   },
@@ -794,7 +800,11 @@
     "impl": 1,
     "trait": 1
   },
+  "crates/fe2o3-runtime/src/bin/fe2o3-runtime-kfd-worker-v5-qualification.rs": {
+    "impl": 1
+  },
   "crates/fe2o3-runtime/src/kfd_backend.rs": {
+    "block": 1,
     "impl": 8,
     "trait": 2
   },

@@ -669,10 +669,8 @@ fn try_uninit_box_v1<T>() -> Result<Box<MaybeUninit<T>>, ()> {
     Ok(unsafe { Box::from_raw(raw) })
 }
 
-fn fill_restore_shell_v1<T>(mut shell: Box<MaybeUninit<T>>, value: T) -> Box<T> {
-    shell.write(value);
-    // The exact preallocated slot was initialized immediately above.
-    unsafe { shell.assume_init() }
+fn fill_restore_shell_v1<T>(shell: Box<MaybeUninit<T>>, value: T) -> Box<T> {
+    Box::write(shell, value)
 }
 
 impl KfdRuntimeSdmaStorageV1 {
