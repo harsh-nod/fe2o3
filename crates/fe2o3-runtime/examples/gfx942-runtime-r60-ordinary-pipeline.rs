@@ -219,6 +219,10 @@ mod enabled {
             } else {
                 Err("pipeline output failed full-byte comparison".to_owned())
             };
+            eprintln!(
+                "R60 qualification phase=pre-cleanup output_byte_exact={} cleanup=pending",
+                numerical_result.is_ok()
+            );
             for submission in submissions.into_iter().rev() {
                 self.context
                     .release_submission(submission)

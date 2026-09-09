@@ -4221,6 +4221,32 @@ fn take_after_auxiliary_destroy_preflight_v1<T>(
     Ok(state.take().expect("preflight retained auxiliary lane"))
 }
 
+fn preflight_auxiliary_compute_lane_destroy_v1(
+    state: &ComputeAqlQueueLaneStateV1,
+) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+    state.completion_owner.ensure_releasable()?;
+    if let Some(dispatch) = state.dispatch.as_ref() {
+        dispatch.ensure_releasable()?;
+    }
+    // Cache eviction releases code/kernarg before returning the data leases.
+    // A detached lane is destroyable only after every lease has been released.
+    if state.detached_data_count != 0
+        || !auxiliary_compute_lane_quiescence_from_facts_v1(
+            true,
+            state.dispatch.as_ref().map(|_| true),
+            state.detached_data_count,
+            state.detached_dispatch_generation,
+            state.detached_data_identities.len(),
+            state.detached_next_insertion_index,
+        )
+    {
+        return Err(ComputeAqlQueueSessionErrorV1::Contract(
+            "auxiliary dispatch resources must be attached or fully released before destroy",
+        ));
+    }
+    Ok(())
+}
+
 /// Narrow fixed-dispatch access to one admitted compute lane.
 ///
 /// Session-global transitions such as SDMA creation are deliberately absent.
@@ -6060,15 +6086,7 @@ impl ComputeAqlQueueSessionV1 {
             .map_err(map_dependency_target_use_error_v1)?;
         let mut state = take_after_auxiliary_destroy_preflight_v1(
             &mut self.auxiliary_compute_lanes[index].state,
-            |state| {
-                state.completion_owner.ensure_releasable()?;
-                state
-                    .dispatch
-                    .as_ref()
-                    .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?
-                    .ensure_releasable()?;
-                Ok(())
-            },
+            preflight_auxiliary_compute_lane_destroy_v1,
         )?;
 
         let result =
@@ -6111,16 +6129,15 @@ impl ComputeAqlQueueSessionV1 {
                     .expect("checked queue engine")
                     .release_destroyed_resources(state.key)
                     .map_err(map_native)?;
-                let dispatch = state
-                    .dispatch
-                    .take()
-                    .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?;
+                let dispatch = state.dispatch.take();
                 let completion_signals = state.completion_signals.take().ok_or(
                     ComputeAqlQueueSessionErrorV1::Contract("missing completion signal arena"),
                 )?;
                 self.with_live_queue_memory_model(move |memory| {
                     release_resource_authority(memory, authority, shadow_release)?;
-                    dispatch.release(memory)?;
+                    if let Some(dispatch) = dispatch {
+                        dispatch.release(memory)?;
+                    }
                     let completion_signals =
                         memory.unmap_from_gpu(completion_signals.into_token())?;
                     memory.release(completion_signals)?;
@@ -15330,6 +15347,104 @@ mod tests {
         let _allocation_b = allocation_b
             .retire_settled_frontier_v1(returned_frontier_b)
             .expect("allocation B accepts its returned exact frontier");
+    }
+
+    #[test]
+    fn auxiliary_destroy_accepts_fully_released_detached_lane() {
+        let queue = test_queue_key(201, 1);
+        for insertion in [None, Some(0)] {
+            let mut lane = compute_lane_state_for_multi_inflight_test(queue);
+            lane.detached_dispatch_generation = Some(64);
+            lane.detached_next_insertion_index = insertion;
+            let mut state = Some(lane);
+            let released = take_after_auxiliary_destroy_preflight_v1(
+                &mut state,
+                preflight_auxiliary_compute_lane_destroy_v1,
+            )
+            .expect("completed detached lane has no remaining data custody");
+            assert!(state.is_none());
+            assert!(released.dispatch.is_none());
+            assert_eq!(released.detached_dispatch_generation, Some(64));
+            assert_eq!(released.detached_next_insertion_index, insertion);
+        }
+    }
+
+    #[test]
+    fn auxiliary_destroy_rejects_live_or_malformed_detached_ledger_without_taking_custody() {
+        let queue = test_queue_key(202, 1);
+        let (device, _host) = crate::sdma::persistent_sdma_buffers_for_test(queue, 0x6200);
+        let Gfx942SdmaBufferStorageIdentityV1::Device(identity) = device.storage_identity() else {
+            unreachable!("device fixture retains device storage")
+        };
+        let identity = Gfx942FixedDispatchStorageIdentityV1::DeviceUninitialized(identity);
+        for (generation, count, identities, insertion) in [
+            (None, 0, vec![], None),
+            (Some(64), 1, vec![identity], None),
+            (Some(64), 1, vec![], None),
+            (Some(64), 0, vec![identity], Some(0)),
+            (Some(64), 0, vec![], Some(1)),
+            (Some(0), 0, vec![], None),
+        ] {
+            let mut lane = compute_lane_state_for_multi_inflight_test(queue);
+            lane.detached_dispatch_generation = generation;
+            lane.detached_data_count = count;
+            lane.detached_data_identities = identities.clone();
+            lane.detached_next_insertion_index = insertion;
+            let completion_before = lane.completion_owner.state_snapshot_for_test();
+            let mut state = Some(lane);
+            assert!(
+                take_after_auxiliary_destroy_preflight_v1(
+                    &mut state,
+                    preflight_auxiliary_compute_lane_destroy_v1,
+                )
+                .is_err()
+            );
+            let retained = state.as_ref().expect("rejected preflight retains the lane");
+            assert_eq!(retained.key, queue);
+            assert_eq!(retained.detached_dispatch_generation, generation);
+            assert_eq!(retained.detached_data_count, count);
+            assert_eq!(retained.detached_data_identities, identities);
+            assert_eq!(retained.detached_next_insertion_index, insertion);
+            assert_eq!(
+                retained.completion_owner.state_snapshot_for_test(),
+                completion_before
+            );
+        }
+    }
+
+    #[test]
+    fn auxiliary_destroy_rejects_live_completion_then_accepts_exact_cancellation() {
+        let queue = test_queue_key(203, 1);
+        let mut lane = compute_lane_state_for_multi_inflight_test(queue);
+        lane.detached_dispatch_generation = Some(64);
+        lane.detached_next_insertion_index = Some(0);
+        let bound = lane
+            .completion_owner
+            .bind_batch([test_completion_template(queue, 65)])
+            .unwrap();
+        let (_, retention) = bound.into_parts();
+        let before = lane.completion_owner.state_snapshot_for_test();
+        let mut state = Some(lane);
+        assert!(matches!(
+            take_after_auxiliary_destroy_preflight_v1(
+                &mut state,
+                preflight_auxiliary_compute_lane_destroy_v1,
+            ),
+            Err(ComputeAqlQueueSessionErrorV1::Completion(_))
+        ));
+        let retained = state
+            .as_mut()
+            .expect("live completion retains lane custody");
+        assert_eq!(retained.completion_owner.state_snapshot_for_test(), before);
+        retained.completion_owner.cancel_bound(retention).unwrap();
+        assert!(
+            take_after_auxiliary_destroy_preflight_v1(
+                &mut state,
+                preflight_auxiliary_compute_lane_destroy_v1,
+            )
+            .is_ok()
+        );
+        assert!(state.is_none());
     }
 
     #[test]
