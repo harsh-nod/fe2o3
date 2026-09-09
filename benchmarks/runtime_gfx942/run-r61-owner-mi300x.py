@@ -6,6 +6,7 @@ import json
 import os
 import pathlib
 import secrets
+import shlex
 import shutil
 import signal
 import sys
@@ -18,6 +19,7 @@ base = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = base
 spec.loader.exec_module(base)
 EXAMPLE = "gfx942-runtime-r61-async-owner"
+HOST_TARGET = "x86_64-unknown-linux-musl"
 PASS = ("PASS schema=fe2o3.runtime.r61-async-owner-copy.v1 bytes=1048832 "
         "owner_threads=1 abandoned_upload=completed canaries=complete cleanup=complete\n")
 
@@ -25,6 +27,53 @@ PASS = ("PASS schema=fe2o3.runtime.r61-async-owner-copy.v1 bytes=1048832 "
 def validate_output(output):
     if output != PASS:
         raise base.RunError("owner qualifier did not emit exact PASS")
+
+
+def validate_static_symbols(output, policy):
+    """Apply the unchanged symbol bans to the full, not merely dynamic, table."""
+    symbols = set()
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) not in (3, 4) or len(fields[1]) != 1 or not fields[1].isalpha():
+            raise base.RunError("missing or malformed full symbol evidence")
+        name, kind = fields[:2]
+        if kind in "Uwv":
+            raise base.RunError(f"static owner has unresolved symbol: {name}")
+        try:
+            for value in fields[2:]:
+                int(value, 16)
+        except ValueError as error:
+            raise base.RunError("malformed full symbol address") from error
+        normalized = name.split("@", 1)[0].lstrip("_").lower()
+        if (normalized in policy["forbidden_dynamic_symbols"]
+                or any(normalized.startswith(prefix) for prefix in policy["forbidden_dynamic_symbol_prefixes"])
+                or normalized == "pthread_get_minstack"):
+            raise base.RunError(f"prohibited full symbol: {name}")
+        symbols.add(name)
+    if not {"main", "pthread_create"}.issubset(symbols):
+        raise base.RunError("full owner symbol table lacks required anchors")
+    return len(symbols)
+
+
+def validate_static_headers(output):
+    lines = [line.split() for line in output.splitlines() if line.strip()]
+    if not any(fields[0] == "LOAD" for fields in lines):
+        raise base.RunError("missing static ELF program headers")
+    if any(fields[0] == "INTERP" or "(NEEDED)" in fields for fields in lines):
+        raise base.RunError("static owner has an interpreter or dynamic dependency")
+
+
+def validate_link_command(output):
+    if len(output.splitlines()) != 1:
+        raise base.RunError("missing or ambiguous final link command")
+    fields = shlex.split(output)
+    while fields and "=" in fields[0] and not fields[0].startswith("-"):
+        fields.pop(0)
+    if (not fields or fields[0] != "/usr/bin/cc"
+            or [field for field in fields if field.startswith("-fuse-ld=")] != ["-fuse-ld=bfd"]
+            or fields.count("-static-pie") != 1
+            or any(field in ("-shared", "-pie", "-no-pie", "-static", "-r") for field in fields)):
+        raise base.RunError("final link did not use the selected static host profile")
 
 
 class OwnerRunner(base.Runner):
@@ -48,23 +97,60 @@ class OwnerRunner(base.Runner):
         tools = [rust / "cargo", rust / "rustc", rust / "rustup", self.args.rocm_path / "bin/rocm-smi",
                  *(pathlib.Path("/usr/bin") / name for name in
                    ("git", "ssh-keygen", "python3", "numactl", "taskset", "timeout", "readelf", "nm"))]
+        tools.append(pathlib.Path("/usr/bin/cc"))
+        for name in ("ld.bfd", "collect2"):
+            program = self.run(["/usr/bin/cc", f"-print-prog-name={name}"], label=f"resolved-{name}", env=env)
+            resolved = shutil.which(program.strip(), path=base.SYSTEM_PATH)
+            if resolved is None:
+                raise base.RunError(f"selected linker tool is missing: {name}")
+            tools.append(pathlib.Path(resolved))
         for name in ("cargo", "rustc"):
             self.run([rust / name, "--version"], label=f"{name}-version", env=env, cwd=self.source)
             tools.append(pathlib.Path(self.run([rust / "rustup", "which", name],
                 label=f"resolved-{name}", env=env, cwd=self.source).strip()))
+        self.run([rust / "rustc", "-vV"], label="rustc-verbose-version", env=env, cwd=self.source)
         self.tool_hashes = {str(path): {"resolved": str(path.resolve(strict=True)),
                             "sha256": base.sha256_file(path)} for path in tools}
-        self.run([rust / "cargo", "build", "--offline", "--locked", "--release",
-                  "--no-default-features", "-p", "fe2o3-runtime", "--example", EXAMPLE],
+        target_libdir = pathlib.Path(self.run([rust / "rustc", "--print", "target-libdir", "--target", HOST_TARGET],
+                                              label="target-libdir", env=env, cwd=self.source).strip())
+        target_libraries = base.tree_hashes(target_libdir)
+        if not target_libraries or not any(name.startswith("libstd-") for name in target_libraries):
+            raise base.RunError("target standard-library closure is missing")
+        base.write_json(self.evidence / "target-libraries.json", target_libraries)
+        link_command = self.run([rust / "cargo", "rustc", "--offline", "--locked", "--release",
+                  "--target", HOST_TARGET, "--no-default-features", "-p", "fe2o3-runtime", "--example", EXAMPLE,
+                  "--", "--print=link-args", "-C", "linker=/usr/bin/cc", "-C", "link-arg=-fuse-ld=bfd"],
                  label="build-owner", timeout=1200, env=env, cwd=self.source)
-        binary = self.stage / "target/release/examples" / EXAMPLE
+        validate_link_command(link_command)
+        binary = self.stage / "target" / HOST_TARGET / "release/examples" / EXAMPLE
         binary.chmod(0o500)
         self.binaries = {"kfd": binary}
         self.binary_hashes = {"kfd": base.sha256_file(binary)}
         audit = self.source / "scripts/runtime_pure_rust_audit.py"
-        self.run(["/usr/bin/python3", audit, "metadata", "--cargo", "--root", "fe2o3-runtime"],
+        metadata = self.evidence / "cargo-metadata.json"
+        self.run([rust / "cargo", "metadata", "--offline", "--locked", "--format-version", "1",
+                  "--filter-platform", HOST_TARGET, "--no-default-features"],
+                 label="cargo-metadata", timeout=180, env=env, cwd=self.source, output=metadata)
+        self.run(["/usr/bin/python3", audit, "metadata", "--input", metadata, "--root", "fe2o3-runtime"],
                  label="cargo-closure", timeout=180, env=env, cwd=self.source)
         self.run(["/usr/bin/python3", audit, "elf", "--input", binary], label="elf-closure")
+        headers = self.run(["/usr/bin/readelf", "--program-headers", "--dynamic", "--wide", binary], label="static-headers")
+        validate_static_headers(headers)
+        symbols = self.run(["/usr/bin/nm", "--format=posix", "--no-demangle", binary], label="full-symbols")
+        count = validate_static_symbols(symbols, json.loads((self.source / "scripts/runtime-pure-rust-policy.json").read_text()))
+        if binary.stat().st_size > (64 << 20) or b"__pthread_get_minstack" in binary.read_bytes():
+            raise base.RunError("owner binary exceeds its bound or retains the GNU stack lookup")
+        if base.tree_hashes(target_libdir) != target_libraries:
+            raise base.RunError("target standard-library closure changed during build")
+        for path, identity in self.tool_hashes.items():
+            if str(pathlib.Path(path).resolve(strict=True)) != identity["resolved"] or base.sha256_file(pathlib.Path(path)) != identity["sha256"]:
+                raise base.RunError("selected build or audit tool changed during qualification")
+        base.write_json(self.evidence / "static-closure.json", {
+            "host_target": HOST_TARGET, "full_symbol_names": count, "undefined_symbols": 0,
+            "interpreter": False, "dynamic_dependencies": 0, "gnu_minstack_lookup": False,
+            "binary_sha256": base.sha256_file(binary),
+            "target_libdir": str(target_libdir), "target_libraries_rechecked": True,
+        })
         self.run(["/usr/bin/uname", "-a"], label="kernel")
         self.verify_source()
 
@@ -96,6 +182,7 @@ class OwnerRunner(base.Runner):
         base.write_json(self.evidence / "commands.json", self.commands)
         base.write_json(self.evidence / "provenance.json", {
             "schema": "fe2o3.r61-owner-copy-qualification.v1", "source_commit": self.commit,
+            "host_target": HOST_TARGET,
             "claim_scope": "one-device-one-stream-h2d-d2h-abandoned-observer-custody-and-cleanup",
             "source_archive_sha256": base.sha256_file(self.evidence / "source.tar"),
             "snapshot_input_sha256": self.snapshot_input_hashes,

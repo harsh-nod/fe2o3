@@ -62,8 +62,10 @@ rejects at normal admission. This is not yet graph-wide resource reservation.
 - A persistent refcounted stream roster has no more entries than the operation
   registry. Its cyclic flush cursor is independent of cyclic operation polling,
   including when the poll budget visits only part of the roster.
-- Admission/retirement is `O(log S)` for `S` live streams. Each tick is bounded
-  by its operation/flush budgets, apart from the contracted adapter calls.
+- Stream-roster admission/retirement bookkeeping is `O(log S)` for `S` live
+  streams. Registry insertion is amortized; a deque growth can move `O(N)`
+  entries. Each tick is bounded by its operation/flush budgets, apart from the
+  contracted adapter calls.
 - Record capacities do not bound arbitrary closure/argument/result bytes,
   caller-retained completed futures, all native pools, or cumulative process
   quarantine. Those end-to-end budgets remain #182 work.
@@ -79,6 +81,23 @@ rejects at normal admission. This is not yet graph-wide resource reservation.
 | Native copy behavior | The default-feature canary and guarded two-run runner exercise one selected gfx942 GPU, one stream, H2D/D2H, full input/output/padding bytes, abandoned observation, and explicit cleanup. Hardware evidence is recorded separately. |
 | Verus/Rust/solver/source identity | The existing authenticated runner, source auditor, expected-negative inventory, closure checker, and SHA256 pins are retained. R61 adds eight obligations and eight negative mutations; it does not prove Linux, KFD, firmware, GPU, threads, channels, or executors. |
 | Generated-kernel production authority | Unchanged external dependency on #137/generated-host/Worker V3 admission. Neither typed metadata nor a factory grants authority. |
+
+## Qualified Host Build Profile
+
+The owner canary uses the repository-pinned `x86_64-unknown-linux-musl` target.
+The first GNU-target attempt was rejected before GPU execution: the pinned
+Rust standard library's thread startup uses `dlsym` to resolve
+`__pthread_get_minstack`. Explicit stack sizing does not bypass that lookup.
+The GNU owner binary is therefore not admitted by the production ELF policy.
+
+The musl thread implementation does not use that lookup. Qualification retains
+target-filtered Cargo metadata, the unchanged Cargo/ELF audits, a full nonempty
+symbol table checked against the same symbol bans, interpreter/dependency
+rejection, and target-library hashes checked before and after building. Static
+linking alone is not evidence that a prohibited path disappeared. These checks
+qualify the canary artifact, not every downstream application or libc itself.
+The final link uses an explicit compiler driver and BFD selector; its invocation
+and the compiler/driver/linker identities are retained and rechecked.
 
 ## Remaining Acceptance
 

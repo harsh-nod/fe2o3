@@ -12,6 +12,37 @@ spec.loader.exec_module(runner)
 
 
 class OwnerRunnerTests(unittest.TestCase):
+    def test_final_link_profile_is_explicit(self):
+        good = 'LC_ALL="C" PATH="/usr/bin" "/usr/bin/cc" "-fuse-ld=bfd" "-static-pie"\n'
+        runner.validate_link_command(good)
+        for value in ("", good * 2, good.replace("/usr/bin/cc", "cc"),
+                      good.replace("-fuse-ld=bfd", "-fuse-ld=lld"), good.replace("-static-pie", "-shared"),
+                      *(good.rstrip() + " " + flag for flag in ("-fuse-ld=lld", "-shared", "-no-pie", "-static-pie"))):
+            with self.assertRaises(runner.base.RunError):
+                runner.validate_link_command(value)
+
+    def test_static_symbols_reject_hidden_forbidden_and_missing_tables(self):
+        policy = json.loads((pathlib.Path(__file__).resolve().parents[2] / "scripts/runtime-pure-rust-policy.json").read_text())
+        good = "main T 100 10\npthread_create W 200 10\n"
+        self.assertEqual(runner.validate_static_symbols(good, policy), 2)
+        for value in ("", "nm: no symbols\n", "main T 100 10\n", good + "valid T not-hex 10\n",
+                      good + "unknown U\n", good + "unknown w\n", good + "unknown v\n"):
+            with self.assertRaises(runner.base.RunError):
+                runner.validate_static_symbols(value, policy)
+        for name in (*policy["forbidden_dynamic_symbols"], "__dlsym", "dlsym@GLIBC_2.34",
+                     "__pthread_get_minstack", *(p + "probe" for p in policy["forbidden_dynamic_symbol_prefixes"])):
+            for kind in ("T", "t", "W", "w", "U"):
+                with self.assertRaises(runner.base.RunError):
+                    runner.validate_static_symbols(good + f"{name} {kind} 300 10\n", policy)
+
+    def test_static_headers_reject_loader_and_missing_evidence(self):
+        good = "Program Headers:\n LOAD 0x0000 0x0000 R E\n"
+        runner.validate_static_headers(good)
+        for value in ("", "There are no program headers.\n", good + " INTERP 0x0\n",
+                      good + " 0x0000000000000001 (NEEDED) Shared library: [libc.so.6]\n"):
+            with self.assertRaises(runner.base.RunError):
+                runner.validate_static_headers(value)
+
     def test_exact_output(self):
         runner.validate_output(runner.PASS)
         for value in ("", runner.PASS[:-1], runner.PASS * 2, runner.PASS.replace("complete", "partial")):
