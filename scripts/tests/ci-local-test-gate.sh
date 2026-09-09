@@ -59,6 +59,29 @@ OWNED_TMP_PATH="$(
   exit 1
 }
 
+for step_timeout in 1 3599 3600 7199; do
+  env FE2O3_CI_STEP_TIMEOUT_SECONDS="${step_timeout}" \
+    CI_LOG_DIR="${TIMEOUT_TEST_ROOT}/boundary-logs" \
+    bash -c '
+      source "$1"
+      mkdir -p "${CI_LOG_DIR}"
+      run_step boundary-fixture true
+    ' bash "${TEST_SCRIPT_DIR}/../ci-local.sh" \
+    >"${TIMEOUT_TEST_ROOT}/boundary.out" 2>&1
+done
+for step_timeout in 0 7200 -1 1.5 invalid; do
+  boundary_status=0
+  env FE2O3_CI_STEP_TIMEOUT_SECONDS="${step_timeout}" \
+    CI_LOG_DIR="${TIMEOUT_TEST_ROOT}/boundary-logs" \
+    bash -c '
+      source "$1"
+      mkdir -p "${CI_LOG_DIR}"
+      run_step boundary-fixture touch "$2"
+    ' bash "${TEST_SCRIPT_DIR}/../ci-local.sh" "${TIMEOUT_TEST_ROOT}/invalid-ran" \
+    >"${TIMEOUT_TEST_ROOT}/boundary.out" 2>&1 || boundary_status=$?
+  [[ "${boundary_status}" -eq 2 && ! -e "${TIMEOUT_TEST_ROOT}/invalid-ran" ]]
+done
+
 set +e
 timeout 10s env \
   FE2O3_CI_STEP_TIMEOUT_SECONDS=1 \

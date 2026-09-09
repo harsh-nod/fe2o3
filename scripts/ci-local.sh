@@ -236,12 +236,6 @@ run_step_with_timeout() {
 }
 
 run_step() {
-  if [[ ! "${CI_STEP_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]] ||
-    ((CI_STEP_TIMEOUT_SECONDS >= 3600)); then
-    printf '%s\n' \
-      'FE2O3_CI_STEP_TIMEOUT_SECONDS must be an integer from 1 through 3599' >&2
-    return 2
-  fi
   run_step_with_timeout "${CI_STEP_TIMEOUT_SECONDS}" "$@"
 }
 
