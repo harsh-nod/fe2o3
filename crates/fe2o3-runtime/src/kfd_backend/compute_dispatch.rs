@@ -4205,38 +4205,37 @@ impl KfdRuntimeBackendV1 {
                     self.terminal_error(format!("explicit auxiliary KFD queue teardown: {error}"))
                 );
             }
-            let profile_queue = self.profile_resource_v1(
-                KfdProfileResourceKindV1::NativeQueue,
-                KFD_PROFILE_NATIVE_QUEUE_ORDINAL_V1 + index as u64,
-            );
-            self.observe_profile_v1(
-                profile_queue
-                    .map(|queue| KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { queue }),
-            );
+            self.observe_destroyed_compute_lane_v1(Some(index));
         }
         let primary_logical_lane = self
             .native_compute_lanes
             .iter()
             .position(|lane| lane.is_some_and(|lane| lane.ordinal() == 0));
-        let profile_queue = primary_logical_lane.and_then(|lane| {
-            self.profile_resource_v1(
-                KfdProfileResourceKindV1::NativeQueue,
-                KFD_PROFILE_NATIVE_QUEUE_ORDINAL_V1 + lane as u64,
-            )
-        });
         if let Some(queue) = self.queue.take() {
             queue.destroy().map_err(|error| {
                 self.terminal_error(format!("explicit KFD queue teardown: {error}"))
             })?;
-            self.observe_profile_v1(
-                profile_queue
-                    .map(|queue| KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { queue }),
-            );
+            self.observe_destroyed_compute_lane_v1(primary_logical_lane);
         }
         self.admitted_device.take();
         self.native_compute_lanes.fill(None);
         self.queue_retired = true;
         Ok(())
+    }
+
+    pub(super) fn observe_destroyed_compute_lane_v1(&mut self, logical_lane: Option<usize>) {
+        // An SDMA bootstrap queue may never serve a logical compute lane and
+        // therefore has no matching creation event in the compute profile.
+        let Some(lane) = logical_lane else {
+            return;
+        };
+        let queue = self.profile_resource_v1(
+            KfdProfileResourceKindV1::NativeQueue,
+            KFD_PROFILE_NATIVE_QUEUE_ORDINAL_V1 + lane as u64,
+        );
+        self.observe_profile_v1(
+            queue.map(|queue| KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { queue }),
+        );
     }
 
     pub(super) fn detach_recycled_dispatch(

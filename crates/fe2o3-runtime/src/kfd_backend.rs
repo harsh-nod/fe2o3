@@ -22010,6 +22010,49 @@ mod tests {
     }
 
     #[test]
+    fn profiler_unassigned_bootstrap_queue_teardown_does_not_drop_an_event() {
+        for logical_lane in [None, Some(0), Some(1)] {
+            let mut backend = KfdRuntimeBackendV1::mock();
+            backend
+                .enable_profiler_v1(KfdRuntimeProfilerConfigV1::new([0x60; 32], 16).unwrap())
+                .unwrap();
+            let queue = logical_lane.and_then(|lane| {
+                backend.profile_resource_v1(
+                    KfdProfileResourceKindV1::NativeQueue,
+                    KFD_PROFILE_NATIVE_QUEUE_ORDINAL_V1 + lane as u64,
+                )
+            });
+            if logical_lane.is_some() {
+                backend.observe_profile_v1(
+                    queue.map(|queue| KfdRuntimeProfileEventKindV1::NativeQueueCreated { queue }),
+                );
+                backend.observe_destroyed_compute_lane_v1(logical_lane);
+            }
+            backend.observe_destroyed_compute_lane_v1(None);
+            backend.shutdown_native_v1().unwrap();
+            let capture = backend.finish_profiler_v1().unwrap();
+            capture.validate().unwrap();
+            assert!(capture.coverage.complete_runtime_operation_history);
+            assert_eq!(capture.coverage.dropped_events, 0);
+            if let Some(queue) = queue {
+                assert_eq!(capture.events.len(), 2);
+                assert!(matches!(
+                    capture.events[0].event,
+                    KfdRuntimeProfileEventKindV1::NativeQueueCreated { queue: observed }
+                        if observed == queue
+                ));
+                assert!(matches!(
+                    capture.events[1].event,
+                    KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { queue: observed }
+                        if observed == queue
+                ));
+            } else {
+                assert!(capture.events.is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn profiler_records_complete_address_free_runtime_lifecycle() {
         let mut backend = KfdRuntimeBackendV1::mock();
         backend

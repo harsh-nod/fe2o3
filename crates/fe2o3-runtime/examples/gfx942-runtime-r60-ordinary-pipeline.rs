@@ -236,7 +236,11 @@ mod enabled {
             if !profile.coverage.complete_runtime_operation_history
                 || profile.coverage.dropped_events != 0
             {
-                return Err("incomplete qualification profile".to_owned());
+                return Err(format!(
+                    "incomplete qualification profile: retained_events={} dropped_events={} cleanup=complete",
+                    profile.events.len(),
+                    profile.coverage.dropped_events
+                ));
             }
             validate_publication_prefix(profile.events.iter().map(|entry| &entry.event))?;
             Ok(profile)
