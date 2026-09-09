@@ -291,8 +291,14 @@ pub(super) fn host_visible_resident_roster_is_reusable_v1(
     descriptors: &[ResidentDataDescriptorV1],
     native_data_count: usize,
 ) -> bool {
+    descriptors.len() == native_data_count
+        && host_visible_resident_descriptors_are_reusable_v1(descriptors)
+}
+
+pub(super) fn host_visible_resident_descriptors_are_reusable_v1(
+    descriptors: &[ResidentDataDescriptorV1],
+) -> bool {
     !descriptors.is_empty()
-        && descriptors.len() == native_data_count
         && descriptors.iter().all(|descriptor| {
             descriptor.kind == RuntimeMemoryKindV1::HostVisible && descriptor.byte_len != 0
         })
@@ -4257,7 +4263,7 @@ impl KfdRuntimeBackendV1 {
         );
     }
 
-    pub(super) fn detach_recycled_dispatch(
+    pub(super) fn synchronize_recycled_dispatch_data_v1(
         &mut self,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         if self.recycled_dispatch.is_some() {
@@ -4277,6 +4283,13 @@ impl KfdRuntimeBackendV1 {
                 self.synchronize_native_allocation_lane_v1(allocation, lane)?;
             }
         }
+        Ok(())
+    }
+
+    pub(super) fn detach_recycled_dispatch(
+        &mut self,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.synchronize_recycled_dispatch_data_v1()?;
         let Some(recycled) = self.recycled_dispatch.take() else {
             return Ok(());
         };

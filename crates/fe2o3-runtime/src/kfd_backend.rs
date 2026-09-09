@@ -2612,6 +2612,26 @@ impl KfdRuntimeBackendV1 {
                 continue;
             }
             self.with_compute_lane_state_v1(lane, |backend| {
+                if backend.can_retain_host_visible_recycled_control_v1() {
+                    let native_lane = backend.selected_native_compute_lane_v1()?;
+                    let validation = backend
+                        .queue
+                        .as_mut()
+                        .ok_or_else(|| "KFD recycled dispatch has no native queue".to_owned())
+                        .and_then(|queue| {
+                            queue
+                                .with_compute_lane_v1(native_lane, |queue| {
+                                    queue.recycled_fixed_dispatch_generation()
+                                })
+                                .map_err(|error| format!("KFD compute-lane selection: {error}"))?
+                                .map_err(|error| format!("KFD retained control preflight: {error}"))
+                        });
+                    validation.map_err(|detail| backend.terminal_error(detail))?;
+                    backend.synchronize_recycled_dispatch_data_v1()?;
+                    // Native bytes and control stay owned together. Fresh launch
+                    // admission still precedes any generation-checked overwrite.
+                    return Ok(());
+                }
                 backend.detach_recycled_dispatch()?;
                 let retain_data = backend.resident_data.as_ref().is_some_and(|resident| {
                     host_visible_resident_roster_is_reusable_v1(
@@ -2629,6 +2649,13 @@ impl KfdRuntimeBackendV1 {
             })?;
         }
         Ok(())
+    }
+
+    fn can_retain_host_visible_recycled_control_v1(&self) -> bool {
+        self.resident_data.is_none()
+            && self.recycled_dispatch.as_ref().is_some_and(|recycled| {
+                host_visible_resident_descriptors_are_reusable_v1(&recycled.descriptors)
+            })
     }
 
     fn release_retained_persistent_control_v1(
@@ -19941,6 +19968,88 @@ mod tests {
             Some([1; 32])
         ));
         assert_eq!(prior.host_content_sha256, Some([1; 32]));
+    }
+
+    #[test]
+    fn host_visible_recycled_control_retention_policy_requires_one_nonempty_host_owner() {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        let descriptor = ResidentDataDescriptorV1 {
+            allocation: 1,
+            kind: RuntimeMemoryKindV1::HostVisible,
+            alignment: 8,
+            allocation_offset: 0,
+            byte_len: 16,
+            host_content_sha256: Some([1; 32]),
+            device_may_have_modified: true,
+        };
+        assert!(!backend.can_retain_host_visible_recycled_control_v1());
+        backend.recycled_dispatch = Some(RecycledDispatchV1 {
+            kernel: 1,
+            dispatch_shape_sha256: [2; 32],
+            descriptors: vec![descriptor],
+        });
+        assert!(backend.can_retain_host_visible_recycled_control_v1());
+        backend.resident_data = Some(ResidentDataRosterV1 {
+            descriptors: vec![],
+            data: vec![],
+        });
+        assert!(!backend.can_retain_host_visible_recycled_control_v1());
+        backend.resident_data = None;
+        for invalid in [
+            vec![],
+            vec![ResidentDataDescriptorV1 {
+                byte_len: 0,
+                ..descriptor
+            }],
+            vec![
+                descriptor,
+                ResidentDataDescriptorV1 {
+                    kind: RuntimeMemoryKindV1::DeviceLocal,
+                    ..descriptor
+                },
+            ],
+        ] {
+            backend.recycled_dispatch.as_mut().unwrap().descriptors = invalid;
+            assert!(!backend.can_retain_host_visible_recycled_control_v1());
+        }
+        // This policy fixture never creates a native control owner.
+        backend.recycled_dispatch = None;
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn host_visible_recycled_control_retention_wiring_preserves_checked_reconciliation() {
+        let source = include_str!("kfd_backend.rs");
+        let prepare = source
+            .split("fn prepare_compute_caches_for_host_write_v1(")
+            .nth(1)
+            .unwrap()
+            .split("fn can_retain_host_visible_recycled_control_v1(")
+            .next()
+            .unwrap();
+        let mut remaining = prepare;
+        for fragment in [
+            "can_retain_host_visible_write_cache_v1(allocation, full_write)",
+            "can_retain_host_visible_recycled_control_v1()",
+            "queue.recycled_fixed_dispatch_generation()",
+            "validation.map_err(|detail| backend.terminal_error(detail))?;",
+            "backend.synchronize_recycled_dispatch_data_v1()?;",
+            "return Ok(());",
+            "backend.detach_recycled_dispatch()?;",
+        ] {
+            remaining = remaining.split_once(fragment).unwrap().1;
+        }
+        let dispatch = include_str!("kfd_backend/compute_dispatch.rs");
+        let detach = dispatch
+            .split("pub(super) fn detach_recycled_dispatch(")
+            .nth(1)
+            .unwrap();
+        assert!(
+            detach
+                .find("self.synchronize_recycled_dispatch_data_v1()?;")
+                .unwrap()
+                < detach.find("self.recycled_dispatch.take()").unwrap()
+        );
     }
 
     #[test]

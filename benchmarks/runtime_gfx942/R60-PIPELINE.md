@@ -4,6 +4,8 @@ This benchmark compares a bounded 64-launch ordinary vecadd batch on one
 gfx942:xnack- device. It measures the public KFD runtime, HIP module launch,
 and raw HSA AQL submission separately. It does not establish general HIP/HSA
 parity, machine-code refinement, concurrent execution, or device-kernel speedup.
+See the [exact-source MI300X evidence](../../docs/evidence/mi300x-r60-ordinary-pipeline-2026-09-09/README.md)
+for accepted results, before/after timings, rejected attempts and cleanup.
 
 All three backends use the retained `trusted-gfx942-vecadd-v1/vecadd.hsaco`
 (SHA-256 `3a25e364dd1e1931d1a16c24b37aa998df2c6ef1cbcf0ec2afb6372cbc878bab`),
@@ -29,13 +31,16 @@ or stream, and timing storage. HSA also preallocates its completion signals;
 KFD's per-dispatch resource setup remains inside issue timing. Explicit allocation API
 calls, output reset, and validation are outside timing. Runtime-internal work
 performed by a launch API is included in its issue cost. A globally quiescent
-full HostVisible reset can now retain compatible native data mappings while
-detaching code and kernarg control. The next timed launch still rebuilds that
-control and performs checked overwrites of changed native data. Partial writes
-and incompatible caches retain the conservative eviction path. The original
-`4f25e304` baseline fully evicted data mappings on every output reset; any
-before/after comparison must retain that source distinction. This benchmark
-does not assume complete native control residency across batches. Its `explicit_allocation_api_timed: false`
+full HostVisible reset can retain compatible native data and attached code and
+kernarg control after checking that all native epochs are recycled. It still
+reconciles dirty data before changing host authority. The next timed launch
+performs fresh admission and generation-checked overwrites; a changed recipe
+uses detach/rebind. Partial writes and incompatible caches retain conservative
+eviction. The original `4f25e304` baseline fully evicted data mappings on every
+reset; `63822487` and `8fe4d0a9` retained only data and rebuilt control in the
+next timed launch. Any before/after comparison must preserve those source
+distinctions. This benchmark does not assume native control residency across
+incompatible recipes. Its `explicit_allocation_api_timed: false`
 field does not exclude that implicit runtime work. There are 10 warmup batches and 30 measured
 batches. A single monotonic host clock gives three timestamps:
 
