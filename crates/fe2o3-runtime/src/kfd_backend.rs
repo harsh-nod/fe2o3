@@ -2590,6 +2590,47 @@ impl KfdRuntimeBackendV1 {
         Ok(())
     }
 
+    fn can_retain_host_visible_write_cache_v1(&self, allocation: u64, full_write: bool) -> bool {
+        full_write
+            && self.allocations.get(&allocation).is_some_and(|record| {
+                record.kind == RuntimeMemoryKindV1::HostVisible && !record.bytes.is_empty()
+            })
+            && !self.any_compute_active_v1()
+            && self.retained_persistent_dispatch.is_none()
+    }
+
+    fn prepare_compute_caches_for_host_write_v1(
+        &mut self,
+        allocation: u64,
+        full_write: bool,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if !self.can_retain_host_visible_write_cache_v1(allocation, full_write) {
+            return self.release_all_compute_caches_for_allocation_v1(allocation);
+        }
+        for lane in 0..self.native_compute_lanes.len() {
+            if !self.compute_lane_caches_allocation_v1(lane, allocation) {
+                continue;
+            }
+            self.with_compute_lane_state_v1(lane, |backend| {
+                backend.detach_recycled_dispatch()?;
+                let retain_data = backend.resident_data.as_ref().is_some_and(|resident| {
+                    host_visible_resident_roster_is_reusable_v1(
+                        &resident.descriptors,
+                        resident.data.len(),
+                    )
+                });
+                if retain_data {
+                    // These descriptors still describe native bytes. The next
+                    // checked overwrite/rebind, not this host write, refreshes them.
+                    Ok(())
+                } else {
+                    backend.release_resident_data()
+                }
+            })?;
+        }
+        Ok(())
+    }
+
     fn release_retained_persistent_control_v1(
         &mut self,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
@@ -5995,7 +6036,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             None
         };
 
-        self.release_all_compute_caches_for_allocation_v1(allocation)
+        self.prepare_compute_caches_for_host_write_v1(allocation, full_write)
             .map_err(Self::after_possible_host_mutation)?;
         self.synchronize_sdma_shadow_v1(allocation)
             .map_err(Self::after_possible_host_mutation)?;
@@ -19749,6 +19790,128 @@ mod tests {
             performance: KfdRuntimeLaunchPerformanceV1::default(),
             execution: None,
         }
+    }
+
+    #[test]
+    fn host_visible_write_cache_retention_requires_full_write_and_global_compute_quiescence() {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        let host = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 16, 8)
+            .unwrap();
+        let device = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+            .unwrap();
+        assert!(backend.can_retain_host_visible_write_cache_v1(host, true));
+        assert!(!backend.can_retain_host_visible_write_cache_v1(host, false));
+        assert!(!backend.can_retain_host_visible_write_cache_v1(device, true));
+        assert!(!backend.can_retain_host_visible_write_cache_v1(u64::MAX, true));
+        backend.active = Some(pipelined_active_for_test_v1(10));
+        assert!(!backend.can_retain_host_visible_write_cache_v1(host, true));
+        backend.active = None;
+        backend.auxiliary_compute_lanes[0].active = Some(pipelined_active_for_test_v1(11));
+        assert!(!backend.can_retain_host_visible_write_cache_v1(host, true));
+        backend.auxiliary_compute_lanes[0].active = None;
+        assert!(
+            backend
+                .compute_pipeline
+                .insert_published(pipelined_active_for_test_v1(12))
+                .is_ok()
+        );
+        assert!(!backend.can_retain_host_visible_write_cache_v1(host, true));
+        backend.compute_pipeline = RuntimeComputePipelineV1::vacant();
+        assert!(
+            backend.auxiliary_compute_lanes[0]
+                .pipeline
+                .insert_published(pipelined_active_for_test_v1(13))
+                .is_ok()
+        );
+        assert!(!backend.can_retain_host_visible_write_cache_v1(host, true));
+        backend.auxiliary_compute_lanes[0].pipeline = RuntimeComputePipelineV1::vacant();
+        backend.retained_persistent_dispatch = Some(RetainedPersistentDispatchV1 {
+            allocation: device,
+            dispatch_shape_sha256: [1; 32],
+        });
+        assert!(!backend.can_retain_host_visible_write_cache_v1(host, true));
+        backend.retained_persistent_dispatch = None;
+        assert!(backend.can_retain_host_visible_write_cache_v1(host, true));
+        backend.write_allocation_v1(host, 0, &[0x60; 16]).unwrap();
+        backend.write_allocation_v1(host, 0, &[0x60; 16]).unwrap();
+        backend.release_allocation_v1(device).unwrap();
+        backend.release_allocation_v1(host).unwrap();
+        backend.shutdown_native_v1().unwrap();
+    }
+
+    #[test]
+    fn host_visible_write_cache_retention_rejects_mixed_empty_or_incomplete_rosters() {
+        let descriptor = ResidentDataDescriptorV1 {
+            allocation: 1,
+            kind: RuntimeMemoryKindV1::HostVisible,
+            alignment: 8,
+            allocation_offset: 0,
+            byte_len: 16,
+            host_content_sha256: Some([1; 32]),
+            device_may_have_modified: false,
+        };
+        let descriptors = [descriptor; 3];
+        assert!(host_visible_resident_roster_is_reusable_v1(&descriptors, 3));
+        for count in [0, 1, 2, 4] {
+            assert!(!host_visible_resident_roster_is_reusable_v1(
+                &descriptors,
+                count
+            ));
+        }
+        assert!(!host_visible_resident_roster_is_reusable_v1(&[], 0));
+        for mask in 1..8 {
+            let mut mixed = descriptors;
+            for (index, descriptor) in mixed.iter_mut().enumerate() {
+                if mask & (1 << index) != 0 {
+                    descriptor.kind = RuntimeMemoryKindV1::DeviceLocal;
+                }
+            }
+            assert!(!host_visible_resident_roster_is_reusable_v1(&mixed, 3));
+        }
+        let empty = ResidentDataDescriptorV1 {
+            byte_len: 0,
+            ..descriptor
+        };
+        assert!(!host_visible_resident_roster_is_reusable_v1(&[empty], 1));
+    }
+
+    #[test]
+    fn host_visible_write_cache_retention_keeps_old_native_digest_until_checked_overwrite() {
+        let prior = ResidentDataDescriptorV1 {
+            allocation: 1,
+            kind: RuntimeMemoryKindV1::HostVisible,
+            alignment: 8,
+            allocation_offset: 0,
+            byte_len: 16,
+            host_content_sha256: Some([1; 32]),
+            device_may_have_modified: false,
+        };
+        assert!(!resident_data_needs_host_overwrite_v1(
+            &prior,
+            Some([1; 32])
+        ));
+        assert!(resident_data_needs_host_overwrite_v1(&prior, Some([2; 32])));
+        assert!(resident_data_needs_host_overwrite_v1(&prior, None));
+        let written = ResidentDataDescriptorV1 {
+            device_may_have_modified: true,
+            ..prior
+        };
+        assert!(resident_data_needs_host_overwrite_v1(
+            &written,
+            Some([1; 32])
+        ));
+        let unknown = ResidentDataDescriptorV1 {
+            host_content_sha256: None,
+            ..prior
+        };
+        assert!(resident_data_needs_host_overwrite_v1(&unknown, None));
+        assert!(resident_data_needs_host_overwrite_v1(
+            &unknown,
+            Some([1; 32])
+        ));
+        assert_eq!(prior.host_content_sha256, Some([1; 32]));
     }
 
     #[test]

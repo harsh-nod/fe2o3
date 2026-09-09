@@ -28,10 +28,14 @@ Each backend preallocates application-owned buffers, launch arguments, queue
 or stream, and timing storage. HSA also preallocates its completion signals;
 KFD's per-dispatch resource setup remains inside issue timing. Explicit allocation API
 calls, output reset, and validation are outside timing. Runtime-internal work
-performed by a launch API is included in its issue cost. In particular, a KFD
-host output write evicts the compute cache, so the next timed flush allocates
-and materializes native bindings again. This benchmark does not assume steady
-native residency across batches. Its `explicit_allocation_api_timed: false`
+performed by a launch API is included in its issue cost. A globally quiescent
+full HostVisible reset can now retain compatible native data mappings while
+detaching code and kernarg control. The next timed launch still rebuilds that
+control and performs checked overwrites of changed native data. Partial writes
+and incompatible caches retain the conservative eviction path. The original
+`4f25e304` baseline fully evicted data mappings on every output reset; any
+before/after comparison must retain that source distinction. This benchmark
+does not assume complete native control residency across batches. Its `explicit_allocation_api_timed: false`
 field does not exclude that implicit runtime work. There are 10 warmup batches and 30 measured
 batches. A single monotonic host clock gives three timestamps:
 

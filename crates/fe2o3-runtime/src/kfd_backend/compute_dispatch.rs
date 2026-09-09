@@ -287,6 +287,26 @@ pub(super) fn recycled_dispatch_reuse_is_admitted_v1(
             .all(|spec| spec.kind == RuntimeMemoryKindV1::HostVisible)
 }
 
+pub(super) fn host_visible_resident_roster_is_reusable_v1(
+    descriptors: &[ResidentDataDescriptorV1],
+    native_data_count: usize,
+) -> bool {
+    !descriptors.is_empty()
+        && descriptors.len() == native_data_count
+        && descriptors.iter().all(|descriptor| {
+            descriptor.kind == RuntimeMemoryKindV1::HostVisible && descriptor.byte_len != 0
+        })
+}
+
+pub(super) fn resident_data_needs_host_overwrite_v1(
+    prior: &ResidentDataDescriptorV1,
+    current_host_sha256: Option<[u8; 32]>,
+) -> bool {
+    prior.device_may_have_modified
+        || prior.host_content_sha256.is_none()
+        || prior.host_content_sha256 != current_host_sha256
+}
+
 impl KfdRuntimeBackendV1 {
     pub(super) fn collect_compute_dependencies_v1(
         &self,
@@ -2766,10 +2786,10 @@ impl KfdRuntimeBackendV1 {
                                     .zip(&data)
                                     .enumerate()
                                     .try_for_each(|(index, (prior, spec))| {
-                                        if !prior.device_may_have_modified
-                                            && prior.host_content_sha256.is_some()
-                                            && prior.host_content_sha256 == spec.content_sha256
-                                        {
+                                        if !resident_data_needs_host_overwrite_v1(
+                                            prior,
+                                            spec.content_sha256,
+                                        ) {
                                             return Ok(());
                                         }
                                         queue
@@ -2889,11 +2909,10 @@ impl KfdRuntimeBackendV1 {
                                         .zip(resident.descriptors.iter().zip(&data))
                                         .enumerate()
                                         .try_for_each(|(index, (native, (prior, spec)))| {
-                                            if !prior.device_may_have_modified
-                                                && prior.host_content_sha256.is_some()
-                                                && prior.host_content_sha256
-                                                    == spec.content_sha256
-                                            {
+                                            if !resident_data_needs_host_overwrite_v1(
+                                                prior,
+                                                spec.content_sha256,
+                                            ) {
                                                 return Ok(());
                                             }
                                             queue
