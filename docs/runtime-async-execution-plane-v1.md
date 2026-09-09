@@ -107,8 +107,15 @@ memory allocator and preserves the original logical copy length. Host buffers,
 promotion admission, copy/window bounds, and compute authority are unchanged.
 Full-initialization compute bridges still reject logical/physical mismatches;
 unwritten allocation padding never becomes initialized compute data.
+Consequently, fresh non-page-sized device buffers also become ineligible for
+the legacy completed-copy compute bridge. This is an intentional conservative
+restriction; callers cannot use a logical-only copy to initialize the padding.
 
 ## Remaining Acceptance
+
+The [R61 evidence report](evidence/mi300x-r61-async-owner-2026-09-09/README.md)
+retains CPU/proof validation, both rejected attempts, and the two accepted
+single-device musl copy canaries with independent integrity and cleanup checks.
 
 #182 must remain open until its full acceptance matrix is met:
 

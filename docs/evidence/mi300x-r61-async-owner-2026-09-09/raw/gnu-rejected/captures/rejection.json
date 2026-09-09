@@ -1,0 +1,1 @@
+{"error": "elf-closure exited 1: prohibited dynamic symbol: dlsym (exact)\npure-Rust runtime audit: FAILED (1 violation(s); ELF bytes=4317200 needed=3 dynsym=87 sha256=9cc03a0f0c9eae701b1aa8f2c1758cc5462f521223d823493f9e0fc355faf5df)"}

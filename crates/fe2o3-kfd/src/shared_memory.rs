@@ -7554,8 +7554,7 @@ mod tests {
                 bytes,
                 1,
             )
-            .err()
-            .expect("padding is outside the logical copy extent");
+            .expect_err("padding is outside the logical copy extent");
             let Gfx942DirectionalPersistentSdmaSubmissionCustodyV1::Retryable { allocation, host } =
                 failure.into_parts().1
             else {
@@ -7584,8 +7583,7 @@ mod tests {
                 bytes,
                 1,
             )
-            .err()
-            .expect("window admission cannot copy padding either");
+            .expect_err("window admission cannot copy padding either");
             let Gfx942DirectionalPersistentSdmaWindowSubmissionCustodyV1::Retryable {
                 allocation,
                 host: _,

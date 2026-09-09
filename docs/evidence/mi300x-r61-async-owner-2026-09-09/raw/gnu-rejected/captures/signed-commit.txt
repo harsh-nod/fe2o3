@@ -1,0 +1,14 @@
+tree dcbb1fadd059770109ab227c9b954703eaf4ea00
+parent 618b5bec35039ec0004d1904feb35b6abe2724f1
+author Harsh Noda <3144552+harsh-nod@users.noreply.github.com> 1788990937 -0700
+committer Harsh Noda <3144552+harsh-nod@users.noreply.github.com> 1788990937 -0700
+gpgsig -----BEGIN SSH SIGNATURE-----
+ U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgIhPOhXrjN3i1h5mG86L6afBBrE
+ QjisW9d4LcfGKV4FIAAAADZ2l0AAAAAAAAAAZzaGE1MTIAAABTAAAAC3NzaC1lZDI1NTE5
+ AAAAQDXqGk2cuNZGyIbXuKTY3zOugkS/N3mYfC6+5cm7dHa7lPDomfQCJlEHgRfreMckHP
+ 1S9A5XiBaKrHK2O5iaPA4=
+ -----END SSH SIGNATURE-----
+
+Add owner-thread direct KFD async execution slice for issue 182
+
+Signed-off-by: Harsh Noda <3144552+harsh-nod@users.noreply.github.com>

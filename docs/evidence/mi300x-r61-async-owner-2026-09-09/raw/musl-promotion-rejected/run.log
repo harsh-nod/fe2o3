@@ -1,0 +1,2 @@
+R61 rejected: monitor-owner-0 exited 2: Error: BackendRejected(KfdRuntimeBackendErrorV1 { kind: Native, detail: "KFD persistent device promotion: Contract(\"directional persistent SDMA promotion requires 0 < logical <= page-rounded physical <= 256 MiB\")" })
+r26-host-guard: target command exited with status 1; diagnostics=/dev/shm/fe2o3-r61-owner.b9pXCghD/output/r61-rejected-38bb0c4f94731f783fc960c29fd292e9

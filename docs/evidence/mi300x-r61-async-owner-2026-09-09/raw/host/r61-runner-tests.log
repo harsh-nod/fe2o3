@@ -1,0 +1,15 @@
+test_cleanup_failure_withdraws_published_evidence (test_run_r61_owner.OwnerRunnerTests.test_cleanup_failure_withdraws_published_evidence) ... R61 rejected: cleanup failed; diagnostics=/tmp/tmpx8_hr2_f/r61-rejected-12e4202a011b87e616e0ce5d73bb58a7
+ok
+test_constructor_failure_cleans_only_owned_stage (test_run_r61_owner.OwnerRunnerTests.test_constructor_failure_cleans_only_owned_stage) ... R61 rejected: constructor failed; diagnostics=None
+ok
+test_corrupt_publication_never_enters_final_namespace (test_run_r61_owner.OwnerRunnerTests.test_corrupt_publication_never_enters_final_namespace) ... ok
+test_exact_output (test_run_r61_owner.OwnerRunnerTests.test_exact_output) ... ok
+test_final_link_profile_is_explicit (test_run_r61_owner.OwnerRunnerTests.test_final_link_profile_is_explicit) ... ok
+test_selected_telemetry_fails_closed (test_run_r61_owner.OwnerRunnerTests.test_selected_telemetry_fails_closed) ... ok
+test_static_headers_reject_loader_and_missing_evidence (test_run_r61_owner.OwnerRunnerTests.test_static_headers_reject_loader_and_missing_evidence) ... ok
+test_static_symbols_reject_hidden_forbidden_and_missing_tables (test_run_r61_owner.OwnerRunnerTests.test_static_symbols_reject_hidden_forbidden_and_missing_tables) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.018s
+
+OK
