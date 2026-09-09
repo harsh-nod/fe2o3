@@ -35,6 +35,10 @@ use crate::topology::{
 };
 use crate::{KfdAdapterError, KfdWithAdmittedUapi};
 
+#[path = "device_gfx950.rs"]
+mod gfx950;
+pub use gfx950::*;
+
 pub const ADMITTED_KERNEL_RELEASE_V1: &str = "6.8.0-124-generic";
 pub const ADMITTED_AMDGPU_MODULE_VERSION_V1: &str = "6.16.13";
 pub const ADMITTED_AMDGPU_MODULE_SRCVERSION_V1: &str = "A6F143BEC60C0AFC3263226";
