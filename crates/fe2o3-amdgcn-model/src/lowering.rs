@@ -2910,6 +2910,21 @@ fn collect_intrinsic_declarations<'a>(
                             }
                     }));
                 }
+                OperationKind::Cast {
+                    kind: CastKind::FloatToInteger,
+                    to,
+                    ..
+                } => {
+                    let scalar = to.as_scalar().expect("validated float-to-integer cast");
+                    declarations.insert(
+                        saturating_float_to_integer_intrinsic_name(scalar),
+                        IntrinsicDeclaration {
+                            result: llvm_type(to),
+                            arguments: "float",
+                            attribute: IntrinsicAttribute::ReadNone,
+                        },
+                    );
+                }
                 OperationKind::WorkgroupBarrier(_)
                     if !lowerer.target.requires_physical_workgroup_barrier() =>
                 {
@@ -5490,7 +5505,7 @@ impl<'a> FunctionLowerer<'a> {
         if self.emit_workgroup_memory_declarations(&mut output)? {
             writeln!(output).unwrap();
         }
-        let invocation_intrinsics = collect_intrinsic_declarations(std::iter::once(self))?;
+        let intrinsic_declarations = collect_intrinsic_declarations(std::iter::once(self))?;
         if matches!(
             self.semantic_anchor_emission,
             SemanticAnchorEmissionV1::Active(_)
@@ -5509,7 +5524,7 @@ impl<'a> FunctionLowerer<'a> {
             AmdgcnIntrinsic::WorkGroupId(Dim::X).llvm_name()
         )
         .unwrap();
-        for (symbol, declaration) in invocation_intrinsics {
+        for (symbol, declaration) in intrinsic_declarations {
             if symbol == AmdgcnIntrinsic::DispatchPtr.llvm_name() {
                 debug_assert_eq!(declaration.result, "ptr addrspace(4)");
                 debug_assert_eq!(declaration.arguments, "");
@@ -5524,6 +5539,16 @@ impl<'a> FunctionLowerer<'a> {
                 debug_assert_eq!(declaration.arguments, "");
                 debug_assert_eq!(declaration.attribute, IntrinsicAttribute::ReadNone);
                 writeln!(output, "declare i32 @{symbol}() #1").unwrap();
+            } else if symbol.starts_with("llvm.fptosi.sat.")
+                || symbol.starts_with("llvm.fptoui.sat.")
+            {
+                debug_assert_eq!(declaration.attribute, IntrinsicAttribute::ReadNone);
+                writeln!(
+                    output,
+                    "declare {} @{symbol}({}) #1",
+                    declaration.result, declaration.arguments,
+                )
+                .unwrap();
             }
         }
         if has_workgroup_barrier && !self.target.requires_physical_workgroup_barrier() {
@@ -6427,6 +6452,19 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Cast { kind, value, to } => {
                 let (value_name, from) = self.value(*value);
+                if *kind == CastKind::FloatToInteger {
+                    let scalar = to.as_scalar().expect("validated float-to-integer cast");
+                    writeln!(
+                        output,
+                        "  {} = call {} @{}(float {})",
+                        result_name.expect("validated result"),
+                        llvm_type(to),
+                        saturating_float_to_integer_intrinsic_name(scalar),
+                        value_name,
+                    )
+                    .unwrap();
+                    return Ok(());
+                }
                 if *kind == CastKind::RestrictPointerAccess {
                     writeln!(
                         output,
@@ -6455,7 +6493,7 @@ impl<'a> FunctionLowerer<'a> {
                     output,
                     "  {} = {} {} {} to {}",
                     result_name.expect("validated result"),
-                    cast_opcode(*kind, from, to),
+                    cast_opcode(*kind, from),
                     llvm_type(from),
                     value_name,
                     llvm_type(to)
@@ -9248,7 +9286,12 @@ fn compare_opcode(ty: &Type) -> &'static str {
     }
 }
 
-fn cast_opcode(kind: CastKind, from: &Type, to: &Type) -> &'static str {
+fn saturating_float_to_integer_intrinsic_name(to: ScalarType) -> String {
+    let signedness = if to.is_signed_integer() { 's' } else { 'u' };
+    format!("llvm.fpto{signedness}i.sat.i{}.f32", llvm_width(to))
+}
+
+fn cast_opcode(kind: CastKind, from: &Type) -> &'static str {
     match kind {
         CastKind::RestrictPointerAccess => {
             unreachable!("pointer access restriction uses an identity select")
@@ -9260,10 +9303,9 @@ fn cast_opcode(kind: CastKind, from: &Type, to: &Type) -> &'static str {
             "sitofp"
         }
         CastKind::IntegerToFloat => "uitofp",
-        CastKind::FloatToInteger if to.as_scalar().is_some_and(ScalarType::is_signed_integer) => {
-            "fptosi"
+        CastKind::FloatToInteger => {
+            unreachable!("float-to-integer casts use LLVM saturating intrinsics")
         }
-        CastKind::FloatToInteger => "fptoui",
         CastKind::Bitcast => "bitcast",
         CastKind::FloatExtend | CastKind::FloatTruncate => {
             unreachable!("preflight rejected unsupported cast")

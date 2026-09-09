@@ -1223,6 +1223,8 @@ for production_step in \
   rocm-production-barrier-cfg \
   rocm-production-simulation-bundle-gfx942 \
   rocm-production-simulation-bundle-gfx950 \
+  rocm-production-simulation-float-casts \
+  rocm-production-scalar-casts \
   rocm-production-simulation-bundle-v2-source-variables \
   rocm-production-simulation-bundle-v2-invalid-name; do
   assert_step_count "${production_step}" 1 \

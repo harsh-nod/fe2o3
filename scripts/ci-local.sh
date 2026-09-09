@@ -1331,6 +1331,18 @@ run_rocm_compile() {
         --test production_ranked_bounds_driver_v1 \
         ordinary_kernel_source_exports_the_exact_gfx950_simulation_target -- \
         --ignored --exact
+  run_step rocm-production-simulation-float-casts \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        ordinary_source_float_casts_saturate_in_simulation -- \
+        --ignored --exact
+  run_step rocm-production-scalar-casts \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p fe2o3-amdgcn-model \
+        --test scalar_v2 \
+        rocm_clang_compiles_every_accepted_gfx942_scalar_path -- \
+        --ignored --exact
   run_step rocm-production-simulation-bundle-v2-source-variables \
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \

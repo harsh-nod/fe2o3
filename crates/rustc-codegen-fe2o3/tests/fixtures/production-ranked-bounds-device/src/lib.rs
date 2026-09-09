@@ -7,6 +7,8 @@ use fe2o3_device::Gfx950Subgroup;
 #[cfg(any(
     feature = "grid_exclusive",
     feature = "write_only_grid_exclusive",
+    feature = "write_only_grid_exclusive_dynamic",
+    feature = "write_only_grid_exclusive_dynamic_forged",
     feature = "barrier_divergent",
     feature = "barrier_early_return"
 ))]
@@ -19,12 +21,16 @@ use fe2o3_device::Shifted;
 use fe2o3_device::Tiled2D;
 #[cfg(any(
     feature = "write_only_grid_exclusive",
+    feature = "write_only_grid_exclusive_dynamic",
+    feature = "write_only_grid_exclusive_dynamic_forged",
     feature = "write_only_blocked",
     feature = "write_only_blocked_dynamic_grid",
     feature = "write_only_tiled",
     feature = "write_only_row_striped"
 ))]
 use fe2o3_device::WriteOnlyDisjointSlice;
+#[cfg(feature = "write_only_grid_exclusive_dynamic")]
+use fe2o3_device::memory;
 #[cfg(any(
     feature = "barrier_after_access",
     feature = "barrier_before_access",
@@ -71,6 +77,7 @@ use fe2o3_device::{Wave64, WaveLane};
     feature = "debug_helper",
     feature = "debug_long_name",
     feature = "debug_mutated_argument",
+    feature = "float_to_integer",
     feature = "shifted",
     feature = "grid_exclusive",
     feature = "blocked",
@@ -79,6 +86,8 @@ use fe2o3_device::{Wave64, WaveLane};
     feature = "blocked_multi_lane_dynamic_grid",
     feature = "block_component_index",
     feature = "write_only_grid_exclusive",
+    feature = "write_only_grid_exclusive_dynamic",
+    feature = "write_only_grid_exclusive_dynamic_forged",
     feature = "write_only_blocked",
     feature = "write_only_blocked_dynamic_grid",
     feature = "write_only_tiled",
@@ -115,6 +124,24 @@ pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
     let selected = input[63];
     if let Some(element) = output.get_mut(thread::index_1d()) {
         *element = selected;
+    }
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "float_to_integer")]
+pub fn float_to_integer(
+    value: f64,
+    mut signed: DisjointSlice<i32>,
+    mut unsigned: DisjointSlice<u32>,
+) {
+    if let Some(element) = signed.get_mut(thread::index_1d()) {
+        *element = value as i32;
+    }
+    if let Some(element) = unsigned.get_mut(thread::index_1d()) {
+        *element = value as u32;
     }
 }
 
@@ -630,6 +657,50 @@ pub fn write_only_grid_exclusive(mut output: WriteOnlyDisjointSlice<f32, GridExc
     if let Some(leader) = thread::grid_leader() {
         let _ = output.write_exclusive(&leader, 7, 1.0);
     }
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
+    control_flow(loop_bounds(4)),
+)]
+#[cfg(feature = "write_only_grid_exclusive_dynamic")]
+pub fn write_only_grid_exclusive_dynamic(
+    page_indices: &[u32],
+    mut output: WriteOnlyDisjointSlice<f32, GridExclusive>,
+) {
+    if let Some(leader) = thread::grid_leader() {
+        if page_indices.len() != 4 {
+            fe2o3_device::trap();
+        }
+        let mut row = 0_usize;
+        while row < 4 {
+            let page = memory::volatile_load(page_indices, row) as usize;
+            if page >= 16 {
+                fe2o3_device::trap();
+            }
+            let index = page * 16 + row;
+            if !output.write_exclusive(&leader, index, 1.0) {
+                fe2o3_device::trap();
+            }
+            row += 1;
+        }
+    }
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
+)]
+#[cfg(feature = "write_only_grid_exclusive_dynamic_forged")]
+pub fn write_only_grid_exclusive_dynamic_forged(
+    index: usize,
+    mut output: WriteOnlyDisjointSlice<f32, GridExclusive>,
+) {
+    // SAFETY: deliberately hostile extraction fixture; production projection
+    // must reject this value because it has no authenticated `Some` edge.
+    let forged = unsafe { core::mem::zeroed() };
+    let _ = output.write_exclusive(&forged, index, 1.0);
 }
 
 #[kernel(

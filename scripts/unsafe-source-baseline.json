@@ -1,0 +1,1018 @@
+{
+  "crates/cargo-fe2o3/src/application_exec.rs": {
+    "block": 10
+  },
+  "crates/cargo-fe2o3/src/application_handoff.rs": {
+    "block": 53,
+    "function": 1
+  },
+  "crates/cargo-fe2o3/src/application_sandbox.rs": {
+    "block": 21
+  },
+  "crates/cargo-fe2o3/src/application_supervisor.rs": {
+    "block": 28
+  },
+  "crates/cargo-fe2o3/src/authority_release.rs": {
+    "block": 8
+  },
+  "crates/cargo-fe2o3/src/authorized_kernel_closure.rs": {
+    "block": 6
+  },
+  "crates/cargo-fe2o3/src/bin/fe2o3-engineering-lld-proxy.rs": {
+    "block": 1,
+    "extern_block": 1
+  },
+  "crates/cargo-fe2o3/src/binding_check_projection.rs": {
+    "block": 3
+  },
+  "crates/cargo-fe2o3/src/binding_wrapper.rs": {
+    "block": 2
+  },
+  "crates/cargo-fe2o3/src/cargo_invocation_boundary.rs": {
+    "block": 7
+  },
+  "crates/cargo-fe2o3/src/compiler_execution_boundary.rs": {
+    "block": 2
+  },
+  "crates/cargo-fe2o3/src/main.rs": {
+    "block": 6
+  },
+  "crates/cargo-fe2o3/src/process_execution.rs": {
+    "block": 1
+  },
+  "crates/cargo-fe2o3/src/profile_command.rs": {
+    "block": 18
+  },
+  "crates/cargo-fe2o3/src/project.rs": {
+    "block": 2
+  },
+  "crates/cargo-fe2o3/src/rustc_wrapper/pinned_codegen_backend.rs": {
+    "block": 8
+  },
+  "crates/cargo-fe2o3/src/rustc_wrapper/pinned_executable.rs": {
+    "block": 2
+  },
+  "crates/cargo-fe2o3/src/tests/production_source_isa_unit_matrix_v1.rs": {
+    "block": 5
+  },
+  "crates/cargo-fe2o3/src/tool_commands.rs": {
+    "block": 8,
+    "extern_block": 1
+  },
+  "crates/cargo-fe2o3/tests/binding_host_test_cli.rs": {
+    "block": 1
+  },
+  "crates/cargo-fe2o3/tests/fixtures/build_script_fixture.rs": {
+    "block": 3,
+    "extern_block": 1
+  },
+  "crates/cargo-fe2o3/tests/fixtures/cargo_fixture.rs": {
+    "block": 2
+  },
+  "crates/cargo-fe2o3/tests/fixtures/g8_b_tool_fixture.rs": {
+    "block": 1,
+    "extern_block": 1
+  },
+  "crates/cargo-fe2o3/tests/fixtures/release_cargo_fixture.rs": {
+    "block": 2
+  },
+  "crates/cargo-fe2o3/tests/fixtures/release_rustc_fixture.rs": {
+    "block": 6
+  },
+  "crates/cargo-fe2o3/tests/fixtures/runner_app_fixture.rs": {
+    "block": 20
+  },
+  "crates/cargo-fe2o3/tests/fixtures/runner_chain_fixture.rs": {
+    "block": 1
+  },
+  "crates/cargo-fe2o3/tests/fixtures/rustc_fixture.rs": {
+    "block": 1
+  },
+  "crates/cargo-fe2o3/tests/fixtures/worker_v3_host_consumer_app_fixture.rs": {
+    "block": 3
+  },
+  "crates/cargo-fe2o3/tests/inspect_cli.rs": {
+    "block": 1
+  },
+  "crates/cargo-fe2o3/tests/profile_cli.rs": {
+    "block": 2
+  },
+  "crates/cargo-fe2o3/tests/worker_v3_load_envelope_vertical.rs": {
+    "block": 8,
+    "function": 14,
+    "impl": 18
+  },
+  "crates/cargo-fe2o3/tests/wrapper_managed_projection_cli.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-artifact-transaction/src/attempt_scoped_hsaco_publication.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-artifact-transaction/src/compiler_module_handoff.rs": {
+    "block": 6
+  },
+  "crates/fe2o3-artifact-transaction/src/lib.rs": {
+    "block": 16
+  },
+  "crates/fe2o3-artifact-transaction/src/publication_object_inventory_v1.rs": {
+    "block": 10
+  },
+  "crates/fe2o3-artifact-transaction/src/worker_v3_load_readiness.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-artifact-transaction/tests/attempt_scoped_hsaco_publication_v3.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-artifact-transaction/tests/compiler_artifact_generation_v1.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-artifact-transaction/tests/worker_v3_load_readiness.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-artifact-transaction/tests/worker_v3_publication_intent.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-broker-authority-service/src/compiler_execution_external_anchor.rs": {
+    "block": 14
+  },
+  "crates/fe2o3-broker-authority-service/src/compiler_execution_issuer.rs": {
+    "block": 7
+  },
+  "crates/fe2o3-broker-authority-service/src/compiler_execution_issuer_durable.rs": {
+    "block": 5
+  },
+  "crates/fe2o3-broker-authority-service/src/compiler_execution_service.rs": {
+    "block": 16
+  },
+  "crates/fe2o3-broker-authority-service/src/compiler_execution_supervision.rs": {
+    "block": 12
+  },
+  "crates/fe2o3-broker-authority-service/src/durable_session_consume/tests.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-broker-authority-service/src/linux.rs": {
+    "block": 24
+  },
+  "crates/fe2o3-compiler-closure-capability/src/compiler_execution_policy.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-compiler-closure-capability/src/sealed_image.rs": {
+    "block": 5
+  },
+  "crates/fe2o3-compiler-execution-client/src/bin/compiler-execution-client-check.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-compiler-execution-client/src/child_channel.rs": {
+    "block": 20
+  },
+  "crates/fe2o3-compiler-execution-client/src/lib.rs": {
+    "block": 18
+  },
+  "crates/fe2o3-compiler-execution-client/src/supervisor_handoff.rs": {
+    "block": 3
+  },
+  "crates/fe2o3-compiler-execution-client/tests/child_channel.rs": {
+    "block": 5
+  },
+  "crates/fe2o3-compiler-execution-client/tests/client.rs": {
+    "block": 9
+  },
+  "crates/fe2o3-compiler-execution-client/tests/inherited_child.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/entrypoint.rs": {
+    "block": 3
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/inherited.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/provisioning_entrypoint.rs": {
+    "block": 5
+  },
+  "crates/fe2o3-compiler-execution-issuer/src/lib.rs": {
+    "block": 15
+  },
+  "crates/fe2o3-compiler-execution-supervisor/src/deployment.rs": {
+    "block": 8
+  },
+  "crates/fe2o3-compiler-execution-supervisor/src/process.rs": {
+    "block": 28,
+    "extern_block": 1,
+    "function": 5
+  },
+  "crates/fe2o3-compiler-ffi/tests/v3_owned_decode_allocations.rs": {
+    "block": 4,
+    "function": 4,
+    "impl": 1
+  },
+  "crates/fe2o3-completion/benches/completion_scaling.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-completion/src/graph.rs": {
+    "function": 3
+  },
+  "crates/fe2o3-completion/src/lifecycle.rs": {
+    "block": 9,
+    "function": 13
+  },
+  "crates/fe2o3-completion/tests/completion_graph.rs": {
+    "block": 14
+  },
+  "crates/fe2o3-completion/tests/lifecycle.rs": {
+    "block": 26
+  },
+  "crates/fe2o3-core/src/context.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-core/src/cooperative.rs": {
+    "block": 3,
+    "function": 4
+  },
+  "crates/fe2o3-core/src/device_copy.rs": {
+    "impl": 2,
+    "trait": 1
+  },
+  "crates/fe2o3-core/src/device_target.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-core/src/error.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-core/src/event.rs": {
+    "block": 6,
+    "function": 1,
+    "impl": 1
+  },
+  "crates/fe2o3-core/src/launch.rs": {
+    "block": 1,
+    "function": 1
+  },
+  "crates/fe2o3-core/src/managed_memory.rs": {
+    "block": 6,
+    "function": 1
+  },
+  "crates/fe2o3-core/src/memory.rs": {
+    "block": 6,
+    "function": 1,
+    "impl": 2
+  },
+  "crates/fe2o3-core/src/memory_topology.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-core/src/module.rs": {
+    "block": 4,
+    "function": 3,
+    "impl": 4
+  },
+  "crates/fe2o3-core/src/operation.rs": {
+    "block": 18,
+    "function": 2
+  },
+  "crates/fe2o3-core/src/peer_access.rs": {
+    "block": 3
+  },
+  "crates/fe2o3-core/src/pinned_memory.rs": {
+    "block": 8,
+    "function": 1,
+    "impl": 2
+  },
+  "crates/fe2o3-core/src/stream.rs": {
+    "block": 3,
+    "function": 1
+  },
+  "crates/fe2o3-core/src/vmm.rs": {
+    "block": 9,
+    "function": 1
+  },
+  "crates/fe2o3-core/tests/ui/operation/fail/exclusive_cannot_be_moved.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-core/tests/ui/operation/fail/exclusive_cannot_be_read.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-core/tests/ui/operation/fail/owned_borrowed_resource_is_rejected.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-core/tests/ui/operation/fail/owned_handle_cannot_be_cloned.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-core/tests/ui/operation/fail/owned_handle_cannot_be_reused_after_move.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-core/tests/ui/operation/fail/owned_handle_must_be_used.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-core/tests/ui/operation/fail/owned_resource_cannot_be_reused_after_forget.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-core/tests/ui/operation/fail/owned_resource_cannot_be_reused_while_pending.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-core/tests/ui/operation/pass/owned_resource_returned_after_wait.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-core/tests/ui/operation/pass/shared_can_be_read.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-core/tests/ui/production_runtime_surface/raw_module_loader_is_unavailable.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-core/tests/ui/vmm/mapped_owner_exposes_no_address.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-core/tests/vmm_hardware.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-debug-cli/src/bin/fe2o3-agent-reference-client.rs": {
+    "block": 6
+  },
+  "crates/fe2o3-debug-cli/src/hardware_linux_v2.rs": {
+    "block": 7
+  },
+  "crates/fe2o3-debug-cli/src/hardware_linux_v3.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-debug-cli/src/lib.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-debug-cli/src/rocgdb_mi_v3/process.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-device/src/atomic.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-device/src/collective.rs": {
+    "block": 18,
+    "function": 9
+  },
+  "crates/fe2o3-device/src/collective/tests.rs": {
+    "block": 8
+  },
+  "crates/fe2o3-device/src/ffi.rs": {
+    "function": 2,
+    "impl": 3,
+    "trait": 1
+  },
+  "crates/fe2o3-device/src/group.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-device/src/lds.rs": {
+    "block": 18,
+    "function": 4,
+    "impl": 4,
+    "trait": 2
+  },
+  "crates/fe2o3-device/src/lib.rs": {
+    "block": 23,
+    "function": 3,
+    "trait": 3
+  },
+  "crates/fe2o3-device/src/memory.rs": {
+    "block": 14,
+    "function": 1
+  },
+  "crates/fe2o3-device/src/sync.rs": {
+    "block": 4,
+    "function": 11
+  },
+  "crates/fe2o3-device/src/tensor.rs": {
+    "block": 4,
+    "function": 1,
+    "impl": 1
+  },
+  "crates/fe2o3-device/src/thread.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-device/src/views.rs": {
+    "block": 16,
+    "function": 1
+  },
+  "crates/fe2o3-device/src/wave.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-device/tests/device_ffi_ui/fail/device_ffi_effect_abi_mismatch.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-device/tests/device_ffi_ui/fail/device_ffi_export_call_requires_unsafe.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-device/tests/device_ffi_ui/fail/device_ffi_generic_root.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-device/tests/device_ffi_ui/fail/device_ffi_import_call_requires_unsafe.rs": {
+    "extern_block": 1
+  },
+  "crates/fe2o3-device/tests/device_ffi_ui/fail/device_ffi_import_needs_foreign_block.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-device/tests/device_ffi_ui/fail/device_ffi_invalid_symbol.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-device/tests/device_ffi_ui/fail/device_ffi_reference_type.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-device/tests/device_ffi_ui/pass/reviewed_contract.rs": {
+    "attribute": 1,
+    "extern_block": 1,
+    "function": 3
+  },
+  "crates/fe2o3-device/tests/host_codegen/static_view_shape.rs": {
+    "attribute": 5
+  },
+  "crates/fe2o3-device/tests/managed_barrier_api.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-device/tests/ui/fail/dynamic_lds_lifetime_escape.rs": {
+    "block": 1,
+    "function": 1
+  },
+  "crates/fe2o3-device/tests/ui/fail/gfx942_split_barrier_is_unavailable.rs": {
+    "block": 1,
+    "function": 1
+  },
+  "crates/fe2o3-device/tests/ui/fail/managed_barrier_pending_destroy.rs": {
+    "block": 2,
+    "function": 1
+  },
+  "crates/fe2o3-device/tests/ui/fail/managed_barrier_wait_before_arrive.rs": {
+    "block": 2,
+    "function": 1
+  },
+  "crates/fe2o3-device/tests/ui/fail/static_view_mut_disjoint_slice_is_not_global_authority.rs": {
+    "block": 1,
+    "function": 1
+  },
+  "crates/fe2o3-device/tests/ui/fail/static_view_parent_borrow_is_exclusive.rs": {
+    "block": 1,
+    "function": 1
+  },
+  "crates/fe2o3-device/tests/ui/fail/wave32_cannot_form_wave64_snapshots.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-device/tests/ui/fail/wave_snapshot_group_lifetime_escape.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-device/tests/ui/pass/coordinates_and_wave_contracts.rs": {
+    "block": 3,
+    "function": 1
+  },
+  "crates/fe2o3-device/tests/ui/pass/dynamic_lds_typed_contract.rs": {
+    "block": 3,
+    "function": 2
+  },
+  "crates/fe2o3-device/tests/ui/pass/managed_barrier_lifecycle.rs": {
+    "block": 7,
+    "function": 2
+  },
+  "crates/fe2o3-device/tests/ui/pass/memory_write_capabilities.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-device/tests/ui/pass/static_view_authority_boundary.rs": {
+    "block": 1,
+    "function": 1
+  },
+  "crates/fe2o3-device/tests/ui/pass/typed_group_contracts.rs": {
+    "block": 3,
+    "function": 1
+  },
+  "crates/fe2o3-external-anchor-coordinator/src/lib.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-external-anchor-provisioner/src/entrypoint.rs": {
+    "block": 9,
+    "function": 2
+  },
+  "crates/fe2o3-external-anchor-service/src/entrypoint.rs": {
+    "block": 10
+  },
+  "crates/fe2o3-external-anchor-service/src/service.rs": {
+    "block": 3
+  },
+  "crates/fe2o3-hip-sys/src/cooperative_peer.rs": {
+    "block": 4,
+    "extern_block": 1,
+    "function": 12
+  },
+  "crates/fe2o3-hip-sys/src/lib.rs": {
+    "block": 4,
+    "extern_block": 1,
+    "function": 1
+  },
+  "crates/fe2o3-hip-sys/src/memory_topology.rs": {
+    "block": 2,
+    "extern_block": 1,
+    "function": 2
+  },
+  "crates/fe2o3-hip-sys/src/unavailable_runtime.rs": {
+    "block": 3,
+    "function": 3
+  },
+  "crates/fe2o3-host-link-closure/src/closure.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-host-link-closure/src/process.rs": {
+    "block": 10,
+    "extern_block": 1,
+    "function": 4,
+    "impl": 2
+  },
+  "crates/fe2o3-host-link-closure/tests/fixtures/rust-static.rs": {
+    "attribute": 1
+  },
+  "crates/fe2o3-host-link-closure/tests/real_static_lld.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-host-link-closure/tests/result_channel.rs": {
+    "block": 4,
+    "function": 1
+  },
+  "crates/fe2o3-host/src/application_descriptor_handoff.rs": {
+    "block": 13,
+    "function": 3
+  },
+  "crates/fe2o3-host/src/argument_alias.rs": {
+    "block": 19,
+    "function": 2
+  },
+  "crates/fe2o3-host/src/compiler_execution_current_record_audit/tests.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-host/src/compiler_generated_contract.rs": {
+    "block": 2,
+    "function": 1,
+    "impl": 4,
+    "trait": 1
+  },
+  "crates/fe2o3-host/src/generated_argument_plan.rs": {
+    "block": 14,
+    "function": 2
+  },
+  "crates/fe2o3-host/src/generated_kfd_arguments.rs": {
+    "block": 2,
+    "function": 2,
+    "trait": 1
+  },
+  "crates/fe2o3-host/src/generated_kfd_invocation.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-host/src/generated_worker_v3_dispatch.rs": {
+    "block": 5,
+    "trait": 1
+  },
+  "crates/fe2o3-host/src/hsa_executable_lifecycle.rs": {
+    "block": 6,
+    "function": 13,
+    "impl": 1,
+    "trait": 2
+  },
+  "crates/fe2o3-host/src/lib.rs": {
+    "block": 2,
+    "function": 1
+  },
+  "crates/fe2o3-host/src/prepared_launch.rs": {
+    "block": 7,
+    "function": 1
+  },
+  "crates/fe2o3-host/src/production_application.rs": {
+    "block": 2,
+    "function": 2
+  },
+  "crates/fe2o3-host/src/tile_interop.rs": {
+    "block": 1,
+    "function": 1
+  },
+  "crates/fe2o3-host/src/worker_v3_verification_admission.rs": {
+    "block": 8,
+    "function": 14,
+    "impl": 3,
+    "trait": 5
+  },
+  "crates/fe2o3-host/tests/gfx942_tile_interop_hardware.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-host/tests/ui/authenticated_artifact/expectation_impl_requires_unsafe.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-host/tests/ui/hsa_executable_lifecycle/hsa_adapter_requires_unsafe_impl.rs": {
+    "function": 5
+  },
+  "crates/fe2o3-host/tests/ui/worker_v3_verification_admission/protected_backend_requires_unsafe_impl.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-host/tests/ui/worker_v3_verification_admission/protected_roster_backend_requires_unsafe_impl.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-host/tests/ui/worker_v3_verification_admission/refinement_backend_requires_unsafe_impl.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-host/tests/ui/worker_v3_verification_admission/verifier_is_sealed.rs": {
+    "function": 1,
+    "impl": 1
+  },
+  "crates/fe2o3-hsa-runtime/src/api.rs": {
+    "block": 45,
+    "function": 1
+  },
+  "crates/fe2o3-hsa-runtime/src/backend.rs": {
+    "function": 2
+  },
+  "crates/fe2o3-hsa-runtime/src/dispatch.rs": {
+    "block": 2,
+    "function": 2,
+    "impl": 1
+  },
+  "crates/fe2o3-hsa-runtime/src/lifecycle.rs": {
+    "function": 6,
+    "impl": 1
+  },
+  "crates/fe2o3-hsa-runtime/src/sys.rs": {
+    "extern_block": 1
+  },
+  "crates/fe2o3-hsa-runtime/tests/gfx942_runtime_context_hardware.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-hsa-runtime/tests/gfx942_scalar_gemm_hardware.rs": {
+    "block": 9,
+    "function": 1
+  },
+  "crates/fe2o3-hsa-runtime/tests/gfx950_advanced_hardware.rs": {
+    "block": 17,
+    "function": 1
+  },
+  "crates/fe2o3-hsa-runtime/tests/gfx950_attention_hardware.rs": {
+    "block": 9,
+    "function": 1
+  },
+  "crates/fe2o3-hsa-runtime/tests/gfx950_fp4_gemm_hardware.rs": {
+    "block": 9,
+    "function": 1
+  },
+  "crates/fe2o3-hsa-runtime/tests/gfx950_fp8_gemm_hardware.rs": {
+    "block": 9,
+    "function": 1
+  },
+  "crates/fe2o3-hsa-runtime/tests/tiled_gemm_v1_hardware.rs": {
+    "block": 10,
+    "function": 1
+  },
+  "crates/fe2o3-hsa-runtime/tests/ui/authority/executable_cannot_unload_while_kernel_set_is_live.rs": {
+    "block": 2,
+    "function": 1
+  },
+  "crates/fe2o3-hsaco-finalize/src/worker_protocol_v2.rs": {
+    "block": 3,
+    "function": 3,
+    "impl": 1
+  },
+  "crates/fe2o3-hsaco-finalize/src/worker_v3_hsaco_publication.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-kernel-analysis/src/authenticated_machine_effect.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-kernel-analysis/tests/fixtures/machine_effect_worker_fixture_common.rs": {
+    "block": 5,
+    "extern_block": 3
+  },
+  "crates/fe2o3-kfd/src/currentness.rs": {
+    "block": 3
+  },
+  "crates/fe2o3-kfd/src/debug_trap.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-kfd/src/linux.rs": {
+    "block": 20
+  },
+  "crates/fe2o3-kfd/src/memory_linux.rs": {
+    "block": 36,
+    "extern_block": 1
+  },
+  "crates/fe2o3-kfd/src/queue_completion.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-kfd/src/queue_dispatch_live.rs": {
+    "function": 3
+  },
+  "crates/fe2o3-kfd/src/queue_linux.rs": {
+    "block": 45,
+    "extern_block": 1
+  },
+  "crates/fe2o3-kfd/src/queue_submit.rs": {
+    "block": 7
+  },
+  "crates/fe2o3-kfd/src/stopped_state_v1.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-kfd/src/target_debug_telemetry_v1.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-kfd/tests/kfd_debug_trap_live.rs": {
+    "block": 7
+  },
+  "crates/fe2o3-kfd/tests/target_debug_telemetry_env_v1.rs": {
+    "block": 3
+  },
+  "crates/fe2o3-loop-device/src/lib.rs": {
+    "block": 5,
+    "function": 1,
+    "impl": 1
+  },
+  "crates/fe2o3-macros/src/lib.rs": {
+    "attribute": 3,
+    "block": 4,
+    "extern_block": 1,
+    "function": 13,
+    "impl": 6
+  },
+  "crates/fe2o3-macros/tests/fixtures/renamed-device/src/main.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-macros/tests/fixtures/renamed-typed-host/host-stub/src/lib.rs": {
+    "function": 1,
+    "trait": 2
+  },
+  "crates/fe2o3-macros/tests/fixtures/typed-invalid/src/bin/invalid_control_flow.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-macros/tests/fixtures/typed-invalid/src/bin/invalid_safe_kernel.rs": {
+    "block": 1,
+    "function": 1
+  },
+  "crates/fe2o3-macros/tests/fixtures/typed-invalid/src/bin/invalid_signatures.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-macros/tests/fixtures/typed-invalid/src/bin/invalid_unsafe_asm.rs": {
+    "function": 2
+  },
+  "crates/fe2o3-macros/tests/fixtures/typed-invalid/src/bin/undeclared_asm.rs": {
+    "block": 1,
+    "function": 1
+  },
+  "crates/fe2o3-process-identity/src/lib.rs": {
+    "block": 3
+  },
+  "crates/fe2o3-process-identity/src/sealed_memfd.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-process-identity/tests/receiver_exec.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-protected-publisher/src/enrollment.rs": {
+    "block": 16
+  },
+  "crates/fe2o3-protected-publisher/src/main.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-protected-publisher/src/process_security.rs": {
+    "block": 9
+  },
+  "crates/fe2o3-protected-publisher/src/store.rs": {
+    "block": 6
+  },
+  "crates/fe2o3-protected-service-profile/src/lib.rs": {
+    "block": 2,
+    "extern_block": 1
+  },
+  "crates/fe2o3-protected-service-spawn/src/syscall.rs": {
+    "block": 37,
+    "function": 6
+  },
+  "crates/fe2o3-runtime-protocol/src/worker_v3_load_envelope.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-runtime-protocol/src/worker_v3_load_envelope_v2.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-runtime/examples/gfx942-lds-diagnostic.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/examples/gfx942-runtime-directional-window-benchmark.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/src/authorized_execution.rs": {
+    "block": 3,
+    "impl": 1,
+    "trait": 1
+  },
+  "crates/fe2o3-runtime/src/kfd_backend.rs": {
+    "impl": 8,
+    "trait": 2
+  },
+  "crates/fe2o3-runtime/tests/kfd_opaque_checkpoint_live.rs": {
+    "block": 9,
+    "impl": 1
+  },
+  "crates/fe2o3-verifier/src/authenticated_execution.rs": {
+    "block": 3,
+    "extern_block": 1
+  },
+  "crates/fe2o3-verifier/src/authenticated_verus_execution_v2.rs": {
+    "block": 21,
+    "extern_block": 2
+  },
+  "crates/fe2o3-verifier/src/functional_refinement_process_tree_v1_linux.rs": {
+    "block": 17,
+    "extern_block": 1
+  },
+  "crates/fe2o3-verifier/src/persistent_freshness_linux.rs": {
+    "block": 12,
+    "extern_block": 2
+  },
+  "crates/fe2o3-verifier/tests/support/recorder.rs": {
+    "block": 1,
+    "extern_block": 1
+  },
+  "crates/fe2o3-verifier/tests/support/verus_execution_v2.rs": {
+    "attribute": 1,
+    "block": 16,
+    "extern_block": 8
+  },
+  "crates/rustc-codegen-fe2o3/src/bin/fe2o3-rustc-extract.rs": {
+    "block": 1
+  },
+  "crates/rustc-codegen-fe2o3/src/lib.rs": {
+    "attribute": 1
+  },
+  "crates/rustc-codegen-fe2o3/src/protected_compiler_execution.rs": {
+    "block": 2
+  },
+  "crates/rustc-codegen-fe2o3/src/protected_rustc_invocation.rs": {
+    "block": 1
+  },
+  "crates/rustc-codegen-fe2o3/src/protected_rustc_invocation/tests.rs": {
+    "block": 9
+  },
+  "crates/rustc-codegen-fe2o3/src/trusted_device_items.rs": {
+    "block": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-import/consumer-substituted-anchor.rs": {
+    "function": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-import/consumer.rs": {
+    "function": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-import/provider/src/lib.rs": {
+    "function": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/device-ffi/app.rs": {
+    "attribute": 1,
+    "block": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/device-ffi/export-lib.rs": {
+    "attribute": 1,
+    "function": 2
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/device-ffi/import-app.rs": {
+    "attribute": 1,
+    "block": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/device-ffi/import-lib.rs": {
+    "block": 1,
+    "extern_block": 1,
+    "function": 2
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/external-spoof/src/lib.rs": {
+    "block": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/frontend-contract/duplicate.rs": {
+    "attribute": 1,
+    "block": 1,
+    "function": 3
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/frontend-contract/effectful.rs": {
+    "attribute": 1,
+    "block": 1,
+    "function": 3
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/frontend-contract/genuine.rs": {
+    "attribute": 1,
+    "block": 1,
+    "function": 3
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/frontend-contract/operand-mismatch.rs": {
+    "attribute": 1,
+    "block": 1,
+    "function": 3
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/frontend-contract/option-mismatch.rs": {
+    "attribute": 1,
+    "block": 1,
+    "function": 3
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/frontend-contract/reachable-helper.rs": {
+    "attribute": 1,
+    "block": 2,
+    "function": 4
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/frontend-contract/spoofed-target.rs": {
+    "attribute": 1,
+    "block": 1,
+    "function": 4
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/frontend-contract/undeclared-asm.rs": {
+    "attribute": 1,
+    "block": 2,
+    "function": 3
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/g2-monomorphization/collectible.rs": {
+    "attribute": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/g2-monomorphization/dead-branches.rs": {
+    "attribute": 1,
+    "block": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/g2-monomorphization/fmt-lookalike.rs": {
+    "attribute": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/g2-monomorphization/malformed-registration.rs": {
+    "attribute": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/g2-monomorphization/semantic-substitution-a.rs": {
+    "attribute": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/g2-monomorphization/semantic-substitution-b.rs": {
+    "attribute": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/g2-monomorphization/unavailable.rs": {
+    "attribute": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/half-math-compiler/src/bin/tiled_gemm_frontend_v1.rs": {
+    "attribute": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs": {
+    "attribute": 1,
+    "block": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/lookalike-type/src/main.rs": {
+    "block": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/src/lib.rs": {
+    "block": 1,
+    "function": 2
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/src/lib.rs": {
+    "block": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/production-source-safety-device/local_unsafe_block.rs": {
+    "block": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/production-source-safety-device/reachable_unsafe_fn.rs": {
+    "block": 1,
+    "function": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/renamed-genuine/src/main.rs": {
+    "attribute": 6
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/tiled-gemm-local-marker-spoof.rs": {
+    "attribute": 1,
+    "block": 1,
+    "function": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/tiled-gemm-provider-impostor/consumer-shared.rs": {
+    "attribute": 1,
+    "block": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/tiled-gemm-provider-impostor/provider-exact/src/lib.rs": {
+    "function": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/tiled-gemm-provider-impostor/provider-fnabi/src/lib.rs": {
+    "function": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/tiled-gemm-provider-impostor/provider-layout/src/lib.rs": {
+    "function": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs": {
+    "function": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/support/cargo_fe2o3.rs": {
+    "block": 3
+  },
+  "examples/flash_attention_general_v1/src/main.rs": {
+    "block": 1
+  },
+  "examples/gemm_autoresearch_v1/src/main.rs": {
+    "block": 5,
+    "function": 1
+  },
+  "examples/moe_grouped_expert_general_v1/src/main.rs": {
+    "block": 1
+  },
+  "examples/tiled_gemm_general_v1/device-api/src/lib.rs": {
+    "block": 6,
+    "function": 6
+  },
+  "examples/tiled_gemm_general_v1/src/main.rs": {
+    "block": 1
+  },
+  "examples/tiled_gemm_general_v1/tests/kernel_source.rs": {
+    "block": 1
+  },
+  "tests/fixtures/device-link/rust-device/src/lib.rs": {
+    "block": 1,
+    "extern_block": 1,
+    "function": 1
+  },
+  "tools/fe2o3-host-lld/tests/rust_host_smoke.rs": {
+    "block": 2
+  }
+}

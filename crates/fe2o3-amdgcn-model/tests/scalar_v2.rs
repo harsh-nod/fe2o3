@@ -303,6 +303,80 @@ fn combined_llvm_module(operations: &[Operation]) -> String {
     module
 }
 
+fn direct_float_cast_llvm_module() -> String {
+    use fe2o3_kernel_ir as kir;
+
+    let mut module = kir::Module::new("tests::direct-float-casts");
+    for to in [
+        kir::ScalarType::I8,
+        kir::ScalarType::U8,
+        kir::ScalarType::I16,
+        kir::ScalarType::U16,
+        kir::ScalarType::I32,
+        kir::ScalarType::U32,
+        kir::ScalarType::I64,
+        kir::ScalarType::U64,
+    ] {
+        let result = kir::Type::Scalar(to);
+        let mut block = kir::BasicBlock::new(kir::BlockId(0));
+        block.operations.push(kir::Operation::effect_free(
+            kir::ValueDef::new(ValueId(1), result.clone()),
+            kir::OperationKind::Cast {
+                kind: kir::CastKind::FloatToInteger,
+                value: ValueId(0),
+                to: result.clone(),
+            },
+        ));
+        block.terminator = Some(kir::Terminator::Return {
+            values: vec![ValueId(1)],
+        });
+        let mut function = kir::Function::device_ffi_export(
+            format!("direct_float_cast_{to:?}"),
+            kir::Signature::new(vec![kir::Type::Scalar(kir::ScalarType::F32)], vec![result]),
+            vec![ValueId(0)],
+            vec![block],
+        );
+        function
+            .required_capabilities
+            .insert(kir::TargetCapability::WaveWidth(kir::WaveWidth::Wave64));
+        module.functions.push(function);
+    }
+    fe2o3_amdgcn_model::lower_device_module_to_gfx942_llvm_ir(&module).unwrap()
+}
+
+#[test]
+fn accepted_cast_corpus_covers_normalized_and_direct_saturating_paths() {
+    let operations = accepted_gfx942_operations();
+    for float in [FloatWidth::F32, FloatWidth::F64] {
+        for width in [
+            IntWidth::W8,
+            IntWidth::W16,
+            IntWidth::W32,
+            IntWidth::W64,
+            IntWidth::W128,
+        ] {
+            for signed in [false, true] {
+                assert!(operations.contains(&Operation::Cast {
+                    from: ScalarType::Float(float),
+                    to: int(width, signed),
+                    cast: Cast::FloatToInt {
+                        semantics: FloatToIntSemantics::RustSaturatingAs
+                    },
+                }));
+            }
+        }
+    }
+    let direct = direct_float_cast_llvm_module();
+    assert_eq!(direct.matches("define ").count(), 8);
+    for width in [8, 16, 32, 64] {
+        for signedness in ['s', 'u'] {
+            assert!(direct.contains(&format!(
+                "call i{width} @llvm.fpto{signedness}i.sat.i{width}.f32(float "
+            )));
+        }
+    }
+}
+
 fn software_float_to_int(
     bits: u64,
     exponent_bits: u32,
@@ -888,39 +962,44 @@ fn rocm_clang_compiles_every_accepted_gfx942_scalar_path() {
         std::process::id()
     ));
     std::fs::create_dir(&root).unwrap();
-    let llvm = root.join("all-scalar-paths.ll");
-    std::fs::write(&llvm, module).unwrap();
     let clang = std::env::var_os("FE2O3_SCALAR_CLANG")
         .unwrap_or_else(|| OsString::from("/opt/rocm/llvm/bin/clang"));
     let mut failures = Vec::new();
-    for optimization in ["-O0", "-O2"] {
-        let object = root.join(format!("all-scalar-paths-{optimization}.o"));
-        let output = Command::new(&clang)
-            .args([
-                "--target=amdgcn-amd-amdhsa",
-                "-mcpu=gfx942",
-                "-nogpulib",
-                optimization,
-                "-x",
-                "ir",
-                "-c",
-            ])
-            .arg(&llvm)
-            .arg("-o")
-            .arg(&object)
-            .output()
-            .expect("run gfx942 clang");
-        if !output.status.success() {
-            failures.push(format!(
-                "{optimization}: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
+    for (name, module) in [
+        ("all-scalar-paths", module),
+        ("direct-float-casts", direct_float_cast_llvm_module()),
+    ] {
+        let llvm = root.join(format!("{name}.ll"));
+        std::fs::write(&llvm, module).unwrap();
+        for optimization in ["-O0", "-O2"] {
+            let object = root.join(format!("{name}-{optimization}.o"));
+            let output = Command::new(&clang)
+                .args([
+                    "--target=amdgcn-amd-amdhsa",
+                    "-mcpu=gfx942",
+                    "-nogpulib",
+                    optimization,
+                    "-x",
+                    "ir",
+                    "-c",
+                ])
+                .arg(&llvm)
+                .arg("-o")
+                .arg(&object)
+                .output()
+                .expect("run gfx942 clang");
+            if !output.status.success() {
+                failures.push(format!(
+                    "{name} {optimization}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
         }
     }
     let cleanup = std::fs::remove_dir_all(&root);
     assert!(
         failures.is_empty(),
-        "{} rejected {} accepted scalar paths:\n{}",
+        "{} rejected {} normalized scalar paths or direct float casts:\n{}",
         clang.to_string_lossy(),
         operations.len(),
         failures.join("\n")

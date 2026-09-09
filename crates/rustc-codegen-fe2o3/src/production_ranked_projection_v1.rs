@@ -7978,42 +7978,56 @@ fn project_intrinsic_contracts(
                         "grid-leader authority is used outside its authenticated Some edge",
                     ));
                 }
-                let value = call
-                    .arguments()
-                    .get(2)
-                    .and_then(|operand| constant_operand_value(operand, constants))
-                    .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-                        "a dynamic grid-exclusive index requires a deliberate ranked argument projection",
-                    ))?;
-                reserve_operation(operations)?;
-                let constant_index = next_value_id(next_value)?;
-                operations.push(ProductionRankedOperationV1::IndexConstant {
-                    result: constant_index,
-                    value,
-                });
-                push_ranked_ir(
-                    ranked_ir,
-                    &format!(
-                        "  %{} = kernel.index_constant {}\n",
-                        constant_index.get(),
-                        value,
+                let index_operand = call.arguments().get(2).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "a grid-exclusive access has no exact index operand",
                     ),
                 )?;
+                if unsigned_index_bits_v1(types, index_operand.ty()) != Some(64) {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a grid-exclusive index is not an exact unsigned 64-bit device index",
+                    ));
+                }
+                let constant_index_value = constant_operand_value(index_operand, constants);
+                // The opaque ranked value overapproximates every loop execution.
+                // Each access uses that same value in its dominating bounds guard;
+                // race freedom is discharged separately from the singleton
+                // invocation domain, not from index injectivity.
+                let projected_index = project_runtime_index_operand_v1(
+                    Some(index_operand),
+                    constants,
+                    &stable_argument_origins,
+                    &mut runtime_index_arguments,
+                    &mut next_runtime_argument,
+                    operations,
+                    next_value,
+                )?;
+                if let Some(value) = constant_index_value {
+                    let ProductionRankedValueV1::Local(result) = projected_index else {
+                        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                            "a constant grid-exclusive index did not remain a ranked local",
+                        ));
+                    };
+                    push_ranked_ir(
+                        ranked_ir,
+                        &format!("  %{} = kernel.index_constant {}\n", result.get(), value),
+                    )?;
+                }
                 reserve_operation(operations)?;
                 let index = next_value_id(next_value)?;
                 operations.push(ProductionRankedOperationV1::IndexBinary {
                     result: index,
                     kind: IndexBinaryKindAttr::Add,
                     lhs: leader.precondition.0,
-                    rhs: ProductionRankedValueV1::Local(constant_index),
+                    rhs: projected_index,
                 });
                 push_ranked_ir(
                     ranked_ir,
                     &format!(
-                        "  %{} = kernel.index_binary Add {}, %{}\n",
+                        "  %{} = kernel.index_binary Add {}, {}\n",
                         index.get(),
                         ranked_value_text_v1(leader.precondition.0),
-                        constant_index.get(),
+                        ranked_value_text_v1(projected_index),
                     ),
                 )?;
                 (
@@ -17439,7 +17453,7 @@ fn project_runtime_index_operand_v1(
     next_value: &mut u32,
 ) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
     let operand = operand.ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-        "a tiled-2d index operand is missing",
+        "a runtime index operand is missing",
     ))?;
     if let Some(value) = constant_operand_value(operand, constants) {
         reserve_operation(operations)?;
@@ -17449,13 +17463,13 @@ fn project_runtime_index_operand_v1(
     }
     let local =
         simple_operand_local(operand).ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-            "a tiled-2d runtime index is not a constant or one exact kernel argument",
+            "a runtime index is not a constant or one exact semantic local",
         ))?;
     let local_index = local.index() as usize;
     // Preserve stable kernel-argument aliases when available. Other exact MIR
-    // locals are projected as opaque ranked arguments: the checked tiled
-    // operation still proves its own component and extent bounds, while the
-    // analysis makes no unsound claim about how that dynamic value was formed.
+    // locals are projected as opaque ranked arguments. Their consumers must
+    // retain pointwise guards; the projection makes no claim about how each
+    // dynamic value was formed or whether loop iterations are equal.
     let origin = stable_argument_origins
         .get(local_index)
         .copied()
@@ -17464,17 +17478,17 @@ fn project_runtime_index_operand_v1(
     let slot = arguments
         .get_mut(origin)
         .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-            "a tiled-2d runtime argument origin is outside the semantic local table",
+            "a runtime argument origin is outside the semantic local table",
         ))?;
     let argument = match *slot {
         Some(argument) => argument,
         None => {
             let argument = u32::try_from(*next_argument).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported("too many tiled-2d ranked arguments")
+                ProductionRankedProjectionErrorV1::Unsupported("too many runtime ranked arguments")
             })?;
             *next_argument = next_argument.checked_add(1).ok_or(
                 ProductionRankedProjectionErrorV1::Unsupported(
-                    "tiled-2d ranked argument count overflow",
+                    "runtime ranked argument count overflow",
                 ),
             )?;
             *slot = Some(argument);

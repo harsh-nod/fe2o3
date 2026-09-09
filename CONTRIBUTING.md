@@ -62,6 +62,8 @@ simulated, compile-only, or GPU-less results as hardware execution.
 - Generalize behavior across kernel types. Avoid kernel-specific production
   paths unless the issue explicitly defines a bounded fixture.
 - Preserve typed contracts and deterministic diagnostics at trust boundaries.
+- Follow the [unsafe code policy](docs/unsafe-code-policy.md) and review inventory
+  changes when adding or removing unsafe code.
 - Fail closed when identity, authorization, completeness, or device admission
   cannot be established.
 - Keep the production runtime on the direct-KFD path. HIP, HSA, ROCgdb, and

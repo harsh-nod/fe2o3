@@ -84,7 +84,7 @@ fn build(args: &[OsString]) -> ExitCode {
     }
     let report = serde_json::json!({
         "pid": std::process::id(),
-        "parent_pid": unsafe { libc::getppid() },
+        "parent_pid": rustix::process::Pid::as_raw(rustix::process::getppid()),
         "parent_death_signal": parent_death_signal,
         "args": args.iter().map(|value| value.to_string_lossy()).collect::<Vec<_>>(),
         "target": env::var_os("FE2O3_TARGET").map(|value| value.to_string_lossy().into_owned()),

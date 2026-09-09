@@ -1650,7 +1650,10 @@ pub enum CastKind {
     FloatTruncate,
     /// Numerically convert an integer value to a floating-point value.
     IntegerToFloat,
-    /// Numerically convert a floating-point value to an integer value.
+    /// Convert a floating-point value with Rust's saturating `as` semantics.
+    ///
+    /// Truncate toward zero, clamp to the destination's minimum or maximum on
+    /// overflow (including infinities), and produce zero for NaN.
     FloatToInteger,
     /// Reinterpret a numeric value as a distinct numeric type of the same width.
     ///

@@ -21,6 +21,15 @@
     const VALIDITY_U32_TYPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(16);
 
     #[test]
+    fn grid_exclusive_runtime_indices_require_exact_unsigned_64_bit_types() {
+        let types = assertion_proof_types();
+        assert_eq!(unsigned_index_bits_v1(&types, U64_TYPE), Some(64));
+        for hostile in [SCALAR_TYPE, U8_TYPE, I32_TYPE, U128_TYPE, BOOL_TYPE] {
+            assert_ne!(unsigned_index_bits_v1(&types, hostile), Some(64));
+        }
+    }
+
+    #[test]
     fn blocked_launch_bound_checks_the_last_thread_and_component_without_wrapping() {
         assert!(blocked_mapping_fits_launch_v1(Some(64), 16, 4));
         assert!(!blocked_mapping_fits_launch_v1(None, 16, 4));
