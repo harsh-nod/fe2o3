@@ -12561,6 +12561,24 @@ impl RuntimeCancellationBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     }
 }
 
+impl crate::RuntimeOwnedShutdownBackendV1 for KfdRuntimeBackendV1 {
+    fn shutdown_owned_v1(&mut self) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.shutdown_native_v1()
+    }
+}
+
+impl crate::RuntimeOwnedShutdownBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
+    fn shutdown_owned_v1(&mut self) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.shutdown_native_v1()
+    }
+}
+
+impl crate::RuntimeOwnedShutdownBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
+    fn shutdown_owned_v1(&mut self) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.shutdown_native_v1()
+    }
+}
+
 impl Drop for KfdRuntimeBackendV1 {
     fn drop(&mut self) {
         #[cfg(test)]

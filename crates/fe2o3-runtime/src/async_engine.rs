@@ -21,6 +21,11 @@ use std::task::{Context, Poll, Waker};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+mod owned;
+pub use owned::*;
+mod operation;
+pub use operation::*;
+
 /// Hard upper bound for commands waiting to enter one async engine.
 pub const MAX_RUNTIME_ASYNC_COMMANDS_V1: usize = 65_536;
 /// Hard upper bound for event futures observed by one async engine.
@@ -309,6 +314,7 @@ impl Error for RuntimeAsyncProgressEngineSpawnErrorV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeAsyncEngineCallErrorV1 {
     CommandQueueFull,
+    OperationCapacity,
     EngineStopped,
     ReentrantCall,
     CommandPanicked,
@@ -720,6 +726,7 @@ type RuntimeContextCommandV1<B> = Box<dyn FnOnce(&mut RuntimeContextV1<B>) + Sen
 
 enum RuntimeAsyncEngineCommandV1<B: RuntimeBackendV1> {
     Context(RuntimeContextCommandV1<B>),
+    Operation(Box<dyn operation::EngineOperationV1<B>>),
     Register {
         event: RuntimeEventIdV1,
         cell: Arc<RuntimeAsyncFutureCellV1<B::Error>>,
@@ -741,21 +748,23 @@ enum RuntimeAsyncEngineCommandV1<B: RuntimeBackendV1> {
 }
 
 /// Cloneable command and event-registration handle for one async engine.
-pub struct RuntimeAsyncEngineHandleV1<B: RuntimeBackendV1 + Send + 'static> {
+pub struct RuntimeAsyncEngineHandleV1<B: RuntimeBackendV1 + 'static> {
     sender: SyncSender<RuntimeAsyncEngineCommandV1<B>>,
     worker_thread: Arc<OnceLock<thread::ThreadId>>,
+    quarantine_command_panics: bool,
 }
 
-impl<B: RuntimeBackendV1 + Send + 'static> Clone for RuntimeAsyncEngineHandleV1<B> {
+impl<B: RuntimeBackendV1 + 'static> Clone for RuntimeAsyncEngineHandleV1<B> {
     fn clone(&self) -> Self {
         Self {
             sender: self.sender.clone(),
             worker_thread: Arc::clone(&self.worker_thread),
+            quarantine_command_panics: self.quarantine_command_panics,
         }
     }
 }
 
-impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineHandleV1<B> {
+impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncEngineHandleV1<B> {
     /// Runs one boundedly enqueued safe context operation on the engine thread.
     ///
     /// The operation is synchronous from the caller's perspective. A panic is
@@ -771,9 +780,13 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineHandleV1<B> {
             return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
         }
         let (response_sender, response_receiver) = sync_channel(1);
+        let quarantine_command_panics = self.quarantine_command_panics;
         let command = RuntimeAsyncEngineCommandV1::Context(Box::new(move |context| {
             let result = catch_unwind(AssertUnwindSafe(|| operation(context))).map_err(|payload| {
                 core::mem::forget(payload);
+                if quarantine_command_panics {
+                    context.quarantine_after_async_command_panic_v1();
+                }
                 RuntimeAsyncEngineCallErrorV1::CommandPanicked
             });
             let _ = response_sender.send(result);
@@ -837,11 +850,11 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineHandleV1<B> {
 ///
 /// Only this handle can register streams for background flushes. Its observer
 /// view retains the ordinary engine's observation-only context and event APIs.
-pub struct RuntimeAsyncProgressHandleV1<B: RuntimeBackendV1 + Send + 'static> {
+pub struct RuntimeAsyncProgressHandleV1<B: RuntimeBackendV1 + 'static> {
     observer: RuntimeAsyncEngineHandleV1<B>,
 }
 
-impl<B: RuntimeBackendV1 + Send + 'static> Clone for RuntimeAsyncProgressHandleV1<B> {
+impl<B: RuntimeBackendV1 + 'static> Clone for RuntimeAsyncProgressHandleV1<B> {
     fn clone(&self) -> Self {
         Self {
             observer: self.observer.clone(),
@@ -849,7 +862,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> Clone for RuntimeAsyncProgressHandleV
     }
 }
 
-impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncProgressHandleV1<B> {
+impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
     pub const fn observer(&self) -> &RuntimeAsyncEngineHandleV1<B> {
         &self.observer
     }
@@ -1033,6 +1046,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
         let handle = RuntimeAsyncEngineHandleV1 {
             sender: sender.clone(),
             worker_thread,
+            quarantine_command_panics: false,
         };
         Ok((
             Self {
@@ -1118,6 +1132,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
         let observer = RuntimeAsyncEngineHandleV1 {
             sender: sender.clone(),
             worker_thread,
+            quarantine_command_panics: false,
         };
         Ok((
             Self {
@@ -1172,13 +1187,24 @@ impl fmt::Display for RuntimeAsyncEngineJoinErrorV1 {
 
 impl Error for RuntimeAsyncEngineJoinErrorV1 {}
 
-fn run_engine_v1<B: RuntimeBackendV1 + Send + 'static>(
+fn run_engine_v1<B: RuntimeBackendV1 + 'static>(
     mut context: RuntimeContextV1<B>,
     receiver: Receiver<RuntimeAsyncEngineCommandV1<B>>,
     config: RuntimeAsyncEngineConfigV1,
     progress: Option<RuntimeAsyncProgressModeV1<B>>,
 ) -> RuntimeContextV1<B> {
+    run_engine_context_v1(&mut context, receiver, config, progress);
+    context
+}
+
+fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
+    context: &mut RuntimeContextV1<B>,
+    receiver: Receiver<RuntimeAsyncEngineCommandV1<B>>,
+    config: RuntimeAsyncEngineConfigV1,
+    progress: Option<RuntimeAsyncProgressModeV1<B>>,
+) {
     let mut waiters = RuntimeAsyncWaiterRegistryV1::new();
+    let mut operations = operation::OperationRegistryV1::new();
     let mut progress_registry = progress
         .as_ref()
         .map(|_| RuntimeAsyncProgressRegistryV1::new());
@@ -1189,8 +1215,9 @@ fn run_engine_v1<B: RuntimeBackendV1 + Send + 'static>(
         match receiver.recv_timeout(config.poll_interval) {
             Ok(command) => {
                 stopped = handle_command_v1(
-                    &mut context,
+                    context,
                     &mut waiters.entries,
+                    &mut operations,
                     progress_registry.as_mut(),
                     command,
                     config,
@@ -1203,8 +1230,9 @@ fn run_engine_v1<B: RuntimeBackendV1 + Send + 'static>(
                     match receiver.try_recv() {
                         Ok(command) => {
                             stopped = handle_command_v1(
-                                &mut context,
+                                context,
                                 &mut waiters.entries,
+                                &mut operations,
                                 progress_registry.as_mut(),
                                 command,
                                 config,
@@ -1222,9 +1250,19 @@ fn run_engine_v1<B: RuntimeBackendV1 + Send + 'static>(
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => stopped = true,
         }
+        if !stopped && let Some(mode) = progress.as_ref() {
+            operation::advance_operations_v1(
+                context,
+                &mut operations,
+                config.polls_per_tick,
+                mode.config.flushes_per_tick,
+                mode.flush_stream,
+            );
+            stopped = context.is_terminal();
+        }
         if !stopped {
             stopped = poll_waiters_v1(
-                &mut context,
+                context,
                 &mut waiters.entries,
                 progress_registry
                     .as_mut()
@@ -1237,7 +1275,7 @@ fn run_engine_v1<B: RuntimeBackendV1 + Send + 'static>(
             && let (Some(mode), Some(registry)) = (progress.as_ref(), progress_registry.as_mut())
         {
             stopped = flush_progress_v1(
-                &mut context,
+                context,
                 &mut registry.entries,
                 &mut next_stream,
                 mode.config.flushes_per_tick,
@@ -1253,18 +1291,32 @@ fn run_engine_v1<B: RuntimeBackendV1 + Send + 'static>(
     for (_, cell) in core::mem::take(&mut waiters.entries) {
         cell.complete(Err(RuntimeAsyncEventErrorV1::EngineStopped));
     }
-    context
 }
 
-fn handle_command_v1<B: RuntimeBackendV1 + Send + 'static>(
+#[allow(clippy::too_many_arguments)] // Independently bounded observer and operation registries.
+fn handle_command_v1<B: RuntimeBackendV1 + 'static>(
     context: &mut RuntimeContextV1<B>,
     waiters: &mut BTreeMap<RuntimeEventIdV1, Arc<RuntimeAsyncFutureCellV1<B::Error>>>,
+    operations: &mut operation::OperationRegistryV1<B>,
     progress: Option<&mut RuntimeAsyncProgressRegistryV1<B::Error>>,
     command: RuntimeAsyncEngineCommandV1<B>,
     config: RuntimeAsyncEngineConfigV1,
     progress_config: Option<RuntimeAsyncProgressConfigV1>,
 ) -> bool {
     match command {
+        RuntimeAsyncEngineCommandV1::Operation(mut operation) => {
+            if progress_config.is_none() {
+                operation.reject(RuntimeAsyncEngineCallErrorV1::EngineStopped);
+            } else if !fe2o3_runtime_model::r61_operation_registry_accepts_v1(
+                operations.len(),
+                config.waiter_capacity,
+            ) {
+                operation.reject(RuntimeAsyncEngineCallErrorV1::OperationCapacity);
+            } else {
+                operations.insert(operation);
+            }
+            false
+        }
         RuntimeAsyncEngineCommandV1::Context(command) => {
             command(context);
             context.is_terminal()
@@ -1460,7 +1512,7 @@ fn handle_command_v1<B: RuntimeBackendV1 + Send + 'static>(
     }
 }
 
-fn poll_waiters_v1<B: RuntimeBackendV1 + Send + 'static>(
+fn poll_waiters_v1<B: RuntimeBackendV1 + 'static>(
     context: &mut RuntimeContextV1<B>,
     waiters: &mut BTreeMap<RuntimeEventIdV1, Arc<RuntimeAsyncFutureCellV1<B::Error>>>,
     mut progress: Option<
@@ -1541,7 +1593,7 @@ fn stop_paired_progress_v1<E>(
     }
 }
 
-fn flush_progress_v1<B: RuntimeBackendV1 + Send + 'static>(
+fn flush_progress_v1<B: RuntimeBackendV1 + 'static>(
     context: &mut RuntimeContextV1<B>,
     registrations: &mut BTreeMap<RuntimeStreamIdV1, Arc<RuntimeAsyncProgressCellV1<B::Error>>>,
     next_stream: &mut Option<RuntimeStreamIdV1>,
@@ -1619,6 +1671,8 @@ fn runtime_error_is_terminal_v1<E>(error: &RuntimeErrorV1<E>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod owned_tests;
     use crate::{
         BackendDeviceDescriptionV1, BackendLaunchV1, BackendMemoryRegionV1, BackendPollV1,
         RuntimeArgumentsV1, RuntimeBackendFailureV1, RuntimeBindingV1, RuntimeCapabilitiesV1,

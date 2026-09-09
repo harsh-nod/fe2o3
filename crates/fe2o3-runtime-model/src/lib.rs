@@ -65,6 +65,7 @@ mod r51_native_compute_dependency_lifecycle;
 mod r56_two_native_sdma_mux;
 mod r57_three_binding_compute;
 mod r60_ordinary_fixed_dispatch_pipeline;
+mod r61_owner_async_custody;
 mod r9_native_evidence;
 mod typed_async;
 
@@ -117,6 +118,7 @@ pub use r51_native_compute_dependency_lifecycle::*;
 pub use r56_two_native_sdma_mux::*;
 pub use r57_three_binding_compute::*;
 pub use r60_ordinary_fixed_dispatch_pipeline::*;
+pub use r61_owner_async_custody::*;
 pub use typed_async::*;
 
 #[cfg(test)]

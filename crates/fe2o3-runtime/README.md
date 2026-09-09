@@ -110,6 +110,18 @@ futures as stopped and returns the context. This engine observes completion; it
 does not publish deferred backend work, replace explicit `flush_stream`, or
 provide native asynchronous execution by itself.
 
+`RuntimeAsyncOwnedEngineV1` additionally constructs even a non-`Send` direct-KFD
+context inside its owner thread. It uses the same bounded loop and requires
+explicit native teardown through `RuntimeOwnedShutdownBackendV1`; failed cleanup
+retains the context until process exit. Its handles add nonblocking
+`enqueue_with_context` commands and runtime-owned `launch`, `copy_async`, and
+`peer_copy` futures. Operation progress survives future Drop. A persistent stream
+roster rotates flushes independently of completion polling. Rejected polls retry
+observation without resubmitting work. Shutdown stops rather than drains; inspect
+its cleanup/native-failure/quarantine report. This is a local #182 integration,
+not distributed execution or complete executable verification. See
+`docs/runtime-async-execution-plane-v1.md` for bounds and remaining acceptance.
+
 Progress mode additionally offers `event_future_with_progress`, which admits one
 event and its exact source stream in a single transaction. Event polling runs
 before stream flushing in each engine tick, so completion of one persistent SDMA
@@ -152,8 +164,10 @@ failures remain registered and observable; terminal ambiguity seals the engine.
 This opt-in host scheduler is cooperative progress, not proof of native
 liveness, fairness, or hardware execution. Runtime Worker V1 has no flush
 request; negotiated Runtime Worker V4 and V5 expose the same bounded progress
-operation. Direct KFD owners remain thread-affine and cannot use the cross-thread
-engine; the Send-capable Worker V4/V5 adapters can.
+operation. Direct KFD owners remain thread-affine and cannot be moved into the
+original cross-thread engine; R61's factory-owned engine constructs them on the
+worker thread instead. The Send-capable Worker V4/V5 adapters support the
+original constructors.
 
 Live child-process regression tests exercise this progress path through exact
 V4 ordinary and V5 atomic wire requests: an event must first report pending,

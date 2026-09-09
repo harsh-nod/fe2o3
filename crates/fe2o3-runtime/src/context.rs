@@ -621,6 +621,17 @@ pub trait RuntimeFlushBackendV1: RuntimeBackendV1 {
     fn flush_stream_v1(&mut self, stream: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>>;
 }
 
+/// Explicit native teardown for a backend created on an async owner thread.
+///
+/// Called only after context cleanup discharged every logical handle. Success
+/// must also discharge native queues, pools, and other backend-owned custody,
+/// making ordinary backend Drop safe. Any error retains the complete backend;
+/// neither rejection nor a timeout is permission to drop it. This is a
+/// contracted adapter boundary, not evidence of executable verification.
+pub trait RuntimeOwnedShutdownBackendV1: RuntimeBackendV1 {
+    fn shutdown_owned_v1(&mut self) -> Result<(), RuntimeBackendFailureV1<Self::Error>>;
+}
+
 /// Backend result of a cancellation attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackendCancellationV1 {
@@ -1089,6 +1100,19 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
 
     pub fn backend(&self) -> &B {
         &self.backend
+    }
+
+    pub(crate) fn quarantine_after_async_command_panic_v1(&mut self) {
+        self.terminal = true;
+    }
+
+    pub(crate) fn shutdown_owned_backend_v1(
+        &mut self,
+    ) -> Result<(), RuntimeBackendFailureV1<B::Error>>
+    where
+        B: RuntimeOwnedShutdownBackendV1,
+    {
+        self.backend.shutdown_owned_v1()
     }
 
     #[cfg(test)]
