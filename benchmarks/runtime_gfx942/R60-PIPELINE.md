@@ -25,7 +25,8 @@ HIP checks completion of the nonblocking stream after 64 accepted module calls.
 ## Timing
 
 Each backend preallocates application-owned buffers, launch arguments, queue
-or stream, completion resources, and timing storage. Explicit allocation API
+or stream, and timing storage. HSA also preallocates its completion signals;
+KFD's per-dispatch resource setup remains inside issue timing. Explicit allocation API
 calls, output reset, and validation are outside timing. Runtime-internal work
 performed by a launch API is included in its issue cost. In particular, a KFD
 host output write evicts the compute cache, so the next timed flush allocates
@@ -34,7 +35,7 @@ native residency across batches. Its `explicit_allocation_api_timed: false`
 field does not exclude that implicit runtime work. There are 10 warmup batches and 30 measured
 batches. A single monotonic host clock gives three timestamps:
 
-- `issue_batch_ns`: first timestamp through return from the 64th issue call.
+- `issue_batch_ns`: first timestamp through publication of all 64 launches.
 - `tail_wait_batch_ns`: return from issue through observed batch completion.
 - `total_batch_ns`: complete interval, exactly the sum of the two components.
 
