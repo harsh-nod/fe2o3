@@ -1,14 +1,15 @@
 # Native Resource Accounting Contract V1
 
-Status: proposed MEM-5 inventory/interface contract, reviewed against the local
-R66/R67 working tree on 2026-09-10. This document adds no accounting adapter,
-changes no budget, and does not close MEM-2 through MEM-5. Implementation handoff
-requires primary approval of the ownership and cross-crate interface below.
+Status: MEM-BASE shared-engine extraction implemented locally; the remaining
+MEM-5 inventory/interface contract is proposed, reviewed on 2026-09-10. The
+extraction changes no budget and adds no native accounting adapter. It does not
+close MEM-2 through MEM-5. Native ownership, parent/batch/split operations and
+physical disposal integration still require explicit reviewed handoffs below.
 The [A1/A2 swarm plan](runtime-a1-a2-swarm-plan.md) owns scheduling and acceptance.
 
 ## Current Boundary
 
-[R67 resource credits](../crates/fe2o3-runtime/src/resource_credits.rs) provide
+[R67 resource credits](../crates/fe2o3-resource-accounting/src/lib.rs) provide
 checked nineteen-dimensional admission, bounded owner records, move-only
 reservations, retained charges and conservative quarantine. The
 [Context adapter](../crates/fe2o3-runtime/src/context/allocation_admission.rs)
@@ -127,13 +128,20 @@ profile with an exclusion note while still claiming its total byte bound.
 
 ### One Ledger, Native Ownership
 
-Preferred proposal: extract the existing account engine into a small lower-level
-`fe2o3-resource-accounting` crate depending on `fe2o3-runtime-model` and `std`.
-Both runtime and KFD depend on it. Runtime retains branded thin wrappers and
-Context configuration; KFD retains moved credits in its private native owner
-bundles. Move the implementation, do not fork it. The new crate owns arithmetic,
+The approved MEM-BASE extraction moves the existing account engine into the
+lower-level `fe2o3-resource-accounting` crate depending on `fe2o3-runtime-model`
+and `std`. Runtime now depends on it and retains branded thin wrappers and
+Context configuration. KFD does not yet depend on it or hold native charges.
+The implementation is moved, not forked: the shared crate owns arithmetic,
 record identity and transaction mechanics, not native allocation, device
-currentness or disposal observations.
+currentness or disposal observations. Nine engine regressions and two compile-fail
+ownership examples live with the engine; three runtime wrapper regressions
+cover device labels, independent accounts and interface compatibility.
+
+The next native adapter must compose moved credits with private native owner
+bundles. Public core counter-release methods are accounting mechanics, not
+physical-disposal evidence; only the reviewed native adapter may decide when
+its represented native resources were actually disposed.
 
 The simpler alternative is a native-owned ledger in KFD with runtime forwarding
 native budget configuration and inert usage observations. That fits N1-N9 and

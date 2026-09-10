@@ -225,6 +225,7 @@ use fe2o3_aql::{
 
 #[path = "queue_live/compute_sdma_coexistence.rs"]
 mod compute_sdma_coexistence;
+pub use compute_sdma_coexistence::Gfx942R66NativeObservationFailureV1;
 #[allow(unsafe_code)]
 #[path = "queue_dispatch_live.rs"]
 mod dispatch;
@@ -14511,7 +14512,7 @@ mod tests {
         );
     }
 
-    fn test_queue_key(queue: u64, generation: u64) -> QueueKeyV1 {
+    pub(super) fn test_queue_key(queue: u64, generation: u64) -> QueueKeyV1 {
         QueueKeyV1 {
             vm: fe2o3_runtime_model::VmKeyV1 {
                 device: fe2o3_runtime_model::DeviceKeyV1 {
@@ -16451,7 +16452,7 @@ mod tests {
         }
     }
 
-    fn prepared_persistent_compute_cancellation_fixture(
+    pub(super) fn prepared_persistent_compute_cancellation_fixture(
         queue: QueueKeyV1,
         id: u64,
         authenticated_sha256: Option<[u8; 32]>,

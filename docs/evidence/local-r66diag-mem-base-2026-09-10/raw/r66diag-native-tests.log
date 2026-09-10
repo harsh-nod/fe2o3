@@ -1,0 +1,14 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.82s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-97db64be4c930fe7)
+
+running 6 tests
+test queue::dispatch_binding::tests::r66_published_occurrence_observation_preserves_digest_and_owner_state ... ok
+test queue::live::compute_sdma_coexistence::tests::r66_compute_custody_diagnostics_distinguish_live_settled_and_local_storage ... ok
+test queue::live::compute_sdma_coexistence::tests::r66_profile_failure_remains_distinct_from_missing_native_owner ... ok
+test queue::live::compute_sdma_coexistence::tests::r66_compute_entry_diagnostics_reject_one_coordinate_changes ... ok
+test queue::live::compute_sdma_coexistence::tests::r66_attachment_diagnostics_reject_one_coordinate_changes ... ok
+test queue::live::compute_sdma_coexistence::tests::r66_prepared_and_published_compute_shape_are_distinct_without_native_authority ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 671 filtered out; finished in 0.01s
+

@@ -2070,17 +2070,12 @@ impl DispatchResourceOwnerV1 {
         &self,
         batch: &Gfx942DispatchBatchV1<N>,
     ) -> Option<[u8; 32]> {
-        self.validate_published(batch.identity, &batch.completion)
-            .ok()?;
         let occurrence = batch.completion.occurrence_v1().ok()?;
-        let mut hash = Sha256::new();
-        hash.update(b"fe2o3.r66.retained-persistent-dispatch.v1\0");
-        hash.update(occurrence.roster_sha256);
-        hash.update(batch.identity.recipe_occurrence.to_le_bytes());
-        hash.update([batch.identity.slot_index]);
-        hash.update(batch.identity.slot_generation.to_le_bytes());
-        hash.update(batch.identity.dispatch_generation.to_le_bytes());
-        Some(hash.finalize().into())
+        r66_retained_published_occurrence_observation_v1(
+            &self.generation,
+            batch.identity,
+            occurrence,
+        )
     }
 
     pub(super) fn validate_persistent_replay_v1(
@@ -2746,6 +2741,22 @@ impl DispatchResourceOwnerV1 {
     fn require_prepared(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {
         self.generation.ensure_prepared()
     }
+}
+
+fn r66_retained_published_occurrence_observation_v1(
+    generation: &DispatchGenerationOwnerV1,
+    identity: DispatchEpochIdentityV1,
+    occurrence: CompletionBatchOccurrenceV1,
+) -> Option<[u8; 32]> {
+    generation.validate_published(identity, occurrence).ok()?;
+    let mut hash = Sha256::new();
+    hash.update(b"fe2o3.r66.retained-persistent-dispatch.v1\0");
+    hash.update(occurrence.roster_sha256);
+    hash.update(identity.recipe_occurrence.to_le_bytes());
+    hash.update([identity.slot_index]);
+    hash.update(identity.slot_generation.to_le_bytes());
+    hash.update(identity.dispatch_generation.to_le_bytes());
+    Some(hash.finalize().into())
 }
 
 const fn persistent_replay_initialization_is_admitted_v1(
@@ -5938,6 +5949,10 @@ mod tests {
             },
         ];
         for stale in identities {
+            assert!(
+                r66_retained_published_occurrence_observation_v1(&owner, stale, completion)
+                    .is_none()
+            );
             assert!(matches!(
                 owner.validate_published(stale, completion),
                 Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration)
@@ -6013,12 +6028,66 @@ mod tests {
             },
         ];
         for stale in substitutions {
+            assert!(
+                r66_retained_published_occurrence_observation_v1(&owner, identity, stale).is_none()
+            );
             assert!(matches!(
                 owner.validate_published(identity, stale),
                 Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration)
             ));
         }
         owner.validate_published(identity, completion).unwrap();
+    }
+
+    #[test]
+    fn r66_published_occurrence_observation_preserves_digest_and_owner_state() {
+        let queue = test_dispatch_queue_v1();
+        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
+        let identity = owner.reserve(queue, test_completion_roster_v1(1)).unwrap();
+        let completion = test_completion_occurrence_v1(1);
+        assert!(
+            r66_retained_published_occurrence_observation_v1(&owner, identity, completion)
+                .is_none()
+        );
+        owner.mark_published(identity, completion).unwrap();
+        let snapshot = owner.clone();
+        // Preserve the original R66 byte sequence, including its domain separator.
+        let mut prior_hash = Sha256::new();
+        prior_hash.update(b"fe2o3.r66.retained-persistent-dispatch.v1\0");
+        prior_hash.update(completion.roster_sha256);
+        prior_hash.update(identity.recipe_occurrence.to_le_bytes());
+        prior_hash.update([identity.slot_index]);
+        prior_hash.update(identity.slot_generation.to_le_bytes());
+        prior_hash.update(identity.dispatch_generation.to_le_bytes());
+        let expected: [u8; 32] = prior_hash.finalize().into();
+        for _ in 0..8 {
+            assert_eq!(
+                r66_retained_published_occurrence_observation_v1(&owner, identity, completion),
+                Some(expected)
+            );
+            assert_eq!(owner, snapshot);
+        }
+        owner.complete_epoch(identity, completion).unwrap();
+        let completed = owner.clone();
+        assert!(
+            r66_retained_published_occurrence_observation_v1(&owner, identity, completion)
+                .is_none()
+        );
+        assert_eq!(owner, completed);
+        owner.recycle_epoch(identity, completion).unwrap();
+        let recycled = owner.clone();
+        assert!(
+            r66_retained_published_occurrence_observation_v1(&owner, identity, completion)
+                .is_none()
+        );
+        assert_eq!(owner, recycled);
+        owner.poison();
+        let poisoned = owner.clone();
+        assert!(
+            r66_retained_published_occurrence_observation_v1(&owner, identity, completion)
+                .is_none()
+        );
+        assert_eq!(owner, poisoned);
     }
 
     #[test]

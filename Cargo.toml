@@ -140,6 +140,7 @@ fe2o3-proof-contracts = { path = "crates/fe2o3-proof-contracts" }
 fe2o3-rustc-invocation = { path = "crates/fe2o3-rustc-invocation" }
 fe2o3-rustc-front = { path = "crates/fe2o3-rustc-front" }
 fe2o3-runtime-model = { path = "crates/fe2o3-runtime-model" }
+fe2o3-resource-accounting = { path = "crates/fe2o3-resource-accounting" }
 fe2o3-runtime-protocol = { path = "crates/fe2o3-runtime-protocol" }
 fe2o3-runtime = { path = "crates/fe2o3-runtime" }
 fe2o3-virtual-runtime = { path = "crates/fe2o3-virtual-runtime" }

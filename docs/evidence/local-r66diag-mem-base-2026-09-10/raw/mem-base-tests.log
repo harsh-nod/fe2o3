@@ -1,0 +1,25 @@
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.11s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_resource_accounting-0c3d31953eefbdf2)
+
+running 9 tests
+test tests::abandoned_retained_token_preserves_charge_after_all_external_handles_drop ... ok
+test tests::account_configuration_has_a_fixed_record_bound ... ok
+test tests::bounded_record_and_generation_exhaustion_are_failure_atomic ... ok
+test tests::complete_vector_rejection_changes_neither_usage_nor_record_identity ... ok
+test tests::account_identity_is_bound_in_the_token_not_chosen_during_release ... ok
+test tests::poisoned_account_cannot_refund_or_admit_more_custody ... ok
+test tests::unissued_drop_and_definite_rejection_refund_exactly_once ... ok
+test tests::slot_reuse_changes_owner_and_stale_release_never_refunds ... ok
+test tests::concurrent_complete_vector_admission_preserves_conservation ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fe2o3_resource_accounting
+
+running 2 tests
+test crates/fe2o3-resource-accounting/src/lib.rs - RetainedResourceCreditsV1 (line 316) - compile fail ... ok
+test crates/fe2o3-resource-accounting/src/lib.rs - RetainedResourceCreditsV1 (line 309) - compile fail ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+

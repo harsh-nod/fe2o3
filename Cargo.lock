@@ -1688,6 +1688,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-resource-accounting"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-runtime-model",
+]
+
+[[package]]
 name = "fe2o3-runtime"
 version = "0.1.0"
 dependencies = [
@@ -1700,6 +1707,7 @@ dependencies = [
  "fe2o3-kfd",
  "fe2o3-kfd-uapi",
  "fe2o3-profiler-protocol",
+ "fe2o3-resource-accounting",
  "fe2o3-runtime-model",
  "futures-executor",
  "futures-util",

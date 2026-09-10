@@ -11,7 +11,8 @@ generated native launches or establish a complete physical memory budget.
 | `fe2o3-host/generated_runtime_arguments.rs` | Owned typed data, authenticated argument-plan validation, per-invocation footprint preflight and inert result decoding |
 | `fe2o3-macros` | Emit owned wrappers from the same parsed signature, ABI, effects and index mappings as the borrowed adapter |
 | `fe2o3-runtime-model/r67_resource_credits.rs` | Fixed-vector arithmetic and exact owner/phase transition decisions |
-| `fe2o3-runtime/resource_credits.rs` | Private synchronized account, bounded owner arena and move-only reservation/retention tokens |
+| `fe2o3-resource-accounting` | Shared synchronized account, bounded owner arena and move-only reservation/retention tokens; no native disposal authority |
+| `fe2o3-runtime/resource_credits.rs` | Thin device-branded wrapper preserving the runtime's account and usage interface |
 | `fe2o3-runtime/context/allocation_admission.rs` | Opt-in requested-byte/record admission, backend failure classification and successful logical disposal integration |
 | Native KFD adapters | Retain actual native storage independently; physical backing and slot charges are subsequent MEM-2/3/4 work |
 
@@ -85,6 +86,12 @@ One retained `Arc` anchor per ambiguous account conservatively preserves that
 ledger after its external handles disappear. This is a process-lifetime fallback,
 not a global quarantine ceiling. Repeated Context creation, actual arena bytes
 and simultaneous failures still require MEM-5 aggregate accounting.
+
+MEM-BASE moves the existing engine into a lower-level crate depending only on
+`std` and `fe2o3-runtime-model`. Runtime device labels remain in the wrapper;
+independent accounts with equal labels do not share credit authority. This
+extraction does not add parent budgets, native accounting adapters, atomic batch
+or split operations, or a new proof of the mutex/arena implementation.
 
 ## Context Allocation Profile
 

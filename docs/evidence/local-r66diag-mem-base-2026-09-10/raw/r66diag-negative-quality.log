@@ -1,0 +1,2 @@
+usage: crates/fe2o3-runtime-model/verus/check-negative-quality.py DIRECTORY RUNNER
+       crates/fe2o3-runtime-model/verus/check-negative-quality.py --self-test REJECT_FIXTURE ACCEPT_FIXTURE

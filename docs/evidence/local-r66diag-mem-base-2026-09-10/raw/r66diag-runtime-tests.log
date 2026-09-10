@@ -1,0 +1,17 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 11s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-aed91983b7e32e50)
+
+running 8 tests
+test kfd_backend::qualification_coexistence::tests::membership_binds_every_coordinate_and_native_occurrence ... ok
+test kfd_backend::qualification_coexistence::tests::qualified_runtime_shape_never_substitutes_for_native_authority ... ok
+test kfd_backend::qualification_coexistence::tests::runtime_shape_rejects_terminal_retired_unsupported_and_incomplete_rosters ... ok
+test kfd_backend::qualification_coexistence::tests::scripted_r26_copy_geometry_reports_exact_directional_coordinates ... ok
+test kfd_backend::qualification_coexistence::tests::scripted_r26_membership_is_immutable_and_never_native_observation_authority ... ok
+test kfd_backend::qualification_coexistence::tests::unaccounted_native_storage_markers_are_not_an_empty_observation ... ok
+test kfd_backend::qualification_coexistence::tests::scripted_r26_compute_membership_reports_one_coordinate_failures ... ok
+test kfd_backend::qualification_coexistence::tests::scripted_r26_copy_membership_reports_one_coordinate_failures ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 520 filtered out; finished in 4.28s
+

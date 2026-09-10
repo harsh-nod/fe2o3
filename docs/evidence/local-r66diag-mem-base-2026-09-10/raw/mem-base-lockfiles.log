@@ -1,0 +1,9 @@
+     Locking 2 packages to latest Rust 1.96.0-nightly compatible versions
+      Adding fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 2 unchanged dependencies behind latest
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/mem-base-lockfiles.py", line 29, in <module>
+    assert before == after, f'unrelated lockfile change: {path}'
+           ^^^^^^^^^^^^^^^
+AssertionError: unrelated lockfile change: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/Cargo.lock

@@ -26,13 +26,22 @@ mod enabled {
     fn hex(value: [u8; 32]) -> String {
         value.iter().map(|byte| format!("{byte:02x}")).collect()
     }
+    #[derive(Clone, Copy, Debug)]
+    enum ObservationPhase {
+        Setup,
+        First,
+        Both,
+        AfterCopy,
+        AfterCompute,
+    }
     fn observation(
         context: &RuntimeContextV1<KfdRuntimeBackendV1>,
+        phase: ObservationPhase,
     ) -> ResultV1<KfdR66RetainedCustodyObservationV1> {
         context
             .backend()
-            .observe_r66_retained_custody_v1()
-            .ok_or_else(|| "R66 exact retained native roster unavailable".into())
+            .diagnose_r66_retained_custody_v1()
+            .map_err(|failure| format!("R66 observation phase={phase:?}: {failure}").into())
     }
     fn json_observation(value: KfdR66RetainedCustodyObservationV1) -> Value {
         json!({"compute": value.compute.map(hex), "compute_membership": value.compute_membership.map(hex),
@@ -267,8 +276,9 @@ mod enabled {
                 compute_device,
                 kernel_bytes,
             )?;
-            if observation(&context)?.compute.is_some() || observation(&context)?.copy.is_some() {
-                return Err("R66 setup retained unexpected native work".into());
+            let setup = observation(&context, ObservationPhase::Setup)?;
+            if setup.compute.is_some() || setup.copy.is_some() {
+                return Err("R66 observation phase=Setup retained unexpected native work".into());
             }
             let arguments = Gfx942InplaceTransformQualificationArgumentsV1::new(compute_device);
             let (source, destination) = if h2d {
@@ -290,13 +300,13 @@ mod enabled {
                     )
                     .map_err(error)?;
                 context.flush_stream(compute_stream).map_err(error)?;
-                first = observation(&context)?;
+                first = observation(&context, ObservationPhase::First)?;
                 copy_submission = copy(&mut context, copy_stream, source, destination, PAD, bytes)?;
                 context.flush_stream(copy_stream).map_err(error)?;
             } else {
                 copy_submission = copy(&mut context, copy_stream, source, destination, PAD, bytes)?;
                 context.flush_stream(copy_stream).map_err(error)?;
-                first = observation(&context)?;
+                first = observation(&context, ObservationPhase::First)?;
                 compute_submission = context
                     .launch(
                         compute_stream,
@@ -308,7 +318,7 @@ mod enabled {
                     .map_err(error)?;
                 context.flush_stream(compute_stream).map_err(error)?;
             }
-            let both = observation(&context)?;
+            let both = observation(&context, ObservationPhase::Both)?;
             if both.compute.is_none()
                 || both.copy.is_none()
                 || both.copy_packets != packets
@@ -321,25 +331,33 @@ mod enabled {
                         || first.copy_membership != both.copy_membership
                         || first.compute.is_some()))
             {
-                return Err("R66 publication order or retained identity mismatch".into());
+                return Err(
+                    "R66 observation phase=Both publication order or retained identity mismatch"
+                        .into(),
+                );
             }
             finish(&mut context, copy_stream, &mut copy_submission)?;
             context.release_submission(copy_submission).map_err(error)?;
-            let after_copy = observation(&context)?;
+            let after_copy = observation(&context, ObservationPhase::AfterCopy)?;
             if after_copy.compute != both.compute
                 || after_copy.compute_membership != both.compute_membership
                 || after_copy.copy.is_some()
                 || after_copy.copy_packets != 0
             {
-                return Err("R66 copy retirement lost compute custody".into());
+                return Err(
+                    "R66 observation phase=AfterCopy copy retirement lost compute custody".into(),
+                );
             }
             finish(&mut context, compute_stream, &mut compute_submission)?;
             context
                 .release_submission(compute_submission)
                 .map_err(error)?;
-            let after_compute = observation(&context)?;
+            let after_compute = observation(&context, ObservationPhase::AfterCompute)?;
             if after_compute.compute.is_some() || after_compute.copy.is_some() {
-                return Err("R66 native work retained after completion".into());
+                return Err(
+                    "R66 observation phase=AfterCompute native work retained after completion"
+                        .into(),
+                );
             }
             if context
                 .allocation_admission_usage_v1(device)
@@ -412,9 +430,14 @@ mod enabled {
                 for (bytes, packets) in [(SMALL, 1), (LARGE, 2)] {
                     for h2d in [true, false] {
                         for compute_first in [true, false] {
+                            let ordinal = cases.len();
                             cases.push(
-                                case(unique_id, cases.len(), bytes, packets, h2d, compute_first)
-                                    .map_err(|error| error.to_string())?,
+                                case(unique_id, ordinal, bytes, packets, h2d, compute_first)
+                                    .map_err(|error| format!(
+                                        "R66 cell={ordinal} bytes={bytes} packets={packets} direction={} order={}: {error}",
+                                        if h2d { "h2d" } else { "d2h" },
+                                        if compute_first { "compute-first" } else { "copy-first" },
+                                    ))?,
                             );
                         }
                     }

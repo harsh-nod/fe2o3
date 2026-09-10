@@ -1,0 +1,94 @@
+     Locking 2 packages to latest Rust 1.96.0-nightly compatible versions
+      Adding fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 2 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: crates/rustc-codegen-fe2o3/tests/fixtures/collected-tiled-gemm-v1/Cargo.lock
+     Locking 2 packages to latest Rust 1.96.0-nightly compatible versions
+      Adding fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 2 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-binding/kernel-a/Cargo.lock
+     Locking 2 packages to latest Rust 1.96.0-nightly compatible versions
+      Adding fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 2 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-binding/kernel-b/Cargo.lock
+     Locking 2 packages to latest Rust 1.96.0-nightly compatible versions
+      Adding fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 2 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-import/provider/Cargo.lock
+     Locking 1 package to latest Rust 1.94 compatible version
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 4 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: examples/flash_attention_general_v1/Cargo.lock
+     Locking 2 packages to latest Rust 1.94 compatible versions
+      Adding fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 4 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: examples/flash_attention_v1/Cargo.lock
+     Locking 1 package to latest Rust 1.94 compatible version
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 4 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: examples/gemm_autoresearch_v1/Cargo.lock
+     Locking 2 packages to latest Rust 1.94 compatible versions
+      Adding fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 3 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: examples/gfx950_advanced_attention/Cargo.lock
+     Locking 2 packages to latest Rust 1.94 compatible versions
+      Adding fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 2 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: examples/gfx950_advanced_systems/Cargo.lock
+     Locking 2 packages to latest Rust 1.94 compatible versions
+      Adding fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 2 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: examples/gfx950_gpt_oss_decode/Cargo.lock
+     Locking 2 packages to latest Rust 1.94 compatible versions
+      Adding fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 2 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: examples/gfx950_low_precision/Cargo.lock
+    Blocking waiting for file lock on package cache
+     Locking 2 packages to latest Rust 1.94 compatible versions
+      Adding fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 4 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: examples/moe_expert_v1/Cargo.lock
+     Locking 1 package to latest Rust 1.94 compatible version
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 4 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: examples/moe_grouped_expert_general_v1/Cargo.lock
+     Locking 2 packages to latest Rust 1.94 compatible versions
+      Adding fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 4 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: examples/moe_top2_v1/Cargo.lock
+     Locking 2 packages to latest Rust 1.94 compatible versions
+      Adding fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 2 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: examples/row_softmax_general_v1/Cargo.lock
+     Locking 2 packages to latest Rust 1.94 compatible versions
+      Adding fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 3 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: examples/row_softmax_v1/Cargo.lock
+     Locking 1 package to latest Rust 1.94 compatible version
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 5 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: examples/tiled_gemm_general_v1/Cargo.lock
+     Locking 2 packages to latest Rust 1.94 compatible versions
+      Adding fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 3 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: examples/wave64_collectives_v1/Cargo.lock
+    Blocking waiting for file lock on package cache
+     Locking 2 packages to latest Rust 1.94 compatible versions
+      Adding fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+      Adding fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+note: pass `--verbose` to see 3 unchanged dependencies behind latest
+Exact MEM-BASE dependency addition: examples/workgroup_sync_v1/Cargo.lock
+Standalone runtime lockfiles minimally updated: 19

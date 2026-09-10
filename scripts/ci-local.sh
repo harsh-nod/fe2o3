@@ -124,6 +124,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-process-identity
   fe2o3-profiler-protocol
   fe2o3-proof-contracts
+  fe2o3-resource-accounting
   fe2o3-rustc-front
   fe2o3-rustc-invocation
   fe2o3-service-host
@@ -740,7 +741,7 @@ run_auxiliary_tests() {
   run_step device-copy-derive-ui \
     cargo test --locked -p fe2o3-core --test device_copy_derive_ui
   run_step runtime-release-tests \
-    cargo test --locked --release -p fe2o3-runtime --lib
+    cargo test --locked --release -p fe2o3-resource-accounting -p fe2o3-runtime --lib
   run_step core-production-runtime-surface-ui \
     env FE2O3_HIP_SYS_DISABLE=1 \
       cargo test --locked -p fe2o3-core --test production_runtime_surface_ui

@@ -2,6 +2,7 @@
 """Qualify the signed R61 copy owner using unchanged R60 custody/R26 host guards."""
 
 import importlib.util
+import hashlib
 import json
 import os
 import pathlib
@@ -168,6 +169,21 @@ class OwnerRunner(base.Runner):
         })
         self.run(["/usr/bin/uname", "-a"], label="kernel")
         self.verify_source()
+        self.retain_owner_binary()
+
+    def retain_owner_binary(self):
+        binary = self.binaries["kfd"]
+        expected = self.binary_hashes["kfd"]
+        if binary.is_symlink() or not binary.is_file():
+            raise base.RunError("owner binary is not a regular owned build output")
+        with binary.open("rb") as source:
+            encoded = source.read((64 << 20) + 1)
+        if len(encoded) > (64 << 20) or hashlib.sha256(encoded).hexdigest() != expected:
+            raise base.RunError("owner binary changed before diagnostic retention")
+        destination = self.evidence / "owner-binary"
+        with destination.open("xb") as output:
+            output.write(encoded)
+        destination.chmod(0o400)
 
     def telemetry(self, label):
         raw = self.run([self.args.rocm_path / "bin/rocm-smi", "--showuniqueid", "--showbus",
@@ -193,6 +209,12 @@ class OwnerRunner(base.Runner):
         self.verify_source()
 
     def publish(self):
+        retained_binary = self.evidence / "owner-binary"
+        if (retained_binary.is_symlink() or not retained_binary.is_file()
+                or retained_binary.stat().st_size > (64 << 20)
+                or base.sha256_file(retained_binary) != self.binary_hashes["kfd"]
+                or base.sha256_file(self.binaries["kfd"]) != self.binary_hashes["kfd"]):
+            raise base.RunError("retained owner binary differs from the qualified build")
         destination = self.args.output_dir / f"{self.label}-owner-{secrets.token_hex(16)}"
         base.write_json(self.evidence / "commands.json", self.commands)
         base.write_json(self.evidence / "provenance.json", {
@@ -205,7 +227,6 @@ class OwnerRunner(base.Runner):
             "topology": self.topology, "qualification_runs": 2,
             "census_retry_policy": "abort-set", "performance_claim": False,
         })
-        shutil.copy2(self.binaries["kfd"], self.evidence / "owner-binary")
         base.write_json(self.evidence / "sha256.json", base.tree_hashes(self.evidence))
         pending = pathlib.Path(tempfile.mkdtemp(prefix=f".{self.label}-publish.", dir=self.args.output_dir))
         try:

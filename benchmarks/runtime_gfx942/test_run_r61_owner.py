@@ -49,8 +49,11 @@ class OwnerRunnerTests(unittest.TestCase):
                         mock.patch.object(instance, "verify_source") as verify_source, \
                         mock.patch.object(pathlib.Path, "resolve", autospec=True, side_effect=lambda path, **kwargs: path), \
                         mock.patch.object(runner.base, "tree_hashes", return_value={"libstd-test.rlib": "1" * 64}), \
-                        mock.patch.object(runner.base, "sha256_file", return_value="1" * 64):
+                        mock.patch.object(runner.base, "sha256_file", return_value="1" * 64), \
+                        mock.patch.object(runner.hashlib, "sha256") as digest:
+                    digest.return_value.hexdigest.return_value = "1" * 64
                     instance.build()
+                self.assertTrue((instance.evidence / "owner-binary").is_file())
                 verify_source.assert_called_once_with()
                 for label in ("build-owner", "cargo-metadata"):
                     command = commands[label]
@@ -169,10 +172,12 @@ class OwnerRunnerTests(unittest.TestCase):
             output.mkdir()
             instance = runner.OwnerRunner(argparse.Namespace(output_dir=output), stage)
             instance.commit = "1" * 40
-            instance.snapshot_input_hashes = instance.tool_hashes = instance.binary_hashes = instance.topology = {}
+            instance.snapshot_input_hashes = instance.tool_hashes = instance.topology = {}
             binary = stage / "binary"
             binary.touch()
             instance.binaries = {"kfd": binary}
+            instance.binary_hashes = {"kfd": runner.base.sha256_file(binary)}
+            instance.retain_owner_binary()
             (instance.evidence / "source.tar").touch()
             original = runner.shutil.copytree
             def corrupt(source, destination, **kwargs):
@@ -182,6 +187,55 @@ class OwnerRunnerTests(unittest.TestCase):
             with mock.patch.object(runner.shutil, "copytree", side_effect=corrupt):
                 with self.assertRaises(runner.base.RunError): instance.publish()
             self.assertEqual(list(output.iterdir()), [])
+
+    def test_post_build_rejection_retains_exact_binary_and_cleans_stage(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args = argparse.Namespace(staging_parent=root, output_dir=root)
+            expected = b"qualification binary bytes"
+            class Fake(runner.OwnerRunner):
+                def snapshot(self): pass
+                def build(self):
+                    binary = self.stage / "binary"
+                    binary.write_bytes(expected)
+                    self.binaries = {"kfd": binary}
+                    self.binary_hashes = {"kfd": runner.base.sha256_file(binary)}
+                    self.retain_owner_binary()
+                def qualify_and_measure(self):
+                    raise runner.base.RunError("typed qualification rejection")
+            with mock.patch.object(runner.base, "parse_args", return_value=args):
+                self.assertEqual(runner.main(Fake), 2)
+            self.assertFalse(list(root.glob("fe2o3-r61-owner.*")))
+            rejected = list(root.glob("r61-rejected-*"))
+            self.assertEqual(len(rejected), 1)
+            self.assertEqual((rejected[0] / "owner-binary").read_bytes(), expected)
+            self.assertIn("typed qualification rejection", (rejected[0] / "rejection.json").read_text())
+
+    def test_binary_retention_rejects_substitution_and_does_not_overwrite(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            instance = runner.OwnerRunner(argparse.Namespace(output_dir=root), root)
+            binary = root / "binary"
+            binary.write_bytes(b"admitted bytes")
+            instance.binaries = {"kfd": binary}
+            instance.binary_hashes = {"kfd": runner.base.sha256_file(binary)}
+            binary.write_bytes(b"substitution")
+            with self.assertRaisesRegex(runner.base.RunError, "changed before"):
+                instance.retain_owner_binary()
+            self.assertFalse((instance.evidence / "owner-binary").exists())
+            binary.write_bytes(b"admitted bytes")
+            instance.retain_owner_binary()
+            with self.assertRaises(FileExistsError):
+                instance.retain_owner_binary()
+            binary.write_bytes(b"changed after retention")
+            with self.assertRaisesRegex(runner.base.RunError, "differs from"):
+                instance.publish()
+            binary.write_bytes(b"admitted bytes")
+            retained = instance.evidence / "owner-binary"
+            retained.chmod(0o600)
+            retained.write_bytes(b"changed retained bytes")
+            with self.assertRaisesRegex(runner.base.RunError, "differs from"):
+                instance.publish()
 
 
 if __name__ == "__main__":
