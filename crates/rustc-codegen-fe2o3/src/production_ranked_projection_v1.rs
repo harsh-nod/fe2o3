@@ -10580,6 +10580,7 @@ fn compiler_intrinsic_is_pure_total_scalar_dependency_v1(
             | SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { .. }
             | SemanticCompilerIntrinsicOperationV1::DisjointIndexCheckedShift { .. }
             | SemanticCompilerIntrinsicOperationV1::DisjointSliceLen { .. }
+            | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen { .. }
     )
 }
 
@@ -31882,6 +31883,93 @@ mod tests {
                 }
             ));
         }
+    }
+
+    fn write_only_slice_length_callable() -> SemanticCallableDeclV1 {
+        compiler_intrinsic_callable(
+            SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen {
+                disjoint_slice: POINTER_TYPE,
+                element: SCALAR_TYPE,
+                raw_index: SCALAR_TYPE,
+                index_space: SemanticDisjointIndexSpaceV1::Index1d,
+            },
+        )
+    }
+
+    #[test]
+    fn write_only_slice_length_preserves_uniform_and_varying_operand_dependencies() {
+        let function = defined_scalar_call_switch(0, vec![tensor_operand(1)]);
+        let callable = write_only_slice_length_callable();
+        let (switches, operations, _) = deterministic_scalar_switch_projection(
+            &[callable.clone()],
+            &function,
+            &vec![None; function.locals().len()],
+            vec![],
+            0,
+        )
+        .unwrap();
+        assert!(switches[1].is_some());
+        assert!(operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::DeterministicJoin { dependencies, .. }
+                if dependencies == &[ProductionRankedValueV1::Argument(1)]
+        )));
+
+        let invocation = ProductionRankedValueIdV1::new(0);
+        let mut lane_values = vec![None; function.locals().len()];
+        lane_values[1] = Some(ProjectedDisjointIndexV1 {
+            value: ProductionRankedValueV1::Local(invocation),
+            mapping: SemanticDisjointIndexSpaceV1::Index1d,
+            precondition: None,
+            availability: None,
+        });
+        let (switches, operations, _) = deterministic_scalar_switch_projection(
+            &[callable],
+            &function,
+            &lane_values,
+            vec![ProductionRankedOperationV1::InvocationIndex {
+                result: invocation,
+                dimension: 0,
+                launch_extent: 0,
+            }],
+            1,
+        )
+        .unwrap();
+        assert!(switches[1].is_some());
+        assert!(operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::DeterministicJoin { dependencies, .. }
+                if dependencies == &[ProductionRankedValueV1::Local(invocation)]
+        )));
+    }
+
+    #[test]
+    fn write_only_slice_length_does_not_admit_unresolved_dereference_control() {
+        let argument = SemanticOperandV1::Copy(
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(1),
+                vec![
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, SCALAR_TYPE)
+                        .unwrap(),
+                ],
+                SCALAR_TYPE,
+            )
+            .unwrap(),
+        );
+        let function = defined_scalar_call_switch(0, vec![argument]);
+        let (switches, operations, _) = deterministic_scalar_switch_projection(
+            &[write_only_slice_length_callable()],
+            &function,
+            &vec![None; function.locals().len()],
+            vec![],
+            0,
+        )
+        .unwrap();
+        assert!(switches[1].is_none());
+        assert!(!operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::DeterministicJoin { .. }
+        )));
     }
 
     #[test]
