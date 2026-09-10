@@ -30,7 +30,7 @@ fn r62_copy_and_peer_use_existing_admission_and_cancellation() {
     let device = h.context.devices()[0].id();
     let source = h
         .context
-        .allocate(device, RuntimeMemoryKindV1::HostVisible, 64, 8)
+        .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 8)
         .unwrap();
     let destination = h
         .context

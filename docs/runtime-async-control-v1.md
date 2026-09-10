@@ -86,6 +86,10 @@ The cancelled full-buffer copy must not alter padding; the timed-out body copy
 must still complete after observer Drop. Full input/output/padding and explicit
 native cleanup are checked. This is neither kernel nor performance evidence.
 
+[The R62 evidence report](evidence/mi300x-r62-async-control-2026-09-09/README.md)
+retains two accepted MI300X runs, final CPU/proof results, the initial mock-fixture
+failure, independent source/archive verification, and remote cleanup checks.
+
 ## Remaining Issue Gates
 
 Production generated compute still needs the semantic-to-machine refinement

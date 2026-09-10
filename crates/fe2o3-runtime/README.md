@@ -122,6 +122,13 @@ its cleanup/native-failure/quarantine report. This is a local #182 integration,
 not distributed execution or complete executable verification. See
 `docs/runtime-async-execution-plane-v1.md` for bounds and remaining acceptance.
 
+The additive `launch_tracked`, `copy_async_tracked`, and `peer_copy_tracked`
+operations provide an opaque local control handle and atomic cancellation before
+context submission starts. `observe_with_timeout` accepts an executor timer and
+returns the original operation on timeout, preserving its eventual result and
+runtime custody. Neither control phases nor timeout establish GPU completion or
+retry authority. See `docs/runtime-async-control-v1.md` for the exact boundary.
+
 Progress mode additionally offers `event_future_with_progress`, which admits one
 event and its exact source stream in a single transaction. Event polling runs
 before stream flushing in each engine tick, so completion of one persistent SDMA
