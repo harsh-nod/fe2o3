@@ -59,7 +59,10 @@ remains unchanged when no group binding table is supplied.
 Host reads/writes are bounded to 4 MiB per call. Kernel objects remain bounded
 to 64 MiB, kernargs to 65536 bytes, pointer fixups to 256, and individual
 dispatch waits to 600000 ms. Existing per-context allocation limits apply,
-with at most 2048 group buffers. IDs never recycle within a group.
+with at most 2048 buffers per context and 2048 times the admitted participant
+count in the group record table. This permits independent per-rank model
+allocations without weakening any owner's allocation limit. IDs never recycle
+within a group.
 
 ## Failure And Release
 

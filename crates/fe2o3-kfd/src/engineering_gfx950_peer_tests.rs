@@ -1,4 +1,13 @@
 use super::*;
+
+#[test]
+fn group_record_budget_is_bounded_by_participant_allocation_limits() {
+    assert_eq!(group_allocation_limit(2).unwrap(), 4096);
+    assert_eq!(group_allocation_limit(8).unwrap(), 16384);
+    for world in [0, 1, 3, 9, usize::MAX] {
+        assert!(group_allocation_limit(world).is_err());
+    }
+}
 use crate::memory::MemorySessionError;
 
 struct FakeBackend {

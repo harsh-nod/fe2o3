@@ -9,6 +9,15 @@ static NEXT_GROUP: AtomicU64 = AtomicU64::new(1);
 const LINK_ENABLED: u32 = 1;
 const LINK_NO_ATOMICS: u32 = (1 << 2) | (1 << 3);
 
+fn group_allocation_limit(world: usize) -> Result<usize> {
+    if !matches!(world, 2 | 8) {
+        return Err("invalid group allocation world size".into());
+    }
+    MAX_ALLOCATIONS
+        .checked_mul(world)
+        .ok_or_else(|| "group allocation limit overflow".into())
+}
+
 /// Group-scoped identity, never a pointer or native allocation handle.
 ///
 /// ```compile_fail
@@ -437,7 +446,7 @@ impl Gfx950EngineeringPeerGroupV1 {
         self.require_active()?;
         let result = (|| {
             if owner >= self.contexts.len()
-                || self.buffers.len() >= MAX_ALLOCATIONS
+                || self.buffers.len() >= group_allocation_limit(self.contexts.len())?
                 || peers
                     .iter()
                     .any(|&peer| peer >= self.contexts.len() || peer == owner)
