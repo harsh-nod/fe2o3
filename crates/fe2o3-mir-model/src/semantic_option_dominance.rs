@@ -7,9 +7,10 @@ use std::{error::Error, fmt};
 
 use crate::semantic_mir_v1::{
     SemanticBlockIdV1, SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1,
-    SemanticDirectCallV1, SemanticFunctionDeclV1, SemanticLocalIdV1, SemanticOperandV1,
-    SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticStatementKindV1,
-    SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeShapeV1, SemanticUncheckedBinaryOpV1,
+    SemanticDirectCallV1, SemanticFunctionDeclV1, SemanticLocalIdV1, SemanticLocalRoleV1,
+    SemanticOperandV1, SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1,
+    SemanticStatementKindV1, SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeShapeV1,
+    SemanticUncheckedBinaryOpV1,
 };
 
 /// Maximum charged CFG, statement, definition, and dominator work.
@@ -819,6 +820,7 @@ impl WorkBudgetV1 {
 }
 
 struct DominatorIntervalsV1 {
+    entry: usize,
     preorder: Vec<usize>,
     subtree_end: Vec<usize>,
     predecessors: Vec<Vec<usize>>,
@@ -938,6 +940,7 @@ impl DominatorIntervalsV1 {
             }
         }
         Ok(Self {
+            entry,
             preorder,
             subtree_end,
             predecessors,
@@ -945,10 +948,12 @@ impl DominatorIntervalsV1 {
     }
 
     fn has_unique_predecessor(&self, block: usize, predecessor: usize) -> bool {
-        matches!(
-            self.predecessors.get(block).map(Vec::as_slice),
-            Some([exact]) if *exact == predecessor
-        )
+        // Entry also has the implicit edge from the function invocation.
+        block != self.entry
+            && matches!(
+                self.predecessors.get(block).map(Vec::as_slice),
+                Some([exact]) if *exact == predecessor
+            )
     }
 
     fn is_reachable(&self, block: usize) -> bool {
@@ -1018,7 +1023,17 @@ fn local_definition_counts(
     function: &SemanticFunctionDeclV1,
     budget: &mut WorkBudgetV1,
 ) -> Result<Vec<u8>, SemanticOptionDominanceErrorV1> {
-    let mut definitions = vec![0_u8; function.locals().len()];
+    budget.charge(function.locals().len())?;
+    let mut definitions = Vec::new();
+    definitions
+        .try_reserve_exact(function.locals().len())
+        .map_err(|_| SemanticOptionDominanceErrorV1::Storage)?;
+    definitions.extend(
+        function
+            .locals()
+            .iter()
+            .map(|local| u8::from(matches!(local.role(), SemanticLocalRoleV1::Argument(_)))),
+    );
     let mut record = |place: &SemanticPlaceV1| {
         let Some(slot) = definitions.get_mut(place.local().index() as usize) else {
             return Err(SemanticOptionDominanceErrorV1::InvalidControlFlow(
@@ -1054,6 +1069,10 @@ fn local_definition_counts(
     }
     Ok(definitions)
 }
+
+#[cfg(test)]
+#[path = "semantic_argument_entry_v1_tests.rs"]
+mod argument_entry_tests;
 
 #[cfg(test)]
 mod tests {
