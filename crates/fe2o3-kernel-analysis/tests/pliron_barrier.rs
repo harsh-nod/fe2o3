@@ -19,6 +19,9 @@ use pliron::{
     op::Op,
 };
 
+#[path = "pliron_barrier/barrier_free_scc.rs"]
+mod barrier_free_scc;
+
 fn setup() -> Context {
     let mut context = Context::new();
     register_dialect(&mut context, &DialectName::try_new(DIALECT_NAME).unwrap()).unwrap();
