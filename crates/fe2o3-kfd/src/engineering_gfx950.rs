@@ -29,6 +29,13 @@ use crate::queue_linux::{
 };
 use crate::{CheckedGfx950XnackMinusDevice, DeviceSelector, OpenedKfd};
 
+#[path = "engineering_gfx950_peer.rs"]
+mod peer;
+pub use peer::{
+    Gfx950EngineeringPeerBufferV1, Gfx950EngineeringPeerGroupV1, Gfx950EngineeringPeerKernelV1,
+    Gfx950EngineeringPeerPointerV1,
+};
+
 type Result<T> = std::result::Result<T, String>;
 const MAX_KERNELS: usize = 256;
 
@@ -63,9 +70,9 @@ struct PreparedDispatch {
     group_bytes: u32,
 }
 
-/// Crate-private owner. Its only caller is the explicit disposable-process
-/// entry below. On any uncertain native result, the complete owner is leaked
-/// until process teardown instead of retrying or freeing live resources.
+/// Crate-private owner used only by explicit disposable-process engineering
+/// entries, including the separately opted-in peer group. Any uncertain native
+/// result retains the owner until process teardown instead of retrying frees.
 struct Context {
     backend: Backend,
     unique_id: u64,
@@ -629,10 +636,22 @@ impl Context {
     fn prepare_dispatch(
         &mut self,
         id: u64,
+        bytes: Vec<u8>,
+        workgroup: [u16; 3],
+        grid: [u32; 3],
+        pointers: &[PointerFixupV1],
+    ) -> Result<PreparedDispatch> {
+        self.prepare_dispatch_with_peer_bindings(id, bytes, workgroup, grid, pointers, None)
+    }
+
+    fn prepare_dispatch_with_peer_bindings(
+        &mut self,
+        id: u64,
         mut bytes: Vec<u8>,
         workgroup: [u16; 3],
         grid: [u32; 3],
         pointers: &[PointerFixupV1],
+        peer_bindings: Option<&BTreeMap<u64, (u64, u64)>>,
     ) -> Result<PreparedDispatch> {
         let prepare_started = self.profile_started();
         self.check_idle()?;
@@ -679,9 +698,13 @@ impl Context {
             record_elapsed(&mut self.counters.kernel_admission_ns, admission_started)?;
         }
         patch_pointer_arguments(&kernel.metadata, &mut bytes, pointers, |id| {
-            self.buffers
-                .get(&id)
-                .map(|allocation| (allocation.va, allocation.requested as u64))
+            if let Some(bindings) = peer_bindings {
+                bindings.get(&id).copied()
+            } else {
+                self.buffers
+                    .get(&id)
+                    .map(|allocation| (allocation.va, allocation.requested as u64))
+            }
         })?;
         crate::queue::dispatch_binding::initialize_engineering_cov6_kernarg(
             closure

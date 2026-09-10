@@ -54,6 +54,10 @@ pub(super) struct LinuxMemoryBackendFor<D> {
 
 #[cfg(feature = "engineering-gfx950")]
 impl LinuxMemoryBackendFor<crate::CheckedGfx950XnackMinusDevice> {
+    pub(super) fn engineering_peer_topology(&self) -> &crate::topology::HostTopologySnapshot {
+        self.device.topology_snapshot()
+    }
+
     pub(super) fn check_engineering_operational_currentness(
         &mut self,
     ) -> Result<(), MemorySessionError> {
