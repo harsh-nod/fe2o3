@@ -30,6 +30,12 @@ That record also retains failed environmental attempts and the optional legacy
 musl compiler limitation. Older R66 evidence does not qualify the new source;
 signed live hardware acceptance remains separate.
 
+Signed implementation `bd8aa3de` is pushed to both remotes. Its first
+[MI300X R66 campaign](evidence/mi300x-r66-coexistence-2026-09-10/README.md)
+was rejected because exact retained native-roster observation was unavailable.
+The complete owned-process/stage cleanup check passed; this does not fill any
+accepted hardware cell. Native-roster diagnosis now precedes a new campaign.
+
 | Slice | Implemented locally | Boundary still open |
 | --- | --- | --- |
 | OVL-QUAL-1 | Eight-cell R26 coexistence example, immutable native-custody observations, independent checker, signed-source runner and negative tests | Signed live capture, native extraction refinement, physical overlap and production generated-kernel authority |
@@ -84,7 +90,7 @@ MI300X jobs or pushes integrated changes to both remotes.
 
 | Lane | First bounded ticket | Deliverable | Then |
 | --- | --- | --- | --- |
-| Native | SCALE-1 profile design | Separately admitted bounded short/long artifacts and independent correctness oracles; review OVL-QUAL-2 capture | SCALE-CAP after physical budgets; SCALE-3 signed producers and measurement |
+| Native | OVL-DIAG-1, then SCALE-1 | Explain the rejected actual native roster without weakening checks; retain typed failure stage and actual binary; design bounded short/long profiles | New OVL-QUAL-2 campaign; SCALE-CAP after physical budgets; SCALE-3 producers/measurement |
 | Resources | Shared ledger/interface, then MEM-2A | Implement the approved lower-level ledger boundary and individual backing admission from the completed inventory proposal | MEM-2B, MEM-3A/B, MEM-4A/B, MEM-5 closure; VER-1/2 can move earlier |
 | Admission | DRN-1 capture and GEN-2 interface | Bounded host-only capture and exact private typed-async authority contracts | DRN-3B capture-failure cases and DRN-2; production GEN-2 after accounting/compiler evidence |
 | Primary | PRF-1/2 and native accounting interface | Finish current-wave verification; approve cross-crate accounting ownership; compose shared hooks and proof roster | Signed OVL-QUAL-2 hardware campaign, retained evidence and dual-remote publication |
@@ -103,6 +109,7 @@ the existing tickets; they do not weaken or replace the parent acceptance gates.
 | Packet | Owner | Concrete output and completion gate |
 | --- | --- | --- |
 | SCALE-3-PROTO | Native | Protocol/checker in `benchmarks/runtime_gfx942`; reject mismatched artifacts, geometry, bytes, completion/reuse policy, missing samples and unsupported overlap claims |
+| OVL-DIAG-1 | Native; primary integrates | Qualification-only typed stage errors with cell/order/direction/observation phase; actual-R26-shape regressions and one-coordinate negatives; repeated observations preserve state/digests; retain binary on post-build rejection; no addresses, polling or weakened checks |
 | OVL-QUAL-2 | Primary; native reviews | Signed two-run MI300X capture of all eight cells; independent canary/custody/census audit and exact owned-process/stage cleanup |
 | SCALE-1 | Native | Separately admitted short/long artifacts with fixed work bounds, ABI/effects and independent oracles; qualify correctness before scheduling claims |
 | MEM-5 inventory contract | Resources; primary approves | Allocation-site inventory with no double charging within each measured quantity, actual layouts and custody/refund events; settle the cross-crate adapter before MEM-2/3/4 edits |
@@ -215,6 +222,13 @@ signed qualifier on one admitted MI300X with private staging and bounded
 processes. Independently audit output, native identities, topology/census and
 owned-process/stage cleanup. Prior R26/R65 captures do not qualify R66. Pending
 host intervals do not establish physical overlap; that remains SCALE-3.
+
+The first signed `bd8aa3de` campaign built successfully but rejected the first
+qualifier's native-roster observation. It did not reach a complete eight-cell
+pass or the second run. All recorded owned processes/groups and the private
+stage were independently confirmed absent afterward, with GPU 1 idle. Preserve
+that rejection and diagnose it before a new signed campaign; access and cleanup
+alone do not establish native acceptance.
 
 ### SCALE-1: Admitted Short/Long Qualification Profiles
 

@@ -1,0 +1,52 @@
+   Compiling typenum v1.20.1
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling hybrid-array v0.4.14
+   Compiling cpufeatures v0.3.1
+   Compiling serde_core v1.0.229
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling cfg-if v1.0.4
+   Compiling zmij v1.0.23
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling syn v3.0.4
+   Compiling fe2o3-target-spec v0.1.0 (/dev/shm/fe2o3-r66-owner.MoPM9aSZ/staging/fe2o3-r66-owner.iuz6v2aa/source/crates/fe2o3-target-spec)
+   Compiling serde v1.0.229
+   Compiling autocfg v1.5.1
+   Compiling serde_json v1.0.151
+   Compiling rustix v1.1.4
+   Compiling num-traits v0.2.19
+   Compiling fe2o3-amd-target v0.1.0 (/dev/shm/fe2o3-r66-owner.MoPM9aSZ/staging/fe2o3-r66-owner.iuz6v2aa/source/crates/fe2o3-amd-target)
+   Compiling serde_derive v1.0.229
+   Compiling itoa v1.0.18
+   Compiling libc v0.2.189
+   Compiling bitflags v2.13.1
+   Compiling linux-raw-sys v0.12.1
+   Compiling memchr v2.8.3
+   Compiling fe2o3-hsaco v0.1.0 (/dev/shm/fe2o3-r66-owner.MoPM9aSZ/staging/fe2o3-r66-owner.iuz6v2aa/source/crates/fe2o3-hsaco)
+   Compiling spin v0.12.3
+   Compiling pin-project-lite v0.2.17
+   Compiling fe2o3-runtime-model v0.1.0 (/dev/shm/fe2o3-r66-owner.MoPM9aSZ/staging/fe2o3-r66-owner.iuz6v2aa/source/crates/fe2o3-runtime-model)
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/dev/shm/fe2o3-r66-owner.MoPM9aSZ/staging/fe2o3-r66-owner.iuz6v2aa/source/crates/fe2o3-amdhsa-loader)
+   Compiling fe2o3-kfd-uapi v0.1.0 (/dev/shm/fe2o3-r66-owner.MoPM9aSZ/staging/fe2o3-r66-owner.iuz6v2aa/source/crates/fe2o3-kfd-uapi)
+   Compiling slab v0.4.12
+   Compiling arrayvec v0.7.8
+   Compiling zeroize v1.9.0
+   Compiling fe2o3-drm-uapi v0.1.0 (/dev/shm/fe2o3-r66-owner.MoPM9aSZ/staging/fe2o3-r66-owner.iuz6v2aa/source/crates/fe2o3-drm-uapi)
+   Compiling futures-core v0.3.34
+   Compiling fe2o3-aql v0.1.0 (/dev/shm/fe2o3-r66-owner.MoPM9aSZ/staging/fe2o3-r66-owner.iuz6v2aa/source/crates/fe2o3-aql)
+   Compiling futures-task v0.3.34
+   Compiling futures-util v0.3.34
+   Compiling fe2o3-kfd v0.1.0 (/dev/shm/fe2o3-r66-owner.MoPM9aSZ/staging/fe2o3-r66-owner.iuz6v2aa/source/crates/fe2o3-kfd)
+   Compiling rmp v0.8.15
+   Compiling fe2o3-profiler-protocol v0.1.0 (/dev/shm/fe2o3-r66-owner.MoPM9aSZ/staging/fe2o3-r66-owner.iuz6v2aa/source/crates/fe2o3-profiler-protocol)
+   Compiling fe2o3-completion v0.1.0 (/dev/shm/fe2o3-r66-owner.MoPM9aSZ/staging/fe2o3-r66-owner.iuz6v2aa/source/crates/fe2o3-completion)
+   Compiling fe2o3-host-api v0.1.0 (/dev/shm/fe2o3-r66-owner.MoPM9aSZ/staging/fe2o3-r66-owner.iuz6v2aa/source/crates/fe2o3-host-api)
+   Compiling fe2o3-runtime v0.1.0 (/dev/shm/fe2o3-r66-owner.MoPM9aSZ/staging/fe2o3-r66-owner.iuz6v2aa/source/crates/fe2o3-runtime)
+   Compiling rmpv v1.3.1
+   Compiling futures-executor v0.3.34
+   Compiling tokio v1.47.1
+   Compiling fe2o3-debug-protocol v0.1.0 (/dev/shm/fe2o3-r66-owner.MoPM9aSZ/staging/fe2o3-r66-owner.iuz6v2aa/source/crates/fe2o3-debug-protocol)
+    Finished `release` profile [optimized] target(s) in 1m 28s

@@ -1,0 +1,21 @@
+{
+  "source_commit": "bd8aa3ded708ecd6e799a803bee8e9c7ccd6c91a",
+  "signed_source_verified": true,
+  "source_archive_exact": true,
+  "source_archive_sha256": "adedf25216e3fabed36ed5a699c422a841c4a27b2f7104158a26309affc7cf34",
+  "source_files": 6932,
+  "capture_sha256": "fa9c7733250bc07f2c7aaee445189b1e4f16852234db00f7060d5a5c5bf70a6a",
+  "capture_bytes": 118845440,
+  "commands": 25,
+  "successful_commands": 24,
+  "rejected_command": "monitor-owner-0",
+  "acceptance": false,
+  "performance_claim": false,
+  "physical_overlap": "unmeasured",
+  "actual_binary_retained": false,
+  "independent_actual_elf_audit": false,
+  "cleanup_verified": true,
+  "rejection": {
+    "error": "monitor-owner-0 exited 2: R66 qualification failed: R66 operation: R66 exact retained native roster unavailable; cleanup: R66 cleanup incomplete: RuntimeCleanupReportV1 { failures: [RuntimeCleanupFailureV1 { resource: Stream(RuntimeStreamIdV1 { context_generation: 1, local: 1 }), failure: Rejected(KfdRuntimeBackendErrorV1 { kind: Busy, detail: \"stream still owns a pending KFD dispatch\" }) }], retained: RuntimeRetainedResourcesV1 { streams: 1, events: 0, submissions: 1, modules: 1, allocations: 7 }, terminal: false, graph_reserved: false, allocation_credit_records: 7 }\nr26-host-guard: target command exited with status 1"
+  }
+}
