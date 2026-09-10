@@ -901,16 +901,16 @@ impl ComputeAqlQueueSessionV1 {
         if !test_validation_only && let Err(error) = self.require_sdma_enabled() {
             return Err(recover(error, inputs));
         }
-        let competing_queues_quiescent = test_validation_only
-            || (self
-                .sdma
-                .as_ref()
-                .is_some_and(Gfx942SdmaQueueSetV1::persistent_compute_is_quiescent)
-                && auxiliary_compute_lanes_are_quiescent_v1(&self.auxiliary_compute_lanes));
-        if !competing_queues_quiescent {
+        let competing_queues_admitted = test_validation_only
+            || self.persistent_inputs_coexist_with_directional_sdma_v1(&[
+                &inputs.inputs[0],
+                &inputs.inputs[1],
+                &inputs.inputs[2],
+            ]);
+        if !competing_queues_admitted {
             return Err(recover(
                 ComputeAqlQueueSessionErrorV1::Contract(
-                    "three-binding persistent compute requires quiescent competing queues",
+                    "three-binding persistent compute requires disjoint directional custody",
                 ),
                 inputs,
             ));
@@ -1516,15 +1516,14 @@ impl ComputeAqlQueueSessionV1 {
         if let Err(error) = self.require_sdma_enabled() {
             return Err(recover(error, input));
         }
-        let competing_queues_quiescent = self
-            .sdma
-            .as_ref()
-            .is_some_and(Gfx942SdmaQueueSetV1::persistent_compute_is_quiescent)
-            && auxiliary_compute_lanes_are_quiescent_v1(&self.auxiliary_compute_lanes);
-        input = preserve_persistent_compute_bind_input_for_sdma_quiescence_v1(
-            input,
-            competing_queues_quiescent,
-        )?;
+        let competing_queues_admitted =
+            self.persistent_inputs_coexist_with_directional_sdma_v1(&[&input]);
+        if !competing_queues_admitted {
+            return Err(recover(
+                Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+                input,
+            ));
+        }
 
         let authenticated_sha256 = match &input {
             Gfx942PersistentComputeInputV1::Uninitialized(_) => None,

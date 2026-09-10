@@ -30,7 +30,10 @@ use crate::queue::{
 use crate::sdma::{Gfx942SdmaBufferStorageV1, Gfx942SdmaBufferV1};
 use crate::shared_memory::Gfx942DeviceMemoryIdentityV1;
 
-/// Claim boundary for the first persistent directional-SDMA/compute bridge.
+/// Historical R52 claim boundary for the first persistent SDMA/compute bridge.
+///
+/// Its exclusion claim is unchanged. R66's separately named coexistence profile
+/// does not inherit that profile's evidence or claim quiescence for disjoint work.
 pub const GFX942_PERSISTENT_LOCAL_COMPUTE_ADAPTER_MANIFEST_V1: &str = concat!(
     "profile=fe2o3-gfx942-kfd-persistent-local-compute-r52-v1\n",
     "target=gfx942:xnack-,one-primary-compute-queue-and-one-directional-sdma-pair\n",
@@ -50,6 +53,22 @@ pub const GFX942_PERSISTENT_LOCAL_COMPUTE_ADAPTER_MANIFEST_V1: &str = concat!(
 /// SHA-256 of [`GFX942_PERSISTENT_LOCAL_COMPUTE_ADAPTER_MANIFEST_V1`].
 pub const GFX942_PERSISTENT_LOCAL_COMPUTE_ADAPTER_MANIFEST_SHA256_V1: &str =
     "86d284a16c6bdb43c03d78d09bd34d9eb8247b9cb23d1d7e4a223d4927531f87";
+
+/// Descriptive R66 coexistence boundary, not execution or release authority.
+pub const GFX942_COMPUTE_SDMA_COEXISTENCE_MANIFEST_V1: &str = concat!(
+    "profile=fe2o3-gfx942-kfd-compute-directional-sdma-coexistence-r66-v1\n",
+    "target=gfx942:xnack-,one-primary-persistent-compute-lane,one-exact-directional-sdma-pair\n",
+    "admission=one-or-three-full-extent-device-compute-bindings,disjoint-whole-device-allocations,exact-device-vm-queue-pool-storage-and-generation-custody,reciprocal-check-before-bind-or-copy-publication\n",
+    "copy=directional-persistent-h2d-or-d2h-single-or-window,private-publication-provenance,complete-both-64-slot-record-and-window-ledgers,exact-host-session-and-device-endpoints,settled-but-retained-records-included\n",
+    "failure=unknown-stale-incomplete-terminal-or-aliased-custody-rejects,no-new-retry-or-release-authority,existing-completion-retirement-quarantine-and-shutdown-retention-preserved\n",
+    "limits=no-auxiliary-compute,no-generic-or-ordinary-copy-coexistence,no-striped-sdma,no-same-device-d2d,no-xgmi,no-partial-range-alias-exception,no-new-compiler-execution-authority\n",
+    "proof=bounded-device-storage-scan-and-cyclic-slot-predicates,reviewed-rust-verus-correspondence,native-roster-and-identity-extraction-not-executable-refined,physical-nonaliasing-and-gpu-behavior-contracted\n",
+    "evidence=cpu-model-and-scripted-custody-validation,no-new-live-native-admission-qualification,no-device-timeline-overlap-or-performance-claim\n",
+);
+
+/// SHA-256 of [`GFX942_COMPUTE_SDMA_COEXISTENCE_MANIFEST_V1`].
+pub const GFX942_COMPUTE_SDMA_COEXISTENCE_MANIFEST_SHA256_V1: &str =
+    "f0dc4b8483d6a479a4db8e28c7b62fb447c92f5944869a5afc0b61e4275f88f3";
 
 /// Metadata-derived aggregate access of the exact persistent compute binding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1199,6 +1218,22 @@ mod tests {
         assert_eq!(
             rendered,
             GFX942_PERSISTENT_LOCAL_COMPUTE_ADAPTER_MANIFEST_SHA256_V1
+        );
+    }
+
+    #[test]
+    fn coexistence_manifest_has_its_own_frozen_identity() {
+        let digest = Sha256::digest(GFX942_COMPUTE_SDMA_COEXISTENCE_MANIFEST_V1);
+        let rendered: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(rendered, GFX942_COMPUTE_SDMA_COEXISTENCE_MANIFEST_SHA256_V1);
+        assert_ne!(
+            rendered,
+            GFX942_PERSISTENT_LOCAL_COMPUTE_ADAPTER_MANIFEST_SHA256_V1
+        );
+        assert!(GFX942_PERSISTENT_LOCAL_COMPUTE_ADAPTER_MANIFEST_V1.contains("no-concurrent-sdma"));
+        assert!(
+            GFX942_COMPUTE_SDMA_COEXISTENCE_MANIFEST_V1
+                .contains("no-device-timeline-overlap-or-performance-claim")
         );
     }
 

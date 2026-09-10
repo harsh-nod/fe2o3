@@ -299,6 +299,17 @@ pub(crate) fn local_mapping_for_persistent_sdma_test(
 }
 
 #[cfg(test)]
+pub(crate) fn local_mapping_with_extent_for_persistent_sdma_test(
+    id: u64,
+    bytes: u64,
+) -> Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1> {
+    let mut lease = local_mapping_for_persistent_sdma_test(id);
+    lease.layout.requested_bytes = bytes;
+    lease.layout.backing_bytes = bytes;
+    lease
+}
+
+#[cfg(test)]
 pub(crate) fn mapped_host_for_persistent_sdma_test(
     id: u64,
     bytes: usize,
@@ -563,6 +574,18 @@ pub(crate) struct Gfx942DeviceMemoryIdentityV1 {
     vm: VmKeyV1,
 }
 
+impl Gfx942DeviceMemoryIdentityV1 {
+    pub(crate) fn coexistence_facts_v1(self) -> Option<fe2o3_runtime_model::R66DeviceStorageV1> {
+        (self.device == self.vm.device).then_some(fe2o3_runtime_model::R66DeviceStorageV1 {
+            allocation_id: self.id,
+            generation: self.generation,
+            physical_device: self.device.physical.0,
+            device_generation: self.device.generation.0,
+            vm_id: self.vm.id.0,
+        })
+    }
+}
+
 mod sealed {
     pub trait Profile {}
     pub trait State {}
@@ -789,6 +812,17 @@ pub(crate) struct SharedGttAllocationIdentityV1 {
     generation: u64,
 }
 
+impl SharedGttAllocationIdentityV1 {
+    pub(crate) fn same_retained_session_v1(self, other: Self) -> bool {
+        self.session_id != 0
+            && self.session_id == other.session_id
+            && self.id != 0
+            && other.id != 0
+            && self.generation != 0
+            && other.generation != 0
+    }
+}
+
 trait GpuMappedGttStateV1: GttAllocationStateV1 {
     const PHASE: SharedAllocationPhaseV1;
 }
@@ -988,6 +1022,10 @@ pub(crate) struct Gfx942DeviceMemoryDispatchAuthorityV1 {
 }
 
 impl Gfx942DeviceMemoryDispatchAuthorityV1 {
+    pub(crate) const fn storage_identity(&self) -> Gfx942DeviceMemoryIdentityV1 {
+        self.lease.storage_identity()
+    }
+
     pub(crate) const fn facts(&self) -> &Gfx942DeviceMemoryDispatchFactsV1 {
         &self.facts
     }
@@ -5355,6 +5393,28 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use crate::memory::KernelOutcome;
+
+    #[test]
+    fn compute_coexistence_identity_extraction_preserves_incarnations() {
+        let mut identity = local_mapping_for_persistent_sdma_test(41).storage_identity();
+        let facts = identity.coexistence_facts_v1().unwrap();
+        assert_eq!(facts.allocation_id, 41);
+        assert_eq!(facts.generation, 1);
+        assert_eq!(facts.physical_device, identity.vm.device.physical.0);
+        identity.generation = 2;
+        assert_eq!(identity.coexistence_facts_v1().unwrap().generation, 2);
+        identity.device.generation.0 += 1;
+        assert!(identity.coexistence_facts_v1().is_none());
+        let host = mapped_host_for_persistent_sdma_test(1, 4096).storage_identity();
+        let mut other = host;
+        other.id = 2;
+        assert!(host.same_retained_session_v1(other));
+        other.session_id += 1;
+        assert!(!host.same_retained_session_v1(other));
+        other = host;
+        other.generation = 0;
+        assert!(!host.same_retained_session_v1(other));
+    }
 
     struct FakeMapping {
         address: u64,

@@ -1,11 +1,11 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Planning baseline: `acff59688eeb04c84cafe6a8ba1ab46b6d1e26b3`, reviewed
-2026-09-10. This decomposes the remaining local A1/A2 work in
+Planning baseline: `9e822ad737a21bd7cb563623ba3266066a6179d9` plus the R66
+implementation described below, reviewed 2026-09-10. This decomposes the remaining local A1/A2 work in
 [#182](https://github.com/harsh-nod/fe2o3/issues/182), not the later multi-GPU
-and distributed milestones. None of the tickets below is marked implemented
-by this plan. Three agents independently reviewed their assigned areas;
-implementation and qualification follow the dependency waves below.
+and distributed milestones. Three agents independently reconciled their lanes
+against the current code. Their read-only breakdown is complete; the queued
+implementation assignments below are not claims of completed work.
 
 The [R65 contract](runtime-async-drain-versions-v1.md) is the current baseline:
 cooperative drain, reply-count admission and graph-local version lineage are
@@ -14,13 +14,19 @@ generated async launches, active-work drain qualification and measured
 compute/copy overlap remain open. Existing pure-guard proofs do not prove the
 whole executable reference executor.
 
+R66 implementation follow-up: the
+[native compute/SDMA coexistence contract](runtime-compute-sdma-coexistence-v1.md)
+describes OVL-1/2's implemented checker and runtime
+integration with bounded-scan proofs and CPU tests. Their live native admission
+and hardware acceptance remain open. No other ticket is completed by that work.
+
 ## Ownership
 
 | Lane | Assigned agent | Implementation backlog |
 | --- | --- | --- |
-| Native execution and qualification | `r60_batched_benchmarks` | OVL-1/2, SCALE-1/2/3 and SCALE-CAP: disjoint compute/SDMA custody, admitted mixed-duration profiles, native capacity/qualification and matched performance |
-| Resources and versions | `r60_origin_gates` | MEM-1 through MEM-5, VER-1/2: complete resource accounting, pools/residency, persistent mutation journal and cross-run leases |
-| Admission and drain | `r60_production_final_review` | GEN-1/2, DRN-1/2/3: owned generated launches, authenticated async admission, host-only capture and active/failure drain qualification |
+| Native execution and qualification | `r66_native_coexistence` | OVL-QUAL-1/2, SCALE-1/2/3 and SCALE-CAP: qualify disjoint compute/SDMA custody, admitted mixed-duration profiles, native capacity and matched performance |
+| Resources and versions | `r66_coexistence_model` | MEM-1 through MEM-5, VER-1/2: complete resource accounting, pools/residency, persistent mutation journal and cross-run leases |
+| Admission and drain | `r66_runtime_coexistence` | GEN-1/2, DRN-1/2/3: owned generated launches, authenticated async admission, host-only capture and active/failure drain qualification |
 | Integration and proof composition | Primary | PRF-1/2: shared Context hooks, executable refinement, authenticated proof roster, cross-review, hardware scheduling and publication |
 
 These are three concurrent worker slots, not one simultaneous worker per ticket.
@@ -31,17 +37,54 @@ and thin integration points in `kfd_backend.rs`/`queue_live.rs`. Coordinate
 generated macro changes with the generated-host owner. Only the primary schedules
 MI300X jobs or pushes integrated changes to both remotes.
 
+## Next Assignments
+
+| Lane | First bounded ticket | Deliverable | Then |
+| --- | --- | --- | --- |
+| Native | OVL-QUAL-1 | New R66 example, signed runner, independent checker and negative runner tests; unchanged admitted compute artifact and disjoint directional copies | OVL-QUAL-2 when hardware is reachable; SCALE-1 and SCALE-3 protocol work can proceed locally |
+| Resources | MEM-1 | Complete resource-vector contract and move-only transactional credits, tests, production-used model transitions and named proof mutations | MEM-2/3/4 integration; MEM-5 closure; VER-1/2 when a slot is free |
+| Admission | GEN-1 | Owned typed argument/result packing boundary with compile-fail borrowed-escape tests; no new launch authority | DRN-3 delta tests, DRN-1 capture, then GEN-2 adapter and DRN-2 qualification |
+| Primary | PRF-1/2 | Freeze shared hooks and MEM-5 inventory, review integration, authenticate proof roster, maintain evidence matrix | Serialize hardware campaigns and publish reviewed commits |
+
+These assignments name the next implementation work, not background jobs left
+running by the planning audit. Each starts in its isolated module. Shared-file
+edits require an explicit handoff to the primary; no lane independently raises
+capacity, changes admission authority or schedules hardware.
+
+## Acceptance Matrix
+
+`Partial` means only the named restricted slice exists. `Open` means this
+ticket's acceptance is not established, even where earlier reusable primitives
+or fixture results exist. None of the rows establishes runtime-wide parity.
+
+| Work | Implementation | Authenticated proof | CPU integration | Fixture hardware | Production-admitted hardware | Performance |
+| --- | --- | --- | --- | --- | --- | --- |
+| OVL-1/2 | R66 restricted profile | Bounded scan only; native extraction/composition open | Both orders, H2D/D2H, one/three bindings | Open: OVL-QUAL-1/2 | Open: GEN-2 also required | Open |
+| MEM-1..5 | Open; existing counts/pools are partial inputs | End-to-end accounting open | Complete inventory/failure matrix open | Saturation/reuse open | Open | Unmeasured |
+| VER-1/2 | Open; R65 lineage is graph-local | Persistent authority open | Cross-run mutation/lease matrix open | Open | Kernel extension also needs GEN-2 | Unmeasured |
+| GEN-1/2 | Open; borrowed blocking bridge exists | Owned async composition and compiler evidence open | Positive owned path open | Fixtures cannot fill production cells | Open | Unmeasured |
+| DRN-1/2/3 | R65 drain exists; capture and delta cases open | Whole drain/executor refinement open | Substantial R65 coverage; delta matrix open | R65 idle only; outstanding-work open | Open | Unmeasured |
+| SCALE-1/CAP/2 | Open; default remains 64 epochs per compute lane | Capacity/acquisition composition open | Larger native-capacity profile open | Short/long and native-depth open | Open | Unmeasured |
+| SCALE-3 | Protocol and timestamp producer work open | Optimization/timeline boundary open | Runner/checker open | Measurements open | Measurements open | No R66 result |
+| PRF-1/2 | Whole executor composition open | Isolated guards are not whole-state refinement | Final unrestricted gate open | Per-profile qualification open | Open | Per-workload only |
+
+R66's local environment cannot inspect sockets or use ptrace as required by
+some existing tests; report those failures separately, not as an unrestricted
+green suite. SSH to `mi300x` failed name resolution, so no R66 hardware cell is
+filled and no remote staging was created. Neither limitation blocks the local
+implementation assignments above.
+
 ## Native Execution Lane
 
 ### OVL-1: Private Native Disjoint-Custody Checker
 
-**Ready now.** Add a private checker in proposed
-`crates/fe2o3-kfd/src/queue_live/compute_sdma_coexistence.rs`. Derive decisions
+**Implemented in R66; native extraction refinement remains open.** The private
+checker in `crates/fe2o3-kfd/src/queue_live/compute_sdma_coexistence.rs` derives decisions
 from retained compute storage and complete directional SDMA slot/window ledgers,
 including exact session, incarnation and generation. Initially reject a shared
 allocation even when claimed byte ranges are disjoint. Reject incomplete,
 foreign, terminal or unknown custody. Caller IDs or booleans are not witnesses.
-Leave every production blanket exclusion unchanged in this first ticket.
+OVL-1 alone did not relax publication; R66 composes it with OVL-2 below.
 
 Acceptance: production-usable bounded predicates, authenticated noninterference
 obligations and negative mutations for aliasing, stale generations, missing
@@ -49,7 +92,7 @@ window anchors and foreign owners. This is checker validation, not overlap.
 
 ### OVL-2: Reciprocal Directional Compute/SDMA Admission
 
-**Depends on OVL-1.** Integrate the checker into
+**Implemented in R66; live qualification remains open.** Integrates the checker into
 `fe2o3-kfd/src/queue_live/fixed_dispatch.rs`, `queue_live.rs`, and runtime
 `kfd_backend/compute_dispatch.rs` plus the reciprocal copy-publication path.
 Preserve primary-only persistent compute and auxiliary-compute, generic-copy,
@@ -61,6 +104,28 @@ completion, retry without duplicate issue, timeout, currentness failure and exac
 release. First hardware evidence uses the exact R26 compute profile and disjoint
 copies, with complete output/padding checks and cleanup. Simultaneously retained
 native submissions establish concurrent custody, not physical GPU overlap.
+
+### OVL-QUAL-1: Signed Coexistence Qualifier
+
+**First ready native ticket; depends on final R66 integration.** Add a new
+runtime example plus runner/checker and negative tests under
+`benchmarks/runtime_gfx942`. Reuse the unchanged admitted R26 in-place compute
+artifact and separate directional H2D/D2H storage. Cover both publication
+orders, exact retained native identities, copy retirement while compute remains
+retained, independent full outputs/padding, retirement and explicit cleanup.
+
+Reuse the R61/R65 source, topology, census and process guards. Unlike the
+copy-only runner, authenticate `hardware-qualification` in both the build and
+Cargo-metadata commands; changing only the example is insufficient. This ticket
+delivers a locally tested harness, not successful native admission or overlap.
+
+### OVL-QUAL-2: Live Coexistence Acceptance
+
+**Depends on OVL-QUAL-1 and reachable idle hardware.** Primary runs the exact
+signed qualifier on one admitted MI300X with private staging and bounded
+processes. Independently audit output, native identities, topology/census and
+owned-process/stage cleanup. Prior R26/R65 captures do not qualify R66. Pending
+host intervals do not establish physical overlap; that remains SCALE-3.
 
 ### SCALE-1: Admitted Short/Long Qualification Profiles
 
@@ -139,6 +204,10 @@ factor or runtime-wide parity claim is presumed.
 `crates/fe2o3-runtime/src/resource_credits.rs`: typed per-device credit vectors,
 move-only reservations and failure-atomic multi-resource admission. Distinguish
 requested logical bytes, resident physical bytes and occupied native slots.
+Reuse `async_engine/snapshot.rs` byte permits and `reply_budget.rs` lifetime
+patterns where appropriate, but do not mistake their individual bounds or
+Context handle-count limits for this complete vector. Freeze MEM-5's inventory
+categories before choosing the vector fields.
 
 Acceptance: checked arithmetic, complete-vector rejection, conservation, exact
 ownership transfer and exactly-once return. Mutations must detect overflow,
@@ -303,6 +372,11 @@ and scripted adapters for submit rejection, repeated observation rejection,
 quiescent failure, pre-issue cancellation, terminal ambiguity, exhausted budget,
 interruption and capture failure. Check exact reply delivery, identity, retained
 resources and no retry/duplicate publication.
+R65 already covers quiescent failure, budget exhaustion, abandoned observers,
+interruption and panic. Preserve that coverage and add the missing combinations,
+particularly accepted-submit rejection, repeated observation rejection,
+pre-issue cancellation and capture failure after DRN-1, instead of rebuilding
+the drain lifecycle.
 
 Shared-host hardware initially covers only non-disruptive rejection/cancellation.
 Device resets, device-loss injection or partition failures require a separately
@@ -347,8 +421,8 @@ merging to either main branch.
 
 | Wave | Native lane | Resource/version lane | Admission/drain lane | Primary |
 | --- | --- | --- | --- | --- |
-| 1 | OVL-1; design SCALE-1/3 | MEM-1; define MEM-5 inventory | GEN-1; design DRN-1; DRN-3 | Freeze shared contracts and start PRF-1 |
-| 2 | OVL-2; qualify SCALE-1; SCALE-CAP after MEM prerequisites | MEM-2/3/4, then MEM-5 | GEN-2 adapter; implement DRN-1 | Integrate shared hooks; arrange compiler handoff |
+| 1 | OVL-QUAL-1; design SCALE-1/3 | MEM-1; define MEM-5 inventory | GEN-1; design DRN-1; DRN-3 delta | Freeze shared contracts and start PRF-1 |
+| 2 | OVL-QUAL-2; qualify SCALE-1; SCALE-CAP after MEM prerequisites | MEM-2/3/4, then MEM-5 | GEN-2 adapter; implement DRN-1 | Integrate shared hooks; arrange compiler handoff |
 | 3 | SCALE-2, including SCALE-CAP's measured native-depth gate | VER-1 then VER-2 | DRN-2; production GEN-2 only when evidence exists | Compose proofs and repeated mixed-graph acceptance |
 | 4 | SCALE-3 measurements | Budget/version stress and cross-review | Active/failure drain and cross-review | PRF-2 evidence, A1/A2 exit audit, dual-remote publication |
 
@@ -358,3 +432,20 @@ External compiler work must have an explicit handoff artifact and owner. Its
 absence does not block native checker, resource, copy-version or fixture work,
 but keeps the affected positive production cells open. A1/A2 close only after
 their complete acceptance matrix passes; later #182 milestones remain separate.
+
+## Later Milestones
+
+Keep the same lane boundaries when decomposing later work; these are not
+additional A1/A2 acceptance claims or simultaneous worker assignments.
+
+| Later work | Lead lane | Boundary still open |
+| --- | --- | --- |
+| Local multi-GPU execution | Native, with resources/versions | Unified compute/XGMI ownership and topology-current placement; current native XGMI backend is separate, exact-two-device and copy-only |
+| Production atomics/collectives and broader device Rust | Admission with compiler owners | Exact compiler plans, machine refinement and native semantic qualification; typed transport contracts alone are insufficient |
+| Device profiling and overlap attribution | Native | Trusted per-dispatch device timestamps, copy-engine events and cross-collector attribution; typed semantic profiling already exists |
+| Distributed milestones in #182 | Primary decomposes after local contracts stabilize | Membership/epochs, bounded transport, distributed versions/collectives, failure/drain and executable refinement require their own tickets and test environments |
+
+The [runtime parity profile](runtime-hip-hsa-parity-profile-v1.md) defines a
+bounded behavioral surface, not every HIP/HSA API. Measured improvements must
+name workloads and matched baselines; no speedup target replaces correctness,
+proof or hardware acceptance.

@@ -778,6 +778,7 @@ pub struct Gfx942SdmaMemoryPoolObservationV1 {
 }
 
 struct SdmaCopyRecordV1 {
+    directional_persistent: bool,
     generation: u32,
     completion_value: u32,
     fence_header: u32,
@@ -864,6 +865,7 @@ pub(crate) struct PreparedSdmaBatchV1 {
 
 /// Stack-sized preparation custody for latency-sensitive single-copy paths.
 pub(crate) struct PreparedSingleSdmaV1 {
+    directional_persistent: bool,
     queue_id: u32,
     write: u64,
     write_end: u64,
@@ -1258,14 +1260,128 @@ impl Gfx942SdmaEngineProfileV1 {
 }
 
 impl Gfx942SdmaQueueOwnerV1 {
-    fn is_live_and_quiescent(&self) -> bool {
-        !self.destroyed
-            && !self.poisoned
-            && self.uncertain_xgmi_ticket.is_none()
-            && self.records.iter().all(Option::is_none)
-            && self.xgmi_records.iter().all(Option::is_none)
-            && self.persistent_window_slots.iter().all(Option::is_none)
-            && self.persistent_window_records.iter().all(Option::is_none)
+    fn collect_compute_coexistence_endpoints_v1(
+        &self,
+        session: SharedGttAllocationIdentityV1,
+        endpoints: &mut arrayvec::ArrayVec<fe2o3_runtime_model::R66DeviceStorageV1, 258>,
+    ) -> Option<()> {
+        let slots = GFX942_SDMA_RING_SLOT_COUNT_V1;
+        if self.records.len() != slots
+            || self.xgmi_records.len() != slots
+            || self.persistent_window_slots.len() != slots
+            || self.persistent_window_records.len() != slots
+            || self.xgmi_records.iter().any(Option::is_some)
+        {
+            return None;
+        }
+        let mut occupied = 0;
+        for slot in 0..slots {
+            if let Some(record) = &self.records[slot] {
+                if !record.directional_persistent
+                    || record.copy_bytes > GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1
+                    || record.generation == 0
+                    || record.generation != self.generations[slot]
+                    || record.completion_value != record.generation
+                    || self.persistent_window_slots[slot].is_some()
+                    || self.persistent_window_records[slot].is_some()
+                {
+                    return None;
+                }
+                self.collect_compute_coexistence_pair_v1(
+                    session,
+                    &record.source,
+                    &record.destination,
+                    record.source_offset,
+                    record.destination_offset,
+                    record.copy_bytes,
+                    endpoints,
+                )?;
+                occupied += 1;
+            }
+            if let Some(window_slot) = self.persistent_window_slots[slot] {
+                let record = self
+                    .persistent_window_records
+                    .get(window_slot.anchor_slot)?
+                    .as_ref()?;
+                if !fe2o3_runtime_model::r66_window_slot_matches_v1(
+                    slot,
+                    window_slot.anchor_slot,
+                    record.packet_count,
+                    window_slot.generation,
+                    self.generations[slot],
+                    window_slot.completion_value,
+                ) {
+                    return None;
+                }
+                occupied += 1;
+            }
+            if let Some(record) = &self.persistent_window_records[slot] {
+                if persistent_sdma_window_packet_count(record.request.copy_bytes).ok()
+                    != Some(record.packet_count)
+                {
+                    return None;
+                }
+                for offset in 0..record.packet_count {
+                    let linked = self.persistent_window_slots[(slot + offset) % slots]?;
+                    if linked.anchor_slot != slot {
+                        return None;
+                    }
+                }
+                let request = &record.request;
+                self.collect_compute_coexistence_pair_v1(
+                    session,
+                    &request.source,
+                    &request.destination,
+                    request.source_offset,
+                    request.destination_offset,
+                    request.copy_bytes,
+                    endpoints,
+                )?;
+            }
+        }
+        (occupied <= GFX942_SDMA_MAX_IN_FLIGHT_V1).then_some(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn collect_compute_coexistence_pair_v1(
+        &self,
+        session: SharedGttAllocationIdentityV1,
+        source: &Gfx942SdmaBufferV1,
+        destination: &Gfx942SdmaBufferV1,
+        source_offset: u64,
+        destination_offset: u64,
+        bytes: u32,
+        endpoints: &mut arrayvec::ArrayVec<fe2o3_runtime_model::R66DeviceStorageV1, 258>,
+    ) -> Option<()> {
+        let (host, device) = match self.engine_index {
+            Some(GFX942_SDMA_D2H_ENGINE_INDEX_V1) => (destination, source),
+            Some(GFX942_SDMA_H2D_ENGINE_INDEX_V1) => (source, destination),
+            _ => return None,
+        };
+        let Gfx942SdmaBufferStorageIdentityV1::Host(host_identity) = host.storage_identity() else {
+            return None;
+        };
+        let Gfx942SdmaBufferStorageIdentityV1::Device(device_identity) = device.storage_identity()
+        else {
+            return None;
+        };
+        if bytes == 0 || !host_identity.same_retained_session_v1(session) {
+            return None;
+        }
+        for (buffer, offset) in [(source, source_offset), (destination, destination_offset)] {
+            if !buffer.belongs_to(self.owner)
+                || buffer.pool_generation == 0
+                || buffer.logical_bytes == 0
+                || buffer.logical_bytes > buffer.physical_bytes()
+                || offset.checked_add(u64::from(bytes))? > buffer.logical_bytes
+            {
+                return None;
+            }
+        }
+        endpoints
+            .try_push(device_identity.coexistence_facts_v1()?)
+            .ok()?;
+        Some(())
     }
 
     #[allow(clippy::result_large_err)]
@@ -1646,6 +1762,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         )?;
         self.generations[ring_slot] = generation;
         self.records[ring_slot] = Some(SdmaCopyRecordV1 {
+            directional_persistent: false,
             generation,
             completion_value,
             fence_header: packet.fence_header(),
@@ -2092,6 +2209,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         })();
         match prepared {
             Ok((write, write_end, copy, slot, generation)) => Ok(PreparedSingleSdmaV1 {
+                directional_persistent: false,
                 queue_id: self.queue_id,
                 write,
                 write_end,
@@ -2148,6 +2266,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             });
         }
         let PreparedSingleSdmaV1 {
+            directional_persistent,
             write,
             write_end,
             copy,
@@ -2157,6 +2276,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         } = prepared;
         self.generations[copy.slot] = copy.generation;
         self.records[copy.slot] = Some(SdmaCopyRecordV1 {
+            directional_persistent,
             generation: copy.generation,
             completion_value: copy.completion_value,
             fence_header: copy.packet.fence_header(),
@@ -2729,6 +2849,7 @@ impl Gfx942SdmaQueueOwnerV1 {
         for (request, item) in requests.into_iter().zip(&copies) {
             self.generations[item.slot] = item.generation;
             self.records[item.slot] = Some(SdmaCopyRecordV1 {
+                directional_persistent: false,
                 generation: item.generation,
                 completion_value: item.completion_value,
                 fence_header: item.packet.fence_header(),
@@ -4683,17 +4804,64 @@ fn terminal_sdma_queue_set_creation_failure(
 }
 
 impl Gfx942SdmaQueueSetV1 {
-    pub(crate) fn persistent_compute_is_quiescent(&self) -> bool {
+    /// Visits every retained endpoint only after validating both complete slot
+    /// ledgers. This is a borrowed custody observation, not a transferable permit.
+    pub(crate) fn compute_coexistence_endpoints_v1(
+        &self,
+        expected_owner: QueueKeyV1,
+    ) -> Option<arrayvec::ArrayVec<fe2o3_runtime_model::R66DeviceStorageV1, 258>> {
+        let Self::Directional(owners) = self else {
+            return None;
+        };
+        let [d2h, h2d] = owners.as_slice() else {
+            return None;
+        };
+        if d2h.queue_id == h2d.queue_id
+            || d2h.engine_index != Some(GFX942_SDMA_D2H_ENGINE_INDEX_V1)
+            || h2d.engine_index != Some(GFX942_SDMA_H2D_ENGINE_INDEX_V1)
+        {
+            return None;
+        }
+        let mut endpoints = arrayvec::ArrayVec::new();
+        for owner in owners {
+            if owner.owner != expected_owner
+                || owner.destroyed
+                || owner.poisoned
+                || owner.ring.is_none()
+                || owner.control.is_none()
+                || owner.doorbell.is_none()
+                || owner.uncertain_xgmi_ticket.is_some()
+            {
+                return None;
+            }
+            let session = owner.completions.as_ref()?.storage_identity();
+            if !session.same_retained_session_v1(d2h.completions.as_ref()?.storage_identity()) {
+                return None;
+            }
+            owner.collect_compute_coexistence_endpoints_v1(session, &mut endpoints)?;
+        }
+        Some(endpoints)
+    }
+
+    pub(crate) fn compute_coexistence_host_is_current_v1(
+        &self,
+        owner: QueueKeyV1,
+        host: &Gfx942SdmaBufferV1,
+    ) -> bool {
         let Self::Directional(owners) = self else {
             return false;
         };
-        let [device_to_host, host_to_device] = owners.as_slice() else {
+        let Some(session) = owners.first().and_then(|owner| owner.completions.as_ref()) else {
             return false;
         };
-        directional_sdma_pair_quiescence_is_admitted(
-            device_to_host.is_live_and_quiescent(),
-            host_to_device.is_live_and_quiescent(),
-        )
+        let Gfx942SdmaBufferStorageIdentityV1::Host(identity) = host.storage_identity() else {
+            return false;
+        };
+        host.belongs_to(owner)
+            && host.pool_generation != 0
+            && host.logical_bytes != 0
+            && host.logical_bytes <= host.physical_bytes()
+            && identity.same_retained_session_v1(session.storage_identity())
     }
 
     #[allow(clippy::result_large_err)]
@@ -5424,16 +5592,24 @@ impl Gfx942SdmaQueueSetV1 {
     }
 
     #[allow(clippy::result_large_err)]
-    pub(crate) fn prepare_single_recoverable(
+    pub(crate) fn prepare_directional_persistent_single_recoverable(
         &mut self,
         memory: &mut SharedGttMemorySessionV1,
         request: Gfx942SdmaCopyRequestV1,
     ) -> Result<PreparedSingleSdmaV1, (Gfx942SdmaErrorV1, Gfx942SdmaCopyRequestV1)> {
+        if !matches!(self, Self::Directional(_)) {
+            return Err((
+                Gfx942SdmaErrorV1::Contract("directional persistent single profile"),
+                request,
+            ));
+        }
         let owner = match self.owner_for_copy(request.source.kind(), request.destination.kind()) {
             Ok(owner) => owner,
             Err(error) => return Err((error, request)),
         };
-        owner.prepare_single_recoverable(memory, request)
+        let mut prepared = owner.prepare_single_recoverable(memory, request)?;
+        prepared.directional_persistent = true;
+        Ok(prepared)
     }
 
     #[allow(clippy::result_large_err)]
@@ -5978,6 +6154,7 @@ impl Gfx942SdmaQueueSetV1 {
     }
 }
 
+#[cfg(test)]
 const fn directional_sdma_pair_quiescence_is_admitted(
     device_to_host_quiescent: bool,
     host_to_device_quiescent: bool,
@@ -6405,6 +6582,241 @@ mod tests {
             id: QueueInstanceIdV1(queue),
             generation: QueueGenerationV1(generation),
         }
+    }
+
+    fn compute_coexistence_owner_for_test(engine: u32) -> Gfx942SdmaQueueOwnerV1 {
+        Gfx942SdmaQueueOwnerV1 {
+            owner: queue_key(7, 11, 13),
+            queue_id: engine + 20,
+            engine_index: Some(engine),
+            ring: None,
+            control: None,
+            completions: Some(crate::shared_memory::mapped_host_for_persistent_sdma_test(
+                900, 4096,
+            )),
+            doorbell: None,
+            records: (0..64).map(|_| None).collect(),
+            xgmi_records: (0..64).map(|_| None).collect(),
+            persistent_window_slots: (0..64).map(|_| None).collect(),
+            persistent_window_records: (0..64).map(|_| None).collect(),
+            uncertain_xgmi_ticket: None,
+            generations: [0; 64],
+            destroyed: false,
+            poisoned: false,
+        }
+    }
+
+    fn compute_coexistence_add_single(owner: &mut Gfx942SdmaQueueOwnerV1, id: u64) {
+        let (device, host) = persistent_sdma_buffers_for_test(owner.owner, id);
+        let (source, destination) = if owner.engine_index == Some(GFX942_SDMA_D2H_ENGINE_INDEX_V1) {
+            (device, host)
+        } else {
+            (host, device)
+        };
+        owner.generations[7] = 3;
+        owner.records[7] = Some(SdmaCopyRecordV1 {
+            directional_persistent: true,
+            generation: 3,
+            completion_value: 3,
+            fence_header: 0,
+            completion_observed: false,
+            source,
+            destination,
+            copy_bytes: 4096,
+            source_offset: 0,
+            destination_offset: 0,
+        });
+    }
+
+    fn compute_coexistence_add_window(owner: &mut Gfx942SdmaQueueOwnerV1, id: u64) {
+        let bytes = GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 + 1;
+        let device = Gfx942SdmaBufferV1::from_bridge_parts(
+            Gfx942SdmaBufferStorageV1::Device(
+                crate::shared_memory::local_mapping_with_extent_for_persistent_sdma_test(
+                    id,
+                    u64::from(bytes),
+                ),
+            ),
+            owner.owner,
+            1,
+            u64::from(bytes),
+        );
+        let host = Gfx942SdmaBufferV1::from_bridge_parts(
+            Gfx942SdmaBufferStorageV1::Host(
+                crate::shared_memory::mapped_host_for_persistent_sdma_test(
+                    id + 1000,
+                    bytes as usize,
+                ),
+            ),
+            owner.owner,
+            1,
+            u64::from(bytes),
+        );
+        let request = if owner.engine_index == Some(GFX942_SDMA_D2H_ENGINE_INDEX_V1) {
+            Gfx942SdmaCopyRequestV1::new(device, 0, host, 0, bytes)
+        } else {
+            Gfx942SdmaCopyRequestV1::new(host, 0, device, 0, bytes)
+        };
+        owner.persistent_window_records[63] = Some(PersistentSdmaWindowRecordV1 {
+            request,
+            packet_count: 2,
+        });
+        for (slot, generation) in [(63, 4), (0, 5)] {
+            owner.generations[slot] = generation;
+            owner.persistent_window_slots[slot] = Some(PersistentSdmaWindowSlotV1 {
+                anchor_slot: 63,
+                generation,
+                completion_value: generation,
+            });
+        }
+    }
+
+    fn compute_coexistence_collect_for_test(
+        owner: &Gfx942SdmaQueueOwnerV1,
+    ) -> Option<arrayvec::ArrayVec<fe2o3_runtime_model::R66DeviceStorageV1, 258>> {
+        let mut endpoints = arrayvec::ArrayVec::new();
+        owner.collect_compute_coexistence_endpoints_v1(
+            owner.completions.as_ref()?.storage_identity(),
+            &mut endpoints,
+        )?;
+        Some(endpoints)
+    }
+
+    #[test]
+    fn compute_coexistence_scans_both_directions_and_settled_retained_records() {
+        for engine in [
+            GFX942_SDMA_D2H_ENGINE_INDEX_V1,
+            GFX942_SDMA_H2D_ENGINE_INDEX_V1,
+        ] {
+            let mut owner = compute_coexistence_owner_for_test(engine);
+            compute_coexistence_add_single(&mut owner, 41);
+            compute_coexistence_add_window(&mut owner, 42);
+            owner.records[7].as_mut().unwrap().completion_observed = true;
+            let endpoints = compute_coexistence_collect_for_test(&owner).unwrap();
+            assert_eq!(endpoints.len(), 2);
+            assert!(endpoints.iter().any(|entry| entry.allocation_id == 41));
+            assert!(endpoints.iter().any(|entry| entry.allocation_id == 42));
+            let domain = fe2o3_runtime_model::R66DeviceDomainV1 {
+                physical_device: 7,
+                device_generation: 1,
+                vm_id: 1,
+            };
+            let mut compute = endpoints[0];
+            compute.allocation_id = 43;
+            assert!(fe2o3_runtime_model::r66_device_storage_rosters_disjoint_v1(
+                domain,
+                &[compute],
+                &endpoints
+            ));
+            compute.allocation_id = 41;
+            compute.generation += 1;
+            assert!(
+                !fe2o3_runtime_model::r66_device_storage_rosters_disjoint_v1(
+                    domain,
+                    &[compute],
+                    &endpoints
+                )
+            );
+            assert!(owner.records[7].is_some());
+            assert!(owner.persistent_window_records[63].is_some());
+        }
+    }
+
+    #[test]
+    fn compute_coexistence_rejects_incomplete_stale_and_ordinary_ledgers() {
+        for mutation in 0..13 {
+            let mut owner = compute_coexistence_owner_for_test(GFX942_SDMA_H2D_ENGINE_INDEX_V1);
+            compute_coexistence_add_single(&mut owner, 41);
+            compute_coexistence_add_window(&mut owner, 42);
+            match mutation {
+                0 => {
+                    owner.records.pop();
+                }
+                1 => {
+                    owner.persistent_window_slots[0] = None;
+                }
+                2 => {
+                    owner.persistent_window_records[63] = None;
+                }
+                3 => {
+                    owner.persistent_window_slots[0]
+                        .as_mut()
+                        .unwrap()
+                        .generation += 1;
+                }
+                4 => {
+                    owner.persistent_window_slots[0]
+                        .as_mut()
+                        .unwrap()
+                        .anchor_slot = 64;
+                }
+                5 => {
+                    owner.persistent_window_slots[0]
+                        .as_mut()
+                        .unwrap()
+                        .completion_value = 0;
+                }
+                6 => {
+                    owner.persistent_window_records[63]
+                        .as_mut()
+                        .unwrap()
+                        .packet_count = 1;
+                }
+                7 => {
+                    owner.records[7].as_mut().unwrap().directional_persistent = false;
+                }
+                8 => {
+                    owner.records[7].as_mut().unwrap().generation += 1;
+                }
+                9 => {
+                    owner.records[7]
+                        .as_mut()
+                        .unwrap()
+                        .destination
+                        .owner
+                        .generation
+                        .0 += 1;
+                }
+                10 => {
+                    owner.records[7].as_mut().unwrap().source.pool_generation = 0;
+                }
+                11 => {
+                    owner.records[7].as_mut().unwrap().destination_offset = u64::MAX;
+                }
+                12 => {
+                    owner.persistent_window_slots[7] = owner.persistent_window_slots[0];
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                compute_coexistence_collect_for_test(&owner).is_none(),
+                "mutation {mutation}"
+            );
+            assert!(
+                owner.records[7].is_some(),
+                "rejection must retain exact custody"
+            );
+        }
+    }
+
+    #[test]
+    fn compute_coexistence_missing_native_authority_never_admits() {
+        let owner = queue_key(7, 11, 13);
+        let queues = Gfx942SdmaQueueSetV1::Directional(vec![
+            compute_coexistence_owner_for_test(GFX942_SDMA_D2H_ENGINE_INDEX_V1),
+            compute_coexistence_owner_for_test(GFX942_SDMA_H2D_ENGINE_INDEX_V1),
+        ]);
+        assert!(queues.compute_coexistence_endpoints_v1(owner).is_none());
+        assert!(
+            Gfx942SdmaQueueSetV1::Generic(Vec::new())
+                .compute_coexistence_endpoints_v1(owner)
+                .is_none()
+        );
+        assert!(
+            Gfx942SdmaQueueSetV1::Directional(Vec::new())
+                .compute_coexistence_endpoints_v1(owner)
+                .is_none()
+        );
     }
 
     #[test]

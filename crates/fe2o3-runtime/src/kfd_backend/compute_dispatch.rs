@@ -1747,7 +1747,8 @@ impl KfdRuntimeBackendV1 {
             || self
                 .three_binding_persistent_admission_for_launch_v1(pending.launch.borrowed())
                 .is_some();
-        if persistent_selected && let Some(copy) = self.any_published_sdma_v1() {
+        if persistent_selected && let Some(copy) = self.persistent_compute_sdma_blocker_v1(&pending)
+        {
             self.pending_compute.insert(pending.id, pending);
             let _ = self.poll_v1(copy)?;
             return Ok(BackendPollV1::Pending);

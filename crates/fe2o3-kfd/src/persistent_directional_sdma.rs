@@ -2687,7 +2687,7 @@ mod tests {
     }
 
     #[test]
-    fn persistent_compute_window_gate_returns_exact_custody_in_both_directions() {
+    fn legacy_detached_window_gate_returns_exact_custody_in_both_directions() {
         for (ordinal, direction) in [
             Gfx942PersistentSdmaDirectionV1::HostToDevice,
             Gfx942PersistentSdmaDirectionV1::DeviceToHost,
@@ -2726,7 +2726,7 @@ mod tests {
     }
 
     #[test]
-    fn active_directional_sdma_blocks_bind_and_returns_exact_compute_input() {
+    fn legacy_quiescence_gate_returns_exact_compute_input() {
         for (ordinal, direction) in [
             Gfx942PersistentSdmaDirectionV1::HostToDevice,
             Gfx942PersistentSdmaDirectionV1::DeviceToHost,
@@ -3009,7 +3009,9 @@ mod tests {
         let request_preparation = submission
             .find("prepare_admitted_directional_persistent_sdma_request_v1")
             .unwrap();
-        let lower_preparation = submission.find("prepare_single_recoverable").unwrap();
+        let lower_preparation = submission
+            .find("prepare_directional_persistent_single_recoverable")
+            .unwrap();
         let prepublication = submission[opening + 1..]
             .find("if let Err(error) = memory.check_queue_operational_currentness()")
             .map(|offset| opening + 1 + offset)
@@ -3047,7 +3049,8 @@ mod tests {
         assert!(finish.contains("loan_error.is_none() && preparation_succeeded"));
         assert!(finish.contains("loan_error.is_none() && closing_currentness_succeeded"));
         assert!(!submission.contains("self.check_currentness()"));
-        assert!(submission.contains("prepare_single_recoverable"));
+        assert!(submission.contains("prepare_directional_persistent_single_recoverable"));
+        assert!(!submission.contains("owner.prepare_single_recoverable"));
         assert!(!submission.contains("vec![request]"));
 
         let window = live
@@ -3206,7 +3209,9 @@ mod tests {
             .find("prepare_directional_persistent_sdma_request_v1")
             .unwrap();
         let loan = fused.find("with_sdma_owner_memory").unwrap();
-        let preparation = fused.find("prepare_single_recoverable").unwrap();
+        let preparation = fused
+            .find("prepare_directional_persistent_single_recoverable")
+            .unwrap();
         let prepublication = fused
             .find("if let Err(error) = memory.check_queue_operational_currentness()")
             .unwrap();

@@ -223,6 +223,8 @@ use fe2o3_aql::{
     AqlPreparedKernelDispatchV1, classify_acquired_completion_value_v1,
 };
 
+#[path = "queue_live/compute_sdma_coexistence.rs"]
+mod compute_sdma_coexistence;
 #[allow(unsafe_code)]
 #[path = "queue_dispatch_live.rs"]
 mod dispatch;
@@ -2554,7 +2556,9 @@ enum GenericRecycledDispatchAccessV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SdmaPublicationModeV1 {
     Persistent,
+    #[cfg(test)]
     DirectionalCopy(Gfx942PersistentSdmaDirectionV1),
+    #[cfg(test)]
     DirectionalWindow(Gfx942PersistentSdmaDirectionV1),
     SameDeviceWindow,
     Ordinary,
@@ -3289,6 +3293,7 @@ pub(crate) fn preserve_ordinary_sdma_publication_custody_v1(
 }
 
 #[allow(clippy::result_large_err)]
+#[cfg(test)]
 pub(crate) fn preserve_directional_window_sdma_publication_custody_v1(
     persistent_compute_attached: bool,
     direction: Gfx942PersistentSdmaDirectionV1,
@@ -3318,6 +3323,7 @@ pub(crate) fn preserve_directional_window_sdma_publication_custody_v1(
 }
 
 #[allow(clippy::result_large_err)]
+#[cfg(test)]
 pub(crate) fn preserve_persistent_compute_bind_input_for_sdma_quiescence_v1(
     input: Gfx942PersistentComputeInputV1,
     directional_sdma_quiescent: bool,
@@ -7746,12 +7752,12 @@ impl ComputeAqlQueueSessionV1 {
             device_offset,
             copy_bytes,
         )?;
-        if let Err(error) = admit_sdma_publication_while_compute_detached(
-            false,
-            self.has_any_persistent_compute_attachment_v1(),
-            SdmaPublicationModeV1::DirectionalCopy(direction),
-        ) {
-            return Err(retryable(error.into(), allocation, host));
+        if !self.directional_sdma_coexists_with_persistent_compute_v1(&allocation, &host) {
+            return Err(retryable(
+                Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+                allocation,
+                host,
+            ));
         }
         if let Err(error) = self.require_sdma_enabled() {
             return Err(retryable(error, allocation, host));
@@ -7988,7 +7994,7 @@ impl ComputeAqlQueueSessionV1 {
                     return Ok(());
                 }
             };
-            let prepared = match owner.prepare_single_recoverable(memory, request) {
+            let prepared = match owner.prepare_directional_persistent_single_recoverable(memory, request) {
                 Ok(prepared) => prepared,
                 Err((error, request)) => {
                     let closing = memory.check_queue_operational_currentness();
@@ -8171,7 +8177,7 @@ impl ComputeAqlQueueSessionV1 {
             let request = request
                 .take()
                 .expect("synchronous directional request consumed once");
-            let prepared = match owner.prepare_single_recoverable(memory, request) {
+            let prepared = match owner.prepare_directional_persistent_single_recoverable(memory, request) {
                 Ok(prepared) => prepared,
                 Err((error, request)) => {
                     let closing = memory.check_queue_operational_currentness();
@@ -8818,12 +8824,14 @@ impl ComputeAqlQueueSessionV1 {
             device_offset,
             copy_bytes,
         )?;
-        let (mut allocation, host) = preserve_directional_window_sdma_publication_custody_v1(
-            self.has_any_persistent_compute_attachment_v1(),
-            direction,
-            allocation,
-            host,
-        )?;
+        if !self.directional_sdma_coexists_with_persistent_compute_v1(&allocation, &host) {
+            return Err(retryable(
+                Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+                allocation,
+                host,
+            ));
+        }
+        let mut allocation = allocation;
         if let Err(error) = self.require_sdma_enabled() {
             return Err(retryable(error, allocation, host));
         }
@@ -17957,7 +17965,7 @@ mod tests {
     }
 
     #[test]
-    fn persistent_compute_blocks_every_sdma_publication_and_both_directions() {
+    fn legacy_detached_only_gate_blocks_every_sdma_publication_and_both_directions() {
         let modes = [
             SdmaPublicationModeV1::Persistent,
             SdmaPublicationModeV1::DirectionalCopy(Gfx942PersistentSdmaDirectionV1::HostToDevice),

@@ -2222,6 +2222,32 @@ impl DispatchResourceOwnerV1 {
         authorities
     }
 
+    pub(super) fn persistent_device_roster_matches_v1(
+        &self,
+        identities: &[crate::shared_memory::Gfx942DeviceMemoryIdentityV1],
+    ) -> bool {
+        let PersistentFixedDispatchControlStateV1::Attached(control) = self.persistent_control
+        else {
+            return false;
+        };
+        self.generation.ensure_not_poisoned().is_ok()
+            && !identities.is_empty()
+            && control.binding_count() == identities.len()
+            && self.data.len() == identities.len()
+            && self.data_premises.len() == identities.len()
+            && self
+                .data
+                .iter()
+                .zip(identities)
+                .enumerate()
+                .all(|(index, (data, identity))| {
+                    control.data_storage[index]
+                        == Some(Gfx942SdmaBufferStorageIdentityV1::Device(*identity))
+                        && matches!(data, DispatchDataAuthorityV1::Device(authority)
+                        if authority.storage_identity() == *identity)
+                })
+    }
+
     pub(super) fn bind_templates<const N: usize>(
         &mut self,
         queue: QueueKeyV1,

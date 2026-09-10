@@ -149,6 +149,12 @@ versions do not grant compiler admission or cross-run freshness. See the
 [R65 contract](../../docs/runtime-async-drain-versions-v1.md) for bounds,
 verification scope and remaining A1/A2 acceptance.
 
+R66 adds reciprocal native storage checks and runtime scheduling for disjoint
+primary persistent compute with directional-persistent H2D/D2H copies. This
+changes admission, not completion or release semantics. See the
+[coexistence contract](../../docs/runtime-compute-sdma-coexistence-v1.md) for
+supported modes, proof boundaries and outstanding hardware qualification.
+
 Progress mode additionally offers `event_future_with_progress`, which admits one
 event and its exact source stream in a single transaction. Event polling runs
 before stream flushing in each engine tick, so completion of one persistent SDMA
@@ -424,9 +430,10 @@ clock-domain calibration input only: it does not identify a dispatch
 publication, start, or completion boundary. Collection begins before context
 construction and finishes only after logical cleanup and native shutdown. See
 [`docs/kfd-native-profiler-v1.md`](../../docs/kfd-native-profiler-v1.md).
-Atomic and collective contracts affect the opaque dispatch-shape identity but
-are not yet exposed as typed profiler fields, so profiler/query consumers cannot
-independently report their operation, scope, order, or participants.
+An opt-in semantic-profile sidecar exposes exact typed atomic/collective fields,
+including ordering and participants. The separate V2 runtime custody and query
+path authenticates that observation; it does not prove kernel machine semantics
+or provide device timestamps.
 
 The profiler also records process-local monotonic points immediately after an
 AQL publication is accepted and when runtime completion processing finishes.
