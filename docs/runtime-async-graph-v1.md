@@ -91,6 +91,10 @@ successful native observations, all input/output/padding bytes, empty submission
 registries and complete native shutdown. It is correctness qualification, not
 evidence of achieved overlap, compiler admission, two-host execution or speedup.
 
+The [R63 evidence report](evidence/mi300x-r63-async-graph-2026-09-09/README.md)
+records two accepted MI300X runs from signed source, the complete CPU/proof
+results, independent capture verification and the final shared-host cleanup check.
+
 ## Still Required For #182
 
 Compiler-authenticated admitted plans, data versions/graph epochs/residency,
