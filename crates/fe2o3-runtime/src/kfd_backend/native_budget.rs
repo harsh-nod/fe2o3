@@ -1,7 +1,7 @@
-//! Immutable forwarding of session-local N2 limits; not aggregate accounting.
+//! Immutable session-local backing and device-cache limits, not aggregate accounting.
 
 use super::*;
-use fe2o3_kfd::Gfx942DeviceBackingUsageV1;
+use fe2o3_kfd::{Gfx942DeviceBackingUsageV1, Gfx942DevicePoolUsageV1};
 
 impl KfdRuntimeBackendV1 {
     /// Selects immutable N2 backing limits before logical or native resource use.
@@ -15,9 +15,22 @@ impl KfdRuntimeBackendV1 {
         &mut self,
         budget: Gfx942DeviceBackingBudgetV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.require_pristine_native_resource_configuration_v1()?;
+        if self.device_backing_budget.is_some() {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "native backing limits must be configured once before resource creation",
+            ));
+        }
+        self.device_backing_budget = Some(budget);
+        Ok(())
+    }
+
+    fn require_pristine_native_resource_configuration_v1(
+        &self,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
-        if self.device_backing_budget.is_some()
-            || self.next_handle != 1
+        if self.next_handle != 1
             || self.queue.is_some()
             || self.queue_retired
             || self.terminal_memory.is_some()
@@ -33,11 +46,70 @@ impl KfdRuntimeBackendV1 {
         {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
-                "native backing limits must be configured once before resource creation",
+                "native resource limits must precede resource creation",
             ));
         }
-        self.device_backing_budget = Some(budget);
         Ok(())
+    }
+
+    /// Bounds cached-free device backing in the existing native SDMA pool.
+    ///
+    /// Configure once before any logical/native resource history. Either zero
+    /// limit disables device caching, not device allocation. Cache overflow
+    /// disposes the returned idle buffer through the existing native release
+    /// path; uncertain disposal never refunds its N2 backing charge. Host pools,
+    /// checked-out backing, metadata and aggregate budgets are separate.
+    pub fn configure_device_pool_limits_v1(
+        &mut self,
+        limits: Gfx942DevicePoolLimitsV1,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.require_pristine_native_resource_configuration_v1()?;
+        if self.device_pool_limits.is_some() {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "device pool limits must be configured once before resource creation",
+            ));
+        }
+        self.device_pool_limits = Some(limits);
+        Ok(())
+    }
+
+    pub const fn device_pool_limits_v1(&self) -> Option<Gfx942DevicePoolLimitsV1> {
+        self.device_pool_limits
+    }
+
+    /// Observes cached-free device backing, not total resident or disposed bytes.
+    /// `None` means unavailable or unconfigured, never a zero-usage certificate.
+    pub fn device_pool_usage_v1(
+        &self,
+    ) -> Result<Option<Gfx942DevicePoolUsageV1>, KfdRuntimeBackendErrorV1> {
+        if self.terminal {
+            return Err(KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::Terminal,
+                "KFD backend is terminal",
+            ));
+        }
+        self.queue.as_ref().map_or(Ok(None), |queue| {
+            queue.sdma_device_pool_usage_v1().map_err(|error| {
+                KfdRuntimeBackendErrorV1::new(
+                    KfdRuntimeBackendErrorKindV1::Native,
+                    format!("KFD device pool observation: {error}"),
+                )
+            })
+        })
+    }
+
+    pub(super) fn configure_native_device_pool_v1(
+        &mut self,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let Some(limits) = self.device_pool_limits else {
+            return Ok(());
+        };
+        self.queue
+            .as_mut()
+            .expect("new native queue remains retained before pool configuration")
+            .configure_sdma_device_pool_v1(limits)
+            .map_err(|error| self.terminal_error(format!("KFD device pool configuration: {error}")))
     }
 
     /// Reports the configured limits, not evidence of native account creation.
@@ -181,5 +253,158 @@ mod tests {
             .unwrap();
         assert!(compute[acquire..acquire + materialize].contains("self.device_backing_budget,"));
         assert!(!compute.contains(".acquire_shared_gtt_memory_session()"));
+    }
+
+    fn pool_limits() -> Gfx942DevicePoolLimitsV1 {
+        Gfx942DevicePoolLimitsV1::new(8192, 2).unwrap()
+    }
+
+    #[test]
+    fn device_pool_defaults_and_configuration_do_not_imply_native_residency() {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        assert_eq!(backend.device_pool_limits_v1(), None);
+        assert_eq!(backend.device_pool_usage_v1().unwrap(), None);
+        let capabilities = backend.description.capabilities;
+        backend
+            .configure_device_pool_limits_v1(pool_limits())
+            .unwrap();
+        assert_eq!(backend.device_pool_limits_v1(), Some(pool_limits()));
+        assert_eq!(backend.device_pool_usage_v1().unwrap(), None);
+        assert_eq!(backend.device_backing_budget_v1(), None);
+        assert_eq!(backend.description.capabilities, capabilities);
+        assert_eq!(backend.next_handle, 1);
+        assert_busy(backend.configure_device_pool_limits_v1(pool_limits()));
+        assert_busy(
+            backend.configure_device_pool_limits_v1(Gfx942DevicePoolLimitsV1::new(0, 0).unwrap()),
+        );
+        assert_eq!(backend.device_pool_limits_v1(), Some(pool_limits()));
+    }
+
+    #[test]
+    fn device_pool_and_backing_limits_are_independent_in_both_configuration_orders() {
+        for backing_first in [false, true] {
+            let mut backend = KfdRuntimeBackendV1::mock();
+            if backing_first {
+                backend
+                    .configure_device_backing_budget_v1(budget())
+                    .unwrap();
+            }
+            backend
+                .configure_device_pool_limits_v1(pool_limits())
+                .unwrap();
+            if !backing_first {
+                backend
+                    .configure_device_backing_budget_v1(budget())
+                    .unwrap();
+            }
+            assert_eq!(backend.device_backing_budget_v1(), Some(budget()));
+            assert_eq!(backend.device_pool_limits_v1(), Some(pool_limits()));
+            assert_busy(backend.configure_device_backing_budget_v1(budget()));
+            assert_busy(backend.configure_device_pool_limits_v1(pool_limits()));
+            assert!(backend.queue.is_none());
+        }
+    }
+
+    #[test]
+    fn device_pool_limits_reject_live_released_and_native_resource_history() {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        let stream = backend.create_stream_v1(7).unwrap();
+        assert_busy(backend.configure_device_pool_limits_v1(pool_limits()));
+        backend.destroy_stream_v1(stream).unwrap();
+        assert_busy(backend.configure_device_pool_limits_v1(pool_limits()));
+        assert_eq!(backend.device_pool_limits_v1(), None);
+        let mut allocated = KfdRuntimeBackendV1::mock();
+        let allocation = allocated
+            .allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+            .unwrap();
+        allocated.release_allocation_v1(allocation).unwrap();
+        assert_busy(allocated.configure_device_pool_limits_v1(pool_limits()));
+        let mut retired = KfdRuntimeBackendV1::mock();
+        retired.queue_retired = true;
+        assert_busy(retired.configure_device_pool_limits_v1(pool_limits()));
+    }
+
+    #[test]
+    fn zero_device_cache_limits_do_not_disable_or_replace_backing_admission() {
+        for limits in [
+            Gfx942DevicePoolLimitsV1::new(0, 2).unwrap(),
+            Gfx942DevicePoolLimitsV1::new(8192, 0).unwrap(),
+        ] {
+            let mut backend = KfdRuntimeBackendV1::mock();
+            backend
+                .configure_device_backing_budget_v1(budget())
+                .unwrap();
+            backend.configure_device_pool_limits_v1(limits).unwrap();
+            assert_eq!(backend.device_pool_limits_v1(), Some(limits));
+            assert_eq!(backend.device_backing_budget_v1(), Some(budget()));
+            let allocation = backend
+                .allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, 16, 8)
+                .unwrap();
+            backend.release_allocation_v1(allocation).unwrap();
+        }
+    }
+
+    #[test]
+    fn terminal_device_pool_observation_does_not_report_empty_or_reopen_configuration() {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        backend.terminal = true;
+        assert!(matches!(
+            backend.configure_device_pool_limits_v1(pool_limits()),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+        assert_eq!(
+            backend.device_pool_usage_v1().unwrap_err().kind(),
+            KfdRuntimeBackendErrorKindV1::Terminal
+        );
+        assert_eq!(backend.device_pool_limits_v1(), None);
+        // Terminal Drop deliberately aborts; this mock has no native resources.
+        core::mem::forget(backend);
+    }
+
+    #[test]
+    fn device_pool_forwarding_retains_queue_before_configuration_in_both_startup_paths() {
+        // Source wiring complements the native fake-record/ownership tests.
+        for (source, start, end, sdma_first) in [
+            (
+                include_str!("../kfd_backend.rs"),
+                "    fn ensure_sdma_queue_v1(",
+                "    fn directional_sdma_ops_v1(",
+                true,
+            ),
+            (
+                include_str!("compute_dispatch.rs"),
+                "    pub(super) fn publish(",
+                "    pub(super) fn observe_materialized_dispatch_published_v1(",
+                false,
+            ),
+        ] {
+            let function = source
+                .split_once(start)
+                .unwrap()
+                .1
+                .split_once(end)
+                .unwrap()
+                .0;
+            assert_eq!(
+                function
+                    .matches("self.configure_native_device_pool_v1()?;")
+                    .count(),
+                1
+            );
+            let (before, after) = function
+                .split_once("self.configure_native_device_pool_v1()?;")
+                .unwrap();
+            assert!(before.trim_end().ends_with("self.queue = Some(queue);"));
+            let enable = ".enable_gfx942_directional_sdma_copy_engines()";
+            assert!(!before.contains(enable));
+            if sdma_first {
+                assert_eq!(after.matches(enable).count(), 1);
+            } else {
+                assert!(!after.contains(enable));
+                assert!(after.contains(
+                    "self.native_compute_lanes[self.selected_compute_lane] = Some(primary_lane);"
+                ));
+            }
+        }
     }
 }

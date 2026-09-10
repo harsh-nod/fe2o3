@@ -35,6 +35,12 @@ use crate::shared_memory::{
 };
 use crate::wait::MonotonicWaitV1;
 
+pub(crate) mod pool_policy;
+pub(crate) use pool_policy::{
+    DevicePoolDispositionV1, device_pool_recycle_decision_v1, device_pool_usage_v1,
+};
+pub use pool_policy::{Gfx942DevicePoolLimitsV1, Gfx942DevicePoolUsageV1};
+
 mod multi_queue;
 use multi_queue::next_striped_owner;
 pub use multi_queue::{

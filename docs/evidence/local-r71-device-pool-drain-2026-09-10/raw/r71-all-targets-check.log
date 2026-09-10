@@ -1,0 +1,22 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+error[E0277]: `?` couldn't convert the error: `RuntimeSubmissionReleaseFailureV1<RuntimeCopyV1, ...>: Error` is not satisfied
+   --> crates/fe2o3-runtime/examples/gfx942-runtime-drain-capture.rs:353:47
+    |
+339 |         source: RuntimeAllocationIdV1, destination: RuntimeAllocationIdV1) -> ResultV1<()>
+    |                                                                               ------------ required `RuntimeSubmissionReleaseFailureV1<RuntimeCopyV1, ...>: Error` because of this
+...
+353 |         context.release_submission(submission)?;
+    |                 ------------------------------^ unsatisfied trait bound
+    |                 |
+    |                 this has type `Result<_, RuntimeSubmissionReleaseFailureV1<RuntimeCopyV1, fe2o3_runtime::KfdRuntimeBackendErrorV1>>`
+    |
+    = help: the trait `std::error::Error` is not implemented for `RuntimeSubmissionReleaseFailureV1<RuntimeCopyV1, fe2o3_runtime::KfdRuntimeBackendErrorV1>`
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+    = note: required for `Box<dyn std::error::Error + Send + Sync>` to implement `From<RuntimeSubmissionReleaseFailureV1<RuntimeCopyV1, ...>>`
+    = note: the full name for the type has been written to '/home/harsh/.codex-tmp/fe2o3-r61-execution/target/debug/examples/gfx942_runtime_drain_capture-5a399d01ec771a64.long-type-9376727436010028794.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `fe2o3-runtime` (example "gfx942-runtime-drain-capture") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

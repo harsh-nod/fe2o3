@@ -1,0 +1,88 @@
+    Checking fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Checking fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Checking fe2o3-service-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-service-host)
+error: this boolean expression can be simplified
+   --> crates/fe2o3-runtime/src/kfd_backend/qualification_coexistence.rs:278:12
+    |
+278 |           if !self
+    |  ____________^
+279 | |             .active_sdma_streams
+280 | |             .get(&copy.stream)
+281 | |             .is_some_and(|ids| ids.iter().filter(|candidate| **candidate == id).count() == 1)
+    | |_____________________________________________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#nonminimal_bool
+    = note: `-D clippy::nonminimal-bool` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::nonminimal_bool)]`
+help: try
+    |
+278 ~         if self
+279 +             .active_sdma_streams
+280 +             .get(&copy.stream).is_none_or(|ids| ids.iter().filter(|candidate| **candidate == id).count() != 1)
+    |
+
+error: this boolean expression can be simplified
+   --> crates/fe2o3-runtime/src/kfd_backend/qualification_drain_capture.rs:228:20
+    |
+228 |                   || !self
+    |  ____________________^
+229 | |                     .active_sdma_streams
+230 | |                     .get(&copy.stream)
+231 | |                     .is_some_and(|ids| ids.iter().filter(|actual| **actual == id).count() == 1)
+    | |_______________________________________________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#nonminimal_bool
+help: try
+    |
+228 ~                 || self
+229 +                     .active_sdma_streams
+230 +                     .get(&copy.stream).is_none_or(|ids| ids.iter().filter(|actual| **actual == id).count() != 1)
+    |
+
+error: this boolean expression can be simplified
+   --> crates/fe2o3-runtime/src/kfd_backend/qualification_drain_capture.rs:347:21
+    |
+347 | /                     !self
+348 | |                         .active_sdma
+349 | |                         .get(id)
+350 | |                         .is_some_and(|copy| copy.stream == stream)
+    | |__________________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#nonminimal_bool
+help: try
+    |
+347 ~                     self
+348 +                         .active_sdma
+349 +                         .get(id).is_none_or(|copy| copy.stream != stream)
+    |
+
+error: this `if` can be collapsed into the outer `match`
+   --> crates/fe2o3-runtime/src/kfd_backend/qualification_drain_capture.rs:389:21
+    |
+389 | /                     if !self.active_sdma.get(&id).is_some_and(|copy| {
+390 | |                         (copy.source == allocation || copy.destination == allocation)
+391 | |                             && matches!(copy.phase, ActiveSdmaPhaseV1::DirectionalPublished(_))
+392 | |                     }) {
+393 | |                         return Err(Failure::Storage);
+394 | |                     }
+    | |_____________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_match
+    = note: `-D clippy::collapsible-match` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_match)]`
+help: collapse nested if block
+    |
+388 ~                 KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Async(id))
+389 |                     if !self.active_sdma.get(&id).is_some_and(|copy| {
+390 |                         (copy.source == allocation || copy.destination == allocation)
+391 |                             && matches!(copy.phase, ActiveSdmaPhaseV1::DirectionalPublished(_))
+392 ~                     }) => {
+393 |                         return Err(Failure::Storage);
+394 ~                     }
+    |
+
+error: could not compile `fe2o3-runtime` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `fe2o3-runtime` (lib test) due to 4 previous errors

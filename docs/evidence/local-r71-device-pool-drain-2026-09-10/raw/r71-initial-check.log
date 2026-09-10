@@ -1,0 +1,32 @@
+    Checking fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Checking fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+error[E0624]: method `configure_native_device_pool_v1` is private
+    --> crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs:2869:22
+     |
+2869 |                   self.configure_native_device_pool_v1()?;
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private method
+     |
+    ::: crates/fe2o3-runtime/src/kfd_backend/native_budget.rs:102:5
+     |
+ 102 | /     fn configure_native_device_pool_v1(
+ 103 | |         &mut self,
+ 104 | |     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+     | |______________________________________________________________________- private method defined here
+
+error[E0624]: method `configure_native_device_pool_v1` is private
+    --> crates/fe2o3-runtime/src/kfd_backend.rs:2999:18
+     |
+2999 |               self.configure_native_device_pool_v1()?;
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private method
+     |
+    ::: crates/fe2o3-runtime/src/kfd_backend/native_budget.rs:102:5
+     |
+ 102 | /     fn configure_native_device_pool_v1(
+ 103 | |         &mut self,
+ 104 | |     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+     | |______________________________________________________________________- private method defined here
+
+For more information about this error, try `rustc --explain E0624`.
+error: could not compile `fe2o3-runtime` (lib) due to 2 previous errors

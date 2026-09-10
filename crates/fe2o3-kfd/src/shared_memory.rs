@@ -1966,6 +1966,45 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)
     }
 
+    fn device_pool_backing_bytes_v1(
+        &self,
+        lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+        device: DeviceKeyV1,
+        vm: VmKeyV1,
+    ) -> Result<u64, MemorySessionError> {
+        let index = self.device_memory_index(lease, DeviceMemoryPhaseV1::Mapped)?;
+        let record = &self.device_memory[index];
+        if record.device != device
+            || record.vm != vm
+            || vm.device != device
+            || record.id == 0
+            || record.generation == 0
+            || record.handle.is_none()
+            || record.reservation.is_none()
+            || record.mapping.is_some()
+            || record.free_attempted
+        {
+            return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
+        }
+        let exact_charge = match (&self.device_backing_account, &record.backing_charge) {
+            (None, None) => true,
+            (Some(account), Some(charge)) => charge.matches(
+                account,
+                self.session_id,
+                device,
+                vm,
+                record.id,
+                record.generation,
+                record.layout,
+            ),
+            _ => false,
+        };
+        if !exact_charge {
+            return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
+        }
+        Ok(record.layout.backing_bytes())
+    }
+
     #[inline]
     fn device_memory_record_matches<S: Gfx942DeviceMemoryStateV1>(
         &self,
@@ -4067,6 +4106,26 @@ impl SharedGttMemorySessionV1 {
             .map(DeviceBackingAccountV1::usage)
     }
 
+    pub(crate) fn validate_device_pool_domain_v1(
+        &self,
+        vm: VmKeyV1,
+    ) -> Result<(), MemorySessionError> {
+        self.engine.require_active()?;
+        if vm != self.vm || vm.device != self.model_device.model_key() {
+            return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
+        }
+        Ok(())
+    }
+
+    // Retention-only projection: this neither observes the device nor authorizes disposal.
+    pub(crate) fn device_pool_backing_bytes_v1(
+        &self,
+        lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    ) -> Result<u64, MemorySessionError> {
+        self.engine
+            .device_pool_backing_bytes_v1(lease, self.model_device.model_key(), self.vm)
+    }
+
     pub fn retained_allocation_count(&self) -> usize {
         self.engine
             .allocations
@@ -5777,6 +5836,7 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     mod device_backing;
+    mod device_pool;
     use super::*;
     use core::cell::Cell;
     use fe2o3_kfd_uapi::KfdIoctlAllocMemoryOfGpuArgs;

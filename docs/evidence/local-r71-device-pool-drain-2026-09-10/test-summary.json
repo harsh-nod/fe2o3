@@ -1,0 +1,53 @@
+{
+  "gnu-tests": {
+    "passed": 2180,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "musl-tests": {
+    "passed": 2180,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "gnu-docs": {
+    "passed": 82,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 6
+  },
+  "musl-docs": {
+    "passed": 71,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 5
+  },
+  "musl-host-docs": {
+    "passed": 10,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "gnu-host": {
+    "passed": 207,
+    "failed": 0,
+    "ignored": 4,
+    "harnesses": 1
+  },
+  "macro-fixtures": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "verus": {
+    "positive_sources": 60,
+    "obligations": 1362,
+    "expected_negatives": 669,
+    "native_or_whole_executor_proof": false
+  },
+  "base_commit": "6a47a6611238a16cbb279876f70db9aba6538ff5",
+  "dependencies_changed": false,
+  "final_gate_attempt": "r71-final3"
+}

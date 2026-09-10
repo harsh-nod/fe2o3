@@ -170,7 +170,7 @@ impl KfdRuntimeBackendV1 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::kfd_backend) mod tests {
     use super::*;
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::cell::Cell;
@@ -217,7 +217,7 @@ mod tests {
     #[global_allocator]
     static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-    fn counted<R>(operation: impl FnOnce() -> R) -> (R, usize) {
+    pub(in crate::kfd_backend) fn counted<R>(operation: impl FnOnce() -> R) -> (R, usize) {
         struct Stop;
         impl Drop for Stop {
             fn drop(&mut self) {

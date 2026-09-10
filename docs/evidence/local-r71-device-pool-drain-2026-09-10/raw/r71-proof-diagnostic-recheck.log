@@ -1,0 +1,144 @@
+error: assertion failed
+   --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:270:16
+    |
+270 |         assert(prefix_bytes_v1(entries, 1) == (entries[0].backing_bytes as int));
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion failed
+
+note: automatically chose triggers for this expression:
+  --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:66:9
+   |
+66 |     &&& forall|i: int| 0 <= i < entries.len() ==> entry_valid_v1(domain, entries[i])
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note:   trigger 1 of 1:
+  --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:66:74
+   |
+66 |     &&& forall|i: int| 0 <= i < entries.len() ==> entry_valid_v1(domain, entries[i])
+   |                                                                          ^^^^^^^^^^
+
+note: automatically chose triggers for this expression:
+  --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:67:9
+   |
+67 |       &&& forall|i: int, j: int| 0 <= j < i < entries.len()
+   |  _________^
+68 | |         ==> entries[i].storage.allocation_id != entries[j].storage.allocation_id
+   | |________________________________________________________________________________^
+
+note:   trigger 1 of 1:
+  --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:68:13
+   |
+68 |         ==> entries[i].storage.allocation_id != entries[j].storage.allocation_id
+   |             ^^^^^^^^^^                          ^^^^^^^^^^
+
+note: automatically chose triggers for this expression:
+  --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:79:9
+   |
+79 |       &&& forall|i: int| 0 <= i < entries.len()
+   |  _________^
+80 | |         ==> entries[i].storage.allocation_id != candidate.storage.allocation_id
+   | |_______________________________________________________________________________^
+
+note:   trigger 1 of 1:
+  --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:80:13
+   |
+80 |         ==> entries[i].storage.allocation_id != candidate.storage.allocation_id
+   |             ^^^^^^^^^^
+
+note: automatically chose triggers for this expression:
+   --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:156:17
+    |
+156 |                 forall|x: int| 0 <= x < i ==> entry_valid_v1(domain, entries@[x]),
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note:   trigger 1 of 1:
+   --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:156:70
+    |
+156 |                 forall|x: int| 0 <= x < i ==> entry_valid_v1(domain, entries@[x]),
+    |                                                                      ^^^^^^^^^^^
+
+note: automatically chose triggers for this expression:
+   --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:157:17
+    |
+157 | /                 forall|x: int, y: int| 0 <= y < x < i
+158 | |                     ==> entries@[x].storage.allocation_id != entries@[y].storage.allocation_id,
+    | |______________________________________________________________________________________________^
+
+note:   trigger 1 of 1:
+   --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:158:25
+    |
+158 |                     ==> entries@[x].storage.allocation_id != entries@[y].storage.allocation_id,
+    |                         ^^^^^^^^^^^                          ^^^^^^^^^^^
+
+note: automatically chose triggers for this expression:
+   --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:159:17
+    |
+159 | /                 forall|y: int| 0 <= y < j
+160 | |                     ==> entries@[i as int].storage.allocation_id != entries@[y].storage.allocation_id,
+    | |_____________________________________________________________________________________________________^
+
+note:   trigger 1 of 1:
+   --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:160:69
+    |
+160 |                     ==> entries@[i as int].storage.allocation_id != entries@[y].storage.allocation_id,
+    |                                                                     ^^^^^^^^^^^
+
+note: automatically chose triggers for this expression:
+   --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:139:13
+    |
+139 |             forall|x: int| 0 <= x < i ==> entry_valid_v1(domain, entries@[x]),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note:   trigger 1 of 1:
+   --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:139:66
+    |
+139 |             forall|x: int| 0 <= x < i ==> entry_valid_v1(domain, entries@[x]),
+    |                                                                  ^^^^^^^^^^^
+
+note: automatically chose triggers for this expression:
+   --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:140:13
+    |
+140 | /             forall|x: int, y: int| 0 <= y < x < i
+141 | |                 ==> entries@[x].storage.allocation_id != entries@[y].storage.allocation_id,
+    | |__________________________________________________________________________________________^
+
+note:   trigger 1 of 1:
+   --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:141:21
+    |
+141 |                 ==> entries@[x].storage.allocation_id != entries@[y].storage.allocation_id,
+    |                     ^^^^^^^^^^^                          ^^^^^^^^^^^
+
+note: automatically chose triggers for this expression:
+   --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:219:13
+    |
+219 | /             forall|x: int| 0 <= x < i
+220 | |                 ==> entries@[x].storage.allocation_id != candidate.storage.allocation_id,
+    | |________________________________________________________________________________________^
+
+note:   trigger 1 of 1:
+   --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:220:21
+    |
+220 |                 ==> entries@[x].storage.allocation_id != candidate.storage.allocation_id,
+    |                     ^^^^^^^^^^^
+
+note: Verus printed one or more automatically chosen quantifier triggers
+      because it had low confidence in the chosen triggers.
+      To suppress these messages, do one of the following:
+        (1) manually annotate a single desired trigger using #[trigger]
+            (example: forall|i: int, j: int| f(i) && #[trigger] g(i) && #[trigger] h(j)),
+        (2) manually annotate multiple desired triggers using #![trigger ...]
+            (example: forall|i: int| #![trigger f(i)] #![trigger g(i)] f(i) && g(i)),
+        (3) accept the automatically chosen trigger using #![auto]
+            (example: forall|i: int, j: int| #![auto] f(i) && g(i) && h(j))
+        (4) use the --triggers-mode silent command-line option to suppress all printing of triggers.
+      (Note: triggers are used by the underlying SMT theorem prover to instantiate quantifiers;
+      the theorem prover instantiates a quantifier whenever some expression matches the
+      pattern specified by one of the quantifier's triggers.)
+   --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:219:13
+    |
+219 | /             forall|x: int| 0 <= x < i
+220 | |                 ==> entries@[x].storage.allocation_id != candidate.storage.allocation_id,
+    | |________________________________________________________________________________________^
+
+verification results:: 14 verified, 1 errors
+error: aborting due to 1 previous error
+

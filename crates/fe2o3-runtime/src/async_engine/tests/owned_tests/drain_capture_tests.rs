@@ -106,9 +106,11 @@ fn drn1a_capture_resolves_late_backing_and_bytes_outlive_reply_and_owner() {
     let captured = report.capture.unwrap();
     assert_eq!(captured.as_bytes(), &[0x5a; 16]);
     join_command(accepted).unwrap();
-    assert_eq!(handle.observer().reply_cells_in_use(), 0);
     assert_eq!(handle.observer().drain_capture_bytes_in_use(), 16);
     assert!(engine.shutdown().unwrap().cleanup.unwrap().is_complete());
+    // Result extraction can precede the owner's final reply-sender drop.
+    // Joining the owner orders that drop without reopening closed admission.
+    assert_eq!(handle.observer().reply_cells_in_use(), 0);
     assert_eq!(handle.observer().drain_capture_bytes_in_use(), 16);
     let trace = trace.lock().unwrap();
     assert_eq!(trace.capture_calls, 1);

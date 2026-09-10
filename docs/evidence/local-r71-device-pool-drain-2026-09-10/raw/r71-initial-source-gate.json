@@ -1,0 +1,28 @@
+[
+  {
+    "name": "gnu-tests",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--offline",
+      "--no-fail-fast",
+      "-p",
+      "fe2o3-completion",
+      "-p",
+      "fe2o3-runtime-model",
+      "-p",
+      "fe2o3-resource-accounting",
+      "-p",
+      "fe2o3-kfd",
+      "-p",
+      "fe2o3-runtime",
+      "--all-features",
+      "--all-targets"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r71-initial-gnu-tests.log",
+    "returncode": 101,
+    "elapsed_seconds": 100.582
+  }
+]

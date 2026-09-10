@@ -2866,6 +2866,7 @@ impl KfdRuntimeBackendV1 {
                     .map_err(|error| self.terminal_error(format!("KFD queue creation: {error}")))?;
                 let primary_lane = queue.primary_compute_lane_v1();
                 self.queue = Some(queue);
+                self.configure_native_device_pool_v1()?;
                 self.native_compute_lanes[self.selected_compute_lane] = Some(primary_lane);
             } else if creates_native_queue {
                 performance.user_data_materializations = user_data_count;

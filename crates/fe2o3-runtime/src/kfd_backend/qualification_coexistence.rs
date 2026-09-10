@@ -38,8 +38,10 @@ pub enum KfdR66RetainedCustodyObservationFailureV1 {
     CountsComputeMismatch,
     CountsCopyMismatch,
     ComputeExecution,
+    /// The borrowed dispatch is not this backend's exact nonzero active owner.
     ComputeSubmissionMissing,
     ComputeStreamMismatch,
+    /// Active ownership conflicts with another lifecycle index, including a result-table entry.
     ComputeStatus,
     ComputeAllocationCount,
     ComputeAllocationMembership,
@@ -47,9 +49,11 @@ pub enum KfdR66RetainedCustodyObservationFailureV1 {
     ComputeCustody,
     ComputeStorage,
     ComputeNative(Gfx942R66NativeObservationFailureV1),
+    /// The borrowed copy is not this backend's exact nonzero active owner.
     CopySubmissionMissing,
     CopyIdMismatch,
     CopyStreamMismatch,
+    /// Active ownership conflicts with another lifecycle index, including a result-table entry.
     CopyStatus,
     CopyPublishedRoster,
     CopyPartialCompletion,
@@ -186,16 +190,26 @@ impl KfdRuntimeBackendV1 {
         allocation: u64,
     ) -> Result<(), KfdR66RetainedCustodyObservationFailureV1> {
         use KfdR66RetainedCustodyObservationFailureV1 as Failure;
-        let record = self
-            .submissions
-            .get(&active.id)
-            .ok_or(Failure::ComputeSubmissionMissing)?;
-        if record.stream != active.stream {
-            return Err(Failure::ComputeStreamMismatch);
+        if active.id == 0
+            || self
+                .active
+                .as_ref()
+                .is_none_or(|retained| !core::ptr::eq(retained, active))
+        {
+            return Err(Failure::ComputeSubmissionMissing);
         }
-        if !matches!(record.status, BackendPollV1::Pending) {
+        // Pending work lives in the move-only active owner, not the terminal
+        // submission table. Any table entry would mask that owner in poll_v1.
+        if self.submissions.contains_key(&active.id)
+            || self.active_sdma.contains_key(&active.id)
+            || self.pending_compute.contains_key(&active.id)
+        {
             return Err(Failure::ComputeStatus);
         }
+        let device = self
+            .streams
+            .get(&active.stream)
+            .ok_or(Failure::ComputeStreamMismatch)?;
         if active.allocations.len() != 1 {
             return Err(Failure::ComputeAllocationCount);
         }
@@ -206,6 +220,9 @@ impl KfdRuntimeBackendV1 {
             .allocations
             .get(&allocation)
             .ok_or(Failure::ComputeAllocationMissing)?;
+        if record.device != *device {
+            return Err(Failure::ComputeStreamMismatch);
+        }
         let owner = RuntimeAllocationCustodyOwnerV1 {
             submission: active.id,
             stream: active.stream,
@@ -227,15 +244,20 @@ impl KfdRuntimeBackendV1 {
         copy: &ActiveSdmaCopyV1,
     ) -> Result<(), KfdR66RetainedCustodyObservationFailureV1> {
         use KfdR66RetainedCustodyObservationFailureV1 as Failure;
-        let record = self
-            .submissions
-            .get(&id)
-            .ok_or(Failure::CopySubmissionMissing)?;
         for (rejected, failure) in [
             (id != copy.id, Failure::CopyIdMismatch),
-            (record.stream != copy.stream, Failure::CopyStreamMismatch),
             (
-                !matches!(record.status, BackendPollV1::Pending),
+                id == 0
+                    || self
+                        .active_sdma
+                        .get(&id)
+                        .is_none_or(|retained| !core::ptr::eq(retained, copy)),
+                Failure::CopySubmissionMissing,
+            ),
+            (
+                self.submissions.contains_key(&id)
+                    || self.active.as_ref().is_some_and(|active| active.id == id)
+                    || self.pending_compute.contains_key(&id),
                 Failure::CopyStatus,
             ),
             (
@@ -248,6 +270,17 @@ impl KfdRuntimeBackendV1 {
             if rejected {
                 return Err(failure);
             }
+        }
+        let device = self
+            .streams
+            .get(&copy.stream)
+            .ok_or(Failure::CopyStreamMismatch)?;
+        if self
+            .active_sdma_streams
+            .get(&copy.stream)
+            .is_none_or(|ids| ids.iter().filter(|candidate| **candidate == id).count() != 1)
+        {
+            return Err(Failure::CopyStreamMismatch);
         }
         let owner = RuntimeAllocationCustodyOwnerV1 {
             submission: id,
@@ -269,6 +302,9 @@ impl KfdRuntimeBackendV1 {
             ),
         ] {
             let record = self.allocations.get(&allocation).ok_or(missing)?;
+            if record.device != *device {
+                return Err(Failure::CopyStreamMismatch);
+            }
             if !self.allocation_retains_exact_owner_v1(allocation, owner) {
                 return Err(custody);
             }
@@ -357,65 +393,83 @@ impl KfdRuntimeBackendV1 {
             ));
         }
         if let Some((&id, copy)) = self.active_sdma.iter().next() {
-            self.r66_copy_membership_v1(id, copy)?;
-            let ActiveSdmaPhaseV1::DirectionalPublished(native) = &copy.phase else {
-                return Err(Failure::CopyPhase);
-            };
-            let (identity, packets, direction, host_offset, device_offset, bytes) =
-                match native.as_ref() {
-                    DirectionalSdmaSubmissionOwnerV1::NativeSingle {
-                        submission,
-                        host_offset,
-                        device_offset,
-                    } => {
-                        if *host_offset != submission.host_offset() {
-                            return Err(Failure::CopyHostWrapperOffset);
-                        }
-                        if *device_offset != submission.device_offset() {
-                            return Err(Failure::CopyDeviceWrapperOffset);
-                        }
-                        (
-                            queue
-                                .diagnose_r66_retained_single_copy_v1(submission)
-                                .map_err(Failure::CopySingleNative)?,
-                            1,
-                            submission.direction(),
-                            *host_offset,
-                            *device_offset,
-                            submission.copy_bytes(),
-                        )
-                    }
-                    DirectionalSdmaSubmissionOwnerV1::NativeWindow { submission } => (
-                        queue
-                            .diagnose_r66_retained_window_copy_v1(submission)
-                            .map_err(Failure::CopyWindowNative)?,
-                        submission.packet_count(),
-                        submission.direction(),
-                        submission.host_offset(),
-                        submission.device_offset(),
-                        submission.copy_bytes(),
-                    ),
-                    #[cfg(test)]
-                    _ => return Err(Failure::CopyNonNativeOwner),
-                };
-            Self::r66_copy_geometry_v1(copy, direction, host_offset, device_offset, bytes)?;
-            observed.copy = Some(identity);
-            observed.copy_packets = packets;
-            observed.copy_membership = Some(membership(
-                b"copy\0",
-                identity,
-                &[
-                    id,
-                    copy.stream,
-                    copy.source,
-                    copy.destination,
-                    copy.source_offset,
-                    copy.destination_offset,
-                    copy.byte_len,
-                ],
-            ));
+            let copy_observation = self.r66_copy_observation_v1(id, copy)?;
+            observed.copy = copy_observation.copy;
+            observed.copy_membership = copy_observation.copy_membership;
+            observed.copy_packets = copy_observation.copy_packets;
         }
         Ok(observed)
+    }
+
+    pub(super) fn r66_copy_observation_v1(
+        &self,
+        id: u64,
+        copy: &ActiveSdmaCopyV1,
+    ) -> Result<KfdR66RetainedCustodyObservationV1, KfdR66RetainedCustodyObservationFailureV1> {
+        use KfdR66RetainedCustodyObservationFailureV1 as Failure;
+        let queue = self.queue.as_ref().ok_or(Failure::CountsQueueUnavailable)?;
+        self.r66_copy_membership_v1(id, copy)?;
+        let ActiveSdmaPhaseV1::DirectionalPublished(native) = &copy.phase else {
+            return Err(Failure::CopyPhase);
+        };
+        let (identity, packets, direction, host_offset, device_offset, bytes) =
+            match native.as_ref() {
+                DirectionalSdmaSubmissionOwnerV1::NativeSingle {
+                    submission,
+                    host_offset,
+                    device_offset,
+                } => {
+                    if *host_offset != submission.host_offset() {
+                        return Err(Failure::CopyHostWrapperOffset);
+                    }
+                    if *device_offset != submission.device_offset() {
+                        return Err(Failure::CopyDeviceWrapperOffset);
+                    }
+                    (
+                        queue
+                            .diagnose_r66_retained_single_copy_v1(submission)
+                            .map_err(Failure::CopySingleNative)?,
+                        1,
+                        submission.direction(),
+                        *host_offset,
+                        *device_offset,
+                        submission.copy_bytes(),
+                    )
+                }
+                DirectionalSdmaSubmissionOwnerV1::NativeWindow { submission } => (
+                    queue
+                        .diagnose_r66_retained_window_copy_v1(submission)
+                        .map_err(Failure::CopyWindowNative)?,
+                    submission.packet_count(),
+                    submission.direction(),
+                    submission.host_offset(),
+                    submission.device_offset(),
+                    submission.copy_bytes(),
+                ),
+                #[cfg(test)]
+                _ => return Err(Failure::CopyNonNativeOwner),
+            };
+        Self::r66_copy_geometry_v1(copy, direction, host_offset, device_offset, bytes)?;
+        let copy_membership = membership(
+            b"copy\0",
+            identity,
+            &[
+                id,
+                copy.stream,
+                copy.source,
+                copy.destination,
+                copy.source_offset,
+                copy.destination_offset,
+                copy.byte_len,
+            ],
+        );
+        Ok(KfdR66RetainedCustodyObservationV1 {
+            compute: None,
+            compute_membership: None,
+            copy: Some(identity),
+            copy_membership: Some(copy_membership),
+            copy_packets: packets,
+        })
     }
 }
 
@@ -492,6 +546,9 @@ mod tests {
                 },
             );
             backend.published_sdma_submissions.push(Self::COPY);
+            backend
+                .active_sdma_streams
+                .insert(copy_stream, VecDeque::from([Self::COPY]));
             for (submission, stream, kind, allocations) in [
                 (
                     Self::COMPUTE,
@@ -506,14 +563,6 @@ mod tests {
                     vec![source, destination],
                 ),
             ] {
-                backend.submissions.insert(
-                    submission,
-                    SubmissionRecordV1 {
-                        stream,
-                        status: BackendPollV1::Pending,
-                        profile_dispatch_published: false,
-                    },
-                );
                 let reserved = backend.reserve_allocation_custody_v1(&allocations).unwrap();
                 backend.retain_allocation_custody_v1(
                     &allocations,
@@ -562,6 +611,7 @@ mod tests {
         fn drop(&mut self) {
             self.backend.active = None;
             self.backend.active_sdma.clear();
+            self.backend.active_sdma_streams.clear();
             self.backend.published_sdma_submissions.clear();
             self.backend.submissions.clear();
             self.backend.allocation_custody.clear();
@@ -605,12 +655,7 @@ mod tests {
             backend.active_sdma[&ScriptedR26RosterV1::COPY].completed_bytes,
             0
         );
-        assert!(
-            backend
-                .submissions
-                .values()
-                .all(|record| matches!(record.status, BackendPollV1::Pending))
-        );
+        assert!(backend.submissions.is_empty());
         for (index, allocation) in [fixture.allocation, fixture.source, fixture.destination]
             .into_iter()
             .enumerate()
@@ -635,31 +680,139 @@ mod tests {
     }
 
     #[test]
+    fn active_owner_membership_needs_no_pending_result_record_and_allocates_nothing() {
+        use super::super::drain_capture::tests::counted;
+        let fixture = ScriptedR26RosterV1::new();
+        assert!(fixture.backend.submissions.is_empty());
+        for _ in 0..16 {
+            let (result, allocations) =
+                counted(|| (fixture.compute_membership(), fixture.copy_membership()));
+            assert_eq!(result, (Ok(()), Ok(())));
+            assert_eq!(allocations, 0);
+            assert!(fixture.backend.submissions.is_empty());
+        }
+    }
+
+    #[test]
+    fn active_owner_membership_rejects_foreign_and_removed_owner_borrows() {
+        use KfdR66RetainedCustodyObservationFailureV1 as Failure;
+        let mut fixture = ScriptedR26RosterV1::new();
+        let foreign = ScriptedR26RosterV1::new();
+        assert_eq!(
+            fixture.backend.r66_compute_membership_v1(
+                foreign.backend.active.as_ref().unwrap(),
+                fixture.allocation,
+            ),
+            Err(Failure::ComputeSubmissionMissing)
+        );
+        assert_eq!(
+            fixture.backend.r66_copy_membership_v1(
+                ScriptedR26RosterV1::COPY,
+                &foreign.backend.active_sdma[&ScriptedR26RosterV1::COPY],
+            ),
+            Err(Failure::CopySubmissionMissing)
+        );
+        let active = fixture.backend.active.take().unwrap();
+        assert_eq!(
+            fixture
+                .backend
+                .r66_compute_membership_v1(&active, fixture.allocation),
+            Err(Failure::ComputeSubmissionMissing)
+        );
+        fixture.backend.active = Some(active);
+        let copy = fixture
+            .backend
+            .active_sdma
+            .remove(&ScriptedR26RosterV1::COPY)
+            .unwrap();
+        assert_eq!(
+            fixture
+                .backend
+                .r66_copy_membership_v1(ScriptedR26RosterV1::COPY, &copy),
+            Err(Failure::CopySubmissionMissing)
+        );
+        fixture
+            .backend
+            .active_sdma
+            .insert(ScriptedR26RosterV1::COPY, copy);
+        assert_eq!(fixture.compute_membership(), Ok(()));
+        assert_eq!(fixture.copy_membership(), Ok(()));
+    }
+
+    #[test]
+    fn active_owner_membership_rejects_every_conflicting_result_without_mutation() {
+        use KfdR66RetainedCustodyObservationFailureV1 as Failure;
+        let mut fixture = ScriptedR26RosterV1::new();
+        for status in [
+            BackendPollV1::Pending,
+            BackendPollV1::Succeeded,
+            BackendPollV1::Failed { code: 9 },
+        ] {
+            for compute in [true, false] {
+                let (id, stream, expected) = if compute {
+                    (
+                        ScriptedR26RosterV1::COMPUTE,
+                        fixture.backend.active.as_ref().unwrap().stream,
+                        Failure::ComputeStatus,
+                    )
+                } else {
+                    (
+                        ScriptedR26RosterV1::COPY,
+                        fixture.backend.active_sdma[&ScriptedR26RosterV1::COPY].stream,
+                        Failure::CopyStatus,
+                    )
+                };
+                fixture.backend.submissions.insert(
+                    id,
+                    SubmissionRecordV1 {
+                        stream,
+                        status,
+                        profile_dispatch_published: false,
+                    },
+                );
+                for _ in 0..2 {
+                    let result = if compute {
+                        fixture.compute_membership()
+                    } else {
+                        fixture.copy_membership()
+                    };
+                    assert_eq!(result, Err(expected));
+                    assert_eq!(fixture.backend.submissions[&id].status, status);
+                    assert_eq!(fixture.backend.submissions[&id].stream, stream);
+                }
+                fixture.backend.submissions.remove(&id);
+                assert_eq!(fixture.compute_membership(), Ok(()));
+                assert_eq!(fixture.copy_membership(), Ok(()));
+            }
+        }
+    }
+
+    #[test]
     fn scripted_r26_compute_membership_reports_one_coordinate_failures() {
         use KfdR66RetainedCustodyObservationFailureV1 as Failure;
         type Mutation = (Failure, fn(&mut ScriptedR26RosterV1));
         let cases: &[Mutation] = &[
-            (Failure::ComputeSubmissionMissing, |fixture| {
-                fixture
-                    .backend
-                    .submissions
-                    .remove(&ScriptedR26RosterV1::COMPUTE);
+            (Failure::ComputeStreamMismatch, |fixture| {
+                let stream = fixture.backend.active.as_ref().unwrap().stream;
+                fixture.backend.streams.remove(&stream);
             }),
             (Failure::ComputeStreamMismatch, |fixture| {
                 fixture
                     .backend
-                    .submissions
-                    .get_mut(&ScriptedR26RosterV1::COMPUTE)
+                    .allocations
+                    .get_mut(&fixture.allocation)
                     .unwrap()
-                    .stream += 1;
+                    .device += 1;
             }),
             (Failure::ComputeStatus, |fixture| {
-                fixture
-                    .backend
-                    .submissions
-                    .get_mut(&ScriptedR26RosterV1::COMPUTE)
-                    .unwrap()
-                    .status = BackendPollV1::Succeeded;
+                fixture.backend.submissions.insert(
+                    ScriptedR26RosterV1::COMPUTE,
+                    SubmissionRecordV1 {
+                        stream: fixture.backend.active.as_ref().unwrap().stream,
+                        status: BackendPollV1::Succeeded,
+                        profile_dispatch_published: false,
+                    },
+                );
             }),
             (Failure::ComputeAllocationCount, |fixture| {
                 fixture
@@ -724,12 +877,6 @@ mod tests {
         use KfdR66RetainedCustodyObservationFailureV1 as Failure;
         type Mutation = (Failure, fn(&mut ScriptedR26RosterV1));
         let cases: &[Mutation] = &[
-            (Failure::CopySubmissionMissing, |fixture| {
-                fixture
-                    .backend
-                    .submissions
-                    .remove(&ScriptedR26RosterV1::COPY);
-            }),
             (Failure::CopyIdMismatch, |fixture| {
                 fixture
                     .backend
@@ -739,20 +886,39 @@ mod tests {
                     .id += 1;
             }),
             (Failure::CopyStreamMismatch, |fixture| {
+                let stream = fixture.backend.active_sdma[&ScriptedR26RosterV1::COPY].stream;
+                fixture.backend.streams.remove(&stream);
+            }),
+            (Failure::CopyStreamMismatch, |fixture| {
+                let stream = fixture.backend.active_sdma[&ScriptedR26RosterV1::COPY].stream;
+                fixture.backend.active_sdma_streams.remove(&stream);
+            }),
+            (Failure::CopyStreamMismatch, |fixture| {
+                let stream = fixture.backend.active_sdma[&ScriptedR26RosterV1::COPY].stream;
                 fixture
                     .backend
-                    .submissions
-                    .get_mut(&ScriptedR26RosterV1::COPY)
+                    .active_sdma_streams
+                    .get_mut(&stream)
                     .unwrap()
-                    .stream += 1;
+                    .push_back(ScriptedR26RosterV1::COPY);
+            }),
+            (Failure::CopyStreamMismatch, |fixture| {
+                fixture
+                    .backend
+                    .allocations
+                    .get_mut(&fixture.destination)
+                    .unwrap()
+                    .device += 1;
             }),
             (Failure::CopyStatus, |fixture| {
-                fixture
-                    .backend
-                    .submissions
-                    .get_mut(&ScriptedR26RosterV1::COPY)
-                    .unwrap()
-                    .status = BackendPollV1::Succeeded;
+                fixture.backend.submissions.insert(
+                    ScriptedR26RosterV1::COPY,
+                    SubmissionRecordV1 {
+                        stream: fixture.backend.active_sdma[&ScriptedR26RosterV1::COPY].stream,
+                        status: BackendPollV1::Succeeded,
+                        profile_dispatch_published: false,
+                    },
+                );
             }),
             (Failure::CopyPublishedRoster, |fixture| {
                 fixture.backend.published_sdma_submissions[0] += 1;

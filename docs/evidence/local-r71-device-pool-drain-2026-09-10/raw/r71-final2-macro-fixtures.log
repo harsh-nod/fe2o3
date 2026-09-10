@@ -1,0 +1,14 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/typed_kernel_fixtures.rs (target/debug/deps/typed_kernel_fixtures-4fdb643882ffd84c)
+
+running 7 tests
+test ordinary_kernel_profile_accepts_safe_only_source ... ok
+test typed_kernel_resolves_renamed_host_dependency ... ok
+test generated_arguments_retain_source_borrows ... ok
+test typed_kernel_compile_fail_diagnostics_are_stable ... ok
+test generated_global_mut_arguments_reject_forgery_and_substitution ... ok
+test generated_worker_v3_adapter_compiles_downstream ... ok
+test generated_worker_v3_adapter_rejects_unsafe_escape_hatches ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.29s
+

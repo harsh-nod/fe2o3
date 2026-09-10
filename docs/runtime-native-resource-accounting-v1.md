@@ -1,9 +1,10 @@
 # Native Resource Accounting Contract V1
 
 Status: MEM-BASE, the optional session-local MEM-2A N2 backing adapter and
-MEM-2A-FWD runtime configuration are implemented locally. The remaining MEM-5 inventory/interface contract is
+MEM-2A-FWD runtime configuration and device-only MEM-2B cache limits are
+implemented locally. The remaining MEM-5 inventory/interface contract is
 proposed, reviewed on 2026-09-10. This does not close MEM-2 through MEM-5.
-Pool qualification, compound native ownership, parent/split operations and
+Live pool qualification, host-pool accounting, compound native ownership, parent/split operations and
 global physical accounting still require the reviewed handoffs below.
 The [A1/A2 swarm plan](runtime-a1-a2-swarm-plan.md) owns scheduling and acceptance.
 
@@ -77,9 +78,9 @@ authenticated roster and CPU fault matrix are separate release gates.
 
 This is one session's N2 accounting, not a closed runtime-wide memory ceiling.
 Session bootstrap, GTT, queue/control backing, host metadata, parent budgets and
-aggregate quarantine remain open. Pool checkout/recycle/trim qualification is MEM-2B;
-retaining charges in the underlying allocation record does not by itself
-qualify every pool path.
+aggregate quarantine remain open. The [MEM-2B device-cache contract](runtime-device-pool-policy-v1.md)
+adds bounded cached-free device residency with policy/fake-native tests and
+runtime forwarding. It does not qualify every live pool path or any host pool.
 No hardware or performance result is implied by this implementation.
 
 ## Implemented MEM-2A-FWD Slice
@@ -113,6 +114,12 @@ explicitly labeled source-wiring check. These are not live constructor or
 pool-path qualification and do not prove whole-executor refinement.
 
 ## Units And Counting Rules
+
+The next N1A packet is ordinary coherent non-userptr host-GTT backing only.
+It must distinguish page-padded physical backing from VA reservations and charge
+the same object once across CPU/GPU views. Broader AQL/userptr/executable profiles,
+native adoption of exact batch member credits, and root/bootstrap accounting
+remain separately required; see the swarm plan's explicit prerequisites.
 
 The qualified ceiling must name its domain: resources owned or retained by the
 bounded runtime profile, including abandoned/terminal work. It is not a claim

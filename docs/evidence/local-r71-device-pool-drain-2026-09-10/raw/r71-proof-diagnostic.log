@@ -1,0 +1,9 @@
+error[E0601]: `main` function not found in crate `r71_device_pool_v1`
+   --> crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs:274:2
+    |
+274 | }
+    |  ^ consider adding a `main` function to `crates/fe2o3-runtime-model/verus/r71_device_pool_v1.rs`
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0601`.

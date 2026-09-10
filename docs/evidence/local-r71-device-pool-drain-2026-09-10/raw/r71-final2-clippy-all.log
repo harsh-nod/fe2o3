@@ -1,0 +1,15 @@
+    Checking fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+error: unnecessary `>= y + 1` or `x - 1 >=`
+   --> crates/fe2o3-runtime-model/src/r71_device_pool.rs:296:63
+    |
+296 |                         } else if used + incoming <= bytes && roster.len() + 1 <= count {
+    |                                                               ^^^^^^^^^^^^^^^^^^^^^^^^^ help: change it to: `roster.len() < count`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#int_plus_one
+    = note: `-D clippy::int-plus-one` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::int_plus_one)]`
+
+    Checking fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error: could not compile `fe2o3-runtime-model` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

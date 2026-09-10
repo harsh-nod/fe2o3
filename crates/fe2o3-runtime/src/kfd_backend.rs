@@ -30,7 +30,8 @@ use fe2o3_kfd::{
     GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, Gfx942CompletedDispatchReadRequestV1,
     Gfx942CompletedPersistentComputeDispatchV1, Gfx942DeviceBackingBudgetV1,
     Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1, Gfx942DeviceMemoryLeaseV1,
-    Gfx942DeviceMemoryUnmappedV1, Gfx942DirectionalPersistentSdmaDemotionTerminalCustodyV1,
+    Gfx942DeviceMemoryUnmappedV1, Gfx942DevicePoolLimitsV1,
+    Gfx942DirectionalPersistentSdmaDemotionTerminalCustodyV1,
     Gfx942DirectionalPersistentSdmaFrontierRetirementFailureV1,
     Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1,
     Gfx942DirectionalPersistentSdmaTerminalCustodyV1,
@@ -91,6 +92,13 @@ mod qualification_coexistence;
 #[cfg(feature = "hardware-qualification")]
 pub use qualification_coexistence::{
     KfdR66RetainedCustodyObservationFailureV1, KfdR66RetainedCustodyObservationV1,
+};
+#[cfg(feature = "hardware-qualification")]
+mod qualification_drain_capture;
+#[cfg(feature = "hardware-qualification")]
+pub use qualification_drain_capture::{
+    KfdDrainCaptureCopyObservationV1, KfdDrainCaptureCopyPhaseV1,
+    KfdDrainCaptureCustodyObservationV1, KfdDrainCaptureObservationFailureV1,
 };
 mod kfd_backend_sdma_seam;
 use compute_dispatch::*;
@@ -487,6 +495,8 @@ enum KfdRuntimeLaunchGateV1 {
     Production(Box<dyn KfdRuntimeLaunchAuthorityV1>),
     Semantic(Box<dyn KfdRuntimeSemanticLaunchAuthorityV1>),
     #[cfg(feature = "hardware-qualification")]
+    CopyOnlyQualification,
+    #[cfg(feature = "hardware-qualification")]
     ExactGfx942Vecadd(crate::qualification_gfx942_vecadd_v1::AdmittedGfx942VecaddQualificationV1),
     #[cfg(feature = "hardware-qualification")]
     ExactGfx942R57N3(
@@ -509,6 +519,8 @@ impl fmt::Debug for KfdRuntimeLaunchGateV1 {
                 formatter.debug_tuple("Semantic").field(authority).finish()
             }
             #[cfg(feature = "hardware-qualification")]
+            Self::CopyOnlyQualification => formatter.write_str("CopyOnlyQualification"),
+            #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942Vecadd(_) => formatter.write_str("ExactGfx942Vecadd"),
             #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942R57N3(_) => formatter.write_str("ExactGfx942R57N3"),
@@ -525,6 +537,8 @@ impl KfdRuntimeLaunchGateV1 {
         catch_authority_callback_v1(|| match self {
             Self::Production(authority) => authority.authorize_launch_v1(request),
             Self::Semantic(authority) => authority.authorize_launch_v1(request),
+            #[cfg(feature = "hardware-qualification")]
+            Self::CopyOnlyQualification => false,
             #[cfg(feature = "hardware-qualification")]
             Self::ExactGfx942Vecadd(admitted) => admitted.authorizes_kfd_request_v1(request),
             #[cfg(feature = "hardware-qualification")]
@@ -1153,6 +1167,8 @@ pub struct KfdRuntimeBackendV1 {
     native_dirty_extents: usize,
     active_sdma: HashMap<u64, ActiveSdmaCopyV1>,
     published_sdma_submissions: Vec<u64>,
+    #[cfg(feature = "hardware-qualification")]
+    drain_capture_publications: Option<qualification_drain_capture::PublicationHistoryV1>,
     active_sdma_streams: HashMap<u64, VecDeque<u64>>,
     sdma_dependency_retain_counts: HashMap<u64, usize>,
     quiescent_sdma_submissions: HashSet<u64>,
@@ -1161,6 +1177,7 @@ pub struct KfdRuntimeBackendV1 {
     last_ready_promotion_performance: Option<KfdRuntimeReadyPromotionPerformanceV1>,
     staging_budgets: StagingBudgetsV1,
     device_backing_budget: Option<Gfx942DeviceBackingBudgetV1>,
+    device_pool_limits: Option<Gfx942DevicePoolLimitsV1>,
     staged_context_bytes: u64,
     sdma_enabled: bool,
     native_available: bool,
@@ -1250,6 +1267,7 @@ impl fmt::Debug for KfdRuntimeBackendV1 {
             .field("sdma_enabled", &self.sdma_enabled)
             .field("staging_budgets", &self.staging_budgets)
             .field("device_backing_budget", &self.device_backing_budget)
+            .field("device_pool_limits", &self.device_pool_limits)
             .field("launch_gate", &self.launch_gate)
             .field("profiler", &self.profiler)
             .finish()
@@ -1504,6 +1522,8 @@ impl KfdRuntimeBackendV1 {
             native_dirty_extents: 0,
             active_sdma: HashMap::new(),
             published_sdma_submissions: Vec::new(),
+            #[cfg(feature = "hardware-qualification")]
+            drain_capture_publications: None,
             active_sdma_streams: HashMap::new(),
             sdma_dependency_retain_counts: HashMap::new(),
             quiescent_sdma_submissions: HashSet::new(),
@@ -1512,6 +1532,7 @@ impl KfdRuntimeBackendV1 {
             last_ready_promotion_performance: None,
             staging_budgets,
             device_backing_budget: None,
+            device_pool_limits: None,
             staged_context_bytes: 0,
             sdma_enabled: false,
             native_available,
@@ -2357,6 +2378,13 @@ impl KfdRuntimeBackendV1 {
         debug_assert!(self.published_sdma_submissions.len() <= GFX942_SDMA_MAX_IN_FLIGHT_V1);
     }
 
+    #[cfg(feature = "hardware-qualification")]
+    fn record_drain_capture_publication_v1(&mut self, submission: u64) {
+        if let Some(history) = self.drain_capture_publications.as_mut() {
+            history.record(submission);
+        }
+    }
+
     fn unindex_published_sdma_v1(&mut self, submission: u64) {
         if let Ok(position) = self.published_sdma_submissions.binary_search(&submission) {
             self.published_sdma_submissions.remove(position);
@@ -2971,6 +2999,7 @@ impl KfdRuntimeBackendV1 {
                 )
                 .map_err(|error| self.terminal_error(format!("KFD queue creation: {error}")))?;
             self.queue = Some(queue);
+            self.configure_native_device_pool_v1()?;
         }
         if !self.sdma_enabled {
             self.queue
@@ -3738,6 +3767,8 @@ impl KfdRuntimeBackendV1 {
                 active.window_requests = Some(window.requests);
                 active.phase = ActiveSdmaPhaseV1::DirectionalPublished(Box::new(submission));
                 self.index_published_sdma_v1(active.id);
+                #[cfg(feature = "hardware-qualification")]
+                self.record_drain_capture_publication_v1(active.id);
                 self.active_sdma.insert(active.id, active);
                 Ok(BackendPollV1::Pending)
             }
@@ -3800,6 +3831,8 @@ impl KfdRuntimeBackendV1 {
                 active.window_requests = Some(window.requests);
                 active.phase = ActiveSdmaPhaseV1::SameDevicePublished(Box::new(submission));
                 self.index_published_sdma_v1(active.id);
+                #[cfg(feature = "hardware-qualification")]
+                self.record_drain_capture_publication_v1(active.id);
                 self.active_sdma.insert(active.id, active);
                 Ok(BackendPollV1::Pending)
             }
@@ -18774,6 +18807,65 @@ mod tests {
             BackendPollV1::Succeeded
         );
         assert!(backend.active_sdma.is_empty());
+        clean_scripted_direct_backend_v1(&mut backend, stream, host, device, Some(submission));
+    }
+
+    #[cfg(feature = "hardware-qualification")]
+    #[test]
+    fn drain_observer_tracks_real_async_copy_ownership_without_recounting_pending_polls() {
+        let mut steps = vec![
+            scripted_submit_step_v1(
+                Gfx942PersistentSdmaDirectionV1::HostToDevice,
+                0,
+                0,
+                8,
+                ScriptedFailureModeV1::Success,
+            ),
+            ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Pending),
+            ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Pending),
+            ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Completed {
+                direction: None,
+                copy_bytes: None,
+            }),
+            ScriptedSdmaStepV1::Retire(ScriptedFailureModeV1::Success),
+        ];
+        steps.extend(scripted_release_steps_v1());
+        let (mut backend, stream, host, device) = scripted_direct_backend_v1(8, steps);
+        backend.launch_gate = KfdRuntimeLaunchGateV1::CopyOnlyQualification;
+        backend.drain_capture_publications =
+            Some(qualification_drain_capture::PublicationHistoryV1::new());
+        let (source, destination) = scripted_copy_regions_v1(host, device, 8);
+        let submission = backend
+            .copy_async_v1(stream, source, destination, &[])
+            .unwrap();
+        assert!(!backend.submissions.contains_key(&submission));
+        let published = backend.drain_capture_runtime_roster_v1().unwrap();
+        assert_eq!(published.publication_ids(), &[submission]);
+        assert_eq!(published.copies().len(), 1);
+        assert_eq!(
+            published.copies()[0].phase,
+            KfdDrainCaptureCopyPhaseV1::DirectionalPublished
+        );
+        // Scripted custody may test runtime shape, but never grants native evidence.
+        assert_eq!(
+            backend.diagnose_drain_capture_custody_v1(),
+            Err(KfdDrainCaptureObservationFailureV1::NativeQueueUnavailable)
+        );
+        for _ in 0..2 {
+            assert_eq!(backend.poll_v1(submission).unwrap(), BackendPollV1::Pending);
+            assert!(!backend.submissions.contains_key(&submission));
+            assert_eq!(
+                backend.drain_capture_runtime_roster_v1().unwrap(),
+                published
+            );
+        }
+        assert_eq!(
+            backend.poll_v1(submission).unwrap(),
+            BackendPollV1::Succeeded
+        );
+        let completed = backend.drain_capture_runtime_roster_v1().unwrap();
+        assert!(completed.copies().is_empty());
+        assert_eq!(completed.publication_ids(), &[submission]);
         clean_scripted_direct_backend_v1(&mut backend, stream, host, device, Some(submission));
     }
 
