@@ -8,6 +8,8 @@ use fe2o3_kernel_ir::{
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+mod contextual_control;
+
 /// Conservatively classifies SSA values and barrier control in one function.
 ///
 /// The caller should run the kernel IR verifier first. This function still
@@ -25,7 +27,14 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 ///
 /// The returned report is analysis evidence only and grants no assurance.
 pub fn analyze_function(function: &Function) -> AnalysisReport {
-    analyze_function_with_contract(function, &[], &BTreeSet::new(), &BTreeSet::new(), None)
+    analyze_function_with_contract(
+        function,
+        &[],
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+        None,
+        None,
+    )
 }
 
 /// Classifies one kernel entry using uniform ABI parameters and conservative
@@ -48,6 +57,7 @@ pub fn analyze_kernel_entry(module: &Module, function: &Function) -> AnalysisRep
         &summarized_calls,
         &uniform_input_calls,
         workgroup_size,
+        contextual_control::exact_d1_workgroup(module, function),
     )
 }
 
@@ -57,6 +67,7 @@ fn analyze_function_with_contract(
     summarized_calls: &BTreeSet<fe2o3_kernel_ir::FunctionId>,
     uniform_input_calls: &BTreeSet<fe2o3_kernel_ir::FunctionId>,
     workgroup_size: Option<WorkgroupSize>,
+    exact_d1_workgroup: Option<u32>,
 ) -> AnalysisReport {
     let mut report = AnalysisReport {
         function: function.id.clone(),
@@ -81,6 +92,7 @@ fn analyze_function_with_contract(
         summarized_calls,
         uniform_input_calls,
         workgroup_size,
+        exact_d1_workgroup,
     )
     .run()
 }
@@ -314,6 +326,7 @@ fn uniform_helper_returns_are_proven(
         summarized,
         uniform_inputs_required,
         None,
+        None,
     );
     if !report.diagnostics().is_empty() {
         return false;
@@ -344,6 +357,7 @@ struct Analyzer<'a> {
     summarized_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
     uniform_input_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
     workgroup_size: Option<WorkgroupSize>,
+    exact_d1_workgroup: Option<u32>,
     value_definitions: BTreeMap<ValueId, &'a Operation>,
     report: AnalysisReport,
 }
@@ -371,6 +385,7 @@ impl<'a> Analyzer<'a> {
         summarized_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
         uniform_input_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
         workgroup_size: Option<WorkgroupSize>,
+        exact_d1_workgroup: Option<u32>,
     ) -> Self {
         let mut blocks = BTreeMap::new();
         let mut malformed = false;
@@ -454,7 +469,38 @@ impl<'a> Analyzer<'a> {
             &private_slot_stores,
         )
         .solve_terminator_selectors();
-        let effective_successors = effective_successors(body, &known_integer_values);
+        let proven_no_overflow = prove_unsigned_checked_arithmetic(
+            function,
+            body,
+            &reachable,
+            &incoming,
+            &dominators,
+            &trivial_phi_representatives,
+            &private_load_slots,
+            &private_slot_stores,
+        );
+        let value_definitions = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .flat_map(|operation| {
+                operation
+                    .results
+                    .iter()
+                    .map(move |result| (result.id, operation))
+            })
+            .collect();
+        let mut effective_successors = effective_successors(body, &known_integer_values);
+        if !malformed && !malformed_values && !malformed_edges && !control_flow_malformed {
+            contextual_control::refine_successors(
+                body,
+                &incoming,
+                &dominators,
+                &value_types,
+                &value_definitions,
+                &mut effective_successors,
+            );
+        }
         let postdominance_available =
             postdominance_available(&blocks, &reachable, &effective_successors);
         let mut control_unknown = reachable
@@ -481,28 +527,6 @@ impl<'a> Analyzer<'a> {
             &natural_loop_nests,
             &effective_successors,
         );
-        let proven_no_overflow = prove_unsigned_checked_arithmetic(
-            function,
-            body,
-            &reachable,
-            &incoming,
-            &dominators,
-            &trivial_phi_representatives,
-            &private_load_slots,
-            &private_slot_stores,
-        );
-        let value_definitions = body
-            .blocks
-            .iter()
-            .flat_map(|block| &block.operations)
-            .flat_map(|operation| {
-                operation
-                    .results
-                    .iter()
-                    .map(move |result| (result.id, operation))
-            })
-            .collect();
-
         Self {
             body,
             reachable,
@@ -518,6 +542,7 @@ impl<'a> Analyzer<'a> {
             summarized_calls,
             uniform_input_calls,
             workgroup_size,
+            exact_d1_workgroup,
             value_definitions,
             report,
         }
@@ -873,6 +898,21 @@ impl<'a> Analyzer<'a> {
                 lhs,
                 rhs,
             } if self.is_wave64_index_quotient(*lhs, *rhs) => Variation::SubgroupUniform,
+            OperationKind::Compare {
+                predicate,
+                lhs,
+                rhs,
+            } if matches!(operation.results.as_slice(), [result] if result.ty == Type::BOOL)
+                && contextual_control::aligned_global_comparison(
+                    self.exact_d1_workgroup,
+                    &self.value_definitions,
+                    *predicate,
+                    *lhs,
+                    *rhs,
+                ) =>
+            {
+                Variation::WorkgroupUniform
+            }
             OperationKind::Unary { .. }
             | OperationKind::Binary { .. }
             | OperationKind::Compare { .. }
