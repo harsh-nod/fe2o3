@@ -24,8 +24,8 @@ PASS = ("PASS schema=fe2o3.runtime.r61-async-owner-copy.v1 bytes=1048832 "
         "owner_threads=1 abandoned_upload=completed canaries=complete cleanup=complete\n")
 
 
-def validate_output(output):
-    if output != PASS:
+def validate_output(output, expected=PASS):
+    if output != expected:
         raise base.RunError("owner qualifier did not emit exact PASS")
 
 
@@ -77,6 +77,12 @@ def validate_link_command(output):
 
 
 class OwnerRunner(base.Runner):
+    label = "r61"
+    example = EXAMPLE
+    expected_pass = PASS
+    schema = "fe2o3.r61-owner-copy-qualification.v1"
+    claim_scope = "one-device-one-stream-h2d-d2h-abandoned-observer-custody-and-cleanup"
+
     def snapshot(self):
         super().snapshot()
         relative = str(base.BENCH_DIR / HERE.name)
@@ -118,11 +124,11 @@ class OwnerRunner(base.Runner):
             raise base.RunError("target standard-library closure is missing")
         base.write_json(self.evidence / "target-libraries.json", target_libraries)
         link_command = self.run([rust / "cargo", "rustc", "--offline", "--locked", "--release",
-                  "--target", HOST_TARGET, "--no-default-features", "-p", "fe2o3-runtime", "--example", EXAMPLE,
+                  "--target", HOST_TARGET, "--no-default-features", "-p", "fe2o3-runtime", "--example", self.example,
                   "--", "--print=link-args", "-C", "linker=/usr/bin/cc", "-C", "link-arg=-fuse-ld=bfd"],
                  label="build-owner", timeout=1200, env=env, cwd=self.source)
         validate_link_command(link_command)
-        binary = self.stage / "target" / HOST_TARGET / "release/examples" / EXAMPLE
+        binary = self.stage / "target" / HOST_TARGET / "release/examples" / self.example
         binary.chmod(0o500)
         self.binaries = {"kfd": binary}
         self.binary_hashes = {"kfd": base.sha256_file(binary)}
@@ -174,16 +180,16 @@ class OwnerRunner(base.Runner):
                   f"--membind={self.topology['numa_node']}", "/usr/bin/true"], label="placement-probe")
         for ordinal in range(2):
             output = self.phase(f"owner-{ordinal}", "kfd", [base.UNIQUE_ID])
-            validate_output(output.read_text())
+            validate_output(output.read_text(), self.expected_pass)
         self.verify_source()
 
     def publish(self):
-        destination = self.args.output_dir / f"r61-owner-{secrets.token_hex(16)}"
+        destination = self.args.output_dir / f"{self.label}-owner-{secrets.token_hex(16)}"
         base.write_json(self.evidence / "commands.json", self.commands)
         base.write_json(self.evidence / "provenance.json", {
-            "schema": "fe2o3.r61-owner-copy-qualification.v1", "source_commit": self.commit,
+            "schema": self.schema, "source_commit": self.commit,
             "host_target": HOST_TARGET,
-            "claim_scope": "one-device-one-stream-h2d-d2h-abandoned-observer-custody-and-cleanup",
+            "claim_scope": self.claim_scope,
             "source_archive_sha256": base.sha256_file(self.evidence / "source.tar"),
             "snapshot_input_sha256": self.snapshot_input_hashes,
             "tool_identity": self.tool_hashes, "binary_sha256": self.binary_hashes,
@@ -192,7 +198,7 @@ class OwnerRunner(base.Runner):
         })
         shutil.copy2(self.binaries["kfd"], self.evidence / "owner-binary")
         base.write_json(self.evidence / "sha256.json", base.tree_hashes(self.evidence))
-        pending = pathlib.Path(tempfile.mkdtemp(prefix=".r61-publish.", dir=self.args.output_dir))
+        pending = pathlib.Path(tempfile.mkdtemp(prefix=f".{self.label}-publish.", dir=self.args.output_dir))
         try:
             shutil.copytree(self.evidence, pending, dirs_exist_ok=True)
             actual = base.tree_hashes(pending)
@@ -206,7 +212,7 @@ class OwnerRunner(base.Runner):
         return destination
 
 
-def main():
+def main(runner_type=None, label="r61"):
     os.umask(0o077)
     args = base.parse_args()
     for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT, signal.SIGTERM):
@@ -214,15 +220,15 @@ def main():
     stage = runner = destination = None
     completed = False
     try:
-        stage = pathlib.Path(tempfile.mkdtemp(prefix="fe2o3-r61-owner.", dir=args.staging_parent))
-        runner = OwnerRunner(args, stage)
+        stage = pathlib.Path(tempfile.mkdtemp(prefix=f"fe2o3-{label}-owner.", dir=args.staging_parent))
+        runner = (OwnerRunner if runner_type is None else runner_type)(args, stage)
         runner.snapshot()
         runner.build()
         runner.qualify_and_measure()
         destination = runner.publish()
         base.cleanup_tree(stage)
         stage = None
-        print(f"PASS R61 owner qualification: {destination}")
+        print(f"PASS {label.upper()} owner qualification: {destination}")
         completed = True
         return 0
     except Exception as error:
@@ -232,9 +238,9 @@ def main():
             if not commands.exists():
                 base.write_json(commands, runner.commands)
             base.write_json(runner.evidence / "rejection.json", {"error": str(error)})
-            rejected = args.output_dir / f"r61-rejected-{secrets.token_hex(16)}"
+            rejected = args.output_dir / f"{label}-rejected-{secrets.token_hex(16)}"
             shutil.copytree(runner.evidence, rejected)
-        print(f"R61 rejected: {error}; diagnostics={rejected}", file=sys.stderr)
+        print(f"{label.upper()} rejected: {error}; diagnostics={rejected}", file=sys.stderr)
         return 2
     finally:
         try:

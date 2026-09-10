@@ -57,6 +57,15 @@ r56_two_native_sdma_mux_proof="$script_dir/r56_two_native_sdma_mux_v1.rs"
 r57_three_binding_compute_proof="$script_dir/r57_three_binding_compute_v1.rs"
 r60_ordinary_fixed_dispatch_pipeline_proof="$script_dir/r60_ordinary_fixed_dispatch_pipeline_v1.rs"
 r61_owner_async_custody_proof="$script_dir/r61_owner_async_custody_v1.rs"
+r62_operation_control_proof="$script_dir/r62_operation_control_v1.rs"
+negative_r62_cancel_after_start="$script_dir/negative/r62_operation_control_v1_cancel_after_start.rs"
+negative_r62_restart_cancelled="$script_dir/negative/r62_operation_control_v1_restart_cancelled.rs"
+negative_r62_repeat_start="$script_dir/negative/r62_operation_control_v1_repeat_start.rs"
+negative_r62_reopen_queued="$script_dir/negative/r62_operation_control_v1_reopen_queued.rs"
+negative_r62_stop_loses_custody="$script_dir/negative/r62_operation_control_v1_stop_loses_custody.rs"
+negative_r62_terminal_reopen="$script_dir/negative/r62_operation_control_v1_terminal_reopen.rs"
+negative_r62_finish_before_start="$script_dir/negative/r62_operation_control_v1_finish_before_start.rs"
+negative_r62_timeout_drops_custody="$script_dir/negative/r62_operation_control_v1_timeout_drops_custody.rs"
 negative_r61_release_without_native_shutdown="$script_dir/negative/r61_owner_async_custody_v1_release_without_native_shutdown.rs"
 negative_r61_incomplete_cleanup_release="$script_dir/negative/r61_owner_async_custody_v1_incomplete_cleanup_release.rs"
 negative_r61_native_failure_release="$script_dir/negative/r61_owner_async_custody_v1_native_failure_release.rs"
@@ -727,6 +736,15 @@ expected_r56_two_native_sdma_mux=$(read_pin "$pin_dir/R56_TWO_NATIVE_SDMA_MUX_SH
 expected_r57_three_binding_compute=$(read_pin "$pin_dir/R57_THREE_BINDING_COMPUTE_SHA256")
 expected_r60_ordinary_fixed_dispatch_pipeline=$(read_pin "$pin_dir/R60_ORDINARY_FIXED_DISPATCH_PIPELINE_SHA256")
 expected_r61_owner_async_custody=$(read_pin "$pin_dir/R61_OWNER_ASYNC_CUSTODY_SHA256")
+expected_r62_operation_control=$(read_pin "$pin_dir/R62_OPERATION_CONTROL_SHA256")
+expected_negative_r62_cancel_after_start=$(read_pin "$pin_dir/NEGATIVE_R62_CANCEL_AFTER_START_SHA256")
+expected_negative_r62_restart_cancelled=$(read_pin "$pin_dir/NEGATIVE_R62_RESTART_CANCELLED_SHA256")
+expected_negative_r62_repeat_start=$(read_pin "$pin_dir/NEGATIVE_R62_REPEAT_START_SHA256")
+expected_negative_r62_reopen_queued=$(read_pin "$pin_dir/NEGATIVE_R62_REOPEN_QUEUED_SHA256")
+expected_negative_r62_stop_loses_custody=$(read_pin "$pin_dir/NEGATIVE_R62_STOP_LOSES_CUSTODY_SHA256")
+expected_negative_r62_terminal_reopen=$(read_pin "$pin_dir/NEGATIVE_R62_TERMINAL_REOPEN_SHA256")
+expected_negative_r62_finish_before_start=$(read_pin "$pin_dir/NEGATIVE_R62_FINISH_BEFORE_START_SHA256")
+expected_negative_r62_timeout_drops_custody=$(read_pin "$pin_dir/NEGATIVE_R62_TIMEOUT_DROPS_CUSTODY_SHA256")
 expected_negative_r61_release_without_native_shutdown=$(read_pin "$pin_dir/NEGATIVE_R61_RELEASE_WITHOUT_NATIVE_SHUTDOWN_SHA256")
 expected_negative_r61_incomplete_cleanup_release=$(read_pin "$pin_dir/NEGATIVE_R61_INCOMPLETE_CLEANUP_RELEASE_SHA256")
 expected_negative_r61_native_failure_release=$(read_pin "$pin_dir/NEGATIVE_R61_NATIVE_FAILURE_RELEASE_SHA256")
@@ -1409,6 +1427,15 @@ check_sources() {
     check_digest "$expected_r57_three_binding_compute" "$r57_three_binding_compute_proof"
     check_digest "$expected_r60_ordinary_fixed_dispatch_pipeline" "$r60_ordinary_fixed_dispatch_pipeline_proof"
     check_digest "$expected_r61_owner_async_custody" "$r61_owner_async_custody_proof"
+    check_digest "$expected_r62_operation_control" "$r62_operation_control_proof"
+    check_digest "$expected_negative_r62_cancel_after_start" "$negative_r62_cancel_after_start"
+    check_digest "$expected_negative_r62_restart_cancelled" "$negative_r62_restart_cancelled"
+    check_digest "$expected_negative_r62_repeat_start" "$negative_r62_repeat_start"
+    check_digest "$expected_negative_r62_reopen_queued" "$negative_r62_reopen_queued"
+    check_digest "$expected_negative_r62_stop_loses_custody" "$negative_r62_stop_loses_custody"
+    check_digest "$expected_negative_r62_terminal_reopen" "$negative_r62_terminal_reopen"
+    check_digest "$expected_negative_r62_finish_before_start" "$negative_r62_finish_before_start"
+    check_digest "$expected_negative_r62_timeout_drops_custody" "$negative_r62_timeout_drops_custody"
     check_digest "$expected_negative_r61_release_without_native_shutdown" "$negative_r61_release_without_native_shutdown"
     check_digest "$expected_negative_r61_incomplete_cleanup_release" "$negative_r61_incomplete_cleanup_release"
     check_digest "$expected_negative_r61_native_failure_release" "$negative_r61_native_failure_release"
@@ -2062,6 +2089,15 @@ check_sources
     "$r57_three_binding_compute_proof" \
     "$r60_ordinary_fixed_dispatch_pipeline_proof" \
     "$r61_owner_async_custody_proof" \
+    "$r62_operation_control_proof" \
+    "$negative_r62_cancel_after_start" \
+    "$negative_r62_restart_cancelled" \
+    "$negative_r62_repeat_start" \
+    "$negative_r62_reopen_queued" \
+    "$negative_r62_stop_loses_custody" \
+    "$negative_r62_terminal_reopen" \
+    "$negative_r62_finish_before_start" \
+    "$negative_r62_timeout_drops_custody" \
     "$negative_r61_release_without_native_shutdown" \
     "$negative_r61_incomplete_cleanup_release" \
     "$negative_r61_native_failure_release" \
@@ -2808,6 +2844,7 @@ check_positive "$r56_two_native_sdma_mux_proof" 'verification results:: 41 verif
 check_positive "$r57_three_binding_compute_proof" 'verification results:: 35 verified, 0 errors' r57-three-binding-compute
 check_positive "$r60_ordinary_fixed_dispatch_pipeline_proof" 'verification results:: 46 verified, 0 errors' r60-ordinary-fixed-dispatch-pipeline
 check_positive "$r61_owner_async_custody_proof" 'verification results:: 8 verified, 0 errors' r61-owner-async-custody
+check_positive "$r62_operation_control_proof" 'verification results:: 8 verified, 0 errors' r62-operation-control
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -3400,6 +3437,14 @@ check_negative "$negative_r61_duplicate_reply" mutated_reply_resolves_once_v1 r6
 check_negative "$negative_r61_future_drop_releases_custody" mutated_abandon_preserves_custody_v1 r61-future-drop-releases-custody
 check_negative "$negative_r61_stop_promotes_completion" mutated_stop_preserves_completion_v1 r61-stop-promotes-completion
 check_negative "$negative_r61_queue_credit_duplication" mutated_capacity_rejects_overflow_v1 r61-queue-credit-duplication
+check_negative "$negative_r62_cancel_after_start" mutated_cancel_after_start_v1 r62-cancel-after-start
+check_negative "$negative_r62_restart_cancelled" mutated_restart_cancelled_v1 r62-restart-cancelled
+check_negative "$negative_r62_repeat_start" mutated_repeat_start_v1 r62-repeat-start
+check_negative "$negative_r62_reopen_queued" mutated_reopen_queued_v1 r62-reopen-queued
+check_negative "$negative_r62_stop_loses_custody" mutated_stop_loses_custody_v1 r62-stop-loses-custody
+check_negative "$negative_r62_terminal_reopen" mutated_terminal_reopen_v1 r62-terminal-reopen
+check_negative "$negative_r62_finish_before_start" mutated_finish_before_start_v1 r62-finish-before-start
+check_negative "$negative_r62_timeout_drops_custody" mutated_timeout_drops_custody_v1 r62-timeout-drops-custody
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
@@ -3408,7 +3453,7 @@ check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 r57_three_binding_compute_obligations=35 r57_three_binding_compute_mutations=23 r60_ordinary_fixed_dispatch_pipeline_obligations=46 r60_ordinary_fixed_dispatch_pipeline_mutations=26 r61_owner_async_custody_obligations=8 r61_owner_async_custody_mutations=8 expected_negative_files=592'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 r57_three_binding_compute_obligations=35 r57_three_binding_compute_mutations=23 r60_ordinary_fixed_dispatch_pipeline_obligations=46 r60_ordinary_fixed_dispatch_pipeline_mutations=26 r61_owner_async_custody_obligations=8 r61_owner_async_custody_mutations=8 r62_operation_control_obligations=8 r62_operation_control_mutations=8 expected_negative_files=600'
 actual_transcript=$(printf '%s\n' "$transcript" | /usr/bin/sha256sum | /usr/bin/awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

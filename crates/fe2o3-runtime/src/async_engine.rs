@@ -25,6 +25,8 @@ mod owned;
 pub use owned::*;
 mod operation;
 pub use operation::*;
+mod operation_control;
+pub use operation_control::*;
 
 /// Hard upper bound for commands waiting to enter one async engine.
 pub const MAX_RUNTIME_ASYNC_COMMANDS_V1: usize = 65_536;
@@ -315,6 +317,8 @@ impl Error for RuntimeAsyncProgressEngineSpawnErrorV1 {
 pub enum RuntimeAsyncEngineCallErrorV1 {
     CommandQueueFull,
     OperationCapacity,
+    /// This operation never entered context submission. Not GPU completion.
+    CancelledBeforeSubmission,
     EngineStopped,
     ReentrantCall,
     CommandPanicked,

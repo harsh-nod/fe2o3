@@ -2,6 +2,8 @@ use super::*;
 use crate::{RuntimeAsyncOwnedDispositionV1, RuntimeOwnedShutdownBackendV1};
 use std::cell::Cell;
 
+mod control_tests;
+
 #[derive(Default)]
 struct OwnerTrace {
     calls: Vec<(&'static str, ThreadId)>,

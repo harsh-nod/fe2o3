@@ -120,9 +120,11 @@ single-device musl copy canaries with independent integrity and cleanup checks.
 #182 must remain open until its full acceptance matrix is met:
 
 - A0: distributed threat model, stable identities, bounded protocols and budgets.
-- A1: general generated-kernel production authority, operation-addressable
-  prepublication cancellation, timeout policy, end-to-end byte budgets, multiple
-  executor integration, mixed-duration/high-depth hardware qualification.
+- A1: general generated-kernel production authority, end-to-end byte budgets,
+  multiple executor integration, mixed-duration/high-depth hardware qualification
+  and full drain qualification. [R62](runtime-async-control-v1.md) adds opaque
+  operation-addressable pre-submission cancellation and recoverable timeout
+  observation with an executor-supplied timer; it does not supply a timer service.
 - A2: admitted graph driver, exclusive resource reservation or pins, exact data
   versions, graph epochs, joins, residency and repeated overlap qualification.
 - A3: integrated group placement/sharding/replicas, all-admitted-GPU qualification,

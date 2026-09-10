@@ -1,5 +1,23 @@
 # Runtime model verification
 
+## Issue 182 Local Control Extension
+
+R61 contributes eight abstract owner-custody obligations and eight negative
+mutations. R62 adds eight host-control obligations and eight targeted negatives:
+cancel/start exclusion, cancellation absorption, at-most-once start, no reopening,
+stop disposition, terminal absorption, started-path observation, and timeout/Drop
+identity and custody. The authenticated runner now expects 51 positive sources,
+1,276 obligations, and 600 negative files. Counts do not imply whole-runtime proof.
+
+Production calls the shared Rust R62 transition table. Its finite table and short
+traces are exhaustively tested, but Rust/Verus correspondence remains reviewed,
+not proved executable refinement. CAS and memory ordering are contracted;
+thread/future/waker integration is validated. Neither host phases nor timer
+observations establish GPU completion, native quiescence, or retry authority.
+See `docs/runtime-async-control-v1.md` for property-level boundaries and remaining
+issue acceptance. The source auditor, negative quality checker, and toolchain
+closure restrictions are unchanged; only the reviewed source roster/digests grow.
+
 This directory contains the issue #137 Verus specifications and the additive R7
 asynchronous-resource, R8 execution-contract, R9 native-evidence, R10 closed
 execution-composition, R11 runtime-semantics, R12 native-concurrency, R13

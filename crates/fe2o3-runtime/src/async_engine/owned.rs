@@ -65,6 +65,24 @@ pub struct RuntimeAsyncCommandFutureV1<R> {
     completed: bool,
 }
 
+fn discard_waker(waker: Option<Waker>) {
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(waker))) {
+        core::mem::forget(payload);
+    }
+}
+
+impl<R> RuntimeAsyncCommandFutureV1<R> {
+    pub(super) fn clear_waker(&self) {
+        let waker = self
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .waker
+            .take();
+        discard_waker(waker);
+    }
+}
+
 impl<R> Future for RuntimeAsyncCommandFutureV1<R> {
     type Output = Result<R, RuntimeAsyncEngineCallErrorV1>;
 
@@ -74,18 +92,19 @@ impl<R> Future for RuntimeAsyncCommandFutureV1<R> {
             "runtime command future polled after completion"
         );
         // Executor-supplied clone/drop callbacks must not run under our lock.
-        let new_waker = context.waker().clone();
+        let mut new_waker = Some(context.waker().clone());
         let (result, old_waker) = {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             let result = state.result.take();
             let old_waker = if result.is_none() {
-                state.waker.replace(new_waker)
+                core::mem::replace(&mut state.waker, new_waker.take())
             } else {
                 state.waker.take()
             };
             (result, old_waker)
         };
-        drop(old_waker);
+        discard_waker(old_waker);
+        discard_waker(new_waker);
         match result {
             Some(result) => {
                 self.completed = true;
@@ -98,13 +117,7 @@ impl<R> Future for RuntimeAsyncCommandFutureV1<R> {
 
 impl<R> Drop for RuntimeAsyncCommandFutureV1<R> {
     fn drop(&mut self) {
-        let waker = self
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .waker
-            .take();
-        drop(waker);
+        self.clear_waker();
     }
 }
 

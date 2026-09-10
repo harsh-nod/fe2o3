@@ -83,10 +83,14 @@ struct Operation<B: RuntimeBackendV1, A> {
     reply: owned::Reply<RuntimeAsyncOperationResultV1<A, B::Error>>,
     rejected_observations: u64,
     last_rejected_observation: Option<B::Error>,
+    control: Option<RuntimeAsyncOperationControlV1>,
 }
 
 impl<B: RuntimeBackendV1, A> Operation<B, A> {
     fn finish(&mut self, observation: Result<RuntimeCompletionStatusV1, RuntimeErrorV1<B::Error>>) {
+        if let Some(control) = &self.control {
+            control.finish_observation();
+        }
         self.reply.complete(Ok(RuntimeAsyncOperationResultV1 {
             submission: self.submission.take(),
             observation,
@@ -96,11 +100,41 @@ impl<B: RuntimeBackendV1, A> Operation<B, A> {
     }
 }
 
+impl<B: RuntimeBackendV1, A> Drop for Operation<B, A> {
+    fn drop(&mut self) {
+        if let Some(control) = &self.control {
+            control.stopped();
+            if control.phase() == RuntimeAsyncOperationPhaseV1::CancelledBeforeSubmission {
+                self.reply.complete(Err(
+                    RuntimeAsyncEngineCallErrorV1::CancelledBeforeSubmission,
+                ));
+            }
+        }
+    }
+}
+
 impl<B: RuntimeBackendV1, A> EngineOperationV1<B> for Operation<B, A> {
     fn advance(&mut self, context: &mut RuntimeContextV1<B>) -> bool {
         if let Some(submit) = self.submit.take() {
+            if let Some(control) = &self.control
+                && !control.start_submission()
+            {
+                let error =
+                    if control.phase() == RuntimeAsyncOperationPhaseV1::CancelledBeforeSubmission {
+                        RuntimeAsyncEngineCallErrorV1::CancelledBeforeSubmission
+                    } else {
+                        RuntimeAsyncEngineCallErrorV1::EngineStopped
+                    };
+                self.reply.complete(Err(error));
+                return true;
+            }
             match submit(context) {
-                Ok(submission) => self.submission = Some(submission),
+                Ok(submission) => {
+                    self.submission = Some(submission);
+                    if let Some(control) = &self.control {
+                        control.observing();
+                    }
+                }
                 Err(error) => {
                     self.finish(Err(error));
                     return true;
@@ -143,6 +177,15 @@ impl<B: RuntimeBackendV1, A> EngineOperationV1<B> for Operation<B, A> {
     }
 
     fn reject(&mut self, error: RuntimeAsyncEngineCallErrorV1) {
+        if let Some(control) = &self.control {
+            control.stopped();
+            if control.phase() == RuntimeAsyncOperationPhaseV1::CancelledBeforeSubmission {
+                self.reply.complete(Err(
+                    RuntimeAsyncEngineCallErrorV1::CancelledBeforeSubmission,
+                ));
+                return;
+            }
+        }
         self.reply.complete(Err(error));
     }
 }
@@ -152,6 +195,25 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         &self,
         stream: RuntimeStreamIdV1,
         submit: Submit<B, A>,
+    ) -> Result<RuntimeAsyncOperationFutureV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
+        self.enqueue_controlled_operation(stream, submit, None)
+    }
+
+    fn enqueue_tracked_operation<A: 'static>(
+        &self,
+        stream: RuntimeStreamIdV1,
+        submit: Submit<B, A>,
+    ) -> Result<RuntimeAsyncTrackedOperationV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
+        let control = RuntimeAsyncOperationControlV1::new();
+        let future = self.enqueue_controlled_operation(stream, submit, Some(control.clone()))?;
+        Ok(RuntimeAsyncTrackedOperationV1 { future, control })
+    }
+
+    fn enqueue_controlled_operation<A: 'static>(
+        &self,
+        stream: RuntimeStreamIdV1,
+        submit: Submit<B, A>,
+        control: Option<RuntimeAsyncOperationControlV1>,
     ) -> Result<RuntimeAsyncOperationFutureV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
         if self.observer.is_worker_thread() {
             return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
@@ -164,6 +226,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
             reply,
             rejected_observations: 0,
             last_rejected_observation: None,
+            control,
         };
         match self
             .observer
@@ -201,6 +264,24 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         )
     }
 
+    /// Like `launch`, with local identity, pre-submission cancellation, and
+    /// recoverable timeout observation. It uses the same admission and registry.
+    pub fn launch_tracked<A: RuntimeArgumentsV1>(
+        &self,
+        stream: RuntimeStreamIdV1,
+        kernel: Arc<TypedRuntimeKernelV1<A>>,
+        arguments: A,
+        geometry: RuntimeLaunchGeometryV1,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<RuntimeAsyncTrackedOperationV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
+        self.enqueue_tracked_operation(
+            stream,
+            Box::new(move |context| {
+                context.launch(stream, &kernel, &arguments, geometry, &dependencies)
+            }),
+        )
+    }
+
     /// Enqueues a same-device transfer with runtime-owned progress and custody.
     pub fn copy_async(
         &self,
@@ -218,6 +299,26 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         )
     }
 
+    /// Same-device transfer with the same control and custody as `launch_tracked`.
+    pub fn copy_async_tracked(
+        &self,
+        stream: RuntimeStreamIdV1,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<
+        RuntimeAsyncTrackedOperationV1<RuntimeCopyV1, B::Error>,
+        RuntimeAsyncEngineCallErrorV1,
+    >
+    where
+        B: RuntimeAsyncCopyBackendV1,
+    {
+        self.enqueue_tracked_operation(
+            stream,
+            Box::new(move |context| context.copy_async(stream, source, destination, &dependencies)),
+        )
+    }
+
     /// Enqueues an admitted peer transfer; it does not imply native XGMI routing.
     pub fn peer_copy(
         &self,
@@ -230,6 +331,23 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         RuntimeAsyncEngineCallErrorV1,
     > {
         self.enqueue_operation(
+            stream,
+            Box::new(move |context| context.peer_copy(stream, source, destination, &dependencies)),
+        )
+    }
+
+    /// Admitted peer transfer with local control; it does not imply XGMI routing.
+    pub fn peer_copy_tracked(
+        &self,
+        stream: RuntimeStreamIdV1,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<
+        RuntimeAsyncTrackedOperationV1<RuntimePeerCopyV1, B::Error>,
+        RuntimeAsyncEngineCallErrorV1,
+    > {
+        self.enqueue_tracked_operation(
             stream,
             Box::new(move |context| context.peer_copy(stream, source, destination, &dependencies)),
         )
