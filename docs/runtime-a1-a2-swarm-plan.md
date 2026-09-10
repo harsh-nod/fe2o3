@@ -52,6 +52,14 @@ the 43-package production dependency audit also pass. Proof inputs are unchanged
 the negative inventory was rechecked, not the full solver run. Live acceptance
 remains open.
 
+Signed diagnostic/extraction implementation `d5ada879` is pushed to both
+remotes. Its [new MI300X campaign](evidence/mi300x-r66diag-d5ada879-2026-09-10/README.md)
+built successfully and retained the actual independently audited binary, but
+the shared GPU became busy before launch. The qualifier never started. All
+owned processes/groups and staging files were independently confirmed absent;
+foreign GPU work was left untouched. Native-roster diagnosis therefore still
+requires an idle shared-GPU window; this is not a new native acceptance result.
+
 The resources owner moved the existing credit engine into
 `fe2o3-resource-accounting`; the runtime keeps its device-branded wrapper. Only
 this extraction is approved/implemented. KFD physical costs, parent budgets,

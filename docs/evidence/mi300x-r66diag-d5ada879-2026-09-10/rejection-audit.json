@@ -1,0 +1,48 @@
+{
+  "source_commit": "d5ada879bc88a70523a1a5b6ab97f7aa218cbc11",
+  "signed_source_verified": true,
+  "source_archive_exact": true,
+  "source_archive_sha256": "96579bcc7c585ced6cc14335bf877c36f0c44e5e8a5c8531bd785401785014ed",
+  "source_files": 7047,
+  "capture_sha256": "c7030db589bd6f8920d2ac3540682bdcc7ddb939b79c213b0ffded6de11944dc",
+  "capture_bytes": 129812480,
+  "commands": 24,
+  "successful_commands": 24,
+  "last_command": {
+    "argv": [
+      "/opt/rocm-7.2.4/bin/rocm-smi",
+      "--showuniqueid",
+      "--showbus",
+      "--showuse",
+      "--showmemuse",
+      "--json"
+    ],
+    "cwd": "/dev/shm/fe2o3-r66-owner.rHMgBJTs/staging/fe2o3-r66-owner.tvuktnqy",
+    "environment": {
+      "LANG": "C",
+      "LC_ALL": "C",
+      "PATH": "/usr/sbin:/usr/bin:/sbin:/bin"
+    },
+    "process_group": 875783,
+    "returncode": 0,
+    "stderr": "evidence/023-telemetry-owner-0-start.stderr",
+    "stdout": "evidence/023-telemetry-owner-0-start.stdout",
+    "timeout_seconds": 60
+  },
+  "qualifier_started": false,
+  "rejection_stage": "prelaunch-shared-gpu-busy",
+  "acceptance": false,
+  "performance_claim": false,
+  "physical_overlap": "unmeasured",
+  "actual_binary_retained": true,
+  "independent_actual_elf_audit": true,
+  "binary_sha256": "5fd183d66bf45ace4c16291a468ea03fbe142a4a34544a7fb332bda583fb7132",
+  "binary_bytes": 4426920,
+  "static_symbol_names": 4863,
+  "elf_audit": "pure-Rust runtime audit: OK (ELF bytes=4426920 needed=0 dynsym=0 sha256=5fd183d66bf45ace4c16291a468ea03fbe142a4a34544a7fb332bda583fb7132; profile=fe2o3.runtime.pure-rust.gfx942.v1)",
+  "metadata_audit": "pure-Rust runtime audit: OK (metadata roots=1 packages=43 allowed_build_scripts=libc@0.2.189,proc-macro2@1.0.107,quote@1.0.47,rustix@1.1.4,serde@1.0.229,serde_core@1.0.229,serde_json@1.0.151,zmij@1.0.23 sha256=8f0c9b91b1305b550181c9327d282344c55be8524a8ed534677716f50ff33740; profile=fe2o3.runtime.pure-rust.gfx942.v1)",
+  "cleanup_verified": true,
+  "rejection": {
+    "error": "selected GPU identity changed or GPU is busy"
+  }
+}
