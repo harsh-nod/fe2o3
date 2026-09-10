@@ -18,6 +18,33 @@ The capability migration remains incomplete: 0 of 47 tutorial fixtures have
 qualified through the new production path. No milestone is completed by the
 component tests below.
 
+A source-export sweep of committed revision `742c20641` on mi350 attempted
+all 47 exact manifest selections after repairing ten standalone lockfiles and
+the sparse/compressed-attention feature gates. All 47 exports rejected; this
+was not a hardware run. The first observed blockers were:
+
+| Source boundary | Fixtures |
+| --- | ---: |
+| Borrowed closure capture lacks allocation/completion provenance | 25 |
+| Other cross-crate helpers lack reviewed source-safety authentication | 12 |
+| Closure capture budget exceeded | 3 |
+| Reachable panic path | 3 |
+| Dynamic launch/output coverage | 1 |
+| Retained private-slot lowering | 1 |
+| Named-constant `for` range unsupported by macro lowering | 1 |
+| Host-only dependencies included in an AMDGPU build | 1 |
+
+The Wave64 dependency issue was then fixed in `4045b8bd7` using the existing
+host/device cfg split. A separate exact-fixture rerun passed dependency and
+Rust compilation, then rejected at semantic MIR import: function 1 has invalid
+local roles. It still produced no bundle or hardware observation.
+
+The diagnostic runner retains exact commands, candidate and binary identities,
+exit status, bounded content-addressed logs, and cleanup observations. Its
+`--source-export-report` mode does not create qualification evidence. Earlier
+checked-in `productionExport` observations remain historical; refreshing input
+hashes does not rerun those observations or turn them into passing results.
+
 The real context-based vecadd now passes CPU-reference binding and semantic
 MIR admission. Integration fixes preserve the borrowed invocation receiver,
 its root provenance, nominal disjoint index-space dependencies, and the exact
@@ -39,10 +66,13 @@ metadata remains tied to the authenticated allocation. Shared scalar slices
 retain read-only access even when rustc's ABI record omits a frozen-pointee
 flag; this refinement does not apply to raw pointers or interior-mutable data.
 Exclusive read/write views now preserve their authenticated mutable borrow,
-allocation, access, and source relations in this ranked path. Functional value
-correlation still rejects loads from writable allocations: access coordinates
-alone do not establish which write supplies a mutable load. A reaching-write
-model remains required. An exclusive allocation does not imply disjoint
+allocation, access, and source relations in this ranked path. A bounded
+reaching-write analysis now correlates a mutable load with initial memory or
+one preceding store at the exact same invocation coordinate. It retains
+unchanged-memory paths, requires exact bounds guards and dominance, and rejects
+conflicting joins, aliases, unknown effects, barriers, and cyclic control flow.
+This is not yet a model for tiled, cross-invocation, or loop-carried mutable
+state. An exclusive allocation does not imply disjoint
 invocation accesses: stores still require
 an exact invocation-derived index, and ranked race and ownership checks remain
 mandatory. Blocked stores and unsupported compact arithmetic index mappings
@@ -58,19 +88,33 @@ output-coordinate domain. Each CPU bounds assertion must follow from that
 domain or its own preceding CPU path conditions, never from itself, a later
 write's guard, or the GPU's guards.
 
-Extraction next rejects the absent protected functional-refinement runtime at
+The protected functional-refinement runtime now admits on mi350 in a private
+mount namespace with the unchanged byte pins and root-owned installation at
 `/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5`.
-The standalone cached Verus executable is not a replacement for that retained,
-pinned runtime closure. No source-reference proof, Bundle V8, HSACO, protected
-launch, or hardware qualification was produced by this extraction.
-The exact runtime source audit now passes on mi300x using privately staged
-pinned libraries and rustup provenance, without changing system libraries or
-manifest pins. The existing ignored retained-runtime smoke test now passes on
-mi300x with those exact bytes. It uses the test-only ownership policy in private
-scratch, executes a real Verus proof, and produces no production lease or
-receipt. The protected runtime has not been installed: mi300x requires a sudo
-password, so administrator provisioning remains necessary. The available mi350
-host has a different system loader and does not match this runtime pin.
+A read-only directory overlay supplies the pinned loader only inside that
+namespace; the shared host's loader and libraries are unchanged. A leaf-file
+bind mount correctly rejects at the retained runtime's no-cross-device check.
+No production protection check or manifest pin is relaxed.
+
+Real vecadd extraction now executes and imports its local reference proof.
+The controller's bounded polling backoff removes a fixed-sleep bottleneck:
+the previous run hit its 60-second proof deadline; the new run reaches ranked
+ownership admission in 13.14 seconds with the same deadline. Ownership then
+rejects the dynamic launch dimension (`FE2O3-OWN-002`). No Bundle V8, HSACO,
+protected launch, or hardware qualification was produced.
+
+Completing that boundary requires guard-aware output coverage and an
+authenticated relationship between runtime launch dimensions and output
+extents. The current source join requests `TotalView`, whereas the CPU reference
+can leave outputs unchanged when an input is shorter. Merely replacing that
+contract with `ExactEffectDomain`, or treating a tested grid as a universal
+compile-time bound, would not establish whole-output equivalence.
+
+A separate ignored production-runtime test now executes and imports matching
+integer and IEEE operator-congruence formulas and rejects wrong operators
+through the normal root-protected lease. Its four proof cases passed on mi350
+in 24.85 seconds. The earlier retained-runtime smoke and formula tests on
+mi300x use the test-only ownership policy and produce no production lease.
 The retained controller also verifies generated integer and floating-point
 operator-congruence formulas, rejects wrong-operator mutations in both models,
 and verifies a generated IEEE aggregate formula. These are explicit test-only
@@ -84,7 +128,7 @@ load only when its exact authenticated recipe is intact, the load precedes
 the consuming write, and every possible path or write predicate excludes
 using the fallback value. Unknown paths are retained conservatively; cycles
 and exhausted budgets reject. This component has not yet been exercised by
-the real vecadd extraction, which stops before proof admission. Mutable escapes
+the real vecadd extraction, which stops at ranked ownership admission. Mutable escapes
 invalidate scalar and physical-view provenance; a copied allocation length
 cannot silently retain its old meaning after rebinding through a borrow.
 
@@ -130,9 +174,14 @@ establish source-proof execution, machine refinement, or a GPU observation.
 Native V5 has a typed continuation from pending machine-refined finalization
 through authenticated compiler completion to publication. The finalizer binds
 the checked machine evidence to the exact worker request, response, optimized
-bitcode, generated object, and raw HSACO. The production worker still lacks
-complete stage-content and instruction-selection/decoded-ISA capture for the
-independent checker, so its missing machine evidence remains fatal.
+bitcode, generated object, and raw HSACO. Explicit capture-required requests
+now transport bounded linked bitcode, optimized bitcode, and generated-object
+bytes and require exact agreement between bootstrap and replay. Existing V2
+requests retain their previous wire bytes, V4 responses, and size behavior;
+the production caller still selects V2. These contents are
+inputs to checking, not a machine-equivalence certificate. Complete pass
+occurrence, instruction-selection, and decoded-ISA correspondence are still
+missing, so the independent machine-evidence gate remains fatal.
 
 The hardware protocol now admits compiler-only preparation separately from
 signed hardware observations. Rust verifies the newline-inclusive prepared
@@ -141,22 +190,25 @@ driver/runtime facts on the target host. A real sealed V5/Bundle V8 archive
 has not yet passed the combined Python-to-Rust positive path. The Python
 producer now consumes the current compiler-only preparation schema and leaves
 driver/runtime facts to the hardware observation. A compiler-owned negative
-replay removes one root from the exact retained source MIR roster and reruns
-admission, with an independent replay on import. This is explicitly incomplete:
-it does not recompile a mutated Rust kernel or satisfy the required negative
-suite. Caller JSON claiming that negatives passed cannot authorize promotion.
+replay binds the required declaration roster and first checks the unchanged
+MIR and executable KIR as positive controls. Supplemental mutations remove a
+source root, change unwind behavior, or introduce an unknown KIR callee;
+import independently replays them. None substitutes for a required declared
+case: the receipt explicitly reports zero required cases satisfied and no
+Rust-source recompilation. Caller JSON claiming that negatives passed cannot
+authorize promotion.
 
 Python and Rust now hash package sources in the same component order, excluding
 only `target` directories. A shared digest vector covers prefix collisions and
 creation order; all 47 checked-in fixture input contracts pass the Rust
 production admission check without rewriting their expected hashes in the test.
-The 37 refreshed input contracts do not create fresh production observations:
+Input-only contract refreshes do not create fresh production observations:
 retained export diagnostics are explicitly historical and all kernels remain
 unqualified. `--check-inputs` validates current inputs without promoting them;
 `--committed-parity` additionally requires exact shared contract bytes in both
 repositories' committed HEADs.
 
-Current component validation passes 1,601 library tests: 658 compiler, 128 MIR
+The preceding component checkpoint passed 1,601 library tests: 658 compiler, 128 MIR
 model, 166 Pliron, 200 lowering, 51 AMD model, 130 kernel analysis, 104 KIR,
 39 shared lineage, and 125 verifier tests. Six verifier tests are ignored by
 default: three subprocess helpers and three provisioning-dependent runtime
@@ -165,7 +217,7 @@ The selected native capability verifier integration suite passes 20 tests,
 including three shared historical-fixture tests and rejection of unchanged
 historical evidence with a stale work report.
 The transaction producer and batch-verifier CLI suites pass another 14 tests.
-The finalizer library suite passes 111 tests, including three machine-binding
+That checkpoint's finalizer library suite passed 111 tests, including three machine-binding
 tests and three historical-fixture regressions. Genuine V8 fixtures captured
 from compiler revision `149019b40` repair the stale fixture dependency without
 projecting V13 into V8. Their original bytes stay frozen; a separate current
@@ -174,18 +226,29 @@ Worker-admission integration passes 16 tests, but 12 still fail at the missing
 machine-refinement gate before their later finalization/publication assertions.
 Two real-worker integration tests remain ignored. No missing proof was replaced
 with fixture authority to make these tests pass.
+This update reruns 1,187 selected library tests successfully: 671 compiler,
+228 artifact transaction, 120 finalizer, 126 verifier (seven ignored), and
+42 runtime protocol tests. The 124 tutorial Python tests also pass. Wave64
+host tests run through `cargo fe2o3 test --all-targets`: 46 pass and three are
+ignored. Direct `cargo test` is not admitted for its typed kernel.
+The new C++ codec tests pass against explicitly unqualified LLVM 18; the full
+pinned LLVM 22 worker pipeline has not been built or executed. Finalizer-only
+strict Clippy passes; this is not a workspace-wide Clippy result. The three
+new wrapping-helper tests verify the closed origin/signature contract and
+reject changed MIR operators, operands, effects, and return shapes. The helper
+waiver applies only to the exact reviewed safe-core wrapping bodies; collection,
+intrinsic authentication, MIR admission, and lowering still run normally.
 This is not a full-workspace test result or all-kernel equivalence evidence.
 Strict Clippy is not clean: existing style diagnostics remain in the MIR model
 and proof-contract dependency.
 
-The tutorial website passes 198 unit tests with two workers, corpus validation,
-lint, type checking, and its production build. A default-concurrency rerun hit
-an unrelated debugger UI test's five-second timeout; the two-worker rerun
-passed without changing that test. The updated capability page also passes
+The tutorial website passes 198 unit tests with one worker, corpus validation,
+lint, type checking, and its production build. A two-worker run hit the existing
+debugger UI test's five-second timeout; no timeout was relaxed. The page also passes
 desktop/mobile browser checks and overflow checks. Qualification remains 0 of
 47; neither these component results nor contract parity establishes a complete
 source-proof, machine-refinement, artifact, and hardware chain. No deployment
-is claimed by this checkpoint.
+is claimed by this checkpoint. No qualification requirement was relaxed.
 
 ## Decision
 

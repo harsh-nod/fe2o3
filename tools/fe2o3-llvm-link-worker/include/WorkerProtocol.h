@@ -32,8 +32,15 @@ inline constexpr size_t MaxDiagnosticBytes = 1024;
 inline constexpr size_t MaxTotalDiagnosticBytes = 16 * 1024;
 inline constexpr size_t MaxWorkerExecutableBytes = 512 * 1024 * 1024;
 inline constexpr size_t MaxNativeLinkInputs = MaxInputs + 1;
+inline constexpr size_t MaxStageCaptureBytes = 1024 * 1024;
+inline constexpr size_t MaxResponseBytes =
+    MaxOutputBytes + MaxTotalDiagnosticBytes + 2 * 1024 * 1024;
 
-enum class ProtocolVersion : uint8_t { V1 = 1, V2 = 2 };
+enum class ProtocolVersion : uint8_t { V1 = 1, V2 = 2, CaptureRequiredV3 = 3 };
+constexpr bool isCompilerProtocol(ProtocolVersion Version) {
+  return Version == ProtocolVersion::V2 ||
+         Version == ProtocolVersion::CaptureRequiredV3;
+}
 enum class InputKind : uint8_t {
   LlvmBitcode = 1,
   AmdGpuRelocatable = 2,
@@ -137,6 +144,13 @@ struct DerivationEvidence {
   std::array<uint8_t, 32> EvidenceIdentity{};
 };
 
+/// Exact checkpoint bytes, not a claim of LLVM or machine equivalence.
+struct StageCapture {
+  std::vector<uint8_t> LinkedBitcode;
+  std::vector<uint8_t> OptimizedBitcode;
+  std::vector<uint8_t> GeneratedObject;
+};
+
 struct Response {
   std::array<uint8_t, 32> RequestId{};
   std::array<uint8_t, 32> RequestIdentity{};
@@ -149,10 +163,12 @@ struct Response {
   std::optional<DeviceLibraryProviderEvidence> DeviceLibraryProvider =
       std::nullopt;
   std::optional<DerivationEvidence> Derivation = std::nullopt;
+  std::optional<StageCapture> CapturedStages = std::nullopt;
 };
 
 llvm::Expected<Request> decodeRequest(llvm::ArrayRef<uint8_t> Bytes);
 llvm::Expected<Request> decodeRequestV2(llvm::ArrayRef<uint8_t> Bytes);
+llvm::Expected<Request> decodeCaptureRequestV3(llvm::ArrayRef<uint8_t> Bytes);
 llvm::Expected<Request> decodeAnyRequest(llvm::ArrayRef<uint8_t> Bytes);
 llvm::Expected<ProtocolVersion>
 detectRequestProtocol(llvm::ArrayRef<uint8_t> Bytes);

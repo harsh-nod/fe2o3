@@ -21,7 +21,7 @@ use crate::{
     MAX_WORKER_TOTAL_INPUT_BYTES, MultiInputLinkPlanV1, PinnedWorkerV1, ProvenanceNodeV1,
     WorkerExecutionError, WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1,
     WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerProtocolError,
-    WorkerRequestConstructionError, WorkerResponseV2,
+    WorkerRequestConstructionError, WorkerRequestRevisionV1, WorkerResponseV2,
     first_build_worker_engine::{
         ReproducibleFirstBuildEngineError, ReproducibleFirstBuildEnginePreflight,
         execute_preflighted_reproducible_first_build_engine,
@@ -33,15 +33,13 @@ use crate::{
 
 const BINDING_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/PROTECTED-WORKER-COMPILER-HANDOFF-BINDING/V3\0";
 const EVIDENCE_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/PROTECTED-FIRST-BUILD-WORKER-EVIDENCE/V3\0";
-const WORKER_REQUEST_MAGIC_V2: &[u8; 8] = b"F3LREQ02";
-const WORKER_REQUEST_IDENTITY_DOMAIN_V2: &[u8] = b"FE2O3/DIRECT-LLVM-WORKER-REQUEST/V2\0";
 const PROTECTED_FIRST_BUILD_REQUEST_DOMAIN_V3: &[u8] =
     b"FE2O3/SEMANTIC-CAPSULE-PROTECTED-FIRST-BUILD-WORKER-REQUEST/V3\0";
 const PROTECTED_PLAN_REQUEST_DOMAIN_V3: &[u8] =
     b"FE2O3/SEMANTIC-CAPSULE-PROTECTED-PLAN-BOUND-WORKER-REQUEST/V3\0";
 const INPUT_KIND_CLOSURE_DOMAIN_V1: &[u8] = b"FE2O3/DEVICE-LINK-INPUT-KIND-CLOSURE/V1\0";
 const STAGED_COMPILER_FFI_ENVELOPE_DOMAIN_V1: &[u8] = b"FE2O3/STAGED-COMPILER-FFI-ENVELOPE/V1\0";
-const WORKER_REQUEST_FIELD_COUNT_V2: usize = 15;
+const MAX_WORKER_REQUEST_FIELDS: usize = 16;
 const WORKER_INPUT_WIRE_OVERHEAD_BYTES_V2: usize = 1 + 32 + 8;
 const WORKER_REQUEST_FIXED_BUDGET_BYTES_V3: usize = 4096;
 const RETAINED_INPUT_COPIES_DURING_PREFLIGHT_V3: usize = 4;
@@ -970,6 +968,33 @@ pub fn preflight_protected_reproducible_first_build_worker_v3(
     candidate_output_bound: WorkerOutputConstraintsV1,
     limits: WorkerExecutionLimitsV1,
 ) -> Result<PreparedProtectedFirstBuildWorkerV3PreflightV1, ProtectedFirstBuildWorkerV3Error> {
+    preflight_protected_reproducible_first_build_worker_with_revision_v3(
+        handoff,
+        expected_receipt,
+        expected_compiler_closure,
+        worker,
+        external_providers,
+        link_options,
+        candidate_output_bound,
+        limits,
+        WorkerRequestRevisionV1::V2,
+    )
+}
+
+/// Selects the request revision before one-shot consumption. Capture-required V3
+/// requires V5 success responses in both executions and cannot use frozen compact replay.
+#[allow(clippy::too_many_arguments)]
+pub fn preflight_protected_reproducible_first_build_worker_with_revision_v3(
+    handoff: &InertSemanticCompilerModuleHandoffV3,
+    expected_receipt: CompilerModuleHandoffReceiptV3,
+    expected_compiler_closure: CompilerClosureV2,
+    worker: &PinnedWorkerV1,
+    external_providers: Vec<WorkerInputV1>,
+    link_options: Vec<LinkOptionV1>,
+    candidate_output_bound: WorkerOutputConstraintsV1,
+    limits: WorkerExecutionLimitsV1,
+    request_revision: WorkerRequestRevisionV1,
+) -> Result<PreparedProtectedFirstBuildWorkerV3PreflightV1, ProtectedFirstBuildWorkerV3Error> {
     let binding = ProtectedCompilerHandoffBindingV3::from_handoff(
         handoff,
         expected_receipt,
@@ -986,6 +1011,7 @@ pub fn preflight_protected_reproducible_first_build_worker_v3(
         external_providers,
         link_options,
         candidate_output_bound,
+        request_revision,
     )
     .map_err(|error| map_engine_error(binding, error))?;
     Ok(PreparedProtectedFirstBuildWorkerV3PreflightV1 {
@@ -1314,6 +1340,7 @@ fn validate_replay_parts(
     }
     if bootstrap_derivation != replay_derivation
         || bootstrap_derivation.hsaco() != bootstrap_output.identity()
+        || bootstrap_response.stage_capture() != replay_response.stage_capture()
     {
         return Err(replay_error(
             "reproducible LLVM/object/LLD derivation custody",
@@ -1464,18 +1491,21 @@ pub(crate) struct OwnedWorkerV3RequestReplayPartsV1 {
 }
 
 struct BorrowedWorkerRequestV2<'bytes> {
-    fields: [&'bytes [u8]; WORKER_REQUEST_FIELD_COUNT_V2],
+    fields: [&'bytes [u8]; MAX_WORKER_REQUEST_FIELDS],
+    revision: WorkerRequestRevisionV1,
 }
 
 impl<'bytes> BorrowedWorkerRequestV2<'bytes> {
     fn decode(bytes: &'bytes [u8]) -> Result<Self, ()> {
-        if bytes.len() > MAX_WORKER_REQUEST_BYTES || !bytes.starts_with(WORKER_REQUEST_MAGIC_V2) {
+        if bytes.len() > MAX_WORKER_REQUEST_BYTES {
             return Err(());
         }
-        let mut offset = WORKER_REQUEST_MAGIC_V2.len();
-        let mut fields = [&[][..]; WORKER_REQUEST_FIELD_COUNT_V2];
+        let revision = WorkerRequestRevisionV1::from_magic(bytes).map_err(|_| ())?;
+        let field_count = usize::from(revision.field_count());
+        let mut offset = revision.magic().len();
+        let mut fields = [&[][..]; MAX_WORKER_REQUEST_FIELDS];
         let mut identity_preimage_len = 0;
-        for expected_tag in 1..=WORKER_REQUEST_FIELD_COUNT_V2 {
+        for expected_tag in 1..=field_count {
             let header_end = offset.checked_add(6).ok_or(())?;
             let header = bytes.get(offset..header_end).ok_or(())?;
             let tag = u16::from_le_bytes(header[..2].try_into().map_err(|_| ())?);
@@ -1485,23 +1515,26 @@ impl<'bytes> BorrowedWorkerRequestV2<'bytes> {
             let field_len = u32::from_le_bytes(header[2..].try_into().map_err(|_| ())?) as usize;
             let field_end = header_end.checked_add(field_len).ok_or(())?;
             fields[expected_tag - 1] = bytes.get(header_end..field_end).ok_or(())?;
-            if expected_tag == WORKER_REQUEST_FIELD_COUNT_V2 {
+            if expected_tag == field_count {
                 identity_preimage_len = offset;
             }
             offset = field_end;
         }
-        if offset != bytes.len() || fields[14].len() != 32 {
+        if offset != bytes.len()
+            || fields[field_count - 1].len() != 32
+            || (revision.requires_stage_capture() && fields[14] != [1])
+        {
             return Err(());
         }
         let mut hasher = Sha256::new();
-        hasher.update(WORKER_REQUEST_IDENTITY_DOMAIN_V2);
+        hasher.update(revision.domain());
         hasher.update((identity_preimage_len as u64).to_le_bytes());
         hasher.update(&bytes[..identity_preimage_len]);
         let actual_identity: [u8; 32] = hasher.finalize().into();
-        if fields[14] != actual_identity {
+        if fields[field_count - 1] != actual_identity {
             return Err(());
         }
-        Ok(Self { fields })
+        Ok(Self { fields, revision })
     }
 
     fn field(&self, tag: usize) -> &'bytes [u8] {
@@ -1513,7 +1546,7 @@ impl<'bytes> BorrowedWorkerRequestV2<'bytes> {
     }
 
     fn request_identity(&self) -> &'bytes [u8] {
-        self.field(15)
+        self.field(usize::from(self.revision.field_count()))
     }
 }
 
@@ -1524,6 +1557,8 @@ fn validate_request_response_binding(
     if request.request_id() != response.request_id()
         || request.request_identity() != response.request_identity()
         || request.field(8) != response.compiler_envelope_identity().as_bytes()
+        || (response.output().is_some()
+            && response.stage_capture().is_some() != request.revision.requires_stage_capture())
     {
         return Err(());
     }
@@ -1571,6 +1606,9 @@ fn validate_stable_request_fields(
     bootstrap: &BorrowedWorkerRequestV2<'_>,
     replay: &BorrowedWorkerRequestV2<'_>,
 ) -> Result<(), ()> {
+    if bootstrap.revision != replay.revision {
+        return Err(());
+    }
     for tag in 2..=13 {
         if bootstrap.field(tag) != replay.field(tag) {
             return Err(());
@@ -1650,6 +1688,11 @@ pub(crate) fn extract_worker_v3_request_replay_parts_v1(
         .map_err(|_| replay_error("exact-replay request canonical transcript"))?;
     validate_stable_request_fields(&bootstrap, &replay)
         .map_err(|_| replay_error("stable bootstrap/replay request fields"))?;
+    if bootstrap.revision.requires_stage_capture() {
+        return Err(replay_error(
+            "capture revision cannot enter frozen request replay",
+        ));
+    }
     let bootstrap_output_bound =
         decode_u64(bootstrap.field(14)).map_err(|_| replay_error("bootstrap output bound"))?;
     if bootstrap_output_bound == 0 || bootstrap_output_bound > crate::MAX_WORKER_OUTPUT_BYTES as u64

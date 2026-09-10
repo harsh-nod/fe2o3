@@ -501,11 +501,11 @@ mod platform {
             &self.measurement
         }
 
-        /// Runs one sealed compiler-FFI V2 request under bounded supervisor limits.
+        /// Runs one sealed compiler-FFI request under bounded supervisor limits.
         ///
         /// The request must bind this exact executable, worker build, and LLVM
-        /// build. The response must use the V2 domain and echo the exact request
-        /// and compiler-envelope identities. The result remains inert.
+        /// build. Response decoding enforces the request revision's capture mode
+        /// and exact request/compiler-envelope identities. The result remains inert.
         pub(crate) fn execute_v2(
             &self,
             request: &WorkerRequestV2,

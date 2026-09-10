@@ -377,7 +377,7 @@ int main(int ArgumentCount, char **ArgumentValues) {
   }
   auto RequestValue = decodeAnyRequest(Bytes);
   if (!RequestValue) {
-    if (*Version == ProtocolVersion::V2) {
+    if (isCompilerProtocol(*Version)) {
       llvm::consumeError(RequestValue.takeError());
       return 65;
     }

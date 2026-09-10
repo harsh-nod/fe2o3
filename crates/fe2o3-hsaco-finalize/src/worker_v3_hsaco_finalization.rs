@@ -43,6 +43,7 @@ use crate::{
 };
 
 mod machine_binding;
+mod machine_stage_capture;
 
 const PROTECTED_FINALIZED_IDENTITY_DOMAIN_V3: &[u8] =
     b"FE2O3/STRICT-V3-PROTECTED-WORKER-CANONICAL-FINALIZATION/V1\0";
@@ -291,8 +292,7 @@ impl MachineRefinementPendingFinalizedProtectedWorkerV3HsacoV1 {
             self.finalized_output,
             &self.canonical_descriptor_bytes,
             self.canonical_descriptor_evidence,
-            &self.machine_refinement,
-            &machine_refinement_receipt,
+            (&self.machine_refinement, &machine_refinement_receipt),
             compiler_completion,
         );
         Ok(PreparedFinalizedProtectedWorkerV3HsacoV1 {
@@ -575,6 +575,12 @@ pub enum WorkerV3HsacoFinalizationError {
     ),
     UnsupportedMachineRefinementTarget,
     MachineRefinementArtifactMismatch,
+    MachineStageCaptureUnavailable,
+    MachineStageCaptureReplayMismatch,
+    MachineStageSource(fe2o3_compiler_ffi::CompilerModuleHandoffErrorV2),
+    MachineStageSourceKind,
+    MachineStageCustody(fe2o3_compiler_lineage::PostLlvmStageCustodyErrorV1),
+    MachineStageAllocation,
     MachineRefinementWorkerBindingMismatch {
         field: &'static str,
     },
@@ -618,6 +624,18 @@ impl fmt::Display for WorkerV3HsacoFinalizationError {
             Self::MachineRefinementArtifactMismatch => formatter.write_str(
                 "independently checked machine refinement names a different raw HSACO",
             ),
+            Self::MachineStageCaptureUnavailable => formatter.write_str(
+                "machine checking requires response V5 exact stage contents; V4 hashes are insufficient",
+            ),
+            Self::MachineStageCaptureReplayMismatch => formatter.write_str(
+                "bootstrap and exact replay retain different machine-stage contents",
+            ),
+            Self::MachineStageSource(error) => write!(formatter, "machine-stage compiler source rejected: {error}"),
+            Self::MachineStageSourceKind => formatter.write_str(
+                "machine-stage custody requires exact compiler-owned LLVM text",
+            ),
+            Self::MachineStageCustody(error) => write!(formatter, "machine-stage contents rejected: {error}"),
+            Self::MachineStageAllocation => formatter.write_str("machine-stage custody allocation failed"),
             Self::MachineRefinementWorkerBindingMismatch { field } => write!(
                 formatter,
                 "independently checked machine refinement differs from the retained worker {field}"
@@ -679,6 +697,8 @@ impl Error for WorkerV3HsacoFinalizationError {
             Self::CanonicalDescriptorEvidence(error) => Some(error),
             Self::CompilerDescriptorSource(error) => Some(error),
             Self::MachineRefinementReceipt(error) => Some(error),
+            Self::MachineStageSource(error) => Some(error),
+            Self::MachineStageCustody(error) => Some(error),
             _ => None,
         }
     }
@@ -954,10 +974,13 @@ fn calculate_protected_v3_finalized_identity(
     finalized_output: ContentIdentityV1,
     descriptor_bytes: &[u8],
     canonical_descriptor_evidence: ContentIdentityV1,
-    machine_refinement: &CheckedAmdMachineRefinementV1,
-    machine_refinement_receipt: &CheckedTargetMachineRefinementReceiptV1,
+    machine_evidence: (
+        &CheckedAmdMachineRefinementV1,
+        &CheckedTargetMachineRefinementReceiptV1,
+    ),
     compiler_completion: &AuthenticatedCompilerCapabilityCompletionV5,
 ) -> FinalizedProtectedWorkerV3HsacoIdentityV1 {
+    let (machine_refinement, machine_refinement_receipt) = machine_evidence;
     let expectation = raw.binding_expectation();
     let outer_identity = expectation.outer_handoff_identity();
     let nested_identity = expectation.nested_handoff_identity();

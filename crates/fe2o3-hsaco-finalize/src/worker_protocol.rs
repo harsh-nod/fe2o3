@@ -192,6 +192,8 @@ pub enum WorkerProtocolError {
     NonCanonicalDiagnostics,
     DuplicateDiagnostic,
     InvalidResponseState,
+    StageCaptureReplayUnavailable,
+    StageCaptureModeMismatch,
     NonCanonicalEncoding,
     IntegerOverflow,
     AllocationFailed(&'static str),
@@ -256,6 +258,12 @@ impl fmt::Display for WorkerProtocolError {
             }
             Self::DuplicateDiagnostic => formatter.write_str("duplicate worker diagnostic"),
             Self::InvalidResponseState => formatter.write_str("invalid worker response state"),
+            Self::StageCaptureReplayUnavailable => formatter.write_str(
+                "response V5 exact stage capture requires versioned compact replay; it cannot be discarded",
+            ),
+            Self::StageCaptureModeMismatch => formatter.write_str(
+                "worker success response does not match the sealed request's stage capture mode",
+            ),
             Self::NonCanonicalEncoding => formatter.write_str("noncanonical worker encoding"),
             Self::IntegerOverflow => formatter.write_str("worker message integer overflow"),
             Self::AllocationFailed(component) => {

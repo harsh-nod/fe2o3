@@ -91,6 +91,7 @@ pub use first_build_worker_v3::{
     execute_preflighted_protected_reproducible_first_build_worker_v3,
     execute_protected_reproducible_first_build_worker_v3,
     preflight_protected_reproducible_first_build_worker_v3,
+    preflight_protected_reproducible_first_build_worker_with_revision_v3,
 };
 pub use link_plan::{
     ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, LinkPlanIdentityV1,
@@ -208,12 +209,13 @@ pub use worker_protocol::{
     WorkerProtocolError, WorkerStageV1,
 };
 pub use worker_protocol_v2::{
-    InertDecodedWorkerExchangeV2, WORKER_REQUEST_MAGIC_V2, WORKER_RESPONSE_MAGIC_V2,
-    WORKER_RESPONSE_MAGIC_V3, WORKER_RESPONSE_MAGIC_V4, WorkerCompilerFfiEnvelopeIdentityV2,
+    InertDecodedWorkerExchangeV2, MAX_WORKER_STAGE_CAPTURE_BYTES_V1, WORKER_REQUEST_MAGIC_V2,
+    WORKER_REQUEST_MAGIC_V3, WORKER_RESPONSE_MAGIC_V2, WORKER_RESPONSE_MAGIC_V3,
+    WORKER_RESPONSE_MAGIC_V4, WORKER_RESPONSE_MAGIC_V5, WorkerCompilerFfiEnvelopeIdentityV2,
     WorkerDerivationEvidenceV1, WorkerDeviceLibraryProviderEvidenceV1,
     WorkerDeviceLibraryProviderFileEvidenceV1, WorkerEvidenceClassV2,
     WorkerNativeLinkInputEvidenceV1, WorkerNativeLinkInputSourceV1, WorkerOutputV2,
-    WorkerRequestV2, WorkerResponseV2,
+    WorkerRequestRevisionV1, WorkerRequestV2, WorkerResponseV2, WorkerStageCaptureV1,
 };
 pub use worker_v3_compact_finalizer_replay::{
     MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1,

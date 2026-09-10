@@ -12,6 +12,10 @@ use fe2o3_compiler_ffi::CompilerFfiEnvelopeIdentityV1;
 use fe2o3_kernel_descriptor::{CodeObjectVersion, DeviceTargetV1};
 use sha2::{Digest, Sha256};
 
+mod stage_capture_v1;
+use stage_capture_v1::{MAX_STAGE_CAPTURE_BODY_BYTES, StageCaptureRangesV1};
+pub use stage_capture_v1::{MAX_WORKER_STAGE_CAPTURE_BYTES_V1, WorkerStageCaptureV1};
+
 use crate::{
     ContentIdentityV1, MAX_LINK_INPUTS, MAX_WORKER_DIAGNOSTIC_BYTES, MAX_WORKER_DIAGNOSTICS,
     MAX_WORKER_OUTPUT_BYTES, MAX_WORKER_REQUEST_BYTES, MAX_WORKER_RESPONSE_BYTES,
@@ -26,19 +30,25 @@ use crate::{
 };
 
 pub const WORKER_REQUEST_MAGIC_V2: &[u8; 8] = b"F3LREQ02";
+pub const WORKER_REQUEST_MAGIC_V3: &[u8; 8] = b"F3LREQ03";
 pub const WORKER_RESPONSE_MAGIC_V2: &[u8; 8] = b"F3LRSP02";
 pub const WORKER_RESPONSE_MAGIC_V3: &[u8; 8] = b"F3LRSP03";
 pub const WORKER_RESPONSE_MAGIC_V4: &[u8; 8] = b"F3LRSP04";
+pub const WORKER_RESPONSE_MAGIC_V5: &[u8; 8] = b"F3LRSP05";
 
 const REQUEST_DOMAIN_V2: &[u8] = b"FE2O3/DIRECT-LLVM-WORKER-REQUEST/V2\0";
+const REQUEST_DOMAIN_V3: &[u8] = b"FE2O3/DIRECT-LLVM-WORKER-REQUEST/V3\0";
 const PROVIDER_MANIFEST_DOMAIN_V1: &[u8] = b"FE2O3/DEVICE-LIBRARY-PROVIDER-MANIFEST/V1\0";
 const RESPONSE_DOMAIN_V3: &[u8] = b"FE2O3/DIRECT-LLVM-WORKER-RESPONSE/V3\0";
 const RESPONSE_DOMAIN_V4: &[u8] = b"FE2O3/DIRECT-LLVM-WORKER-RESPONSE/V4\0";
+const RESPONSE_DOMAIN_V5: &[u8] = b"FE2O3/DIRECT-LLVM-WORKER-RESPONSE/V5\0";
 const DERIVATION_EVIDENCE_DOMAIN_V1: &[u8] = b"FE2O3/UPSTREAM-LLVM-LLD-DERIVATION-EVIDENCE/V1\0";
 const REQUEST_FIELD_COUNT_V2: u16 = 15;
+const REQUEST_FIELD_COUNT_V3: u16 = 16;
 const RESPONSE_FIELD_COUNT_V2: u16 = 7;
 const RESPONSE_FIELD_COUNT_V3: u16 = 9;
 const RESPONSE_FIELD_COUNT_V4: u16 = 10;
+const RESPONSE_FIELD_COUNT_V5: u16 = 11;
 const INPUT_OVERHEAD_BYTES: usize = 1 + 32 + 8;
 const CONTENT_IDENTITY_BYTES: usize = 32 + 8;
 const MAX_PROVIDER_IDENTITY_BYTES: usize = 128;
@@ -135,7 +145,49 @@ impl WorkerCompilerFfiEnvelopeIdentityV2 {
     }
 }
 
-/// Private validated parts accepted by the only V2 request constructor.
+/// Explicit request schema. Capture is never enabled by the environment or worker default.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkerRequestRevisionV1 {
+    V2,
+    CaptureRequiredV3,
+}
+
+impl WorkerRequestRevisionV1 {
+    pub const fn requires_stage_capture(self) -> bool {
+        matches!(self, Self::CaptureRequiredV3)
+    }
+
+    pub(crate) const fn magic(self) -> &'static [u8; 8] {
+        match self {
+            Self::V2 => WORKER_REQUEST_MAGIC_V2,
+            Self::CaptureRequiredV3 => WORKER_REQUEST_MAGIC_V3,
+        }
+    }
+
+    pub(crate) const fn domain(self) -> &'static [u8] {
+        match self {
+            Self::V2 => REQUEST_DOMAIN_V2,
+            Self::CaptureRequiredV3 => REQUEST_DOMAIN_V3,
+        }
+    }
+
+    pub(crate) const fn field_count(self) -> u16 {
+        match self {
+            Self::V2 => REQUEST_FIELD_COUNT_V2,
+            Self::CaptureRequiredV3 => REQUEST_FIELD_COUNT_V3,
+        }
+    }
+
+    pub(crate) fn from_magic(bytes: &[u8]) -> Result<Self, WorkerProtocolError> {
+        match bytes.get(..8) {
+            Some(magic) if magic == WORKER_REQUEST_MAGIC_V2 => Ok(Self::V2),
+            Some(magic) if magic == WORKER_REQUEST_MAGIC_V3 => Ok(Self::CaptureRequiredV3),
+            _ => Err(WorkerProtocolError::BadMagic),
+        }
+    }
+}
+
+/// Private validated parts accepted by the sealed request constructor.
 pub(crate) struct SealedWorkerRequestV2Parts {
     pub request_id: [u8; 32],
     pub llvm_build_identity: String,
@@ -156,6 +208,7 @@ pub(crate) struct SealedWorkerRequestV2Parts {
 /// Canonical V2 request created only from sealed compiler observations.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkerRequestV2 {
+    revision: WorkerRequestRevisionV1,
     request_id: [u8; 32],
     llvm_build_identity: String,
     worker_build_identity: String,
@@ -180,6 +233,7 @@ impl WorkerRequestV2 {
     ) -> Result<Self, WorkerProtocolError> {
         validate_request_parts(&parts)?;
         let mut request = Self {
+            revision: WorkerRequestRevisionV1::V2,
             request_id: parts.request_id,
             llvm_build_identity: parts.llvm_build_identity,
             worker_build_identity: parts.worker_build_identity,
@@ -201,6 +255,24 @@ impl WorkerRequestV2 {
         request.canonical_bytes = canonical_bytes;
         request.identity = identity;
         Ok(request)
+    }
+
+    pub(crate) fn with_revision(
+        mut self,
+        revision: WorkerRequestRevisionV1,
+    ) -> Result<Self, WorkerProtocolError> {
+        if self.revision == revision {
+            return Ok(self);
+        }
+        self.revision = revision;
+        let (bytes, identity) = encode_request(&self)?;
+        self.canonical_bytes = bytes;
+        self.identity = identity;
+        Ok(self)
+    }
+
+    pub const fn revision(&self) -> WorkerRequestRevisionV1 {
+        self.revision
     }
 
     pub(crate) fn into_external_providers(self) -> Vec<WorkerInputV1> {
@@ -599,6 +671,7 @@ pub struct WorkerResponseV2 {
     output: Option<WorkerOutputV2>,
     device_library_provider: Option<WorkerDeviceLibraryProviderEvidenceV1>,
     derivation: Option<WorkerDerivationEvidenceV1>,
+    stage_capture: Option<StageCaptureRangesV1>,
     response_identity: Option<[u8; 32]>,
     canonical_bytes: Vec<u8>,
 }
@@ -611,9 +684,13 @@ impl WorkerResponseV2 {
         if bytes.len() > MAX_WORKER_RESPONSE_BYTES {
             return Err(WorkerProtocolError::ResponseTooLarge);
         }
-        let has_derivation_extension = bytes.starts_with(WORKER_RESPONSE_MAGIC_V4);
+        let has_stage_capture = bytes.starts_with(WORKER_RESPONSE_MAGIC_V5);
+        let has_derivation_extension =
+            has_stage_capture || bytes.starts_with(WORKER_RESPONSE_MAGIC_V4);
         let has_provider_extension = bytes.starts_with(WORKER_RESPONSE_MAGIC_V3);
-        let (magic, field_count) = if has_derivation_extension {
+        let (magic, field_count) = if has_stage_capture {
+            (WORKER_RESPONSE_MAGIC_V5, RESPONSE_FIELD_COUNT_V5)
+        } else if has_derivation_extension {
             (WORKER_RESPONSE_MAGIC_V4, RESPONSE_FIELD_COUNT_V4)
         } else if has_provider_extension {
             (WORKER_RESPONSE_MAGIC_V3, RESPONSE_FIELD_COUNT_V3)
@@ -639,6 +716,7 @@ impl WorkerResponseV2 {
             true,
         )?;
         let raw_output = decode_output(decoder.field(7, MAX_RESPONSE_OUTPUT_BODY_BYTES)?)?;
+        let mut stage_capture = None;
         let (device_library_provider, derivation, response_identity) = if has_derivation_extension {
             let provider_body = decoder.field(8, MAX_PROVIDER_EVIDENCE_BYTES)?;
             let provider = if provider_body.is_empty() {
@@ -648,11 +726,23 @@ impl WorkerResponseV2 {
             };
             let derivation =
                 decode_derivation_evidence(decoder.field(9, MAX_DERIVATION_EVIDENCE_BYTES)?)?;
+            if has_stage_capture {
+                let body_offset = decoder.position() + 6;
+                stage_capture = Some(StageCaptureRangesV1::decode(
+                    decoder.field(10, MAX_STAGE_CAPTURE_BODY_BYTES)?,
+                    body_offset,
+                    &derivation,
+                )?);
+            }
             let identity_field_offset = decoder.position();
-            let declared_identity = fixed::<32>(decoder.field(10, 32)?)?;
-            decoder.finish(RESPONSE_FIELD_COUNT_V4)?;
-            if calculate_response_identity_v4(&bytes[..identity_field_offset]) != declared_identity
-            {
+            let declared_identity = fixed::<32>(decoder.field(field_count, 32)?)?;
+            decoder.finish(field_count)?;
+            let calculated_identity = if has_stage_capture {
+                calculate_response_identity_v5(&bytes[..identity_field_offset])
+            } else {
+                calculate_response_identity_v4(&bytes[..identity_field_offset])
+            };
+            if calculated_identity != declared_identity {
                 return Err(WorkerProtocolError::ResponseIdentityMismatch);
             }
             (provider, Some(derivation), Some(declared_identity))
@@ -694,6 +784,9 @@ impl WorkerResponseV2 {
         if (stage == WorkerStageV1::Complete) != raw_output.is_some() {
             return Err(WorkerProtocolError::InvalidResponseState);
         }
+        if raw_output.is_some() && has_stage_capture != request.revision.requires_stage_capture() {
+            return Err(WorkerProtocolError::StageCaptureModeMismatch);
+        }
         let output = raw_output.map(|(identity, bytes)| WorkerOutputV2 {
             request_identity,
             compiler_envelope,
@@ -726,6 +819,7 @@ impl WorkerResponseV2 {
             output,
             device_library_provider,
             derivation,
+            stage_capture,
             response_identity,
             canonical_bytes: copy_bytes(bytes, "decoded response canonical bytes")?,
         })
@@ -741,6 +835,9 @@ impl WorkerResponseV2 {
         if self.stage != WorkerStageV1::Complete || self.output.is_none() {
             return Err(WorkerProtocolError::InvalidResponseState);
         }
+        if self.stage_capture.is_some() {
+            return Err(WorkerProtocolError::StageCaptureReplayUnavailable);
+        }
         let metadata = response_replay_metadata_from_bytes(self.canonical_bytes())?;
         if metadata.provider_evidence_body.is_some() != self.device_library_provider.is_some() {
             return Err(WorkerProtocolError::NonCanonicalEncoding);
@@ -749,6 +846,14 @@ impl WorkerResponseV2 {
             return Err(WorkerProtocolError::NonCanonicalEncoding);
         }
         Ok(metadata)
+    }
+
+    /// Exact checkpoint bytes retained in response V5. Content custody is not
+    /// instruction correspondence, semantic refinement, or execution authority.
+    pub fn stage_capture(&self) -> Option<WorkerStageCaptureV1<'_>> {
+        self.stage_capture
+            .as_ref()
+            .map(|ranges| ranges.view(&self.canonical_bytes))
     }
 
     pub const fn request_id(&self) -> &[u8; 32] {
@@ -1140,14 +1245,21 @@ fn encode_request(request: &WorkerRequestV2) -> Result<(Vec<u8>, [u8; 32]), Work
                 .ok_or(WorkerProtocolError::IntegerOverflow)
         })?;
     let total_len = body_len
-        .checked_add(6 + 32)
+        .checked_add(
+            6 + 32
+                + if request.revision.requires_stage_capture() {
+                    7
+                } else {
+                    0
+                },
+        )
         .ok_or(WorkerProtocolError::IntegerOverflow)?;
     if total_len > MAX_WORKER_REQUEST_BYTES {
         return Err(WorkerProtocolError::RequestTooLarge);
     }
 
     let mut encoded = fallible_vec(total_len, "encoded worker request")?;
-    encoded.extend_from_slice(WORKER_REQUEST_MAGIC_V2);
+    encoded.extend_from_slice(request.revision.magic());
     push_field(&mut encoded, 1, &request.request_id)?;
     push_field(&mut encoded, 2, request.llvm_build_identity.as_bytes())?;
     push_field(&mut encoded, 3, request.worker_build_identity.as_bytes())?;
@@ -1174,8 +1286,11 @@ fn encode_request(request: &WorkerRequestV2) -> Result<(Vec<u8>, [u8; 32]), Work
     push_field(&mut encoded, 12, &exports)?;
     push_field(&mut encoded, 13, &final_symbols)?;
     push_field(&mut encoded, 14, &request.output.max_bytes().to_le_bytes())?;
-    let identity = calculate_request_identity(&encoded);
-    push_field(&mut encoded, 15, &identity)?;
+    if request.revision.requires_stage_capture() {
+        push_field(&mut encoded, 15, &[1])?;
+    }
+    let identity = calculate_request_identity_for_revision(request.revision, &encoded);
+    push_field(&mut encoded, request.revision.field_count(), &identity)?;
     debug_assert_eq!(encoded.len(), total_len);
     Ok((encoded, identity))
 }
@@ -1184,7 +1299,8 @@ fn decode_request(bytes: &[u8]) -> Result<WorkerRequestV2, WorkerProtocolError> 
     if bytes.len() > MAX_WORKER_REQUEST_BYTES {
         return Err(WorkerProtocolError::RequestTooLarge);
     }
-    let mut decoder = Decoder::new(bytes, WORKER_REQUEST_MAGIC_V2, REQUEST_FIELD_COUNT_V2)?;
+    let revision = WorkerRequestRevisionV1::from_magic(bytes)?;
+    let mut decoder = Decoder::new(bytes, revision.magic(), revision.field_count())?;
     let request_id = fixed::<32>(decoder.field(1, 32)?)?;
     let llvm_build_identity = text(
         decoder.field(2, MAX_WORKER_TOOLCHAIN_ID_BYTES)?,
@@ -1223,10 +1339,15 @@ fn decode_request(bytes: &[u8]) -> Result<WorkerRequestV2, WorkerProtocolError> 
     let final_symbols = decode_symbols(decoder.field(13, max_symbol_field)?)?;
     let output =
         WorkerOutputConstraintsV1::new(u64::from_le_bytes(fixed::<8>(decoder.field(14, 8)?)?))?;
+    if revision.requires_stage_capture() && one_byte(decoder.field(15, 1)?)? != 1 {
+        return Err(WorkerProtocolError::UnknownEnum("stage capture mode"));
+    }
     let identity_field_offset = decoder.position();
-    let declared_identity = fixed::<32>(decoder.field(15, 32)?)?;
-    decoder.finish(REQUEST_FIELD_COUNT_V2)?;
-    if calculate_request_identity(&bytes[..identity_field_offset]) != declared_identity {
+    let declared_identity = fixed::<32>(decoder.field(revision.field_count(), 32)?)?;
+    decoder.finish(revision.field_count())?;
+    if calculate_request_identity_for_revision(revision, &bytes[..identity_field_offset])
+        != declared_identity
+    {
         return Err(WorkerProtocolError::RequestIdentityMismatch);
     }
     let parts = SealedWorkerRequestV2Parts {
@@ -1247,6 +1368,7 @@ fn decode_request(bytes: &[u8]) -> Result<WorkerRequestV2, WorkerProtocolError> 
     };
     validate_request_parts(&parts)?;
     let request = WorkerRequestV2 {
+        revision,
         request_id: parts.request_id,
         llvm_build_identity: parts.llvm_build_identity,
         worker_build_identity: parts.worker_build_identity,
@@ -1270,9 +1392,12 @@ fn decode_request(bytes: &[u8]) -> Result<WorkerRequestV2, WorkerProtocolError> 
     Ok(request)
 }
 
-fn calculate_request_identity(encoded_without_identity: &[u8]) -> [u8; 32] {
+fn calculate_request_identity_for_revision(
+    revision: WorkerRequestRevisionV1,
+    encoded_without_identity: &[u8],
+) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(REQUEST_DOMAIN_V2);
+    hasher.update(revision.domain());
     hasher.update((encoded_without_identity.len() as u64).to_le_bytes());
     hasher.update(encoded_without_identity);
     hasher.finalize().into()
@@ -1758,6 +1883,14 @@ fn calculate_response_identity_v3(encoded_without_identity: &[u8]) -> [u8; 32] {
 fn calculate_response_identity_v4(encoded_without_identity: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(RESPONSE_DOMAIN_V4);
+    hasher.update((encoded_without_identity.len() as u64).to_le_bytes());
+    hasher.update(encoded_without_identity);
+    hasher.finalize().into()
+}
+
+fn calculate_response_identity_v5(encoded_without_identity: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(RESPONSE_DOMAIN_V5);
     hasher.update((encoded_without_identity.len() as u64).to_le_bytes());
     hasher.update(encoded_without_identity);
     hasher.finalize().into()
@@ -2320,6 +2453,297 @@ mod tests {
 
     fn derivation_response(request: &WorkerRequestV2, output: &[u8]) -> Vec<u8> {
         derivation_response_from_body(request, output, &derivation_evidence_body(request, output))
+    }
+
+    fn stage_capture_body() -> Vec<u8> {
+        let mut bytes = vec![1];
+        for (index, body) in [
+            b"linked-module".as_slice(),
+            b"optimized-module",
+            b"generated-object",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            bytes.push((index + 1) as u8);
+            bytes.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(body);
+        }
+        bytes
+    }
+
+    fn stage_capture_response(request: &WorkerRequestV2, body: &[u8]) -> Vec<u8> {
+        let mut bytes = derivation_response(request, b"hsaco");
+        bytes.truncate(bytes.len() - 38);
+        bytes[..8].copy_from_slice(WORKER_RESPONSE_MAGIC_V5);
+        push_field(&mut bytes, 10, body).unwrap();
+        let identity = calculate_response_identity_v5(&bytes);
+        push_field(&mut bytes, 11, &identity).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn v5_stage_capture_retains_exact_borrowed_checkpoint_bodies() {
+        let request = capture_request();
+        let bytes = stage_capture_response(&request, &stage_capture_body());
+        let response = WorkerResponseV2::decode_for_request(&bytes, &request).unwrap();
+        let capture = response.stage_capture().unwrap();
+        for (actual, expected) in [
+            (capture.linked_bitcode(), b"linked-module".as_slice()),
+            (capture.optimized_bitcode(), b"optimized-module"),
+            (capture.generated_object(), b"generated-object"),
+        ] {
+            assert_eq!(actual, expected);
+            let range = response.canonical_bytes().as_ptr_range();
+            assert!(range.start <= actual.as_ptr() && actual.as_ptr() < range.end);
+        }
+        assert!(!response.grants_publication_authority());
+        assert!(!response.grants_launch_authority());
+        assert_eq!(
+            response.replay_metadata(),
+            Err(WorkerProtocolError::StageCaptureReplayUnavailable)
+        );
+    }
+
+    #[test]
+    fn v5_stage_capture_rejects_changed_stage_even_with_resealed_response() {
+        let request = capture_request();
+        let mut offset = 1;
+        for body in [
+            b"linked-module".as_slice(),
+            b"optimized-module",
+            b"generated-object",
+        ] {
+            let mut changed = stage_capture_body();
+            changed[offset + 5] ^= 1;
+            let bytes = stage_capture_response(&request, &changed);
+            assert_eq!(
+                WorkerResponseV2::decode_for_request(&bytes, &request),
+                Err(WorkerProtocolError::ContentIdentityMismatch)
+            );
+            offset += 5 + body.len();
+        }
+    }
+
+    #[test]
+    fn v5_stage_capture_rejects_noncanonical_incomplete_and_unbounded_records() {
+        let request = capture_request();
+        let valid = stage_capture_body();
+        let mut unknown = valid.clone();
+        unknown[0] = 2;
+        let mut duplicate = valid.clone();
+        duplicate[1 + 5 + b"linked-module".len()] = 1;
+        let mut reordered = valid.clone();
+        reordered[1] = 2;
+        let mut zero_length = valid.clone();
+        zero_length[2..6].copy_from_slice(&0u32.to_le_bytes());
+        let mut oversized = valid.clone();
+        oversized[2..6]
+            .copy_from_slice(&(MAX_WORKER_STAGE_CAPTURE_BYTES_V1 as u32 + 1).to_le_bytes());
+        let mut trailing = valid.clone();
+        trailing.push(0);
+        for body in [
+            unknown,
+            duplicate,
+            reordered,
+            zero_length,
+            oversized,
+            trailing,
+            valid[..valid.len() - b"generated-object".len() - 5].to_vec(),
+        ] {
+            let bytes = stage_capture_response(&request, &body);
+            assert!(WorkerResponseV2::decode_for_request(&bytes, &request).is_err());
+        }
+        for end in 0..valid.len() {
+            let bytes = stage_capture_response(&request, &valid[..end]);
+            assert!(WorkerResponseV2::decode_for_request(&bytes, &request).is_err());
+        }
+    }
+
+    #[test]
+    fn v5_stage_capture_cannot_be_substituted_or_downgraded_to_v4() {
+        let request = capture_request();
+        let valid = stage_capture_response(&request, &stage_capture_body());
+        let mut wrong_request = request.clone();
+        wrong_request.request_id[0] ^= 1;
+        assert_eq!(
+            WorkerResponseV2::decode_for_request(&valid, &wrong_request),
+            Err(WorkerProtocolError::RequestIdentityMismatch)
+        );
+        let mut wrong_identity = valid.clone();
+        *wrong_identity.last_mut().unwrap() ^= 1;
+        assert_eq!(
+            WorkerResponseV2::decode_for_request(&wrong_identity, &request),
+            Err(WorkerProtocolError::ResponseIdentityMismatch)
+        );
+        let mut downgrade = valid;
+        downgrade[..8].copy_from_slice(WORKER_RESPONSE_MAGIC_V4);
+        assert!(WorkerResponseV2::decode_for_request(&downgrade, &request).is_err());
+        let request = self::request();
+        let legacy = WorkerResponseV2::decode_for_request(
+            &derivation_response(&request, b"hsaco"),
+            &request,
+        )
+        .unwrap();
+        assert!(legacy.stage_capture().is_none());
+        let reconstructed = reconstruct_complete_worker_response_v2(
+            &request,
+            b"hsaco",
+            legacy.replay_metadata().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(legacy, reconstructed);
+    }
+
+    fn capture_request() -> WorkerRequestV2 {
+        request()
+            .with_revision(WorkerRequestRevisionV1::CaptureRequiredV3)
+            .unwrap()
+    }
+
+    #[test]
+    fn capture_request_revision_is_canonical_identity_bound_and_not_a_v2_flag() {
+        let legacy = request();
+        assert_eq!(
+            legacy
+                .clone()
+                .with_revision(WorkerRequestRevisionV1::V2)
+                .unwrap(),
+            legacy
+        );
+        let capture = capture_request();
+        let bytes = capture.canonical_bytes();
+        assert_eq!(
+            capture.revision(),
+            WorkerRequestRevisionV1::CaptureRequiredV3
+        );
+        assert_eq!(&bytes[..8], WORKER_REQUEST_MAGIC_V3);
+        assert_eq!(bytes.len(), legacy.canonical_bytes().len() + 7);
+        let prefix_end = legacy.canonical_bytes().len() - 38;
+        assert_eq!(
+            &bytes[8..prefix_end],
+            &legacy.canonical_bytes()[8..prefix_end]
+        );
+        assert_ne!(capture.identity(), legacy.identity());
+        assert_eq!(WorkerRequestV2::decode_for_test(bytes).unwrap(), capture);
+        for end in 0..bytes.len() {
+            assert!(WorkerRequestV2::decode_for_test(&bytes[..end]).is_err());
+        }
+        for offset in 0..bytes.len() {
+            let mut changed = bytes.to_vec();
+            changed[offset] ^= 0x80;
+            assert!(
+                WorkerRequestV2::decode_for_test(&changed).is_err(),
+                "byte {offset}"
+            );
+        }
+        for mode in [0, 2, 255] {
+            let mut changed = bytes.to_vec();
+            changed[prefix_end + 6] = mode;
+            let hash_offset = changed.len() - 38;
+            let identity = calculate_request_identity_for_revision(
+                capture.revision(),
+                &changed[..hash_offset],
+            );
+            changed[hash_offset + 6..].copy_from_slice(&identity);
+            assert_eq!(
+                WorkerRequestV2::decode_for_test(&changed),
+                Err(WorkerProtocolError::UnknownEnum("stage capture mode"))
+            );
+        }
+        let mut trailing = bytes.to_vec();
+        trailing.push(0);
+        assert!(WorkerRequestV2::decode_for_test(&trailing).is_err());
+    }
+
+    #[test]
+    fn sealed_success_requires_the_requested_capture_mode_and_failures_stay_inert() {
+        let capture = capture_request();
+        for success in [
+            success_response(&capture, b"hsaco"),
+            provider_response(&capture, b"hsaco"),
+            derivation_response(&capture, b"hsaco"),
+        ] {
+            assert_eq!(
+                WorkerResponseV2::decode_for_request(&success, &capture),
+                Err(WorkerProtocolError::StageCaptureModeMismatch)
+            );
+        }
+        let legacy = request();
+        assert_eq!(
+            WorkerResponseV2::decode_for_request(
+                &stage_capture_response(&legacy, &stage_capture_body()),
+                &legacy
+            ),
+            Err(WorkerProtocolError::StageCaptureModeMismatch)
+        );
+        let legacy_response =
+            WorkerResponseV2::decode_for_request(&derivation_response(&legacy, b"hsaco"), &legacy)
+                .unwrap();
+        let metadata = legacy_response.replay_metadata().unwrap();
+        assert_eq!(
+            reconstruct_complete_worker_response_v2(&capture, b"hsaco", metadata),
+            Err(WorkerProtocolError::StageCaptureModeMismatch)
+        );
+        for request in [&legacy, &capture] {
+            let failure =
+                WorkerResponseV2::decode_for_request(&incomplete_response(request), request)
+                    .unwrap();
+            assert!(failure.output().is_none());
+            assert!(!failure.grants_publication_authority());
+            assert!(!failure.grants_launch_authority());
+        }
+    }
+
+    #[test]
+    fn v2_identity_only_stages_are_not_subject_to_capture_size_limit() {
+        let request = request();
+        let mut body = derivation_evidence_body(&request, b"hsaco");
+        for offset in [1 + 32, 1 + 40 + 32] {
+            body[offset..offset + 8]
+                .copy_from_slice(&(MAX_WORKER_STAGE_CAPTURE_BYTES_V1 as u64 + 1).to_le_bytes());
+        }
+        reseal_derivation_body(&mut body);
+        let response = WorkerResponseV2::decode_for_request(
+            &derivation_response_from_body(&request, b"hsaco", &body),
+            &request,
+        )
+        .unwrap();
+        assert!(response.stage_capture().is_none());
+        assert_eq!(
+            reconstruct_complete_worker_response_v2(
+                &request,
+                b"hsaco",
+                response.replay_metadata().unwrap()
+            )
+            .unwrap(),
+            response
+        );
+    }
+
+    #[test]
+    fn frozen_request_replay_cannot_erase_capture_revision() {
+        use crate::first_build_worker_v3::extract_worker_v3_request_replay_parts_v1 as extract;
+        let legacy = request();
+        let capture = capture_request();
+        assert!(extract(legacy.canonical_bytes(), legacy.canonical_bytes()).is_ok());
+        let unsupported = extract(capture.canonical_bytes(), capture.canonical_bytes())
+            .err()
+            .unwrap();
+        assert!(
+            unsupported
+                .to_string()
+                .contains("capture revision cannot enter frozen request replay")
+        );
+        for (first, second) in [(&capture, &legacy), (&legacy, &capture)] {
+            assert!(
+                extract(first.canonical_bytes(), second.canonical_bytes())
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("stable bootstrap/replay request fields")
+            );
+        }
     }
 
     fn reseal_derivation_body(body: &mut [u8]) {

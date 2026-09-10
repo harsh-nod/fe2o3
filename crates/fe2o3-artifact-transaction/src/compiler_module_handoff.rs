@@ -11379,7 +11379,7 @@ pub(crate) mod semantic_v5 {
             let associations =
                 InertMultiRootStaticCapabilityEvidenceAssociationV1::new(vec![association])
                     .unwrap();
-            let evidence = payload("authenticated-machine-refinement", 16);
+            let evidence = machine_evidence(16);
             let signing_key = SigningKey::from_bytes(&[0xa5; 32]);
             let error = InertCompilerCapabilityVerifierResponseV5::fixture(
                 *prepared.transaction_identity().as_bytes(),
@@ -11427,11 +11427,19 @@ pub(crate) mod semantic_v5 {
                 machine_evidence(18),
             )
             .unwrap();
+            let mut substituted_parts =
+                TargetMachineRefinementReceiptV1::decode(expected_machine.canonical_preimage())
+                    .unwrap()
+                    .parts();
+            substituted_parts.machine_refinement_sha256[0] ^= 1;
+            let substituted_evidence =
+                TargetMachineRefinementReceiptV1::from_parts(substituted_parts).unwrap();
             let substituted_machine = InertCapabilityRefinementReceiptV1::from_canonical_preimage(
                 fe2o3_compiler_lineage::InertCapabilityRefinementReceiptKindV1::Machine,
-                payload("substituted-machine-refinement", 18),
+                substituted_evidence.canonical_bytes().to_vec(),
             )
             .unwrap();
+            assert_ne!(expected_machine.identity(), substituted_machine.identity());
             let (association, owner) = completion_evidence(prepared.handoff(), &expected_machine);
             let associations =
                 InertMultiRootStaticCapabilityEvidenceAssociationV1::new(vec![association])

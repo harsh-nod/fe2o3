@@ -1,7 +1,7 @@
 //! Internal reproducible first-build engine for the production Worker V3 transaction.
 //!
-//! Worker requests and responses still use the frozen V2 wire codec. Those version labels describe
-//! serialized bytes only; this module exposes no V2 compilation or publication authority.
+//! Request revisions are explicit preflight inputs, preserved across bootstrap and replay.
+//! Wire version labels expose no compilation or publication authority.
 
 use sha2::{Digest, Sha256};
 
@@ -66,6 +66,7 @@ pub(crate) fn preflight_reproducible_first_build_engine(
     mut external_providers: Vec<WorkerInputV1>,
     mut link_options: Vec<LinkOptionV1>,
     candidate_output_bound: WorkerOutputConstraintsV1,
+    request_revision: crate::WorkerRequestRevisionV1,
 ) -> Result<ReproducibleFirstBuildEnginePreflight, ReproducibleFirstBuildEngineError> {
     canonicalize_options(&mut link_options)?;
     let (planned_code_object_version, options) = decode_link_options(&link_options)
@@ -98,6 +99,7 @@ pub(crate) fn preflight_reproducible_first_build_engine(
         options,
         candidate_output_bound.clone(),
     )
+    .and_then(|request| request.with_request_revision(request_revision))
     .map_err(ReproducibleFirstBuildEngineError::RequestConstruction)?;
     let candidate_request_bytes = candidate_request
         .sealed_request()
@@ -129,6 +131,7 @@ pub(crate) fn preflight_reproducible_first_build_engine(
         &input_kinds,
         candidate_output_bound.clone(),
     )
+    .and_then(|request| request.with_request_revision(request_revision))
     .map_err(ReproducibleFirstBuildEngineError::RequestConstruction)?;
 
     Ok(ReproducibleFirstBuildEnginePreflight {
@@ -185,6 +188,9 @@ pub(crate) fn execute_preflighted_reproducible_first_build_engine(
         &input_kinds,
         exact_output,
     )
+    .and_then(|request| {
+        request.with_request_revision(candidate_request.sealed_request().revision())
+    })
     .map_err(ReproducibleFirstBuildEngineError::RequestConstruction)?;
     let authorized_request_bytes = authorized_request
         .sealed_request()

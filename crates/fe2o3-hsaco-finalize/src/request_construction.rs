@@ -434,6 +434,18 @@ pub(crate) struct ConstructedFirstBuildWorkerRequest {
 }
 
 impl ConstructedFirstBuildWorkerRequest {
+    pub(crate) fn with_request_revision(
+        self,
+        revision: crate::WorkerRequestRevisionV1,
+    ) -> Result<Self, WorkerRequestConstructionError> {
+        Ok(Self {
+            request: self
+                .request
+                .with_revision(revision)
+                .map_err(WorkerRequestConstructionError::WorkerProtocol)?,
+        })
+    }
+
     pub(crate) const fn sealed_request(&self) -> &WorkerRequestV2 {
         &self.request
     }

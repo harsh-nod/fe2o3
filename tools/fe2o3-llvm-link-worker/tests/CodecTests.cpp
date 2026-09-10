@@ -1,5 +1,6 @@
 #include "WorkerProtocol.h"
 
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/SHA256.h"
@@ -72,6 +73,24 @@ DerivationEvidence derivationFor(llvm::ArrayRef<uint8_t> OutputBytes) {
   return Evidence;
 }
 
+std::vector<uint8_t> captureRequest(llvm::ArrayRef<uint8_t> V2,
+                                    uint8_t Mode = 1) {
+  std::vector<uint8_t> Bytes(V2.begin(), V2.end() - 38);
+  Bytes[7] = '3';
+  Bytes.insert(Bytes.end(), {15, 0, 1, 0, 0, 0, Mode});
+  llvm::SHA256 Digest;
+  constexpr char Domain[] = "FE2O3/DIRECT-LLVM-WORKER-REQUEST/V3\0";
+  Digest.update(llvm::StringRef(Domain, sizeof(Domain) - 1));
+  std::array<uint8_t, 8> Length{};
+  llvm::support::endian::write64le(Length.data(), Bytes.size());
+  Digest.update(Length);
+  Digest.update(Bytes);
+  auto Identity = Digest.final();
+  Bytes.insert(Bytes.end(), {16, 0, 32, 0, 0, 0});
+  Bytes.insert(Bytes.end(), Identity.begin(), Identity.end());
+  return Bytes;
+}
+
 } // namespace
 
 int main() {
@@ -140,11 +159,67 @@ int main() {
     llvm::consumeError(Result.takeError());
   }
 
+  const auto V3Bytes = captureRequest(V2Golden);
+  auto V3Request = decodeAnyRequest(V3Bytes);
+  if (!V3Request) {
+    llvm::logAllUnhandledErrors(V3Request.takeError(), llvm::errs());
+    return fail("capture-required request could not be decoded");
+  }
+  if (V3Request->Protocol != ProtocolVersion::CaptureRequiredV3 ||
+      V3Request->Identity == V2Request->Identity ||
+      V3Request->CompilerModule.Bytes != V2Request->CompilerModule.Bytes ||
+      V3Request->CompilerEnvelopeIdentity !=
+          V2Request->CompilerEnvelopeIdentity ||
+      V3Bytes.size() != V2Golden.size() + 7)
+    return fail("capture revision changed source fields or lost mode identity");
+  auto V3Downgrade = decodeRequestV2(V3Bytes);
+  if (V3Downgrade)
+    return fail("capture request accepted by frozen V2 decoder");
+  llvm::consumeError(V3Downgrade.takeError());
+  auto V2Upgrade = decodeCaptureRequestV3(V2Golden);
+  if (V2Upgrade)
+    return fail("legacy request accepted by capture decoder");
+  llvm::consumeError(V2Upgrade.takeError());
+  for (size_t I = 0; I < V3Bytes.size(); ++I) {
+    auto Changed = V3Bytes;
+    Changed[I] ^= 0x80;
+    auto Mutation = decodeAnyRequest(Changed);
+    if (Mutation)
+      return fail("mutated capture request was accepted");
+    llvm::consumeError(Mutation.takeError());
+    auto Truncated =
+        decodeAnyRequest(llvm::ArrayRef<uint8_t>(V3Bytes).take_front(I));
+    if (Truncated)
+      return fail("truncated capture request was accepted");
+    llvm::consumeError(Truncated.takeError());
+  }
+  for (uint8_t Mode : {0, 2, 255}) {
+    auto Unknown = decodeAnyRequest(captureRequest(V2Golden, Mode));
+    if (Unknown)
+      return fail("unknown or zero capture mode accepted with valid identity");
+    llvm::consumeError(Unknown.takeError());
+  }
+  auto Trailing = V3Bytes;
+  Trailing.push_back(0);
+  auto TrailingResult = decodeAnyRequest(Trailing);
+  if (TrailingResult)
+    return fail("capture request accepted trailing bytes");
+  llvm::consumeError(TrailingResult.takeError());
+
   Response V2Failure{V2Request->RequestId,  V2Request->Identity,
                      FE2O3_WORKER_BUILD_ID, Stage::NativeLink,
                      {"V2 failure"},        std::nullopt};
   V2Failure.Protocol = ProtocolVersion::V2;
   V2Failure.CompilerEnvelopeIdentity = V2Request->CompilerEnvelopeIdentity;
+  Response V3Failure = V2Failure;
+  V3Failure.Protocol = ProtocolVersion::CaptureRequiredV3;
+  V3Failure.RequestIdentity = V3Request->Identity;
+  auto EncodedFailure = encodeResponse(V3Failure);
+  if (!EncodedFailure)
+    return fail("capture request cannot report structured failure");
+  if (llvm::StringRef(reinterpret_cast<const char *>(EncodedFailure->data()),
+                      8) != "F3LRSP02")
+    return fail("capture failure unexpectedly requires output or stages");
   auto EncodedV2Response = encodeResponse(std::move(V2Failure));
   if (!EncodedV2Response) {
     llvm::logAllUnhandledErrors(EncodedV2Response.takeError(), llvm::errs(),
@@ -187,6 +262,70 @@ int main() {
                   EncodedProviderResponse->begin()))
     return fail("success response omitted exact derivation custody");
   Response MissingDerivation = ProviderSuccess;
+  Response LargeLegacy = ProviderSuccess;
+  LargeLegacy.Derivation->LinkedModule.ByteLength = MaxStageCaptureBytes + 1;
+  LargeLegacy.Derivation->OptimizedModule.ByteLength = MaxStageCaptureBytes + 1;
+  auto LargeIdentity =
+      calculateDerivationEvidenceIdentity(*LargeLegacy.Derivation);
+  if (!LargeIdentity)
+    return fail("legacy derivation unexpectedly has capture size limit");
+  LargeLegacy.Derivation->EvidenceIdentity = *LargeIdentity;
+  auto EncodedLarge = encodeResponse(LargeLegacy);
+  if (!EncodedLarge)
+    return fail("legacy stage sizes above capture bound were rejected");
+  if (llvm::StringRef(reinterpret_cast<const char *>(EncodedLarge->data()),
+                      8) != "F3LRSP04")
+    return fail("legacy request unexpectedly opted into stage capture");
+  Response Captured = ProviderSuccess;
+  Captured.Protocol = ProtocolVersion::CaptureRequiredV3;
+  Captured.RequestIdentity = V3Request->Identity;
+  Captured.CapturedStages = StageCapture{
+      {'l', 'i', 'n', 'k', 'e', 'd'}, {'o', 'p', 't'}, {'o', 'b', 'j'}};
+  auto EncodedCapture = encodeResponse(Captured);
+  if (!EncodedCapture)
+    return fail("stage capture could not be encoded");
+  if (llvm::StringRef(reinterpret_cast<const char *>(EncodedCapture->data()),
+                      8) != "F3LRSP05")
+    return fail("stage capture reused a frozen response version");
+  Response MissingCapture = Captured;
+  MissingCapture.CapturedStages.reset();
+  auto Downgrade = encodeResponse(std::move(MissingCapture));
+  if (Downgrade)
+    return fail(
+        "capture success silently downgraded to identity-only response");
+  llvm::consumeError(Downgrade.takeError());
+  Response UnrequestedCapture = Captured;
+  UnrequestedCapture.Protocol = ProtocolVersion::V2;
+  auto Upgrade = encodeResponse(std::move(UnrequestedCapture));
+  if (Upgrade)
+    return fail("legacy request silently upgraded to capture response");
+  llvm::consumeError(Upgrade.takeError());
+  for (unsigned Axis = 0; Axis != 3; ++Axis) {
+    Response Wrong = Captured;
+    auto &Body = Axis == 0   ? Wrong.CapturedStages->LinkedBitcode
+                 : Axis == 1 ? Wrong.CapturedStages->OptimizedBitcode
+                             : Wrong.CapturedStages->GeneratedObject;
+    Body[0] ^= 1;
+    auto Rejected = encodeResponse(std::move(Wrong));
+    if (Rejected)
+      return fail("changed stage body matched unchanged derivation");
+    llvm::consumeError(Rejected.takeError());
+  }
+  for (bool Oversized : {false, true}) {
+    Response Wrong = Captured;
+    Wrong.CapturedStages->GeneratedObject.assign(
+        Oversized ? MaxStageCaptureBytes : 0, 1);
+    auto Rejected = encodeResponse(std::move(Wrong));
+    if (Rejected)
+      return fail("empty or oversized stage capture was accepted");
+    llvm::consumeError(Rejected.takeError());
+  }
+  Response MissingCaptureDerivation = Captured;
+  MissingCaptureDerivation.Derivation.reset();
+  auto RejectedCapture = encodeResponse(std::move(MissingCaptureDerivation));
+  if (RejectedCapture)
+    return fail("stage capture was accepted without derivation");
+  llvm::consumeError(RejectedCapture.takeError());
   MissingDerivation.Derivation.reset();
   auto MissingDerivationResult = encodeResponse(std::move(MissingDerivation));
   if (MissingDerivationResult)

@@ -5,6 +5,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/BinaryFormat/MsgPackDocument.h"
+#include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -547,11 +548,11 @@ std::vector<uint8_t>
 makeKernelBitcode(StringRef Name,
                   std::optional<std::array<uint32_t, 3>> RequiredWorkgroup =
                       std::array<uint32_t, 3>{256, 1, 1},
-                  uint32_t MaxWorkgroup = 256,
-                  uint8_t CodeObjectVersion = 5) {
+                  uint32_t MaxWorkgroup = 256, uint8_t CodeObjectVersion = 5,
+                  StringRef Cpu = "gfx942", size_t PaddingBytes = 0) {
   LLVMContext Context;
   auto ModuleValue = std::make_unique<Module>("publication-kernel", Context);
-  std::unique_ptr<TargetMachine> Machine = createMachine("gfx942");
+  std::unique_ptr<TargetMachine> Machine = createMachine(Cpu);
   ModuleValue->setTargetTriple(Triple(AmdGpuTriple));
   ModuleValue->setDataLayout(Machine->createDataLayout());
   ModuleValue->addModuleFlag(Module::Error, "amdhsa_code_object_version",
@@ -561,7 +562,7 @@ makeKernelBitcode(StringRef Name,
   Function *Kernel = Function::Create(Signature, GlobalValue::ExternalLinkage,
                                       Name, *ModuleValue);
   Kernel->setCallingConv(CallingConv::AMDGPU_KERNEL);
-  Kernel->addFnAttr("target-cpu", "gfx942");
+  Kernel->addFnAttr("target-cpu", Cpu);
   Kernel->addFnAttr("target-features", "-wavefrontsize32,+wavefrontsize64");
   std::string FlatWorkgroup =
       (Twine(MaxWorkgroup) + "," + Twine(MaxWorkgroup)).str();
@@ -579,6 +580,12 @@ makeKernelBitcode(StringRef Name,
   }
   BasicBlock *Entry = BasicBlock::Create(Context, "entry", Kernel);
   IRBuilder<>(Entry).CreateRetVoid();
+
+  if (PaddingBytes) {
+    auto *Padding = MDString::get(Context, std::string(PaddingBytes, 'p'));
+    ModuleValue->getOrInsertNamedMetadata("codec.capture.bound")
+        ->addOperand(MDNode::get(Context, Padding));
+  }
 
   SmallVector<char, 0> Buffer;
   raw_svector_ostream Stream(Buffer);
@@ -841,13 +848,71 @@ Response runSuccess(const Request &RequestValue,
   require(Result.LinkedOutput->Digest ==
               SHA256::hash(Result.LinkedOutput->Bytes),
           "success output digest is incorrect");
-  if (RequestValue.Protocol == ProtocolVersion::V2) {
+  if (isCompilerProtocol(RequestValue.Protocol)) {
     require(Result.Derivation.has_value(),
             "V2 success omitted LLVM/object/LLD derivation evidence");
     require(Result.Derivation->Hsaco.Digest == Result.LinkedOutput->Digest &&
                 Result.Derivation->Hsaco.ByteLength ==
                     Result.LinkedOutput->Bytes.size(),
             "success derivation does not terminate at the exact HSACO");
+  }
+  if (RequestValue.Protocol == ProtocolVersion::CaptureRequiredV3) {
+    require(Result.CapturedStages.has_value(),
+            "capture-required worker dropped exact machine-stage inputs");
+    const StageCapture &Capture = *Result.CapturedStages;
+    size_t Total = Capture.LinkedBitcode.size() +
+                   Capture.OptimizedBitcode.size() +
+                   Capture.GeneratedObject.size();
+    require(Total <= MaxStageCaptureBytes,
+            "capture exceeded its aggregate bound");
+    for (const auto &[Bytes, Identity] :
+         {std::pair{ArrayRef<uint8_t>(Capture.LinkedBitcode),
+                    Result.Derivation->LinkedModule},
+          std::pair{ArrayRef<uint8_t>(Capture.OptimizedBitcode),
+                    Result.Derivation->OptimizedModule}}) {
+      require(Identity.ByteLength == Bytes.size() &&
+                  Identity.Digest == SHA256::hash(Bytes),
+              "captured bitcode does not match the worker derivation");
+      LLVMContext Context;
+      auto Parsed = parseBitcodeFile(
+          MemoryBufferRef(
+              StringRef(reinterpret_cast<const char *>(Bytes.data()),
+                        Bytes.size()),
+              "captured-stage"),
+          Context);
+      if (!Parsed)
+        fail(toString(Parsed.takeError()));
+      require((*Parsed)->getTargetTriple().getArch() == Triple::amdgcn,
+              "stage capture is not actual AMDGPU bitcode");
+    }
+    require(Result.Derivation->GeneratedObject.ByteLength ==
+                    Capture.GeneratedObject.size() &&
+                Result.Derivation->GeneratedObject.Digest ==
+                    SHA256::hash(Capture.GeneratedObject),
+            "capture does not retain the exact generated object");
+    auto Object = ObjectFile::createObjectFile(
+        MemoryBufferRef(StringRef(reinterpret_cast<const char *>(
+                                      Capture.GeneratedObject.data()),
+                                  Capture.GeneratedObject.size()),
+                        "captured-object"));
+    if (!Object)
+      fail(toString(Object.takeError()));
+    require((*Object)->isRelocatableObject(),
+            "captured object is not relocatable");
+    auto Encoded = encodeResponse(Result);
+    if (!Encoded)
+      fail(toString(Encoded.takeError()));
+    require(StringRef(reinterpret_cast<const char *>(Encoded->data()), 8) ==
+                "F3LRSP05",
+            "actual stage capture did not cross response V5");
+  } else if (RequestValue.Protocol == ProtocolVersion::V2) {
+    require(!Result.CapturedStages, "legacy V2 unexpectedly captured stages");
+    auto Encoded = encodeResponse(Result);
+    if (!Encoded)
+      fail(toString(Encoded.takeError()));
+    require(StringRef(reinterpret_cast<const char *>(Encoded->data()), 8) ==
+                "F3LRSP04",
+            "legacy V2 success changed its frozen response version");
   }
   require(inspectHsaco(Result.LinkedOutput->Bytes,
                        RequestValue.CodeObjectVersion) == ExpectedSymbols,
@@ -1876,6 +1941,47 @@ int main(int ArgumentCount, char **Arguments) {
   requireDiagnostic(PublicationResponse, "wavefront_size=64");
   requireDiagnostic(PublicationResponse, "max_workgroup_size=256");
   requireDiagnostic(PublicationResponse, "reqd_workgroup_size=[256,1,1]");
+
+  for (StringRef Cpu : {"gfx942", "gfx950"}) {
+    Request Legacy = makeV2Request(
+        makeInput(InputKind::LlvmBitcode,
+                  makeKernelBitcode("capture_kernel",
+                                    std::array<uint32_t, 3>{256, 1, 1}, 256, 6,
+                                    Cpu)),
+        {}, {}, {"capture_kernel"}, {"capture_kernel", "capture_kernel.kd"}, 6);
+    Legacy.Target = (Cpu + ":xnack-").str();
+    Response Original =
+        runSuccess(Legacy, {"capture_kernel", "capture_kernel.kd"});
+    Request Capture = Legacy;
+    Capture.Protocol = ProtocolVersion::CaptureRequiredV3;
+    Response Captured =
+        runSuccess(Capture, {"capture_kernel", "capture_kernel.kd"});
+    require(Original.LinkedOutput->Bytes == Captured.LinkedOutput->Bytes &&
+                Original.Derivation->EvidenceIdentity ==
+                    Captured.Derivation->EvidenceIdentity,
+            "request capture mode changed pipeline output or stage identities");
+  }
+
+  Request LargeLegacy = makeV2Request(
+      makeInput(InputKind::LlvmBitcode,
+                makeKernelBitcode("large_stage",
+                                  std::array<uint32_t, 3>{256, 1, 1}, 256, 6,
+                                  "gfx942", MaxStageCaptureBytes + 1)),
+      {}, {}, {"large_stage"}, {"large_stage", "large_stage.kd"}, 6);
+  LargeLegacy.Target = "gfx942:xnack-";
+  Response LargeResponse =
+      runSuccess(LargeLegacy, {"large_stage", "large_stage.kd"});
+  require(LargeResponse.Derivation->LinkedModule.ByteLength >
+              MaxStageCaptureBytes,
+          "fixture did not exceed the opt-in capture limit");
+  LargeLegacy.Protocol = ProtocolVersion::CaptureRequiredV3;
+  Response BoundedFailure = execute(LargeLegacy);
+  require(!BoundedFailure.LinkedOutput && !BoundedFailure.CapturedStages,
+          "oversized opt-in capture silently returned identity-only success");
+  require(BoundedFailure.FailureStage == Stage::BitcodeLink,
+          "oversized opt-in capture failed outside linked-stage capture");
+  requireDiagnostic(BoundedFailure,
+                    "LLVM stage capture exceeds aggregate byte bound");
 
   Request ProductionFill = makeV2Request(
       makeInput(InputKind::LlvmBitcode,

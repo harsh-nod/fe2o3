@@ -123,6 +123,20 @@ these tests signs a receipt or establishes tutorial compilation or GPU execution
 Runtime errors preserve the underlying diagnostic and error chain, including
 the failing object or protection check.
 
+The additional ignored
+`production_runtime_imports_generated_proofs_and_rejects_wrong_operators` test
+requires the real root-protected installation. It opens the normal production
+lease, executes and locally imports integer and IEEE operator-congruence
+proofs within a 60-second per-proof deadline, and rejects wrong operators at
+verification rather than during setup. All four cases passed on mi350 in
+24.85 seconds on 2026-09-09. The exact runtime was installed only inside a
+private mount namespace; host libraries and manifest pins were unchanged.
+Bounded controller polling now starts at 50 microseconds after progress and
+backs off to the existing 2-millisecond maximum, retaining all deadline,
+process-tree, mapping, output, and cleanup checks. Real vecadd extraction also
+passes local reference-proof import, then rejects dynamic-launch ownership.
+Neither result establishes final-graph equivalence or GPU qualification.
+
 ## Remaining boundaries
 
 The compiler frontend derives one reference output location/formula and one GPU

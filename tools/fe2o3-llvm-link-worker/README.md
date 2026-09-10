@@ -32,6 +32,39 @@ request, checks the final payload identity, and requires strict Worker V3
 bootstrap/replay agreement. The wire version records this schema migration; it
 does not add another compiler route.
 
+Legacy request V2 keeps its exact encoding and emits success V4 (`F3LRSP04`),
+without retaining stage bodies or imposing the capture limit below. The
+production caller remains V2. Capture requires explicit request V3 (`F3LREQ03`):
+fields 1-14 retain their V2 meanings, field 15 is the single byte `1`
+(capture required), and field 16 seals the prefix under request hash domain V3.
+Rust callers opt in through
+`preflight_protected_reproducible_first_build_worker_with_revision_v3` with
+`WorkerRequestRevisionV1::CaptureRequiredV3`; the existing preflight API selects
+V2. There is no environment switch.
+
+Only capture-required requests emit success V5 (`F3LRSP05`). Field 10
+retains the linked bitcode, optimized bitcode, and generated relocatable object
+in that order; field 11 binds the complete response content with the
+V5 digest domain. Capture version 1 uses three ordered tagged, length-prefixed
+bodies and a 1 MiB aggregate payload bound. Oversized captures fail explicitly;
+the worker never falls back to hash-only success. Rust rejects successful
+responses whose capture presence disagrees with the sealed request revision.
+Both request revisions can return an inert V2 failure echoing the exact request
+identity, without output or stage bodies. The object is the exact last input
+consumed by LLD, not a separately regenerated object. All older request and
+response encodings remain unchanged.
+
+Rust checks these bodies against the derivation and retains borrowed ranges in
+the canonical response. The live inspected-worker adapter additionally checks
+bootstrap/replay byte equality and obtains the source LLVM from the retained
+compiler handoff. It produces only `CheckedPostLlvmStageContentsV1`, with no
+invented pass observations. Instruction-selection correspondence, complete
+expanded pass/assembly custody, and authenticated occurrence consumption still
+need producers before independently checked machine refinement is available.
+Frozen compact finalizer replay cannot retain V5 stage bodies and rejects them
+explicitly rather than silently downgrading the response. This capture alone
+does not enable the typed V5 finalizer continuation.
+
 This evidence establishes exact content and policy custody through the
 upstream LLVM/LLD stages. It does not prove LLVM optimization or code-generation
 semantic preservation, machine-code safety, or publication, load, or launch

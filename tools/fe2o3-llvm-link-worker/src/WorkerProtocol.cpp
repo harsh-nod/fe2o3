@@ -10,6 +10,7 @@
 #include <limits>
 #include <set>
 #include <tuple>
+#include <utility>
 
 using namespace llvm;
 
@@ -19,15 +20,19 @@ namespace {
 constexpr uint8_t RequestMagicV1[] = {'F', '3', 'L', 'R', 'E', 'Q', '0', '1'};
 constexpr uint8_t ResponseMagicV1[] = {'F', '3', 'L', 'R', 'S', 'P', '0', '1'};
 constexpr uint8_t RequestMagicV2[] = {'F', '3', 'L', 'R', 'E', 'Q', '0', '2'};
+constexpr uint8_t RequestMagicV3[] = {'F', '3', 'L', 'R', 'E', 'Q', '0', '3'};
 constexpr uint8_t ResponseMagicV2[] = {'F', '3', 'L', 'R', 'S', 'P', '0', '2'};
 constexpr uint8_t ResponseMagicV3[] = {'F', '3', 'L', 'R', 'S', 'P', '0', '3'};
 constexpr uint8_t ResponseMagicV4[] = {'F', '3', 'L', 'R', 'S', 'P', '0', '4'};
+constexpr uint8_t ResponseMagicV5[] = {'F', '3', 'L', 'R', 'S', 'P', '0', '5'};
 constexpr char RequestDomainV1[] = "FE2O3/DIRECT-LLVM-WORKER-REQUEST/V1\0";
 constexpr char RequestDomainV2[] = "FE2O3/DIRECT-LLVM-WORKER-REQUEST/V2\0";
+constexpr char RequestDomainV3[] = "FE2O3/DIRECT-LLVM-WORKER-REQUEST/V3\0";
 constexpr char ProviderManifestDomainV1[] =
     "FE2O3/DEVICE-LIBRARY-PROVIDER-MANIFEST/V1\0";
 constexpr char ResponseDomainV3[] = "FE2O3/DIRECT-LLVM-WORKER-RESPONSE/V3\0";
 constexpr char ResponseDomainV4[] = "FE2O3/DIRECT-LLVM-WORKER-RESPONSE/V4\0";
+constexpr char ResponseDomainV5[] = "FE2O3/DIRECT-LLVM-WORKER-RESPONSE/V5\0";
 constexpr char DerivationEvidenceDomainV1[] =
     "FE2O3/UPSTREAM-LLVM-LLD-DERIVATION-EVIDENCE/V1\0";
 constexpr size_t MaxBuildIdentityBytes = 160;
@@ -652,6 +657,8 @@ Expected<ProtocolVersion> detectRequestProtocol(ArrayRef<uint8_t> Bytes) {
     return ProtocolVersion::V1;
   if (Magic == ArrayRef<uint8_t>(RequestMagicV2))
     return ProtocolVersion::V2;
+  if (Magic == ArrayRef<uint8_t>(RequestMagicV3))
+    return ProtocolVersion::CaptureRequiredV3;
   return protocolError("invalid worker protocol magic/version");
 }
 
@@ -661,15 +668,23 @@ Expected<Request> decodeAnyRequest(ArrayRef<uint8_t> Bytes) {
     return Version.takeError();
   if (*Version == ProtocolVersion::V1)
     return decodeRequest(Bytes);
+  if (*Version == ProtocolVersion::CaptureRequiredV3)
+    return decodeCaptureRequestV3(Bytes);
   return decodeRequestV2(Bytes);
 }
 
-Expected<Request> decodeRequestV2(ArrayRef<uint8_t> Bytes) {
+static Expected<Request> decodeCompilerRequest(ArrayRef<uint8_t> Bytes,
+                                               ProtocolVersion Version) {
   if (Bytes.size() > MaxRequestBytes)
     return protocolError("worker V2 request exceeds bound");
-  MessageDecoder Decoder(Bytes, RequestMagicV2, 15);
+  const bool CaptureRequired = Version == ProtocolVersion::CaptureRequiredV3;
+  const uint16_t LastField = CaptureRequired ? 16 : 15;
+  MessageDecoder Decoder(Bytes,
+                         CaptureRequired ? ArrayRef<uint8_t>(RequestMagicV3)
+                                         : ArrayRef<uint8_t>(RequestMagicV2),
+                         LastField);
   Request Result;
-  Result.Protocol = ProtocolVersion::V2;
+  Result.Protocol = Version;
 
   auto RequestId = Decoder.field(1, 32);
   if (!RequestId)
@@ -839,19 +854,28 @@ Expected<Request> decodeRequestV2(ArrayRef<uint8_t> Bytes) {
   if (Result.MaxOutputBytes == 0 || Result.MaxOutputBytes > MaxOutputBytes)
     return protocolError("invalid output byte bound");
 
+  if (CaptureRequired) {
+    auto Mode = Decoder.field(15, 1);
+    if (!Mode)
+      return Mode.takeError();
+    if (Mode->size() != 1 || (*Mode)[0] != 1)
+      return protocolError("unsupported stage capture mode");
+  }
   size_t IdentityFieldOffset = Decoder.position();
-  auto IdentityBytes = Decoder.field(15, 32);
+  auto IdentityBytes = Decoder.field(LastField, 32);
   if (!IdentityBytes)
     return IdentityBytes.takeError();
   auto Identity = fixed<32>(*IdentityBytes);
   if (!Identity)
     return Identity.takeError();
   Result.Identity = *Identity;
-  if (Error E = Decoder.finish(15))
+  if (Error E = Decoder.finish(LastField))
     return E;
 
   SHA256 Hasher;
-  Hasher.update(StringRef(RequestDomainV2, sizeof(RequestDomainV2) - 1));
+  Hasher.update(CaptureRequired
+                    ? StringRef(RequestDomainV3, sizeof(RequestDomainV3) - 1)
+                    : StringRef(RequestDomainV2, sizeof(RequestDomainV2) - 1));
   uint8_t LengthBytes[8];
   support::endian::write64le(LengthBytes, IdentityFieldOffset);
   Hasher.update(ArrayRef<uint8_t>(LengthBytes));
@@ -868,6 +892,14 @@ Expected<Request> decodeRequestV2(ArrayRef<uint8_t> Bytes) {
   Result.RequiredSymbols = Result.FinalSymbols;
   Result.ExpectedDefinedSymbols = Result.FinalSymbols;
   return Result;
+}
+
+Expected<Request> decodeRequestV2(ArrayRef<uint8_t> Bytes) {
+  return decodeCompilerRequest(Bytes, ProtocolVersion::V2);
+}
+
+Expected<Request> decodeCaptureRequestV3(ArrayRef<uint8_t> Bytes) {
+  return decodeCompilerRequest(Bytes, ProtocolVersion::CaptureRequiredV3);
 }
 
 Expected<std::vector<uint8_t>> encodeResponse(Response Value) {
@@ -889,12 +921,12 @@ Expected<std::vector<uint8_t>> encodeResponse(Response Value) {
       return protocolError("worker output digest mismatch");
   }
 
-  if (Value.Protocol == ProtocolVersion::V2 &&
+  if (isCompilerProtocol(Value.Protocol) &&
       llvm::all_of(Value.CompilerEnvelopeIdentity,
                    [](uint8_t Byte) { return Byte == 0; }))
     return protocolError("V2 response has no compiler envelope identity");
   if (Value.DeviceLibraryProvider) {
-    if (Value.Protocol != ProtocolVersion::V2 || !Success)
+    if (!isCompilerProtocol(Value.Protocol) || !Success)
       return protocolError(
           "provider evidence requires a successful V2 response");
     auto ManifestIdentity =
@@ -905,7 +937,7 @@ Expected<std::vector<uint8_t>> encodeResponse(Response Value) {
       return protocolError("provider manifest identity mismatch");
   }
   if (Value.Derivation) {
-    if (Value.Protocol != ProtocolVersion::V2 || !Success)
+    if (!isCompilerProtocol(Value.Protocol) || !Success)
       return protocolError(
           "derivation evidence requires a successful V2 response");
     auto EvidenceIdentity =
@@ -917,15 +949,50 @@ Expected<std::vector<uint8_t>> encodeResponse(Response Value) {
     if (Value.Derivation->Hsaco.Digest != Value.LinkedOutput->Digest ||
         Value.Derivation->Hsaco.ByteLength != Value.LinkedOutput->Bytes.size())
       return protocolError("derivation HSACO identity does not match output");
-  } else if (Value.Protocol == ProtocolVersion::V2 && Success) {
+  } else if (isCompilerProtocol(Value.Protocol) && Success) {
     return protocolError("successful V2 response has no derivation evidence");
+  }
+
+  if (Success && Value.Protocol == ProtocolVersion::CaptureRequiredV3 &&
+      !Value.CapturedStages)
+    return protocolError("capture-required request produced no stage contents");
+  std::vector<uint8_t> CaptureBytes;
+  if (Value.CapturedStages) {
+    if (!Value.Derivation ||
+        Value.Protocol != ProtocolVersion::CaptureRequiredV3 || !Success)
+      return protocolError(
+          "stage capture requires an explicit capture-required request");
+    const StageCapture &Capture = *Value.CapturedStages;
+    const DerivationEvidence &Evidence = *Value.Derivation;
+    size_t Remaining = MaxStageCaptureBytes;
+    CaptureBytes.push_back(1);
+    uint8_t Tag = 1;
+    for (const auto &[Bytes, Identity] :
+         {std::pair{ArrayRef<uint8_t>(Capture.LinkedBitcode),
+                    Evidence.LinkedModule},
+          std::pair{ArrayRef<uint8_t>(Capture.OptimizedBitcode),
+                    Evidence.OptimizedModule},
+          std::pair{ArrayRef<uint8_t>(Capture.GeneratedObject),
+                    Evidence.GeneratedObject}}) {
+      if (Bytes.empty() || Bytes.size() > Remaining)
+        return protocolError("stage capture exceeds aggregate byte bound");
+      Remaining -= Bytes.size();
+      if (Bytes.size() != Identity.ByteLength ||
+          SHA256::hash(Bytes) != Identity.Digest)
+        return protocolError("stage capture does not match derivation");
+      CaptureBytes.push_back(Tag++);
+      appendU32(CaptureBytes, static_cast<uint32_t>(Bytes.size()));
+      CaptureBytes.insert(CaptureBytes.end(), Bytes.begin(), Bytes.end());
+    }
   }
 
   std::vector<uint8_t> Encoded;
   if (Value.Protocol == ProtocolVersion::V1)
     Encoded.assign(std::begin(ResponseMagicV1), std::end(ResponseMagicV1));
-  else if (Value.Protocol == ProtocolVersion::V2) {
-    if (Value.Derivation)
+  else if (isCompilerProtocol(Value.Protocol)) {
+    if (Value.CapturedStages)
+      Encoded.assign(std::begin(ResponseMagicV5), std::end(ResponseMagicV5));
+    else if (Value.Derivation)
       Encoded.assign(std::begin(ResponseMagicV4), std::end(ResponseMagicV4));
     else
       Encoded.assign(Value.DeviceLibraryProvider ? std::begin(ResponseMagicV3)
@@ -939,7 +1006,7 @@ Expected<std::vector<uint8_t>> encodeResponse(Response Value) {
   if (Error E = appendField(Encoded, 2, Value.RequestIdentity))
     return E;
   uint16_t Offset = 0;
-  if (Value.Protocol == ProtocolVersion::V2) {
+  if (isCompilerProtocol(Value.Protocol)) {
     if (Error E = appendField(Encoded, 3, Value.CompilerEnvelopeIdentity))
       return E;
     Offset = 1;
@@ -994,14 +1061,21 @@ Expected<std::vector<uint8_t>> encodeResponse(Response Value) {
                             Value.Derivation->EvidenceIdentity.end());
     if (Error E = appendField(Encoded, 9, *DerivationBytes))
       return E;
+    if (Value.CapturedStages)
+      if (Error E = appendField(Encoded, 10, CaptureBytes))
+        return E;
 
     SHA256 Hasher;
-    Hasher.update(StringRef(ResponseDomainV4, sizeof(ResponseDomainV4) - 1));
+    Hasher.update(
+        Value.CapturedStages
+            ? StringRef(ResponseDomainV5, sizeof(ResponseDomainV5) - 1)
+            : StringRef(ResponseDomainV4, sizeof(ResponseDomainV4) - 1));
     uint8_t LengthBytes[8];
     support::endian::write64le(LengthBytes, Encoded.size());
     Hasher.update(ArrayRef<uint8_t>(LengthBytes));
     Hasher.update(Encoded);
-    if (Error E = appendField(Encoded, 10, Hasher.final()))
+    if (Error E = appendField(Encoded, Value.CapturedStages ? 11 : 10,
+                              Hasher.final()))
       return E;
   } else if (Value.DeviceLibraryProvider) {
     auto ProviderBytes =
@@ -1024,6 +1098,8 @@ Expected<std::vector<uint8_t>> encodeResponse(Response Value) {
     if (Error E = appendField(Encoded, 9, ResponseIdentity))
       return E;
   }
+  if (Encoded.size() > MaxResponseBytes)
+    return protocolError("worker response exceeds aggregate byte bound");
   return Encoded;
 }
 

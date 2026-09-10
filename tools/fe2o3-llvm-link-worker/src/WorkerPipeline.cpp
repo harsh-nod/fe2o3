@@ -719,6 +719,44 @@ StageContentIdentity moduleIdentity(const Module &ModuleValue) {
   return Stream.finish();
 }
 
+class StageCaptureRawStream final : public raw_ostream {
+public:
+  explicit StageCaptureRawStream(size_t Limit) : Limit(Limit) {
+    SetUnbuffered();
+  }
+
+  Expected<std::vector<uint8_t>> finish() {
+    flush();
+    if (Overflow || Bytes.empty())
+      return pipelineError("LLVM stage capture exceeds aggregate byte bound");
+    return std::move(Bytes);
+  }
+
+private:
+  void write_impl(const char *Pointer, size_t Size) override {
+    Position += Size;
+    if (Overflow || Size > Limit - Bytes.size()) {
+      Overflow = true;
+      return;
+    }
+    Bytes.insert(Bytes.end(), Pointer, Pointer + Size);
+  }
+
+  uint64_t current_pos() const override { return Position; }
+
+  size_t Limit;
+  uint64_t Position = 0;
+  bool Overflow = false;
+  std::vector<uint8_t> Bytes;
+};
+
+Expected<std::vector<uint8_t>> captureModule(const Module &ModuleValue,
+                                             size_t RemainingBytes) {
+  StageCaptureRawStream Stream(RemainingBytes);
+  WriteBitcodeToFile(ModuleValue, Stream);
+  return Stream.finish();
+}
+
 void hashU32(SHA256 &Hasher, uint32_t Value) {
   uint8_t Bytes[4];
   support::endian::write32le(Bytes, Value);
@@ -1713,7 +1751,7 @@ inspectOutput(ArrayRef<uint8_t> Bytes, const ElfContract &Expected,
         " actual=" + diagnosticList(MetadataDescriptors));
 
   if (!ExpectedDescriptors.empty() &&
-      RequestValue.Protocol == ProtocolVersion::V2) {
+      isCompilerProtocol(RequestValue.Protocol)) {
     if (!CompilerLaunchContracts ||
         CompilerLaunchContracts->size() != Metadata->Kernels.size())
       return pipelineError(
@@ -1923,7 +1961,7 @@ inspectLinkedOutputForPublication(ArrayRef<uint8_t> Bytes,
     return pipelineError(
         "target machine emitted the wrong code-object version");
   std::optional<SymbolContract> CompilerModule;
-  if (RequestValue.Protocol == ProtocolVersion::V2) {
+  if (isCompilerProtocol(RequestValue.Protocol)) {
     auto Inspected = inspectNormalizedCompilerModule(RequestValue, *Machine);
     if (!Inspected)
       return Inspected.takeError();
@@ -1940,7 +1978,7 @@ Response executeImpl(const Request &RequestValue,
   if (RequestValue.LlvmBuildIdentity != LlvmBuildIdentity)
     return failure(RequestValue, Stage::Toolchain,
                    {"request LLVM identity does not match worker measurement"});
-  if (RequestValue.Protocol == ProtocolVersion::V2 &&
+  if (isCompilerProtocol(RequestValue.Protocol) &&
       RequestValue.WorkerBuildIdentity != WorkerBuildIdentity)
     return failure(
         RequestValue, Stage::Toolchain,
@@ -1959,7 +1997,7 @@ Response executeImpl(const Request &RequestValue,
   std::unique_ptr<TargetMachine> Machine = std::move(*MachineOrError);
 
   std::optional<SymbolContract> CompilerModule;
-  if (RequestValue.Protocol == ProtocolVersion::V2) {
+  if (isCompilerProtocol(RequestValue.Protocol)) {
     auto Inspected = inspectNormalizedCompilerModule(RequestValue, *Machine);
     if (!Inspected)
       return failure(RequestValue, Stage::InputValidation,
@@ -1998,7 +2036,7 @@ Response executeImpl(const Request &RequestValue,
                                 ? isSupportedGfx950OcmlCodeObjectVersion(
                                       RequestValue.CodeObjectVersion)
                                 : false;
-    if (RequestValue.Protocol != ProtocolVersion::V2 || !SupportedVersion)
+    if (!isCompilerProtocol(RequestValue.Protocol) || !SupportedVersion)
       return failure(RequestValue, Stage::InputValidation,
                      {"measured OCML provider target/code-object version is "
                       "not supported"});
@@ -2049,7 +2087,7 @@ Response executeImpl(const Request &RequestValue,
     ProviderEvidence = std::move(Evidence);
   }
 
-  if (RequestValue.Protocol == ProtocolVersion::V2)
+  if (isCompilerProtocol(RequestValue.Protocol))
     if (Error E = validateV2SymbolRoles(RequestValue, *CompilerModule,
                                         BuiltinProviders))
       return failure(RequestValue, Stage::InputValidation, std::move(E));
@@ -2098,11 +2136,33 @@ Response executeImpl(const Request &RequestValue,
   std::optional<StageContentIdentity> LinkedModuleIdentity;
   std::optional<StageContentIdentity> OptimizedModuleIdentity;
   std::optional<StageContentIdentity> GeneratedObjectIdentity;
+  std::optional<StageCapture> CapturedStages;
+  if (RequestValue.Protocol == ProtocolVersion::CaptureRequiredV3)
+    CapturedStages.emplace();
   if (*LinkedModule) {
-    LinkedModuleIdentity = moduleIdentity(**LinkedModule);
+    if (CapturedStages) {
+      auto Bytes = captureModule(**LinkedModule, MaxStageCaptureBytes);
+      if (!Bytes)
+        return failure(RequestValue, Stage::BitcodeLink, Bytes.takeError());
+      CapturedStages->LinkedBitcode = std::move(*Bytes);
+      LinkedModuleIdentity = contentIdentity(CapturedStages->LinkedBitcode);
+    } else {
+      LinkedModuleIdentity = moduleIdentity(**LinkedModule);
+    }
     if (Error E = optimizeModule(**LinkedModule, RequestValue, *Machine))
       return failure(RequestValue, Stage::Optimization, std::move(E));
-    OptimizedModuleIdentity = moduleIdentity(**LinkedModule);
+    if (CapturedStages) {
+      auto Bytes = captureModule(**LinkedModule,
+                                 MaxStageCaptureBytes -
+                                     CapturedStages->LinkedBitcode.size());
+      if (!Bytes)
+        return failure(RequestValue, Stage::Optimization, Bytes.takeError());
+      CapturedStages->OptimizedBitcode = std::move(*Bytes);
+      OptimizedModuleIdentity =
+          contentIdentity(CapturedStages->OptimizedBitcode);
+    } else {
+      OptimizedModuleIdentity = moduleIdentity(**LinkedModule);
+    }
     auto GeneratedObject = emitObject(**LinkedModule, *Machine);
     if (!GeneratedObject)
       return failure(RequestValue, Stage::Codegen, GeneratedObject.takeError());
@@ -2113,12 +2173,18 @@ Response executeImpl(const Request &RequestValue,
       return failure(RequestValue, Stage::Codegen,
                      {"generated object target contract mismatch"});
     GeneratedObjectIdentity = contentIdentity(*GeneratedObject);
+    if (CapturedStages &&
+        GeneratedObject->size() > MaxStageCaptureBytes -
+                                      CapturedStages->LinkedBitcode.size() -
+                                      CapturedStages->OptimizedBitcode.size())
+      return failure(RequestValue, Stage::Codegen,
+                     {"object stage capture exceeds aggregate byte bound"});
     Objects.push_back(std::move(*GeneratedObject));
     NativeLinkEvidence.push_back(
         {NativeLinkInputSource::GeneratedObject, *GeneratedObjectIdentity});
     ObjectContracts.push_back(std::move(*Contract));
   }
-  if (RequestValue.Protocol == ProtocolVersion::V2 &&
+  if (isCompilerProtocol(RequestValue.Protocol) &&
       (!LinkedModuleIdentity || !OptimizedModuleIdentity ||
        !GeneratedObjectIdentity))
     return failure(RequestValue, Stage::Codegen,
@@ -2172,7 +2238,7 @@ Response executeImpl(const Request &RequestValue,
   Result.Protocol = RequestValue.Protocol;
   Result.CompilerEnvelopeIdentity = RequestValue.CompilerEnvelopeIdentity;
   Result.DeviceLibraryProvider = std::move(ProviderEvidence);
-  if (RequestValue.Protocol == ProtocolVersion::V2) {
+  if (isCompilerProtocol(RequestValue.Protocol)) {
     DerivationEvidence Evidence{*LinkedModuleIdentity,
                                 *OptimizedModuleIdentity,
                                 *GeneratedObjectIdentity,
@@ -2191,6 +2257,12 @@ Response executeImpl(const Request &RequestValue,
                      Identity.takeError());
     Evidence.EvidenceIdentity = *Identity;
     Result.Derivation = std::move(Evidence);
+    // The generated object is always the last native input. Retain the exact
+    // bytes consumed by LLD, without another emission or an object-body copy.
+    if (CapturedStages) {
+      CapturedStages->GeneratedObject = std::move(Objects.back());
+      Result.CapturedStages = std::move(CapturedStages);
+    }
   }
   return Result;
 }
