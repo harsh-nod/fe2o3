@@ -1,10 +1,10 @@
 # Native Resource Accounting Contract V1
 
-Status: MEM-BASE shared-engine extraction implemented locally; the remaining
-MEM-5 inventory/interface contract is proposed, reviewed on 2026-09-10. The
-extraction changes no budget and adds no native accounting adapter. It does not
-close MEM-2 through MEM-5. Native ownership, parent/batch/split operations and
-physical disposal integration still require explicit reviewed handoffs below.
+Status: MEM-BASE and the optional session-local MEM-2A N2 backing adapter are
+implemented locally. The remaining MEM-5 inventory/interface contract is
+proposed, reviewed on 2026-09-10. This does not close MEM-2 through MEM-5.
+Pool qualification, compound native ownership, parent/batch/split operations and
+global physical accounting still require the reviewed handoffs below.
 The [A1/A2 swarm plan](runtime-a1-a2-swarm-plan.md) owns scheduling and acceptance.
 
 ## Current Boundary
@@ -33,6 +33,57 @@ Existing staging-byte, snapshot-byte, reply-count, queue-slot and memory-session
 limits are useful local guards. They are neither one transactional resource
 vector nor a total runtime-owned memory ceiling. R67's unused dimensions are
 not measured zeros.
+
+## Implemented MEM-2A Slice
+
+`SharedGttMemorySessionV1::configure_device_backing_budget_v1` installs one
+immutable `Gfx942DeviceBackingBudgetV1`. Its two positive limits cannot exceed
+the existing 192-GiB backing and 128-allocation native profile. Configuration
+requires an active, session-owned instance before any N2 native attempt or
+queue-foundation certification. A released allocation does not reopen
+configuration; restoring queue ownership does not remove the closure.
+
+The [private adapter](../crates/fe2o3-kfd/src/shared_memory/resource_accounting.rs)
+binds its account to the actual session ID, device generation and VM. It derives
+cost from a canonical validated `Gfx942DeviceMemoryLayoutV1`, using padded
+`backing_bytes` and one `AllocationRecords` unit. Requested bytes, GTT, mapped
+views and other accounts are not substituted or added to this backing cost.
+Both ordinary and PUBLIC device-local allocation paths use the same adapter.
+Usage snapshots are inert and do not expose charge or disposal authority.
+
+Reservation precedes currentness and the first `reserve_va` call. An unissued
+reservation can cancel; immediately before native entry it becomes retained.
+The exact allocation ID, generation and layout accompany its move-only charge
+in `DeviceMemoryRecord`. Mapping, initialization, lease drop and uncertain
+results do not refund it. An ambiguous attempt before record insertion retains
+the debit through the shared ledger's quarantine anchor. Configured native
+transition panics quarantine the session and resume the original payload. A
+paired XGMI operation quarantines both participants if either is configured.
+Neither guard performs cleanup, retries native operations or replaces the panic.
+
+Refund requires the exact account and allocation identity, successful backing
+free and VA release, closing currentness and checked existing byte accounting.
+A charged record cannot be recycled. Failed or interrupted disposal retains
+the debit even if part of the native cleanup has already succeeded. Accounts
+without this opt-in configuration keep the existing allocation behavior and
+profile limits.
+
+R68's production-used projection has a corresponding property-specific Verus
+source and five named mutations. Its four obligations cover the bounded input,
+exact backing/record vector, zero other dimensions and algebraic conservation.
+They do not prove that native layout extraction, syscall outcomes, mutex/arena
+ownership or whole-executor disposal correspond to the model. The full
+authenticated roster and CPU fault matrix are separate release gates.
+
+This is one session's N2 accounting, not a runtime-wide switch or closed memory
+ceiling. Session bootstrap, GTT, queue/control backing, host metadata, parent
+budgets, aggregate quarantine and runtime configuration forwarding remain
+open. Runtime forwarding must configure during native session construction,
+before queue-foundation transfer, rather than weakening freshness to permit
+late Context configuration. Pool checkout/recycle/trim qualification is MEM-2B;
+retaining charges in the underlying allocation record does not by itself
+qualify every pool path.
+No hardware or performance result is implied by this implementation.
 
 ## Units And Counting Rules
 
@@ -130,15 +181,15 @@ profile with an exclusion note while still claiming its total byte bound.
 
 The approved MEM-BASE extraction moves the existing account engine into the
 lower-level `fe2o3-resource-accounting` crate depending on `fe2o3-runtime-model`
-and `std`. Runtime now depends on it and retains branded thin wrappers and
-Context configuration. KFD does not yet depend on it or hold native charges.
+and `std`. Runtime depends on it and retains branded thin wrappers and
+Context configuration. KFD now consumes it for the session-local N2 slice above.
 The implementation is moved, not forked: the shared crate owns arithmetic,
 record identity and transaction mechanics, not native allocation, device
 currentness or disposal observations. Nine engine regressions and two compile-fail
 ownership examples live with the engine; three runtime wrapper regressions
 cover device labels, independent accounts and interface compatibility.
 
-The next native adapter must compose moved credits with private native owner
+Further native adapters must compose moved credits with private native owner
 bundles. Public core counter-release methods are accounting mechanics, not
 physical-disposal evidence; only the reviewed native adapter may decide when
 its represented native resources were actually disposed.
@@ -266,7 +317,7 @@ well as successful ownership transfers. Full reference-executor conservation,
 native extraction and observed disposal correspondence remain PRF-1 composition
 work; proofs of vector arithmetic alone do not establish them.
 
-## Evidence At This Checkpoint
+## Earlier R67 Evidence
 
 The current all-feature library gate passed 527 runtime tests and 693 model
 tests, with two existing model ignores, including all ten Context admission
@@ -278,6 +329,17 @@ This proves neither the proposed hierarchy nor native extraction, whole-account
 ownership or the reference executor. The R66 qualifier now
 contains requested-credit saturation/retention/logical-disposal checks, but
 there is no new signed hardware result for native physical budgets.
+
+## MEM-2A Evidence
+
+The [R68 local record](evidence/local-r68-native-backing-2026-09-10/README.md)
+passes 2,065 runtime tests on each of GNU and musl, with five existing ignores,
+plus host, fixture, doctest, lint, dependency and lockfile gates. The full
+authenticated proof run passes 57 positive sources, 1,334 obligations and 645
+expected negatives. R68 adds only four projection obligations and five named
+mutations. Public XGMI wiring remains source-tested rather than live-qualified;
+the configuration transfer/loan/retake round trip lacks an integrated regression.
+The shared GPU remained busy, so no new hardware stage or qualifier was started.
 
 Existing native layout, pool, slot and teardown tests are reusable evidence
 inputs. They are not tests of the proposed ledger extraction, parent limits,

@@ -157,6 +157,8 @@ pub enum MemorySessionError {
     DeviceMemoryByteCapacity {
         maximum_bytes: u64,
     },
+    DeviceBackingBudgetConfiguration(&'static str),
+    DeviceBackingCredits(fe2o3_resource_accounting::ResourceCreditErrorV1),
     InvalidDeviceMemorySize,
     InvalidDeviceMemoryAlignment,
     DeviceContentMismatch,
@@ -221,6 +223,15 @@ impl fmt::Display for MemorySessionError {
                 formatter,
                 "device-memory capacity {maximum_bytes} bytes would be exceeded"
             ),
+            Self::DeviceBackingBudgetConfiguration(detail) => {
+                write!(
+                    formatter,
+                    "device-backing budget configuration rejected: {detail}"
+                )
+            }
+            Self::DeviceBackingCredits(error) => {
+                write!(formatter, "device-backing resource credits: {error}")
+            }
             Self::InvalidDeviceMemorySize => {
                 formatter.write_str("device-memory size must be nonzero and within profile bounds")
             }

@@ -134,6 +134,27 @@ pub const SHARED_GTT_MEMORY_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
     0x6a, 0x6d, 0xdb, 0xbe, 0x89, 0x57, 0x72, 0x17, 0x28, 0x4b, 0x18, 0xbd, 0xcf, 0xdc, 0xbd, 0xd3,
 ];
 
+mod resource_accounting;
+use resource_accounting::{
+    DeviceBackingAccountV1, DeviceBackingAccountingErrorV1, DeviceBackingChargeV1,
+};
+pub use resource_accounting::{Gfx942DeviceBackingBudgetV1, Gfx942DeviceBackingUsageV1};
+
+fn device_backing_accounting_error(error: DeviceBackingAccountingErrorV1) -> MemorySessionError {
+    match error {
+        DeviceBackingAccountingErrorV1::InvalidBudget => {
+            MemorySessionError::DeviceBackingBudgetConfiguration("invalid bounded budget")
+        }
+        DeviceBackingAccountingErrorV1::InvalidDomain
+        | DeviceBackingAccountingErrorV1::InvalidAllocation => {
+            MemorySessionError::InvalidDeviceMemoryAuthority
+        }
+        DeviceBackingAccountingErrorV1::Credits(error) => {
+            MemorySessionError::DeviceBackingCredits(error)
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SharedGttProfileV1 {
     HostVisibleCoherent,
@@ -1096,6 +1117,7 @@ struct DeviceMemoryRecord<B: MemoryBackend> {
     handle: Option<u64>,
     free_attempted: bool,
     phase: DeviceMemoryPhaseV1,
+    backing_charge: Option<DeviceBackingChargeV1>,
 }
 
 impl<B: MemoryBackend> DeviceMemoryRecord<B> {
@@ -1105,6 +1127,7 @@ impl<B: MemoryBackend> DeviceMemoryRecord<B> {
             && self.reservation.is_none()
             && self.mapping.is_none()
             && self.handle.is_none()
+            && self.backing_charge.is_none()
     }
 }
 
@@ -1120,10 +1143,50 @@ struct SharedMemoryEngine<B: MemoryBackend> {
     device_memory_record_slots: HashMap<u64, usize>,
     next_device_memory_id: u64,
     retained_device_memory_bytes: u64,
+    device_backing_account: Option<DeviceBackingAccountV1>,
+    device_backing_activity_started: bool,
+    device_backing_configuration_closed: bool,
     #[cfg(test)]
     shared_lookup_comparisons: Cell<usize>,
     #[cfg(test)]
     device_lookup_comparisons: Cell<usize>,
+}
+
+trait DeviceBackingUnwindTargetV1 {
+    fn has_device_backing_account(&self) -> bool;
+    fn quarantine_device_backing_unwind(&mut self);
+}
+
+impl<B: MemoryBackend> DeviceBackingUnwindTargetV1 for SharedMemoryEngine<B> {
+    fn has_device_backing_account(&self) -> bool {
+        self.device_backing_account.is_some()
+    }
+
+    fn quarantine_device_backing_unwind(&mut self) {
+        self.phase = SharedMemorySessionPhaseV1::Quarantined;
+    }
+}
+
+fn with_device_backing_pair_unwind_quarantine<L, R, T>(
+    left: &mut L,
+    right: &mut R,
+    operation: impl FnOnce(&mut L, &mut R) -> T,
+) -> T
+where
+    L: DeviceBackingUnwindTargetV1,
+    R: DeviceBackingUnwindTargetV1,
+{
+    if !left.has_device_backing_account() && !right.has_device_backing_account() {
+        return operation(left, right);
+    }
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(left, right))) {
+        Ok(result) => result,
+        Err(payload) => {
+            left.quarantine_device_backing_unwind();
+            right.quarantine_device_backing_unwind();
+            std::panic::resume_unwind(payload)
+        }
+    }
 }
 
 impl<B: MemoryBackend> SharedMemoryEngine<B> {
@@ -1178,6 +1241,9 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             device_memory_record_slots,
             next_device_memory_id: 1,
             retained_device_memory_bytes: 0,
+            device_backing_account: None,
+            device_backing_activity_started: false,
+            device_backing_configuration_closed: false,
             #[cfg(test)]
             shared_lookup_comparisons: Cell::new(0),
             #[cfg(test)]
@@ -1186,7 +1252,14 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
     }
 
     fn phase(&self) -> SharedMemorySessionPhaseV1 {
-        self.phase
+        if self.device_backing_account.as_ref().is_some_and(|account| {
+            let usage = account.usage();
+            usage.poisoned || usage.quarantined_records != 0
+        }) {
+            SharedMemorySessionPhaseV1::Quarantined
+        } else {
+            self.phase
+        }
     }
 
     fn quarantine<T>(&mut self, error: MemorySessionError) -> Result<T, MemorySessionError> {
@@ -1195,10 +1268,51 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
     }
 
     fn require_active(&self) -> Result<(), MemorySessionError> {
-        if self.phase == SharedMemorySessionPhaseV1::Active {
+        if self.phase() == SharedMemorySessionPhaseV1::Active {
             Ok(())
         } else {
             Err(MemorySessionError::SharedSessionQuarantined)
+        }
+    }
+
+    fn configure_device_backing_budget_v1(
+        &mut self,
+        device: DeviceKeyV1,
+        vm: VmKeyV1,
+        budget: Gfx942DeviceBackingBudgetV1,
+    ) -> Result<(), MemorySessionError> {
+        self.require_active()?;
+        if self.device_backing_account.is_some()
+            || self.device_backing_activity_started
+            || self.device_backing_configuration_closed
+            || !self.device_memory.is_empty()
+            || self.next_device_memory_id != 1
+            || self.retained_device_memory_bytes != 0
+        {
+            return Err(MemorySessionError::DeviceBackingBudgetConfiguration(
+                "requires a fresh unsealed session without prior N2 activity",
+            ));
+        }
+        let account = DeviceBackingAccountV1::new(self.session_id, device, vm, budget)
+            .map_err(device_backing_accounting_error)?;
+        self.check_currentness()?;
+        self.device_backing_account = Some(account);
+        Ok(())
+    }
+
+    fn with_device_backing_unwind_quarantine<R>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        if self.device_backing_account.is_none() {
+            return operation(self);
+        }
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(self))) {
+            Ok(result) => result,
+            Err(payload) => {
+                self.phase = SharedMemorySessionPhaseV1::Quarantined;
+                std::panic::resume_unwind(payload)
+            }
         }
     }
 
@@ -1426,6 +1540,25 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         alignment: u64,
         flags: KfdAllocMemoryFlags,
     ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, MemorySessionError> {
+        self.with_device_backing_unwind_quarantine(|engine| {
+            engine.allocate_device_memory_with_flags_inner(
+                device,
+                vm,
+                requested_bytes,
+                alignment,
+                flags,
+            )
+        })
+    }
+
+    fn allocate_device_memory_with_flags_inner(
+        &mut self,
+        device: DeviceKeyV1,
+        vm: VmKeyV1,
+        requested_bytes: u64,
+        alignment: u64,
+        flags: KfdAllocMemoryFlags,
+    ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, MemorySessionError> {
         self.require_active()?;
         if vm.device != device {
             return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
@@ -1456,7 +1589,19 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         let reservation_bytes =
             usize::try_from(layout.backing_bytes).map_err(|_| MemorySessionError::SizeOverflow)?;
 
+        let backing_reservation = self
+            .device_backing_account
+            .as_ref()
+            .map(|account| {
+                account
+                    .reserve(self.session_id, device, vm, id, 1, layout)
+                    .map_err(device_backing_accounting_error)
+            })
+            .transpose()?;
         self.check_currentness()?;
+        // A VA attempt can be ambiguous before there is a native record to retain it.
+        self.device_backing_activity_started = true;
+        let backing_charge = backing_reservation.map(|reservation| reservation.retain());
         let reservation = match self.backend.reserve_va(reservation_bytes) {
             Ok(reservation) => reservation,
             Err(error) => return self.quarantine(error),
@@ -1475,6 +1620,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             handle: None,
             free_attempted: false,
             phase: DeviceMemoryPhaseV1::Ambiguous,
+            backing_charge,
         };
         if record_slot == self.device_memory.len() {
             self.device_memory.push(record);
@@ -1631,6 +1777,25 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         write: impl FnOnce(&mut [u8]) -> Result<(), MemorySessionError>,
         verification_source: Option<&[u8]>,
     ) -> Result<Gfx942InitializedDeviceMemoryV1, MemorySessionError> {
+        self.with_device_backing_unwind_quarantine(|engine| {
+            engine.initialize_public_device_memory_after_preflight_inner(
+                lease,
+                expected_len,
+                content,
+                write,
+                verification_source,
+            )
+        })
+    }
+
+    fn initialize_public_device_memory_after_preflight_inner(
+        &mut self,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+        expected_len: usize,
+        content: Gfx942DeviceContentDescriptorV1,
+        write: impl FnOnce(&mut [u8]) -> Result<(), MemorySessionError>,
+        verification_source: Option<&[u8]>,
+    ) -> Result<Gfx942InitializedDeviceMemoryV1, MemorySessionError> {
         let index = self.device_memory_index(&lease, DeviceMemoryPhaseV1::Unmapped)?;
         self.check_currentness()?;
         let mapping_bytes = usize::try_from(self.device_memory[index].layout.backing_bytes)
@@ -1704,6 +1869,16 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
     }
 
     fn with_unmapped_public_device_memory<R>(
+        &mut self,
+        lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+        access: impl FnOnce(&mut [u8]) -> R,
+    ) -> Result<R, MemorySessionError> {
+        self.with_device_backing_unwind_quarantine(|engine| {
+            engine.with_unmapped_public_device_memory_inner(lease, access)
+        })
+    }
+
+    fn with_unmapped_public_device_memory_inner<R>(
         &mut self,
         lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
         access: impl FnOnce(&mut [u8]) -> R,
@@ -1886,6 +2061,13 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         &mut self,
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
     ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>, MemorySessionError> {
+        self.with_device_backing_unwind_quarantine(|engine| engine.map_device_memory_inner(lease))
+    }
+
+    fn map_device_memory_inner(
+        &mut self,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+    ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>, MemorySessionError> {
         let index = self.device_memory_index(&lease, DeviceMemoryPhaseV1::Unmapped)?;
         if self.device_memory[index].mapping.is_some() {
             return self.quarantine(MemorySessionError::InvalidDeviceMemoryAuthority);
@@ -1916,6 +2098,17 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
 
     #[allow(clippy::result_large_err)]
     fn map_device_memory_to_gpus(
+        &mut self,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+        gpu_ids: Box<[u32]>,
+    ) -> Result<Gfx942XgmiMappedDeviceMemoryV1, Gfx942XgmiMapFailureV1> {
+        self.with_device_backing_unwind_quarantine(|engine| {
+            engine.map_device_memory_to_gpus_inner(lease, gpu_ids)
+        })
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn map_device_memory_to_gpus_inner(
         &mut self,
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
         gpu_ids: Box<[u32]>,
@@ -2064,6 +2257,17 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
     #[allow(clippy::result_large_err)]
     fn unmap_device_memory_from_gpus(
         &mut self,
+        mapping: Gfx942XgmiMappedDeviceMemoryV1,
+    ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, Gfx942XgmiUnmapFailureV1>
+    {
+        self.with_device_backing_unwind_quarantine(|engine| {
+            engine.unmap_device_memory_from_gpus_inner(mapping)
+        })
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn unmap_device_memory_from_gpus_inner(
+        &mut self,
         mut mapping: Gfx942XgmiMappedDeviceMemoryV1,
     ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, Gfx942XgmiUnmapFailureV1>
     {
@@ -2167,6 +2371,13 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         &mut self,
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
     ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, MemorySessionError> {
+        self.with_device_backing_unwind_quarantine(|engine| engine.unmap_device_memory_inner(lease))
+    }
+
+    fn unmap_device_memory_inner(
+        &mut self,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+    ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, MemorySessionError> {
         let index = self.device_memory_index(&lease, DeviceMemoryPhaseV1::Mapped)?;
         self.check_currentness()?;
         let handle = self.device_memory[index]
@@ -2196,7 +2407,32 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         &mut self,
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
     ) -> Result<(), MemorySessionError> {
+        self.with_device_backing_unwind_quarantine(|engine| {
+            engine.release_device_memory_inner(lease)
+        })
+    }
+
+    fn release_device_memory_inner(
+        &mut self,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+    ) -> Result<(), MemorySessionError> {
         let index = self.device_memory_index(&lease, DeviceMemoryPhaseV1::Unmapped)?;
+        if let Some(account) = &self.device_backing_account {
+            let Some(charge) = &self.device_memory[index].backing_charge else {
+                return self.quarantine(MemorySessionError::InvalidDeviceMemoryAuthority);
+            };
+            if !charge.matches(
+                account,
+                self.session_id,
+                lease.device,
+                lease.vm,
+                lease.id,
+                lease.generation,
+                lease.layout,
+            ) {
+                return self.quarantine(MemorySessionError::InvalidDeviceMemoryAuthority);
+            }
+        }
         self.check_currentness()?;
         if self.device_memory[index].mapping.is_some() {
             return self.quarantine(MemorySessionError::InvalidDeviceMemoryAuthority);
@@ -2231,12 +2467,37 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         self.check_currentness()?;
         self.device_memory[index].phase = DeviceMemoryPhaseV1::Released;
         self.device_memory_record_slots.remove(&lease.id);
-        self.retained_device_memory_bytes = self
+        self.retained_device_memory_bytes = match self
             .retained_device_memory_bytes
             .checked_sub(lease.layout.backing_bytes)
-            .ok_or(MemorySessionError::KernelResultMalformed(
-                "retained device-memory accounting",
-            ))?;
+        {
+            Some(bytes) => bytes,
+            None => {
+                let error =
+                    MemorySessionError::KernelResultMalformed("retained device-memory accounting");
+                return if self.device_backing_account.is_some() {
+                    self.quarantine(error)
+                } else {
+                    Err(error)
+                };
+            }
+        };
+        if let Some(charge) = self.device_memory[index].backing_charge.take() {
+            let Some(account) = &self.device_backing_account else {
+                return self.quarantine(MemorySessionError::InvalidDeviceMemoryAuthority);
+            };
+            if let Err(error) = charge.release_after_disposal(
+                account,
+                self.session_id,
+                lease.device,
+                lease.vm,
+                lease.id,
+                lease.generation,
+                lease.layout,
+            ) {
+                return self.quarantine(device_backing_accounting_error(error));
+            }
+        }
         Ok(())
     }
 
@@ -3629,6 +3890,17 @@ pub struct SharedGttMemorySessionV1 {
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+impl DeviceBackingUnwindTargetV1 for SharedGttMemorySessionV1 {
+    fn has_device_backing_account(&self) -> bool {
+        self.engine.has_device_backing_account()
+    }
+
+    fn quarantine_device_backing_unwind(&mut self) {
+        self.engine.quarantine_device_backing_unwind();
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl CheckedGfx942XnackMinusDevice {
     /// Acquires one process VM that can retain several bounded typed GTT BOs.
     pub fn acquire_shared_gtt_memory_session(
@@ -3682,6 +3954,34 @@ impl CheckedGfx942XnackMinusDevice {
 impl SharedGttMemorySessionV1 {
     pub fn phase(&self) -> SharedMemorySessionPhaseV1 {
         self.engine.phase()
+    }
+
+    /// Installs an immutable, session-local N2 backing budget before first use.
+    ///
+    /// Charges include padded device backing and live backing records only.
+    /// This does not account for GTT, queues, bootstrap storage or other sessions.
+    pub fn configure_device_backing_budget_v1(
+        &mut self,
+        budget: Gfx942DeviceBackingBudgetV1,
+    ) -> Result<(), MemorySessionError> {
+        if !self.model_ownership.is_session_owned() {
+            return Err(MemorySessionError::DeviceBackingBudgetConfiguration(
+                "queue-owned or loaned memory cannot configure a backing budget",
+            ));
+        }
+        self.engine.configure_device_backing_budget_v1(
+            self.model_device.model_key(),
+            self.vm,
+            budget,
+        )
+    }
+
+    /// Reports only this session's configured N2 debit, including retained uncertainty.
+    pub fn device_backing_usage_v1(&self) -> Option<Gfx942DeviceBackingUsageV1> {
+        self.engine
+            .device_backing_account
+            .as_ref()
+            .map(DeviceBackingAccountV1::usage)
     }
 
     pub fn retained_allocation_count(&self) -> usize {
@@ -3874,6 +4174,18 @@ impl SharedGttMemorySessionV1 {
         route: crate::topology::Gfx942XgmiRouteV1,
         lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
     ) -> Result<Gfx942XgmiMappedDeviceMemoryV1, Gfx942XgmiMapFailureV1> {
+        with_device_backing_pair_unwind_quarantine(self, peer, |session, peer| {
+            session.map_gfx942_device_memory_for_xgmi_peer_inner(peer, route, lease)
+        })
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn map_gfx942_device_memory_for_xgmi_peer_inner(
+        &mut self,
+        peer: &mut Self,
+        route: crate::topology::Gfx942XgmiRouteV1,
+        lease: Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>,
+    ) -> Result<Gfx942XgmiMappedDeviceMemoryV1, Gfx942XgmiMapFailureV1> {
         let fail = |error, lease| Gfx942XgmiMapFailureV1 {
             error,
             recovery: Gfx942XgmiMapRecoveryV1::Unmapped(lease),
@@ -3940,6 +4252,19 @@ impl SharedGttMemorySessionV1 {
     /// prefix so callers can retry without freeing a partially mapped BO.
     #[allow(clippy::result_large_err)]
     pub fn unmap_gfx942_device_memory_from_xgmi_peer(
+        &mut self,
+        peer: &mut Self,
+        route: crate::topology::Gfx942XgmiRouteV1,
+        mapping: Gfx942XgmiMappedDeviceMemoryV1,
+    ) -> Result<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryUnmappedV1>, Gfx942XgmiUnmapFailureV1>
+    {
+        with_device_backing_pair_unwind_quarantine(self, peer, |session, peer| {
+            session.unmap_gfx942_device_memory_from_xgmi_peer_inner(peer, route, mapping)
+        })
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn unmap_gfx942_device_memory_from_xgmi_peer_inner(
         &mut self,
         peer: &mut Self,
         route: crate::topology::Gfx942XgmiRouteV1,
@@ -4259,6 +4584,7 @@ impl SharedGttMemorySessionV1 {
     fn take_queue_model_foundation_after_device_memory_check(
         &mut self,
     ) -> Result<QueueModelFoundationV1, MemorySessionError> {
+        self.engine.device_backing_configuration_closed = true;
         let issuer = self
             .model_ownership
             .certify_and_transfer_to_queue(
@@ -5386,6 +5712,7 @@ const _: () = {
 
 #[cfg(test)]
 mod tests {
+    mod device_backing;
     use super::*;
     use core::cell::Cell;
     use fe2o3_kfd_uapi::KfdIoctlAllocMemoryOfGpuArgs;
@@ -5423,6 +5750,7 @@ mod tests {
         writable: bool,
         corrupt_readback: bool,
         readback_calls: Cell<usize>,
+        panic_access: Option<&'static str>,
     }
 
     struct FakeBackend {
@@ -5430,6 +5758,7 @@ mod tests {
         next_handle: u64,
         flags: Vec<u32>,
         fail_operation: Option<&'static str>,
+        panic_operation: Option<&'static str>,
         fixed_va: Option<u64>,
         map_progress: u32,
         unmap_progress: u32,
@@ -5440,6 +5769,7 @@ mod tests {
         corrupt_mapping_address: bool,
         currentness_calls: usize,
         fail_currentness_at: Option<usize>,
+        panic_currentness_at: Option<usize>,
         operational_currentness_calls: usize,
         fail_operational_currentness_at: Option<usize>,
         reserve_va_calls: usize,
@@ -5449,6 +5779,8 @@ mod tests {
         unmap_gpu_calls: usize,
         multi_map_script: Vec<(u32, bool)>,
         multi_unmap_script: Vec<(u32, bool)>,
+        panic_multi_map_at: Option<usize>,
+        panic_multi_unmap_at: Option<usize>,
         multi_map_inputs: Vec<(Vec<u32>, u32)>,
         multi_unmap_inputs: Vec<(Vec<u32>, u32)>,
         free_calls: usize,
@@ -5468,6 +5800,7 @@ mod tests {
                 next_handle: 1,
                 flags: Vec::new(),
                 fail_operation: None,
+                panic_operation: None,
                 fixed_va: None,
                 map_progress: 1,
                 unmap_progress: 1,
@@ -5478,6 +5811,7 @@ mod tests {
                 corrupt_mapping_address: false,
                 currentness_calls: 0,
                 fail_currentness_at: None,
+                panic_currentness_at: None,
                 operational_currentness_calls: 0,
                 fail_operational_currentness_at: None,
                 reserve_va_calls: 0,
@@ -5487,6 +5821,8 @@ mod tests {
                 unmap_gpu_calls: 0,
                 multi_map_script: Vec::new(),
                 multi_unmap_script: Vec::new(),
+                panic_multi_map_at: None,
+                panic_multi_unmap_at: None,
                 multi_map_inputs: Vec::new(),
                 multi_unmap_inputs: Vec::new(),
                 free_calls: 0,
@@ -5501,6 +5837,9 @@ mod tests {
         }
 
         fn check(&self, operation: &'static str) -> Result<(), MemorySessionError> {
+            if self.panic_operation == Some(operation) {
+                std::panic::panic_any(("N2 native panic", operation));
+            }
             if self.fail_operation == Some(operation) {
                 Err(MemorySessionError::Injected(operation))
             } else {
@@ -5530,6 +5869,9 @@ mod tests {
         }
         fn check_currentness(&mut self) -> Result<(), MemorySessionError> {
             self.currentness_calls += 1;
+            if self.panic_currentness_at == Some(self.currentness_calls) {
+                std::panic::panic_any(("N2 native panic", "currentness"));
+            }
             if self.fail_currentness_at == Some(self.currentness_calls) {
                 Err(MemorySessionError::Injected("currentness"))
             } else {
@@ -5608,6 +5950,7 @@ mod tests {
                 writable: false,
                 corrupt_readback: self.corrupt_readback,
                 readback_calls: Cell::new(0),
+                panic_access: self.panic_operation,
             };
             self.prepare_cpu_mapping(&mut mapping)?;
             Ok(mapping)
@@ -5669,6 +6012,7 @@ mod tests {
                 writable: false,
                 corrupt_readback: self.corrupt_readback,
                 readback_calls: Cell::new(0),
+                panic_access: self.panic_operation,
             })
         }
         fn mapping_address(mapping: &Self::Mapping) -> u64 {
@@ -5723,6 +6067,9 @@ mod tests {
         ) -> KernelOutcome<u32> {
             let call = self.multi_map_inputs.len();
             self.multi_map_inputs.push((gpu_ids.to_vec(), old_success));
+            if self.panic_multi_map_at == Some(call + 1) {
+                std::panic::panic_any(("N2 native panic", "map_gpu_ids"));
+            }
             let (value, errno) = self
                 .multi_map_script
                 .get(call)
@@ -5746,6 +6093,9 @@ mod tests {
             let call = self.multi_unmap_inputs.len();
             self.multi_unmap_inputs
                 .push((gpu_ids.to_vec(), old_success));
+            if self.panic_multi_unmap_at == Some(call + 1) {
+                std::panic::panic_any(("N2 native panic", "unmap_gpu_ids"));
+            }
             let (value, errno) = self
                 .multi_unmap_script
                 .get(call)
@@ -5765,6 +6115,9 @@ mod tests {
             requested_bytes: usize,
             f: impl FnOnce(&[u8]) -> R,
         ) -> R {
+            if mapping.panic_access == Some("with_bytes") {
+                std::panic::panic_any(("N2 native panic", "with_bytes"));
+            }
             assert!(mapping.active);
             mapping.readback_calls.set(mapping.readback_calls.get() + 1);
             if mapping.corrupt_readback {
@@ -5780,6 +6133,9 @@ mod tests {
             requested_bytes: usize,
             f: impl FnOnce(&mut [u8]) -> R,
         ) -> R {
+            if mapping.panic_access == Some("with_bytes_mut") {
+                std::panic::panic_any(("N2 native panic", "with_bytes_mut"));
+            }
             assert!(mapping.active && mapping.writable);
             f(&mut mapping.bytes[..requested_bytes])
         }

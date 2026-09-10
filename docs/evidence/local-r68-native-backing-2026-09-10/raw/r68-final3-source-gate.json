@@ -1,0 +1,324 @@
+[
+  {
+    "name": "gnu-tests",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--offline",
+      "--no-fail-fast",
+      "-p",
+      "fe2o3-completion",
+      "-p",
+      "fe2o3-runtime-model",
+      "-p",
+      "fe2o3-resource-accounting",
+      "-p",
+      "fe2o3-kfd",
+      "-p",
+      "fe2o3-runtime",
+      "--all-features",
+      "--all-targets"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r68-final3-gnu-tests.log",
+    "returncode": 0,
+    "elapsed_seconds": 44.24
+  },
+  {
+    "name": "musl-tests",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--offline",
+      "--no-fail-fast",
+      "-p",
+      "fe2o3-completion",
+      "-p",
+      "fe2o3-runtime-model",
+      "-p",
+      "fe2o3-resource-accounting",
+      "-p",
+      "fe2o3-kfd",
+      "-p",
+      "fe2o3-runtime",
+      "--all-features",
+      "--all-targets",
+      "--target",
+      "x86_64-unknown-linux-musl"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r68-final3-musl-tests.log",
+    "returncode": 0,
+    "elapsed_seconds": 51.933
+  },
+  {
+    "name": "gnu-docs",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--offline",
+      "--no-fail-fast",
+      "-p",
+      "fe2o3-completion",
+      "-p",
+      "fe2o3-runtime-model",
+      "-p",
+      "fe2o3-resource-accounting",
+      "-p",
+      "fe2o3-kfd",
+      "-p",
+      "fe2o3-runtime",
+      "--all-features",
+      "-p",
+      "fe2o3-host",
+      "--doc"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r68-final3-gnu-docs.log",
+    "returncode": 0,
+    "elapsed_seconds": 4.877
+  },
+  {
+    "name": "musl-docs",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--offline",
+      "--no-fail-fast",
+      "-p",
+      "fe2o3-completion",
+      "-p",
+      "fe2o3-runtime-model",
+      "-p",
+      "fe2o3-resource-accounting",
+      "-p",
+      "fe2o3-kfd",
+      "-p",
+      "fe2o3-runtime",
+      "--all-features",
+      "--doc",
+      "--target",
+      "x86_64-unknown-linux-musl"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r68-final3-musl-docs.log",
+    "returncode": 0,
+    "elapsed_seconds": 4.132
+  },
+  {
+    "name": "musl-host-docs",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--offline",
+      "-p",
+      "fe2o3-host",
+      "--doc",
+      "--target",
+      "x86_64-unknown-linux-musl"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r68-final3-musl-host-docs.log",
+    "returncode": 0,
+    "elapsed_seconds": 0.817
+  },
+  {
+    "name": "gnu-host",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--offline",
+      "-p",
+      "fe2o3-host",
+      "--all-features",
+      "--lib"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r68-final3-gnu-host.log",
+    "returncode": 0,
+    "elapsed_seconds": 1.726
+  },
+  {
+    "name": "macro-fixtures",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--offline",
+      "-p",
+      "fe2o3-macros",
+      "--test",
+      "typed_kernel_fixtures"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r68-final3-macro-fixtures.log",
+    "returncode": 0,
+    "elapsed_seconds": 5.338
+  },
+  {
+    "name": "clippy-all",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "--offline",
+      "-p",
+      "fe2o3-completion",
+      "-p",
+      "fe2o3-runtime-model",
+      "-p",
+      "fe2o3-resource-accounting",
+      "-p",
+      "fe2o3-kfd",
+      "-p",
+      "fe2o3-runtime",
+      "-p",
+      "fe2o3-host",
+      "-p",
+      "fe2o3-macros",
+      "--all-features",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r68-final3-clippy-all.log",
+    "returncode": 0,
+    "elapsed_seconds": 17.846
+  },
+  {
+    "name": "clippy-production",
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "--offline",
+      "-p",
+      "fe2o3-completion",
+      "-p",
+      "fe2o3-runtime-model",
+      "-p",
+      "fe2o3-resource-accounting",
+      "-p",
+      "fe2o3-kfd",
+      "-p",
+      "fe2o3-runtime",
+      "-p",
+      "fe2o3-host",
+      "-p",
+      "fe2o3-macros",
+      "--no-default-features",
+      "--lib",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r68-final3-clippy-production.log",
+    "returncode": 0,
+    "elapsed_seconds": 18.652
+  },
+  {
+    "name": "python",
+    "command": [
+      "python3",
+      "-B",
+      "-m",
+      "unittest",
+      "test_run_r26_inplace_runner",
+      "test_check_r40_striped",
+      "test_run_r40_striped_runner",
+      "test_run_r60_pipeline",
+      "test_check_r60_pipeline",
+      "test_run_r61_owner",
+      "test_run_r62_control",
+      "test_run_r63_graph",
+      "test_run_r65_drain_versions",
+      "test_run_r66_coexistence",
+      "test_check_scale3_protocol"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution/benchmarks/runtime_gfx942",
+    "log": "/home/harsh/.codex-tmp/r68-final3-python.log",
+    "returncode": 0,
+    "elapsed_seconds": 5.285
+  },
+  {
+    "name": "fmt",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r68-final3-fmt.log",
+    "returncode": 0,
+    "elapsed_seconds": 20.392
+  },
+  {
+    "name": "whitespace",
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r68-final3-whitespace.log",
+    "returncode": 0,
+    "elapsed_seconds": 0.065
+  },
+  {
+    "name": "dependency-policy",
+    "command": [
+      "python3",
+      "-B",
+      "scripts/workspace_dependency_policy.py"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r68-final3-dependency-policy.log",
+    "returncode": 0,
+    "elapsed_seconds": 0.216
+  },
+  {
+    "name": "dependency-tests",
+    "command": [
+      "python3",
+      "-B",
+      "scripts/tests/workspace_dependency_policy.py"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r68-final3-dependency-tests.log",
+    "returncode": 0,
+    "elapsed_seconds": 0.116
+  },
+  {
+    "name": "ci-test-gate",
+    "command": [
+      "bash",
+      "scripts/tests/ci-local-test-gate.sh"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r68-final3-ci-test-gate.log",
+    "returncode": 0,
+    "elapsed_seconds": 14.924
+  },
+  {
+    "name": "standalone-lockfiles",
+    "command": [
+      "bash",
+      "scripts/check-standalone-lockfiles.sh"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r68-final3-standalone-lockfiles.log",
+    "returncode": 0,
+    "elapsed_seconds": 6.897
+  }
+]

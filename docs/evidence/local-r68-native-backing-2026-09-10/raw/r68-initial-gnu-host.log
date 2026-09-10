@@ -1,0 +1,7 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+   Compiling fe2o3-service-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-service-host)
+   Compiling fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host)
+error: couldn't create a temp dir: No space left on device (os error 28) at path "/home/harsh/.codex-tmp/fe2o3-r61-execution/target/debug/deps/rmetaeVDxTA"
+
+error: could not compile `fe2o3-host` (lib test) due to 1 previous error

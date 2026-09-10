@@ -1,0 +1,207 @@
+   Compiling fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-target-spec)
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+   Compiling fe2o3-aql v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-aql)
+   Compiling fe2o3-kfd-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd-uapi)
+   Compiling fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amd-target)
+   Compiling fe2o3-drm-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-drm-uapi)
+   Compiling fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+   Compiling fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-profiler-protocol)
+   Compiling fe2o3-hsaco v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hsaco)
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amdhsa-loader)
+   Compiling fe2o3-host-api v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host-api)
+   Compiling fe2o3-debug-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-debug-protocol)
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0277]: `Gfx942XgmiMapFailureV1` doesn't implement `std::fmt::Debug`
+    --> crates/fe2o3-kfd/src/shared_memory/tests/device_backing.rs:73:18
+     |
+  73 |                 .unwrap();
+     |                  ^^^^^^ unsatisfied trait bound
+     |
+help: the trait `std::fmt::Debug` is not implemented for `Gfx942XgmiMapFailureV1`
+    --> crates/fe2o3-kfd/src/shared_memory.rs:358:1
+     |
+ 358 | pub struct Gfx942XgmiMapFailureV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: add `#[derive(Debug)]` to `Gfx942XgmiMapFailureV1` or manually `impl std::fmt::Debug for Gfx942XgmiMapFailureV1`
+note: required by a bound in `Result::<T, E>::unwrap`
+    --> /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1229:12
+     |
+1227 |     pub fn unwrap(self) -> T
+     |            ------ required by a bound in this associated function
+1228 |     where
+1229 |         E: fmt::Debug,
+     |            ^^^^^^^^^^ required by this bound in `Result::<T, E>::unwrap`
+
+error[E0277]: `Gfx942XgmiUnmapFailureV1` doesn't implement `std::fmt::Debug`
+    --> crates/fe2o3-kfd/src/shared_memory/tests/device_backing.rs:88:22
+     |
+  88 |                     .unwrap();
+     |                      ^^^^^^ unsatisfied trait bound
+     |
+help: the trait `std::fmt::Debug` is not implemented for `Gfx942XgmiUnmapFailureV1`
+    --> crates/fe2o3-kfd/src/shared_memory.rs:395:1
+     |
+ 395 | pub struct Gfx942XgmiUnmapFailureV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: add `#[derive(Debug)]` to `Gfx942XgmiUnmapFailureV1` or manually `impl std::fmt::Debug for Gfx942XgmiUnmapFailureV1`
+note: required by a bound in `Result::<T, E>::unwrap`
+    --> /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1229:12
+     |
+1227 |     pub fn unwrap(self) -> T
+     |            ------ required by a bound in this associated function
+1228 |     where
+1229 |         E: fmt::Debug,
+     |            ^^^^^^^^^^ required by this bound in `Result::<T, E>::unwrap`
+
+error[E0277]: `Gfx942XgmiMapFailureV1` doesn't implement `std::fmt::Debug`
+    --> crates/fe2o3-kfd/src/shared_memory/tests/device_backing.rs:93:22
+     |
+  93 |                     .unwrap();
+     |                      ^^^^^^ unsatisfied trait bound
+     |
+help: the trait `std::fmt::Debug` is not implemented for `Gfx942XgmiMapFailureV1`
+    --> crates/fe2o3-kfd/src/shared_memory.rs:358:1
+     |
+ 358 | pub struct Gfx942XgmiMapFailureV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: add `#[derive(Debug)]` to `Gfx942XgmiMapFailureV1` or manually `impl std::fmt::Debug for Gfx942XgmiMapFailureV1`
+note: required by a bound in `Result::<T, E>::unwrap`
+    --> /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1229:12
+     |
+1227 |     pub fn unwrap(self) -> T
+     |            ------ required by a bound in this associated function
+1228 |     where
+1229 |         E: fmt::Debug,
+     |            ^^^^^^^^^^ required by this bound in `Result::<T, E>::unwrap`
+
+error[E0277]: `Gfx942XgmiMapFailureV1` doesn't implement `std::fmt::Debug`
+    --> crates/fe2o3-kfd/src/shared_memory/tests/device_backing.rs:156:34
+     |
+ 156 | ...                   .unwrap(),
+     |                        ^^^^^^ unsatisfied trait bound
+     |
+help: the trait `std::fmt::Debug` is not implemented for `Gfx942XgmiMapFailureV1`
+    --> crates/fe2o3-kfd/src/shared_memory.rs:358:1
+     |
+ 358 | pub struct Gfx942XgmiMapFailureV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: add `#[derive(Debug)]` to `Gfx942XgmiMapFailureV1` or manually `impl std::fmt::Debug for Gfx942XgmiMapFailureV1`
+note: required by a bound in `Result::<T, E>::unwrap`
+    --> /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1229:12
+     |
+1227 |     pub fn unwrap(self) -> T
+     |            ------ required by a bound in this associated function
+1228 |     where
+1229 |         E: fmt::Debug,
+     |            ^^^^^^^^^^ required by this bound in `Result::<T, E>::unwrap`
+
+error[E0277]: `Gfx942XgmiUnmapFailureV1` doesn't implement `std::fmt::Debug`
+    --> crates/fe2o3-kfd/src/shared_memory/tests/device_backing.rs:190:38
+     |
+ 190 | ...                   .unwrap();
+     |                        ^^^^^^ unsatisfied trait bound
+     |
+help: the trait `std::fmt::Debug` is not implemented for `Gfx942XgmiUnmapFailureV1`
+    --> crates/fe2o3-kfd/src/shared_memory.rs:395:1
+     |
+ 395 | pub struct Gfx942XgmiUnmapFailureV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: add `#[derive(Debug)]` to `Gfx942XgmiUnmapFailureV1` or manually `impl std::fmt::Debug for Gfx942XgmiUnmapFailureV1`
+note: required by a bound in `Result::<T, E>::unwrap`
+    --> /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1229:12
+     |
+1227 |     pub fn unwrap(self) -> T
+     |            ------ required by a bound in this associated function
+1228 |     where
+1229 |         E: fmt::Debug,
+     |            ^^^^^^^^^^ required by this bound in `Result::<T, E>::unwrap`
+
+error[E0277]: `Gfx942XgmiMapFailureV1` doesn't implement `std::fmt::Debug`
+    --> crates/fe2o3-kfd/src/shared_memory/tests/device_backing.rs:197:38
+     |
+ 197 | ...                   .unwrap();
+     |                        ^^^^^^ unsatisfied trait bound
+     |
+help: the trait `std::fmt::Debug` is not implemented for `Gfx942XgmiMapFailureV1`
+    --> crates/fe2o3-kfd/src/shared_memory.rs:358:1
+     |
+ 358 | pub struct Gfx942XgmiMapFailureV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: add `#[derive(Debug)]` to `Gfx942XgmiMapFailureV1` or manually `impl std::fmt::Debug for Gfx942XgmiMapFailureV1`
+note: required by a bound in `Result::<T, E>::unwrap`
+    --> /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1229:12
+     |
+1227 |     pub fn unwrap(self) -> T
+     |            ------ required by a bound in this associated function
+1228 |     where
+1229 |         E: fmt::Debug,
+     |            ^^^^^^^^^^ required by this bound in `Result::<T, E>::unwrap`
+
+error[E0277]: `Gfx942XgmiMapFailureV1` doesn't implement `std::fmt::Debug`
+    --> crates/fe2o3-kfd/src/shared_memory/tests/device_backing.rs:274:18
+     |
+ 274 |                 .unwrap();
+     |                  ^^^^^^ unsatisfied trait bound
+     |
+help: the trait `std::fmt::Debug` is not implemented for `Gfx942XgmiMapFailureV1`
+    --> crates/fe2o3-kfd/src/shared_memory.rs:358:1
+     |
+ 358 | pub struct Gfx942XgmiMapFailureV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: add `#[derive(Debug)]` to `Gfx942XgmiMapFailureV1` or manually `impl std::fmt::Debug for Gfx942XgmiMapFailureV1`
+note: required by a bound in `Result::<T, E>::unwrap`
+    --> /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1229:12
+     |
+1227 |     pub fn unwrap(self) -> T
+     |            ------ required by a bound in this associated function
+1228 |     where
+1229 |         E: fmt::Debug,
+     |            ^^^^^^^^^^ required by this bound in `Result::<T, E>::unwrap`
+
+error[E0277]: `Gfx942XgmiMappedDeviceMemoryV1` doesn't implement `std::fmt::Debug`
+    --> crates/fe2o3-kfd/src/shared_memory/tests/device_backing.rs:300:18
+     |
+ 300 |                 .unwrap_err();
+     |                  ^^^^^^^^^^ the trait `std::fmt::Debug` is not implemented for `Gfx942XgmiMappedDeviceMemoryV1`
+     |
+     = note: add `#[derive(Debug)]` to `Gfx942XgmiMappedDeviceMemoryV1` or manually `impl std::fmt::Debug for Gfx942XgmiMappedDeviceMemoryV1`
+note: required by a bound in `Result::<T, E>::unwrap_err`
+    --> /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1326:12
+     |
+1324 |     pub fn unwrap_err(self) -> E
+     |            ---------- required by a bound in this associated function
+1325 |     where
+1326 |         T: fmt::Debug,
+     |            ^^^^^^^^^^ required by this bound in `Result::<T, E>::unwrap_err`
+help: consider annotating `Gfx942XgmiMappedDeviceMemoryV1` with `#[derive(Debug)]`
+    -->  crates/fe2o3-kfd/src/shared_memory.rs:250:1
+     |
+ 250 + #[derive(Debug)]
+ 251 | pub struct Gfx942XgmiMappedDeviceMemoryV1 {
+     |
+
+error[E0277]: `Gfx942XgmiUnmapFailureV1` doesn't implement `std::fmt::Debug`
+    --> crates/fe2o3-kfd/src/shared_memory/tests/device_backing.rs:317:66
+     |
+ 317 |         let lease = local.unmap_device_memory_from_gpus(mapping).unwrap();
+     |                                                                  ^^^^^^ unsatisfied trait bound
+     |
+help: the trait `std::fmt::Debug` is not implemented for `Gfx942XgmiUnmapFailureV1`
+    --> crates/fe2o3-kfd/src/shared_memory.rs:395:1
+     |
+ 395 | pub struct Gfx942XgmiUnmapFailureV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: add `#[derive(Debug)]` to `Gfx942XgmiUnmapFailureV1` or manually `impl std::fmt::Debug for Gfx942XgmiUnmapFailureV1`
+note: required by a bound in `Result::<T, E>::unwrap`
+    --> /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1229:12
+     |
+1227 |     pub fn unwrap(self) -> T
+     |            ------ required by a bound in this associated function
+1228 |     where
+1229 |         E: fmt::Debug,
+     |            ^^^^^^^^^^ required by this bound in `Result::<T, E>::unwrap`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `fe2o3-kfd` (lib test) due to 9 previous errors
+warning: build failed, waiting for other jobs to finish...

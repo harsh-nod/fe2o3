@@ -1,0 +1,90 @@
+    Checking fe2o3-target-spec v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-target-spec)
+    Checking fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Checking fe2o3-drm-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-drm-uapi)
+    Checking fe2o3-aql v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-aql)
+    Checking fe2o3-kfd-uapi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd-uapi)
+    Checking fe2o3-amd-target v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amd-target)
+    Checking fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-completion)
+    Checking fe2o3-host-api v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host-api)
+    Checking fe2o3-hsaco v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hsaco)
+    Checking fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-profiler-protocol)
+    Checking fe2o3-kernel-descriptor v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kernel-descriptor)
+    Checking fe2o3-amdhsa-loader v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amdhsa-loader)
+    Checking fe2o3-build-authority v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-build-authority)
+    Checking reserved-fe2o3-symbols v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/reserved-fe2o3-symbols)
+    Checking fe2o3-pliron-owner-core v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-pliron-owner-core)
+    Checking fe2o3-rustc-invocation v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-rustc-invocation)
+    Checking fe2o3-kernel-ir v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kernel-ir)
+    Checking fe2o3-compiler-lineage v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-lineage)
+    Checking fe2o3-compiler-ffi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-ffi)
+    Checking fe2o3-artifact-transaction v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-artifact-transaction)
+    Checking dialect-gpu v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-gpu)
+    Checking fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Checking fe2o3-mir-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-mir-model)
+    Checking fe2o3-proof-contracts v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-proof-contracts)
+    Checking fe2o3-functional-proof v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-functional-proof)
+    Checking dialect-kernel v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-kernel)
+    Checking dialect-proof v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-proof)
+    Checking fe2o3-kernel-analysis v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kernel-analysis)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Checking dialect-mir v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-mir)
+    Checking fe2o3-llvm-handoff v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-llvm-handoff)
+    Checking fe2o3-pliron v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-pliron)
+   Compiling fe2o3-artifacts v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-artifacts)
+    Checking fe2o3-external-anchor-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-external-anchor-protocol)
+    Checking fe2o3-debug-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-debug-protocol)
+    Checking fe2o3-compiler-execution-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-execution-protocol)
+   Compiling fe2o3-hip-sys v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hip-sys)
+   Compiling fe2o3-macros v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-macros)
+    Checking fe2o3-kernel-opt v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kernel-opt)
+    Checking fe2o3-amdgcn-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amdgcn-model)
+    Checking fe2o3-lower-mir-kernel v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-lower-mir-kernel)
+    Checking dialect-amdgcn v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-amdgcn)
+    Checking fe2o3-llvm-text v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-llvm-text)
+    Checking fe2o3-source-isa-observation v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-source-isa-observation)
+    Checking fe2o3-process-identity v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-process-identity)
+    Checking fe2o3-compiler-closure-capability v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-closure-capability)
+    Checking fe2o3-rustc-front v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-rustc-front)
+    Checking fe2o3-service-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-service-model)
+    Checking fe2o3-contracts v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-contracts)
+    Checking fe2o3-service-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-service-host)
+    Checking fe2o3-verifier v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-verifier)
+    Checking fe2o3-compiler-execution-client v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-execution-client)
+    Checking fe2o3-core v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-core)
+    Checking fe2o3-hsaco-finalize v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hsaco-finalize)
+    Checking fe2o3-device v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-device)
+    Checking fe2o3-runtime-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-protocol)
+    Checking fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host)
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/shared_memory/tests/device_backing.rs:284:83
+    |
+284 |                   with_device_backing_pair_unwind_quarantine(&mut local, &mut peer, |local, peer| {
+    |  ___________________________________________________________________________________^
+285 | |                     let result = local.unmap_device_memory_from_gpus(mapping);
+286 | |                     let peer_post = peer.check_currentness();
+287 | |                     finish_xgmi_unmap_with_peer_post(result, peer_post)
+288 | |                 })
+    | |_________________^ the `Err`-variant is at least 200 bytes
+    |
+    = help: try reducing the size of `shared_memory::Gfx942XgmiUnmapFailureV1`, for example by boxing large elements or replacing it with `Box<shared_memory::Gfx942XgmiUnmapFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/shared_memory/tests/device_backing.rs:303:83
+    |
+303 |                   with_device_backing_pair_unwind_quarantine(&mut local, &mut peer, |local, peer| {
+    |  ___________________________________________________________________________________^
+304 | |                     let result = local.map_device_memory_to_gpus(lease, Box::new([7, 9]));
+305 | |                     let peer_post = peer.check_currentness();
+306 | |                     finish_xgmi_map_with_peer_post(result, peer_post)
+307 | |                 })
+    | |_________________^ the `Err`-variant is at least 200 bytes
+    |
+    = help: try reducing the size of `shared_memory::Gfx942XgmiMapFailureV1`, for example by boxing large elements or replacing it with `Box<shared_memory::Gfx942XgmiMapFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: could not compile `fe2o3-kfd` (lib test) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

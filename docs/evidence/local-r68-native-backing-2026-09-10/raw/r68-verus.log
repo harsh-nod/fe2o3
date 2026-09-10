@@ -1,0 +1,97 @@
+PASS: runtime expected-negative quality and inventory self-test
+PASS: runtime expected-negative quality and inventory checked 645 files
+PASS: pinned Verus release closure matched at this measurement (190 files, 129019839 bytes)
+verification results:: 2 verified, 0 errors
+verification results:: 4 verified, 0 errors
+verification results:: 4 verified, 0 errors
+verification results:: 6 verified, 0 errors
+verification results:: 11 verified, 0 errors
+verification results:: 3 verified, 0 errors
+verification results:: 8 verified, 0 errors
+verification results:: 11 verified, 0 errors
+verification results:: 8 verified, 0 errors
+verification results:: 10 verified, 0 errors
+verification results:: 14 verified, 0 errors
+verification results:: 20 verified, 0 errors
+verification results:: 18 verified, 0 errors
+verification results:: 23 verified, 0 errors
+verification results:: 20 verified, 0 errors
+verification results:: 10 verified, 0 errors
+verification results:: 21 verified, 0 errors
+verification results:: 32 verified, 0 errors
+verification results:: 34 verified, 0 errors
+verification results:: 46 verified, 0 errors
+verification results:: 31 verified, 0 errors
+verification results:: 37 verified, 0 errors
+verification results:: 41 verified, 0 errors
+verification results:: 46 verified, 0 errors
+verification results:: 34 verified, 0 errors
+verification results:: 38 verified, 0 errors
+verification results:: 20 verified, 0 errors
+verification results:: 31 verified, 0 errors
+verification results:: 38 verified, 0 errors
+verification results:: 41 verified, 0 errors
+verification results:: 34 verified, 0 errors
+verification results:: 45 verified, 0 errors
+verification results:: 54 verified, 0 errors
+verification results:: 13 verified, 0 errors
+verification results:: 15 verified, 0 errors
+verification results:: 15 verified, 0 errors
+verification results:: 19 verified, 0 errors
+verification results:: 20 verified, 0 errors
+verification results:: 25 verified, 0 errors
+verification results:: 43 verified, 0 errors
+verification results:: 21 verified, 0 errors
+verification results:: 27 verified, 0 errors
+verification results:: 39 verified, 0 errors
+verification results:: 32 verified, 0 errors
+verification results:: 43 verified, 0 errors
+verification results:: 31 verified, 0 errors
+verification results:: 41 verified, 0 errors
+verification results:: 35 verified, 0 errors
+verification results:: 46 verified, 0 errors
+verification results:: 8 verified, 0 errors
+verification results:: 8 verified, 0 errors
+verification results:: 8 verified, 0 errors
+verification results:: 8 verified, 0 errors
+verification results:: 8 verified, 0 errors
+verification results:: 16 verified, 0 errors
+verification results:: 14 verified, 0 errors
+verification results:: 4 verified, 0 errors
+expected-negative rejected: release-while-published
+expected-negative rejected: vm-generation-substitution
+expected-negative rejected: stale-generation-reuse
+expected-negative rejected: render-substitution
+expected-negative rejected: projection-schema-drop
+expected-negative rejected: projection-history-link
+expected-negative rejected: projection-identity-mix
+expected-negative rejected: projection-currentness-drop
+expected-negative rejected: memory-free-while-partial
+expected-negative rejected: memory-unmap-cumulative
+expected-negative rejected: memory-unmap-failed-full
+expected-negative rejected: queue-resource-substitution
+expected-negative rejected: queue-destroy-ambiguity
+expected-negative rejected: queue-destroy-source-restore
+expected-negative rejected: queue-history-prefix
+expected-negative rejected: queue-sentinel-returned
+expected-negative rejected: queue-publication-owner
+expected-negative rejected: queue-ambiguous-id-reuse
+expected-negative rejected: queue-mapping-generation
+expected-negative rejected: queue-illegal-ambiguity
+expected-negative rejected: queue-generic-create-ambiguity
+expected-negative rejected: queue-cancel-retention
+expected-negative rejected: queue-pending-create-overlap
+expected-negative rejected: load-page-overlap
+expected-negative rejected: load-descriptor-delta
+expected-negative rejected: materialization-source-substitution
+expected-negative rejected: materialization-zero-omission
+expected-negative rejected: aql-vendor-body
+expected-negative rejected: aql-setup-substitution
+expected-negative rejected: aql-reservation-replay
+expected-negative rejected: aql-read-regression
+expected-negative rejected: aql-full-overwrite
+expected-negative rejected: r7-generation-reuse
+expected-negative rejected: r7-cross-device
+expected-negative rejected: r8-eager-publication
+expected-negative rejected: r8-conflicting-overlap
+FAIL: expected-negative proof failed at an unexpected verification surface: r8-dependency-polarity

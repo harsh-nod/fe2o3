@@ -61,11 +61,30 @@ foreign GPU work was left untouched. Native-roster diagnosis therefore still
 requires an idle shared-GPU window; this is not a new native acceptance result.
 
 The resources owner moved the existing credit engine into
-`fe2o3-resource-accounting`; the runtime keeps its device-branded wrapper. Only
-this extraction is approved/implemented. KFD physical costs, parent budgets,
-batch/split transactions and aggregate quarantine are not implied. The core's
+`fe2o3-resource-accounting`; the runtime keeps its device-branded wrapper. That
+checkpoint implemented only the extraction. Parent budgets, batch/split
+transactions and aggregate quarantine are not implied. The core's
 moved tests are included in CPU and release-test rosters, and dependency policy
 prevents an upward runtime dependency.
+
+The next packet implements optional, immutable session-local N2 backing
+admission (MEM-2A). KFD derives padded bytes from its actual private layout and
+retains the charge with the native record until complete backing/VA disposal.
+The [native accounting contract](runtime-native-resource-accounting-v1.md)
+separates this from GTT, session bootstrap, queues, pools, parent budgets and
+runtime-wide forwarding. Independent review found panic-continuation gaps in
+mapping, CPU access/initialization and paired XGMI transitions; configured-path
+quarantine handling and fault tests are part of the integration gate. R68 adds
+only a production-used cost projection and property-specific proofs, not a
+proof of native disposal or the whole executor. The
+[final MEM-2A local gates](evidence/local-r68-native-backing-2026-09-10/README.md)
+pass 2,065 runtime tests on each of GNU and musl, with five existing ignores.
+The full authenticated proof run passes 57 positive sources, 1,334 obligations
+and 645 expected negatives. Host/fixture/doctest, lint, runner/checker,
+dependency and lockfile gates also pass. Failed build/lint and disk-exhaustion
+attempts are retained separately. A read-only shared-GPU query still found GPU1
+busy; no new remote stage or qualifier was started. Signed hardware acceptance
+and measured performance remain open.
 
 | Slice | Implemented locally | Boundary still open |
 | --- | --- | --- |
@@ -74,7 +93,8 @@ prevents an upward runtime dependency.
 | GEN-1 | Owned typed arguments/results, complete-invocation preflight, authenticated packing-plan reuse and compile-fail ownership checks | Invocation-bound async authority, Context freshness, global credit lifetime and compiler machine evidence |
 | DRN-3A | Three composed accepted-submit rejection, repeated observation rejection and pre-issue cancellation regressions | Host capture failures, active-work hardware drain and whole-executor refinement |
 | SCALE-3-PROTO | Bounded matched-plan/checker protocol; fourteen tests and independent cross-review pass | Signed producers, genuine correctness/timing captures, performance and physical overlap |
-| MEM-BASE / MEM-5 inventory | Shared credit-engine extraction and device-branded wrapper; concrete allocation-site inventory | Native adapter approval, implemented physical admission and complete aggregate byte-budget closure |
+| MEM-BASE / MEM-5 inventory | Shared credit-engine extraction and device-branded wrapper; concrete allocation-site inventory | Parent budgets, compound native admission and complete aggregate byte-budget closure |
+| MEM-2A | Locally validated optional session-local N2 padded-backing/record admission and retained native charge; configured panic quarantine | Signed hardware qualification, pool-path coverage, runtime configuration forwarding and parent/global closure |
 
 The previous R67 source record has 2,021 passing all-feature/all-target runtime
 tests on each of GNU and musl, with five
@@ -122,10 +142,10 @@ MI300X jobs or pushes integrated changes to both remotes.
 
 | Lane | First bounded ticket | Deliverable | Then |
 | --- | --- | --- | --- |
-| Native | OVL-DIAG-1, then SCALE-1 | Explain the rejected actual native roster without weakening checks; retain typed failure stage and actual binary; design bounded short/long profiles | New OVL-QUAL-2 campaign; SCALE-CAP after physical budgets; SCALE-3 producers/measurement |
-| Resources | MEM-BASE integration, then MEM-2A contract | Validate the extracted lower-level ledger; agree exact native domain/cost/disposal ownership before individual backing admission | MEM-2B, MEM-3A/B, MEM-4A/B, MEM-5 closure; VER-1/2 can move earlier |
-| Admission | DRN-1 capture and GEN-2 interface | Bounded host-only capture and exact private typed-async authority contracts | DRN-3B capture-failure cases and DRN-2; production GEN-2 after accounting/compiler evidence |
-| Primary | PRF-1/2 and native accounting interface | Finish current-wave verification; approve cross-crate accounting ownership; compose shared hooks and proof roster | Signed OVL-QUAL-2 hardware campaign, retained evidence and dual-remote publication |
+| Native | DRN-1A native capture | Direct coherent read-into with no GPU work or capture-time allocation; strict native custody/currentness checks | OVL-QUAL-2 when shared GPU is idle; SCALE-1; pool and capacity integration after accounting review |
+| Resources | MEM-2B contract and constructor forwarding | Settle pool checkout/recycle/trim and pre-queue native budget configuration; review DRN-1A result-credit lifetime | MEM-3A/B, MEM-4A/B, MEM-5 closure; VER-1/2 can move earlier |
+| Admission | DRN-1A and GEN-2 interface | One bounded owned host capture with exact private logical/native identity, cutoff and result credits | DRN-3B capture-failure cases and DRN-2; production GEN-2 after accounting/compiler evidence |
+| Primary | MEM-2A release and DRN-1A shared hooks | Full local and authenticated proof gates, source/evidence identities and dual-remote publication; approve Context/owner/capture interface | Signed OVL-QUAL-2 when idle; PRF-1/2 composition and subsequent native accounting |
 
 The three agents completed SCALE-3-PROTO, the MEM-5 inventory proposal and DRN-3A,
 then cross-reviewed those packets. These rows name their next implementation
@@ -163,16 +183,17 @@ the existing tickets; they do not weaken or replace the parent acceptance gates.
 The native accounting adapter is an explicit architectural prerequisite.
 `RuntimeResourceCreditAccountV1` remains a runtime-private device-branded wrapper;
 the engine and opaque tokens now live in `fe2o3-resource-accounting`. KFD cannot
-depend upward on the runtime crate and does not yet consume the shared engine.
-Resource and native owners must agree which layer measures actual layout, holds
+depend upward on the runtime crate; its MEM-2A adapter now consumes the shared
+engine. Resource and native owners must agree which layer measures actual layout, holds
 each charge through cached residency and recognizes physical disposal. Existing
 requested-allocation credits remain a distinct quantity, and public counter
 mechanics are not native-disposal evidence.
 
 ### Next Packet Contracts
 
-The second scoping review fixes the following small implementation boundaries;
-these are queued work, not implemented or hardware-accepted features.
+The second scoping review fixes the following small implementation boundaries.
+MEM-2A is implemented locally as described above; the other packets remain
+queued, and none is hardware-accepted by this scoping review.
 
 - **SCALE-1A, native owner:** two separate qualification-only fixed-work artifacts
   and a sequential correctness qualifier. Freeze a small complete ReadWrite
@@ -204,6 +225,20 @@ these are queued work, not implemented or hardware-accepted features.
   reports cannot authorize generated results. Signed active-work and whole
   executor proof gates remain separate.
 
+The native DRN-1A review refined the capture boundary. Register the logical
+allocation incarnation before cutoff, but resolve its exact live native
+session/allocation/queue/pool generation only after conclusive drain: accepted
+D2H work may legitimately create or promote backing in between. Native
+HostVisible storage must be initialized, directly mapped and free of pending
+read/write custody. `sdma_shadow_dirty` alone is not a rejection: completed D2H
+can make the native host bytes current while the separate Arc shadow is stale.
+Capture must read the native bytes without repairing that shadow. Add bounded
+typed-error read-into forwarding through the backend, SDMA seam, queue and
+memory owner; existing boxed readback and synchronization fallback cannot be
+used. Pre-copy rejection leaves the private destination untouched; closing
+currentness failure discards it and publishes no partial capture. These are
+implementation requirements, not completed DRN-1A behavior.
+
 ## Acceptance Matrix
 
 `Partial` means only the named restricted slice exists. `Open` means this
@@ -215,7 +250,8 @@ or fixture results exist. None of the rows establishes runtime-wide parity.
 | OVL-1/2 | R66 restricted profile | Bounded scan only; native extraction/composition open | Both orders, H2D/D2H, one/three bindings | Open: OVL-QUAL-1/2 | Open: GEN-2 also required | Open |
 | OVL-QUAL-1/2 | Qualifier and typed diagnostics locally validated; live gate open | Descriptive observation, not authority | Eight runtime observation tests, six native diagnostic tests and runner/checker negatives | Open: new signed capture required | Open: GEN-2 also required | Physical overlap unmeasured |
 | MEM-1 | Local transactional credits and Context requested-allocation profile | R67: 14 vector/record obligations and eight mutations passed full authenticated gate; adapter composition open | Ten Context, nine shared-engine and three device-wrapper tests; two core ownership compile-fail examples | New qualifier includes requested-credit saturation/retention/disposal; not yet accepted | Open | Unmeasured |
-| MEM-2..5 | MEM-BASE extraction and site inventory available; physical integration and global closure open | End-to-end accounting open | Measured costs and complete failure matrix open | Physical saturation/reuse open | Open | Unmeasured |
+| MEM-2A | Optional session-local N2 native backing/record admission, locally validated | R68: four projection obligations and five mutations passed full authenticated gate; native correspondence open | 20 native, eight adapter and three model tests pass; public-pair live and configuration round-trip gaps remain | Physical saturation/reuse open | Open | Unmeasured |
+| MEM-2B..5 | Shared engine and site inventory available; pool, compound backing and global closure open | End-to-end accounting open | Complete composed failure matrix open | Physical saturation/reuse open | Open | Unmeasured |
 | VER-1/2 | Open; R65 lineage is graph-local | Persistent authority open | Cross-run mutation/lease matrix open | Open | Kernel extension also needs GEN-2 | Unmeasured |
 | GEN-1 | Owned data boundary implemented locally | No execution authority or whole-async proof | Eleven focused host tests and generated fixtures pass | Data-only boundary | Not an execution cell | Unmeasured |
 | GEN-2 | Exact typed async authority and integration open | Compiler evidence and async composition open | Permit/currentness/native integration matrix open | Fixtures cannot fill production cells | Open | Unmeasured |

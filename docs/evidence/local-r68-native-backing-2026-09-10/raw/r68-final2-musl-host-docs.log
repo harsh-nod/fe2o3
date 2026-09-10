@@ -1,0 +1,63 @@
+   Compiling fe2o3-pliron-owner-core v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-pliron-owner-core)
+   Compiling fe2o3-kernel-ir v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kernel-ir)
+   Compiling fe2o3-kernel-descriptor v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kernel-descriptor)
+   Compiling fe2o3-build-authority v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-build-authority)
+   Compiling dialect-gpu v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-gpu)
+   Compiling fe2o3-rustc-invocation v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-rustc-invocation)
+   Compiling fe2o3-compiler-lineage v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-lineage)
+   Compiling fe2o3-mir-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-mir-model)
+   Compiling reserved-fe2o3-symbols v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/reserved-fe2o3-symbols)
+   Compiling fe2o3-proof-contracts v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-proof-contracts)
+   Compiling fe2o3-functional-proof v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-functional-proof)
+   Compiling fe2o3-compiler-ffi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-ffi)
+   Compiling fe2o3-artifact-transaction v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-artifact-transaction)
+   Compiling fe2o3-llvm-handoff v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-llvm-handoff)
+   Compiling dialect-kernel v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-kernel)
+   Compiling dialect-proof v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-proof)
+   Compiling fe2o3-kernel-analysis v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kernel-analysis)
+   Compiling dialect-mir v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-mir)
+   Compiling fe2o3-external-anchor-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-external-anchor-protocol)
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+   Compiling fe2o3-compiler-execution-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-execution-protocol)
+   Compiling fe2o3-pliron v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-pliron)
+   Compiling fe2o3-kernel-opt v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kernel-opt)
+   Compiling fe2o3-amdgcn-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amdgcn-model)
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+   Compiling fe2o3-lower-mir-kernel v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-lower-mir-kernel)
+   Compiling dialect-amdgcn v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-amdgcn)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-artifacts v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-artifacts)
+   Compiling fe2o3-source-isa-observation v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-source-isa-observation)
+   Compiling fe2o3-llvm-text v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-llvm-text)
+   Compiling fe2o3-process-identity v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-process-identity)
+   Compiling fe2o3-macros v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-macros)
+   Compiling fe2o3-hsaco-finalize v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hsaco-finalize)
+   Compiling fe2o3-compiler-closure-capability v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-closure-capability)
+   Compiling fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-profiler-protocol)
+   Compiling fe2o3-rustc-front v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-rustc-front)
+   Compiling fe2o3-contracts v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-contracts)
+   Compiling fe2o3-service-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-service-model)
+   Compiling fe2o3-service-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-service-host)
+   Compiling fe2o3-verifier v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-verifier)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+   Compiling fe2o3-runtime-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-protocol)
+   Compiling fe2o3-compiler-execution-client v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-execution-client)
+   Compiling fe2o3-device v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-device)
+   Compiling fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 22s
+   Doc-tests fe2o3_host
+
+running 10 tests
+test crates/fe2o3-host/src/worker_v3_verification_admission.rs - worker_v3_verification_admission::WorkerV3SemanticMachineRefinementReceiptV1 (line 601) - compile fail ... ok
+test crates/fe2o3-host/src/authenticated_service_queue.rs - authenticated_service_queue::AuthenticatedServiceQueueSessionV1<N>::destroy_and_release (line 781) - compile fail ... ok
+test crates/fe2o3-host/src/compiler_execution_current_record_audit.rs - compiler_execution_current_record_audit::WorkerV3CompilerCurrentRecordAuditV1 (line 124) - compile fail ... ok
+test crates/fe2o3-host/src/generated_runtime_arguments.rs - generated_runtime_arguments::GeneratedRuntimeReadSlice (line 221) - compile fail ... ok
+test crates/fe2o3-host/src/generated_kfd_invocation.rs - generated_kfd_invocation::WorkerV3ApplicationExecutionBindingV1 (line 312) - compile fail ... ok
+test crates/fe2o3-host/src/compiler_execution_current_record_audit.rs - compiler_execution_current_record_audit::InheritedWorkerV3CompilerCurrentRecordAuditorV1 (line 366) - compile fail ... ok
+test crates/fe2o3-host/src/worker_v3_verification_admission.rs - worker_v3_verification_admission::WorkerV3RosterLoadEnvelopeEvidenceViewV1 (line 2394) - compile fail ... ok
+test crates/fe2o3-host/src/compiler_execution_current_record_audit.rs - compiler_execution_current_record_audit::WorkerV3CompilerCurrentRecordEvidenceViewV1 (line 43) - compile fail ... ok
+test crates/fe2o3-host/src/worker_v3_verification_admission.rs - worker_v3_verification_admission::WorkerV3SemanticMachineRefinementReceiptV1 (line 612) - compile fail ... ok
+test crates/fe2o3-host/src/application_descriptor_handoff.rs - application_descriptor_handoff::consume_inherited_worker_v3_application_roster_handoff_v1 (line 250) - compile fail ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+

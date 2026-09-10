@@ -643,6 +643,7 @@ dependencies = [
  "fe2o3-drm-uapi",
  "fe2o3-hsaco",
  "fe2o3-kfd-uapi",
+ "fe2o3-resource-accounting",
  "fe2o3-runtime-model",
  "libc",
  "rustix",
