@@ -15,6 +15,12 @@ name = "fe2o3_kfd"
 default = []
 # Process-forking hardware validation only. This is not runtime authority.
 live-validation = ["rustix/process", "rustix/runtime"]
+engineering-gfx950 = ["dep:serde", "dep:serde_json"]
+
+[[bin]]
+name = "fe2o3-gfx950-engineering-worker"
+path = "src/bin/gfx950_engineering_worker.rs"
+required-features = ["engineering-gfx950"]
 
 [[example]]
 name = "kfd-host-visible-memory"
@@ -53,6 +59,8 @@ fe2o3-runtime-model.workspace = true
 libc.workspace = true
 rustix = { workspace = true, features = ["mm", "param", "pipe", "process", "thread"] }
 sha2.workspace = true
+serde = { workspace = true, optional = true }
+serde_json = { version = "1", optional = true }
 zeroize = "=1.9.0"
 
 [lints.rust]

@@ -674,17 +674,24 @@
     "block": 5,
     "extern_block": 3
   },
+  "crates/fe2o3-kfd/src/bin/gfx950_engineering_worker.rs": {
+    "block": 1
+  },
   "crates/fe2o3-kfd/src/currentness.rs": {
     "block": 3
   },
   "crates/fe2o3-kfd/src/debug_trap.rs": {
     "block": 4
   },
+  "crates/fe2o3-kfd/src/engineering_gfx950.rs": {
+    "block": 1,
+    "function": 2
+  },
   "crates/fe2o3-kfd/src/linux.rs": {
     "block": 20
   },
   "crates/fe2o3-kfd/src/memory_linux.rs": {
-    "block": 36,
+    "block": 38,
     "extern_block": 1
   },
   "crates/fe2o3-kfd/src/queue_completion.rs": {

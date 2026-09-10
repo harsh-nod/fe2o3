@@ -2517,6 +2517,27 @@ fn validate_kernarg_resource_shape(
     Ok(())
 }
 
+#[cfg(feature = "engineering-gfx950")]
+pub(crate) fn initialize_engineering_cov6_kernarg(
+    kernel: &InspectedKernel,
+    geometry: AqlDispatchGeometryV1,
+    bytes: &mut [u8],
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    if bytes.len() as u64 != kernel.kernarg_segment_size() {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidCode(
+            "engineering kernarg size",
+        ));
+    }
+    if let Some(plan) = validate_cov6_implicit_kernarg_layout(kernel)? {
+        validate_caller_zero_cov6_implicit_suffix(0, bytes, &plan)?;
+        let values =
+            derive_cov6_implicit_kernarg_values(geometry, 0, kernel.uniform_work_group_size())
+                .map_err(|detail| Gfx942DispatchBindingErrorV1::Geometry { packet: 0, detail })?;
+        initialize_cov6_implicit_kernarg(bytes, &plan, values);
+    }
+    Ok(())
+}
+
 fn validate_cov6_implicit_kernarg_layout(
     kernel: &InspectedKernel,
 ) -> Result<Option<Cov6ImplicitKernargPlanV1>, Gfx942DispatchBindingErrorV1> {

@@ -92,6 +92,18 @@ impl fmt::Debug for CheckedGfx950XnackMinusDevice {
 }
 
 impl CheckedGfx950XnackMinusDevice {
+    #[cfg(feature = "engineering-gfx950")]
+    pub(crate) fn kfd_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        use std::os::fd::AsFd;
+        self.kfd.opened.fd.as_fd()
+    }
+
+    #[cfg(feature = "engineering-gfx950")]
+    pub(crate) fn render_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        use std::os::fd::AsFd;
+        self.render_fd.as_fd()
+    }
+
     pub fn topology_snapshot(&self) -> &HostTopologySnapshot {
         &self.topology
     }

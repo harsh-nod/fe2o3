@@ -1480,6 +1480,34 @@ impl LinuxDoorbellSliceV1 {
             return Err(LinuxDoorbellErrorV1::ProcessChanged);
         }
         let plan = doorbell_mmap_plan(outputs)?;
+        Self::map_admitted_plan(kfd, plan, opener_pid)
+    }
+
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn map_gfx950(
+        kfd: BorrowedFd<'_>,
+        plan: crate::engineering_gfx950_profile::Gfx950DoorbellPlanV1,
+        opener_pid: u32,
+    ) -> Result<Self, LinuxDoorbellErrorV1> {
+        Self::map_admitted_plan(
+            kfd,
+            DoorbellMmapPlanV1 {
+                encoded_slice_offset: plan.encoded_slice_offset,
+                queue_byte_offset: plan.queue_byte_offset,
+                slice_bytes: 8192,
+            },
+            opener_pid,
+        )
+    }
+
+    fn map_admitted_plan(
+        kfd: BorrowedFd<'_>,
+        plan: DoorbellMmapPlanV1,
+        opener_pid: u32,
+    ) -> Result<Self, LinuxDoorbellErrorV1> {
+        if opener_pid != std::process::id() {
+            return Err(LinuxDoorbellErrorV1::ProcessChanged);
+        }
         // SAFETY: the admitted KFD output fixes the mmap type/GPU hash and
         // complete 8192-byte slice offset. PROT_NONE prevents MMIO access
         // before the mandatory DONTFORK ordering point.

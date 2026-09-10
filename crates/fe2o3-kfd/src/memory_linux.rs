@@ -42,8 +42,93 @@ unsafe extern "C" {
     fn mincore(address: *mut c_void, length: usize, residency: *mut u8) -> i32;
 }
 
-pub(super) struct LinuxMemoryBackend {
-    device: CheckedGfx942XnackMinusDevice,
+pub(super) type LinuxMemoryBackend = LinuxMemoryBackendFor<CheckedGfx942XnackMinusDevice>;
+
+#[cfg(feature = "engineering-gfx950")]
+pub(super) type LinuxGfx950MemoryBackend =
+    LinuxMemoryBackendFor<crate::CheckedGfx950XnackMinusDevice>;
+
+pub(super) struct LinuxMemoryBackendFor<D> {
+    device: D,
+}
+
+/// Sealed inside the KFD adapter: only separately checked target tokens may
+/// reuse these exact KFD 1.18 / DRM mmap wire operations. This is not model or
+/// queue authority, and cannot convert either target's checked device token.
+pub(super) trait LinuxMemoryDevice {
+    fn kfd_fd(&self) -> BorrowedFd<'_>;
+    fn render_fd(&self) -> BorrowedFd<'_>;
+    fn opener_pid(&self) -> u32;
+    fn gpu_id(&self) -> u32;
+    fn gpuvm_aperture(&self) -> InclusiveAperture;
+    fn check_currentness(&mut self) -> Result<(), MemorySessionError>;
+    fn check_operational_currentness(&mut self) -> Result<(), MemorySessionError>;
+    fn check_xgmi_publication_currentness(&mut self) -> Result<(), MemorySessionError>;
+    fn vm_acquired(&mut self);
+}
+
+impl LinuxMemoryDevice for CheckedGfx942XnackMinusDevice {
+    fn kfd_fd(&self) -> BorrowedFd<'_> {
+        self.kfd.opened.fd.as_fd()
+    }
+    fn render_fd(&self) -> BorrowedFd<'_> {
+        self.render_fd.as_fd()
+    }
+    fn opener_pid(&self) -> u32 {
+        self.process_incarnation().pid()
+    }
+    fn gpu_id(&self) -> u32 {
+        self.observation().kfd_gpu_id()
+    }
+    fn gpuvm_aperture(&self) -> InclusiveAperture {
+        self.observation().aperture().gpuvm()
+    }
+    fn check_currentness(&mut self) -> Result<(), MemorySessionError> {
+        self.check_observable_currentness()
+            .map(|_| ())
+            .map_err(Into::into)
+    }
+    fn check_operational_currentness(&mut self) -> Result<(), MemorySessionError> {
+        CheckedGfx942XnackMinusDevice::check_operational_currentness(self).map_err(Into::into)
+    }
+    fn check_xgmi_publication_currentness(&mut self) -> Result<(), MemorySessionError> {
+        self.check_gfx942_xgmi_publication_currentness()
+            .map_err(Into::into)
+    }
+    fn vm_acquired(&mut self) {
+        self.retire_model_on_drop = false;
+    }
+}
+
+#[cfg(feature = "engineering-gfx950")]
+impl LinuxMemoryDevice for crate::CheckedGfx950XnackMinusDevice {
+    fn kfd_fd(&self) -> BorrowedFd<'_> {
+        self.kfd_fd()
+    }
+    fn render_fd(&self) -> BorrowedFd<'_> {
+        self.render_fd()
+    }
+    fn opener_pid(&self) -> u32 {
+        self.process_incarnation().pid()
+    }
+    fn gpu_id(&self) -> u32 {
+        self.observation().kfd_gpu_id()
+    }
+    fn gpuvm_aperture(&self) -> InclusiveAperture {
+        self.observation().aperture().gpuvm()
+    }
+    fn check_currentness(&mut self) -> Result<(), MemorySessionError> {
+        self.check_observable_currentness().map_err(Into::into)
+    }
+    fn check_operational_currentness(&mut self) -> Result<(), MemorySessionError> {
+        self.check_observable_currentness().map_err(Into::into)
+    }
+    fn check_xgmi_publication_currentness(&mut self) -> Result<(), MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "gfx950 engineering has no XGMI publication authority",
+        ))
+    }
+    fn vm_acquired(&mut self) {}
 }
 
 pub(super) struct LinuxVaReservation {
@@ -65,10 +150,6 @@ const VA_IDENTITY_MAPPED: u8 = 1;
 const VA_RELEASED: u8 = 2;
 
 impl LinuxMemoryBackend {
-    pub(super) fn new(device: CheckedGfx942XnackMinusDevice) -> Self {
-        Self { device }
-    }
-
     pub(super) fn bind_model_vm(
         &mut self,
         vm_id: VmIdV1,
@@ -76,10 +157,6 @@ impl LinuxMemoryBackend {
         self.device
             .register_memory_vm_model_only(vm_id)
             .map_err(MemorySessionError::Device)
-    }
-
-    pub(super) fn kfd_fd(&self) -> BorrowedFd<'_> {
-        self.device.kfd.opened.fd.as_fd()
     }
 
     pub(super) fn model_device(&self) -> ModelDeviceAdmissionV1 {
@@ -150,6 +227,42 @@ impl LinuxMemoryBackend {
             self.device.observation().unique_id(),
             ring_bytes,
         )
+    }
+}
+
+impl<D: LinuxMemoryDevice> LinuxMemoryBackendFor<D> {
+    pub(super) fn new(device: D) -> Self {
+        Self { device }
+    }
+
+    pub(super) fn kfd_fd(&self) -> BorrowedFd<'_> {
+        self.device.kfd_fd()
+    }
+
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn initialize_engineering_signal(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<(), MemorySessionError> {
+        let pointer = checked_mapping_pointer(mapping, 4096, 0, AMD_SIGNAL_BYTES_V1, 64)?;
+        // SAFETY: the exact exclusively owned aligned slot is initialized
+        // before queue creation; no outstanding GPU use or reference exists.
+        unsafe {
+            pointer
+                .cast::<fe2o3_aql::AmdBusyCompletionSignalV1>()
+                .write(fe2o3_aql::AmdBusyCompletionSignalV1::new_pending())
+        };
+        Ok(())
+    }
+
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn initialize_engineering_error_payload(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<(), MemorySessionError> {
+        let pointer = checked_mapping_pointer(mapping, 4096, 256, 8, 8)?;
+        // SAFETY: this private, aligned, exclusively owned error word is
+        // initialized before queue creation and retained through event destroy.
+        unsafe { pointer.cast::<AtomicI64>().write(AtomicI64::new(0)) };
+        Ok(())
     }
 
     fn discard_unprepared_mapping_or_abort(mapping: &mut LinuxCpuMapping) {
@@ -259,7 +372,7 @@ impl LinuxMemoryBackend {
         device_ids: &[u32],
         old_success: u32,
         unmap: bool,
-        kfd: &rustix::fd::OwnedFd,
+        kfd: BorrowedFd<'_>,
     ) -> KernelOutcome<u32> {
         let Some(n_devices) = u32::try_from(device_ids.len())
             .ok()
@@ -341,20 +454,20 @@ impl LinuxMemoryBackend {
     }
 }
 
-impl MemoryBackend for LinuxMemoryBackend {
+impl<D: LinuxMemoryDevice> MemoryBackend for LinuxMemoryBackendFor<D> {
     type Reservation = LinuxVaReservation;
     type Mapping = LinuxCpuMapping;
 
     fn opener_pid(&self) -> u32 {
-        self.device.process_incarnation().pid()
+        self.device.opener_pid()
     }
 
     fn gpu_id(&self) -> u32 {
-        self.device.observation().kfd_gpu_id()
+        self.device.gpu_id()
     }
 
     fn gpuvm_aperture(&self) -> InclusiveAperture {
-        self.device.observation().aperture().gpuvm()
+        self.device.gpuvm_aperture()
     }
 
     fn page_size(&self) -> usize {
@@ -362,22 +475,19 @@ impl MemoryBackend for LinuxMemoryBackend {
     }
 
     fn check_currentness(&mut self) -> Result<(), MemorySessionError> {
-        self.device.check_observable_currentness()?;
-        Ok(())
+        self.device.check_currentness()
     }
 
     fn check_operational_currentness(&mut self) -> Result<(), MemorySessionError> {
-        self.device.check_operational_currentness()?;
-        Ok(())
+        self.device.check_operational_currentness()
     }
 
     fn check_xgmi_publication_currentness(&mut self) -> Result<(), MemorySessionError> {
-        self.device.check_gfx942_xgmi_publication_currentness()?;
-        Ok(())
+        self.device.check_xgmi_publication_currentness()
     }
 
     fn acquire_vm(&mut self) -> Result<(), MemorySessionError> {
-        let raw_fd = self.device.render_fd.as_raw_fd();
+        let raw_fd = self.device.render_fd().as_raw_fd();
         let drm_fd = u32::try_from(raw_fd)
             .map_err(|_| MemorySessionError::KernelResultMalformed("render descriptor number"))?;
         let args = KfdIoctlAcquireVmArgs::new(drm_fd, self.gpu_id());
@@ -386,9 +496,9 @@ impl MemoryBackend for LinuxMemoryBackend {
         let request = unsafe { Setter::<ACQUIRE_VM_OPCODE, _>::new(args) };
         // SAFETY: the input-only request and retained KFD descriptor satisfy
         // the reviewed request contract. Success is rechecked for currentness.
-        unsafe { rustix::ioctl::ioctl(&self.device.kfd.opened.fd, request) }
+        unsafe { rustix::ioctl::ioctl(self.device.kfd_fd(), request) }
             .map_err(|source| Self::syscall("AMDKFD_IOC_ACQUIRE_VM", source))?;
-        self.device.retire_model_on_drop = false;
+        self.device.vm_acquired();
         Ok(())
     }
 
@@ -430,7 +540,7 @@ impl MemoryBackend for LinuxMemoryBackend {
         let request = unsafe { Updater::<ALLOC_MEMORY_OPCODE, _>::new(&mut args) };
         // SAFETY: request contract is established above; every field is still
         // treated as untrusted even if ioctl returns success.
-        let result = unsafe { rustix::ioctl::ioctl(&self.device.kfd.opened.fd, request) }
+        let result = unsafe { rustix::ioctl::ioctl(self.device.kfd_fd(), request) }
             .map_err(|source| Self::syscall("AMDKFD_IOC_ALLOC_MEMORY_OF_GPU", source));
         KernelOutcome {
             value: args,
@@ -492,7 +602,7 @@ impl MemoryBackend for LinuxMemoryBackend {
         let request = unsafe { Updater::<ALLOC_MEMORY_OPCODE, _>::new(&mut args) };
         // SAFETY: the reviewed in/out record and live VMA remain exclusively
         // owned for the call; all kernel-written fields remain untrusted.
-        let result = unsafe { rustix::ioctl::ioctl(&self.device.kfd.opened.fd, request) }
+        let result = unsafe { rustix::ioctl::ioctl(self.device.kfd_fd(), request) }
             .map_err(|source| Self::syscall("AMDKFD_IOC_ALLOC_MEMORY_OF_GPU(USERPTR)", source));
         KernelOutcome {
             value: args,
@@ -524,7 +634,7 @@ impl MemoryBackend for LinuxMemoryBackend {
                 bytes,
                 ProtFlags::empty(),
                 MapFlags::SHARED | MapFlags::FIXED,
-                &self.device.render_fd,
+                self.device.render_fd(),
                 mmap_offset,
             )
         }
@@ -616,7 +726,7 @@ impl MemoryBackend for LinuxMemoryBackend {
             &gpu_ids,
             old_success,
             false,
-            &self.device.kfd.opened.fd,
+            self.device.kfd_fd(),
         )
     }
 
@@ -628,7 +738,7 @@ impl MemoryBackend for LinuxMemoryBackend {
             &gpu_ids,
             old_success,
             true,
-            &self.device.kfd.opened.fd,
+            self.device.kfd_fd(),
         )
     }
 
@@ -644,7 +754,7 @@ impl MemoryBackend for LinuxMemoryBackend {
             gpu_ids,
             old_success,
             false,
-            &self.device.kfd.opened.fd,
+            self.device.kfd_fd(),
         )
     }
 
@@ -660,7 +770,7 @@ impl MemoryBackend for LinuxMemoryBackend {
             gpu_ids,
             old_success,
             true,
-            &self.device.kfd.opened.fd,
+            self.device.kfd_fd(),
         )
     }
 
@@ -963,7 +1073,7 @@ impl MemoryBackend for LinuxMemoryBackend {
         // engine invokes this operation at most once.
         let request = unsafe { Setter::<FREE_MEMORY_OPCODE, _>::new(args) };
         // SAFETY: request and retained KFD descriptor satisfy that contract.
-        unsafe { rustix::ioctl::ioctl(&self.device.kfd.opened.fd, request) }
+        unsafe { rustix::ioctl::ioctl(self.device.kfd_fd(), request) }
             .map_err(|source| Self::syscall("AMDKFD_IOC_FREE_MEMORY_OF_GPU", source))
     }
 }

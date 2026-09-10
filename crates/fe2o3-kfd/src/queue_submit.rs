@@ -344,7 +344,7 @@ impl<B: NativeAqlSubmissionBackendV1> AqlBarrierAndPublicationTargetV1
     }
 }
 
-pub(super) fn initialize_invalid_ring(bytes: &mut [u8]) -> Result<(), NativeAqlSubmissionErrorV1> {
+pub(crate) fn initialize_invalid_ring(bytes: &mut [u8]) -> Result<(), NativeAqlSubmissionErrorV1> {
     let ring_bytes = u32::try_from(bytes.len())
         .map_err(|_| NativeAqlSubmissionErrorV1::InvalidRing("length"))?;
     AqlRingCapacityV1::from_ring_bytes(ring_bytes)
