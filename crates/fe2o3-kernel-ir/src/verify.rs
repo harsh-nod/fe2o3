@@ -18,6 +18,10 @@ use crate::{
     analyze_control_flow, pointer_for,
 };
 
+#[cfg(test)]
+#[path = "verification_definition_borrow_tests.rs"]
+mod definition_borrow_tests;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum DiagnosticCode {
     InvalidIdentity,
@@ -668,8 +672,8 @@ enum DefSite {
 }
 
 #[derive(Clone)]
-struct DefInfo {
-    ty: Type,
+struct DefInfo<'module> {
+    ty: &'module Type,
     site: DefSite,
 }
 
@@ -679,7 +683,7 @@ struct FunctionVerifier<'a, 'module> {
     functions: &'a BTreeMap<&'module FunctionId, &'module Function>,
     supported_capabilities: Option<&'a BTreeSet<TargetCapability>>,
     diagnostics: &'a mut Vec<Diagnostic>,
-    definitions: BTreeMap<ValueId, DefInfo>,
+    definitions: BTreeMap<ValueId, DefInfo<'module>>,
     blocks: BTreeMap<BlockId, &'module BasicBlock>,
     control_flow: Option<IndexedControlFlow>,
     dynamic_workgroup_memory_declarations: usize,
@@ -717,12 +721,7 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             let Some(ty) = self.function.signature.parameters.get(index) else {
                 break;
             };
-            self.define(
-                value,
-                ty.clone(),
-                DefSite::FunctionParameter,
-                base_location.clone(),
-            );
+            self.define(value, ty, DefSite::FunctionParameter, base_location.clone());
         }
 
         for block in &body.blocks {
@@ -737,7 +736,7 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             for parameter in &block.parameters {
                 self.define(
                     parameter.id,
-                    parameter.ty.clone(),
+                    &parameter.ty,
                     DefSite::BlockParameter(block.id),
                     location.clone(),
                 );
@@ -746,7 +745,7 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 for result in &operation.results {
                     self.define(
                         result.id,
-                        result.ty.clone(),
+                        &result.ty,
                         DefSite::Operation(block.id, operation_index),
                         location.clone().at_operation(operation_index),
                     );
@@ -796,7 +795,13 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
         }
     }
 
-    fn define(&mut self, value: ValueId, ty: Type, site: DefSite, location: DiagnosticLocation) {
+    fn define(
+        &mut self,
+        value: ValueId,
+        ty: &'module Type,
+        site: DefSite,
+        location: DiagnosticLocation,
+    ) {
         if self
             .definitions
             .insert(value, DefInfo { ty, site })
@@ -2450,9 +2455,7 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
     }
 
     fn ty(&self, value: ValueId) -> Option<&Type> {
-        self.definitions
-            .get(&value)
-            .map(|definition| &definition.ty)
+        self.definitions.get(&value).map(|definition| definition.ty)
     }
 
     fn emit(
