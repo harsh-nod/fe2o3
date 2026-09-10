@@ -141,6 +141,10 @@ persistent compute/SDMA coexistence requires reciprocal exact-storage checks in
 the lower KFD layer and runtime; it is not solely blocked by compiler admission.
 Neither milestone should be closed on this local copy-only evidence.
 
+The [A1/A2 swarm plan](runtime-a1-a2-swarm-plan.md) assigns the remaining work,
+dependency waves, code ownership and independent implementation/proof/hardware
+acceptance gates. It is a planning artifact, not additional implementation.
+
 The [R65 evidence report](evidence/mi300x-r65-drain-versions-2026-09-10/README.md)
 retains final CPU/proof results, signed-source hardware records and independent
 capture, ELF, queue-census and shared-host cleanup audits.
