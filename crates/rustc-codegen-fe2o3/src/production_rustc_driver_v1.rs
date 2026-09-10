@@ -82,7 +82,7 @@ fn transaction_in_active_session_v1<'tcx>(
     let closure = crate::collector::collect_authenticated_kernel_closure_v1(
         tcx,
         partitions.codegen_units,
-        false,
+        crate::env_flag(crate::VERBOSE_ENV),
         target,
     )
     .map_err(|error| format!("production extraction collection failed: {error}"))?;

@@ -44,6 +44,9 @@ use std::fmt;
 
 use crate::production_rustc_drop_v1::{ProductionRustcDropClassV1, classify_rustc_drop_v1};
 
+#[cfg(test)]
+mod closure_once_shim_collector_tests;
+pub(crate) mod closure_once_shim_v1;
 mod production_importer_v1;
 
 pub(crate) use production_importer_v1::{
@@ -2941,10 +2944,16 @@ impl<'tcx> DeviceCollector<'tcx> {
     }
 
     fn collect(mut self) -> Result<CollectionResult<'tcx>, CollectError> {
+        let mut closure_custody = crate::closure_profile_v1::CollectedClosureCustodyV1::default();
         while let Some(mut function) = self.worklist.pop_front() {
             let def_id = function.instance.def_id();
 
-            if !self.tcx.is_mir_available(def_id) {
+            if !self.tcx.is_mir_available(def_id)
+                && !closure_once_shim_v1::authenticate_closure_once_shim_v1(
+                    self.tcx,
+                    function.instance,
+                )
+            {
                 return Err(self.reachable_error(
                     &function.instance,
                     "MIR is unavailable for a collected device function",
@@ -2965,19 +2974,20 @@ impl<'tcx> DeviceCollector<'tcx> {
                     None,
                 )
             })? {
-                let closure_plan = crate::closure_profile_v1::analyze_production_closures_v1(
-                    self.tcx,
-                    function.instance,
-                    crate::closure_profile_v1::ClosureOriginPolicyV1::Either,
-                    &self.expected_target,
-                )
-                .map_err(|error| {
-                    self.reachable_error(
-                        &function.instance,
-                        &format!("bounded production closure admission failed: {error}"),
-                        None,
+                let closure_plan = closure_custody
+                    .analyze(
+                        self.tcx,
+                        function.instance,
+                        function.role == CollectedFunctionRole::InternalHelper,
+                        &self.expected_target,
                     )
-                })?;
+                    .map_err(|error| {
+                        self.reachable_error(
+                            &function.instance,
+                            &format!("bounded production closure admission failed: {error}"),
+                            None,
+                        )
+                    })?;
                 if self.verbose {
                     eprintln!(
                         "[collector] production closure profile target {}: {} environment(s), {} static call(s), {} transported call(s), {} authenticated higher-order capability call(s), identity {}",
@@ -2993,6 +3003,15 @@ impl<'tcx> DeviceCollector<'tcx> {
             } else {
                 None
             };
+            closure_custody
+                .observe_calls(self.tcx, function.instance, closure_plan.as_ref())
+                .map_err(|error| {
+                    self.reachable_error(
+                        &function.instance,
+                        &format!("device closure custody failed closed: {error}"),
+                        None,
+                    )
+                })?;
             let dead_branches =
                 crate::monomorphization_dead::CompilerDeadBranchObservationV1::observe(
                     self.tcx,
@@ -3774,6 +3793,12 @@ impl<'tcx> DeviceCollector<'tcx> {
                     continue;
                 }
                 let Some(local_def_id) = function.instance.def_id().as_local() else {
+                    if closure_once_shim_v1::authenticate_closure_once_shim_v1(
+                        self.tcx,
+                        function.instance,
+                    ) {
+                        continue;
+                    }
                     if crate::trusted_device_items::authenticate_reviewed_safe_core_scalar_bitcast_helper_v1(
                         self.tcx,
                         function.instance,
@@ -3793,6 +3818,18 @@ impl<'tcx> DeviceCollector<'tcx> {
                         continue;
                     }
                     if crate::trusted_device_items::authenticate_reviewed_safe_core_wrapping_helper_v1(
+                        self.tcx,
+                        function.instance,
+                    ) {
+                        continue;
+                    }
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_checked_mul_helper_v1(
+                        self.tcx,
+                        function.instance,
+                    ) {
+                        continue;
+                    }
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_option_helper_v1(
                         self.tcx,
                         function.instance,
                     ) {
@@ -4144,7 +4181,9 @@ impl<'tcx> DeviceCollector<'tcx> {
             return Ok(());
         }
 
-        if !matches!(resolved.def, InstanceKind::Item(_)) {
+        let authenticated_closure_once_shim =
+            closure_once_shim_v1::authenticate_closure_once_shim_v1(self.tcx, resolved);
+        if !matches!(resolved.def, InstanceKind::Item(_)) && !authenticated_closure_once_shim {
             return Err(self.reachable_error(
                 caller,
                 &format!(
@@ -4175,7 +4214,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             ));
         }
 
-        if !self.tcx.is_mir_available(resolved.def_id()) {
+        if !self.tcx.is_mir_available(resolved.def_id()) && !authenticated_closure_once_shim {
             return Err(self.reachable_error(
                 caller,
                 "MIR is unavailable for a device-reachable item; compile the dependency with encoded MIR (for example, an inline Rust definition) or keep the call out of device code",

@@ -73,7 +73,7 @@ use crate::rustc_semantic_plan_v1::{
 };
 use crate::trusted_device_items::{self, TrustedDeviceItem};
 
-const IDENTITY_INVENTORY_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-identity-inventory/v1";
+const IDENTITY_INVENTORY_DOMAIN_V2: &[u8] = b"fe2o3/semantic-mir/rustc-identity-inventory/v2";
 #[cfg(test)]
 const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V1: &[u8] =
     b"fe2o3/semantic-mir/production-compiler-intrinsic/v1";
@@ -8020,6 +8020,7 @@ fn build_identity_inventory_v1<'tcx>(
             .then(|| function.export_name.clone()),
             kernel_binding: function.kernel_binding,
             frontend_contract: function.frontend_contract.clone(),
+            closure_admission: function.closure_plan.as_ref().map(|plan| plan.identity()),
         });
     }
     functions.sort_unstable_by_key(|entry| entry.identities.function());
@@ -8073,7 +8074,7 @@ fn identity_inventory_identity_and_transcript_v1(
     roots: &[SemanticFunctionIdV1],
 ) -> ([u8; 32], Box<[u8]>) {
     let mut digest =
-        SemanticIdentityDigestV1::new_with_canonical_transcript(IDENTITY_INVENTORY_DOMAIN_V1);
+        SemanticIdentityDigestV1::new_with_canonical_transcript(IDENTITY_INVENTORY_DOMAIN_V2);
     digest.field(target.identity().as_bytes());
     for function in functions {
         digest.field(function.identities.function().as_bytes());
@@ -8082,6 +8083,13 @@ fn identity_inventory_identity_and_transcript_v1(
         digest.field(function.identities.generic_type_arguments().as_bytes());
         digest.field(function.identities.const_generic_arguments().as_bytes());
         digest.field(&[function_role_tag_v1(function.role)]);
+        match function.closure_admission {
+            Some(identity) => {
+                digest.field(&[1]);
+                digest.field(&identity);
+            }
+            None => digest.field(&[0]),
+        }
         match &function.export_name {
             Some(symbol) => {
                 digest.field(&[1]);

@@ -129,6 +129,13 @@ fn source_signature_abi(
 }
 
 fn request(abi: SemanticFunctionAbiV1) -> InertSemanticMirRequestV1 {
+    request_with_locals(abi, |_| {})
+}
+
+fn request_with_locals(
+    abi: SemanticFunctionAbiV1,
+    mutate: impl FnOnce(&mut Vec<SemanticLocalDeclV1>),
+) -> InertSemanticMirRequestV1 {
     let types = fixture_types();
     let mut locals = vec![SemanticLocalDeclV1::new(
         SemanticLocalIdentityV1::from_sha256(bytes(1)),
@@ -154,6 +161,7 @@ fn request(abi: SemanticFunctionAbiV1) -> InertSemanticMirRequestV1 {
         ));
     }
 
+    mutate(&mut locals);
     let block = SemanticBasicBlockV1::new(
         SemanticBlockIdentityV1::from_sha256(bytes(1)),
         SemanticSourceProvenanceV1::unavailable(),
@@ -230,6 +238,42 @@ fn nonempty_rust_call_tuple_expansion_admits() {
     assert_eq!(abi.adjusted_arguments().len(), 3);
     let admitted = admit(abi).unwrap();
     assert_eq!(admitted.functions()[0].abi().adjusted_arguments().len(), 3);
+}
+
+#[test]
+fn rust_call_local_roles_require_the_source_tuple_not_flattened_fields() {
+    let u32_id = SemanticTypeIdV1::from_index(0);
+    let u64_id = SemanticTypeIdV1::from_index(1);
+    let tuple_id = SemanticTypeIdV1::from_index(2);
+    let abi = rust_call_abi(vec![
+        SemanticAbiArgumentV1::rust_call_tuple_field(0, direct(u32_id)),
+        SemanticAbiArgumentV1::rust_call_tuple_field(1, direct(u64_id)),
+    ])
+    .unwrap();
+    for (role, ty) in [
+        (SemanticLocalRoleV1::Temporary, tuple_id),
+        (SemanticLocalRoleV1::Argument(0), tuple_id),
+        (SemanticLocalRoleV1::Argument(2), tuple_id),
+        (SemanticLocalRoleV1::Argument(1), u32_id),
+    ] {
+        let request = request_with_locals(abi.clone(), |locals| {
+            let local = &locals[2];
+            locals[2] = SemanticLocalDeclV1::new(local.identity(), ty, role, local.source());
+        });
+        assert!(matches!(request.admit(SemanticMirLimitsV1::default()),
+            Err(SemanticMirErrorV1::InvalidLocalRoles { function }) if function.index() == 0));
+    }
+    let duplicated = request_with_locals(abi, |locals| {
+        let local = &locals[3];
+        locals[3] = SemanticLocalDeclV1::new(
+            local.identity(),
+            tuple_id,
+            SemanticLocalRoleV1::Argument(1),
+            local.source(),
+        );
+    });
+    assert!(matches!(duplicated.admit(SemanticMirLimitsV1::default()),
+        Err(SemanticMirErrorV1::InvalidLocalRoles { function }) if function.index() == 0));
 }
 
 #[test]

@@ -35,7 +35,11 @@ use dialect_amdgcn::{
 use fe2o3_kernel_ir::{NarrowFloatFormat, WidenedFloatBinaryOp};
 use fe2o3_rustc_invocation::CARGO_METADATA_BUILD_OBSERVATION_ENV_V2;
 
+mod core_checked_mul_v1;
+mod core_option_v1;
 mod core_wrapping_v1;
+pub(crate) use core_checked_mul_v1::authenticate_reviewed_safe_core_checked_mul_helper_v1;
+pub(crate) use core_option_v1::authenticate_reviewed_safe_core_option_helper_v1;
 pub(crate) use core_wrapping_v1::authenticate_reviewed_safe_core_wrapping_helper_v1;
 
 const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =

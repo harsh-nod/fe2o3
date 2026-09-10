@@ -41,6 +41,9 @@ use crate::production_rustc_drop_v1::{ProductionRustcDropClassV1, classify_rustc
 use crate::production_rustc_intrinsic_v1::ProductionRustcIntrinsicOperationV1;
 use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
 
+mod closure_once_v1;
+mod rust_call_v1;
+
 const MAX_ERROR_COMPONENT_CHARS_V1: usize = 512;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -575,6 +578,8 @@ struct BodyProducerV1<'a, 'owner, 'tcx> {
     type_ids: HashMap<Ty<'tcx>, SemanticTypeIdV1>,
     locals_by_raw: Vec<&'a ProductionSemanticLocalBindingV1>,
     locals_by_semantic: Vec<&'a ProductionSemanticLocalBindingV1>,
+    inserted_local_order: Option<rust_call_v1::InsertedLocalOrderV1>,
+    closure_once_reborrow: Option<closure_once_v1::ClosureOnceReborrowV1<'tcx>>,
     blocks_by_raw: Vec<&'a ProductionSemanticBlockBindingV1>,
     blocks_by_semantic: Vec<&'a ProductionSemanticBlockBindingV1>,
     direct_calls_by_raw: Vec<Option<&'a ProductionSemanticDirectCallBindingV1<'tcx>>>,
@@ -607,9 +612,23 @@ pub(crate) fn construct_production_semantic_body_v1<'a, 'owner, 'tcx>(
     let export = input.export.clone();
     let entry = input.entry;
     let mut producer = BodyProducerV1::new(&input, owner)?;
-    let locals = producer.construct_locals()?;
-    let blocks = producer.construct_blocks()?;
+    let closure_arguments = producer.closure_arguments_v1(&input)?;
+    let mut locals = producer.construct_locals()?;
+    let closure_arguments = closure_arguments
+        .map(|arguments| arguments.normalize_locals(&mut locals, producer.owner))
+        .transpose()?;
+    // Freeze the final local order before emitting any place, projection, or
+    // storage marker. Original local identities remain bound to their raw MIR.
+    producer.inserted_local_order = closure_arguments
+        .as_ref()
+        .map(|arguments| arguments.local_order);
+    producer.closure_once_reborrow =
+        producer.normalize_closure_once_receiver_v1(&input, &mut locals)?;
+    let mut blocks = producer.construct_blocks()?;
     producer.require_all_call_bindings_consumed()?;
+    if let Some(arguments) = closure_arguments {
+        arguments.initialize_entry(&mut blocks, entry)?;
+    }
 
     let ProductionSemanticFunctionIdentitiesV1 {
         identity,
@@ -717,6 +736,8 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             type_ids,
             locals_by_raw,
             locals_by_semantic,
+            inserted_local_order: None,
+            closure_once_reborrow: None,
             blocks_by_raw,
             blocks_by_semantic,
             direct_calls_by_raw,
@@ -773,10 +794,13 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 .normalized_intrinsics_by_raw
                 .get(raw_index)
                 .is_some_and(Option::is_some);
+            let has_closure_reborrow =
+                raw_index == START_BLOCK.index() && self.closure_once_reborrow.is_some();
             let semantic_statement_count = data
                 .statements
                 .len()
                 .checked_add(usize::from(has_normalized_intrinsic))
+                .and_then(|count| count.checked_add(usize::from(has_closure_reborrow)))
                 .ok_or_else(|| table("statement source table"))?;
             self.owner
                 .charge(SemanticMirResourceV1::Statements, semantic_statement_count)?;
@@ -808,6 +832,10 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             } else {
                 self.construct_terminator(raw_block, &terminator.kind)?
             };
+            if has_closure_reborrow {
+                statements
+                    .push(self.closure_once_reborrow_statement_v1(binding.terminator_source)?);
+            }
             blocks.push(SemanticBasicBlockV1::new(
                 binding.identity,
                 binding.source,
@@ -1105,6 +1133,7 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 for argument in args {
                     arguments.push(self.construct_operand(&argument.node, block, None)?);
                 }
+                self.reborrow_closure_once_call_v1(raw_block, resolved, &mut arguments)?;
                 let destination = if let Some(target) = target {
                     Some(SemanticCallDestinationV1::new(
                         self.construct_place(*destination, block, None)?,
@@ -1787,10 +1816,15 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
         &self,
         raw_local: usize,
     ) -> Result<SemanticLocalIdV1, ProductionSemanticBodyErrorV1> {
-        self.locals_by_raw
+        let local = self
+            .locals_by_raw
             .get(raw_local)
             .map(|binding| binding.semantic_local)
-            .ok_or_else(|| table("local table"))
+            .ok_or_else(|| table("local table"))?;
+        match self.inserted_local_order {
+            Some(order) => order.remap(local),
+            None => Ok(local),
+        }
     }
 
     fn block_id(

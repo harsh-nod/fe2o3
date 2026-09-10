@@ -106,6 +106,7 @@ pub(crate) struct RetainedSemanticFunctionProducerV1<'tcx> {
     pub(crate) export_name: Option<String>,
     pub(crate) kernel_binding: Option<reserved_fe2o3_symbols::KernelBindingIdV1>,
     pub(crate) frontend_contract: Option<crate::collector::AuthenticatedKernelFrontendContractV1>,
+    pub(crate) closure_admission: Option<[u8; 32]>,
 }
 
 #[derive(Clone, Copy, Debug)]

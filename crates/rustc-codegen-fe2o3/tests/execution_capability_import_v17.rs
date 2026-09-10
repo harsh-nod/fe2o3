@@ -325,9 +325,21 @@ fn compile_hostile_source(target: &Scratch, source: &str) -> Output {
 }
 
 fn import_hostile_source(target: &Scratch, source: &str) -> Output {
+    import_hostile_source_with_mir_optimization(target, source, None)
+}
+
+fn import_hostile_source_with_mir_optimization(
+    target: &Scratch,
+    source: &str,
+    optimization: Option<u8>,
+) -> Output {
     let fixture = materialize_fixture(target, source, false);
     clean_hostile_package(target, &fixture);
     let mut command = Command::new(env!("CARGO"));
+    let mut rustflags = "-Zalways-encode-mir -Zinline-mir=no -Copt-level=0 -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32".to_owned();
+    if let Some(level) = optimization {
+        rustflags.push_str(&format!(" -Copt-level=3 -Zmir-opt-level={level}"));
+    }
     command
         .current_dir(fixture)
         .env("RUSTC", pinned_rustc())
@@ -341,10 +353,7 @@ fn import_hostile_source(target: &Scratch, source: &str) -> Output {
         .env("FE2O3_VERBOSE", "1")
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
-        .env(
-            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
-            "-Zalways-encode-mir -Zinline-mir=no -Copt-level=0 -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
-        )
+        .env("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS", rustflags)
         .args([
             "check",
             "--offline",
@@ -610,6 +619,34 @@ fn collector_admits_only_authenticated_higher_order_capability_terminals() {
         "authenticated with_workgroup/with_matrix graph was not preserved through import:\n{stderr}",
     );
     assert!(!stderr.contains("closure value escapes"), "{stderr}");
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn collector_profiles_authenticated_constant_only_closures() {
+    let target = Scratch::new("constant-only-capabilities");
+    let output = import_hostile_source_with_mir_optimization(
+        &target,
+        include_str!("fixtures/execution-capability-v17-hostile/higher_order_positive.rs"),
+        Some(3),
+    );
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 rustc diagnostics");
+    assert!(
+        stderr.lines().any(|line| {
+            line.contains("production closure profile")
+                && line.contains("0 environment(s)")
+                && line.contains("1 authenticated higher-order capability call(s)")
+        }),
+        "optimized constant-only operation was not closure-profiled:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("closure custody failed closed"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("bounded production closure admission failed"),
+        "{stderr}"
+    );
 }
 
 #[test]

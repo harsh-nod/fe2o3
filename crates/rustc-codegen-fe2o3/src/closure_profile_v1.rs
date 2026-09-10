@@ -24,9 +24,14 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+mod custody_v1;
+pub(crate) use custody_v1::CollectedClosureCustodyV1;
+
 const MAX_CLOSURES: usize = 8;
-const MAX_CAPTURES: usize = 16;
-const MAX_ENVIRONMENT_BYTES: u64 = 256;
+// Preserve the original aggregate work/storage envelope while allowing one
+// device environment to use more than an eighth of the function's allowance.
+const MAX_TOTAL_CAPTURES: usize = MAX_CLOSURES * 16;
+const MAX_TOTAL_ENVIRONMENT_BYTES: u64 = MAX_CLOSURES as u64 * 256;
 const MAX_ENVIRONMENT_ALIGNMENT: u64 = 16;
 const MAX_CALL_ARGUMENTS: usize = 8;
 const MAX_STATIC_CALLS: usize = 64;
@@ -46,6 +51,7 @@ pub(crate) enum ClosureOriginV1 {
     HostArgument,
     DeviceInternal,
     InvocationReceiver,
+    DeviceTransport,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -81,6 +87,7 @@ pub(crate) struct ClosureEnvironmentV1 {
     pub(crate) size_bytes: u64,
     pub(crate) alignment_bytes: u64,
     pub(crate) captures: Vec<ClosureCaptureLayoutV1>,
+    pub(crate) transport_identity: Option<[u8; 32]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -98,7 +105,7 @@ pub(crate) struct StaticClosureCallV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ClosureTransportCallV1 {
     pub(crate) block: usize,
-    pub(crate) closure_local: usize,
+    pub(crate) closure_custody: ClosureCustodyV1,
     pub(crate) argument_index: usize,
     pub(crate) target_definition_hash: [u8; 16],
     pub(crate) target_function_identity: [u8; 32],
@@ -115,7 +122,7 @@ pub(crate) enum HigherOrderCapabilityTerminalV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum HigherOrderClosureCustodyV1 {
+pub(crate) enum ClosureCustodyV1 {
     EnvironmentLocal(usize),
     ZeroSizedConstant {
         definition_hash: [u8; 16],
@@ -127,7 +134,7 @@ pub(crate) enum HigherOrderClosureCustodyV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HigherOrderCapabilityCallV1 {
     pub(crate) block: usize,
-    pub(crate) closure_custody: HigherOrderClosureCustodyV1,
+    pub(crate) closure_custody: ClosureCustodyV1,
     pub(crate) terminal: HigherOrderCapabilityTerminalV1,
     pub(crate) target_definition_hash: [u8; 16],
     pub(crate) target_function_identity: [u8; 32],
@@ -143,7 +150,9 @@ pub(crate) struct HigherOrderCapabilityCallV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ProductionClosureLoweringV1 {
     target: String,
+    owner: custody_v1::FunctionKeyV1,
     environments: Vec<ClosureEnvironmentV1>,
+    aliases: BTreeMap<Local, Local>,
     calls: Vec<StaticClosureCallV1>,
     transport_calls: Vec<ClosureTransportCallV1>,
     higher_order_calls: Vec<HigherOrderCapabilityCallV1>,
@@ -180,12 +189,18 @@ impl ProductionClosureLoweringV1 {
             .chain(
                 self.higher_order_calls
                     .iter()
-                    .filter_map(|call| match &call.closure_custody {
-                        HigherOrderClosureCustodyV1::ZeroSizedConstant {
+                    .map(|call| &call.closure_custody)
+                    .chain(
+                        self.transport_calls
+                            .iter()
+                            .map(|call| &call.closure_custody),
+                    )
+                    .filter_map(|custody| match custody {
+                        ClosureCustodyV1::ZeroSizedConstant {
                             closure_type_identity,
                             ..
                         } => Some(*closure_type_identity),
-                        HigherOrderClosureCustodyV1::EnvironmentLocal(_) => None,
+                        ClosureCustodyV1::EnvironmentLocal(_) => None,
                     }),
             )
     }
@@ -216,11 +231,22 @@ impl fmt::Display for ClosureProfileErrorV1 {
 
 impl std::error::Error for ClosureProfileErrorV1 {}
 
+#[cfg(test)]
 pub(crate) fn analyze_production_closures_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     policy: ClosureOriginPolicyV1,
     selected_target: &str,
+) -> Result<ProductionClosureLoweringV1, ClosureProfileErrorV1> {
+    analyze_with_custody_v1(tcx, instance, policy, selected_target, None)
+}
+
+fn analyze_with_custody_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    policy: ClosureOriginPolicyV1,
+    selected_target: &str,
+    incoming: Option<&BTreeMap<usize, custody_v1::TransportedArgumentV1>>,
 ) -> Result<ProductionClosureLoweringV1, ClosureProfileErrorV1> {
     let processor = selected_target
         .split(':')
@@ -253,6 +279,8 @@ pub(crate) fn analyze_production_closures_v1<'tcx>(
     let value_aliases = closure_value_aliases(body, &typed_closure_locals)?;
     let mut environments = Vec::new();
     let mut closure_locals = BTreeSet::new();
+    let mut remaining_captures = MAX_TOTAL_CAPTURES;
+    let mut remaining_environment_bytes = MAX_TOTAL_ENVIRONMENT_BYTES;
 
     for (local, declaration) in body.local_decls.iter_enumerated() {
         let ty = normalized_ty(tcx, instance, declaration.ty, "closure local")?;
@@ -269,10 +297,21 @@ pub(crate) fn analyze_production_closures_v1<'tcx>(
                 "closure count exceeds {MAX_CLOSURES}"
             )));
         }
-        let origin = if local.as_usize() == 1 && *def_id == instance.def_id() {
+        let transport = incoming.and_then(|arguments| arguments.get(&local.as_usize()));
+        if let Some(transport) = transport {
+            transport.require_type(tcx, ty)?;
+        }
+        let origin = if (local.as_usize() == 1 && *def_id == instance.def_id())
+            || crate::collector::closure_once_shim_v1::authenticated_closure_once_receiver_v1(
+                tcx, instance, local, ty,
+            ) {
             ClosureOriginV1::InvocationReceiver
         } else if local.as_usize() != 0 && local.as_usize() <= body.arg_count {
-            ClosureOriginV1::HostArgument
+            if transport.is_some() {
+                ClosureOriginV1::DeviceTransport
+            } else {
+                ClosureOriginV1::HostArgument
+            }
         } else if creations.contains_key(&local) {
             ClosureOriginV1::DeviceInternal
         } else if value_aliases.contains_key(&local) {
@@ -286,13 +325,12 @@ pub(crate) fn analyze_production_closures_v1<'tcx>(
         require_origin(policy, origin)?;
         let call_kind = closure_kind(args.as_closure().kind_ty().to_opt_closure_kind())?;
         let upvars = args.as_closure().upvar_tys();
-        if upvars.len() > MAX_CAPTURES {
-            return Err(ClosureProfileErrorV1::new(format!(
-                "closure local{} capture count {} exceeds {MAX_CAPTURES}",
+        remaining_captures = remaining_captures.checked_sub(upvars.len()).ok_or_else(|| {
+            ClosureProfileErrorV1::new(format!(
+                "closure local{} exceeds the per-function budget of {MAX_TOTAL_CAPTURES} captures",
                 local.as_usize(),
-                upvars.len()
-            )));
-        }
+            ))
+        })?;
         if let Some((creation_def_id, operand_count)) = creations.get(&local)
             && (creation_def_id != def_id || *operand_count != upvars.len())
         {
@@ -308,9 +346,15 @@ pub(crate) fn analyze_production_closures_v1<'tcx>(
         })?;
         let size_bytes = layout.size.bytes();
         let alignment_bytes = layout.align.abi.bytes();
-        if size_bytes > MAX_ENVIRONMENT_BYTES || alignment_bytes > MAX_ENVIRONMENT_ALIGNMENT {
+        remaining_environment_bytes = remaining_environment_bytes.checked_sub(size_bytes).ok_or_else(|| {
+            ClosureProfileErrorV1::new(format!(
+                "closure local{} exceeds the per-function environment budget of {MAX_TOTAL_ENVIRONMENT_BYTES} bytes",
+                local.as_usize(),
+            ))
+        })?;
+        if alignment_bytes > MAX_ENVIRONMENT_ALIGNMENT {
             return Err(ClosureProfileErrorV1::new(format!(
-                "closure local{} environment is {size_bytes} bytes aligned to {alignment_bytes}; limits are {MAX_ENVIRONMENT_BYTES}/{MAX_ENVIRONMENT_ALIGNMENT}",
+                "closure local{} environment alignment {alignment_bytes} exceeds {MAX_ENVIRONMENT_ALIGNMENT}",
                 local.as_usize()
             )));
         }
@@ -320,6 +364,10 @@ pub(crate) fn analyze_production_closures_v1<'tcx>(
             ));
         }
 
+        let mut memory_indices = vec![0; upvars.len()];
+        for (memory_index, source_index) in layout.fields.index_by_increasing_offset().enumerate() {
+            memory_indices[source_index] = memory_index;
+        }
         let mut captures = Vec::with_capacity(upvars.len());
         for (source_index, raw_ty) in upvars.iter().enumerate() {
             let capture_ty = normalized_ty(tcx, instance, raw_ty, "closure capture")?;
@@ -369,11 +417,7 @@ pub(crate) fn analyze_production_closures_v1<'tcx>(
             }
             captures.push(ClosureCaptureLayoutV1 {
                 source_index,
-                memory_index: layout
-                    .fields
-                    .index_by_increasing_offset()
-                    .position(|index| index == source_index)
-                    .expect("rustc field order is a permutation"),
+                memory_index: memory_indices[source_index],
                 offset_bytes: layout.fields.offset(source_index).bytes(),
                 mode,
                 layout: facts,
@@ -392,14 +436,10 @@ pub(crate) fn analyze_production_closures_v1<'tcx>(
             size_bytes,
             alignment_bytes,
             captures,
+            transport_identity: transport.map(|transport| transport.identity()),
         });
     }
 
-    if environments.is_empty() {
-        return Err(ClosureProfileErrorV1::new(
-            "the requested closure profile contains no concrete closure environment",
-        ));
-    }
     environments.sort_by_key(|environment| environment.local);
     let aliases = closure_reference_aliases(body, &closure_locals, &value_aliases)?;
     let (calls, transport_calls, higher_order_calls) = validate_uses_and_calls(
@@ -410,16 +450,26 @@ pub(crate) fn analyze_production_closures_v1<'tcx>(
         &closure_locals,
         &aliases,
     )?;
+    if environments.is_empty() && higher_order_calls.is_empty() && transport_calls.is_empty() {
+        return Err(ClosureProfileErrorV1::new(
+            "the requested closure profile contains no concrete closure environment or authenticated zero-sized operation",
+        ));
+    }
+    let owner = custody_v1::FunctionKeyV1::from_instance(tcx, instance)?;
     let identity = lowering_identity(
         selected_target,
+        &owner,
         &environments,
+        &aliases,
         &calls,
         &transport_calls,
         &higher_order_calls,
     );
     Ok(ProductionClosureLoweringV1 {
         target: selected_target.to_owned(),
+        owner,
         environments,
+        aliases,
         calls,
         transport_calls,
         higher_order_calls,
@@ -436,6 +486,21 @@ pub(crate) fn contains_concrete_closure_v1<'tcx>(
         let ty = normalized_ty(tcx, instance, declaration.ty, "closure presence check")?;
         if matches!(ty.kind(), TyKind::Closure(..)) {
             return Ok(true);
+        }
+    }
+    for block in body.basic_blocks.iter() {
+        if let TerminatorKind::Call { args, .. } = &block.terminator().kind {
+            for argument in args {
+                if let Operand::Constant(constant) = &argument.node
+                    && matches!(
+                        normalized_ty(tcx, instance, constant.const_.ty(), "closure constant")?
+                            .kind(),
+                        TyKind::Closure(..)
+                    )
+                {
+                    return Ok(true);
+                }
+            }
         }
     }
     Ok(false)
@@ -749,9 +814,7 @@ fn validate_uses_and_calls<'tcx>(
                     closure_locals,
                     aliases,
                 )? {
-                    if let HigherOrderClosureCustodyV1::EnvironmentLocal(local) =
-                        &call.closure_custody
-                    {
+                    if let ClosureCustodyV1::EnvironmentLocal(local) = &call.closure_custody {
                         *call_counts.entry(Local::from_usize(*local)).or_default() += 1;
                     }
                     higher_order_calls.push(call);
@@ -792,9 +855,9 @@ fn validate_uses_and_calls<'tcx>(
                         aliases,
                     )?
                 {
-                    *call_counts
-                        .entry(Local::from_usize(call.closure_local))
-                        .or_default() += 1;
+                    if let ClosureCustodyV1::EnvironmentLocal(local) = &call.closure_custody {
+                        *call_counts.entry(Local::from_usize(*local)).or_default() += 1;
+                    }
                     transport_calls.push(call);
                     if calls.len() + transport_calls.len() + higher_order_calls.len()
                         > MAX_STATIC_CALLS
@@ -934,7 +997,7 @@ fn validate_uses_and_calls<'tcx>(
         }
     }
     calls.sort_by_key(|call| (call.block, call.closure_local));
-    transport_calls.sort_by_key(|call| (call.block, call.argument_index, call.closure_local));
+    transport_calls.sort_by_key(|call| (call.block, call.argument_index));
     higher_order_calls.sort_by_key(|call| call.block);
     Ok((calls, transport_calls, higher_order_calls))
 }
@@ -951,16 +1014,31 @@ fn authenticate_closure_transport_call_v1<'tcx>(
     closure_locals: &BTreeSet<Local>,
     aliases: &BTreeMap<Local, Local>,
 ) -> Result<Option<ClosureTransportCallV1>, ClosureProfileErrorV1> {
-    let transported = args
-        .iter()
-        .enumerate()
-        .filter_map(|(index, argument)| {
-            operand_local(&argument.node)
-                .and_then(|local| resolve_alias_root(local, closure_locals, aliases))
-                .map(|local| (index, local))
-        })
-        .collect::<Vec<_>>();
-    let [(argument_index, closure_local)] = transported.as_slice() else {
+    let mut transported = Vec::new();
+    for (index, argument) in args.iter().enumerate() {
+        let ty = normalized_ty(
+            tcx,
+            caller,
+            argument.node.ty(body, tcx),
+            "closure transport candidate",
+        )?;
+        if operand_mentions_closure(&argument.node, closure_locals, aliases)
+            || matches!(ty.kind(), TyKind::Closure(..))
+        {
+            transported.push((
+                index,
+                resolve_operand_closure_custody(
+                    tcx,
+                    caller,
+                    argument,
+                    ty,
+                    closure_locals,
+                    aliases,
+                )?,
+            ));
+        }
+    }
+    let [(argument_index, closure_custody)] = transported.as_slice() else {
         if transported.is_empty() {
             return Ok(None);
         }
@@ -1044,7 +1122,7 @@ fn authenticate_closure_transport_call_v1<'tcx>(
     })?;
     Ok(Some(ClosureTransportCallV1 {
         block,
-        closure_local: closure_local.as_usize(),
+        closure_custody: closure_custody.clone(),
         argument_index: *argument_index,
         target_definition_hash: tcx.def_path_hash(target.def_id()).0.to_le_bytes(),
         target_function_identity: *identities.function().as_bytes(),
@@ -1234,13 +1312,11 @@ fn resolve_operand_closure_custody<'tcx>(
     closure_ty: Ty<'tcx>,
     closure_locals: &BTreeSet<Local>,
     aliases: &BTreeMap<Local, Local>,
-) -> Result<HigherOrderClosureCustodyV1, ClosureProfileErrorV1> {
+) -> Result<ClosureCustodyV1, ClosureProfileErrorV1> {
     if let Some(root) = operand_local(&operand.node)
         .and_then(|local| resolve_alias_root(local, closure_locals, aliases))
     {
-        return Ok(HigherOrderClosureCustodyV1::EnvironmentLocal(
-            root.as_usize(),
-        ));
+        return Ok(ClosureCustodyV1::EnvironmentLocal(root.as_usize()));
     }
     let Operand::Constant(constant) = &operand.node else {
         return Err(ClosureProfileErrorV1::new(
@@ -1292,7 +1368,7 @@ fn resolve_operand_closure_custody<'tcx>(
             "zero-sized closure constant has invalid source provenance: {error}"
         ))
     })?;
-    Ok(HigherOrderClosureCustodyV1::ZeroSizedConstant {
+    Ok(ClosureCustodyV1::ZeroSizedConstant {
         definition_hash: tcx.def_path_hash(*definition).0.to_le_bytes(),
         closure_type_identity: *crate::rustc_semantic_adapter_v1::rustc_type_identity_v1(
             tcx, closure_ty,
@@ -1620,21 +1696,36 @@ fn tuple_argument_count<'tcx>(
 
 fn lowering_identity(
     target: &str,
+    owner: &custody_v1::FunctionKeyV1,
     environments: &[ClosureEnvironmentV1],
+    aliases: &BTreeMap<Local, Local>,
     calls: &[StaticClosureCallV1],
     transport_calls: &[ClosureTransportCallV1],
     higher_order_calls: &[HigherOrderCapabilityCallV1],
 ) -> [u8; 32] {
     let mut hash = Sha256::new();
-    hash.update(b"fe2o3.production-closure-lowering.v3\0");
+    hash.update(b"fe2o3.production-closure-lowering.v4\0");
     hash.update((target.len() as u64).to_le_bytes());
     hash.update(target.as_bytes());
+    owner.hash_into(&mut hash);
+    hash.update((aliases.len() as u64).to_le_bytes());
+    for (local, root) in aliases {
+        hash.update((local.as_usize() as u64).to_le_bytes());
+        hash.update((root.as_usize() as u64).to_le_bytes());
+    }
     hash.update((environments.len() as u64).to_le_bytes());
     for environment in environments {
         hash.update((environment.local as u64).to_le_bytes());
         hash.update([environment.origin as u8, environment.call_kind as u8]);
         hash.update(environment.definition_hash);
         hash.update(environment.closure_type_identity);
+        match environment.transport_identity {
+            Some(identity) => {
+                hash.update([1]);
+                hash.update(identity);
+            }
+            None => hash.update([0]),
+        }
         hash.update(environment.size_bytes.to_le_bytes());
         hash.update(environment.alignment_bytes.to_le_bytes());
         hash.update((environment.captures.len() as u64).to_le_bytes());
@@ -1658,7 +1749,7 @@ fn lowering_identity(
     hash.update((transport_calls.len() as u64).to_le_bytes());
     for call in transport_calls {
         hash.update((call.block as u64).to_le_bytes());
-        hash.update((call.closure_local as u64).to_le_bytes());
+        hash_closure_custody_v1(&mut hash, &call.closure_custody);
         hash.update((call.argument_index as u64).to_le_bytes());
         hash.update(call.target_definition_hash);
         hash.update(call.target_function_identity);
@@ -1670,22 +1761,7 @@ fn lowering_identity(
     hash.update((higher_order_calls.len() as u64).to_le_bytes());
     for call in higher_order_calls {
         hash.update((call.block as u64).to_le_bytes());
-        match &call.closure_custody {
-            HigherOrderClosureCustodyV1::EnvironmentLocal(local) => {
-                hash.update([0]);
-                hash.update((*local as u64).to_le_bytes());
-            }
-            HigherOrderClosureCustodyV1::ZeroSizedConstant {
-                definition_hash,
-                closure_type_identity,
-                operand_source_identity,
-            } => {
-                hash.update([1]);
-                hash.update(definition_hash);
-                hash.update(closure_type_identity);
-                hash.update(operand_source_identity);
-            }
-        }
+        hash_closure_custody_v1(&mut hash, &call.closure_custody);
         hash.update([call.terminal as u8]);
         hash.update(call.target_definition_hash);
         hash.update(call.target_function_identity);
@@ -1697,6 +1773,25 @@ fn lowering_identity(
         hash.update(call.call_source_identity);
     }
     hash.finalize().into()
+}
+
+fn hash_closure_custody_v1(hash: &mut Sha256, custody: &ClosureCustodyV1) {
+    match custody {
+        ClosureCustodyV1::EnvironmentLocal(local) => {
+            hash.update([0]);
+            hash.update((*local as u64).to_le_bytes());
+        }
+        ClosureCustodyV1::ZeroSizedConstant {
+            definition_hash,
+            closure_type_identity,
+            operand_source_identity,
+        } => {
+            hash.update([1]);
+            hash.update(definition_hash);
+            hash.update(closure_type_identity);
+            hash.update(operand_source_identity);
+        }
+    }
 }
 
 #[cfg(test)]
