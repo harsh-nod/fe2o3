@@ -394,6 +394,9 @@ fn compiler_intrinsic_accepts_transparent_borrow_v1(
     source_type: SemanticTypeIdV1,
 ) -> bool {
     match operation {
+        SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d {
+            invocation, ..
+        } => argument == 0 && source_type == *invocation,
         SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindReadOnly { context, .. }
         | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindExclusiveReadWrite {
             context,

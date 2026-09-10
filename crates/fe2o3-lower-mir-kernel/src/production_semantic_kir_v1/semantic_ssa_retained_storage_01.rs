@@ -632,9 +632,10 @@ fn first_retained_local_cause_v1(
             )
     };
     let rvalue_cause = |value: &SemanticRvalueKindV1| match value {
-        SemanticRvalueKindV1::Borrow { place, .. }
-            if place_matches(place) && !transparent_borrow(place) =>
-        {
+        SemanticRvalueKindV1::Borrow { place, .. } if place_matches(place) => {
+            if transparent_borrow(place) {
+                return Some("compiler-issued capability borrow not admitted by SSA");
+            }
             Some(first_borrow_consumer_cause_v1(function, local, callables))
         }
         SemanticRvalueKindV1::AddressOf { place, .. } if place_matches(place) => Some("address-of"),
@@ -774,6 +775,9 @@ fn first_borrow_consumer_cause_v1(
             | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut { .. }
             | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut { .. } => {
                 "borrow for disjoint-slice operation"
+            }
+            SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d { .. } => {
+                "borrow for authenticated invocation index"
             }
             SemanticCompilerIntrinsicOperationV1::ThreadIndexGet { .. }
             | SemanticCompilerIntrinsicOperationV1::DisjointIndexGet { .. }

@@ -1861,6 +1861,17 @@ fn typed_global_borrow_cases(
     );
     vec![
         (
+            SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d {
+                invocation: receiver,
+                index_witness: data,
+                raw_index: data,
+                provenance,
+                source_identity,
+            },
+            1,
+            1,
+        ),
+        (
             SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindReadOnly {
                 context: receiver,
                 physical: data,
@@ -2042,6 +2053,112 @@ fn typed_global_borrows_reject_escape_and_multiple_consumers() {
                 "{operation:?}, escape={escape}"
             );
         }
+    }
+}
+
+fn invocation_receiver_callable(abi: SemanticFunctionAbiV1) -> SemanticCallableDeclV1 {
+    let (operation, _, _) = typed_global_borrow_cases(SemanticTypeIdV1::from_index(0))
+        .into_iter()
+        .find(|(operation, _, _)| {
+            matches!(
+                operation,
+                SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d { .. }
+            )
+        })
+        .unwrap();
+    test_operation_callable(abi, operation, 122)
+}
+
+fn invocation_receiver_borrow() -> SemanticStatementV1 {
+    SemanticStatementV1::new(
+        fe2o3_mir_model::semantic_mir_v1::SemanticSourceProvenanceV1::unavailable(),
+        SemanticStatementKindV1::Assign(
+            fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1::new(
+                test_scalar_place(2),
+                SemanticRvalueV1::new(
+                    SemanticTypeIdV1::from_index(1),
+                    SemanticRvalueKindV1::Borrow {
+                        kind: SemanticBorrowKindV1::Shared,
+                        place: test_place(1, None),
+                    },
+                ),
+            ),
+        ),
+    )
+}
+
+fn invocation_receiver_call() -> SemanticTerminatorKindV1 {
+    test_call(
+        0,
+        vec![SemanticOperandV1::Move(test_scalar_place(2))],
+        Some(SemanticCallDestinationV1::new(
+            test_scalar_place(3),
+            test_edge(SemanticEdgeRoleV1::CallReturn, 2),
+        )),
+    )
+}
+
+#[test]
+fn invocation_receiver_borrow_crosses_cfg_as_ssa_without_private_storage() {
+    let function = test_function(vec![
+        test_block(
+            123,
+            vec![invocation_receiver_borrow()],
+            SemanticTerminatorKindV1::Goto(test_edge(SemanticEdgeRoleV1::Goto, 1)),
+        ),
+        test_block(124, vec![], invocation_receiver_call()),
+        test_block(125, vec![], SemanticTerminatorKindV1::Return),
+    ]);
+    let callables = [invocation_receiver_callable(function.abi().clone())];
+    let plan = plan_semantic_function_ssa_with_module_v1(
+        SemanticFunctionIdV1::from_index(0),
+        &function,
+        &test_types(false),
+        &callables,
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap();
+    for local in [1, 2] {
+        assert!(
+            plan.plan()
+                .promoted_variables()
+                .contains(&SsaVariableIdV1::new(local))
+        );
+    }
+    assert!(plan.retained_cross_edge_variables().is_empty());
+}
+
+#[test]
+fn invocation_receiver_borrow_rejects_killed_source_or_reference() {
+    for killed in [1, 2] {
+        let statements = if killed == 1 {
+            vec![test_storage_dead(1), invocation_receiver_borrow()]
+        } else {
+            vec![invocation_receiver_borrow(), test_storage_dead(2)]
+        };
+        let function = test_function(vec![
+            test_block(
+                123,
+                statements,
+                SemanticTerminatorKindV1::Goto(test_edge(SemanticEdgeRoleV1::Goto, 1)),
+            ),
+            test_block(124, vec![], invocation_receiver_call()),
+            test_block(125, vec![], SemanticTerminatorKindV1::Return),
+        ]);
+        let callables = [invocation_receiver_callable(function.abi().clone())];
+        assert!(matches!(
+            plan_semantic_function_ssa_with_module_v1(
+                SemanticFunctionIdV1::from_index(0),
+                &function,
+                &test_types(false),
+                &callables,
+                ProductionSemanticSsaLimitsV1::default(),
+            ),
+            Err(ProductionSemanticSsaErrorV1::Planner {
+                error: SsaPlannerErrorV1::UndefinedAtUse { variable, .. },
+                ..
+            }) if variable == SsaVariableIdV1::new(killed)
+        ));
     }
 }
 
