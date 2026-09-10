@@ -3,6 +3,7 @@ use crate::{RuntimeAsyncOwnedDispositionV1, RuntimeOwnedShutdownBackendV1};
 use std::cell::Cell;
 
 mod control_tests;
+mod graph_tests;
 
 #[derive(Default)]
 struct OwnerTrace {
@@ -330,6 +331,7 @@ fn enqueue_is_nonblocking_bounded_and_discarded_commands_resolve() {
     // Exercise the receiver-drop guard without relying on thread scheduling.
     let (sender, receiver) = sync_channel(1);
     let handle = RuntimeAsyncEngineHandleV1::<MockBackend> {
+        graph_slot: Arc::new(AtomicBool::new(false)),
         sender,
         worker_thread: Arc::new(OnceLock::new()),
         quarantine_command_panics: false,
@@ -536,6 +538,7 @@ fn operation_registry_capacity_rejects_before_submission() {
 fn command_future_replaces_waker_and_wakes_exactly_once() {
     let (sender, receiver) = sync_channel(1);
     let handle = RuntimeAsyncEngineHandleV1::<MockBackend> {
+        graph_slot: Arc::new(AtomicBool::new(false)),
         sender,
         worker_thread: Arc::new(OnceLock::new()),
         quarantine_command_panics: false,

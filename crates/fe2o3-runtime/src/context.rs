@@ -10,6 +10,9 @@ use std::panic::{AssertUnwindSafe, UnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+mod graph;
+pub(crate) use graph::*;
+
 /// Maximum number of devices retained by one runtime context.
 pub const MAX_RUNTIME_DEVICES_V1: usize = 256;
 /// Maximum number of live streams retained by one runtime context.
@@ -701,6 +704,7 @@ pub enum RuntimeValidationErrorV1 {
     GeometryOverflow,
     InvalidAtomicContract,
     InvalidCollectiveContract,
+    ContextReserved,
 }
 
 impl fmt::Display for RuntimeValidationErrorV1 {
@@ -834,6 +838,7 @@ pub struct RuntimeCleanupReportV1<E> {
     failures: Vec<RuntimeCleanupFailureV1<E>>,
     retained: RuntimeRetainedResourcesV1,
     terminal: bool,
+    graph_reserved: bool,
 }
 
 impl<E> RuntimeCleanupReportV1<E> {
@@ -850,7 +855,11 @@ impl<E> RuntimeCleanupReportV1<E> {
     }
 
     pub const fn is_complete(&self) -> bool {
-        !self.terminal && self.retained.is_empty()
+        !self.terminal && !self.graph_reserved && self.retained.is_empty()
+    }
+
+    pub const fn is_graph_reserved(&self) -> bool {
+        self.graph_reserved
     }
 }
 
@@ -950,14 +959,32 @@ pub struct RuntimeContextV1<B: RuntimeBackendV1> {
     completion_callback_panic_count: u64,
     next_identity: u64,
     terminal: bool,
+    graph_reservation: Option<ContextGraphReservationV1>,
+    graph_issue_closed: bool,
 }
 
 struct ContextLaunchRequestV1<'a, A: RuntimeArgumentsV1> {
     stream: RuntimeStreamIdV1,
     kernel: &'a TypedRuntimeKernelV1<A>,
-    arguments: &'a A,
+    arguments: ContextLaunchArgumentsV1<'a, A>,
     geometry: RuntimeLaunchGeometryV1,
     dependencies: &'a [RuntimeEventIdV1],
+    semantic_launch: BackendSemanticLaunchV1,
+}
+
+enum ContextLaunchArgumentsV1<'a, A> {
+    Live(&'a A),
+    Frozen(&'a [u8], &'a [RuntimeBindingV1]),
+}
+
+pub(crate) struct PreparedContextLaunchV1 {
+    stream: RuntimeStreamIdV1,
+    stream_record: StreamRecordV1,
+    kernel: u64,
+    explicit_kernarg: Vec<u8>,
+    backend_bindings: Vec<BackendBindingV1>,
+    backend_dependencies: Vec<u64>,
+    geometry: RuntimeLaunchGeometryV1,
     semantic_launch: BackendSemanticLaunchV1,
 }
 
@@ -1076,6 +1103,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             completion_callback_panic_count: 0,
             next_identity: 1,
             terminal: false,
+            graph_reservation: None,
+            graph_issue_closed: false,
         })
     }
 
@@ -1133,7 +1162,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     /// immediately and permanently seals the context.
     pub fn cleanup(&mut self) -> RuntimeCleanupReportV1<B::Error> {
         let mut failures = Vec::new();
-        if self.terminal {
+        if self.terminal || self.graph_reservation.is_some() {
             return self.cleanup_report(failures);
         }
 
@@ -1322,6 +1351,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 allocations: self.allocations.len(),
             },
             terminal: self.terminal,
+            graph_reserved: self.graph_reservation.is_some(),
         }
     }
 
@@ -1449,8 +1479,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     }
 
     fn require_live(&self) -> Result<(), RuntimeValidationErrorV1> {
+        self.require_graph_access(None)
+    }
+
+    fn require_graph_access(
+        &self,
+        access: Option<ContextGraphReservationV1>,
+    ) -> Result<(), RuntimeValidationErrorV1> {
         if self.terminal {
             Err(RuntimeValidationErrorV1::ContextTerminal)
+        } else if self.graph_reservation != access {
+            Err(RuntimeValidationErrorV1::ContextReserved)
         } else {
             Ok(())
         }
@@ -1827,7 +1866,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             ContextLaunchRequestV1 {
                 stream,
                 kernel,
-                arguments,
+                arguments: ContextLaunchArgumentsV1::Live(arguments),
                 geometry,
                 dependencies,
                 semantic_launch: BackendSemanticLaunchV1::Ordinary,
@@ -1848,6 +1887,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             BackendLaunchV1<'launch>,
         ) -> Result<u64, RuntimeBackendFailureV1<B::Error>>,
     {
+        let prepared = self.prepare_context_launch_v1(request, None)?;
+        self.submit_prepared_launch_v1(prepared, None, submit)
+    }
+
+    fn prepare_context_launch_v1<A: RuntimeArgumentsV1>(
+        &self,
+        request: ContextLaunchRequestV1<'_, A>,
+        access: Option<ContextGraphReservationV1>,
+    ) -> Result<PreparedContextLaunchV1, RuntimeErrorV1<B::Error>> {
         let ContextLaunchRequestV1 {
             stream,
             kernel,
@@ -1856,7 +1904,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             dependencies,
             semantic_launch,
         } = request;
-        self.require_live()?;
+        self.require_graph_access(access)?;
         if self.submissions.len() >= MAX_RUNTIME_SUBMISSIONS_V1 {
             return Err(RuntimeValidationErrorV1::Capacity.into());
         }
@@ -1894,11 +1942,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         {
             return Err(RuntimeValidationErrorV1::UnknownKernel.into());
         }
-        let explicit_kernarg = arguments.encode_explicit_kernarg_v1();
+        let explicit_kernarg = match &arguments {
+            ContextLaunchArgumentsV1::Live(arguments) => arguments.encode_explicit_kernarg_v1(),
+            ContextLaunchArgumentsV1::Frozen(bytes, _) => bytes.to_vec(),
+        };
         if explicit_kernarg.len() > MAX_RUNTIME_EXPLICIT_KERNARG_BYTES_V1 {
             return Err(RuntimeValidationErrorV1::KernargTooLarge.into());
         }
-        let bindings = arguments.bindings_v1();
+        let bindings = match arguments {
+            ContextLaunchArgumentsV1::Live(arguments) => arguments.bindings_v1(),
+            ContextLaunchArgumentsV1::Frozen(_, bindings) => bindings.to_vec(),
+        };
         if bindings.len() > fe2o3_host_api::MAX_DISPATCH_BINDINGS_V1 {
             return Err(RuntimeValidationErrorV1::TooManyBindings.into());
         }
@@ -1964,12 +2018,50 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             }
             backend_dependencies.push(event.backend_event);
         }
+        Ok(PreparedContextLaunchV1 {
+            stream,
+            stream_record,
+            kernel: kernel.backend_kernel,
+            explicit_kernarg,
+            backend_bindings,
+            backend_dependencies,
+            geometry,
+            semantic_launch,
+        })
+    }
+
+    fn submit_prepared_launch_v1<M, F>(
+        &mut self,
+        prepared: PreparedContextLaunchV1,
+        access: Option<ContextGraphReservationV1>,
+        submit: F,
+    ) -> Result<RuntimeSubmissionV1<M>, RuntimeErrorV1<B::Error>>
+    where
+        F: for<'launch> FnOnce(
+            &mut B,
+            BackendLaunchV1<'launch>,
+        ) -> Result<u64, RuntimeBackendFailureV1<B::Error>>,
+    {
+        self.require_graph_access(access)?;
+        if self.submissions.len() >= MAX_RUNTIME_SUBMISSIONS_V1 {
+            return Err(RuntimeValidationErrorV1::Capacity.into());
+        }
+        let PreparedContextLaunchV1 {
+            stream,
+            stream_record,
+            kernel,
+            explicit_kernarg,
+            backend_bindings,
+            backend_dependencies,
+            geometry,
+            semantic_launch,
+        } = prepared;
         let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
         let result = submit(
             &mut self.backend,
             BackendLaunchV1 {
                 stream: stream_record.backend_stream,
-                kernel: kernel.backend_kernel,
+                kernel,
                 explicit_kernarg: &explicit_kernarg,
                 bindings: &backend_bindings,
                 dependencies: &backend_dependencies,
@@ -2053,7 +2145,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             ContextLaunchRequestV1 {
                 stream,
                 kernel,
-                arguments,
+                arguments: ContextLaunchArgumentsV1::Live(arguments),
                 geometry,
                 dependencies,
                 semantic_launch: BackendSemanticLaunchV1::Atomic(contract),
@@ -2133,7 +2225,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             ContextLaunchRequestV1 {
                 stream,
                 kernel,
-                arguments,
+                arguments: ContextLaunchArgumentsV1::Live(arguments),
                 geometry,
                 dependencies,
                 semantic_launch: BackendSemanticLaunchV1::Collective(contract),
@@ -2146,7 +2238,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self,
         submission: &mut RuntimeSubmissionV1<A>,
     ) -> Result<RuntimePollV1, RuntimeErrorV1<B::Error>> {
-        self.require_live()?;
+        self.poll_with_graph_access_v1(submission, None)
+    }
+
+    pub(crate) fn poll_with_graph_access_v1<A>(
+        &mut self,
+        submission: &mut RuntimeSubmissionV1<A>,
+        access: Option<ContextGraphReservationV1>,
+    ) -> Result<RuntimePollV1, RuntimeErrorV1<B::Error>> {
+        self.require_graph_access(access)?;
         let record = self.live_submission_record(submission)?;
         if record.status.is_terminal() {
             return Ok(submission.observe_status(record.status));
@@ -2209,7 +2309,18 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     where
         B: RuntimeFlushBackendV1,
     {
-        self.require_live()?;
+        self.flush_with_graph_access_v1(stream, None)
+    }
+
+    pub(crate) fn flush_with_graph_access_v1(
+        &mut self,
+        stream: RuntimeStreamIdV1,
+        access: Option<ContextGraphReservationV1>,
+    ) -> Result<(), RuntimeErrorV1<B::Error>>
+    where
+        B: RuntimeFlushBackendV1,
+    {
+        self.require_graph_access(access)?;
         let backend_stream = self
             .streams
             .get(&stream)
@@ -2327,7 +2438,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self,
         submission: RuntimeSubmissionV1<A>,
     ) -> Result<(), RuntimeSubmissionReleaseFailureV1<A, B::Error>> {
-        match self.release_submission_ref(&submission) {
+        match self.release_submission_ref(&submission, None) {
             Ok(()) => Ok(()),
             Err(error) => Err(RuntimeSubmissionReleaseFailureV1 { submission, error }),
         }
@@ -2336,8 +2447,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     fn release_submission_ref<A>(
         &mut self,
         submission: &RuntimeSubmissionV1<A>,
+        access: Option<ContextGraphReservationV1>,
     ) -> Result<(), RuntimeErrorV1<B::Error>> {
-        self.require_live()?;
+        self.require_graph_access(access)?;
         let record = self.submission_record(submission)?;
         if !record.quiescent {
             return Err(RuntimeValidationErrorV1::SubmissionPending.into());
@@ -2638,7 +2750,20 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     where
         B: RuntimeAsyncCopyBackendV1,
     {
-        self.require_live()?;
+        let prepared =
+            self.prepare_context_copy_v1(stream, source, destination, dependencies, None)?;
+        self.submit_prepared_copy_v1(prepared, None)
+    }
+
+    fn prepare_context_copy_v1(
+        &self,
+        stream: RuntimeStreamIdV1,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+        dependencies: &[RuntimeEventIdV1],
+        access: Option<ContextGraphReservationV1>,
+    ) -> Result<PreparedContextCopyV1, RuntimeErrorV1<B::Error>> {
+        self.require_graph_access(access)?;
         if self.submissions.len() >= MAX_RUNTIME_SUBMISSIONS_V1 {
             return Err(RuntimeValidationErrorV1::Capacity.into());
         }
@@ -2710,6 +2835,35 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             }
             backend_dependencies.push(event.backend_event);
         }
+        Ok(PreparedContextCopyV1 {
+            stream,
+            stream_record,
+            source,
+            destination,
+            backend_dependencies,
+        })
+    }
+
+    fn submit_prepared_copy_v1<M>(
+        &mut self,
+        prepared: PreparedContextCopyV1,
+        access: Option<ContextGraphReservationV1>,
+    ) -> Result<RuntimeSubmissionV1<M>, RuntimeErrorV1<B::Error>>
+    where
+        B: RuntimeAsyncCopyBackendV1,
+    {
+        self.require_graph_access(access)?;
+        if self.submissions.len() >= MAX_RUNTIME_SUBMISSIONS_V1 {
+            return Err(RuntimeValidationErrorV1::Capacity.into());
+        }
+        let PreparedContextCopyV1 {
+            stream,
+            stream_record,
+            source,
+            destination,
+            backend_dependencies,
+        } = prepared;
+        let destination_device = stream_record.device;
         let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
         let result = self.backend.copy_async_v1(
             stream_record.backend_stream,
@@ -3101,6 +3255,90 @@ mod tests {
         wait_observation: Option<BackendPollV1>,
         first_wait_failure: MockWaitFailure,
         wait_deadlines: Vec<Instant>,
+    }
+
+    #[test]
+    fn r63_private_reservations_require_closed_issue_and_fresh_exact_generation() {
+        let mut context = RuntimeContextV1::open(MockBackend::default()).unwrap();
+        let token = context.reserve_graph_v1(1).unwrap();
+        let report = context.cleanup();
+        assert!(report.retained().is_empty());
+        assert!(report.is_graph_reserved());
+        assert!(!report.is_complete());
+        assert_eq!(
+            context.release_graph_v1(token),
+            Err(RuntimeValidationErrorV1::SubmissionPending)
+        );
+        context.close_graph_issue_v1(token).unwrap();
+        context.release_graph_v1(token).unwrap();
+        let fresh = context.reserve_graph_v1(1).unwrap();
+        assert_ne!(token, fresh);
+        assert_eq!(
+            context.close_graph_issue_v1(token),
+            Err(RuntimeValidationErrorV1::ContextReserved)
+        );
+        assert_eq!(
+            context.release_graph_v1(token),
+            Err(RuntimeValidationErrorV1::ContextReserved)
+        );
+        let mut other = RuntimeContextV1::open(MockBackend::default()).unwrap();
+        let foreign = other.reserve_graph_v1(1).unwrap();
+        assert_eq!(
+            context.close_graph_issue_v1(foreign),
+            Err(RuntimeValidationErrorV1::ContextReserved)
+        );
+        context.close_graph_issue_v1(fresh).unwrap();
+        context.release_graph_v1(fresh).unwrap();
+        other.close_graph_issue_v1(foreign).unwrap();
+        other.release_graph_v1(foreign).unwrap();
+        context.next_identity = u64::MAX;
+        assert_eq!(
+            context.reserve_graph_v1(1),
+            Err(RuntimeValidationErrorV1::Capacity)
+        );
+        assert_eq!(context.next_identity, u64::MAX);
+        assert!(context.cleanup().is_complete());
+    }
+
+    #[test]
+    fn r63_closed_reservation_cannot_issue_prepared_copy() {
+        let mut context = RuntimeContextV1::open(MockBackend::default()).unwrap();
+        let device = context.devices()[0].id();
+        let stream = context.create_stream(device).unwrap();
+        let source = context
+            .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 8)
+            .unwrap();
+        let destination = context
+            .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 8)
+            .unwrap();
+        let action = context
+            .prepare_graph_copy_v1(
+                stream,
+                RuntimeMemoryRegionV1 {
+                    allocation: source,
+                    access: RuntimeAccessV1::Read,
+                    byte_offset: 0,
+                    byte_len: 64,
+                },
+                RuntimeMemoryRegionV1 {
+                    allocation: destination,
+                    access: RuntimeAccessV1::Write,
+                    byte_offset: 0,
+                    byte_len: 64,
+                },
+            )
+            .unwrap();
+        let token = context.reserve_graph_v1(1).unwrap();
+        context.close_graph_issue_v1(token).unwrap();
+        assert!(matches!(
+            context.submit_graph_action_v1(token, action),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::ContextReserved
+            ))
+        ));
+        assert!(context.submissions.is_empty());
+        context.release_graph_v1(token).unwrap();
+        assert!(context.cleanup().is_complete());
     }
 
     impl MockBackend {

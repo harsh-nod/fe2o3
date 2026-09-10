@@ -27,6 +27,7 @@ pub use authorized_execution::{
     execute_authorized_gfx942_runtime_dispatch_v1,
 };
 pub use context::*;
+pub use fe2o3_completion as completion;
 pub use fe2o3_host_api as contract;
 pub use fe2o3_profiler_protocol as profiler;
 pub use kfd_backend::*;

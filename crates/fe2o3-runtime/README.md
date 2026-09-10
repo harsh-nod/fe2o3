@@ -129,6 +129,12 @@ returns the original operation on timeout, preserving its eventual result and
 runtime custody. Neither control phases nor timeout establish GPU completion or
 retry authority. See `docs/runtime-async-control-v1.md` for the exact boundary.
 
+`submit_graph` binds the existing completion graph to frozen typed launches,
+same-device copies and host joins. Its bounded driver reserves the entire
+context, gates dependent issue on successful retirement, and preserves custody
+across cancellation and observer Drop. This is not compiler-authenticated DAG
+admission or distributed execution. See `docs/runtime-async-graph-v1.md`.
+
 Progress mode additionally offers `event_future_with_progress`, which admits one
 event and its exact source stream in a single transaction. Event polling runs
 before stream flushing in each engine tick, so completion of one persistent SDMA

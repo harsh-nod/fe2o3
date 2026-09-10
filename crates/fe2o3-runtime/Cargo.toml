@@ -29,6 +29,7 @@ path = "src/bin/fe2o3-runtime-kfd-worker-v5-qualification.rs"
 required-features = ["hardware-qualification"]
 
 [dependencies]
+fe2o3-completion.workspace = true
 fe2o3-amdhsa-loader.workspace = true
 fe2o3-aql.workspace = true
 fe2o3-hsaco.workspace = true

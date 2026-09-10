@@ -68,6 +68,40 @@ fn fixture() -> CompletionGraphV1 {
 }
 
 #[test]
+fn ready_notifications_are_unique_and_dependency_ordered() {
+    let mut authority = chain_fixture(256).into_completion_authority();
+    for n in 1..=256 {
+        assert_eq!(authority.pop_ready_notification(), Some(node(n)));
+        assert_eq!(authority.pop_ready_notification(), None);
+        assert_eq!(
+            authority.state(node(n)).unwrap(),
+            CompletionNodeStateV1::Ready
+        );
+        // SAFETY: model-only fixture supplies the stipulated success premise.
+        unsafe {
+            authority.mark_succeeded(node(n)).unwrap();
+        }
+    }
+    assert!(authority.is_terminal());
+    assert_eq!(authority.pop_ready_notification(), None);
+}
+
+#[test]
+fn readiness_notifications_can_be_stale_but_never_reopen_cancelled_nodes() {
+    let mut authority = chain_fixture(3).into_completion_authority();
+    let reason = CancellationCodeV1::new(1).unwrap();
+    authority.request_cancel(node(1), reason).unwrap();
+    // SAFETY: fixture has never submitted any work.
+    unsafe {
+        authority.mark_cancelled(node(1)).unwrap();
+    }
+    assert_eq!(authority.pop_ready_notification(), Some(node(1)));
+    assert!(authority.state(node(1)).unwrap().is_terminal());
+    assert_eq!(authority.pop_ready_notification(), None);
+    assert!(authority.is_terminal());
+}
+
+#[test]
 fn validates_exact_stream_and_event_dependency_graph() {
     let graph = fixture();
     assert_eq!(graph.device(), DeviceIdentityV1::from_bytes(bytes(1)));

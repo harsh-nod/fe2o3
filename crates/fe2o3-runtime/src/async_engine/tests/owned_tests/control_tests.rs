@@ -9,12 +9,26 @@ use std::marker::PhantomPinned;
 impl crate::RuntimeAsyncCopyBackendV1 for MockBackend {
     fn copy_async_v1(
         &mut self,
-        _: u64,
-        _: BackendMemoryRegionV1,
-        _: BackendMemoryRegionV1,
-        _: &[u64],
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+        dependencies: &[u64],
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        if let Some(error) = self.state.lock().unwrap().submit_failures.pop_front() {
+            return Err(error);
+        }
         let id = self.next();
+        self.state.lock().unwrap().copy_issues.push((
+            stream,
+            source,
+            destination,
+            dependencies.to_vec(),
+        ));
+        self.state
+            .lock()
+            .unwrap()
+            .issues
+            .push((stream, id, Vec::new(), Vec::new()));
         self.state
             .lock()
             .unwrap()
@@ -372,6 +386,7 @@ impl Harness {
         let (sender, receiver) = sync_channel(4);
         let handle = RuntimeAsyncProgressHandleV1 {
             observer: RuntimeAsyncEngineHandleV1 {
+                graph_slot: Arc::new(AtomicBool::new(false)),
                 sender,
                 worker_thread: Arc::new(OnceLock::new()),
                 quarantine_command_panics: true,

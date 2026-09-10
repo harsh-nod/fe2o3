@@ -27,6 +27,9 @@ mod operation;
 pub use operation::*;
 mod operation_control;
 pub use operation_control::*;
+#[allow(unsafe_code)] // Authenticates exact runtime observations for CompletionAuthorityV1.
+mod graph;
+pub use graph::*;
 
 /// Hard upper bound for commands waiting to enter one async engine.
 pub const MAX_RUNTIME_ASYNC_COMMANDS_V1: usize = 65_536;
@@ -322,6 +325,7 @@ pub enum RuntimeAsyncEngineCallErrorV1 {
     EngineStopped,
     ReentrantCall,
     CommandPanicked,
+    GraphCapacity,
 }
 
 impl fmt::Display for RuntimeAsyncEngineCallErrorV1 {
@@ -731,6 +735,7 @@ type RuntimeContextCommandV1<B> = Box<dyn FnOnce(&mut RuntimeContextV1<B>) + Sen
 enum RuntimeAsyncEngineCommandV1<B: RuntimeBackendV1> {
     Context(RuntimeContextCommandV1<B>),
     Operation(Box<dyn operation::EngineOperationV1<B>>),
+    Graph(Box<dyn graph::EngineGraphV1<B>>),
     Register {
         event: RuntimeEventIdV1,
         cell: Arc<RuntimeAsyncFutureCellV1<B::Error>>,
@@ -756,6 +761,7 @@ pub struct RuntimeAsyncEngineHandleV1<B: RuntimeBackendV1 + 'static> {
     sender: SyncSender<RuntimeAsyncEngineCommandV1<B>>,
     worker_thread: Arc<OnceLock<thread::ThreadId>>,
     quarantine_command_panics: bool,
+    graph_slot: Arc<AtomicBool>,
 }
 
 impl<B: RuntimeBackendV1 + 'static> Clone for RuntimeAsyncEngineHandleV1<B> {
@@ -764,6 +770,7 @@ impl<B: RuntimeBackendV1 + 'static> Clone for RuntimeAsyncEngineHandleV1<B> {
             sender: self.sender.clone(),
             worker_thread: Arc::clone(&self.worker_thread),
             quarantine_command_panics: self.quarantine_command_panics,
+            graph_slot: Arc::clone(&self.graph_slot),
         }
     }
 }
@@ -1048,6 +1055,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
         };
         drop(context_slot);
         let handle = RuntimeAsyncEngineHandleV1 {
+            graph_slot: Arc::new(AtomicBool::new(false)),
             sender: sender.clone(),
             worker_thread,
             quarantine_command_panics: false,
@@ -1134,6 +1142,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
         };
         drop(context_slot);
         let observer = RuntimeAsyncEngineHandleV1 {
+            graph_slot: Arc::new(AtomicBool::new(false)),
             sender: sender.clone(),
             worker_thread,
             quarantine_command_panics: false,
@@ -1209,6 +1218,7 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
 ) {
     let mut waiters = RuntimeAsyncWaiterRegistryV1::new();
     let mut operations = operation::OperationRegistryV1::new();
+    let mut graph = None;
     let mut progress_registry = progress
         .as_ref()
         .map(|_| RuntimeAsyncProgressRegistryV1::new());
@@ -1222,6 +1232,7 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
                     context,
                     &mut waiters.entries,
                     &mut operations,
+                    &mut graph,
                     progress_registry.as_mut(),
                     command,
                     config,
@@ -1237,6 +1248,7 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
                                 context,
                                 &mut waiters.entries,
                                 &mut operations,
+                                &mut graph,
                                 progress_registry.as_mut(),
                                 command,
                                 config,
@@ -1255,6 +1267,22 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => stopped = true,
         }
         if !stopped && let Some(mode) = progress.as_ref() {
+            if let Some(active) = graph.as_mut() {
+                match catch_unwind(AssertUnwindSafe(|| {
+                    active.advance(context, config.polls_per_tick, mode.config.flushes_per_tick)
+                })) {
+                    Ok(true) => graph = None,
+                    Ok(false) => {}
+                    Err(payload) => {
+                        core::mem::forget(payload);
+                        context.quarantine_after_async_command_panic_v1();
+                    }
+                }
+            }
+            if context.is_terminal() {
+                stopped = true;
+                continue;
+            }
             operation::advance_operations_v1(
                 context,
                 &mut operations,
@@ -1287,6 +1315,14 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
             );
         }
     }
+    if let Some(mut graph) = graph {
+        if context.is_terminal() {
+            // Dropping an observer/driver cannot discharge ambiguous custody.
+        } else if let Err(payload) = catch_unwind(AssertUnwindSafe(|| graph.stop(context))) {
+            core::mem::forget(payload);
+            context.quarantine_after_async_command_panic_v1();
+        }
+    }
     if let Some(registry) = progress_registry.as_mut() {
         for (_, cell) in core::mem::take(&mut registry.entries) {
             cell.stop();
@@ -1302,12 +1338,35 @@ fn handle_command_v1<B: RuntimeBackendV1 + 'static>(
     context: &mut RuntimeContextV1<B>,
     waiters: &mut BTreeMap<RuntimeEventIdV1, Arc<RuntimeAsyncFutureCellV1<B::Error>>>,
     operations: &mut operation::OperationRegistryV1<B>,
+    graph: &mut Option<Box<dyn graph::EngineGraphV1<B>>>,
     progress: Option<&mut RuntimeAsyncProgressRegistryV1<B::Error>>,
     command: RuntimeAsyncEngineCommandV1<B>,
     config: RuntimeAsyncEngineConfigV1,
     progress_config: Option<RuntimeAsyncProgressConfigV1>,
 ) -> bool {
     match command {
+        RuntimeAsyncEngineCommandV1::Graph(mut incoming) => {
+            if progress_config.is_none()
+                || graph.is_some()
+                || operations.len() != 0
+                || !waiters.is_empty()
+                || progress
+                    .as_ref()
+                    .is_some_and(|registry| !registry.entries.is_empty())
+            {
+                incoming.reject(RuntimeGraphErrorV1::Busy);
+            } else {
+                match catch_unwind(AssertUnwindSafe(|| incoming.admit(context))) {
+                    Ok(true) => *graph = Some(incoming),
+                    Ok(false) => {}
+                    Err(payload) => {
+                        core::mem::forget(payload);
+                        context.quarantine_after_async_command_panic_v1();
+                    }
+                }
+            }
+            context.is_terminal()
+        }
         RuntimeAsyncEngineCommandV1::Operation(mut operation) => {
             if progress_config.is_none() {
                 operation.reject(RuntimeAsyncEngineCallErrorV1::EngineStopped);
@@ -1736,6 +1795,10 @@ mod tests {
         progress_steps: Vec<MockProgressStepV1>,
         release_calls: usize,
         panic_on_poll: bool,
+        issues: Vec<(u64, u64, Vec<u8>, Vec<crate::BackendBindingV1>)>,
+        copy_issues: Vec<(u64, BackendMemoryRegionV1, BackendMemoryRegionV1, Vec<u64>)>,
+        submit_failures: VecDeque<RuntimeBackendFailureV1<MockError>>,
+        release_failures: VecDeque<RuntimeBackendFailureV1<MockError>>,
     }
 
     struct MockBackend {
@@ -1848,9 +1911,18 @@ mod tests {
 
         fn submit_v1(
             &mut self,
-            _launch: BackendLaunchV1<'_>,
+            launch: BackendLaunchV1<'_>,
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            if let Some(error) = self.state.lock().unwrap().submit_failures.pop_front() {
+                return Err(error);
+            }
             let handle = self.next();
+            self.state.lock().unwrap().issues.push((
+                launch.stream,
+                handle,
+                launch.explicit_kernarg.to_vec(),
+                launch.bindings.to_vec(),
+            ));
             self.state
                 .lock()
                 .unwrap()
@@ -1906,6 +1978,9 @@ mod tests {
         ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
             let mut state = self.state.lock().unwrap();
             state.release_calls += 1;
+            if let Some(error) = state.release_failures.pop_front() {
+                return Err(error);
+            }
             state.statuses.remove(&submission);
             Ok(())
         }

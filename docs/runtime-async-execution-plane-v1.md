@@ -127,6 +127,9 @@ single-device musl copy canaries with independent integrity and cleanup checks.
   observation with an executor-supplied timer; it does not supply a timer service.
 - A2: admitted graph driver, exclusive resource reservation or pins, exact data
   versions, graph epochs, joins, residency and repeated overlap qualification.
+  [R63](runtime-async-graph-v1.md) now provides a bounded runtime-bound driver,
+  frozen arguments, whole-context reservation and host joins. Compiler admission,
+  data versions, epochs, residency and measured overlap remain outstanding.
 - A3: integrated group placement/sharding/replicas, all-admitted-GPU qualification,
   partial failure and group quiescence. Existing child backends alone are not it.
 - A4-A5: authenticated two-host control, membership/coordinator epochs, exact

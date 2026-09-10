@@ -360,6 +360,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
             return Err(error);
         }
         let observer = RuntimeAsyncEngineHandleV1 {
+            graph_slot: Arc::new(AtomicBool::new(false)),
             sender: sender.clone(),
             worker_thread,
             quarantine_command_panics: true,
