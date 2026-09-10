@@ -684,8 +684,16 @@
     "block": 4
   },
   "crates/fe2o3-kfd/src/engineering_gfx950.rs": {
+    "block": 4,
+    "function": 4
+  },
+  "crates/fe2o3-kfd/src/engineering_gfx950_peer.rs": {
     "block": 1,
     "function": 2
+  },
+  "crates/fe2o3-kfd/src/engineering_gfx950_peer_performance.rs": {
+    "block": 1,
+    "function": 1
   },
   "crates/fe2o3-kfd/src/linux.rs": {
     "block": 20
