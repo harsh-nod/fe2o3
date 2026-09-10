@@ -12,11 +12,70 @@ that any #272 work package or milestone is implemented. A milestone is complete
 only when its linked issue dependencies and its end-to-end acceptance tests are
 complete on the one production route.
 
-## Integration checkpoint: 2026-09-09
+## Integration checkpoint: 2026-09-10
 
 The capability migration remains incomplete: 0 of 47 tutorial fixtures have
 qualified through the new production path. No milestone is completed by the
 component tests below.
+
+A clean source-export sweep of `75a5778ed` on mi350 attempted all 47 exact
+manifest selections: 10 gfx942 and 37 gfx950. All exports still rejected before
+producing a Bundle V8; no hardware command or qualification adapter ran. The
+first observed boundaries are now:
+
+| Source boundary | Fixtures |
+| --- | ---: |
+| Other core helpers lack reviewed source-safety authentication | 29 |
+| Reachable panic or precondition path | 7 |
+| Mutable-slice descriptor admission | 3 |
+| Closure environment count exceeds the bounded profile | 2 |
+| Numerical-policy terminal lacks production expansion | 2 |
+| Dynamic launch/output coverage | 1 |
+| Retained capability borrow requires private-slot lowering | 1 |
+| RustCall helper is unsupported by checked call expansion | 1 |
+| Dereferenced memory access lacks ranked index projection | 1 |
+
+The 29 helper failures comprise `Result::from_residual` (12),
+`usize::checked_sub` (8), `usize::wrapping_sub` (4), `usize::checked_add` (3),
+`Option`'s `Try::branch` (1), and `PartialEq::ne` (1). These require exact
+authentication and subsequent semantic lowering, not a blanket core-library
+exemption. This table reports first failures, not a complete inventory of
+remaining obligations. Nine fixtures reach descriptor, semantic import, call
+expansion, ranked analysis, or KIR lowering after collection; none qualifies.
+
+Device closure transport now retains exact caller, operand, callee, MIR, ABI,
+monomorphization, and target custody. The admission identity is carried in the
+rustc identity transcript. Borrowed helper environments and zero-sized constant
+closures require admitted caller custody; helper status alone grants none.
+Large environments share the existing aggregate capture/byte maxima; the
+eight-environment limit remains. Host references, escapes, changed call edges,
+dropping captures, and exhausted budgets still reject.
+
+Closed MIR checks now authenticate the bounded core checked-multiply and
+`Option::unwrap_or`/`and_then` profiles, including dead blocks and cleanup.
+Authenticated generated `FnOnce` adapters remain in recursive collection;
+shared receiver reborrows and RustCall source tuples are represented explicitly.
+Canonical local ordering is preserved. Wave64 consequently reaches checked
+call expansion, which still rejects its RustCall helper. Fill passes its earlier
+invocation receiver boundary but retains a different capability borrow.
+
+Named constant `for` ranges now use bounded CTFE expansion with primitive
+integer typing, a shared nested-unroll budget, and rejection of executable
+expressions embedded in endpoint paths. Mutation tests cover identities,
+operands, effects, cleanup, receiver types, source roles, and resource limits.
+On mi350, 1,149 selected library tests and 11 integration tests passed. One
+integration test checks constant-only closure profiling, not whole-kernel
+semantic admission or GPU execution. Formatting passes for changed packages;
+unrelated existing workspace formatting differences remain untouched.
+
+The diagnostic report retains exact candidate/binary identities, commands,
+content-addressed logs, and 47 successful scratch-cleanup observations. Its
+SHA-256 is `555564e4c33c9ec4667a42b138e7019435b5ff3e866198546e5c556a4682584e`.
+Input-manifest hashes and qualification statuses are unchanged. Final machine
+refinement, required negative cases, and protected GPU/CPU comparison remain
+mandatory and incomplete.
+
+### Previous source baseline: 2026-09-09
 
 A source-export sweep of committed revision `742c20641` on mi350 attempted
 all 47 exact manifest selections after repairing ten standalone lockfiles and
