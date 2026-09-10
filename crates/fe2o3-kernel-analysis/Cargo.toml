@@ -47,5 +47,115 @@ test = false
 bench = false
 required-features = ["authenticated-machine-effect"]
 
+[[test]]
+name = "authenticated_machine_effect"
+path = "tests/authenticated_machine_effect.rs"
+required-features = ["authenticated-machine-effect"]
+
+[[test]]
+name = "gfx942_scalar_f32_recurrence"
+path = "tests/gfx942_scalar_f32_recurrence.rs"
+required-features = ["authenticated-machine-effect"]
+
+[[test]]
+name = "physical_machine_effect"
+path = "tests/physical_machine_effect.rs"
+required-features = ["authenticated-machine-effect"]
+
+[[test]]
+name = "pliron_atomic_legality"
+path = "tests/pliron_atomic_legality.rs"
+required-features = ["pliron-analysis"]
+
+[[test]]
+name = "pliron_barrier"
+path = "tests/pliron_barrier.rs"
+required-features = ["pliron-analysis"]
+
+[[test]]
+name = "pliron_collective_semantics"
+path = "tests/pliron_collective_semantics.rs"
+required-features = ["pliron-analysis"]
+
+[[test]]
+name = "pliron_effect_refinement"
+path = "tests/pliron_effect_refinement.rs"
+required-features = ["pliron-analysis"]
+
+[[test]]
+name = "pliron_hierarchical_ownership"
+path = "tests/pliron_hierarchical_ownership.rs"
+required-features = ["pliron-analysis"]
+
+[[test]]
+name = "pliron_ir_identity"
+path = "tests/pliron_ir_identity.rs"
+required-features = ["pliron-analysis"]
+
+[[test]]
+name = "pliron_launch_contract"
+path = "tests/pliron_launch_contract.rs"
+required-features = ["pliron-analysis"]
+
+[[test]]
+name = "pliron_lit"
+path = "tests/pliron_lit.rs"
+required-features = ["pliron-analysis"]
+
+[[test]]
+name = "pliron_pipeline_protocol"
+path = "tests/pliron_pipeline_protocol.rs"
+required-features = ["pliron-analysis"]
+
+[[test]]
+name = "pliron_presburger"
+path = "tests/pliron_presburger.rs"
+required-features = ["pliron-analysis"]
+
+[[test]]
+name = "pliron_progress"
+path = "tests/pliron_progress.rs"
+required-features = ["pliron-analysis"]
+
+[[test]]
+name = "pliron_protocol_lit"
+path = "tests/pliron_protocol_lit.rs"
+required-features = ["pliron-analysis"]
+
+[[test]]
+name = "pliron_provenance_alias"
+path = "tests/pliron_provenance_alias.rs"
+required-features = ["pliron-analysis"]
+
+[[test]]
+name = "pliron_race"
+path = "tests/pliron_race.rs"
+required-features = ["pliron-analysis"]
+
+[[test]]
+name = "pliron_ranked_bounds"
+path = "tests/pliron_ranked_bounds.rs"
+required-features = ["pliron-analysis"]
+
+[[test]]
+name = "pliron_semantic_refinement"
+path = "tests/pliron_semantic_refinement.rs"
+required-features = ["pliron-analysis"]
+
+[[test]]
+name = "pliron_sparse_index"
+path = "tests/pliron_sparse_index.rs"
+required-features = ["pliron-analysis"]
+
+[[test]]
+name = "pliron_tensor_layout"
+path = "tests/pliron_tensor_layout.rs"
+required-features = ["pliron-analysis"]
+
+[[test]]
+name = "pliron_workgroup_memory"
+path = "tests/pliron_workgroup_memory.rs"
+required-features = ["pliron-analysis"]
+
 [lints.rust]
 unsafe_code = "deny"
