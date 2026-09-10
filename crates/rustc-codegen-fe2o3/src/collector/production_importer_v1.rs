@@ -59,7 +59,7 @@ use crate::rustc_semantic_plan_v1::{
 };
 use crate::trusted_device_items::{self, TrustedDeviceItem};
 
-const IDENTITY_INVENTORY_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-identity-inventory/v1";
+const IDENTITY_INVENTORY_DOMAIN_V2: &[u8] = b"fe2o3/semantic-mir/rustc-identity-inventory/v2";
 #[cfg(test)]
 const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V1: &[u8] =
     b"fe2o3/semantic-mir/production-compiler-intrinsic/v1";
@@ -744,30 +744,51 @@ const fn semantic_function_role_v1(role: CollectedFunctionRole) -> SemanticFunct
 fn semantic_function_export_v1(
     function: &RetainedSemanticFunctionProducerV1<'_>,
 ) -> Result<ProductionSemanticFunctionExportV1, ProductionSemanticImportErrorV1> {
-    match function.role {
+    semantic_function_export_metadata_v1(
+        function.role,
+        function.export_name.as_deref(),
+        function.kernel_binding,
+        function.generated_host_contract_identity,
+        function.frontend_contract.as_ref(),
+    )
+}
+
+fn semantic_function_export_metadata_v1(
+    role: CollectedFunctionRole,
+    export_name: Option<&str>,
+    kernel_binding: Option<reserved_fe2o3_symbols::KernelBindingIdV1>,
+    generated_host_contract_identity: Option<reserved_fe2o3_symbols::GeneratedHostContractIdV3>,
+    frontend_contract: Option<&super::AuthenticatedKernelFrontendContractV1>,
+) -> Result<ProductionSemanticFunctionExportV1, ProductionSemanticImportErrorV1> {
+    match role {
         CollectedFunctionRole::InternalHelper
-            if function.export_name.is_none()
-                && function.kernel_binding.is_none()
-                && function.frontend_contract.is_none() =>
+            if export_name.is_none()
+                && kernel_binding.is_none()
+                && generated_host_contract_identity.is_none()
+                && frontend_contract.is_none() =>
         {
             Ok(ProductionSemanticFunctionExportV1::None)
         }
         CollectedFunctionRole::DeviceFfiExport
-            if function.kernel_binding.is_none() && function.frontend_contract.is_none() =>
+            if kernel_binding.is_none()
+                && generated_host_contract_identity.is_none()
+                && frontend_contract.is_none() =>
         {
             Ok(ProductionSemanticFunctionExportV1::DeviceFfi(
-                semantic_link_symbol_v1(function.export_name.as_deref())?,
+                semantic_link_symbol_v1(export_name)?,
             ))
         }
         CollectedFunctionRole::KernelEntry => {
-            let binding = function
-                .kernel_binding
+            let binding = kernel_binding
                 .ok_or_else(|| body_owner_table_mismatch_v1("kernel binding identity"))?;
             Ok(ProductionSemanticFunctionExportV1::Kernel(
                 SemanticKernelEntryV1::new(
-                    semantic_link_symbol_v1(function.export_name.as_deref())?,
+                    semantic_link_symbol_v1(export_name)?,
                     SemanticKernelBindingIdentityV1::from_sha256(binding.as_bytes()),
-                    semantic_kernel_source_contract_v1(function.frontend_contract.as_ref())?,
+                    semantic_kernel_source_contract_v1(
+                        frontend_contract,
+                        generated_host_contract_identity,
+                    )?,
                 ),
             ))
         }
@@ -791,9 +812,31 @@ fn semantic_link_symbol_v1(
 
 fn semantic_kernel_source_contract_v1(
     authenticated: Option<&super::AuthenticatedKernelFrontendContractV1>,
+    generated_host_contract_identity: Option<reserved_fe2o3_symbols::GeneratedHostContractIdV3>,
 ) -> Result<SemanticKernelSourceContractV1, ProductionSemanticImportErrorV1> {
+    let default_launch = if generated_host_contract_identity.is_some()
+        && authenticated
+            .and_then(|value| value.contract().launch())
+            .is_none()
+    {
+        // Typed registration authenticates the implicit launch. Use the same
+        // rule as descriptor reconstruction before exposing semantic geometry.
+        let launch = super::general_typed_launch_v3(authenticated, "semantic typed launch")
+            .map_err(|_| body_owner_table_mismatch_v1("authenticated typed default launch"))?;
+        let fe2o3_artifacts::BlockSize::Exact(block) = launch.block_size() else {
+            return Err(body_owner_table_mismatch_v1("exact typed default launch"));
+        };
+        let dimensions = SemanticWorkgroupDimensionsV1::new([block.x(), block.y(), block.z()])
+            .map_err(ProductionSemanticImportErrorV1::SemanticSchema)?;
+        Some(
+            SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None)
+                .map_err(ProductionSemanticImportErrorV1::SemanticSchema)?,
+        )
+    } else {
+        None
+    };
     let Some(authenticated) = authenticated else {
-        return SemanticKernelSourceContractV1::new(None, None, None)
+        return SemanticKernelSourceContractV1::new(default_launch, None, None)
             .map_err(ProductionSemanticImportErrorV1::SemanticSchema);
     };
     let frontend = authenticated.contract();
@@ -813,7 +856,8 @@ fn semantic_kernel_source_contract_v1(
             )
         })
         .transpose()
-        .map_err(ProductionSemanticImportErrorV1::SemanticSchema)?;
+        .map_err(ProductionSemanticImportErrorV1::SemanticSchema)?
+        .or(default_launch);
     let resources = authenticated
         .resource_contract()
         .map(|resources| {
@@ -4154,6 +4198,7 @@ fn build_identity_inventory_v1<'tcx>(
             )
             .then(|| function.export_name.clone()),
             kernel_binding: function.kernel_binding,
+            generated_host_contract_identity: function.generated_host_contract_identity,
             frontend_contract: function.frontend_contract.clone(),
         });
     }
@@ -4208,7 +4253,7 @@ fn identity_inventory_identity_and_transcript_v1(
     roots: &[SemanticFunctionIdV1],
 ) -> ([u8; 32], Box<[u8]>) {
     let mut digest =
-        SemanticIdentityDigestV1::new_with_canonical_transcript(IDENTITY_INVENTORY_DOMAIN_V1);
+        SemanticIdentityDigestV1::new_with_canonical_transcript(IDENTITY_INVENTORY_DOMAIN_V2);
     digest.field(target.identity().as_bytes());
     for function in functions {
         digest.field(function.identities.function().as_bytes());
@@ -4231,6 +4276,10 @@ fn identity_inventory_identity_and_transcript_v1(
             }
             None => digest.field(&[0]),
         }
+        identity_inventory_generated_host_contract_v1(
+            &mut digest,
+            function.generated_host_contract_identity,
+        );
         match &function.frontend_contract {
             Some(contract) => {
                 digest.field(&[1]);
@@ -4251,6 +4300,19 @@ fn identity_inventory_identity_and_transcript_v1(
         digest.field(&root.index().to_le_bytes());
     }
     digest.finish_with_canonical_transcript()
+}
+
+fn identity_inventory_generated_host_contract_v1(
+    digest: &mut SemanticIdentityDigestV1,
+    identity: Option<reserved_fe2o3_symbols::GeneratedHostContractIdV3>,
+) {
+    match identity {
+        Some(identity) => {
+            digest.field(&[1]);
+            digest.field(&identity.as_bytes());
+        }
+        None => digest.field(&[0]),
+    }
 }
 
 const fn function_role_tag_v1(role: CollectedFunctionRole) -> u8 {
@@ -4284,6 +4346,10 @@ fn exact_ordered_axes_match<T: PartialEq>(
 ) -> bool {
     expected.into_iter().eq(observed)
 }
+
+#[cfg(test)]
+#[path = "production_importer_typed_default_v1_tests.rs"]
+mod typed_default_tests;
 
 #[cfg(test)]
 mod tests {

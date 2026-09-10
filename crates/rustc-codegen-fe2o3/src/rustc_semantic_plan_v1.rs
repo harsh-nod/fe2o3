@@ -105,6 +105,8 @@ pub(crate) struct RetainedSemanticFunctionProducerV1<'tcx> {
     pub(crate) role: CollectedFunctionRole,
     pub(crate) export_name: Option<String>,
     pub(crate) kernel_binding: Option<reserved_fe2o3_symbols::KernelBindingIdV1>,
+    pub(crate) generated_host_contract_identity:
+        Option<reserved_fe2o3_symbols::GeneratedHostContractIdV3>,
     pub(crate) frontend_contract: Option<crate::collector::AuthenticatedKernelFrontendContractV1>,
 }
 
