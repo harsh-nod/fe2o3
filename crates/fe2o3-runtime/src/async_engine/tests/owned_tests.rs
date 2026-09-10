@@ -11,6 +11,7 @@ mod snapshot_tests;
 #[derive(Default)]
 struct OwnerTrace {
     calls: Vec<(&'static str, ThreadId)>,
+    polled_submissions: Vec<u64>,
     finalizer_fails: bool,
     finalizer_panics: bool,
     cleanup_fails: bool,
@@ -73,7 +74,11 @@ impl RuntimeBackendV1 for ThreadBoundBackend {
         submission: u64,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
         self.record("poll_v1");
-        let panics = self.trace.lock().unwrap().poll_panics;
+        let panics = {
+            let mut trace = self.trace.lock().unwrap();
+            trace.polled_submissions.push(submission);
+            trace.poll_panics
+        };
         assert!(!panics, "poll adapter panic");
         self.inner.poll_v1(submission)
     }

@@ -350,6 +350,23 @@ pub struct GeneratedKfdSliceBinding<'allocation> {
     writeback: Option<GeneratedKfdWriteback<'allocation>>,
 }
 
+impl GeneratedKfdSliceBinding<'static> {
+    pub(crate) fn from_owned_buffer(
+        argument_index: usize,
+        input: GeneratedArgumentInputV1<'static>,
+        buffer: Option<Gfx942RuntimeDispatchBufferV1>,
+        required_alignment: u64,
+    ) -> Self {
+        Self {
+            argument_index,
+            input,
+            buffer,
+            required_alignment,
+            writeback: None,
+        }
+    }
+}
+
 /// Complete generated scalar/slice binding before deterministic ABI packing.
 #[doc(hidden)]
 pub struct GeneratedKfdArgumentBinding<'allocation> {
@@ -515,6 +532,27 @@ impl<'allocation> GeneratedKfdPackedArguments<'allocation> {
         &self.packing_observation
     }
 
+    pub(crate) fn into_owned_parts(
+        self,
+    ) -> Result<GeneratedKfdOwnedPackedParts, GeneratedKfdArgumentError> {
+        if self
+            .completion
+            .buffers
+            .iter()
+            .any(|buffer| buffer.writeback.is_some())
+        {
+            return Err(GeneratedKfdArgumentError::RetainedWriteback);
+        }
+        Ok(GeneratedKfdOwnedPackedParts {
+            kernel_id: self.kernel_id,
+            alignment: self.alignment,
+            explicit_kernarg: self.explicit_kernarg,
+            buffers: self.buffers,
+            pointer_fixups: self.pointer_fixups,
+            packing_observation: self.packing_observation,
+        })
+    }
+
     pub fn into_runtime_inputs(
         self,
         geometry: AqlDispatchGeometryV1,
@@ -536,6 +574,15 @@ impl<'allocation> GeneratedKfdPackedArguments<'allocation> {
             self.completion,
         )
     }
+}
+
+pub(crate) struct GeneratedKfdOwnedPackedParts {
+    pub(crate) kernel_id: KernelId,
+    pub(crate) alignment: u32,
+    pub(crate) explicit_kernarg: Vec<u8>,
+    pub(crate) buffers: Vec<Gfx942RuntimeDispatchBufferV1>,
+    pub(crate) pointer_fixups: Vec<Gfx942KfdDispatchPointerFixupV1>,
+    pub(crate) packing_observation: GeneratedKfdPackingObservationV1,
 }
 
 /// Address-free input identity retained from the compiler-generated packing plan.
@@ -826,6 +873,7 @@ pub enum GeneratedKfdArgumentError {
     WritebackWithoutBuffer { argument_index: usize },
     PointerOffset { argument_index: usize, offset: u64 },
     AllocationFailure,
+    RetainedWriteback,
 }
 
 impl fmt::Display for GeneratedKfdArgumentError {
@@ -855,6 +903,8 @@ impl fmt::Display for GeneratedKfdArgumentError {
             Self::AllocationFailure => {
                 formatter.write_str("generated KFD observation allocation failed")
             }
+            Self::RetainedWriteback => formatter
+                .write_str("borrowed KFD output cannot be extracted as owned runtime storage"),
         }
     }
 }

@@ -12,12 +12,7 @@ pub fn transform(factor: f32, source: &[f32], destination: DisjointSlice<f32>) {
     typed,
     namespace = "8c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
 )]
-pub fn combine(
-    left: &[f32],
-    right: &[f32],
-    offset: f32,
-    destination: DisjointSlice<f32>,
-) {
+pub fn combine(left: &[f32], right: &[f32], offset: f32, destination: DisjointSlice<f32>) {
     let _ = (left, right, offset, destination);
 }
 
@@ -34,14 +29,7 @@ pub fn multi_argument_kernel(
     extent_y: u32,
     extent_z: u32,
 ) {
-    let _ = (
-        first,
-        second,
-        destination,
-        extent_x,
-        extent_y,
-        extent_z,
-    );
+    let _ = (first, second, destination, extent_x, extent_y, extent_z);
 }
 
 #[kernel(
@@ -64,6 +52,24 @@ pub fn assert_generated_adapters() {
         Arguments: gpu_host::__generated::CompilerGeneratedKfdArguments<'allocation, K>,
     {
     }
+
+    fn assert_owned_adapter<K, Arguments>()
+    where
+        K: gpu_host::__generated::CompilerGeneratedKernelExpectationV1,
+        Arguments: gpu_host::__generated::CompilerGeneratedRuntimeArguments<K> + Send + 'static,
+    {
+    }
+
+    assert_owned_adapter::<transform_gpu::Marker, transform_gpu::RuntimeArguments>();
+    assert_owned_adapter::<combine_gpu::Marker, combine_gpu::RuntimeArguments>();
+    assert_owned_adapter::<
+        multi_argument_kernel_gpu::Marker,
+        multi_argument_kernel_gpu::RuntimeArguments,
+    >();
+    assert_owned_adapter::<
+        mapped_output_kernel_gpu::Marker,
+        mapped_output_kernel_gpu::RuntimeArguments,
+    >();
 
     assert_kfd_adapter::<transform_gpu::Marker, transform_gpu::Arguments<'static>>();
     assert_kfd_adapter::<combine_gpu::Marker, combine_gpu::Arguments<'static>>();
@@ -89,6 +95,24 @@ pub fn assert_generated_adapters() {
             gpu_host::__generated::GeneratedKfdReadWriteSlice<'static, u16>,
         >,
     >();
+}
+
+pub fn owned_generated_arguments() -> transform_gpu::RuntimeArguments {
+    let source = gpu_host::GeneratedRuntimeReadSlice::new(vec![1_f32, 2.0].into_boxed_slice());
+    let (destination, observer) =
+        gpu_host::GeneratedRuntimeReadWriteSlice::new(vec![0_f32; 2].into_boxed_slice());
+    drop(observer);
+    transform_gpu::RuntimeArguments::new(2.0, source, destination)
+}
+
+pub fn prepare_owned_generated_arguments(
+    executable: &gpu_host::AuthenticatedWorkerV3ExecutableV1<transform_gpu::Marker>,
+) -> Result<gpu_host::GeneratedRuntimePackedArgumentsV1, gpu_host::GeneratedRuntimeArgumentErrorV1>
+{
+    executable.prepare_generated_runtime_arguments(
+        owned_generated_arguments(),
+        gpu_host::GeneratedRuntimeArgumentLimitsV1::new(4096, 4096, 3),
+    )
 }
 
 pub fn mapped_kfd_arguments<'allocation>(

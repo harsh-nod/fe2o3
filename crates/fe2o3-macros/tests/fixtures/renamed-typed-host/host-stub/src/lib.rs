@@ -264,14 +264,81 @@ pub mod __generated {
     pub unsafe trait CompilerGeneratedKfdArguments<
         'allocation,
         K: CompilerGeneratedKernelExpectationV1,
-    > {
-        fn generated_argument_layout(
-        ) -> Result<CompilerGeneratedArgumentLayoutV1, GeneratedArgumentLayoutError>;
+    >
+    {
+        fn generated_argument_layout()
+        -> Result<CompilerGeneratedArgumentLayoutV1, GeneratedArgumentLayoutError>;
 
         fn bind_kfd_arguments(
             self,
             plan: &GeneratedArgumentPackingPlanV1,
         ) -> Result<GeneratedKfdArgumentBinding<'allocation>, GeneratedKfdArgumentError>;
+    }
+
+    pub struct GeneratedRuntimeArgumentBudgetV1;
+    pub struct GeneratedRuntimeSliceBindingV1;
+    pub struct GeneratedRuntimeArgumentBindingV1;
+    pub enum GeneratedRuntimeArgumentErrorV1 {
+        Pack(GeneratedArgumentPackError),
+    }
+
+    impl GeneratedRuntimeArgumentBindingV1 {
+        pub fn from_compiler_generated_parts(
+            _scalars: Vec<GeneratedArgumentInputV1<'static>>,
+            _memory: Vec<GeneratedRuntimeSliceBindingV1>,
+        ) -> Self {
+            Self
+        }
+    }
+
+    macro_rules! owned_fixture_slice {
+        ($name:ident) => {
+            pub struct $name<T>(PhantomData<T>);
+
+            impl<T> $name<T> {
+                pub fn account_storage(
+                    &self,
+                    _budget: &mut GeneratedRuntimeArgumentBudgetV1,
+                ) -> Result<(), GeneratedRuntimeArgumentErrorV1> {
+                    Ok(())
+                }
+
+                pub fn bind_argument(
+                    self,
+                    _plan: &GeneratedArgumentPackingPlanV1,
+                    _argument_index: usize,
+                    _budget: &mut GeneratedRuntimeArgumentBudgetV1,
+                ) -> Result<GeneratedRuntimeSliceBindingV1, GeneratedRuntimeArgumentErrorV1> {
+                    Ok(GeneratedRuntimeSliceBindingV1)
+                }
+            }
+        };
+    }
+
+    owned_fixture_slice!(GeneratedRuntimeReadSlice);
+    owned_fixture_slice!(GeneratedRuntimeWriteSlice);
+    owned_fixture_slice!(GeneratedRuntimeReadWriteSlice);
+
+    /// Minimal fixture copy of the owned generated argument bridge.
+    ///
+    /// # Safety
+    /// Implementations must describe the exact marker signature and effects.
+    pub unsafe trait CompilerGeneratedRuntimeArguments<K: CompilerGeneratedKernelExpectationV1>:
+        Send + 'static
+    {
+        fn generated_argument_layout()
+        -> Result<CompilerGeneratedArgumentLayoutV1, GeneratedArgumentLayoutError>;
+
+        fn account_runtime_arguments(
+            &self,
+            budget: &mut GeneratedRuntimeArgumentBudgetV1,
+        ) -> Result<(), GeneratedRuntimeArgumentErrorV1>;
+
+        fn bind_runtime_arguments(
+            self,
+            plan: &GeneratedArgumentPackingPlanV1,
+            budget: &mut GeneratedRuntimeArgumentBudgetV1,
+        ) -> Result<GeneratedRuntimeArgumentBindingV1, GeneratedRuntimeArgumentErrorV1>;
     }
 
     /// Minimal fixture copy of the V3 semantic-witness parser SPI.

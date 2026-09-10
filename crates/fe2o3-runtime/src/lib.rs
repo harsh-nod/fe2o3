@@ -15,6 +15,7 @@ pub mod qualification_gfx942_inplace_transform_v1;
 pub mod qualification_gfx942_r57_n3_v1;
 #[cfg(feature = "hardware-qualification")]
 pub mod qualification_gfx942_vecadd_v1;
+mod resource_credits;
 mod worker;
 
 pub use async_engine::*;
@@ -33,6 +34,10 @@ pub use fe2o3_profiler_protocol as profiler;
 pub use kfd_backend::*;
 pub use kfd_profile::*;
 pub use kfd_timestamp_profile::*;
+pub use resource_credits::{
+    MAX_RUNTIME_RESOURCE_CREDIT_RECORDS_V1, RuntimeResourceCreditErrorV1,
+    RuntimeResourceCreditUsageV1, RuntimeResourceKindV1, RuntimeResourceVectorV1,
+};
 pub use worker::*;
 
 use core::fmt;

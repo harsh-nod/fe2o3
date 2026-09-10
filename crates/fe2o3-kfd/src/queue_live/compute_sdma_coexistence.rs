@@ -10,6 +10,174 @@ use super::super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1;
 use super::*;
 
 impl ComputeAqlQueueSessionV1 {
+    /// Observes retained publication custody only; does not poll GPU completion.
+    pub fn observe_r66_retained_counts_v1(&self) -> Option<(usize, usize)> {
+        if !self.coexistence_primary_profile_v1() {
+            return None;
+        }
+        let copies = self
+            .sdma
+            .as_ref()?
+            .compute_coexistence_endpoints_v1(self.key)?
+            .len();
+        let compute = match &self.persistent_compute {
+            None => 0,
+            Some(attachment)
+                if attachment.is_single()
+                    && attachment.terminal_custody.is_none()
+                    && attachment.binding.queue == self.key
+                    && attachment.binding.attachment_generation.checked_add(1)
+                        == Some(self.next_persistent_compute_generation)
+                    && matches!(
+                        attachment.entries[0].state,
+                        PersistentComputeUseStateV1::Published(_)
+                    ) =>
+            {
+                1
+            }
+            Some(_) => return None,
+        };
+        Some((compute, copies))
+    }
+
+    /// Address-free identity of the exact retained native dispatch receipt.
+    pub fn observe_r66_retained_compute_v1(
+        &self,
+        receipt: &Gfx942PersistentComputeDispatchV1,
+    ) -> Option<[u8; 32]> {
+        use sha2::{Digest, Sha256};
+        if self.observe_r66_retained_counts_v1()?.0 != 1 {
+            return None;
+        }
+        let attachment = self.persistent_compute.as_ref()?;
+        let entry = attachment.single_entry()?;
+        let identity = entry.storage_identity?;
+        if receipt.binding != attachment.binding
+            || entry.allocation.owner.quarantine_reason().is_some()
+            || entry.allocation.owner.live_use_count() != 1
+            || entry.allocation.owner.retained_settled_use_count() != 0
+            || entry.allocation.owner.local_native_for_sdma().is_some()
+            || entry.allocation.attachment.pool_generation == 0
+            || entry.allocation.byte_len() == 0
+            || entry.allocation.byte_len() != entry.allocation.physical_byte_len()
+            || entry.allocation.owner.byte_len() != entry.allocation.physical_byte_len()
+            || entry.allocation.attachment.storage_identity
+                != Gfx942SdmaBufferStorageIdentityV1::Device(identity)
+            || !self.directional_persistent_sdma_attachment_is_current(&entry.allocation.attachment)
+            || !self
+                .dispatch
+                .as_ref()?
+                .persistent_device_roster_matches_v1(&[identity])
+        {
+            return None;
+        }
+        let mut hash = Sha256::new();
+        hash.update(b"fe2o3.r66.compute-attachment-observation.v1\0");
+        let facts = identity.coexistence_facts_v1()?;
+        for coordinate in [
+            facts.allocation_id,
+            facts.generation,
+            facts.physical_device,
+            facts.device_generation,
+            facts.vm_id,
+            entry.allocation.attachment.pool_generation,
+            entry.allocation.byte_len(),
+            entry.allocation.physical_byte_len(),
+        ] {
+            hash.update(coordinate.to_le_bytes());
+        }
+        hash.update(receipt.binding.attachment_generation.to_le_bytes());
+        hash.update(
+            self.dispatch
+                .as_ref()?
+                .retained_published_batch_observation_v1(&receipt.batch)?,
+        );
+        Some(hash.finalize().into())
+    }
+
+    /// Address-free identity of an exact retained directional single receipt.
+    pub fn observe_r66_retained_single_copy_v1(
+        &self,
+        receipt: &Gfx942DirectionalPersistentSdmaSubmissionV1,
+    ) -> Option<[u8; 32]> {
+        self.observe_r66_retained_counts_v1()?;
+        let observed = self
+            .sdma
+            .as_ref()?
+            .observe_directional_retained_request_v1(self.key, &[receipt.ticket])?;
+        self.match_r66_copy_observation_v1(
+            &receipt.allocation,
+            receipt.host_binding,
+            receipt.direction,
+            receipt.host_offset,
+            receipt.device_offset,
+            receipt.copy_bytes,
+            observed,
+        )
+    }
+
+    /// Address-free identity of every ticket in a retained directional window.
+    pub fn observe_r66_retained_window_copy_v1(
+        &self,
+        receipt: &Gfx942DirectionalPersistentSdmaWindowSubmissionV1,
+    ) -> Option<[u8; 32]> {
+        self.observe_r66_retained_counts_v1()?;
+        if receipt.tickets.len() != receipt.packet_count {
+            return None;
+        }
+        let observed = self
+            .sdma
+            .as_ref()?
+            .observe_directional_retained_request_v1(self.key, &receipt.tickets)?;
+        self.match_r66_copy_observation_v1(
+            &receipt.allocation,
+            receipt.host_binding,
+            receipt.direction,
+            receipt.host_offset,
+            receipt.device_offset,
+            receipt.copy_bytes,
+            observed,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn match_r66_copy_observation_v1(
+        &self,
+        allocation: &Gfx942DirectionalQueuePersistentAllocationV1,
+        host_binding: Gfx942PersistentDirectionalSdmaHostBindingV1,
+        direction: Gfx942PersistentSdmaDirectionV1,
+        host_offset: u64,
+        device_offset: u64,
+        copy_bytes: u32,
+        observed: crate::sdma::RetainedDirectionalSdmaObservationV1<'_>,
+    ) -> Option<[u8; 32]> {
+        let (host, device, actual_host_offset, actual_device_offset) = match direction {
+            Gfx942PersistentSdmaDirectionV1::HostToDevice => (
+                observed.source,
+                observed.destination,
+                observed.source_offset,
+                observed.destination_offset,
+            ),
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost => (
+                observed.destination,
+                observed.source,
+                observed.destination_offset,
+                observed.source_offset,
+            ),
+        };
+        (self.directional_persistent_sdma_attachment_is_current(&allocation.attachment)
+            && allocation.owner.quarantine_reason().is_none()
+            && allocation.attachment.storage_identity == device.storage_identity()
+            && allocation.attachment.pool_generation == device.pool_generation()
+            && allocation.physical_byte_len() == device.physical_bytes()
+            && allocation.byte_len() == device.requested_bytes()
+            && host_binding.matches(host)
+            && host_offset == actual_host_offset
+            && device_offset == actual_device_offset
+            && copy_bytes == observed.copy_bytes)
+            .then_some(observed.identity)
+    }
+
     fn coexistence_domain_v1(&self) -> R66DeviceDomainV1 {
         R66DeviceDomainV1 {
             physical_device: self.key.vm.device.physical.0,

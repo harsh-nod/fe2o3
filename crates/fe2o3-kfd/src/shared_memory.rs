@@ -566,7 +566,7 @@ impl<S: Gfx942DeviceMemoryStateV1> Gfx942DeviceMemoryLeaseV1<S> {
 }
 
 /// Crate-private non-authority identity for one exact device allocation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct Gfx942DeviceMemoryIdentityV1 {
     id: u64,
     generation: u64,
@@ -805,7 +805,7 @@ impl<P: GttProfileV1, S: GttAllocationStateV1> SharedGttAllocationV1<P, S> {
 }
 
 /// Crate-private non-authority identity for one exact shared allocation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct SharedGttAllocationIdentityV1 {
     session_id: u64,
     id: u64,

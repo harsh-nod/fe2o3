@@ -1,11 +1,11 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Committed baseline: `23d77036` (R66 implementation plus unrestricted test
-evidence), reviewed 2026-09-10. This decomposes the remaining local A1/A2 work in
+Baseline: `4b897b3a` (R66 implementation, unrestricted evidence and initial
+swarm assignments), reviewed 2026-09-10. This decomposes the remaining local A1/A2 work in
 [#182](https://github.com/harsh-nod/fe2o3/issues/182), not the later multi-GPU
 and distributed milestones. The issue's A1/A2 exit criteria were rechecked on
 2026-09-10. Three agents independently reconciled their lanes against the current
-code after the first implementation wave. The working-tree checkpoint below is
+code after the first implementation wave. The source checkpoint below is
 separate from the committed baseline; queued tickets are not completed work or
 unattended background jobs.
 
@@ -22,26 +22,31 @@ describes OVL-1/2's implemented checker and runtime
 integration with bounded-scan proofs and CPU tests. Their live native admission
 and hardware acceptance remain open.
 
-## Working-Tree Checkpoint
+## Source Checkpoint
 
-The first swarm wave has added the following code locally. These changes have
-not yet passed the complete release gate or been published as an implementation
-commit. Older R66 validation does not qualify the new source.
+The first swarm wave and its three follow-up packets have passed the local
+gates recorded in the [R67 evidence](evidence/local-r67-owned-credits-2026-09-10/README.md).
+That record also retains failed environmental attempts and the optional legacy
+musl compiler limitation. Older R66 evidence does not qualify the new source;
+signed live hardware acceptance remains separate.
 
 | Slice | Implemented locally | Boundary still open |
 | --- | --- | --- |
 | OVL-QUAL-1 | Eight-cell R26 coexistence example, immutable native-custody observations, independent checker, signed-source runner and negative tests | Signed live capture, native extraction refinement, physical overlap and production generated-kernel authority |
 | MEM-1 | Nineteen-dimensional credit primitive and opt-in Context requested-byte/allocation-record admission; retain uncertain charges and reject false cleanup completion | Actual native residency/slot cost extraction, global budget closure and whole-account/executor refinement |
 | GEN-1 | Owned typed arguments/results, complete-invocation preflight, authenticated packing-plan reuse and compile-fail ownership checks | Invocation-bound async authority, Context freshness, global credit lifetime and compiler machine evidence |
+| DRN-3A | Three composed accepted-submit rejection, repeated observation rejection and pre-issue cancellation regressions | Host capture failures, active-work hardware drain and whole-executor refinement |
+| SCALE-3-PROTO | Bounded matched-plan/checker protocol; fourteen tests and independent cross-review pass | Signed producers, genuine correctness/timing captures, performance and physical overlap |
+| MEM-5 inventory | Concrete allocation-site inventory and proposed shared-ledger ownership contract | Interface approval, implemented physical admission and complete aggregate byte-budget closure |
 
-Targeted checks passed: the R66 example compiles without default features, its
-four observation tests pass, and the six R60/R61/R62/R63/R65/R66 runner suites
-pass 48 tests. GEN-1 passes 11 focused host tests, its positive/negative generated
-wrapper harness and the renamed-host fixture. The all-feature runtime/model
-library gate passes 527 runtime tests and 693 model tests (two existing model
-ignores), including all ten Context admission tests and nine credit-adapter
-tests. Complete release-gate results must be retained with the eventual source
-freeze, not inferred from this list.
+GNU and musl each pass 2,021 all-feature/all-target runtime tests with five
+existing ignores across 46 harnesses. GNU five-crate doctests pass 75; musl
+runtime doctests pass 64 and direct-KFD host doctests pass ten. Default host tests
+pass 90; the all-feature GNU host gate passes 207 with four existing ignores
+after correcting a stale test-process runtime-directory environment. The macro
+fixture harness passes seven tests and runner/checker suites pass 132. Lint,
+formatting and the 42-package production dependency audit pass. These are
+local test results, not hardware or production generated-authority evidence.
 
 The full authenticated Verus run also passed: 56 positive sources, 1,330
 obligations and 640 expected-negative rejections, with the exact transcript and
@@ -49,9 +54,8 @@ pre/post source, inventory and pinned release-closure checks accepted. R67 adds
 14 vector/record-decision obligations and eight named mutations. These totals
 aggregate property-specific results; mutex/arena ownership, native cost
 extraction, Context adapters and whole-executor refinement remain open. The
-remaining current-wave release work includes GNU/musl all-target suites,
-host/macro integration and doctests, lint, dependency/symbol audits, source freeze
-and separately scheduled hardware acceptance.
+remaining live release work includes signed source freeze, actual qualifier ELF
+and census audits, and separately scheduled hardware acceptance.
 
 Cross-review found no blocking issue in the owned data boundary or native
 qualifier. This is a code-review result, not a proof of the adapters. Requested
@@ -80,14 +84,14 @@ MI300X jobs or pushes integrated changes to both remotes.
 
 | Lane | First bounded ticket | Deliverable | Then |
 | --- | --- | --- | --- |
-| Native | SCALE-3-PROTO | Isolated benchmark protocol, checker and negative fixtures; no production queue changes or GPU work | OVL-QUAL-2 preparation; SCALE-1 profiles; SCALE-CAP after physical budgets |
-| Resources | MEM-5 inventory contract, then MEM-2A | Enumerate concrete allocation sites, actual extents, owners, transfers and refunds; propose one native cost/ownership adapter, then integrate existing backing allocation | MEM-2B, MEM-3A/B, MEM-4A/B, MEM-5 closure; VER-1/2 can move earlier |
-| Admission | DRN-3A | Missing composed CPU cases: accepted-submit rejection, repeated observation rejection and pre-issue cancellation | DRN-1 capture and GEN-2 interface; capture-failure cases and DRN-2 follow |
+| Native | SCALE-1 profile design | Separately admitted bounded short/long artifacts and independent correctness oracles; review OVL-QUAL-2 capture | SCALE-CAP after physical budgets; SCALE-3 signed producers and measurement |
+| Resources | Shared ledger/interface, then MEM-2A | Implement the approved lower-level ledger boundary and individual backing admission from the completed inventory proposal | MEM-2B, MEM-3A/B, MEM-4A/B, MEM-5 closure; VER-1/2 can move earlier |
+| Admission | DRN-1 capture and GEN-2 interface | Bounded host-only capture and exact private typed-async authority contracts | DRN-3B capture-failure cases and DRN-2; production GEN-2 after accounting/compiler evidence |
 | Primary | PRF-1/2 and native accounting interface | Finish current-wave verification; approve cross-crate accounting ownership; compose shared hooks and proof roster | Signed OVL-QUAL-2 hardware campaign, retained evidence and dual-remote publication |
 
-The three agents have completed this reconciliation and handoff. These rows
-name their next implementation queue, not background jobs left running by the
-planning audit. Each starts in its isolated module. Shared-file
+The three agents completed SCALE-3-PROTO, the MEM-5 inventory proposal and DRN-3A,
+then cross-reviewed those packets. These rows name their next implementation
+queue, not background jobs left running by the audit. Each starts in its isolated module. Shared-file
 edits require an explicit handoff to the primary; no lane independently raises
 capacity, changes admission authority or schedules hardware.
 
@@ -133,16 +137,16 @@ or fixture results exist. None of the rows establishes runtime-wide parity.
 | Work | Implementation | Authenticated proof | CPU integration | Fixture hardware | Production-admitted hardware | Performance |
 | --- | --- | --- | --- | --- | --- | --- |
 | OVL-1/2 | R66 restricted profile | Bounded scan only; native extraction/composition open | Both orders, H2D/D2H, one/three bindings | Open: OVL-QUAL-1/2 | Open: GEN-2 also required | Open |
-| OVL-QUAL-1/2 | Qualifier implemented locally; live gate open | Descriptive observation, not authority | Four observation tests, example compile and runner checks passed | Open: new signed capture required | Open: GEN-2 also required | Physical overlap unmeasured |
+| OVL-QUAL-1/2 | Qualifier locally validated; live gate open | Descriptive observation, not authority | Four observation tests and eleven runner/checker tests pass | Open: new signed capture required | Open: GEN-2 also required | Physical overlap unmeasured |
 | MEM-1 | Local transactional credits and Context requested-allocation profile | R67: 14 vector/record obligations and eight mutations passed full authenticated gate; adapter composition open | All ten Context and nine adapter tests pass within runtime/model library gate | New qualifier includes requested-credit saturation/retention/disposal; not yet run | Open | Unmeasured |
-| MEM-2..5 | Physical cost/ownership integration and global closure open | End-to-end accounting open | Complete inventory/failure matrix open | Physical saturation/reuse open | Open | Unmeasured |
+| MEM-2..5 | Site inventory/interface proposal available; physical integration and global closure open | End-to-end accounting open | Measured costs and complete failure matrix open | Physical saturation/reuse open | Open | Unmeasured |
 | VER-1/2 | Open; R65 lineage is graph-local | Persistent authority open | Cross-run mutation/lease matrix open | Open | Kernel extension also needs GEN-2 | Unmeasured |
 | GEN-1 | Owned data boundary implemented locally | No execution authority or whole-async proof | Eleven focused host tests and generated fixtures pass | Data-only boundary | Not an execution cell | Unmeasured |
 | GEN-2 | Exact typed async authority and integration open | Compiler evidence and async composition open | Permit/currentness/native integration matrix open | Fixtures cannot fill production cells | Open | Unmeasured |
-| DRN-1/2/3 | R65 drain exists; capture and delta cases open | Whole drain/executor refinement open | Substantial R65 coverage; delta matrix open | R65 idle only; outstanding-work open | Open | Unmeasured |
+| DRN-1/2/3 | R65 drain and DRN-3A exist; capture/failure integration open | Whole drain/executor refinement open | Three new composed failure/cancellation cases pass; capture failures open | R65 idle only; outstanding-work open | Open | Unmeasured |
 | SCALE-1/CAP/2 | Open; default remains 64 epochs per compute lane | Capacity/acquisition composition open | Larger native-capacity profile open | Short/long and native-depth open | Open | Unmeasured |
-| SCALE-3 | Protocol and timestamp producer work open | Optimization/timeline boundary open | Runner/checker open | Measurements open | Measurements open | No R66 result |
-| PRF-1/2 | Whole executor composition open | Isolated guards are not whole-state refinement | R66 unrestricted gate passed; current-wave full gate open | Per-profile qualification open | Open | Per-workload only |
+| SCALE-3 | Protocol/checker implemented; signed/timestamp producers open | Optimization/timeline boundary open | Fourteen protocol tests and independent review pass | Measurements open | Measurements open | No R66 result |
+| PRF-1/2 | Whole executor composition open | Isolated guards are not whole-state refinement | Current-source local gates retained; optional legacy-musl compiler unavailable | Per-profile qualification open | Open | Per-workload only |
 
 R66's first local runs could not inspect sockets or use ptrace. After those
 restrictions were lifted, GNU and musl each passed all 1,992 tests with five
@@ -267,10 +271,13 @@ until then.
 
 ### SCALE-3: Measured Overlap And Matched HIP/HSA Results
 
-**Protocol/checker work can start now; measurements depend on OVL-2 and qualified
-workloads from SCALE-1/2.** The first independent native packet is
-`SCALE-3-PROTO`: versioned measurement schema, bounded checker and negative
-fixtures without production queue changes or GPU execution. Match exact
+**Protocol/checker implemented; measurements depend on qualified workloads and
+signed producers.** [SCALE-3-PROTO](../benchmarks/runtime_gfx942/scale3-protocol-v1.md)
+provides a versioned measurement schema, bounded checker and fourteen passing
+tests without production queue changes or GPU execution. Its pinned plan binds
+exact argument templates, artifacts, GPU/NUMA/CPU, stream/memory policy and a
+balanced backend rotation. Its acceptance establishes consistency, not hardware
+authenticity, budget closure or physical overlap. Match exact
 artifacts, geometry, bytes, selected GPU,
 completion semantics and resource-reuse policy. Separate setup, submission,
 transfer, wait and validation costs. Rotate backend order and publish sample
@@ -319,6 +326,13 @@ than physically release it. Keep MEM-1 requested bytes distinct from this
 retained native charge. Split work into actual-layout admission (MEM-2A), then
 checkout/recycle/trim ownership and cache ceilings (MEM-2B).
 
+MEM-2A may qualify a single backing allocation first. Whole Context allocation
+accounting also needs MEM-3: allocating can lazily initialize queues, control
+storage and scratch. The [native accounting inventory](runtime-native-resource-accounting-v1.md)
+proposes one extracted lower-level ledger, exact root/device/Context/session
+domains and explicit bootstrap costs. Primary approval precedes integration;
+the proposal itself implements no physical admission.
+
 Acceptance: fail before over-budget allocation, bound cached capacity, transfer
 checkout custody without double charging, and return credit only for successfully
 released backing. Test alignment, oversized extents, generation exhaustion,
@@ -332,6 +346,9 @@ queue/ring residency and per-operation slots. Charge preallocated arenas once
 and their occupied slots separately. Integrate preparation, publication and
 recycling across admitted compute/SDMA lanes; do not duplicate low-level queues.
 MEM-3A measures/reserves actual arenas; MEM-3B integrates occupied-slot credits.
+Compound creation requires atomic fixed-roster reservation. Separately disposed
+members also need proved charge splitting; R67's current primitive supplies
+neither parent-account transactions nor divisible native bundles.
 
 Acceptance: no publication without every required reservation, exact generation
 on reuse, and no timeout/cancellation refund of possibly referenced storage.
@@ -364,6 +381,10 @@ captures, terminal records and retained results, including DRN-1 capture bytes.
 Unrestricted generic closures cannot be made byte-bounded by trusting a caller's
 claimed size; keep them outside the qualified bounded profile or replace them
 there with closed, accounted commands.
+
+The source-reviewed [inventory and interface proposal](runtime-native-resource-accounting-v1.md)
+is available. Enumerating site families does not establish complete measured
+metadata, driver/OS overhead or global quarantine bounds.
 
 Reserve worst-case quarantine bookkeeping/headroom before accepting native
 custody, or retain it within the already-charged global ceiling. Simultaneous
@@ -440,6 +461,13 @@ and resource generations. Retain compiler-publication/proof custody through
 native quiescence and revalidate at the publication boundary. The blocking entry
 must join this same async path, not retain a second execution implementation.
 
+Invocation/native credits survive the required retirement and physical disposal.
+Decoded-output byte credits survive movement out of reply cells and remain with
+observer-retained storage. Native quiescence alone cannot refund that storage.
+The [owned arguments and credits contract](runtime-owned-arguments-and-credits-v1.md)
+separates the implemented data boundary from these still-open authority/lifetime
+obligations.
+
 Acceptance: fixture substitution, stale publication, mismatched receipt/artifact,
 changed arguments/device and duplicated permits reject. Loss of currentness
 after publication retains custody and never grants replay permission.
@@ -452,12 +480,15 @@ refinement backend/artifact; fixtures must not fill that authority gap.
 
 ### DRN-1: Bounded Host-Only Drain Capture
 
-**Contract work can start independently; budget integration needs MEM-1/MEM-5.**
+**Contract work can start independently; bounded capture needs the approved
+accounting contract and capture reservation, not already-complete MEM-5.**
 Add proposed runtime `async_engine/drain_capture.rs` and an audited lower-KFD
 coherent-storage read operation. Pre-admit GPU downloads/canary copies before
 the drain admission cutoff. Capture already-coherent host bytes only after
 conclusive quiescence and before cleanup, with exact retained buffer generation
 and bounded result storage.
+Final MEM-5 closure incorporates the implemented capture and version-journal
+storage, avoiding a circular prerequisite.
 
 Do not use unrestricted `Context::read_allocation`: existing fallback paths can
 synchronize or download using SDMA. Host capture and its currentness checks must
@@ -485,16 +516,17 @@ mixed-duration or general-production cells.
 
 ### DRN-3: Failure And Retention Matrix
 
-**CPU work ready now.** Extend `async_engine/tests/owned_tests/drain_tests.rs`
-and scripted adapters for submit rejection, repeated observation rejection,
-quiescent failure, pre-issue cancellation, terminal ambiguity, exhausted budget,
-interruption and capture failure. Check exact reply delivery, identity, retained
-resources and no retry/duplicate publication.
+**DRN-3A implemented; capture-failure work awaits DRN-1.** Three new composed
+regressions in `async_engine/tests/owned_tests/drain_tests.rs` check exact
+accepted-submit rejection, repeated observation rejection without reissue and
+pre-issue cancellation preserving a successfully submitted sibling. They check
+reply/snapshot lifetimes, credit usage and retained allocation/module/stream/
+submission identities. No production transition changed for these tests.
+Extend the scripted adapters for capture failure after DRN-1. Check exact reply
+delivery, identity, retained resources and no retry/duplicate publication.
 R65 already covers quiescent failure, budget exhaustion, abandoned observers,
-interruption and panic. Preserve that coverage and add the missing combinations,
-particularly accepted-submit rejection, repeated observation rejection,
-pre-issue cancellation and capture failure after DRN-1, instead of rebuilding
-the drain lifecycle.
+interruption and panic. Preserve those cases and DRN-3A when composing capture;
+do not rebuild the drain lifecycle.
 
 Shared-host hardware initially covers only non-disruptive rejection/cancellation.
 Device resets, device-loss injection or partition failures require a separately
@@ -539,13 +571,13 @@ merging to either main branch.
 
 | Wave | Native lane | Resource/version lane | Admission/drain lane | Primary |
 | --- | --- | --- | --- | --- |
-| Current checkpoint | OVL-QUAL-1 locally validated | MEM-1 requested-allocation slice implemented | GEN-1 owned data boundary locally validated | Finish current-wave full gate and signed freeze |
-| 1 | SCALE-3-PROTO; prepare SCALE-1 | MEM-5 inventory/interface contract, then MEM-2A/B | DRN-3A; design DRN-1 and GEN-2 authority interface | Approve native accounting boundary; execute OVL-QUAL-2 after freeze |
+| Current checkpoint | OVL-QUAL-1 and SCALE-3-PROTO locally validated | MEM-1 requested-allocation slice and MEM-5 inventory proposal | GEN-1 owned data boundary and DRN-3A regressions | Current-source gate and signed freeze; hardware separate |
+| 1 | Prepare SCALE-1; review OVL-QUAL-2 | Approved shared ledger, then MEM-2A/B | Design DRN-1 and GEN-2 authority interface | Approve native accounting boundary; execute OVL-QUAL-2 after freeze |
 | 2 | Qualify SCALE-1; SCALE-CAP after MEM prerequisites | MEM-3A/B, MEM-4A/B, then provisional MEM-5 integration | GEN-2 adapter; implement DRN-1; DRN-3B | Integrate shared hooks; arrange compiler handoff |
 | 3 | SCALE-2, including SCALE-CAP's measured native-depth gate | VER-1 then VER-2; final MEM-5 closure includes journal/lease and capture storage | DRN-2; production GEN-2 only when evidence exists | Compose proofs and repeated mixed-graph acceptance |
 | 4 | SCALE-3 measurements | Budget/version stress and cross-review | Active/failure drain and cross-review | PRF-2 evidence, A1/A2 exit audit, dual-remote publication |
 
-VER-1 and DRN-3 are independently ready and can move earlier when a slot is free;
+VER-1 and the DRN-1 contract can move earlier when a slot is free;
 the wave table is an execution order, not an artificial technical dependency.
 External compiler work must have an explicit handoff artifact and owner. Its
 absence does not block native checker, resource, copy-version or fixture work,

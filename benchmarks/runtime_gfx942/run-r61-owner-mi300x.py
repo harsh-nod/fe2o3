@@ -82,6 +82,15 @@ class OwnerRunner(base.Runner):
     expected_pass = PASS
     schema = "fe2o3.r61-owner-copy-qualification.v1"
     claim_scope = "one-device-one-stream-h2d-d2h-abandoned-observer-custody-and-cleanup"
+    cargo_features = ()
+
+    def cargo_feature_arguments(self):
+        if self.cargo_features not in ((), ("fe2o3-runtime/hardware-qualification",)):
+            raise base.RunError("unadmitted owner Cargo feature profile")
+        return ["--features", ",".join(self.cargo_features)] if self.cargo_features else []
+
+    def validate_qualifier_output(self, output):
+        validate_output(output, self.expected_pass)
 
     def snapshot(self):
         super().snapshot()
@@ -124,7 +133,7 @@ class OwnerRunner(base.Runner):
             raise base.RunError("target standard-library closure is missing")
         base.write_json(self.evidence / "target-libraries.json", target_libraries)
         link_command = self.run([rust / "cargo", "rustc", "--offline", "--locked", "--release",
-                  "--target", HOST_TARGET, "--no-default-features", "-p", "fe2o3-runtime", "--example", self.example,
+                  "--target", HOST_TARGET, "--no-default-features", *self.cargo_feature_arguments(), "-p", "fe2o3-runtime", "--example", self.example,
                   "--", "--print=link-args", "-C", "linker=/usr/bin/cc", "-C", "link-arg=-fuse-ld=bfd"],
                  label="build-owner", timeout=1200, env=env, cwd=self.source)
         validate_link_command(link_command)
@@ -135,7 +144,7 @@ class OwnerRunner(base.Runner):
         audit = self.source / "scripts/runtime_pure_rust_audit.py"
         metadata = self.evidence / "cargo-metadata.json"
         self.run([rust / "cargo", "metadata", "--offline", "--locked", "--format-version", "1",
-                  "--filter-platform", HOST_TARGET, "--no-default-features"],
+                  "--filter-platform", HOST_TARGET, "--no-default-features", *self.cargo_feature_arguments()],
                  label="cargo-metadata", timeout=180, env=env, cwd=self.source, output=metadata)
         self.run(["/usr/bin/python3", audit, "metadata", "--input", metadata, "--root", "fe2o3-runtime"],
                  label="cargo-closure", timeout=180, env=env, cwd=self.source)
@@ -180,7 +189,7 @@ class OwnerRunner(base.Runner):
                   f"--membind={self.topology['numa_node']}", "/usr/bin/true"], label="placement-probe")
         for ordinal in range(2):
             output = self.phase(f"owner-{ordinal}", "kfd", [base.UNIQUE_ID])
-            validate_output(output.read_text(), self.expected_pass)
+            self.validate_qualifier_output(output.read_text())
         self.verify_source()
 
     def publish(self):

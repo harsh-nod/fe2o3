@@ -84,6 +84,10 @@ use crate::{
 
 mod compute_dispatch;
 mod compute_state;
+#[cfg(feature = "hardware-qualification")]
+mod qualification_coexistence;
+#[cfg(feature = "hardware-qualification")]
+pub use qualification_coexistence::KfdR66RetainedCustodyObservationV1;
 mod kfd_backend_sdma_seam;
 use compute_dispatch::*;
 use compute_state::*;

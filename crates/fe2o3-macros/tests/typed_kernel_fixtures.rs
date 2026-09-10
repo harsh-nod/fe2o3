@@ -158,6 +158,26 @@ fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
             "kfd_mutable_alias",
             &["cannot borrow `*output` as mutable more than once"],
         ),
+        (
+            "runtime_borrow_escape",
+            &[
+                "error[E0308]",
+                "GeneratedRuntimeReadSlice",
+                "GeneratedRuntimeReadWriteSlice",
+            ],
+        ),
+        (
+            "runtime_output_alias",
+            &["error[E0382]", "use of moved value: `output`"],
+        ),
+        (
+            "runtime_kernel_substitution",
+            &["error[E0277]", "CompilerGeneratedRuntimeArguments"],
+        ),
+        (
+            "runtime_trait_requires_unsafe",
+            &["error[E0200]", "CompilerGeneratedRuntimeArguments"],
+        ),
     ];
 
     for (bin, expected_diagnostics) in cases {

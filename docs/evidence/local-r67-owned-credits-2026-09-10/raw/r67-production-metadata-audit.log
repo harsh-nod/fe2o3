@@ -1,0 +1,1 @@
+pure-Rust runtime audit: OK (metadata roots=1 packages=42 allowed_build_scripts=libc@0.2.189,proc-macro2@1.0.107,quote@1.0.47,rustix@1.1.4,serde@1.0.229,serde_core@1.0.229,serde_json@1.0.151,zmij@1.0.23 sha256=ed2e52fc0f8ba560b0503194c956d357cb6adb05884400a6791f0a0129f89340; profile=fe2o3.runtime.pure-rust.gfx942.v1)

@@ -1,0 +1,21 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.50s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_host-d6ec31991941ab38)
+
+running 1 test
+test published_direct_link::tests::exact_published_selection_is_admitted_without_authority ... FAILED
+
+failures:
+
+---- published_direct_link::tests::exact_published_selection_is_admitted_without_authority stdout ----
+
+thread 'published_direct_link::tests::exact_published_selection_is_admitted_without_authority' (596782) panicked at crates/fe2o3-host/src/published_direct_link.rs:1349:10:
+called `Result::unwrap()` on an `Err` value: Filesystem(Io(Os { code: 2, kind: NotFound, message: "No such file or directory" }))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    published_direct_link::tests::exact_published_selection_is_admitted_without_authority
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 210 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-host --lib`

@@ -12,6 +12,66 @@ spec.loader.exec_module(runner)
 
 
 class OwnerRunnerTests(unittest.TestCase):
+    def test_qualification_feature_is_identical_in_build_and_metadata(self):
+        for features in ((), ("fe2o3-runtime/hardware-qualification",)):
+            with self.subTest(features=features), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                home = root / "home"
+                rust = home / ".cargo/bin"
+                rust.mkdir(parents=True)
+                for name in ("cargo", "rustc", "rustup"):
+                    (rust / name).touch()
+                rocm = root / "rocm"
+                (rocm / "bin").mkdir(parents=True)
+                (rocm / "bin/rocm-smi").touch()
+                stage = root / "stage"
+                stage.mkdir()
+                instance = runner.OwnerRunner(argparse.Namespace(build_home=home, rocm_path=rocm), stage)
+                instance.cargo_features = features
+                scripts = instance.source / "scripts"
+                scripts.mkdir(parents=True)
+                (scripts / "runtime-pure-rust-policy.json").write_text(json.dumps({
+                    "forbidden_dynamic_symbols": [], "forbidden_dynamic_symbol_prefixes": []}))
+                binary = stage / "target" / runner.HOST_TARGET / "release/examples" / instance.example
+                binary.parent.mkdir(parents=True)
+                binary.touch()
+                commands = {}
+                def run(argv, *, label, **kwargs):
+                    commands[label] = [str(value) for value in argv]
+                    if label in ("resolved-ld.bfd", "resolved-collect2", "resolved-cargo", "resolved-rustc"):
+                        return "/usr/bin/true\n"
+                    if label == "target-libdir": return str(root) + "\n"
+                    if label == "build-owner": return '"/usr/bin/cc" "-fuse-ld=bfd" "-static-pie"\n'
+                    if label == "static-headers": return "LOAD 0x0\n"
+                    if label == "full-symbols": return "main T 100 10\npthread_create W 200 10\n"
+                    return ""
+                with mock.patch.object(instance, "run", side_effect=run), \
+                        mock.patch.object(instance, "verify_source") as verify_source, \
+                        mock.patch.object(pathlib.Path, "resolve", autospec=True, side_effect=lambda path, **kwargs: path), \
+                        mock.patch.object(runner.base, "tree_hashes", return_value={"libstd-test.rlib": "1" * 64}), \
+                        mock.patch.object(runner.base, "sha256_file", return_value="1" * 64):
+                    instance.build()
+                verify_source.assert_called_once_with()
+                for label in ("build-owner", "cargo-metadata"):
+                    command = commands[label]
+                    self.assertEqual(command.count("--no-default-features"), 1)
+                    self.assertEqual(command.count("--features"), bool(features))
+                    if features:
+                        self.assertEqual(command[command.index("--features") + 1], features[0])
+                self.assertIn("cargo-closure", commands)
+                self.assertIn("elf-closure", commands)
+                self.assertIn("full-symbols", commands)
+
+    def test_unadmitted_feature_profiles_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            instance = runner.OwnerRunner(argparse.Namespace(), pathlib.Path(temporary))
+            self.assertEqual(instance.cargo_feature_arguments(), [])
+            for features in (("hardware-qualification",), ("fe2o3-runtime/hardware-qualification", "other"),
+                             ("default",), ["fe2o3-runtime/hardware-qualification"]):
+                instance.cargo_features = features
+                with self.assertRaises(runner.base.RunError):
+                    instance.cargo_feature_arguments()
+
     def test_final_link_profile_is_explicit(self):
         good = 'LC_ALL="C" PATH="/usr/bin" "/usr/bin/cc" "-fuse-ld=bfd" "-static-pie"\n'
         runner.validate_link_command(good)

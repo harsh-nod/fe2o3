@@ -2066,6 +2066,23 @@ pub(super) struct DispatchResourceOwnerV1 {
 }
 
 impl DispatchResourceOwnerV1 {
+    pub(super) fn retained_published_batch_observation_v1<const N: usize>(
+        &self,
+        batch: &Gfx942DispatchBatchV1<N>,
+    ) -> Option<[u8; 32]> {
+        self.validate_published(batch.identity, &batch.completion)
+            .ok()?;
+        let occurrence = batch.completion.occurrence_v1().ok()?;
+        let mut hash = Sha256::new();
+        hash.update(b"fe2o3.r66.retained-persistent-dispatch.v1\0");
+        hash.update(occurrence.roster_sha256);
+        hash.update(batch.identity.recipe_occurrence.to_le_bytes());
+        hash.update([batch.identity.slot_index]);
+        hash.update(batch.identity.slot_generation.to_le_bytes());
+        hash.update(batch.identity.dispatch_generation.to_le_bytes());
+        Some(hash.finalize().into())
+    }
+
     pub(super) fn validate_persistent_replay_v1(
         &self,
         identity: PersistentFixedDispatchControlIdentityV1,

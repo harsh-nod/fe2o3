@@ -2418,7 +2418,112 @@ fn generated_worker_v3_adapter_v1(
     } else {
         quote!(Arguments)
     };
+    let runtime_field_types = model
+        .arguments
+        .iter()
+        .map(|argument| {
+            let (scalar, wrapper) = match argument {
+                GeneralTypedArgumentKindV1::Scalar(scalar) => return scalar.rust_type_tokens(),
+                GeneralTypedArgumentKindV1::SharedSlice(scalar) => {
+                    (*scalar, quote!(GeneratedRuntimeReadSlice))
+                }
+                GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(scalar)
+                | GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(scalar, _) => {
+                    (*scalar, quote!(GeneratedRuntimeWriteSlice))
+                }
+                GeneralTypedArgumentKindV1::ExclusiveSlice(scalar)
+                | GeneralTypedArgumentKindV1::MappedExclusiveSlice(scalar, _) => {
+                    (*scalar, quote!(GeneratedRuntimeReadWriteSlice))
+                }
+                _ => unreachable!("unsupported Worker V3 owned arguments were excluded above"),
+            };
+            let scalar = scalar.rust_type_tokens();
+            quote!(__fe2o3_kernel_host::__generated::#wrapper<#scalar>)
+        })
+        .collect::<Vec<_>>();
+    let runtime_scalar_inputs = model.arguments.iter().zip(&fields).enumerate()
+        .filter(|(_, (argument, _))| matches!(argument, GeneralTypedArgumentKindV1::Scalar(_)))
+        .map(|(index, (_, field))| quote!(
+            plan.scalar(#index, self.#field)
+                .map_err(__fe2o3_kernel_host::__generated::GeneratedRuntimeArgumentErrorV1::Pack)?
+        )).collect::<Vec<_>>();
+    let runtime_memory_arguments = model
+        .arguments
+        .iter()
+        .zip(&fields)
+        .enumerate()
+        .filter_map(|(index, (argument, field))| match argument {
+            GeneralTypedArgumentKindV1::SharedSlice(_)
+            | GeneralTypedArgumentKindV1::WriteOnlyExclusiveSlice(_)
+            | GeneralTypedArgumentKindV1::ExclusiveSlice(_) => {
+                Some(quote!(self.#field.bind_argument(plan, #index, budget)?))
+            }
+            GeneralTypedArgumentKindV1::MappedWriteOnlyExclusiveSlice(_, index_space)
+            | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, index_space) => {
+                let index_space = generated_disjoint_index_space_v1(*index_space);
+                Some(quote!(self.#field.bind_mapped_argument(plan, #index, #index_space, budget)?))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let runtime_accounting = model
+        .arguments
+        .iter()
+        .zip(&fields)
+        .filter(|(argument, _)| !matches!(argument, GeneralTypedArgumentKindV1::Scalar(_)))
+        .map(|(_, field)| quote!(self.#field.account_storage(budget)?;))
+        .collect::<Vec<_>>();
     quote! {
+        /// Opaque owned data for this exact kernel signature. This is not launch authority.
+        #[must_use = "owned generated arguments retain storage but do not launch a kernel"]
+        #[allow(dead_code)]
+        pub struct RuntimeArguments {
+            #(#fields: #runtime_field_types,)*
+        }
+
+        impl RuntimeArguments {
+            #[allow(clippy::too_many_arguments)]
+            pub fn new(#(#fields: #runtime_field_types),*) -> Self {
+                Self { #(#fields),* }
+            }
+        }
+
+        // SAFETY: the owned adapter uses the same signature, ABI, effects and index mappings as
+        // the borrowed adapter below. Every slice consumes owned typed storage and the supplied
+        // budget before encoding; the layout and scalar binding plan are shared unchanged.
+        unsafe impl __fe2o3_kernel_host::__generated::CompilerGeneratedRuntimeArguments<Marker>
+            for RuntimeArguments
+        {
+            fn generated_argument_layout() -> Result<
+                __fe2o3_kernel_host::__generated::CompilerGeneratedArgumentLayoutV1,
+                __fe2o3_kernel_host::__generated::GeneratedArgumentLayoutError,
+            > {
+                #layout
+            }
+
+            fn account_runtime_arguments(
+                &self,
+                budget: &mut __fe2o3_kernel_host::__generated::GeneratedRuntimeArgumentBudgetV1,
+            ) -> Result<(), __fe2o3_kernel_host::__generated::GeneratedRuntimeArgumentErrorV1> {
+                #(#runtime_accounting)*
+                Ok(())
+            }
+
+            fn bind_runtime_arguments(
+                self,
+                plan: &__fe2o3_kernel_host::__generated::GeneratedArgumentPackingPlanV1,
+                budget: &mut __fe2o3_kernel_host::__generated::GeneratedRuntimeArgumentBudgetV1,
+            ) -> Result<
+                __fe2o3_kernel_host::__generated::GeneratedRuntimeArgumentBindingV1,
+                __fe2o3_kernel_host::__generated::GeneratedRuntimeArgumentErrorV1,
+            > {
+                let scalar_inputs = [#(#runtime_scalar_inputs),*].into_iter().collect();
+                let memory_arguments = [#(#runtime_memory_arguments),*].into_iter().collect();
+                Ok(__fe2o3_kernel_host::__generated::GeneratedRuntimeArgumentBindingV1::
+                    from_compiler_generated_parts(scalar_inputs, memory_arguments))
+            }
+        }
+
         // SAFETY: this implementation is emitted from the same parsed signature, canonical ABI,
         // marker, and effect model as the compiler registration. KFD capabilities produce owned
         // address-free buffers and zero pointer placeholders together with their exact fixups.

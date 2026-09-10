@@ -102,6 +102,15 @@ negative_r66_window_extent="$script_dir/negative/r66_compute_sdma_coexistence_v1
 negative_r66_window_generation="$script_dir/negative/r66_compute_sdma_coexistence_v1_window_generation.rs"
 negative_r66_window_completion="$script_dir/negative/r66_compute_sdma_coexistence_v1_window_completion.rs"
 negative_r66_roster_bound="$script_dir/negative/r66_compute_sdma_coexistence_v1_roster_bound.rs"
+r67_resource_credits_proof="$script_dir/r67_resource_credits_v1.rs"
+negative_r67_partial_vector="$script_dir/negative/r67_resource_credits_v1_partial_vector.rs"
+negative_r67_overflow="$script_dir/negative/r67_resource_credits_v1_overflow.rs"
+negative_r67_duplicate_refund="$script_dir/negative/r67_resource_credits_v1_duplicate_refund.rs"
+negative_r67_premature_refund="$script_dir/negative/r67_resource_credits_v1_premature_refund.rs"
+negative_r67_stale_owner="$script_dir/negative/r67_resource_credits_v1_stale_owner.rs"
+negative_r67_quarantine_refund="$script_dir/negative/r67_resource_credits_v1_quarantine_refund.rs"
+negative_r67_quarantine_reuse="$script_dir/negative/r67_resource_credits_v1_quarantine_reuse.rs"
+negative_r67_partial_release="$script_dir/negative/r67_resource_credits_v1_partial_release.rs"
 negative_r61_release_without_native_shutdown="$script_dir/negative/r61_owner_async_custody_v1_release_without_native_shutdown.rs"
 negative_r61_incomplete_cleanup_release="$script_dir/negative/r61_owner_async_custody_v1_incomplete_cleanup_release.rs"
 negative_r61_native_failure_release="$script_dir/negative/r61_owner_async_custody_v1_native_failure_release.rs"
@@ -817,6 +826,15 @@ expected_negative_r66_window_extent=$(read_pin "$pin_dir/NEGATIVE_R66_WINDOW_EXT
 expected_negative_r66_window_generation=$(read_pin "$pin_dir/NEGATIVE_R66_WINDOW_GENERATION_SHA256")
 expected_negative_r66_window_completion=$(read_pin "$pin_dir/NEGATIVE_R66_WINDOW_COMPLETION_SHA256")
 expected_negative_r66_roster_bound=$(read_pin "$pin_dir/NEGATIVE_R66_ROSTER_BOUND_SHA256")
+expected_r67_resource_credits=$(read_pin "$pin_dir/R67_RESOURCE_CREDITS_SHA256")
+expected_negative_r67_partial_vector=$(read_pin "$pin_dir/NEGATIVE_R67_PARTIAL_VECTOR_SHA256")
+expected_negative_r67_overflow=$(read_pin "$pin_dir/NEGATIVE_R67_OVERFLOW_SHA256")
+expected_negative_r67_duplicate_refund=$(read_pin "$pin_dir/NEGATIVE_R67_DUPLICATE_REFUND_SHA256")
+expected_negative_r67_premature_refund=$(read_pin "$pin_dir/NEGATIVE_R67_PREMATURE_REFUND_SHA256")
+expected_negative_r67_stale_owner=$(read_pin "$pin_dir/NEGATIVE_R67_STALE_OWNER_SHA256")
+expected_negative_r67_quarantine_refund=$(read_pin "$pin_dir/NEGATIVE_R67_QUARANTINE_REFUND_SHA256")
+expected_negative_r67_quarantine_reuse=$(read_pin "$pin_dir/NEGATIVE_R67_QUARANTINE_REUSE_SHA256")
+expected_negative_r67_partial_release=$(read_pin "$pin_dir/NEGATIVE_R67_PARTIAL_RELEASE_SHA256")
 expected_negative_r61_release_without_native_shutdown=$(read_pin "$pin_dir/NEGATIVE_R61_RELEASE_WITHOUT_NATIVE_SHUTDOWN_SHA256")
 expected_negative_r61_incomplete_cleanup_release=$(read_pin "$pin_dir/NEGATIVE_R61_INCOMPLETE_CLEANUP_RELEASE_SHA256")
 expected_negative_r61_native_failure_release=$(read_pin "$pin_dir/NEGATIVE_R61_NATIVE_FAILURE_RELEASE_SHA256")
@@ -1544,6 +1562,15 @@ check_sources() {
     check_digest "$expected_negative_r66_window_generation" "$negative_r66_window_generation"
     check_digest "$expected_negative_r66_window_completion" "$negative_r66_window_completion"
     check_digest "$expected_negative_r66_roster_bound" "$negative_r66_roster_bound"
+    check_digest "$expected_r67_resource_credits" "$r67_resource_credits_proof"
+    check_digest "$expected_negative_r67_partial_vector" "$negative_r67_partial_vector"
+    check_digest "$expected_negative_r67_overflow" "$negative_r67_overflow"
+    check_digest "$expected_negative_r67_duplicate_refund" "$negative_r67_duplicate_refund"
+    check_digest "$expected_negative_r67_premature_refund" "$negative_r67_premature_refund"
+    check_digest "$expected_negative_r67_stale_owner" "$negative_r67_stale_owner"
+    check_digest "$expected_negative_r67_quarantine_refund" "$negative_r67_quarantine_refund"
+    check_digest "$expected_negative_r67_quarantine_reuse" "$negative_r67_quarantine_reuse"
+    check_digest "$expected_negative_r67_partial_release" "$negative_r67_partial_release"
     check_digest "$expected_negative_r61_release_without_native_shutdown" "$negative_r61_release_without_native_shutdown"
     check_digest "$expected_negative_r61_incomplete_cleanup_release" "$negative_r61_incomplete_cleanup_release"
     check_digest "$expected_negative_r61_native_failure_release" "$negative_r61_native_failure_release"
@@ -2242,6 +2269,15 @@ check_sources
     "$negative_r66_window_generation" \
     "$negative_r66_window_completion" \
     "$negative_r66_roster_bound" \
+    "$r67_resource_credits_proof" \
+    "$negative_r67_partial_vector" \
+    "$negative_r67_overflow" \
+    "$negative_r67_duplicate_refund" \
+    "$negative_r67_premature_refund" \
+    "$negative_r67_stale_owner" \
+    "$negative_r67_quarantine_refund" \
+    "$negative_r67_quarantine_reuse" \
+    "$negative_r67_partial_release" \
     "$negative_r61_release_without_native_shutdown" \
     "$negative_r61_incomplete_cleanup_release" \
     "$negative_r61_native_failure_release" \
@@ -2993,6 +3029,7 @@ check_positive "$r63_graph_reservation_proof" 'verification results:: 8 verified
 check_positive "$r64_payload_budget_proof" 'verification results:: 8 verified, 0 errors' r64-payload-budget
 check_positive "$r65_graph_versions_proof" 'verification results:: 8 verified, 0 errors' r65-graph-versions
 check_positive "$r66_compute_sdma_coexistence_proof" 'verification results:: 16 verified, 0 errors' r66-compute-sdma-coexistence
+check_positive "$r67_resource_credits_proof" 'verification results:: 14 verified, 0 errors' r67-resource-credits
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -3625,6 +3662,14 @@ check_negative "$negative_r66_window_extent" mutated_window_extent_v1 r66-window
 check_negative "$negative_r66_window_generation" mutated_window_generation_v1 r66-window-generation
 check_negative "$negative_r66_window_completion" mutated_window_completion_v1 r66-window-completion
 check_negative "$negative_r66_roster_bound" mutated_roster_bound_v1 r66-roster-bound
+check_negative "$negative_r67_partial_vector" mutated_partial_vector_v1 r67-partial-vector
+check_negative "$negative_r67_overflow" mutated_overflow_v1 r67-overflow
+check_negative "$negative_r67_duplicate_refund" mutated_duplicate_refund_v1 r67-duplicate-refund
+check_negative "$negative_r67_premature_refund" mutated_premature_refund_v1 r67-premature-refund
+check_negative "$negative_r67_stale_owner" mutated_stale_owner_v1 r67-stale-owner
+check_negative "$negative_r67_quarantine_refund" mutated_quarantine_refund_v1 r67-quarantine-refund
+check_negative "$negative_r67_quarantine_reuse" mutated_quarantine_reuse_v1 r67-quarantine-reuse
+check_negative "$negative_r67_partial_release" mutated_partial_release_v1 r67-partial-release
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
@@ -3633,7 +3678,7 @@ check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 r57_three_binding_compute_obligations=35 r57_three_binding_compute_mutations=23 r60_ordinary_fixed_dispatch_pipeline_obligations=46 r60_ordinary_fixed_dispatch_pipeline_mutations=26 r61_owner_async_custody_obligations=8 r61_owner_async_custody_mutations=8 r62_operation_control_obligations=8 r62_operation_control_mutations=8 r63_graph_reservation_obligations=8 r63_graph_reservation_mutations=8 r64_payload_budget_obligations=8 r64_payload_budget_mutations=8 r65_graph_versions_obligations=8 r65_graph_versions_mutations=8 r66_compute_sdma_coexistence_obligations=16 r66_compute_sdma_coexistence_mutations=8 expected_negative_files=632'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 r57_three_binding_compute_obligations=35 r57_three_binding_compute_mutations=23 r60_ordinary_fixed_dispatch_pipeline_obligations=46 r60_ordinary_fixed_dispatch_pipeline_mutations=26 r61_owner_async_custody_obligations=8 r61_owner_async_custody_mutations=8 r62_operation_control_obligations=8 r62_operation_control_mutations=8 r63_graph_reservation_obligations=8 r63_graph_reservation_mutations=8 r64_payload_budget_obligations=8 r64_payload_budget_mutations=8 r65_graph_versions_obligations=8 r65_graph_versions_mutations=8 r66_compute_sdma_coexistence_obligations=16 r66_compute_sdma_coexistence_mutations=8 r67_resource_credits_obligations=14 r67_resource_credits_mutations=8 expected_negative_files=640'
 actual_transcript=$(printf '%s\n' "$transcript" | /usr/bin/sha256sum | /usr/bin/awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

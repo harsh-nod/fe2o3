@@ -1,0 +1,179 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling version_check v0.9.5
+   Compiling serde_core v1.0.229
+   Compiling const_fn v0.4.12
+   Compiling scopeguard v1.2.0
+   Compiling lock_api v0.4.14
+   Compiling spin v0.12.3
+   Compiling generic-array v0.14.7
+   Compiling syn v2.0.119
+   Compiling syn v3.0.4
+   Compiling awint_internals v0.19.0
+   Compiling unicode-ident v1.0.24
+   Compiling serde_json v1.0.151
+   Compiling awint_core v0.19.0
+   Compiling awint_ext v0.19.0
+   Compiling recasting v0.2.3
+   Compiling bytemuck v1.25.2
+   Compiling semver v1.0.28
+   Compiling linkme-impl v0.3.37
+   Compiling rustc_version v0.4.1
+   Compiling safe_arch v1.2.0
+   Compiling triple_arena v0.15.1
+   Compiling awint_macro_internals v0.19.0
+   Compiling block-buffer v0.10.4
+   Compiling serde_derive v1.0.229
+   Compiling crypto-common v0.1.7
+   Compiling slotmap v1.1.1
+   Compiling aho-corasick v1.1.5
+   Compiling regex-syntax v0.8.11
+   Compiling equivalent v1.0.2
+   Compiling allocator-api2 v0.2.21
+   Compiling unicode-segmentation v1.13.3
+   Compiling rustc_apfloat v0.2.3+llvm-462a31f5a5ab
+   Compiling linkme v0.3.37
+   Compiling foldhash v0.2.0
+   Compiling thiserror v2.0.16
+   Compiling hashbrown v0.17.1
+   Compiling regex-automata v0.4.18
+   Compiling convert_case v0.11.0
+   Compiling awint_macros v0.19.0
+   Compiling thiserror-impl v2.0.16
+   Compiling digest v0.10.7
+   Compiling serde v1.0.229
+   Compiling wide v1.7.0
+   Compiling curve25519-dalek v4.1.3
+   Compiling bytes v1.12.1
+   Compiling smallvec v1.15.2
+   Compiling cpufeatures v0.2.17
+   Compiling pliron-derive v0.17.0 (https://github.com/harsh-nod/pliron.git?rev=5bdf861bf03e7f20242b25717fb653336d02e487#5bdf861b)
+   Compiling combine v4.6.8
+   Compiling regex v1.13.1
+   Compiling awint v0.19.0
+   Compiling indexmap v2.14.1
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling utf8-chars v3.0.7
+   Compiling getrandom v0.2.17
+   Compiling log v0.4.34
+   Compiling dyn-clone v1.0.20
+   Compiling downcast-rs v2.0.2
+   Compiling once_vec v0.4.0
+   Compiling subtle v2.6.1
+   Compiling rustc-hash v2.1.3
+   Compiling signature v2.2.0
+   Compiling ed25519 v2.2.3
+   Compiling rand_core v0.6.4
+   Compiling sha2 v0.10.9
+   Compiling fe2o3-kernel-ir v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kernel-ir)
+   Compiling hi_sparse_bitset v0.9.0
+   Compiling fe2o3-kernel-descriptor v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kernel-descriptor)
+   Compiling pliron v0.17.0 (https://github.com/harsh-nod/pliron.git?rev=5bdf861bf03e7f20242b25717fb653336d02e487#5bdf861b)
+   Compiling ed25519-dalek v2.2.0
+   Compiling fe2o3-build-authority v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-build-authority)
+   Compiling fe2o3-rustc-invocation v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-rustc-invocation)
+   Compiling fe2o3-mir-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-mir-model)
+   Compiling fe2o3-compiler-lineage v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-lineage)
+   Compiling reserved-fe2o3-symbols v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/reserved-fe2o3-symbols)
+   Compiling libc v0.2.189
+   Compiling fe2o3-proof-contracts v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-proof-contracts)
+   Compiling fe2o3-functional-proof v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-functional-proof)
+   Compiling fe2o3-pliron-owner-core v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-pliron-owner-core)
+   Compiling dialect-kernel v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-kernel)
+   Compiling dialect-proof v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-proof)
+   Compiling dialect-gpu v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-gpu)
+   Compiling dialect-mir v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-mir)
+   Compiling fe2o3-compiler-ffi v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-ffi)
+   Compiling fe2o3-kernel-analysis v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kernel-analysis)
+   Compiling fe2o3-artifact-transaction v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-artifact-transaction)
+   Compiling rustix v1.1.4
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+   Compiling fe2o3-llvm-handoff v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-llvm-handoff)
+   Compiling fe2o3-pliron v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-pliron)
+   Compiling fe2o3-kernel-opt v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kernel-opt)
+   Compiling find-msvc-tools v0.1.11
+   Compiling shlex v2.0.1
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling cc v1.4.4
+   Compiling fe2o3-amdgcn-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amdgcn-model)
+   Compiling fe2o3-external-anchor-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-external-anchor-protocol)
+   Compiling winnow v1.0.4
+   Compiling object v0.39.1
+   Compiling dialect-amdgcn v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-amdgcn)
+   Compiling toml_parser v1.1.3+spec-1.1.0
+   Compiling fe2o3-artifacts v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-artifacts)
+   Compiling fe2o3-compiler-execution-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-execution-protocol)
+   Compiling fe2o3-hip-sys v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hip-sys)
+   Compiling fe2o3-lower-mir-kernel v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-lower-mir-kernel)
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling serde_spanned v1.1.1
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling toml v1.1.4+spec-1.1.0
+   Compiling fe2o3-macros v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-macros)
+warning: fe2o3-hip-sys@0.1.0: Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-gcc": No such file or directory (os error 2)
+warning: fe2o3-hip-sys@0.1.0: Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-gcc": No such file or directory (os error 2)
+error: failed to run custom build command for `fe2o3-hip-sys v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hip-sys)`
+
+Caused by:
+  process didn't exit successfully: `/home/harsh/.codex-tmp/fe2o3-r61-execution/target/debug/build/fe2o3-hip-sys-35494bb82861063f/build-script-build` (exit status: 1)
+  --- stdout
+  cargo:rerun-if-env-changed=ROCM_PATH
+  cargo:rerun-if-env-changed=HIP_PATH
+  cargo:rerun-if-env-changed=FE2O3_HIP_SYS_DISABLE
+  cargo:rerun-if-env-changed=CARGO_FEATURE_QUALIFICATION_LEGACY_NATIVE_HIP
+  cargo:rerun-if-changed=native/device_properties.c
+  cargo:rerun-if-changed=native/device_properties.h
+  cargo:rerun-if-changed=native/cooperative_peer_abi.c
+  cargo:rerun-if-changed=native/memory_topology_abi.c
+  cargo:rustc-check-cfg=cfg(fe2o3_hip_device_properties)
+  cargo:rustc-check-cfg=cfg(fe2o3_hip_cooperative_peer)
+  cargo:rustc-check-cfg=cfg(fe2o3_hip_memory_topology)
+  cargo:rustc-check-cfg=cfg(fe2o3_hip_runtime)
+  cargo:rustc-link-search=native=/opt/rocm/lib
+  cargo:rustc-link-lib=dylib=amdhip64
+  cargo:rustc-cfg=fe2o3_hip_runtime
+  cargo:rerun-if-env-changed=CC_FORCE_DISABLE
+  CC_FORCE_DISABLE = None
+  cargo:rerun-if-env-changed=CC_x86_64-unknown-linux-musl
+  CC_x86_64-unknown-linux-musl = None
+  cargo:rerun-if-env-changed=CC_x86_64_unknown_linux_musl
+  CC_x86_64_unknown_linux_musl = None
+  cargo:rerun-if-env-changed=TARGET_CC
+  TARGET_CC = None
+  cargo:rerun-if-env-changed=CC
+  CC = None
+  cargo:rerun-if-env-changed=CROSS_COMPILE
+  CROSS_COMPILE = None
+  PATH = Some(/home/harsh/.codex-openai/packages/standalone/releases/0.154.0-x86_64-unknown-linux-musl/codex-path:/home/harsh/.local/bin:/home/harsh/bin:/home/harsh/.codex-openai/tmp/arg0/codex-arg0UmtjNj:/home/harsh/.codex-openai/packages/standalone/releases/0.154.0-x86_64-unknown-linux-musl/codex-path:/home/harsh/.codex-openai/tmp/arg0/codex-arg04khUCD:/home/harsh/.nvm/versions/node/v22.22.1/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/harsh/.local/bin:/home/harsh/bin:/home/harsh/bin:/home/harsh/.nvm/versions/node/v22.22.1/bin:/home/harsh/.local/bin:/home/harsh/.cargo/bin:/home/harsh/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/usr/lib/wsl/lib:/mnt/c/Users/harmenon/Downloads/OpenSSH-Win64/OpenSSH-Win64:/mnt/c/WINDOWS/system32:/mnt/c/WINDOWS:/mnt/c/WINDOWS/System32/Wbem:/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/:/mnt/c/WINDOWS/System32/OpenSSH/:/mnt/c/Program Files/dotnet/:/mnt/c/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/:/mnt/c/Program Files (x86)/Microsoft SQL Server/150/Tools/Binn/:/mnt/c/Program Files/Microsoft SQL Server/150/Tools/Binn/:/mnt/c/Program Files/Microsoft SQL Server/150/DTS/Binn/:/mnt/c/Program Files/nodejs/:/mnt/c/ProgramData/Self-Host Agent/services:/mnt/c/Users/harmenon/AppData/Local/Programs/Python/Python310/Scripts/:/mnt/c/Users/harmenon/AppData/Local/Programs/Python/Python310/:/mnt/c/Users/harmenon/AppData/Local/Microsoft/WindowsApps:/mnt/c/Users/harmenon/AppData/Local/Programs/cursor/resources/app/bin:/mnt/c/Users/harmenon/AppData/Local/Programs/Microsoft VS Code/bin:/mnt/c/Users/harmenon/AppData/Roaming/npm:/mnt/c/Users/harmenon/AppData/Local/Programs/Zed/bin:/snap/bin)
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:warning=Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-gcc": No such file or directory (os error 2)
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  cargo:warning=Compiler family detection failed due to error: ToolNotFound: failed to find tool "x86_64-linux-musl-gcc": No such file or directory (os error 2)
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  cargo:rerun-if-env-changed=CFLAGS
+  CFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CFLAGS
+  TARGET_CFLAGS = None
+  cargo:rerun-if-env-changed=CFLAGS_x86_64_unknown_linux_musl
+  CFLAGS_x86_64_unknown_linux_musl = None
+  cargo:rerun-if-env-changed=CFLAGS_x86_64-unknown-linux-musl
+  CFLAGS_x86_64-unknown-linux-musl = None
+  cargo:rerun-if-env-changed=CFLAGS
+  CFLAGS = None
+  cargo:rerun-if-env-changed=TARGET_CFLAGS
+  TARGET_CFLAGS = None
+  cargo:rerun-if-env-changed=CFLAGS_x86_64_unknown_linux_musl
+  CFLAGS_x86_64_unknown_linux_musl = None
+  cargo:rerun-if-env-changed=CFLAGS_x86_64-unknown-linux-musl
+  CFLAGS_x86_64-unknown-linux-musl = None
+
+  --- stderr
+
+
+  error occurred in cc-rs: failed to find tool "x86_64-linux-musl-gcc": No such file or directory (os error 2)
+
+
+warning: build failed, waiting for other jobs to finish...

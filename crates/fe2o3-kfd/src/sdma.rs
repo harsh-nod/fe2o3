@@ -342,7 +342,7 @@ pub(crate) enum Gfx942SdmaBufferStorageV1 {
     Device(Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum Gfx942SdmaBufferStorageIdentityV1 {
     Host(SharedGttAllocationIdentityV1),
     Device(Gfx942DeviceMemoryIdentityV1),
@@ -808,6 +808,15 @@ struct PersistentSdmaWindowSlotV1 {
 struct PersistentSdmaWindowRecordV1 {
     request: Gfx942SdmaCopyRequestV1,
     packet_count: usize,
+}
+
+pub(crate) struct RetainedDirectionalSdmaObservationV1<'a> {
+    pub(crate) identity: [u8; 32],
+    pub(crate) source: &'a Gfx942SdmaBufferV1,
+    pub(crate) destination: &'a Gfx942SdmaBufferV1,
+    pub(crate) source_offset: u64,
+    pub(crate) destination_offset: u64,
+    pub(crate) copy_bytes: u32,
 }
 
 pub struct Gfx942XgmiCompletedCopyV1 {
@@ -4804,6 +4813,78 @@ fn terminal_sdma_queue_set_creation_failure(
 }
 
 impl Gfx942SdmaQueueSetV1 {
+    pub(crate) fn observe_directional_retained_request_v1(
+        &self,
+        expected_owner: QueueKeyV1,
+        tickets: &[Gfx942SdmaCopyTicketV1],
+    ) -> Option<RetainedDirectionalSdmaObservationV1<'_>> {
+        use sha2::{Digest, Sha256};
+        use std::hash::{Hash, Hasher};
+        struct ObserverHash(Sha256);
+        impl Hasher for ObserverHash {
+            fn finish(&self) -> u64 {
+                unreachable!("full digest only")
+            }
+            fn write(&mut self, bytes: &[u8]) {
+                self.0.update(bytes);
+            }
+        }
+        self.compute_coexistence_endpoints_v1(expected_owner)?;
+        let Self::Directional(owners) = self else {
+            return None;
+        };
+        let first = *tickets.first()?;
+        let owner = owners
+            .iter()
+            .find(|owner| owner.queue_id == first.queue_id)?;
+        let (source, destination, source_offset, destination_offset, copy_bytes) =
+            if tickets.len() == 1 && owner.records.get(usize::from(first.slot))?.is_some() {
+                let slot = owner.validate_ticket(first).ok()?;
+                let record = owner.records[slot].as_ref()?;
+                (
+                    &record.source,
+                    &record.destination,
+                    record.source_offset,
+                    record.destination_offset,
+                    record.copy_bytes,
+                )
+            } else {
+                let anchor = owner.validate_persistent_window_tickets(tickets).ok()?;
+                let request = &owner.persistent_window_records[anchor].as_ref()?.request;
+                (
+                    &request.source,
+                    &request.destination,
+                    request.source_offset,
+                    request.destination_offset,
+                    request.copy_bytes,
+                )
+            };
+        let mut hash = ObserverHash(Sha256::new());
+        hash.write(b"fe2o3.r66.retained-directional-sdma.v1\0");
+        tickets.len().hash(&mut hash);
+        for ticket in tickets {
+            ticket.owner.hash(&mut hash);
+            ticket.queue_id.hash(&mut hash);
+            ticket.slot.hash(&mut hash);
+            ticket.generation.hash(&mut hash);
+        }
+        for buffer in [source, destination] {
+            buffer.storage_identity().hash(&mut hash);
+            buffer.pool_generation.hash(&mut hash);
+            buffer.logical_bytes.hash(&mut hash);
+            buffer.physical_bytes().hash(&mut hash);
+        }
+        (source_offset, destination_offset, copy_bytes).hash(&mut hash);
+        Some(RetainedDirectionalSdmaObservationV1 {
+            identity: hash.0.finalize().into(),
+            source,
+            destination,
+            source_offset,
+            destination_offset,
+            copy_bytes,
+        })
+    }
+
     /// Visits every retained endpoint only after validating both complete slot
     /// ledgers. This is a borrowed custody observation, not a transferable permit.
     pub(crate) fn compute_coexistence_endpoints_v1(

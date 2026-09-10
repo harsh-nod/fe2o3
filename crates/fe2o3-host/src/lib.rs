@@ -13,6 +13,7 @@ mod generated_argument_borrow;
 mod generated_argument_plan;
 mod generated_kfd_arguments;
 mod generated_kfd_invocation;
+mod generated_runtime_arguments;
 #[cfg(feature = "qualification-legacy-hip-hsa")]
 mod generated_worker_v3_dispatch;
 #[cfg(feature = "qualification-legacy-hip-hsa")]
@@ -197,6 +198,14 @@ pub use generated_kfd_invocation::{
     GeneratedWorkerV3KfdInvocation, GeneratedWorkerV3KfdInvocationError,
     WorkerV3ApplicationExecutionBindingV1,
 };
+pub use generated_runtime_arguments::{
+    CompilerGeneratedRuntimeArguments, GeneratedRuntimeArgumentBindingV1,
+    GeneratedRuntimeArgumentBudgetV1, GeneratedRuntimeArgumentErrorV1,
+    GeneratedRuntimeArgumentFootprintV1, GeneratedRuntimeArgumentLimitsV1,
+    GeneratedRuntimeOutputDecoderV1, GeneratedRuntimePackedArgumentsV1, GeneratedRuntimeReadSlice,
+    GeneratedRuntimeReadWriteSlice, GeneratedRuntimeResultV1, GeneratedRuntimeSliceBindingV1,
+    GeneratedRuntimeWriteSlice,
+};
 #[doc(hidden)]
 #[cfg(feature = "qualification-legacy-hip-hsa")]
 pub use generated_worker_v3_dispatch::{
@@ -295,6 +304,14 @@ pub mod __generated {
     pub use crate::production_application::load_admitted_worker_v3_application_v1;
     #[cfg(target_os = "linux")]
     pub use crate::production_application::prepare_admitted_worker_v3_kfd_application_v1;
+    pub use crate::{
+        CompilerGeneratedRuntimeArguments, GeneratedRuntimeArgumentBindingV1,
+        GeneratedRuntimeArgumentBudgetV1, GeneratedRuntimeArgumentErrorV1,
+        GeneratedRuntimeArgumentFootprintV1, GeneratedRuntimeArgumentLimitsV1,
+        GeneratedRuntimeOutputDecoderV1, GeneratedRuntimePackedArgumentsV1,
+        GeneratedRuntimeReadSlice, GeneratedRuntimeReadWriteSlice, GeneratedRuntimeResultV1,
+        GeneratedRuntimeSliceBindingV1, GeneratedRuntimeWriteSlice,
+    };
 
     pub use crate::{
         CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationRosterEntryV1,

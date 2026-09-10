@@ -71,6 +71,7 @@ mod r63_graph_reservation;
 mod r64_payload_budget;
 mod r65_graph_versions;
 mod r66_compute_sdma_coexistence;
+mod r67_resource_credits;
 mod r9_native_evidence;
 mod typed_async;
 
@@ -129,6 +130,7 @@ pub use r63_graph_reservation::*;
 pub use r64_payload_budget::*;
 pub use r65_graph_versions::*;
 pub use r66_compute_sdma_coexistence::*;
+pub use r67_resource_credits::*;
 pub use typed_async::*;
 
 #[cfg(test)]

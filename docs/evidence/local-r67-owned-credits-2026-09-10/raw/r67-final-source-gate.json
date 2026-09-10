@@ -1,0 +1,216 @@
+[
+  {
+    "name": "gnu-tests-final",
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "--no-fail-fast",
+      "-p",
+      "fe2o3-completion",
+      "-p",
+      "fe2o3-runtime-model",
+      "-p",
+      "fe2o3-kfd",
+      "-p",
+      "fe2o3-runtime",
+      "--all-features",
+      "--all-targets"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r67-gnu-tests-final.log",
+    "returncode": 0,
+    "elapsed_seconds": 39.099
+  },
+  {
+    "name": "musl-tests-final",
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "--no-fail-fast",
+      "-p",
+      "fe2o3-completion",
+      "-p",
+      "fe2o3-runtime-model",
+      "-p",
+      "fe2o3-kfd",
+      "-p",
+      "fe2o3-runtime",
+      "--all-features",
+      "--all-targets",
+      "--target",
+      "x86_64-unknown-linux-musl"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r67-musl-tests-final.log",
+    "returncode": 0,
+    "elapsed_seconds": 51.133
+  },
+  {
+    "name": "musl-doctests-final",
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "--no-fail-fast",
+      "-p",
+      "fe2o3-completion",
+      "-p",
+      "fe2o3-runtime-model",
+      "-p",
+      "fe2o3-kfd",
+      "-p",
+      "fe2o3-runtime",
+      "--all-features",
+      "-p",
+      "fe2o3-host",
+      "--doc",
+      "--target",
+      "x86_64-unknown-linux-musl"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r67-musl-doctests-final.log",
+    "returncode": 101,
+    "elapsed_seconds": 120.438
+  },
+  {
+    "name": "musl-runtime-doctests-final",
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "--no-fail-fast",
+      "-p",
+      "fe2o3-completion",
+      "-p",
+      "fe2o3-runtime-model",
+      "-p",
+      "fe2o3-kfd",
+      "-p",
+      "fe2o3-runtime",
+      "--all-features",
+      "--doc",
+      "--target",
+      "x86_64-unknown-linux-musl"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r67-musl-runtime-doctests-final.log",
+    "returncode": 0,
+    "elapsed_seconds": 4.217
+  },
+  {
+    "name": "musl-host-production-doctests-final",
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "-p",
+      "fe2o3-host",
+      "--doc",
+      "--target",
+      "x86_64-unknown-linux-musl"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r67-musl-host-production-doctests-final.log",
+    "returncode": 0,
+    "elapsed_seconds": 43.013
+  },
+  {
+    "name": "host-lib-final",
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "-p",
+      "fe2o3-host",
+      "--lib"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r67-host-lib-final.log",
+    "returncode": 0,
+    "elapsed_seconds": 15.42
+  },
+  {
+    "name": "host-all-feature-lib-final",
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "-p",
+      "fe2o3-host",
+      "--all-features",
+      "--lib"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r67-host-all-feature-lib-final.log",
+    "returncode": 101,
+    "elapsed_seconds": 13.537
+  },
+  {
+    "name": "macro-fixtures-final",
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "-p",
+      "fe2o3-macros",
+      "--test",
+      "typed_kernel_fixtures"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r67-macro-fixtures-final.log",
+    "returncode": 0,
+    "elapsed_seconds": 11.165
+  },
+  {
+    "name": "python-final",
+    "command": [
+      "python3",
+      "-B",
+      "-m",
+      "unittest",
+      "test_run_r26_inplace_runner",
+      "test_check_r40_striped",
+      "test_run_r40_striped_runner",
+      "test_run_r60_pipeline",
+      "test_check_r60_pipeline",
+      "test_run_r61_owner",
+      "test_run_r62_control",
+      "test_run_r63_graph",
+      "test_run_r65_drain_versions",
+      "test_run_r66_coexistence",
+      "test_check_scale3_protocol"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution/benchmarks/runtime_gfx942",
+    "log": "/home/harsh/.codex-tmp/r67-python-final.log",
+    "returncode": 0,
+    "elapsed_seconds": 6.21
+  },
+  {
+    "name": "fmt-final",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r67-fmt-final.log",
+    "returncode": 0,
+    "elapsed_seconds": 25.34
+  },
+  {
+    "name": "whitespace-final",
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+    "log": "/home/harsh/.codex-tmp/r67-whitespace-final.log",
+    "returncode": 0,
+    "elapsed_seconds": 0.08
+  }
+]

@@ -12,7 +12,9 @@ use std::time::{Duration, Instant};
 
 mod graph;
 pub(crate) use graph::*;
+mod allocation_admission;
 mod drain;
+use allocation_admission::ContextAllocationAdmissionV1;
 
 /// Maximum number of devices retained by one runtime context.
 pub const MAX_RUNTIME_DEVICES_V1: usize = 256;
@@ -77,6 +79,11 @@ runtime_id!(RuntimeAllocationIdV1);
 runtime_id!(RuntimeModuleIdV1);
 runtime_id!(RuntimeEventIdV1);
 runtime_id!(RuntimeSubmissionIdV1);
+
+#[cfg(test)]
+pub(crate) const fn resource_credit_test_device_v1() -> RuntimeDeviceIdV1 {
+    RuntimeDeviceIdV1::new(1, 2)
+}
 
 /// Stable capability inventory reported for one concrete backend device.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -840,6 +847,7 @@ pub struct RuntimeCleanupReportV1<E> {
     retained: RuntimeRetainedResourcesV1,
     terminal: bool,
     graph_reserved: bool,
+    allocation_credit_records: usize,
 }
 
 impl<E> RuntimeCleanupReportV1<E> {
@@ -856,11 +864,20 @@ impl<E> RuntimeCleanupReportV1<E> {
     }
 
     pub const fn is_complete(&self) -> bool {
-        !self.terminal && !self.graph_reserved && self.retained.is_empty()
+        !self.terminal
+            && !self.graph_reserved
+            && self.retained.is_empty()
+            && self.allocation_credit_records == 0
     }
 
     pub const fn is_graph_reserved(&self) -> bool {
         self.graph_reserved
+    }
+
+    /// Remaining opt-in allocation credit records, including unidentified
+    /// quarantined attempts. This count is not a full native resource inventory.
+    pub const fn allocation_credit_records_v1(&self) -> usize {
+        self.allocation_credit_records
     }
 }
 
@@ -948,6 +965,7 @@ pub struct RuntimeContextV1<B: RuntimeBackendV1> {
     backend_streams: HashSet<u64>,
     allocations: HashMap<RuntimeAllocationIdV1, AllocationRecordV1>,
     backend_allocations: HashSet<u64>,
+    allocation_admission: ContextAllocationAdmissionV1,
     modules: HashMap<RuntimeModuleIdV1, ModuleRecordV1>,
     backend_modules: HashSet<u64>,
     kernels: HashMap<u64, KernelRecordV1>,
@@ -1092,6 +1110,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             backend_streams: HashSet::new(),
             allocations: HashMap::new(),
             backend_allocations: HashSet::new(),
+            allocation_admission: ContextAllocationAdmissionV1::default(),
             modules: HashMap::new(),
             backend_modules: HashSet::new(),
             kernels: HashMap::new(),
@@ -1296,11 +1315,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         allocation_ids.sort_unstable();
         for id in allocation_ids {
             let record = self.allocations[&id];
-            match self
-                .backend
-                .release_allocation_v1(record.backend_allocation)
-            {
+            match self.release_admitted_allocation_backend_v1(id, record.backend_allocation) {
                 Ok(()) => {
+                    self.dispose_allocation_credits_v1(id);
                     self.allocations.remove(&id);
                     self.backend_allocations.remove(&record.backend_allocation);
                 }
@@ -1353,6 +1370,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             },
             terminal: self.terminal,
             graph_reserved: self.graph_reservation.is_some(),
+            allocation_credit_records: self.allocation_admission.retained_records(),
         }
     }
 
@@ -1672,10 +1690,62 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         }
         let backend_device = device_record.backend_device;
         let id = RuntimeAllocationIdV1::new(self.context_generation, self.next_id()?);
-        let result = self
-            .backend
-            .allocate_v1(backend_device, kind, byte_len, alignment);
-        let backend_allocation = self.backend_result(result)?;
+        if self
+            .allocation_admission
+            .prepare_registry(device)
+            .map_err(|_| RuntimeValidationErrorV1::Capacity)?
+        {
+            self.allocations
+                .try_reserve(1)
+                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+            self.backend_allocations
+                .try_reserve(1)
+                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        }
+        let credits = self
+            .allocation_admission
+            .reserve(device, byte_len)
+            .map_err(|error| {
+                if error == crate::RuntimeResourceCreditErrorV1::Invariant {
+                    self.terminal = true;
+                }
+                RuntimeValidationErrorV1::Capacity
+            })?;
+        let result = if credits.is_some() {
+            match catch_unwind(AssertUnwindSafe(|| {
+                self.backend
+                    .allocate_v1(backend_device, kind, byte_len, alignment)
+            })) {
+                Ok(result) => result,
+                Err(payload) => {
+                    self.terminal = true;
+                    drop(credits);
+                    std::panic::resume_unwind(payload);
+                }
+            }
+        } else {
+            self.backend
+                .allocate_v1(backend_device, kind, byte_len, alignment)
+        };
+        let backend_allocation = match result {
+            Ok(handle) => handle,
+            Err(failure) => {
+                if let Some(credits) = credits {
+                    if matches!(&failure, RuntimeBackendFailureV1::Rejected(_)) {
+                        if let Err(error) = credits.release_after_rejection() {
+                            self.terminal = true;
+                            panic!(
+                                "allocation credit owner invariant failed after rejection: {error:?}"
+                            );
+                        }
+                    } else {
+                        credits.quarantine();
+                    }
+                }
+                return self.backend_result(Err(failure));
+            }
+        };
+        self.allocation_admission.attach(id, credits);
         let protocol_error = self.backend_handle_protocol_error(
             RuntimeBackendResourceKindV1::Allocation,
             backend_allocation,
@@ -1703,10 +1773,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .allocations
             .get(&allocation)
             .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?;
-        let result = self
-            .backend
-            .release_allocation_v1(record.backend_allocation);
+        let result =
+            self.release_admitted_allocation_backend_v1(allocation, record.backend_allocation);
         self.backend_result(result)?;
+        self.dispose_allocation_credits_v1(allocation);
         self.allocations.remove(&allocation);
         self.backend_allocations.remove(&record.backend_allocation);
         Ok(())
@@ -3194,6 +3264,7 @@ pub enum RuntimePollV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod allocation_admission_tests;
 
     #[derive(Debug)]
     struct MockError(&'static str);
@@ -3252,9 +3323,40 @@ mod tests {
         TerminalFirst,
     }
 
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    enum MockMemoryFailure {
+        #[default]
+        None,
+        Rejected,
+        Quiescent,
+        Terminal,
+        Panic,
+    }
+
+    fn mock_memory_failure_v1(
+        failure: MockMemoryFailure,
+    ) -> Result<(), RuntimeBackendFailureV1<MockError>> {
+        match failure {
+            MockMemoryFailure::None => Ok(()),
+            MockMemoryFailure::Rejected => Err(RuntimeBackendFailureV1::Rejected(MockError(
+                "allocation rejected",
+            ))),
+            MockMemoryFailure::Quiescent => Err(RuntimeBackendFailureV1::Quiescent(MockError(
+                "allocation quiescent failure",
+            ))),
+            MockMemoryFailure::Terminal => Err(RuntimeBackendFailureV1::Terminal(MockError(
+                "allocation terminal failure",
+            ))),
+            MockMemoryFailure::Panic => panic!("scripted allocation adapter panic"),
+        }
+    }
+
     #[derive(Debug, Default)]
     struct MockBackend {
         next: u64,
+        allocation_calls: usize,
+        allocation_failure: MockMemoryFailure,
+        release_allocation_failure: MockMemoryFailure,
         memory: HashMap<u64, Vec<u8>>,
         polls: HashMap<u64, u8>,
         terminal_on_submit: bool,
@@ -3462,8 +3564,14 @@ mod tests {
             byte_len: u64,
             _alignment: u64,
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            self.allocation_calls += 1;
+            let failure = core::mem::take(&mut self.allocation_failure);
+            if failure == MockMemoryFailure::Rejected {
+                mock_memory_failure_v1(failure)?;
+            }
             let identity = self.handle(MockHandleKind::Allocation);
             self.memory.insert(identity, vec![0; byte_len as usize]);
+            mock_memory_failure_v1(failure)?;
             Ok(identity)
         }
 
@@ -3473,6 +3581,8 @@ mod tests {
         ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
             self.cleanup_log
                 .push((MockCleanupKind::Allocation, allocation));
+            let failure = core::mem::take(&mut self.release_allocation_failure);
+            mock_memory_failure_v1(failure)?;
             self.memory.remove(&allocation);
             Ok(())
         }

@@ -144,7 +144,7 @@ impl Gfx942PersistentDirectionalSdmaHostBindingV1 {
         }
     }
 
-    fn matches(self, host: &Gfx942SdmaBufferV1) -> bool {
+    pub(crate) fn matches(self, host: &Gfx942SdmaBufferV1) -> bool {
         host.belongs_to(self.queue)
             && host.storage_identity() == self.storage_identity
             && host.pool_generation() == self.pool_generation
@@ -375,6 +375,14 @@ impl Gfx942DirectionalPersistentSdmaSubmissionV1 {
 
     pub const fn copy_bytes(&self) -> u32 {
         self.copy_bytes
+    }
+
+    pub const fn host_offset(&self) -> u64 {
+        self.host_offset
+    }
+
+    pub const fn device_offset(&self) -> u64 {
+        self.device_offset
     }
 }
 

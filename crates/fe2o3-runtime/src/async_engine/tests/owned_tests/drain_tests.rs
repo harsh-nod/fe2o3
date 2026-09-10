@@ -1,4 +1,85 @@
 use super::*;
+use crate::{RuntimeAsyncCancelResultV1 as Cancel, RuntimeAsyncOperationPhaseV1 as Phase};
+
+struct DrainArgs(crate::RuntimeAllocationIdV1);
+
+impl RuntimeArgumentsV1 for DrainArgs {
+    const SIGNATURE_V1: [u8; 32] = [0x68; 32];
+
+    fn encode_explicit_kernarg_v1(&self) -> Vec<u8> {
+        vec![0; 8]
+    }
+
+    fn bindings_v1(&self) -> Vec<RuntimeBindingV1> {
+        vec![RuntimeBindingV1 {
+            region: crate::RuntimeMemoryRegionV1 {
+                allocation: self.0,
+                access: crate::RuntimeAccessV1::ReadWrite,
+                byte_offset: 0,
+                byte_len: 64,
+            },
+            kernarg_byte_offset: 0,
+        }]
+    }
+}
+
+struct DrainFixture {
+    stream: RuntimeStreamIdV1,
+    kernel: Arc<crate::TypedRuntimeKernelV1<DrainArgs>>,
+    arguments: DrainArgs,
+}
+
+impl DrainFixture {
+    fn new(handle: &RuntimeAsyncProgressHandleV1<ThreadBoundBackend>) -> Self {
+        handle
+            .observer()
+            .try_with_context(|context| {
+                let device = context.devices()[0].id();
+                context
+                    .configure_allocation_admission_v1(device, 64, 1)
+                    .unwrap();
+                let stream = context.create_stream(device).unwrap();
+                let module = context.load_module(device, &[1]).unwrap();
+                let kernel = Arc::new(
+                    context
+                        .resolve_kernel::<DrainArgs>(module, "drain")
+                        .unwrap(),
+                );
+                let allocation = context
+                    .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 8)
+                    .unwrap();
+                context.write_allocation(allocation, 0, &[0; 64]).unwrap();
+                let usage = context
+                    .allocation_admission_usage_v1(device)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    usage.used,
+                    crate::RuntimeResourceVectorV1::ZERO
+                        .with(crate::RuntimeResourceKindV1::RequestedAllocationBytes, 64)
+                        .with(crate::RuntimeResourceKindV1::AllocationRecords, 1)
+                );
+                assert_eq!(usage.retained_records, 1);
+                Self {
+                    stream,
+                    kernel,
+                    arguments: DrainArgs(allocation),
+                }
+            })
+            .unwrap()
+    }
+
+    fn request(&self) -> RuntimeAsyncLaunchRequestV1<DrainArgs> {
+        RuntimeAsyncLaunchRequestV1::new(
+            self.stream,
+            self.kernel.clone(),
+            &self.arguments,
+            geometry(),
+            vec![],
+        )
+        .unwrap()
+    }
+}
 
 fn paused_owner(handle: &RuntimeAsyncProgressHandleV1<ThreadBoundBackend>) -> Arc<Barrier> {
     let entered = Arc::new(Barrier::new(2));
@@ -15,6 +96,292 @@ fn paused_owner(handle: &RuntimeAsyncProgressHandleV1<ThreadBoundBackend>) -> Ar
     );
     entered.wait();
     release
+}
+
+#[test]
+fn drn3a_accepted_submit_rejection_resolves_once_without_native_custody_or_reissue() {
+    let state = Arc::new(Mutex::new(MockState::default()));
+    let trace = Arc::new(Mutex::new(OwnerTrace::default()));
+    let (engine, handle) = start(state.clone(), trace.clone());
+    let fixture = DrainFixture::new(&handle);
+    let release = paused_owner(&handle);
+    state
+        .lock()
+        .unwrap()
+        .submit_failures
+        .push_back(RuntimeBackendFailureV1::Rejected(MockError(
+            "drain-submit-rejected",
+        )));
+    let request = fixture.request();
+    let bytes = request.snapshot_bytes();
+    assert!(bytes > 0);
+    let mut operation = Box::pin(handle.enqueue_launch_tracked(request).unwrap());
+    let control = operation.control();
+    assert!(control.same_operation(&operation.control()));
+    assert_eq!(control.phase(), Phase::Queued);
+    assert_eq!(handle.observer().snapshot_bytes_in_use(), bytes);
+    assert_eq!(handle.observer().reply_cells_in_use(), 2);
+    let drain = handle.begin_drain(32).unwrap();
+    assert!(matches!(
+        handle.enqueue_launch_tracked(fixture.request()),
+        Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
+    ));
+    assert_eq!(handle.observer().snapshot_bytes_in_use(), bytes);
+    assert_eq!(handle.observer().reply_cells_in_use(), 2);
+    release.wait();
+    let report = join_command(drain).unwrap();
+    assert_eq!(report.outcome, RuntimeAsyncDrainOutcomeV1::Quiescent);
+    assert_eq!(report.retained_submissions.total_submissions, 0);
+    assert_eq!(report.operations_remaining, 0);
+    assert!(report.queued_commands_exhausted);
+    let shutdown = engine.shutdown().unwrap();
+    assert_eq!(
+        shutdown.disposition,
+        RuntimeAsyncOwnedDispositionV1::Released
+    );
+    let cleanup = shutdown.cleanup.unwrap();
+    assert!(cleanup.is_complete());
+    assert_eq!(cleanup.allocation_credit_records_v1(), 0);
+    assert_eq!(handle.observer().snapshot_bytes_in_use(), 0);
+    assert_eq!(handle.observer().reply_cells_in_use(), 1);
+    let Poll::Ready(Ok(result)) = operation
+        .as_mut()
+        .poll(&mut Context::from_waker(Waker::noop()))
+    else {
+        panic!("accepted rejection must deliver its sole operation reply");
+    };
+    assert!(result.submission.is_none());
+    assert!(matches!(
+        result.observation,
+        Err(RuntimeErrorV1::BackendRejected(MockError(
+            "drain-submit-rejected"
+        )))
+    ));
+    assert_eq!(result.rejected_observations, 0);
+    assert_eq!(result.last_rejected_observation, None);
+    assert!(control.same_operation(&operation.control()));
+    assert_eq!(control.phase(), Phase::ObservationFinished);
+    assert_eq!(
+        control.cancel_before_submission(),
+        Cancel::NotCancellable(Phase::ObservationFinished)
+    );
+    assert_eq!(handle.observer().reply_cells_in_use(), 1);
+    drop(operation);
+    assert_eq!(handle.observer().reply_cells_in_use(), 0);
+    let state = state.lock().unwrap();
+    assert!(state.issues.is_empty());
+    assert!(state.statuses.is_empty());
+    assert!(state.submit_failures.is_empty());
+    assert_eq!(state.release_calls, 0);
+    let trace = trace.lock().unwrap();
+    assert_eq!(
+        trace
+            .calls
+            .iter()
+            .filter(|(call, _)| *call == "submit_v1")
+            .count(),
+        1
+    );
+    assert_eq!(
+        trace
+            .calls
+            .iter()
+            .filter(|(call, _)| *call == "release_allocation_v1")
+            .count(),
+        1
+    );
+    assert!(trace.polled_submissions.is_empty());
+}
+
+#[test]
+fn drn3a_repeated_observation_rejection_exhausts_drain_without_republishing_or_freeing() {
+    let state = Arc::new(Mutex::new(MockState::default()));
+    let trace = Arc::new(Mutex::new(OwnerTrace::default()));
+    let config = RuntimeAsyncEngineConfigV1::new(8, 8, 1, 1, Duration::from_millis(1)).unwrap();
+    let (engine, handle) = start_with_config(state.clone(), trace.clone(), config);
+    let fixture = DrainFixture::new(&handle);
+    let release = paused_owner(&handle);
+    state.lock().unwrap().poll_failures.extend(
+        (0..64).map(|_| RuntimeBackendFailureV1::Rejected(MockError("drain-observation-rejected"))),
+    );
+    let request = fixture.request();
+    let bytes = request.snapshot_bytes();
+    let mut operation = Box::pin(handle.enqueue_launch_tracked(request).unwrap());
+    let control = operation.control();
+    let retained_control = control.clone();
+    assert_eq!(handle.observer().snapshot_bytes_in_use(), bytes);
+    let drain = handle.begin_drain(8).unwrap();
+    release.wait();
+    let report = join_command(drain).unwrap();
+    assert_eq!(report.outcome, RuntimeAsyncDrainOutcomeV1::BudgetExhausted);
+    assert_eq!(report.ticks, 8);
+    assert_eq!(report.retained_submissions.total_submissions, 1);
+    assert_eq!(report.retained_submissions.pending, 1);
+    assert_eq!(report.retained_submissions.succeeded, 0);
+    assert_eq!(report.retained_submissions.quiescent_without_result, 0);
+    assert_eq!(report.operations_remaining, 1);
+    assert!(report.queued_commands_exhausted);
+    let shutdown = engine.shutdown().unwrap();
+    assert_eq!(
+        shutdown.disposition,
+        RuntimeAsyncOwnedDispositionV1::RetainedUntilProcessExit
+    );
+    let cleanup = shutdown.cleanup.unwrap();
+    assert!(!cleanup.is_complete());
+    assert!(cleanup.is_terminal());
+    assert_eq!(cleanup.retained().allocations, 1);
+    assert_eq!(cleanup.retained().submissions, 1);
+    assert_eq!(cleanup.retained().modules, 1);
+    assert_eq!(cleanup.retained().streams, 1);
+    assert_eq!(cleanup.allocation_credit_records_v1(), 1);
+    assert!(control.same_operation(&retained_control));
+    assert!(control.same_operation(&operation.control()));
+    assert_eq!(control.phase(), Phase::StoppedAfterSubmission);
+    assert_eq!(
+        control.cancel_before_submission(),
+        Cancel::NotCancellable(Phase::StoppedAfterSubmission)
+    );
+    assert_eq!(handle.observer().snapshot_bytes_in_use(), 0);
+    assert_eq!(handle.observer().reply_cells_in_use(), 1);
+    assert!(matches!(
+        operation
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(Err(RuntimeAsyncEngineCallErrorV1::EngineStopped))
+    ));
+    assert_eq!(handle.observer().reply_cells_in_use(), 1);
+    drop(operation);
+    assert_eq!(handle.observer().reply_cells_in_use(), 0);
+    let state = state.lock().unwrap();
+    assert_eq!(state.issues.len(), 1);
+    let native = state.issues[0].1;
+    assert_eq!(state.statuses.len(), 1);
+    assert_eq!(state.statuses[&native], BackendPollV1::Pending);
+    assert!(state.poll_calls >= 2);
+    assert_eq!(state.poll_failures.len(), 64 - state.poll_calls);
+    assert!(!state.poll_failures.is_empty());
+    assert_eq!(state.release_calls, 0);
+    let trace = trace.lock().unwrap();
+    assert_eq!(trace.polled_submissions.len(), state.poll_calls);
+    assert!(trace.polled_submissions.iter().all(|id| *id == native));
+    assert_eq!(
+        trace
+            .calls
+            .iter()
+            .filter(|(call, _)| *call == "submit_v1")
+            .count(),
+        1
+    );
+    assert!(!trace.calls.iter().any(|(call, _)| matches!(
+        *call,
+        "release_allocation_v1"
+            | "release_submission_v1"
+            | "destroy_stream_v1"
+            | "finalize"
+            | "drop"
+    )));
+}
+
+#[test]
+fn drn3a_preissue_cancellation_preserves_accepted_sibling_and_credit_lifetimes() {
+    let state = Arc::new(Mutex::new(MockState {
+        complete_on_flush: true,
+        ..MockState::default()
+    }));
+    let trace = Arc::new(Mutex::new(OwnerTrace::default()));
+    let (engine, handle) = start(state.clone(), trace.clone());
+    let fixture = DrainFixture::new(&handle);
+    let release = paused_owner(&handle);
+    let request = fixture.request();
+    let bytes = request.snapshot_bytes();
+    let mut cancelled = Box::pin(handle.enqueue_launch_tracked(request).unwrap());
+    let cancelled_control = cancelled.control();
+    let mut sibling = Box::pin(handle.enqueue_launch_tracked(fixture.request()).unwrap());
+    let sibling_control = sibling.control();
+    assert!(!cancelled_control.same_operation(&sibling_control));
+    let drain = handle.begin_drain(64).unwrap();
+    assert_eq!(
+        cancelled_control.cancel_before_submission(),
+        Cancel::CancelledBeforeSubmission
+    );
+    assert_eq!(
+        cancelled_control.cancel_before_submission(),
+        Cancel::AlreadyCancelled
+    );
+    assert_eq!(sibling_control.phase(), Phase::Queued);
+    assert_eq!(handle.observer().snapshot_bytes_in_use(), 2 * bytes);
+    assert_eq!(handle.observer().reply_cells_in_use(), 3);
+    release.wait();
+    let report = join_command(drain).unwrap();
+    assert_eq!(report.outcome, RuntimeAsyncDrainOutcomeV1::Quiescent);
+    assert_eq!(report.retained_submissions.total_submissions, 1);
+    assert_eq!(report.retained_submissions.succeeded, 1);
+    assert_eq!(report.retained_submissions.pending, 0);
+    assert_eq!(report.operations_remaining, 0);
+    assert!(report.queued_commands_exhausted);
+    let shutdown = engine.shutdown().unwrap();
+    assert_eq!(
+        shutdown.disposition,
+        RuntimeAsyncOwnedDispositionV1::Released
+    );
+    let cleanup = shutdown.cleanup.unwrap();
+    assert!(cleanup.is_complete());
+    assert_eq!(cleanup.allocation_credit_records_v1(), 0);
+    assert_eq!(handle.observer().snapshot_bytes_in_use(), 0);
+    assert_eq!(handle.observer().reply_cells_in_use(), 2);
+    assert!(matches!(
+        cancelled
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(Err(
+            RuntimeAsyncEngineCallErrorV1::CancelledBeforeSubmission
+        ))
+    ));
+    let Poll::Ready(Ok(result)) = sibling
+        .as_mut()
+        .poll(&mut Context::from_waker(Waker::noop()))
+    else {
+        panic!("accepted sibling must retain its successful reply");
+    };
+    assert_eq!(
+        result.observation.unwrap(),
+        RuntimeCompletionStatusV1::Succeeded
+    );
+    assert!(result.submission.is_some());
+    assert_eq!(result.rejected_observations, 0);
+    assert_eq!(cancelled_control.phase(), Phase::CancelledBeforeSubmission);
+    assert_eq!(sibling_control.phase(), Phase::ObservationFinished);
+    assert!(cancelled_control.same_operation(&cancelled.control()));
+    assert!(sibling_control.same_operation(&sibling.control()));
+    assert_eq!(handle.observer().reply_cells_in_use(), 2);
+    drop(cancelled);
+    assert_eq!(handle.observer().reply_cells_in_use(), 1);
+    drop(sibling);
+    assert_eq!(handle.observer().reply_cells_in_use(), 0);
+    let state = state.lock().unwrap();
+    assert_eq!(state.issues.len(), 1);
+    assert_eq!(state.release_calls, 1);
+    assert!(state.statuses.is_empty());
+    let native = state.issues[0].1;
+    let trace = trace.lock().unwrap();
+    assert!(!trace.polled_submissions.is_empty());
+    assert!(trace.polled_submissions.iter().all(|id| *id == native));
+    assert_eq!(
+        trace
+            .calls
+            .iter()
+            .filter(|(call, _)| *call == "submit_v1")
+            .count(),
+        1
+    );
+    assert_eq!(
+        trace
+            .calls
+            .iter()
+            .filter(|(call, _)| *call == "release_allocation_v1")
+            .count(),
+        1
+    );
 }
 
 #[test]
