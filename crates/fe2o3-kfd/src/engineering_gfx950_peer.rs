@@ -218,20 +218,33 @@ struct RouteFacts {
 }
 
 fn validate_route(facts: RouteFacts) -> Result<()> {
-    if facts.targets != [GfxTarget::Gfx950; 2]
-        || facts.gpus[0] == facts.gpus[1]
-        || facts.hives[0] == 0
-        || facts.hives[0] != facts.hives[1]
-        || facts.directional_links != 1
-        || !facts.io
-        || facts.node_from != facts.source_node
-        || facts.node_to != facts.destination_node
-        || facts.link_type != 11
-        || facts.flags & !LINK_NO_ATOMICS != LINK_ENABLED
-        || facts.bandwidth == 0
-    {
-        return Err("gfx950 compute peer route is unsupported".into());
+    let rejection = if facts.targets != [GfxTarget::Gfx950; 2] {
+        Some("target is not gfx950")
+    } else if facts.gpus[0] == facts.gpus[1] {
+        Some("GPU identities are not distinct")
+    } else if facts.hives[0] == 0 || facts.hives[0] != facts.hives[1] {
+        Some("XGMI hive is zero or differs")
+    } else if facts.directional_links != 1 {
+        Some("directional link is missing or ambiguous")
+    } else if !facts.io {
+        Some("link is not an IO observation")
+    } else if facts.node_from != facts.source_node || facts.node_to != facts.destination_node {
+        Some("link direction does not match endpoints")
+    } else if facts.link_type != 11 {
+        Some("link type is not XGMI")
+    } else if facts.flags & !LINK_NO_ATOMICS != LINK_ENABLED {
+        Some("link is disabled, noncoherent, peer-disabled, or has unknown flags")
+    } else {
+        None
+    };
+    if let Some(reason) = rejection {
+        return Err(format!(
+            "gfx950 compute peer route rejected: {reason}; nodes {}->{} flags {:#x} reported_max_bandwidth {}",
+            facts.source_node, facts.destination_node, facts.flags, facts.bandwidth,
+        ));
     }
+    // KFD can publish an enabled XGMI route with unreported (zero) bandwidth.
+    // This metric grants no accessibility, coherence, SDMA, or throughput claim.
     Ok(())
 }
 

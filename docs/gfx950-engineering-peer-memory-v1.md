@@ -15,13 +15,23 @@ The original single-context worker entry and its wire protocol are unchanged.
 
 All participants must have identical retained host topology snapshots. Every
 directional pair must be gfx950, have distinct GPU identities in the same
-nonzero XGMI hive, and have exactly one enabled IO XGMI link with positive
-bandwidth. Noncoherent links, NO_PEER_TO_PEER_DMA and reserved flags reject.
+nonzero XGMI hive, and have exactly one enabled IO XGMI link. Reported bandwidth
+is observational: zero does not imply a disabled link and grants no throughput
+claim. Noncoherent links, NO_PEER_TO_PEER_DMA and reserved flags reject.
 NO_ATOMICS_32_BIT and NO_ATOMICS_64_BIT are allowed because this profile does
 not authorize remote atomics. No SDMA engine selection is inferred or granted.
 Full existing device currentness checks on every participant run before and
 after mapping, dispatch, host access and release. Thus topology and aperture
 equality, process/fd/XNACK/reset/DRM observations retain their full contract.
+
+Linux's [v6.14 CRAT producer](https://github.com/torvalds/linux/blob/v6.14/drivers/gpu/drm/amd/amdkfd/kfd_crat.c#L2080)
+marks XGMI links enabled separately from their bandwidth fields, and can emit
+zero bandwidth for a cross-device route. Its
+[bandwidth helper](https://github.com/torvalds/linux/blob/v6.14/drivers/gpu/drm/amd/amdgpu/amdgpu_amdkfd.c#L541)
+also returns zero when the number of links is unknown. Accessibility still
+requires the complete route predicates, successful native mapping and a
+separate hardware probe. This engineering profile does not alter the stricter
+protected gfx942 route contract. Rejections name their failing predicate.
 
 ## Allocation And Access
 

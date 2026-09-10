@@ -258,9 +258,6 @@ fn route_admission_checks_target_hive_direction_enabled_link_and_uniqueness() {
     let mut facts = route();
     facts.flags = 0;
     failures.push(facts);
-    let mut facts = route();
-    facts.bandwidth = 0;
-    failures.push(facts);
     for count in [0, 2] {
         let mut facts = route();
         facts.directional_links = count;
@@ -269,6 +266,34 @@ fn route_admission_checks_target_hive_direction_enabled_link_and_uniqueness() {
     for facts in failures {
         assert!(validate_route(facts).is_err(), "{facts:?}");
     }
+}
+
+#[test]
+fn unreported_bandwidth_does_not_override_enabled_route_or_rejection_flags() {
+    validate_route(RouteFacts {
+        bandwidth: 0,
+        ..route()
+    })
+    .unwrap();
+    for flags in [0, 3, 17, 33] {
+        let error = validate_route(RouteFacts {
+            bandwidth: 0,
+            flags,
+            ..route()
+        })
+        .unwrap_err();
+        assert!(
+            error.contains("link is disabled, noncoherent, peer-disabled, or has unknown flags")
+        );
+        assert!(error.contains("reported_max_bandwidth 0"));
+    }
+    let error = validate_route(RouteFacts {
+        bandwidth: 0,
+        link_type: 2,
+        ..route()
+    })
+    .unwrap_err();
+    assert!(error.contains("link type is not XGMI"));
 }
 
 #[test]
