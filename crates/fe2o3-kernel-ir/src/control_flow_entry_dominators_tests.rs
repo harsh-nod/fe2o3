@@ -96,9 +96,9 @@ fn assert_set_oracle(successors: &[Vec<usize>]) -> IndexedControlFlow {
     let flow = analyze_control_flow(&function(successors)).unwrap();
     for block in 0..successors.len() {
         assert_eq!(flow.is_reachable(block_id(block)), reachable[block]);
-        for definition in 0..successors.len() {
+        for (definition, dominates) in dominators[block].iter().copied().enumerate() {
             let expected = if reachable[block] {
-                dominators[block][definition]
+                dominates
             } else {
                 definition == block
             };

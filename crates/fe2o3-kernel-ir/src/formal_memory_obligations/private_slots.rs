@@ -168,7 +168,7 @@ pub(super) fn classify_eligible_private_slots(
         }
     }
 
-    for (_, (location, pointer)) in &escapes {
+    for (location, pointer) in escapes.values() {
         reasons.insert(FormalMemoryIncompleteReason::UnsupportedPointerDerivation {
             location: *location,
             pointer: *pointer,
