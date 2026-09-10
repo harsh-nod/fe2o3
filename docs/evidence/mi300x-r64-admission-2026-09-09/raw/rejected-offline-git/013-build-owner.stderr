@@ -1,0 +1,10 @@
+error: failed to get `pliron` as a dependency of package `fe2o3-kernel-analysis v0.1.0 (/dev/shm/fe2o3-r64-owner.m0FdGlkA/staging/fe2o3-r63-owner.rk6wj6xt/source/crates/fe2o3-kernel-analysis)`
+
+Caused by:
+  failed to load source for dependency `pliron`
+
+Caused by:
+  unable to update https://github.com/harsh-nod/pliron.git?rev=5bdf861bf03e7f20242b25717fb653336d02e487#5bdf861b
+
+Caused by:
+  can't checkout from 'https://github.com/harsh-nod/pliron.git': you are in the offline mode (--offline)

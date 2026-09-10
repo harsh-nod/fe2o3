@@ -101,3 +101,9 @@ placement/shards/replicas/group quiescence; authenticated two-host control/data
 transport and collectives; authorized reset/partition/failure campaigns; and
 precommitted all-GPU/two-host performance gates. Named-executor tests validate
 integration, not executor fairness or production hardware throughput.
+
+The [R64 evidence report](evidence/mi300x-r64-admission-2026-09-09/README.md)
+retains the CPU/executor and authenticated proof results, two guarded MI300X
+copy-DAG regressions, the rejected offline-cache attempt and independent
+capture/cleanup audits. Its hardware scope excludes compute and nonzero frozen
+launch payload budgets.

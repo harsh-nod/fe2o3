@@ -1,0 +1,9 @@
+................R61 rejected: cleanup failed; diagnostics=/tmp/tmph5a9r_j3/r61-rejected-d7c1ba73f33612953a14ba36a093d56c
+.R61 rejected: constructor failed; diagnostics=None
+........R62 rejected: constructor failed; diagnostics=None
+....R63 rejected: constructor failed; diagnostics=None
+...
+----------------------------------------------------------------------
+Ran 32 tests in 0.753s
+
+OK
