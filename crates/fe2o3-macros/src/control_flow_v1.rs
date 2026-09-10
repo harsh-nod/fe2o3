@@ -10,6 +10,11 @@ use syn::{
     punctuated::Punctuated,
 };
 
+mod constant_for_v1;
+use constant_for_v1::UnrolledRangeV1;
+#[cfg(test)]
+mod constant_for_tests;
+
 pub(crate) const CONTROL_FLOW_REGISTRATION_PREFIX_V1: &str = "__fe2o3_control_flow_contract_v1_";
 pub(crate) const CONTROL_FLOW_REGISTRATION_MAGIC_V1: u64 = u64::from_le_bytes(*b"FE2O3CFA");
 pub(crate) const CONTROL_FLOW_REGISTRATION_VERSION_V1: u16 = 1;
@@ -245,9 +250,11 @@ pub(crate) fn lower_bounded_for_loops_v1(
     let Some(declaration) = declaration else {
         return Ok(());
     };
-    let mut lowerer = LiteralForLowerer {
+    let mut lowerer = BoundedForLowerer {
         declaration,
         loop_cursor: 0,
+        expansion_multiplier: 1,
+        remaining_copies: MAX_NODES_V1,
         error: None,
     };
     lowerer.visit_block_mut(&mut input.block);
@@ -257,13 +264,15 @@ pub(crate) fn lower_bounded_for_loops_v1(
     Ok(())
 }
 
-struct LiteralForLowerer<'a> {
+struct BoundedForLowerer<'a> {
     declaration: &'a ParsedControlFlowOptionsV1,
     loop_cursor: usize,
+    expansion_multiplier: usize,
+    remaining_copies: usize,
     error: Option<syn::Error>,
 }
 
-impl LiteralForLowerer<'_> {
+impl BoundedForLowerer<'_> {
     fn take_bound(&mut self, span: Span) -> Option<(usize, u32)> {
         let index = self.loop_cursor;
         self.loop_cursor += 1;
@@ -279,7 +288,7 @@ impl LiteralForLowerer<'_> {
 
     fn lower_for(&mut self, expression: &mut Expr) {
         let Expr::ForLoop(for_loop) = expression else {
-            unreachable!("literal-for lowering was called for a different expression")
+            unreachable!("bounded-for lowering was called for a different expression")
         };
         let span = for_loop.span();
         let Some((loop_index, declared_bound)) = self.take_bound(span) else {
@@ -309,7 +318,7 @@ impl LiteralForLowerer<'_> {
         let Expr::Range(range) = for_loop.expr.as_ref() else {
             self.error = Some(syn::Error::new_spanned(
                 &for_loop.expr,
-                "bounded for lowering requires a literal half-open range START..END",
+                "bounded for lowering requires a constant half-open range START..END",
             ));
             return;
         };
@@ -320,85 +329,36 @@ impl LiteralForLowerer<'_> {
             ));
             return;
         }
-        let (Some(start), Some(end)) = (&range.start, &range.end) else {
-            self.error = Some(syn::Error::new_spanned(
-                range,
-                "bounded for lowering requires both literal range endpoints",
-            ));
-            return;
-        };
-        let (Expr::Lit(start), Expr::Lit(end)) = (start.as_ref(), end.as_ref()) else {
-            self.error = Some(syn::Error::new_spanned(
-                range,
-                "bounded for lowering requires literal range endpoints",
-            ));
-            return;
-        };
-        let (syn::Lit::Int(start), syn::Lit::Int(end)) = (&start.lit, &end.lit) else {
-            self.error = Some(syn::Error::new_spanned(
-                range,
-                "bounded for lowering requires integer literal range endpoints",
-            ));
-            return;
-        };
-        let start_value = match start.base10_parse::<u32>() {
-            Ok(value) => value,
+        let unrolled_range = match UnrolledRangeV1::parse(range, declared_bound) {
+            Ok(range) => range,
             Err(error) => {
                 self.error = Some(error);
                 return;
             }
         };
-        let end_value = match end.base10_parse::<u32>() {
-            Ok(value) => value,
-            Err(error) => {
-                self.error = Some(error);
-                return;
-            }
+        let iterations = unrolled_range.copies();
+        let previous_multiplier = self.expansion_multiplier;
+        let copies = previous_multiplier.saturating_mul(iterations.max(1) as usize);
+        let Some(remaining_copies) = self.remaining_copies.checked_sub(copies) else {
+            self.error = Some(syn::Error::new_spanned(
+                range,
+                "bounded for lowering exceeds its aggregate 4096-copy expansion budget",
+            ));
+            return;
         };
-        let iterations = end_value.saturating_sub(start_value);
-        if iterations > declared_bound {
-            self.error = Some(syn::Error::new_spanned(
-                range,
-                format!(
-                    "literal for range has {iterations} iterations, exceeding its declared control_flow bound {declared_bound}"
-                ),
-            ));
-            return;
-        }
-        if iterations > MAX_LITERAL_FOR_UNROLL_V1 {
-            self.error = Some(syn::Error::new_spanned(
-                range,
-                format!(
-                    "literal for lowering supports at most {MAX_LITERAL_FOR_UNROLL_V1} iterations; found {iterations}"
-                ),
-            ));
-            return;
-        }
+        self.remaining_copies = remaining_copies;
 
         let break_label = syn::Lifetime::new(&format!("'__fe2o3_unrolled_for_{loop_index}"), span);
         let pattern = for_loop.pat.clone();
         let attrs = for_loop.attrs.clone();
-        let start_suffix = start.suffix();
-        let end_suffix = end.suffix();
-        let suffix = match (start_suffix.is_empty(), end_suffix.is_empty()) {
-            (false, false) if start_suffix != end_suffix => {
-                self.error = Some(syn::Error::new_spanned(
-                    range,
-                    "bounded for lowering requires identical explicit integer suffixes",
-                ));
-                return;
-            }
-            (false, _) => start_suffix,
-            (_, false) => end_suffix,
-            (true, true) => "",
-        }
-        .to_owned();
+        self.expansion_multiplier = copies;
         self.visit_block_mut(&mut for_loop.body);
+        self.expansion_multiplier = previous_multiplier;
         if self.error.is_some() {
             return;
         }
         let mut copies = Vec::with_capacity(iterations as usize);
-        for (copy_index, value) in (start_value..end_value).enumerate() {
+        for copy_index in 0..iterations {
             let continue_label = syn::Lifetime::new(
                 &format!("'__fe2o3_unrolled_for_{loop_index}_iteration_{copy_index}"),
                 span,
@@ -414,13 +374,16 @@ impl LiteralForLowerer<'_> {
                 self.error = Some(error);
                 return;
             }
-            let literal = LitInt::new(&format!("{value}{suffix}"), span);
-            copies.push(quote_spanned! {span=>
-                #continue_label: {
-                    let #pattern = #literal;
-                    #body
-                }
-            });
+            let value = unrolled_range.value(copy_index, span);
+            copies.push(unrolled_range.iteration(
+                copy_index,
+                quote_spanned! {span=>
+                    #continue_label: {
+                        let #pattern = #value;
+                        #body
+                    }
+                },
+            ));
         }
         match syn::parse2(quote_spanned! {span=>
             #(#attrs)*
@@ -434,7 +397,7 @@ impl LiteralForLowerer<'_> {
     }
 }
 
-impl VisitMut for LiteralForLowerer<'_> {
+impl VisitMut for BoundedForLowerer<'_> {
     fn visit_item_mut(&mut self, _item: &mut syn::Item) {}
 
     fn visit_expr_mut(&mut self, expression: &mut Expr) {
@@ -1992,9 +1955,9 @@ mod tests {
     fn unsupported_for_unroll_shapes_fail_closed() {
         let cases: Vec<(ItemFn, Vec<u32>, &str)> = vec![
             (
-                parse_quote! { fn kernel(end: u32) { for i in 0..end { let _ = i; } } },
+                parse_quote! { fn kernel() { for i in 0..end() { let _ = i; } } },
                 vec![4],
-                "literal range endpoints",
+                "integer literals or named constants",
             ),
             (
                 parse_quote! { fn kernel() { for i in 0..=4 { let _ = i; } } },

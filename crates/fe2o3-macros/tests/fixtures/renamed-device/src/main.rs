@@ -67,6 +67,24 @@ pub fn literal_for_unroll(mut value: u32) -> u32 {
     value
 }
 
+const RANGE_START: i32 = -2;
+#[allow(non_upper_case_globals)]
+const __fe2o3_range: i32 = 2;
+
+#[kernel(control_flow(loop_bounds(4)))]
+pub fn constant_for_unroll(mut value: i32) -> i32 {
+    for i in RANGE_START..__fe2o3_range {
+        if i == -1 {
+            continue;
+        }
+        if i == 1 {
+            break;
+        }
+        value += i;
+    }
+    value
+}
+
 fn apply<T, F: FnOnce(T) -> T>(value: T, body: F) -> T {
     body(value)
 }
@@ -132,7 +150,27 @@ fn main() {
         <__fe2o3_kernel_marker_literal_for_unroll as KernelMarkerV1>::FUNCTION(10),
         12
     );
-    assert!(!__fe2o3_control_flow_contract_v1_literal_for_unroll.4.is_empty());
+    assert!(
+        !__fe2o3_control_flow_contract_v1_literal_for_unroll
+            .4
+            .is_empty()
+    );
+    assert_eq!(
+        <__fe2o3_kernel_marker_constant_for_unroll as KernelMarkerV1>::FUNCTION(10),
+        8
+    );
+    let constant_contract = frontend::decode_control_flow_contract_v1(
+        __fe2o3_control_flow_contract_v1_constant_for_unroll.4,
+    )
+    .unwrap();
+    assert_eq!(
+        constant_contract
+            .nodes()
+            .iter()
+            .filter(|node| matches!(node.kind(), frontend::ControlFlowNodeKindV1::Loop { .. }))
+            .count(),
+        1
+    );
     assert_marker::<__fe2o3_kernel_marker_nested_closure_control_flow>();
     assert_eq!(
         <__fe2o3_kernel_marker_nested_closure_control_flow as KernelMarkerV1>::FUNCTION(1),
