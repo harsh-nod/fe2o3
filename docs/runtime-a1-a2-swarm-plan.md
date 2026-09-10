@@ -1,6 +1,6 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Baseline: `6a47a6611238a16cbb279876f70db9aba6538ff5` (locally validated R70,
+Baseline: `1c7b1249fa1326b5cc90c2ac19fc8007b5e84763` (locally validated R71,
 pushed to both remotes), reviewed 2026-09-10. This decomposes the remaining local
 A1/A2 work in
 [#182](https://github.com/harsh-nod/fe2o3/issues/182), not the later multi-GPU
@@ -10,6 +10,12 @@ code through MEM-2A; the subsequent DRN-1A implementation is recorded below.
 The checkpoint history distinguishes local
 implementation from hardware acceptance; queued tickets are not completed work
 or unattended background jobs.
+
+The [next-wave dispatch](runtime-a1-a2-next-wave.md) is the concise current
+ticket split from the three-agent read-only audit against R71. It records the
+agreed N1A interface, generated-admission/result dependencies and completion
+gates. That planning checkpoint adds no runtime implementation or hardware
+acceptance; the history below retains the earlier packet boundaries.
 
 The [R65 contract](runtime-async-drain-versions-v1.md) is the current baseline:
 cooperative drain, reply-count admission and graph-local version lineage are
@@ -193,18 +199,18 @@ MI300X jobs or pushes integrated changes to both remotes.
 
 ## Next Assignments
 
-R70 was released as signed `6a47a661` on both remotes. The following R71 swarm
-implemented device-only MEM-2B policy/native hooks and DRN-2A copy-first
-qualification. Its current-source release record is separate from R70;
-hardware acceptance remains open. The following assignments are the next queue,
+R71 was released as signed `1c7b1249` on both remotes, including device-only
+MEM-2B policy/native hooks and DRN-2A copy-first qualification. Its local release
+gates are complete; hardware acceptance remains open. These assignments are
+the next queue,
 not unattended background jobs; shared integration and hardware remain primary-owned.
 
 | Lane | Next bounded packet | Dependency and exit gate |
 | --- | --- | --- |
 | Native | MEM-N1A coherent host-GTT hooks; SCALE-1A fixtures independently | Agree canonical layout/account boundary with Resources before shared-memory edits; retain charges through actual map/read/seal/loan/disposal, including partial failures |
-| Resources | MEM-N1A cost/charge adapter, then MEM-DOM-1 | Ordinary non-userptr coherent host backing only; exact page-padded cost, private session-bound charge and before-effect admission. Broader N1 profiles and aggregate closure remain separate |
+| Resources | MEM-N1A cost/charge adapter, then GEN-2R, broader N1 and MEM-DOM-1 | Ordinary non-userptr coherent host backing first; exact page-padded cost, private session-bound charge and before-effect admission. Schedule charged generated results separately; broader profiles and aggregate closure remain separate |
 | Admission | GEN-2 compiler handoff and private async permit/decoder contract | Bind invocation, artifact, device/generations, ABI/effects and result decoder; no positive generated execution without exact compiler/machine evidence. Support signed DRN-2A campaign diagnostics |
-| Primary | R71 integration, then signed OVL-QUAL-2/DRN-2A campaigns | Full current-source gates and dual-remote release; idle selected GPU, real binary/census and complete cleanup. Approve N1A account boundary and compose proof/test evidence |
+| Primary | N1A shared integration and signed OVL-QUAL-2/DRN-2A campaigns | R71 local release is complete. New implementation needs current-source gates and dual-remote release; hardware requires idle selected GPU, real binary/census and complete cleanup. Approve N1A account boundary and compose proof/test evidence |
 
 ### R71 Implementation Ownership
 
@@ -387,7 +393,9 @@ recycle/checkout retention. Only confirmed complete backing/VA disposal refunds;
 a later queue-retake failure must not resurrect an already disposed debit.
 Native compound creation must adopt exact pre-reserved member credits rather
 than charging the same backing again inside N1/N2. N1A alone does not qualify
-all GTT profiles, host-pool ceilings, bootstrap or aggregate quarantine.
+all GTT profiles, host-pool ceilings, complete bootstrap or aggregate quarantine.
+It does cover ordinary coherent allocations made during bootstrap, such as
+completion/control storage, when they use the exact admitted ordinary profile.
 MEM-DOM-1 must not be postponed to a documentation-only final
 audit. Host images, journals, captures and independent native owners may be
 implemented incrementally, but the final aggregate gate includes all of them.
