@@ -18,7 +18,7 @@ whole executable reference executor.
 
 | Lane | Assigned agent | Implementation backlog |
 | --- | --- | --- |
-| Native execution and qualification | `r60_batched_benchmarks` | OVL-1/2, SCALE-1/2/3: disjoint compute/SDMA custody, admitted mixed-duration profiles, native-depth qualification and matched performance |
+| Native execution and qualification | `r60_batched_benchmarks` | OVL-1/2, SCALE-1/2/3 and SCALE-CAP: disjoint compute/SDMA custody, admitted mixed-duration profiles, native capacity/qualification and matched performance |
 | Resources and versions | `r60_origin_gates` | MEM-1 through MEM-5, VER-1/2: complete resource accounting, pools/residency, persistent mutation journal and cross-run leases |
 | Admission and drain | `r60_production_final_review` | GEN-1/2, DRN-1/2/3: owned generated launches, authenticated async admission, host-only capture and active/failure drain qualification |
 | Integration and proof composition | Primary | PRF-1/2: shared Context hooks, executable refinement, authenticated proof roster, cross-review, hardware scheduling and publication |
@@ -74,10 +74,30 @@ Acceptance: qualify each profile's correctness independently before making an
 out-of-order scheduling claim. General production acceptance additionally needs
 GEN-2 and matching compiler-owned evidence for each executable class.
 
+### SCALE-CAP: Opt-In Native Capacity Profile
+
+**Depends on native MEM admission and SCALE-1's bounded workload profile.**
+Own KFD `queue_dispatch_binding.rs`, `queue_completion.rs` and runtime
+`kfd_backend/compute_state.rs`; primary integrates queue configuration. Target
+1,024 retained epochs on each existing compute lane in a separately admitted
+profile, preserving the current default. Validate feasibility against actual
+ring headroom, signal capacity and aggregate memory limits before promotion.
+Widen private `u8` slot identities and audit all consumers; raising the constant
+alone is insufficient. No new queues are assumed necessary by the initial design.
+
+Acceptance: checked generation arithmetic, exact reservations/rollback,
+wraparound and stale-slot rejection, signal-reader retention and no reuse before
+retirement. The hardware gate requires at least 2,048 simultaneously
+native-published/retained epochs with exact identities and complete cleanup.
+Report observed completion status separately: retained does not mean physically
+running or even still incomplete. Queued commands do not count. SCALE-2 owns
+this measurement; capacity implementation alone does not pass it.
+
 ### SCALE-2: Hardware Depth And Out-of-Order Campaign
 
-**Depends on SCALE-1 and the required MEM tickets; mixed compute/copy also needs
-OVL-2.** Add an async-owner example and signed runner/checker. Precommit the
+**Depends on SCALE-1 and the required MEM tickets; the thousands-native cell
+also needs SCALE-CAP, and mixed compute/copy needs OVL-2.** Add an async-owner
+example and signed runner/checker. Precommit the
 depths, memory ceiling, deadlines and resource-reuse count. Exercise later-short
 completion before earlier-long completion, exact operation/native identities,
 dropped and timed-out observers, backpressure and successful cleanup.
@@ -89,11 +109,9 @@ directional SDMA queues have their own finite slot limits. Thousands of accepted
 operations cycling through these slots are not thousands of simultaneously
 published native operations. CPU tests with 2,048 operations qualify neither.
 
-If the selected acceptance cell requires thousands of native operations at once,
-first add a separately reviewed capacity expansion with exact ring/slot/signal/
-kernarg generations, aggregate credits and reuse proofs. Increasing engine queue
-capacity alone cannot satisfy that cell. Keep the native-depth gate open until
-the claimed occupancy is actually measured. Active-drain content checks need
+SCALE-CAP supplies the separately reviewed native capacity expansion; increasing
+engine queue capacity alone cannot satisfy that cell. Keep the native-depth gate
+open until the claimed occupancy is actually measured. Active-drain content checks need
 DRN-1; successful-completion and custody-only drain runs must remain distinct
 until then.
 
@@ -330,8 +348,8 @@ merging to either main branch.
 | Wave | Native lane | Resource/version lane | Admission/drain lane | Primary |
 | --- | --- | --- | --- | --- |
 | 1 | OVL-1; design SCALE-1/3 | MEM-1; define MEM-5 inventory | GEN-1; design DRN-1; DRN-3 | Freeze shared contracts and start PRF-1 |
-| 2 | OVL-2; qualify SCALE-1 | MEM-2/3/4, then MEM-5 | GEN-2 adapter; implement DRN-1 | Integrate shared hooks; arrange compiler handoff |
-| 3 | SCALE-2, with explicit native-depth gate | VER-1 then VER-2 | DRN-2; production GEN-2 only when evidence exists | Compose proofs and repeated mixed-graph acceptance |
+| 2 | OVL-2; qualify SCALE-1; SCALE-CAP after MEM prerequisites | MEM-2/3/4, then MEM-5 | GEN-2 adapter; implement DRN-1 | Integrate shared hooks; arrange compiler handoff |
+| 3 | SCALE-2, including SCALE-CAP's measured native-depth gate | VER-1 then VER-2 | DRN-2; production GEN-2 only when evidence exists | Compose proofs and repeated mixed-graph acceptance |
 | 4 | SCALE-3 measurements | Budget/version stress and cross-review | Active/failure drain and cross-review | PRF-2 evidence, A1/A2 exit audit, dual-remote publication |
 
 VER-1 and DRN-3 are independently ready and can move earlier when a slot is free;
