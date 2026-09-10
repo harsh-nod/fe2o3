@@ -1070,8 +1070,13 @@ fn checked_tiled_pair_is_disjoint(
     let first_component = sparse.fact(first.component()).constant_value();
     let second_component = sparse.fact(second.component()).constant_value();
     first.geometry() == second.geometry()
-        && first.runtime_layout() == second.runtime_layout()
-        && checked_runtime_layout_is_uniform(context, function, &first.runtime_layout(), sparse)
+        && checked_runtime_layouts_are_equivalent_and_uniform(
+            context,
+            function,
+            &first.runtime_layout(),
+            &second.runtime_layout(),
+            sparse,
+        )
         && first.invocation() == second.invocation()
         && first_component.is_some_and(|component| component < first.geometry()[3])
         && second_component.is_some_and(|component| component < second.geometry()[3])
