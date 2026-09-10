@@ -41,6 +41,13 @@ pub struct PointerFixupV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CommandV1 {
+    /// Explicit engineering policy, accepted once before user resources exist.
+    ConfigurePerformance {
+        cache_kernel_admission: bool,
+        operational_currentness: bool,
+        profile: bool,
+    },
+    PerformanceSnapshot,
     Allocate {
         bytes: u64,
     },
@@ -106,11 +113,41 @@ impl CommandV1 {
                 *payload_bytes
             }
             Self::Read { bytes, .. } if *bytes <= MAX_TRANSFER_BYTES_V1 => 0,
-            Self::Allocate { .. } | Self::Free { .. } | Self::Close => 0,
+            Self::Allocate { .. }
+            | Self::Free { .. }
+            | Self::ConfigurePerformance { .. }
+            | Self::PerformanceSnapshot
+            | Self::Close => 0,
             _ => return Err(invalid("engineering frame limits")),
         };
         Ok(length as usize)
     }
+}
+
+/// Cumulative worker-side wall-clock observations, not GPU timestamp queries.
+/// Counters start at explicit configuration; snapshot excludes its own command.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PerformanceCountersV1 {
+    pub commands: u64,
+    pub command_ns: u64,
+    pub full_currentness_checks: u64,
+    pub full_currentness_ns: u64,
+    pub operational_currentness_checks: u64,
+    pub operational_currentness_ns: u64,
+    pub kernel_admissions: u64,
+    pub kernel_admission_ns: u64,
+    pub dispatches: u64,
+    pub dispatch_prepare_ns: u64,
+    pub dispatch_publish_ns: u64,
+    pub dispatch_wait_ns: u64,
+    pub completion_polls: u64,
+    pub reads: u64,
+    pub read_bytes: u64,
+    pub read_ns: u64,
+    pub writes: u64,
+    pub write_bytes: u64,
+    pub write_ns: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -141,6 +178,10 @@ pub struct ExplicitArgumentV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ResponseV1 {
+    PerformanceConfigured,
+    PerformanceSnapshot {
+        counters: PerformanceCountersV1,
+    },
     Ready {
         protocol: u32,
         target: String,
@@ -221,6 +262,35 @@ fn invalid(message: &'static str) -> io::Error {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn performance_commands_are_explicit_bounded_and_exact() {
+        for command in [
+            CommandV1::ConfigurePerformance {
+                cache_kernel_admission: true,
+                operational_currentness: false,
+                profile: true,
+            },
+            CommandV1::PerformanceSnapshot,
+        ] {
+            assert_eq!(command.payload_bytes().unwrap(), 0);
+            let mut bytes = Vec::new();
+            write_header_v1(&mut bytes, &command).unwrap();
+            assert_eq!(
+                read_header_v1::<CommandV1>(&mut Cursor::new(bytes)).unwrap(),
+                Some(command)
+            );
+        }
+        let response = ResponseV1::PerformanceSnapshot {
+            counters: PerformanceCountersV1::default(),
+        };
+        let mut bytes = Vec::new();
+        write_header_v1(&mut bytes, &response).unwrap();
+        assert_eq!(
+            read_header_v1::<ResponseV1>(&mut Cursor::new(bytes)).unwrap(),
+            Some(response)
+        );
+    }
 
     #[test]
     fn exact_header_round_trip_does_not_consume_binary_payload() {

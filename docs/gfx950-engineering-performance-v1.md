@@ -1,0 +1,73 @@
+# Gfx950 Engineering Performance Policy V1
+
+This opt-in policy applies only to the isolated, unauthenticated-machine-code
+engineering worker. It is not protected runtime, loader, dispatch, or serving
+authority, and does not change the public gfx950 checked-observation contract.
+
+Immediately after `Ready`, before allocating any user buffer or loading a
+kernel, a controller may issue `ConfigurePerformance` with three independent
+booleans: `cache_kernel_admission`, `operational_currentness`, and `profile`.
+The worker acknowledges `PerformanceConfigured`. Configuration is accepted
+once only, including when all three options are false. Previously allocated
+then freed resources do not restore eligibility. Existing controllers that do
+not configure retain full checks and per-dispatch object validation.
+
+## Immutable Admission Cache
+
+The worker retains an owned clone of the selected, admitted kernel metadata
+alongside the immutable object bytes, materialized code allocation, resource
+binding, and descriptor offset. Cache mode avoids repeating HSACO parsing and
+kernel selection. Every dispatch still checks current buffer ownership,
+pointer ranges, alignment, argument access and aliasing, caller-zero implicit
+arguments, grid/workgroup geometry, descriptor and kernarg addresses, queue
+frontiers, signal state, and exception state. No load or mutable buffer result
+is reused as evidence for another argument binding.
+
+There is no kernel replacement or unload API, and monotonically increasing
+resource identifiers are never recycled. Close destroys all cached state. Any
+validation, native operation, timeout, reset, or framing failure remains
+terminal: the worker reports a fatal error and retains uncertain resources
+until process exit. Configuration cannot recover a poisoned owner.
+
+## Currentness Boundaries
+
+Full topology, aperture, sysfs, UAPI, descriptor, process, reset-stream, XNACK,
+and DRM identity checks remain mandatory at initialization, configuration,
+allocation/mapping, free/unmapping, kernel loading, and queue teardown.
+Opt-in ordinary mapped-memory and dispatch operations use a bounded retained
+queue fence, analogous to the existing gfx942 operational fence:
+
+- The original process and process incarnation must match, before consuming
+  the retained reset FIFO; process incarnation is rechecked at exit.
+- KFD and render descriptors must still match their retained identities.
+- KFD UAPI and XNACK mode must still match.
+- Full DRM identity including the VRAM-loss observation must still match.
+- The prospective reset stream is checked before and after observations.
+- Any error poisons the same device token used by the full check.
+
+Topology and aperture equality become lifecycle observations in this opt-in
+policy, not per-dispatch observations. The policy does not prove an all-reset
+generation, prevent unreported resets or observation ABA, or authenticate the
+driver/hardware. It does not enable gfx950 XGMI publication authority.
+
+## Measurements
+
+With `profile` enabled, `PerformanceSnapshot` returns checked cumulative
+`PerformanceCountersV1` counters. It is valid only at an idle worker boundary.
+The snapshot includes its own idle currentness check but excludes its own
+command service count/time. Counts begin at configuration, excluding worker
+startup. Counter overflow is terminal rather than wrapping.
+
+Timers are worker wall-clock nanoseconds, not GPU timestamps. `command_ns`
+excludes header/payload reading and response writing. Read/write totals include
+their validation fences. Dispatch preparation includes its initial fence and
+argument validation; publication includes the publication fence and doorbell;
+wait includes polling, sleeps, and periodic fences. Final idle validation is
+included in command time but not those three dispatch subphases. Currentness
+timers overlap their parent phases and must not be added to them. Kernel
+admission timing covers object validation and binding at load or dispatch.
+
+Take snapshots outside measured model intervals, and compare separate runs
+with each policy option toggled independently. No performance improvement is
+claimed until the same artifacts and workload pass numerical checks and
+unprofiled repeat measurements. Profiling itself adds observation overhead.

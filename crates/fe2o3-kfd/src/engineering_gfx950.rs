@@ -47,6 +47,7 @@ struct Allocation {
 
 struct Kernel {
     object: Vec<u8>,
+    inspected: InspectedKernel,
     metadata: KernelMetadataV1,
     resources: SelectedKernelResourceBindingV1,
     code: Allocation,
@@ -74,6 +75,44 @@ struct Context {
     ring: AqlSingleProducerRingModelV1,
     completed_write: u64,
     last_observed_read: u64,
+    performance: Option<PerformanceOptions>,
+    counters: PerformanceCountersV1,
+}
+
+#[derive(Clone, Copy)]
+struct PerformanceOptions {
+    cache_kernel_admission: bool,
+    operational_currentness: bool,
+    profile: bool,
+}
+
+fn add_counter(counter: &mut u64, value: u64) -> Result<()> {
+    *counter = counter
+        .checked_add(value)
+        .ok_or("performance counter exhausted")?;
+    Ok(())
+}
+
+fn record_elapsed(counter: &mut u64, started: Option<Instant>) -> Result<()> {
+    if let Some(started) = started {
+        add_counter(
+            counter,
+            u64::try_from(started.elapsed().as_nanos()).map_err(explain)?,
+        )?;
+    }
+    Ok(())
+}
+
+fn require_fresh_configuration(
+    configured: bool,
+    next_buffer: u64,
+    next_kernel: u64,
+    write: u64,
+) -> Result<()> {
+    if configured || next_buffer != 1 || next_kernel != 1 || write != 0 {
+        return Err("performance configuration requires a fresh worker".into());
+    }
+    Ok(())
 }
 
 const RING: usize = 0;
@@ -113,6 +152,8 @@ impl Context {
             .map_err(explain)?,
             completed_write: 0,
             last_observed_read: 0,
+            performance: None,
+            counters: PerformanceCountersV1::default(),
         };
         if let Err(error) = context.initialize() {
             std::mem::forget(context);
@@ -122,9 +163,9 @@ impl Context {
     }
 
     fn initialize(&mut self) -> Result<()> {
-        self.backend.check_currentness().map_err(explain)?;
+        self.check_currentness(true)?;
         self.backend.acquire_vm().map_err(explain)?;
-        self.backend.check_currentness().map_err(explain)?;
+        self.check_currentness(true)?;
         self.runtime = Some(
             LinuxKfdRuntimeEnabledV1::enable(self.backend.kfd_fd(), self.backend.opener_pid())
                 .map_err(explain)?,
@@ -176,7 +217,7 @@ impl Context {
             |bytes| initialize_cwsr(bytes, payload, event_id),
         )?;
         self.internal.push(cwsr);
-        self.backend.check_currentness().map_err(explain)?;
+        self.check_currentness(true)?;
         let expected = KfdIoctlCreateQueueArgs {
             ring_base_address: self.internal[RING].va,
             write_pointer_address: self.internal[CONTROL].va + 0x38,
@@ -227,6 +268,48 @@ impl Context {
         self.check_idle()
     }
 
+    fn profile_started(&self) -> Option<Instant> {
+        self.performance
+            .filter(|options| options.profile)
+            .map(|_| Instant::now())
+    }
+
+    fn configure_performance(&mut self, options: PerformanceOptions) -> Result<()> {
+        require_fresh_configuration(
+            self.performance.is_some(),
+            self.next_buffer,
+            self.next_kernel,
+            self.ring.write(),
+        )?;
+        self.check_currentness(true)?;
+        self.check_idle()?;
+        self.performance = Some(options);
+        Ok(())
+    }
+
+    fn check_currentness(&mut self, lifecycle: bool) -> Result<()> {
+        let started = self.profile_started();
+        let operational = !lifecycle
+            && self
+                .performance
+                .is_some_and(|options| options.operational_currentness);
+        let result = if operational {
+            self.backend.check_engineering_operational_currentness()
+        } else {
+            self.backend.check_currentness()
+        };
+        if started.is_some() {
+            if operational {
+                add_counter(&mut self.counters.operational_currentness_checks, 1)?;
+                record_elapsed(&mut self.counters.operational_currentness_ns, started)?;
+            } else {
+                add_counter(&mut self.counters.full_currentness_checks, 1)?;
+                record_elapsed(&mut self.counters.full_currentness_ns, started)?;
+            }
+        }
+        result.map_err(explain)
+    }
+
     fn allocate_resource(
         &mut self,
         requested: usize,
@@ -248,7 +331,7 @@ impl Context {
             .checked_add(backing as u64)
             .filter(|total| *total <= MAX_TOTAL_BYTES)
             .ok_or("total allocation bound")?;
-        self.backend.check_currentness().map_err(explain)?;
+        self.check_currentness(true)?;
         let mut reservation = self.backend.reserve_va(backing).map_err(explain)?;
         let va = Backend::reservation_address(&reservation);
         let aperture = self.backend.gpuvm_aperture();
@@ -317,7 +400,7 @@ impl Context {
         if outcome.value != 1 {
             return Err("incomplete selected-device mapping".into());
         }
-        self.backend.check_currentness().map_err(explain)?;
+        self.check_currentness(true)?;
         Ok(Allocation {
             reservation,
             mapping,
@@ -330,7 +413,7 @@ impl Context {
     }
 
     fn release_resource(&mut self, mut allocation: Allocation) -> Result<()> {
-        self.backend.check_currentness().map_err(explain)?;
+        self.check_currentness(true)?;
         let outcome = self.backend.unmap_gpu(allocation.handle, 0);
         outcome.result.map_err(explain)?;
         if outcome.value != 1 {
@@ -356,13 +439,11 @@ impl Context {
             .total_bytes
             .checked_sub(allocation.backing as u64)
             .ok_or("allocation accounting")?;
-        self.backend.check_currentness().map_err(explain)
+        self.check_currentness(true)
     }
 
     fn check_idle(&mut self) -> Result<()> {
-        self.backend
-            .check_operational_currentness()
-            .map_err(explain)?;
+        self.check_currentness(false)?;
         let (write, read) =
             Backend::observe_aql_counters(&mut self.internal[CONTROL].mapping, PAGE_BYTES)
                 .map_err(explain)?;
@@ -402,6 +483,7 @@ impl Context {
     }
 
     fn write(&mut self, id: u64, offset: u64, bytes: &[u8]) -> Result<()> {
+        let started = self.profile_started();
         self.check_idle()?;
         let allocation = self.buffers.get_mut(&id).ok_or("unknown buffer")?;
         let range = checked_range(allocation.requested as u64, offset, bytes.len() as u64)
@@ -409,12 +491,17 @@ impl Context {
         Backend::with_bytes_mut(&mut allocation.mapping, allocation.requested, |mapped| {
             mapped[range].copy_from_slice(bytes)
         });
-        self.backend
-            .check_operational_currentness()
-            .map_err(explain)
+        self.check_currentness(false)?;
+        if started.is_some() {
+            add_counter(&mut self.counters.writes, 1)?;
+            add_counter(&mut self.counters.write_bytes, bytes.len() as u64)?;
+            record_elapsed(&mut self.counters.write_ns, started)?;
+        }
+        Ok(())
     }
 
     fn read(&mut self, id: u64, offset: u64, bytes: u32) -> Result<Vec<u8>> {
+        let started = self.profile_started();
         self.check_idle()?;
         let allocation = self.buffers.get(&id).ok_or("unknown buffer")?;
         let range = checked_range(allocation.requested as u64, offset, u64::from(bytes))
@@ -422,9 +509,12 @@ impl Context {
         let result = Backend::with_bytes(&allocation.mapping, allocation.requested, |mapped| {
             mapped[range].to_vec()
         });
-        self.backend
-            .check_operational_currentness()
-            .map_err(explain)?;
+        self.check_currentness(false)?;
+        if started.is_some() {
+            add_counter(&mut self.counters.reads, 1)?;
+            add_counter(&mut self.counters.read_bytes, u64::from(bytes))?;
+            record_elapsed(&mut self.counters.read_ns, started)?;
+        }
         Ok(result)
     }
 
@@ -435,16 +525,23 @@ impl Context {
         symbol: String,
     ) -> Result<ResponseV1> {
         self.check_idle()?;
+        self.check_currentness(true)?;
         if self.kernels.len() >= MAX_KERNELS
             || <[u8; 32]>::from(Sha256::digest(&object)) != expected_hash
         {
             return Err("kernel count or object hash".into());
         }
+        let admission_started = self.profile_started();
         let closure = fe2o3_amdhsa_loader::validate(&object, AdmittedProfile::Gfx950XnackOffCov6)
             .map_err(explain)?
             .bind_kernel(&symbol)
             .map_err(explain)?;
         let resources = closure.resources();
+        let inspected = closure.selected_kernel().clone();
+        if admission_started.is_some() {
+            add_counter(&mut self.counters.kernel_admissions, 1)?;
+            record_elapsed(&mut self.counters.kernel_admission_ns, admission_started)?;
+        }
         if resources.wavefront_size() != 64
             || resources.private_segment_fixed_size() != 0
             || resources.group_segment_fixed_size() > 160 * 1024
@@ -479,6 +576,7 @@ impl Context {
             id,
             Kernel {
                 object,
+                inspected,
                 metadata: metadata.clone(),
                 resources,
                 code,
@@ -502,9 +600,11 @@ impl Context {
         pointers: &[PointerFixupV1],
         timeout_ms: u32,
     ) -> Result<u64> {
+        let prepare_started = self.profile_started();
         self.check_idle()?;
         let geometry =
             AqlDispatchGeometryV1::new(grid, workgroup.map(u32::from)).map_err(explain)?;
+        let admission_started = self.profile_started();
         let kernel = self.kernels.get(&id).ok_or("unknown kernel")?;
         let product = workgroup
             .iter()
@@ -525,18 +625,34 @@ impl Context {
                 return Err("kernel workgroup count".into());
             }
         }
-        let closure =
-            fe2o3_amdhsa_loader::validate(&kernel.object, AdmittedProfile::Gfx950XnackOffCov6)
-                .map_err(explain)?
-                .bind_kernel(&kernel.metadata.symbol)
-                .map_err(explain)?;
+        // Only immutable owned load-time metadata is cached. Buffer ownership,
+        // aliasing, argument values, geometry, and queue state are checked anew.
+        let closure = if self
+            .performance
+            .is_some_and(|options| options.cache_kernel_admission)
+        {
+            None
+        } else {
+            Some(
+                fe2o3_amdhsa_loader::validate(&kernel.object, AdmittedProfile::Gfx950XnackOffCov6)
+                    .map_err(explain)?
+                    .bind_kernel(&kernel.metadata.symbol)
+                    .map_err(explain)?,
+            )
+        };
+        if closure.is_some() && admission_started.is_some() {
+            add_counter(&mut self.counters.kernel_admissions, 1)?;
+            record_elapsed(&mut self.counters.kernel_admission_ns, admission_started)?;
+        }
         patch_pointer_arguments(&kernel.metadata, &mut bytes, pointers, |id| {
             self.buffers
                 .get(&id)
                 .map(|allocation| (allocation.va, allocation.requested as u64))
         })?;
         crate::queue::dispatch_binding::initialize_engineering_cov6_kernarg(
-            closure.selected_kernel(),
+            closure
+                .as_ref()
+                .map_or(&kernel.inspected, |closure| closure.selected_kernel()),
             geometry,
             &mut bytes,
         )
@@ -554,6 +670,8 @@ impl Context {
             .reserve_one(self.last_observed_read)
             .map_err(explain)?;
         let next = reservation.next_write();
+        record_elapsed(&mut self.counters.dispatch_prepare_ns, prepare_started)?;
+        let publish_started = self.profile_started();
         let started = Instant::now();
         Backend::with_bytes_mut(
             &mut self.internal[KERNARG].mapping,
@@ -575,9 +693,7 @@ impl Context {
             ObservedGpuAddressV1::new(self.internal[SIGNAL].va).map_err(explain)?,
         )
         .map_err(explain)?;
-        self.backend
-            .check_operational_currentness()
-            .map_err(explain)?;
+        self.check_currentness(false)?;
         let prior =
             Backend::fetch_add_aql_write(&mut self.internal[CONTROL].mapping, PAGE_BYTES, 1)
                 .map_err(explain)?;
@@ -593,11 +709,16 @@ impl Context {
             .ok_or("missing doorbell")?
             .store_packet_id_release(reservation.packet_id())
             .map_err(explain)?;
+        record_elapsed(&mut self.counters.dispatch_publish_ns, publish_started)?;
+        let wait_started = self.profile_started();
         let deadline = started
             .checked_add(Duration::from_millis(u64::from(timeout_ms)))
             .ok_or("dispatch deadline")?;
         let mut next_currentness = started;
         loop {
+            if wait_started.is_some() {
+                add_counter(&mut self.counters.completion_polls, 1)?;
+            }
             let completion = Backend::observe_completion_signal_acquire(
                 &mut self.internal[SIGNAL].mapping,
                 PAGE_BYTES,
@@ -629,19 +750,22 @@ impl Context {
                 ));
             }
             if now >= next_currentness {
-                self.backend
-                    .check_operational_currentness()
-                    .map_err(explain)?;
+                self.check_currentness(false)?;
                 next_currentness = now + Duration::from_millis(100);
             }
             std::thread::sleep(Duration::from_micros(50));
         }
         self.completed_write = next;
+        record_elapsed(&mut self.counters.dispatch_wait_ns, wait_started)?;
         self.check_idle()?;
+        if prepare_started.is_some() {
+            add_counter(&mut self.counters.dispatches, 1)?;
+        }
         u64::try_from(started.elapsed().as_nanos()).map_err(explain)
     }
 
     fn close_inner(&mut self) -> Result<()> {
+        self.check_currentness(true)?;
         self.check_idle()?;
         let queue_id = self.queue_id.ok_or("queue already closed")?;
         let expected = KfdIoctlDestroyQueueArgs::new(queue_id);
@@ -974,8 +1098,30 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
             let payload_bytes = command.payload_bytes().map_err(explain)?;
             let mut payload = vec![0; payload_bytes];
             input.read_exact(&mut payload).map_err(explain)?;
+            let command_started = context.profile_started();
             let mut response_payload = Vec::new();
             let response = match command {
+                CommandV1::ConfigurePerformance {
+                    cache_kernel_admission,
+                    operational_currentness,
+                    profile,
+                } => {
+                    context.configure_performance(PerformanceOptions {
+                        cache_kernel_admission,
+                        operational_currentness,
+                        profile,
+                    })?;
+                    ResponseV1::PerformanceConfigured
+                }
+                CommandV1::PerformanceSnapshot => {
+                    if !context.performance.is_some_and(|options| options.profile) {
+                        return Err("performance profiling was not enabled".into());
+                    }
+                    context.check_idle()?;
+                    ResponseV1::PerformanceSnapshot {
+                        counters: context.counters.clone(),
+                    }
+                }
                 CommandV1::Allocate { bytes } => context.allocate(bytes)?,
                 CommandV1::Free { buffer } => {
                     context.free(buffer)?;
@@ -1021,6 +1167,10 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
                     ResponseV1::Closed
                 }
             };
+            if command_started.is_some() {
+                add_counter(&mut context.counters.commands, 1)?;
+                record_elapsed(&mut context.counters.command_ns, command_started)?;
+            }
             let closed = matches!(response, ResponseV1::Closed);
             write_header_v1(&mut output, &response).map_err(explain)?;
             output.write_all(&response_payload).map_err(explain)?;
@@ -1047,6 +1197,67 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn performance_configuration_cannot_change_a_live_or_previously_used_session() {
+        assert!(require_fresh_configuration(false, 1, 1, 0).is_ok());
+        for (configured, buffer, kernel, write) in [
+            (true, 1, 1, 0),
+            (false, 2, 1, 0),
+            (false, 1, 2, 0),
+            (false, 1, 1, 1),
+            (false, 0, 1, 0),
+            (false, 1, 0, 0),
+        ] {
+            assert!(require_fresh_configuration(configured, buffer, kernel, write).is_err());
+        }
+    }
+
+    #[test]
+    fn profile_counters_fail_closed_and_disabled_timers_do_not_change_values() {
+        let mut value = 7;
+        record_elapsed(&mut value, None).unwrap();
+        assert_eq!(value, 7);
+        add_counter(&mut value, 3).unwrap();
+        assert_eq!(value, 10);
+        assert!(add_counter(&mut value, u64::MAX).is_err());
+        assert_eq!(value, 10);
+    }
+
+    #[test]
+    fn operational_fence_preserves_live_checks_and_full_public_api() {
+        let source = include_str!("device_gfx950.rs");
+        let body = source
+            .split("pub(crate) fn check_engineering_operational_currentness")
+            .nth(1)
+            .unwrap()
+            .split("fn check_currentness_inner")
+            .next()
+            .unwrap();
+        for check in [
+            "ensure_process",
+            "observe_process_incarnation",
+            "reset_fence.check_clear",
+            "revalidate_descriptor",
+            "revalidate_render_descriptor",
+            "observe_uapi",
+            "query_xnack_mode",
+            "observe_drm_identity",
+            "currentness_poisoned = true",
+        ] {
+            assert!(body.contains(check), "missing {check}");
+        }
+        assert!(!body.contains("discover_default_topology_for_target"));
+        assert!(!body.contains("observe_process_apertures"));
+        let public = source
+            .split("pub fn check_observable_currentness")
+            .nth(1)
+            .unwrap()
+            .split("pub(crate) fn check_engineering_operational_currentness")
+            .next()
+            .unwrap();
+        assert!(public.contains("self.check_currentness_inner()"));
+    }
 
     #[test]
     fn completion_requires_exact_write_read_order_signal_and_no_exception() {

@@ -52,6 +52,17 @@ pub(super) struct LinuxMemoryBackendFor<D> {
     device: D,
 }
 
+#[cfg(feature = "engineering-gfx950")]
+impl LinuxMemoryBackendFor<crate::CheckedGfx950XnackMinusDevice> {
+    pub(super) fn check_engineering_operational_currentness(
+        &mut self,
+    ) -> Result<(), MemorySessionError> {
+        self.device
+            .check_engineering_operational_currentness()
+            .map_err(Into::into)
+    }
+}
+
 /// Sealed inside the KFD adapter: only separately checked target tokens may
 /// reuse these exact KFD 1.18 / DRM mmap wire operations. This is not model or
 /// queue authority, and cannot convert either target's checked device token.

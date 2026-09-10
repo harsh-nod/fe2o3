@@ -138,6 +138,58 @@ impl CheckedGfx950XnackMinusDevice {
         result
     }
 
+    /// Engineering-only retained-queue fence. Full topology/aperture checks
+    /// remain mandatory at lifecycle boundaries; no public observation API
+    /// changes its contract. Any reset, descriptor, mode, or process failure
+    /// permanently invalidates the same token used by the full fence.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(crate) fn check_engineering_operational_currentness(
+        &mut self,
+    ) -> Result<(), DeviceBindingError> {
+        if self.currentness_poisoned {
+            return Err(DeviceBindingError::CurrentnessFencePoisoned);
+        }
+        let result = (|| {
+            self.kfd
+                .opened
+                .ensure_process(std::process::id())
+                .map_err(DeviceBindingError::Kfd)?;
+            if crate::linux::observe_process_incarnation()? != self.process {
+                return Err(DeviceBindingError::ProcessIncarnationChanged);
+            }
+            self.reset_fence.check_clear()?;
+            crate::linux::revalidate_descriptor(
+                &self.kfd.opened.fd,
+                self.kfd.opened.node_observation(),
+                "gfx950 engineering operational currentness fstat",
+            )?;
+            crate::linux::revalidate_render_descriptor(
+                &self.render_fd,
+                self.observation.render_descriptor(),
+            )?;
+            if crate::linux::observe_uapi(&self.kfd.opened.fd)? != self.kfd.uapi.reported_version()
+            {
+                return Err(DeviceBindingError::UapiChanged);
+            }
+            if crate::linux::query_xnack_mode(&self.kfd.opened.fd)? != 0 {
+                return Err(DeviceBindingError::UnsupportedXnackMode);
+            }
+            if crate::linux::observe_drm_identity(&self.render_fd)? != self.observation.drm() {
+                return Err(DeviceBindingError::ObservableCurrentnessChanged(
+                    "DRM identity or VRAM-loss counter",
+                ));
+            }
+            if crate::linux::observe_process_incarnation()? != self.process {
+                return Err(DeviceBindingError::ProcessIncarnationChanged);
+            }
+            self.reset_fence.check_clear()
+        })();
+        if result.is_err() {
+            self.currentness_poisoned = true;
+        }
+        result
+    }
+
     fn check_currentness_inner(&mut self) -> Result<(), DeviceBindingError> {
         self.kfd
             .opened
