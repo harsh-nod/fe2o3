@@ -34,8 +34,9 @@ mod engineering_gfx950;
     target_arch = "x86_64"
 ))]
 pub use engineering_gfx950::{
-    Gfx950EngineeringPeerBufferV1, Gfx950EngineeringPeerGroupV1, Gfx950EngineeringPeerKernelV1,
-    Gfx950EngineeringPeerPointerV1, run_gfx950_engineering_worker_unchecked_v1,
+    Gfx950EngineeringPeerBufferV1, Gfx950EngineeringPeerDispatchV1, Gfx950EngineeringPeerGroupV1,
+    Gfx950EngineeringPeerKernelV1, Gfx950EngineeringPeerPointerV1,
+    run_gfx950_engineering_worker_unchecked_v1,
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

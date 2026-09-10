@@ -32,8 +32,8 @@ use crate::{CheckedGfx950XnackMinusDevice, DeviceSelector, OpenedKfd};
 #[path = "engineering_gfx950_peer.rs"]
 mod peer;
 pub use peer::{
-    Gfx950EngineeringPeerBufferV1, Gfx950EngineeringPeerGroupV1, Gfx950EngineeringPeerKernelV1,
-    Gfx950EngineeringPeerPointerV1,
+    Gfx950EngineeringPeerBufferV1, Gfx950EngineeringPeerDispatchV1, Gfx950EngineeringPeerGroupV1,
+    Gfx950EngineeringPeerKernelV1, Gfx950EngineeringPeerPointerV1,
 };
 
 type Result<T> = std::result::Result<T, String>;

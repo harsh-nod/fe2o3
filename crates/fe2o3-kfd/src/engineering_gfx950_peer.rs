@@ -5,6 +5,10 @@ use crate::memory::KernelOutcome;
 use crate::topology::{GfxTarget, HostTopologySnapshot, KfdTopologyLinkSetV1};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[path = "engineering_gfx950_peer_performance.rs"]
+mod performance;
+pub use performance::Gfx950EngineeringPeerDispatchV1;
+
 static NEXT_GROUP: AtomicU64 = AtomicU64::new(1);
 const LINK_ENABLED: u32 = 1;
 const LINK_NO_ATOMICS: u32 = (1 << 2) | (1 << 3);
@@ -592,48 +596,9 @@ impl Gfx950EngineeringPeerGroupV1 {
     ) -> Result<u64> {
         self.require_active()?;
         let result = (|| {
-            if kernel.group != self.incarnation
-                || kernel.rank >= self.contexts.len()
-                || timeout_ms == 0
-                || timeout_ms > 600_000
-                || pointers.len() > MAX_POINTER_FIXUPS_V1
-                || bytes.len() > MAX_KERNARG_BYTES_V1 as usize
-            {
-                return Err("peer dispatch scope or bounds".into());
-            }
             check_contexts(&mut self.contexts)?;
-            let mut bindings = BTreeMap::new();
-            let mut fixups = Vec::with_capacity(pointers.len());
-            for pointer in pointers {
-                let record = self.validate_token(pointer.buffer)?;
-                require_peer_access(
-                    pointer.buffer.owner,
-                    kernel.rank,
-                    self.contexts[kernel.rank].backend.gpu_id(),
-                    &record.mapping.peers,
-                    pointer.access,
-                )?;
-                let allocation = &self.contexts[pointer.buffer.owner].buffers[&record.local_id];
-                bindings.insert(
-                    pointer.buffer.id,
-                    (allocation.va, allocation.requested as u64),
-                );
-                fixups.push(PointerFixupV1 {
-                    kernarg_offset: pointer.kernarg_offset,
-                    buffer: pointer.buffer.id,
-                    buffer_offset: pointer.buffer_offset,
-                    extent_bytes: pointer.extent_bytes,
-                    access: pointer.access,
-                });
-            }
-            let prepared = self.contexts[kernel.rank].prepare_dispatch_with_peer_bindings(
-                kernel.id,
-                bytes,
-                workgroup,
-                grid,
-                &fixups,
-                Some(&bindings),
-            )?;
+            let prepared =
+                self.prepare_peer_dispatch(kernel, bytes, workgroup, grid, pointers, timeout_ms)?;
             // SAFETY: group retains all owners and only exposes checked read-only
             // peer bindings; no mutation/free can interleave with this &mut borrow.
             let elapsed = unsafe {
@@ -643,6 +608,58 @@ impl Gfx950EngineeringPeerGroupV1 {
             Ok(elapsed)
         })();
         self.finish(result)
+    }
+
+    fn prepare_peer_dispatch(
+        &mut self,
+        kernel: &Gfx950EngineeringPeerKernelV1,
+        bytes: Vec<u8>,
+        workgroup: [u16; 3],
+        grid: [u32; 3],
+        pointers: &[Gfx950EngineeringPeerPointerV1],
+        timeout_ms: u32,
+    ) -> Result<PreparedDispatch> {
+        if kernel.group != self.incarnation
+            || kernel.rank >= self.contexts.len()
+            || timeout_ms == 0
+            || timeout_ms > 600_000
+            || pointers.len() > MAX_POINTER_FIXUPS_V1
+            || bytes.len() > MAX_KERNARG_BYTES_V1 as usize
+        {
+            return Err("peer dispatch scope or bounds".into());
+        }
+        let mut bindings = BTreeMap::new();
+        let mut fixups = Vec::with_capacity(pointers.len());
+        for pointer in pointers {
+            let record = self.validate_token(pointer.buffer)?;
+            require_peer_access(
+                pointer.buffer.owner,
+                kernel.rank,
+                self.contexts[kernel.rank].backend.gpu_id(),
+                &record.mapping.peers,
+                pointer.access,
+            )?;
+            let allocation = &self.contexts[pointer.buffer.owner].buffers[&record.local_id];
+            bindings.insert(
+                pointer.buffer.id,
+                (allocation.va, allocation.requested as u64),
+            );
+            fixups.push(PointerFixupV1 {
+                kernarg_offset: pointer.kernarg_offset,
+                buffer: pointer.buffer.id,
+                buffer_offset: pointer.buffer_offset,
+                extent_bytes: pointer.extent_bytes,
+                access: pointer.access,
+            });
+        }
+        self.contexts[kernel.rank].prepare_dispatch_with_peer_bindings(
+            kernel.id,
+            bytes,
+            workgroup,
+            grid,
+            &fixups,
+            Some(&bindings),
+        )
     }
 
     pub fn release(&mut self, buffer: Gfx950EngineeringPeerBufferV1) -> Result<()> {

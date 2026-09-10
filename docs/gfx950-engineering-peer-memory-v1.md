@@ -105,8 +105,39 @@ the other ranks. An ordered device reduction then reads rank 0 through rank 7
 partials, checks every FP32 intermediate, adds the local residual once and
 rounds once to BF16, without copying tensors through controller IPC.
 
-This group currently serializes individual dispatches and performs full
-group-wide currentness checks. It is a foundation for qualified peer memory,
+This group serializes individual dispatches and performs full group-wide
+currentness checks at every original single-dispatch boundary. It is a
+foundation for qualified peer memory,
 not a claim of faster tensor parallelism, asynchronous collectives, symmetric
 memory, or overlap. Ferric's existing host-staged mode remains explicit until
 the new group, kernel image, transport and model outputs pass hardware checks.
+
+## Explicit Performance Options
+
+`configure_performance(cache_kernel_admission, operational_currentness)` is
+accepted exactly once before any participant has user buffers, kernels or
+published packets. Every participant is preflighted before changing any option;
+full group fences bracket configuration. A partial configuration failure
+poisons the whole group, with no rollback or subsequent GPU operation.
+
+Immutable admission caching uses each context's retained load-time closure;
+geometry, argument values, owned tokens, access, extent and alias checks still
+run for every dispatch. Operational currentness uses the existing separately
+documented engineering operational checks only, never a protected authority.
+
+`dispatch_sequence_unchecked` accepts one to sixteen commands for exactly one
+retained rank. Before publishing any packet it checks capacity and prepares
+every argument and resource binding. Full currentness and idle checks on all
+participants bracket the sequence; every individual dispatch is preceded and
+followed by all-participant operational currentness plus idle checks. Without
+the explicit operational option those checks remain full. Each signal must be
+observed complete before the next command reuses private resources. No map,
+free, host write, load or queue rollover can interleave with the exclusive group
+borrow. No async execution or guessed ring retirement is introduced.
+
+Any command, completion or postcheck failure poisons the group and returns no
+successful partial sequence receipt. Host fault tests exercise the shared
+sequence algorithm, including late-preparation failure before all publication,
+pre/postcheck failures, exact completion order and the one-to-sixteen bound.
+Native sequence visibility and performance still require separate hardware
+qualification; the original two/eight-device probe does not imply those claims.
