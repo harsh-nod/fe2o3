@@ -228,7 +228,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         if self.observer.is_worker_thread() {
             return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
         }
-        let (reply, future) = owned::Reply::pair();
+        let (reply, future) = owned::Reply::budgeted_pair(&self.observer.reply_budget)?;
         let operation = Operation {
             stream,
             submit: Some(submit),
@@ -240,8 +240,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         };
         match self
             .observer
-            .sender
-            .try_send(RuntimeAsyncEngineCommandV1::Operation(Box::new(operation)))
+            .try_send_command(RuntimeAsyncEngineCommandV1::Operation(Box::new(operation)))
         {
             Ok(()) => Ok(future),
             Err(TrySendError::Full(_)) => Err(RuntimeAsyncEngineCallErrorV1::CommandQueueFull),

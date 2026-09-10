@@ -386,6 +386,8 @@ impl Harness {
         let (sender, receiver) = sync_channel(4);
         let handle = RuntimeAsyncProgressHandleV1 {
             observer: RuntimeAsyncEngineHandleV1 {
+                reply_budget: reply_budget::ReplyBudgetV1::new(DEFAULT_RUNTIME_ASYNC_REPLIES_V1),
+                admission: drain::AdmissionV1::new(),
                 graph_slot: Arc::new(AtomicBool::new(false)),
                 snapshot_budget: snapshot::SnapshotBudgetV1::new(
                     DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1,

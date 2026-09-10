@@ -23,7 +23,10 @@ use std::time::Duration;
 
 mod owned;
 pub use owned::*;
+mod drain;
+pub use drain::*;
 mod operation;
+mod reply_budget;
 pub use operation::*;
 mod snapshot;
 pub use snapshot::{RuntimeAsyncLaunchRequestV1, RuntimeAsyncSnapshotErrorV1};
@@ -50,6 +53,8 @@ pub const MAX_RUNTIME_ASYNC_FLUSHES_PER_TICK_V1: usize = 1024;
 /// Maximum retained standalone request payload budget, excluding native resources.
 pub const MAX_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1: usize = 1024 * 1024 * 1024;
 pub const DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1: usize = 16 * 1024 * 1024;
+pub const MAX_RUNTIME_ASYNC_REPLIES_V1: usize = 65_536;
+pub const DEFAULT_RUNTIME_ASYNC_REPLIES_V1: usize = 16_384;
 
 /// Bounded scheduling configuration for one async observation engine.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -60,6 +65,7 @@ pub struct RuntimeAsyncEngineConfigV1 {
     polls_per_tick: usize,
     poll_interval: Duration,
     snapshot_byte_capacity: usize,
+    reply_capacity: usize,
 }
 
 impl RuntimeAsyncEngineConfigV1 {
@@ -92,6 +98,7 @@ impl RuntimeAsyncEngineConfigV1 {
             polls_per_tick,
             poll_interval,
             snapshot_byte_capacity: DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1,
+            reply_capacity: DEFAULT_RUNTIME_ASYNC_REPLIES_V1,
         })
     }
 
@@ -110,6 +117,24 @@ impl RuntimeAsyncEngineConfigV1 {
 
     pub const fn snapshot_byte_capacity(self) -> usize {
         self.snapshot_byte_capacity
+    }
+
+    /// Bounds command/operation/graph reply cells through final disposal, even
+    /// after completion. This is a record count, not arbitrary result bytes.
+    /// Event/progress registrations have separate bounds; drain has one slot.
+    pub fn with_reply_capacity(
+        mut self,
+        capacity: usize,
+    ) -> Result<Self, RuntimeAsyncEngineConfigErrorV1> {
+        if capacity == 0 || capacity > MAX_RUNTIME_ASYNC_REPLIES_V1 {
+            return Err(RuntimeAsyncEngineConfigErrorV1::ReplyCapacity);
+        }
+        self.reply_capacity = capacity;
+        Ok(self)
+    }
+
+    pub const fn reply_capacity(self) -> usize {
+        self.reply_capacity
     }
 
     pub const fn command_capacity(self) -> usize {
@@ -142,6 +167,7 @@ impl Default for RuntimeAsyncEngineConfigV1 {
             polls_per_tick: 64,
             poll_interval: Duration::from_millis(1),
             snapshot_byte_capacity: DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1,
+            reply_capacity: DEFAULT_RUNTIME_ASYNC_REPLIES_V1,
         }
     }
 }
@@ -155,6 +181,7 @@ pub enum RuntimeAsyncEngineConfigErrorV1 {
     PollsPerTick,
     PollInterval,
     SnapshotByteCapacity,
+    ReplyCapacity,
 }
 
 impl fmt::Display for RuntimeAsyncEngineConfigErrorV1 {
@@ -353,6 +380,7 @@ pub enum RuntimeAsyncEngineCallErrorV1 {
     CommandPanicked,
     GraphCapacity,
     SnapshotCapacity,
+    ReplyCapacity,
     InvalidSnapshot(RuntimeAsyncSnapshotErrorV1),
 }
 
@@ -786,6 +814,8 @@ enum RuntimeAsyncEngineCommandV1<B: RuntimeBackendV1> {
 
 /// Cloneable command and event-registration handle for one async engine.
 pub struct RuntimeAsyncEngineHandleV1<B: RuntimeBackendV1 + 'static> {
+    reply_budget: Arc<reply_budget::ReplyBudgetV1>,
+    admission: Arc<drain::AdmissionV1>,
     sender: SyncSender<RuntimeAsyncEngineCommandV1<B>>,
     worker_thread: Arc<OnceLock<thread::ThreadId>>,
     quarantine_command_panics: bool,
@@ -797,6 +827,8 @@ impl<B: RuntimeBackendV1 + 'static> Clone for RuntimeAsyncEngineHandleV1<B> {
     fn clone(&self) -> Self {
         Self {
             sender: self.sender.clone(),
+            admission: Arc::clone(&self.admission),
+            reply_budget: Arc::clone(&self.reply_budget),
             worker_thread: Arc::clone(&self.worker_thread),
             quarantine_command_panics: self.quarantine_command_panics,
             graph_slot: Arc::clone(&self.graph_slot),
@@ -806,6 +838,10 @@ impl<B: RuntimeBackendV1 + 'static> Clone for RuntimeAsyncEngineHandleV1<B> {
 }
 
 impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncEngineHandleV1<B> {
+    /// Counts retained async command/operation/graph reply cells, not GPU resources.
+    pub fn reply_cells_in_use(&self) -> usize {
+        self.reply_budget.used()
+    }
     /// Descriptive retained standalone payload bytes, not native resource usage.
     pub fn snapshot_bytes_in_use(&self) -> usize {
         self.snapshot_budget.used()
@@ -837,7 +873,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncEngineHandleV1<B> {
             });
             let _ = response_sender.send(result);
         }));
-        match self.sender.try_send(command) {
+        match self.try_send_command(command) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
                 return Err(RuntimeAsyncEngineCallErrorV1::CommandQueueFull);
@@ -866,7 +902,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncEngineHandleV1<B> {
             cell: Arc::clone(&cell),
             response: response_sender,
         };
-        match self.sender.try_send(command) {
+        match self.try_send_command(command) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
                 return Err(RuntimeAsyncEventRegistrationErrorV1::CommandQueueFull);
@@ -933,7 +969,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
             cell: Arc::clone(&cell),
             response: response_sender,
         };
-        match self.observer.sender.try_send(command) {
+        match self.observer.try_send_command(command) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
                 return Err(RuntimeAsyncProgressRegistrationErrorV1::CommandQueueFull);
@@ -980,7 +1016,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
             progress_cell: Arc::clone(&progress_cell),
             response: response_sender,
         };
-        match self.observer.sender.try_send(command) {
+        match self.observer.try_send_command(command) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
                 return Err(RuntimeAsyncProgressEventRegistrationErrorV1::CommandQueueFull);
@@ -1034,6 +1070,7 @@ fn flush_stream_v1<B: RuntimeFlushBackendV1>(
 /// be moved onto its own worker; cloneable handles are the cross-thread surface.
 #[must_use = "async engines own a runtime context until consuming shutdown"]
 pub struct RuntimeAsyncEngineV1<B: RuntimeBackendV1 + Send + 'static> {
+    admission: Arc<drain::AdmissionV1>,
     sender: Option<SyncSender<RuntimeAsyncEngineCommandV1<B>>>,
     worker: Option<JoinHandle<RuntimeContextV1<B>>>,
     thread_affinity: PhantomData<Rc<()>>,
@@ -1052,6 +1089,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
             config.poll_interval,
         )
         .and_then(|validated| validated.with_snapshot_byte_capacity(config.snapshot_byte_capacity))
+        .and_then(|validated| validated.with_reply_capacity(config.reply_capacity))
         {
             return Err(RuntimeAsyncEngineSpawnFailureV1 {
                 context: Box::new(context),
@@ -1059,6 +1097,8 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
             });
         }
         let (sender, receiver) = sync_channel(config.command_capacity);
+        let admission = drain::AdmissionV1::new();
+        let worker_admission = Arc::clone(&admission);
         let context_slot = Arc::new(Mutex::new(Some(context)));
         let worker_slot = Arc::clone(&context_slot);
         let worker_thread = Arc::new(OnceLock::new());
@@ -1074,7 +1114,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
                     .unwrap_or_else(|poison| poison.into_inner())
                     .take()
                     .expect("async engine context is taken exactly once");
-                run_engine_v1(context, receiver, config, None)
+                run_engine_v1(context, receiver, config, None, worker_admission)
             });
         let worker = match worker {
             Ok(worker) => worker,
@@ -1092,6 +1132,8 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
         };
         drop(context_slot);
         let handle = RuntimeAsyncEngineHandleV1 {
+            reply_budget: reply_budget::ReplyBudgetV1::new(config.reply_capacity),
+            admission: Arc::clone(&admission),
             snapshot_budget: snapshot::SnapshotBudgetV1::new(config.snapshot_byte_capacity),
             graph_slot: Arc::new(AtomicBool::new(false)),
             sender: sender.clone(),
@@ -1100,6 +1142,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
         };
         Ok((
             Self {
+                admission,
                 sender: Some(sender),
                 worker: Some(worker),
                 thread_affinity: PhantomData,
@@ -1129,6 +1172,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
             config.poll_interval,
         )
         .and_then(|validated| validated.with_snapshot_byte_capacity(config.snapshot_byte_capacity))
+        .and_then(|validated| validated.with_reply_capacity(config.reply_capacity))
         {
             return Err(RuntimeAsyncProgressEngineSpawnFailureV1 {
                 context: Box::new(context),
@@ -1145,6 +1189,8 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
             });
         }
         let (sender, receiver) = sync_channel(config.command_capacity);
+        let admission = drain::AdmissionV1::new();
+        let worker_admission = Arc::clone(&admission);
         let context_slot = Arc::new(Mutex::new(Some(context)));
         let worker_slot = Arc::clone(&context_slot);
         let worker_thread = Arc::new(OnceLock::new());
@@ -1164,7 +1210,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
                     .unwrap_or_else(|poison| poison.into_inner())
                     .take()
                     .expect("async engine context is taken exactly once");
-                run_engine_v1(context, receiver, config, Some(progress))
+                run_engine_v1(context, receiver, config, Some(progress), worker_admission)
             });
         let worker = match worker {
             Ok(worker) => worker,
@@ -1182,6 +1228,8 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
         };
         drop(context_slot);
         let observer = RuntimeAsyncEngineHandleV1 {
+            reply_budget: reply_budget::ReplyBudgetV1::new(config.reply_capacity),
+            admission: Arc::clone(&admission),
             snapshot_budget: snapshot::SnapshotBudgetV1::new(config.snapshot_byte_capacity),
             graph_slot: Arc::new(AtomicBool::new(false)),
             sender: sender.clone(),
@@ -1190,6 +1238,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
         };
         Ok((
             Self {
+                admission,
                 sender: Some(sender),
                 worker: Some(worker),
                 thread_affinity: PhantomData,
@@ -1209,6 +1258,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
     }
 
     fn stop_and_join(&mut self) -> Result<RuntimeContextV1<B>, RuntimeAsyncEngineJoinErrorV1> {
+        self.admission.close();
         if let Some(sender) = self.sender.take() {
             let _ = sender.send(RuntimeAsyncEngineCommandV1::Stop);
         }
@@ -1246,8 +1296,9 @@ fn run_engine_v1<B: RuntimeBackendV1 + 'static>(
     receiver: Receiver<RuntimeAsyncEngineCommandV1<B>>,
     config: RuntimeAsyncEngineConfigV1,
     progress: Option<RuntimeAsyncProgressModeV1<B>>,
+    admission: Arc<drain::AdmissionV1>,
 ) -> RuntimeContextV1<B> {
-    run_engine_context_v1(&mut context, receiver, config, progress);
+    run_engine_context_v1(&mut context, receiver, config, progress, admission);
     context
 }
 
@@ -1256,7 +1307,11 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
     receiver: Receiver<RuntimeAsyncEngineCommandV1<B>>,
     config: RuntimeAsyncEngineConfigV1,
     progress: Option<RuntimeAsyncProgressModeV1<B>>,
+    admission: Arc<drain::AdmissionV1>,
 ) {
+    let admission = drain::AdmissionWorkerGuardV1(admission);
+    let mut draining = None;
+    let mut queue_exhausted = false;
     let mut waiters = RuntimeAsyncWaiterRegistryV1::new();
     let mut operations = operation::OperationRegistryV1::new();
     let mut graph = None;
@@ -1267,6 +1322,9 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
     let mut next_stream = None;
     let mut stopped = context.is_terminal();
     while !stopped {
+        if draining.is_none() {
+            draining = drain::DrainRequest::take(&admission.0);
+        }
         match receiver.recv_timeout(config.poll_interval) {
             Ok(command) => {
                 stopped = handle_command_v1(
@@ -1296,7 +1354,10 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
                                 progress.as_ref().map(|mode| mode.config),
                             );
                         }
-                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Empty) => {
+                            queue_exhausted = draining.is_some();
+                            break;
+                        }
                         Err(TryRecvError::Disconnected) => {
                             stopped = true;
                             break;
@@ -1304,7 +1365,9 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
                     }
                 }
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                queue_exhausted = draining.is_some();
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => stopped = true,
         }
         if !stopped && let Some(mode) = progress.as_ref() {
@@ -1355,6 +1418,36 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
                 mode.flush_stream,
             );
         }
+        if !stopped && let (Some(request), Some(mode)) = (draining.as_mut(), progress.as_ref()) {
+            stopped = match catch_unwind(AssertUnwindSafe(|| {
+                request.tick(
+                    context,
+                    queue_exhausted,
+                    operations.len(),
+                    graph.is_some(),
+                    waiters.entries.is_empty(),
+                    config,
+                    mode,
+                )
+            })) {
+                Ok(stopped) => stopped,
+                Err(payload) => {
+                    core::mem::forget(payload);
+                    context.quarantine_after_async_command_panic_v1();
+                    true
+                }
+            };
+        }
+    }
+    let pending_drain = admission.0.close_and_take();
+    if draining.is_none() {
+        draining = pending_drain;
+    }
+    if draining
+        .as_ref()
+        .is_some_and(|request| !request.is_quiescent())
+    {
+        context.quarantine_after_async_command_panic_v1();
     }
     if let Some(mut graph) = graph {
         if context.is_terminal() {
@@ -1838,6 +1931,9 @@ mod tests {
         panic_on_poll: bool,
         panic_on_submit: bool,
         issues: Vec<(u64, u64, Vec<u8>, Vec<crate::BackendBindingV1>)>,
+        submission_dependencies: HashMap<u64, Vec<u64>>,
+        event_sources: HashMap<u64, u64>,
+        complete_on_flush: bool,
         copy_issues: Vec<(u64, BackendMemoryRegionV1, BackendMemoryRegionV1, Vec<u64>)>,
         submit_failures: VecDeque<RuntimeBackendFailureV1<MockError>>,
         release_failures: VecDeque<RuntimeBackendFailureV1<MockError>>,
@@ -1961,6 +2057,11 @@ mod tests {
                 return Err(error);
             }
             let handle = self.next();
+            self.state
+                .lock()
+                .unwrap()
+                .submission_dependencies
+                .insert(handle, launch.dependencies.to_vec());
             self.state.lock().unwrap().issues.push((
                 launch.stream,
                 handle,
@@ -2032,9 +2133,15 @@ mod tests {
         fn record_event_v1(
             &mut self,
             _stream: u64,
-            _submission: u64,
+            submission: u64,
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
-            Ok(self.next())
+            let event = self.next();
+            self.state
+                .lock()
+                .unwrap()
+                .event_sources
+                .insert(event, submission);
+            Ok(event)
         }
 
         fn release_event_v1(
@@ -2071,6 +2178,25 @@ mod tests {
             }
             let outcome = {
                 let mut state = self.state.lock().unwrap();
+                if state.complete_on_flush {
+                    let ready: Vec<_> = state
+                        .issues
+                        .iter()
+                        .filter_map(|(owner, id, _, _)| {
+                            (*owner == stream
+                                && state.submission_dependencies[id].iter().all(|event| {
+                                    state.statuses.get(&state.event_sources[event])
+                                        == Some(&BackendPollV1::Succeeded)
+                                }))
+                            .then_some(*id)
+                        })
+                        .collect();
+                    for id in ready {
+                        if state.statuses.get(&id) == Some(&BackendPollV1::Pending) {
+                            state.statuses.insert(id, BackendPollV1::Succeeded);
+                        }
+                    }
+                }
                 let publish_continuation = state
                     .window_progress
                     .as_ref()
@@ -3101,6 +3227,7 @@ mod tests {
                 config: progress_config,
                 flush_stream: flush_stream_v1::<MockBackend>,
             }),
+            drain::AdmissionV1::new(),
         );
         assert_eq!(response_receiver.recv().unwrap(), Ok(()));
         assert!(progress_cell.stopped.load(Ordering::Acquire));
@@ -3520,6 +3647,7 @@ mod tests {
                 config: progress_config,
                 flush_stream: flush_stream_v1::<MockBackend>,
             }),
+            drain::AdmissionV1::new(),
         );
         assert_eq!(response_receiver.recv().unwrap(), Ok(()));
         assert!(cell.stopped.load(Ordering::Acquire));
@@ -3560,6 +3688,7 @@ mod tests {
                 config: progress_config,
                 flush_stream: flush_stream_v1::<MockBackend>,
             }),
+            drain::AdmissionV1::new(),
         );
 
         assert_eq!(response_receiver.recv().unwrap(), Ok(()));
@@ -3685,6 +3814,7 @@ mod tests {
                 config: progress_config,
                 flush_stream: flush_stream_v1::<MockBackend>,
             }),
+            drain::AdmissionV1::new(),
         );
         drop(sender);
         assert_eq!(progress_response_receiver.recv().unwrap(), Ok(()));

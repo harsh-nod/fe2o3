@@ -71,6 +71,10 @@ a data version, a device-reset generation, a compiler plan or distributed epoch.
 Exact producer versions still need graph-local derivation checks and, for
 cross-run consumption, context-wide mutation/invalidation tracking.
 
+The subsequent [R65 contract](runtime-async-drain-versions-v1.md) supplies the
+graph-local derivation/checks and a separate retained-reply count budget.
+Cross-run mutation authority and full byte/native-resource budgets remain open.
+
 ## Verification Boundaries
 
 The eight R64 abstract arithmetic obligations cover exact reservation, capacity
@@ -95,7 +99,7 @@ No executor library becomes a production runtime dependency.
 ## Remaining Acceptance
 
 #182 still requires compiler-authenticated plans and semantic-to-machine
-refinement from #134/#214; exact versions, residency and measured overlap;
+refinement from #134/#214; cross-run versions, residency and measured overlap;
 end-to-end budgets and complete native drain qualification; integrated multi-GPU
 placement/shards/replicas/group quiescence; authenticated two-host control/data
 transport and collectives; authorized reset/partition/failure campaigns; and

@@ -6,6 +6,8 @@ use crate::{RuntimeBackendFailureV1, RuntimeCleanupReportV1, RuntimeOwnedShutdow
 struct ReplyState<R> {
     result: Option<Result<R, RuntimeAsyncEngineCallErrorV1>>,
     waker: Option<Waker>,
+    // The retained result and waker drop before returning the cell's count credit.
+    _permit: Option<reply_budget::ReplyPermitV1>,
 }
 
 pub(super) struct Reply<R> {
@@ -15,9 +17,22 @@ pub(super) struct Reply<R> {
 
 impl<R> Reply<R> {
     pub(super) fn pair() -> (Self, RuntimeAsyncCommandFutureV1<R>) {
+        Self::with_permit(None)
+    }
+
+    pub(super) fn budgeted_pair(
+        budget: &Arc<reply_budget::ReplyBudgetV1>,
+    ) -> Result<(Self, RuntimeAsyncCommandFutureV1<R>), RuntimeAsyncEngineCallErrorV1> {
+        Ok(Self::with_permit(Some(budget.reserve()?)))
+    }
+
+    fn with_permit(
+        permit: Option<reply_budget::ReplyPermitV1>,
+    ) -> (Self, RuntimeAsyncCommandFutureV1<R>) {
         let state = Arc::new(Mutex::new(ReplyState {
             result: None,
             waker: None,
+            _permit: permit,
         }));
         (
             Self {
@@ -139,14 +154,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncEngineHandleV1<B> {
         if self.is_worker_thread() {
             return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
         }
-        let state = Arc::new(Mutex::new(ReplyState {
-            result: None,
-            waker: None,
-        }));
-        let mut reply = Reply {
-            state: Arc::clone(&state),
-            completed: false,
-        };
+        let (mut reply, future) = Reply::budgeted_pair(&self.reply_budget)?;
         let quarantine_command_panics = self.quarantine_command_panics;
         let command = RuntimeAsyncEngineCommandV1::Context(Box::new(move |context| {
             let result = catch_unwind(AssertUnwindSafe(|| operation(context))).map_err(|payload| {
@@ -158,11 +166,8 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncEngineHandleV1<B> {
             });
             reply.complete(result);
         }));
-        match self.sender.try_send(command) {
-            Ok(()) => Ok(RuntimeAsyncCommandFutureV1 {
-                state,
-                completed: false,
-            }),
+        match self.try_send_command(command) {
+            Ok(()) => Ok(future),
             Err(TrySendError::Full(_)) => Err(RuntimeAsyncEngineCallErrorV1::CommandQueueFull),
             Err(TrySendError::Disconnected(_)) => Err(RuntimeAsyncEngineCallErrorV1::EngineStopped),
         }
@@ -229,6 +234,7 @@ pub struct RuntimeAsyncOwnedShutdownV1<E> {
 /// ```
 #[must_use = "the owner must be shut down to inspect cleanup and quarantine"]
 pub struct RuntimeAsyncOwnedEngineV1<B: RuntimeBackendV1 + 'static> {
+    admission: Arc<drain::AdmissionV1>,
     sender: Option<SyncSender<RuntimeAsyncEngineCommandV1<B>>>,
     worker: Option<JoinHandle<RuntimeAsyncOwnedShutdownV1<B::Error>>>,
     thread_affinity: PhantomData<Rc<()>>,
@@ -253,6 +259,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
             config.poll_interval,
         )
         .and_then(|validated| validated.with_snapshot_byte_capacity(config.snapshot_byte_capacity))
+        .and_then(|validated| validated.with_reply_capacity(config.reply_capacity))
         .map_err(RuntimeAsyncOwnedSpawnErrorV1::InvalidEngineConfig)?;
         RuntimeAsyncProgressConfigV1::new(
             progress_config.stream_capacity,
@@ -260,6 +267,8 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
         )
         .map_err(RuntimeAsyncOwnedSpawnErrorV1::InvalidProgressConfig)?;
         let (sender, receiver) = sync_channel(config.command_capacity);
+        let admission = drain::AdmissionV1::new();
+        let worker_admission = Arc::clone(&admission);
         let (startup_sender, startup_receiver) = sync_channel(1);
         let worker_thread = Arc::new(OnceLock::new());
         let worker_id = Arc::clone(&worker_thread);
@@ -304,6 +313,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
                             config: progress_config,
                             flush_stream: flush_stream_v1::<B>,
                         }),
+                        worker_admission,
                     );
                     let cleanup = context.cleanup();
                     let native_failure = if cleanup.is_complete() {
@@ -361,6 +371,8 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
             return Err(error);
         }
         let observer = RuntimeAsyncEngineHandleV1 {
+            reply_budget: reply_budget::ReplyBudgetV1::new(config.reply_capacity),
+            admission: Arc::clone(&admission),
             snapshot_budget: snapshot::SnapshotBudgetV1::new(config.snapshot_byte_capacity),
             graph_slot: Arc::new(AtomicBool::new(false)),
             sender: sender.clone(),
@@ -369,6 +381,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
         };
         Ok((
             Self {
+                admission,
                 sender: Some(sender),
                 worker: Some(worker),
                 thread_affinity: PhantomData,
@@ -386,6 +399,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
     fn stop_and_join(
         &mut self,
     ) -> Result<RuntimeAsyncOwnedShutdownV1<B::Error>, RuntimeAsyncEngineJoinErrorV1> {
+        self.admission.close();
         if let Some(sender) = self.sender.take() {
             let _ = sender.send(RuntimeAsyncEngineCommandV1::Stop);
         }

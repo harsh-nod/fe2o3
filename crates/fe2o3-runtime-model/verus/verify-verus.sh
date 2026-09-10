@@ -84,6 +84,15 @@ negative_r64_underflow="$script_dir/negative/r64_payload_budget_v1_underflow.rs"
 negative_r64_roundtrip="$script_dir/negative/r64_payload_budget_v1_roundtrip.rs"
 negative_r64_boundedness="$script_dir/negative/r64_payload_budget_v1_boundedness.rs"
 negative_r64_zero_charge="$script_dir/negative/r64_payload_budget_v1_zero_charge.rs"
+r65_graph_versions_proof="$script_dir/r65_graph_versions_v1.rs"
+negative_r65_input_exact="$script_dir/negative/r65_graph_versions_v1_input_exact.rs"
+negative_r65_input_available="$script_dir/negative/r65_graph_versions_v1_input_available.rs"
+negative_r65_begin_planned="$script_dir/negative/r65_graph_versions_v1_begin_planned.rs"
+negative_r65_begin_exclusive="$script_dir/negative/r65_graph_versions_v1_begin_exclusive.rs"
+negative_r65_begin_predecessor="$script_dir/negative/r65_graph_versions_v1_begin_predecessor.rs"
+negative_r65_commit_in_flight="$script_dir/negative/r65_graph_versions_v1_commit_in_flight.rs"
+negative_r65_commit_exact_owner="$script_dir/negative/r65_graph_versions_v1_commit_exact_owner.rs"
+negative_r65_commit_invalidated="$script_dir/negative/r65_graph_versions_v1_commit_invalidated.rs"
 negative_r61_release_without_native_shutdown="$script_dir/negative/r61_owner_async_custody_v1_release_without_native_shutdown.rs"
 negative_r61_incomplete_cleanup_release="$script_dir/negative/r61_owner_async_custody_v1_incomplete_cleanup_release.rs"
 negative_r61_native_failure_release="$script_dir/negative/r61_owner_async_custody_v1_native_failure_release.rs"
@@ -781,6 +790,15 @@ expected_negative_r64_underflow=$(read_pin "$pin_dir/NEGATIVE_R64_UNDERFLOW_SHA2
 expected_negative_r64_roundtrip=$(read_pin "$pin_dir/NEGATIVE_R64_ROUNDTRIP_SHA256")
 expected_negative_r64_boundedness=$(read_pin "$pin_dir/NEGATIVE_R64_BOUNDEDNESS_SHA256")
 expected_negative_r64_zero_charge=$(read_pin "$pin_dir/NEGATIVE_R64_ZERO_CHARGE_SHA256")
+expected_r65_graph_versions=$(read_pin "$pin_dir/R65_GRAPH_VERSIONS_SHA256")
+expected_negative_r65_input_exact=$(read_pin "$pin_dir/NEGATIVE_R65_INPUT_EXACT_SHA256")
+expected_negative_r65_input_available=$(read_pin "$pin_dir/NEGATIVE_R65_INPUT_AVAILABLE_SHA256")
+expected_negative_r65_begin_planned=$(read_pin "$pin_dir/NEGATIVE_R65_BEGIN_PLANNED_SHA256")
+expected_negative_r65_begin_exclusive=$(read_pin "$pin_dir/NEGATIVE_R65_BEGIN_EXCLUSIVE_SHA256")
+expected_negative_r65_begin_predecessor=$(read_pin "$pin_dir/NEGATIVE_R65_BEGIN_PREDECESSOR_SHA256")
+expected_negative_r65_commit_in_flight=$(read_pin "$pin_dir/NEGATIVE_R65_COMMIT_IN_FLIGHT_SHA256")
+expected_negative_r65_commit_exact_owner=$(read_pin "$pin_dir/NEGATIVE_R65_COMMIT_EXACT_OWNER_SHA256")
+expected_negative_r65_commit_invalidated=$(read_pin "$pin_dir/NEGATIVE_R65_COMMIT_INVALIDATED_SHA256")
 expected_negative_r61_release_without_native_shutdown=$(read_pin "$pin_dir/NEGATIVE_R61_RELEASE_WITHOUT_NATIVE_SHUTDOWN_SHA256")
 expected_negative_r61_incomplete_cleanup_release=$(read_pin "$pin_dir/NEGATIVE_R61_INCOMPLETE_CLEANUP_RELEASE_SHA256")
 expected_negative_r61_native_failure_release=$(read_pin "$pin_dir/NEGATIVE_R61_NATIVE_FAILURE_RELEASE_SHA256")
@@ -1490,6 +1508,15 @@ check_sources() {
     check_digest "$expected_negative_r64_roundtrip" "$negative_r64_roundtrip"
     check_digest "$expected_negative_r64_boundedness" "$negative_r64_boundedness"
     check_digest "$expected_negative_r64_zero_charge" "$negative_r64_zero_charge"
+    check_digest "$expected_r65_graph_versions" "$r65_graph_versions_proof"
+    check_digest "$expected_negative_r65_input_exact" "$negative_r65_input_exact"
+    check_digest "$expected_negative_r65_input_available" "$negative_r65_input_available"
+    check_digest "$expected_negative_r65_begin_planned" "$negative_r65_begin_planned"
+    check_digest "$expected_negative_r65_begin_exclusive" "$negative_r65_begin_exclusive"
+    check_digest "$expected_negative_r65_begin_predecessor" "$negative_r65_begin_predecessor"
+    check_digest "$expected_negative_r65_commit_in_flight" "$negative_r65_commit_in_flight"
+    check_digest "$expected_negative_r65_commit_exact_owner" "$negative_r65_commit_exact_owner"
+    check_digest "$expected_negative_r65_commit_invalidated" "$negative_r65_commit_invalidated"
     check_digest "$expected_negative_r61_release_without_native_shutdown" "$negative_r61_release_without_native_shutdown"
     check_digest "$expected_negative_r61_incomplete_cleanup_release" "$negative_r61_incomplete_cleanup_release"
     check_digest "$expected_negative_r61_native_failure_release" "$negative_r61_native_failure_release"
@@ -2170,6 +2197,15 @@ check_sources
     "$negative_r64_roundtrip" \
     "$negative_r64_boundedness" \
     "$negative_r64_zero_charge" \
+    "$r65_graph_versions_proof" \
+    "$negative_r65_input_exact" \
+    "$negative_r65_input_available" \
+    "$negative_r65_begin_planned" \
+    "$negative_r65_begin_exclusive" \
+    "$negative_r65_begin_predecessor" \
+    "$negative_r65_commit_in_flight" \
+    "$negative_r65_commit_exact_owner" \
+    "$negative_r65_commit_invalidated" \
     "$negative_r61_release_without_native_shutdown" \
     "$negative_r61_incomplete_cleanup_release" \
     "$negative_r61_native_failure_release" \
@@ -2919,6 +2955,7 @@ check_positive "$r61_owner_async_custody_proof" 'verification results:: 8 verifi
 check_positive "$r62_operation_control_proof" 'verification results:: 8 verified, 0 errors' r62-operation-control
 check_positive "$r63_graph_reservation_proof" 'verification results:: 8 verified, 0 errors' r63-graph-reservation
 check_positive "$r64_payload_budget_proof" 'verification results:: 8 verified, 0 errors' r64-payload-budget
+check_positive "$r65_graph_versions_proof" 'verification results:: 8 verified, 0 errors' r65-graph-versions
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
@@ -3535,6 +3572,14 @@ check_negative "$negative_r64_underflow" mutated_underflow_v1 r64-underflow
 check_negative "$negative_r64_roundtrip" mutated_roundtrip_v1 r64-roundtrip
 check_negative "$negative_r64_boundedness" mutated_boundedness_v1 r64-boundedness
 check_negative "$negative_r64_zero_charge" mutated_zero_charge_v1 r64-zero-charge
+check_negative "$negative_r65_input_exact" mutated_input_exact_v1 r65-input-exact
+check_negative "$negative_r65_input_available" mutated_input_available_v1 r65-input-available
+check_negative "$negative_r65_begin_planned" mutated_begin_planned_v1 r65-begin-planned
+check_negative "$negative_r65_begin_exclusive" mutated_begin_exclusive_v1 r65-begin-exclusive
+check_negative "$negative_r65_begin_predecessor" mutated_begin_predecessor_v1 r65-begin-predecessor
+check_negative "$negative_r65_commit_in_flight" mutated_commit_in_flight_v1 r65-commit-in-flight
+check_negative "$negative_r65_commit_exact_owner" mutated_commit_exact_owner_v1 r65-commit-exact-owner
+check_negative "$negative_r65_commit_invalidated" mutated_commit_invalidated_v1 r65-commit-invalidated
 
 # Detect source, checker, closure, or executable replacement during the run.
 check_sources
@@ -3543,7 +3588,7 @@ check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 r57_three_binding_compute_obligations=35 r57_three_binding_compute_mutations=23 r60_ordinary_fixed_dispatch_pipeline_obligations=46 r60_ordinary_fixed_dispatch_pipeline_mutations=26 r61_owner_async_custody_obligations=8 r61_owner_async_custody_mutations=8 r62_operation_control_obligations=8 r62_operation_control_mutations=8 r63_graph_reservation_obligations=8 r63_graph_reservation_mutations=8 r64_payload_budget_obligations=8 r64_payload_budget_mutations=8 expected_negative_files=616'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 r57_three_binding_compute_obligations=35 r57_three_binding_compute_mutations=23 r60_ordinary_fixed_dispatch_pipeline_obligations=46 r60_ordinary_fixed_dispatch_pipeline_mutations=26 r61_owner_async_custody_obligations=8 r61_owner_async_custody_mutations=8 r62_operation_control_obligations=8 r62_operation_control_mutations=8 r63_graph_reservation_obligations=8 r63_graph_reservation_mutations=8 r64_payload_budget_obligations=8 r64_payload_budget_mutations=8 r65_graph_versions_obligations=8 r65_graph_versions_mutations=8 expected_negative_files=624'
 actual_transcript=$(printf '%s\n' "$transcript" | /usr/bin/sha256sum | /usr/bin/awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2

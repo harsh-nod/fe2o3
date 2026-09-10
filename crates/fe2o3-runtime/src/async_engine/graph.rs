@@ -12,6 +12,12 @@ use fe2o3_completion::{
     ContextIdentityV1, FailureCodeV1, StreamIdentityV1,
 };
 use std::collections::VecDeque;
+mod versions;
+pub use versions::{
+    MAX_RUNTIME_GRAPH_VERSION_REFERENCES_V1, MAX_RUNTIME_GRAPH_VERSIONS_V1,
+    RuntimeGraphDataVersionV1, RuntimeGraphInputVersionV1, RuntimeGraphVersionRecordV1,
+    RuntimeGraphVersionSourceV1, RuntimeGraphVersionStateV1,
+};
 
 pub const MAX_RUNTIME_GRAPH_NODES_V1: usize = 256;
 pub const MAX_RUNTIME_GRAPH_KERNARG_BYTES_V1: usize = 65_536;
@@ -25,6 +31,9 @@ pub enum RuntimeGraphValidationErrorV1 {
     NotOperation,
     DuplicateOperation,
     MissingOperation,
+    DuplicateVersionInput,
+    InvalidVersionInput,
+    VersionNotAvailable,
     UnorderedMemoryConflict {
         first: CompletionNodeIdV1,
         second: CompletionNodeIdV1,
@@ -64,6 +73,8 @@ pub type RuntimeGraphResultV1<E> = Result<RuntimeGraphReportV1<E>, RuntimeGraphE
 #[derive(Debug)]
 pub struct RuntimeGraphReportV1<E> {
     pub execution: RuntimeGraphExecutionIdentityV1,
+    pub versions: Vec<RuntimeGraphVersionRecordV1>,
+    pub version_inputs: Vec<RuntimeGraphInputVersionV1>,
     pub completion: CompletionReportV1,
     pub observations: Vec<(CompletionNodeIdV1, RuntimeCompletionStatusV1)>,
     pub errors: Vec<(CompletionNodeIdV1, RuntimeErrorV1<E>)>,
@@ -179,6 +190,7 @@ pub struct RuntimeGraphRequestV1<B: RuntimeBackendV1> {
     actions: BTreeMap<CompletionNodeIdV1, Action<B>>,
     kernarg_bytes: usize,
     effects: usize,
+    version_inputs: BTreeMap<versions::InputKey, RuntimeGraphVersionSourceV1>,
 }
 impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
     pub fn new(
@@ -208,6 +220,7 @@ impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
             actions: BTreeMap::new(),
             kernarg_bytes: 0,
             effects: 0,
+            version_inputs: BTreeMap::new(),
         })
     }
 
@@ -362,6 +375,7 @@ pub(super) trait EngineGraphV1<B: RuntimeBackendV1>: Send {
 }
 
 struct Graph<B: RuntimeBackendV1> {
+    versions: Option<versions::VersionLedger>,
     request: Option<RuntimeGraphRequestV1<B>>,
     authority: Option<CompletionAuthorityV1>,
     token: Option<ContextGraphReservationV1>,
@@ -444,6 +458,8 @@ impl<B: RuntimeBackendV1> Graph<B> {
         request
             .validate_hazards()
             .map_err(RuntimeGraphErrorV1::Invalid)?;
+        self.versions =
+            Some(versions::VersionLedger::prepare(request).map_err(RuntimeGraphErrorV1::Invalid)?);
         self.streams.extend(request.streams.values().copied());
         let request = self.request.take().expect("validated request");
         let graph_context = request.graph.context();
@@ -465,6 +481,7 @@ impl<B: RuntimeBackendV1> Graph<B> {
     }
 
     fn fail_node(&mut self, index: usize, code: u32) {
+        self.versions.as_mut().unwrap().fail(index);
         // SAFETY: only this owner issues nodes. The caller established either
         // definite nonpublication or exact quiescent failure for this occurrence.
         unsafe {
@@ -508,6 +525,15 @@ impl<B: RuntimeBackendV1> Graph<B> {
         if !self.authority.as_ref().unwrap().is_terminal() || !self.active.is_empty() {
             return false;
         }
+        let execution = self.execution.expect("admitted graph occurrence");
+        let Some((versions, version_inputs)) = self.versions.take().unwrap().report(execution)
+        else {
+            context.quarantine_after_async_command_panic_v1();
+            self.reject(RuntimeGraphErrorV1::Invalid(
+                RuntimeGraphValidationErrorV1::VersionNotAvailable,
+            ));
+            return true;
+        };
         // Terminal graph state permanently closes issue, and every token was
         // retired successfully. No observer can reopen this consumed authority.
         let token = self.token.take().unwrap();
@@ -528,6 +554,8 @@ impl<B: RuntimeBackendV1> Graph<B> {
         self.release_slot();
         self.reply.complete(Ok(Ok(RuntimeGraphReportV1 {
             execution: self.execution.take().expect("admitted graph occurrence"),
+            versions,
+            version_inputs,
             completion,
             observations: core::mem::take(&mut self.observations),
             errors: core::mem::take(&mut self.errors),
@@ -554,6 +582,13 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
         }
         let index = self.ids.binary_search(&node).unwrap();
         assert!(!self.issued[index], "graph occurrence cannot issue twice");
+        if !self.versions.as_mut().unwrap().begin(index) {
+            context.quarantine_after_async_command_panic_v1();
+            self.reject(RuntimeGraphErrorV1::Invalid(
+                RuntimeGraphValidationErrorV1::VersionNotAvailable,
+            ));
+            return true;
+        }
         self.issued[index] = true;
         match self.actions[index].take() {
             Some(action) => match context.submit_graph_action_v1(self.token.unwrap(), action) {
@@ -591,6 +626,13 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
             match context.release_graph_submission_v1(token, &submission) {
                 Ok(()) => {
                     if status == RuntimeCompletionStatusV1::Succeeded {
+                        if !self.versions.as_mut().unwrap().commit(index) {
+                            context.quarantine_after_async_command_panic_v1();
+                            self.reject(RuntimeGraphErrorV1::Invalid(
+                                RuntimeGraphValidationErrorV1::VersionNotAvailable,
+                            ));
+                            return true;
+                        }
                         // SAFETY: exact context success was observed and native
                         // retirement succeeded before permitting dependent issue.
                         unsafe {
@@ -726,6 +768,7 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static>
         if self.observer.is_worker_thread() {
             return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
         }
+        let (reply, future) = owned::Reply::budgeted_pair(&self.observer.reply_budget)?;
         if self
             .observer
             .graph_slot
@@ -734,9 +777,9 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static>
         {
             return Err(RuntimeAsyncEngineCallErrorV1::GraphCapacity);
         }
-        let (reply, future) = owned::Reply::pair();
         let control = RuntimeGraphControlV1(Arc::new(AtomicBool::new(false)));
         let graph = Graph {
+            versions: None,
             request: Some(request),
             authority: None,
             token: None,
@@ -759,8 +802,7 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static>
         };
         match self
             .observer
-            .sender
-            .try_send(RuntimeAsyncEngineCommandV1::Graph(Box::new(graph)))
+            .try_send_command(RuntimeAsyncEngineCommandV1::Graph(Box::new(graph)))
         {
             Ok(()) => Ok(RuntimeAsyncGraphFutureV1 { future, control }),
             Err(TrySendError::Full(_)) => Err(RuntimeAsyncEngineCallErrorV1::CommandQueueFull),

@@ -100,9 +100,15 @@ execution identity to terminal reports. Repeated identical structural graphs
 receive distinct context-local generations; these are not data versions or
 distributed epochs.
 
+[R65](runtime-async-drain-versions-v1.md) adds bounded exact segment lineage,
+optional graph-local producer expectations and input/output version records.
+It also offers cooperative `begin_drain` without cancelling accepted graphs;
+its result and owner cleanup remain separate. This does not add cross-run
+version authority, compiler admission or measured compute/copy overlap.
+
 ## Still Required For #182
 
-Compiler-authenticated admitted plans, data versions/graph epochs/residency,
+Compiler-authenticated admitted plans, cross-run versions/graph epochs/residency,
 multi-device group placement and quiescence, authenticated two-host transport,
 distributed collectives, failure/recovery campaigns,
 end-to-end budgets and the precommitted scaling/performance gates remain open.

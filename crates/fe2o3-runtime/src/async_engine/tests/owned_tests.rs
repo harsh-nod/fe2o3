@@ -3,6 +3,7 @@ use crate::{RuntimeAsyncOwnedDispositionV1, RuntimeOwnedShutdownBackendV1};
 use std::cell::Cell;
 
 mod control_tests;
+mod drain_tests;
 mod executor_tests;
 mod graph_tests;
 mod snapshot_tests;
@@ -16,6 +17,8 @@ struct OwnerTrace {
     cleanup_panics: bool,
     write_panics: bool,
     flush_panics: bool,
+    poll_panics: bool,
+    initially_terminal: bool,
 }
 
 struct ThreadBoundBackend {
@@ -65,7 +68,15 @@ impl RuntimeBackendV1 for ThreadBoundBackend {
     forward!(unload_module_v1(module: u64) -> ());
     forward!(resolve_kernel_v1(module: u64, name: &str, signature: [u8;32]) -> u64);
     forward!(submit_v1(launch: BackendLaunchV1<'_>) -> u64);
-    forward!(poll_v1(submission: u64) -> BackendPollV1);
+    fn poll_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+        self.record("poll_v1");
+        let panics = self.trace.lock().unwrap().poll_panics;
+        assert!(!panics, "poll adapter panic");
+        self.inner.poll_v1(submission)
+    }
     forward!(wait_v1(submission: u64, deadline: Instant) -> BackendPollV1);
     forward!(release_submission_v1(submission: u64) -> ());
     forward!(record_event_v1(stream: u64, submission: u64) -> u64);
@@ -127,6 +138,17 @@ fn start(
     RuntimeAsyncOwnedEngineV1<ThreadBoundBackend>,
     RuntimeAsyncProgressHandleV1<ThreadBoundBackend>,
 ) {
+    start_with_config(state, trace, RuntimeAsyncEngineConfigV1::default())
+}
+
+fn start_with_config(
+    state: Arc<Mutex<MockState>>,
+    trace: Arc<Mutex<OwnerTrace>>,
+    config: RuntimeAsyncEngineConfigV1,
+) -> (
+    RuntimeAsyncOwnedEngineV1<ThreadBoundBackend>,
+    RuntimeAsyncProgressHandleV1<ThreadBoundBackend>,
+) {
     RuntimeAsyncOwnedEngineV1::spawn_with_progress(
         move || {
             let backend = ThreadBoundBackend {
@@ -136,9 +158,14 @@ fn start(
                 trace,
             };
             backend.record("construct");
-            RuntimeContextV1::open(backend)
+            let initially_terminal = backend.trace.lock().unwrap().initially_terminal;
+            let mut context = RuntimeContextV1::open(backend)?;
+            if initially_terminal {
+                context.quarantine_after_async_command_panic_v1();
+            }
+            Ok::<_, RuntimeErrorV1<MockError>>(context)
         },
-        RuntimeAsyncEngineConfigV1::default(),
+        config,
         RuntimeAsyncProgressConfigV1::default(),
     )
     .unwrap()
@@ -333,6 +360,8 @@ fn enqueue_is_nonblocking_bounded_and_discarded_commands_resolve() {
     // Exercise the receiver-drop guard without relying on thread scheduling.
     let (sender, receiver) = sync_channel(1);
     let handle = RuntimeAsyncEngineHandleV1::<MockBackend> {
+        reply_budget: reply_budget::ReplyBudgetV1::new(DEFAULT_RUNTIME_ASYNC_REPLIES_V1),
+        admission: drain::AdmissionV1::new(),
         graph_slot: Arc::new(AtomicBool::new(false)),
         snapshot_budget: snapshot::SnapshotBudgetV1::new(DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1),
         sender,
@@ -541,6 +570,8 @@ fn operation_registry_capacity_rejects_before_submission() {
 fn command_future_replaces_waker_and_wakes_exactly_once() {
     let (sender, receiver) = sync_channel(1);
     let handle = RuntimeAsyncEngineHandleV1::<MockBackend> {
+        reply_budget: reply_budget::ReplyBudgetV1::new(DEFAULT_RUNTIME_ASYNC_REPLIES_V1),
+        admission: drain::AdmissionV1::new(),
         graph_slot: Arc::new(AtomicBool::new(false)),
         snapshot_budget: snapshot::SnapshotBudgetV1::new(DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1),
         sender,

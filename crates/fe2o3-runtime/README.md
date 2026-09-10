@@ -135,6 +135,20 @@ context, gates dependent issue on successful retirement, and preserves custody
 across cancellation and observer Drop. This is not compiler-authenticated DAG
 admission or distributed execution. See `docs/runtime-async-graph-v1.md`.
 
+`begin_drain` closes cloned-handle admission and observes the accepted workload
+without cancellation. Its separate lifecycle slot remains available when the
+command queue or reply budget is full. A quiescent report is not a cleanup
+receipt; join the owner and inspect shutdown separately. Tick exhaustion or
+interruption retains unresolved custody. Async reply cells now have a shared
+configurable count budget that includes completed, caller-retained futures.
+
+Graph reports derive exact byte-segment input/output lineage for each execution.
+Optional `expect_input_version` checks a graph-local producer before reservation;
+output versions commit only after successful native retirement. These historical
+versions do not grant compiler admission or cross-run freshness. See the
+[R65 contract](../../docs/runtime-async-drain-versions-v1.md) for bounds,
+verification scope and remaining A1/A2 acceptance.
+
 Progress mode additionally offers `event_future_with_progress`, which admits one
 event and its exact source stream in a single transaction. Event polling runs
 before stream flushing in each engine tick, so completion of one persistent SDMA

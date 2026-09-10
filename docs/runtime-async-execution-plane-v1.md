@@ -25,6 +25,10 @@ proof that pending work completed. Potentially blocking backend methods retain
 their existing contracts; an external process deadline is still needed against
 an unresponsive adapter.
 
+[R65](runtime-async-drain-versions-v1.md) adds an explicit cooperative
+`begin_drain` before shutdown. Its quiescent report is separate from cleanup;
+budget exhaustion and interruption retain unresolved custody.
+
 ## Operation Progress
 
 `enqueue_with_context` returns immediately after bounded enqueue. Its standard
@@ -70,7 +74,8 @@ rejects at normal admission. This is not yet graph-wide resource reservation.
   caller-retained completed futures, all native pools, or cumulative process
   quarantine. [R64](runtime-async-admission-v1.md) bounds frozen standalone
   request payloads and compact dependency slices across cloned handles. Those
-  broader end-to-end budgets remain #182 work.
+  broader end-to-end budgets remain #182 work. R65 separately bounds retained
+  async reply cells, including completed caller-retained futures, by count.
 
 ## Evidence Boundaries
 
@@ -132,7 +137,8 @@ single-device musl copy canaries with independent integrity and cleanup checks.
   versions, graph epochs, joins, residency and repeated overlap qualification.
   [R63](runtime-async-graph-v1.md) now provides a bounded runtime-bound driver,
   frozen arguments, whole-context reservation and host joins. Compiler admission,
-  data versions, residency and measured overlap remain outstanding. R64 adds
+  residency and measured overlap remain outstanding. R65 adds exact graph-local
+  segment lineage, not persistent cross-run mutation authority. R64 adds
   process-local execution-occurrence identities, not distributed graph epochs.
 - A3: integrated group placement/sharding/replicas, all-admitted-GPU qualification,
   partial failure and group quiescence. Existing child backends alone are not it.

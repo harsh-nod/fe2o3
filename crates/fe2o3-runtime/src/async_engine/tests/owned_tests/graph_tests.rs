@@ -1,4 +1,5 @@
 use super::*;
+mod version_tests;
 use crate::async_engine::graph::EngineGraphV1;
 use crate::completion::{
     CompletionGraphV1, CompletionNodeIdV1, CompletionNodeV1, EventIdentityV1, FutureIdentityV1,
@@ -56,6 +57,8 @@ impl Harness {
         let (sender, receiver) = sync_channel(4);
         let handle = RuntimeAsyncProgressHandleV1 {
             observer: RuntimeAsyncEngineHandleV1 {
+                reply_budget: reply_budget::ReplyBudgetV1::new(DEFAULT_RUNTIME_ASYNC_REPLIES_V1),
+                admission: drain::AdmissionV1::new(),
                 sender,
                 worker_thread: Arc::new(OnceLock::new()),
                 quarantine_command_panics: true,
