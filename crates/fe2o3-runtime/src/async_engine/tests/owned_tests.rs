@@ -3,7 +3,9 @@ use crate::{RuntimeAsyncOwnedDispositionV1, RuntimeOwnedShutdownBackendV1};
 use std::cell::Cell;
 
 mod control_tests;
+mod executor_tests;
 mod graph_tests;
+mod snapshot_tests;
 
 #[derive(Default)]
 struct OwnerTrace {
@@ -332,6 +334,7 @@ fn enqueue_is_nonblocking_bounded_and_discarded_commands_resolve() {
     let (sender, receiver) = sync_channel(1);
     let handle = RuntimeAsyncEngineHandleV1::<MockBackend> {
         graph_slot: Arc::new(AtomicBool::new(false)),
+        snapshot_budget: snapshot::SnapshotBudgetV1::new(DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1),
         sender,
         worker_thread: Arc::new(OnceLock::new()),
         quarantine_command_panics: false,
@@ -539,6 +542,7 @@ fn command_future_replaces_waker_and_wakes_exactly_once() {
     let (sender, receiver) = sync_channel(1);
     let handle = RuntimeAsyncEngineHandleV1::<MockBackend> {
         graph_slot: Arc::new(AtomicBool::new(false)),
+        snapshot_budget: snapshot::SnapshotBudgetV1::new(DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1),
         sender,
         worker_thread: Arc::new(OnceLock::new()),
         quarantine_command_panics: false,

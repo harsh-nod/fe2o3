@@ -9,6 +9,12 @@ pub(crate) struct ContextGraphReservationV1 {
     local: u64,
 }
 
+impl ContextGraphReservationV1 {
+    pub(crate) const fn generation(self) -> u64 {
+        self.local
+    }
+}
+
 pub(crate) struct PreparedContextCopyV1 {
     pub(super) stream: RuntimeStreamIdV1,
     pub(super) stream_record: StreamRecordV1,

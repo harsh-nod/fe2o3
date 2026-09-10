@@ -387,6 +387,9 @@ impl Harness {
         let handle = RuntimeAsyncProgressHandleV1 {
             observer: RuntimeAsyncEngineHandleV1 {
                 graph_slot: Arc::new(AtomicBool::new(false)),
+                snapshot_budget: snapshot::SnapshotBudgetV1::new(
+                    DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1,
+                ),
                 sender,
                 worker_thread: Arc::new(OnceLock::new()),
                 quarantine_command_panics: true,

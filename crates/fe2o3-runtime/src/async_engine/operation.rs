@@ -191,7 +191,17 @@ impl<B: RuntimeBackendV1, A> EngineOperationV1<B> for Operation<B, A> {
 }
 
 impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
-    fn enqueue_operation<A: 'static>(
+    fn operation_dependencies(
+        &self,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<snapshot::Charged<Box<[RuntimeEventIdV1]>>, RuntimeAsyncEngineCallErrorV1> {
+        if self.observer.is_worker_thread() {
+            return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
+        }
+        snapshot::charge_dependencies(&self.observer.snapshot_budget, dependencies)
+    }
+
+    pub(super) fn enqueue_operation<A: 'static>(
         &self,
         stream: RuntimeStreamIdV1,
         submit: Submit<B, A>,
@@ -199,7 +209,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         self.enqueue_controlled_operation(stream, submit, None)
     }
 
-    fn enqueue_tracked_operation<A: 'static>(
+    pub(super) fn enqueue_tracked_operation<A: 'static>(
         &self,
         stream: RuntimeStreamIdV1,
         submit: Submit<B, A>,
@@ -248,6 +258,8 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
     /// distinct operation streams, in addition to the observer registries.
     /// Arguments and kernel ownership remain subject to their existing contracts;
     /// these record bounds do not bound arbitrary user-owned argument bytes.
+    /// Dependency lists are checked, compacted and charged before enqueue.
+    /// Use `enqueue_launch` for a fully frozen, payload-budgeted launch request.
     pub fn launch<A: RuntimeArgumentsV1>(
         &self,
         stream: RuntimeStreamIdV1,
@@ -256,10 +268,13 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         geometry: RuntimeLaunchGeometryV1,
         dependencies: Vec<RuntimeEventIdV1>,
     ) -> Result<RuntimeAsyncOperationFutureV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
+        let dependencies = self.operation_dependencies(dependencies)?;
         self.enqueue_operation(
             stream,
             Box::new(move |context| {
-                context.launch(stream, &kernel, &arguments, geometry, &dependencies)
+                dependencies.with(|dependencies| {
+                    context.launch(stream, &kernel, &arguments, geometry, dependencies)
+                })
             }),
         )
     }
@@ -274,10 +289,13 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         geometry: RuntimeLaunchGeometryV1,
         dependencies: Vec<RuntimeEventIdV1>,
     ) -> Result<RuntimeAsyncTrackedOperationV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
+        let dependencies = self.operation_dependencies(dependencies)?;
         self.enqueue_tracked_operation(
             stream,
             Box::new(move |context| {
-                context.launch(stream, &kernel, &arguments, geometry, &dependencies)
+                dependencies.with(|dependencies| {
+                    context.launch(stream, &kernel, &arguments, geometry, dependencies)
+                })
             }),
         )
     }
@@ -293,9 +311,14 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
     where
         B: RuntimeAsyncCopyBackendV1,
     {
+        let dependencies = self.operation_dependencies(dependencies)?;
         self.enqueue_operation(
             stream,
-            Box::new(move |context| context.copy_async(stream, source, destination, &dependencies)),
+            Box::new(move |context| {
+                dependencies.with(|dependencies| {
+                    context.copy_async(stream, source, destination, dependencies)
+                })
+            }),
         )
     }
 
@@ -313,9 +336,14 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
     where
         B: RuntimeAsyncCopyBackendV1,
     {
+        let dependencies = self.operation_dependencies(dependencies)?;
         self.enqueue_tracked_operation(
             stream,
-            Box::new(move |context| context.copy_async(stream, source, destination, &dependencies)),
+            Box::new(move |context| {
+                dependencies.with(|dependencies| {
+                    context.copy_async(stream, source, destination, dependencies)
+                })
+            }),
         )
     }
 
@@ -330,9 +358,14 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         RuntimeAsyncOperationFutureV1<RuntimePeerCopyV1, B::Error>,
         RuntimeAsyncEngineCallErrorV1,
     > {
+        let dependencies = self.operation_dependencies(dependencies)?;
         self.enqueue_operation(
             stream,
-            Box::new(move |context| context.peer_copy(stream, source, destination, &dependencies)),
+            Box::new(move |context| {
+                dependencies.with(|dependencies| {
+                    context.peer_copy(stream, source, destination, dependencies)
+                })
+            }),
         )
     }
 
@@ -347,9 +380,14 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         RuntimeAsyncTrackedOperationV1<RuntimePeerCopyV1, B::Error>,
         RuntimeAsyncEngineCallErrorV1,
     > {
+        let dependencies = self.operation_dependencies(dependencies)?;
         self.enqueue_tracked_operation(
             stream,
-            Box::new(move |context| context.peer_copy(stream, source, destination, &dependencies)),
+            Box::new(move |context| {
+                dependencies.with(|dependencies| {
+                    context.peer_copy(stream, source, destination, dependencies)
+                })
+            }),
         )
     }
 }

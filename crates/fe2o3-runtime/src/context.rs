@@ -1875,6 +1875,28 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         )
     }
 
+    pub(crate) fn launch_snapshot_v1<A: RuntimeArgumentsV1>(
+        &mut self,
+        stream: RuntimeStreamIdV1,
+        kernel: &TypedRuntimeKernelV1<A>,
+        bytes: &[u8],
+        bindings: &[RuntimeBindingV1],
+        geometry: RuntimeLaunchGeometryV1,
+        dependencies: &[RuntimeEventIdV1],
+    ) -> Result<RuntimeSubmissionV1<A>, RuntimeErrorV1<B::Error>> {
+        self.launch_with_backend_submit(
+            ContextLaunchRequestV1 {
+                stream,
+                kernel,
+                arguments: ContextLaunchArgumentsV1::Frozen(bytes, bindings),
+                geometry,
+                dependencies,
+                semantic_launch: BackendSemanticLaunchV1::Ordinary,
+            },
+            |backend, launch| backend.submit_v1(launch),
+        )
+    }
+
     fn launch_with_backend_submit<A, M, F>(
         &mut self,
         request: ContextLaunchRequestV1<'_, A>,

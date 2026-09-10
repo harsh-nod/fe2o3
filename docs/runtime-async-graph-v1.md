@@ -95,9 +95,15 @@ The [R63 evidence report](evidence/mi300x-r63-async-graph-2026-09-09/README.md)
 records two accepted MI300X runs from signed source, the complete CPU/proof
 results, independent capture verification and the final shared-host cleanup check.
 
+[R64](runtime-async-admission-v1.md) adds a private-construction descriptive
+execution identity to terminal reports. Repeated identical structural graphs
+receive distinct context-local generations; these are not data versions or
+distributed epochs.
+
 ## Still Required For #182
 
 Compiler-authenticated admitted plans, data versions/graph epochs/residency,
 multi-device group placement and quiescence, authenticated two-host transport,
-distributed collectives, failure/recovery campaigns, named-executor integration,
+distributed collectives, failure/recovery campaigns,
 end-to-end budgets and the precommitted scaling/performance gates remain open.
+R64 supplies named-executor integration tests, not progress/fairness proofs.

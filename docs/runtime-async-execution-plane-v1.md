@@ -68,7 +68,9 @@ rejects at normal admission. This is not yet graph-wide resource reservation.
   contracted adapter calls.
 - Record capacities do not bound arbitrary closure/argument/result bytes,
   caller-retained completed futures, all native pools, or cumulative process
-  quarantine. Those end-to-end budgets remain #182 work.
+  quarantine. [R64](runtime-async-admission-v1.md) bounds frozen standalone
+  request payloads and compact dependency slices across cloned handles. Those
+  broader end-to-end budgets remain #182 work.
 
 ## Evidence Boundaries
 
@@ -121,15 +123,17 @@ single-device musl copy canaries with independent integrity and cleanup checks.
 
 - A0: distributed threat model, stable identities, bounded protocols and budgets.
 - A1: general generated-kernel production authority, end-to-end byte budgets,
-  multiple executor integration, mixed-duration/high-depth hardware qualification
-  and full drain qualification. [R62](runtime-async-control-v1.md) adds opaque
+  mixed-duration/high-depth hardware qualification and full drain qualification.
+  R64 adds real Tokio and LocalPool integration tests, not executor fairness
+  proofs. [R62](runtime-async-control-v1.md) adds opaque
   operation-addressable pre-submission cancellation and recoverable timeout
   observation with an executor-supplied timer; it does not supply a timer service.
 - A2: admitted graph driver, exclusive resource reservation or pins, exact data
   versions, graph epochs, joins, residency and repeated overlap qualification.
   [R63](runtime-async-graph-v1.md) now provides a bounded runtime-bound driver,
   frozen arguments, whole-context reservation and host joins. Compiler admission,
-  data versions, epochs, residency and measured overlap remain outstanding.
+  data versions, residency and measured overlap remain outstanding. R64 adds
+  process-local execution-occurrence identities, not distributed graph epochs.
 - A3: integrated group placement/sharding/replicas, all-admitted-GPU qualification,
   partial failure and group quiescence. Existing child backends alone are not it.
 - A4-A5: authenticated two-host control, membership/coordinator epochs, exact

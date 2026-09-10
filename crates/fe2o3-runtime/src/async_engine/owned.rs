@@ -252,6 +252,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
             config.polls_per_tick,
             config.poll_interval,
         )
+        .and_then(|validated| validated.with_snapshot_byte_capacity(config.snapshot_byte_capacity))
         .map_err(RuntimeAsyncOwnedSpawnErrorV1::InvalidEngineConfig)?;
         RuntimeAsyncProgressConfigV1::new(
             progress_config.stream_capacity,
@@ -360,6 +361,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
             return Err(error);
         }
         let observer = RuntimeAsyncEngineHandleV1 {
+            snapshot_budget: snapshot::SnapshotBudgetV1::new(config.snapshot_byte_capacity),
             graph_slot: Arc::new(AtomicBool::new(false)),
             sender: sender.clone(),
             worker_thread,

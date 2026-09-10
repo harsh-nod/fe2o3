@@ -25,6 +25,8 @@ mod owned;
 pub use owned::*;
 mod operation;
 pub use operation::*;
+mod snapshot;
+pub use snapshot::{RuntimeAsyncLaunchRequestV1, RuntimeAsyncSnapshotErrorV1};
 mod operation_control;
 pub use operation_control::*;
 #[allow(unsafe_code)] // Authenticates exact runtime observations for CompletionAuthorityV1.
@@ -45,6 +47,9 @@ pub const MAX_RUNTIME_ASYNC_POLL_INTERVAL_V1: Duration = Duration::from_secs(1);
 pub const MAX_RUNTIME_ASYNC_PROGRESS_STREAMS_V1: usize = 65_536;
 /// Hard upper bound for stream flushes attempted in one scheduling tick.
 pub const MAX_RUNTIME_ASYNC_FLUSHES_PER_TICK_V1: usize = 1024;
+/// Maximum retained standalone request payload budget, excluding native resources.
+pub const MAX_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1: usize = 1024 * 1024 * 1024;
+pub const DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1: usize = 16 * 1024 * 1024;
 
 /// Bounded scheduling configuration for one async observation engine.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,6 +59,7 @@ pub struct RuntimeAsyncEngineConfigV1 {
     commands_per_tick: usize,
     polls_per_tick: usize,
     poll_interval: Duration,
+    snapshot_byte_capacity: usize,
 }
 
 impl RuntimeAsyncEngineConfigV1 {
@@ -85,7 +91,25 @@ impl RuntimeAsyncEngineConfigV1 {
             commands_per_tick,
             polls_per_tick,
             poll_interval,
+            snapshot_byte_capacity: DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1,
         })
+    }
+
+    /// Bounds frozen launch payloads and compact standalone dependency lists.
+    /// Does not bound legacy argument objects, generic callbacks, replies or GPU memory.
+    pub fn with_snapshot_byte_capacity(
+        mut self,
+        capacity: usize,
+    ) -> Result<Self, RuntimeAsyncEngineConfigErrorV1> {
+        if capacity == 0 || capacity > MAX_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1 {
+            return Err(RuntimeAsyncEngineConfigErrorV1::SnapshotByteCapacity);
+        }
+        self.snapshot_byte_capacity = capacity;
+        Ok(self)
+    }
+
+    pub const fn snapshot_byte_capacity(self) -> usize {
+        self.snapshot_byte_capacity
     }
 
     pub const fn command_capacity(self) -> usize {
@@ -117,6 +141,7 @@ impl Default for RuntimeAsyncEngineConfigV1 {
             commands_per_tick: 64,
             polls_per_tick: 64,
             poll_interval: Duration::from_millis(1),
+            snapshot_byte_capacity: DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1,
         }
     }
 }
@@ -129,6 +154,7 @@ pub enum RuntimeAsyncEngineConfigErrorV1 {
     CommandsPerTick,
     PollsPerTick,
     PollInterval,
+    SnapshotByteCapacity,
 }
 
 impl fmt::Display for RuntimeAsyncEngineConfigErrorV1 {
@@ -326,6 +352,8 @@ pub enum RuntimeAsyncEngineCallErrorV1 {
     ReentrantCall,
     CommandPanicked,
     GraphCapacity,
+    SnapshotCapacity,
+    InvalidSnapshot(RuntimeAsyncSnapshotErrorV1),
 }
 
 impl fmt::Display for RuntimeAsyncEngineCallErrorV1 {
@@ -762,6 +790,7 @@ pub struct RuntimeAsyncEngineHandleV1<B: RuntimeBackendV1 + 'static> {
     worker_thread: Arc<OnceLock<thread::ThreadId>>,
     quarantine_command_panics: bool,
     graph_slot: Arc<AtomicBool>,
+    snapshot_budget: Arc<snapshot::SnapshotBudgetV1>,
 }
 
 impl<B: RuntimeBackendV1 + 'static> Clone for RuntimeAsyncEngineHandleV1<B> {
@@ -771,11 +800,17 @@ impl<B: RuntimeBackendV1 + 'static> Clone for RuntimeAsyncEngineHandleV1<B> {
             worker_thread: Arc::clone(&self.worker_thread),
             quarantine_command_panics: self.quarantine_command_panics,
             graph_slot: Arc::clone(&self.graph_slot),
+            snapshot_budget: Arc::clone(&self.snapshot_budget),
         }
     }
 }
 
 impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncEngineHandleV1<B> {
+    /// Descriptive retained standalone payload bytes, not native resource usage.
+    pub fn snapshot_bytes_in_use(&self) -> usize {
+        self.snapshot_budget.used()
+    }
+
     /// Runs one boundedly enqueued safe context operation on the engine thread.
     ///
     /// The operation is synchronous from the caller's perspective. A panic is
@@ -1015,7 +1050,9 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
             config.commands_per_tick,
             config.polls_per_tick,
             config.poll_interval,
-        ) {
+        )
+        .and_then(|validated| validated.with_snapshot_byte_capacity(config.snapshot_byte_capacity))
+        {
             return Err(RuntimeAsyncEngineSpawnFailureV1 {
                 context: Box::new(context),
                 error: RuntimeAsyncEngineSpawnErrorV1::InvalidConfig(error),
@@ -1055,6 +1092,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
         };
         drop(context_slot);
         let handle = RuntimeAsyncEngineHandleV1 {
+            snapshot_budget: snapshot::SnapshotBudgetV1::new(config.snapshot_byte_capacity),
             graph_slot: Arc::new(AtomicBool::new(false)),
             sender: sender.clone(),
             worker_thread,
@@ -1089,7 +1127,9 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
             config.commands_per_tick,
             config.polls_per_tick,
             config.poll_interval,
-        ) {
+        )
+        .and_then(|validated| validated.with_snapshot_byte_capacity(config.snapshot_byte_capacity))
+        {
             return Err(RuntimeAsyncProgressEngineSpawnFailureV1 {
                 context: Box::new(context),
                 error: RuntimeAsyncProgressEngineSpawnErrorV1::InvalidEngineConfig(error),
@@ -1142,6 +1182,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
         };
         drop(context_slot);
         let observer = RuntimeAsyncEngineHandleV1 {
+            snapshot_budget: snapshot::SnapshotBudgetV1::new(config.snapshot_byte_capacity),
             graph_slot: Arc::new(AtomicBool::new(false)),
             sender: sender.clone(),
             worker_thread,
@@ -1795,6 +1836,7 @@ mod tests {
         progress_steps: Vec<MockProgressStepV1>,
         release_calls: usize,
         panic_on_poll: bool,
+        panic_on_submit: bool,
         issues: Vec<(u64, u64, Vec<u8>, Vec<crate::BackendBindingV1>)>,
         copy_issues: Vec<(u64, BackendMemoryRegionV1, BackendMemoryRegionV1, Vec<u64>)>,
         submit_failures: VecDeque<RuntimeBackendFailureV1<MockError>>,
@@ -1913,6 +1955,8 @@ mod tests {
             &mut self,
             launch: BackendLaunchV1<'_>,
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            let panics = self.state.lock().unwrap().panic_on_submit;
+            assert!(!panics, "requested backend submit panic");
             if let Some(error) = self.state.lock().unwrap().submit_failures.pop_front() {
                 return Err(error);
             }

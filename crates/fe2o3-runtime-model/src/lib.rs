@@ -68,6 +68,7 @@ mod r60_ordinary_fixed_dispatch_pipeline;
 mod r61_owner_async_custody;
 mod r62_operation_control;
 mod r63_graph_reservation;
+mod r64_payload_budget;
 mod r9_native_evidence;
 mod typed_async;
 
@@ -123,6 +124,7 @@ pub use r60_ordinary_fixed_dispatch_pipeline::*;
 pub use r61_owner_async_custody::*;
 pub use r62_operation_control::*;
 pub use r63_graph_reservation::*;
+pub use r64_payload_budget::*;
 pub use typed_async::*;
 
 #[cfg(test)]

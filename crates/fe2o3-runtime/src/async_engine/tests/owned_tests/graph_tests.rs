@@ -60,6 +60,9 @@ impl Harness {
                 worker_thread: Arc::new(OnceLock::new()),
                 quarantine_command_panics: true,
                 graph_slot: Arc::new(AtomicBool::new(false)),
+                snapshot_budget: snapshot::SnapshotBudgetV1::new(
+                    DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1,
+                ),
             },
         };
         Self {
@@ -529,6 +532,45 @@ fn r63_repeated_graphs_retire_all_submission_records() {
     }
     assert_eq!(h.issue_count(), 512);
     assert!(h.context.cleanup().is_complete());
+}
+
+#[test]
+fn r64_repeated_graph_reports_identify_distinct_admitted_occurrences() {
+    let mut h = Harness::new();
+    let mut prior = None;
+    let mut first = None;
+    for _ in 0..16 {
+        let future = h.submit(h.bound(false));
+        h.succeed();
+        let report = result(future).unwrap();
+        assert_eq!(
+            report.execution.graph_identity(),
+            report.completion.graph_identity()
+        );
+        assert_eq!(
+            report.execution.context(),
+            h.context
+                .completion_stream_identity_v1(h.streams[0])
+                .unwrap()
+                .context()
+        );
+        if let Some(previous) = prior {
+            let previous: crate::RuntimeGraphExecutionIdentityV1 = previous;
+            assert_eq!(previous.graph_identity(), report.execution.graph_identity());
+            assert_eq!(previous.context(), report.execution.context());
+            assert!(previous.generation() < report.execution.generation());
+            assert_ne!(previous, report.execution);
+        }
+        first.get_or_insert(report.execution);
+        prior = Some(report.execution);
+    }
+    assert_ne!(first, prior);
+    let mut other = Harness::new();
+    let future = other.submit(other.bound(false));
+    other.succeed();
+    let report = result(future).unwrap();
+    assert_ne!(first.unwrap().context(), report.execution.context());
+    assert_ne!(first.unwrap(), report.execution);
 }
 
 #[test]

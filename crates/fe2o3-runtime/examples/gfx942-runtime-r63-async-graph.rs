@@ -181,6 +181,9 @@ fn main() -> ResultV1<()> {
     let report =
         wait(handle.submit_graph(request)?)??.map_err(|e| format!("graph execution: {e:?}"))?;
     if report.completion.graph_identity() != identity
+        || report.execution.graph_identity() != identity
+        || report.execution.context() != s[0].context()
+        || report.execution.generation() == 0
         || report.completion.entries().len() != 12
         || report
             .completion

@@ -7,9 +7,9 @@ use crate::{
     RuntimeLaunchGeometryV1, RuntimeMemoryRegionV1, RuntimeSubmissionV1, TypedRuntimeKernelV1,
 };
 use fe2o3_completion::{
-    CancellationCodeV1, CompletionAuthorityV1, CompletionGraphV1, CompletionNodeIdV1,
-    CompletionNodeKindV1, CompletionNodeStateV1, CompletionReportV1, FailureCodeV1,
-    StreamIdentityV1,
+    CancellationCodeV1, CompletionAuthorityV1, CompletionGraphIdentityV1, CompletionGraphV1,
+    CompletionNodeIdV1, CompletionNodeKindV1, CompletionNodeStateV1, CompletionReportV1,
+    ContextIdentityV1, FailureCodeV1, StreamIdentityV1,
 };
 use std::collections::VecDeque;
 
@@ -63,11 +63,41 @@ pub type RuntimeGraphResultV1<E> = Result<RuntimeGraphReportV1<E>, RuntimeGraphE
 /// has been released. Failed/cancelled nodes are not successful data versions.
 #[derive(Debug)]
 pub struct RuntimeGraphReportV1<E> {
+    pub execution: RuntimeGraphExecutionIdentityV1,
     pub completion: CompletionReportV1,
     pub observations: Vec<(CompletionNodeIdV1, RuntimeCompletionStatusV1)>,
     pub errors: Vec<(CompletionNodeIdV1, RuntimeErrorV1<E>)>,
     pub rejected_observations: u64,
     pub rejected_releases: u64,
+}
+
+/// One admitted process-local graph occurrence, not a data version or authority.
+/// The structural identity excludes bound argument bytes. Generation may have
+/// gaps and is scoped to the context, not a GPU-reset or distributed epoch.
+///
+/// ```compile_fail
+/// use fe2o3_runtime::RuntimeGraphExecutionIdentityV1;
+/// use fe2o3_runtime::completion::{ContextIdentityV1, CompletionGraphIdentityV1};
+/// fn forge(context: ContextIdentityV1, graph: CompletionGraphIdentityV1) {
+///     let forged = RuntimeGraphExecutionIdentityV1 { context, graph, generation: 1 };
+/// }
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub struct RuntimeGraphExecutionIdentityV1 {
+    context: ContextIdentityV1,
+    graph: CompletionGraphIdentityV1,
+    generation: u64,
+}
+impl RuntimeGraphExecutionIdentityV1 {
+    pub const fn context(self) -> ContextIdentityV1 {
+        self.context
+    }
+    pub const fn graph_identity(self) -> CompletionGraphIdentityV1 {
+        self.graph
+    }
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
 }
 
 /// Local cancellation requests closure of unissued nodes when the owner next
@@ -335,6 +365,7 @@ struct Graph<B: RuntimeBackendV1> {
     request: Option<RuntimeGraphRequestV1<B>>,
     authority: Option<CompletionAuthorityV1>,
     token: Option<ContextGraphReservationV1>,
+    execution: Option<RuntimeGraphExecutionIdentityV1>,
     actions: Vec<Option<PreparedContextGraphActionV1>>,
     ids: Vec<CompletionNodeIdV1>,
     issued: Vec<bool>,
@@ -415,15 +446,21 @@ impl<B: RuntimeBackendV1> Graph<B> {
             .map_err(RuntimeGraphErrorV1::Invalid)?;
         self.streams.extend(request.streams.values().copied());
         let request = self.request.take().expect("validated request");
+        let graph_context = request.graph.context();
+        let graph_identity = request.graph.identity();
         self.authority = Some(request.graph.into_completion_authority());
         self.active.reserve(self.ids.len());
         self.observations.reserve(self.ids.len());
         self.errors.reserve(self.ids.len());
-        self.token = Some(
-            context
-                .reserve_graph_v1(self.ids.len())
-                .map_err(|e| RuntimeGraphErrorV1::Context(e.into()))?,
-        );
+        let token = context
+            .reserve_graph_v1(self.ids.len())
+            .map_err(|e| RuntimeGraphErrorV1::Context(e.into()))?;
+        self.token = Some(token);
+        self.execution = Some(RuntimeGraphExecutionIdentityV1 {
+            context: graph_context,
+            graph: graph_identity,
+            generation: token.generation(),
+        });
         Ok(())
     }
 
@@ -490,6 +527,7 @@ impl<B: RuntimeBackendV1> Graph<B> {
             .unwrap_or_else(|_| panic!("terminal graph"));
         self.release_slot();
         self.reply.complete(Ok(Ok(RuntimeGraphReportV1 {
+            execution: self.execution.take().expect("admitted graph occurrence"),
             completion,
             observations: core::mem::take(&mut self.observations),
             errors: core::mem::take(&mut self.errors),
@@ -702,6 +740,7 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static>
             request: Some(request),
             authority: None,
             token: None,
+            execution: None,
             actions: Vec::new(),
             ids: Vec::new(),
             issued: Vec::new(),
