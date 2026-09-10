@@ -64,7 +64,8 @@ No resets, fault injection or all-GPU reservation were performed.
 - GNU and musl: **1,931 passed, 5 ignored, 44 harnesses each**, covering runtime,
   runtime-model, KFD and completion with all features/all targets.
 - GNU and musl doctests: **63 passed each**.
-- Clippy with warnings denied, formatting and diff checks passed.
+- Clippy with warnings denied, formatting and source/document diff checks passed.
+  Verbatim raw evidence retains tool-emitted whitespace.
 - R60/R61/R62/R63 runner tests: **32 passed**.
 - Authenticated Verus suite: **52 positive sources, 1,284 verified obligations,
   608 expected-negative rejections**; the 190-file toolchain closure matched.
