@@ -502,7 +502,11 @@ fn compute_immediate_dominators(
                 continue;
             };
             meter.charge_dominator_predecessor()?;
-            for predecessor in candidates {
+            // Entry absorbs every remaining predecessor intersection.
+            while next != 0 {
+                let Some(predecessor) = candidates.next() else {
+                    break;
+                };
                 meter.charge_dominator_predecessor()?;
                 next = intersect_dominators(next, predecessor, &dominators, &order, meter)?;
             }
@@ -814,6 +818,10 @@ impl WorkMeter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "control_flow_entry_dominators_tests.rs"]
+mod entry_dominator_tests;
 
 #[cfg(test)]
 mod tests {
