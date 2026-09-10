@@ -5182,6 +5182,16 @@ impl SharedGttMemorySessionV1 {
             .copy_mapped_host_visible_subrange(token, offset, byte_len)
     }
 
+    pub(crate) fn copy_mapped_host_visible_subrange_into(
+        &mut self,
+        token: &SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+        offset: u64,
+        destination: &mut [u8],
+    ) -> Result<(), MemorySessionError> {
+        self.engine
+            .copy_mapped_host_visible_subrange_into(token, offset, destination)
+    }
+
     #[allow(dead_code)]
     pub(crate) fn observe_aql_control_counters(
         &mut self,
@@ -6922,6 +6932,120 @@ mod tests {
                 .copy_mapped_host_visible_subrange(&stale, 64, 32)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn coherent_capture_into_rejects_each_stale_coordinate_without_writing() {
+        for mutation in 0..7 {
+            let mut engine = acquired();
+            let token = engine.allocate::<HostVisibleCoherentGttV1>(64).unwrap();
+            let token = engine.map_mutable(token).unwrap();
+            let mut candidate = SharedGttAllocationV1 {
+                session_id: token.session_id,
+                id: token.id,
+                generation: token.generation,
+                layout: token.layout,
+                marker: PhantomData::<(HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1)>,
+            };
+            match mutation {
+                0 => candidate.session_id += 1,
+                1 => candidate.id += 1,
+                2 => candidate.generation += 1,
+                3 => candidate.layout.requested_bytes += 1,
+                4 => engine.allocations[0].phase = SharedAllocationPhaseV1::Released,
+                5 => engine.allocations[0].mapping = None,
+                _ => engine.phase = SharedMemorySessionPhaseV1::Quarantined,
+            }
+            let calls = (
+                engine.backend.reserve_va_calls,
+                engine.backend.alloc_calls,
+                engine.backend.map_cpu_calls,
+                engine.backend.map_gpu_calls,
+                engine.backend.unmap_gpu_calls,
+                engine.backend.free_calls,
+            );
+            let mut destination = [0xa5; 8];
+            assert!(
+                engine
+                    .copy_mapped_host_visible_subrange_into(&candidate, 8, &mut destination)
+                    .is_err()
+            );
+            assert_eq!(destination, [0xa5; 8]);
+            assert_eq!(
+                calls,
+                (
+                    engine.backend.reserve_va_calls,
+                    engine.backend.alloc_calls,
+                    engine.backend.map_cpu_calls,
+                    engine.backend.map_gpu_calls,
+                    engine.backend.unmap_gpu_calls,
+                    engine.backend.free_calls
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn coherent_capture_into_has_exact_currentness_and_no_native_mutation() {
+        for failing_fence in [None, Some(1), Some(2)] {
+            let mut engine = acquired();
+            let mut token = engine.allocate::<HostVisibleCoherentGttV1>(64).unwrap();
+            engine
+                .with_bytes_mut(&mut token, |bytes| {
+                    for (index, byte) in bytes.iter_mut().enumerate() {
+                        *byte = index as u8;
+                    }
+                })
+                .unwrap();
+            let token = engine.map_mutable(token).unwrap();
+            let before = engine.backend.operational_currentness_calls;
+            engine.backend.fail_operational_currentness_at =
+                failing_fence.map(|delta| before + delta);
+            let operations = engine.backend.operations.len();
+            let currentness = engine.backend.currentness_calls;
+            let mut destination = [0xa5; 12];
+            let result =
+                engine.copy_mapped_host_visible_subrange_into(&token, 16, &mut destination[2..10]);
+            assert_eq!(destination[..2], [0xa5; 2]);
+            assert_eq!(destination[10..], [0xa5; 2]);
+            assert_eq!(engine.backend.currentness_calls, currentness);
+            assert_eq!(engine.backend.operations.len(), operations);
+            if failing_fence == Some(1) {
+                assert_eq!(destination, [0xa5; 12]);
+                assert_eq!(engine.backend.operational_currentness_calls - before, 1);
+            } else {
+                assert_eq!(destination[2..10], [16, 17, 18, 19, 20, 21, 22, 23]);
+                assert_eq!(engine.backend.operational_currentness_calls - before, 2);
+            }
+            if failing_fence.is_some() {
+                assert!(result.is_err());
+                assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
+            } else {
+                assert!(result.is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn coherent_capture_into_panic_still_checks_closing_currentness() {
+        let mut engine = acquired();
+        let token = engine.allocate::<HostVisibleCoherentGttV1>(64).unwrap();
+        let token = engine.map_mutable(token).unwrap();
+        engine.allocations[0].mapping.as_mut().unwrap().panic_access = Some("with_bytes");
+        let before = engine.backend.operational_currentness_calls;
+        let mut destination = [0xa5; 8];
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine.copy_mapped_host_visible_subrange_into(&token, 8, &mut destination)
+        }))
+        .unwrap_err();
+        assert_eq!(
+            payload.downcast_ref::<(&'static str, &'static str)>(),
+            Some(&("N2 native panic", "with_bytes"))
+        );
+        assert_eq!(engine.backend.operational_currentness_calls - before, 2);
+        assert_eq!(destination, [0xa5; 8]);
+        assert_eq!(engine.backend.free_calls, 0);
+        assert_eq!(engine.backend.release_va_calls, 0);
     }
 
     #[test]

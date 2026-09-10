@@ -25,6 +25,7 @@ use fe2o3_runtime_model::{
 
 #[path = "queue_live.rs"]
 mod live;
+pub use live::Gfx942SdmaHostReadIntoErrorV1;
 
 #[cfg(test)]
 pub(crate) use live::{

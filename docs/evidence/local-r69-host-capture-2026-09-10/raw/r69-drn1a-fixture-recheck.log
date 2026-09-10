@@ -1,0 +1,18 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-profiler-protocol)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 47.50s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 8 tests
+test async_engine::tests::owned_tests::drain_tests::capture_tests::drn1a_transferable_owner_preserves_registration_and_default_unsupported_spi ... ok
+test async_engine::tests::owned_tests::drain_tests::capture_tests::drn1a_capture_resolves_late_backing_and_bytes_outlive_reply_and_owner ... ok
+test async_engine::tests::owned_tests::drain_tests::capture_tests::drn1a_abandoned_capture_observer_does_not_withdraw_capture ... ok
+test async_engine::tests::owned_tests::drain_tests::capture_tests::drn1a_released_source_cannot_read_replacement_allocation ... ok
+test async_engine::tests::owned_tests::drain_tests::capture_tests::drn1a_budget_exhaustion_discards_destination_without_capture_or_native_release ... ok
+test async_engine::tests::owned_tests::drain_tests::capture_tests::drn1a_admission_rejection_returns_original_destination_without_closing ... ok
+test async_engine::tests::owned_tests::drain_tests::capture_tests::drn1a_capture_rejection_terminal_failure_and_panic_never_deliver_partial_bytes ... ok
+test async_engine::tests::owned_tests::drain_tests::capture_tests::drn1a_capture_and_plain_drain_race_share_exactly_one_cutoff ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 550 filtered out; finished in 0.03s
+

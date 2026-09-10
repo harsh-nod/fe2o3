@@ -78,6 +78,29 @@ impl AdmissionV1 {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
     }
 
+    #[allow(clippy::result_large_err)]
+    pub(super) fn install_capture(
+        &self,
+        max_ticks: usize,
+        capture: drain_capture::PendingCaptureV1,
+    ) -> Result<(), drain_capture::PendingCaptureV1> {
+        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if state.closed {
+            drop(state);
+            return Err(capture);
+        }
+        let capture = capture.retain();
+        state.drain = Some(DrainRequest {
+            reply: DrainReplyV1::Capture(capture),
+            remaining: max_ticks,
+            ticks: 0,
+            native: None,
+            quiescent: false,
+        });
+        state.closed = true;
+        Ok(())
+    }
+
     fn take_drain(&self) -> Option<DrainRequest> {
         self.0
             .lock()
@@ -153,7 +176,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         }
         state.closed = true;
         state.drain = Some(DrainRequest {
-            reply,
+            reply: DrainReplyV1::Report(reply),
             remaining: max_ticks,
             ticks: 0,
             native: None,
@@ -169,8 +192,18 @@ struct NativeDrain {
     next_stream: usize,
 }
 
+/// Minted only by the owner's complete accepted-prefix quiescence decision.
+pub(crate) struct DrainQuiescenceV1 {
+    _private: (),
+}
+
+enum DrainReplyV1 {
+    Report(owned::Reply<RuntimeAsyncDrainReportV1>),
+    Capture(drain_capture::CaptureRequestV1),
+}
+
 pub(super) struct DrainRequest {
-    reply: owned::Reply<RuntimeAsyncDrainReportV1>,
+    reply: DrainReplyV1,
     remaining: usize,
     ticks: usize,
     native: Option<NativeDrain>,
@@ -242,13 +275,23 @@ impl DrainRequest {
                 if native.pending.is_empty() && operations == 0 && waiters_empty {
                     let counts = context.async_drain_counts_v1();
                     if counts.pending == 0 {
-                        self.finish(
-                            RuntimeAsyncDrainOutcomeV1::Quiescent,
-                            counts,
-                            true,
-                            0,
-                            false,
-                        );
+                        let report = RuntimeAsyncDrainReportV1 {
+                            outcome: RuntimeAsyncDrainOutcomeV1::Quiescent,
+                            ticks: self.ticks,
+                            retained_submissions: counts,
+                            queued_commands_exhausted: true,
+                            operations_remaining: 0,
+                            graph_active: false,
+                        };
+                        match &mut self.reply {
+                            DrainReplyV1::Report(reply) => reply.complete(Ok(report)),
+                            DrainReplyV1::Capture(capture) => capture.complete(
+                                context,
+                                report,
+                                DrainQuiescenceV1 { _private: () },
+                            ),
+                        }
+                        self.quiescent = !context.is_terminal();
                         return true;
                     }
                     // Standalone operations can create submissions after the initial snapshot.
@@ -280,13 +323,17 @@ impl DrainRequest {
         graph_active: bool,
     ) {
         self.quiescent = outcome == RuntimeAsyncDrainOutcomeV1::Quiescent;
-        self.reply.complete(Ok(RuntimeAsyncDrainReportV1 {
+        let report = RuntimeAsyncDrainReportV1 {
             outcome,
             ticks: self.ticks,
             retained_submissions,
             queued_commands_exhausted,
             operations_remaining,
             graph_active,
-        }));
+        };
+        match &mut self.reply {
+            DrainReplyV1::Report(reply) => reply.complete(Ok(report)),
+            DrainReplyV1::Capture(capture) => capture.incomplete(report),
+        }
     }
 }

@@ -24,7 +24,12 @@ use std::time::Duration;
 mod owned;
 pub use owned::*;
 mod drain;
+pub(crate) use drain::DrainQuiescenceV1;
 pub use drain::*;
+mod drain_capture;
+pub use drain_capture::*;
+mod drain_capture_storage;
+pub use drain_capture_storage::RuntimeAsyncCapturedBytesV1;
 mod operation;
 mod reply_budget;
 pub use operation::*;
@@ -55,6 +60,9 @@ pub const MAX_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1: usize = 1024 * 1024 * 1024;
 pub const DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1: usize = 16 * 1024 * 1024;
 pub const MAX_RUNTIME_ASYNC_REPLIES_V1: usize = 65_536;
 pub const DEFAULT_RUNTIME_ASYNC_REPLIES_V1: usize = 16_384;
+/// Maximum owned coherent capture extent; disabled by default.
+pub const MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_BYTES_V1: usize =
+    drain_capture_storage::MAX_CAPTURE_BYTES_V1;
 
 /// Bounded scheduling configuration for one async observation engine.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,6 +74,7 @@ pub struct RuntimeAsyncEngineConfigV1 {
     poll_interval: Duration,
     snapshot_byte_capacity: usize,
     reply_capacity: usize,
+    drain_capture_byte_capacity: usize,
 }
 
 impl RuntimeAsyncEngineConfigV1 {
@@ -99,6 +108,7 @@ impl RuntimeAsyncEngineConfigV1 {
             poll_interval,
             snapshot_byte_capacity: DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1,
             reply_capacity: DEFAULT_RUNTIME_ASYNC_REPLIES_V1,
+            drain_capture_byte_capacity: 0,
         })
     }
 
@@ -137,6 +147,37 @@ impl RuntimeAsyncEngineConfigV1 {
         self.reply_capacity
     }
 
+    /// Opts into one owned coherent drain capture. Zero disables capture.
+    /// This bounds its slice payload, not native backing, allocator overhead,
+    /// arbitrary application allocations, wakers or other generic results.
+    pub fn with_drain_capture_byte_capacity(
+        mut self,
+        capacity: usize,
+    ) -> Result<Self, RuntimeAsyncEngineConfigErrorV1> {
+        if capacity > MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_BYTES_V1 {
+            return Err(RuntimeAsyncEngineConfigErrorV1::DrainCaptureByteCapacity);
+        }
+        self.drain_capture_byte_capacity = capacity;
+        Ok(self)
+    }
+
+    pub const fn drain_capture_byte_capacity(self) -> usize {
+        self.drain_capture_byte_capacity
+    }
+
+    fn capture_budget_v1(
+        self,
+    ) -> Result<
+        Option<drain_capture_storage::CaptureBudgetV1>,
+        fe2o3_resource_accounting::ResourceCreditErrorV1,
+    > {
+        if self.drain_capture_byte_capacity == 0 {
+            Ok(None)
+        } else {
+            drain_capture_storage::CaptureBudgetV1::new(self.drain_capture_byte_capacity).map(Some)
+        }
+    }
+
     pub const fn command_capacity(self) -> usize {
         self.command_capacity
     }
@@ -168,6 +209,7 @@ impl Default for RuntimeAsyncEngineConfigV1 {
             poll_interval: Duration::from_millis(1),
             snapshot_byte_capacity: DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1,
             reply_capacity: DEFAULT_RUNTIME_ASYNC_REPLIES_V1,
+            drain_capture_byte_capacity: 0,
         }
     }
 }
@@ -182,6 +224,7 @@ pub enum RuntimeAsyncEngineConfigErrorV1 {
     PollInterval,
     SnapshotByteCapacity,
     ReplyCapacity,
+    DrainCaptureByteCapacity,
 }
 
 impl fmt::Display for RuntimeAsyncEngineConfigErrorV1 {
@@ -288,6 +331,7 @@ impl<B: RuntimeBackendV1> RuntimeAsyncEngineSpawnFailureV1<B> {
 #[derive(Debug)]
 pub enum RuntimeAsyncEngineSpawnErrorV1 {
     InvalidConfig(RuntimeAsyncEngineConfigErrorV1),
+    CaptureBudget(fe2o3_resource_accounting::ResourceCreditErrorV1),
     Thread(io::Error),
 }
 
@@ -295,6 +339,7 @@ impl fmt::Display for RuntimeAsyncEngineSpawnErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidConfig(error) => error.fmt(formatter),
+            Self::CaptureBudget(error) => error.fmt(formatter),
             Self::Thread(error) => write!(formatter, "runtime async engine thread: {error}"),
         }
     }
@@ -304,6 +349,7 @@ impl Error for RuntimeAsyncEngineSpawnErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::InvalidConfig(error) => Some(error),
+            Self::CaptureBudget(error) => Some(error),
             Self::Thread(error) => Some(error),
         }
     }
@@ -343,6 +389,7 @@ impl<B: RuntimeBackendV1> RuntimeAsyncProgressEngineSpawnFailureV1<B> {
 pub enum RuntimeAsyncProgressEngineSpawnErrorV1 {
     InvalidEngineConfig(RuntimeAsyncEngineConfigErrorV1),
     InvalidProgressConfig(RuntimeAsyncProgressConfigErrorV1),
+    CaptureBudget(fe2o3_resource_accounting::ResourceCreditErrorV1),
     Thread(io::Error),
 }
 
@@ -351,6 +398,7 @@ impl fmt::Display for RuntimeAsyncProgressEngineSpawnErrorV1 {
         match self {
             Self::InvalidEngineConfig(error) => error.fmt(formatter),
             Self::InvalidProgressConfig(error) => error.fmt(formatter),
+            Self::CaptureBudget(error) => error.fmt(formatter),
             Self::Thread(error) => {
                 write!(formatter, "runtime async progress engine thread: {error}")
             }
@@ -363,6 +411,7 @@ impl Error for RuntimeAsyncProgressEngineSpawnErrorV1 {
         match self {
             Self::InvalidEngineConfig(error) => Some(error),
             Self::InvalidProgressConfig(error) => Some(error),
+            Self::CaptureBudget(error) => Some(error),
             Self::Thread(error) => Some(error),
         }
     }
@@ -382,6 +431,7 @@ pub enum RuntimeAsyncEngineCallErrorV1 {
     SnapshotCapacity,
     ReplyCapacity,
     InvalidSnapshot(RuntimeAsyncSnapshotErrorV1),
+    CaptureFailed(crate::RuntimeHostCaptureErrorV1),
 }
 
 impl fmt::Display for RuntimeAsyncEngineCallErrorV1 {
@@ -814,6 +864,8 @@ enum RuntimeAsyncEngineCommandV1<B: RuntimeBackendV1> {
 
 /// Cloneable command and event-registration handle for one async engine.
 pub struct RuntimeAsyncEngineHandleV1<B: RuntimeBackendV1 + 'static> {
+    context_generation: u64,
+    capture_budget: Option<drain_capture_storage::CaptureBudgetV1>,
     reply_budget: Arc<reply_budget::ReplyBudgetV1>,
     admission: Arc<drain::AdmissionV1>,
     sender: SyncSender<RuntimeAsyncEngineCommandV1<B>>,
@@ -827,6 +879,8 @@ impl<B: RuntimeBackendV1 + 'static> Clone for RuntimeAsyncEngineHandleV1<B> {
     fn clone(&self) -> Self {
         Self {
             sender: self.sender.clone(),
+            context_generation: self.context_generation,
+            capture_budget: self.capture_budget.clone(),
             admission: Arc::clone(&self.admission),
             reply_budget: Arc::clone(&self.reply_budget),
             worker_thread: Arc::clone(&self.worker_thread),
@@ -845,6 +899,14 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncEngineHandleV1<B> {
     /// Descriptive retained standalone payload bytes, not native resource usage.
     pub fn snapshot_bytes_in_use(&self) -> usize {
         self.snapshot_budget.used()
+    }
+
+    /// Owned capture bytes, including results retained after reply extraction.
+    /// This observation grants no source, completion or disposal authority.
+    pub fn drain_capture_bytes_in_use(&self) -> usize {
+        self.capture_budget
+            .as_ref()
+            .map_or(0, |budget| budget.used_bytes())
     }
 
     /// Runs one boundedly enqueued safe context operation on the engine thread.
@@ -1090,12 +1152,24 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
         )
         .and_then(|validated| validated.with_snapshot_byte_capacity(config.snapshot_byte_capacity))
         .and_then(|validated| validated.with_reply_capacity(config.reply_capacity))
-        {
+        .and_then(|validated| {
+            validated.with_drain_capture_byte_capacity(config.drain_capture_byte_capacity)
+        }) {
             return Err(RuntimeAsyncEngineSpawnFailureV1 {
                 context: Box::new(context),
                 error: RuntimeAsyncEngineSpawnErrorV1::InvalidConfig(error),
             });
         }
+        let capture_budget = match config.capture_budget_v1() {
+            Ok(budget) => budget,
+            Err(error) => {
+                return Err(RuntimeAsyncEngineSpawnFailureV1 {
+                    context: Box::new(context),
+                    error: RuntimeAsyncEngineSpawnErrorV1::CaptureBudget(error),
+                });
+            }
+        };
+        let context_generation = context.capture_context_generation_v1();
         let (sender, receiver) = sync_channel(config.command_capacity);
         let admission = drain::AdmissionV1::new();
         let worker_admission = Arc::clone(&admission);
@@ -1132,6 +1206,8 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
         };
         drop(context_slot);
         let handle = RuntimeAsyncEngineHandleV1 {
+            context_generation,
+            capture_budget,
             reply_budget: reply_budget::ReplyBudgetV1::new(config.reply_capacity),
             admission: Arc::clone(&admission),
             snapshot_budget: snapshot::SnapshotBudgetV1::new(config.snapshot_byte_capacity),
@@ -1173,7 +1249,9 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
         )
         .and_then(|validated| validated.with_snapshot_byte_capacity(config.snapshot_byte_capacity))
         .and_then(|validated| validated.with_reply_capacity(config.reply_capacity))
-        {
+        .and_then(|validated| {
+            validated.with_drain_capture_byte_capacity(config.drain_capture_byte_capacity)
+        }) {
             return Err(RuntimeAsyncProgressEngineSpawnFailureV1 {
                 context: Box::new(context),
                 error: RuntimeAsyncProgressEngineSpawnErrorV1::InvalidEngineConfig(error),
@@ -1188,6 +1266,16 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
                 error: RuntimeAsyncProgressEngineSpawnErrorV1::InvalidProgressConfig(error),
             });
         }
+        let capture_budget = match config.capture_budget_v1() {
+            Ok(budget) => budget,
+            Err(error) => {
+                return Err(RuntimeAsyncProgressEngineSpawnFailureV1 {
+                    context: Box::new(context),
+                    error: RuntimeAsyncProgressEngineSpawnErrorV1::CaptureBudget(error),
+                });
+            }
+        };
+        let context_generation = context.capture_context_generation_v1();
         let (sender, receiver) = sync_channel(config.command_capacity);
         let admission = drain::AdmissionV1::new();
         let worker_admission = Arc::clone(&admission);
@@ -1228,6 +1316,8 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
         };
         drop(context_slot);
         let observer = RuntimeAsyncEngineHandleV1 {
+            context_generation,
+            capture_budget,
             reply_budget: reply_budget::ReplyBudgetV1::new(config.reply_capacity),
             admission: Arc::clone(&admission),
             snapshot_budget: snapshot::SnapshotBudgetV1::new(config.snapshot_byte_capacity),
@@ -1967,6 +2057,7 @@ mod tests {
                     streams: true,
                     events: true,
                     device_memory: true,
+                    host_visible_memory: true,
                     ..RuntimeCapabilitiesV1::default()
                 },
             }])
@@ -3897,6 +3988,27 @@ mod tests {
             )
         ));
         let (_context, _) = failure.into_parts();
+    }
+
+    #[test]
+    fn drain_capture_configuration_is_disabled_by_default_and_bounded() {
+        let config = RuntimeAsyncEngineConfigV1::default();
+        assert_eq!(config.drain_capture_byte_capacity(), 0);
+        let enabled = config
+            .with_drain_capture_byte_capacity(MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_BYTES_V1)
+            .unwrap();
+        assert_eq!(enabled.drain_capture_byte_capacity(), 64 * 1024 * 1024);
+        assert_eq!(
+            enabled
+                .with_drain_capture_byte_capacity(0)
+                .unwrap()
+                .drain_capture_byte_capacity(),
+            0,
+        );
+        assert_eq!(
+            config.with_drain_capture_byte_capacity(MAX_RUNTIME_ASYNC_DRAIN_CAPTURE_BYTES_V1 + 1),
+            Err(RuntimeAsyncEngineConfigErrorV1::DrainCaptureByteCapacity),
+        );
     }
 
     #[test]

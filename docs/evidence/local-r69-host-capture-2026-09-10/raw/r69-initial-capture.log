@@ -1,0 +1,93 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 48.74s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-f9eea0dcd3ca45b2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 710 filtered out; finished in 0.00s
+
+     Running tests/kfd_debug_trap_live.rs (target/debug/deps/kfd_debug_trap_live-6d29884979e27be8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/target_debug_telemetry_env_v1.rs (target/debug/deps/target_debug_telemetry_env_v1-2e07448d91cee3d3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running tests/target_debug_telemetry_v1.rs (target/debug/deps/target_debug_telemetry_v1-e410d221890786b5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-21f716eca27caec8)
+
+running 18 tests
+test async_engine::drain_capture_storage::tests::capacity_failure_returns_exact_destination_without_changing_usage ... ok
+test async_engine::drain_capture_storage::tests::actual_box_extent_is_charged_only_as_reply_bytes ... ok
+test async_engine::drain_capture_storage::tests::capture_capacity_and_record_arena_are_bounded ... ok
+test async_engine::drain_capture_storage::tests::equal_capacity_accounts_do_not_exchange_result_credits ... ok
+test async_engine::drain_capture_storage::tests::internal_empty_destination_still_owns_the_only_record ... ok
+test async_engine::drain_capture_storage::tests::pre_cutoff_rollback_returns_caller_storage_and_cancels_reservation ... ok
+test async_engine::drain_capture_storage::tests::observer_drop_does_not_release_result_still_owned_by_reply ... ok
+test async_engine::drain_capture_storage::tests::record_exhaustion_is_shared_by_clones_and_failure_atomic ... ok
+test async_engine::drain_capture_storage::tests::reply_extraction_and_owner_drop_keep_result_bytes_charged ... ok
+test async_engine::drain_capture_storage::tests::storage_destructor_runs_before_refund_transition ... ok
+test async_engine::drain_capture_storage::tests::retained_result_supports_capture_mutation_but_redacts_debug ... ok
+test async_engine::drain_capture_storage::tests::result_move_to_another_thread_keeps_exact_account_charge ... ok
+test kfd_backend::drain_capture::tests::coherent_capture_native_seam_rejects_scripted_storage_without_fallback ... ok
+test kfd_backend::drain_capture::tests::coherent_capture_record_reads_native_bytes_not_stale_shadow_without_heap ... ok
+test kfd_backend::drain_capture::tests::coherent_capture_record_rejections_do_not_read_write_or_allocate ... ok
+test kfd_backend::drain_capture::tests::coherent_capture_uncertain_read_returns_no_success_and_latches_terminal ... ok
+test kfd_backend::drain_capture::tests::coherent_capture_reader_panic_preserves_payload_and_terminal_custody ... ok
+test kfd_backend::drain_capture::tests::coherent_capture_backend_rejects_pending_terminal_and_unsupported_without_heap ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 535 filtered out; finished in 0.01s
+
+     Running unittests src/bin/fe2o3-runtime-kfd-worker-v5-qualification.rs (target/debug/deps/fe2o3_runtime_kfd_worker_v5_qualification-6eac520d428cde72)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/closed_execution_conformance.rs (target/debug/deps/closed_execution_conformance-76456c7db8bd6223)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/gfx942_real_hsaco.rs (target/debug/deps/gfx942_real_hsaco-e267a0b3e25032a1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/kfd_opaque_checkpoint_live.rs (target/debug/deps/kfd_opaque_checkpoint_live-32af0b4b519d2979)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/kfd_worker_v5_qualification.rs (target/debug/deps/kfd_worker_v5_qualification-962d3a9041f9deaa)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/r57_n3_hardware_source.rs (target/debug/deps/r57_n3_hardware_source-5b0e43f484f4538e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/r60_pipeline_hardware_source.rs (target/debug/deps/r60_pipeline_hardware_source-9cdb8dd8ccefee81)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+

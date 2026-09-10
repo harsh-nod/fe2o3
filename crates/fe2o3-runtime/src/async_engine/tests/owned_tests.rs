@@ -20,6 +20,12 @@ struct OwnerTrace {
     flush_panics: bool,
     poll_panics: bool,
     initially_terminal: bool,
+    capture_failure: Option<crate::RuntimeHostCaptureErrorV1>,
+    capture_terminal: bool,
+    capture_panics: bool,
+    capture_backing_pending: bool,
+    capture_calls: usize,
+    capture_requests: Vec<(u64, u64, u64, usize)>,
 }
 
 struct ThreadBoundBackend {
@@ -65,6 +71,42 @@ impl RuntimeBackendV1 for ThreadBoundBackend {
             .write_allocation_v1(allocation, byte_offset, bytes)
     }
     forward!(read_allocation_v1(allocation: u64, byte_offset: u64, destination: &mut [u8]) -> ());
+    fn capture_coherent_host_range_v1(
+        &mut self,
+        mut request: crate::BackendHostCaptureV1<'_>,
+    ) -> Result<(), RuntimeBackendFailureV1<crate::RuntimeHostCaptureErrorV1>> {
+        self.record("capture");
+        let mut trace = self.trace.lock().unwrap();
+        trace.capture_calls += 1;
+        trace.capture_requests.push((
+            request.device(),
+            request.allocation(),
+            request.byte_offset(),
+            request.destination_mut().len(),
+        ));
+        let (failure, terminal, panics, pending) = (
+            trace.capture_failure,
+            trace.capture_terminal,
+            trace.capture_panics,
+            trace.capture_backing_pending,
+        );
+        drop(trace);
+        if pending {
+            return Err(RuntimeBackendFailureV1::Rejected(
+                crate::RuntimeHostCaptureErrorV1::Pending,
+            ));
+        }
+        if let Some(error) = failure {
+            if terminal {
+                request.destination_mut()[0] = 0xee;
+                return Err(RuntimeBackendFailureV1::Terminal(error));
+            }
+            return Err(RuntimeBackendFailureV1::Rejected(error));
+        }
+        request.destination_mut().fill(0x5a);
+        assert!(!panics, "capture adapter panic after private copy");
+        Ok(())
+    }
     forward!(load_module_v1(device: u64, image: &[u8]) -> u64);
     forward!(unload_module_v1(module: u64) -> ());
     forward!(resolve_kernel_v1(module: u64, name: &str, signature: [u8;32]) -> u64);
@@ -365,6 +407,8 @@ fn enqueue_is_nonblocking_bounded_and_discarded_commands_resolve() {
     // Exercise the receiver-drop guard without relying on thread scheduling.
     let (sender, receiver) = sync_channel(1);
     let handle = RuntimeAsyncEngineHandleV1::<MockBackend> {
+        context_generation: 0,
+        capture_budget: None,
         reply_budget: reply_budget::ReplyBudgetV1::new(DEFAULT_RUNTIME_ASYNC_REPLIES_V1),
         admission: drain::AdmissionV1::new(),
         graph_slot: Arc::new(AtomicBool::new(false)),
@@ -575,6 +619,8 @@ fn operation_registry_capacity_rejects_before_submission() {
 fn command_future_replaces_waker_and_wakes_exactly_once() {
     let (sender, receiver) = sync_channel(1);
     let handle = RuntimeAsyncEngineHandleV1::<MockBackend> {
+        context_generation: 0,
+        capture_budget: None,
         reply_budget: reply_budget::ReplyBudgetV1::new(DEFAULT_RUNTIME_ASYNC_REPLIES_V1),
         admission: drain::AdmissionV1::new(),
         graph_slot: Arc::new(AtomicBool::new(false)),

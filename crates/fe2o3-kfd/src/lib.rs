@@ -100,6 +100,8 @@ pub use persistent_same_device_sdma::*;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use persistent_sdma::*;
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use queue::Gfx942SdmaHostReadIntoErrorV1;
 #[cfg(target_os = "linux")]
 pub use queue_resources::*;
 

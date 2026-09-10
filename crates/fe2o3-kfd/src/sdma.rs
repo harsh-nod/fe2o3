@@ -6445,6 +6445,31 @@ pub(crate) fn read_host_buffer(
     }
 }
 
+pub(crate) fn read_host_buffer_into_v1(
+    memory: &mut SharedGttMemorySessionV1,
+    buffer: &Gfx942SdmaBufferV1,
+    offset: u64,
+    destination: &mut [u8],
+) -> Result<(), Gfx942SdmaErrorV1> {
+    let byte_len = u64::try_from(destination.len())
+        .map_err(|_| Gfx942SdmaErrorV1::Contract("logical host read length"))?;
+    if byte_len == 0
+        || offset
+            .checked_add(byte_len)
+            .is_none_or(|end| end > buffer.logical_bytes)
+    {
+        return Err(Gfx942SdmaErrorV1::Contract("logical host read range"));
+    }
+    match &buffer.storage {
+        Gfx942SdmaBufferStorageV1::Host(token) => memory
+            .copy_mapped_host_visible_subrange_into(token, offset, destination)
+            .map_err(Into::into),
+        Gfx942SdmaBufferStorageV1::Device(_) => Err(Gfx942SdmaErrorV1::Contract(
+            "device-local buffer is not CPU readable",
+        )),
+    }
+}
+
 fn ranges_overlap(left: u64, left_bytes: u64, right: u64, right_bytes: u64) -> bool {
     let Some(left_end) = left.checked_add(left_bytes) else {
         return true;

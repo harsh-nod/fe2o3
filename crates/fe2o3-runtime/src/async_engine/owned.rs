@@ -179,6 +179,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncEngineHandleV1<B> {
 pub enum RuntimeAsyncOwnedSpawnErrorV1<E> {
     InvalidEngineConfig(RuntimeAsyncEngineConfigErrorV1),
     InvalidProgressConfig(RuntimeAsyncProgressConfigErrorV1),
+    CaptureBudget(fe2o3_resource_accounting::ResourceCreditErrorV1),
     Thread(io::Error),
     Initialize(E),
     InitializerPanicked,
@@ -189,6 +190,7 @@ impl<E: fmt::Display> fmt::Display for RuntimeAsyncOwnedSpawnErrorV1<E> {
         match self {
             Self::InvalidEngineConfig(error) => error.fmt(formatter),
             Self::InvalidProgressConfig(error) => error.fmt(formatter),
+            Self::CaptureBudget(error) => error.fmt(formatter),
             Self::Thread(error) => write!(formatter, "runtime owner thread: {error}"),
             Self::Initialize(error) => write!(formatter, "runtime owner initialization: {error}"),
             Self::InitializerPanicked => formatter.write_str("runtime owner initializer panicked"),
@@ -260,12 +262,18 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
         )
         .and_then(|validated| validated.with_snapshot_byte_capacity(config.snapshot_byte_capacity))
         .and_then(|validated| validated.with_reply_capacity(config.reply_capacity))
+        .and_then(|validated| {
+            validated.with_drain_capture_byte_capacity(config.drain_capture_byte_capacity)
+        })
         .map_err(RuntimeAsyncOwnedSpawnErrorV1::InvalidEngineConfig)?;
         RuntimeAsyncProgressConfigV1::new(
             progress_config.stream_capacity,
             progress_config.flushes_per_tick,
         )
         .map_err(RuntimeAsyncOwnedSpawnErrorV1::InvalidProgressConfig)?;
+        let capture_budget = config
+            .capture_budget_v1()
+            .map_err(RuntimeAsyncOwnedSpawnErrorV1::CaptureBudget)?;
         let (sender, receiver) = sync_channel(config.command_capacity);
         let admission = drain::AdmissionV1::new();
         let worker_admission = Arc::clone(&admission);
@@ -303,7 +311,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
                         };
                     }
                 };
-                let _ = startup_sender.send(Ok(()));
+                let _ = startup_sender.send(Ok(context.capture_context_generation_v1()));
                 let outcome = catch_unwind(AssertUnwindSafe(|| {
                     run_engine_context_v1(
                         &mut context,
@@ -363,14 +371,19 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
                 }
             })
             .map_err(RuntimeAsyncOwnedSpawnErrorV1::Thread)?;
-        if let Err(error) = startup_receiver
+        let context_generation = match startup_receiver
             .recv()
             .unwrap_or(Err(RuntimeAsyncOwnedSpawnErrorV1::InitializerPanicked))
         {
-            let _ = worker.join();
-            return Err(error);
-        }
+            Ok(generation) => generation,
+            Err(error) => {
+                let _ = worker.join();
+                return Err(error);
+            }
+        };
         let observer = RuntimeAsyncEngineHandleV1 {
+            context_generation,
+            capture_budget,
             reply_budget: reply_budget::ReplyBudgetV1::new(config.reply_capacity),
             admission: Arc::clone(&admission),
             snapshot_budget: snapshot::SnapshotBudgetV1::new(config.snapshot_byte_capacity),

@@ -84,6 +84,7 @@ use crate::{
 
 mod compute_dispatch;
 mod compute_state;
+mod drain_capture;
 #[cfg(feature = "hardware-qualification")]
 mod qualification_coexistence;
 #[cfg(feature = "hardware-qualification")]
@@ -5860,6 +5861,13 @@ impl KfdRuntimeBackendV1 {
 
 impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
     type Error = KfdRuntimeBackendErrorV1;
+
+    fn capture_coherent_host_range_v1(
+        &mut self,
+        request: crate::BackendHostCaptureV1<'_>,
+    ) -> Result<(), RuntimeBackendFailureV1<crate::RuntimeHostCaptureErrorV1>> {
+        self.capture_coherent_host_range_impl_v1(request)
+    }
 
     fn execution_capabilities_v1(&self, device: u64) -> RuntimeExecutionCapabilitiesV1 {
         if device != self.description.backend_device || !self.native_available {

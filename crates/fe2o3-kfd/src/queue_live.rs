@@ -3739,6 +3739,41 @@ pub struct ComputeAqlQueueSessionV1 {
     auxiliary_compute_lanes: Vec<AuxiliaryComputeLaneSlotV1<ComputeAqlQueueLaneStateV1>>,
 }
 
+/// Fixed failures for direct coherent reads into caller-owned storage.
+/// `NativeUncertain` requires terminal retention; no partial bytes are accepted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Gfx942SdmaHostReadIntoErrorV1 {
+    InvalidRange,
+    InvalidBuffer,
+    Unavailable,
+    NativeUncertain,
+}
+
+fn preflight_sdma_host_read_into_v1(
+    buffer: &Gfx942SdmaBufferV1,
+    queue: QueueKeyV1,
+    offset: u64,
+    destination_len: usize,
+) -> Result<(), Gfx942SdmaHostReadIntoErrorV1> {
+    if !buffer.belongs_to(queue)
+        || buffer.kind() != Gfx942SdmaBufferKindV1::HostVisibleCoherent
+        || buffer.pool_generation() == 0
+        || buffer.requested_bytes() > buffer.physical_bytes()
+    {
+        return Err(Gfx942SdmaHostReadIntoErrorV1::InvalidBuffer);
+    }
+    let bytes =
+        u64::try_from(destination_len).map_err(|_| Gfx942SdmaHostReadIntoErrorV1::InvalidRange)?;
+    if bytes == 0
+        || offset
+            .checked_add(bytes)
+            .is_none_or(|end| end > buffer.requested_bytes())
+    {
+        return Err(Gfx942SdmaHostReadIntoErrorV1::InvalidRange);
+    }
+    Ok(())
+}
+
 /// Stable queue-local lane selected inside one exact shared KFD VM session.
 ///
 /// Lane zero is the original queue. Additional lanes own distinct KFD queue,
@@ -10193,6 +10228,40 @@ impl ComputeAqlQueueSessionV1 {
         })
     }
 
+    /// Reads one exact retained coherent buffer without output allocation or
+    /// GPU work. The caller must establish completion before reading GPU writes.
+    /// Operational reset/counter observations and the existing model loan remain
+    /// mandatory; this method does not establish drain or completion authority.
+    pub fn read_sdma_host_buffer_into_v1(
+        &mut self,
+        buffer: &Gfx942SdmaBufferV1,
+        offset: u64,
+        destination: &mut [u8],
+    ) -> Result<(), Gfx942SdmaHostReadIntoErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942SdmaHostReadIntoErrorV1::NativeUncertain);
+        }
+        preflight_sdma_host_read_into_v1(buffer, self.key, offset, destination.len())?;
+        if self.require_sdma_enabled().is_err()
+            || self.engine.is_none()
+            || self.sdma_outstanding_buffers == 0
+        {
+            return Err(Gfx942SdmaHostReadIntoErrorV1::Unavailable);
+        }
+        // The immutable move-only buffer fixes queue, pool and native token
+        // identity throughout the read; memory authenticates the exact record.
+        let result = self.with_live_queue_memory_model(|memory| {
+            crate::sdma::read_host_buffer_into_v1(memory, buffer, offset, destination)
+                .map_err(Into::into)
+        });
+        if result.is_err() {
+            self.poison_terminal();
+            permanently_poison_process_global_kfd_runtime_gate_v1();
+            return Err(Gfx942SdmaHostReadIntoErrorV1::NativeUncertain);
+        }
+        Ok(())
+    }
+
     /// Rebrands one fully initialized coherent SDMA buffer as dispatch data.
     ///
     /// The complete physical extent is copied to owned host bytes and hashed
@@ -15865,6 +15934,77 @@ mod tests {
         );
         assert!(prepared_terminal.contains("PersistentComputeUseStateV1::Prepared(prepared)"));
         assert!(prepared_terminal.contains("ProcessTeardown"));
+    }
+
+    #[test]
+    fn coherent_capture_preflight_binds_owner_kind_and_logical_extent() {
+        let queue = test_queue_key(701, 1);
+        let (device, mut host) = crate::sdma::persistent_sdma_buffers_for_test(queue, 91);
+        host.set_logical_bytes(32);
+        assert_eq!(preflight_sdma_host_read_into_v1(&host, queue, 8, 8), Ok(()));
+        for foreign in [test_queue_key(702, 1), test_queue_key(701, 2)] {
+            assert_eq!(
+                preflight_sdma_host_read_into_v1(&host, foreign, 8, 8),
+                Err(Gfx942SdmaHostReadIntoErrorV1::InvalidBuffer)
+            );
+        }
+        assert_eq!(
+            preflight_sdma_host_read_into_v1(&device, queue, 0, 8),
+            Err(Gfx942SdmaHostReadIntoErrorV1::InvalidBuffer)
+        );
+        for (offset, len) in [(0, 0), (25, 8), (u64::MAX, 8)] {
+            assert_eq!(
+                preflight_sdma_host_read_into_v1(&host, queue, offset, len),
+                Err(Gfx942SdmaHostReadIntoErrorV1::InvalidRange)
+            );
+        }
+        let mut session = persistent_compute_cancellation_test_session(queue, None, None);
+        let mut destination = [0xa5; 8];
+        assert_eq!(
+            session.read_sdma_host_buffer_into_v1(&host, 8, &mut destination),
+            Err(Gfx942SdmaHostReadIntoErrorV1::Unavailable)
+        );
+        assert_eq!(destination, [0xa5; 8]);
+        assert!(!session.terminal_poisoned);
+        session.terminal_poisoned = true;
+        assert_eq!(
+            session.read_sdma_host_buffer_into_v1(&host, 8, &mut destination),
+            Err(Gfx942SdmaHostReadIntoErrorV1::NativeUncertain)
+        );
+        assert_eq!(
+            session.read_sdma_host_buffer_into_v1(&device, u64::MAX, &mut destination),
+            Err(Gfx942SdmaHostReadIntoErrorV1::NativeUncertain)
+        );
+        assert_eq!(destination, [0xa5; 8]);
+    }
+
+    #[test]
+    fn coherent_capture_queue_wiring_preserves_retake_and_terminal_boundary() {
+        let source = include_str!("queue_live.rs");
+        let body = source
+            .split("pub fn read_sdma_host_buffer_into_v1(")
+            .nth(1)
+            .unwrap()
+            .split("/// Rebrands one fully initialized")
+            .next()
+            .unwrap();
+        assert!(body.contains("preflight_sdma_host_read_into_v1"));
+        assert!(body.contains("self.with_live_queue_memory_model("));
+        assert!(body.contains("crate::sdma::read_host_buffer_into_v1"));
+        assert!(body.contains("permanently_poison_process_global_kfd_runtime_gate_v1()"));
+        for forbidden in [
+            ".poll(",
+            ".flush(",
+            "read_host_buffer(",
+            "to_string(",
+            "to_vec(",
+            "allocate_",
+        ] {
+            assert!(
+                !body.contains(forbidden),
+                "unexpected capture path: {forbidden}"
+            );
+        }
     }
 
     fn persistent_compute_cancellation_test_session(

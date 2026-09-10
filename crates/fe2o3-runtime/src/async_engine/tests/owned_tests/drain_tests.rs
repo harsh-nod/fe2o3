@@ -1,6 +1,9 @@
 use super::*;
 use crate::{RuntimeAsyncCancelResultV1 as Cancel, RuntimeAsyncOperationPhaseV1 as Phase};
 
+#[path = "drain_capture_tests.rs"]
+mod capture_tests;
+
 struct DrainArgs(crate::RuntimeAllocationIdV1);
 
 impl RuntimeArgumentsV1 for DrainArgs {

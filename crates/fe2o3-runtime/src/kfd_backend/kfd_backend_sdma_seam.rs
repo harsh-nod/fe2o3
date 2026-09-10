@@ -751,6 +751,21 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
         }
     }
 
+    pub(super) fn read_host_into_v1(
+        &mut self,
+        buffer: &SdmaBufferOwnerV1,
+        offset: u64,
+        destination: &mut [u8],
+    ) -> Result<(), fe2o3_kfd::Gfx942SdmaHostReadIntoErrorV1> {
+        match (self, buffer) {
+            (Self::Native(queue), SdmaBufferOwnerV1::Native(buffer)) => {
+                queue.read_sdma_host_buffer_into_v1(buffer, offset, destination)
+            }
+            #[cfg(test)]
+            _ => Err(fe2o3_kfd::Gfx942SdmaHostReadIntoErrorV1::InvalidBuffer),
+        }
+    }
+
     pub(super) fn promote(
         &mut self,
         buffer: SdmaBufferOwnerV1,

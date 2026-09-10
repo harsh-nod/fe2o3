@@ -1,0 +1,69 @@
+PASS: runtime expected-negative quality and inventory self-test
+PASS: runtime expected-negative quality and inventory checked 650 files
+PASS: pinned Verus release closure matched at this measurement (190 files, 129019839 bytes)
+verification results:: 2 verified, 0 errors
+verification results:: 4 verified, 0 errors
+verification results:: 4 verified, 0 errors
+verification results:: 6 verified, 0 errors
+verification results:: 11 verified, 0 errors
+verification results:: 3 verified, 0 errors
+verification results:: 8 verified, 0 errors
+verification results:: 11 verified, 0 errors
+verification results:: 8 verified, 0 errors
+verification results:: 10 verified, 0 errors
+verification results:: 14 verified, 0 errors
+verification results:: 20 verified, 0 errors
+verification results:: 18 verified, 0 errors
+verification results:: 23 verified, 0 errors
+verification results:: 20 verified, 0 errors
+verification results:: 10 verified, 0 errors
+verification results:: 21 verified, 0 errors
+verification results:: 32 verified, 0 errors
+verification results:: 34 verified, 0 errors
+verification results:: 46 verified, 0 errors
+verification results:: 31 verified, 0 errors
+verification results:: 37 verified, 0 errors
+verification results:: 41 verified, 0 errors
+verification results:: 46 verified, 0 errors
+verification results:: 34 verified, 0 errors
+verification results:: 38 verified, 0 errors
+verification results:: 20 verified, 0 errors
+verification results:: 31 verified, 0 errors
+verification results:: 38 verified, 0 errors
+verification results:: 41 verified, 0 errors
+verification results:: 34 verified, 0 errors
+verification results:: 45 verified, 0 errors
+verification results:: 54 verified, 0 errors
+verification results:: 13 verified, 0 errors
+verification results:: 15 verified, 0 errors
+verification results:: 15 verified, 0 errors
+verification results:: 19 verified, 0 errors
+verification results:: 20 verified, 0 errors
+verification results:: 25 verified, 0 errors
+verification results:: 43 verified, 0 errors
+verification results:: 21 verified, 0 errors
+verification results:: 27 verified, 0 errors
+verification results:: 39 verified, 0 errors
+verification results:: 32 verified, 0 errors
+verification results:: 43 verified, 0 errors
+verification results:: 31 verified, 0 errors
+verification results:: 41 verified, 0 errors
+verification results:: 35 verified, 0 errors
+verification results:: 46 verified, 0 errors
+verification results:: 8 verified, 0 errors
+verification results:: 8 verified, 0 errors
+verification results:: 8 verified, 0 errors
+verification results:: 8 verified, 0 errors
+verification results:: 8 verified, 0 errors
+verification results:: 16 verified, 0 errors
+verification results:: 14 verified, 0 errors
+verification results:: 4 verified, 0 errors
+FAIL: positive proof did not verify: r69-host-capture
+error: expected `,`
+  --> /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model/verus/r69_host_capture_v1.rs:34:32
+   |
+34 |         offset as int < offset as int + byte_len as int,
+   |                                ^^
+
+error: aborting due to 1 previous error
+

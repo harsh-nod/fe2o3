@@ -14,7 +14,9 @@ mod graph;
 pub(crate) use graph::*;
 mod allocation_admission;
 mod drain;
+mod drain_capture;
 use allocation_admission::ContextAllocationAdmissionV1;
+pub use drain_capture::*;
 
 /// Maximum number of devices retained by one runtime context.
 pub const MAX_RUNTIME_DEVICES_V1: usize = 256;
@@ -514,6 +516,23 @@ pub trait RuntimeBackendV1 {
         destination: &mut [u8],
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>>;
 
+    /// Copies already-coherent host bytes after private owner-drain quiescence.
+    ///
+    /// This must not publish work, poll completion, flush, synchronize, allocate
+    /// native storage or create a readback buffer. Implementations validate the
+    /// exact live native storage and currentness before and after the CPU copy.
+    /// Bounded observation-only reset/currentness syscalls are permitted. Errors
+    /// are fixed-size; `Terminal` retains native custody and seals the context.
+    /// No bytes from an unsuccessful capture are delivered to the observer.
+    fn capture_coherent_host_range_v1(
+        &mut self,
+        _request: BackendHostCaptureV1<'_>,
+    ) -> Result<(), RuntimeBackendFailureV1<RuntimeHostCaptureErrorV1>> {
+        Err(RuntimeBackendFailureV1::Rejected(
+            RuntimeHostCaptureErrorV1::UnsupportedBackend,
+        ))
+    }
+
     fn load_module_v1(
         &mut self,
         device: u64,
@@ -899,6 +918,7 @@ struct StreamRecordV1 {
 struct AllocationRecordV1 {
     backend_allocation: u64,
     device: RuntimeDeviceIdV1,
+    kind: RuntimeMemoryKindV1,
     byte_len: u64,
 }
 
@@ -1755,6 +1775,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             AllocationRecordV1 {
                 backend_allocation,
                 device,
+                kind,
                 byte_len,
             },
         );
@@ -3380,6 +3401,77 @@ mod tests {
         wait_observation: Option<BackendPollV1>,
         first_wait_failure: MockWaitFailure,
         wait_deadlines: Vec<Instant>,
+    }
+
+    #[test]
+    fn host_capture_registration_is_logical_and_range_checked() {
+        let mut context = RuntimeContextV1::open(MockBackend::default()).unwrap();
+        let device = context.devices()[0].id();
+        let allocation = context
+            .allocate(device, RuntimeMemoryKindV1::HostVisible, 64, 8)
+            .unwrap();
+        let source = context
+            .prepare_host_drain_capture_v1(allocation, 8, 16)
+            .unwrap();
+        assert_eq!(source.allocation(), allocation);
+        assert_eq!(source.device(), device);
+        assert_eq!(source.byte_offset(), 8);
+        assert_eq!(source.byte_len(), 16);
+        assert!(source.belongs_to_context(context.capture_context_generation_v1()));
+        assert_eq!(context.backend.allocation_calls, 1);
+        assert_eq!(context.backend.poll_call_count, 0);
+        assert_eq!(context.backend.wait_call_count, 0);
+        assert_eq!(context.backend.flush_call_count, 0);
+        for (offset, length) in [(0, 0), (63, 2), (64, 1), (u64::MAX, 1)] {
+            assert_eq!(
+                context
+                    .prepare_host_drain_capture_v1(allocation, offset, length)
+                    .unwrap_err(),
+                RuntimeHostCaptureErrorV1::InvalidRange,
+            );
+        }
+        assert_eq!(context.backend.allocation_calls, 1);
+        assert!(context.cleanup().is_complete());
+    }
+
+    #[test]
+    fn host_capture_registration_rejects_foreign_device_local_released_and_terminal() {
+        let mut context = RuntimeContextV1::open(MockBackend::default()).unwrap();
+        let device = context.devices()[0].id();
+        let allocation = context
+            .allocate(device, RuntimeMemoryKindV1::HostVisible, 64, 8)
+            .unwrap();
+        let local = context
+            .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 8)
+            .unwrap();
+        assert_eq!(
+            context
+                .prepare_host_drain_capture_v1(local, 0, 8)
+                .unwrap_err(),
+            RuntimeHostCaptureErrorV1::DeviceLocal,
+        );
+        let mut other = RuntimeContextV1::open(MockBackend::default()).unwrap();
+        assert_eq!(
+            other
+                .prepare_host_drain_capture_v1(allocation, 0, 8)
+                .unwrap_err(),
+            RuntimeHostCaptureErrorV1::ForeignContext,
+        );
+        context.release_allocation(allocation).unwrap();
+        assert_eq!(
+            context
+                .prepare_host_drain_capture_v1(allocation, 0, 8)
+                .unwrap_err(),
+            RuntimeHostCaptureErrorV1::UnknownAllocation,
+        );
+        assert!(context.cleanup().is_complete());
+        other.quarantine_after_async_command_panic_v1();
+        assert_eq!(
+            other
+                .prepare_host_drain_capture_v1(allocation, 0, 8)
+                .unwrap_err(),
+            RuntimeHostCaptureErrorV1::ContextTerminal,
+        );
     }
 
     #[test]

@@ -57,6 +57,8 @@ impl Harness {
         let (sender, receiver) = sync_channel(4);
         let handle = RuntimeAsyncProgressHandleV1 {
             observer: RuntimeAsyncEngineHandleV1 {
+                context_generation: context.capture_context_generation_v1(),
+                capture_budget: None,
                 reply_budget: reply_budget::ReplyBudgetV1::new(DEFAULT_RUNTIME_ASYNC_REPLIES_V1),
                 admission: drain::AdmissionV1::new(),
                 sender,
