@@ -359,6 +359,7 @@ def _run_bounded(
     timeout_seconds: int,
     stdout_limit: int = MAX_PROCESS_STDOUT,
     stderr_limit: int = MAX_PROCESS_STDERR,
+    observe: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[bytes, bytes]:
     if (
         not isinstance(timeout_seconds, int)
@@ -366,42 +367,75 @@ def _run_bounded(
         or not 0 < timeout_seconds <= MAX_PROCESS_TIMEOUT
     ):
         _fail("command timeout is outside the protected bound")
+    if any(
+        not isinstance(limit, int) or isinstance(limit, bool) or not 0 < limit <= MAX_JSON_BYTES
+        for limit in (stdout_limit, stderr_limit)
+    ):
+        _fail("command output limit is outside the protected bound")
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
-        process = subprocess.Popen(
-            command,
-            cwd=cwd,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=stdout,
-            stderr=stderr,
-            start_new_session=True,
-        )
-        deadline = time.monotonic() + timeout_seconds
+        process = None
+        status = None
         reason: str | None = None
-        while process.poll() is None:
-            stdout_size = os.fstat(stdout.fileno()).st_size
-            stderr_size = os.fstat(stderr.fileno()).st_size
-            if stdout_size > stdout_limit or stderr_size > stderr_limit:
-                reason = "command exceeded its output bounds"
-                break
-            if time.monotonic() >= deadline:
-                reason = f"command exceeded its {timeout_seconds} second timeout"
-                break
-            time.sleep(0.05)
-        if reason is not None:
-            hardware_runner_contract._kill_process_group(process)
-            _fail(reason)
-        status = process.wait()
+        termination = None
+        try:
+            try:
+                process = subprocess.Popen(
+                    command, cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
+                    stdout=stdout, stderr=stderr, start_new_session=True,
+                )
+            except OSError as error:
+                reason, termination = f"cannot start command: {error}", "spawn-error"
+            if process is not None:
+                deadline = time.monotonic() + timeout_seconds
+                while process.poll() is None:
+                    if os.fstat(stdout.fileno()).st_size > stdout_limit or os.fstat(stderr.fileno()).st_size > stderr_limit:
+                        reason, termination = "command exceeded its output bounds", "output-bound"
+                        break
+                    if time.monotonic() >= deadline:
+                        reason, termination = f"command exceeded its {timeout_seconds} second timeout", "timeout"
+                        break
+                    time.sleep(0.05)
+                if reason is not None:
+                    hardware_runner_contract._kill_process_group(process)
+                status = process.wait()
+                try:
+                    hardware_runner_contract._reject_live_descendants(process, "qualification command")
+                except hardware_runner_contract.RunnerError as error:
+                    if reason is None:
+                        reason, termination = str(error), "live-descendants"
+        finally:
+            if process is not None and (process.poll() is None or sys.exc_info()[0] is not None):
+                hardware_runner_contract._kill_process_group(process)
         stdout_size = os.fstat(stdout.fileno()).st_size
         stderr_size = os.fstat(stderr.fileno()).st_size
-        if stdout_size > stdout_limit or stderr_size > stderr_limit:
-            _fail("command exceeded its output bounds")
-        hardware_runner_contract._reject_live_descendants(
-            process, "qualification command"
-        )
+        if reason is None and (stdout_size > stdout_limit or stderr_size > stderr_limit):
+            reason, termination = "command exceeded its output bounds", "output-bound"
         stdout.seek(0)
         stderr.seek(0)
-        output, errors = stdout.read(), stderr.read()
+        output, errors = stdout.read(stdout_limit), stderr.read(stderr_limit)
+        if observe is not None:
+            logs = {}
+            for name, stream, size, payload in (
+                ("stdout", stdout, stdout_size, output),
+                ("stderr", stderr, stderr_size, errors),
+            ):
+                stream.seek(0)
+                logs[name] = {
+                    "payload": payload,
+                    "observedBytes": size,
+                    "observedSha256": hashlib.file_digest(stream, "sha256").hexdigest(),
+                    "complete": termination is None and len(payload) == size,
+                }
+            observe({
+                "command": command,
+                "workingDirectory": str(cwd),
+                "timeoutSeconds": timeout_seconds,
+                "exitStatus": status,
+                "termination": termination,
+                "logs": logs,
+            })
+        if reason is not None:
+            _fail(reason)
     if status != 0:
         detail = errors.decode("utf-8", errors="replace").strip()
         _fail(
@@ -997,6 +1031,8 @@ def invoke_compiler_phase(
     request_path: Path,
     output_directory: Path,
     timeout_seconds: int,
+    *,
+    observe: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
     if output_directory.exists():
         _fail("production transaction output directory already exists")
@@ -1013,6 +1049,7 @@ def invoke_compiler_phase(
         cwd=repository,
         environment=_transaction_environment(),
         timeout_seconds=timeout_seconds,
+        **({"observe": observe} if observe is not None else {}),
     )
     if output:
         _fail("compiler phase must publish evidence, not stdout authority")

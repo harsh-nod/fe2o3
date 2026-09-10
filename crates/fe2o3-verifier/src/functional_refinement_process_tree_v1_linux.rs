@@ -42,6 +42,36 @@ const DESCRIPTOR_LIMIT: u64 = 256;
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
 const CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
 
+// Loader mapping events arrive in short bursts. Start with a short wait after
+// progress, then back off for solver work without changing the proof deadline.
+struct TraceePollBackoff {
+    next: Duration,
+}
+
+impl TraceePollBackoff {
+    const INITIAL: Duration = Duration::from_micros(50);
+
+    fn new() -> Self {
+        Self {
+            next: Self::INITIAL,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.next = Self::INITIAL;
+    }
+
+    fn next_delay(&mut self) -> Duration {
+        let delay = self.next;
+        self.next = (delay * 2).min(POLL_INTERVAL);
+        delay
+    }
+
+    fn pause(&mut self) {
+        thread::sleep(self.next_delay());
+    }
+}
+
 const PTRACE_TRACEME: u32 = 0;
 const PTRACE_CONT: u32 = 7;
 const PTRACE_GETREGS: u32 = 12;
@@ -706,6 +736,7 @@ fn supervise(
         let mut auxiliary_started = false;
         let mut solver_started = false;
         let expected_process_descendants = if require_auxiliary_verifier { 2 } else { 1 };
+        let mut idle = TraceePollBackoff::new();
         while !tracees.is_empty() {
             drain(&mut stdout, &mut stdout_capture, output_limit)?;
             drain(&mut stderr, &mut stderr_capture, output_limit)?;
@@ -898,8 +929,10 @@ fn supervise(
                     }
                 }
             }
-            if !progressed {
-                thread::sleep(POLL_INTERVAL);
+            if progressed {
+                idle.reset();
+            } else {
+                idle.pause();
             }
         }
         let verifier_terminal = verifier_terminal
@@ -1006,6 +1039,7 @@ fn wait_for_specific(
     process: i32,
     deadline: Instant,
 ) -> Result<i32, RetainedFunctionalRefinementRuntimeErrorV1> {
+    let mut idle = TraceePollBackoff::new();
     loop {
         if let Some(status) = wait_for_specific_nonblocking(process)? {
             return Ok(status);
@@ -1016,7 +1050,7 @@ fn wait_for_specific(
                 "timed out waiting for traced proof process",
             ));
         }
-        thread::sleep(POLL_INTERVAL);
+        idle.pause();
     }
 }
 
@@ -1821,6 +1855,19 @@ fn controller_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tracee_poll_backoff_is_bounded_and_resets_after_progress() {
+        let mut backoff = TraceePollBackoff::new();
+        for micros in [50, 100, 200, 400, 800, 1600, 2000, 2000] {
+            assert_eq!(backoff.next_delay(), Duration::from_micros(micros));
+        }
+        for _ in 0..1024 {
+            assert_eq!(backoff.next_delay(), POLL_INTERVAL);
+        }
+        backoff.reset();
+        assert_eq!(backoff.next_delay(), TraceePollBackoff::INITIAL);
+    }
 
     struct HostileRun {
         result: Result<

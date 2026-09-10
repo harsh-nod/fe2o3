@@ -1796,6 +1796,60 @@ mod tests {
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[test]
+    #[ignore = "requires the root-protected pinned functional-refinement runtime"]
+    fn production_runtime_imports_generated_proofs_and_rejects_wrong_operators() {
+        let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(
+            "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5",
+        )
+        .expect("production runtime admission must succeed without the test ownership policy");
+        for scalar in [
+            ProductionSemanticScalarTypeV2::Integer {
+                signed: false,
+                bits: 32,
+            },
+            ProductionSemanticScalarTypeV2::Float { bits: 32 },
+        ] {
+            let positive =
+                typed_scalar_expression_kernel(ProductionSemanticBinaryOpV2::Add, scalar);
+            let (binding, proof, _) = execute_and_import_ranked_functional_refinement_locally_v2(
+                &runtime,
+                &positive,
+                0,
+                2,
+                subjects(),
+                60,
+            )
+            .expect(
+                "exact generated formula must verify and import within the production deadline",
+            );
+            assert_eq!(proof.binding(), binding);
+            assert_eq!(
+                proof.boundary(),
+                FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir
+            );
+
+            let negative =
+                typed_scalar_expression_kernel(ProductionSemanticBinaryOpV2::Subtract, scalar);
+            let error = match execute_and_import_ranked_functional_refinement_locally_v2(
+                &runtime,
+                &negative,
+                0,
+                2,
+                subjects(),
+                60,
+            ) {
+                Ok(_) => panic!("wrong operator produced an imported proof for {scalar:?}"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.kind(),
+                FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult
+            );
+        }
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
     #[ignore = "requires the exact pinned functional-refinement test runtime closure"]
     fn retained_runtime_checks_generated_equivalence_and_rejects_operator_mutations() {
         let integer = ProductionSemanticScalarTypeV2::Integer {

@@ -368,7 +368,7 @@ fn typed_global_exclusive_source_fixture_v1(
 }
 
 #[test]
-fn typed_global_exclusive_source_preserves_extents_but_rejects_unversioned_loads() {
+fn typed_global_exclusive_source_preserves_extents_and_initial_memory_versions() {
     for exclusive_input in [false, true] {
         let (types, callables, function) =
             typed_global_exclusive_source_fixture_v1(exclusive_input);
@@ -397,13 +397,6 @@ fn typed_global_exclusive_source_preserves_extents_but_rejects_unversioned_loads
             &blocks,
             &sources,
         );
-        if exclusive_input {
-            assert_incomplete(
-                writes,
-                "typed global mutable load requires reaching-write semantics",
-            );
-            continue;
-        }
         let writes = writes.unwrap();
         assert_eq!(writes.len(), 1);
         assert_eq!(writes[0].allocation_origin, 2);

@@ -1055,7 +1055,6 @@ pub fn gfx950_content_sparse_attention(
     let weight1 = math.exp_f32(selected1_attention - maximum);
     let weight2 = math.exp_f32(selected2_attention - maximum);
     let denominator = weight0 + weight1 + weight2;
-    #[cfg(not(feature = "kernel-content-sparse-attention-reciprocal-reuse-v1"))]
     let value_base = batch.wrapping_mul(ATTENTION_TOKENS_V1 * CHANNELS_V1);
     let value0 = v
         .load(value_base + selected0 * CHANNELS_V1 + column)
@@ -1066,6 +1065,7 @@ pub fn gfx950_content_sparse_attention(
     let value2 = v
         .load(value_base + selected2 * CHANNELS_V1 + column)
         .unwrap_or(0);
+    #[cfg(not(feature = "kernel-content-sparse-attention-reciprocal-reuse-v1"))]
     let result = weight0 / denominator * decode_fp8_e4m3_v1!(value0)
         + weight1 / denominator * decode_fp8_e4m3_v1!(value1)
         + weight2 / denominator * decode_fp8_e4m3_v1!(value2);
@@ -1468,8 +1468,8 @@ pub fn gfx950_compressed_hybrid_attention(
     let local_weight2 = math.exp_f32(score14 - local_maximum);
     let local_weight3 = math.exp_f32(score15 - local_maximum);
     let local_sum = local_weight0 + local_weight1 + local_weight2 + local_weight3;
-    #[cfg(feature = "kernel-compressed-hybrid-attention-division-baseline-v1")]
     let value_base = batch.wrapping_mul(ATTENTION_TOKENS_V1 * CHANNELS_V1);
+    #[cfg(feature = "kernel-compressed-hybrid-attention-division-baseline-v1")]
     let local_value = local_weight0 / local_sum
         * decode_fp8_e4m3_v1!(global_load_2d_u8_v1(
             &v,
@@ -1844,6 +1844,10 @@ pub fn gfx950_mhc_sinkhorn_mix(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "kernel_cfg_tests.rs"]
+mod cfg_tests;
 
 #[cfg(test)]
 mod tests {

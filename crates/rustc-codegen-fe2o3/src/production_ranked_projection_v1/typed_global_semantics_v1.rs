@@ -379,11 +379,13 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             AccessKindAttr::Read,
         )
         .map_err(ProductionRankedProjectionErrorV1::Incomplete)?;
-        // Access coordinates identify an event, not the memory state it reads.
-        // Mutable loads need reaching-write semantics before value correlation.
-        if bound.allocation.writable {
+        if bound.allocation.writable
+            && !self
+                .memory_versions
+                .contains_key(&(source.block, source.operation))
+        {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "typed global mutable load requires reaching-write semantics",
+                "typed global mutable load lacks an authenticated reaching memory version",
             ));
         }
         if allocations.get(view).copied() != Some(bound.allocation.allocation_origin)
@@ -432,5 +434,39 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             }
         }
         Ok(())
+    }
+
+    fn resolve_versioned_load_v1(
+        &mut self,
+        load: ProductionSemanticLoadV2,
+        depth: usize,
+    ) -> Result<ProductionSemanticExpressionV2, &'static str> {
+        Self::require_depth_v2(depth)?;
+        match self
+            .memory_versions
+            .get(&(load.block as usize, load.operation as usize))
+            .copied()
+        {
+            None | Some(TypedGlobalMemoryVersionV1::Initial) => {
+                Ok(ProductionSemanticExpressionV2::Load(load))
+            }
+            Some(TypedGlobalMemoryVersionV1::Store { semantic_block }) => {
+                self.charge_v2()?;
+                if !self.visiting_stores.insert(semantic_block) {
+                    return Err("mutable global store value has a cyclic memory dependency");
+                }
+                let result = match self.function.blocks()[semantic_block].terminator().kind() {
+                    SemanticTerminatorKindV1::Call(call) => {
+                        self.resolve_operand_v2(&call.arguments()[2], depth + 1)
+                    }
+                    _ => Err("mutable global reaching store lost its source call"),
+                };
+                self.visiting_stores.remove(&semantic_block);
+                result
+            }
+            Some(TypedGlobalMemoryVersionV1::Conflict) => {
+                Err("mutable global load has conflicting reaching writes")
+            }
+        }
     }
 }

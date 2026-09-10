@@ -1,7 +1,7 @@
-//! Source-derived negative replay, not a completed tutorial negative-fixture suite.
+//! Compiler-owned negative replay, not a completed tutorial negative-fixture suite.
 //!
 //! The production constructor requires recovered V5 custody. Archived JSON is inert:
-//! validation regenerates the mutation and reruns the same bounded MIR admission.
+//! validation regenerates each mutation and reruns bounded MIR/KIR admission.
 
 use super::*;
 use fe2o3_mir_model::semantic_mir_v1::{
@@ -9,13 +9,17 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticFunctionRoleV1, SemanticMirEntityV1, SemanticMirErrorV1, SemanticMirLimitsV1,
 };
 
-const SCHEMA: &str = "fe2o3-tutorial-source-negative-replay-v1";
-const RUN_DOMAIN: &[u8] = b"fe2o3-tutorial-source-negative-replay-run-v1\0";
+const SCHEMA: &str = "fe2o3-tutorial-source-negative-replay-v2";
+const RUN_DOMAIN: &[u8] = b"fe2o3-tutorial-source-negative-replay-run-v2\0";
 const MUTATION_DOMAIN: &[u8] = b"fe2o3-tutorial-source-negative-mutation-v1\0";
 const CASE_ID: &str = "original-kernel-root-roster-omission";
-const MAX_RECEIPT_BYTES: usize = 16 * 1024;
+const MAX_RECEIPT_BYTES: usize = 64 * 1024;
+const MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
 
-// This is one fixed recipe and one admission, never a caller-provided mutation program.
+#[path = "production_pipeline_tutorial_transaction_negative_v1_recipes.rs"]
+mod recipes;
+
+// Closed recipes, never a caller-provided mutation program.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SourceNegativeReplayBindingV1 {
     request_binding: String,
@@ -28,6 +32,8 @@ struct SourceNegativeReplayBindingV1 {
     transaction: [u8; 32],
     compiler_policy: [u8; 32],
     semantic_mir: [u8; 32],
+    executable_kir: [u8; 32],
+    declaration_roster: recipes::RequiredNegativeRosterV1,
 }
 
 impl SourceNegativeReplayBindingV1 {
@@ -35,17 +41,25 @@ impl SourceNegativeReplayBindingV1 {
         context: &RequestContext,
         result: &InertProductionCapabilityResultV5,
     ) -> ResultV1<Self> {
+        let compiler_input = sha256(&compiler_input_preimage_v1(context)?);
+        let source_closure = sha256(&context.source_closure_preimage);
         Ok(Self {
             request_binding: context.request_binding_sha256.clone(),
             fixture_id: context.fixture_id.clone(),
             target: context.target.clone(),
             kernel_symbol: context.kernel_symbol.clone(),
-            source_closure: sha256(&context.source_closure_preimage),
-            compiler_input: sha256(&compiler_input_preimage_v1(context)?),
+            source_closure,
+            compiler_input,
             sealed_result: result.identity().sha256(),
             transaction: result.transaction().identity().sha256(),
             compiler_policy: result.handoff().inputs().compiler_policy(),
             semantic_mir: result.handoff().inputs().semantic_mir_identity(),
+            executable_kir: sha256(result.handoff().executable_kir().canonical_preimage()),
+            declaration_roster: recipes::RequiredNegativeRosterV1::load(
+                context,
+                source_closure,
+                compiler_input,
+            )?,
         })
     }
 
@@ -53,9 +67,12 @@ impl SourceNegativeReplayBindingV1 {
         serde_json::json!({
             "compilerInputSha256": hex32(self.compiler_input),
             "compilerPolicySha256": hex32(self.compiler_policy),
+            "executableKirSha256": hex32(self.executable_kir),
             "fixtureId": self.fixture_id,
             "kernelSymbol": self.kernel_symbol,
             "recipeSourceSha256": hex_sha256(include_bytes!("production_pipeline_tutorial_transaction_negative_v1.rs")),
+            "recipeImplementationSha256": hex_sha256(include_bytes!("production_pipeline_tutorial_transaction_negative_v1_recipes.rs")),
+            "negativeDeclarationRoster": self.declaration_roster,
             "requestBindingSha256": self.request_binding,
             "sealedResultSha256": hex32(self.sealed_result),
             "semanticMirSha256": hex32(self.semantic_mir),
@@ -74,7 +91,11 @@ struct SourceNegativeReplayReceiptV1 {
 }
 
 impl SourceNegativeReplayReceiptV1 {
-    fn run(binding: &SourceNegativeReplayBindingV1, original: &[u8]) -> ResultV1<Self> {
+    fn run(
+        binding: &SourceNegativeReplayBindingV1,
+        original: &[u8],
+        executable_kir: &[u8],
+    ) -> ResultV1<Self> {
         if [
             &binding.request_binding,
             &binding.fixture_id,
@@ -86,8 +107,14 @@ impl SourceNegativeReplayReceiptV1 {
         {
             return mismatch("negative replay binding exceeds its byte bound");
         }
+        if original.len() > MAX_INPUT_BYTES || executable_kir.len() > MAX_INPUT_BYTES {
+            return mismatch("negative replay input exceeds its byte bound");
+        }
         if sha256(original) != binding.semantic_mir {
             return mismatch("negative replay source differs from the sealed source MIR");
+        }
+        if sha256(executable_kir) != binding.executable_kir {
+            return mismatch("negative replay KIR differs from the sealed executable KIR");
         }
         // Positive control: invalid source must not be credited as a rejected mutation.
         let source = AdmittedInertSemanticMirV1::decode_current_production_canonical(
@@ -149,6 +176,9 @@ impl SourceNegativeReplayReceiptV1 {
                 );
             }
         };
+        let abi_case = recipes::reject_unwinding_kernel_abi(&source, root)?;
+        let kir_case =
+            recipes::reject_unresolved_kernel_call(executable_kir, &binding.kernel_symbol)?;
         let mut document = serde_json::json!({
             "binding": binding.document(),
             "cases": [{
@@ -158,10 +188,13 @@ impl SourceNegativeReplayReceiptV1 {
                 "mutationRecipeSha256": domain_sha256(MUTATION_DOMAIN, &mutation)?,
                 "productionBoundary": "semantic-mir-admission",
                 "status": "rejected-by-live-replay",
-            }],
-            "mode": "in-process-source-mir-admission-replay",
-            "positiveControl": "admitted-exact-source",
+                "coverage": "supplemental-not-declared-mutation",
+            }, abi_case, kir_case],
+            "mode": "in-process-source-mir-and-kir-admission-replay",
+            "positiveControl": "admitted-exact-source-and-executable-kir",
             "qualificationStatus": "incomplete",
+            "requiredCasesSatisfied": 0,
+            "requiredCases": binding.declaration_roster.pending_cases(),
             "schema": SCHEMA,
             "sourceRustRecompiled": false,
         });
@@ -248,7 +281,11 @@ fn replay_result(
         .receipts()
         .semantic_mir()
         .canonical_preimage();
-    SourceNegativeReplayReceiptV1::run(&binding, original)
+    SourceNegativeReplayReceiptV1::run(
+        &binding,
+        original,
+        result.handoff().executable_kir().canonical_preimage(),
+    )
 }
 
 fn replay_error(message: impl Into<String>) -> TutorialProductionTransactionErrorV1 {

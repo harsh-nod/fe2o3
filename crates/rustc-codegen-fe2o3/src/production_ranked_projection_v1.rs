@@ -3768,6 +3768,8 @@ struct GpuSemanticExpressionResolverV2<'a> {
     work: usize,
     loads: HashMap<*const SemanticRvalueV1, ProductionSemanticLoadV2>,
     place_loads: HashMap<*const SemanticPlaceV1, ProductionSemanticLoadV2>,
+    memory_versions: TypedGlobalMemoryVersionsV1,
+    visiting_stores: HashSet<usize>,
 }
 
 fn semantic_rvalue_read_places_v2<'a>(
@@ -3849,6 +3851,8 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             work: 0,
             loads: HashMap::new(),
             place_loads: HashMap::new(),
+            memory_versions: HashMap::new(),
+            visiting_stores: HashSet::new(),
         }
     }
 
@@ -3861,6 +3865,9 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         sources: &[ProjectedAccessSourceV1],
     ) -> Result<Self, ProductionRankedProjectionErrorV1> {
         let mut resolver = Self::new(types, function);
+        resolver.memory_versions = typed_global_memory_versions_v1(
+            function, callables, intrinsic, blocks, sources, &mut 0,
+        )?;
         let mut allocation_origins = HashMap::new();
         for block in blocks {
             for operation in block.operations() {
@@ -4097,8 +4104,12 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         depth: usize,
     ) -> Result<ProductionSemanticExpressionV2, &'static str> {
         Self::require_depth_v2(depth)?;
-        if let Some(load) = self.place_loads.get(&(place as *const SemanticPlaceV1)) {
-            return Ok(ProductionSemanticExpressionV2::Load(load.clone()));
+        if let Some(load) = self
+            .place_loads
+            .get(&(place as *const SemanticPlaceV1))
+            .cloned()
+        {
+            return self.resolve_versioned_load_v1(load, depth);
         }
         let local = place.local().index();
         if !place.projections().is_empty() {
@@ -5583,6 +5594,7 @@ fn transfer_capability_statements_v1(
 }
 
 include!("production_ranked_projection_v1/typed_global_semantics_v1.rs");
+include!("production_ranked_projection_v1/typed_global_memory_v1.rs");
 
 fn consume_capability_rvalue_operands_v1(
     rvalue: &SemanticRvalueKindV1,
@@ -24579,6 +24591,7 @@ mod tests {
     include!("production_ranked_projection_v1/execution_view_tests.rs");
     include!("production_ranked_projection_v1/typed_global_tests.rs");
     include!("production_ranked_projection_v1/typed_global_source_tests.rs");
+    include!("production_ranked_projection_v1/typed_global_memory_tests.rs");
     include!("production_ranked_projection_v1/projection_01_tests.rs");
     include!("production_ranked_projection_v1/projection_02_tests.rs");
     include!("production_ranked_projection_v1/projection_03_tests.rs");

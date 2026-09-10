@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
-"""Generate the bounded, typed semantic-simulation fixtures from the manifest."""
+"""Generate typed fixtures, or observe source exports with --source-export-report.
+
+Diagnostic modes use prebuilt binaries in a clean candidate repository. Run them
+inside the production runtime namespace when required. Source extraction accepts
+an operator-owned --target-dir, retained for reuse; without it, one sweep-local
+cache is shared then removed. --preparation-report instead measures the native
+protected transaction, whose build directory cannot currently be shared. Reports
+never replace historical fixture observations or authorize qualification.
+"""
 
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import copy
 import hashlib
 import importlib.util
@@ -17,6 +26,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Callable
 
 
@@ -29,6 +39,12 @@ REQUEST_SCHEMA = "fe2o3-simulation-request-v1"
 SENTINEL_F32 = 12_345.0
 SENTINEL_U32 = 0xA5A5A5A5
 PRODUCER_TIMEOUT_SECONDS = 3600
+PROBE_SIMULATOR_MARKER = b"tutorial-fixture-producer-probe-v1\n"
+SOURCE_SWEEP_SCHEMA = "fe2o3-tutorial-source-export-diagnostic-sweep-v1"
+PREPARATION_SWEEP_SCHEMA = "fe2o3-tutorial-preparation-diagnostic-sweep-v1"
+SOURCE_OBSERVATION_DOMAIN = b"fe2o3-tutorial-source-export-observation-v1\0"
+SOURCE_CARGO_RUSTC_ERROR = re.compile(rb"error(?:\[(E[0-9]{4})\])?: (.+)\Z")
+DIAGNOSTIC_SGR = re.compile(rb"\x1b\[[0-9;]*m")
 PRODUCER_ERROR = re.compile(r"(FE2O3-TUTORIAL-(?:PROBE|TXN)-[0-9]{3}): (.+)\Z")
 DIAGNOSTIC_IDENTITY_DOMAIN = b"fe2o3-tutorial-production-export-diagnostic-v1\0"
 PRODUCER_STAGES = {
@@ -419,7 +435,7 @@ def probe_production_exports(
     producer = _load_producer_contract()
     manifest_payload = MANIFEST.read_bytes()
     manifest_identity = producer._manifest_identity(manifest, manifest_payload)
-    simulator_reference = producer._reference(b"tutorial-fixture-producer-probe-v1\n")
+    simulator_reference = producer._reference(PROBE_SIMULATOR_MARKER)
     ordered = sorted(fixtures)
     with tempfile.TemporaryDirectory(prefix="fe2o3-fixture-producer-probe-") as raw_temporary:
         temporary = Path(raw_temporary)
@@ -502,6 +518,266 @@ def probe_production_exports(
         exports = {first_id: first}
         exports.update({fixture_id: probe(fixture_id) for fixture_id in ordered[1:]})
         return exports
+
+
+def source_export_selection(manifest: dict[str, Any], requested: list[str] | None) -> list[str]:
+    available = {fixture["fixtureId"] for fixture in manifest["compilerFixtures"]}
+    if requested is None:
+        return sorted(available)
+    if not requested or len(requested) != len(set(requested)):
+        raise ValueError("source export selection must be nonempty and contain no duplicates")
+    unknown = set(requested) - available
+    if unknown:
+        raise ValueError(f"unknown exact fixture IDs: {sorted(unknown)!r}")
+    return sorted(requested)
+
+
+def source_export_diagnostic(stderr: bytes, mode: str = "prepare") -> dict[str, Any] | None:
+    """First anchored diagnostic in log order, not a semantic/proof-stage inference."""
+    prefixes = (
+        ((b"fe2o3 tutorial production transaction: ", "unclassified-exporter-failure"),)
+        if mode == "prepare" else (
+            (b"fe2o3 rustc extraction: ", "rustc-source-extraction"),
+            (b"fe2o3-export-sim: ", "source-export"),
+        )
+    )
+    offset = 0
+    for line in stderr.splitlines(keepends=True):
+        # Strip display color only for recognition. Offsets and hashes name raw bytes.
+        displayed = DIAGNOSTIC_SGR.sub(b"", line) if mode == "source" else line
+        detail = None
+        code = None
+        for prefix, stage in prefixes:
+            if not displayed.startswith(prefix):
+                continue
+            detail = displayed[len(prefix):].rstrip(b"\r\n").decode("utf-8", errors="replace")
+            if mode == "prepare":
+                match = PRODUCER_ERROR.fullmatch(detail)
+                code = match.group(1) if match else None
+                stage = PRODUCER_STAGES.get(code, stage)
+            break
+        if detail is None and mode == "source":
+            match = SOURCE_CARGO_RUSTC_ERROR.fullmatch(displayed.rstrip(b"\r\n"))
+            if match is not None:
+                code = match.group(1).decode("ascii") if match.group(1) else None
+                detail = match.group(2).decode("utf-8", errors="replace")
+                if code is not None:
+                    stage = "rustc-compilation"
+                elif detail.startswith("cannot update the lock file ") or re.fullmatch(
+                    r"the lock file .+ needs to be updated but --locked\b.*", detail
+                ):
+                    stage = "cargo-lockfile"
+                elif detail.startswith(("failed to select a version ", "no matching package named ")):
+                    stage = "cargo-dependency-resolution"
+                else:
+                    stage = "cargo-rustc"
+        if detail is not None:
+            return {
+                "byteOffset": offset,
+                "bytes": len(line),
+                "sha256": sha256(line),
+                "code": code,
+                "stage": stage,
+                "text": detail[:2048],
+                "textTruncated": len(detail) > 2048,
+            }
+        offset += len(line)
+    return None
+
+
+def export_diagnostic_sweep(
+    repository: Path,
+    output: Path,
+    exporter: Path,
+    *,
+    mode: str,
+    cargo_fe2o3: Path | None = None,
+    target_dir: Path | None = None,
+    fixture_ids: list[str] | None = None,
+    timeout_seconds: int = PRODUCER_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Observe source extraction or preparation; never simulate, finalize, or promote."""
+    if mode not in {"source", "prepare"}:
+        raise ValueError("unknown export diagnostic mode")
+    if (mode == "prepare" and (cargo_fe2o3 is None or target_dir is not None)) or (mode == "source" and cargo_fe2o3 is not None):
+        raise ValueError("preparation requires --cargo-fe2o3; --target-dir is source-only")
+    producer = _load_producer_contract()
+    paths = producer.hardware_runner_contract
+    repository = paths.regular_path(str(repository), "source export repository", directory=True)
+    output = output.absolute()
+    parent = paths.regular_path(str(output.parent), "diagnostic output parent", directory=True)
+    if parent.is_relative_to(repository) or output.exists() or output.is_symlink():
+        raise ValueError("diagnostic output must be a new directory outside the repository")
+    if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or not 0 < timeout_seconds <= PRODUCER_TIMEOUT_SECONDS:
+        raise ValueError("source export timeout is outside its bound")
+    producer.manifest_contract.validate_repository(repository)
+    raw, manifest = producer.manifest_contract._load_json_unique(repository / producer.MANIFEST_RELATIVE)
+    selected = source_export_selection(manifest, fixture_ids)
+    fixtures = {fixture["fixtureId"]: fixture for fixture in manifest["compilerFixtures"]}
+    kernels = {kernel["fixtureId"]: kernel for kernel in manifest["capabilityKernels"]}
+    candidate = producer.clean_candidate(repository)
+    binaries = {}
+    binary_paths = [("exporter", exporter)]
+    if cargo_fe2o3 is not None:
+        binary_paths.append(("cargo-fe2o3", cargo_fe2o3))
+    for name, path in binary_paths:
+        path = paths.regular_path(str(path), name)
+        if path.stat().st_mode & 0o111 == 0:
+            raise ValueError(f"{name} must be executable")
+        payload = producer._read_regular(path, name, producer.MAX_FILE_BYTES)
+        binaries[name] = {"path": str(path), "bytes": len(payload), "sha256": sha256(payload)}
+    manifest_identity = producer._manifest_identity(manifest, raw)
+    simulation = producer._load_sibling("fe2o3_simulation_for_diagnostic_sweep", "run-tutorial-semantic-simulation.py") if mode == "source" else None
+    if target_dir is not None:
+        target_dir = target_dir.absolute()
+        paths.regular_path(str(target_dir.parent), "shared target parent", directory=True)
+        if target_dir == repository or repository.is_relative_to(target_dir) or target_dir.is_relative_to(output) or output.is_relative_to(target_dir):
+            raise ValueError("shared target directory must not contain the repository or diagnostic report")
+        target_dir.mkdir(exist_ok=True, mode=0o700)
+        target_dir = paths.regular_path(str(target_dir), "shared target directory", directory=True)
+    observations = []
+    with producer.qualification_workspace(parent) as workspace:
+        archive = workspace / "diagnostics"
+        archive.mkdir()
+        marker = producer._write_object(archive, PROBE_SIMULATOR_MARKER) if mode == "prepare" else None
+        cache = target_dir or workspace / "cargo-target"
+        for fixture_id in selected:
+            fixture, kernel = fixtures[fixture_id], kernels[fixture_id]
+            captured = []
+            failure = None
+            prepared = None
+            artifact = None
+            request_payload = None
+            started = time.monotonic()
+            with tempfile.TemporaryDirectory(prefix=f"{fixture_id}-", dir=workspace) as directory:
+                unit = Path(directory)
+                request_path = unit / "request.json"
+                export_root = unit / "export"
+                try:
+                    if mode == "source":
+                        bundle = unit / "production.bundle-v8"
+                        producer._run_bounded(
+                            [str(exporter), "--crate", fixture["compilerInput"]["cargoTarget"]["name"],
+                             "--output", str(bundle), "--bundle-version", "8", "--target", fixture["target"],
+                             "--target-dir", str(cache), "--", *simulation._cargo_selection(fixture["compilerInput"])],
+                            cwd=repository, environment=simulation._command_environment(),
+                            timeout_seconds=timeout_seconds, observe=captured.append,
+                        )
+                        payload = producer._read_regular(bundle, "unverified source export", producer.MAX_FILE_BYTES)
+                        if not payload:
+                            raise ValueError("source exporter published an empty output")
+                        artifact = {
+                            "path": str(bundle), "bytes": len(payload), "sha256": sha256(payload),
+                            "validation": "bytes-only-not-sealed-authority", "retained": False,
+                        }
+                    else:
+                        request = producer.transaction_request(
+                            fixture, kernel, candidate, manifest_identity, marker,
+                            f"preparation-diagnostic-{fixture['target']}",
+                        )
+                        request_payload = producer._canonical(request) + b"\n"
+                        producer._publish_new_file(request_path, request_payload)
+                        producer.invoke_compiler_phase(
+                            [str(exporter), "--cargo-fe2o3", str(cargo_fe2o3)],
+                            repository, request_path, export_root, timeout_seconds,
+                            observe=captured.append,
+                        )
+                        record = producer.validate_pre_hardware_export(export_root, request)
+                        prepared = {
+                            "envelope": producer._write_object(
+                                archive,
+                                producer._read_regular(export_root / producer.PRE_HARDWARE_RESULT_NAME, "prepared export"),
+                            ),
+                            "verifierInputs": {
+                                kind: record["evidenceFiles"][kind]
+                                for kind in ("sealed-production-receipt", "simulation-bundle-v8")
+                            },
+                            "exportArtifactsRetained": False,
+                        }
+                except (ValueError, OSError) as error:
+                    failure = str(error)
+                if len(captured) > 1:
+                    raise ValueError("source exporter produced more than one process observation")
+                process = captured[0] if captured else None
+                diagnostic = source_export_diagnostic(process["logs"]["stderr"]["payload"], mode) if process else None
+                if process is None or process["termination"] == "spawn-error":
+                    status, stage = "not-started", "exporter-invocation"
+                elif process["termination"] is not None or process["exitStatus"] != 0:
+                    status = "exporter-failed"
+                    stage = diagnostic["stage"] if diagnostic else "unclassified-exporter-failure"
+                elif failure is not None or diagnostic is not None:
+                    status, stage = ("invalid-preparation", "preparation-transport-validation") if mode == "prepare" else ("invalid-source-output", "source-output-validation")
+                else:
+                    status, stage = ("prepared-not-qualified" if mode == "prepare" else "exported-unverified"), None
+                if process is not None:
+                    for log in process["logs"].values():
+                        payload = log.pop("payload")
+                        # Empty logs have an exact observed hash, not an evidence object.
+                        log["captured"] = producer._write_object(archive, payload) if payload else None
+                row = {
+                    "fixtureId": fixture_id,
+                    "kernelSymbol": kernel["kernelSymbol"],
+                    "lessonIds": kernel["lessonIds"],
+                    "target": fixture["target"],
+                    "packageManifest": fixture["compilerInput"]["packageManifest"],
+                    "compilerInput": fixture["compilerInput"],
+                    "hardwareCommandNotExecuted": producer.manifest_contract._expected_hardware_command(fixture),
+                    "qualificationAdaptersNotExecuted": [
+                        suite for suite in manifest["qualification"]["suites"]
+                        if any(fixture_id in coverage["fixtureIds"] for coverage in suite["coverage"])
+                    ],
+                    "request": producer._write_object(archive, request_payload) if request_payload else None,
+                    "process": process,
+                    "diagnostic": diagnostic,
+                    "orchestrationDiagnostic": producer._write_object(archive, failure.encode("utf-8")) if failure else None,
+                    "earliestObservedBlockingStage": stage,
+                    "status": status,
+                    "preparedExport": prepared,
+                    "sourceExport": artifact,
+                    "elapsedMilliseconds": int((time.monotonic() - started) * 1000),
+                }
+            if unit.exists():
+                raise ValueError("source export scratch cleanup is incomplete")
+            row["scratchCleanupComplete"] = True
+            row["observationSha256"] = producer._domain_sha256(SOURCE_OBSERVATION_DOMAIN, row)
+            observations.append(row)
+        if producer.clean_candidate(repository) != candidate:
+            raise ValueError("compiler candidate changed during the diagnostic sweep")
+        for name, identity in binaries.items():
+            payload = producer._read_regular(Path(identity["path"]), name, producer.MAX_FILE_BYTES)
+            if len(payload) != identity["bytes"] or sha256(payload) != identity["sha256"]:
+                raise ValueError(f"{name} changed during the diagnostic sweep")
+        groups = {}
+        for row in observations:
+            if row["earliestObservedBlockingStage"] is not None:
+                key = (row["earliestObservedBlockingStage"], (row["diagnostic"] or {}).get("code") or "")
+                groups.setdefault(key, []).append(row["fixtureId"])
+        report = {
+            "schema": SOURCE_SWEEP_SCHEMA if mode == "source" else PREPARATION_SWEEP_SCHEMA,
+            "mode": mode,
+            "authority": "diagnostic-only-no-qualification-authority",
+            "candidate": candidate,
+            "manifest": manifest_identity,
+            "binaries": binaries,
+            "selection": {"fixtureIds": selected, "manifestFixtureCount": len(fixtures)},
+            "simulatorInput": {"kind": "diagnostic-marker-not-simulation-evidence", "reference": marker} if marker else None,
+            "buildCache": {"path": str(cache), "ownership": "operator-retained" if target_dir else "sweep-temporary", "sharedAcrossFixtures": True} if mode == "source" else None,
+            "limits": {"timeoutSecondsPerFixture": timeout_seconds, "stdoutBytesPerFixture": producer.MAX_PROCESS_STDOUT, "stderrBytesPerFixture": producer.MAX_PROCESS_STDERR},
+            "observations": observations,
+            "summary": {
+                "observedFixtures": len(observations),
+                "byStatus": dict(sorted(Counter(row["status"] for row in observations).items())),
+                "byTarget": dict(sorted(Counter(row["target"] for row in observations).items())),
+                "byPackage": dict(sorted(Counter(row["packageManifest"] for row in observations).items())),
+                "blockerGroups": [
+                    {"stage": stage, "diagnosticCode": code or None, "fixtureIds": ids}
+                    for (stage, code), ids in sorted(groups.items())
+                ],
+            },
+        }
+        producer._publish_new_file(archive / "report.json", producer._canonical(report) + b"\n")
+        producer._publish_new_directory(archive, output)
+    return report
 
 
 def encoded(values: list[int | float], element: str) -> str:
@@ -1267,8 +1543,39 @@ def write_regular(path: Path, payload: bytes) -> None:
 
 def main(arguments: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--write", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--write", action="store_true")
+    mode.add_argument("--source-export-report", type=Path, metavar="NEW_DIRECTORY", help="nonqualifying fe2o3-export-sim Bundle V8 source extraction sweep")
+    mode.add_argument("--preparation-report", type=Path, metavar="NEW_DIRECTORY", help="nonqualifying native protected preparation sweep")
+    parser.add_argument("--repository", type=Path)
+    parser.add_argument("--exporter", type=Path, help="prebuilt exporter for the selected mode")
+    parser.add_argument("--cargo-fe2o3", type=Path, help="prebuilt production cargo-fe2o3 executable")
+    parser.add_argument("--target-dir", type=Path, help="source-only shared Cargo cache, operator-owned and retained; default: temporary sweep cache")
+    parser.add_argument("--fixture", action="append", help="exact fixture ID; repeat for a subset, otherwise sweep all manifest fixtures")
+    parser.add_argument("--timeout-seconds", type=int)
     options = parser.parse_args(arguments)
+    report_path = options.source_export_report or options.preparation_report
+    if report_path is not None:
+        if options.exporter is None:
+            parser.error("diagnostic report requires --exporter")
+        if options.preparation_report and (options.cargo_fe2o3 is None or options.target_dir is not None):
+            parser.error("--preparation-report requires --cargo-fe2o3 and does not support --target-dir")
+        if options.source_export_report and options.cargo_fe2o3 is not None:
+            parser.error("--source-export-report uses fe2o3-export-sim, not --cargo-fe2o3")
+        try:
+            report = export_diagnostic_sweep(
+                options.repository or ROOT, report_path, options.exporter,
+                mode="source" if options.source_export_report else "prepare",
+                cargo_fe2o3=options.cargo_fe2o3, target_dir=options.target_dir, fixture_ids=options.fixture,
+                timeout_seconds=PRODUCER_TIMEOUT_SECONDS if options.timeout_seconds is None else options.timeout_seconds,
+            )
+        except (OSError, ValueError) as error:
+            print(f"source export diagnostic sweep: {error}", file=sys.stderr)
+            return 2
+        print(json.dumps({"authority": report["authority"], "summary": report["summary"]}, sort_keys=True))
+        return int(any(row["status"] not in {"prepared-not-qualified", "exported-unverified"} for row in report["observations"]))
+    if any(value is not None for value in (options.repository, options.exporter, options.cargo_fe2o3, options.target_dir, options.fixture, options.timeout_seconds)):
+        parser.error("diagnostic options require --source-export-report or --preparation-report")
     try:
         generated = records()
         expected_paths = {FIXTURE_ROOT / f"{identity}.json" for identity in generated}

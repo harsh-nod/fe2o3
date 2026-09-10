@@ -33,7 +33,7 @@
       "status": "checked"
     }
   },
-  "compilerInputContractSha256": "7b1e0b9cefae31ee931953fb993acb4c52dd28e9e40deea6bc08542dbc892923",
+  "compilerInputContractSha256": "4f260bbbe2bf5b17ab0d6177a80fbaec77b3ad281daf2ee463265296f06139c0",
   "expectedArguments": [
     {
       "bytes": "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -358,7 +358,7 @@
     "coordinates": null,
     "diagnostic": "FE2O3-TUTORIAL-PROBE-001: production exporter failed: crates/fe2o3-verifier/src/production_final_graph_functional_refinement_v1.rs:77:5: error[E0277]: `ProductionVerifiedFinalGraphV1` doesn't implement `std::fmt::Debug`: the trait `std::fmt::Debug` is not implemented for `ProductionVerifiedFinalGraphV1`",
     "diagnosticCode": "FE2O3-TUTORIAL-PROBE-001",
-    "diagnosticIdentitySha256": "eb7ae96497889a138ee2c6936251475c7722709d2dea4f3809560a6375076706",
+    "diagnosticIdentitySha256": "8769bf38b5bb2e9e2f9e44c3bf7d851f8cc2696d7d1103bc5e1d9a5da0a54950",
     "identityContract": {
       "rawContentField": "evidenceFiles[optimized-kir-v13].sha256",
       "rawContentIdentity": "SHA-256(raw optimized KIR V13 bytes)",

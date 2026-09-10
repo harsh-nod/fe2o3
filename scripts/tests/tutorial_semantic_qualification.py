@@ -28,7 +28,7 @@ class TutorialSemanticQualificationTests(unittest.TestCase):
     def test_corpus_identity_matches_shared_baseline(self) -> None:
         _, document = manifest()
         self.assertEqual(
-            "878e12ff3af757ac658c3f7b8058278a962893aeb2639e46405f6844f04b7d95",
+            "b0d99f0c4b7c0431dda5e7441062dc94fea3aecb5c51a89ba1180471caa6e11c",
             RUNNER.corpus_contract_sha256(document),
         )
 
