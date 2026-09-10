@@ -48,6 +48,11 @@ pub enum CommandV1 {
         profile: bool,
     },
     PerformanceSnapshot,
+    /// Retires a completed queue and rebuilds its private resources.
+    RolloverQueue {
+        expected_epoch: u64,
+        expected_completed_packets: u64,
+    },
     Allocate {
         bytes: u64,
     },
@@ -117,6 +122,7 @@ impl CommandV1 {
             | Self::Free { .. }
             | Self::ConfigurePerformance { .. }
             | Self::PerformanceSnapshot
+            | Self::RolloverQueue { .. }
             | Self::Close => 0,
             _ => return Err(invalid("engineering frame limits")),
         };
@@ -178,6 +184,10 @@ pub struct ExplicitArgumentV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ResponseV1 {
+    QueueRolledOver {
+        retired_packets: u64,
+        queue_epoch: u64,
+    },
     PerformanceConfigured,
     PerformanceSnapshot {
         counters: PerformanceCountersV1,
@@ -272,6 +282,10 @@ mod tests {
                 profile: true,
             },
             CommandV1::PerformanceSnapshot,
+            CommandV1::RolloverQueue {
+                expected_epoch: 4,
+                expected_completed_packets: MAX_UNRETIRED_RING_PACKETS_V1,
+            },
         ] {
             assert_eq!(command.payload_bytes().unwrap(), 0);
             let mut bytes = Vec::new();

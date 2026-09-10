@@ -71,3 +71,27 @@ Take snapshots outside measured model intervals, and compare separate runs
 with each policy option toggled independently. No performance improvement is
 claimed until the same artifacts and workload pass numerical checks and
 unprofiled repeat measurements. Profiling itself adds observation overhead.
+
+## Queue Rollover
+
+`RolloverQueue { expected_epoch, expected_completed_packets }` is a separately
+explicit engineering command, independent of performance configuration. Epoch
+starts at zero. The expected packet frontier is the count since the previous
+rollover, not the lifetime dispatch count. Exact epoch and completed frontier
+must match before any native lifecycle transition; incomplete work, drift,
+exceptions, or exhausted epochs fail closed.
+
+The worker validates full currentness and idle counters, destroys the old
+queue, destroys its exception event, disables the old runtime lease, releases
+its doorbell, and releases all six old private queue allocations. Only then
+does it reset its software frontier and allocate/create a new ring, control,
+signal, kernarg, EOP, CWSR, exception event, runtime lease, and doorbell. It
+validates the new queue and full currentness before acknowledging
+`QueueRolledOver { retired_packets, queue_epoch }`.
+
+User allocation and kernel identifiers, mappings, bytes, and immutable
+admissions remain owned and unchanged. No read pointer is fabricated from a
+completion signal. The existing 131072-unretired-packet bound is unchanged;
+controllers must request rollover before a dispatch would exhaust that ring.
+Any uncertain destroy, unmap, disable, allocation, create, or validation result
+is terminal and must end the process; it is never retried on the same owner.

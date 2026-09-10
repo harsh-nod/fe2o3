@@ -24,7 +24,8 @@ use crate::memory_linux::{
     LinuxCpuMapping, LinuxGfx950MemoryBackend as Backend, LinuxVaReservation,
 };
 use crate::queue_linux::{
-    LinuxDoorbellSliceV1, LinuxKfdRuntimeEnabledV1, LinuxQueueExceptionEventV1,
+    LinuxDoorbellSliceV1, LinuxKfdRuntimeDisabledV1, LinuxKfdRuntimeEnabledV1,
+    LinuxQueueExceptionEventV1,
 };
 use crate::{CheckedGfx950XnackMinusDevice, DeviceSelector, OpenedKfd};
 
@@ -74,6 +75,7 @@ struct Context {
     next_kernel: u64,
     ring: AqlSingleProducerRingModelV1,
     completed_write: u64,
+    queue_epoch: u64,
     last_observed_read: u64,
     performance: Option<PerformanceOptions>,
     counters: PerformanceCountersV1,
@@ -115,6 +117,20 @@ fn require_fresh_configuration(
     Ok(())
 }
 
+fn next_queue_epoch(
+    epoch: u64,
+    expected_epoch: u64,
+    completed: u64,
+    expected_completed: u64,
+    write: u64,
+) -> Result<u64> {
+    require_completed_frontier(completed, write)?;
+    if epoch != expected_epoch || completed != expected_completed {
+        return Err("queue rollover identity/frontier mismatch".into());
+    }
+    epoch.checked_add(1).ok_or("queue epoch exhausted".into())
+}
+
 const RING: usize = 0;
 const CONTROL: usize = 1;
 const SIGNAL: usize = 2;
@@ -151,6 +167,7 @@ impl Context {
             )
             .map_err(explain)?,
             completed_write: 0,
+            queue_epoch: 0,
             last_observed_read: 0,
             performance: None,
             counters: PerformanceCountersV1::default(),
@@ -165,6 +182,18 @@ impl Context {
     fn initialize(&mut self) -> Result<()> {
         self.check_currentness(true)?;
         self.backend.acquire_vm().map_err(explain)?;
+        self.initialize_queue()
+    }
+
+    fn initialize_queue(&mut self) -> Result<()> {
+        if self.queue_id.is_some()
+            || self.runtime.is_some()
+            || self.event.is_some()
+            || self.doorbell.is_some()
+            || !self.internal.is_empty()
+        {
+            return Err("queue initialization requires destroyed private resources".into());
+        }
         self.check_currentness(true)?;
         self.runtime = Some(
             LinuxKfdRuntimeEnabledV1::enable(self.backend.kfd_fd(), self.backend.opener_pid())
@@ -764,7 +793,7 @@ impl Context {
         u64::try_from(started.elapsed().as_nanos()).map_err(explain)
     }
 
-    fn close_inner(&mut self) -> Result<()> {
+    fn destroy_queue(&mut self) -> Result<LinuxKfdRuntimeDisabledV1> {
         self.check_currentness(true)?;
         self.check_idle()?;
         let queue_id = self.queue_id.ok_or("queue already closed")?;
@@ -802,6 +831,51 @@ impl Context {
             .ok_or("missing doorbell")?
             .release()
             .map_err(explain)?;
+        Ok(disabled)
+    }
+
+    fn rollover_queue(
+        &mut self,
+        expected_epoch: u64,
+        expected_completed: u64,
+    ) -> Result<ResponseV1> {
+        let next_epoch = next_queue_epoch(
+            self.queue_epoch,
+            expected_epoch,
+            self.completed_write,
+            expected_completed,
+            self.ring.write(),
+        )?;
+        self.check_currentness(true)?;
+        self.check_idle()?;
+        let retired_packets = self.completed_write;
+        let disabled = self.destroy_queue()?;
+        // The old queue is destroyed before its ring, signals, kernargs, EOP,
+        // and CWSR are released. Completion never fabricates a hardware read.
+        while let Some(allocation) = self.internal.pop() {
+            self.release_resource(allocation)?;
+        }
+        disabled.complete();
+        self.check_currentness(true)?;
+        self.ring = AqlSingleProducerRingModelV1::new(
+            AqlRingCapacityV1::from_ring_bytes(RING_BYTES as u32).map_err(explain)?,
+            0,
+            0,
+        )
+        .map_err(explain)?;
+        self.completed_write = 0;
+        self.last_observed_read = 0;
+        self.initialize_queue()?;
+        self.check_currentness(true)?;
+        self.queue_epoch = next_epoch;
+        Ok(ResponseV1::QueueRolledOver {
+            retired_packets,
+            queue_epoch: next_epoch,
+        })
+    }
+
+    fn close_inner(&mut self) -> Result<()> {
+        let disabled = self.destroy_queue()?;
         while let Some((_, kernel)) = self.kernels.pop_last() {
             self.release_resource(kernel.code)?;
         }
@@ -1122,6 +1196,10 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
                         counters: context.counters.clone(),
                     }
                 }
+                CommandV1::RolloverQueue {
+                    expected_epoch,
+                    expected_completed_packets,
+                } => context.rollover_queue(expected_epoch, expected_completed_packets)?,
                 CommandV1::Allocate { bytes } => context.allocate(bytes)?,
                 CommandV1::Free { buffer } => {
                     context.free(buffer)?;
@@ -1197,6 +1275,55 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rollover_requires_exact_epoch_and_successful_completion_frontier() {
+        assert_eq!(next_queue_epoch(0, 0, 0, 0, 0).unwrap(), 1);
+        assert_eq!(
+            next_queue_epoch(
+                9,
+                9,
+                MAX_UNRETIRED_RING_PACKETS_V1,
+                MAX_UNRETIRED_RING_PACKETS_V1,
+                MAX_UNRETIRED_RING_PACKETS_V1
+            )
+            .unwrap(),
+            10
+        );
+        for (epoch, expected_epoch, complete, expected_complete, write) in [
+            (1, 0, 3, 3, 3),
+            (1, 1, 3, 2, 3),
+            (1, 1, 3, 3, 4),
+            (1, 1, 4, 4, 3),
+            (u64::MAX, u64::MAX, 3, 3, 3),
+        ] {
+            assert!(
+                next_queue_epoch(epoch, expected_epoch, complete, expected_complete, write)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn rollover_destroys_old_queue_before_releasing_or_resetting_and_retains_user_resources() {
+        let source = include_str!("engineering_gfx950.rs");
+        let body = source
+            .split("fn rollover_queue(")
+            .nth(1)
+            .unwrap()
+            .split("fn close_inner(")
+            .next()
+            .unwrap();
+        let destroy = body.find("self.destroy_queue()?").unwrap();
+        let release = body.find("self.release_resource(allocation)?").unwrap();
+        let reset = body.find("self.ring =").unwrap();
+        let initialize = body.find("self.initialize_queue()?").unwrap();
+        let epoch = body.find("self.queue_epoch = next_epoch").unwrap();
+        assert!(destroy < release && release < reset && reset < initialize && initialize < epoch);
+        assert!(!body.contains("buffers.pop"));
+        assert!(!body.contains("kernels.pop"));
+        assert!(!body.contains("last_observed_read = self.completed_write"));
+    }
 
     #[test]
     fn performance_configuration_cannot_change_a_live_or_previously_used_session() {
