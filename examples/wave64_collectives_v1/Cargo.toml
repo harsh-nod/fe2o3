@@ -13,6 +13,8 @@ publish = false
 
 [dependencies]
 fe2o3-device = { path = "../../crates/fe2o3-device" }
+
+[target.'cfg(not(target_arch = "amdgpu"))'.dependencies]
 fe2o3-host = { path = "../../crates/fe2o3-host" }
 fe2o3-kernel-ir = { path = "../../crates/fe2o3-kernel-ir" }
 quote = "1"

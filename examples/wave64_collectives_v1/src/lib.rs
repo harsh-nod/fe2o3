@@ -1,5 +1,6 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
+#![cfg_attr(target_arch = "amdgpu", no_std)]
 
 //! Exact source, CPU oracle, and proof-facing contract for masked Wave64 sums.
 //!
@@ -12,27 +13,35 @@
 //! grants compiler, artifact, runtime, machine, generalized-safety, or parity
 //! authority.
 
+#[cfg(not(target_arch = "amdgpu"))]
 pub mod contract;
 pub mod kernel;
+#[cfg(not(target_arch = "amdgpu"))]
 pub mod oracle;
+#[cfg(not(target_arch = "amdgpu"))]
 pub mod source_kir_refinement;
+#[cfg(not(target_arch = "amdgpu"))]
 pub mod source_model_correspondence;
 
+#[cfg(not(target_arch = "amdgpu"))]
 pub use contract::{
     EMPTY_MASK_POLICY_V1, INACTIVE_LANE_OUTPUT_POLICY_V1, LaneOutputsV1,
     MAX_EXACT_INPUT_MAGNITUDE_V1, PHYSICAL_EXECUTION_POLICY_V1, WAVE64_LANES_V1, lane_is_active_v1,
     lane_outputs_v1,
 };
+#[cfg(not(target_arch = "amdgpu"))]
 pub use oracle::{
     CollectiveOutputV1, OracleErrorV1, OracleErrorV1OrMismatch, OracleStateV1, OutputMismatchV1,
     compare_wave64_collectives_v1, wave64_collectives_oracle_v1,
 };
+#[cfg(not(target_arch = "amdgpu"))]
 pub use source_kir_refinement::{
     WAVE64_COLLECTIVES_V1_SOURCE_SHA256, WAVE64_REFINEMENT_BOUNDARY_V13, Wave64KirShapeErrorV13,
     Wave64RefinementErrorV13, Wave64RefinementIdentitiesV13, Wave64SemanticOutputV1,
     Wave64SemanticOutputsV1, Wave64SourceKirRefinementV13, bind_wave64_refinement_identities_v13,
     source_contributor_mask_v1, verify_wave64_source_model_to_kir_v13,
 };
+#[cfg(not(target_arch = "amdgpu"))]
 pub use source_model_correspondence::{
     REVIEWED_SOURCE_CPU_CORRESPONDENCE_BOUNDARY_V2, ReviewedSourceAlgorithmV2, SourceCpuBindingV2,
     SourceCpuContentIdentitiesV2, SourceCpuCorrespondenceErrorV2, SourceCpuCorrespondenceReceiptV2,

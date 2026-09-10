@@ -1,5 +1,5 @@
 {
-  "fixtureContractSha256": "bf0e9a24c996ffabde72bb2135f0cfcc0e5836acddccd95b1fbe6f40d37a59d4",
+  "fixtureContractSha256": "98b2c5dac6d9e63ffacb5eac92c34fa636c4ec5eca200579e1bfb0b6b267e0a2",
   "fixtures": [
     {
       "bindingSha256": "91cf1c193b840496d7aaabb250e674eaadfa04a27f903c2dfde9981b5e3384a9",
@@ -3815,10 +3815,10 @@
       "target": "gfx942"
     },
     {
-      "bindingSha256": "ac19b2dc48df891cb1ac53da7de24dc33c91b8197ce846fc7d2cabf177766281",
+      "bindingSha256": "ee7e407e49e88c9cc2d6771336d8e5aea65f8a963d6e3bc36160236eb60b344e",
       "cases": [
         {
-          "basePayloadSha256": "a2e70bfcbe61a1023e641004235f5c77f59fafb6e5face81b23bf64050c78e61",
+          "basePayloadSha256": "99bb41e0058eaa1bb6a3014cefc0cb5a62796d064f48fc0c6836b126ddbf006f",
           "caseId": "gfx942-wave64-collectives--abi",
           "category": "abi",
           "diagnosticCode": "FE2O3-NEG-0130",
@@ -3828,16 +3828,16 @@
             "status": "unavailable"
           },
           "failureStage": "mir-admission",
-          "fixtureBindingSha256": "ac19b2dc48df891cb1ac53da7de24dc33c91b8197ce846fc7d2cabf177766281",
+          "fixtureBindingSha256": "ee7e407e49e88c9cc2d6771336d8e5aea65f8a963d6e3bc36160236eb60b344e",
           "fixtureId": "gfx942-wave64-collectives",
-          "mutatedPayloadSha256": "2eb69637bcadab1217f619c2f110aa071587f771a222d461167efa57bbe4ba79",
+          "mutatedPayloadSha256": "8b6411631256deadd9087bdfef92ad9a211a21f4b1822b0a7647437710f2b967",
           "mutation": {
             "class": "abi-layout",
             "path": [
               "compilerInput",
               "contractSha256"
             ],
-            "replacement": "6f4fafc5a62cccc85dc5045ecba90f385764c908f9911306e9fd516dde959880",
+            "replacement": "0e531104a1030447a8258a35413d5c21928a808c6417b38dd7e0de599bc1b016",
             "subjectKind": "compiler-input"
           },
           "productionBoundary": "mir-admission",
@@ -3847,7 +3847,7 @@
           "testSha256": "ea46af66d70727ddc9b2f88316a4f272a94acbe843e146fb09cf4fa562dc4e1a"
         },
         {
-          "basePayloadSha256": "ea62b32cf01bcb45ababe7b73369efb995babac59616cc5b825b667dfa6057af",
+          "basePayloadSha256": "d3e1f4bcb14c83c79ccc742ab2c97bc8146d9eecc2ddc0fc67bacaefc339864b",
           "caseId": "gfx942-wave64-collectives--alias",
           "category": "alias",
           "diagnosticCode": "FE2O3-NEG-0131",
@@ -3857,16 +3857,16 @@
             "status": "unavailable"
           },
           "failureStage": "static-analysis",
-          "fixtureBindingSha256": "ac19b2dc48df891cb1ac53da7de24dc33c91b8197ce846fc7d2cabf177766281",
+          "fixtureBindingSha256": "ee7e407e49e88c9cc2d6771336d8e5aea65f8a963d6e3bc36160236eb60b344e",
           "fixtureId": "gfx942-wave64-collectives",
-          "mutatedPayloadSha256": "84c2a6a350226e2f4a16ad504b6fe1462d2379855e5852695956dccfedf08f71",
+          "mutatedPayloadSha256": "41805d1a0e880df74f4d7158b4f3854eb111ae815be18c2d8c984f31974f5ae3",
           "mutation": {
             "class": "alias-overlap",
             "path": [
               "semanticContract",
               "alias"
             ],
-            "replacement": "6e47e889653dc1e3327bb0a496c6219bf3f6454894d442645acc95268765438e",
+            "replacement": "4d4ae322bbec40458f4e634c2a03db3e0702644faa7d36e13555a7f936037b4f",
             "subjectKind": "optimized-kir-v13"
           },
           "productionBoundary": "static-analysis",
@@ -3876,7 +3876,7 @@
           "testSha256": "ea46af66d70727ddc9b2f88316a4f272a94acbe843e146fb09cf4fa562dc4e1a"
         },
         {
-          "basePayloadSha256": "144bab8d3e92e281546fd50a3b6045c1677b82833d34e94dd2421130099f603e",
+          "basePayloadSha256": "fe740df2cf7cff878d74cee91021ea5497245c4277f09e32acf6be09aaa90ee3",
           "caseId": "gfx942-wave64-collectives--bounds",
           "category": "bounds",
           "diagnosticCode": "FE2O3-NEG-0132",
@@ -3886,16 +3886,16 @@
             "status": "unavailable"
           },
           "failureStage": "static-analysis",
-          "fixtureBindingSha256": "ac19b2dc48df891cb1ac53da7de24dc33c91b8197ce846fc7d2cabf177766281",
+          "fixtureBindingSha256": "ee7e407e49e88c9cc2d6771336d8e5aea65f8a963d6e3bc36160236eb60b344e",
           "fixtureId": "gfx942-wave64-collectives",
-          "mutatedPayloadSha256": "c6ddc121ef2d0dab99c888420f733c12df478ffe9f0e6c0579b73098adc08e03",
+          "mutatedPayloadSha256": "d6da32d712a6da2ed88c9b06e2666edbda744335ea9b0ddaed87ed58d727bd9e",
           "mutation": {
             "class": "index-out-of-bounds",
             "path": [
               "semanticContract",
               "bounds"
             ],
-            "replacement": "1e047b761475aaaadb6e32af1939e1c91f3797e3cec140a5c485a7d76677f301",
+            "replacement": "ee910ccb71d2f7357abef743f3f94c8780c8f3e8c9275f3f68bdea416000b737",
             "subjectKind": "optimized-kir-v13"
           },
           "productionBoundary": "static-analysis",
@@ -3905,7 +3905,7 @@
           "testSha256": "ea46af66d70727ddc9b2f88316a4f272a94acbe843e146fb09cf4fa562dc4e1a"
         },
         {
-          "basePayloadSha256": "cde35f5d3cea6d94086e8ce342156a14b61b31fa0daab94520bd8b728a5f8497",
+          "basePayloadSha256": "55c8c5d45fccebb840b88b708d0d68e9940cfc5314696b178a2649f1b53790a7",
           "caseId": "gfx942-wave64-collectives--capability-forgery",
           "category": "capability-forgery",
           "diagnosticCode": "FE2O3-NEG-0133",
@@ -3915,16 +3915,16 @@
             "status": "unavailable"
           },
           "failureStage": "macro-authentication",
-          "fixtureBindingSha256": "ac19b2dc48df891cb1ac53da7de24dc33c91b8197ce846fc7d2cabf177766281",
+          "fixtureBindingSha256": "ee7e407e49e88c9cc2d6771336d8e5aea65f8a963d6e3bc36160236eb60b344e",
           "fixtureId": "gfx942-wave64-collectives",
-          "mutatedPayloadSha256": "d4037c32ce93d835518a62a4a78f76a0251736f118b23b16cd3864f39e4f8c90",
+          "mutatedPayloadSha256": "7c1c9797553e5109eabf83ca1e1bbc22b6b959ae1cfd22c67dcc966570b6c183",
           "mutation": {
             "class": "capability-forgery",
             "path": [
               "semanticContract",
               "capability"
             ],
-            "replacement": "b7fed3c89b6f3bb0cf212666515bc76654bb46cf15acb2342b2672b588743cfa",
+            "replacement": "920dd1b639e9ae29f47fa9304fbd2e3f72928247dfda88492e855a50ac967cbe",
             "subjectKind": "compiler-input"
           },
           "productionBoundary": "macro-authentication",
@@ -3934,7 +3934,7 @@
           "testSha256": "ea46af66d70727ddc9b2f88316a4f272a94acbe843e146fb09cf4fa562dc4e1a"
         },
         {
-          "basePayloadSha256": "cde35f5d3cea6d94086e8ce342156a14b61b31fa0daab94520bd8b728a5f8497",
+          "basePayloadSha256": "55c8c5d45fccebb840b88b708d0d68e9940cfc5314696b178a2649f1b53790a7",
           "caseId": "gfx942-wave64-collectives--capability-substitution",
           "category": "capability-substitution",
           "diagnosticCode": "FE2O3-NEG-0134",
@@ -3944,9 +3944,9 @@
             "status": "unavailable"
           },
           "failureStage": "static-analysis",
-          "fixtureBindingSha256": "ac19b2dc48df891cb1ac53da7de24dc33c91b8197ce846fc7d2cabf177766281",
+          "fixtureBindingSha256": "ee7e407e49e88c9cc2d6771336d8e5aea65f8a963d6e3bc36160236eb60b344e",
           "fixtureId": "gfx942-wave64-collectives",
-          "mutatedPayloadSha256": "395d0f5e7d12b97a64c0f63a6f3a49d3b204f5d322bb3df2f0fb7aff39ef8225",
+          "mutatedPayloadSha256": "3ca23e3626005329ed8467abcc28d46d64738e5c5187ddd86cc093377db311e2",
           "mutation": {
             "class": "cross-kernel-capability",
             "path": [
@@ -3962,7 +3962,7 @@
           "testSha256": "ea46af66d70727ddc9b2f88316a4f272a94acbe843e146fb09cf4fa562dc4e1a"
         },
         {
-          "basePayloadSha256": "cde35f5d3cea6d94086e8ce342156a14b61b31fa0daab94520bd8b728a5f8497",
+          "basePayloadSha256": "55c8c5d45fccebb840b88b708d0d68e9940cfc5314696b178a2649f1b53790a7",
           "caseId": "gfx942-wave64-collectives--evidence",
           "category": "evidence",
           "diagnosticCode": "FE2O3-NEG-0135",
@@ -3972,16 +3972,16 @@
             "status": "unavailable"
           },
           "failureStage": "sealed-verifier",
-          "fixtureBindingSha256": "ac19b2dc48df891cb1ac53da7de24dc33c91b8197ce846fc7d2cabf177766281",
+          "fixtureBindingSha256": "ee7e407e49e88c9cc2d6771336d8e5aea65f8a963d6e3bc36160236eb60b344e",
           "fixtureId": "gfx942-wave64-collectives",
-          "mutatedPayloadSha256": "d775e257febfeb80405be1452584c48ac11f5fee650acaabd5fcd53f35fd62b1",
+          "mutatedPayloadSha256": "50c9abeeb6208082a7440126ad2743822c81e00632ae44d1ea8456f4e3b1fbd6",
           "mutation": {
             "class": "evidence-substitution",
             "path": [
               "evidence",
               "semanticFixtureRawSha256"
             ],
-            "replacement": "6307acd50430f75c178b5c4e726cbec1e0c4348b59f8cd0248bb375703bca067",
+            "replacement": "16d6b5a3d056266ca92065fd7df18631fe66b58709e165fad43b304ac6015bb7",
             "subjectKind": "evidence"
           },
           "productionBoundary": "sealed-verifier",
@@ -3991,7 +3991,7 @@
           "testSha256": "ea46af66d70727ddc9b2f88316a4f272a94acbe843e146fb09cf4fa562dc4e1a"
         },
         {
-          "basePayloadSha256": "cde35f5d3cea6d94086e8ce342156a14b61b31fa0daab94520bd8b728a5f8497",
+          "basePayloadSha256": "55c8c5d45fccebb840b88b708d0d68e9940cfc5314696b178a2649f1b53790a7",
           "caseId": "gfx942-wave64-collectives--host-invocation",
           "category": "host-invocation",
           "diagnosticCode": "FE2O3-NEG-0136",
@@ -4001,16 +4001,16 @@
             "status": "unavailable"
           },
           "failureStage": "host-preparation",
-          "fixtureBindingSha256": "ac19b2dc48df891cb1ac53da7de24dc33c91b8197ce846fc7d2cabf177766281",
+          "fixtureBindingSha256": "ee7e407e49e88c9cc2d6771336d8e5aea65f8a963d6e3bc36160236eb60b344e",
           "fixtureId": "gfx942-wave64-collectives",
-          "mutatedPayloadSha256": "cec26b04500ad6c5e184898f01e38e0f6dbe98f21d0dbb1a8f96dc9c153f35b4",
+          "mutatedPayloadSha256": "e1f0769463567ed2b56b51ec0fcbe33807da57c6707c0f328d4e1887a23da816",
           "mutation": {
             "class": "host-invocation",
             "path": [
               "receipt",
               "hostInvocation"
             ],
-            "replacement": "e5fddbdabfc5860d50a316e20befa3ed89d5b3efa9ad4494ec8474f9bf41e2c5",
+            "replacement": "ab676621a2d5fe4a7567a74a30adad504c09938c69096712f544c17cd5c89928",
             "subjectKind": "receipt"
           },
           "productionBoundary": "host-preparation",
@@ -4020,7 +4020,7 @@
           "testSha256": "ea46af66d70727ddc9b2f88316a4f272a94acbe843e146fb09cf4fa562dc4e1a"
         },
         {
-          "basePayloadSha256": "3f273ddf944a4078407941d31fb926ba76f368b66c482e25b6de9e01bb77e953",
+          "basePayloadSha256": "7d247e9013e3a8b23ec459edfcc583d186f04d52b308a08c7aff86ba31adec71",
           "caseId": "gfx942-wave64-collectives--initialization",
           "category": "initialization",
           "diagnosticCode": "FE2O3-NEG-0137",
@@ -4030,16 +4030,16 @@
             "status": "unavailable"
           },
           "failureStage": "static-analysis",
-          "fixtureBindingSha256": "ac19b2dc48df891cb1ac53da7de24dc33c91b8197ce846fc7d2cabf177766281",
+          "fixtureBindingSha256": "ee7e407e49e88c9cc2d6771336d8e5aea65f8a963d6e3bc36160236eb60b344e",
           "fixtureId": "gfx942-wave64-collectives",
-          "mutatedPayloadSha256": "5def7c756d6cdb09f80a79138026982aafcbddb30d82f78f91cc81bf516c1547",
+          "mutatedPayloadSha256": "af2056e77d98d511f7a502e1460c3ba09b81f60e136f9a1da81a798bbb929d4d",
           "mutation": {
             "class": "uninitialized-read",
             "path": [
               "semanticContract",
               "initialization"
             ],
-            "replacement": "198fc89a29f3ec16052f4e18c9236bae373cf813894a85a35b442c65f35299f8",
+            "replacement": "54775d59d6f32b266b165ab7b1378d25e4be48de8cdbb1f22137ef9e99312938",
             "subjectKind": "optimized-kir-v13"
           },
           "productionBoundary": "static-analysis",
@@ -4049,7 +4049,7 @@
           "testSha256": "ea46af66d70727ddc9b2f88316a4f272a94acbe843e146fb09cf4fa562dc4e1a"
         },
         {
-          "basePayloadSha256": "cde35f5d3cea6d94086e8ce342156a14b61b31fa0daab94520bd8b728a5f8497",
+          "basePayloadSha256": "55c8c5d45fccebb840b88b708d0d68e9940cfc5314696b178a2649f1b53790a7",
           "caseId": "gfx942-wave64-collectives--launch",
           "category": "launch",
           "diagnosticCode": "FE2O3-NEG-0138",
@@ -4059,9 +4059,9 @@
             "status": "unavailable"
           },
           "failureStage": "host-preparation",
-          "fixtureBindingSha256": "ac19b2dc48df891cb1ac53da7de24dc33c91b8197ce846fc7d2cabf177766281",
+          "fixtureBindingSha256": "ee7e407e49e88c9cc2d6771336d8e5aea65f8a963d6e3bc36160236eb60b344e",
           "fixtureId": "gfx942-wave64-collectives",
-          "mutatedPayloadSha256": "9ebd7ac6d012c9c5f75d7060e837f7d8ec22e3ca605af469d2ec3679ff4ee9f4",
+          "mutatedPayloadSha256": "85e0095bbe9d6d1079350ff5c61cbb0b0a2508e95148e38a157d0b9807d5300f",
           "mutation": {
             "class": "launch-shape",
             "path": [
@@ -4079,7 +4079,7 @@
           "testSha256": "ea46af66d70727ddc9b2f88316a4f272a94acbe843e146fb09cf4fa562dc4e1a"
         },
         {
-          "basePayloadSha256": "c5f817fe16ef7b9b6301decdebfdaeee9ff5b18ac4f3477122860c5012c39354",
+          "basePayloadSha256": "1626f700c5154e7b7017c415da20a480eaf5d2f721960589ab2cb2ef91dfcda7",
           "caseId": "gfx942-wave64-collectives--raw-pointer",
           "category": "raw-pointer",
           "diagnosticCode": "FE2O3-NEG-0139",
@@ -4089,16 +4089,16 @@
             "status": "unavailable"
           },
           "failureStage": "static-analysis",
-          "fixtureBindingSha256": "ac19b2dc48df891cb1ac53da7de24dc33c91b8197ce846fc7d2cabf177766281",
+          "fixtureBindingSha256": "ee7e407e49e88c9cc2d6771336d8e5aea65f8a963d6e3bc36160236eb60b344e",
           "fixtureId": "gfx942-wave64-collectives",
-          "mutatedPayloadSha256": "9b3e22fbcc8252e4f1ccdf6226571d89e302ee02ff8f589fb1786b1abfefdcc2",
+          "mutatedPayloadSha256": "f65110d0496c42a32856a54aaaad4167a7f5aa982adefa2f56247fbd6bb6ccbd",
           "mutation": {
             "class": "raw-pointer-effect",
             "path": [
               "semanticContract",
               "operation"
             ],
-            "replacement": "b8693184415b820ece3d4552049695d68f003718cae3662596cf9f1196a0a46e",
+            "replacement": "bcff4e1a5a7056ce6dae1118b7bfe65f60dffa94bf2df79ce5d8995004444cbc",
             "subjectKind": "optimized-kir-v13"
           },
           "productionBoundary": "static-analysis",
@@ -4108,7 +4108,7 @@
           "testSha256": "ea46af66d70727ddc9b2f88316a4f272a94acbe843e146fb09cf4fa562dc4e1a"
         },
         {
-          "basePayloadSha256": "cde35f5d3cea6d94086e8ce342156a14b61b31fa0daab94520bd8b728a5f8497",
+          "basePayloadSha256": "55c8c5d45fccebb840b88b708d0d68e9940cfc5314696b178a2649f1b53790a7",
           "caseId": "gfx942-wave64-collectives--stale-output",
           "category": "stale-output",
           "diagnosticCode": "FE2O3-NEG-0140",
@@ -4118,16 +4118,16 @@
             "status": "unavailable"
           },
           "failureStage": "sealed-verifier",
-          "fixtureBindingSha256": "ac19b2dc48df891cb1ac53da7de24dc33c91b8197ce846fc7d2cabf177766281",
+          "fixtureBindingSha256": "ee7e407e49e88c9cc2d6771336d8e5aea65f8a963d6e3bc36160236eb60b344e",
           "fixtureId": "gfx942-wave64-collectives",
-          "mutatedPayloadSha256": "4db1938b33e699a48f13907ebe15a60679e1643a2be52d19eaecb18a4f3a45ab",
+          "mutatedPayloadSha256": "4ff39c9b0a7082ab0ff959e18ee5245207a262701fa7018d22b28bbf4de3a221",
           "mutation": {
             "class": "output-substitution",
             "path": [
               "evidence",
               "expectedOutputSha256"
             ],
-            "replacement": "a471e47da2f6e8dcfbbcd6f6393a5506140385d2cd45ea35c963d7212c10403b",
+            "replacement": "b528bc7cd956dab21595f959ae4fa92d2bd4fc0962bbedc99dec5429a8dbc320",
             "subjectKind": "evidence"
           },
           "productionBoundary": "sealed-verifier",
@@ -4137,7 +4137,7 @@
           "testSha256": "ea46af66d70727ddc9b2f88316a4f272a94acbe843e146fb09cf4fa562dc4e1a"
         },
         {
-          "basePayloadSha256": "5afc87f2885f1503e688f726f0e012d60a6e7a418b04632224346e28bc64b8e7",
+          "basePayloadSha256": "afebdf94e97440eb062a7f1840707e4b2d2f7bb8549aa440944d6e80fffc8d41",
           "caseId": "gfx942-wave64-collectives--synchronization",
           "category": "synchronization",
           "diagnosticCode": "FE2O3-NEG-0141",
@@ -4147,16 +4147,16 @@
             "status": "unavailable"
           },
           "failureStage": "static-analysis",
-          "fixtureBindingSha256": "ac19b2dc48df891cb1ac53da7de24dc33c91b8197ce846fc7d2cabf177766281",
+          "fixtureBindingSha256": "ee7e407e49e88c9cc2d6771336d8e5aea65f8a963d6e3bc36160236eb60b344e",
           "fixtureId": "gfx942-wave64-collectives",
-          "mutatedPayloadSha256": "6d0d214363ad6b94e5ea62efc0910fc44d1c9a5bbe12dbe02e31cba992dfde00",
+          "mutatedPayloadSha256": "7c796233ecffd2d082513f5fb8223d5b78eb7c21873fa3e462eeff3cba04c1de",
           "mutation": {
             "class": "barrier-epoch-order",
             "path": [
               "semanticContract",
               "order"
             ],
-            "replacement": "1ce758d81d4edf7d5fe623ada2101ea81373a1a70cd1f1fabca2de1b75101fbb",
+            "replacement": "4483b48e485b5e2c89597a38f6b507187066d215ab5e8ec7b8fa15ac9c09bdae",
             "subjectKind": "optimized-kir-v13"
           },
           "productionBoundary": "static-analysis",
@@ -4166,7 +4166,7 @@
           "testSha256": "ea46af66d70727ddc9b2f88316a4f272a94acbe843e146fb09cf4fa562dc4e1a"
         },
         {
-          "basePayloadSha256": "cde35f5d3cea6d94086e8ce342156a14b61b31fa0daab94520bd8b728a5f8497",
+          "basePayloadSha256": "55c8c5d45fccebb840b88b708d0d68e9940cfc5314696b178a2649f1b53790a7",
           "caseId": "gfx942-wave64-collectives--target",
           "category": "target",
           "diagnosticCode": "FE2O3-NEG-0142",
@@ -4176,9 +4176,9 @@
             "status": "unavailable"
           },
           "failureStage": "target-legalization",
-          "fixtureBindingSha256": "ac19b2dc48df891cb1ac53da7de24dc33c91b8197ce846fc7d2cabf177766281",
+          "fixtureBindingSha256": "ee7e407e49e88c9cc2d6771336d8e5aea65f8a963d6e3bc36160236eb60b344e",
           "fixtureId": "gfx942-wave64-collectives",
-          "mutatedPayloadSha256": "208bde78a4b339a587ab3bc38c672511cbd3cc5a6de8bef6958073e7d4c639cc",
+          "mutatedPayloadSha256": "6f1fce937a45ac5495be64bcd443aad60f3ac3207dc19b11918ecddfd2b0a11f",
           "mutation": {
             "class": "cross-target",
             "path": [
@@ -4194,7 +4194,7 @@
           "testSha256": "ea46af66d70727ddc9b2f88316a4f272a94acbe843e146fb09cf4fa562dc4e1a"
         },
         {
-          "basePayloadSha256": "cde35f5d3cea6d94086e8ce342156a14b61b31fa0daab94520bd8b728a5f8497",
+          "basePayloadSha256": "55c8c5d45fccebb840b88b708d0d68e9940cfc5314696b178a2649f1b53790a7",
           "caseId": "gfx942-wave64-collectives--unsupported-operation",
           "category": "unsupported-operation",
           "diagnosticCode": "FE2O3-NEG-0143",
@@ -4204,16 +4204,16 @@
             "status": "unavailable"
           },
           "failureStage": "kir-verification",
-          "fixtureBindingSha256": "ac19b2dc48df891cb1ac53da7de24dc33c91b8197ce846fc7d2cabf177766281",
+          "fixtureBindingSha256": "ee7e407e49e88c9cc2d6771336d8e5aea65f8a963d6e3bc36160236eb60b344e",
           "fixtureId": "gfx942-wave64-collectives",
-          "mutatedPayloadSha256": "42e646810cd53a76993ca4f39b2e0edb2dff250e119ef8bb042d6ebd7dc80944",
+          "mutatedPayloadSha256": "ddb1b55e4244475e9527ffd926763a1e2bac0d7451e2857a307099da977c5e55",
           "mutation": {
             "class": "unsupported-operation",
             "path": [
               "semanticContract",
               "operation"
             ],
-            "replacement": "8583fa4d5b1a57f129f8de81d1206dbcfb3ed88f395365679011722954769c23",
+            "replacement": "0a6237ee76c16178fa21b0b6ca2a52aa7fca5f7ba3722fbfa576af708d926399",
             "subjectKind": "optimized-kir-v13"
           },
           "productionBoundary": "kir-verification",
@@ -4223,10 +4223,10 @@
           "testSha256": "ea46af66d70727ddc9b2f88316a4f272a94acbe843e146fb09cf4fa562dc4e1a"
         }
       ],
-      "compilerInputContractSha256": "93d341a98bb4ae0637af1570c3031d918145ccd39dc2ea19b30418fcfb766a82",
+      "compilerInputContractSha256": "f57defef2c3155b956405c00828324fb055819259e26c71dc99de17047863c42",
       "fixtureId": "gfx942-wave64-collectives",
       "kernelSymbol": "wave64_collectives_v1",
-      "sourceClosureSha256": "c090a298ef26dc9234064f3c46a12e09c2edc98129b9d2bff3c461c4f6894dd8",
+      "sourceClosureSha256": "349378c6cc2c476f5f9d8bd5f5a103f5c1e65bc11d28bd9c87ceff4575a3402c",
       "target": "gfx942"
     },
     {

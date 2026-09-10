@@ -1935,11 +1935,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/wave64_collectives_v1/Cargo.toml",
-        "packageManifestSha256": "cc269c9c6c12bcde9a22fa6eb1b6a07d21da6bc57ccd8fcf343bbc67811a7005",
+        "packageManifestSha256": "37fd4d88c55f75eefbf7e3f93915ce7d4a57de65a930d0efba4555db1deb7c10",
         "sourcePaths": [
           "examples/wave64_collectives_v1/src/kernel.rs"
         ],
-        "sourceClosureSha256": "c090a298ef26dc9234064f3c46a12e09c2edc98129b9d2bff3c461c4f6894dd8",
+        "sourceClosureSha256": "349378c6cc2c476f5f9d8bd5f5a103f5c1e65bc11d28bd9c87ceff4575a3402c",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_wave64_collectives_v1",
@@ -1952,7 +1952,7 @@
         ],
         "cargoLockPath": "examples/wave64_collectives_v1/Cargo.lock",
         "cargoLockSha256": "a237ad4027624060395e63c071080763d111b1f1f6a0347e110b72407f21a16d",
-        "contractSha256": "93d341a98bb4ae0637af1570c3031d918145ccd39dc2ea19b30418fcfb766a82"
+        "contractSha256": "f57defef2c3155b956405c00828324fb055819259e26c71dc99de17047863c42"
       }
     },
     {
