@@ -6158,13 +6158,10 @@ fn transfer_capability_terminator_v1(
         }
         if matches!(
             operation,
-            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindExclusiveReadWrite { .. }
-                | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveLoad { .. }
-                | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveStore { .. }
-                | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStoreBlock { .. }
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStoreBlock { .. }
         ) {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "typed global exclusive or blocked memory requires an exact ranked access relation",
+                "typed global blocked memory requires an exact ranked access relation",
             ));
         }
         if let Some(contract) = global_access_contract_v1(operation) {
@@ -6301,6 +6298,7 @@ fn transfer_capability_terminator_v1(
             None,
         ),
         SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindReadOnly { .. }
+        | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindExclusiveReadWrite { .. }
         | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindDisjointWrite { .. } => (
             authenticate_global_bind_v1(
                 &callables[call.callee().index() as usize],
@@ -6754,6 +6752,14 @@ fn global_access_contract_v1(
             provenance,
             source_identity,
             option,
+        }
+        | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveLoad {
+            view,
+            element,
+            contract,
+            provenance,
+            source_identity,
+            option,
         } => (
             view,
             element,
@@ -6764,6 +6770,15 @@ fn global_access_contract_v1(
             AccessKindAttr::Read,
         ),
         SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStore {
+            view,
+            element,
+            contract,
+            provenance,
+            source_identity,
+            result,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveStore {
             view,
             element,
             contract,
@@ -6826,6 +6841,24 @@ fn authenticate_global_bind_v1(
                 source_identity,
                 SemanticSourceArgumentOwnershipV1::SharedBorrow,
             ),
+            SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindExclusiveReadWrite {
+                context,
+                physical,
+                view,
+                element,
+                contract,
+                provenance,
+                source_identity,
+            } if contract == SemanticCapabilityMemoryContractV1::global_exclusive_read_write() => (
+                context,
+                physical,
+                view,
+                element,
+                contract,
+                provenance,
+                source_identity,
+                SemanticSourceArgumentOwnershipV1::UniqueBorrow,
+            ),
             SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindDisjointWrite {
                 context,
                 physical,
@@ -6882,7 +6915,8 @@ fn authenticate_global_bind_v1(
             SemanticSourceArgumentOwnershipV1::SharedBorrow => {
                 allocation.writable || allocation.noalias_class != 1
             }
-            SemanticSourceArgumentOwnershipV1::ExclusiveOwner => {
+            SemanticSourceArgumentOwnershipV1::ExclusiveOwner
+            | SemanticSourceArgumentOwnershipV1::UniqueBorrow => {
                 !allocation.writable || allocation.noalias_class <= 1
             }
             _ => true,
@@ -7755,9 +7789,12 @@ fn root_invocation_provenance_v1(
             operation,
             SemanticCompilerIntrinsicOperationV1::CapabilityInvocationIndex1d { .. }
                 | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindReadOnly { .. }
+                | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindExclusiveReadWrite { .. }
                 | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalBindDisjointWrite { .. }
                 | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalLoad { .. }
+                | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveLoad { .. }
                 | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalStore { .. }
+                | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveStore { .. }
         )
     }) {
         return Ok(None);
@@ -8735,7 +8772,18 @@ fn project_intrinsic_contracts(
                 )?),
                 None => None,
             };
+            let exclusive =
+                bound.contract == SemanticCapabilityMemoryContractV1::global_exclusive_read_write();
+            // Unique allocation ownership is not an invocation-index relation.
+            // Keep exclusive writes off the opaque runtime-argument fallback;
+            // ranked analysis must still check the exact access for races.
+            if write && exclusive && projected.is_none() {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a typed global exclusive store requires an exact invocation-derived index",
+                ));
+            }
             if write
+                && !exclusive
                 && (!matches!(
                     bound.contract.aliasing(),
                     SemanticCapabilityMemoryAliasingV1::Disjoint(

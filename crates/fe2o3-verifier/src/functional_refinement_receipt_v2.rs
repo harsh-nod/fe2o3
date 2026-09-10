@@ -398,6 +398,7 @@ fn generate_ranked_functional_refinement_proof_v2(
 pub(crate) struct RankedEffectFormulaReplayV2 {
     lemma: String,
     symbols: Vec<u32>,
+    uses_ieee_congruence: bool,
 }
 
 impl RankedEffectFormulaReplayV2 {
@@ -407,6 +408,10 @@ impl RankedEffectFormulaReplayV2 {
 
     pub(crate) fn symbols(&self) -> &[u32] {
         &self.symbols
+    }
+
+    pub(crate) const fn uses_ieee_congruence(&self) -> bool {
+        self.uses_ieee_congruence
     }
 }
 
@@ -456,6 +461,7 @@ pub(crate) fn generate_ranked_effect_formula_replay_v2(
     Ok(RankedEffectFormulaReplayV2 {
         lemma: program.render_lemma(&pairs, lemma_name)?,
         symbols: program.symbols.iter().copied().collect(),
+        uses_ieee_congruence: program.uses_ieee_congruence(),
     })
 }
 
@@ -463,9 +469,9 @@ pub(crate) const fn ranked_effect_formula_replay_prelude_v2() -> &'static str {
     BITVECTOR_SEMANTICS_V2
 }
 
-pub(crate) const fn ranked_effect_ieee_congruence_declaration_v2() -> &'static str {
-    IEEE_CONGRUENCE_DECLARATION_V2
-}
+pub(crate) const IEEE_CONGRUENCE_PARAMETER_V2: &str =
+    "fe2o3_ieee_operator_congruence_v2: spec_fn(int, int, int, int) -> int";
+pub(crate) const IEEE_CONGRUENCE_ARGUMENT_V2: &str = "fe2o3_ieee_operator_congruence_v2";
 
 #[derive(Clone)]
 enum SemanticDefinitionV2 {
@@ -676,7 +682,7 @@ impl SemanticFormulaProgramV2 {
         let mut source = BoundedVerusSourceV2::default();
         write!(
             source,
-            "use vstd::prelude::*;\n\nverus! {{\n{BITVECTOR_SEMANTICS_V2}\n{IEEE_CONGRUENCE_DECLARATION_V2}\n"
+            "use vstd::prelude::*;\n\nverus! {{\n{BITVECTOR_SEMANTICS_V2}\n"
         )
         .map_err(|_| generated_source_limit())?;
         self.write_lemma(&mut source, pairs, "fe2o3_functional_refinement_v2")?;
@@ -702,9 +708,15 @@ impl SemanticFormulaProgramV2 {
         pairs: &[(ProductionRankedValueV1, ProductionRankedValueV1)],
         lemma_name: &str,
     ) -> Result<(), FunctionalRefinementVerusExecutionErrorV2> {
+        let uses_ieee_congruence = self.uses_ieee_congruence();
         write!(source, "    proof fn {lemma_name}(").map_err(|_| generated_source_limit())?;
+        if uses_ieee_congruence {
+            source
+                .write_str(IEEE_CONGRUENCE_PARAMETER_V2)
+                .map_err(|_| generated_source_limit())?;
+        }
         for (index, symbol) in self.symbols.iter().enumerate() {
-            if index != 0 {
+            if index != 0 || uses_ieee_congruence {
                 source
                     .write_str(", ")
                     .map_err(|_| generated_source_limit())?;
@@ -785,6 +797,14 @@ impl SemanticFormulaProgramV2 {
             .write_str("    }\n\n")
             .map_err(|_| generated_source_limit())?;
         Ok(())
+    }
+
+    // Quantify over every interpretation; no assumed body or IEEE arithmetic axiom is needed.
+    fn uses_ieee_congruence(&self) -> bool {
+        self.order.iter().any(|id| matches!(
+            self.definitions.get(id),
+            Some(SemanticDefinitionV2::TypedExpression(_, fe2o3_pliron::ProductionNumericalContractV2::ExactIeee754OperatorCongruence { .. }))
+        ))
     }
 }
 
@@ -890,13 +910,6 @@ const BITVECTOR_SEMANTICS_V2: &str = r#"
             }
         }
     }
-"#;
-
-const IEEE_CONGRUENCE_DECLARATION_V2: &str = r#"
-    // This symbol models congruence of identical compiler-side operator DAG
-    // applications only. It grants no IEEE real-value, lowering, or target
-    // instruction semantics.
-    uninterp spec fn fe2o3_ieee_operator_congruence_v2(tag: int, a: int, b: int, c: int) -> int;
 "#;
 
 fn render_bitvector_expression_v2(
@@ -1501,10 +1514,19 @@ mod tests {
     fn typed_expression_kernel(
         expected_operation: ProductionSemanticBinaryOpV2,
     ) -> ProductionRankedKernelV1 {
-        let scalar = ProductionSemanticScalarTypeV2::Integer {
-            signed: false,
-            bits: 32,
-        };
+        typed_scalar_expression_kernel(
+            expected_operation,
+            ProductionSemanticScalarTypeV2::Integer {
+                signed: false,
+                bits: 32,
+            },
+        )
+    }
+
+    fn typed_scalar_expression_kernel(
+        expected_operation: ProductionSemanticBinaryOpV2,
+        scalar: ProductionSemanticScalarTypeV2,
+    ) -> ProductionRankedKernelV1 {
         let expression = |operation| ProductionSemanticExpressionV2::Binary {
             operation,
             scalar,
@@ -1523,14 +1545,12 @@ mod tests {
                     ProductionRankedOperationV1::SemanticExpression {
                         result: actual,
                         expression: expression(ProductionSemanticBinaryOpV2::Add),
-                        numerical_contract:
-                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                        numerical_contract: ProductionNumericalContractV2::exact_for(scalar),
                     },
                     ProductionRankedOperationV1::SemanticExpression {
                         result: expected,
                         expression: expression(expected_operation),
-                        numerical_contract:
-                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                        numerical_contract: ProductionNumericalContractV2::exact_for(scalar),
                     },
                     ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
                         actual: local(actual),
@@ -1757,7 +1777,8 @@ mod tests {
             generate_ranked_functional_refinement_proof_v2(&positive, 0, 2, subjects()).unwrap();
         let source = std::str::from_utf8(positive_source.source()).unwrap();
         assert!(source.contains("open spec fn fe2o3_bv_norm_v2"));
-        assert!(source.contains("uninterp spec fn fe2o3_ieee_operator_congruence_v2"));
+        assert!(!source.contains("uninterp spec fn"));
+        assert!(!source.contains(IEEE_CONGRUENCE_PARAMETER_V2));
         assert!(!source.contains("fe2o3_semantic_op_v2"));
         assert!(source.contains("s7: int"));
         assert!(source.contains("fe2o3_bv_norm_v2"));
@@ -1771,6 +1792,78 @@ mod tests {
             positive_binding.normalized_obligation_effect_ir_hash(),
             mutated_binding.normalized_obligation_effect_ir_hash(),
         );
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    #[ignore = "requires the exact pinned functional-refinement test runtime closure"]
+    fn retained_runtime_checks_generated_equivalence_and_rejects_operator_mutations() {
+        let integer = ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 32,
+        };
+        let float = ProductionSemanticScalarTypeV2::Float { bits: 32 };
+        let sources = [
+            (integer, ProductionSemanticBinaryOpV2::Add),
+            (integer, ProductionSemanticBinaryOpV2::Subtract),
+            (float, ProductionSemanticBinaryOpV2::Add),
+            (float, ProductionSemanticBinaryOpV2::Subtract),
+        ]
+        .map(|(scalar, operation)| {
+            generate_ranked_functional_refinement_proof_v2(
+                &typed_scalar_expression_kernel(operation, scalar),
+                0,
+                2,
+                subjects(),
+            )
+            .unwrap()
+            .1
+        });
+        assert_ne!(sources[0].source(), sources[1].source());
+        assert_ne!(sources[2].source(), sources[3].source());
+        let outputs = crate::retained_functional_refinement_runtime_v1::execute_pinned_generated_proofs_for_test(&sources);
+        let mut outputs = outputs
+            .into_iter()
+            .map(FunctionalRefinementRuntimeProcessOutputV1::from);
+        for model in ["bitvector", "IEEE operator congruence"] {
+            let positive = outputs.next().unwrap();
+            validate_proved_output(&positive).unwrap_or_else(|error| {
+                panic!(
+                    "generated {model} positive failed: {error}; stdout={} stderr={}",
+                    String::from_utf8_lossy(&positive.stdout),
+                    String::from_utf8_lossy(&positive.stderr)
+                )
+            });
+            let negative = outputs.next().unwrap();
+            assert_eq!(negative.signal, None);
+            assert!(negative.exit_code.is_some_and(|code| code != 0));
+            assert_eq!(
+                validate_proved_output(&negative).unwrap_err().kind(),
+                FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult
+            );
+            assert!(
+                String::from_utf8_lossy(&negative.stderr).contains("assertion failed"),
+                "{model} mutation must fail verification, not runtime setup: stdout={} stderr={}",
+                String::from_utf8_lossy(&negative.stdout),
+                String::from_utf8_lossy(&negative.stderr)
+            );
+        }
+        assert!(outputs.next().is_none());
+    }
+
+    #[test]
+    fn ieee_congruence_is_universally_quantified_without_an_assumed_function() {
+        let kernel = typed_scalar_expression_kernel(
+            ProductionSemanticBinaryOpV2::Add,
+            ProductionSemanticScalarTypeV2::Float { bits: 32 },
+        );
+        let (_, source) =
+            generate_ranked_functional_refinement_proof_v2(&kernel, 0, 2, subjects()).unwrap();
+        let source = std::str::from_utf8(source.source()).unwrap();
+        assert!(source.contains(IEEE_CONGRUENCE_PARAMETER_V2));
+        assert!(!source.contains("uninterp spec fn"));
+        assert!(!source.contains("assume("));
+        assert!(source.contains("assert(v0 == v1);"));
     }
 
     #[test]

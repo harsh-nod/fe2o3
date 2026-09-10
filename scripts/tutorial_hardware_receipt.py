@@ -48,6 +48,8 @@ RUN_DOMAIN = b"fe2o3-tutorial-hardware-run-receipt-v1\0"
 CLEANUP_DOMAIN = b"fe2o3-tutorial-hardware-cleanup-receipt-v1\0"
 TRANSPORT_DOMAIN = b"fe2o3-tutorial-hardware-archive-v1\0"
 PRE_HARDWARE_RECORD_DOMAIN = b"fe2o3-tutorial-pre-hardware-record-v1\0"
+NEGATIVE_REPLAY_SCHEMA = "fe2o3-tutorial-source-negative-replay-v1"
+NEGATIVE_REPLAY_DOMAIN = b"fe2o3-tutorial-source-negative-replay-run-v1\0"
 SCRATCH_DOMAIN = b"fe2o3-tutorial-hardware-scratch-v1\0"
 COMMAND_DOMAIN = b"fe2o3-tutorial-semantic-command-v1\0"
 SIGNATURE_CONTEXT = b"fe2o3-tutorial-hardware-receipt-signature-v1\0"
@@ -401,6 +403,7 @@ def _validate_pre_hardware_record(
             "hardware",
             "kernelSymbol",
             "lessonIds",
+            "negativeFixtureReplay",
             "pendingEvidence",
             "preHardwareBindingSha256",
             "productionEvidence",
@@ -413,6 +416,31 @@ def _validate_pre_hardware_record(
         },
         "pre-hardware record",
     )
+    # Transport consistency only; Rust independently replays the sealed source MIR.
+    replay = _object(record["negativeFixtureReplay"], "negative fixture replay")
+    _exact(
+        replay,
+        {
+            "binding", "cases", "mode", "positiveControl", "qualificationStatus",
+            "replayRunSha256", "schema", "sourceRustRecompiled",
+        },
+        "negative fixture replay",
+    )
+    if len(canonical(replay)) > 16 * 1024:
+        _fail("negative fixture replay exceeds its byte bound")
+    if (
+        replay["schema"] != NEGATIVE_REPLAY_SCHEMA
+        or replay["mode"] != "in-process-source-mir-admission-replay"
+        or replay["positiveControl"] != "admitted-exact-source"
+        or replay["qualificationStatus"] != "incomplete"
+        or replay["sourceRustRecompiled"] is not False
+        or not isinstance(replay["cases"], list)
+        or len(replay["cases"]) != 1
+    ):
+        _fail("negative fixture replay is not an incomplete source-MIR observation")
+    _object(replay["binding"], "negative fixture replay.binding")
+    _object(replay["cases"][0], "negative fixture replay case")
+    _binding(replay, "replayRunSha256", NEGATIVE_REPLAY_DOMAIN, "negative fixture replay")
     if record.get("schema") != PRE_HARDWARE_RECORD_SCHEMA:
         _fail("pre-hardware record schema differs")
     _binding(

@@ -65,6 +65,19 @@ pub(crate) enum ProductionSourceIsaKernelFamilyV1 {
     Tiled,
 }
 
+mod historical_v4 {
+    include!("frozen_compiler_v4/loader.rs");
+}
+
+#[allow(
+    unused_imports,
+    reason = "shared support has several fixture consumers"
+)]
+pub(crate) use historical_v4::{
+    historical_compiler_proof_inputs_v4, historical_compiler_proof_inputs_v4_with_sourceful_family,
+    historical_compiler_proof_inputs_v4_with_sourceful_induction,
+};
+
 impl CanonicalCompilerProofInputsV3 {
     pub(crate) fn semantic_mir(&self) -> &[u8] {
         &self.semantic_mir
@@ -114,7 +127,12 @@ pub(crate) fn frozen_compiler_proof_inputs_v4() -> CanonicalCompilerProofInputsV
 )]
 pub(crate) fn current_compiler_proof_inputs_v4_from_frozen_source() -> CanonicalCompilerProofInputsV3
 {
-    let mut current = frozen_compiler_proof_inputs_v4();
+    refresh_original_induction_report_v4(frozen_compiler_proof_inputs_v4())
+}
+
+fn refresh_original_induction_report_v4(
+    mut current: CanonicalCompilerProofInputsV3,
+) -> CanonicalCompilerProofInputsV3 {
     let semantic = AdmittedInertSemanticMirV1::decode_current_production_canonical(
         &current.semantic_mir,
         SemanticMirLimitsV1::default(),
@@ -136,17 +154,19 @@ pub(crate) fn current_compiler_proof_inputs_v4_from_frozen_source() -> Canonical
     assert_eq!(retained.semantic_mir_sha256(), replay.semantic_mir_sha256());
     assert_eq!(retained.function(), replay.function());
     assert_eq!(retained.function_identity(), replay.function_identity());
-    assert_eq!(retained.checked_additions_examined(), 0);
-    assert_eq!(replay.checked_additions_examined(), 0);
-    assert!(retained.certificates().is_empty());
-    assert!(replay.certificates().is_empty());
+    assert_eq!(
+        retained.checked_additions_examined(),
+        replay.checked_additions_examined()
+    );
+    assert_eq!(retained.certificates(), replay.certificates());
     assert_eq!(
         retained.canonical_bytes().len(),
         replay.canonical_bytes().len()
     );
 
-    // V4 ends with the complete length-delimited V1 report. Equal lengths leave
-    // every header, correspondence row and KIR binding byte unchanged.
+    // Only analysis work accounting may differ. V4 ends with the complete
+    // length-delimited V1 report; equal lengths preserve every enclosing byte,
+    // including source/KIR identities and all correspondence coordinates.
     let start = current
         .correspondence
         .len()

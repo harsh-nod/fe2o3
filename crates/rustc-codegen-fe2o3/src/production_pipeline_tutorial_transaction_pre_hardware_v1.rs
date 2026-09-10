@@ -393,6 +393,7 @@ fn pre_hardware_record_v1(
         "productionKirIdentitySha256": hex32(*bundle.canonical_kir_v13_digest()),
         "semanticMirIdentitySha256": hex32(bundle.semantic_mir_identity()),
     });
+    let negative_replay = negative_fixture::produce_v1(context, recovered)?;
     let mut record = serde_json::json!({
         "capabilityClosure": {
             "requirements": required(
@@ -416,6 +417,7 @@ fn pre_hardware_record_v1(
         },
         "kernelSymbol": context.kernel_symbol,
         "lessonIds": required(kernel, "lessonIds", "request.capabilityKernel")?,
+        "negativeFixtureReplay": negative_replay,
         "pendingEvidence": PENDING_EVIDENCE_KINDS,
         "preHardwareBindingSha256": "0000000000000000000000000000000000000000000000000000000000000000",
         "productionEvidence": {
@@ -496,6 +498,15 @@ fn validate_pre_hardware_record_v1(
     objects: &BTreeMap<String, Vec<u8>>,
 ) -> ResultV1<()> {
     validate_compiler_evidence_roster_v1(objects)?;
+    negative_fixture::validate_v1(
+        context,
+        result,
+        required(
+            object(record, "pre-hardware record")?,
+            "negativeFixtureReplay",
+            "pre-hardware record",
+        )?,
+    )?;
     validate_evidence_references_v1(
         required(
             object(record, "pre-hardware record")?,

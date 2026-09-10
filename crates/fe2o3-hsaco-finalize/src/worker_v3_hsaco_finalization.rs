@@ -42,6 +42,8 @@ use crate::{
     verify_allocated_read_only_finalized, verify_finalized,
 };
 
+mod machine_binding;
+
 const PROTECTED_FINALIZED_IDENTITY_DOMAIN_V3: &[u8] =
     b"FE2O3/STRICT-V3-PROTECTED-WORKER-CANONICAL-FINALIZATION/V1\0";
 
@@ -573,6 +575,9 @@ pub enum WorkerV3HsacoFinalizationError {
     ),
     UnsupportedMachineRefinementTarget,
     MachineRefinementArtifactMismatch,
+    MachineRefinementWorkerBindingMismatch {
+        field: &'static str,
+    },
     AuthenticatedCompletionObjectMismatch,
     MachineRefinementReceipt(TargetMachineRefinementReceiptErrorV1),
     CanonicalFinalization(FinalizationError),
@@ -612,6 +617,10 @@ impl fmt::Display for WorkerV3HsacoFinalizationError {
             ),
             Self::MachineRefinementArtifactMismatch => formatter.write_str(
                 "independently checked machine refinement names a different raw HSACO",
+            ),
+            Self::MachineRefinementWorkerBindingMismatch { field } => write!(
+                formatter,
+                "independently checked machine refinement differs from the retained worker {field}"
             ),
             Self::AuthenticatedCompletionObjectMismatch => formatter.write_str(
                 "verifier-signed completion names different finalized object bytes",
@@ -684,14 +693,36 @@ impl Error for WorkerV3HsacoFinalizationError {
 pub fn finalize_protected_worker_v3_hsaco_v1(
     raw: InspectedProtectedWorkerV3HsacoV1,
 ) -> Result<PreparedFinalizedProtectedWorkerV3HsacoV1, WorkerV3HsacoFinalizationError> {
-    if raw.canonical_descriptor_section() == CanonicalDescriptorSectionObservationV1::Missing {
-        return Err(
-            WorkerV3HsacoFinalizationError::MissingAuthenticatedProtectedDescriptorSourceEvidenceV3(
-                Box::new(MissingAuthenticatedProtectedDescriptorSourceEvidenceV3 { raw }),
-            ),
-        );
+    Err(missing_machine_refinement(raw))
+}
+
+/// Starts native finalization only with independently checked, move-only machine evidence.
+///
+/// Worker stage identities and LLVM replay are not inputs to the machine checker. Until the
+/// worker supplies its complete checker inputs, `None` retains the raw inspection in the existing
+/// fail-closed error. Even `Some` yields only a pending owner: authenticated compiler completion
+/// remains mandatory before publication can be prepared.
+pub fn begin_protected_worker_v3_machine_refined_finalization_v1(
+    raw: InspectedProtectedWorkerV3HsacoV1,
+    machine_refinement: Option<CheckedAmdMachineRefinementV1>,
+) -> Result<MachineRefinementPendingFinalizedProtectedWorkerV3HsacoV1, WorkerV3HsacoFinalizationError>
+{
+    match machine_refinement {
+        Some(machine_refinement) => begin_machine_refined_amd_hsaco_v1(raw, machine_refinement),
+        None => Err(missing_machine_refinement(raw)),
     }
-    Err(WorkerV3HsacoFinalizationError::MissingMachineRefinementEvidence(Box::new(raw)))
+}
+
+fn missing_machine_refinement(
+    raw: InspectedProtectedWorkerV3HsacoV1,
+) -> WorkerV3HsacoFinalizationError {
+    if raw.canonical_descriptor_section() == CanonicalDescriptorSectionObservationV1::Missing {
+        WorkerV3HsacoFinalizationError::MissingAuthenticatedProtectedDescriptorSourceEvidenceV3(
+            Box::new(MissingAuthenticatedProtectedDescriptorSourceEvidenceV3 { raw }),
+        )
+    } else {
+        WorkerV3HsacoFinalizationError::MissingMachineRefinementEvidence(Box::new(raw))
+    }
 }
 
 fn begin_machine_refined_amd_hsaco_v1(
@@ -718,6 +749,7 @@ fn begin_machine_refined_amd_hsaco_v1(
     {
         return Err(WorkerV3HsacoFinalizationError::MachineRefinementArtifactMismatch);
     }
+    machine_binding::validate(&raw, &machine_refinement)?;
     let outer = raw.outer_handoff();
     let descriptor_source =
         CompilerDescriptorSourceV1::decode(outer.capsule().receipts().abi().canonical_preimage())

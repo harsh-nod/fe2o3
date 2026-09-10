@@ -170,7 +170,9 @@ fn global_physical_place_v1(
         };
         if projection.kind() != SemanticProjectionKindV1::Dereference
             || pointer.kind() != SemanticPointerKindV1::Reference
-            || pointer.mutability() != SemanticMutabilityV1::Immutable
+            || (pointer.mutability() != SemanticMutabilityV1::Immutable
+                && view.contract
+                    != SemanticCapabilityMemoryContractV1::global_exclusive_read_write())
             || pointer.metadata() != SemanticPointerMetadataV1::SliceLength
             || projection.result_type() != pointer.pointee()
         {
@@ -348,7 +350,8 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         if !matches!(
             callables.get(call.callee().index() as usize),
             Some(SemanticCallableDeclV1::CompilerIntrinsic {
-                operation: SemanticCompilerIntrinsicOperationV1::CapabilityGlobalLoad { .. },
+                operation: SemanticCompilerIntrinsicOperationV1::CapabilityGlobalLoad { .. }
+                    | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveLoad { .. },
                 ..
             })
         ) {
@@ -376,6 +379,13 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             AccessKindAttr::Read,
         )
         .map_err(ProductionRankedProjectionErrorV1::Incomplete)?;
+        // Access coordinates identify an event, not the memory state it reads.
+        // Mutable loads need reaching-write semantics before value correlation.
+        if bound.allocation.writable {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "typed global mutable load requires reaching-write semantics",
+            ));
+        }
         if allocations.get(view).copied() != Some(bound.allocation.allocation_origin)
             || sources
                 .iter()

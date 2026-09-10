@@ -37,6 +37,52 @@ def load_runner():
 RUNNER = load_runner()
 
 
+def negative_replay_fixture(request: dict, record: dict) -> dict:
+    """Protocol stand-in, not a reproduced replay or a proof-authoritative receipt."""
+    production = record["productionEvidence"]
+    case_id = "original-kernel-root-roster-omission"
+    mutation = {
+        "caseId": case_id,
+        "coordinateSpace": "original-source-mir",
+        "functionIdentitySha256": RECEIPT.sha256(b"test-only-original-root"),
+        "operation": "omit-root-roster-entry",
+        "root": 0,
+        "semanticMirSha256": production["sourceMirIdentitySha256"],
+    }
+    replay = {
+        "binding": {
+            "compilerInputSha256": record["evidenceFiles"]["compiler-input"]["sha256"],
+            "compilerPolicySha256": production["compilerPolicySha256"],
+            "fixtureId": record["fixtureId"],
+            "kernelSymbol": record["kernelSymbol"],
+            "recipeSourceSha256": RECEIPT.sha256(b"test-only-negative-recipe"),
+            "requestBindingSha256": request["requestBindingSha256"],
+            "sealedResultSha256": production["sealedResultSha256"],
+            "semanticMirSha256": production["sourceMirIdentitySha256"],
+            "sourceClosureSha256": record["compilerInput"]["sourceClosureSha256"],
+            "target": record["target"],
+            "transactionSha256": record["productionTransaction"]["transactionSha256"],
+        },
+        "cases": [{
+            "caseId": case_id,
+            "diagnostic": "EmptyModelRoot",
+            "mutation": mutation,
+            "mutationRecipeSha256": RECEIPT._domain_identity(
+                b"fe2o3-tutorial-source-negative-mutation-v1\0", mutation
+            ),
+            "productionBoundary": "semantic-mir-admission",
+            "status": "rejected-by-live-replay",
+        }],
+        "mode": "in-process-source-mir-admission-replay",
+        "positiveControl": "admitted-exact-source",
+        "qualificationStatus": "incomplete",
+        "schema": RECEIPT.NEGATIVE_REPLAY_SCHEMA,
+        "sourceRustRecompiled": False,
+    }
+    replay["replayRunSha256"] = RECEIPT._domain_identity(RECEIPT.NEGATIVE_REPLAY_DOMAIN, replay)
+    return replay
+
+
 class PreHardwareProtocolTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -191,6 +237,7 @@ class PreHardwareProtocolTests(unittest.TestCase):
             "target": "gfx942",
             "targetDecision": {},
         }
+        record["negativeFixtureReplay"] = negative_replay_fixture(request, record)
         subject = {
             key: value
             for key, value in record.items()
@@ -427,6 +474,45 @@ class PreHardwareProtocolTests(unittest.TestCase):
         mutated["target"] = "gfx950"
         with self.assertRaisesRegex(RECEIPT.HardwareReceiptError, "binding is stale"):
             RECEIPT._validate_pre_hardware_record(request, mutated)
+
+    def test_negative_replay_cannot_claim_full_qualification_even_when_rebound(self) -> None:
+        mutations = (
+            lambda replay: replay.update(qualificationStatus="complete"),
+            lambda replay: replay.update(sourceRustRecompiled=True),
+            lambda replay: replay.update(sourceRustRecompiled=0),
+            lambda replay: replay.update(mode="full-source-recompile"),
+            lambda replay: replay.update(schema="unknown-replay-schema"),
+            lambda replay: replay.update(cases=[]),
+            lambda replay: replay["cases"].append(deepcopy(replay["cases"][0])),
+            lambda replay: replay.update(cases=["not-a-case"]),
+            lambda replay: replay.update(compilerAuthority=True),
+            lambda replay: replay["binding"].update(fixtureId="x" * (16 * 1024)),
+        )
+        for index, mutate in enumerate(mutations):
+            with self.subTest(mutation=index):
+                request, record = self.transaction()
+                replay = record["negativeFixtureReplay"]
+                mutate(replay)
+                replay["replayRunSha256"] = RECEIPT._domain_identity(
+                    RECEIPT.NEGATIVE_REPLAY_DOMAIN,
+                    {key: value for key, value in replay.items() if key != "replayRunSha256"},
+                )
+                record["preHardwareBindingSha256"] = RECEIPT._domain_identity(
+                    RECEIPT.PRE_HARDWARE_RECORD_DOMAIN,
+                    {key: value for key, value in record.items() if key != "preHardwareBindingSha256"},
+                )
+                with self.assertRaises(RECEIPT.HardwareReceiptError):
+                    RECEIPT._validate_pre_hardware_record(request, record)
+
+    def test_negative_replay_identity_is_checked_inside_the_pre_record_binding(self) -> None:
+        request, record = self.transaction()
+        record["negativeFixtureReplay"]["cases"][0]["mutation"]["root"] += 1
+        record["preHardwareBindingSha256"] = RECEIPT._domain_identity(
+            RECEIPT.PRE_HARDWARE_RECORD_DOMAIN,
+            {key: value for key, value in record.items() if key != "preHardwareBindingSha256"},
+        )
+        with self.assertRaisesRegex(RECEIPT.HardwareReceiptError, "negative fixture replay binding is stale"):
+            RECEIPT._validate_pre_hardware_record(request, record)
 
     def test_adapter_exposes_fresh_platform_measurements_not_compiler_inputs(self) -> None:
         repository = self.root / "repository"

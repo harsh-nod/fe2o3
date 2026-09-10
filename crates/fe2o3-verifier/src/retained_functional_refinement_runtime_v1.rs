@@ -17,6 +17,9 @@ use crate::CanonicalGeneratedVerusProofInputV3;
 #[path = "retained_functional_refinement_runtime_v1_linux.rs"]
 mod linux;
 
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use linux::execute_pinned_generated_proofs_for_test;
+
 pub(crate) const FUNCTIONAL_REFINEMENT_RUNTIME_V1_MANIFEST_NAME: &str =
     "FUNCTIONAL_REFINEMENT_RUNTIME_V1.manifest";
 const FUNCTIONAL_REFINEMENT_MANIFEST_BYTES: &[u8] =

@@ -238,6 +238,7 @@ pub use worker_v3_hsaco_finalization::{
     MachineRefinementPendingFinalizedProtectedWorkerV3HsacoV1,
     MissingAuthenticatedProtectedDescriptorSourceEvidenceV3,
     PreparedFinalizedProtectedWorkerV3HsacoV1, WorkerV3HsacoFinalizationError,
+    begin_protected_worker_v3_machine_refined_finalization_v1,
     finalize_protected_worker_v3_hsaco_v1,
 };
 pub use worker_v3_hsaco_publication::{

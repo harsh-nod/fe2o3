@@ -415,6 +415,392 @@ fn typed_global_fixture_with_body_v1(
     .unwrap()
 }
 
+fn typed_global_exclusive_fixture_v1(
+    mut types: Vec<SemanticTypeDeclV1>,
+    mut callables: Vec<SemanticCallableDeclV1>,
+    function: SemanticFunctionDeclV1,
+    exclusive_input: bool,
+) -> (
+    Vec<SemanticTypeDeclV1>,
+    Vec<SemanticCallableDeclV1>,
+    SemanticFunctionDeclV1,
+) {
+    use SemanticCompilerIntrinsicOperationV1 as Op;
+    use SemanticSourceArgumentOwnershipV1::{ByValue, SharedBorrow, UniqueBorrow};
+    let physical_read = function.locals()[12].ty();
+    let physical_write = function.locals()[13].ty();
+    let SemanticTypeShapeV1::Pointer(pointer) = types[physical_read.index() as usize].shape()
+    else {
+        unreachable!();
+    };
+    let slice = pointer.pointee();
+    let contract = SemanticCapabilityMemoryContractV1::global_exclusive_read_write();
+    let provenance = capability_index_provenance(None);
+    let source_identity = SemanticFunctionIdentityV1::from_sha256(bytes(116));
+    for (physical, view, callable) in [
+        (physical_read, function.locals()[11].ty(), 1),
+        (physical_write, function.locals()[14].ty(), 6),
+    ] {
+        if callable == 1 && !exclusive_input {
+            continue;
+        }
+        let original = &types[physical.index() as usize];
+        types[physical.index() as usize] = SemanticTypeDeclV1::new(
+            original.identity(),
+            original.layout_identity(),
+            SemanticTypeLayoutV1::new(Some(16), 8).unwrap(),
+            SemanticTypeShapeV1::Pointer(
+                SemanticPointerTypeV1::new_with_kind(
+                    slice,
+                    SemanticPointerKindV1::Reference,
+                    SemanticMutabilityV1::Mutable,
+                    0,
+                    64,
+                    SemanticPointerMetadataV1::SliceLength,
+                )
+                .unwrap(),
+            ),
+        )
+        .with_rustc_abi_properties(
+            SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+                Some(
+                    SemanticAbiPointeeInfoV1::new(
+                        SemanticAbiPointeeKindV1::MutableReference { unpin: true },
+                        0,
+                        8,
+                    )
+                    .unwrap(),
+                ),
+                None,
+            ),
+        );
+        callables[callable] = capability_index_callable(
+            Op::CapabilityGlobalBindExclusiveReadWrite {
+                context: CAP_INDEX_CONTEXT,
+                physical,
+                view,
+                element: U64_TYPE,
+                contract,
+                provenance,
+                source_identity,
+            },
+            &[
+                (CAP_INDEX_CONTEXT_BORROW, SharedBorrow),
+                (physical, UniqueBorrow),
+            ],
+            view,
+        );
+    }
+    if exclusive_input {
+        callables[7] = capability_index_callable(
+            Op::CapabilityGlobalExclusiveLoad {
+                view: function.locals()[11].ty(),
+                option: function.locals()[17].ty(),
+                element: U64_TYPE,
+                contract,
+                provenance,
+                source_identity,
+            },
+            &[
+                (function.locals()[16].ty(), SharedBorrow),
+                (U64_TYPE, ByValue),
+            ],
+            function.locals()[17].ty(),
+        );
+    }
+    callables[8] = capability_index_callable(
+        Op::CapabilityGlobalExclusiveStore {
+            view: function.locals()[14].ty(),
+            index: U64_TYPE,
+            element: U64_TYPE,
+            result: BOOL_TYPE,
+            contract,
+            provenance,
+            source_identity,
+        },
+        &[
+            (function.locals()[20].ty(), UniqueBorrow),
+            (U64_TYPE, ByValue),
+            (U64_TYPE, ByValue),
+        ],
+        BOOL_TYPE,
+    );
+    let mut blocks = function.blocks().to_vec();
+    for block in &mut blocks {
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+            continue;
+        };
+        let mut arguments = call.arguments().to_vec();
+        match call.callee().index() {
+            1 if exclusive_input => {
+                arguments[1] = SemanticOperandV1::Move(typed_place(12, physical_read))
+            }
+            8 => arguments[1] = typed_operand(6, U64_TYPE),
+            _ => continue,
+        }
+        *block = SemanticBasicBlockV1::new(
+            block.identity(),
+            block.source(),
+            block.statements().to_vec(),
+            SemanticTerminatorV1::new(
+                block.terminator().source(),
+                SemanticTerminatorKindV1::Call(
+                    SemanticDirectCallV1::new_callable(
+                        call.callee(),
+                        arguments,
+                        call.destination().cloned(),
+                        call.unwind(),
+                    )
+                    .unwrap(),
+                ),
+            ),
+        )
+        .unwrap();
+    }
+    let arguments = [physical_read, physical_write]
+        .into_iter()
+        .enumerate()
+        .map(|(index, ty)| {
+            if index == 0 && !exclusive_input {
+                return function.abi().adjusted_arguments()[index].value().clone();
+            }
+            SemanticAbiValueV1::new(
+                ty,
+                SemanticAbiPassModeV1::Pair {
+                    first: SemanticAbiValueAttributesV1::new(
+                        SemanticAbiRegularAttributesV1::new(true, None, true, false, false, true),
+                        SemanticAbiExtensionV1::None,
+                        0,
+                        None,
+                    )
+                    .unwrap(),
+                    second: SemanticAbiValueAttributesV1::plain(),
+                },
+            )
+        })
+        .collect();
+    let abi = SemanticFunctionAbiV1::new(
+        SemanticAbiIdentityV1::from_sha256(bytes(202)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(202)),
+        SemanticCanonAbiV1::GpuKernel,
+        false,
+        false,
+        arguments,
+        SemanticAbiValueV1::new(SCALAR_TYPE, SemanticAbiPassModeV1::Ignore),
+    )
+    .unwrap()
+    .with_source_argument_ownership(vec![
+        if exclusive_input {
+            UniqueBorrow
+        } else {
+            SharedBorrow
+        },
+        UniqueBorrow,
+    ])
+    .unwrap();
+    let function = SemanticFunctionDeclV1::new(
+        function.identity(),
+        function.role(),
+        function.item_definition_identity(),
+        function.monomorphization_identity(),
+        function.generic_type_arguments_identity(),
+        function.const_generic_arguments_identity(),
+        function.source(),
+        abi,
+        function.locals().to_vec(),
+        function.entry(),
+        blocks,
+    )
+    .unwrap();
+    (types, callables, function)
+}
+
+#[test]
+fn typed_global_exclusive_projection_preserves_access_and_allocation_contracts() {
+    for exclusive_input in [false, true] {
+        let (types, callables, function) = typed_global_projection_fixture_v1();
+        let (types, callables, function) =
+            typed_global_exclusive_fixture_v1(types, callables, function, exclusive_input);
+        let (projection, operations) =
+            project_capability_index_fixture(&types, &callables, &function).unwrap();
+        let read = projection.direct_read_effects[6].as_ref().unwrap();
+        let write = projection.direct_write_effects[7].as_ref().unwrap();
+        assert_eq!(read.indices, write.indices);
+        assert_ne!(read.comparisons[0].1, write.comparisons[0].1);
+        for (access, origin, class, writable) in [
+            (
+                read,
+                1,
+                if exclusive_input { 2 } else { 1 },
+                exclusive_input,
+            ),
+            (write, 2, 3, true),
+        ] {
+            assert_eq!(access.comparisons.len(), 1);
+            assert!(operations.iter().any(|operation| matches!(operation,
+                ProductionRankedOperationV1::ViewInSpace { result, allocation_origin,
+                    noalias_class, writable: actual_writable, dynamic_extents, .. }
+                if *result == access.view && *allocation_origin == origin
+                    && *noalias_class == class && *actual_writable == writable
+                    && dynamic_extents == &[access.comparisons[0].1]
+            )));
+        }
+        assert_eq!(
+            projection.option_predicates[17],
+            Some(GuardPredicateV1::for_access(read))
+        );
+        assert_eq!(
+            projection.direct_switch_predicates[21],
+            Some(GuardPredicateV1::for_access(write))
+        );
+    }
+}
+
+#[test]
+fn typed_global_exclusive_projection_rejects_index_fabrication_and_reassignment() {
+    for rewritten in [false, true] {
+        let (types, callables, function) = typed_global_projection_fixture_v1();
+        let (types, callables, function) =
+            typed_global_exclusive_fixture_v1(types, callables, function, false);
+        let mut blocks = function.blocks().to_vec();
+        let original = &blocks[7];
+        let SemanticTerminatorKindV1::Call(call) = original.terminator().kind() else {
+            unreachable!();
+        };
+        let mut arguments = call.arguments().to_vec();
+        let mut statements = original.statements().to_vec();
+        if rewritten {
+            statements.push(typed_assignment(
+                6,
+                U64_TYPE,
+                SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 0, 8)),
+            ));
+        } else {
+            arguments[1] = typed_constant(U64_TYPE, 0, 8);
+        }
+        blocks[7] = SemanticBasicBlockV1::new(
+            original.identity(),
+            original.source(),
+            statements,
+            SemanticTerminatorV1::new(
+                original.terminator().source(),
+                SemanticTerminatorKindV1::Call(
+                    SemanticDirectCallV1::new_callable(
+                        call.callee(),
+                        arguments,
+                        call.destination().cloned(),
+                        call.unwind(),
+                    )
+                    .unwrap(),
+                ),
+            ),
+        )
+        .unwrap();
+        let changed =
+            typed_global_fixture_with_body_v1(&function, function.locals().to_vec(), blocks);
+        assert!(project_capability_index_fixture(&types, &callables, &changed).is_err());
+    }
+}
+
+#[test]
+fn typed_global_exclusive_projection_rejects_contract_and_provenance_substitution() {
+    for exclusive_input in [false, true] {
+        let (types, callables, function) = typed_global_projection_fixture_v1();
+        let (types, callables, function) =
+            typed_global_exclusive_fixture_v1(types, callables, function, exclusive_input);
+        for axis in 0..3 {
+            let mut changed = callables.clone();
+            let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } =
+                &mut changed[if exclusive_input { 7 } else { 8 }]
+            else {
+                unreachable!();
+            };
+            let (identity, provenance, contract) = match operation {
+                SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveLoad {
+                    source_identity,
+                    provenance,
+                    contract,
+                    ..
+                }
+                | SemanticCompilerIntrinsicOperationV1::CapabilityGlobalExclusiveStore {
+                    source_identity,
+                    provenance,
+                    contract,
+                    ..
+                } => (source_identity, provenance, contract),
+                _ => unreachable!(),
+            };
+            match axis {
+                0 => *identity = SemanticFunctionIdentityV1::from_sha256(bytes(210)),
+                1 => *provenance = capability_index_provenance(Some(3)),
+                _ => *contract = SemanticCapabilityMemoryContractV1::global_read_only(),
+            }
+            assert_incomplete(
+                project_capability_index_fixture(&types, &changed, &function),
+                "a typed global access lacks its exact bound allocation, borrow, or source contract",
+            );
+        }
+    }
+}
+
+#[test]
+fn typed_global_exclusive_projection_requires_unique_abi_allocation() {
+    for missing_noalias in [false, true] {
+        let (types, callables, function) = typed_global_projection_fixture_v1();
+        let (types, callables, function) =
+            typed_global_exclusive_fixture_v1(types, callables, function, false);
+        let mut arguments = function
+            .abi()
+            .adjusted_arguments()
+            .iter()
+            .map(|argument| argument.value().clone())
+            .collect::<Vec<_>>();
+        if missing_noalias {
+            arguments[1] = SemanticAbiValueV1::new(
+                function.locals()[13].ty(),
+                SemanticAbiPassModeV1::Pair {
+                    first: SemanticAbiValueAttributesV1::plain(),
+                    second: SemanticAbiValueAttributesV1::plain(),
+                },
+            );
+        }
+        let abi = SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1::from_sha256(bytes(202)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(202)),
+            SemanticCanonAbiV1::GpuKernel,
+            false,
+            false,
+            arguments,
+            SemanticAbiValueV1::new(SCALAR_TYPE, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap()
+        .with_source_argument_ownership(vec![
+            SemanticSourceArgumentOwnershipV1::SharedBorrow,
+            if missing_noalias {
+                SemanticSourceArgumentOwnershipV1::UniqueBorrow
+            } else {
+                SemanticSourceArgumentOwnershipV1::RawPointer
+            },
+        ])
+        .unwrap();
+        let changed = SemanticFunctionDeclV1::new(
+            function.identity(),
+            function.role(),
+            function.item_definition_identity(),
+            function.monomorphization_identity(),
+            function.generic_type_arguments_identity(),
+            function.const_generic_arguments_identity(),
+            function.source(),
+            abi,
+            function.locals().to_vec(),
+            function.entry(),
+            function.blocks().to_vec(),
+        )
+        .unwrap();
+        assert!(project_capability_index_fixture(&types, &callables, &changed).is_err());
+    }
+}
+
 #[test]
 fn typed_global_projection_frame_markers_do_not_count_as_value_definitions() {
     let (types, callables, function) = typed_global_projection_fixture_v1();

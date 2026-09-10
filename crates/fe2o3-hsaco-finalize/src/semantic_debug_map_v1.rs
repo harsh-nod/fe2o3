@@ -2237,7 +2237,7 @@ mod production_correspondence_tests {
     #[allow(clippy::too_many_lines)]
     fn exact_map_fixture() -> ExactMapFixture {
         let proof =
-            compiler_proof_inputs_v3::canonical_compiler_proof_inputs_v4_with_sourceful_induction(
+            compiler_proof_inputs_v3::historical_compiler_proof_inputs_v4_with_sourceful_induction(
                 0x20,
             );
         let semantic_mir = proof.semantic_mir().to_vec();

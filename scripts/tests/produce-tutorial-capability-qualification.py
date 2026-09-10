@@ -51,6 +51,10 @@ PROVISIONER = load(
     "tutorial_hardware_attestor_provisioner_tests",
     SCRIPTS / "provision-tutorial-hardware-attestor.py",
 )
+PRE_HARDWARE_FIXTURES = load(
+    "tutorial_native_pre_hardware_protocol_fixtures",
+    Path(__file__).with_name("tutorial_hardware_prehardware_v1.py"),
+)
 
 
 def canonical(value: object) -> bytes:
@@ -171,14 +175,38 @@ class TutorialCapabilityQualificationProducerTests(unittest.TestCase):
             record["evidenceFiles"]["simulator"],
             "test-mi300x-reservation",
         )
-        return request, self.as_pre_hardware_record(record)
+        return request, self.as_pre_hardware_record(record, request)
 
-    def as_pre_hardware_record(self, record: dict) -> dict:
+    def as_pre_hardware_record(self, record: dict, request: dict) -> dict:
+        # Protocol fixtures only: these bytes cannot establish native sealed authority.
         record.pop("recordBindingSha256")
         for kind in PRODUCER.hardware_receipt_contract.PENDING_EVIDENCE_KINDS:
             record["evidenceFiles"].pop(kind, None)
-        record["productionEvidence"].pop("hardwareEvidenceSha256")
+        production = record["productionEvidence"]
+        production["numericalPolicyEvidenceSha256"] = record["evidenceFiles"]["numerical-policy"]["sha256"]
+        production["sealedResultSha256"] = PRODUCER._sha256(b"test-only-unverified-v5-identity")
+        record["productionEvidence"] = {
+            key: production[key] for key in PRODUCER.PRE_HARDWARE_PRODUCTION_EVIDENCE_KEYS
+        }
         record.pop("negativeFixtures")
+        record["graph"] = {
+            key: record["graph"][key]
+            for key in (
+                "bundleContentIdentitySha256",
+                "finalGraphEpoch",
+                "kernelCount",
+                "productionKirIdentitySha256",
+                "semanticMirIdentitySha256",
+            )
+        }
+        record["capabilityClosure"]["status"] = "compiler-complete"
+        record["proof"]["status"] = "compiler-complete"
+        record["simulator"]["status"] = "request-bound-external-observation"
+        record["targetDecision"] = {
+            "capabilityClosureSha256": production["capabilityClosureSha256"],
+            "status": "compiler-complete",
+            "targetIdentitySha256": production["targetIdentitySha256"],
+        }
         record["hardware"] = {
             "commandSha256": record["hardware"]["commandSha256"],
             "lane": record["hardware"]["lane"],
@@ -190,6 +218,7 @@ class TutorialCapabilityQualificationProducerTests(unittest.TestCase):
             PRODUCER.hardware_receipt_contract.PENDING_EVIDENCE_KINDS
         )
         record["schema"] = PRODUCER.hardware_receipt_contract.PRE_HARDWARE_RECORD_SCHEMA
+        record["negativeFixtureReplay"] = PRE_HARDWARE_FIXTURES.negative_replay_fixture(request, record)
         record["preHardwareBindingSha256"] = "0" * 64
         record["preHardwareBindingSha256"] = PRODUCER.pre_hardware_binding_sha256(
             record
@@ -362,6 +391,7 @@ class TutorialCapabilityQualificationProducerTests(unittest.TestCase):
             record["hardware"]["timeoutSeconds"] = request["fixture"][
                 "hardwareCommand"
             ]["timeoutSeconds"]
+            record["negativeFixtureReplay"] = PRE_HARDWARE_FIXTURES.negative_replay_fixture(request, record)
             record["preHardwareBindingSha256"] = PRODUCER.pre_hardware_binding_sha256(
                 record
             )
@@ -566,10 +596,7 @@ class TutorialCapabilityQualificationProducerTests(unittest.TestCase):
         (export / PRODUCER.RESULT_NAME).write_bytes(canonical(envelope))
         return temporary, export, destination, request, record
 
-    def make_pre_export(self) -> tuple[tempfile.TemporaryDirectory, Path, dict, dict]:
-        request, record = self.request_and_record()
-        temporary = tempfile.TemporaryDirectory(dir=self.root)
-        export = Path(temporary.name) / "pre-hardware"
+    def write_pre_export(self, export: Path, request: dict, record: dict) -> None:
         export.mkdir()
         for kind, reference in record["evidenceFiles"].items():
             if kind == "simulator":
@@ -587,6 +614,12 @@ class TutorialCapabilityQualificationProducerTests(unittest.TestCase):
             "schema": PRODUCER.PRE_HARDWARE_EXPORT_SCHEMA,
         }
         (export / PRODUCER.PRE_HARDWARE_RESULT_NAME).write_bytes(canonical(envelope))
+
+    def make_pre_export(self) -> tuple[tempfile.TemporaryDirectory, Path, dict, dict]:
+        request, record = self.request_and_record()
+        temporary = tempfile.TemporaryDirectory(dir=self.root)
+        export = Path(temporary.name) / "pre-hardware"
+        self.write_pre_export(export, request, record)
         return temporary, export, request, record
 
     def assert_export_rejected(self, pattern: str, **mutations) -> None:
@@ -627,6 +660,7 @@ class TutorialCapabilityQualificationProducerTests(unittest.TestCase):
     def test_pre_hardware_export_contains_no_predicted_hardware_identity(self) -> None:
         temporary, export, request, record = self.make_pre_export()
         with temporary:
+            self.assertEqual(record, PRODUCER.validate_pre_hardware_export(export, request))
             PRODUCER.hardware_receipt_contract._validate_pre_hardware_record(
                 request, record
             )
@@ -640,6 +674,58 @@ class TutorialCapabilityQualificationProducerTests(unittest.TestCase):
             self.assertEqual(
                 "pending-authenticated-observation", record["hardware"]["status"]
             )
+
+    def test_pre_hardware_export_rejects_legacy_and_predicted_fields(self) -> None:
+        mutations = (
+            lambda record: record.pop("schema"),
+            lambda record: record.pop("negativeFixtureReplay"),
+            lambda record: record.pop("pendingEvidence"),
+            lambda record: record.update(negativeFixtures={"status": "passed"}),
+            lambda record: record["pendingEvidence"].reverse(),
+            lambda record: record["hardware"].update(status="passed"),
+            lambda record: record["hardware"].update(driverIdentitySha256="1" * 64),
+            lambda record: record["productionEvidence"].update(hardwareEvidenceSha256="1" * 64),
+            lambda record: record["productionEvidence"].pop("sealedResultSha256"),
+            lambda record: record["productionEvidence"].update(sealedResultSha256="0" * 64),
+            lambda record: record["productionEvidence"].update(numericalPolicySha256="1" * 64),
+            lambda record: record["compilerInput"].update(contractSha256="1" * 64),
+            lambda record: record["evidenceFiles"].update(simulator=PRODUCER._reference(b"substituted")),
+        )
+        for index, mutate in enumerate(mutations):
+            with self.subTest(mutation=index):
+                temporary, export, request, _ = self.make_pre_export()
+                with temporary:
+                    path = export / PRODUCER.PRE_HARDWARE_RESULT_NAME
+                    envelope = json.loads(path.read_bytes())
+                    mutate(envelope["record"])
+                    envelope["record"]["preHardwareBindingSha256"] = (
+                        PRODUCER.pre_hardware_binding_sha256(envelope["record"])
+                    )
+                    path.write_bytes(canonical(envelope))
+                    with self.assertRaises(PRODUCER.QualificationProducerError):
+                        PRODUCER.validate_pre_hardware_export(export, request)
+
+    def test_pre_hardware_export_requires_exact_sealed_and_bundle_objects(self) -> None:
+        for kind in ("sealed-production-receipt", "simulation-bundle-v8"):
+            for mutation in ("missing", "changed", "omitted-reference"):
+                with self.subTest(kind=kind, mutation=mutation):
+                    temporary, export, request, record = self.make_pre_export()
+                    with temporary:
+                        path = export / record["evidenceFiles"][kind]["path"]
+                        if mutation == "missing":
+                            path.unlink()
+                        elif mutation == "changed":
+                            path.write_bytes(path.read_bytes() + b"substituted")
+                        else:
+                            envelope_path = export / PRODUCER.PRE_HARDWARE_RESULT_NAME
+                            envelope = json.loads(envelope_path.read_bytes())
+                            envelope["record"]["evidenceFiles"].pop(kind)
+                            envelope["record"]["preHardwareBindingSha256"] = (
+                                PRODUCER.pre_hardware_binding_sha256(envelope["record"])
+                            )
+                            envelope_path.write_bytes(canonical(envelope))
+                        with self.assertRaises(PRODUCER.QualificationProducerError):
+                            PRODUCER.validate_pre_hardware_export(export, request)
 
     def test_exact_compiler_export_is_consumed_without_rebinding(self) -> None:
         temporary, export, destination, request, pre_record = self.make_export()
@@ -1231,6 +1317,138 @@ class TutorialCapabilityQualificationProducerTests(unittest.TestCase):
         )
         policy_offset = command.index("--hardware-trust-policy")
         self.assertEqual(str(self.policy_path), command[policy_offset + 1])
+
+    def test_orchestration_routes_native_preparation_and_signed_observation_without_authority(self) -> None:
+        # External execution is doubled; transport authentication and orchestration
+        # are real. None of these protocol fixtures is a verified V5/Bundle V8.
+        receipt = PRODUCER.hardware_receipt_contract
+        manifest_path = ROOT / PRODUCER.MANIFEST_RELATIVE
+        manifest_before = manifest_path.read_bytes()
+        simulator_refs = {
+            item["fixtureId"]: item["evidenceFiles"]["simulator"]
+            for item in self.batch["records"]
+        }
+        for outcome, error in (
+            ("rejected", "test-only native finalizer rejection"),
+            ("empty-success", "production transaction export"),
+            ("stdout-success", "must publish evidence, not stdout authority"),
+            ("missing-sealed-input", "cannot read pre-hardware evidence"),
+        ):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory(dir=self.root) as temporary:
+                parent = Path(temporary)
+                events = []
+                handoff = {}
+
+                def semantic_suites(repository, document, payload, candidate, archive):
+                    self.assertEqual(manifest_before, payload)
+                    reference = self.batch["semanticQualification"]
+                    PRODUCER._copy_object(self.archive, archive, reference, "test semantic input")
+                    for simulator in simulator_refs.values():
+                        PRODUCER._copy_object(self.archive, archive, simulator, "test simulator input")
+                    return reference, simulator_refs
+
+                def authenticated_observation(request, pre_record, pre_root, attestor):
+                    events.append("authenticated-observation")
+                    self.assertEqual(handoff["record"], pre_record)
+                    self.assertEqual(handoff["request"], canonical(request))
+                    self.assertEqual("tutorial-test-attestor-v1", attestor)
+                    driver, runtime, isa, resource, result = self.runner_observations(request, pre_record)
+                    scratch = pre_root.parent / "test-hardware-scratch"
+                    spool = pre_root.parent / "test-receipt-spool"
+                    scratch.mkdir()
+                    receipt.prepare_transport(
+                        request, pre_record, pre_root, isa, resource, result,
+                        scratch, spool, attestor, self.private_key,
+                        driver_observation=driver, runtime_observation=runtime,
+                    )
+                    shutil.rmtree(scratch)
+                    archive = receipt.finalize_transport(
+                        spool, scratch, self.private_key, request, pre_record, pre_root
+                    )
+                    self.assertFalse(scratch.exists())
+                    self.assertFalse(spool.exists())
+                    handoff["archive"] = archive
+                    return archive
+
+                def native_process(command, *, cwd, environment, timeout_seconds):
+                    self.assertEqual(ROOT, cwd)
+                    self.assertEqual(7, timeout_seconds)
+                    self.assertTrue(PRODUCER.SCRUBBED_ENVIRONMENT.isdisjoint(environment))
+                    options = dict(zip(command[1::2], command[2::2], strict=True))
+                    phase = options["--phase"]
+                    events.append(phase)
+                    request_path = Path(options["--request"])
+                    request_payload = request_path.read_bytes()
+                    request = json.loads(request_payload)
+                    output = Path(options["--output-directory"])
+                    self.assertFalse(output.exists())
+                    if phase == "prepare":
+                        self.assertNotIn("--hardware-trust-policy", options)
+                        handoff["request"] = request_payload
+                        handoff["request_path"] = request_path
+                        handoff["pre_root"] = output
+                        record = self.as_pre_hardware_record(deepcopy(self.batch["records"][0]), request)
+                        handoff["record"] = record
+                        self.write_pre_export(output, request, record)
+                        handoff["pre_export"] = (output / PRODUCER.PRE_HARDWARE_RESULT_NAME).read_bytes()
+                        if outcome == "missing-sealed-input":
+                            (output / record["evidenceFiles"]["sealed-production-receipt"]["path"]).unlink()
+                        return b"", b""
+
+                    self.assertEqual("finalize", phase)
+                    self.assertEqual(handoff["request_path"], request_path)
+                    self.assertEqual(handoff["request"], request_payload)
+                    self.assertEqual(str(handoff["pre_root"]), options["--pre-hardware-directory"])
+                    self.assertEqual(str(self.policy_path), options["--hardware-trust-policy"])
+                    self.assertEqual(
+                        handoff["pre_export"],
+                        (handoff["pre_root"] / PRODUCER.PRE_HARDWARE_RESULT_NAME).read_bytes(),
+                    )
+                    archive_path = Path(options["--hardware-archive"])
+                    self.assertEqual(handoff["archive"], archive_path.read_bytes())
+                    record = handoff["record"]
+                    self.assertEqual("incomplete", record["negativeFixtureReplay"]["qualificationStatus"])
+                    self.assertIs(False, record["negativeFixtureReplay"]["sourceRustRecompiled"])
+                    observed = receipt.validate_and_ingest(
+                        archive_path, request, record, self.hardware_policy,
+                        receipt.object_reference, set(),
+                    )
+                    index, objects = receipt._archive_entries(handoff["archive"])
+                    run = json.loads(objects[index["runReceipt"]["sha256"]])
+                    for kind in ("sealed-production-receipt", "simulation-bundle-v8"):
+                        reference = record["evidenceFiles"][kind]
+                        self.assertEqual(
+                            (handoff["pre_root"] / reference["path"]).read_bytes(),
+                            objects[reference["sha256"]],
+                        )
+                        self.assertNotIn(kind, run["observations"])
+                    hardware = json.loads(objects[observed.hardware_evidence_reference["sha256"]])
+                    self.assertEqual("verification-input-no-independent-authority", hardware["authority"])
+                    if outcome == "rejected":
+                        raise PRODUCER.QualificationProducerError(error)
+                    return (b'{"status":"passed"}' if outcome == "stdout-success" else b""), b""
+
+                with (
+                    patch.object(PRODUCER, "clean_candidate", return_value=self.candidate),
+                    patch.object(PRODUCER, "production_transaction_command", return_value=["test-only-native-exporter"]),
+                    patch.object(PRODUCER, "_semantic_suites", side_effect=semantic_suites),
+                    patch.object(PRODUCER, "_run_bounded", side_effect=native_process),
+                    patch.object(PRODUCER.hardware_runner_contract, "RemoteHardwareSession") as remote,
+                    patch.object(PRODUCER.promotion_contract, "run_producer_verifier") as verifier,
+                    self.assertRaisesRegex(PRODUCER.QualificationProducerError, error),
+                ):
+                    remote.return_value.__enter__.return_value.run.side_effect = authenticated_observation
+                    PRODUCER.produce(
+                        ROOT, parent / "batch.json", parent / "evidence", 7, 11,
+                        self.policy_path, Path(sys.executable).resolve(), {}, verifier=verifier,
+                    )
+                expected = ["prepare"] if outcome == "missing-sealed-input" else ["prepare", "authenticated-observation", "finalize"]
+                self.assertEqual(expected, events)
+                self.assertEqual(outcome != "missing-sealed-input", remote.return_value.__enter__.return_value.run.called)
+                remote.return_value.__exit__.assert_called_once()
+                verifier.assert_not_called()
+                self.assertEqual([], list(parent.iterdir()))
+                self.assertEqual(manifest_before, manifest_path.read_bytes())
 
     def test_legacy_hardware_command_without_protocol_marker_is_rejected(self) -> None:
         request, _ = self.request_and_record()

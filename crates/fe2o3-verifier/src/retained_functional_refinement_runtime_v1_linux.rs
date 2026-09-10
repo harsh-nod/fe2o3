@@ -508,6 +508,35 @@ pub(super) fn execute_functional_refinement_generated_rust_verify(
     functional_refinement_process_tree_v1::execute(runtime, source, deadline, output_limit)
 }
 
+/// Exercises the real controller with pinned bytes, without a production lease or receipt.
+#[cfg(test)]
+pub(crate) fn execute_pinned_generated_proofs_for_test(
+    sources: &[CanonicalGeneratedVerusProofInputV3],
+) -> Vec<RetainedFunctionalRefinementRuntimeOutputV1> {
+    let _guard = RUNTIME_CLOSURE_PROCESS_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let root = std::env::var_os("FE2O3_FUNCTIONAL_REFINEMENT_TEST_RUNTIME_ROOT")
+        .expect("set the pinned test runtime root; this does not admit a production runtime");
+    let manifest = ManifestV2::parse_functional_refinement_runtime_v1().unwrap();
+    let runtime = RetainedRuntimeClosureV2::open_for_test(Path::new(&root), &manifest).unwrap();
+    sources
+        .iter()
+        .map(|source| {
+            runtime.revalidate().unwrap();
+            let output = execute_functional_refinement_generated_rust_verify(
+                &runtime,
+                source,
+                Instant::now() + std::time::Duration::from_secs(120),
+                crate::functional_refinement_receipt_v2::MAX_FUNCTIONAL_REFINEMENT_VERUS_OUTPUT_BYTES_V2,
+            )
+            .unwrap();
+            runtime.revalidate().unwrap();
+            output
+        })
+        .collect()
+}
+
 struct SealedGeneratedProofSourceV3 {
     file: File,
     snapshot: ObjectSnapshotV2,

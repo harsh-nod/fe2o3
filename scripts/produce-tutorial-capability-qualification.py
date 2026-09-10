@@ -62,36 +62,24 @@ MAX_PROCESS_TIMEOUT = 24 * 60 * 60
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 ENVIRONMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.+\Z")
 HARDWARE_LANES = {"gfx942": "mi300x", "gfx950": "mi350"}
-PRE_HARDWARE_RECORD_KEYS = {
-    "capabilityClosure",
-    "compilerInput",
-    "evidenceFiles",
-    "fixtureId",
-    "graph",
-    "hardware",
-    "kernelSymbol",
-    "lessonIds",
-    "negativeFixtures",
-    "preHardwareBindingSha256",
-    "productionEvidence",
-    "productionTransaction",
-    "proof",
-    "simulator",
-    "target",
-    "targetDecision",
-}
-PRE_HARDWARE_SUMMARY_KEYS = {
+PRE_HARDWARE_PRODUCTION_EVIDENCE_KEYS = {
     "artifactInspectionSha256",
     "artifactSha256",
-    "commandSha256",
-    "driverIdentitySha256",
-    "lane",
+    "capabilityAnalysisSha256",
+    "capabilityClosureSha256",
+    "compilerPolicySha256",
+    "finalOptimizedKirSha256",
     "launchContractSha256",
-    "runtimeIdentitySha256",
-    "subjectSha256",
-    "target",
+    "loweringIdentitySha256",
+    "machineRefinementSha256",
+    "numericalPolicyEvidenceSha256",
+    "proofCheckerSha256",
+    "proofEvidenceSha256",
+    "proofObligationSetSha256",
+    "sealedResultSha256",
+    "sourceMirIdentitySha256",
+    "sourceMirToKirRefinementSha256",
     "targetIdentitySha256",
-    "timeoutSeconds",
 }
 PRE_HARDWARE_RECORD_DOMAIN = b"fe2o3-tutorial-pre-hardware-record-v1\0"
 SCRUBBED_ENVIRONMENT = {
@@ -141,7 +129,6 @@ hardware_runner_contract = _load_sibling(
     "fe2o3_tutorial_hardware_runner_for_qualification",
     "run-tutorial-authenticated-hardware.py",
 )
-PRE_HARDWARE_EVIDENCE_KINDS = promotion_contract.ARCHIVE_KINDS - {"hardware"}
 
 
 def _fail(message: str) -> None:
@@ -601,31 +588,10 @@ def pre_hardware_binding_sha256(record: dict[str, Any]) -> str:
     return _domain_sha256(PRE_HARDWARE_RECORD_DOMAIN, subject)
 
 
-def _expected_pre_hardware_summary(
-    request: dict[str, Any], record: dict[str, Any]
-) -> dict[str, Any]:
-    fixture = request["fixture"]
-    evidence = record["productionEvidence"]
-    files = record["evidenceFiles"]
-    return {
-        "artifactInspectionSha256": evidence["artifactInspectionSha256"],
-        "artifactSha256": evidence["artifactSha256"],
-        "commandSha256": promotion_contract.command_sha256(fixture["hardwareCommand"]),
-        "driverIdentitySha256": files["driver-identity"]["sha256"],
-        "lane": fixture["hardwareLane"],
-        "launchContractSha256": evidence["launchContractSha256"],
-        "runtimeIdentitySha256": files["runtime-identity"]["sha256"],
-        "subjectSha256": evidence["artifactSha256"],
-        "target": fixture["target"],
-        "targetIdentitySha256": evidence["targetIdentitySha256"],
-        "timeoutSeconds": fixture["hardwareCommand"]["timeoutSeconds"],
-    }
-
-
 def validate_pre_hardware_export(
     export_root: Path, request: dict[str, Any]
 ) -> dict[str, Any]:
-    """Admit compiler evidence that contains no hardware-derived identity."""
+    """Check transport consistency; only Rust can admit sealed V5/Bundle V8 authority."""
     if request.get("requestBindingSha256") != request_binding_sha256(request):
         _fail("production transaction request binding is stale")
     envelope = _load_canonical_json(
@@ -645,41 +611,31 @@ def validate_pre_hardware_export(
     ):
         _fail("pre-hardware transaction export is stale or substituted")
     record = _object(envelope["record"], "pre-hardware transaction export.record")
-    _exact_keys(record, PRE_HARDWARE_RECORD_KEYS, "pre-hardware record")
-    if record["preHardwareBindingSha256"] != pre_hardware_binding_sha256(record):
-        _fail("pre-hardware record binding is stale")
-    kernel = request["capabilityKernel"]
-    if (
-        record["fixtureId"] != fixture["fixtureId"]
-        or record["target"] != fixture["target"]
-        or record["kernelSymbol"] != kernel["kernelSymbol"]
-        or record["lessonIds"] != kernel["lessonIds"]
-        or record["compilerInput"]
-        != {
-            key: fixture["compilerInput"][key]
-            for key in (
-                "cargoLockSha256",
-                "contractSha256",
-                "packageManifestSha256",
-                "sourceClosureSha256",
-            )
-        }
-    ):
+    try:
+        hardware_receipt_contract._validate_pre_hardware_record(request, record)
+    except hardware_receipt_contract.HardwareReceiptError as error:
+        _fail(f"pre-hardware transaction export rejected: {error}")
+    if record["compilerInput"] != {
+        key: fixture["compilerInput"][key]
+        for key in (
+            "cargoLockSha256",
+            "contractSha256",
+            "packageManifestSha256",
+            "sourceClosureSha256",
+        )
+    }:
         _fail("pre-hardware record is stale, reordered, or cross-target")
-    files = _object(record["evidenceFiles"], "pre-hardware record.evidenceFiles")
-    _exact_keys(files, PRE_HARDWARE_EVIDENCE_KINDS, "pre-hardware evidence")
+    files = record["evidenceFiles"]
     production = _object(
         record["productionEvidence"], "pre-hardware record.productionEvidence"
     )
     _exact_keys(
         production,
-        manifest_contract.PRODUCTION_EVIDENCE_KEYS - {"hardwareEvidenceSha256"},
+        PRE_HARDWARE_PRODUCTION_EVIDENCE_KEYS,
         "pre-hardware production evidence",
     )
-    hardware = _object(record["hardware"], "pre-hardware record.hardware")
-    _exact_keys(hardware, PRE_HARDWARE_SUMMARY_KEYS, "pre-hardware summary")
-    if hardware != _expected_pre_hardware_summary(request, record):
-        _fail("pre-hardware summary is stale, cross-target, or predicts execution")
+    for key, value in production.items():
+        _sha(value, f"pre-hardware production evidence.{key}")
     simulator = _validate_reference(request["simulatorEvidence"], "simulator evidence")
     if files["simulator"] != simulator:
         _fail("pre-hardware record substituted semantic simulator evidence")

@@ -817,9 +817,6 @@ fn append_contract_instantiations_v1(
     source.push_str(
         crate::functional_refinement_receipt_v2::ranked_effect_formula_replay_prelude_v2(),
     );
-    source.push_str(
-        crate::functional_refinement_receipt_v2::ranked_effect_ieee_congruence_declaration_v2(),
-    );
     source.push('\n');
     let mut all_symbols = std::collections::BTreeSet::new();
     for replay in &replays {
@@ -838,9 +835,13 @@ fn append_contract_instantiations_v1(
         source.push_str(replay.lemma());
         all_symbols.extend(replay.symbols().iter().copied());
     }
+    let uses_ieee_congruence = replays.iter().any(|replay| replay.uses_ieee_congruence());
     source.push_str("    proof fn fe2o3_replay_all_output_effect_formulas_v1(");
+    if uses_ieee_congruence {
+        source.push_str(crate::functional_refinement_receipt_v2::IEEE_CONGRUENCE_PARAMETER_V2);
+    }
     for (index, symbol) in all_symbols.iter().enumerate() {
-        if index != 0 {
+        if index != 0 || uses_ieee_congruence {
             source.push_str(", ");
         }
         write!(source, "s{symbol}: int").map_err(generated_format_error)?;
@@ -849,8 +850,11 @@ fn append_contract_instantiations_v1(
     for (index, replay) in replays.iter().enumerate() {
         write!(source, "        fe2o3_output_{index}_effect_formula_v1(")
             .map_err(generated_format_error)?;
+        if replay.uses_ieee_congruence() {
+            source.push_str(crate::functional_refinement_receipt_v2::IEEE_CONGRUENCE_ARGUMENT_V2);
+        }
         for (symbol_index, symbol) in replay.symbols().iter().enumerate() {
-            if symbol_index != 0 {
+            if symbol_index != 0 || replay.uses_ieee_congruence() {
                 source.push_str(", ");
             }
             write!(source, "s{symbol}").map_err(generated_format_error)?;
@@ -1189,6 +1193,14 @@ mod tests {
         DigestV1::from_untrusted_bytes([tag; 32])
     }
 
+    fn current_source_from_historical_fixture(frozen: &str) -> String {
+        // Keep reviewed V1 files and pins unchanged. The current generator removes
+        // precisely this unused axiom from the historical integer-only snapshots.
+        const DECLARATION: &str = "\n    // This symbol models congruence of identical compiler-side operator DAG\n    // applications only. It grants no IEEE real-value, lowering, or target\n    // instruction semantics.\n    uninterp spec fn fe2o3_ieee_operator_congruence_v2(tag: int, a: int, b: int, c: int) -> int;\n";
+        assert_eq!(frozen.matches(DECLARATION).count(), 1);
+        frozen.replacen(DECLARATION, "", 1)
+    }
+
     fn obligation_input() -> AggregateObligationInputV1 {
         AggregateObligationInputV1 {
             contract: digest(1),
@@ -1223,14 +1235,26 @@ mod tests {
     }
 
     fn pointwise_contract(extent: SemanticFiniteExtentV1) -> MirPlironSemanticContractV1 {
+        pointwise_scalar_contract(
+            extent,
+            SemanticScalarTypeV1::Unsigned(32),
+            SemanticNumericalPolicyV1::ExactBitVector,
+        )
+    }
+
+    fn pointwise_scalar_contract(
+        extent: SemanticFiniteExtentV1,
+        scalar: SemanticScalarTypeV1,
+        numerical_policy: SemanticNumericalPolicyV1,
+    ) -> MirPlironSemanticContractV1 {
         let domain = digest(21);
         let roots = [22_u8, 23].map(|identity| {
             SemanticTypedRootV1::new(
                 digest(identity),
                 digest(24),
                 domain,
-                SemanticScalarTypeV1::Unsigned(32),
-                SemanticNumericalPolicyV1::ExactBitVector,
+                scalar,
+                numerical_policy,
             )
             .unwrap()
         });
@@ -1298,6 +1322,15 @@ mod tests {
     }
 
     fn bound_effect_kernel() -> (ProductionRankedKernelV1, DigestV1) {
+        bound_scalar_effect_kernel(ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 32,
+        })
+    }
+
+    fn bound_scalar_effect_kernel(
+        scalar: ProductionSemanticScalarTypeV2,
+    ) -> (ProductionRankedKernelV1, DigestV1) {
         let local = |value| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(value));
         let contract = ProductionEffectRefinementContractV2::new(
             73,
@@ -1315,10 +1348,6 @@ mod tests {
             local(3),
         )
         .unwrap();
-        let scalar_u32 = ProductionSemanticScalarTypeV2::Integer {
-            signed: false,
-            bits: 32,
-        };
         let skeleton = ProductionRankedKernelV1::new(
             "aggregate_formula_replay",
             0,
@@ -1346,21 +1375,13 @@ mod tests {
                     },
                     ProductionRankedOperationV1::SemanticExpression {
                         result: ProductionRankedValueIdV1::new(2),
-                        expression: ProductionSemanticExpressionV2::Constant {
-                            scalar: scalar_u32,
-                            bits: 7,
-                        },
-                        numerical_contract:
-                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                        expression: ProductionSemanticExpressionV2::Constant { scalar, bits: 7 },
+                        numerical_contract: ProductionNumericalContractV2::exact_for(scalar),
                     },
                     ProductionRankedOperationV1::SemanticExpression {
                         result: ProductionRankedValueIdV1::new(3),
-                        expression: ProductionSemanticExpressionV2::Constant {
-                            scalar: scalar_u32,
-                            bits: 7,
-                        },
-                        numerical_contract:
-                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                        expression: ProductionSemanticExpressionV2::Constant { scalar, bits: 7 },
+                        numerical_contract: ProductionNumericalContractV2::exact_for(scalar),
                     },
                     ProductionRankedOperationV1::SemanticExpression {
                         result: ProductionRankedValueIdV1::new(4),
@@ -2000,6 +2021,78 @@ mod tests {
         assert!(!source.authenticates_verus_execution());
     }
 
+    fn generated_ieee_aggregate_source() -> String {
+        use fe2o3_functional_proof::{SemanticIeeeExceptionalValueV1, SemanticIeeeRoundingV1};
+        let rounding = SemanticIeeeRoundingV1::NearestTiesEven;
+        let exceptional_values = SemanticIeeeExceptionalValueV1::ExactBits;
+        let (kernel, proof) =
+            bound_scalar_effect_kernel(ProductionSemanticScalarTypeV2::Float { bits: 32 });
+        let contract = pointwise_scalar_contract(
+            SemanticFiniteExtentV1::Static(1),
+            SemanticScalarTypeV1::Float(32),
+            SemanticNumericalPolicyV1::IeeeOperatorCongruence {
+                rounding,
+                exceptional_values,
+            },
+        );
+        let parallel = relation_contract(
+            &contract,
+            ParallelScheduleRelationV1::PointwiseBijection,
+            ParallelNumericalPolicyV1::IeeeOperatorCongruence {
+                rounding,
+                exceptional_values,
+            },
+            proof,
+        );
+        let mut source = GENERATED_COMPOSITION_THEOREM_V1.to_owned();
+        append_contract_instantiations_v1(&mut source, &kernel, &contract, &parallel).unwrap();
+        source
+    }
+
+    #[test]
+    fn aggregate_forwards_one_universal_ieee_interpretation_to_its_effect_lemma() {
+        let source = generated_ieee_aggregate_source();
+        assert_eq!(
+            source
+                .matches(crate::functional_refinement_receipt_v2::IEEE_CONGRUENCE_PARAMETER_V2)
+                .count(),
+            2
+        );
+        assert!(
+            source.contains("fe2o3_output_0_effect_formula_v1(fe2o3_ieee_operator_congruence_v2);")
+        );
+        for forbidden in [
+            "uninterp spec fn",
+            "requires",
+            "assume(",
+            "admit(",
+            "external_body",
+        ] {
+            assert!(!source.contains(forbidden), "unexpected {forbidden}");
+        }
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    #[ignore = "requires the exact pinned functional-refinement test runtime closure"]
+    fn retained_runtime_executes_generated_ieee_aggregate_formula() {
+        let source = CanonicalGeneratedVerusProofInputV3::new(
+            generated_ieee_aggregate_source().into_bytes(),
+        )
+        .unwrap();
+        let outputs = crate::retained_functional_refinement_runtime_v1::execute_pinned_generated_proofs_for_test(&[source]);
+        let output = &outputs[0];
+        assert_eq!(
+            (output.exit_code, output.signal),
+            (Some(0), None),
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stderr.is_empty());
+        assert!(String::from_utf8_lossy(&output.stdout).contains(" verified, 0 errors"));
+    }
+
     #[test]
     fn aggregate_formula_replay_has_a_conservative_whole_compilation_output_limit() {
         assert!(require_aggregate_output_limit_v1(64).is_ok());
@@ -2016,9 +2109,9 @@ mod tests {
         append_contract_instantiations_v1(&mut generated, &kernel, &contract, &parallel).unwrap();
         assert_eq!(
             generated,
-            include_str!(
+            current_source_from_historical_fixture(include_str!(
                 "../verus/mir_pliron_per_compilation_generated_multi_output_fixture_v1.rs"
-            )
+            ))
         );
 
         let needle = "let v6: int = fe2o3_bv_norm_v2(9, 32);";
@@ -2026,9 +2119,9 @@ mod tests {
         let substituted = generated.replacen(needle, "let v6: int = fe2o3_bv_norm_v2(10, 32);", 1);
         assert_eq!(
             substituted,
-            include_str!(
+            current_source_from_historical_fixture(include_str!(
                 "../verus/negative/mir_pliron_per_compilation_multi_output_substitution_v1.rs"
-            )
+            ))
         );
     }
 
@@ -2130,7 +2223,9 @@ mod tests {
         }
         assert_eq!(
             generated,
-            include_str!("../verus/mir_pliron_per_compilation_generated_fixture_v1.rs")
+            current_source_from_historical_fixture(include_str!(
+                "../verus/mir_pliron_per_compilation_generated_fixture_v1.rs"
+            ))
         );
     }
 

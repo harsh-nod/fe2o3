@@ -109,24 +109,51 @@ impl From<RetainedFunctionalRefinementRuntimeOutputV1>
 /// Runtime admission, revalidation, or execution failure.
 #[derive(Debug)]
 pub struct FunctionalRefinementRuntimeErrorV1 {
-    detail: String,
+    source: RetainedFunctionalRefinementRuntimeErrorV1,
 }
 
 impl fmt::Display for FunctionalRefinementRuntimeErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.detail)
+        write!(
+            formatter,
+            "retained generated-proof runtime failed ({:?}): {}",
+            self.source.kind(),
+            self.source,
+        )
     }
 }
 
-impl Error for FunctionalRefinementRuntimeErrorV1 {}
+impl Error for FunctionalRefinementRuntimeErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.source)
+    }
+}
 
 fn runtime_error_from_backend(
     error: RetainedFunctionalRefinementRuntimeErrorV1,
 ) -> FunctionalRefinementRuntimeErrorV1 {
-    FunctionalRefinementRuntimeErrorV1 {
-        detail: format!(
-            "retained generated-proof runtime failed: {:?}",
-            error.kind()
-        ),
+    FunctionalRefinementRuntimeErrorV1 { source: error }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::retained_functional_refinement_runtime_v1::RetainedFunctionalRefinementRuntimeErrorKindV1;
+
+    #[test]
+    fn public_runtime_failure_preserves_the_backend_diagnostic_and_source() {
+        let error = runtime_error_from_backend(RetainedFunctionalRefinementRuntimeErrorV1::new(
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Protection,
+            "runtime directory dist ownership or mode differs",
+        ));
+        let source = error.source().unwrap();
+        assert!(source.is::<RetainedFunctionalRefinementRuntimeErrorV1>());
+        assert!(error.to_string().contains("Protection"));
+        assert!(error.to_string().contains(&source.to_string()));
+        assert!(
+            source
+                .to_string()
+                .contains("runtime directory dist ownership or mode differs")
+        );
     }
 }

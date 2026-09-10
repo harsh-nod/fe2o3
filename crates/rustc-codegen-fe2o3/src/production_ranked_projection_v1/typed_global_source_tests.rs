@@ -312,6 +312,210 @@ fn typed_global_ranked_source_fixture_v1(
     (projection, blocks, sources)
 }
 
+fn typed_global_exclusive_source_fixture_v1(
+    exclusive_input: bool,
+) -> (
+    Vec<SemanticTypeDeclV1>,
+    Vec<SemanticCallableDeclV1>,
+    SemanticFunctionDeclV1,
+) {
+    let (types, callables, function) = typed_global_source_fixture_v1();
+    let (types, callables, function) =
+        typed_global_exclusive_fixture_v1(types, callables, function, exclusive_input);
+    let write_view = function.locals()[14].ty();
+    let physical_write = function.locals()[13].ty();
+    let SemanticTypeShapeV1::Pointer(pointer) = types[physical_write.index() as usize].shape()
+    else {
+        unreachable!();
+    };
+    let slice = pointer.pointee();
+    let mut blocks = function.blocks().to_vec();
+    let original = &blocks[9];
+    let mut statements = original.statements().to_vec();
+    // Global<ExclusiveReadWrite>::len observes the physical mutable slice's
+    // metadata through a shared view borrow, without consuming the allocation.
+    statements.push(typed_assignment(
+        24,
+        U64_TYPE,
+        SemanticRvalueKindV1::Length(
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(22),
+                vec![
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, write_view)
+                        .unwrap(),
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), physical_write)
+                        .unwrap(),
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, slice)
+                        .unwrap(),
+                ],
+                slice,
+            )
+            .unwrap(),
+        ),
+    ));
+    blocks[9] = SemanticBasicBlockV1::new(
+        original.identity(),
+        original.source(),
+        statements,
+        SemanticTerminatorV1::new(
+            original.terminator().source(),
+            SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 10)),
+        ),
+    )
+    .unwrap();
+    let function = typed_global_fixture_with_body_v1(&function, function.locals().to_vec(), blocks);
+    (types, callables, function)
+}
+
+#[test]
+fn typed_global_exclusive_source_preserves_extents_but_rejects_unversioned_loads() {
+    for exclusive_input in [false, true] {
+        let (types, callables, function) =
+            typed_global_exclusive_source_fixture_v1(exclusive_input);
+        let (projection, blocks, sources) =
+            typed_global_ranked_source_fixture_v1(&types, &callables, &function);
+        let read = projection.direct_read_effects[6].as_ref().unwrap();
+        let write = projection.direct_write_effects[11].as_ref().unwrap();
+        assert_eq!(
+            projection.direct_switch_predicates[26],
+            Some(GuardPredicateV1::for_access(write))
+        );
+        assert_eq!(
+            projection.direct_switch_predicates[27],
+            Some(GuardPredicateV1::for_access(read))
+        );
+        assert_eq!(
+            projection.global_uses.comparisons[&(10, 2)].allocation_origin,
+            2
+        );
+        assert_ne!(read.comparisons[0].1, write.comparisons[0].1);
+        let writes = projected_reference_gpu_writes_v2(
+            &types,
+            &callables,
+            &function,
+            &projection,
+            &blocks,
+            &sources,
+        );
+        if exclusive_input {
+            assert_incomplete(
+                writes,
+                "typed global mutable load requires reaching-write semantics",
+            );
+            continue;
+        }
+        let writes = writes.unwrap();
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].allocation_origin, 2);
+        let ProductionSemanticExpressionV2::Binary {
+            operation: ProductionSemanticBinaryOpV2::Add,
+            lhs,
+            ..
+        } = writes[0].value.as_ref().unwrap()
+        else {
+            panic!("missing source arithmetic");
+        };
+        let ProductionSemanticExpressionV2::Load(load) = lhs.as_ref() else {
+            panic!("missing source load");
+        };
+        let source = sources
+            .iter()
+            .find(|source| source.access == AccessKindAttr::Read)
+            .unwrap();
+        assert_eq!(
+            (
+                load.block as usize,
+                load.operation as usize,
+                load.allocation_origin
+            ),
+            (source.block, source.operation, 1)
+        );
+        assert_eq!(
+            source.semantic_site,
+            Some(ProjectedSemanticAccessSiteV1 {
+                block: 6,
+                statement: None
+            })
+        );
+    }
+}
+
+#[test]
+fn typed_global_exclusive_source_rejects_substituted_load_and_store_sites() {
+    let (types, callables, function) = typed_global_exclusive_source_fixture_v1(false);
+    let (projection, blocks, sources) =
+        typed_global_ranked_source_fixture_v1(&types, &callables, &function);
+    assert!(
+        projected_reference_gpu_writes_v2(
+            &types,
+            &callables,
+            &function,
+            &projection,
+            &blocks,
+            &sources,
+        )
+        .unwrap()
+        .iter()
+        .all(|write| write.value.is_ok())
+    );
+    for access in [AccessKindAttr::Read, AccessKindAttr::Write] {
+        let mut changed = sources.clone();
+        let source = changed
+            .iter_mut()
+            .find(|source| source.access == access)
+            .unwrap();
+        source.semantic_site = Some(ProjectedSemanticAccessSiteV1 {
+            block: if access == AccessKindAttr::Read {
+                11
+            } else {
+                6
+            },
+            statement: None,
+        });
+        let result = projected_reference_gpu_writes_v2(
+            &types,
+            &callables,
+            &function,
+            &projection,
+            &blocks,
+            &changed,
+        );
+        assert!(result.is_err() || result.unwrap().iter().any(|write| write.value.is_err()));
+    }
+}
+
+#[test]
+fn typed_global_exclusive_source_invalidated_extent_does_not_authorize_guard() {
+    for kind in [SemanticPointerKindV1::Reference, SemanticPointerKindV1::Raw] {
+        let (mut types, callables, function) = typed_global_exclusive_source_fixture_v1(false);
+        let mut locals = function.locals().to_vec();
+        let mutation = typed_global_source_alias_mutation_v1(
+            &mut types,
+            &mut locals,
+            25,
+            typed_constant(U64_TYPE, u128::from(u64::MAX), 8),
+            kind,
+        );
+        let mut blocks = function.blocks().to_vec();
+        let original = &blocks[10];
+        let mut statements = original.statements().to_vec();
+        statements.splice(2..2, mutation);
+        blocks[10] = SemanticBasicBlockV1::new(
+            original.identity(),
+            original.source(),
+            statements,
+            original.terminator().clone(),
+        )
+        .unwrap();
+        let changed = typed_global_fixture_with_body_v1(&function, locals, blocks);
+        let (projection, _) =
+            project_capability_index_fixture(&types, &callables, &changed).unwrap();
+        assert!(projection.direct_switch_predicates[26].is_none());
+        assert!(!projection.global_uses.comparisons.contains_key(&(10, 4)));
+        assert!(projection.direct_write_effects[11].is_some());
+    }
+}
+
 #[test]
 fn typed_global_source_preserves_helper_extent_and_load_store_sites() {
     let (types, callables, function) = typed_global_source_fixture_v1();

@@ -996,6 +996,7 @@ fn expanded_helper_bounds_preserve_move_and_storage_availability() {
         for kind in [
             SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(1)),
             SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(1)),
+            SemanticStatementKindV1::Deinitialize(place(1, U32)),
         ] {
             let dead = prepend_helper_statements(
                 &source,

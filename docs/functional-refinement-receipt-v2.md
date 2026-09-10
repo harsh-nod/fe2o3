@@ -57,7 +57,13 @@ not merely equality of operator tags. Operation definedness is checked before
 receipt admission. Floating-point expressions still use a separately tagged
 uninterpreted operator-congruence model; their receipt proves typed MIR
 operator identity under the declared rounding/exception policy, not IEEE value
-equivalence or target-instruction conformance.
+equivalence or target-instruction conformance. The interpretation is a universally
+quantified `spec_fn(int, int, int, int) -> int` parameter, not an assumed function
+body. Each aggregate replay passes the same interpretation into every applicable
+effect lemma. Integer-only formulas do not carry that parameter. This uses
+[Verus spec closures](https://verus-lang.github.io/verus/guide/spec_closures.html)
+and keeps `--no-cheating` enabled; the former unconditional `uninterp spec fn`
+declaration was rejected by that production flag even for integer-only proofs.
 
 The distributed path returns an unsigned canonical receipt to a configured
 signer. The local path creates an ephemeral compiler-owned Ed25519 trust root,
@@ -98,6 +104,24 @@ Ubuntu's `zlib1g_1.3.dfsg-3.1ubuntu2.1_amd64.deb`; extracting that package into 
 private staging directory does not install it. These version labels aid
 recovery only: the manifest byte pins, not package names, decide admission.
 Source audit success does not establish proof execution or artifact authority.
+
+The ignored `pinned_functional_refinement_runtime_executes_a_real_verus_proof`
+test exercises the retained process controller using the exact manifest bytes.
+Set `FE2O3_FUNCTIONAL_REFINEMENT_TEST_RUNTIME_ROOT` to a complete test closure
+and run the selected test with `--ignored`. Its private, test-only filesystem
+policy permits a user-owned closure; that policy is absent from production
+builds and cannot create a production runtime lease or proof receipt. The
+smoke test passed on mi300x on 2026-09-09. Production admission still requires
+the root-owned installation and all normal path, inventory, and content checks.
+Two additional ignored tests passed through the same retained controller:
+`retained_runtime_checks_generated_equivalence_and_rejects_operator_mutations`
+checks integer and IEEE operator-congruence formulas and requires wrong-operator
+mutations to fail assertions, not runtime setup;
+`retained_runtime_executes_generated_ieee_aggregate_formula` checks forwarding
+of the universal interpretation through a generated aggregate proof. None of
+these tests signs a receipt or establishes tutorial compilation or GPU execution.
+Runtime errors preserve the underlying diagnostic and error chain, including
+the failing object or protection check.
 
 ## Remaining boundaries
 

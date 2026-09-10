@@ -72,6 +72,7 @@ use fe2o3_hsaco_finalize::{
     WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError,
     WorkerV3HsacoInspectionError, WorkerV3HsacoPublicationErrorV1,
     admit_production_kir_v7_structural_bridge_v1,
+    begin_protected_worker_v3_machine_refined_finalization_v1,
     execute_protected_reproducible_first_build_worker_v3, finalize_protected_worker_v3_hsaco_v1,
     inspect_protected_worker_v3_hsaco_v1, inspect_unfinalized,
     persist_prepared_protected_worker_v3_hsaco_publication_v1,
@@ -122,10 +123,10 @@ mod hsaco_fixture;
 mod production_semantic_debug_fixture_v1;
 
 use compiler_proof_inputs_v3::{
-    ProductionSourceIsaKernelFamilyV1, canonical_compiler_proof_inputs_v4,
-    canonical_compiler_proof_inputs_v4_with_sourceful_family,
-    canonical_compiler_proof_inputs_v4_with_sourceful_induction,
-    canonical_verus_execution_evidence_v1,
+    ProductionSourceIsaKernelFamilyV1, canonical_verus_execution_evidence_v1,
+    historical_compiler_proof_inputs_v4 as canonical_compiler_proof_inputs_v4,
+    historical_compiler_proof_inputs_v4_with_sourceful_family as canonical_compiler_proof_inputs_v4_with_sourceful_family,
+    historical_compiler_proof_inputs_v4_with_sourceful_induction as canonical_compiler_proof_inputs_v4_with_sourceful_induction,
 };
 use hsaco_fixture::{
     ScalarAddFixtureMutation, scalar_add_fixture_with, slice_fixture_with_descriptor_table,
@@ -634,6 +635,42 @@ fn native_v3_finalization_fails_closed_without_machine_refinement_evidence() {
     assert_eq!(retained.identity(), raw_identity);
     assert_eq!(retained.raw_hsaco_identity(), raw_output);
     assert!(!retained.grants_publication_authority());
+
+    let retained = match begin_protected_worker_v3_machine_refined_finalization_v1(*retained, None)
+    {
+        Err(WorkerV3HsacoFinalizationError::MissingMachineRefinementEvidence(retained)) => retained,
+        result => {
+            panic!("expected native machine-evidence input to remain mandatory, found {result:?}")
+        }
+    };
+    assert_eq!(retained.identity(), raw_identity);
+    assert_eq!(retained.raw_hsaco_identity(), raw_output);
+    assert!(!retained.grants_publication_authority());
+    assert!(!retained.grants_load_authority());
+    assert!(!retained.grants_launch_authority());
+}
+
+#[test]
+fn native_machine_finalization_preserves_descriptor_source_blocker() {
+    let raw = inspected(
+        scalar_add_fixture_with(ScalarAddFixtureMutation::RequiredWorkgroup).bytes,
+        EvidenceConfig::BASE,
+    );
+    let identity = raw.identity();
+    let output = raw.raw_hsaco_identity();
+    let blocker = match begin_protected_worker_v3_machine_refined_finalization_v1(raw, None) {
+        Err(
+            WorkerV3HsacoFinalizationError::MissingAuthenticatedProtectedDescriptorSourceEvidenceV3(
+                blocker,
+            ),
+        ) => blocker,
+        result => panic!("expected native descriptor-source blocker, found {result:?}"),
+    };
+    assert_eq!(blocker.raw_inspection_identity(), identity);
+    assert_eq!(blocker.raw_output_identity(), output);
+    assert!(!blocker.grants_publication_authority());
+    assert!(!blocker.grants_load_authority());
+    assert!(!blocker.grants_launch_authority());
 }
 
 #[test]
@@ -1729,6 +1766,9 @@ fn semantic_anchor_handoff_with_version_and_family(
     let proof_inputs = canonical_compiler_proof_inputs_v4_with_sourceful_family(0x20, family);
     let neutral_bytes = replay_kernel_ir_bytes(proof_inputs.kernel_ir(), version);
     let neutral_module = match version {
+        ProductionReplayKernelIrVersionV1::V13 => {
+            panic!("legacy anchor fixture cannot represent capability-closed V13")
+        }
         ProductionReplayKernelIrVersionV1::V8 => {
             VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(neutral_bytes)
                 .unwrap()
@@ -1747,6 +1787,9 @@ fn semantic_anchor_handoff_with_version_and_family(
     };
     let target_bound = bind_production_target_v1(&neutral_module, profile).unwrap();
     let anchor_identity = match version {
+        ProductionReplayKernelIrVersionV1::V13 => {
+            panic!("legacy anchor fixture cannot represent capability-closed V13")
+        }
         ProductionReplayKernelIrVersionV1::V8 => {
             let owner =
                 VerifiedCanonicalKernelIrV8::from_module(target_bound.module().clone()).unwrap();
@@ -1818,6 +1861,9 @@ fn replay_kernel_ir_bytes(
         VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(canonical_v8.to_vec())
             .unwrap();
     match version {
+        ProductionReplayKernelIrVersionV1::V13 => {
+            panic!("legacy replay fixture cannot manufacture native V13 lineage")
+        }
         ProductionReplayKernelIrVersionV1::V8 => canonical_v8.to_vec(),
         ProductionReplayKernelIrVersionV1::V9 => VerifiedCanonicalKernelIrV9::from_module(module)
             .unwrap()
@@ -4037,6 +4083,9 @@ fn capsule_bytes_with_semantic_to_llvm_and_version_for_family(
     receipts[6].0 = proof_inputs.formal_memory().to_vec();
     let profile = replay_profile.unwrap_or(ProductionAmdTargetProfileV1::Gfx942);
     let neutral_module = match replay_version {
+        ProductionReplayKernelIrVersionV1::V13 => {
+            panic!("legacy anchor fixture cannot represent capability-closed V13")
+        }
         ProductionReplayKernelIrVersionV1::V8 => {
             VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(receipts[4].0.clone())
                 .unwrap()
@@ -4055,6 +4104,9 @@ fn capsule_bytes_with_semantic_to_llvm_and_version_for_family(
     };
     let target_bound = bind_production_target_v1(&neutral_module, profile).unwrap();
     let anchor_identity = match replay_version {
+        ProductionReplayKernelIrVersionV1::V13 => {
+            panic!("legacy anchor fixture cannot represent capability-closed V13")
+        }
         ProductionReplayKernelIrVersionV1::V8 => {
             let owner =
                 VerifiedCanonicalKernelIrV8::from_module(target_bound.module().clone()).unwrap();

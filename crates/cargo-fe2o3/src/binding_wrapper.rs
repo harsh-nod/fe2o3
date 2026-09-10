@@ -21,8 +21,8 @@ use fe2o3_compiler_execution_protocol::CompilerExecutionReceiptCarriageV1;
 use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3;
 use fe2o3_hsaco_finalize::{
     PublishedProtectedWorkerV3HsacoV1, RecoveredProtectedWorkerV3HsacoPublicationV1,
-    WorkerV3HsacoPublicationErrorV1, finalize_protected_worker_v3_hsaco_v1,
-    inspect_protected_worker_v3_hsaco_v1,
+    WorkerV3HsacoPublicationErrorV1, begin_protected_worker_v3_machine_refined_finalization_v1,
+    finalize_protected_worker_v3_hsaco_v1, inspect_protected_worker_v3_hsaco_v1,
     persist_prepared_protected_worker_v3_hsaco_publication_v1,
     prepare_protected_worker_v3_hsaco_publication_v1,
     publish_recovered_protected_worker_v3_hsaco_v1,
@@ -68,8 +68,8 @@ use crate::inert_rustc_invocation_capture::{
 use crate::pinned_codegen_backend::PinnedCodegenBackend;
 use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
 use crate::production_capability_completion_v5::{
-    CompletedProductionCapabilityCompletionJoinV5, ProductionCapabilityCompletionExecutorV5,
-    prepare_pending_capability_result_v1,
+    CompletedProductionCapabilityCompletionJoinV5, PendingProductionCapabilityCompletionJoinV5,
+    ProductionCapabilityCompletionExecutorV5, prepare_pending_capability_result_v1,
 };
 use crate::project::PinnedDirectory;
 use crate::protected_compiler_handoff_v3::{
@@ -2426,11 +2426,41 @@ fn complete_fresh_production_artifact(
             "independent strict V3 raw-HSACO inspection failed: {error}"
         ))
     })?;
-    if capability_v5.is_some() {
-        return Err(CompletionFailure::Uncommitted(
-            "native V5 completion requires an independently checked target-machine refinement before canonical HSACO finalization"
-                .to_owned(),
-        ));
+    if let Some(capability_v5) = capability_v5 {
+        // The current worker retains stage identities, not the complete stage contents,
+        // instruction-selection correspondence, and decoded ISA needed by the independent
+        // machine checker. Keep that missing producer explicit; LLVM replay cannot replace it.
+        let finalized = begin_protected_worker_v3_machine_refined_finalization_v1(inspected, None)
+            .map_err(|error| {
+                CompletionFailure::Uncommitted(format!(
+                    "native V5 independently checked machine finalization failed: {error}"
+                ))
+            })?;
+        let prepared = capability_v5
+            .begin_completion(finalized.exact_finalized_bytes().to_vec())
+            .map_err(|error| {
+                CompletionFailure::Uncommitted(format!(
+                    "native V5 exact finalized-object preparation failed: {error}"
+                ))
+            })?;
+        let join = PendingProductionCapabilityCompletionJoinV5::new(
+            prepared,
+            finalized,
+            compiler_execution,
+        )
+        .map_err(|error| {
+            CompletionFailure::Uncommitted(format!(
+                "native V5 compiler/finalizer custody join failed: {error}"
+            ))
+        })?;
+        let completed = join
+            .complete_with_available_authority(capability_completion)
+            .map_err(|error| {
+                CompletionFailure::Uncommitted(format!(
+                    "native V5 authenticated compiler completion failed: {error}"
+                ))
+            })?;
+        return complete_fresh_capability_artifact(managed, compiler_closure, completed);
     }
     let finalized = finalize_protected_worker_v3_hsaco_v1(inspected).map_err(|error| {
         CompletionFailure::Uncommitted(format!(

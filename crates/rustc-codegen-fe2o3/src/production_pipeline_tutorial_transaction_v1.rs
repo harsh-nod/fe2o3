@@ -744,6 +744,9 @@ fn read_bounded_optional_file(path: &Path, maximum: u64, label: &str) -> ResultV
     Ok(bytes)
 }
 
+#[path = "production_pipeline_tutorial_transaction_negative_v1.rs"]
+mod negative_fixture;
+
 include!("production_pipeline_tutorial_transaction_request_v1.rs");
 include!("production_pipeline_tutorial_transaction_evidence_v1.rs");
 include!("production_pipeline_tutorial_transaction_pre_hardware_v1.rs");

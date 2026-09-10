@@ -38,7 +38,15 @@ exact allocation, extent, index, access, and predicate relations. Physical-view
 metadata remains tied to the authenticated allocation. Shared scalar slices
 retain read-only access even when rustc's ABI record omits a frozen-pointee
 flag; this refinement does not apply to raw pointers or interior-mutable data.
-Exclusive and nonidentity mappings remain unsupported in this ranked path.
+Exclusive read/write views now preserve their authenticated mutable borrow,
+allocation, access, and source relations in this ranked path. Functional value
+correlation still rejects loads from writable allocations: access coordinates
+alone do not establish which write supplies a mutable load. A reaching-write
+model remains required. An exclusive allocation does not imply disjoint
+invocation accesses: stores still require
+an exact invocation-derived index, and ranked race and ownership checks remain
+mandatory. Blocked stores and unsupported compact arithmetic index mappings
+still reject.
 
 The real vecadd extraction now passes write-guard and expression matching and
 CPU-reference bounds discharge. For input arrays `a` and `b`, the CPU reference
@@ -57,8 +65,19 @@ pinned runtime closure. No source-reference proof, Bundle V8, HSACO, protected
 launch, or hardware qualification was produced by this extraction.
 The exact runtime source audit now passes on mi300x using privately staged
 pinned libraries and rustup provenance, without changing system libraries or
-manifest pins. The protected runtime has not been installed. The available
-mi350 host has a different system loader and does not match this runtime pin.
+manifest pins. The existing ignored retained-runtime smoke test now passes on
+mi300x with those exact bytes. It uses the test-only ownership policy in private
+scratch, executes a real Verus proof, and produces no production lease or
+receipt. The protected runtime has not been installed: mi300x requires a sudo
+password, so administrator provisioning remains necessary. The available mi350
+host has a different system loader and does not match this runtime pin.
+The retained controller also verifies generated integer and floating-point
+operator-congruence formulas, rejects wrong-operator mutations in both models,
+and verifies a generated IEEE aggregate formula. These are explicit test-only
+executions, not tutorial source compilation or receipt publication.
+They exposed and fixed an unconditional assumed-function declaration that was
+incompatible with `--no-cheating`. The generator now universally quantifies
+the operator interpretation and forwards it through aggregate effect proofs.
 
 Separately tested KIR value correlation accepts a guarded load as a source
 load only when its exact authenticated recipe is intact, the load precedes
@@ -108,13 +127,24 @@ gfx950. Source, target, and final-graph substitutions reject. This receipt path
 already existed; no new outer capsule version was needed. The tests do not
 establish source-proof execution, machine refinement, or a GPU observation.
 
+Native V5 has a typed continuation from pending machine-refined finalization
+through authenticated compiler completion to publication. The finalizer binds
+the checked machine evidence to the exact worker request, response, optimized
+bitcode, generated object, and raw HSACO. The production worker still lacks
+complete stage-content and instruction-selection/decoded-ISA capture for the
+independent checker, so its missing machine evidence remains fatal.
+
 The hardware protocol now admits compiler-only preparation separately from
 signed hardware observations. Rust verifies the newline-inclusive prepared
 record identity and preserves authenticated payload bytes. Python gathers
 driver/runtime facts on the target host. A real sealed V5/Bundle V8 archive
-has not yet passed the combined Python-to-Rust positive path. Finalization
-also lacks compiler-produced typed negative-fixture receipts; caller JSON
-claiming that negatives passed cannot authorize promotion.
+has not yet passed the combined Python-to-Rust positive path. The Python
+producer now consumes the current compiler-only preparation schema and leaves
+driver/runtime facts to the hardware observation. A compiler-owned negative
+replay removes one root from the exact retained source MIR roster and reruns
+admission, with an independent replay on import. This is explicitly incomplete:
+it does not recompile a mutated Rust kernel or satisfy the required negative
+suite. Caller JSON claiming that negatives passed cannot authorize promotion.
 
 Python and Rust now hash package sources in the same component order, excluding
 only `target` directories. A shared digest vector covers prefix collisions and
@@ -126,18 +156,32 @@ unqualified. `--check-inputs` validates current inputs without promoting them;
 `--committed-parity` additionally requires exact shared contract bytes in both
 repositories' committed HEADs.
 
-Current component validation passes 1,585 library tests: 645 compiler, 128 MIR
+Current component validation passes 1,601 library tests: 658 compiler, 128 MIR
 model, 166 Pliron, 200 lowering, 51 AMD model, 130 kernel analysis, 104 KIR,
-39 shared lineage, and 122 verifier tests. Four verifier tests remain ignored:
-three subprocess helpers and the provisioning-dependent proof-runtime test.
-The selected native capability verifier integration suite passes 17 tests,
-including rejection of unchanged historical evidence with a stale work report.
+39 shared lineage, and 125 verifier tests. Six verifier tests are ignored by
+default: three subprocess helpers and three provisioning-dependent runtime
+tests. All three runtime tests passed in explicit test-only runs on mi300x.
+The selected native capability verifier integration suite passes 20 tests,
+including three shared historical-fixture tests and rejection of unchanged
+historical evidence with a stale work report.
+The transaction producer and batch-verifier CLI suites pass another 14 tests.
+The finalizer library suite passes 111 tests, including three machine-binding
+tests and three historical-fixture regressions. Genuine V8 fixtures captured
+from compiler revision `149019b40` repair the stale fixture dependency without
+projecting V13 into V8. Their original bytes stay frozen; a separate current
+induction replay preserves every certificate and correspondence coordinate.
+Worker-admission integration passes 16 tests, but 12 still fail at the missing
+machine-refinement gate before their later finalization/publication assertions.
+Two real-worker integration tests remain ignored. No missing proof was replaced
+with fixture authority to make these tests pass.
 This is not a full-workspace test result or all-kernel equivalence evidence.
 Strict Clippy is not clean: existing style diagnostics remain in the MIR model
 and proof-contract dependency.
 
-The tutorial website passes 198 unit tests, corpus validation, lint, type
-checking, and its production build. The updated capability page also passes
+The tutorial website passes 198 unit tests with two workers, corpus validation,
+lint, type checking, and its production build. A default-concurrency rerun hit
+an unrelated debugger UI test's five-second timeout; the two-worker rerun
+passed without changing that test. The updated capability page also passes
 desktop/mobile browser checks and overflow checks. Qualification remains 0 of
 47; neither these component results nor contract parity establishes a complete
 source-proof, machine-refinement, artifact, and hardware chain. No deployment
