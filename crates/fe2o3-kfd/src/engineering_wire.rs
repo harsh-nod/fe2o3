@@ -17,6 +17,7 @@ pub const MAX_TRANSFER_BYTES_V1: u32 = 4 * 1024 * 1024;
 pub const MAX_OBJECT_BYTES_V1: u32 = 64 * 1024 * 1024;
 pub const MAX_KERNARG_BYTES_V1: u32 = 65_536;
 pub const MAX_POINTER_FIXUPS_V1: usize = 256;
+pub const MAX_SEQUENCE_DISPATCHES_V1: usize = 16;
 /// Conservative dispatch budget when hardware read-pointer reports never advance.
 pub const MAX_UNRETIRED_RING_PACKETS_V1: u64 = 131_072;
 
@@ -39,6 +40,42 @@ pub struct PointerFixupV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SequenceDispatchV1 {
+    pub kernel: u64,
+    pub payload_bytes: u32,
+    pub workgroup: [u16; 3],
+    pub grid: [u32; 3],
+    pub pointers: Vec<PointerFixupV1>,
+    pub timeout_ms: u32,
+}
+
+fn sequence_payload_bytes(dispatches: &[SequenceDispatchV1]) -> io::Result<usize> {
+    if dispatches.is_empty() || dispatches.len() > MAX_SEQUENCE_DISPATCHES_V1 {
+        return Err(invalid("engineering sequence length"));
+    }
+    let mut bytes = 0_u32;
+    let mut timeout = 0_u32;
+    for dispatch in dispatches {
+        if dispatch.payload_bytes > MAX_KERNARG_BYTES_V1
+            || dispatch.pointers.len() > MAX_POINTER_FIXUPS_V1
+            || dispatch.timeout_ms == 0
+        {
+            return Err(invalid("engineering sequence dispatch limits"));
+        }
+        bytes = bytes
+            .checked_add(dispatch.payload_bytes)
+            .filter(|bytes| *bytes <= MAX_TRANSFER_BYTES_V1)
+            .ok_or_else(|| invalid("engineering sequence payload limit"))?;
+        timeout = timeout
+            .checked_add(dispatch.timeout_ms)
+            .filter(|timeout| *timeout <= 600_000)
+            .ok_or_else(|| invalid("engineering sequence timeout limit"))?;
+    }
+    Ok(bytes as usize)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CommandV1 {
     /// Explicit engineering policy, accepted once before user resources exist.
@@ -52,6 +89,10 @@ pub enum CommandV1 {
     RolloverQueue {
         expected_epoch: u64,
         expected_completed_packets: u64,
+    },
+    /// Concatenated kernargs; no allocation or lifetime transition between items.
+    DispatchSequence {
+        dispatches: Vec<SequenceDispatchV1>,
     },
     Allocate {
         bytes: u64,
@@ -89,6 +130,7 @@ impl CommandV1 {
     /// Checks framing limits before allocating or reading any binary payload.
     pub fn payload_bytes(&self) -> io::Result<usize> {
         let length = match self {
+            Self::DispatchSequence { dispatches } => return sequence_payload_bytes(dispatches),
             Self::Write { payload_bytes, .. } if *payload_bytes <= MAX_TRANSFER_BYTES_V1 => {
                 *payload_bytes
             }
@@ -184,6 +226,16 @@ pub struct ExplicitArgumentV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ResponseV1 {
+    DispatchSequenceCompleted {
+        elapsed_ns: Vec<u64>,
+    },
+    DispatchSequenceFailed {
+        completed_dispatches: u32,
+        attempted_dispatches: u32,
+        elapsed_ns: Vec<u64>,
+        message: String,
+        fatal: bool,
+    },
     QueueRolledOver {
         retired_packets: u64,
         queue_epoch: u64,
@@ -272,6 +324,62 @@ fn invalid(message: &'static str) -> io::Error {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn sequences_have_exact_cumulative_payload_and_time_bounds() {
+        let dispatch = SequenceDispatchV1 {
+            kernel: 1,
+            payload_bytes: MAX_KERNARG_BYTES_V1,
+            workgroup: [64, 1, 1],
+            grid: [64, 1, 1],
+            pointers: Vec::new(),
+            timeout_ms: 1,
+        };
+        assert!(sequence_payload_bytes(&[]).is_err());
+        assert_eq!(
+            sequence_payload_bytes(&vec![dispatch.clone(); 16]).unwrap(),
+            16 * MAX_KERNARG_BYTES_V1 as usize
+        );
+        assert!(sequence_payload_bytes(&vec![dispatch.clone(); 17]).is_err());
+        let mut excessive = dispatch.clone();
+        excessive.payload_bytes += 1;
+        assert!(sequence_payload_bytes(&[excessive]).is_err());
+        excessive = dispatch.clone();
+        excessive.timeout_ms = 0;
+        assert!(sequence_payload_bytes(&[excessive]).is_err());
+        excessive = dispatch.clone();
+        excessive.timeout_ms = 300_001;
+        assert!(sequence_payload_bytes(&[excessive.clone(), excessive]).is_err());
+        excessive = dispatch.clone();
+        excessive.timeout_ms = u32::MAX;
+        assert!(sequence_payload_bytes(&[excessive]).is_err());
+        let command = CommandV1::DispatchSequence {
+            dispatches: vec![dispatch],
+        };
+        let mut bytes = Vec::new();
+        write_header_v1(&mut bytes, &command).unwrap();
+        assert_eq!(
+            read_header_v1::<CommandV1>(&mut Cursor::new(bytes)).unwrap(),
+            Some(command)
+        );
+    }
+
+    #[test]
+    fn failed_sequence_reports_completed_and_attempted_counts_separately() {
+        let response = ResponseV1::DispatchSequenceFailed {
+            completed_dispatches: 1,
+            attempted_dispatches: 2,
+            elapsed_ns: vec![7],
+            message: "uncertain second publication".into(),
+            fatal: true,
+        };
+        let mut bytes = Vec::new();
+        write_header_v1(&mut bytes, &response).unwrap();
+        assert_eq!(
+            read_header_v1::<ResponseV1>(&mut Cursor::new(bytes)).unwrap(),
+            Some(response)
+        );
+    }
 
     #[test]
     fn performance_commands_are_explicit_bounded_and_exact() {

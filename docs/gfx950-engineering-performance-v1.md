@@ -95,3 +95,31 @@ completion signal. The existing 131072-unretired-packet bound is unchanged;
 controllers must request rollover before a dispatch would exhaust that ring.
 Any uncertain destroy, unmap, disable, allocation, create, or validation result
 is terminal and must end the process; it is never retried on the same owner.
+
+## Checked Dispatch Sequences
+
+`DispatchSequence { dispatches }` contains 1 to 16 `SequenceDispatchV1` entries.
+Each entry has the ordinary kernel identifier, kernarg byte count, geometry,
+pointer fixups, and timeout; binary payload concatenates exactly those kernarg
+regions. Normal kernarg/fixup bounds apply, total payload is at most 4 MiB, and
+the sum of per-dispatch timeouts is at most 600000 ms. Header bounds are
+unchanged. Allocation, free, load, write, and rollover cannot occur inside a
+sequence.
+
+The worker checks full currentness and idle state, verifies enough retained
+ring capacity for the whole sequence, and prepares every binding before
+publishing the first packet. It executes packets sequentially using the same
+completion checks and per-dispatch timeout as the ordinary path. Signal and
+kernarg storage are never overwritten while a dispatch may still be live.
+Full currentness and idle state are checked again before success. This removes
+parent/worker round trips, not GPU completion waits; it is not async dispatch.
+
+Success returns `DispatchSequenceCompleted { elapsed_ns }`, one completed
+timing per requested dispatch in order. Failure returns one terminal
+`DispatchSequenceFailed` with completed timings, `completed_dispatches`,
+`attempted_dispatches`, message, and `fatal: true`. Preparation failures have
+zero attempts. An attempted but unacknowledged dispatch is uncertain, not a
+completed dispatch. Post-sequence fence failure may report every dispatch
+complete but still be fatal. The process retains all resources and exits; no
+second error frame or subsequent command is emitted/accepted after this
+failure response. Sequence framing errors use the ordinary fatal error frame.

@@ -55,6 +55,14 @@ struct Kernel {
     descriptor_offset: u64,
 }
 
+struct PreparedDispatch {
+    bytes: Vec<u8>,
+    geometry: AqlDispatchGeometryV1,
+    descriptor: u64,
+    alignment: u64,
+    group_bytes: u32,
+}
+
 /// Crate-private owner. Its only caller is the explicit disposable-process
 /// entry below. On any uncertain native result, the complete owner is leaked
 /// until process teardown instead of retrying or freeing live resources.
@@ -618,17 +626,14 @@ impl Context {
         })
     }
 
-    /// The enclosing process opted into unauthenticated machine code. Exact
-    /// target/ABI/ownership checks do not prove the code honors these bounds.
-    unsafe fn dispatch(
+    fn prepare_dispatch(
         &mut self,
         id: u64,
         mut bytes: Vec<u8>,
         workgroup: [u16; 3],
         grid: [u32; 3],
         pointers: &[PointerFixupV1],
-        timeout_ms: u32,
-    ) -> Result<u64> {
+    ) -> Result<PreparedDispatch> {
         let prepare_started = self.profile_started();
         self.check_idle()?;
         let geometry =
@@ -694,12 +699,49 @@ impl Context {
         let alignment = u64::from(kernel.metadata.kernarg_alignment);
         let group_bytes = kernel.metadata.group_segment_bytes;
         drop(closure);
+        record_elapsed(&mut self.counters.dispatch_prepare_ns, prepare_started)?;
+        Ok(PreparedDispatch {
+            bytes,
+            geometry,
+            descriptor,
+            alignment,
+            group_bytes,
+        })
+    }
+
+    /// The enclosing process opted into unauthenticated machine code. Exact
+    /// target/ABI/ownership checks do not prove the code honors these bounds.
+    unsafe fn dispatch(
+        &mut self,
+        id: u64,
+        bytes: Vec<u8>,
+        workgroup: [u16; 3],
+        grid: [u32; 3],
+        pointers: &[PointerFixupV1],
+        timeout_ms: u32,
+    ) -> Result<u64> {
+        let prepared = self.prepare_dispatch(id, bytes, workgroup, grid, pointers)?;
+        // SAFETY: the same dedicated-process and trusted-code contract applies.
+        unsafe { self.execute_prepared_dispatch(prepared, timeout_ms) }
+    }
+
+    unsafe fn execute_prepared_dispatch(
+        &mut self,
+        prepared: PreparedDispatch,
+        timeout_ms: u32,
+    ) -> Result<u64> {
+        let PreparedDispatch {
+            bytes,
+            geometry,
+            descriptor,
+            alignment,
+            group_bytes,
+        } = prepared;
         let reservation = self
             .ring
             .reserve_one(self.last_observed_read)
             .map_err(explain)?;
         let next = reservation.next_write();
-        record_elapsed(&mut self.counters.dispatch_prepare_ns, prepare_started)?;
         let publish_started = self.profile_started();
         let started = Instant::now();
         Backend::with_bytes_mut(
@@ -787,10 +829,77 @@ impl Context {
         self.completed_write = next;
         record_elapsed(&mut self.counters.dispatch_wait_ns, wait_started)?;
         self.check_idle()?;
-        if prepare_started.is_some() {
+        if publish_started.is_some() {
             add_counter(&mut self.counters.dispatches, 1)?;
         }
         u64::try_from(started.elapsed().as_nanos()).map_err(explain)
+    }
+
+    unsafe fn dispatch_sequence(
+        &mut self,
+        dispatches: Vec<SequenceDispatchV1>,
+        payload: Vec<u8>,
+    ) -> ResponseV1 {
+        let mut elapsed_ns = Vec::with_capacity(dispatches.len());
+        let mut attempted_dispatches = 0_u32;
+        let result = (|| -> Result<()> {
+            let expected_payload = CommandV1::DispatchSequence {
+                dispatches: dispatches.clone(),
+            }
+            .payload_bytes()
+            .map_err(explain)?;
+            if expected_payload != payload.len() {
+                return Err("sequence payload length".into());
+            }
+            self.check_currentness(true)?;
+            self.check_idle()?;
+            require_sequence_capacity(
+                self.ring.write(),
+                self.last_observed_read,
+                dispatches.len(),
+            )?;
+            let mut prepared = Vec::with_capacity(dispatches.len());
+            let mut offset = 0_usize;
+            // Validate every argument and resource binding before publishing any
+            // packet. Only sequential dispatch follows, so lifetimes cannot change.
+            for dispatch in dispatches {
+                let end = offset
+                    .checked_add(dispatch.payload_bytes as usize)
+                    .ok_or("sequence payload overflow")?;
+                prepared.push((
+                    self.prepare_dispatch(
+                        dispatch.kernel,
+                        payload
+                            .get(offset..end)
+                            .ok_or("sequence payload bounds")?
+                            .to_vec(),
+                        dispatch.workgroup,
+                        dispatch.grid,
+                        &dispatch.pointers,
+                    )?,
+                    dispatch.timeout_ms,
+                ));
+                offset = end;
+            }
+            for (dispatch, timeout) in prepared {
+                attempted_dispatches += 1;
+                // SAFETY: same owner, no intervening free/load/write operation,
+                // and each preceding signal was observed complete before reuse.
+                elapsed_ns.push(unsafe { self.execute_prepared_dispatch(dispatch, timeout) }?);
+            }
+            self.check_currentness(true)?;
+            self.check_idle()
+        })();
+        match result {
+            Ok(()) => ResponseV1::DispatchSequenceCompleted { elapsed_ns },
+            Err(message) => ResponseV1::DispatchSequenceFailed {
+                completed_dispatches: elapsed_ns.len() as u32,
+                attempted_dispatches,
+                elapsed_ns,
+                message,
+                fatal: true,
+            },
+        }
     }
 
     fn destroy_queue(&mut self) -> Result<LinuxKfdRuntimeDisabledV1> {
@@ -913,6 +1022,20 @@ fn validate_counters(expected_write: u64, last_read: u64, counters: (u64, u64)) 
 fn require_completed_frontier(completed_write: u64, write: u64) -> Result<()> {
     if completed_write != write {
         return Err("queue has incomplete dispatch".into());
+    }
+    Ok(())
+}
+
+fn require_sequence_capacity(write: u64, read: u64, dispatches: usize) -> Result<()> {
+    if dispatches == 0
+        || dispatches > MAX_SEQUENCE_DISPATCHES_V1
+        || read > write
+        || write
+            .checked_add(dispatches as u64)
+            .and_then(|next| next.checked_sub(read))
+            .is_none_or(|outstanding| outstanding > MAX_UNRETIRED_RING_PACKETS_V1)
+    {
+        return Err("sequence exceeds retained ring capacity; rollover required".into());
     }
     Ok(())
 }
@@ -1153,6 +1276,7 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
     let mut context = Context::open(device)?;
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
+    let mut fatal_response_written = false;
     let result = (|| -> Result<()> {
         write_header_v1(
             &mut output,
@@ -1200,6 +1324,11 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
                     expected_epoch,
                     expected_completed_packets,
                 } => context.rollover_queue(expected_epoch, expected_completed_packets)?,
+                CommandV1::DispatchSequence { dispatches } => {
+                    // SAFETY: the entry's disposable-process/trusted-code contract
+                    // covers every item, and the complete sequence is prevalidated.
+                    unsafe { context.dispatch_sequence(dispatches, payload) }
+                }
                 CommandV1::Allocate { bytes } => context.allocate(bytes)?,
                 CommandV1::Free { buffer } => {
                     context.free(buffer)?;
@@ -1245,6 +1374,10 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
                     ResponseV1::Closed
                 }
             };
+            let terminal = match &response {
+                ResponseV1::DispatchSequenceFailed { message, .. } => Some(message.clone()),
+                _ => None,
+            };
             if command_started.is_some() {
                 add_counter(&mut context.counters.commands, 1)?;
                 record_elapsed(&mut context.counters.command_ns, command_started)?;
@@ -1253,20 +1386,26 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
             write_header_v1(&mut output, &response).map_err(explain)?;
             output.write_all(&response_payload).map_err(explain)?;
             output.flush().map_err(explain)?;
+            if let Some(message) = terminal {
+                fatal_response_written = true;
+                return Err(message);
+            }
             if closed {
                 return Ok(());
             }
         }
     })();
     if let Err(error) = &result {
-        let _ = write_header_v1(
-            &mut output,
-            &ResponseV1::Error {
-                message: error.clone(),
-                fatal: true,
-            },
-        );
-        let _ = output.flush();
+        if !fatal_response_written {
+            let _ = write_header_v1(
+                &mut output,
+                &ResponseV1::Error {
+                    message: error.clone(),
+                    fatal: true,
+                },
+            );
+            let _ = output.flush();
+        }
         std::mem::forget(context);
     }
     result
@@ -1275,6 +1414,44 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sequence_capacity_never_fabricates_retirement_or_wraps() {
+        let full = MAX_UNRETIRED_RING_PACKETS_V1;
+        assert!(require_sequence_capacity(0, 0, 16).is_ok());
+        assert!(require_sequence_capacity(full - 16, 0, 16).is_ok());
+        assert!(require_sequence_capacity(full - 15, 0, 16).is_err());
+        assert!(require_sequence_capacity(full, 0, 1).is_err());
+        assert!(require_sequence_capacity(full, 1, 1).is_ok());
+        assert!(require_sequence_capacity(0, 1, 1).is_err());
+        assert!(require_sequence_capacity(u64::MAX, u64::MAX, 1).is_err());
+        assert!(require_sequence_capacity(0, 0, 0).is_err());
+        assert!(require_sequence_capacity(0, 0, 17).is_err());
+    }
+
+    #[test]
+    fn sequence_prevalidates_all_bindings_before_any_publication() {
+        let source = include_str!("engineering_gfx950.rs");
+        let body = source
+            .split("unsafe fn dispatch_sequence(")
+            .nth(1)
+            .unwrap()
+            .split("fn destroy_queue(")
+            .next()
+            .unwrap();
+        assert!(
+            body.find("self.prepare_dispatch(").unwrap()
+                < body.find("for (dispatch, timeout) in prepared").unwrap()
+        );
+        assert!(
+            body.find("require_sequence_capacity(").unwrap()
+                < body.find("self.execute_prepared_dispatch(").unwrap()
+        );
+        assert!(body.contains("attempted_dispatches += 1"));
+        assert!(body.contains("completed_dispatches: elapsed_ns.len() as u32"));
+        assert!(!body.contains("self.free("));
+        assert!(!body.contains("self.load("));
+    }
 
     #[test]
     fn rollover_requires_exact_epoch_and_successful_completion_frontier() {
