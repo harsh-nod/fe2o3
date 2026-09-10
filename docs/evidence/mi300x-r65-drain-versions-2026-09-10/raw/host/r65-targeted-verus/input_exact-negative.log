@@ -1,0 +1,12 @@
+error: postcondition not satisfied
+  --> crates/fe2o3-runtime-model/verus/negative/r65_graph_versions_v1_input_exact.rs:15:13
+   |
+13 | pub proof fn mutated_input_exact_v1(current: Option<nat>, expected: nat, phase: PhaseV1)
+   | ---------------------------------------------------------------------------------------- at the end of the function body
+14 |     requires input_ready_v1(current, expected, phase),
+15 |     ensures current == Some(expected),
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+
+verification results:: 0 verified, 1 errors
+error: aborting due to 1 previous error
+

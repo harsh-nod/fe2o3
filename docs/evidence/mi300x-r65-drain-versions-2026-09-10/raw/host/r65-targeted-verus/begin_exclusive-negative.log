@@ -1,0 +1,12 @@
+error: postcondition not satisfied
+  --> crates/fe2o3-runtime-model/verus/negative/r65_graph_versions_v1_begin_exclusive.rs:15:13
+   |
+13 | pub proof fn mutated_begin_exclusive_v1(phase: PhaseV1, pending: Option<nat>, current: Option<nat>, predecessor: nat)
+   | --------------------------------------------------------------------------------------------------------------------- at the end of the function body
+14 |     requires begin_write_v1(phase, pending, current, predecessor),
+15 |     ensures pending == None,
+   |             ^^^^^^^^^^^^^^^ failed this postcondition
+
+verification results:: 0 verified, 1 errors
+error: aborting due to 1 previous error
+

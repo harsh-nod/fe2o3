@@ -1,0 +1,12 @@
+error: postcondition not satisfied
+  --> crates/fe2o3-runtime-model/verus/negative/r65_graph_versions_v1_commit_in_flight.rs:15:13
+   |
+13 | pub proof fn mutated_commit_in_flight_v1(phase: PhaseV1, pending: Option<nat>, output: nat, current: Option<nat>)
+   | ----------------------------------------------------------------------------------------------------------------- at the end of the function body
+14 |     requires commit_write_v1(phase, pending, output, current),
+15 |     ensures phase == PhaseV1::InFlight,
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^ failed this postcondition
+
+verification results:: 0 verified, 1 errors
+error: aborting due to 1 previous error
+

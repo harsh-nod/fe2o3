@@ -1,0 +1,1 @@
+PASS schema=fe2o3.runtime.r65-graph-versions-idle-drain.v1 bytes=1048832 owner_threads=1 streams=4 nodes=12 copies=5 executions=2 versions=21 version_inputs=10 current_versions=13 occurrences=distinct joins=host canaries=complete submissions=released drain=idle-quiescent admission=closed cleanup=complete
