@@ -43,6 +43,17 @@ and `fe2o3-runtime`. Final tests include three-binding H2D/D2H in both publicati
 orders, destination-only dirty marking and exact restored storage custody. The
 new R66 tests pass; the full unrestricted suite does not pass in this environment.
 
+### Unrestricted Follow-Up
+
+After the execution restrictions were lifted, both complete all-feature/all-target
+commands were rerun against signed R66 source `ea71ce9c`, before the next
+implementation wave. GNU and musl each passed **1,992 tests, zero failures and
+five ignores across 45 harnesses**. Every changed source hash above was rechecked
+unchanged after those runs. Their separate `*-unrestricted.log` files are
+retained; the earlier failures remain recorded, not rewritten as successes.
+Publication of `ea71ce9c` to both topic-branch remotes also succeeded. SSH became
+reachable, but this follow-up did not execute a GPU qualifier.
+
 The 15 failures per target are confined to existing socket/ptrace-dependent
 tests: one KFD library telemetry test, one live-debug ptrace test, two telemetry
 environment tests, eight telemetry tests and three runtime authorization

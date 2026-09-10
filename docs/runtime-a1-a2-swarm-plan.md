@@ -68,11 +68,12 @@ or fixture results exist. None of the rows establishes runtime-wide parity.
 | SCALE-3 | Protocol and timestamp producer work open | Optimization/timeline boundary open | Runner/checker open | Measurements open | Measurements open | No R66 result |
 | PRF-1/2 | Whole executor composition open | Isolated guards are not whole-state refinement | Final unrestricted gate open | Per-profile qualification open | Open | Per-workload only |
 
-R66's local environment cannot inspect sockets or use ptrace as required by
-some existing tests; report those failures separately, not as an unrestricted
-green suite. SSH to `mi300x` failed name resolution, so no R66 hardware cell is
-filled and no remote staging was created. Neither limitation blocks the local
-implementation assignments above.
+R66's first local runs could not inspect sockets or use ptrace. After those
+restrictions were lifted, GNU and musl each passed all 1,992 tests with five
+existing ignores; the separate attempts are retained in the validation record.
+SSH to `mi300x` is reachable again, but no R66 hardware cell is filled merely
+by restoring access. The qualifier and its independently audited capture remain
+required.
 
 ## Native Execution Lane
 
