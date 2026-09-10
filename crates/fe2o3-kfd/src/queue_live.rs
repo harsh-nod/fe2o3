@@ -208,6 +208,7 @@ use crate::shared_memory::{
     AqlEndOfPipeResourceRoleV1, AqlQueueGttV1, AqlRingResourceRoleV1, ExecutableAqlQueueProbeGttV1,
     ExecutableGttV1, Gfx942DeviceBackingBudgetV1, Gfx942DeviceBackingUsageV1,
     Gfx942DeviceMemoryIdentityV1, Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryMappedV1,
+    Gfx942HostVisibleBackingBudgetV1, Gfx942HostVisibleBackingUsageV1,
     Gfx942InitializedDeviceMemoryV1, Gfx942InitializedHostVisibleMemoryV1, GttCpuWritableV1,
     GttGpuAccessibleExecutableV1, GttGpuAccessibleMutableV1, HostVisibleCoherentGttV1,
     LiveQueueModelFoundationLoanV1, SharedGttAllocationV1, SharedGttMappedResourceFactsV1,
@@ -4660,8 +4661,29 @@ impl CheckedGfx942XnackMinusDevice {
         ring_bytes: u32,
         budget: Option<Gfx942DeviceBackingBudgetV1>,
     ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
-        self.create_compute_aql_queue_with_runtime(ring_bytes, |_| Ok(()), None, budget)
-            .map(|(session, ())| session)
+        self.create_compute_aql_queue_with_backing_budgets_v1(ring_bytes, budget, None)
+    }
+
+    /// Creates one queue with optional immutable N2 and ordinary coherent GTT budgets.
+    ///
+    /// Both accounts are installed before preparation or queue certification.
+    /// The host account includes ordinary coherent completion/control allocations,
+    /// not executable, userptr or doubled-VA AQL backing. These are session-local
+    /// backing limits, not complete bootstrap or aggregate process accounting.
+    pub fn create_compute_aql_queue_with_backing_budgets_v1(
+        self,
+        ring_bytes: u32,
+        device_budget: Option<Gfx942DeviceBackingBudgetV1>,
+        host_budget: Option<Gfx942HostVisibleBackingBudgetV1>,
+    ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
+        self.create_compute_aql_queue_with_runtime(
+            ring_bytes,
+            |_| Ok(()),
+            None,
+            device_budget,
+            host_budget,
+        )
+        .map(|(session, ())| session)
     }
 
     pub(crate) fn create_compute_aql_queue_with<T>(
@@ -4669,7 +4691,7 @@ impl CheckedGfx942XnackMinusDevice {
         ring_bytes: u32,
         prepare: impl FnOnce(&mut SharedGttMemorySessionV1) -> Result<T, ComputeAqlQueueSessionErrorV1>,
     ) -> Result<(ComputeAqlQueueSessionV1, T), ComputeAqlQueueSessionErrorV1> {
-        self.create_compute_aql_queue_with_runtime(ring_bytes, prepare, None, None)
+        self.create_compute_aql_queue_with_runtime(ring_bytes, prepare, None, None, None)
     }
 
     pub(crate) fn create_compute_aql_queue_for_debug_target(
@@ -4682,6 +4704,7 @@ impl CheckedGfx942XnackMinusDevice {
             ring_bytes,
             |_| Ok(()),
             Some((runtime, runtime_control)),
+            None,
             None,
         )
         .map(|(session, ())| session)
@@ -4699,6 +4722,7 @@ impl CheckedGfx942XnackMinusDevice {
             prepare,
             Some((runtime, runtime_control)),
             None,
+            None,
         )
     }
 
@@ -4711,14 +4735,16 @@ impl CheckedGfx942XnackMinusDevice {
             &mut Option<KfdWithAdmittedUapi>,
         )>,
         device_backing_budget: Option<Gfx942DeviceBackingBudgetV1>,
+        host_visible_backing_budget: Option<Gfx942HostVisibleBackingBudgetV1>,
     ) -> Result<(ComputeAqlQueueSessionV1, T), ComputeAqlQueueSessionErrorV1> {
         let geometry = plan_gfx942_aql_queue_resources(
             self.topology_snapshot(),
             self.observation().unique_id(),
             ring_bytes,
         )?;
-        let mut memory = self.acquire_shared_gtt_memory_session_with_device_backing_budget_v1(
+        let mut memory = self.acquire_shared_gtt_memory_session_with_backing_budgets_v1(
             device_backing_budget,
+            host_visible_backing_budget,
         )?;
         let prepared = prepare(&mut memory)?;
         let session = ComputeAqlQueueSessionV1::create_compute_aql_queue_inner(
@@ -6573,6 +6599,14 @@ impl ComputeAqlQueueSessionV1 {
         self.engine
             .as_ref()
             .and_then(|engine| engine.backend.session.device_backing_usage_v1())
+    }
+
+    /// Reports ordinary coherent GTT backing without native progress or cleanup.
+    /// `None` means unavailable or unconfigured, not a zero-residency certificate.
+    pub fn host_visible_backing_usage_v1(&self) -> Option<Gfx942HostVisibleBackingUsageV1> {
+        self.engine
+            .as_ref()
+            .and_then(|engine| engine.backend.session.host_visible_backing_usage_v1())
     }
 
     /// Installs immutable device-cache limits before any SDMA resource attempt.
@@ -14630,7 +14664,7 @@ mod tests {
     }
 
     #[test]
-    fn n2_constructor_forwarding_precedes_prepare_and_keeps_process_vm_envelope() {
+    fn backing_constructor_forwarding_precedes_prepare_and_keeps_process_vm_envelope() {
         // Linux acquisition cannot run in this CPU test; the shared-memory
         // tests execute the configuration and ownership helpers with a fake backend.
         let source = include_str!("queue_live.rs");
@@ -14642,16 +14676,21 @@ mod tests {
             .split("/// Runs one fresh-queue")
             .next()
             .unwrap();
-        let acquisition_call = ".acquire_shared_gtt_memory_session_with_device_backing_budget_v1(";
+        let acquisition_call = ".acquire_shared_gtt_memory_session_with_backing_budgets_v1(";
         let acquire = constructor.find(acquisition_call).unwrap();
         let argument = constructor[acquire + acquisition_call.len()..]
             .split_once(')')
             .unwrap()
             .0
             .trim();
+        let arguments: Vec<_> = argument
+            .split(',')
+            .map(str::trim)
+            .filter(|argument| !argument.is_empty())
+            .collect();
         assert_eq!(
-            argument.strip_suffix(',').unwrap_or(argument).trim(),
-            "device_backing_budget"
+            arguments,
+            ["device_backing_budget", "host_visible_backing_budget"]
         );
         let prepare = constructor.find("prepare(&mut memory)?").unwrap();
         let create = constructor
@@ -14659,15 +14698,15 @@ mod tests {
             .unwrap();
         assert!(acquire < prepare && prepare < create);
         assert!(production.contains(
-            "self.create_compute_aql_queue_with_runtime(ring_bytes, prepare, None, None)"
+            "self.create_compute_aql_queue_with_runtime(ring_bytes, prepare, None, None, None)"
         ));
         assert!(production.contains(
-            "self.create_compute_aql_queue_with_runtime(ring_bytes, |_| Ok(()), None, budget)"
+            "self.create_compute_aql_queue_with_backing_budgets_v1(ring_bytes, budget, None)"
         ));
 
         let shared = include_str!("shared_memory.rs");
         let acquisition = shared
-            .split("pub fn acquire_shared_gtt_memory_session_with_device_backing_budget_v1(")
+            .split("pub fn acquire_shared_gtt_memory_session_with_backing_budgets_v1(")
             .nth(1)
             .unwrap()
             .split("impl SharedGttMemorySessionV1 {")
@@ -14682,10 +14721,18 @@ mod tests {
         let configure = acquisition
             .find(".configure_optional_device_backing_budget(")
             .unwrap();
+        let configure_host = acquisition
+            .find(".configure_optional_host_visible_backing_budget(")
+            .unwrap();
         let finish = acquisition
             .find("finish_process_vm_attempt(result.is_ok(), pid, gpu_id)")
             .unwrap();
-        assert!(begin < bind && bind < configure && configure < finish);
+        assert!(
+            begin < bind
+                && bind < configure
+                && configure < configure_host
+                && configure_host < finish
+        );
         assert!(shared.contains(
             "self.acquire_shared_gtt_memory_session_with_device_backing_budget_v1(None)"
         ));

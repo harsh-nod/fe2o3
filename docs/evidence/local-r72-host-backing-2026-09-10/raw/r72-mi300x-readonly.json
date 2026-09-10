@@ -1,0 +1,17 @@
+{
+  "date": "2026-09-10",
+  "command": ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "mi300x", "timeout", "25", "/opt/rocm/bin/rocm-smi", "--showuniqueid", "--showbus", "--showuse", "--showmemuse", "--json"],
+  "returncode": 0,
+  "observation_scope": "selected-card fields extracted from the read-only command output, not hardware qualification",
+  "selected_card": "card1",
+  "selected_observation": {
+    "Unique ID": "0xab83d2ffef0d3cdf",
+    "PCI Bus": "0000:26:00.0",
+    "GPU use (%)": "52",
+    "GPU Memory Allocated (VRAM%)": "20",
+    "GPU Memory Read/Write Activity (%)": "2",
+    "Memory Activity": "N/A"
+  },
+  "decision": "busy; no remote stage, build or workload started",
+  "cleanup_required": false
+}

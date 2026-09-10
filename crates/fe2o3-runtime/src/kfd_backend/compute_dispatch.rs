@@ -2845,8 +2845,9 @@ impl KfdRuntimeBackendV1 {
                     )
                 })?;
                 let mut memory = device
-                    .acquire_shared_gtt_memory_session_with_device_backing_budget_v1(
+                    .acquire_shared_gtt_memory_session_with_backing_budgets_v1(
                         self.device_backing_budget,
+                        self.host_visible_backing_budget,
                     )
                     .map_err(|error| self.terminal_error(format!("KFD VM acquisition: {error}")))?;
                 let native_data = match materialize_initial_data_v1(&mut memory, data, signature) {

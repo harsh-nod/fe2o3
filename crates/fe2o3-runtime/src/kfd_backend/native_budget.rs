@@ -1,9 +1,52 @@
 //! Immutable session-local backing and device-cache limits, not aggregate accounting.
 
 use super::*;
-use fe2o3_kfd::{Gfx942DeviceBackingUsageV1, Gfx942DevicePoolUsageV1};
+use fe2o3_kfd::{
+    Gfx942DeviceBackingUsageV1, Gfx942DevicePoolUsageV1, Gfx942HostVisibleBackingUsageV1,
+};
+
+#[cfg(test)]
+mod host_backing_tests;
 
 impl KfdRuntimeBackendV1 {
+    /// Selects immutable ordinary coherent GTT backing limits before resource use.
+    ///
+    /// Charges actual page-padded backing and one native record, including ordinary
+    /// coherent bootstrap allocations. Userptr, executable/AQL profiles, complete
+    /// bootstrap, metadata, other sessions and aggregate budgets remain separate.
+    pub fn configure_host_visible_backing_budget_v1(
+        &mut self,
+        budget: Gfx942HostVisibleBackingBudgetV1,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.require_pristine_native_resource_configuration_v1()?;
+        if self.host_visible_backing_budget.is_some() {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "host-visible backing limits must be configured once before resource creation",
+            ));
+        }
+        self.host_visible_backing_budget = Some(budget);
+        Ok(())
+    }
+
+    /// Reports selected limits, not evidence that a native account exists.
+    pub const fn host_visible_backing_budget_v1(&self) -> Option<Gfx942HostVisibleBackingBudgetV1> {
+        self.host_visible_backing_budget
+    }
+
+    /// Observes the retained native account without progress or disposal authority.
+    /// `None` means unavailable or unconfigured, never proof of a refund.
+    pub fn host_visible_backing_usage_v1(&self) -> Option<Gfx942HostVisibleBackingUsageV1> {
+        self.queue
+            .as_ref()
+            .and_then(ComputeAqlQueueSessionV1::host_visible_backing_usage_v1)
+            .or_else(|| {
+                self.terminal_memory
+                    .as_ref()
+                    .and_then(SharedGttMemorySessionV1::host_visible_backing_usage_v1)
+            })
+    }
+
     /// Selects immutable N2 backing limits before logical or native resource use.
     ///
     /// The selected limits are installed in the actual native memory session
@@ -240,13 +283,13 @@ mod tests {
             .split("    fn directional_sdma_ops_v1(")
             .next()
             .unwrap();
-        assert!(sdma.contains(".create_compute_aql_queue_with_device_backing_budget_v1("));
+        assert!(sdma.contains(".create_compute_aql_queue_with_backing_budgets_v1("));
         assert!(sdma.contains("self.device_backing_budget,"));
         assert!(!sdma.contains(".create_compute_aql_queue("));
 
         let compute = include_str!("compute_dispatch.rs");
         let acquire = compute
-            .find(".acquire_shared_gtt_memory_session_with_device_backing_budget_v1(")
+            .find(".acquire_shared_gtt_memory_session_with_backing_budgets_v1(")
             .unwrap();
         let materialize = compute[acquire..]
             .find("materialize_initial_data_v1(")

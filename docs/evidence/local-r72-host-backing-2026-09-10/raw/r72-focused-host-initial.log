@@ -1,0 +1,16 @@
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0583]: file not found for module `host_backing`
+    --> crates/fe2o3-kfd/src/shared_memory.rs:6380:5
+     |
+6380 |     mod host_backing;
+     |     ^^^^^^^^^^^^^^^^^
+     |
+     = help: to create the module `host_backing`, create file "crates/fe2o3-kfd/src/shared_memory/tests/host_backing.rs" or "crates/fe2o3-kfd/src/shared_memory/tests/host_backing/mod.rs"
+     = note: if there is a `mod host_backing` elsewhere in the crate already, import it with `use crate::...` instead
+
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+For more information about this error, try `rustc --explain E0583`.
+error: could not compile `fe2o3-kfd` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

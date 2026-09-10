@@ -159,6 +159,8 @@ pub enum MemorySessionError {
     },
     DeviceBackingBudgetConfiguration(&'static str),
     DeviceBackingCredits(fe2o3_resource_accounting::ResourceCreditErrorV1),
+    HostVisibleBackingBudgetConfiguration(&'static str),
+    HostVisibleBackingCredits(fe2o3_resource_accounting::ResourceCreditErrorV1),
     InvalidDeviceMemorySize,
     InvalidDeviceMemoryAlignment,
     DeviceContentMismatch,
@@ -231,6 +233,15 @@ impl fmt::Display for MemorySessionError {
             }
             Self::DeviceBackingCredits(error) => {
                 write!(formatter, "device-backing resource credits: {error}")
+            }
+            Self::HostVisibleBackingBudgetConfiguration(detail) => {
+                write!(
+                    formatter,
+                    "host-visible backing budget configuration rejected: {detail}"
+                )
+            }
+            Self::HostVisibleBackingCredits(error) => {
+                write!(formatter, "host-visible backing resource credits: {error}")
             }
             Self::InvalidDeviceMemorySize => {
                 formatter.write_str("device-memory size must be nonzero and within profile bounds")

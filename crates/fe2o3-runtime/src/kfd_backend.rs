@@ -38,13 +38,14 @@ use fe2o3_kfd::{
     Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1, Gfx942DispatchBatchV1,
     Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1, Gfx942FixedDispatchDataV1,
     Gfx942FixedDispatchPacketV1, Gfx942FixedDispatchSubmissionFailureV1,
-    Gfx942NativeXgmiSdmaQueueV1, Gfx942PersistentComputeBindFailureCustodyV1,
-    Gfx942PersistentComputeBindTerminalCustodyV1, Gfx942PersistentComputeDispatchV1,
-    Gfx942PersistentComputeEffectV1, Gfx942PersistentComputeInputV1,
-    Gfx942PersistentComputePollAndRecycleFailureV1, Gfx942PersistentComputePollAndRecycleV1,
-    Gfx942PersistentComputeReadyTerminalCustodyV1, Gfx942PersistentComputeTerminalCustodyV1,
-    Gfx942PersistentComputeTransitionFailureCustodyV1, Gfx942PersistentComputeWaitAndRecycleV1,
-    Gfx942PersistentSdmaDirectionV1, Gfx942PreparedPersistentComputeDispatchV1,
+    Gfx942HostVisibleBackingBudgetV1, Gfx942NativeXgmiSdmaQueueV1,
+    Gfx942PersistentComputeBindFailureCustodyV1, Gfx942PersistentComputeBindTerminalCustodyV1,
+    Gfx942PersistentComputeDispatchV1, Gfx942PersistentComputeEffectV1,
+    Gfx942PersistentComputeInputV1, Gfx942PersistentComputePollAndRecycleFailureV1,
+    Gfx942PersistentComputePollAndRecycleV1, Gfx942PersistentComputeReadyTerminalCustodyV1,
+    Gfx942PersistentComputeTerminalCustodyV1, Gfx942PersistentComputeTransitionFailureCustodyV1,
+    Gfx942PersistentComputeWaitAndRecycleV1, Gfx942PersistentSdmaDirectionV1,
+    Gfx942PreparedPersistentComputeDispatchV1,
     Gfx942PreparedThreeBindingPersistentComputeDispatchV1, Gfx942RecycledDispatchWriteRequestV1,
     Gfx942RecycledPersistentComputeDispatchV1,
     Gfx942RecycledThreeBindingPersistentComputeDispatchV1, Gfx942SdmaBufferV1,
@@ -1177,6 +1178,7 @@ pub struct KfdRuntimeBackendV1 {
     last_ready_promotion_performance: Option<KfdRuntimeReadyPromotionPerformanceV1>,
     staging_budgets: StagingBudgetsV1,
     device_backing_budget: Option<Gfx942DeviceBackingBudgetV1>,
+    host_visible_backing_budget: Option<Gfx942HostVisibleBackingBudgetV1>,
     device_pool_limits: Option<Gfx942DevicePoolLimitsV1>,
     staged_context_bytes: u64,
     sdma_enabled: bool,
@@ -1267,6 +1269,10 @@ impl fmt::Debug for KfdRuntimeBackendV1 {
             .field("sdma_enabled", &self.sdma_enabled)
             .field("staging_budgets", &self.staging_budgets)
             .field("device_backing_budget", &self.device_backing_budget)
+            .field(
+                "host_visible_backing_budget",
+                &self.host_visible_backing_budget,
+            )
             .field("device_pool_limits", &self.device_pool_limits)
             .field("launch_gate", &self.launch_gate)
             .field("profiler", &self.profiler)
@@ -1532,6 +1538,7 @@ impl KfdRuntimeBackendV1 {
             last_ready_promotion_performance: None,
             staging_budgets,
             device_backing_budget: None,
+            host_visible_backing_budget: None,
             device_pool_limits: None,
             staged_context_bytes: 0,
             sdma_enabled: false,
@@ -2993,9 +3000,10 @@ impl KfdRuntimeBackendV1 {
                 )
             })?;
             let queue = device
-                .create_compute_aql_queue_with_device_backing_budget_v1(
+                .create_compute_aql_queue_with_backing_budgets_v1(
                     KFD_RUNTIME_RING_BYTES_V1,
                     self.device_backing_budget,
+                    self.host_visible_backing_budget,
                 )
                 .map_err(|error| self.terminal_error(format!("KFD queue creation: {error}")))?;
             self.queue = Some(queue);

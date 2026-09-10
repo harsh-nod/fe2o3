@@ -1,0 +1,32 @@
+PASS: runtime expected-negative quality and inventory self-test
+PASS: runtime expected-negative quality and inventory checked 678 files
+PASS: pinned Verus release closure matched at this measurement (190 files, 129019839 bytes)
+verification results:: 2 verified, 0 errors
+verification results:: 4 verified, 0 errors
+verification results:: 4 verified, 0 errors
+verification results:: 6 verified, 0 errors
+verification results:: 11 verified, 0 errors
+verification results:: 3 verified, 0 errors
+verification results:: 8 verified, 0 errors
+verification results:: 11 verified, 0 errors
+verification results:: 8 verified, 0 errors
+verification results:: 10 verified, 0 errors
+verification results:: 14 verified, 0 errors
+verification results:: 20 verified, 0 errors
+verification results:: 18 verified, 0 errors
+verification results:: 23 verified, 0 errors
+verification results:: 20 verified, 0 errors
+verification results:: 10 verified, 0 errors
+verification results:: 21 verified, 0 errors
+verification results:: 32 verified, 0 errors
+verification results:: 34 verified, 0 errors
+verification results:: 46 verified, 0 errors
+verification results:: 31 verified, 0 errors
+verification results:: 37 verified, 0 errors
+verification results:: 41 verified, 0 errors
+verification results:: 46 verified, 0 errors
+verification results:: 34 verified, 0 errors
+verification results:: 38 verified, 0 errors
+verification results:: 20 verified, 0 errors
+FAIL: positive proof did not verify: r28-persistent-hot-currentness-scope
+cat: /tmp/fe2o3-runtime-model-verus.ysvsnf/r28-persistent-hot-currentness-scope-positive.log: No such file or directory

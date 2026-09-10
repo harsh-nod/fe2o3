@@ -1,0 +1,49 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 42.79s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-f9eea0dcd3ca45b2)
+
+running 26 tests
+test shared_memory::host_resource_accounting::tests::host_backing_allocation_and_domain_substitutions_reject_without_debit ... ok
+test shared_memory::host_resource_accounting::tests::host_backing_abandoned_retained_attempt_keeps_credit_after_account_owner_drop ... ok
+test shared_memory::host_resource_accounting::tests::host_backing_budget_has_positive_numeric_byte_and_record_bounds ... ok
+test shared_memory::host_resource_accounting::tests::host_backing_account_rejects_invalid_domains ... ok
+test shared_memory::host_resource_accounting::tests::host_backing_byte_and_record_failures_are_atomic ... ok
+test shared_memory::host_resource_accounting::tests::host_backing_invalid_refund_quarantines_instead_of_releasing ... ok
+test shared_memory::host_resource_accounting::tests::host_backing_exact_charge_match_is_inert_and_disposal_preserves_sibling ... ok
+test shared_memory::host_resource_accounting::tests::host_backing_only_full_canonical_ordinary_profile_is_accepted ... ok
+test shared_memory::host_resource_accounting::tests::host_backing_reserves_padded_bytes_before_retain_and_cancels_unissued ... ok
+test shared_memory::tests::host_backing::n1_configuration_rejects_replacement_domain_history_and_failed_preflight ... ok
+test shared_memory::tests::host_backing::n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders ... ok
+test shared_memory::tests::host_backing::n1_cpu_and_mapped_post_currentness_panic_retains_written_record ... ok
+test shared_memory::tests::host_backing::n1_cpu_callback_panic_keeps_original_payload_without_post_currentness ... ok
+test shared_memory::tests::host_backing::n1_disposal_failure_matrix_retains_debit_through_final_currentness ... ok
+test shared_memory::tests::host_backing::n1_defaults_and_excluded_profiles_keep_original_allocation_behavior ... ok
+test shared_memory::tests::host_backing::n1_exact_charge_survives_cpu_and_mapped_access_until_full_disposal ... ok
+test shared_memory::tests::host_backing::n1_every_signal_ingress_quarantines_original_backend_panic ... ok
+test shared_memory::tests::host_backing::n1_every_pre_record_native_failure_retains_quarantined_charge ... ok
+test shared_memory::tests::host_backing::n1_foreign_tokens_and_substituted_account_never_release_or_refund ... ok
+test shared_memory::tests::host_backing::n1_gpu_mapping_errors_and_panics_never_refund_or_allow_retry ... ok
+test shared_memory::tests::host_backing::n1_confirmed_disposal_reuses_credit_and_record_slot_not_old_identity ... ok
+test shared_memory::tests::host_backing::n1_padding_and_each_capacity_dimension_reject_before_native_effects ... ok
+test shared_memory::tests::host_backing::n1_unconfigured_transfer_cannot_reopen_budget_after_restore_or_live_loan ... ok
+test shared_memory::tests::host_backing::n1_mapped_data_access_panics_retain_charge_and_close_spare_capacity ... ok
+test shared_memory::tests::host_backing::n1_failed_retake_retains_live_debit_but_does_not_resurrect_disposed_backing ... ok
+test shared_memory::tests::host_backing::n1_pre_effect_currentness_error_or_panic_cancels_only_unissued_credit ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 730 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-21f716eca27caec8)
+
+running 8 tests
+test kfd_backend::native_budget::host_backing_tests::host_backing_limits_reach_both_combined_native_startup_paths ... ok
+test kfd_backend::native_budget::host_backing_tests::host_backing_default_configuration_does_not_imply_native_account_or_residency ... ok
+test kfd_backend::native_budget::host_backing_tests::terminal_host_backing_configuration_cannot_restore_or_replace_limits ... ok
+test kfd_backend::native_budget::host_backing_tests::zero_device_cache_policy_does_not_disable_host_backing_configuration ... ok
+test kfd_backend::native_budget::host_backing_tests::host_device_and_pool_limits_are_independent_in_all_six_configuration_orders ... ok
+test kfd_backend::native_budget::host_backing_tests::host_backing_configuration_rejects_native_lifecycle_history ... ok
+test kfd_backend::native_budget::host_backing_tests::host_backing_configuration_is_immutable_and_preserves_exact_capabilities ... ok
+test kfd_backend::native_budget::host_backing_tests::host_backing_configuration_rejects_live_and_released_logical_resource_history ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 586 filtered out; finished in 0.01s
+
