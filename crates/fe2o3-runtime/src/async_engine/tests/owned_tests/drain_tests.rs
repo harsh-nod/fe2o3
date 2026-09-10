@@ -592,16 +592,34 @@ fn r65_executor_drains_2048_accepted_operations_with_full_reply_budget() {
         Err(RuntimeAsyncEngineCallErrorV1::ReplyCapacity)
     ));
     let drain = handle.begin_drain(1024).unwrap();
-    release.wait();
     let executor = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
         .unwrap();
     executor.block_on(async {
-        let report = tokio::time::timeout(Duration::from_secs(10), drain)
-            .await
-            .expect("drain must wake the executor before the watchdog")
-            .unwrap();
+        let mut drain = Box::pin(drain);
+        let mut watchdog = Box::pin(tokio::time::sleep(Duration::from_secs(10)));
+        let mut release = Some(release);
+        let report = std::future::poll_fn(|cx| {
+            // Check the timer first so its wake cannot rescue a lost owner wake.
+            assert!(
+                watchdog.as_mut().poll(cx).is_pending(),
+                "drain watchdog expired"
+            );
+            let result = drain.as_mut().poll(cx);
+            if result.is_pending()
+                && let Some(release) = release.take()
+            {
+                release.wait();
+            }
+            result
+        })
+        .await
+        .unwrap();
+        assert!(
+            release.is_none(),
+            "drain must first register while the owner is paused"
+        );
         assert_eq!(report.outcome, RuntimeAsyncDrainOutcomeV1::Quiescent);
         assert_eq!(report.retained_submissions.succeeded, OPERATIONS);
         assert_eq!(report.retained_submissions.pending, 0);
