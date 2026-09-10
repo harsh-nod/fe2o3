@@ -172,6 +172,11 @@ impl IndexedControlFlow {
     }
 
     pub fn block_position(&self, block: BlockId) -> Option<usize> {
+        if let Ok(position) = usize::try_from(block.0)
+            && self.block_ids.get(position) == Some(&block)
+        {
+            return Some(position);
+        }
         self.block_positions.get(&block).copied()
     }
 

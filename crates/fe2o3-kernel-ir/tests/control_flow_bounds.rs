@@ -234,3 +234,213 @@ fn sparse_wire_maximum_block_count_is_bounded_and_admitted() {
     assert_eq!(analysis.edge_count(), MAX_BLOCKS_V1 - 1);
     assert_eq!(analysis.work().total, 11 * MAX_BLOCKS_V1 as u64 - 7);
 }
+
+fn lookup_chain(ids: &[u32], reachable_count: usize) -> Function {
+    assert!((1..=ids.len()).contains(&reachable_count));
+    function_with_blocks(
+        ids.iter()
+            .copied()
+            .enumerate()
+            .map(|(position, id)| {
+                let mut block = BasicBlock::new(BlockId(id));
+                block.terminator = Some(if position + 1 < reachable_count {
+                    Terminator::Branch {
+                        target: BlockId(ids[position + 1]),
+                        arguments: vec![],
+                    }
+                } else {
+                    Terminator::Return { values: vec![] }
+                });
+                block
+            })
+            .collect(),
+    )
+}
+
+#[test]
+fn dense_block_lookup_preserves_all_cfg_accessors() {
+    let function = lookup_chain(&[0, 1, 2], 3);
+    let analysis = analyze_control_flow(&function).unwrap();
+    let work = analysis.work();
+    assert_eq!(analysis.block_count(), 3);
+    assert_eq!(analysis.edge_count(), 2);
+    assert_eq!(analysis.edge_argument_count(), 0);
+    assert_eq!(analysis.phi_input_count(), 0);
+    assert!(analysis.is_reducible());
+    assert!(analysis.irreducible_blocks().is_empty());
+    for position in 0..3 {
+        let id = BlockId(u32::try_from(position).unwrap());
+        assert_eq!(analysis.block_position(id), Some(position));
+        assert_eq!(analysis.block_id(position), Some(id));
+        assert!(analysis.is_reachable(id));
+        assert_eq!(
+            analysis.outgoing_edges(id),
+            Some(position.min(2)..(position + 1).min(2))
+        );
+        let incoming = if position == 0 {
+            vec![]
+        } else {
+            vec![position - 1]
+        };
+        assert_eq!(analysis.incoming_edges(id).unwrap(), incoming);
+        let successors = if position < 2 {
+            vec![BlockId(id.0 + 1)]
+        } else {
+            vec![]
+        };
+        assert_eq!(
+            analysis.successor_blocks(id).unwrap().collect::<Vec<_>>(),
+            successors
+        );
+        let predecessors = if position == 0 {
+            vec![]
+        } else {
+            vec![BlockId(id.0 - 1)]
+        };
+        assert_eq!(
+            analysis.predecessor_blocks(id).unwrap().collect::<Vec<_>>(),
+            predecessors
+        );
+        for other in 0..3 {
+            assert_eq!(analysis.dominates(id, BlockId(other)), id.0 <= other);
+        }
+    }
+    for edge in 0..2 {
+        let info = analysis.edge(edge).unwrap();
+        assert_eq!(info.ordinal(), 0);
+        assert_eq!(info.argument_count(), 0);
+        let source = u32::try_from(edge).unwrap();
+        assert_eq!(analysis.edge_source(edge), Some(BlockId(source)));
+        assert_eq!(analysis.edge_target(edge), Some(BlockId(source + 1)));
+        assert!(analysis.edge_arguments(&function, edge).is_empty());
+    }
+    assert_eq!(analysis.block_id(3), None);
+    assert_eq!(analysis.edge(2), None);
+    assert_eq!(analysis.edge_source(2), None);
+    assert_eq!(analysis.edge_target(2), None);
+    assert_eq!(analysis.work(), work);
+}
+
+#[test]
+fn sparse_block_lookup_checks_identity_before_using_an_in_range_id() {
+    let analysis = analyze_control_flow(&lookup_chain(&[1, 7, u32::MAX], 3)).unwrap();
+    let work = analysis.work();
+    // ID 1 indexes the row for ID 7, and absent ID 0 indexes the row for ID 1.
+    assert_eq!(analysis.block_position(BlockId(1)), Some(0));
+    assert_eq!(analysis.block_position(BlockId(7)), Some(1));
+    assert_eq!(analysis.block_position(BlockId(u32::MAX)), Some(2));
+    assert_eq!(analysis.block_position(BlockId(0)), None);
+    assert_eq!(analysis.block_position(BlockId(2)), None);
+    assert!(analysis.dominates(BlockId(1), BlockId(u32::MAX)));
+    assert!(!analysis.dominates(BlockId(7), BlockId(1)));
+    assert_eq!(analysis.work(), work);
+}
+
+#[test]
+fn reordered_block_lookup_preserves_physical_positions_and_nonzero_entry() {
+    let analysis = analyze_control_flow(&lookup_chain(&[2, 0, 1], 3)).unwrap();
+    let work = analysis.work();
+    for (id, position) in [(2, 0), (0, 1), (1, 2)] {
+        assert_eq!(analysis.block_position(BlockId(id)), Some(position));
+    }
+    assert!(analysis.dominates(BlockId(2), BlockId(0)));
+    assert!(analysis.dominates(BlockId(0), BlockId(1)));
+    assert!(!analysis.dominates(BlockId(0), BlockId(2)));
+    assert_eq!(analysis.work(), work);
+}
+
+#[test]
+fn missing_and_unreachable_block_queries_remain_distinct() {
+    let analysis = analyze_control_flow(&lookup_chain(&[u32::MAX, 0, 7], 2)).unwrap();
+    let work = analysis.work();
+    assert_eq!(analysis.block_position(BlockId(7)), Some(2));
+    assert!(!analysis.is_reachable(BlockId(7)));
+    assert!(analysis.dominates(BlockId(7), BlockId(7)));
+    assert!(!analysis.dominates(BlockId(u32::MAX), BlockId(7)));
+    assert!(!analysis.dominates(BlockId(7), BlockId(0)));
+    assert!(analysis.dominates(BlockId(u32::MAX), BlockId(0)));
+    for missing in [BlockId(1), BlockId(2), BlockId(8), BlockId(u32::MAX - 1)] {
+        assert_eq!(analysis.block_position(missing), None);
+        assert!(!analysis.is_reachable(missing));
+        assert_eq!(analysis.outgoing_edges(missing), None);
+        assert_eq!(analysis.incoming_edges(missing), None);
+        assert!(analysis.successor_blocks(missing).is_none());
+        assert!(analysis.predecessor_blocks(missing).is_none());
+        assert!(!analysis.dominates(missing, missing));
+        assert!(!analysis.dominates(missing, BlockId(0)));
+        assert!(!analysis.dominates(BlockId(0), missing));
+    }
+    assert_eq!(analysis.work(), work);
+}
+
+#[test]
+fn block_lookup_matches_a_linear_oracle_for_every_small_physical_permutation() {
+    fn visit(ids: &mut [u32], start: usize, cases: &mut usize) {
+        if start != ids.len() {
+            for next in start..ids.len() {
+                ids.swap(start, next);
+                visit(ids, start + 1, cases);
+                ids.swap(start, next);
+            }
+            return;
+        }
+        let analysis = analyze_control_flow(&lookup_chain(ids, ids.len())).unwrap();
+        let work = analysis.work();
+        for query in [0, 1, 2, 3, 4, 7, 17, u32::MAX - 1, u32::MAX] {
+            let expected = ids.iter().position(|id| *id == query);
+            assert_eq!(analysis.block_position(BlockId(query)), expected);
+            assert_eq!(analysis.is_reachable(BlockId(query)), expected.is_some());
+        }
+        for (definition, definition_id) in ids.iter().copied().enumerate() {
+            for (use_position, use_id) in ids.iter().copied().enumerate() {
+                assert_eq!(
+                    analysis.dominates(BlockId(definition_id), BlockId(use_id)),
+                    definition <= use_position
+                );
+            }
+        }
+        assert_eq!(analysis.work(), work);
+        *cases += 1;
+    }
+    let mut cases = 0;
+    for mut ids in [[0, 1, 2, 3], [1, 7, 17, u32::MAX]] {
+        for count in 1..=ids.len() {
+            visit(&mut ids[..count], 0, &mut cases);
+        }
+    }
+    assert_eq!(cases, 2 * (1 + 2 + 6 + 24));
+}
+
+#[test]
+fn block_lookup_leaves_exact_construction_work_and_one_under_limits_unchanged() {
+    // Three blocks and two chain edges cost 11 * 3 - 7 construction units.
+    const WORK: u64 = 26;
+    for ids in [[0, 1, 2], [2, 0, 1], [1, 7, u32::MAX]] {
+        let function = lookup_chain(&ids, 3);
+        let limits = ControlFlowLimits {
+            analysis_work: WORK,
+            ..ControlFlowLimits::DEFAULT
+        };
+        let analysis = analyze_control_flow_with_limits(&function, limits).unwrap();
+        let work = analysis.work();
+        assert_eq!(work.total, WORK);
+        for (position, id) in ids.iter().copied().enumerate() {
+            assert_eq!(analysis.block_position(BlockId(id)), Some(position));
+        }
+        assert_eq!(analysis.work(), work);
+        assert_eq!(
+            analyze_control_flow_with_limits(
+                &function,
+                ControlFlowLimits {
+                    analysis_work: WORK - 1,
+                    ..limits
+                }
+            ),
+            Err(ControlFlowError::ResourceLimit {
+                resource: ControlFlowResource::AnalysisWork,
+                limit: WORK - 1,
+                actual: WORK,
+            })
+        );
+    }
+}
