@@ -63,13 +63,13 @@ fn ordinary_neutral_collectives_reach_both_target_llvm_backends() {
             (
                 "lds-kernel",
                 "lds_publish_read_reduce_i32_v1",
-                "add i32",
+                "call { i32, i1 } @llvm.sadd.with.overflow.i32(",
                 14,
             ),
             (
                 "lds-u32-kernel",
                 "lds_publish_read_reduce_u32_v1",
-                "add i32",
+                "call { i32, i1 } @llvm.uadd.with.overflow.i32(",
                 14,
             ),
             (
@@ -81,25 +81,25 @@ fn ordinary_neutral_collectives_reach_both_target_llvm_backends() {
             (
                 "lds-scan-u32-kernel",
                 "lds_inclusive_scan_u32_v1",
-                "add i32",
+                "call { i32, i1 } @llvm.uadd.with.overflow.i32(",
                 6,
             ),
             (
                 "lds-scan-u32-exclusive-kernel",
                 "lds_exclusive_scan_u32_v1",
-                "add i32",
+                "call { i32, i1 } @llvm.uadd.with.overflow.i32(",
                 18,
             ),
             (
                 "lds-scan-i32-kernel",
                 "lds_exclusive_scan_i32_v1",
-                "add i32",
+                "call { i32, i1 } @llvm.sadd.with.overflow.i32(",
                 16,
             ),
             (
                 "lds-scan-i32-inclusive-kernel",
                 "lds_inclusive_scan_i32_v1",
-                "add i32",
+                "call { i32, i1 } @llvm.sadd.with.overflow.i32(",
                 6,
             ),
             (
