@@ -1207,6 +1207,96 @@ fn execute_scalar_slice_bundle_v5_through_sim_runtime(
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_source_workgroup_reductions_wrap_on_overflow() {
+    use fe2o3_kir_sim::SimulationScheduleRequestV1;
+
+    const CANARY: u32 = 0xa5c3_7e19;
+    let target = ScratchTarget::new();
+    for (feature, element, values) in [
+        ("workgroup_reduce_u32", "u32", vec![u32::MAX, 0x8000_0001]),
+        (
+            "workgroup_reduce_i32",
+            "i32",
+            vec![i32::MAX as u32, i32::MIN as u32, (i32::MIN + 1) as u32],
+        ),
+    ] {
+        let bundle_path = target.path().join(format!("{feature}-overflow-v5.fe2sim"));
+        let exported = output(
+            simulation_export_command_for_feature(
+                "gfx942",
+                &bundle_path,
+                &target.path().join("reduce-overflow-target"),
+                Some(5),
+                feature,
+            ),
+            "export existing ordinary integer workgroup reduction for overflow coverage",
+        );
+        assert!(exported.status.success(), "{feature}: {}", exported.stderr);
+        for (vector, bits) in values.into_iter().enumerate() {
+            let sum = match element {
+                "u32" => (0..64).fold(0_u32, |sum, _| sum.wrapping_add(bits)),
+                "i32" => (0..64).fold(0_i32, |sum, _| sum.wrapping_add(bits as i32)) as u32,
+                _ => unreachable!("integer workgroup reduction roster"),
+            };
+            assert_ne!(sum, CANARY);
+            let mut expected = sum.to_le_bytes().repeat(64);
+            expected.extend_from_slice(&CANARY.to_le_bytes().repeat(4));
+            let request_path = target.path().join("workgroup-reduce-overflow-request.json");
+            std::fs::write(&request_path, serde_json::to_vec(&json!({
+                "schema": "fe2o3-simulation-request-v1", "kernel": feature,
+                "grid": [64, 1, 1], "workgroup": [64, 1, 1],
+                "arguments": [
+                    {"kind": "scalar", "type": element, "bits": format!("0x{bits:08x}")},
+                    {"kind": "buffer", "element": element, "access": "read_write",
+                     "alignment": 4, "bytes": format!("0x{}", hex(&CANARY.to_le_bytes().repeat(68)))},
+                ],
+            })).unwrap()).unwrap();
+            let admitted =
+                fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5(&bundle_path, &request_path)
+                    .unwrap();
+            for repetition in 0..2_u64 {
+                for schedule in [
+                    SimulationScheduleRequestV1::RecordCanonical {
+                        max_decisions: 100_000,
+                    },
+                    SimulationScheduleRequestV1::RecordSeeded {
+                        seed: 0x275_600 + vector as u64 * 4 + repetition,
+                        max_decisions: 100_000,
+                    },
+                ] {
+                    let execution = admitted
+                        .input()
+                        .module
+                        .simulate_scheduled(
+                            &admitted.input().request,
+                            admitted.input().simulation_target(),
+                            admitted.input().simulation_limits,
+                            schedule,
+                        )
+                        .unwrap_or_else(|error| {
+                            panic!("{feature} vector {vector} repetition {repetition}: {error:?}",)
+                        });
+                    assert_eq!(execution.invocations_executed(), 64);
+                    assert_eq!(execution.workgroups_visited(), 1);
+                    assert!(execution.dynamic_workgroup_memory().is_none());
+                    assert_eq!(
+                        &execution.arguments()[0],
+                        &admitted.input().request.arguments[0],
+                        "{feature} changed its scalar input"
+                    );
+                    assert_eq!(
+                        execution.buffer(1).unwrap().bytes(),
+                        expected,
+                        "{feature} vector {vector} repetition {repetition}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path() {
     use fe2o3_kernel_ir::{
         AddressSpace, MemoryOrdering, OperationKind, SemanticKirComponentRepresentationV2,

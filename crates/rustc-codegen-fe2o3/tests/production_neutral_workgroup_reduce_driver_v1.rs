@@ -645,6 +645,120 @@ fn execute_scan_through_sim_runtime(
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_integer_scan_sources_wrap_on_overflow() {
+    use fe2o3_kir_sim::{BufferBackingIdV1, SimulationScheduleRequestV1};
+
+    const CANARY: u32 = 0xa5c3_7e19;
+    let scratch = ScratchDirectory::new("integer-scan-overflow");
+    let cases = SCAN_CASES
+        .into_iter()
+        .filter(|case| case.extent == 3 && matches!(case.element, "u32" | "i32"))
+        .collect::<Vec<_>>();
+    assert_eq!(cases.len(), 4);
+    for case in cases {
+        let bundle_path = export_scan_bundle(&scratch, case);
+        // Zero tails isolate overflow in speculative additions for inactive scan lanes.
+        let vectors = match case.element {
+            "u32" => vec![[u32::MAX, 1, 7], [u32::MAX, 0, 0]],
+            "i32" => vec![
+                [i32::MAX as u32, 1, 1],
+                [i32::MIN as u32, (-1_i32) as u32, (-1_i32) as u32],
+                [i32::MAX as u32, 0, 0],
+                [i32::MIN as u32, 0, 0],
+            ],
+            _ => unreachable!("integer scan roster"),
+        };
+        for (vector, values) in vectors.into_iter().enumerate() {
+            let input = values
+                .iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect::<Vec<_>>();
+            let mut sum = 0_u32;
+            let mut expected = CANARY.to_le_bytes().repeat(4);
+            for bits in values {
+                let previous = sum;
+                sum = match case.element {
+                    "u32" => sum.wrapping_add(bits),
+                    "i32" => (sum as i32).wrapping_add(bits as i32) as u32,
+                    _ => unreachable!("integer scan roster"),
+                };
+                let prefix = if case.inclusive { sum } else { previous };
+                expected.extend_from_slice(&prefix.to_le_bytes());
+            }
+            expected.extend_from_slice(&CANARY.to_le_bytes().repeat(4));
+            let request_path = write_scan_request(
+                &scratch,
+                "integer-scan-overflow",
+                case,
+                &input,
+                case.extent * 4,
+            );
+            let mut request: Value =
+                serde_json::from_slice(&std::fs::read(&request_path).unwrap()).unwrap();
+            // Keep the source's exact output extent while guarding its backing allocation.
+            request["arguments"][1] = json!({
+                "kind": "buffer_view", "backing": 1, "element": case.element,
+                "access": "read_write", "alignment": 4,
+                "byte_offset": 16, "elements": case.extent,
+            });
+            request["shared_buffers"] = json!([{
+                "id": 1, "element": case.element, "access": "read_write", "alignment": 4,
+                "bytes": format!("0x{}", hex(&CANARY.to_le_bytes().repeat(case.extent + 8))),
+            }]);
+            std::fs::write(&request_path, serde_json::to_vec(&request).unwrap()).unwrap();
+            let admitted =
+                fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5(&bundle_path, &request_path)
+                    .unwrap();
+            for repetition in 0..2_u64 {
+                for schedule in [
+                    SimulationScheduleRequestV1::RecordCanonical {
+                        max_decisions: 20_000,
+                    },
+                    SimulationScheduleRequestV1::RecordSeeded {
+                        seed: 0x275_500 + vector as u64 * 4 + repetition,
+                        max_decisions: 20_000,
+                    },
+                ] {
+                    let execution = admitted
+                        .input()
+                        .module
+                        .simulate_scheduled(
+                            &admitted.input().request,
+                            admitted.input().simulation_target(),
+                            admitted.input().simulation_limits,
+                            schedule,
+                        )
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "{} vector {vector} repetition {repetition}: {error:?}",
+                                case.feature,
+                            )
+                        });
+                    assert_eq!(execution.invocations_executed(), case.extent as u64);
+                    assert_eq!(execution.workgroups_visited(), 1);
+                    assert_eq!(
+                        execution.buffer(0).unwrap().bytes(),
+                        input,
+                        "{} changed immutable scan input",
+                        case.feature
+                    );
+                    assert_scan_rows(
+                        case,
+                        execution
+                            .shared_buffer(BufferBackingIdV1(1))
+                            .unwrap()
+                            .bytes(),
+                        &expected,
+                        &format!("overflow vector {vector} repetition {repetition}"),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_scan_sources_export_v5_and_execute_every_cpu_observation_path() {
     use fe2o3_kernel_ir::{
         AddressSpace, LaunchExtent, OperationKind, SemanticKirComponentRepresentationV2,

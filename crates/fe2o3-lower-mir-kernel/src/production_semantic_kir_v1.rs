@@ -4673,6 +4673,40 @@ fn exact_operation_result_v1(operation: &Operation, ty: &Type) -> Option<ValueId
     (&result.ty == ty).then_some(result.id)
 }
 
+fn exact_workgroup_sum_result_v1(
+    operation: &Operation,
+    scalar: &Type,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> Option<ValueId> {
+    let OperationKind::Binary {
+        op,
+        lhs: actual_lhs,
+        rhs: actual_rhs,
+    } = &operation.kind
+    else {
+        return None;
+    };
+    if *actual_lhs != lhs || *actual_rhs != rhs {
+        return None;
+    }
+    match scalar {
+        Type::Scalar(ScalarType::U32 | ScalarType::I32)
+            if *op == BinaryOp::Checked(CheckedBinaryOperator::Add) =>
+        {
+            let [value, overflow] = operation.results.as_slice() else {
+                return None;
+            };
+            (&value.ty == scalar && overflow.ty == Type::BOOL && value.id != overflow.id)
+                .then_some(value.id)
+        }
+        Type::Scalar(ScalarType::F32) if *op == BinaryOp::Add => {
+            exact_operation_result_v1(operation, scalar)
+        }
+        _ => None,
+    }
+}
+
 fn is_exact_neutral_barrier_v1(operation: &Operation) -> bool {
     matches!(
         &operation.kind,
@@ -5152,17 +5186,8 @@ fn replay_neutral_workgroup_reduce_recipe_v1(
             .ok_or_else(|| mismatch(effect_ordinal))?;
         effect_ordinal += 1;
         let (sum_operation, _) = next_operation!(effect_ordinal);
-        let sum = match &sum_operation.kind {
-            OperationKind::Binary {
-                op: BinaryOp::Add,
-                lhs: actual_lhs,
-                rhs: actual_rhs,
-            } if *actual_lhs == lhs && *actual_rhs == rhs => {
-                exact_operation_result_v1(sum_operation, &scalar)
-            }
-            _ => None,
-        }
-        .ok_or_else(|| mismatch(effect_ordinal))?;
+        let sum = exact_workgroup_sum_result_v1(sum_operation, &scalar, lhs, rhs)
+            .ok_or_else(|| mismatch(effect_ordinal))?;
         let (select_operation, _) = next_operation!(effect_ordinal);
         let selected = match &select_operation.kind {
             OperationKind::Select {
@@ -5539,17 +5564,8 @@ fn replay_neutral_workgroup_scan_recipe_v1(
             .ok_or_else(|| mismatch(effect_ordinal))?;
         effect_ordinal += 1;
         let (sum_operation, _) = next_operation!(effect_ordinal);
-        let sum = match &sum_operation.kind {
-            OperationKind::Binary {
-                op: BinaryOp::Add,
-                lhs,
-                rhs,
-            } if *lhs == prefix && *rhs == current => {
-                exact_operation_result_v1(sum_operation, &scalar)
-            }
-            _ => None,
-        }
-        .ok_or_else(|| mismatch(effect_ordinal))?;
+        let sum = exact_workgroup_sum_result_v1(sum_operation, &scalar, prefix, current)
+            .ok_or_else(|| mismatch(effect_ordinal))?;
         let (select_operation, _) = next_operation!(effect_ordinal);
         let selected = match &select_operation.kind {
             OperationKind::Select {
@@ -21111,6 +21127,49 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         Ok(result)
     }
 
+    fn emit_workgroup_sum_add(
+        &mut self,
+        operations: &mut Vec<Operation>,
+        scalar: &Type,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> Result<ValueId, ProductionSemanticKirErrorV1> {
+        match scalar {
+            Type::Scalar(ScalarType::U32 | ScalarType::I32) => {
+                // The device contract is modular, including sums in inactive lanes.
+                let SemanticValueBindingV1::Aggregate(parts) = self.emit_checked_binary(
+                    operations,
+                    scalar.clone(),
+                    CheckedBinaryOperator::Add,
+                    lhs,
+                    rhs,
+                )?
+                else {
+                    unreachable!("checked binary lowering returns value and overflow");
+                };
+                let (value, _) = parts[0]
+                    .value()
+                    .expect("checked binary value has plain representation");
+                Ok(value)
+            }
+            Type::Scalar(ScalarType::F32) => self.emit_id(
+                operations,
+                scalar.clone(),
+                OperationKind::Binary {
+                    op: BinaryOp::Add,
+                    lhs,
+                    rhs,
+                },
+            ),
+            _ => Err(unsupported(
+                0,
+                None,
+                None,
+                "workgroup sum requires a u32, i32, or f32 element",
+            )),
+        }
+    }
+
     fn emit_workgroup_reduce_sum_tree(
         &mut self,
         operations: &mut Vec<Operation>,
@@ -21143,15 +21202,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             let safe_pair = self.emit_select_index(operations, active, pair, zero)?;
             let lhs = self.emit_workgroup_load_at(operations, scratch, rank, &scalar)?;
             let rhs = self.emit_workgroup_load_at(operations, scratch, safe_pair, &scalar)?;
-            let sum = self.emit_id(
-                operations,
-                scalar.clone(),
-                OperationKind::Binary {
-                    op: BinaryOp::Add,
-                    lhs,
-                    rhs,
-                },
-            )?;
+            let sum = self.emit_workgroup_sum_add(operations, &scalar, lhs, rhs)?;
             let next = self.emit_id(
                 operations,
                 scalar.clone(),
@@ -21217,15 +21268,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 self.emit_index_binary(operations, BinaryOp::Subtract, safe_rank, offset_value)?;
             let current = self.emit_workgroup_load_at(operations, scratch, rank, &scalar)?;
             let prefix = self.emit_workgroup_load_at(operations, scratch, safe_source, &scalar)?;
-            let sum = self.emit_id(
-                operations,
-                scalar.clone(),
-                OperationKind::Binary {
-                    op: BinaryOp::Add,
-                    lhs: prefix,
-                    rhs: current,
-                },
-            )?;
+            let sum = self.emit_workgroup_sum_add(operations, &scalar, prefix, current)?;
             let next = self.emit_id(
                 operations,
                 scalar.clone(),
@@ -24663,6 +24706,7 @@ fn hex_identity(bytes: &[u8; 32]) -> String {
 mod resource_tests {
     include!("production_semantic_kir_v1/resource_01_tests.rs");
     include!("production_semantic_kir_v1/semantic_ssa_01_tests.rs");
+    include!("production_semantic_kir_v1/workgroup_sum_wrapping_tests.rs");
 
     #[test]
     fn semantic_ssa_completion_accepts_an_exhausted_definition_plan() {
@@ -30600,15 +30644,12 @@ mod resource_tests {
                     access: MemoryAccess::new(AddressSpace::Workgroup, 4),
                 },
             );
-            let sum = push_neutral_recipe_result_v1(
+            let sum = push_neutral_recipe_sum_v1(
                 &mut consumer.operations,
                 &mut next_value,
-                scalar_ty.clone(),
-                OperationKind::Binary {
-                    op: BinaryOp::Add,
-                    lhs,
-                    rhs,
-                },
+                &scalar_ty,
+                lhs,
+                rhs,
             );
             let selected = push_neutral_recipe_result_v1(
                 &mut consumer.operations,
@@ -30786,7 +30827,7 @@ mod resource_tests {
 
     #[test]
     fn neutral_recipe_replay_accepts_exact_width_and_scalar_matrix() {
-        for elements in [1_u32, 2, 64] {
+        for elements in [1_u32, 2, 64, 256] {
             for scalar in [ScalarType::I32, ScalarType::U32, ScalarType::F32] {
                 let fixture = neutral_recipe_replay_fixture_v1(elements, scalar);
                 let events = replay_neutral_recipe_fixture_v1(&fixture)
