@@ -387,6 +387,11 @@ Error setAndCheckModuleContract(Module &ModuleValue,
     }
   }
 
+  // Measured multi-target libraries contain unrelated ISA-specific helpers.
+  // Check their function contracts after LinkOnlyNeeded selects the closure.
+  if (MeasuredBuiltinProvider)
+    return Error::success();
+
   for (const Function &FunctionValue : ModuleValue) {
     Attribute Cpu = FunctionValue.getFnAttribute("target-cpu");
     if (Cpu.isStringAttribute() && Cpu.getValueAsString() != Parts.Cpu)
@@ -608,9 +613,12 @@ Expected<std::unique_ptr<Module>> linkBitcode(const Request &RequestValue,
                             Linker::Flags::LinkOnlyNeeded))
       return pipelineError("gfx942 device-library linking failed");
   }
-  if (!BuiltinProviders.empty())
+  if (!BuiltinProviders.empty()) {
+    if (Error E = setAndCheckModuleContract(*Linked, RequestValue, Machine))
+      return E;
     if (Error E = reduceBuiltinProviderClosure(*Linked, RequestValue))
       return E;
+  }
   if (Linked) {
     BoundedRawStream Stream(MaxDiagnosticBytes);
     if (verifyModule(*Linked, &Stream)) {

@@ -578,7 +578,7 @@ pub(crate) fn open_expected_generation(
         format!("failed to inspect Cargo application artifact directory: {error}")
     })?;
     if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
-        || stat.st_uid != unsafe { libc::geteuid() }
+        || stat.st_uid != rustix::process::geteuid().as_raw()
         || stat.st_mode & 0o022 != 0
     {
         return Err(
@@ -1430,10 +1430,10 @@ fn ensure_child_subreaper() -> Result<(), String> {
 }
 
 fn establish_fresh_application_session() -> io::Result<()> {
+    let process = rustix::process::getpid().as_raw_pid();
     // SAFETY: this runs in the single-threaded post-fork child before exec. A successful `setsid`
     // makes the child both session and process-group leader, so processes from the runner's session
     // cannot join the group later. Any failure is returned through `Command::spawn`.
-    let process = unsafe { libc::getpid() };
     let session = unsafe { libc::setsid() };
     if session < 0 {
         return Err(io::Error::last_os_error());
@@ -1737,7 +1737,7 @@ fn validate_envelope_stat(
         || opened.st_dev != linked.st_dev
         || opened.st_ino != linked.st_ino
         || opened.st_nlink != 1
-        || opened.st_uid != unsafe { libc::geteuid() }
+        || opened.st_uid != rustix::process::geteuid().as_raw()
         || opened.st_mode & 0o077 != 0
     {
         return Err(format!("refusing unsafe application envelope {name}"));

@@ -1,6 +1,14 @@
 #[cfg(target_os = "linux")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let snapshot = fe2o3_kfd::topology::discover_default_topology()?;
+    use fe2o3_kfd::topology::{GfxTarget, discover_default_topology_for_target};
+
+    let mut arguments = std::env::args().skip(1);
+    let target = match (arguments.next().as_deref(), arguments.next()) {
+        (None | Some("gfx942"), None) => GfxTarget::Gfx942,
+        (Some("gfx950"), None) => GfxTarget::Gfx950,
+        _ => return Err("usage: kfd-topology [gfx942|gfx950]".into()),
+    };
+    let snapshot = discover_default_topology_for_target(target)?;
     let topology = snapshot.topology();
     let provenance = topology.provenance();
     println!(

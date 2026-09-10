@@ -1,4 +1,4 @@
-//! Strict, read-only discovery of the reviewed KFD `gfx942` topology profile.
+//! Strict, read-only discovery of an explicitly selected KFD topology target.
 //!
 //! Values returned by this module are contracted sysfs observations. They are
 //! not authenticated device identity and grant no VM, memory, queue, or ioctl
@@ -47,6 +47,7 @@ const MAX_LINK_ENTRIES: usize = 4096;
 const MAX_MODULE_FIELD_BYTES: usize = 128;
 const EXPECTED_AMD_VENDOR_ID: u64 = 0x1002;
 const GFX942_TARGET_VERSION: u64 = 90_402;
+const GFX950_TARGET_VERSION: u64 = 90_500;
 const MIN_DRM_RENDER_MINOR: u64 = 128;
 const MAX_DRM_RENDER_MINOR: u64 = 255;
 const KFD_IOLINK_TYPE_XGMI_V1: u32 = 11;
@@ -56,22 +57,27 @@ const GFX942_SDMA_XGMI_ENGINE_COUNT_V1: u32 = 14;
 const GFX942_SDMA_TOTAL_ENGINE_COUNT_V1: u32 =
     GFX942_SDMA_ENGINE_COUNT_V1 + GFX942_SDMA_XGMI_ENGINE_COUNT_V1;
 
-/// The only GPU target admitted by the initial direct-KFD runtime profile.
+/// GPU targets accepted by read-only topology discovery.
+///
+/// Discovery of a target does not admit its devices to the direct-KFD runtime.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum GfxTarget {
     Gfx942,
+    Gfx950,
 }
 
 impl GfxTarget {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Gfx942 => "gfx942",
+            Self::Gfx950 => "gfx950",
         }
     }
 
     pub const fn encoded_version(self) -> u32 {
         match self {
             Self::Gfx942 => GFX942_TARGET_VERSION as u32,
+            Self::Gfx950 => GFX950_TARGET_VERSION as u32,
         }
     }
 }
@@ -648,6 +654,7 @@ pub enum Gfx942XgmiRouteErrorV1 {
     SameGpu,
     UnknownGpu(u32),
     GpuIdOutOfRange(u64),
+    UnsupportedTarget,
     DifferentOrMissingHive,
     MissingDirectionalLink,
     AmbiguousDirectionalLink,
@@ -820,6 +827,9 @@ impl TopologySnapshot {
             find_gpu(source_gpu_id).ok_or(Gfx942XgmiRouteErrorV1::UnknownGpu(source_gpu_id))?;
         let destination = find_gpu(destination_gpu_id)
             .ok_or(Gfx942XgmiRouteErrorV1::UnknownGpu(destination_gpu_id))?;
+        if source.target != GfxTarget::Gfx942 || destination.target != GfxTarget::Gfx942 {
+            return Err(Gfx942XgmiRouteErrorV1::UnsupportedTarget);
+        }
         if source.hive_id == 0 || source.hive_id != destination.hive_id {
             return Err(Gfx942XgmiRouteErrorV1::DifferentOrMissingHive);
         }
@@ -905,17 +915,30 @@ impl HostTopologySnapshot {
     }
 }
 
-/// Discovers the default KFD topology without opening a device or granting
-/// runtime authority.
+/// Discovers the default gfx942 KFD topology without opening a device or
+/// granting runtime authority. Other targets continue to reject.
 pub fn discover_default_topology() -> Result<HostTopologySnapshot, TopologyError> {
-    discover_host_topology(&DiscoveryPaths {
-        topology_root: Path::new(DEFAULT_TOPOLOGY_ROOT),
-        boot_id: Path::new(DEFAULT_BOOT_ID_PATH),
-        os_release: Path::new(DEFAULT_OS_RELEASE_PATH),
-        amdgpu_module_root: Path::new(DEFAULT_AMDGPU_MODULE_ROOT),
-        device_character_root: Path::new(DEFAULT_DEVICE_CHARACTER_ROOT),
-        sysfs_devices_root: Path::new(DEFAULT_SYSFS_DEVICES_ROOT),
-    })
+    discover_default_topology_for_target(GfxTarget::Gfx942)
+}
+
+/// Discovers one homogeneous, explicitly selected target without opening a
+/// device, changing XNACK, or granting VM, queue, dispatch, or XGMI authority.
+/// Every GPU in the complete topology must match; mixed-target inventories
+/// reject rather than silently dropping devices from the snapshot.
+pub fn discover_default_topology_for_target(
+    target: GfxTarget,
+) -> Result<HostTopologySnapshot, TopologyError> {
+    discover_host_topology_for_target(
+        &DiscoveryPaths {
+            topology_root: Path::new(DEFAULT_TOPOLOGY_ROOT),
+            boot_id: Path::new(DEFAULT_BOOT_ID_PATH),
+            os_release: Path::new(DEFAULT_OS_RELEASE_PATH),
+            amdgpu_module_root: Path::new(DEFAULT_AMDGPU_MODULE_ROOT),
+            device_character_root: Path::new(DEFAULT_DEVICE_CHARACTER_ROOT),
+            sysfs_devices_root: Path::new(DEFAULT_SYSFS_DEVICES_ROOT),
+        },
+        target,
+    )
 }
 
 #[derive(Debug)]
@@ -2068,9 +2091,10 @@ fn parse_gpu_node(
     name: String,
     properties_path: &Path,
     properties: &BTreeMap<String, u64>,
+    target: GfxTarget,
 ) -> Result<GpuTopologyNode, TopologyError> {
     let encoded_target = required_property(properties, properties_path, "gfx_target_version")?;
-    if encoded_target != GFX942_TARGET_VERSION {
+    if encoded_target != u64::from(target.encoded_version()) {
         return Err(TopologyError::UnsupportedTarget {
             node_id,
             encoded: encoded_target,
@@ -2175,7 +2199,7 @@ fn parse_gpu_node(
         node_id,
         gpu_id,
         name,
-        target: GfxTarget::Gfx942,
+        target,
         pci_device_id: pci_device_id as u16,
         drm_render_minor: drm_render_minor as u16,
         unique_id,
@@ -2339,10 +2363,11 @@ fn correlate_render_node(
     })
 }
 
-fn discover_host_topology(
+fn discover_host_topology_for_target(
     paths: &DiscoveryPaths<'_>,
+    target: GfxTarget,
 ) -> Result<HostTopologySnapshot, TopologyError> {
-    let topology = discover_topology_at(paths.topology_root)?;
+    let topology = discover_topology_at_for_target(paths.topology_root, target)?;
     let boot_id = read_boot_id(paths.boot_id)?;
     let kernel_release = read_kernel_release(paths.os_release)?;
     let amdgpu_module = observe_amdgpu_module(paths.amdgpu_module_root)?;
@@ -2384,7 +2409,15 @@ fn discover_host_topology(
     })
 }
 
+#[cfg(test)]
 fn discover_topology_at(root: &Path) -> Result<TopologySnapshot, TopologyError> {
+    discover_topology_at_for_target(root, GfxTarget::Gfx942)
+}
+
+fn discover_topology_at_for_target(
+    root: &Path,
+    target: GfxTarget,
+) -> Result<TopologySnapshot, TopologyError> {
     let root_identity = ensure_directory(root)?;
     validate_root(root)?;
     let generation_path = root.join("generation_id");
@@ -2425,7 +2458,14 @@ fn discover_topology_at(root: &Path) -> Result<TopologySnapshot, TopologyError> 
         let properties_path = path.join("properties");
         let properties = parse_properties(&properties_path)?;
         if gpu_id != 0 {
-            let mut node = parse_gpu_node(*node_id, gpu_id, name, &properties_path, &properties)?;
+            let mut node = parse_gpu_node(
+                *node_id,
+                gpu_id,
+                name,
+                &properties_path,
+                &properties,
+                target,
+            )?;
             node.io_links = parse_topology_links(
                 path,
                 *node_id,
@@ -2797,6 +2837,107 @@ mod tests {
             (Some(2), Some(8))
         );
         assert_eq!(snapshot.gpu_nodes()[1].node_id(), 2);
+    }
+
+    #[test]
+    fn explicit_gfx950_discovery_preserves_eight_gpu_inventory_and_capacity() {
+        let fixture = Fixture::valid(8);
+        for node in 1..=8 {
+            for (old, new) in [
+                ("gfx_target_version 90402", "gfx_target_version 90500"),
+                ("device_id 29857", "device_id 30112"),
+                ("simd_count 1216", "simd_count 1024"),
+                ("lds_size_in_kb 64", "lds_size_in_kb 160"),
+                ("fw_version 192", "fw_version 41"),
+                ("sdma_fw_version 25", "sdma_fw_version 12"),
+            ] {
+                fixture.replace_property(node, old, new);
+            }
+        }
+        let snapshot = discover_topology_at_for_target(&fixture.root, GfxTarget::Gfx950).unwrap();
+        assert_eq!(snapshot.observed_node_count(), 9);
+        assert_eq!(snapshot.gpu_nodes().len(), 8);
+        for gpu in snapshot.gpu_nodes() {
+            assert_eq!(gpu.target(), GfxTarget::Gfx950);
+            assert_eq!(gpu.target().name(), "gfx950");
+            assert_eq!(gpu.target().encoded_version(), 90_500);
+            assert_eq!(gpu.pci_device_id(), 0x75a0);
+            assert_eq!(gpu.capacity().simd_count(), 1024);
+            assert_eq!(gpu.capacity().lds_size_in_kb(), 160);
+            assert_eq!(gpu.fw_version(), 41);
+            assert_eq!(gpu.sdma_fw_version(), 12);
+        }
+        assert!(matches!(
+            fixture.discover(),
+            Err(TopologyError::UnsupportedTarget {
+                encoded: 90_500,
+                ..
+            })
+        ));
+        assert_eq!(
+            snapshot.admit_gfx942_xgmi_route(1001, 1002),
+            Err(Gfx942XgmiRouteErrorV1::UnsupportedTarget)
+        );
+    }
+
+    #[test]
+    fn explicit_targets_reject_mixed_and_wrong_inventories() {
+        let fixture = Fixture::valid(2);
+        assert!(matches!(
+            discover_topology_at_for_target(&fixture.root, GfxTarget::Gfx950),
+            Err(TopologyError::UnsupportedTarget {
+                node_id: 1,
+                encoded: 90_402
+            })
+        ));
+        fixture.replace_property(1, "gfx_target_version 90402", "gfx_target_version 90500");
+        assert!(matches!(
+            discover_topology_at_for_target(&fixture.root, GfxTarget::Gfx950),
+            Err(TopologyError::UnsupportedTarget {
+                node_id: 2,
+                encoded: 90_402
+            })
+        ));
+        assert!(matches!(
+            fixture.discover(),
+            Err(TopologyError::UnsupportedTarget {
+                node_id: 1,
+                encoded: 90_500
+            })
+        ));
+    }
+
+    #[test]
+    fn gfx950_discovery_does_not_skip_identity_validation() {
+        let fixture = Fixture::valid(2);
+        for node in 1..=2 {
+            fixture.replace_property(node, "gfx_target_version 90402", "gfx_target_version 90500");
+        }
+        fixture.replace_property(2, "unique_id 2002", "unique_id 2001");
+        assert!(matches!(
+            discover_topology_at_for_target(&fixture.root, GfxTarget::Gfx950),
+            Err(TopologyError::DuplicateIdentity {
+                field: "unique_id",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn gfx950_render_correlation_still_checks_device_identity() {
+        let mut fixture = RenderFixture::valid();
+        fixture.gpu.target = GfxTarget::Gfx950;
+        fixture.gpu.pci_device_id = 0x75a0;
+        fs::write(fixture.pci_path.join("device"), "0x75a0\n").unwrap();
+        fixture.correlate().unwrap();
+        fs::write(fixture.pci_path.join("device"), "0x74a1\n").unwrap();
+        assert!(matches!(
+            fixture.correlate(),
+            Err(TopologyError::RenderCorrelationMismatch {
+                field: "PCI device",
+                ..
+            })
+        ));
     }
 
     #[test]

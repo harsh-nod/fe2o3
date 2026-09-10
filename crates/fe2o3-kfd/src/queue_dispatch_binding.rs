@@ -9,7 +9,7 @@
 
 use core::fmt;
 
-use fe2o3_amdhsa_loader::{KernelIdentityInputsV1, ValidatedKernelEnvelope};
+use fe2o3_amdhsa_loader::{AdmittedProfile, KernelIdentityInputsV1, ValidatedKernelEnvelope};
 use fe2o3_aql::{
     AQL_MAX_FIXED_BATCH_PACKETS_V2, AqlDispatchGeometryV1, AqlDispatchOrderingV1,
     AqlRingCapacityV1, Cov6ImplicitDispatchShapeV1, ObservedGpuAddressV1,
@@ -1291,12 +1291,7 @@ impl DispatchResourceOwnerV1 {
         destination: &mut [u8],
     ) -> Result<(), Gfx942DispatchBindingErrorV1> {
         validate_completed_read_request(&self.generation, &self.data_premises, request)?;
-        if u64::try_from(destination.len()).ok() != Some(request.byte_len) {
-            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
-                index: request.data_index,
-                detail: "completed read destination length",
-            });
-        }
+        validate_completed_read_destination(request, destination.len())?;
         let authority =
             self.data
                 .get(request.data_index)
@@ -1525,23 +1520,29 @@ fn validate_completed_read_request(
             detail: "completed read range",
         });
     }
-    let matching_ranges = premise
-        .writable_ranges
-        .iter()
-        .filter(|range| {
-            ranges_overlap_u64(
-                range.offset,
-                range.byte_len,
-                request.offset,
-                request.byte_len,
-            )
-        })
-        .collect::<Vec<_>>();
-    let writable_end = matching_ranges
-        .first()
-        .and_then(|range| range.offset.checked_add(range.byte_len));
-    if matching_ranges.len() != 1
-        || request.offset < matching_ranges[0].offset
+    let mut matching_range = None;
+    for range in &premise.writable_ranges {
+        if ranges_overlap_u64(
+            range.offset,
+            range.byte_len,
+            request.offset,
+            request.byte_len,
+        ) && matching_range.replace(range).is_some()
+        {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "completed read requires one inspected writable range",
+            });
+        }
+    }
+    let Some(matching_range) = matching_range else {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed read requires one inspected writable range",
+        });
+    };
+    let writable_end = matching_range.offset.checked_add(matching_range.byte_len);
+    if request.offset < matching_range.offset
         || writable_end.is_none_or(|writable_end| end > writable_end)
     {
         return Err(Gfx942DispatchBindingErrorV1::InvalidData {
@@ -1550,6 +1551,19 @@ fn validate_completed_read_request(
         });
     }
     Ok(generation)
+}
+
+fn validate_completed_read_destination(
+    request: Gfx942CompletedDispatchReadRequestV1,
+    destination_len: usize,
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    if u64::try_from(destination_len).ok() != Some(request.byte_len) {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "completed read destination length",
+        });
+    }
+    Ok(())
 }
 
 fn validate_completed_snapshot_request(
@@ -1814,6 +1828,17 @@ pub(super) fn wrap_completed<const N: usize>(
     }
 }
 
+fn validate_gfx942_executable_profile(
+    profile: AdmittedProfile,
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    if profile != AdmittedProfile::Gfx942XnackOffCov6 {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidCode(
+            "executable target is not gfx942:xnack-",
+        ));
+    }
+    Ok(())
+}
+
 /// Builds real owned code, kernarg, and C3 data authorities without publishing.
 pub(super) fn prepare_dispatch_resources<const N: usize>(
     memory: &mut SharedGttMemorySessionV1,
@@ -1823,6 +1848,7 @@ pub(super) fn prepare_dispatch_resources<const N: usize>(
     data: Vec<DeviceDataAllocationInputV1>,
 ) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
     validate_packet_count::<N>()?;
+    validate_gfx942_executable_profile(kernel.envelope().plan().profile())?;
     let resources = kernel.resources();
     let plan = *kernel.envelope().plan();
     let image_len_u64 = plan
@@ -2106,6 +2132,9 @@ fn plan_public_fixed_dispatch_resources<const N: usize>(
             requested: programs.len(),
             maximum: GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1,
         });
+    }
+    for kernel in programs {
+        validate_gfx942_executable_profile(kernel.envelope().plan().profile())?;
     }
     if data_layouts.is_empty() || data_layouts.len() > MAX_DISPATCH_DATA_LEASES_V1 {
         return Err(Gfx942DispatchBindingErrorV1::DataLeaseCount {
@@ -2484,6 +2513,27 @@ fn validate_kernarg_resource_shape(
         return Err(Gfx942DispatchBindingErrorV1::InvalidCode(
             "kernarg resource shape",
         ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "engineering-gfx950")]
+pub(crate) fn initialize_engineering_cov6_kernarg(
+    kernel: &InspectedKernel,
+    geometry: AqlDispatchGeometryV1,
+    bytes: &mut [u8],
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    if bytes.len() as u64 != kernel.kernarg_segment_size() {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidCode(
+            "engineering kernarg size",
+        ));
+    }
+    if let Some(plan) = validate_cov6_implicit_kernarg_layout(kernel)? {
+        validate_caller_zero_cov6_implicit_suffix(0, bytes, &plan)?;
+        let values =
+            derive_cov6_implicit_kernarg_values(geometry, 0, kernel.uniform_work_group_size())
+                .map_err(|detail| Gfx942DispatchBindingErrorV1::Geometry { packet: 0, detail })?;
+        initialize_cov6_implicit_kernarg(bytes, &plan, values);
     }
     Ok(())
 }
@@ -4305,6 +4355,51 @@ mod tests {
     }
 
     #[test]
+    fn gfx950_loader_profile_cannot_enter_gfx942_dispatch_preparation() {
+        validate_gfx942_executable_profile(AdmittedProfile::Gfx942XnackOffCov6).unwrap();
+        assert!(matches!(
+            validate_gfx942_executable_profile(AdmittedProfile::Gfx950XnackOffCov6),
+            Err(Gfx942DispatchBindingErrorV1::InvalidCode(
+                "executable target is not gfx942:xnack-"
+            ))
+        ));
+    }
+
+    #[test]
+    #[ignore = "requires a freshly compiled FE2O3_TEST_GFX950_COV6 and FE2O3_TEST_GFX950_KERNEL"]
+    fn real_gfx950_kernel_rejects_before_fixed_dispatch_data_preparation() {
+        let bytes = std::fs::read(
+            std::env::var("FE2O3_TEST_GFX950_COV6").expect("set FE2O3_TEST_GFX950_COV6"),
+        )
+        .unwrap();
+        let name = std::env::var("FE2O3_TEST_GFX950_KERNEL").expect("set FE2O3_TEST_GFX950_KERNEL");
+        let kernel = fe2o3_amdhsa_loader::validate(&bytes, AdmittedProfile::Gfx950XnackOffCov6)
+            .unwrap()
+            .bind_kernel(&name)
+            .unwrap();
+        let programs = [kernel];
+        let packets = [Gfx942FixedDispatchPacketV1::new(
+            0,
+            AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+            0,
+            Vec::new().into_boxed_slice(),
+            Vec::new().into_boxed_slice(),
+        )];
+        assert!(matches!(
+            plan_public_fixed_dispatch_resources(&programs, &packets, &[], &[]),
+            Err(Gfx942DispatchBindingErrorV1::InvalidCode(
+                "executable target is not gfx942:xnack-"
+            ))
+        ));
+        assert!(matches!(
+            preflight_gfx942_fixed_dispatch_replacement(4096, &programs, &packets, &[], 1),
+            Err(Gfx942DispatchBindingErrorV1::InvalidCode(
+                "executable target is not gfx942:xnack-"
+            ))
+        ));
+    }
+
+    #[test]
     fn replacement_preflight_rejects_empty_programs_and_exhausted_generation_before_mutation() {
         let packets = [Gfx942FixedDispatchPacketV1::new(
             0,
@@ -4546,6 +4641,10 @@ mod tests {
             validate_completed_read_request(&owner, &[valid()], request).unwrap(),
             generation
         );
+        assert!(validate_completed_read_destination(request, 64).is_ok());
+        for rejected_len in [0, 63, 65, usize::MAX] {
+            assert!(validate_completed_read_destination(request, rejected_len).is_err());
+        }
         for rejected in [
             Gfx942CompletedDispatchReadRequestV1::new(0, 0, 64, 64),
             Gfx942CompletedDispatchReadRequestV1::new(generation + 1, 0, 64, 64),

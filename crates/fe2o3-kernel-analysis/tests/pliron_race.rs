@@ -2023,6 +2023,99 @@ fn dynamic_launch_equality_zero_proves_a_single_writer() {
 }
 
 #[test]
+fn opaque_index_is_race_free_only_in_an_exact_singleton_invocation_domain() {
+    #[derive(Clone, Copy)]
+    enum Case {
+        StaticXGuarded,
+        DynamicXUnguarded,
+        DynamicYUnguarded,
+    }
+
+    for case in [
+        Case::StaticXGuarded,
+        Case::DynamicXUnguarded,
+        Case::DynamicYUnguarded,
+    ] {
+        let context = &mut setup();
+        let (function, arguments) =
+            function_with_index_arguments(context, "opaque_singleton_writer", 2);
+        let entry = function.get_entry_block(context);
+        let bounds_block = block(context, &function, "bounds");
+        let access_block = block(context, &function, "access");
+        let exit = block(context, &function, "exit");
+        let view_type =
+            RankedViewType::new(context, 32, true, vec![dialect_kernel::DYNAMIC_EXTENT]).unwrap();
+        let output = RankedViewOp::new(context, view_type, vec![arguments[0]]).unwrap();
+        let x = InvocationIndexOp::new(
+            context,
+            0,
+            if matches!(case, Case::DynamicXUnguarded) {
+                0
+            } else {
+                64
+            },
+        );
+        let y =
+            matches!(case, Case::DynamicYUnguarded).then(|| InvocationIndexOp::new(context, 1, 0));
+        let one = IndexConstantOp::new(context, 1);
+        let leader_guard = (!matches!(case, Case::DynamicXUnguarded)).then(|| {
+            IndexLessThanBranchOp::new(
+                context,
+                x.result(context),
+                one.result(context),
+                bounds_block,
+                exit,
+            )
+        });
+        let unguarded =
+            matches!(case, Case::DynamicXUnguarded).then(|| BranchOp::new(context, bounds_block));
+        let bounds_guard =
+            IndexLessThanBranchOp::new(context, arguments[1], arguments[0], access_block, exit);
+        let write = access(
+            context,
+            AccessKindAttr::Write,
+            output.result(context),
+            arguments[1],
+        );
+        let to_exit = BranchOp::new(context, exit);
+        let ret = ReturnOp::new(context);
+        append(context, entry, &output);
+        append(context, entry, &x);
+        if let Some(y) = &y {
+            append(context, entry, y);
+        }
+        append(context, entry, &one);
+        match case {
+            Case::DynamicXUnguarded => append(
+                context,
+                entry,
+                unguarded.as_ref().expect("unguarded branch"),
+            ),
+            Case::StaticXGuarded | Case::DynamicYUnguarded => {
+                append(context, entry, leader_guard.as_ref().expect("leader guard"))
+            }
+        }
+        append(context, bounds_block, &bounds_guard);
+        append(context, access_block, &write);
+        append(context, access_block, &to_exit);
+        append(context, exit, &ret);
+
+        let report = run_pliron_ranked_race_check_v1(context, &function);
+        match case {
+            Case::StaticXGuarded => assert!(report.is_clean(), "{report:?}"),
+            Case::DynamicXUnguarded => assert!(matches!(
+                report.findings(),
+                [RankedRaceFindingV1::DynamicLaunchExtent { dimension: 0 }]
+            )),
+            Case::DynamicYUnguarded => assert!(matches!(
+                report.findings(),
+                [RankedRaceFindingV1::DynamicLaunchExtent { dimension: 1 }]
+            )),
+        }
+    }
+}
+
+#[test]
 fn remainder_mapping_reports_wraparound_collision() {
     let context = &mut setup();
     let function = function(context, "wrapped_output");

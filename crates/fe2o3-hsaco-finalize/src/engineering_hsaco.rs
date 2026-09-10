@@ -6,13 +6,15 @@
 
 use std::{error::Error, fmt};
 
+use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 use fe2o3_kernel_descriptor::CodeObjectVersion;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    CompilerModuleHandoffErrorV2, ContentIdentityV1, FinalizationError, PinnedWorkerV1,
-    WorkerExecutionError, WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1,
-    WorkerMeasurementV1, WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerProtocolError,
+    CompilerModuleHandoffErrorV2, ContentIdentityV1, FinalizationError, MAX_WORKER_DIAGNOSTICS,
+    MAX_WORKER_TOTAL_DIAGNOSTIC_BYTES, PinnedWorkerV1, WorkerExecutionError,
+    WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1,
+    WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerProtocolError, WorkerStageV1,
     finalize_unfinalized,
     request_construction::{
         DecodedCompilerModuleHandoffV2, WorkerRequestConstructionError,
@@ -20,12 +22,16 @@ use crate::{
     },
     worker_protocol_v2::{
         SealedWorkerRequestV2Parts, WorkerCompilerFfiEnvelopeIdentityV2, WorkerRequestV2,
+        WorkerResponseV2,
     },
 };
 
 const ENGINEERING_REQUEST_DOMAIN_V1: &[u8] =
     b"FE2O3/NON-AUTHORITATIVE-ENGINEERING-HSACO-REQUEST/V1\0";
-const GFX942_XNACK_MINUS: &str = "gfx942:xnack-";
+const MAX_ENGINEERING_NO_OUTPUT_ERROR_BYTES: usize =
+    "engineering exact replay produced no HSACO at OutputInspection".len()
+        + 2 * MAX_WORKER_DIAGNOSTICS
+        + MAX_WORKER_TOTAL_DIAGNOSTIC_BYTES;
 
 /// Content identity and kind of one exact engineering-only provider input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,6 +64,7 @@ impl EngineeringProviderObservationV1 {
 /// ```
 #[derive(Debug, Eq, PartialEq)]
 pub struct EngineeringHsacoObservationV1 {
+    target_profile: ProductionAmdTargetProfileV1,
     finalized_hsaco: Vec<u8>,
     handoff: ContentIdentityV1,
     worker: WorkerMeasurementV1,
@@ -72,6 +79,11 @@ pub struct EngineeringHsacoObservationV1 {
 }
 
 impl EngineeringHsacoObservationV1 {
+    /// Exact profile shared by the compiler handoff and inspected output object.
+    pub const fn target_profile(&self) -> ProductionAmdTargetProfileV1 {
+        self.target_profile
+    }
+
     pub fn hsaco_bytes(&self) -> &[u8] {
         &self.finalized_hsaco
     }
@@ -186,7 +198,8 @@ impl From<FinalizationError> for EngineeringHsacoErrorV1 {
 /// Executes an inert compiler handoff twice through one measured worker and finalizes the exact
 /// matching output for descriptive inspection only.
 ///
-/// The target and options are fixed to `gfx942:xnack-`, COV6, O2, strip-debug, and verify-each.
+/// The handoff selects exactly `gfx942:xnack-` or `gfx950:xnack-`; the output must
+/// match that same profile. Options remain COV6, O2, strip-debug, and verify-each.
 /// No production receipt, carriage, currentness, publication, load, or launch value is accepted
 /// or returned.
 pub fn observe_engineering_hsaco_v1(
@@ -197,12 +210,7 @@ pub fn observe_engineering_hsaco_v1(
     limits: WorkerExecutionLimitsV1,
 ) -> Result<EngineeringHsacoObservationV1, EngineeringHsacoErrorV1> {
     let decoded = decode_compiler_module_handoff_v2(handoff_bytes)?;
-    if decoded.target().to_string() != GFX942_XNACK_MINUS {
-        return Err(EngineeringHsacoErrorV1(format!(
-            "engineering route requires exact target {GFX942_XNACK_MINUS}, handoff selected {}",
-            decoded.target()
-        )));
-    }
+    let target_profile = engineering_target_profile(&decoded.target().to_string())?;
     if decoded.code_object_version() != CodeObjectVersion::V6 {
         return Err(EngineeringHsacoErrorV1(
             "engineering route requires code-object version 6".to_owned(),
@@ -242,9 +250,9 @@ pub fn observe_engineering_hsaco_v1(
     let bootstrap_response = bootstrap.response();
     let bootstrap_response_identity =
         ContentIdentityV1::calculate(bootstrap_response.canonical_bytes());
-    let bootstrap_output = bootstrap_response.output().ok_or_else(|| {
-        EngineeringHsacoErrorV1("engineering bootstrap produced no HSACO".to_owned())
-    })?;
+    let bootstrap_output = bootstrap_response
+        .output()
+        .ok_or_else(|| missing_hsaco_error("bootstrap", bootstrap_response))?;
     if !bootstrap_output
         .identity()
         .matches(bootstrap_output.bytes())
@@ -267,9 +275,9 @@ pub fn observe_engineering_hsaco_v1(
     let replay = worker.execute_v2(&replay_request, limits)?;
     let replay_response = replay.response();
     let replay_response_identity = ContentIdentityV1::calculate(replay_response.canonical_bytes());
-    let replay_output = replay_response.output().ok_or_else(|| {
-        EngineeringHsacoErrorV1("engineering exact replay produced no HSACO".to_owned())
-    })?;
+    let replay_output = replay_response
+        .output()
+        .ok_or_else(|| missing_hsaco_error("exact replay", replay_response))?;
 
     if bootstrap_output.identity() != replay_output.identity()
         || bootstrap_output.bytes() != replay_output.bytes()
@@ -295,14 +303,12 @@ pub fn observe_engineering_hsaco_v1(
 
     let finalized = finalize_unfinalized(bootstrap_output.bytes())?;
     let inspection = finalized.inspection();
-    if inspection.hsaco().target().to_string() != GFX942_XNACK_MINUS
-        || inspection.hsaco().code_object_version().number() != 6
-        || inspection.hsaco().kernels().is_empty()
-    {
-        return Err(EngineeringHsacoErrorV1(
-            "engineering output is not a nonempty gfx942:xnack- COV6 HSACO".to_owned(),
-        ));
-    }
+    validate_engineering_output_profile(
+        target_profile,
+        &inspection.hsaco().target().to_string(),
+        inspection.hsaco().code_object_version().number(),
+        inspection.hsaco().kernels().len(),
+    )?;
     let canonical_descriptor_digest = *inspection.digest().as_bytes();
     let kernel_names = inspection
         .hsaco()
@@ -314,6 +320,7 @@ pub fn observe_engineering_hsaco_v1(
     let finalized_hsaco_identity = ContentIdentityV1::calculate(&finalized_hsaco);
 
     Ok(EngineeringHsacoObservationV1 {
+        target_profile,
         finalized_hsaco,
         handoff: handoff_identity,
         worker: worker.measurement().clone(),
@@ -326,6 +333,54 @@ pub fn observe_engineering_hsaco_v1(
         canonical_descriptor_digest,
         kernel_names,
     })
+}
+
+fn engineering_target_profile(
+    target: &str,
+) -> Result<ProductionAmdTargetProfileV1, EngineeringHsacoErrorV1> {
+    ProductionAmdTargetProfileV1::from_device_target(target).ok_or_else(|| {
+        EngineeringHsacoErrorV1(format!(
+            "engineering route requires exact target gfx942:xnack- or gfx950:xnack-, handoff selected {target}"
+        ))
+    })
+}
+
+fn validate_engineering_output_profile(
+    expected: ProductionAmdTargetProfileV1,
+    target: &str,
+    code_object_version: u8,
+    kernel_count: usize,
+) -> Result<(), EngineeringHsacoErrorV1> {
+    if target != expected.device_target() || code_object_version != 6 || kernel_count == 0 {
+        return Err(EngineeringHsacoErrorV1(format!(
+            "engineering output is not a nonempty {} COV6 HSACO",
+            expected.device_target()
+        )));
+    }
+    Ok(())
+}
+
+fn missing_hsaco_error(
+    phase: &'static str,
+    response: &WorkerResponseV2,
+) -> EngineeringHsacoErrorV1 {
+    missing_hsaco_error_from_parts(phase, response.stage(), response.diagnostics())
+}
+
+fn missing_hsaco_error_from_parts(
+    phase: &'static str,
+    stage: WorkerStageV1,
+    diagnostics: &[String],
+) -> EngineeringHsacoErrorV1 {
+    // WorkerResponseV2 admits only canonical diagnostics within the protocol's fixed count and
+    // aggregate byte bounds. Preserve all of that bounded context on this terminal error path.
+    let mut message = format!("engineering {phase} produced no HSACO at {stage:?}");
+    for (index, diagnostic) in diagnostics.iter().enumerate() {
+        message.push_str(if index == 0 { ": " } else { "; " });
+        message.push_str(diagnostic);
+    }
+    debug_assert!(message.len() <= MAX_ENGINEERING_NO_OUTPUT_ERROR_BYTES);
+    EngineeringHsacoErrorV1(message)
 }
 
 #[derive(Clone, Copy)]
@@ -438,6 +493,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn only_exact_supported_handoff_profiles_are_admitted() {
+        for profile in [
+            ProductionAmdTargetProfileV1::Gfx942,
+            ProductionAmdTargetProfileV1::Gfx950,
+        ] {
+            assert_eq!(
+                engineering_target_profile(profile.device_target()).unwrap(),
+                profile
+            );
+        }
+        for target in [
+            "gfx942",
+            "gfx950",
+            "gfx950:xnack+",
+            "gfx942:xnack+",
+            "gfx950:sramecc+:xnack-",
+            "gfx951:xnack-",
+            "GFX950:xnack-",
+            "",
+        ] {
+            assert!(
+                engineering_target_profile(target).is_err(),
+                "accepted {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn output_must_match_the_handoff_target_cov_and_nonempty_roster() {
+        for expected in [
+            ProductionAmdTargetProfileV1::Gfx942,
+            ProductionAmdTargetProfileV1::Gfx950,
+        ] {
+            for actual in [
+                ProductionAmdTargetProfileV1::Gfx942,
+                ProductionAmdTargetProfileV1::Gfx950,
+            ] {
+                assert_eq!(
+                    validate_engineering_output_profile(expected, actual.device_target(), 6, 12)
+                        .is_ok(),
+                    actual == expected
+                );
+            }
+            for target in [
+                "gfx942",
+                "gfx950",
+                "gfx950:xnack+",
+                "gfx942:xnack+",
+                "gfx950:sramecc+:xnack-",
+            ] {
+                assert!(validate_engineering_output_profile(expected, target, 6, 12).is_err());
+            }
+            assert!(
+                validate_engineering_output_profile(expected, expected.device_target(), 5, 12)
+                    .is_err()
+            );
+            assert!(
+                validate_engineering_output_profile(expected, expected.device_target(), 6, 0)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn observation_type_is_explicitly_non_authoritative() {
         let source = include_str!("engineering_hsaco.rs");
         for forbidden in [
@@ -459,17 +578,76 @@ mod tests {
     #[test]
     fn request_domains_separate_bootstrap_and_exact_replay() {
         assert_ne!(
-            EngineeringPhaseV1::Bootstrap.as_phase_tag(),
-            EngineeringPhaseV1::Replay(ContentIdentityV1::from_parts([1; 32], 1)).as_phase_tag(),
+            EngineeringPhaseV1::Bootstrap.phase_tag(),
+            EngineeringPhaseV1::Replay(ContentIdentityV1::from_parts([1; 32], 1)).phase_tag(),
         );
     }
 
+    #[test]
+    fn no_output_errors_preserve_phase_stage_and_canonical_diagnostics() {
+        let diagnostics = vec![
+            "codegen command exited with status 1".to_owned(),
+            "lld rejected the generated object".to_owned(),
+        ];
+        assert_eq!(
+            missing_hsaco_error_from_parts("bootstrap", WorkerStageV1::Codegen, &diagnostics)
+                .to_string(),
+            "engineering bootstrap produced no HSACO at Codegen: codegen command exited with status 1; lld rejected the generated object"
+        );
+        assert_eq!(
+            missing_hsaco_error_from_parts("exact replay", WorkerStageV1::NativeLink, &[])
+                .to_string(),
+            "engineering exact replay produced no HSACO at NativeLink"
+        );
+    }
+
+    #[test]
+    fn no_output_error_context_is_bounded_by_the_worker_response_contract() {
+        let diagnostics: Vec<String> = (0..MAX_WORKER_DIAGNOSTICS)
+            .map(|index| format!("{index:02}:{}", "x".repeat(253)))
+            .collect();
+        assert_eq!(
+            diagnostics.iter().map(String::len).sum::<usize>(),
+            MAX_WORKER_TOTAL_DIAGNOSTIC_BYTES
+        );
+        let error = missing_hsaco_error_from_parts(
+            "exact replay",
+            WorkerStageV1::OutputInspection,
+            &diagnostics,
+        );
+        assert_eq!(error.0.len(), MAX_ENGINEERING_NO_OUTPUT_ERROR_BYTES);
+        assert!(
+            error
+                .0
+                .starts_with("engineering exact replay produced no HSACO at OutputInspection: 00:")
+        );
+        assert!(error.0.ends_with(&format!("63:{}", "x".repeat(253))));
+    }
+
+    #[test]
+    fn every_worker_stage_is_reported_without_diagnostics() {
+        for stage in [
+            WorkerStageV1::Decode,
+            WorkerStageV1::Toolchain,
+            WorkerStageV1::InputValidation,
+            WorkerStageV1::BitcodeLink,
+            WorkerStageV1::Optimization,
+            WorkerStageV1::Codegen,
+            WorkerStageV1::NativeLink,
+            WorkerStageV1::OutputInspection,
+            WorkerStageV1::Complete,
+        ] {
+            let error = missing_hsaco_error_from_parts("bootstrap", stage, &[]).to_string();
+            assert!(error.ends_with(&format!("{stage:?}")));
+        }
+    }
+
     trait PhaseTag {
-        fn as_phase_tag(self) -> u8;
+        fn phase_tag(self) -> u8;
     }
 
     impl PhaseTag for EngineeringPhaseV1 {
-        fn as_phase_tag(self) -> u8 {
+        fn phase_tag(self) -> u8 {
             match self {
                 EngineeringPhaseV1::Bootstrap => 1,
                 EngineeringPhaseV1::Replay(_) => 2,

@@ -1055,6 +1055,16 @@ impl<const N: usize> AuthenticatedServiceRecycledQueueSessionV1<N> {
         self.queue.read_completed(request)
     }
 
+    /// Reads one completed coherent range into caller-owned bytes without
+    /// releasing authenticated program custody.
+    pub fn read_completed_into(
+        &mut self,
+        request: ServiceCompletedReadRequestV1,
+        destination: &mut [u8],
+    ) -> Result<(), ServiceQueueErrorV1> {
+        self.queue.read_completed_into(request, destination)
+    }
+
     /// Reads one completed enclosing snapshot without releasing program custody.
     pub fn read_completed_snapshot(
         &mut self,

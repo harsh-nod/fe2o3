@@ -526,7 +526,7 @@ fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
     let argv = planned_child_argv(args)?;
     let attempt = random_identity()?;
     let parent_pid = std::process::id();
-    let parent_uid = unsafe { libc::geteuid() };
+    let parent_uid = rustix::process::geteuid().as_raw();
     let parent_start_ticks = process_start_time_ticks(parent_pid)?;
 
     let (launcher_file, launcher) = pin_process_image(parent_pid)?;
@@ -765,7 +765,7 @@ fn validate_child_state(
 ) -> Result<(File, CompilerExecutionClientProfileCapabilityV1), String> {
     validate_release_environment()?;
     verify_parent_death_signal()?;
-    let parent_pid = u32::try_from(unsafe { libc::getppid() })
+    let parent_pid = u32::try_from(rustix::process::Pid::as_raw(rustix::process::getppid()))
         .map_err(|_| "release child parent PID is negative".to_owned())?;
     let (_, launcher) = pin_process_image(parent_pid)?;
     let (_, child) = pin_process_image(std::process::id())?;
@@ -805,7 +805,7 @@ fn validate_child_state(
     validate_child_observation(
         contract,
         &ChildObservation {
-            parent_uid: unsafe { libc::geteuid() },
+            parent_uid: rustix::process::geteuid().as_raw(),
             parent_pid,
             parent_start_ticks: process_start_time_ticks(parent_pid)?,
             launcher,
@@ -1221,11 +1221,11 @@ fn install_child_boundary(
 }
 
 fn install_parent_death_signal(expected_parent: u32) -> std::io::Result<()> {
-    // SAFETY: prctl and getppid receive only documented scalar process arguments.
+    // SAFETY: prctl receives only documented scalar process arguments.
     if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) } != 0 {
         return Err(std::io::Error::last_os_error());
     }
-    let observed_parent = unsafe { libc::getppid() };
+    let observed_parent = rustix::process::Pid::as_raw(rustix::process::getppid());
     if u32::try_from(observed_parent).ok() != Some(expected_parent) {
         return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
     }

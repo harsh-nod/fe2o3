@@ -1015,6 +1015,11 @@ fn effect_pair_symbolically_disjoint(
     launch_extents: &[u64],
     invocation_bounds: Option<&[[Option<u64>; MAX_RANKED_MEMORY_RANK]]>,
 ) -> bool {
+    if effect_has_singleton_invocation_domain(first, launch_extents, invocation_bounds)
+        && effect_has_singleton_invocation_domain(second, launch_extents, invocation_bounds)
+    {
+        return true;
+    }
     if effect_affine_map_is_injective(first, sparse, launch_extents, invocation_bounds)
         && effect_affine_map_is_injective(second, sparse, launch_extents, invocation_bounds)
         && same_index_formula(&first.indices, &second.indices, sparse)
@@ -1422,6 +1427,16 @@ fn effect_affine_map_is_injective(
     affine_map_is_injective(&effect.indices, sparse, &effective_extents)
 }
 
+fn effect_has_singleton_invocation_domain(
+    effect: &EffectV1,
+    launch_extents: &[u64],
+    invocation_bounds: Option<&[[Option<u64>; MAX_RANKED_MEMORY_RANK]]>,
+) -> bool {
+    effective_launch_extents(effect, launch_extents, invocation_bounds)
+        .into_iter()
+        .all(|extent| extent == 1)
+}
+
 fn effective_launch_extents(
     effect: &EffectV1,
     launch_extents: &[u64],
@@ -1430,10 +1445,12 @@ fn effective_launch_extents(
     let mut effective_extents = launch_extents.to_vec();
     if let Some(bounds) = invocation_bounds.and_then(|bounds| bounds.get(effect.location.block)) {
         for (dimension, extent) in effective_extents.iter_mut().enumerate() {
-            if *extent == 0
-                && let Some(bound) = bounds.get(dimension).copied().flatten()
-            {
-                *extent = bound;
+            if let Some(bound) = bounds.get(dimension).copied().flatten() {
+                *extent = if *extent == 0 {
+                    bound
+                } else {
+                    (*extent).min(bound)
+                };
             }
         }
     }

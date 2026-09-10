@@ -19,6 +19,34 @@ partition constant without losing the observed values. The fixed
 kernel-owned render and PCI symlinks are resolved deliberately; symlinks in
 the KFD topology tree and regular-file inputs remain prohibited.
 
+`topology::discover_default_topology_for_target(GfxTarget::Gfx950)` adds the
+same bounded, correlated read-only discovery for a homogeneous gfx950 host.
+`discover_default_topology()` remains gfx942-only; either explicit target
+rejects a mixed-target inventory rather than hiding other GPUs. The
+`kfd-topology [gfx942|gfx950]` example exposes this selection without opening
+device descriptors. This is not MI350 device, XNACK, memory, queue, or dispatch
+admission. Gfx950 observations cannot obtain the gfx942 queue-resource plan or
+gfx942 XGMI-route token, and gfx950 loader closures reject at both gfx942
+executable-preparation paths. An MI350 execution profile still requires its
+own queue-resource geometry and memory/queue integration; see issue #274.
+
+The additive `bind_gfx950_xnack_minus` entry returns a distinct
+`CheckedGfx950XnackMinusDevice` for the exact MI350 profile declared in
+`GFX950_DEVICE_OBSERVATION_PROFILE_MANIFEST_V1`. It retains KFD, render, and
+prospective reset-event descriptors, checks complete process apertures, and
+poisons subsequent currentness checks after any failure. It only queries
+XNACK; it never sets the mode or claims the old no-existing-queue barrier.
+Its authority is checked observation only: it cannot become a gfx942 device,
+runtime-model device generation, memory session, or queue. The
+`kfd-gfx950-device-identity [--all|unique-id]` example performs bind, repeated
+currentness checks, and drop, and checks that its descriptor count returns to
+baseline. No explicit VM acquisition, memory, queue, or dispatch operation is
+exposed by this entry. Opening descriptors may create driver-internal process
+state, but the token grants no VM authority. Independent C layout oracles for
+the MI350 headers agree with the reused KFD/DRM wire layouts; the separate
+profile records the MI350 source provenance without changing the gfx942
+admission manifest.
+
 The public safe API does not expose file descriptors or raw ioctl arguments.
 The R1 composition path consumes an explicitly selected unique ID and returns a
 non-cloneable `CheckedGfx942XnackMinusDevice`. It retains `/dev/kfd` and the

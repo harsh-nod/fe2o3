@@ -523,7 +523,7 @@ fn multithreaded_substitute_wrapper(
     let race_trace = required_path("FE2O3_TEST_WRAPPER_RACE_TRACE");
     let identity =
         fs::metadata(&genuine).map_err(|error| format!("inspect genuine wrapper: {error}"))?;
-    let supervisor = u32::try_from(unsafe { libc::getppid() })
+    let supervisor = u32::try_from(rustix::process::Pid::as_raw(rustix::process::getppid()))
         .map_err(|_| "supervisor PID is negative".to_string())?;
     let baseline = matching_process_descriptors(supervisor, identity.dev(), identity.ino());
     let observed_wrapper = wrapper.clone();

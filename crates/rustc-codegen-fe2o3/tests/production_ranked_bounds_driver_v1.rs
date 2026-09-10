@@ -371,7 +371,12 @@ fn write_only_witness_mappings_retain_exact_ranked_predicates() {
     for (feature, required) in [
         (
             "write_only_grid_exclusive",
-            ["kernel.index_constant 7", "kernel.cond_br"].as_slice(),
+            [
+                "%2 = kernel.index_constant 7",
+                "%3 = kernel.index_binary Add %0, %2",
+                "kernel.cond_br",
+            ]
+            .as_slice(),
         ),
         (
             "write_only_blocked",
@@ -409,6 +414,74 @@ fn write_only_witness_mappings_retain_exact_ranked_predicates() {
             ),
         "write-only blocked dynamic geometry did not fail closed:\n{}",
         wrong_geometry.stderr,
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn dynamic_grid_exclusive_index_retains_leader_and_extent_guards() {
+    let target = ScratchTarget::new();
+    let output = run_feature_extraction(&target, "write_only_grid_exclusive_dynamic");
+    let lines = output.stderr.lines().map(str::trim).collect::<Vec<_>>();
+    let summed_index = lines.iter().find_map(|line| {
+        let (result, operation) = line.split_once(" = ")?;
+        (operation.starts_with("kernel.index_binary Add %0, %arg")).then_some(result)
+    });
+    let ranked_one = lines.iter().find_map(|line| {
+        let (result, operation) = line.split_once(" = ")?;
+        (operation == "kernel.index_constant 1").then_some(result)
+    });
+    let outer_leader_guard = ranked_one.and_then(|one| {
+        lines
+            .iter()
+            .position(|line| line.starts_with(&format!("kernel.cond_br %0 < {one} ")))
+    });
+    let access_leader_guard = ranked_one.and_then(|one| {
+        lines
+            .iter()
+            .position(|line| line.starts_with(&format!("kernel.index_lt_br_args %0, {one} ")))
+    });
+    let extent_guard = summed_index.and_then(|index| {
+        lines
+            .iter()
+            .position(|line| line.starts_with(&format!("kernel.index_lt_br_args {index}, %arg0 ")))
+    });
+    let write = summed_index.and_then(|index| {
+        lines.iter().position(|line| {
+            line.starts_with("kernel.access Write ") && line.ends_with(&format!("[{index}]"))
+        })
+    });
+    assert!(
+        output.status.success()
+            && output
+                .stderr
+                .contains("all mandatory kernel checks clean true")
+            && summed_index.is_some()
+            && ranked_one.is_some()
+            && outer_leader_guard.is_some()
+            && access_leader_guard.is_some()
+            && extent_guard.is_some()
+            && write.is_some()
+            && access_leader_guard < extent_guard
+            && extent_guard < write,
+        "dynamic grid-exclusive write lost its exact leader or bounds guard:\n{}",
+        output.stderr,
+    );
+
+    let forged = run_feature_extraction(
+        &ScratchTarget::new(),
+        "write_only_grid_exclusive_dynamic_forged",
+    );
+    assert!(
+        !forged.status.success()
+            && forged
+                .stderr
+                .contains("unsafe blocks are not allowed in ordinary #[kernel] bodies")
+            && !forged
+                .stderr
+                .contains("ranked PLIRON before accepted lowering"),
+        "forged dynamic grid-exclusive witness did not fail closed:\n{}",
+        forged.stderr,
     );
 }
 
@@ -458,6 +531,92 @@ fn production_barrier_cfg_preserves_order_and_fails_closed() {
         "helper-mediated barrier bypassed the semantic boundary:\n{}",
         helper.stderr,
     );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_source_float_casts_saturate_in_simulation() {
+    let target = ScratchTarget::new();
+    for architecture in ["gfx942", "gfx950"] {
+        let bundle_path = target
+            .path()
+            .join(format!("float-casts-{architecture}.fe2sim"));
+        let result = output(
+            simulation_export_command_for_feature(
+                architecture,
+                &bundle_path,
+                &target.path().join(architecture),
+                None,
+                "float_to_integer",
+            ),
+            "export ordinary Rust float casts",
+        );
+        assert!(result.status.success(), "{}", result.stderr);
+        for value in [
+            f64::NEG_INFINITY,
+            -f64::MAX,
+            -2_147_483_649.0,
+            -2_147_483_648.0,
+            -42.9,
+            -1.0,
+            -0.5,
+            -0.0,
+            0.0,
+            0.5,
+            42.9,
+            2_147_483_647.0,
+            2_147_483_648.0,
+            4_294_967_295.0,
+            4_294_967_296.0,
+            f64::MAX,
+            f64::INFINITY,
+            f64::NAN,
+        ] {
+            let request_path = target.path().join("float-casts-request.json");
+            std::fs::write(
+                &request_path,
+                serde_json::to_vec(&json!({
+                    "schema": "fe2o3-simulation-request-v1",
+                    "kernel": "float_to_integer",
+                    "grid": [64, 1, 1],
+                    "workgroup": [64, 1, 1],
+                    "arguments": [
+                        { "kind": "scalar", "type": "f64", "bits": format!("0x{:016x}", value.to_bits()) },
+                        { "kind": "buffer", "element": "i32", "access": "read_write", "alignment": 4,
+                          "bytes": format!("0x{}", "00".repeat(64 * 4)) },
+                        { "kind": "buffer", "element": "u32", "access": "read_write", "alignment": 4,
+                          "bytes": format!("0x{}", "00".repeat(64 * 4)) },
+                    ],
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let admitted =
+                fe2o3_kir_sim_cli::load_debug_simulation_bundle_v1(&bundle_path, &request_path)
+                    .unwrap();
+            let execution = admitted
+                .input()
+                .module
+                .simulate(
+                    &admitted.input().request,
+                    admitted.input().simulation_target(),
+                    admitted.input().simulation_limits,
+                )
+                .unwrap_or_else(|error| panic!("{architecture}: {value:?}: {error:?}"));
+            assert_eq!(execution.invocations_executed(), 64);
+            for (argument, expected) in [
+                (1, (value as i32).to_le_bytes()),
+                (2, (value as u32).to_le_bytes()),
+            ] {
+                let bytes = execution.buffer(argument).unwrap().bytes();
+                assert_eq!(bytes.len(), 64 * 4);
+                assert!(
+                    bytes.chunks_exact(4).all(|word| word == expected),
+                    "{architecture}: {value:?}: argument {argument} did not match Rust as"
+                );
+            }
+        }
+    }
 }
 
 #[test]

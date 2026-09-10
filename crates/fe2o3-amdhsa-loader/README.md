@@ -12,13 +12,13 @@ semantic closure composes the repository's bounded, allocating
 
 ## Admitted foundation profile
 
-The first profile is intentionally the envelope currently emitted by fe2o3's
-pinned LLVM/LLD finalizer:
+The explicit profiles cover the envelope emitted by fe2o3's pinned LLVM/LLD
+finalizer for `gfx942:xnack-` and `gfx950:xnack-`:
 
 - ELF64, little-endian, AMDGPU HSA OSABI, ABI byte 4 (COV6), `ET_DYN`, and
   `EM_AMDGPU`;
-- zero ELF entry point and exact `e_flags = 0x64c`, meaning `gfx942`, XNACK
-  disabled, and SRAM-ECC unspecified;
+- zero ELF entry point and exact `e_flags = 0x64c` for gfx942 or `0x64f` for
+  gfx950, with XNACK disabled and SRAM-ECC unspecified;
 - exactly one each of the reviewed `PT_PHDR`, `PT_DYNAMIC`, `PT_NOTE`,
   `PT_GNU_STACK`, and `PT_GNU_RELRO` records, plus exactly three `PT_LOAD`
   records with `R`, `R|X`, and `R|W` permissions;
@@ -32,6 +32,14 @@ pinned LLVM/LLD finalizer:
 
 The returned segments are sorted by virtual address independent of program
 header order. Every range and page rounding is checked before it is exposed.
+
+Callers must choose `AdmittedProfile::Gfx942XnackOffCov6` or
+`AdmittedProfile::Gfx950XnackOffCov6`. A profile never accepts the other target's
+object or an unspecified, enabled-XNACK, or explicit-SRAM-ECC variant. Closure
+identity uses a distinct loader profile identifier for each target; existing
+gfx942 identities are unchanged. This is data-only loader support: it does not
+admit an MI350 device or queue. The gfx942 KFD execution paths reject gfx950
+closures before executable allocation or materialization.
 The plan is validated data only; it grants no load or launch authority.
 
 ## Content-bound envelope and safe materialization
@@ -72,7 +80,7 @@ without substitution and enforce the remaining lifecycle.
 `ValidatedEnvelope::bind_kernel` consumes the content-bound envelope and runs
 the repository's existing bounded `fe2o3-hsaco` MessagePack, symbol, descriptor,
 and resource inspector over the same retained byte slice. The composition
-requires COV6 metadata 1.2 for exact `gfx942:xnack-`; rejects unknown metadata
+requires COV6 metadata 1.2 for the exact selected target; rejects unknown metadata
 fields and malformed or over-limit documents through the inspector; and
 requires both parsers to identify the same physical metadata descriptor offset
 and length. `printf` roots, init/fini kernels, dynamic stacks, and device

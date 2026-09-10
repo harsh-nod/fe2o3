@@ -141,6 +141,17 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_caller_owned_readback_has_the_public_custody_preserving_signature() {
+        let method: fn(
+            &mut AuthenticatedServiceRecycledQueueSessionV1<1>,
+            ServiceCompletedReadRequestV1,
+            &mut [u8],
+        ) -> Result<(), ServiceQueueErrorV1> =
+            AuthenticatedServiceRecycledQueueSessionV1::<1>::read_completed_into;
+        let _ = method;
+    }
+
+    #[test]
     fn seven_heterogeneous_rosters_can_supply_twelve_unique_programs() {
         let gfx942 = target("gfx942:sramecc+:xnack-");
         let marker_groups = [

@@ -662,7 +662,7 @@ fn cast_module(kind: CastKind, from: ScalarType, to: ScalarType) -> Module {
 }
 
 #[test]
-fn represented_cast_kinds_reach_the_software_float_path_and_invalid_ranges_are_typed() {
+fn represented_cast_kinds_reach_the_software_float_path() {
     for (kind, from, input, to, expected) in [
         (
             CastKind::FloatExtend,
@@ -707,31 +707,73 @@ fn represented_cast_kinds_reach_the_software_float_path_and_invalid_ranges_are_t
             .unwrap();
         assert_eq!(buffer_bits(execution.buffer(0).unwrap()), vec![expected]);
     }
+}
 
-    let request = SimulationRequestV1::new(
-        "float_cast",
-        [1, 1, 1],
-        [1, 1, 1],
-        vec![
-            SimulationArgumentV1::Buffer(buffer(
-                AccessMode::ReadWrite,
-                &[value(ScalarType::I32, 0)],
-            )),
-            SimulationArgumentV1::Scalar(value(ScalarType::F32, 0x7fc0_0000)),
-        ],
-    );
-    let error = admitted(cast_module(
-        CastKind::FloatToInteger,
-        ScalarType::F32,
-        ScalarType::I32,
-    ))
-    .simulate(&request, TARGET, SimulationLimitsV1::default())
-    .unwrap_err();
-    assert!(matches!(
-        error,
-        fe2o3_kir_sim::SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
-            kind: fe2o3_kir_sim::SimulationExecutionErrorKindV1::IntegerOutOfRange,
-            ..
-        })
-    ));
+#[test]
+fn float_to_integer_saturates_for_every_admitted_float_and_integer_type() {
+    for (from, infinity, one_and_half) in [
+        (ScalarType::F16, 0x7c00, 0x3e00),
+        (ScalarType::Bf16, 0x7f80, 0x3fc0),
+        (ScalarType::F32, 0x7f80_0000, 0x3fc0_0000),
+        (
+            ScalarType::F64,
+            0x7ff0_0000_0000_0000,
+            0x3ff8_0000_0000_0000,
+        ),
+    ] {
+        let sign = 1_u128 << (from.bit_width().unwrap() - 1);
+        for to in [
+            ScalarType::I8,
+            ScalarType::U8,
+            ScalarType::I16,
+            ScalarType::U16,
+            ScalarType::I32,
+            ScalarType::U32,
+            ScalarType::I64,
+            ScalarType::U64,
+            ScalarType::I128,
+            ScalarType::U128,
+        ] {
+            let mask = u128::MAX >> (128 - to.bit_width().unwrap());
+            let (minimum, maximum, negative_one) = if to.is_signed_integer() {
+                (1_u128 << (to.bit_width().unwrap() - 1), mask >> 1, mask)
+            } else {
+                (0, mask, 0)
+            };
+            let module = admitted(cast_module(CastKind::FloatToInteger, from, to));
+            for (input, expected) in [
+                (0, 0),
+                (sign, 0),
+                (1, 0),
+                (sign | 1, 0),
+                (infinity, maximum),
+                (sign | infinity, minimum),
+                (infinity | 1, 0),
+                (sign | infinity | 1, 0),
+                (one_and_half, 1),
+                (sign | one_and_half, negative_one),
+            ] {
+                let request = SimulationRequestV1::new(
+                    "float_cast",
+                    [1, 1, 1],
+                    [1, 1, 1],
+                    vec![
+                        SimulationArgumentV1::Buffer(buffer(
+                            AccessMode::ReadWrite,
+                            &[value(to, 0)],
+                        )),
+                        SimulationArgumentV1::Scalar(value(from, input)),
+                    ],
+                );
+                let execution = module
+                    .simulate(&request, TARGET, SimulationLimitsV1::default())
+                    .unwrap();
+                assert_eq!(
+                    buffer_bits(execution.buffer(0).unwrap()),
+                    vec![expected],
+                    "{from:?}({input:#x}) as {to:?}"
+                );
+            }
+        }
+    }
 }

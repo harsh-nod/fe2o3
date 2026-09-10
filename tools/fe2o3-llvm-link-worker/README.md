@@ -7,6 +7,13 @@ compiler module with explicitly measured device-library providers, emits an
 AMDGPU object, invokes the bounded LLD policy, and inspects the resulting HSACO
 before returning inert bytes.
 
+Measured multi-target device libraries retain their exact digest and module
+contract checks before linking. Function CPU and feature contracts are checked
+on the complete `LinkOnlyNeeded` result before closure reduction or optimization,
+so unused helpers for other GPUs are not selected and incompatible imported
+helpers still reject. Compiler and ordinary external-provider inputs retain
+their eager function checks; no function target attributes are stripped.
+
 The production path does not select kernels by symbol, source marker, shape, or
 algorithm. Kernel entry and descriptor names come from the authenticated
 request. For Worker V2/V3 compiler requests, launch metadata in the output is

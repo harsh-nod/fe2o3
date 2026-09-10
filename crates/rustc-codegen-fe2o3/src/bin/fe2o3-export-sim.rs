@@ -346,6 +346,7 @@ const fn conflicting_extraction_environment() -> [&'static str; 12] {
         "FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1",
         "FE2O3_EXTRACT_GFX942_LLVM_PATH_V1",
         "FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1",
+        "FE2O3_EXTRACT_AMDGPU_COMPILER_HANDOFF_PATH_V1",
         "FE2O3_EXTRACT_CRATE_BINDING_PATH_V1",
     ]
 }

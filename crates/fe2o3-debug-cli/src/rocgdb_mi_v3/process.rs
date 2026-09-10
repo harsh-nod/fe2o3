@@ -3,13 +3,16 @@ use super::*;
 use std::collections::{BTreeSet, VecDeque};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use rustix::process::{Pid, PidfdFlags, Signal, pidfd_open, pidfd_send_signal};
 
 use crate::rocgdb_mi_parser_v3::{MiListV3, MiRecordV3, MiValueV3, parse_mi_record_v3};
 
@@ -1669,18 +1672,12 @@ impl RocgdbMiProcessV3 {
         let raw = required_const(results, "pid")?;
         let pid = parse_decimal_u64(raw)
             .and_then(|value| i32::try_from(value).ok())
-            .filter(|value| *value > 0)
+            .and_then(Pid::from_raw)
             .ok_or(RocgdbMiAdapterErrorV3::InvalidField("inferior process"))?;
-        // SAFETY: `pidfd_open` returns a new descriptor on success. The
-        // positive pid and zero flags were checked above, and ownership is
-        // transferred exactly once to `OwnedFd`.
-        let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0_u32) };
-        if descriptor < 0 {
-            return Err(RocgdbMiAdapterErrorV3::ProcessIo);
-        }
-        // SAFETY: successful `pidfd_open` returned one owned descriptor.
-        self.inferior_process = Some(unsafe { OwnedFd::from_raw_fd(descriptor as i32) });
-        self.inferior_pid = Some(pid as u32);
+        self.inferior_process = Some(
+            pidfd_open(pid, PidfdFlags::empty()).map_err(|_| RocgdbMiAdapterErrorV3::ProcessIo)?,
+        );
+        self.inferior_pid = Some(pid.as_raw_pid() as u32);
         Ok(())
     }
 
@@ -1770,25 +1767,13 @@ impl Drop for RocgdbMiProcessV3 {
         if let Some(process) = self.inferior_process.take()
             && self.inferior_ownership == InferiorOwnershipV3::LaunchOwned
         {
-            // SAFETY: the first argument is an owned pidfd, the signal has no
-            // payload, and flags are required to be zero.
-            let _ = unsafe {
-                libc::syscall(
-                    libc::SYS_pidfd_send_signal,
-                    process.as_raw_fd(),
-                    libc::SIGKILL,
-                    std::ptr::null::<libc::siginfo_t>(),
-                    0_u32,
-                )
+            let _ = pidfd_send_signal(&process, Signal::KILL);
+            let mut descriptors = [PollFd::new(&process, PollFlags::IN)];
+            let timeout = Timespec {
+                tv_sec: 5,
+                tv_nsec: 0,
             };
-            let mut descriptor = libc::pollfd {
-                fd: process.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            // SAFETY: `descriptor` points to one initialized pollfd for the
-            // duration of this bounded call.
-            let _ = unsafe { libc::poll(&mut descriptor, 1, 5_000) };
+            let _ = poll(&mut descriptors, Some(&timeout));
         }
         let _ = self.child.kill();
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -2071,6 +2056,119 @@ fn commit_control_transition(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    struct TestInferior(Child);
+
+    impl TestInferior {
+        fn spawn() -> Self {
+            Self(
+                Command::new("/bin/sleep")
+                    .arg("60")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("test inferior"),
+            )
+        }
+    }
+
+    impl Drop for TestInferior {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    fn fixture_process() -> RocgdbMiProcessV3 {
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fake_rocgdb_mi_v3.py");
+        RocgdbMiProcessV3::spawn(
+            &fixture,
+            identity(1),
+            identity(2),
+            64,
+            RocgdbMiAdapterLimitsV3::default(),
+        )
+        .expect("test debugger")
+    }
+
+    fn started_record(pid: &str) -> MiRecordV3 {
+        parse_mi_record_v3(
+            format!("=thread-group-started,id=\"i1\",pid=\"{pid}\"\n").as_bytes(),
+            MiParserLimitsV3::default(),
+        )
+        .expect("inferior start record")
+    }
+
+    #[test]
+    fn pidfd_authority_rejects_invalid_process_identifiers() {
+        let mut process = fixture_process();
+        for pid in ["0", "-1", "2147483648", "18446744073709551616", "not-a-pid"] {
+            assert_eq!(
+                process.observe_process_authority(&started_record(pid)),
+                Err(RocgdbMiAdapterErrorV3::InvalidField("inferior process"))
+            );
+            assert!(process.inferior_process.is_none());
+            assert!(process.inferior_pid.is_none());
+        }
+    }
+
+    #[test]
+    fn pidfd_authority_is_close_on_exec_and_cleared_on_exit() {
+        let mut inferior = TestInferior::spawn();
+        let mut process = fixture_process();
+        let started = started_record(&inferior.0.id().to_string());
+        process.observe_process_authority(&started).unwrap();
+        let descriptor = process.inferior_process.as_ref().expect("owned pidfd");
+        assert!(
+            rustix::io::fcntl_getfd(descriptor)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+        assert_eq!(process.inferior_pid, Some(inferior.0.id()));
+        assert_eq!(
+            process.observe_process_authority(&started),
+            Err(RocgdbMiAdapterErrorV3::UnexpectedMiRecord)
+        );
+        let exited = parse_mi_record_v3(
+            b"=thread-group-exited,id=\"i1\"\n",
+            MiParserLimitsV3::default(),
+        )
+        .unwrap();
+        process.observe_process_authority(&exited).unwrap();
+        assert!(process.inferior_process.is_none());
+        assert!(process.inferior_pid.is_none());
+        assert!(inferior.0.try_wait().unwrap().is_none());
+        process.observe_process_authority(&started).unwrap();
+    }
+
+    #[test]
+    fn pidfd_cleanup_only_terminates_launch_owned_inferiors() {
+        for ownership in [
+            InferiorOwnershipV3::LaunchOwned,
+            InferiorOwnershipV3::AttachBorrowed,
+            InferiorOwnershipV3::Unknown,
+        ] {
+            let mut inferior = TestInferior::spawn();
+            let mut process = fixture_process();
+            process
+                .observe_process_authority(&started_record(&inferior.0.id().to_string()))
+                .unwrap();
+            process.inferior_ownership = ownership;
+            drop(process);
+            let status = inferior.0.try_wait().expect("inferior status");
+            if ownership == InferiorOwnershipV3::LaunchOwned {
+                assert_eq!(
+                    status.expect("launch-owned inferior exited").signal(),
+                    Some(Signal::KILL.as_raw())
+                );
+            } else {
+                assert!(status.is_none(), "cleanup killed a {ownership:?} inferior");
+            }
+        }
+    }
 
     fn identity(byte: u8) -> OpaqueIdentityV1 {
         OpaqueIdentityV1::new([byte; 32]).expect("nonzero identity")

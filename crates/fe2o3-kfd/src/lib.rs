@@ -10,6 +10,31 @@ use fe2o3_kfd_uapi::{
     AdmittedKfdUapi, KfdUapiVersion, KfdUapiVersionError, negotiate_kfd_uapi_version,
 };
 
+#[cfg(feature = "engineering-gfx950")]
+pub mod engineering_wire;
+
+#[cfg(all(
+    feature = "engineering-gfx950",
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+mod engineering_gfx950_profile;
+
+#[cfg(all(
+    feature = "engineering-gfx950",
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[allow(unsafe_code)]
+mod engineering_gfx950;
+
+#[cfg(all(
+    feature = "engineering-gfx950",
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub use engineering_gfx950::run_gfx950_engineering_worker_unchecked_v1;
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[allow(unsafe_code)]
 mod linux;

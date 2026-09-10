@@ -131,8 +131,7 @@ fn run_supervisor_at(
     let AdoptedSupervisorDescriptors { mut channel, slot } = adopt_supervisor_descriptors(
         channel_fd,
         slot_fd,
-        // SAFETY: getppid has no memory preconditions and no descriptor side effects.
-        unsafe { libc::getppid() },
+        rustix::process::Pid::as_raw(rustix::process::getppid()),
         admission_directory,
     )?;
     let challenge = parse_challenge(&args[2])?;
@@ -205,8 +204,7 @@ impl SupervisorAdmission {
 fn admission_directory() -> PathBuf {
     PathBuf::from(format!(
         "/tmp/fe2o3-application-supervisors-{}",
-        // SAFETY: geteuid has no memory preconditions.
-        unsafe { libc::geteuid() }
+        rustix::process::geteuid().as_raw()
     ))
 }
 
@@ -227,7 +225,7 @@ fn prepare_admission_directory(path: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("inspect application supervisor directory: {error}"))?;
     if !metadata.file_type().is_dir()
-        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.uid() != rustix::process::geteuid().as_raw()
         || metadata.mode() & 0o777 != 0o700
     {
         return Err("application supervisor admission directory is not private".to_string());
@@ -277,7 +275,7 @@ fn validate_slot_metadata(file: &File) -> Result<(), String> {
 
 fn validate_slot_stat(stat: &libc::stat) -> Result<(), String> {
     if stat.st_mode & libc::S_IFMT != libc::S_IFREG
-        || stat.st_uid != unsafe { libc::geteuid() }
+        || stat.st_uid != rustix::process::geteuid().as_raw()
         || stat.st_nlink != 1
         || stat.st_mode & 0o777 != 0o600
     {
@@ -335,7 +333,8 @@ fn validate_channel_raw(fd: RawFd, expected_parent: libc::pid_t) -> Result<(), S
     }
     // SAFETY: successful getsockopt initialized the complete ucred record.
     let credentials = unsafe { credentials.assume_init() };
-    if credentials.pid != expected_parent || credentials.uid != unsafe { libc::geteuid() } {
+    if credentials.pid != expected_parent || credentials.uid != rustix::process::geteuid().as_raw()
+    {
         return Err(
             "application supervisor protocol peer identity does not match its parent".to_string(),
         );
@@ -798,8 +797,13 @@ mod tests {
         assert!(slot_error.contains("fixed admission pool"), "{slot_error}");
 
         let (channel, _peer) = UnixStream::pair().unwrap();
-        let peer_error = validate_channel(&channel, i32::MAX).unwrap_err();
-        assert!(peer_error.contains("peer identity"), "{peer_error}");
+        validate_channel(&channel, rustix::process::getpid().as_raw_pid()).unwrap();
+        // A parent outside the PID namespace is represented by None and must remain PID 0,
+        // which cannot authenticate this channel's live peer.
+        for parent in [i32::MAX, rustix::process::Pid::as_raw(None)] {
+            let peer_error = validate_channel(&channel, parent).unwrap_err();
+            assert!(peer_error.contains("peer identity"), "{peer_error}");
+        }
         drop(forged);
         fs::remove_dir_all(directory).unwrap();
     }

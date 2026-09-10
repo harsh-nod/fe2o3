@@ -7,13 +7,12 @@ use fe2o3_kernel_ir::{
     NarrowFloatFormat, ScalarType, UnaryOp, ValueId, WidenedFloatBinaryOp,
 };
 use rustc_apfloat::ieee::{BFloat, Double, Half, Single};
-use rustc_apfloat::{Float, FloatConvert, Round, Status};
+use rustc_apfloat::{Float, FloatConvert, Round};
 
 use crate::{ScalarBitsV1, SimulationTargetV1};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SoftFloatErrorV1 {
-    InvalidIntegerConversion,
     InternalInvariant(&'static str),
 }
 
@@ -489,17 +488,13 @@ fn float_to_integer(
         ($float:ty) => {{
             let input = <$float>::from_bits(value.bits());
             let mut exact = false;
+            // APFloat returns Rust's saturated bounds (and zero for NaN), even
+            // when it reports INVALID_OP. Those values are defined KIR results.
             if to.is_signed_integer() {
                 let converted = input.to_i128_r(usize::from(width), Round::TowardZero, &mut exact);
-                if converted.status.contains(Status::INVALID_OP) {
-                    return Err(SoftFloatErrorV1::InvalidIntegerConversion);
-                }
                 converted.value as u128 & bit_mask(width)
             } else {
                 let converted = input.to_u128_r(usize::from(width), Round::TowardZero, &mut exact);
-                if converted.status.contains(Status::INVALID_OP) {
-                    return Err(SoftFloatErrorV1::InvalidIntegerConversion);
-                }
                 converted.value & bit_mask(width)
             }
         }};
@@ -913,7 +908,7 @@ mod tests {
     }
 
     #[test]
-    fn format_and_integer_casts_have_exact_ties_and_fail_closed_ranges() {
+    fn format_and_integer_casts_have_exact_ties_and_saturating_ranges() {
         for (to, input, expected) in [
             (ScalarType::F16, 0x3f80_1000, 0x3c00),
             (ScalarType::F16, 0x3f80_3000, 0x3c02),
@@ -1021,26 +1016,37 @@ mod tests {
             .bits(),
             u128::from(u32::MAX)
         );
-        for bits in [0x7fc0_0000, 0x7f80_0000, 0x4f00_0000] {
+        for (bits, expected) in [
+            (0x7fc0_0000, 0),
+            (0x7f80_0000, i32::MAX as u128),
+            (0x4f00_0000, i32::MAX as u128),
+        ] {
             assert_eq!(
                 execute_cast_v1(
                     CastKind::FloatToInteger,
                     value(ScalarType::F32, bits),
                     ScalarType::I32,
                     TARGET,
-                ),
-                Err(SoftFloatErrorV1::InvalidIntegerConversion)
+                )
+                .unwrap()
+                .bits(),
+                expected
             );
         }
-        for (bits, to) in [(0xc301_0000, ScalarType::I8), (0x4380_0000, ScalarType::U8)] {
+        for (bits, to, expected) in [
+            (0xc301_0000, ScalarType::I8, i8::MIN as u8 as u128),
+            (0x4380_0000, ScalarType::U8, u8::MAX as u128),
+        ] {
             assert_eq!(
                 execute_cast_v1(
                     CastKind::FloatToInteger,
                     value(ScalarType::F32, bits),
                     to,
                     TARGET,
-                ),
-                Err(SoftFloatErrorV1::InvalidIntegerConversion),
+                )
+                .unwrap()
+                .bits(),
+                expected,
                 "finite F32 outside {to:?} range"
             );
         }
@@ -1138,8 +1144,10 @@ mod tests {
                             value(float, negative_one),
                             integer,
                             TARGET,
-                        ),
-                        Err(SoftFloatErrorV1::InvalidIntegerConversion),
+                        )
+                        .unwrap()
+                        .bits(),
+                        0,
                         "negative {float:?} to {integer:?}"
                     );
                 }
@@ -1159,10 +1167,112 @@ mod tests {
                         value(float, infinity),
                         integer,
                         TARGET,
-                    ),
-                    Err(SoftFloatErrorV1::InvalidIntegerConversion),
+                    )
+                    .unwrap()
+                    .bits(),
+                    if integer.is_signed_integer() {
+                        i8::MAX as u128
+                    } else {
+                        u8::MAX as u128
+                    },
                     "{float:?} infinity to {integer:?}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn float_to_integer_matches_rust_at_every_destination_boundary() {
+        let integers = [
+            ScalarType::I8,
+            ScalarType::U8,
+            ScalarType::I16,
+            ScalarType::U16,
+            ScalarType::I32,
+            ScalarType::U32,
+            ScalarType::I64,
+            ScalarType::U64,
+            ScalarType::I128,
+            ScalarType::U128,
+        ];
+        for from in [
+            ScalarType::F16,
+            ScalarType::Bf16,
+            ScalarType::F32,
+            ScalarType::F64,
+        ] {
+            let from_f64 = |input: f64| {
+                let bits = u128::from(input.to_bits());
+                if from == ScalarType::F64 {
+                    bits
+                } else {
+                    convert_float_bits(ScalarType::F64, bits, from).unwrap()
+                }
+            };
+            let mut inputs = Vec::new();
+            for input in [
+                0.0,
+                -0.0,
+                0.5,
+                -0.5,
+                1.5,
+                -1.5,
+                127.75,
+                -128.75,
+                255.75,
+                -129.0,
+                256.0,
+                f64::MAX,
+                -f64::MAX,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NAN,
+                -f64::NAN,
+            ] {
+                inputs.push(from_f64(input));
+            }
+            let sign = 1_u128 << (from.bit_width().unwrap() - 1);
+            let infinity = from_f64(f64::INFINITY);
+            inputs.extend([1, sign | 1, infinity | 1, sign | infinity | 1]);
+            for to in integers {
+                let width = to.bit_width().unwrap();
+                let exponent = width - u16::from(to.is_signed_integer());
+                let boundary = from_f64(2_f64.powi(i32::from(exponent)));
+                for bits in [boundary - 1, boundary, boundary + 1] {
+                    inputs.extend([bits, bits | sign]);
+                }
+            }
+            inputs.sort_unstable();
+            inputs.dedup();
+            for bits in inputs {
+                let wide_bits = if from == ScalarType::F64 {
+                    bits
+                } else {
+                    convert_float_bits(from, bits, ScalarType::F64).unwrap()
+                };
+                let native = f64::from_bits(wide_bits as u64);
+                for to in integers {
+                    let expected = match to {
+                        ScalarType::I8 => (native as i8) as u8 as u128,
+                        ScalarType::U8 => (native as u8) as u128,
+                        ScalarType::I16 => (native as i16) as u16 as u128,
+                        ScalarType::U16 => (native as u16) as u128,
+                        ScalarType::I32 => (native as i32) as u32 as u128,
+                        ScalarType::U32 => (native as u32) as u128,
+                        ScalarType::I64 => (native as i64) as u64 as u128,
+                        ScalarType::U64 => (native as u64) as u128,
+                        ScalarType::I128 => (native as i128) as u128,
+                        ScalarType::U128 => native as u128,
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(
+                        execute_cast_v1(CastKind::FloatToInteger, value(from, bits), to, TARGET)
+                            .unwrap()
+                            .bits(),
+                        expected,
+                        "{from:?}({bits:#x}, {native:?}) as {to:?}"
+                    );
+                }
             }
         }
     }

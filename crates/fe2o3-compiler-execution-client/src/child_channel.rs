@@ -344,13 +344,12 @@ fn require_exact_child_reservation(control: RawFd) -> io::Result<()> {
 }
 
 fn send_service_peer(control: RawFd, service: RawFd) -> io::Result<()> {
-    let pid = u32::try_from(unsafe { libc::getpid() })
+    let pid = u32::try_from(rustix::process::getpid().as_raw_pid())
         .map_err(|_| io::Error::from_raw_os_error(libc::EOVERFLOW))?;
-    let parent_pid = u32::try_from(unsafe { libc::getppid() })
+    let parent_pid =
+        rustix::process::getppid().ok_or_else(|| io::Error::from_raw_os_error(libc::ESRCH))?;
+    let parent_pid = u32::try_from(parent_pid.as_raw_pid())
         .map_err(|_| io::Error::from_raw_os_error(libc::EOVERFLOW))?;
-    if parent_pid == 0 {
-        return Err(io::Error::from_raw_os_error(libc::ESRCH));
-    }
     let mut payload = [0_u8; TRANSFER_BYTES];
     payload[..8].copy_from_slice(&TRANSFER_MAGIC);
     payload[8..12].copy_from_slice(&TRANSFER_VERSION.to_le_bytes());

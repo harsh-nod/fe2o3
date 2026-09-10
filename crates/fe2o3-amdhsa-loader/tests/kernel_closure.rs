@@ -8,6 +8,42 @@ use sha2::{Digest, Sha256};
 const PROFILE: AdmittedProfile = AdmittedProfile::Gfx942XnackOffCov6;
 
 #[test]
+#[ignore = "requires a freshly compiled FE2O3_TEST_GFX950_COV6 and FE2O3_TEST_GFX950_KERNEL"]
+fn closes_real_gfx950_kernel_without_admitting_it_to_gfx942() {
+    let path = env::var("FE2O3_TEST_GFX950_COV6").expect("set FE2O3_TEST_GFX950_COV6");
+    let name = env::var("FE2O3_TEST_GFX950_KERNEL").expect("set FE2O3_TEST_GFX950_KERNEL");
+    let bytes = fs::read(path).unwrap();
+    let profile = AdmittedProfile::Gfx950XnackOffCov6;
+    let closure = validate(&bytes, profile)
+        .unwrap()
+        .bind_kernel(&name)
+        .unwrap();
+    assert_eq!(closure.envelope().plan().profile(), profile);
+    assert_eq!(closure.selected_kernel().name(), name);
+    assert_eq!(closure.descriptor_bytes().len(), 64);
+    assert!(!closure.entry_bytes().is_empty());
+    assert_eq!(closure.resources().wavefront_size(), 64);
+    assert_eq!(
+        closure.identity_inputs().object_sha256(),
+        <[u8; 32]>::from(Sha256::digest(&bytes))
+    );
+    let mut image = vec![0xa5; closure.envelope().materialization().image_len() as usize];
+    closure.materialize_into(&mut image).unwrap();
+    assert!(matches!(
+        validate(&bytes, PROFILE),
+        Err(fe2o3_amdhsa_loader::PlanError::UnsupportedElfFlags(0x64f))
+    ));
+    let mut mismatched = bytes.clone();
+    mismatched[48..52].copy_from_slice(&PROFILE.elf_flags().to_le_bytes());
+    assert!(
+        validate(&mismatched, PROFILE)
+            .unwrap()
+            .bind_kernel(&name)
+            .is_err()
+    );
+}
+
+#[test]
 #[ignore = "requires FE2O3_TEST_VECADD_COV6 to name a real gfx942:xnack- COV6 vecadd"]
 fn closes_real_vecadd_semantics_symbols_resources_and_identity() {
     assert_real_closure("FE2O3_TEST_VECADD_COV6", "vecadd");

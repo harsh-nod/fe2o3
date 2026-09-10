@@ -652,6 +652,16 @@ mod tests {
     }
 
     #[test]
+    fn gfx950_target_cannot_reuse_gfx942_queue_resource_formula() {
+        let mut observation = valid_facts();
+        observation.target = GfxTarget::Gfx950;
+        assert_eq!(
+            plan_from_facts(observation, 4096),
+            Err(Gfx942QueueResourcePlanningError::TargetMismatch)
+        );
+    }
+
+    #[test]
     fn backing_profiles_are_observations_not_current_memory_admission() {
         let plan = plan_from_facts(valid_facts(), 1 << 20).unwrap();
         assert_eq!(
