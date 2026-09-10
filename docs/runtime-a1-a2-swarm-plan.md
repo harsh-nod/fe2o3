@@ -107,16 +107,29 @@ work was started for this packet; hardware and performance acceptance remain
 open. The latest three-agent dispatch audit changes the next assignments below,
 not those acceptance boundaries.
 
+The following R70 swarm completed MEM-2A-FWD, MEM-TXN-1 and DRN-3B. Its
+[final local record](evidence/local-r70-batch-forwarding-2026-09-10/README.md)
+passes 2,143 runtime tests on each of GNU and musl, with five existing ignores.
+All sixteen local gates and the 43-package production audit pass. The full
+authenticated Verus run passes 59 positive sources, 1,347 obligations and 659
+distinct expected negatives, including nine new batch obligations and mutations.
+The record retains failed attempts and distinguishes CPU/source-wiring tests
+from native acceptance. A read-only MI300X query found GPU1 busy; no remote
+stage or workload was started. Pool integration, account-domain closure,
+signed drain/coexistence qualification, generated authority, whole-executor
+refinement and matched performance remain open.
+
 | Slice | Implemented locally | Boundary still open |
 | --- | --- | --- |
 | OVL-QUAL-1 | Eight-cell R26 coexistence example, immutable native-custody observations, independent checker, signed-source runner and negative tests | Signed live capture, native extraction refinement, physical overlap and production generated-kernel authority |
 | MEM-1 | Nineteen-dimensional credit primitive and opt-in Context requested-byte/allocation-record admission; retain uncertain charges and reject false cleanup completion | Actual native residency/slot cost extraction, global budget closure and whole-account/executor refinement |
 | GEN-1 | Owned typed arguments/results, complete-invocation preflight, authenticated packing-plan reuse and compile-fail ownership checks | Invocation-bound async authority, Context freshness, global credit lifetime and compiler machine evidence |
-| DRN-3A | Three composed accepted-submit rejection, repeated observation rejection and pre-issue cancellation regressions; basic capture failures added in DRN-1A | Broader DRN-3B composition, active-work hardware drain and whole-executor refinement |
+| DRN-3A/B | Earlier accepted-submit/observation/cancellation regressions plus twelve DRN-3B graph, operation/waiter, capture and Stop scenarios | Active-work hardware drain and whole-executor refinement |
 | SCALE-3-PROTO | Bounded matched-plan/checker protocol; fourteen tests and independent cross-review pass | Signed producers, genuine correctness/timing captures, performance and physical overlap |
 | MEM-BASE / MEM-5 inventory | Shared credit-engine extraction and device-branded wrapper; concrete allocation-site inventory | Parent budgets, compound native admission and complete aggregate byte-budget closure |
-| MEM-2A | Locally validated optional session-local N2 padded-backing/record admission and retained native charge; configured panic quarantine | Signed hardware qualification, pool-path coverage, runtime configuration forwarding and parent/global closure |
-| DRN-1A | Integrated private source validation, native coherent read-into, owned capture credits and cutoff/failure handling | DRN-2 signed outstanding-work capture, broader DRN-3B composition, native/whole-executor refinement and aggregate MEM-5 closure |
+| MEM-2A/FWD | Optional session-local N2 padded-backing/record admission; immutable forwarding before both native startup orders; configured panic quarantine | Signed hardware qualification, pool-path coverage and parent/global closure |
+| MEM-TXN-1 | Single-account complete-roster reservation with independently owned member credits and corruption poisoning | Compound native cost/ownership integration, parent admission and whole-account refinement |
+| DRN-1A | Integrated private source validation, native coherent read-into, owned capture credits and cutoff/failure handling | DRN-2 signed outstanding-work capture, native/whole-executor refinement and aggregate MEM-5 closure |
 
 The previous R67 source record has 2,021 passing all-feature/all-target runtime
 tests on each of GNU and musl, with five
@@ -162,37 +175,37 @@ MI300X jobs or pushes integrated changes to both remotes.
 
 ## Next Assignments
 
-The three lane owners implemented and cross-reviewed DRN-1A after the
-`0d5a2a93` dispatch update. All three then performed a read-only remaining-work
-audit for the user's next swarm dispatch. The assignments below are the next
-implementation queue, not unattended background jobs. That dispatch audit did
-not begin another implementation packet. Shared integration and hardware remain
-primary-owned; R69 release is completed before changing the frozen source.
+R69 was released as signed `440200f0` on both remotes. The next swarm implemented
+MEM-2A-FWD, MEM-TXN-1 and DRN-3B under the ownership table below. Their R70
+current-source local and authenticated proof gates passed as recorded above;
+hardware acceptance remains separate. The following assignments are the next
+queue, not unattended background jobs; shared integration and hardware remain
+primary-owned.
 
 | Lane | Next bounded packet | Dependency and exit gate |
 | --- | --- | --- |
-| Native | MEM-2A-FWD native constructor hooks | Resource contract; configure before N2 use and queue sealing in both startup orders, preserving defaults and freshness. Then pool hooks and SCALE-1 fixtures |
-| Resources | MEM-2A-FWD/2B contract handoff, then independent MEM-TXN-1 | Single-account atomic bounded roster admission with independent member debits and preallocated result metadata. Native can integrate constructors concurrently; MEM-N1 and MEM-DOM-1 remain explicit prerequisites |
-| Admission | DRN-3B composed failure delta, then DRN-2 copy qualifier | Compose capture with active graph/operation/waiter work; preserve one reply and exact retention. Then independently check complete outputs and accepted-prefix ordering. GEN-2 production cells require compiler evidence |
-| Primary | R69 release and shared integration | Full local/proof gates and dual publication; OVL-QUAL-2 in an idle signed hardware window, then DRN-2 hardware and compiler handoff |
+| Native | MEM-2B device-pool integration | Resource-owned cache/checkout contract, retained N2 debit through recycle/trim, failure retention and exact generation reuse; SCALE-1 fixtures can proceed independently |
+| Resources | MEM-2B policy and tests, then MEM-N1 | Bound cached-free backing without refund on recycle; host pools additionally need canonical GTT admission. MEM-DOM-1 remains mandatory before aggregate closure |
+| Admission | DRN-2 copy-first qualifier | Independent complete output/guard checks, accepted-prefix ordering, queued and native-retained cells, dropped observers and explicit cleanup; generated production cells still require GEN-2 |
+| Primary | Shared integration and qualification | R70 gates complete; integrate the next packet and publish its own evidence. OVL-QUAL-2 in an idle signed hardware window, then DRN-2 hardware and compiler handoff |
 
-### First Concurrent Packets
+### R70 Implementation Ownership
 
 There are three worker slots plus the primary, not one worker per roadmap ID.
-Resources first hands Native the immutable configuration/pool ownership contract.
-After that short interface agreement, the following implementation packets can
-run concurrently without editing the same files.
+Resources handed Native the immutable configuration/pool ownership contract.
+After that interface agreement, the following packets were implemented in
+parallel without overlapping file edits. The primary integrated shared hooks.
 
 | Agent | First deliverable | Owned files and handoff | Required focused gate |
 | --- | --- | --- | --- |
 | `r66_native_coexistence` | MEM-2A-FWD constructor forwarding in both startup orders | KFD `shared_memory.rs` and `queue_live.rs`; primary integrates runtime `kfd_backend.rs` and `compute_dispatch.rs` | Configure before N2 allocation/materialization and queue certification; unchanged default, late/replacement/foreign rejection, actual transfer/loan/retake and partial-constructor custody tests |
-| `r66_coexistence_model` | MEM-TXN-1 complete bounded roster reservation | `fe2o3-resource-accounting/src/lib.rs`, proposed `batch.rs`, isolated model/proof sources; primary registers exports/pins | Late-member/vector/record/generation failure changes no account state; independently disposed members refund exactly once; authenticated positive and negative obligations plus adapter tests |
+| `r66_coexistence_model` | MEM-TXN-1 complete bounded roster reservation | `fe2o3-resource-accounting/src/lib.rs`, `batch.rs`, isolated model/proof sources; primary registers exports/pins | Ordinary late-member/vector/record/generation exhaustion changes no account state; detected corruption poisons; independently disposed members refund exactly once; authenticated positive and negative obligations plus adapter tests |
 | `r66_runtime_coexistence` | DRN-3B active-prefix/capture composition fixture | `async_engine/tests/owned_tests/drain_capture_tests.rs`, narrowly `drain_tests.rs` and `owned_tests.rs`; production fixes handed to primary | Active graph/operation/waiter identities, graph reservation release, exact reply and retained credits, no duplicate issue, and controlled Stop ordering; preserve the eight existing DRN-1A tests |
 | Primary | Integration and evidence | Shared constructors, Context/owner hooks, model exports, proof roster, local gates and release records | Cross-review each packet, complete current-source gates, signed commits and both remote refs; hardware acceptance separately recorded |
 
 MEM-TXN-1 is one-account compound admission, not parent/global admission or
-arbitrary splitting of an already-issued debit. DRN-3B must add composition,
-not repeat basic rejection/panic/exhaustion tests. Stop cannot preempt a
+arbitrary splitting of an already-issued debit. DRN-3B adds composition to the
+basic rejection/panic/exhaustion tests. Stop cannot preempt a
 synchronous capture callback: before pickup it prevents capture; a completed
 capture may legitimately win before a concurrent Stop is processed, but partial
 bytes must never become a result.
@@ -206,11 +219,62 @@ bytes must never become a result.
 | Admission | DRN-2 copy-first example/checker; signed copy campaign support; GEN-2 private permit/decoder adapter; generated graph/drain qualification | Copy qualification can precede GEN-2; positive generated execution requires exact compiler/machine evidence; blocking must join the same async path |
 | Primary | OVL-QUAL-2 signed campaign; DRN-2 signed campaign; incremental PRF-1; PRF-2 exit audit and publication | Idle selected GPU and independent cleanup; complete output/identity audits; keep implementation, proof, CPU, fixture hardware, production hardware and performance statuses separate |
 
-SCALE-1A isolated fixtures can move ahead while native constructor interfaces
-are under review. VER-1 can move ahead when the resource slot is free. The GEN-2
+SCALE-1A isolated fixtures can move ahead while the next pool ownership contract
+is under review. VER-1 can move ahead when the resource slot is free. The GEN-2
 compiler handoff can be prepared without changing frozen runtime source. These
 are scheduling alternatives, not extra simultaneous workers. Missing idle
 hardware or compiler evidence does not block unrelated CPU implementation.
+
+### First Follow-On Packet Contracts
+
+The three agents rechecked these boundaries against the R70 implementation.
+These are the next assignments, not completed implementation or running jobs.
+
+**MEM-2B, resources and native:** add an optional immutable device-cache
+byte/record ceiling to the existing SDMA free pool. Resources owns an isolated
+`fe2o3-kfd/src/sdma/pool_policy.rs` policy and model/tests; Native owns minimal
+layout projection and checkout/recycle/trim integration in `sdma.rs` and
+`queue_live.rs`. Primary owns runtime configuration and shared forwarding.
+Derive padded cache cost from each device lease's native layout. Existing mixed
+host/device pool observations report usable extents, not padded N2 residency.
+Keep the N2 record as the sole resident debit; do not add another backing ledger.
+
+Freeze an explicit cache-versus-dispose decision. If the incoming idle device
+buffer cannot be cached, use its existing physical-release path, preserving
+uncertain custody on failure. A generic recovered cache-full rejection would
+currently become terminal in runtime transient recycling. Keep the existing
+bounded best-fit scan, defaults and explicit trim; add no background eviction
+or automatic retry. Test padding, byte/count boundaries, both startup orders,
+foreign/late configuration, generation reuse, logical resize/release, exact
+account identity, failed trim/currentness/panic and refund only after complete
+physical disposal. Host pools require MEM-N1; parent/bootstrap/aggregate claims
+still require MEM-DOM-1 and MEM-5.
+
+**DRN-2A, admission:** implement a copy-only outstanding-work capture example
+at `fe2o3-runtime/examples/gfx942-runtime-drain-capture.rs`, plus independent
+`check_drain_capture.py` and `test_check_drain_capture.py` in
+`benchmarks/runtime_gfx942`. Native and Primary supply a narrow immutable
+`kfd_backend/qualification_drain_capture.rs` observation adapter; Primary owns
+the signed runner, runner tests, shared exports and qualification contract.
+Do not widen R66's compute-gated observer or treat logical Pending as native
+publication. Bind queued/published operation identities to actual retained SDMA
+receipts without granting compute authority.
+
+Freeze eight cells: queued/native-retained cutoff, one/two streams and
+retained/dropped operation or graph observers. Retain the capture future in
+every cell for complete output and extracted-result-credit checks; dropping that
+future would require a separately named cleanup-only cell. Register the source
+and reserve its destination before cutoff, pre-admit verification downloads,
+and permit accepted-prefix publication after cutoff. Keep graph and
+standalone-operation schedules separate where exclusivity requires it.
+Independently check all output/guard bytes,
+odd offsets/tails, unique identities/publications, generations, exact phase/cell
+rosters and bounded canonical evidence; reject malformed data, duplicate keys,
+omitted phases and changed outputs. Require conclusive drain, capture-credit
+retention through extraction/shutdown, refund after result disposal and exact
+native cleanup. CPU/checker/runner work needs neither GEN-2 nor a GPU window;
+signed capture does. Generated-kernel cells require GEN-2. Native retention is
+not proof of physical activity or overlap at cutoff.
 
 ### DRN-1A Implementation Ownership
 
@@ -276,13 +340,14 @@ backing admission alone does not provide any of these mechanisms.
 
 | Packet | Owner / dependency | Deliverable and completion gate |
 | --- | --- | --- |
-| MEM-2A-FWD | Resources contract; native/primary construction hooks | Forward immutable session-local limits before N2 allocation and queue certification in both SDMA-first and compute-first paths. Test default behavior, late/replacement/foreign rejection and actual configuration transfer/loan/retake round trips |
+| MEM-2A-FWD | Implemented in R70; resources contract and native/primary hooks | Immutable session-local limits precede N2 allocation and queue certification in both startup orders. CPU tests cover defaults, late/replacement/foreign rejection and actual configuration transfer/loan/retake; live acceptance remains open |
 | MEM-N1 | Resources adapter; native GTT hooks; prerequisite for host-pool and MEM-3 accounting | Charge canonical GTT backing/mapping/record costs before native effects, distinguish CPU/GPU views of one object, and retain through queue loans and failed disposal. N2-only device-pool work can proceed separately; it cannot qualify host pools |
-| MEM-TXN-1 | Resources shared-core/model/proof work; prerequisite for compound MEM-3 creation | Atomically reserve a bounded complete roster of vectors and owner-record slots. Issue move-only per-member debits at admission so independently disposed members refund exactly their charge. Late-member/record exhaustion leaves usage unchanged; duplicate transfer/refund rejects |
+| MEM-TXN-1 | Implemented in R70; prerequisite for compound MEM-3 creation | Atomic complete roster of vectors and owner slots returns independent move-only reservations. Ordinary late-member/record/generation failure leaves state unchanged; detected internal corruption poisons. Native composition remains open |
 | MEM-DOM-1 | Resources domain contract; primary root/construction hooks; prerequisite for MEM-5 aggregate closure | Bind root/device/Context accounts and reserve bootstrap/terminal headroom before ownership. Repeated Context creation and simultaneous failures cannot reset the ceiling or require unreserved bookkeeping. Session-local accounting may land first only with its narrower scope explicit |
 
-MEM-TXN-1 must not assume arbitrary splitting or partial refunds are already
-available in R67. MEM-DOM-1 must not be postponed to a documentation-only final
+The implemented [batch API](runtime-resource-batch-v1.md) creates independent
+member reservations; it does not split an already-issued retained debit.
+MEM-DOM-1 must not be postponed to a documentation-only final
 audit. Host images, journals, captures and independent native owners may be
 implemented incrementally, but the final aggregate gate includes all of them.
 
@@ -323,11 +388,12 @@ each charge through cached residency and recognizes physical disposal. Existing
 requested-allocation credits remain a distinct quantity, and public counter
 mechanics are not native-disposal evidence.
 
-### Next Packet Contracts
+### Earlier Packet Contracts
 
-The second scoping review fixes the following small implementation boundaries.
+The earlier scoping review fixed the following small implementation boundaries.
 MEM-2A and DRN-1A are implemented locally as described above; SCALE-1A remains
-queued. None is hardware-accepted by this scoping review.
+queued. These historical contracts do not replace the current assignments
+above. None is hardware-accepted by this scoping review.
 
 - **SCALE-1A, native owner:** two separate qualification-only fixed-work artifacts
   and a sequential correctness qualifier. Freeze a small complete ReadWrite
@@ -385,12 +451,13 @@ or fixture results exist. None of the rows establishes runtime-wide parity.
 | OVL-1/2 | R66 restricted profile | Bounded scan only; native extraction/composition open | Both orders, H2D/D2H, one/three bindings | Open: OVL-QUAL-1/2 | Open: GEN-2 also required | Open |
 | OVL-QUAL-1/2 | Qualifier and typed diagnostics locally validated; live gate open | Descriptive observation, not authority | Eight runtime observation tests, six native diagnostic tests and runner/checker negatives | Open: new signed capture required | Open: GEN-2 also required | Physical overlap unmeasured |
 | MEM-1 | Local transactional credits and Context requested-allocation profile | R67: 14 vector/record obligations and eight mutations passed full authenticated gate; adapter composition open | Ten Context, nine shared-engine and three device-wrapper tests; two core ownership compile-fail examples | New qualifier includes requested-credit saturation/retention/disposal; not yet accepted | Open | Unmeasured |
-| MEM-2A | Optional session-local N2 native backing/record admission, locally validated | R68: four projection obligations and five mutations passed full authenticated gate; native correspondence open | 20 native, eight adapter and three model tests pass; public-pair live and configuration round-trip gaps remain | Physical saturation/reuse open | Open | Unmeasured |
+| MEM-2A/FWD | Optional N2 admission and immutable runtime forwarding through both native startup orders | R68 cost projection; constructor/native correspondence open | R68 coverage plus R70 native round-trip, failure and runtime-history tests; public Linux constructor wiring remains source-tested | Physical saturation/reuse and constructor qualification open | Open | Unmeasured |
+| MEM-TXN-1 | Atomic bounded roster on the shared account with independent member ownership | R70 executable arithmetic/roster projection; concrete mutex/arena/token refinement open | Fourteen core and six model tests, mixed scalar/batch stress and one compile-fail example | Not a native consumer | Open | Unmeasured |
 | MEM-2B..5 | Shared engine and site inventory available; pool, compound backing and global closure open | End-to-end accounting open | Complete composed failure matrix open | Physical saturation/reuse open | Open | Unmeasured |
 | VER-1/2 | Open; R65 lineage is graph-local | Persistent authority open | Cross-run mutation/lease matrix open | Open | Kernel extension also needs GEN-2 | Unmeasured |
 | GEN-1 | Owned data boundary implemented locally | No execution authority or whole-async proof | Eleven focused host tests and generated fixtures pass | Data-only boundary | Not an execution cell | Unmeasured |
 | GEN-2 | Exact typed async authority and integration open | Compiler evidence and async composition open | Permit/currentness/native integration matrix open | Fixtures cannot fill production cells | Open | Unmeasured |
-| DRN-1/2/3 | R65 drain, DRN-3A and DRN-1A capture/failure integration exist | R69 range guard only; whole drain/executor refinement open | R69 capture/ownership/native adapter tests; broader DRN-3B composition remains | R65 idle only; DRN-2 outstanding-work open | Open | Unmeasured |
+| DRN-1/2/3 | R65 drain, DRN-1A capture and DRN-3A/B failure composition exist | R69 range guard only; whole drain/executor refinement open | R69 tests plus twelve DRN-3B operation/waiter, graph, exhaustion and Stop scenarios | R65 idle only; DRN-2 outstanding-work open | Open | Unmeasured |
 | SCALE-1/CAP/2 | Open; default remains 64 epochs per compute lane | Capacity/acquisition composition open | Larger native-capacity profile open | Short/long and native-depth open | Open | Unmeasured |
 | SCALE-3 | Protocol/checker implemented; signed/timestamp producers open | Optimization/timeline boundary open | Fourteen protocol tests and independent review pass | Measurements open | Measurements open | No R66 result |
 | PRF-1/2 | Whole executor composition open | Isolated guards are not whole-state refinement | Current-source local gates retained; optional legacy-musl compiler unavailable | Per-profile qualification open | Open | Per-workload only |
@@ -780,16 +847,22 @@ mixed-duration or general-production cells.
 
 ### DRN-3: Failure And Retention Matrix
 
-**DRN-3A and basic DRN-1A capture failures implemented; broader composed
-qualification remains DRN-3B.** Three earlier composed
+**DRN-3A, basic DRN-1A failures and DRN-3B CPU composition implemented.** Three earlier composed
 regressions in `async_engine/tests/owned_tests/drain_tests.rs` check exact
 accepted-submit rejection, repeated observation rejection without reissue and
 pre-issue cancellation preserving a successfully submitted sibling. They check
 reply/snapshot lifetimes, credit usage and retained allocation/module/stream/
 submission identities. No production transition changed for these tests.
 R69 adds capture rejection, terminal partial-copy, panic, abandoned observer,
-cutoff-race and exhaustion tests. Extend the composed matrix while checking exact reply
-delivery, identity, retained resources and no retry/duplicate publication.
+cutoff-race and exhaustion tests. R70 adds four tests covering twelve controlled
+scenarios: six operation/waiter/cancel-or-reject/capture cells, three active
+two-stream graph/capture cells, repeated observation rejection with exhausted
+drain, and Stop before pickup or during a paused synchronous capture. Graphs
+remain exclusive of preexisting operation/waiter registries, so those matrices
+are separate rather than weakening graph admission for a test. Exact reply,
+snapshot/result credit, graph reservation, backend identity and release rosters
+are checked without duplicate issue. Stop during capture cannot expose partial
+bytes or preempt the synchronous callback.
 R65 already covers quiescent failure, budget exhaustion, abandoned observers,
 interruption and panic. Preserve those cases and DRN-3A when composing capture;
 do not rebuild the drain lifecycle.
@@ -839,7 +912,8 @@ merging to either main branch.
 | --- | --- | --- | --- | --- |
 | Checkpoint, complete locally | OVL checker/integration, qualifier/diagnostics and SCALE-3 protocol | MEM-BASE, MEM-1 requested bytes and MEM-2A session-local N2 | GEN-1 owned data and DRN-3A regressions | Signed `dd202891` and R68 local/proof evidence; hardware gates remain open |
 | 1, integrated R69 packet | DRN-1A coherent read-into | DRN-1A charged storage | DRN-1A capture state/tests | Source/currentness/owner hooks and DRN-1A local release gates; hardware separate |
-| 2, dependency-ready queue | MEM-2A-FWD/pool hooks; SCALE-1 fixtures | MEM-2A-FWD/2B, MEM-N1/TXN/DOM; VER-1 can start independently | DRN-3B, DRN-2 copy qualifier and GEN-2 contract | Serialize shared hooks; OVL-QUAL-2 on idle signed hardware; compiler handoff |
+| 2, integrated R70 packet | MEM-2A-FWD constructors and ownership round trips | MEM-TXN-1 atomic single-account member reservations | DRN-3B composed CPU failures | Runtime forwarding, current-source local/proof gates and R70 release; hardware separate |
+| 2 follow-on, dependency-ready queue | MEM-2B pool hooks; SCALE-1 fixtures | MEM-2B policy, MEM-N1/DOM; VER-1 can start independently | DRN-2 copy qualifier and GEN-2 contract | Serialize shared hooks; OVL-QUAL-2 on idle signed hardware; compiler handoff |
 | 3, bounded local integration | MEM-3/4 native hooks, then SCALE-CAP | MEM-3A/B, MEM-4A/B, VER-1/2 and MEM-5 closure | GEN-2 adapter; DRN-2 copy/fixture campaign support | Incremental PRF-1; production GEN-2 requires matching compiler/machine evidence |
 | 4, acceptance campaigns | SCALE-2 depth/out-of-order, then SCALE-3 producers/measurements | Budget/version stress and independent review | Repeated generated graphs and active/failure drain | PRF-2, full A1/A2 exit audit and signed dual-remote publication |
 

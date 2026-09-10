@@ -1,9 +1,9 @@
 # Native Resource Accounting Contract V1
 
-Status: MEM-BASE and the optional session-local MEM-2A N2 backing adapter are
-implemented locally. The remaining MEM-5 inventory/interface contract is
+Status: MEM-BASE, the optional session-local MEM-2A N2 backing adapter and
+MEM-2A-FWD runtime configuration are implemented locally. The remaining MEM-5 inventory/interface contract is
 proposed, reviewed on 2026-09-10. This does not close MEM-2 through MEM-5.
-Pool qualification, compound native ownership, parent/batch/split operations and
+Pool qualification, compound native ownership, parent/split operations and
 global physical accounting still require the reviewed handoffs below.
 The [A1/A2 swarm plan](runtime-a1-a2-swarm-plan.md) owns scheduling and acceptance.
 
@@ -75,15 +75,42 @@ They do not prove that native layout extraction, syscall outcomes, mutex/arena
 ownership or whole-executor disposal correspond to the model. The full
 authenticated roster and CPU fault matrix are separate release gates.
 
-This is one session's N2 accounting, not a runtime-wide switch or closed memory
-ceiling. Session bootstrap, GTT, queue/control backing, host metadata, parent
-budgets, aggregate quarantine and runtime configuration forwarding remain
-open. Runtime forwarding must configure during native session construction,
-before queue-foundation transfer, rather than weakening freshness to permit
-late Context configuration. Pool checkout/recycle/trim qualification is MEM-2B;
+This is one session's N2 accounting, not a closed runtime-wide memory ceiling.
+Session bootstrap, GTT, queue/control backing, host metadata, parent budgets and
+aggregate quarantine remain open. Pool checkout/recycle/trim qualification is MEM-2B;
 retaining charges in the underlying allocation record does not by itself
 qualify every pool path.
 No hardware or performance result is implied by this implementation.
+
+## Implemented MEM-2A-FWD Slice
+
+`KfdRuntimeBackendV1::configure_device_backing_budget_v1` selects those immutable
+limits before any logical or native resource creation. A repeated setting or
+any resource history rejects, including logical resources already released.
+The default remains unconfigured and the setting does not alter launch authority
+or native capabilities. It applies to all existing single-device launch-gate
+constructors; this is not a new multi-device or XGMI configuration surface.
+
+The SDMA-first path uses
+`CheckedGfx942XnackMinusDevice::create_compute_aql_queue_with_device_backing_budget_v1`;
+the compute-first path uses its budget-aware memory-acquisition sibling before
+initial data materialization. Both configure the actual fresh session inside
+the existing process-VM attempt envelope before queue certification. Existing
+constructors forward `None`, preserving their prior behavior. Configuration
+failure cannot reopen the process VM or discard ambiguous native custody.
+
+Queue and runtime `device_backing_usage_v1` expose optional inert observations
+of the retained session account. `None` means unavailable, never zero usage or
+successful disposal. Runtime materialization failure can retain its configured
+account with `terminal_memory`; inaccessible quarantined custody is not refunded
+merely because an observation is unavailable.
+
+Fake-backend tests exercise production configuration, exact foundation
+certification/transfer, loan/retake and restoration in both startup orders.
+They cover unchanged defaults, immutable/late/foreign rejection, partial native
+failure and panic retention. Public Linux constructor ordering also has an
+explicitly labeled source-wiring check. These are not live constructor or
+pool-path qualification and do not prove whole-executor refinement.
 
 ## Units And Counting Rules
 
@@ -263,13 +290,14 @@ kernel or OS freed anything.
    unreleased subset, or conservatively the whole bundle, without duplicate
    refund or retry permission for indeterminate native transactions.
 
-R67 currently has one-vector/one-record reservation, not the proposed
-parent-account transaction or divisible native cost bundle. MEM-3 batch plans
-need a proved fixed-roster batch reservation/splitting operation before partial
-successful disposal can refund separate objects. Do not simulate that feature
-by reserving independent objects sequentially and claiming whole-plan atomicity.
-The first MEM-2A adapter can remain one-backing-object-at-a-time and explicitly
-leave compound creation open.
+R67's scalar admission remains available. MEM-TXN-1 adds single-account
+`reserve_batch` for atomic fixed-roster admission with independently owned
+member credits. It is not a parent-account transaction or arbitrary splitting
+of an issued debit. MEM-3 must compose this primitive with complete measured
+native costs and retain every potentially affected member before the first
+effect. A separately disposed member can refund only its own charge. Actual
+native compound creation and executable refinement remain open; sequential
+independent reservations are not whole-plan atomic admission.
 
 ### Bootstrap And Quarantine
 
@@ -337,11 +365,26 @@ passes 2,065 runtime tests on each of GNU and musl, with five existing ignores,
 plus host, fixture, doctest, lint, dependency and lockfile gates. The full
 authenticated proof run passes 57 positive sources, 1,334 obligations and 645
 expected negatives. R68 adds only four projection obligations and five named
-mutations. Public XGMI wiring remains source-tested rather than live-qualified;
-the configuration transfer/loan/retake round trip lacks an integrated regression.
-The shared GPU remained busy, so no new hardware stage or qualifier was started.
+mutations. At that checkpoint, public XGMI wiring was source-tested rather than
+live-qualified and configuration transfer/loan/retake lacked an integrated
+regression. MEM-2A-FWD now adds the CPU round-trip coverage described above;
+live acceptance remains open. The shared GPU was busy during R68, so no new
+hardware stage or qualifier was started for that checkpoint.
 
 Existing native layout, pool, slot and teardown tests are reusable evidence
-inputs. They are not tests of the proposed ledger extraction, parent limits,
-native debit composition or global quarantine. This packet itself is a
-source-reviewed design and inventory; it runs no Cargo, Verus or hardware test.
+inputs. They are not tests of parent limits, complete native compound admission
+or global quarantine. Source-reviewed inventory entries alone are not executed
+Cargo, Verus or hardware evidence; each implementation packet retains its own
+current-source gate results.
+
+## MEM-2A-FWD And Batch Evidence
+
+The [R70 local record](evidence/local-r70-batch-forwarding-2026-09-10/README.md)
+passes 2,143 runtime tests on each of GNU and musl, with five existing ignores,
+all sixteen local gates and the 43-package production audit. The complete
+authenticated Verus run passes 59 positive sources, 1,347 obligations and 659
+expected negatives. R70 adds nine batch-arithmetic/owner obligations and nine
+mutations, not a native constructor or whole-account proof. Fake-backend
+configuration/ownership round trips and explicit source-wiring checks cover
+the forwarding packet. Pool, GTT, parent/aggregate and live hardware acceptance
+remain open; no native workload was run for R70.

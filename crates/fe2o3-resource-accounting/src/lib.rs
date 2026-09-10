@@ -9,7 +9,9 @@
 //! This is the extracted R67 account engine, not a hierarchical budget or native
 //! cost adapter. Each account has a bounded owner arena; its actual host bytes,
 //! parent/device ceilings, bootstrap storage and aggregate quarantine remain
-//! separate implementation work. No batch split or partial refund is provided.
+//! separate implementation work. Bounded single-account batch admission creates
+//! independent member reservations; issued debits cannot be split or partially
+//! refunded.
 //!
 //! Retained-token Drop quarantines without refund. One Arc anchor preserves an
 //! ambiguous account after outside handles disappear, until process exit. This
@@ -20,6 +22,9 @@ use fe2o3_runtime_model::{
     r67_resource_release_v1, r67_resource_reserve_v1,
 };
 use std::sync::{Arc, Mutex, MutexGuard};
+
+mod batch;
+pub use batch::MAX_RESOURCE_CREDIT_BATCH_MEMBERS_V1;
 
 pub use fe2o3_runtime_model::{
     R67ResourceKindV1 as ResourceKindV1, R67ResourceVectorV1 as ResourceVectorV1,

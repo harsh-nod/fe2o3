@@ -3757,6 +3757,71 @@ impl QueueModelOwnershipV1 {
         }
     }
 
+    fn configure_optional_device_backing_budget<B: MemoryBackend>(
+        &self,
+        engine: &mut SharedMemoryEngine<B>,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
+        budget: Option<Gfx942DeviceBackingBudgetV1>,
+    ) -> Result<(), MemorySessionError> {
+        let Some(budget) = budget else {
+            return Ok(());
+        };
+        if !self.is_session_owned() {
+            return Err(MemorySessionError::DeviceBackingBudgetConfiguration(
+                "queue-owned or loaned memory cannot configure a backing budget",
+            ));
+        }
+        engine.configure_device_backing_budget_v1(device.model_key(), vm, budget)
+    }
+
+    fn take_foundation<B: MemoryBackend>(
+        &mut self,
+        engine: &mut SharedMemoryEngine<B>,
+        foundation: &mut QueueModelFoundationV1,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
+    ) -> Result<QueueModelFoundationV1, MemorySessionError> {
+        engine.device_backing_configuration_closed = true;
+        let issuer = self
+            .certify_and_transfer_to_queue(foundation, engine.session_id, device, vm)
+            .map_err(MemorySessionError::Model)?;
+        debug_assert_eq!(self.queue_owned_issuer(), Some(issuer));
+        let domain = foundation.memory().domain_id();
+        Ok(core::mem::replace(
+            foundation,
+            QueueModelFoundationV1::empty(domain),
+        ))
+    }
+
+    fn restore_foundation<B: MemoryBackend>(
+        &mut self,
+        engine: &mut SharedMemoryEngine<B>,
+        session_foundation: &mut QueueModelFoundationV1,
+        foundation: QueueModelFoundationV1,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
+    ) -> Result<(), MemorySessionError> {
+        let issuer = self.queue_owned_issuer().ok_or(MemorySessionError::Model(
+            "shared queue foundation ownership phase",
+        ))?;
+        if foundation
+            .validate_full(engine.session_id, device, vm, issuer)
+            .is_err()
+            || self.restore_to_session(issuer).is_err()
+        {
+            return engine.quarantine(MemorySessionError::Model(
+                "shared queue model ownership restoration",
+            ));
+        }
+        let mut foundation = foundation;
+        foundation
+            .revoke_invariant_certificate(engine.session_id, device, vm, issuer)
+            .expect("fully validated exact foundation certificate remains revocable");
+        *session_foundation = foundation;
+        Ok(())
+    }
+
     fn certify_and_transfer_to_queue(
         &mut self,
         foundation: &mut QueueModelFoundationV1,
@@ -3906,6 +3971,18 @@ impl CheckedGfx942XnackMinusDevice {
     pub fn acquire_shared_gtt_memory_session(
         self,
     ) -> Result<SharedGttMemorySessionV1, MemorySessionError> {
+        self.acquire_shared_gtt_memory_session_with_device_backing_budget_v1(None)
+    }
+
+    /// Acquires a fresh session with optional immutable N2 backing admission.
+    ///
+    /// Configuration precedes any device-backing allocation or queue-model
+    /// certification. The budget covers this session's padded device backing
+    /// and records, not GTT, VM bootstrap, queues or another session.
+    pub fn acquire_shared_gtt_memory_session_with_device_backing_budget_v1(
+        self,
+        budget: Option<Gfx942DeviceBackingBudgetV1>,
+    ) -> Result<SharedGttMemorySessionV1, MemorySessionError> {
         let pid = std::process::id();
         let gpu_id = self.observation().kfd_gpu_id();
         let vm_id = NEXT_MODEL_VM_ID
@@ -3937,13 +4014,22 @@ impl CheckedGfx942XnackMinusDevice {
                         },
                     })
                     .map_err(|_| MemorySessionError::Model("VM acquisition projection"))?;
-            Ok(SharedGttMemorySessionV1 {
+            let mut session = SharedGttMemorySessionV1 {
                 engine,
                 foundation: QueueModelFoundationV1::uncertified(identity, model),
                 model_device,
                 vm: model_vm.model_key(),
                 model_ownership: QueueModelOwnershipV1::new(),
-            })
+            };
+            session
+                .model_ownership
+                .configure_optional_device_backing_budget(
+                    &mut session.engine,
+                    session.model_device,
+                    session.vm,
+                    budget,
+                )?;
+            Ok(session)
         })();
         finish_process_vm_attempt(result.is_ok(), pid, gpu_id);
         result
@@ -3964,16 +4050,13 @@ impl SharedGttMemorySessionV1 {
         &mut self,
         budget: Gfx942DeviceBackingBudgetV1,
     ) -> Result<(), MemorySessionError> {
-        if !self.model_ownership.is_session_owned() {
-            return Err(MemorySessionError::DeviceBackingBudgetConfiguration(
-                "queue-owned or loaned memory cannot configure a backing budget",
-            ));
-        }
-        self.engine.configure_device_backing_budget_v1(
-            self.model_device.model_key(),
-            self.vm,
-            budget,
-        )
+        self.model_ownership
+            .configure_optional_device_backing_budget(
+                &mut self.engine,
+                self.model_device,
+                self.vm,
+                Some(budget),
+            )
     }
 
     /// Reports only this session's configured N2 debit, including retained uncertainty.
@@ -4584,22 +4667,12 @@ impl SharedGttMemorySessionV1 {
     fn take_queue_model_foundation_after_device_memory_check(
         &mut self,
     ) -> Result<QueueModelFoundationV1, MemorySessionError> {
-        self.engine.device_backing_configuration_closed = true;
-        let issuer = self
-            .model_ownership
-            .certify_and_transfer_to_queue(
-                &mut self.foundation,
-                self.engine.session_id,
-                self.model_device,
-                self.vm,
-            )
-            .map_err(MemorySessionError::Model)?;
-        debug_assert_eq!(self.model_ownership.queue_owned_issuer(), Some(issuer));
-        let domain = self.foundation.memory().domain_id();
-        Ok(core::mem::replace(
+        self.model_ownership.take_foundation(
+            &mut self.engine,
             &mut self.foundation,
-            QueueModelFoundationV1::empty(domain),
-        ))
+            self.model_device,
+            self.vm,
+        )
     }
 
     pub(crate) fn loan_queue_model_foundation_for_live_mutation(
@@ -4662,32 +4735,13 @@ impl SharedGttMemorySessionV1 {
         &mut self,
         foundation: QueueModelFoundationV1,
     ) -> Result<(), MemorySessionError> {
-        let issuer = self
-            .model_ownership
-            .queue_owned_issuer()
-            .ok_or(MemorySessionError::Model(
-                "shared queue foundation ownership phase",
-            ))?;
-        if foundation
-            .validate_full(self.engine.session_id, self.model_device, self.vm, issuer)
-            .is_err()
-            || self.model_ownership.restore_to_session(issuer).is_err()
-        {
-            return self.engine.quarantine(MemorySessionError::Model(
-                "shared queue model ownership restoration",
-            ));
-        }
-        let mut foundation = foundation;
-        foundation
-            .revoke_invariant_certificate(
-                self.engine.session_id,
-                self.model_device,
-                self.vm,
-                issuer,
-            )
-            .expect("fully validated exact foundation certificate remains revocable");
-        self.foundation = foundation;
-        Ok(())
+        self.model_ownership.restore_foundation(
+            &mut self.engine,
+            &mut self.foundation,
+            foundation,
+            self.model_device,
+            self.vm,
+        )
     }
 
     #[allow(dead_code)]
@@ -6526,6 +6580,393 @@ mod tests {
             ownership.phase,
             QueueModelOwnershipPhaseV1::QueueOwned { issuer: second }
         );
+    }
+
+    struct BackingConstructorFixture {
+        engine: SharedMemoryEngine<FakeBackend>,
+        ownership: QueueModelOwnershipV1,
+        foundation: QueueModelFoundationV1,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
+    }
+
+    impl BackingConstructorFixture {
+        fn new(budget: Option<Gfx942DeviceBackingBudgetV1>) -> Self {
+            let (identity, memory, device, vm) = transferred_model_foundation();
+            let mut fixture = Self {
+                engine: acquired(),
+                ownership: QueueModelOwnershipV1::new(),
+                foundation: QueueModelFoundationV1::uncertified(identity, memory),
+                device,
+                vm,
+            };
+            fixture.configure(budget).unwrap();
+            fixture
+        }
+
+        fn configure(
+            &mut self,
+            budget: Option<Gfx942DeviceBackingBudgetV1>,
+        ) -> Result<(), MemorySessionError> {
+            self.ownership.configure_optional_device_backing_budget(
+                &mut self.engine,
+                self.device,
+                self.vm,
+                budget,
+            )
+        }
+
+        fn transfer(
+            &mut self,
+            authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
+        ) -> Result<QueueModelFoundationV1, MemorySessionError> {
+            self.engine.validate_complete_dispatch_device_memory_set(
+                authorities,
+                self.device.model_key(),
+                self.vm,
+            )?;
+            self.ownership.take_foundation(
+                &mut self.engine,
+                &mut self.foundation,
+                self.device,
+                self.vm,
+            )
+        }
+
+        fn mapped_device(&mut self) -> Gfx942DeviceMemoryDispatchAuthorityV1 {
+            let lease = self
+                .engine
+                .allocate_device_memory(self.device.model_key(), self.vm, 17, 4)
+                .and_then(|lease| self.engine.map_device_memory(lease))
+                .unwrap();
+            let record = &self.engine.device_memory[0];
+            Gfx942DeviceMemoryDispatchAuthorityV1 {
+                facts: Gfx942DeviceMemoryDispatchFactsV1 {
+                    id: record.id,
+                    generation: record.generation,
+                    device: record.device,
+                    vm: record.vm,
+                    gpu_va: record.gpu_va,
+                    layout: record.layout,
+                },
+                lease,
+            }
+        }
+
+        fn usage(&self) -> Option<Gfx942DeviceBackingUsageV1> {
+            self.engine
+                .device_backing_account
+                .as_ref()
+                .map(DeviceBackingAccountV1::usage)
+        }
+    }
+
+    #[test]
+    fn n2_constructor_default_has_no_configuration_effects() {
+        let mut fixture = BackingConstructorFixture::new(None);
+        let legacy = acquired();
+        assert!(fixture.usage().is_none());
+        assert_eq!(
+            fixture.engine.backend.currentness_calls,
+            legacy.backend.currentness_calls
+        );
+        assert_eq!(fixture.engine.backend.operations, legacy.backend.operations);
+        assert!(!fixture.engine.device_backing_configuration_closed);
+        assert!(!fixture.engine.device_backing_activity_started);
+        let authority = fixture.mapped_device();
+        let mut queue = fixture.transfer(&[&authority]).unwrap();
+        let loan = fixture
+            .ownership
+            .loan_foundation(
+                fixture.engine.session_id,
+                &mut fixture.foundation,
+                &mut queue,
+                fixture.device,
+                fixture.vm,
+            )
+            .unwrap();
+        fixture
+            .ownership
+            .reclaim_foundation(
+                fixture.engine.session_id,
+                &mut fixture.foundation,
+                &mut queue,
+                fixture.device,
+                fixture.vm,
+                loan,
+            )
+            .unwrap();
+        assert!(fixture.usage().is_none());
+        assert_eq!(fixture.engine.phase(), SharedMemorySessionPhaseV1::Active);
+    }
+
+    #[test]
+    fn n2_constructor_both_orders_preserve_exact_charge_through_real_queue_loan() {
+        let budget = Gfx942DeviceBackingBudgetV1::new(8192, 2).unwrap();
+        for compute_first in [false, true] {
+            let mut fixture = BackingConstructorFixture::new(Some(budget));
+            let mut authority = compute_first.then(|| fixture.mapped_device());
+            let mut queue = if let Some(authority) = authority.as_ref() {
+                fixture.transfer(&[authority]).unwrap()
+            } else {
+                fixture.transfer(&[]).unwrap()
+            };
+            let queue_usage = fixture.usage();
+            let calls = fixture.engine.backend.currentness_calls;
+            assert!(fixture.configure(Some(budget)).is_err());
+            assert_eq!(fixture.engine.backend.currentness_calls, calls);
+            assert_eq!(fixture.usage(), queue_usage);
+            let loan = fixture
+                .ownership
+                .loan_foundation(
+                    fixture.engine.session_id,
+                    &mut fixture.foundation,
+                    &mut queue,
+                    fixture.device,
+                    fixture.vm,
+                )
+                .unwrap();
+            assert!(fixture.configure(Some(budget)).is_err());
+            if !compute_first {
+                authority = Some(fixture.mapped_device());
+            }
+            let account = fixture.engine.device_backing_account.as_ref().unwrap();
+            let record = &fixture.engine.device_memory[0];
+            assert!(record.backing_charge.as_ref().unwrap().matches(
+                account,
+                fixture.engine.session_id,
+                fixture.device.model_key(),
+                fixture.vm,
+                record.id,
+                record.generation,
+                record.layout,
+            ));
+            let retained = fixture.usage().unwrap();
+            assert_eq!(retained.budget, budget);
+            assert_eq!(retained.used_backing_bytes, 4096);
+            assert_eq!(retained.used_allocation_records, 1);
+            fixture
+                .ownership
+                .reclaim_foundation(
+                    fixture.engine.session_id,
+                    &mut fixture.foundation,
+                    &mut queue,
+                    fixture.device,
+                    fixture.vm,
+                    loan,
+                )
+                .unwrap();
+            assert_eq!(fixture.usage(), Some(retained));
+            fixture
+                .ownership
+                .restore_foundation(
+                    &mut fixture.engine,
+                    &mut fixture.foundation,
+                    queue,
+                    fixture.device,
+                    fixture.vm,
+                )
+                .unwrap();
+            assert!(!fixture.foundation.is_certified_for_test());
+            assert!(fixture.ownership.is_session_owned());
+            assert!(fixture.engine.device_backing_configuration_closed);
+            assert!(fixture.configure(Some(budget)).is_err());
+            assert_eq!(fixture.usage(), Some(retained));
+            let unmapped = fixture
+                .engine
+                .unmap_device_memory(authority.unwrap().lease)
+                .unwrap();
+            fixture.engine.release_device_memory(unmapped).unwrap();
+            let disposed = fixture.usage().unwrap();
+            assert_eq!(disposed.budget, budget);
+            assert_eq!(disposed.used_backing_bytes, 0);
+            assert_eq!(disposed.used_allocation_records, 0);
+            assert!(fixture.configure(Some(budget)).is_err());
+        }
+    }
+
+    #[test]
+    fn n2_constructor_unconfigured_transfer_cannot_reopen_configuration_after_restore() {
+        let mut fixture = BackingConstructorFixture::new(None);
+        let budget = Gfx942DeviceBackingBudgetV1::new(4096, 1).unwrap();
+        let queue = fixture.transfer(&[]).unwrap();
+        assert!(fixture.configure(Some(budget)).is_err());
+        fixture
+            .ownership
+            .restore_foundation(
+                &mut fixture.engine,
+                &mut fixture.foundation,
+                queue,
+                fixture.device,
+                fixture.vm,
+            )
+            .unwrap();
+        let calls = fixture.engine.backend.currentness_calls;
+        assert!(fixture.configure(Some(budget)).is_err());
+        assert_eq!(fixture.engine.backend.currentness_calls, calls);
+        assert!(fixture.usage().is_none());
+        assert_eq!(fixture.engine.backend.reserve_va_calls, 0);
+    }
+
+    #[test]
+    fn n2_constructor_configuration_rejects_foreign_currentness_and_prior_activity() {
+        let budget = Gfx942DeviceBackingBudgetV1::new(4096, 1).unwrap();
+        for case in 0..4 {
+            let mut fixture = BackingConstructorFixture::new(None);
+            match case {
+                0 => fixture.vm.device.generation.0 += 1,
+                1 => {
+                    fixture.engine.backend.fail_currentness_at =
+                        Some(fixture.engine.backend.currentness_calls + 1);
+                }
+                2 => {
+                    fixture.configure(Some(budget)).unwrap();
+                }
+                3 => {
+                    let lease = fixture
+                        .engine
+                        .allocate_device_memory(fixture.device.model_key(), fixture.vm, 17, 4)
+                        .unwrap();
+                    fixture.engine.release_device_memory(lease).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let usage = fixture.usage();
+            let calls = (
+                fixture.engine.backend.currentness_calls,
+                fixture.engine.backend.reserve_va_calls,
+                fixture.engine.backend.alloc_calls,
+            );
+            assert!(fixture.configure(Some(budget)).is_err());
+            assert_eq!(fixture.usage(), usage);
+            assert_eq!(
+                fixture.engine.backend.currentness_calls,
+                calls.0 + usize::from(case == 1)
+            );
+            assert_eq!(fixture.engine.backend.reserve_va_calls, calls.1);
+            assert_eq!(fixture.engine.backend.alloc_calls, calls.2);
+        }
+    }
+
+    #[test]
+    fn n2_constructor_partial_native_failure_retains_account_in_both_orders() {
+        let budget = Gfx942DeviceBackingBudgetV1::new(8192, 2).unwrap();
+        for compute_first in [false, true] {
+            for (operation, panic) in [
+                ("reserve_va", false),
+                ("alloc", false),
+                ("reserve_va", true),
+                ("alloc", true),
+            ] {
+                let mut fixture = BackingConstructorFixture::new(Some(budget));
+                let mut queue = (!compute_first).then(|| fixture.transfer(&[]).unwrap());
+                let loan = queue.as_mut().map(|queue| {
+                    fixture
+                        .ownership
+                        .loan_foundation(
+                            fixture.engine.session_id,
+                            &mut fixture.foundation,
+                            queue,
+                            fixture.device,
+                            fixture.vm,
+                        )
+                        .unwrap()
+                });
+                if panic {
+                    fixture.engine.backend.panic_operation = Some(operation);
+                } else {
+                    fixture.engine.backend.fail_operation = Some(operation);
+                }
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    fixture.engine.allocate_device_memory(
+                        fixture.device.model_key(),
+                        fixture.vm,
+                        17,
+                        4,
+                    )
+                }));
+                if panic {
+                    let payload = outcome.expect_err("native constructor panic must escape");
+                    assert_eq!(
+                        payload.downcast_ref::<(&'static str, &'static str)>(),
+                        Some(&("N2 native panic", operation))
+                    );
+                } else {
+                    assert!(outcome.unwrap().is_err());
+                }
+                assert_eq!(
+                    fixture.engine.phase(),
+                    SharedMemorySessionPhaseV1::Quarantined
+                );
+                let failed = fixture.usage().unwrap();
+                assert_eq!(failed.used_backing_bytes, 4096);
+                assert_eq!(failed.used_allocation_records, 1);
+                if let Some(loan) = loan {
+                    fixture
+                        .ownership
+                        .reclaim_foundation(
+                            fixture.engine.session_id,
+                            &mut fixture.foundation,
+                            queue.as_mut().unwrap(),
+                            fixture.device,
+                            fixture.vm,
+                            loan,
+                        )
+                        .unwrap();
+                }
+                let reserve_calls = fixture.engine.backend.reserve_va_calls;
+                assert!(
+                    fixture
+                        .engine
+                        .allocate_device_memory(fixture.device.model_key(), fixture.vm, 17, 4,)
+                        .is_err()
+                );
+                assert_eq!(fixture.engine.backend.reserve_va_calls, reserve_calls);
+                assert_eq!(fixture.engine.backend.free_calls, 0);
+                assert_eq!(fixture.engine.backend.release_va_calls, 0);
+                let account = fixture.engine.device_backing_account.take().unwrap();
+                drop(fixture);
+                assert_eq!(account.usage().used_backing_bytes, 4096);
+                assert_eq!(account.usage().used_allocation_records, 1);
+                assert_eq!(account.usage().quarantined_records, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn n2_constructor_foreign_restore_retains_charge_and_quarantines_session() {
+        let budget = Gfx942DeviceBackingBudgetV1::new(8192, 2).unwrap();
+        let mut fixture = BackingConstructorFixture::new(Some(budget));
+        let authority = fixture.mapped_device();
+        let queue = fixture.transfer(&[&authority]).unwrap();
+        let retained = fixture.usage();
+        let mut foreign_vm = fixture.vm;
+        foreign_vm.id.0 += 1;
+        assert!(
+            fixture
+                .ownership
+                .restore_foundation(
+                    &mut fixture.engine,
+                    &mut fixture.foundation,
+                    queue,
+                    fixture.device,
+                    foreign_vm,
+                )
+                .is_err()
+        );
+        assert_eq!(fixture.usage(), retained);
+        assert_eq!(
+            fixture.engine.phase(),
+            SharedMemorySessionPhaseV1::Quarantined
+        );
+        assert!(!fixture.ownership.is_session_owned());
+        assert!(fixture.configure(Some(budget)).is_err());
+        assert_eq!(fixture.engine.backend.free_calls, 0);
+        assert_eq!(fixture.engine.backend.release_va_calls, 0);
+        let account = fixture.engine.device_backing_account.take().unwrap();
+        drop(fixture);
+        assert_eq!(account.usage().used_backing_bytes, 4096);
+        assert_eq!(account.usage().quarantined_records, 1);
     }
 
     #[test]

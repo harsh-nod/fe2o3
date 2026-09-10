@@ -28,9 +28,9 @@ use fe2o3_kfd::{
     GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_WINDOW_PACKETS_V1,
     GFX942_SAME_DEVICE_PERSISTENT_SDMA_MAX_WINDOW_PACKETS_V1, GFX942_SDMA_MAX_IN_FLIGHT_V1,
     GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, Gfx942CompletedDispatchReadRequestV1,
-    Gfx942CompletedPersistentComputeDispatchV1, Gfx942DeviceContentDescriptorV1,
-    Gfx942DeviceContentRoleV1, Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryUnmappedV1,
-    Gfx942DirectionalPersistentSdmaDemotionTerminalCustodyV1,
+    Gfx942CompletedPersistentComputeDispatchV1, Gfx942DeviceBackingBudgetV1,
+    Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1, Gfx942DeviceMemoryLeaseV1,
+    Gfx942DeviceMemoryUnmappedV1, Gfx942DirectionalPersistentSdmaDemotionTerminalCustodyV1,
     Gfx942DirectionalPersistentSdmaFrontierRetirementFailureV1,
     Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1,
     Gfx942DirectionalPersistentSdmaTerminalCustodyV1,
@@ -85,6 +85,7 @@ use crate::{
 mod compute_dispatch;
 mod compute_state;
 mod drain_capture;
+mod native_budget;
 #[cfg(feature = "hardware-qualification")]
 mod qualification_coexistence;
 #[cfg(feature = "hardware-qualification")]
@@ -1159,6 +1160,7 @@ pub struct KfdRuntimeBackendV1 {
     next_ready_promotion_ordinal: Option<u64>,
     last_ready_promotion_performance: Option<KfdRuntimeReadyPromotionPerformanceV1>,
     staging_budgets: StagingBudgetsV1,
+    device_backing_budget: Option<Gfx942DeviceBackingBudgetV1>,
     staged_context_bytes: u64,
     sdma_enabled: bool,
     native_available: bool,
@@ -1247,6 +1249,7 @@ impl fmt::Debug for KfdRuntimeBackendV1 {
             .field("staged_context_bytes", &self.staged_context_bytes)
             .field("sdma_enabled", &self.sdma_enabled)
             .field("staging_budgets", &self.staging_budgets)
+            .field("device_backing_budget", &self.device_backing_budget)
             .field("launch_gate", &self.launch_gate)
             .field("profiler", &self.profiler)
             .finish()
@@ -1508,6 +1511,7 @@ impl KfdRuntimeBackendV1 {
             next_ready_promotion_ordinal: Some(0),
             last_ready_promotion_performance: None,
             staging_budgets,
+            device_backing_budget: None,
             staged_context_bytes: 0,
             sdma_enabled: false,
             native_available,
@@ -2961,7 +2965,10 @@ impl KfdRuntimeBackendV1 {
                 )
             })?;
             let queue = device
-                .create_compute_aql_queue(KFD_RUNTIME_RING_BYTES_V1)
+                .create_compute_aql_queue_with_device_backing_budget_v1(
+                    KFD_RUNTIME_RING_BYTES_V1,
+                    self.device_backing_budget,
+                )
                 .map_err(|error| self.terminal_error(format!("KFD queue creation: {error}")))?;
             self.queue = Some(queue);
         }

@@ -12,6 +12,7 @@ mod snapshot_tests;
 struct OwnerTrace {
     calls: Vec<(&'static str, ThreadId)>,
     polled_submissions: Vec<u64>,
+    released_submissions: Vec<u64>,
     finalizer_fails: bool,
     finalizer_panics: bool,
     cleanup_fails: bool,
@@ -26,6 +27,8 @@ struct OwnerTrace {
     capture_backing_pending: bool,
     capture_calls: usize,
     capture_requests: Vec<(u64, u64, u64, usize)>,
+    capture_submission_rosters: Vec<Vec<(u64, BackendPollV1)>>,
+    capture_pause: Option<(SyncSender<()>, Receiver<()>)>,
 }
 
 struct ThreadBoundBackend {
@@ -76,8 +79,19 @@ impl RuntimeBackendV1 for ThreadBoundBackend {
         mut request: crate::BackendHostCaptureV1<'_>,
     ) -> Result<(), RuntimeBackendFailureV1<crate::RuntimeHostCaptureErrorV1>> {
         self.record("capture");
+        let mut roster: Vec<_> = self
+            .inner
+            .state
+            .lock()
+            .unwrap()
+            .statuses
+            .iter()
+            .map(|(&id, &status)| (id, status))
+            .collect();
+        roster.sort_by_key(|(id, _)| *id);
         let mut trace = self.trace.lock().unwrap();
         trace.capture_calls += 1;
+        trace.capture_submission_rosters.push(roster);
         trace.capture_requests.push((
             request.device(),
             request.allocation(),
@@ -90,6 +104,7 @@ impl RuntimeBackendV1 for ThreadBoundBackend {
             trace.capture_panics,
             trace.capture_backing_pending,
         );
+        let pause = trace.capture_pause.take();
         drop(trace);
         if pending {
             return Err(RuntimeBackendFailureV1::Rejected(
@@ -102,6 +117,13 @@ impl RuntimeBackendV1 for ThreadBoundBackend {
                 return Err(RuntimeBackendFailureV1::Terminal(error));
             }
             return Err(RuntimeBackendFailureV1::Rejected(error));
+        }
+        if let Some((entered, release)) = pause {
+            request.destination_mut()[0] = 0x5a;
+            entered.send(()).unwrap();
+            release
+                .recv_timeout(Duration::from_secs(5))
+                .expect("capture test did not release its private copy");
         }
         request.destination_mut().fill(0x5a);
         assert!(!panics, "capture adapter panic after private copy");
@@ -125,7 +147,19 @@ impl RuntimeBackendV1 for ThreadBoundBackend {
         self.inner.poll_v1(submission)
     }
     forward!(wait_v1(submission: u64, deadline: Instant) -> BackendPollV1);
-    forward!(release_submission_v1(submission: u64) -> ());
+    fn release_submission_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.record("release_submission_v1");
+        self.inner.release_submission_v1(submission)?;
+        self.trace
+            .lock()
+            .unwrap()
+            .released_submissions
+            .push(submission);
+        Ok(())
+    }
     forward!(record_event_v1(stream: u64, submission: u64) -> u64);
     forward!(release_event_v1(event: u64) -> ());
     forward!(peer_copy_v1(stream: u64, source: BackendMemoryRegionV1, destination: BackendMemoryRegionV1, dependencies: &[u64]) -> u64);

@@ -1,0 +1,20 @@
+    Checking fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-model)
+    Checking fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-profiler-protocol)
+    Checking fe2o3-debug-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-debug-protocol)
+error: cannot find macro `vec` in this scope
+   --> crates/fe2o3-runtime-model/src/r70_resource_batch.rs:131:23
+    |
+131 |         let charges = vec![bytes(0); R70_MAX_RESOURCE_BATCH_MEMBERS_V1 + 1];
+    |                       ^^^
+    |
+help: consider importing one of these macros
+    |
+ 58 +     use std::vec;
+    |
+ 58 +     use alloc::vec;
+    |
+
+    Checking fe2o3-resource-accounting v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-resource-accounting)
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error: could not compile `fe2o3-runtime-model` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
