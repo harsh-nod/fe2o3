@@ -517,7 +517,16 @@ fn production_barrier_cfg_preserves_order_and_fails_closed() {
     assert!(
         !cyclic.status.success()
             && cyclic.stderr.contains("error[FE2O3-BARRIER-002]")
-            && cyclic.stderr.contains("cyclic control flow"),
+            && cyclic
+                .stderr
+                .contains("contains a barrier, tensor collective, or pipeline event")
+            && cyclic
+                .stderr
+                .contains("lowering stopped before target IR or artifact emission")
+            && !cyclic
+                .stderr
+                .contains("all mandatory kernel checks clean true")
+            && !cyclic.stderr.contains("safety-verified lowering input"),
         "cyclic barrier did not remain incomplete:\n{}",
         cyclic.stderr,
     );
