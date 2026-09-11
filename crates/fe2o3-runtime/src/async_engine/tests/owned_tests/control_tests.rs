@@ -6,6 +6,8 @@ use crate::{
 use std::future::{pending, ready};
 use std::marker::PhantomPinned;
 
+mod completion_tests;
+
 impl crate::RuntimeAsyncCopyBackendV1 for MockBackend {
     fn copy_async_v1(
         &mut self,

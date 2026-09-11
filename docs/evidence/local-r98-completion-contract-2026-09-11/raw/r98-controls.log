@@ -1,0 +1,30 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.50s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 23 tests
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_classifier_borrows_non_clone_errors_without_early_drop ... ok
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_classifier_covers_all_observation_families_without_allocation ... ok
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_existing_reply_gate_is_sticky_and_preserves_credit ... ok
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_terminal_raw_reply_does_not_retire_registry_or_context_custody ... ok
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_ordinary_rejections_keep_one_issue_and_exact_last_error ... ok
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_ordinary_failure_and_quiescent_error_preserve_distinct_raw_results ... ok
+test async_engine::tests::owned_tests::control_tests::r62_cancel_survives_capacity_rejection_and_channel_drop ... ok
+test async_engine::tests::owned_tests::control_tests::r62_completion_inside_timer_poll_preserves_ready_result ... ok
+test async_engine::tests::owned_tests::control_tests::r62_drop_pending_timeout_observer_does_not_withdraw_progress ... ok
+test async_engine::tests::owned_tests::control_tests::r62_cancel_in_channel_and_registry_never_calls_submit ... ok
+test async_engine::tests::owned_tests::control_tests::r62_opaque_control_is_exact_and_survives_observer_drop ... ok
+test async_engine::tests::owned_tests::control_tests::r62_ready_result_wins_and_timer_need_not_be_unpin ... ok
+test async_engine::tests::owned_tests::control_tests::r62_copy_and_peer_use_existing_admission_and_cancellation ... ok
+test async_engine::tests::owned_tests::control_tests::r62_rejected_poll_keeps_exact_submission_and_closed_cancellation ... ok
+test async_engine::tests::owned_tests::control_tests::r62_stop_and_rejection_keep_cancel_and_submission_dispositions_distinct ... ok
+test async_engine::tests::owned_tests::control_tests::r62_timeout_unregisters_old_waker_without_consuming_concurrent_result ... ok
+test async_engine::tests::owned_tests::control_tests::r62_timeout_before_and_after_submission_recovers_same_operation ... ok
+test async_engine::tests::owned_tests::control_tests::r62_timer_wakeup_and_replacement_use_executor_waker ... ok
+test async_engine::tests::owned_tests::control_tests::r62_waker_disposal_can_reenter_reply_and_panic_without_poisoning ... ok
+test async_engine::tests::owned_tests::control_tests::r62_submission_panic_cannot_reopen_cancellation_or_retry ... ok
+test async_engine::tests::owned_tests::control_tests::r62_cancel_vs_owner_race_has_one_winner_and_no_replay ... ok
+test async_engine::tests::owned_tests::control_tests::r62_timeout_racing_completion_retains_exactly_one_result ... ok
+test async_engine::tests::owned_tests::control_tests::r62_thousands_of_tracked_operations_mix_timeout_cancel_and_drop ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 692 filtered out; finished in 0.20s
+

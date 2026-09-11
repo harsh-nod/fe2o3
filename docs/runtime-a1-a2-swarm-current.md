@@ -8,6 +8,15 @@ The issue was checked through the GitHub API and remains open; its reported
 This document supersedes the immediate assignment rows in the
 [detailed dispatch](runtime-a1-a2-swarm-dispatch-r83.md) and
 [next-wave roadmap](runtime-a1-a2-next-wave.md), not their historical evidence.
+R98 locally accepts **CO-1**, the production-used completion classifier and six
+focused CPU tests, plus **VER-1A.1 contract/inventory only**, above signed R97
+`1b53ef417d0f4184e2b4e6024b37271b5f719832`. The
+[R98 record](evidence/local-r98-completion-contract-2026-09-11/README.md)
+contains seventeen successful source gates, eight auxiliary checks and four
+compiled behavioral negatives. GNU/musl each pass 2,537 tests with five ignored;
+all 5,653 non-documentation source identities match. No solver, live KFD or
+performance acceptance is added. Next: **.5B-2 + CO-2A + VER-1A.2**.
+
 R97 locally accepts **NATIVE-2B.5B-1**, production-used outer settlement and the
 named CPU/fake-native prefix matrix, above signed planning checkpoint
 `82c8cd854bc6cb8b300a4f5a6b9a2467827dcc6f` and signed R96
@@ -62,10 +71,25 @@ qualify the concrete Linux platform composition. Callback failures are tested
 before allocating/returning owners, not for callback-internal unreturned custody.
 Append-only pending-slot tests do not qualify native released-slot reuse.
 
+### Accepted R98 Scope
+
+The [CO-1 classifier](runtime-completion-observation-contract-v1.md) is now
+implemented and consumed by ordinary operation progress. Six frozen/restored
+tests and four compiled behavioral negatives pass; all 5,653 source identities
+are exactly restored. Full GNU/musl suites each pass 2,537 tests with five ignored.
+All seventeen full-source gates and eight focused lifecycle/audit checks pass.
+The earlier six-pass formatting-overlap run is not acceptance.
+
+Resources' [VER-1A.1 contract/inventory](runtime-context-version-journal-v1.md)
+now exists and has been independently reviewed. Journal/model implementation is
+still absent. Ordered writers and recovery are mandatory before whole-surface
+reuse; the initial one-writer profile must not silently restrict ordinary work.
+No new formal, live KFD or performance acceptance follows from either packet.
+
 ## Swarm Ownership
 
 At the user's renewed swarm request, three existing workers independently
-reviewed the current source, the R97 candidate and the remaining roadmap. They
+reviewed the current source, R98 acceptance and the remaining roadmap. They
 returned the bounded work orders below. Their read-only review turns
 are complete. The implementation queues below are assignments, not unattended
 background jobs. Primary owns
@@ -75,43 +99,43 @@ Context/backend/queue changes and builds are serialized.
 | Lane and worker | First bounded task | Follow-on queue |
 | --- | --- | --- |
 | Native: `r66_native_coexistence` | .5B-2 local platform composition after accepted .5B-1 | .5B-3 CREATE and installation matrix -> replacement/insertion -> generated data adoption -> native publication handoff |
-| Admission: `r66_runtime_coexistence` | CO-1 allocation-free completion classifier consumed by ordinary operation progress | Exact identity -> reply/custody composition -> issue/completion integration -> typed future -> generated graph/drain |
-| Resources: `r66_coexistence_model` | VER-1A.1 Context journal contract and complete mutation inventory | Model/proofs -> bounded journal -> mutation hooks -> cross-run leases; aggregate budgets and residency |
-| Primary | Integrate the next reviewed .5B-2, CO-1 or VER-1A.1 packet without conflicting shared edits | Cross-lane integration, formal correspondence, hardware scheduling, matched benchmarks and signed pushes to both topic remotes |
+| Admission: `r66_runtime_coexistence` | CO-2A exact Context submission-identity tests | CO-2B descriptive identity and CO-3 reply/custody composition -> issue/completion integration -> typed future -> generated graph/drain |
+| Resources: `r66_coexistence_model` | VER-1A.2 executable journal model and property proofs after the reviewed contract | Bounded journal -> complete mutation hooks, ordered writers and recovery -> cross-run leases; aggregate budgets and residency |
+| Primary | Integrate .5B-2, CO-2A and VER-1A.2 without conflicting shared edits | Cross-lane integration, formal correspondence, hardware scheduling, matched benchmarks and signed pushes to both topic remotes |
 
 ### Immediate Handoffs
 
 | Lane | First deliverable | Source boundary and cross-review |
 | --- | --- | --- |
 | Native | .5B-2 fixture setup before successful primary construction, then the unchanged shared auxiliary driver | KFD primary `integration_platform.rs`, auxiliary integration tests and `queue_linux/primary_fixture.rs`. Resources checks charges; Admission checks terminal-outcome meaning. |
-| Admission | CO-1 allocation-free observation classifier, real production consumer and focused tests | Proposed runtime `async_engine/generated_operation/completion_contract.rs`; Primary wires ordinary `async_engine/operation.rs::Operation::advance`. Native reviews outcome authority; no native receipts are invented. |
-| Resources | Proposed `docs/runtime-context-version-journal-v1.md`: identity/capacity contract and complete Context mutation/retirement inventory | Inspect existing `context.rs` and its children; proposed journal belongs in `context/versions.rs`. Admission reviews settlement-before-callback ordering; Native reviews logical-to-native identity preservation. |
+| Admission | CO-2A five-case submission-identity matrix using the existing Context validators | New `context/tests/submission_identity_tests.rs`; Primary wires `context.rs`. Resources checks stale/reused identity; Native checks rejection before backend entry. No replacement validator or native receipt. |
+| Resources | VER-1A.2 production-consumed model and property-specific proofs/negatives | New `runtime-model/src/context_version_journal.rs` and corresponding proof sources; Primary owns exports and authenticated pins. Admission reviews settlement ordering; Native reviews identity preservation. |
 | Primary | Integrate one reviewed packet at a time and record its exact acceptance scope | Shared Context/backend/queue edits, builds, proof runs, hardware and publication remain serialized. |
 
-CO-1 and VER-1A.1 do not wait for .5B. The .5B test designs can be reviewed
-independently, but their source edits share fixtures and must be integrated
-serially. Neither `completion_contract.rs` nor `context/versions.rs` exists at
-this checkpoint; their rows are assignments, not implementation claims.
-
-The first execution wave is **.5B-2 + CO-1 + VER-1A.1**. CO-2 and CO-3 follow
-the frozen CO-1 interface; Resources then takes the executable model before the
-journal implementation. The Native .5B-2/.5B-3 designs can be reviewed now, but
-their integration now follows accepted .5B-1 and shares the primary trace, platform
-and memory fixtures. Do not defer all Admission/Resources work until Native
-finishes. Shared module wiring, Context mutation hooks, backend issue and fixture
-edits still pass through Primary one packet at a time.
+R98 supplies `completion_contract.rs` and the reviewed journal contract;
+`context/versions.rs` and its executable model remain absent. After accepted
+R98, the next execution wave is **.5B-2 + CO-2A + VER-1A.2**. CO-2B descriptor
+coverage and the CO-3 gap audit can use the next available review slot without
+waiting for native adoption. Resources implements the model before the journal.
+The .5B-2/.5B-3 designs are independently reviewable, but their integration shares
+the primary trace, platform and memory fixtures. Shared module wiring, Context
+mutation hooks, backend issue and fixture edits pass through Primary one packet
+at a time.
 
 ### Ready And Dependent Work
 
 | Wave | Native | Admission | Resources |
 | --- | --- | --- | --- |
-| Ready now | .5B-2 local helper composition; review .5B-3 matrix | Implement production-used CO-1 | Write VER-1A.1 contract and complete mutation inventory |
-| After each lane's first gate | .5B-3 complete CREATE/install matrix | CO-2 identity and CO-3 lifecycle composition against frozen CO-1 | VER-1A.2 executable model/proofs, then .3 bounded journal |
-| Integration | 2C replacement/insertion, then nonpublishing DATA-ADOPT | ISSUE with Native, then CO-4/COMPLETE and typed API | .4/.5 initial mutation hooks, then complete VER-1B coverage |
+| Ready now | .5B-2 local helper composition; review .5B-3 matrix | CO-2A Context identity; independently review CO-2B and CO-3 | VER-1A.2 executable model/proofs |
+| After each lane's first gate | .5B-3 complete CREATE/install matrix | CO-2B descriptor matrix and CO-3 lifecycle composition | VER-1A.3 bounded journal |
+| Integration | 2C replacement/insertion, then nonpublishing DATA-ADOPT | ISSUE with Native, then CO-4/COMPLETE and typed API | .4/.5 initial mutation hooks, then complete VER-1B with ordered writers and recovery |
 | A1/A2 closure | Native depth, memory pressure and overlap qualification | Generated GRAPH/DRAIN and end-to-end typed execution | VER-2 cross-run leases, aggregate accounting and residency closure |
 
-CO-2/3 do not require native adoption. First non-reusing ISSUE does not require
-cross-run leases, but its mutation hook must be specified with Resources.
+CO-2A/2B and the preissue CO-3 contract/oracle do not require native adoption.
+Native identity checks join actual DATA-ADOPT/ISSUE records and close at CO-4;
+ISSUE cannot depend on preexisting proof of its own publication receipt.
+First non-reusing ISSUE does not require cross-run leases, but its mutation hook
+must be specified with Resources.
 Cross-run reuse does require complete VER-1B and VER-2. Formal correspondence is
 reviewed with each packet; it is not deferred to the final hardware wave.
 
@@ -177,6 +201,13 @@ protection, restore, publication and cleanup helpers; do not create a second
 constructor or a fake production runtime descriptor whose Drop touches the
 process-global gate.
 
+The test-local `LocalRuntimeRegistrationV1` should retain the exact local gate,
+opener PID and runtime phase, using existing `admit_runtime`,
+`commit_first_enabled` and `admit_runtime_transition` helpers. Its Drop poisons
+only that local gate, not a fabricated successful native disable. Update the
+existing primary fixture's post-Drop expectation accordingly; observe owner
+identity independently of whether the retained gate has become poisoned.
+
 The first matrix covers success, arm/event/install rejection, shadow-init and
 restore error/panic, cleanup panic before/after disposal, late doorbell/gate
 failure and cross-event substitution. Assert original primary retention,
@@ -199,7 +230,7 @@ green fixture count.
 
 ## Admission Queue
 
-1. **CO-1: outcomes, independently ready.** Separate observations, reply
+1. **CO-1: locally accepted R98.** Separate observations, reply
    disposition and permission to dispose owners. Table-test pending, rejected,
    success-candidate, failure/cancellation, quiescence without result, uncertainty
    and already-settled states. Success observation alone permits no decode or
@@ -213,7 +244,9 @@ green fixture count.
    observer loss, Stop/shutdown and waker replacement. Assert callback ordering,
    zero/one adapter calls and one existing reply. Use a data-only adapter;
    runtime must not depend on host-private decoding.
-4. **ISSUE -> CO-4/COMPLETE.** Requires DATA-ADOPT and CO-1/2/3. Exact native
+4. **ISSUE -> CO-4/COMPLETE.** Requires DATA-ADOPT, CO-1, CO-2A/2B and the
+   preissue CO-3 contract/oracle. Native identity checks integrate with ISSUE
+   and close at CO-4. Exact native
    completion, complete readback, closing currentness and native disposition
    precede decode/readiness. Connect the existing R85 decoder; do not reserve
    the R80 reply/readback roster again.
@@ -223,9 +256,9 @@ green fixture count.
    generated graphs, dependencies, accepted-prefix drain and dropped observers.
    Cross-run input reuse additionally requires the complete version journal.
 
-### CO-1 First Handoff
+### CO-1 Implemented Boundary
 
-Add the private classifier at the proposed
+The private classifier is implemented at
 `async_engine/generated_operation/completion_contract.rs`. Its initial real
 production consumer is ordinary `async_engine/operation.rs::Operation::advance`
 after submission, not generated preparation, whose adoption hooks remain absent.
@@ -258,9 +291,55 @@ CO-3 composes the existing reservation/adoption Harness rather than duplicating
 its Stop, observer-loss and waker machinery. Production adoption hooks remain
 absent; R85 decoding is implemented but not native-connected.
 
+### CO-2A Next Handoff
+
+After CO-1 acceptance, exercise the existing Context `submission_record` and
+`live_submission_record` gates without adding another validator. Admission owns
+a proposed `context/tests/submission_identity_tests.rs`; Primary owns its module
+wiring. The five focused cases are:
+
+1. Change one Context brand, logical submission ID, backend submission, stream
+   or device coordinate at a time, using real neighboring handles where possible.
+2. Exercise poll, wait, pure query, event recording, completion callbacks and
+   consuming release. Reject before backend calls, callback delivery or record
+   changes; rejected consuming release returns the supplied handle.
+3. A cached successful status, in either the handle or retained record, cannot
+   bypass exact identity validation.
+4. Reusing a backend ID after genuine release cannot revive the old logical
+   submission or affect its replacement owner.
+5. Preserve live-versus-retained semantics: pure queries retain their existing
+   behavior after stream destruction/Context terminal, while native observation
+   enforces live binding and existing terminal/graph-reservation precedence.
+
+Existing prepared/reserved/active-key replay, cross-Context handles and
+byte-identical generated-source substitution tests already execute. Reuse them.
+Separate source-roster work still needs every descriptor coordinate and the
+immutable-source positive path after one-shot control transfer. Lane,
+queue/publication occurrence and allocation incarnations require actual
+DATA-ADOPT/ISSUE records; descriptive fixtures cannot close native identity.
+CO-2A closes only Context submission-identity coverage, not full CO-2.
+
+### CO-2B And CO-3 Follow-On Packets
+
+CO-2B owns a new `authorized_execution/tests/generated_identity.rs`, with Primary
+wiring `authorized_execution.rs`. Independently mutate every
+`GeneratedHostRosterV1::matches` coordinate, including trailing slots, and add
+the immutable-source positive case after one-shot control transfer. Rejection
+must preserve original source/control and buffer identity. These are descriptive
+checks, not native queue/publication/allocation receipts.
+
+CO-3 owns a gap-only matrix under
+`async_engine/tests/owned_tests/preparation_tests/completion_tests.rs`, reusing
+the R80/R83 Harness, reply cell, registry and owner probes. Cover rejection,
+observer loss, Stop, shutdown, waker replacement, adapter panic and ambiguous
+retirement without a second reply, reissue or premature owner disposal. A
+counted data-only adapter contract can be reviewed now; native readback-adapter
+assertions remain oracle-only until ISSUE/COMPLETE supplies actual callbacks.
+Do not recreate the already-executed preparation/reservation/Stop/waker tests.
+
 ## Resources Queue
 
-1. **VER-1A.1: contract/inventory, independently ready.** Freeze exact
+1. **VER-1A.1: reviewed contract/inventory present.** Freeze exact
    Context/allocation/device/writer identities, finite capacity, nonwrapping
    `Available/Pending/Unknown` versions, whole-destination rosters and retirement
    rules. Graph-local history is not persistent Context authority.
@@ -273,7 +352,9 @@ absent; R85 decoding is implemented but not native-connected.
    ordinary/graph-copy hooks, preserving logical destinations before backend
    translation. Invalidate before effects and settle before callbacks. Extend
    one mutation family at a time through peer copies, every launch family,
-   generated issue, currentness, cancellation, cleanup and retirement.
+   generated issue, currentness, cancellation, cleanup and retirement. Complete
+   ordered overlapping writers and Unknown recovery before whole-surface reuse;
+   an opt-in one-writer staging profile cannot restrict ordinary work silently.
 4. **VER-2: input leases.** Enable only after complete mutation coverage. Reject
    outside-graph writes, overlaps, stale/foreign/replayed identities and unknown
    publication. Caller-declared kernel access is insufficient authority.
@@ -295,7 +376,11 @@ single-account credits are not aggregate domains. Complete version hooks block
 cross-run input leases, not the first non-reusing generated ISSUE; freeze that
 submission's mutation hook now without inventing a second identity allocator.
 
-### VER-1A.1 First Handoff
+### VER-1A.1 Contract Boundary
+
+The reviewed [contract and inventory](runtime-context-version-journal-v1.md)
+is the input to VER-1A.2, not another drafting assignment. It does not implement
+the executable model, Context journal, hooks or cross-run leases.
 
 Freeze a separate journal/profile capacity and reject allocation admission before
 creating an untrackable allocation. Context's 1,048,576-entry bounds and the
@@ -326,8 +411,10 @@ settlement commits the new lineage. A separately named `NoEffect` settlement
 requires exact, attempt-bound definite-no-write evidence and restores the prior
 lineage without rolling back the attempt epoch or Context identity. Rejected
 poll/query observations for an already issued writer are not `NoEffect`
-evidence. Cancellation, quiescence without result and unknown publication cannot
-restore reusable authority. Test wrong/omitted roster members, epoch wrap,
+evidence. Generic cancellation status, quiescence without result and unknown
+publication alone cannot restore reusable authority. Exact attempt-bound
+no-write cancellation receipts remain a required evidence-producer follow-on.
+Test wrong/omitted roster members, epoch wrap,
 NoEffect epoch rollback, rejected polling as NoEffect and lineage zero being
 misinterpreted as initialized contents.
 
@@ -339,6 +426,7 @@ misinterpreted as initialized contents.
 | MEM-N1B-1 -> N1B-2 -> MEM-3 | Native backing, then AQL/USERPTR/control/occupied-slot integration with Native | Whole compound admission before effects; exact retained allocation/map/error/panic prefixes. Reuse R70 admission and existing ledgers. |
 | MEM-4A -> 4B | Isolated host-image ceiling now; native residency after backing/control integration | Repeated loads, live leases, rejected eviction and ambiguous unload. Executable GTT is not VRAM. |
 | PRF + MEM-5 | Incremental adapter correspondence and total resource inventory | Include commands, captures, results, journals, arenas, quarantined roots and callback/panic-payload exclusions; authenticate named properties separately from tests and hardware. |
+| CO-PROOF | After the frozen CO-1 interface; isolated model/proofs, Primary-owned runtime projection and registry wiring | One production-consumed normalized policy, Pending/rejection retention and terminal/panic precedence. Reuse R61/R62/R64; prove the named shared definitions and separately identify Rust enum/ownership/native correspondence gaps. |
 
 R65 graph-local history, R67/R70 single-account credits, optional N1/N2 backing
 budgets, both cache policies and R73/R80/R85 charged storage already exist.
@@ -349,9 +437,10 @@ or newer adapter refinement.
 ## Integration And Qualification
 
 ```text
-R97 .5B-1 -> .5B-2/.5B-3 -> 2C -> DATA-ADOPT ---+
-CO-1 -> CO-2/CO-3 -----------------------------+-> ISSUE -> COMPLETE -> API -> GRAPH/DRAIN
-VER-1A -> complete VER-1B -> VER-2 ------------------------------------------> cross-run input reuse
+R97 .5B-1 -> .5B-2/.5B-3 -> 2C -> DATA-ADOPT -----+
+CO-1 -> CO-2A/2B + preissue CO-3 -----------------+-> ISSUE -> COMPLETE -> API -> GRAPH/DRAIN
+                         native identity joins DATA-ADOPT/ISSUE -> CO-4
+VER-1A -> complete VER-1B -> VER-2 --------------------------------------------> cross-run input reuse
 ```
 
 Independently ready work can fill a free worker slot: SCALE-1A correctness

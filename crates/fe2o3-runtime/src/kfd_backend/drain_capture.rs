@@ -217,7 +217,7 @@ pub(in crate::kfd_backend) mod tests {
     #[global_allocator]
     static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-    pub(in crate::kfd_backend) fn counted<R>(operation: impl FnOnce() -> R) -> (R, usize) {
+    pub(crate) fn counted<R>(operation: impl FnOnce() -> R) -> (R, usize) {
         struct Stop;
         impl Drop for Stop {
             fn drop(&mut self) {

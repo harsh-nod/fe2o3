@@ -1,0 +1,15 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 23s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 6 tests
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_classifier_covers_all_observation_families_without_allocation ... ok
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_classifier_borrows_non_clone_errors_without_early_drop ... ok
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_existing_reply_gate_is_sticky_and_preserves_credit ... ok
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_ordinary_rejections_keep_one_issue_and_exact_last_error ... ok
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_terminal_raw_reply_does_not_retire_registry_or_context_custody ... ok
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_ordinary_failure_and_quiescent_error_preserve_distinct_raw_results ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 709 filtered out; finished in 0.01s
+

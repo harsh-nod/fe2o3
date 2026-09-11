@@ -1,7 +1,17 @@
 # A1/A2 Next-Wave Dispatch
 
 Use the [current work-order board](runtime-a1-a2-swarm-current.md) for immediate
-assignments. R97 now locally accepts .5B-1's production-used auxiliary outer
+assignments. R98 locally accepts the CO-1 classifier and VER-1A.1 journal
+contract/inventory only, with [retained evidence](evidence/local-r98-completion-contract-2026-09-11/README.md).
+Seventeen source gates, eight auxiliary checks and four compiled behavioral
+negatives pass; GNU/musl each pass 2,537 tests with five ignored. All 5,653 source
+identities match. No journal, new proof, live KFD or performance is accepted.
+The next three packets are **.5B-2**, **CO-2A** and
+**VER-1A.2**. CO-2B descriptor coverage and the preissue CO-3 contract/oracle
+are independently reviewable. Native identity checks integrate with
+DATA-ADOPT/ISSUE and close at CO-4, not before their records exist.
+
+R97 locally accepts .5B-1's production-used auxiliary outer
 settlement, with [final evidence](evidence/local-r97-auxiliary-outer-settlement-2026-09-11/README.md):
 seventeen source gates, twelve auxiliary checks, four compiled behavioral
 negatives and 2,531 tests per GNU/musl target pass. Frozen/restored focused
@@ -12,9 +22,8 @@ historical acceptance below applies to its named source only.
 
 The renewed three-agent breakdown assigns Native **.5B-2 local platform
 composition**, then **.5B-3 CREATE/install coverage**, 2C and DATA-ADOPT.
-Admission independently starts the production-used CO-1 classifier in ordinary
-operation progress; Resources starts the VER-1A.1 Context journal
-contract/inventory, including exact NoEffect settlement without attempt-epoch
+Admission next takes Context identity coverage; Resources takes the executable
+journal model/proofs, including exact NoEffect settlement without attempt-epoch
 rollback. Three read-only workers completed these source-grounded handoffs;
 Primary owns edits and serialized integration. The current board records the
 exact ready, dependent and qualification work; earlier assignment rows below
@@ -178,10 +187,10 @@ Under the current ownership policy workers are read-only; Primary owns edits.
 
 | Worker | First bounded packet | Follow-on queue | Exit gate for first packet |
 | --- | --- | --- | --- |
-| Native: `r66_native_coexistence` | NATIVE-2B.5 integrated auxiliary acceptance, then 2C replacement/insertion | NATIVE-3 DATA-ADOPT; ISSUE native interface; SCALE-1A fixtures; native-budget and R76/R78/R82 qualification harnesses; admitted profiles and capacity | Exercise R95's actual sequence with original preparation/shared engine/platform ownership at every failure boundary. Its synthetic-parent and scripted-loan tests do not qualify complete auxiliary CREATE/doorbell behavior. |
-| Admission: `r66_runtime_coexistence` | CO-1 outcome contract, then CO-2 identity and CO-3 reply/custody fixtures | CO-4 native completion integration with ISSUE -> COMPLETE -> API -> generated graph/drain | Runtime fixtures count data-only completion-adapter calls without reversing the host/runtime dependency. Actual R85/native integration follows adoption and issue; no duplicate decoder or reply reservation. |
-| Resources: `r66_coexistence_model` | VER-1A.1 contract/inventory -> .2 model -> .3 journal -> .4 initial write/copy hooks -> .5 acceptance | VER-1B complete hooks; aggregate domains; remaining backing/control/code budgets; VER-2 leases; MEM-5 closure | Nonwrapping Available/Pending/Unknown whole-allocation versions; bounded, atomic whole-roster admission/settlement. Cross-run leases remain disabled until every mutation hook is integrated. |
-| Primary | Preserve R95's local acceptance; complete 2B.5/2C and integrate runtime/journal packets before DATA-ADOPT | Cross-review, executable refinement, signed hardware qualification and matched performance | Serialize shared edits/builds/proofs and preserve R80 credit ownership. Accept CPU, proof, Linux and performance results separately; publish signed accepted packets to both topic remotes. |
+| Native: `r66_native_coexistence` | .5B-2 local platform composition, then .5B-3 CREATE/install coverage and 2C | DATA-ADOPT; ISSUE native interface; SCALE-1A fixtures; native-budget and R76/R78/R82 qualification harnesses | Extend R97's shared driver and actual loan/reclaim with exact local runtime/gate/phase ownership. Auxiliary-only unpublished cleanup and both published payloads retained after late failure. No live KFD claim. |
+| Admission: `r66_runtime_coexistence` | CO-2A Context submission identity, then CO-2B descriptive identity and preissue CO-3 fixtures | ISSUE/native identity -> CO-4/COMPLETE -> API -> generated graph/drain | Five-case matrix covers all observation/release ingress, cached-success bypass and backend-ID reuse without backend entry or unrelated-owner changes. Reuse existing validators, reply and decoder. |
+| Resources: `r66_coexistence_model` | VER-1A.2 model/proofs -> .3 bounded journal -> .4/.5 initial hooks | Complete VER-1B, ordered writers/recovery; VER-2 leases; aggregate domains; backing/control/code budgets; MEM-5 | Atomic whole-roster admission/settlement, exact writers, nonwrapping attempt epochs and exact NoEffect lineage. Model proof alone is not Context refinement; cross-run leases wait for complete coverage. |
+| Primary | Preserve R98 acceptance and serialize the three next packets | Shared-source integration, executable refinement, signed hardware qualification and matched performance | Preserve existing ownership; accept CPU, proof, Linux and performance results separately; publish signed accepted packets to both topic remotes. |
 
 ADOPT-LIFE and DATA-ADOPT are coupled contracts; neither may introduce effects
 before their custody interface is integrated. VER-1A is independent. COMPLETE's
@@ -195,7 +204,8 @@ The critical path is:
 ```text
 accepted R84 + R83 + R82 + R80 -> DATA-ADOPT
 R86 through R91 + R92 primary root -> remaining NATIVE-2 custody -> DATA-ADOPT
-DATA-ADOPT + CO-1/2/3 -> ISSUE -> CO-4 / COMPLETE -> API -> GRAPH/DRAIN
+DATA-ADOPT + CO-1/2A/2B + preissue CO-3 -> ISSUE -> CO-4 / COMPLETE -> API -> GRAPH/DRAIN
+actual native identity checks join DATA-ADOPT/ISSUE and close at CO-4
 accepted R85 private host substrate + ISSUE -> runtime COMPLETE
 VER-1A -> complete VER-1B mutation hooks -> VER-2 cross-run input leases
 ```

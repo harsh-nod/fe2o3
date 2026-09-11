@@ -1,0 +1,22 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--lib",
+    "async_engine::tests::owned_tests::control_tests::completion_tests::co1_terminal_raw_reply_does_not_retire_registry_or_context_custody",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r98-mut-terminal-class.log",
+  "source": "/home/harsh/.codex-tmp/r98-mut-terminal-class-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "elapsed_seconds": 110.765
+}

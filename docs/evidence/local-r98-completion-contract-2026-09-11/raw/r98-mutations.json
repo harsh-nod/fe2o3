@@ -1,0 +1,30 @@
+[
+  {
+    "name": "rejected-class",
+    "path": "crates/fe2o3-runtime/src/async_engine/generated_operation/completion_contract.rs",
+    "edits": [["Err(RuntimeErrorV1::BackendRejected(_)) => Class::Rejected,", "Err(RuntimeErrorV1::BackendRejected(_)) => Class::ObservationError,"]],
+    "test": "async_engine::tests::owned_tests::control_tests::completion_tests::co1_ordinary_rejections_keep_one_issue_and_exact_last_error",
+    "expected": ["assertion failed: !driver.advance(&mut h.context)"]
+  },
+  {
+    "name": "pending-class",
+    "path": "crates/fe2o3-runtime/src/async_engine/generated_operation/completion_contract.rs",
+    "edits": [["Ok(RuntimeCompletionStatusV1::Pending) => Class::Pending,", "Ok(RuntimeCompletionStatusV1::Pending) => Class::SuccessCandidate,"]],
+    "test": "async_engine::tests::owned_tests::control_tests::completion_tests::co1_ordinary_rejections_keep_one_issue_and_exact_last_error",
+    "expected": ["assertion failed: !driver.advance(&mut h.context)"]
+  },
+  {
+    "name": "error-precedence",
+    "path": "crates/fe2o3-runtime/src/async_engine/operation.rs",
+    "edits": [["Err(error) => Err(error),", "Err(_error) => context.query_submission(submission).map_err(RuntimeErrorV1::from),"]],
+    "test": "async_engine::tests::owned_tests::control_tests::completion_tests::co1_ordinary_failure_and_quiescent_error_preserve_distinct_raw_results",
+    "expected": ["assertion failed: matches!(result.observation,"]
+  },
+  {
+    "name": "terminal-class",
+    "path": "crates/fe2o3-runtime/src/async_engine/generated_operation/completion_contract.rs",
+    "edits": [["| RuntimeErrorV1::Validation(RuntimeValidationErrorV1::ContextTerminal),\n        ) => Class::Terminal,", "| RuntimeErrorV1::Validation(RuntimeValidationErrorV1::ContextTerminal),\n        ) => Class::Pending,"]],
+    "test": "async_engine::tests::owned_tests::control_tests::completion_tests::co1_terminal_raw_reply_does_not_retire_registry_or_context_custody",
+    "expected": ["terminal error must reach the existing reply"]
+  }
+]

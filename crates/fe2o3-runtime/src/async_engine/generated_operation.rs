@@ -6,6 +6,7 @@ use crate::{RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedReservationEr
 use operation::{EngineOperationFactoryV1, EngineOperationV1, stop_reply};
 
 pub(super) mod adoption;
+pub(super) mod completion_contract;
 mod reservation;
 pub(super) use reservation::ReserveCommandV1;
 pub use reservation::*;

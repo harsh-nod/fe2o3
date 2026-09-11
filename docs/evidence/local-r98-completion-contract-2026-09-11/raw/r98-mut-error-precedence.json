@@ -1,0 +1,22 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "--lib",
+    "async_engine::tests::owned_tests::control_tests::completion_tests::co1_ordinary_failure_and_quiescent_error_preserve_distinct_raw_results",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r98-mut-error-precedence.log",
+  "source": "/home/harsh/.codex-tmp/r98-mut-error-precedence-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "elapsed_seconds": 49.5
+}

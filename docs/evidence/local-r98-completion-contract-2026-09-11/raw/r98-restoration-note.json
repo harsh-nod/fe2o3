@@ -1,0 +1,8 @@
+{
+  "command": ["node", "/home/harsh/.codex-tmp/r98-mutation-patch.js", "terminal-class", "restore"],
+  "returncode": 1,
+  "diagnostic": "AssertionError [ERR_ASSERTION]: exact unique replacement; 3 !== 2",
+  "stage": "patch generation before any restoration edit",
+  "correction": "Add the adjacent ContextTerminal pattern to both sides of the manifest edit. This reconstructs the same already-tested mutant bytes and makes the reverse match unique.",
+  "acceptance": "Not a test result. Exact frozen-source restoration and a fresh positive run are still required."
+}

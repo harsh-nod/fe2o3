@@ -7,6 +7,8 @@ use crate::{
 };
 use std::collections::{BTreeMap, VecDeque};
 
+use generated_operation::completion_contract::{CompletionClassV1, classify_completion_v1};
+
 mod factory;
 pub(super) use factory::{EngineOperationFactoryV1, stop_reply};
 
@@ -400,27 +402,29 @@ impl<B: RuntimeBackendV1, A> EngineOperationV1<B> for Operation<B, A> {
             .submission
             .as_mut()
             .expect("accepted operation retains submission");
-        if let Err(error) = context.poll(submission) {
-            match error {
-                RuntimeErrorV1::BackendRejected(error) => {
-                    self.rejected_observations = self.rejected_observations.saturating_add(1);
-                    self.last_rejected_observation = Some(error);
-                    return false;
-                }
-                error => {
-                    self.finish(Err(error));
-                    return true;
-                }
+        let observation = match context.poll(submission) {
+            Ok(_) => context
+                .query_submission(submission)
+                .map_err(RuntimeErrorV1::from),
+            Err(error) => Err(error),
+        };
+        match classify_completion_v1(&observation) {
+            CompletionClassV1::Pending => false,
+            CompletionClassV1::Rejected => {
+                let Err(RuntimeErrorV1::BackendRejected(error)) = observation else {
+                    unreachable!("classifier preserves rejected observation");
+                };
+                self.rejected_observations = self.rejected_observations.saturating_add(1);
+                self.last_rejected_observation = Some(error);
+                false
             }
-        }
-        match context.query_submission(submission) {
-            Ok(RuntimeCompletionStatusV1::Pending) => false,
-            Ok(status) => {
-                self.finish(Ok(status));
-                true
-            }
-            Err(error) => {
-                self.finish(Err(error.into()));
+            CompletionClassV1::SuccessCandidate
+            | CompletionClassV1::Failed(_)
+            | CompletionClassV1::QuiescentWithoutResult
+            | CompletionClassV1::QuiescentError
+            | CompletionClassV1::Terminal
+            | CompletionClassV1::ObservationError => {
+                self.finish(observation);
                 true
             }
         }

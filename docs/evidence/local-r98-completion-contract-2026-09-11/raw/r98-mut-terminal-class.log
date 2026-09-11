@@ -1,0 +1,22 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 34s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 1 test
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_terminal_raw_reply_does_not_retire_registry_or_context_custody ... FAILED
+
+failures:
+
+---- async_engine::tests::owned_tests::control_tests::completion_tests::co1_terminal_raw_reply_does_not_retire_registry_or_context_custody stdout ----
+
+thread 'async_engine::tests::owned_tests::control_tests::completion_tests::co1_terminal_raw_reply_does_not_retire_registry_or_context_custody' (2824873) panicked at crates/fe2o3-runtime/src/async_engine/tests/owned_tests/control_tests/completion_tests.rs:256:9:
+terminal error must reach the existing reply
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    async_engine::tests::owned_tests::control_tests::completion_tests::co1_terminal_raw_reply_does_not_retire_registry_or_context_custody
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 714 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

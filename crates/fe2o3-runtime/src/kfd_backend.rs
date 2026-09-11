@@ -89,6 +89,8 @@ use allocation_table::AllocationTableV1;
 mod compute_dispatch;
 mod compute_state;
 mod drain_capture;
+#[cfg(test)]
+pub(crate) use drain_capture::tests::counted as counted_allocations_for_test_v1;
 mod generated_preparation;
 mod generated_shells;
 pub(crate) use generated_shells::GeneratedShellBindingV1;

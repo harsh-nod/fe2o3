@@ -1,0 +1,22 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 03s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 1 test
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_ordinary_rejections_keep_one_issue_and_exact_last_error ... FAILED
+
+failures:
+
+---- async_engine::tests::owned_tests::control_tests::completion_tests::co1_ordinary_rejections_keep_one_issue_and_exact_last_error stdout ----
+
+thread 'async_engine::tests::owned_tests::control_tests::completion_tests::co1_ordinary_rejections_keep_one_issue_and_exact_last_error' (2812097) panicked at crates/fe2o3-runtime/src/async_engine/tests/owned_tests/control_tests/completion_tests.rs:139:9:
+assertion failed: !driver.advance(&mut h.context)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    async_engine::tests::owned_tests::control_tests::completion_tests::co1_ordinary_rejections_keep_one_issue_and_exact_last_error
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 714 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

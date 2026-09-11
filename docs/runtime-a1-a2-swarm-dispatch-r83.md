@@ -1,4 +1,18 @@
-# A1/A2 Swarm Dispatch At R97 Outer Settlement
+# A1/A2 Swarm Dispatch At R98 Completion Contract
+
+Use the [current work-order board](runtime-a1-a2-swarm-current.md) for immediate
+assignments. R98 locally accepts CO-1 and VER-1A.1 contract/inventory only, with
+[final evidence](evidence/local-r98-completion-contract-2026-09-11/README.md):
+seventeen source gates, eight auxiliary checks, four compiled behavioral
+negatives and 2,537 tests per GNU/musl target with five ignored. All 5,653 source
+identities match. No model/journal, new proof, live KFD or performance is added.
+The next bounded
+wave is Native **.5B-2 local platform composition**, Admission **CO-2A Context
+identity**, and Resources **VER-1A.2 executable model/proofs**. Three read-only
+workers reconciled the packets against current source; Primary owns edits and
+serialized integration. CO-2B and the preissue CO-3 contract/oracle can be
+reviewed independently; native identity checks require actual DATA-ADOPT/ISSUE
+records and close at CO-4. Later rows retain historical acceptance only.
 
 R97 locally accepts NATIVE-2B.5B-1 above signed planning checkpoint
 `82c8cd854bc6cb8b300a4f5a6b9a2467827dcc6f` and signed R96
@@ -12,8 +26,8 @@ pass 53 tests and all 5,651 source identities match. This does not accept full
 local Linux platform composition, complete CREATE/install coverage, new formal
 refinement, live KFD or performance.
 
-The renewed three-worker dispatch assigns Native .5B-2 then .5B-3, Admission
-CO-1, and Resources VER-1A.1 independently. The journal contract must distinguish
+The R97 three-worker dispatch assigned Native .5B-2 then .5B-3, Admission
+CO-1, and Resources VER-1A.1 independently. The journal contract distinguishes
 monotonic attempt epochs, content lineage and initialization/readiness; exact
 NoEffect evidence can restore prior lineage without restoring old epochs.
 Read-only handoffs are complete. Primary retains implementation, integration,
@@ -31,8 +45,9 @@ settlement, new formal refinement or performance acceptance.
 
 The [current work-order board](runtime-a1-a2-swarm-current.md) supersedes the
 immediate assignments below: next is .5B-2 local platform
-composition and .5B-3 CREATE/installation coverage, then 2C. CO-1 and VER-1A.1 remain
-independent. The R95 and earlier sections below retain their historical scope.
+composition and .5B-3 CREATE/installation coverage, then 2C. Admission takes
+CO-2A after accepted R98; Resources takes VER-1A.2 after the reviewed contract.
+The R95 and earlier sections below retain their historical scope.
 
 R95 implements the [auxiliary construction root and checked handoff](runtime-auxiliary-queue-construction-custody-v1.md)
 above signed planning checkpoint `cb29dc6216cdf57c76d1f952264ceed9e257c40a`.

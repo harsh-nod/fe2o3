@@ -1,0 +1,10 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 3 tests
+test async_engine::tests::owned_tests::drain_tests::drn3a_accepted_submit_rejection_resolves_once_without_native_custody_or_reissue ... ok
+test async_engine::tests::owned_tests::drain_tests::drn3a_preissue_cancellation_preserves_accepted_sibling_and_credit_lifetimes ... ok
+test async_engine::tests::owned_tests::drain_tests::drn3a_repeated_observation_rejection_exhausts_drain_without_republishing_or_freeing ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 712 filtered out; finished in 0.02s
+
