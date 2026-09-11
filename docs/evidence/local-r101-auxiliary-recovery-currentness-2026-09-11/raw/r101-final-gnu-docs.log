@@ -1,0 +1,155 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+   Compiling fe2o3-service-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-service-host)
+   Compiling fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 55.52s
+   Doc-tests fe2o3_completion
+
+running 3 tests
+test crates/fe2o3-completion/src/graph.rs - graph::CompletionAuthorityV1 (line 604) - compile fail ... ok
+test crates/fe2o3-completion/src/graph.rs - graph::CompletionGraphV1 (line 270) - compile fail ... ok
+test crates/fe2o3-completion/src/graph.rs - graph::CompletionAuthorityV1 (line 597) - compile fail ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+   Doc-tests fe2o3_host
+
+running 2 tests
+test crates/fe2o3-host/src/generated_runtime_invocation.rs - generated_kfd_invocation::generated_runtime_invocation::AuthenticatedWorkerV3ExecutableV1<K>::prepare_generated_context_invocation (line 257) - compile ... ok
+test crates/fe2o3-host/src/generated_runtime_invocation.rs - generated_kfd_invocation::generated_runtime_invocation::AuthenticatedWorkerV3ExecutableV1<K>::prepare_generated_context_invocation_async (line 325) - compile ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 15 tests
+test crates/fe2o3-host/src/worker_v3_verification_admission.rs - worker_v3_verification_admission::WorkerV3SemanticMachineRefinementReceiptV1 (line 601) - compile fail ... ok
+test crates/fe2o3-host/src/published_direct_link.rs - published_direct_link::ValidatedPublishedDirectLinkSelectionV1 (line 25) - compile fail ... ok
+test crates/fe2o3-host/src/authenticated_service_queue.rs - authenticated_service_queue::AuthenticatedServiceQueueSessionV1<N>::destroy_and_release (line 781) - compile fail ... ok
+test crates/fe2o3-host/src/generated_kfd_invocation.rs - generated_kfd_invocation::WorkerV3ApplicationExecutionBindingV1 (line 319) - compile fail ... ok
+test crates/fe2o3-host/src/compiler_execution_current_record_audit.rs - compiler_execution_current_record_audit::InheritedWorkerV3CompilerCurrentRecordAuditorV1 (line 366) - compile fail ... ok
+test crates/fe2o3-host/src/compiler_execution_current_record_audit.rs - compiler_execution_current_record_audit::WorkerV3CompilerCurrentRecordAuditV1 (line 124) - compile fail ... ok
+test crates/fe2o3-host/src/generated_runtime_arguments.rs - generated_runtime_arguments::GeneratedRuntimeChargedArgumentsV1 (line 775) - compile fail ... ok
+test crates/fe2o3-host/src/generated_runtime_arguments.rs - generated_runtime_arguments::GeneratedRuntimeReadSlice (line 392) - compile fail ... ok
+test crates/fe2o3-host/src/generated_runtime_results.rs - generated_runtime_results::ChargedTypedResultV1 (line 68) - compile fail ... ok
+test crates/fe2o3-host/src/compiler_execution_current_record_audit.rs - compiler_execution_current_record_audit::WorkerV3CompilerCurrentRecordEvidenceViewV1 (line 43) - compile fail ... ok
+test crates/fe2o3-host/src/worker_v3_verification_admission.rs - worker_v3_verification_admission::WorkerV3SemanticMachineRefinementReceiptV1 (line 612) - compile fail ... ok
+test crates/fe2o3-host/src/generated_runtime_results.rs - generated_runtime_results::ChargedTypedResultV1 (line 73) - compile fail ... ok
+test crates/fe2o3-host/src/generated_runtime_results.rs - generated_runtime_results::GeneratedRuntimeChargedResultV1 (line 245) - compile fail ... ok
+test crates/fe2o3-host/src/worker_v3_verification_admission.rs - worker_v3_verification_admission::WorkerV3RosterLoadEnvelopeEvidenceViewV1 (line 2394) - compile fail ... ok
+test crates/fe2o3-host/src/application_descriptor_handoff.rs - application_descriptor_handoff::consume_inherited_worker_v3_application_roster_handoff_v1 (line 250) - compile fail ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+all doctests ran in 11.52s; merged doctests compilation took 10.47s
+   Doc-tests fe2o3_kfd
+
+running 27 tests
+test crates/fe2o3-kfd/src/queue_dispatch_binding.rs - queue::dispatch_binding::Gfx942FixedDispatchPacketV1 (line 160) - compile fail ... ok
+test crates/fe2o3-kfd/src/persistent_compute.rs - persistent_compute::Gfx942PersistentComputeWaitAndRecycleV1 (line 522) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_live.rs - queue::live::Gfx942ComputeDependencyEventV1 (line 3827) - compile fail ... ok
+test crates/fe2o3-kfd/src/shared_memory.rs - shared_memory::Gfx942InitializedDeviceMemoryV1 (line 481) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_dispatch_binding.rs - queue::dispatch_binding::Gfx942DispatchBatchV1 (line 3054) - compile fail ... ok
+test crates/fe2o3-kfd/src/persistent_allocation.rs - persistent_allocation::Gfx942PersistentUseLeaseV1 (line 259) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_completion.rs - queue::completion::Gfx942CompletedBatchV1 (line 617) - compile fail ... ok
+test crates/fe2o3-kfd/src/persistent_allocation.rs - persistent_allocation::Gfx942PersistentDeviceAllocationV1 (line 442) - compile fail ... ok
+test crates/fe2o3-kfd/src/shared_memory.rs - shared_memory::Gfx942DeviceMemoryLeaseV1 (line 247) - compile fail ... ok
+test crates/fe2o3-kfd/src/persistent_directional_sdma.rs - persistent_directional_sdma::Gfx942DirectionalQueuePersistentAllocationV1 (line 165) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_dispatch_binding.rs - queue::dispatch_binding::Gfx942CompletedDispatchBatchV1 (line 3098) - compile fail ... ok
+test crates/fe2o3-kfd/src/shared_memory.rs - shared_memory::Gfx942DeviceMemoryLeaseV1 (line 258) - compile fail ... ok
+test crates/fe2o3-kfd/src/shared_memory.rs - shared_memory::SharedGttAllocationV1 (line 821) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_live.rs - queue::live::ComputeAqlQueueLaneDispatchV1 (line 4366) - compile fail ... ok
+test crates/fe2o3-kfd/src/persistent_allocation.rs - persistent_allocation::Gfx942PersistentUseLeaseV1 (line 252) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_live.rs - queue::live::Gfx942ComputeDependencyDispatchV1 (line 3882) - compile fail ... ok
+test crates/fe2o3-kfd/src/shared_memory.rs - shared_memory::Gfx942InitializedDeviceMemoryV1 (line 473) - compile fail ... ok
+test crates/fe2o3-kfd/src/persistent_sdma.rs - persistent_sdma::Gfx942QueuePersistentAllocationV1 (line 110) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_completion.rs - queue::completion::Gfx942CompletionBatchV1 (line 563) - compile fail ... ok
+test crates/fe2o3-kfd/src/persistent_sdma.rs - persistent_sdma::Gfx942QueuePersistentAllocationV1 (line 103) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_completion.rs - queue::completion::Gfx942CompletionBatchV1 (line 553) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_dispatch_binding.rs - queue::dispatch_binding::Gfx942FixedDispatchDataV1 (line 334) - compile fail ... ok
+test crates/fe2o3-kfd/src/persistent_directional_sdma.rs - persistent_directional_sdma::Gfx942DirectionalQueuePersistentAllocationV1 (line 158) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_device_content.rs - queue::device_content::Gfx942DeviceContentDescriptorV1 (line 77) - compile fail ... ok
+test crates/fe2o3-kfd/src/persistent_allocation.rs - persistent_allocation::Gfx942PersistentDeviceAllocationV1 (line 435) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_dispatch_binding.rs - queue::dispatch_binding::Gfx942DispatchBatchV1 (line 3064) - compile fail ... ok
+test crates/fe2o3-kfd/src/queue_dispatch_binding.rs - queue::dispatch_binding::Gfx942DispatchBatchV1 (line 3072) - compile fail ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.05s
+
+   Doc-tests fe2o3_resource_accounting
+
+running 3 tests
+test crates/fe2o3-resource-accounting/src/lib.rs - RetainedResourceCreditsV1 (line 321) - compile fail ... ok
+test crates/fe2o3-resource-accounting/src/batch.rs - batch::ResourceCreditAccountV1::reserve_batch (line 30) - compile fail ... ok
+test crates/fe2o3-resource-accounting/src/lib.rs - RetainedResourceCreditsV1 (line 314) - compile fail ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+
+   Doc-tests fe2o3_runtime
+
+running 33 tests
+test crates/fe2o3-runtime/src/async_engine/generated_operation.rs - async_engine::generated_operation::RuntimeAsyncPreparedTicketV1 (line 36) - compile fail ... ok
+test crates/fe2o3-runtime/src/context/drain_capture.rs - context::drain_capture::RuntimeHostCaptureSourceV1 (line 36) - compile fail ... ok
+test crates/fe2o3-runtime/src/async_engine/graph.rs - async_engine::graph::RuntimeGraphExecutionIdentityV1 (line 89) - compile fail ... ok
+test crates/fe2o3-runtime/src/async_engine/generated_operation.rs - async_engine::generated_operation::RuntimeAsyncPreparedTicketV1 (line 32) - compile fail ... ok
+test crates/fe2o3-runtime/src/generated_source.rs - generated_source::RuntimeGfx942GeneratedSourceMutV1 (line 82) - compile fail ... ok
+test crates/fe2o3-runtime/src/async_engine/owned.rs - async_engine::owned::RuntimeAsyncOwnedEngineV1 (line 232) - compile fail ... ok
+test crates/fe2o3-runtime/src/worker.rs - worker::RuntimeWorkerBackendV1 (line 2197) - compile fail ... ok
+test crates/fe2o3-runtime/src/worker.rs - worker::RuntimeWorkerV1ImmediateProgressBackendV1 (line 1378) - compile fail ... ok
+test crates/fe2o3-runtime/src/async_engine/generated_operation/reservation.rs - async_engine::generated_operation::reservation::RuntimeAsyncReservedTicketV1 (line 12) - compile fail ... ok
+test crates/fe2o3-runtime/src/authorized_execution.rs - authorized_execution::WorkerV3Gfx942ExecutionAuthorityV1 (line 34) - compile fail ... ok
+test crates/fe2o3-runtime/src/persistent_projection.rs - persistent_projection::GeneratedGfx942PersistentStorageV1 (line 173) - compile fail ... ok
+test crates/fe2o3-runtime/src/async_engine/generated_operation.rs - async_engine::generated_operation::RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1>::try_prepare_gfx942_v1 (line 412) - compile fail ... ok
+test crates/fe2o3-runtime/src/kfd_backend.rs - kfd_backend::KfdRuntimeLaunchAuthorityV1 (line 458) - compile fail ... ok
+test crates/fe2o3-runtime/src/persistent_projection.rs - persistent_projection::GeneratedGfx942PersistentStorageV1 (line 165) - compile fail ... ok
+test crates/fe2o3-runtime/src/context/generated_preparation.rs - context::generated_preparation::RuntimeGfx942PreparedV1 (line 47) - compile fail ... ok
+test crates/fe2o3-runtime/src/context/generated_preparation.rs - context::generated_preparation::RuntimeGfx942PreparedV1 (line 37) - compile fail ... ok
+test crates/fe2o3-runtime/src/async_engine/drain_capture_storage.rs - async_engine::drain_capture_storage::RuntimeAsyncCapturedBytesV1 (line 95) - compile fail ... ok
+test crates/fe2o3-runtime/src/async_engine/generated_operation.rs - async_engine::generated_operation::RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1>::try_prepare_gfx942_v1 (line 405) - compile fail ... ok
+test crates/fe2o3-runtime/src/generated_source.rs - generated_source::RuntimeGfx942GeneratedSourceMutV1 (line 92) - compile fail ... ok
+test crates/fe2o3-runtime/src/context/generated_preparation.rs - context::generated_preparation::RuntimeGfx942PreparedV1 (line 42) - compile fail ... ok
+test crates/fe2o3-runtime/src/context/generated_preparation.rs - context::generated_preparation::RuntimeContextV1<KfdRuntimeBackendV1>::with_gfx942_preparation_device_v1 (line 197) - compile fail ... ok
+test crates/fe2o3-runtime/src/generated_source.rs - generated_source::RuntimeGfx942GeneratedSourceMutV1 (line 86) - compile fail ... ok
+test crates/fe2o3-runtime/src/worker.rs - worker::RuntimeWorkerV1ImmediateProgressBackendV1 (line 1384) - compile fail ... ok
+test crates/fe2o3-runtime/src/persistent_projection.rs - persistent_projection::PreparedGfx942PersistentDispatchV1 (line 23) - compile fail ... ok
+test crates/fe2o3-runtime/src/worker.rs - worker::RuntimeWorkerBackendV4 (line 2323) - compile fail ... ok
+test crates/fe2o3-runtime/src/persistent_projection.rs - persistent_projection::GeneratedGfx942PersistentStorageV1 (line 169) - compile fail ... ok
+test crates/fe2o3-runtime/src/persistent_projection.rs - persistent_projection::GeneratedGfx942PersistentStorageV1 (line 161) - compile fail ... ok
+test crates/fe2o3-runtime/src/context/generated_preparation.rs - context::generated_preparation::RuntimeContextV1<KfdRuntimeBackendV1>::with_gfx942_preparation_device_v1 (line 203) - compile fail ... ok
+test crates/fe2o3-runtime/src/context/drain_capture.rs - context::drain_capture::BackendHostCaptureV1 (line 87) - compile fail ... ok
+test crates/fe2o3-runtime/src/async_engine/generated_operation/reservation.rs - async_engine::generated_operation::reservation::RuntimeAsyncReservedTicketV1 (line 8) - compile fail ... ok
+test crates/fe2o3-runtime/src/persistent_projection.rs - persistent_projection::PreparedGfx942PersistentDispatchV1 (line 19) - compile fail ... ok
+test crates/fe2o3-runtime/src/async_engine/drain_capture_storage.rs - async_engine::drain_capture_storage::RuntimeAsyncCapturedBytesV1 (line 102) - compile fail ... ok
+test crates/fe2o3-runtime/src/worker.rs - worker::RuntimeWorkerV1ImmediateProgressBackendV1 (line 1390) - compile fail ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.86s
+
+   Doc-tests fe2o3_runtime_model
+
+running 25 tests
+test crates/fe2o3-runtime-model/src/r19_directional_persistent_local_sdma_adapter.rs - r19_directional_persistent_local_sdma_adapter::R19DirectionalPersistentLocalSdmaAdapterV1 (line 242) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r35_fused_retained_control_replay.rs - r35_fused_retained_control_replay::R35RetainedControlReplayModelV1 (line 251) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r36_fused_completion_poll_recycle.rs - r36_fused_completion_poll_recycle::R36CompletionPollRecycleModelV1 (line 203) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r38_bounded_persistent_compute_wait_recycle.rs - r38_bounded_persistent_compute_wait_recycle::R38BoundedPersistentComputeWaitRecycleModelV1 (line 375) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r17_persistent_native_allocation.rs - r17_persistent_native_allocation::R17PersistentNativeAllocationRegistryV1 (line 309) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r19_directional_persistent_local_sdma_adapter.rs - r19_directional_persistent_local_sdma_adapter::R19DirectionalPersistentLocalSdmaAdapterV1 (line 249) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/async_queue.rs - async_queue::AsyncCompletedOperationTokenV1 (line 1086) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r23_same_device_d2d_persistent_sdma_windows.rs - r23_same_device_d2d_persistent_sdma_windows::R23SameDeviceD2dPersistentSdmaWindowsV1 (line 350) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/async_queue.rs - async_queue::AsyncReservedOperationTokenV1 (line 908) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r56_two_native_sdma_mux.rs - r56_two_native_sdma_mux::R56MuxRequestV1 (line 118) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r34_fused_asynchronous_directional_sdma.rs - r34_fused_asynchronous_directional_sdma::R34AsyncSingleCopyModelV1 (line 321) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r41_persistent_striped_sdma_aggregate.rs - r41_persistent_striped_sdma_aggregate::R41PersistentStripedRequestV1 (line 116) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/typed_async.rs - typed_async::ReservedTypedAsyncOperationV1 (line 563) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r46_gfx942_striped_sdma_tail_wait.rs - r46_gfx942_striped_sdma_tail_wait::R46Gfx942StripedSdmaTailWaitV1 (line 230) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r32_directional_sdma_currentness_handoff.rs - r32_directional_sdma_currentness_handoff::R32DirectionalCurrentnessHandoffModelV1 (line 203) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r33_fused_synchronous_directional_sdma.rs - r33_fused_synchronous_directional_sdma::R33SynchronousExecutionModelV1 (line 379) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r57_three_binding_compute.rs - r57_three_binding_compute::R57OwnedAllocationV1 (line 84) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/typed_async.rs - typed_async::TypedAsyncEventV1 (line 326) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r17_persistent_native_allocation.rs - r17_persistent_native_allocation::R17ReservedPersistentUseLeaseV1 (line 1194) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r38_bounded_persistent_compute_wait_recycle.rs - r38_bounded_persistent_compute_wait_recycle::R38BoundedPersistentComputeWaitRecycleModelV1 (line 386) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r37_typed_native_sdma_wait_activation.rs - r37_typed_native_sdma_wait_activation::R37TypedNativeSdmaWaitModelV1 (line 283) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r17_persistent_native_allocation.rs - r17_persistent_native_allocation::R17PersistentNativeAllocationRegistryV1 (line 302) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r22_batched_directional_persistent_sdma_windows.rs - r22_batched_directional_persistent_sdma_windows::R22BatchedDirectionalPersistentSdmaWindowsV1 (line 291) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r39_scoped_persistent_sdma_wait_policy.rs - r39_scoped_persistent_sdma_wait_policy::R39ScopedPersistentSdmaWaitPolicyModelV1 (line 148) - compile fail ... ok
+test crates/fe2o3-runtime-model/src/r40_gfx942_striped_sdma_aggregate.rs - r40_gfx942_striped_sdma_aggregate::R40AggregateSubmissionV1 (line 306) - compile fail ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s
+

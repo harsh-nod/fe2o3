@@ -1,13 +1,13 @@
-# A1/A2 Swarm Dispatch At R100 CREATE Outcomes
+# A1/A2 Swarm Dispatch At R101 Recovery And Currentness
 
-R100 locally accepts **.5B-3A admitted CREATE outcomes**, with
-[final evidence](evidence/local-r100-auxiliary-create-outcomes-2026-09-11/README.md).
-Two new tests exercise fourteen failure cases. Frozen/restored construction
-suites each pass 56; all seventeen source gates, ten auxiliary checks and four
-compiled behavioral negatives pass. GNU/musl each pass 2,542 tests with five
-ignored, and all 5,656 source identities match. Four test-fixture files change;
-no new production mechanism, solver, live KFD or performance is accepted.
-Native next takes **.5B-3B**, then **3C**; Admission takes **CO-2A**, then reviewed
+R101 locally accepts **.5B-3B recovery/currentness**, with
+[final evidence](evidence/local-r101-auxiliary-recovery-currentness-2026-09-11/README.md).
+Two new tests exercise thirty failures and two trace baselines. Frozen/restored
+construction suites each pass 58; all seventeen source gates, ten auxiliary
+checks and four compiled behavioral negatives pass. GNU/musl each pass 2,544
+tests with five ignored, and all 5,657 source identities match. Two test-fixture
+files change; no new production mechanism, solver, live KFD or performance is accepted.
+Native next takes **.5B-3C**, then **2C**; Admission takes **CO-2A**, then reviewed
 CO-2B/CO-3A; Resources takes **VER-1A.2a-d**, then the production journal in .3.
 The [current board](runtime-a1-a2-swarm-current.md#remaining-work-at-a-glance)
 records exact work orders. Review turns are complete; implementation queues are

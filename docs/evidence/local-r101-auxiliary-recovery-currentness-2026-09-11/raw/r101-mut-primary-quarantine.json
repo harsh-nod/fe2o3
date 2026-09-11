@@ -1,0 +1,22 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recovery_cases::same_engine_auxiliary_currentness_boundaries_retain_exact_history_and_phase_owners",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r101-mut-primary-quarantine.log",
+  "source": "/home/harsh/.codex-tmp/r101-mut-primary-quarantine-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "elapsed_seconds": 47.142
+}

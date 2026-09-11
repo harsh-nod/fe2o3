@@ -1,14 +1,35 @@
 # Auxiliary Queue Construction Custody V1
 
+R101 locally accepts **NATIVE-2B.5B-3B**, the named recovery/currentness matrix,
+above signed R100 `4424f4607d8a64677556b32713a74b1ca5c6557a`.
+The [R101 evidence](evidence/local-r101-auxiliary-recovery-currentness-2026-09-11/README.md)
+records seventeen source gates, ten auxiliary checks and four compiled
+behavioral negatives. GNU/musl each pass 2,544 tests with five ignored;
+frozen/restored construction suites each pass 58. All 5,657 source hashes match.
+Only two test-fixture files change; production mechanisms remain unchanged.
+3C roster/slot composition, 2C and DATA-ADOPT remain open, alongside formal
+correspondence, live KFD and performance qualification.
+
+The two new tests exercise thirty failures plus two successful trace baselines.
+Pre-CREATE retains cleaned unpublished state; post-CREATE retains engine outputs
+before construction output recovery or auxiliary queue-live registration.
+Doorbell-side failures retain the completed lane with absent/present doorbell.
+Runtime-created, output/ID recovery and event-ID failures preserve their exact
+phase-dependent owners. Returned currentness errors quarantine primary then
+auxiliary with exact history; panic does not fabricate that model transition.
+All failures retain the terminal parent, poisoned outer ledgers/local gate and
+unfinished creation arm, with no installation. Fixture disposal remains local
+cleanup, not confirmed native teardown.
+
 R100 locally accepts **NATIVE-2B.5B-3A**, the admitted CREATE outcome matrix,
 above signed R99 `e6ac41c7fe61fbbb3e9a7003a8e9fd9a8a0c97a4`.
 The [R100 evidence](evidence/local-r100-auxiliary-create-outcomes-2026-09-11/README.md)
 records seventeen source gates, ten auxiliary checks, four compiled behavioral
 negatives and 2,542 tests per GNU/musl target with five ignored. Frozen/restored
 construction suites each pass 56 and all 5,656 source hashes match. Only four
-test-fixture files change; production mechanisms remain unchanged. Recovery/
-currentness (.5B-3B), roster/slot composition (.5B-3C), 2C and DATA-ADOPT remain
-open, as do formal correspondence, live KFD and performance qualification.
+test-fixture files change; production mechanisms remain unchanged. At R100,
+recovery/currentness (.5B-3B), roster/slot composition (.5B-3C), 2C and DATA-ADOPT
+remained open, as did formal correspondence, live KFD and performance qualification.
 
 The new matrix exercises seven scripted CREATE outcomes through both original
 runtime routes using R99's actual local Linux helpers. It distinguishes

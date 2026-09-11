@@ -9,6 +9,9 @@ mod platform_cases;
 #[path = "integration_create_tests.rs"]
 mod create_cases;
 
+#[path = "integration_recovery_tests.rs"]
+mod recovery_cases;
+
 type PrefixCaseResult = (
     Box<Scope>,
     Result<(), Box<dyn std::any::Any + Send>>,

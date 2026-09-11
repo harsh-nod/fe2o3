@@ -1,0 +1,45 @@
+[
+  {
+    "name": "pre-doorbell-error",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recovery_cases::same_engine_auxiliary_currentness_boundaries_retain_exact_history_and_phase_owners",
+    "edits": [[
+      "        parent.engine.prepare_operation().map_err(map_native)?;\n        let engine = &*parent.engine;",
+      "        let _ = parent.engine.prepare_operation().map_err(map_native);\n        let engine = &*parent.engine;"
+    ]],
+    "expected": ["assertion `left == right` failed", "left: true", "right: false"]
+  },
+  {
+    "name": "post-doorbell-error",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recovery_cases::same_engine_auxiliary_currentness_boundaries_retain_exact_history_and_phase_owners",
+    "edits": [[
+      "        parent.engine.prepare_operation().map_err(map_native)?;\n        let destination = check_auxiliary_compute_lane_slot_v1(parent.lanes, slot)?;",
+      "        let _ = parent.engine.prepare_operation().map_err(map_native);\n        let destination = check_auxiliary_compute_lane_slot_v1(parent.lanes, slot)?;"
+    ]],
+    "expected": ["AfterDoorbell, panic=false, external=false"]
+  },
+  {
+    "name": "primary-quarantine",
+    "path": "crates/fe2o3-kfd/src/queue.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recovery_cases::same_engine_auxiliary_currentness_boundaries_retain_exact_history_and_phase_owners",
+    "edits": [[
+      "        for key in keys {\n            self.model = match self.model.quarantine_currentness_loss(key) {",
+      "        for key in keys.into_iter().skip(1) {\n            self.model = match self.model.quarantine_currentness_loss(key) {"
+    ]],
+    "expected": ["assertion `left == right` failed", "phase: Active", "phase: Ambiguous"]
+  },
+  {
+    "name": "recovered-output-placement",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::recovery_cases::same_engine_auxiliary_recovery_failures_keep_exact_outputs_before_owner_assembly",
+    "edits": [[
+      "        self.outputs = Some(E::recover_create_outputs(engine, key).ok_or_else(|| {\n            terminal_creation(\n                \"CREATE_QUEUE output recovery\",\n                ComputeAqlQueueSessionErrorV1::Contract(\"missing CREATE outputs\"),\n            )\n        })?);",
+      "        let outputs = E::recover_create_outputs(engine, key).ok_or_else(|| {\n            terminal_creation(\n                \"CREATE_QUEUE output recovery\",\n                ComputeAqlQueueSessionErrorV1::Contract(\"missing CREATE outputs\"),\n            )\n        })?;"
+    ], [
+      "        })?;\n        if parent.session_owned_queue_id_is_retained_v1(queue_id) {",
+      "        })?;\n        self.outputs = Some(outputs);\n        if parent.session_owned_queue_id_is_retained_v1(queue_id) {"
+    ]],
+    "expected": ["assertion `left == right` failed", "left: None", "right: Some("]
+  }
+]

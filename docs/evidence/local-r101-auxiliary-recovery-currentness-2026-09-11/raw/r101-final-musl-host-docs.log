@@ -1,0 +1,33 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+   Compiling fe2o3-service-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-service-host)
+   Compiling fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 39.70s
+   Doc-tests fe2o3_host
+
+running 2 tests
+test crates/fe2o3-host/src/generated_runtime_invocation.rs - generated_kfd_invocation::generated_runtime_invocation::AuthenticatedWorkerV3ExecutableV1<K>::prepare_generated_context_invocation (line 257) - compile ... ok
+test crates/fe2o3-host/src/generated_runtime_invocation.rs - generated_kfd_invocation::generated_runtime_invocation::AuthenticatedWorkerV3ExecutableV1<K>::prepare_generated_context_invocation_async (line 325) - compile ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 14 tests
+test crates/fe2o3-host/src/worker_v3_verification_admission.rs - worker_v3_verification_admission::WorkerV3SemanticMachineRefinementReceiptV1 (line 601) - compile fail ... ok
+test crates/fe2o3-host/src/compiler_execution_current_record_audit.rs - compiler_execution_current_record_audit::WorkerV3CompilerCurrentRecordAuditV1 (line 124) - compile fail ... ok
+test crates/fe2o3-host/src/generated_kfd_invocation.rs - generated_kfd_invocation::WorkerV3ApplicationExecutionBindingV1 (line 319) - compile fail ... ok
+test crates/fe2o3-host/src/compiler_execution_current_record_audit.rs - compiler_execution_current_record_audit::InheritedWorkerV3CompilerCurrentRecordAuditorV1 (line 366) - compile fail ... ok
+test crates/fe2o3-host/src/generated_runtime_arguments.rs - generated_runtime_arguments::GeneratedRuntimeChargedArgumentsV1 (line 775) - compile fail ... ok
+test crates/fe2o3-host/src/authenticated_service_queue.rs - authenticated_service_queue::AuthenticatedServiceQueueSessionV1<N>::destroy_and_release (line 781) - compile fail ... ok
+test crates/fe2o3-host/src/generated_runtime_results.rs - generated_runtime_results::GeneratedRuntimeChargedResultV1 (line 245) - compile fail ... ok
+test crates/fe2o3-host/src/worker_v3_verification_admission.rs - worker_v3_verification_admission::WorkerV3SemanticMachineRefinementReceiptV1 (line 612) - compile fail ... ok
+test crates/fe2o3-host/src/generated_runtime_results.rs - generated_runtime_results::ChargedTypedResultV1 (line 68) - compile fail ... ok
+test crates/fe2o3-host/src/generated_runtime_results.rs - generated_runtime_results::ChargedTypedResultV1 (line 73) - compile fail ... ok
+test crates/fe2o3-host/src/compiler_execution_current_record_audit.rs - compiler_execution_current_record_audit::WorkerV3CompilerCurrentRecordEvidenceViewV1 (line 43) - compile fail ... ok
+test crates/fe2o3-host/src/generated_runtime_arguments.rs - generated_runtime_arguments::GeneratedRuntimeReadSlice (line 392) - compile fail ... ok
+test crates/fe2o3-host/src/worker_v3_verification_admission.rs - worker_v3_verification_admission::WorkerV3RosterLoadEnvelopeEvidenceViewV1 (line 2394) - compile fail ... ok
+test crates/fe2o3-host/src/application_descriptor_handoff.rs - application_descriptor_handoff::consume_inherited_worker_v3_application_roster_handoff_v1 (line 250) - compile fail ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.93s
+
+all doctests ran in 34.73s; merged doctests compilation took 33.53s
