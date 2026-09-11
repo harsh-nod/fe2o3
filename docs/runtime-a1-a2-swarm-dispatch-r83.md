@@ -1,10 +1,10 @@
-# A1/A2 Swarm Dispatch After Signed R86
+# A1/A2 Swarm Dispatch After R87 Allocation Custody
 
 Dispatch established by planning-only commit `32c1beff`, 2026-09-10, and refreshed
-by three read-only workers on 2026-09-11 against the accepted R86 whole-roster
-data conversion, now signed and published to both topic remotes. The latest
-decomposition splits native construction custody into two prerequisites before
-DATA-ADOPT. This is the current assignment overlay for
+by three read-only workers on 2026-09-11 against R87 pending allocation custody
+on signed R86 whole-roster data conversion. The latest decomposition splits
+the remaining native control work into session transitions, preparation ownership
+and both bind settlements before NATIVE-2 and DATA-ADOPT. This is the current assignment overlay for
 [next-wave dispatch](runtime-a1-a2-next-wave.md) and the
 [historical roadmap](runtime-a1-a2-swarm-plan.md). It supersedes their current
 assignment rows, not their packet-specific evidence or historical contracts.
@@ -14,13 +14,15 @@ update `2026-09-11T08:01:35Z` during this refresh. Later A3-A7 milestones remain
 
 ## Checkpoint And Ownership
 
-The current accepted implementation is R86's NATIVE-1 data-conversion portion, with
-[final source evidence](evidence/local-r86-dispatch-retention-2026-09-11/README.md).
+The current locally accepted implementation is R87's pre-record allocation
+prerequisite, with [source evidence](evidence/local-r87-pending-allocation-2026-09-11/README.md).
+Its baseline is signed R86 plus the signed planning-only commit
+`d2e65f47d942af8307d3d54ffa6ee82bef5d2c30`.
 Signed R86 is `1fa69f17e526e2b96ba69a22047f209c261c367e`, on both repositories'
 topic branch `codex/r65-runtime-drain-versions`, not a main merge.
 Its retained evidence records the source accepted at that commit, including
-the then-current documentation; this later dispatch-only refresh changes no
-runtime implementation or proof/hardware status.
+the then-current documentation. R87 adds allocation custody, not new
+proof, hardware or performance acceptance.
 R83 implements private activation, nonflushing active custody, stream holds and
 explicit drain/shutdown retirement. Its
 [local evidence](evidence/local-r83-unpublished-lifecycle-2026-09-10/README.md)
@@ -66,6 +68,16 @@ identities unchanged and 2,401 runtime tests per GNU/musl target. This supersede
 the proposed per-item recovering Host conversion,
 not the complete NATIVE-1 construction owner or NATIVE-2 constructor work.
 
+R87 implements [pending GTT allocation custody](runtime-pending-gtt-allocation-v1.md)
+inside the existing allocator. Returned reservation, raw ALLOC output and mapping
+are rooted before validation; errors/panics retain pending custody and quarantine
+the optional Host debit. Fourteen new KFD tests pass, together with all seventeen
+source gates: 5,622 source identities unchanged and 2,415 runtime tests per
+GNU/musl target. Both expected-negative mutations reject. This does not retain
+unreturned backend mappings, successful tokens across model projection, the full
+preparation owner or outer closing-retake/validation state. Full NATIVE-1 remains
+open, as do kernarg/executable backing and other control-memory budgets.
+
 Three read-only workers completed this source audit. Their review turns are
 complete; the follow-on queues are assignments, not unattended jobs.
 Primary owns all edits, integration, conflict resolution, tests, proofs,
@@ -76,10 +88,10 @@ Primary, not one worker per ticket. Shared Context/backend edits are serialized.
 
 | Worker | First bounded assignment | Deliverable and exit gate |
 | --- | --- | --- |
-| Native: `r66_native_coexistence` | Complete NATIVE-1 control/build ownership above R86 data conversion, then NATIVE-2 constructor custody | Root packet/plan/generation, converted data, code and kernarg stages outside the fallible call. Preserve successful results before closing retake. Distinguish pre-effect rejection, partial pre-queue effects and terminal post-create custody before DATA-ADOPT. |
-| Admission: `r66_runtime_coexistence` | COMPLETE-ORACLE, independent of native adoption | Exact invocation/submission/generation and full-roster validation contract; failure and disposal-order fixtures covering malformed late output, decoder panic, observer loss and shutdown. No native completion authority from fixtures. |
+| Native: `r66_native_coexistence` | CONTROL-1 session transition custody, CONTROL-2 preparation owner, CONTROL-3 both bind settlements; then NATIVE-2 | Preserve returned tokens across model projection and exact control stages, then root packet/plan/generation, data and successful dispatch outside fallible calls. Cover closing-retake and later validation error/panic before DATA-ADOPT. |
+| Admission: `r66_runtime_coexistence` | CO-1/2/3 completion contract and fixtures, independent of native adoption | Exact invocation/submission/generation and full-roster validation contract; failure and disposal-order fixtures covering malformed late output, adapter panic, observer loss and shutdown. CO-4 native completion follows ISSUE; fixtures supply no native authority. |
 | Resources: `r66_coexistence_model` | VER-1A, independent Context mutation journal | Bounded nonwrapping whole-allocation `Available/Pending/Unknown` transitions, atomic multi-destination admission, exact writer completion and a complete mutation-site inventory. Cross-run leases stay disabled. |
-| Primary | Complete NATIVE-1 control/build ownership, then integrate NATIVE-2, runtime COMPLETE-ORACLE and VER-1A | Preserve accepted R84/R85/R86, R80 reservations and R83 custody. Own all edits and shared module changes. Do not install adoption callbacks before complete native custody exists. Retain separate CPU/proof/Linux/performance results and publish accepted packets to both topic remotes. |
+| Primary | Complete NATIVE-1 control/build ownership, then integrate NATIVE-2, runtime COMPLETE-ORACLE and VER-1A | Preserve accepted R84/R85/R86/R87, R80 reservations and R83 custody. Own all edits and shared module changes. Do not install adoption callbacks before complete native custody exists. Retain separate CPU/proof/Linux/performance results and publish accepted packets to both topic remotes. |
 
 Native and Admission first agree on the exact packet/hold/native-key boundary.
 Admission can develop COMPLETE-ORACLE while Native specifies construction custody;
@@ -88,7 +100,9 @@ implementation or recreating R83's existing phase/hold machinery.
 
 ## First Deliverables
 
-1. Native: R86 now implements atomic data conversion; complete the preparation
+1. Native: R86 atomic data conversion and R87 pending allocation custody are
+   implemented. First preserve successful control tokens across session model
+   projection and consuming seal/map/retain transitions, then complete the preparation
    owner in `queue_dispatch_binding.rs` and its narrow private child module.
    Retain packet descriptions, plan, generation, converted data and exact
    premises, code prefixes/current code typestate, kernarg typestate and
@@ -101,8 +115,9 @@ implementation or recreating R83's existing phase/hold machinery.
 2. Admission: specify the runtime completion identity and terminal-outcome
    table against the existing reserved engine reply. Cover definite
    nonpublication, conclusive completion and uncertainty with one outcome per
-   operation. Rejected, stale and duplicate candidates must not call R85 or
-   release native/charged custody. Integrate with Native's exact key/hold
+   operation. Rejected, stale and duplicate candidates must not call the counted
+   completion adapter or release custody; actual R85 integration follows ISSUE.
+   Integrate with Native's exact key/hold
    contract before ISSUE; do not introduce a second reply or result decoder.
 3. Resources: implement the isolated VER-1A Context journal and inventory every
    mutation path. Reuse the existing Context identity allocator and submission
@@ -127,20 +142,23 @@ and acceptance runs. Proposed files and types below do not exist yet.
 
 ### Native: NATIVE-1-CONTROL
 
-1. Introduce private `FixedDispatchPreparationCustodyV1` beside
-   `queue_dispatch_binding.rs`. Make preparation borrow the outer owner;
-   `PersistentFixedDispatchPreparationFailureV1`'s data-only result cannot
-   retain partial code/kernarg construction or survive unwind by itself.
-2. Root that owner before both persistent bind closures in
-   `queue_live/fixed_dispatch.rs`, including before `catch_unwind`. Add a
-   preparation variant to `PersistentComputeTerminalNativeCustodyV1` in
-   `persistent_compute.rs`. Preserve the original input descriptors, successful
-   code prefix, current control typestate and completed dispatch result.
-3. Inject error and panic at allocation, materialization, seal, map, retain and
-   closing-retake boundaries. Assert exact custody/charges, original panic
-   payload, zero publication and no retry authority from uncertainty. Exercise
-   the production sequencer with fake-native records; an early-move/drop mutation
-   must fail. Full source gates precede NATIVE-2 constructor integration.
+| Subpacket | Source boundary and dependency | Deliverable and exit gate |
+| --- | --- | --- |
+| CONTROL-1: session transitions | `shared_memory.rs`: `allocate_profile`, consuming seal/map methods, `commit_map_projection` and code/kernarg retention. Ready after R87. | Root returned tokens before evidence, projection and model replacement. Preserve exact token/record association through materialization and consuming transitions; uncertainty is retained custody, not reconstructed usable typestate. Test successful allocation followed by projection failure, partial seal/map, error/panic and configured/unconfigured profiles with exact records and charges. |
+| CONTROL-2: preparation owner | `queue_dispatch_binding.rs` and proposed private `FixedDispatchPreparationCustodyV1`. Depends on CONTROL-1. | Existing planner/sequencer borrows an externally rooted bounded owner for packets, plan, generation, original data/premises, code prefix/current stage, kernarg and completed dispatch. Replace data-only failure recovery; test later-program and final-resolution failures without post-dispatch reconstruction of unpublished inputs. |
+| CONTROL-3: bind settlement | Both persistent paths in `queue_live/fixed_dispatch.rs`, loan envelope in `queue_live.rs` and terminal custody in `persistent_compute.rs`. Depends on CONTROL-2. | Root preparation before catch/loan and completed dispatch/attachment before closing retake and later validation. Add terminal preparation custody. Test both cardinalities over operation success/error/panic crossed with retake success/error/panic, plus validation failure/panic. Preserve original panic, exact generations and every owner; uncertainty grants no binding or retry. |
+
+The current model-loan custody wrapper retains a successful output across a
+retake error but can lose that locally held output on retake panic. Store success
+outside the closure; returning a richer error alone does not fix unwind.
+Three-binding pre-detach rejection also must not return Retryable after a closing
+retake has already terminalized the queue, even if attachment cancellation succeeds.
+Test this classification against the corresponding single-binding path.
+
+Every subpacket exercises production-used sequencers/settlement helpers with
+fake-native records, exact custody/charges and zero publication. An early-drop
+mutation must fail. Full source gates precede NATIVE-2 constructor integration;
+CPU acceptance is not a Linux result or formal adapter refinement.
 
 Native hands Admission an exact nonpublishing adoption identity and retirement
 outcome, not a completion receipt. Reuse the existing allocator, planner and
@@ -148,20 +166,30 @@ R86 conversion; do not invent a second native runtime.
 
 ### Admission: COMPLETE-ORACLE
 
-Introduce a private completion contract beside `async_engine/generated_operation`
-and focused fixtures under `async_engine/tests/preparation_tests`. Join the exact
+Start with a completion contract and focused fixtures under
+`async_engine/tests/owned_tests/preparation_tests/`. Join the exact
 preparation/source Arc, Context generation, runtime/backend submission, device,
 stream/lane, publication occurrence and complete allocation-incarnation roster.
-Reuse the reserved completion producer/consumer and R85 decoder, not a second
-readback allocation, result decoder or completion cell.
+Reuse the reserved completion producer/consumer. Runtime fixtures use a counted,
+data-only completion adapter, not host-private R85 decoding: host depends on
+runtime, so a reverse dependency is forbidden. Actual R85 invocation belongs to
+later COMPLETE integration; do not add another decoder, readback allocation or
+completion cell.
+
+| Subpacket | Dependencies | Deliverable and exit gate |
+| --- | --- | --- |
+| CO-1: outcome contract | Independent of native work. | Define Pending, rejected observation, exact success, conclusive failure, quiescent-without-result and uncertainty. Table tests distinguish reply disposition from authority to dispose the operation owner. |
+| CO-2: identity oracle | CO-1; parallel-reviewable with CO-3. | Reuse roster matching and Context submission validation. Mutate every source, generation, submission, device/lane, publication and allocation coordinate independently, including byte-identical foreign storage, duplicates and replay. Rejection leaves owner and reserved reply unchanged. |
+| CO-3: reply/custody fixtures | CO-1; existing preparation Harness and R80/R83 fixtures. | Test repeated rejection followed by success, late readback/currentness failure, partial retirement, adapter panic, observer loss, Stop/shutdown and waker replacement. Assert exact callback order, zero/one adapter calls and one reply without duplicate issue. |
+| CO-4: native binding | NATIVE-1/2, DATA-ADOPT and ISSUE. | Integrate private `generated_operation/completion_contract.rs` with actual retained native ownership and exact publication/completion receipts. Readback, closing currentness and disposition checks precede actual R85 decoding. Scripted candidates cannot supply native authority. |
 
 | Candidate or outcome | Required fixture result |
 | --- | --- |
 | Pending, rejected observation, foreign/stale candidate or replay | No decode, disposal, republish or reply duplication; retain the actual operation owner. |
-| Exact successful completion | Complete readback, closing currentness and native disposition checks precede one R85 call and one existing reply completion. |
+| Exact successful completion | Scripted readback/currentness/disposition checks precede one counted-adapter call and one existing reply completion; actual R85/native integration is CO-4. |
 | Conclusive failure or quiescence without result | No typed output; release only after conclusive native retirement, then one failure reply. |
 | Publication uncertainty, currentness loss or partial retirement | No readiness or refund of possibly live custody; an error reply is not disposal authority. |
-| Decoder panic, dropped observer, Stop or shutdown | Preserve charged/native ownership and one-reply semantics before and after decoder transfer. |
+| Decoder-adapter panic, dropped observer, Stop or shutdown | Preserve fixture ownership and one-reply semantics before and after adapter transfer; actual charged/native composition is CO-4. |
 
 Mutate each identity/roster coordinate independently, including byte-identical
 foreign storage and late output mismatch. After packet transfer, use immutable
@@ -178,6 +206,14 @@ and preflight the complete deduplicated destination set before any state change;
 finish also validates the full writer roster before committing any member.
 Unknown stays unavailable until allocation retirement. Available records describe
 mutation lineage, not proof of initialized or correct contents.
+
+| Subpacket | Dependencies | Deliverable and exit gate |
+| --- | --- | --- |
+| VER-1A.1: contract/inventory | Independent of native construction and completion. | Freeze exact Context/allocation/device/writer identity, finite capacity and whole-allocation Available/Pending/Unknown semantics. Name every mutation hook below. |
+| VER-1A.2: executable transitions | .1. | Isolated runtime-model transitions consumed by the journal, with matching Verus statements/negatives. Begin and finish preflight the entire roster before mutation; first/middle/last failure changes no entry. Only exact successful writer settlement restores availability. |
+| VER-1A.3: bounded journal | .2; proposed `context/versions.rs` and child tests. | Preallocate metadata/scratch, prevent live-entry eviction and epoch wrap, retain exact membership and move-only writer tickets. Failed disposal retains entries; Pending/Unknown yield no reusable authority. |
+| VER-1A.4: initial hooks | .3; Primary owns shared Context and graph edits. | Wire host writes and ordinary/graph copies into the actual journal. Retain logical destinations before backend translation, invalidate before effects and settle before callbacks. Comprehensive hook closure stays VER-1B. |
+| VER-1A.5: acceptance | .1 through .4. | Focused/full source gates and authenticated property proofs; omitted-member, wrong-writer and wrapping mutations must fail. Report CPU and proved properties separately; leases remain disabled. |
 
 | Existing boundary | Required inventory/hook contract |
 | --- | --- |
@@ -225,13 +261,13 @@ New modules are proposed, not existing implementation claims.
 | Packet and lead | Dependency / module boundary | Acceptance before advancing |
 | --- | --- | --- |
 | DATA-SHELL: locally accepted R84 | Storage/source modules, `context/generated_shells.rs`, `kfd_backend/allocation_table.rs` and `kfd_backend/generated_shells.rs`; host invocation. | SH-1 through SH-5 pass. Full unused/read-only ordinals, exact IDs and bounded records remain private without packet/decoder authority exposure. No native effects. |
-| NATIVE-1: Native | R86 data conversion implemented; full construction owner remains open. `crates/fe2o3-kfd/src/queue_dispatch_binding.rs`, proposed isolated build-owner module and persistent bind terminal custody. | Reuse R86 whole-roster conversion. Root data/premises, packet/plan/generation, code/kernarg typestates and successful output outside all fallible construction. Inject every control-stage failure/panic and preserve exact descriptors and charges; no post-dispatch recovery for unpublished data. |
+| NATIVE-1: Native | R86 data conversion and R87 pending allocation custody implemented; CONTROL-1/2/3 remain open. `crates/fe2o3-kfd/src/shared_memory.rs`, `queue_dispatch_binding.rs`, proposed build-owner module and persistent bind terminal custody. | Reuse the existing allocator/conversion. Preserve successful tokens across model projection, then data/premises, packet/plan/generation, control stages and completed output outside all fallible construction/settlement. Inject every error/panic with exact descriptors and charges; no post-dispatch recovery for unpublished data. |
 | NATIVE-2: Native; Admission review | NATIVE-1. `crates/fe2o3-kfd/src/queue_live.rs` and `queue_live/fixed_dispatch.rs`; narrow existing abort integration. | Retain primary/auxiliary bootstrap state and successful insertion outputs before closing retake. Separate unchanged pre-effect rejection, partial pre-queue effects and terminal CREATE_QUEUE-attempted failures. Return a usable lane only after complete success; never synthesize a pristine abort continuation from an incomplete constructor. |
 | NATIVE-3 / DATA-ADOPT: Native + Admission; Resources reviews charges | Accepted DATA-SHELL, NATIVE-1/2, R80 reservations, R82 abort and R83 lifecycle. Proposed `kfd_backend/generated_adoption.rs`; narrow Context, `compute_state.rs`, `compute_dispatch.rs` and existing adoption hooks. | Switch the rooted shell into non-discardable native custody before effects. Borrow original initialization bytes, bind without publication, retain the exact session/lane/prefix, then retire through R82 abort and exact data disposal. Exercise initial/auxiliary/reused lanes, allocation/map/bind/retake error/panic, empty-prefix Stop and drain. Linux bind/abort/reuse remains a separate gate. |
-| COMPLETE-ORACLE: Admission; Resources review | Independent now. Runtime completion contract and preparation fixtures above the accepted R85 host boundary. | Freeze exact prepared/adoption/submission/device/queue/generation identity, one reserved reply and terminal outcomes. Foreign/replayed/late or uncertain completion cannot invoke R85, remove retained custody or authorize retry. Scripted candidates are not native receipts. |
+| CO-1/2/3 COMPLETE-ORACLE: Admission; Resources review | Independent now. Runtime completion contract and preparation fixtures above the accepted R85 host boundary. | Freeze exact prepared/adoption/submission/device/queue/generation identity, one reserved reply and terminal outcomes. Foreign/replayed/late or uncertain completion cannot invoke the counted adapter, remove retained custody or authorize retry. Actual R85/native binding is CO-4 after ISSUE; scripted candidates are not native receipts. |
 | COMPLETE-HOST-SUBSTRATE: locally accepted R85 | Host `generated_runtime_arguments/readback.rs`, shared charged decoder transaction and ten new tests. | Actual R80 readback retains its existing debit through decoding. Exact gate/full roster/read-only checks and both disposal settlements precede commit. Final source and auxiliary gates pass; native completion and adapter refinement remain open. |
 | ISSUE: Admission + Native | Composed DATA-ADOPT and COMPLETE-ORACLE. Generated driver, Context registration, `compute_state.rs` and `compute_dispatch.rs`. | A private linear permit binds exact resources/submission and survives actual flush/retry. Reject substitution/replay; distinguish definite nonpublication from unknown publication. No broad backend authorization flag or per-invocation backend replacement. |
-| COMPLETE: Admission; Resources + Native review | ISSUE and accepted R85. Generated driver, host invocation and backend readback hooks. | Admit exact conclusive completion, fill existing R80 destinations and check closing currentness/native disposition before calling R85. Resolve the reserved engine cell once. Test stale/partial results, currentness loss, decoder panic, retained results and credits after shutdown. Do not rebuild the host decoder or reserve readback/reply twice. |
+| CO-4 / COMPLETE: Admission; Resources + Native review | ISSUE and accepted R85. Generated driver, host invocation and backend readback hooks. | Admit exact conclusive completion, fill existing R80 destinations and check closing currentness/native disposition before calling R85. Resolve the reserved engine cell once. Test stale/partial results, currentness loss, decoder panic, retained results and credits after shutdown. Do not rebuild the host decoder or reserve readback/reply twice. |
 | API: Admission; Primary integration | ISSUE + COMPLETE. Runtime handle, generated host interfaces and narrow macro integration. | One executor-neutral typed future; blocking launch joins the same engine. Test completion/poll races, latest-waker replacement, reentrancy, reply/queue pressure, equivalent outcomes and ownership compile failures. No blocking executor hidden in a command callback. |
 | GRAPH/DRAIN: Admission | API; cross-run reuse also needs VER-1B/VER-2. `async_engine/graph`, drain/capture and owned shutdown. | Repeated generated graphs, exact dependencies/results, accepted-prefix drain, dropped observers and failure retention. Preserve graph/standalone exclusion. Production hardware acceptance additionally needs exact protected compiler evidence. |
 
@@ -245,12 +281,12 @@ Drop all consume the new contract. Native and Resources must serialize later
 edits to `shared_memory.rs`; the completion oracle and isolated journal are
 independent of those files.
 
-COMPLETE-ORACLE's first deliverable is a runtime completion contract, proposed
-`async_engine/generated_operation/completion_contract.rs`, and focused fixtures
-beside the existing preparation reservation/adoption tests. Freeze exact
+COMPLETE-ORACLE's first deliverables are the CO-1 contract and CO-2/3 fixtures
+under `async_engine/tests/owned_tests/preparation_tests/`; the production bridge
+follows at CO-4. Freeze exact
 invocation/submission/generation and one-reply semantics. Cover duplicate/foreign
-completion, native readback failure, observer loss and shutdown; prove in the
-fixtures that rejected completion never invokes R85. R85 already validates the
+completion, native readback failure, observer loss and shutdown; assert in the
+fixtures that rejected completion never invokes the counted adapter. R85 already validates the
 host roster/read-only bytes and disposal-before-readiness. This work can proceed
 before native adoption; fixtures do not create native completion authority.
 
@@ -307,7 +343,7 @@ substituted for that source acceptance.
 
 | Batch | Parallel worker work | Primary integration and exit |
 | --- | --- | --- |
-| 1: ready now | Native: NATIVE-1 control/build ownership above R86, followed by NATIVE-2 constructor custody. Admission: runtime COMPLETE-ORACLE above R85. Resources: VER-1A journal/inventory. | Build on accepted R84/R85/R86; implement independently reviewed native/runtime/journal changes as separate bounded packets. No native publication or cross-run leases. |
+| 1: ready now | Native: CONTROL-1 -> CONTROL-2 -> CONTROL-3, then NATIVE-2. Admission: CO-1, then CO-2/3. Resources: VER-1A.1 through .5. | Build on accepted R84/R85/R86/R87; implement independently reviewed native/runtime/journal changes as separate bounded packets. No native publication or cross-run leases. |
 | 2: native custody | Native: accepted NATIVE-1/2, then NATIVE-3 DATA-ADOPT. Admission: exact ISSUE/completion interface review. Resources: VER-1B inventory/hooks and domain/headroom work. | Serialize Context/backend and native shared-memory edits; accept full partial-prefix/lane custody and R82 abort before connecting ISSUE. Keep proof and Linux gates separate. |
 | 3: execution and reuse | Admission: ISSUE, then COMPLETE, then API. Native: fixtures and native qualification harnesses. Resources: close all mutation hooks before VER-2; backing/control/residency work. | Gate each execution transition, retain R73/R80 charge ownership and one completion cell. No API-only claim of graph, native-depth or budget closure. |
 | 4: A1/A2 qualification | Admission: generated GRAPH/DRAIN. Native: depth/overlap/copy/performance campaigns. Resources: resource/proof composition and aggregate bounds. | Signed source, independent evidence review, complete outputs, actual native-depth and repeated graph/version/resource checks, matched baselines and owned-resource cleanup. |
@@ -322,10 +358,10 @@ turns have finished, so queued implementation packets are not background jobs.
 
 ```text
 signed R83 -> final R84 DATA-SHELL acceptance -------------------> DATA-ADOPT
-R86 data conversion -> full NATIVE-1 -> NATIVE-2 ----------------> DATA-ADOPT
+R86 conversion + R87 allocation -> CONTROL-1/2/3 -> NATIVE-2 -----> DATA-ADOPT
 R80 reservations + R82 abort + R83 lifecycle --------------------> DATA-ADOPT
-DATA-ADOPT -> ISSUE -> COMPLETE -> API -> GRAPH/DRAIN
-COMPLETE-ORACLE -> ISSUE
+DATA-ADOPT -> ISSUE -> CO-4 / COMPLETE -> API -> GRAPH/DRAIN
+CO-1/2/3 completion contract and fixtures -> ISSUE
 R85 private host substrate + ISSUE -> runtime COMPLETE
 VER-1A -> all VER-1B mutation hooks -> VER-2 cross-run input leases
 domains + backing/control/residency -> MEM-5 aggregate closure
@@ -350,6 +386,7 @@ After A1/A2, the same slots rotate through the remaining
 | A7: production performance | Native + Primary: predeclared single-device, multi-GPU and two-host performance gates with direct-KFD dependency/symbol audits. |
 
 This dispatch does not close A1/A2, #182, full HIP/HSA parity or any performance
-target. Local R83/R84/R85/R86 acceptance covers private lifecycle, inert allocation
-shells, host readback decoding and atomic native data conversion, not complete
+target. Local R83/R84/R85/R86/R87 acceptance covers private lifecycle, inert allocation
+shells, host readback decoding, atomic native data conversion and pending
+allocation custody, not complete
 native construction, adoption, runtime completion, proof, hardware or performance.

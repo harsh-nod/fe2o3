@@ -1,5 +1,6 @@
 //! Bounded shared KFD VM authority for typed host-visible GTT allocations.
 
+mod allocation;
 mod coherent_initialization;
 mod dispatch_retention;
 
@@ -1192,6 +1193,7 @@ struct SharedMemoryEngine<B: MemoryBackend> {
     session_id: u64,
     phase: SharedMemorySessionPhaseV1,
     allocations: Vec<SharedAllocationRecord<B>>,
+    pending_allocation: Option<allocation::PendingSharedAllocationV1<B>>,
     allocation_record_slots: HashMap<u64, usize>,
     next_id: u64,
     retained_gpu_va_bytes: u64,
@@ -1293,6 +1295,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             session_id,
             phase: SharedMemorySessionPhaseV1::Active,
             allocations,
+            pending_allocation: None,
             allocation_record_slots,
             next_id: 1,
             retained_gpu_va_bytes: 0,
@@ -1477,198 +1480,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         &mut self,
         requested_bytes: usize,
     ) -> Result<SharedGttAllocationV1<P, GttCpuWritableV1>, MemorySessionError> {
-        self.with_host_backing_unwind_quarantine::<P, _>(|engine| {
-            engine.allocate_inner::<P>(requested_bytes)
-        })
-    }
-
-    fn allocate_inner<P: GttProfileV1>(
-        &mut self,
-        requested_bytes: usize,
-    ) -> Result<SharedGttAllocationV1<P, GttCpuWritableV1>, MemorySessionError> {
-        self.require_active()?;
-        if is_host_backing_profile::<P>() {
-            self.host_backing_activity_started = true;
-        }
-        let layout = profile_layout::<P>(requested_bytes)?;
-        let record_slot = if self.allocations.len() < MAX_SHARED_GTT_ALLOCATIONS_V1 {
-            self.allocations.len()
-        } else {
-            self.allocations
-                .iter()
-                .position(SharedAllocationRecord::is_fully_released)
-                .ok_or(MemorySessionError::SharedAllocationCapacity {
-                    maximum: MAX_SHARED_GTT_ALLOCATIONS_V1,
-                })?
-        };
-        let new_total = self
-            .retained_gpu_va_bytes
-            .checked_add(layout.gpu_va_bytes)
-            .ok_or(MemorySessionError::SizeOverflow)?;
-        if new_total > MAX_SHARED_GTT_GPU_VA_BYTES_V1 {
-            return Err(MemorySessionError::SharedVaCapacity {
-                maximum_bytes: MAX_SHARED_GTT_GPU_VA_BYTES_V1,
-            });
-        }
-        let id = self.next_id;
-        let next_id = id.checked_add(1).ok_or(MemorySessionError::SizeOverflow)?;
-        let reservation = if is_host_backing_profile::<P>() {
-            self.host_backing_account
-                .as_ref()
-                .map(|account| {
-                    let (device, vm) = account.domain();
-                    account.reserve(self.session_id, device, vm, id, 1, layout)
-                })
-                .transpose()
-                .map_err(host_backing_accounting_error)?
-        } else {
-            None
-        };
-        self.check_currentness()?;
-        let reservation_bytes =
-            usize::try_from(layout.gpu_va_bytes).map_err(|_| MemorySessionError::SizeOverflow)?;
-        // From the first native attempt onward, loss of this token quarantines
-        // its debit even when no native allocation record can be completed.
-        let host_backing_charge = reservation.map(|reservation| reservation.retain());
-        let mut reservation = match self.backend.reserve_va(reservation_bytes) {
-            Ok(reservation) => reservation,
-            Err(error) => return self.quarantine(error),
-        };
-        let gpu_va = B::reservation_address(&reservation);
-        if let Err(error) =
-            validate_gpu_va_range(gpu_va, layout.gpu_va_bytes, self.backend.gpuvm_aperture())
-        {
-            return self.quarantine(error);
-        }
-        if self.allocations.iter().any(|record| {
-            record.phase != SharedAllocationPhaseV1::Released
-                && ranges_overlap(
-                    gpu_va,
-                    layout.gpu_va_bytes,
-                    record.gpu_va,
-                    record.layout.gpu_va_bytes,
-                )
-        }) || self.device_memory.iter().any(|record| {
-            record.phase != DeviceMemoryPhaseV1::Released
-                && ranges_overlap(
-                    gpu_va,
-                    layout.gpu_va_bytes,
-                    record.gpu_va,
-                    record.layout.backing_bytes,
-                )
-        }) {
-            return self.quarantine(MemorySessionError::KernelResultMalformed(
-                "overlapping GPU VA reservation",
-            ));
-        }
-        let prepared_userptr = if P::IS_USERPTR {
-            let mapping = match self
-                .backend
-                .prepare_userptr(&mut reservation, layout.cpu_mapping_bytes)
-            {
-                Ok(mapping) => mapping,
-                Err(error) => return self.quarantine(error),
-            };
-            self.check_currentness()?;
-            Some(mapping)
-        } else {
-            None
-        };
-        let outcome = if P::IS_USERPTR {
-            self.backend
-                .alloc_userptr(gpu_va, layout.gpu_va_bytes, P::FLAGS)
-        } else {
-            self.backend.alloc(gpu_va, layout.gpu_va_bytes, P::FLAGS)
-        };
-        let args = outcome.value;
-        if let Err(error) = outcome.result {
-            return self.quarantine(error);
-        }
-        if args.va_addr != gpu_va
-            || args.size != layout.gpu_va_bytes
-            || args.gpu_id != self.backend.gpu_id()
-            || args.flags != P::FLAGS.bits()
-            || args.handle == 0
-            || (!P::IS_USERPTR
-                && (args.mmap_offset == 0
-                    || !args
-                        .mmap_offset
-                        .is_multiple_of(HOST_VISIBLE_MEMORY_PAGE_BYTES_V1)))
-        {
-            return self.quarantine(MemorySessionError::KernelResultMalformed(
-                "shared ALLOC_MEMORY_OF_GPU output",
-            ));
-        }
-        if self.allocations.iter().any(|record| {
-            record.phase != SharedAllocationPhaseV1::Released
-                && (record.handle == Some(args.handle)
-                    || (!P::IS_USERPTR
-                        && !record.userptr
-                        && record.mmap_offset == args.mmap_offset))
-        }) || self.device_memory.iter().any(|record| {
-            record.phase != DeviceMemoryPhaseV1::Released
-                && (record.handle == Some(args.handle)
-                    || (!P::IS_USERPTR && record.mmap_offset == args.mmap_offset))
-        }) {
-            return self.quarantine(MemorySessionError::KernelResultMalformed(
-                "shared allocation handle or mmap-offset collision",
-            ));
-        }
-        self.check_currentness()?;
-        let mapping = if let Some(mapping) = prepared_userptr {
-            mapping
-        } else {
-            let mut mapping = match self.backend.map_cpu(
-                &mut reservation,
-                args.mmap_offset,
-                layout.cpu_mapping_bytes,
-            ) {
-                Ok(mapping) => mapping,
-                Err(error) => return self.quarantine(error),
-            };
-            if let Err(error) = self.backend.prepare_cpu_mapping(&mut mapping) {
-                return self.quarantine(error);
-            }
-            mapping
-        };
-        if B::mapping_address(&mapping) != gpu_va {
-            return self.quarantine(MemorySessionError::KernelResultMalformed(
-                "shared identity CPU/GPU VA mapping",
-            ));
-        }
-        self.check_currentness()?;
-        let record = SharedAllocationRecord {
-            id,
-            generation: 1,
-            profile: P::PROFILE,
-            layout,
-            gpu_va,
-            mmap_offset: args.mmap_offset,
-            userptr: P::IS_USERPTR,
-            reservation: Some(reservation),
-            mapping: Some(mapping),
-            handle: Some(args.handle),
-            free_attempted: false,
-            phase: SharedAllocationPhaseV1::CpuWritable,
-            host_backing_charge,
-        };
-        if record_slot == self.allocations.len() {
-            self.allocations.push(record);
-        } else {
-            debug_assert!(self.allocations[record_slot].is_fully_released());
-            self.allocations[record_slot] = record;
-        }
-        let prior_slot = self.allocation_record_slots.insert(id, record_slot);
-        debug_assert!(prior_slot.is_none());
-        self.next_id = next_id;
-        self.retained_gpu_va_bytes = new_total;
-        Ok(SharedGttAllocationV1 {
-            session_id: self.session_id,
-            id,
-            generation: 1,
-            layout,
-            marker: PhantomData,
-        })
+        allocation::allocate_v1(self, requested_bytes)
     }
 
     fn allocate_device_memory(
@@ -6555,6 +6367,7 @@ pub(crate) use tests::pristine_abort::PristineAbortMemoryFixtureV1;
 
 #[cfg(test)]
 mod tests {
+    mod allocation;
     mod device_backing;
     mod device_pool;
     mod dispatch_retention;
@@ -6613,6 +6426,8 @@ mod tests {
         unmap_errno: bool,
         alloc_oom: bool,
         corrupt_flags: bool,
+        allocation_output_mutator: Option<fn(&mut KfdIoctlAllocMemoryOfGpuArgs)>,
+        last_allocation_output: Option<KfdIoctlAllocMemoryOfGpuArgs>,
         corrupt_mapping_address: bool,
         currentness_calls: usize,
         fail_currentness_at: Option<usize>,
@@ -6656,6 +6471,8 @@ mod tests {
                 unmap_errno: false,
                 alloc_oom: false,
                 corrupt_flags: false,
+                allocation_output_mutator: None,
+                last_allocation_output: None,
                 corrupt_mapping_address: false,
                 currentness_calls: 0,
                 fail_currentness_at: None,
@@ -6786,6 +6603,10 @@ mod tests {
             if self.corrupt_flags {
                 args.flags ^= 1;
             }
+            if let Some(mutate) = self.allocation_output_mutator {
+                mutate(&mut args);
+            }
+            self.last_allocation_output = Some(args);
             KernelOutcome {
                 value: args,
                 result: if self.alloc_oom {
@@ -6847,6 +6668,10 @@ mod tests {
             if self.corrupt_flags {
                 args.flags ^= 1;
             }
+            if let Some(mutate) = self.allocation_output_mutator {
+                mutate(&mut args);
+            }
+            self.last_allocation_output = Some(args);
             KernelOutcome {
                 value: args,
                 result: if self.alloc_oom {
@@ -9183,7 +9008,30 @@ mod tests {
         ));
         assert_eq!(engine.phase(), SharedMemorySessionPhaseV1::Quarantined);
         assert_eq!(engine.backend.alloc_calls, 1);
-        assert_eq!(engine.retained_gpu_va_bytes, 0);
+        let pending = engine.pending_allocation.as_ref().unwrap();
+        assert_eq!(
+            pending.stage,
+            crate::shared_memory::allocation::PendingAllocationStageV1::Allocate
+        );
+        assert_eq!(pending.id, 1);
+        assert_eq!(pending.record_slot, 0);
+        assert_eq!(
+            pending.layout.requested_bytes(),
+            crate::queue::completion::COMPLETION_SIGNAL_ARENA_BYTES_V1
+        );
+        assert_eq!(engine.retained_gpu_va_bytes, pending.layout.gpu_va_bytes());
+        assert_eq!(
+            pending.reservation,
+            Some((0x2_0000, pending.layout.gpu_va_bytes() as usize))
+        );
+        assert_eq!(
+            pending.allocation_output,
+            engine.backend.last_allocation_output
+        );
+        assert!(pending.allocation_output.unwrap().handle != 0);
+        assert!(pending.mapping.is_none());
+        assert!(engine.allocations.is_empty());
+        assert_eq!(engine.next_id, 2);
     }
 
     #[test]

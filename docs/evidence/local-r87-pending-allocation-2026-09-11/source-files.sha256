@@ -1,0 +1,8 @@
+d17e64a8d3881f134c71bc0e569a6db2295410dc1c0e7ae3fcf3a3fcdd334c01  crates/fe2o3-kfd/src/shared_memory.rs
+d1f4d9badb99f56e9afd498c1a457620fc2a31ce7bb4af94d46cf4d3d14f8e22  crates/fe2o3-kfd/src/shared_memory/allocation.rs
+2cfd4f4b45de7dcde1827c95a27b9679f49134e5aef0f30588add1e6ae9aa9b1  crates/fe2o3-kfd/src/shared_memory/host_resource_accounting.rs
+7dffa04a371e2db7958e615fe79a4c75c328779955bb460b9c969563753eca17  crates/fe2o3-kfd/src/shared_memory/tests/allocation.rs
+d1d067ff0c20c5bbec7813ddee6645b4649a08f40e319e9e2fb8c8ec6f08c606  docs/runtime-a1-a2-next-wave.md
+c511c08f82bc3420db20d128741a1fa1faf4562243b8ad1d9696cbe40d3b19e4  docs/runtime-a1-a2-swarm-dispatch-r83.md
+b918ced77cb1a8609167f6a9edaeaabf00ca44c62d9a344783ebb183602ad3b6  docs/runtime-a1-a2-swarm-plan.md
+848e133d0fc50b54d4e927e9cec55b7db92c374801dfd390941e5254a117fdd3  docs/runtime-pending-gtt-allocation-v1.md

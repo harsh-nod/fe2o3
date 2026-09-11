@@ -1,0 +1,20 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 13 tests
+test queue::dispatch_binding::pristine_abort::tests::dispatch_retention_after_pristine_abort_preserves_all_five_input_variants ... ok
+test shared_memory::tests::dispatch_retention::dispatch_retention_malformed_content_never_downgrades_initialization ... ok
+test shared_memory::tests::dispatch_retention::dispatch_retention_foreign_host_session_and_device_vm_reject_without_moves ... ok
+test shared_memory::tests::dispatch_retention::dispatch_retention_missing_native_backing_at_every_ordinal_keeps_custody ... ok
+test shared_memory::tests::dispatch_retention::dispatch_retention_late_generation_rejection_keeps_original_prefix_and_suffix ... ok
+test shared_memory::tests::dispatch_retention::dispatch_retention_duplicate_native_storage_ignores_initialization_labels ... ok
+test shared_memory::tests::dispatch_retention::dispatch_retention_missing_charge_at_every_ordinal_keeps_full_debit ... ok
+test shared_memory::tests::dispatch_retention::dispatch_retention_capacity_is_bounded_before_validation_or_consumption ... ok
+test shared_memory::tests::dispatch_retention::dispatch_retention_preserves_complete_mixed_roster_and_exact_charges ... ok
+test shared_memory::tests::dispatch_retention::dispatch_retention_wrong_requested_domain_rejects_valid_local_tokens ... ok
+test shared_memory::tests::dispatch_retention::dispatch_retention_preflight_panic_leaves_complete_original_owner ... ok
+test shared_memory::tests::dispatch_retention::dispatch_retention_refunds_only_after_actual_fake_native_disposal ... ok
+test shared_memory::tests::dispatch_retention::dispatch_retention_wrong_phase_at_every_ordinal_keeps_custody ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 822 filtered out; finished in 0.01s
+

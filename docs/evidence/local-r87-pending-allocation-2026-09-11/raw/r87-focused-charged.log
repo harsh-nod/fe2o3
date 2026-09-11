@@ -1,0 +1,57 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_host-2cf4148bcf65e09d)
+
+running 50 tests
+test generated_runtime_arguments::charged_tests::both_preparation_routes_reject_mixed_custody_before_encoding ... ok
+test generated_runtime_arguments::charged_tests::charged_decoder_cannot_be_used_as_legacy_data_decoder ... ok
+test generated_runtime_arguments::charged_tests::changed_accounting_roster_or_private_seed_scalar_rejects ... ok
+test generated_runtime_arguments::charged_tests::abandoned_observer_retains_seed_until_producer_disposal ... ok
+test generated_runtime_arguments::charged_tests::charged_preparation_reuses_seed_and_preserves_exact_packing ... ok
+test generated_runtime_arguments::charged_tests::charged_write_only_mapped_output_uses_the_existing_binding_rules ... ok
+test generated_runtime_arguments::charged_tests::concurrent_observers_cannot_extract_a_partially_decoded_roster ... ok
+test generated_runtime_arguments::charged_tests::equal_capacity_foreign_read_member_cannot_cross_invocation_gates ... ok
+test generated_runtime_arguments::charged_tests::empty_typed_output_owns_a_member_and_read_only_returns_have_their_own_charge ... ok
+test generated_runtime_arguments::charged_tests::charged_try_take_does_not_wait_for_a_locked_seed ... ok
+test generated_runtime_arguments::charged_tests::full_roster_exhaustion_prevents_binding_every_earlier_seed ... ok
+test generated_runtime_arguments::charged_tests::extracted_result_outlives_joined_producer_and_all_other_owners ... ok
+test generated_runtime_arguments::charged_tests::failed_or_panicking_binding_disposes_prepared_and_unissued_members ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::invocation_preparation_failure_disposes_inputs_and_credits ... ok
+test generated_runtime_arguments::charged_tests::every_sealed_scalar_decodes_into_the_original_typed_extent ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::invocation_preparation_does_not_relax_private_segment_validation ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::invocation_preparation_retains_credits_through_unwind ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::invocation_preparation_retains_exact_identity_and_disposes_without_outputs ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::invocation_persistent_projection_retains_original_peak_and_no_output_authority ... ok
+test generated_runtime_arguments::charged_tests::public_pack_cannot_shed_the_charged_route ... ok
+test generated_runtime_arguments::charged_tests::output_members_dispose_independently_without_partial_peak_refunds ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_completion_preserves_owner_through_decode ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_decoder_panic_disposes_overlap_before_seed_refund ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::invocation_storage_disposes_payload_before_decoder_even_during_unwind ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::invocation_read_only_preparation_retains_credit_with_policy_copies ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_dropped_observer_retains_credits_until_completion ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::invocation_persistent_projection_disposes_storage_and_credits_on_early_and_late_rejection ... ok
+test generated_runtime_arguments::charged_tests::poisoned_seed_custody_rejects_decode_and_refunds_after_abandonment ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_unused_read_only_mutation_rejects_all_outputs ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::invocation_persistent_projection_disposes_payload_before_decoder_on_drop_and_unwind ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_missing_owner_never_decodes ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_read_only_only_completion_releases_all_members ... ok
+test generated_runtime_arguments::charged_tests::zero_buffer_preparation_bypasses_the_nonempty_batch_api ... ok
+test generated_runtime_arguments::charged_tests::late_shape_or_access_or_capacity_error_never_publishes_earlier_outputs ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_settlement_failure_never_commits_ready_outputs ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::generated_storage_mutable_view_preserves_charged_full_roster_and_readback ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::readback_includes_unused_read_only_buffers_and_exact_access ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::generated_storage_with_readback_disposes_payload_before_refund_on_drop_and_unwind ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::readback_staged_rejection_refunds_only_disposed_overlap_and_allows_retry ... ok
+test generated_runtime_arguments::charged_tests::lower_pack_rejection_disposes_all_bound_outputs_and_credits ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::readback_uses_original_account_and_preserves_prepared_source ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::readback_byte_and_record_exhaustion_preserve_original_custody ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::readback_installed_and_staged_unwind_dispose_all_host_storage ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::readback_zero_length_expectation_does_not_add_a_native_buffer ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_zero_output_does_not_shift_physical_ordinals ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::readback_rejects_bad_destination_lengths_and_excess_capacity ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_foreign_gate_rejects_with_shared_or_separate_budgets ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::readback_late_allocation_failure_and_panic_restore_full_account ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::readback_rejects_decoder_length_access_count_and_gate_substitution ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_late_shape_and_decoder_mutations_reject_before_delivery ... ok
+
+test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 212 filtered out; finished in 0.05s
+

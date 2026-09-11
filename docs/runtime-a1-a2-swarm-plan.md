@@ -1,14 +1,18 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Current locally accepted implementation: R86's NATIVE-1 data-conversion portion,
-on signed R85 `9f8779faab169271d716f4a241f849fef0af3567`. Its
-[evidence](evidence/local-r86-dispatch-retention-2026-09-11/README.md) records all
-seventeen final source gates, 2,401 runtime tests per GNU/musl target and thirteen
+Current locally accepted implementation: R87 pending GTT allocation custody,
+on signed R86 `1fa69f17e526e2b96ba69a22047f209c261c367e` and signed dispatch-only
+`d2e65f47d942af8307d3d54ffa6ee82bef5d2c30`. Its
+[evidence](evidence/local-r87-pending-allocation-2026-09-11/README.md) records all
+seventeen final source gates, 2,415 runtime tests per GNU/musl target and fourteen
 new KFD regressions (host suites unchanged at 258 GNU / 141 musl).
 The [current dispatch](runtime-a1-a2-swarm-dispatch-r83.md) assigns native
-remaining NATIVE-1 control/build ownership and NATIVE-2 constructor custody,
-independent runtime completion and version work. R86's atomic data conversion
-does not yet retain full code/kernarg or outer unwind/retake state.
+remaining CONTROL-1 session transitions, CONTROL-2 preparation ownership and
+CONTROL-3 both bind settlements, then NATIVE-2 constructor custody; independent
+CO-1/2/3 completion fixtures and VER-1A.1 through .5 journal work.
+R86 atomic data conversion and R87 pending allocation custody do not yet retain
+successful tokens across model projection, full code/kernarg construction or
+outer unwind/retake/validation state. They add no native adoption or control budgets.
 R85's private host decoder is implemented; runtime COMPLETE
 must call it, not recreate it. Local acceptance does not enable native execution.
 Historical packet validation and exact source/evidence identities remain below.

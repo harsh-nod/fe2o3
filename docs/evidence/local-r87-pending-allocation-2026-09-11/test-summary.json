@@ -1,0 +1,137 @@
+{
+  "gnu-tests": {
+    "passed": 2415,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "musl-tests": {
+    "passed": 2415,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "gnu-docs": {
+    "passed": 108,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 7
+  },
+  "musl-docs": {
+    "passed": 91,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 5
+  },
+  "musl-host-docs": {
+    "passed": 16,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 2
+  },
+  "gnu-host": {
+    "passed": 258,
+    "failed": 0,
+    "ignored": 4,
+    "harnesses": 1
+  },
+  "musl-host": {
+    "passed": 141,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "macro-fixtures": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_allocation": {
+    "passed": 14,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_retention": {
+    "passed": 13,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_readback": {
+    "passed": 10,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_charged": {
+    "passed": 50,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_shells": {
+    "passed": 19,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_storage": {
+    "passed": 9,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 2
+  },
+  "focused_adoption": {
+    "passed": 15,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_async": {
+    "passed": 233,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_memory": {
+    "passed": 175,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "base_commit": "d2e65f47d942af8307d3d54ffa6ee82bef5d2c30",
+  "signed_implementation_baseline": "1fa69f17e526e2b96ba69a22047f209c261c367e",
+  "final_gate_attempt": "r87-accepted",
+  "non_documentation_source_identities_checked": 5622,
+  "new_kfd_cpu_test_functions": 14,
+  "new_runtime_cpu_test_functions": 0,
+  "new_host_cpu_test_functions": 0,
+  "new_compile_fail_doctests": 0,
+  "modified_existing_completion_arena_oom_regression": true,
+  "negative_mutations_precede_only_existing_completion_arena_test_update": true,
+  "pending_gtt_allocation_custody_implemented": true,
+  "returned_native_outputs_preserved_before_validation_cpu_validated": true,
+  "exact_existing_records_and_optional_charges_cpu_validated": true,
+  "id_and_va_counter_reserve_at_first_native_attempt": true,
+  "id_and_va_counter_establish_physical_residency": false,
+  "output_on_errno_mutation_rejected": true,
+  "cleared_pending_owner_mutation_rejected": true,
+  "restored_helper_sha256": "d1f4d9badb99f56e9afd498c1a457620fc2a31ce7bb4af94d46cf4d3d14f8e22",
+  "unreturned_userptr_mapping_custody_implemented": false,
+  "full_native_construction_custody_implemented": false,
+  "code_kernarg_failure_descriptor_recovery_fixed": false,
+  "outer_unwind_and_closing_retake_custody_implemented": false,
+  "native_generated_adoption_hooks_installed": false,
+  "kernarg_and_executable_backing_charges_implemented": false,
+  "linux_pending_allocation_qualified": false,
+  "adapter_refinement_proved": false,
+  "gpu_performance_measured": false,
+  "verus_solver_rerun": false,
+  "new_verus_theorems": 0,
+  "negative_inventory_files": 686,
+  "model_and_proof_sources_unchanged_from": "fb1e27e66cee27bb11f0b7c08f2d5994c5d168da",
+  "manifests_and_lockfiles_unchanged": true,
+  "production_metadata_sha256": "6c0cac53358224a31c356d91228b602ae8545f7c156a0c695f103533238054ca"
+}

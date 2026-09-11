@@ -1,0 +1,22 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.98s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 14 tests
+test shared_memory::tests::allocation::pending_allocation_errno_preserves_nonzero_handle_and_all_raw_fields ... ok
+test shared_memory::tests::allocation::pending_allocation_invalid_reservation_and_mapping_keep_original_objects ... ok
+test shared_memory::tests::allocation::pending_allocation_control_failure_keeps_existing_host_and_device_charges ... ok
+test shared_memory::tests::allocation::pending_allocation_collision_preserves_preexisting_records_and_charges ... ok
+test shared_memory::tests::allocation::pending_allocation_malformed_output_is_retained_without_authority ... ok
+test shared_memory::tests::allocation::pending_allocation_pure_rejection_consumes_no_slot_identity_or_native_budget ... ok
+test shared_memory::tests::allocation::pending_allocation_success_moves_exact_resources_and_charge_into_record ... ok
+test shared_memory::tests::allocation::pending_allocation_unconfigured_failures_still_quarantine_and_retain ... ok
+test shared_memory::tests::allocation::pending_allocation_currentness_faults_preserve_original_panic_and_prefix ... ok
+test shared_memory::tests::allocation::pending_allocation_userptr_currentness_retains_returned_mapping_before_alloc ... ok
+test shared_memory::tests::allocation::pending_allocation_userptr_retains_only_returned_mapping_and_raw_output ... ok
+test shared_memory::tests::allocation::pending_allocation_native_faults_retain_every_returned_control_output ... ok
+test shared_memory::tests::allocation::pending_allocation_capacity_and_released_slot_reuse_remain_bounded ... ok
+test shared_memory::tests::allocation::pending_allocation_failed_released_slot_reuse_keeps_all_committed_records ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 821 filtered out; finished in 0.01s
+

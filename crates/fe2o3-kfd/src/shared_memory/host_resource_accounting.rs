@@ -242,6 +242,10 @@ pub(super) struct HostBackingChargeV1 {
 }
 
 impl HostBackingChargeV1 {
+    pub(super) fn quarantine(self) {
+        self.credits.quarantine();
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn matches(
         &self,
