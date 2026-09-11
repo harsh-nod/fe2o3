@@ -844,14 +844,17 @@ impl<'a> Analyzer<'a> {
                     subgroup_collective_variation(self.value(predicate))
                 }
                 WaveOperationKind::ShuffleIndex {
-                    value, source_lane, ..
+                    value,
+                    source_lane,
+                    tile_width,
                 } => {
                     let value = self.value(value);
                     if value.is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup) {
                         value
-                    } else if self
-                        .value(source_lane)
-                        .is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup)
+                    } else if tile_width == wave.width.lanes()
+                        && self
+                            .value(source_lane)
+                            .is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup)
                     {
                         Variation::SubgroupUniform
                     } else {
