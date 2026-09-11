@@ -1,0 +1,27 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 30.10s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::dispatch_binding::preparation::tests::preparation_materialization_access_and_currentness_panics_keep_borrowed_token ... FAILED
+
+failures:
+
+---- queue::dispatch_binding::preparation::tests::preparation_materialization_access_and_currentness_panics_keep_borrowed_token stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_materialization_access_and_currentness_panics_keep_borrowed_token' (585454) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6845:17:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_materialization_access_and_currentness_panics_keep_borrowed_token' (585454) panicked at crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs:371:9:
+assertion `left == right` failed: missing actual control owner
+  left: 0
+ right: 1
+
+
+failures:
+    queue::dispatch_binding::preparation::tests::preparation_materialization_access_and_currentness_panics_keep_borrowed_token
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 873 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

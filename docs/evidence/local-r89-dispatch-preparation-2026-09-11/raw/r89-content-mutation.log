@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 26.63s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::dispatch_binding::preparation::tests::preparation_preserves_mixed_roster_and_full_successful_images ... FAILED
+
+failures:
+
+---- queue::dispatch_binding::preparation::tests::preparation_preserves_mixed_roster_and_full_successful_images stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_preserves_mixed_roster_and_full_successful_images' (586555) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs:101:13:
+assertion `left == right` failed
+  left: None
+ right: Some(Gfx942DeviceContentDescriptorV1 { role: Gfx942DeviceContentRoleV1 { identity: [81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81], ordinal: 7 }, byte_len: 4096, sha256: [161, 210, 180, 116, 225, 120, 207, 25, 20, 185, 185, 117, 46, 110, 58, 181, 198, 252, 135, 243, 230, 39, 81, 80, 142, 43, 68, 23, 51, 164, 130, 139], identity: [186, 1, 164, 115, 220, 52, 172, 92, 102, 224, 163, 65, 148, 26, 210, 228, 120, 232, 151, 188, 117, 206, 158, 234, 81, 139, 244, 105, 130, 109, 49, 0] })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::dispatch_binding::preparation::tests::preparation_preserves_mixed_roster_and_full_successful_images
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 873 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

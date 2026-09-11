@@ -1301,33 +1301,22 @@ impl ComputeAqlQueueSessionV1 {
             };
             data.push(item);
         }
-        let mut retained_data = Some(data);
+        let mut preparation = FixedDispatchPreparationCustodyV1::new(packets, data);
         let prepared_dispatch = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.with_live_queue_memory_model_custody(|memory| {
                 prepare_three_binding_persistent_fixed_dispatch_resources_v1(
                     memory,
-                    programs,
-                    packets,
-                    retained_data
-                        .take()
-                        .expect("custody operation executes at most once"),
+                    &programs,
+                    &mut preparation,
                     detached_generation,
                     control_identity,
                 )
             })
         }));
         let prepared_dispatch = match prepared_dispatch {
-            Ok(Ok((Ok(dispatch), Ok(())))) => Ok(dispatch),
-            Ok(Ok((Err(failure), Ok(())))) => Err((failure.error.into(), failure.data)),
-            Ok(Ok((Ok(dispatch), Err(error)))) => {
-                self.dispatch = Some(dispatch);
-                Err((error, Vec::new()))
-            }
-            Ok(Ok((Err(failure), Err(error)))) => {
-                let _ = failure.error;
-                Err((error, failure.data))
-            }
-            Ok(Err(error)) => Err((error, retained_data.take().unwrap_or_default())),
+            Ok(Ok((Ok(()), Ok(())))) => Ok(()),
+            Ok(Ok((Err(error), Ok(())))) => Err(error.into()),
+            Ok(Ok((_, Err(error)))) | Ok(Err(error)) => Err(error),
             Err(payload) => {
                 quarantine_persistent_compute_entries_v1(
                     entries.each_mut(),
@@ -1341,11 +1330,9 @@ impl ComputeAqlQueueSessionV1 {
                             attachment_generation,
                         },
                         predecessor_dispatch_generation: detached_generation,
-                        terminal_custody: retained_data.take().map(|data| {
-                            PersistentComputeTerminalNativeCustodyV1::Data(
-                                PersistentComputeTerminalDataV1::from_vec(data),
-                            )
-                        }),
+                        terminal_custody: Some(
+                            PersistentComputeTerminalNativeCustodyV1::Preparation(preparation),
+                        ),
                     },
                 );
                 self.next_persistent_compute_generation = next_attachment_generation;
@@ -1354,9 +1341,11 @@ impl ComputeAqlQueueSessionV1 {
                 std::panic::resume_unwind(payload)
             }
         };
-        let prepared_dispatch = match prepared_dispatch {
+        let prepared_dispatch = match prepared_dispatch
+            .and_then(|()| preparation.take_completed().map_err(Into::into))
+        {
             Ok(dispatch) => dispatch,
-            Err((error, data)) => {
+            Err(error) => {
                 quarantine_persistent_compute_entries_v1(
                     entries.each_mut(),
                     Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
@@ -1369,13 +1358,9 @@ impl ComputeAqlQueueSessionV1 {
                             attachment_generation,
                         },
                         predecessor_dispatch_generation: detached_generation,
-                        terminal_custody: Some(if data.is_empty() {
-                            PersistentComputeTerminalNativeCustodyV1::Attached
-                        } else {
-                            PersistentComputeTerminalNativeCustodyV1::Data(
-                                PersistentComputeTerminalDataV1::from_vec(data),
-                            )
-                        }),
+                        terminal_custody: Some(
+                            PersistentComputeTerminalNativeCustodyV1::Preparation(preparation),
+                        ),
                     },
                 );
                 self.next_persistent_compute_generation = next_attachment_generation;
@@ -1869,23 +1854,22 @@ impl ComputeAqlQueueSessionV1 {
             None if initialized => Gfx942FixedDispatchDataV1::initialized_after_dispatch(lease),
             None => Gfx942FixedDispatchDataV1::uninitialized(lease),
         };
-        let mut retained_data = Some(data);
+        let mut preparation = FixedDispatchPreparationCustodyV1::new(packets, vec![data]);
         let prepared_dispatch = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.with_live_queue_memory_model_custody(|memory| {
                 prepare_persistent_fixed_dispatch_resources_v1(
                     memory,
-                    programs,
-                    packets,
-                    retained_data
-                        .take()
-                        .expect("custody operation executes at most once"),
+                    &programs,
+                    &mut preparation,
                     detached_generation,
                     control_identity,
                 )
             })
         }));
         let prepared_dispatch = match prepared_dispatch {
-            Ok(prepared_dispatch) => prepared_dispatch,
+            Ok(Ok((Ok(()), Ok(())))) => Ok(()),
+            Ok(Ok((Err(error), Ok(())))) => Err(error.into()),
+            Ok(Ok((_, Err(error)))) | Ok(Err(error)) => Err(error),
             Err(payload) => {
                 let state = quarantine_persistent_retained_control_replay_prepared_v1(
                     &mut allocation.owner,
@@ -1903,11 +1887,9 @@ impl ComputeAqlQueueSessionV1 {
                     storage_identity,
                     effect,
                     predecessor_dispatch_generation: detached_generation,
-                    terminal_custody: retained_data.take().map(|data| {
-                        PersistentComputeTerminalNativeCustodyV1::Data(
-                            PersistentComputeTerminalDataV1::from_one(data),
-                        )
-                    }),
+                    terminal_custody: Some(PersistentComputeTerminalNativeCustodyV1::Preparation(
+                        preparation,
+                    )),
                 });
                 self.next_persistent_compute_generation = next_attachment_generation;
                 self.poison_terminal();
@@ -1915,22 +1897,11 @@ impl ComputeAqlQueueSessionV1 {
                 std::panic::resume_unwind(payload)
             }
         };
-        let prepared_dispatch = match prepared_dispatch {
-            Ok((Ok(dispatch), Ok(()))) => Ok(dispatch),
-            Ok((Err(failure), Ok(()))) => Err((failure.error.into(), failure.data)),
-            Ok((Ok(dispatch), Err(error))) => {
-                self.dispatch = Some(dispatch);
-                Err((error, Vec::new()))
-            }
-            Ok((Err(failure), Err(error))) => {
-                let _ = failure.error;
-                Err((error, failure.data))
-            }
-            Err(error) => Err((error, retained_data.into_iter().collect())),
-        };
-        let prepared_dispatch = match prepared_dispatch {
+        let prepared_dispatch = match prepared_dispatch
+            .and_then(|()| preparation.take_completed().map_err(Into::into))
+        {
             Ok(dispatch) => dispatch,
-            Err((error, data)) => {
+            Err(error) => {
                 let state = quarantine_persistent_compute_prepared_v1(
                     &mut allocation.owner,
                     prepared,
@@ -1948,13 +1919,9 @@ impl ComputeAqlQueueSessionV1 {
                     storage_identity,
                     effect,
                     predecessor_dispatch_generation: detached_generation,
-                    terminal_custody: Some(if data.is_empty() {
-                        PersistentComputeTerminalNativeCustodyV1::Attached
-                    } else {
-                        PersistentComputeTerminalNativeCustodyV1::Data(
-                            PersistentComputeTerminalDataV1::from_vec(data),
-                        )
-                    }),
+                    terminal_custody: Some(PersistentComputeTerminalNativeCustodyV1::Preparation(
+                        preparation,
+                    )),
                 });
                 self.next_persistent_compute_generation = next_attachment_generation;
                 self.poison_terminal();

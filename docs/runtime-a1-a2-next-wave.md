@@ -1,21 +1,24 @@
 # A1/A2 Next-Wave Dispatch
 
 Dispatch refreshed 2026-09-11 after the three-agent review of the remaining
-work above signed R88 session transition custody,
-`41d5085430a3d01d869715896fcc0a53c5b8fac1`, on both topic remotes.
-R89 preparation custody is present only as an unaccepted working-tree candidate.
-The latest review splits CONTROL-2 acceptance from CONTROL-3A retake,
+work above R89 CONTROL-2 preparation custody. Its baseline is signed planning
+commit `0a040ece9816335fe4ad0178df9213eb84eca108` above R88, on both topic remotes.
+The [R89 evidence](evidence/local-r89-dispatch-preparation-2026-09-11/README.md)
+records all seventeen source gates and auxiliary checks, 5,627 unchanged source
+identities, 2,454 runtime tests per GNU/musl target, nineteen new KFD tests and
+three rejected mutations. CONTROL-2 is now locally accepted.
+The next native assignments are CONTROL-3A retake,
 3B validation/attachment and 3C retry classification, followed by NATIVE-2.
 See the [current checkpoint](runtime-a1-a2-swarm-dispatch-r83.md#checkpoint-and-ownership)
-for the pending test/gate status; this planning refresh adds no runtime acceptance.
+for the acceptance boundary; no new proof, native execution or performance is claimed.
 The [R88 evidence](evidence/local-r88-session-transitions-2026-09-11/README.md)
 records all seventeen source gates and auxiliary checks, 2,435 runtime tests
 per GNU/musl target, twenty new KFD transition regressions and three rejected
 mutations. Native hooks remain absent; R85 decoding, R86 data
-conversion, R87 pending allocation and R88 CONTROL-1 session transitions are
+conversion, R87 pending allocation, R88 CONTROL-1 and R89 CONTROL-2 are
 implemented, while full NATIVE-1 remains open.
 The [current swarm overlay](runtime-a1-a2-swarm-dispatch-r83.md) assigns NATIVE-1
-preparation ownership and both bind settlements (CONTROL-2/3), followed by
+both bind settlements (CONTROL-3A/B/C), followed by
 NATIVE-2 constructor custody, independent
 runtime COMPLETE-ORACLE above R85, and VER-1A before native
 integration. Its checklist and batches supersede older next-assignment rows
@@ -89,10 +92,10 @@ Under the current ownership policy workers are read-only; Primary owns edits.
 
 | Worker | First bounded packet | Follow-on queue | Exit gate for first packet |
 | --- | --- | --- | --- |
-| Native: `r66_native_coexistence` | R89 CONTROL-2 acceptance -> CONTROL-3A/B/C; then NATIVE-2 | NATIVE-3 DATA-ADOPT; ISSUE native interface; SCALE-1A fixtures; native-budget and R76/R78/R82 qualification harnesses; admitted profiles and capacity | Accept the existing preparation candidate, then cover both bind cardinalities across retake, validation/attachment and retry classification. Retain exact owners on error/panic with zero publication or uncertain retry. |
+| Native: `r66_native_coexistence` | CONTROL-3A/B/C; then NATIVE-2 | NATIVE-3 DATA-ADOPT; ISSUE native interface; SCALE-1A fixtures; native-budget and R76/R78/R82 qualification harnesses; admitted profiles and capacity | Preserve accepted R89 while covering both bind cardinalities across retake, validation/attachment and retry classification. Retain exact owners on error/panic with zero publication or uncertain retry. |
 | Admission: `r66_runtime_coexistence` | CO-1 outcome contract, then CO-2 identity and CO-3 reply/custody fixtures | CO-4 native completion integration with ISSUE -> COMPLETE -> API -> generated graph/drain | Runtime fixtures count data-only completion-adapter calls without reversing the host/runtime dependency. Actual R85/native integration follows adoption and issue; no duplicate decoder or reply reservation. |
 | Resources: `r66_coexistence_model` | VER-1A.1 contract/inventory -> .2 model -> .3 journal -> .4 initial write/copy hooks -> .5 acceptance | VER-1B complete hooks; aggregate domains; remaining backing/control/code budgets; VER-2 leases; MEM-5 closure | Nonwrapping Available/Pending/Unknown whole-allocation versions; bounded, atomic whole-roster admission/settlement. Cross-run leases remain disabled until every mutation hook is integrated. |
-| Primary | Implement the remaining native/runtime/journal packets and DATA-ADOPT on R84/R85/R86/R87/R88 | Cross-review, executable refinement, signed hardware qualification and matched performance | Serialize shared edits/builds/proofs and preserve R80 credit ownership. Accept CPU, proof, Linux and performance results separately; publish signed source/evidence to both topic remotes. |
+| Primary | Implement the remaining native/runtime/journal packets and DATA-ADOPT above R89 | Cross-review, executable refinement, signed hardware qualification and matched performance | Serialize shared edits/builds/proofs and preserve R80 credit ownership. Accept CPU, proof, Linux and performance results separately; publish signed source/evidence to both topic remotes. |
 
 ADOPT-LIFE and DATA-ADOPT are coupled contracts; neither may introduce effects
 before their custody interface is integrated. VER-1A is independent. COMPLETE's
@@ -105,7 +108,7 @@ The critical path is:
 
 ```text
 accepted R84 + R83 + R82 + R80 -> DATA-ADOPT
-R86 + R87 + R88 CONTROL-1 -> CONTROL-2/3 -> NATIVE-2 custody -> DATA-ADOPT
+R86 + R87 + R88 + R89 CONTROL-2 -> CONTROL-3 -> NATIVE-2 custody -> DATA-ADOPT
 DATA-ADOPT + CO-1/2/3 -> ISSUE -> CO-4 / COMPLETE -> API -> GRAPH/DRAIN
 accepted R85 private host substrate + ISSUE -> runtime COMPLETE
 VER-1A -> complete VER-1B mutation hooks -> VER-2 cross-run input leases
@@ -545,8 +548,8 @@ fixture drain do not require that production handoff.
 
 | Stage | Ready work | Gate before advancing |
 | --- | --- | --- |
-| 0: through signed R88 local substrate | Charged results, retained preparation, source/readback reservation, host-cache policy, pristine abort, private unpublished lifecycle, DATA-SHELL, R85 host readback, R86 data conversion, R87 pending allocation and R88 session transitions | Retained packet-specific source gates; R82-R88 add no new adapter proof. Native/whole-executor and hardware acceptance remain separate |
-| 1: ready local packets | R89 CONTROL-2 acceptance, CONTROL-3A/B/C then NATIVE-2; independent COMPLETE-ORACLE, VER-1A, short/long fixtures and native-budget harness | R89 is unaccepted, not another completed substrate. Freeze cross-lane interfaces; complete deterministic ownership/failure/oracle tests. DATA-ADOPT follows complete native construction custody; DATA-SHELL is already accepted |
+| 0: through R89 local substrate | Charged results, retained preparation, source/readback reservation, host-cache policy, pristine abort, private unpublished lifecycle, DATA-SHELL, R85 host readback, R86 data conversion, R87 pending allocation, R88 transitions and R89 preparation custody | Retained packet-specific source gates; R82-R89 add no new adapter proof. Native/whole-executor and hardware acceptance remain separate |
+| 1: ready local packets | CONTROL-3A/B/C then NATIVE-2; independent COMPLETE-ORACLE, VER-1A, short/long fixtures and native-budget harness | Preserve accepted R89 and freeze cross-lane interfaces; complete deterministic ownership/failure/oracle tests. DATA-ADOPT follows complete native construction custody; DATA-SHELL is already accepted |
 | 2: compose ownership | Broader native profiles, domains, control/code budgets, versions and GEN-2B | No duplicate backing debit, unbounded child accounts, stale input authority or detached decoder; preserve progress headroom |
 | 3: qualify A1/A2 | Out-of-order native depth, repeated generated graphs, active drain, memory pressure and overlap | Admitted workloads, exact compiler evidence for production generated cells, signed full-output captures and cleanup; existing copy/overlap campaigns may run earlier |
 | 4: measure and close | Matched KFD/HSA/HIP producers, executable proof composition and exit audit | Predeclared workloads/thresholds, resource/CPU/tail metrics, separate device-timeline evidence for physical overlap; every A1/A2 acceptance cell resolved |

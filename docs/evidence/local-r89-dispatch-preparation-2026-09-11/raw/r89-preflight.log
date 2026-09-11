@@ -1,0 +1,164 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.83s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 16 tests
+test queue::dispatch_binding::preparation::tests::preparation_foreign_data_rejection_keeps_the_complete_original_roster ... FAILED
+test queue::dispatch_binding::preparation::tests::preparation_allocation_projection_failure_keeps_actual_returned_control ... FAILED
+test queue::dispatch_binding::preparation::tests::preparation_allocation_native_failures_keep_prior_code_and_pending_custody ... FAILED
+test queue::dispatch_binding::preparation::tests::preparation_every_program_stage_retains_exact_prefix_on_error_and_panic ... FAILED
+test queue::dispatch_binding::preparation::tests::preparation_completed_owner_survives_caller_unwind_before_transfer ... FAILED
+test queue::dispatch_binding::preparation::tests::preparation_invalid_generation_and_plan_keep_original_inputs ... FAILED
+test queue::dispatch_binding::preparation::tests::preparation_kernarg_and_commit_stages_retain_all_controls ... FAILED
+test queue::dispatch_binding::preparation::tests::preparation_late_packet_resolution_keeps_earlier_packet_and_all_controls ... FAILED
+test queue::dispatch_binding::preparation::tests::preparation_materialization_access_and_currentness_panics_keep_borrowed_token ... FAILED
+test queue::dispatch_binding::preparation::tests::preparation_partial_mapping_keeps_current_session_token_and_prefix ... FAILED
+test queue::dispatch_binding::preparation::tests::preparation_pre_effect_stage_failures_leave_native_state_unchanged ... FAILED
+test queue::dispatch_binding::preparation::tests::preparation_single_persistent_wrapper_preserves_role_and_generation ... FAILED
+test queue::dispatch_binding::preparation::tests::preparation_mapping_panics_and_currentness_failures_keep_exact_custody ... FAILED
+test queue::dispatch_binding::preparation::tests::preparation_terminal_variant_retains_actual_completed_owner ... FAILED
+test queue::dispatch_binding::preparation::tests::preparation_seal_native_and_currentness_failures_keep_exact_session_handoff ... FAILED
+test queue::dispatch_binding::preparation::tests::preparation_preserves_mixed_roster_and_full_successful_images ... FAILED
+
+failures:
+
+---- queue::dispatch_binding::preparation::tests::preparation_foreign_data_rejection_keeps_the_complete_original_roster stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_foreign_data_rejection_keeps_the_complete_original_roster' (513666) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding.rs:6095:14:
+called `Result::unwrap()` on an `Err` value: MissingSourceContractIdentity
+
+---- queue::dispatch_binding::preparation::tests::preparation_allocation_projection_failure_keeps_actual_returned_control stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_allocation_projection_failure_keeps_actual_returned_control' (513663) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding.rs:6095:14:
+called `Result::unwrap()` on an `Err` value: MissingSourceContractIdentity
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_allocation_projection_failure_keeps_actual_returned_control' (513663) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs:216:24:
+called `Result::unwrap()` on an `Err` value: Any { .. }
+
+---- queue::dispatch_binding::preparation::tests::preparation_allocation_native_failures_keep_prior_code_and_pending_custody stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_allocation_native_failures_keep_prior_code_and_pending_custody' (513662) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding.rs:6095:14:
+called `Result::unwrap()` on an `Err` value: MissingSourceContractIdentity
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_allocation_native_failures_keep_prior_code_and_pending_custody' (513662) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs:216:24:
+called `Result::unwrap()` on an `Err` value: Any { .. }
+
+---- queue::dispatch_binding::preparation::tests::preparation_every_program_stage_retains_exact_prefix_on_error_and_panic stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_every_program_stage_retains_exact_prefix_on_error_and_panic' (513665) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding.rs:6095:14:
+called `Result::unwrap()` on an `Err` value: MissingSourceContractIdentity
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_every_program_stage_retains_exact_prefix_on_error_and_panic' (513665) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs:123:24:
+called `Result::unwrap()` on an `Err` value: Any { .. }
+
+---- queue::dispatch_binding::preparation::tests::preparation_completed_owner_survives_caller_unwind_before_transfer stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_completed_owner_survives_caller_unwind_before_transfer' (513664) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding.rs:6095:14:
+called `Result::unwrap()` on an `Err` value: MissingSourceContractIdentity
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_completed_owner_survives_caller_unwind_before_transfer' (513664) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs:346:5:
+assertion `left == right` failed
+  left: None
+ right: Some("caller after preparation")
+
+---- queue::dispatch_binding::preparation::tests::preparation_invalid_generation_and_plan_keep_original_inputs stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_invalid_generation_and_plan_keep_original_inputs' (513667) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding.rs:6095:14:
+called `Result::unwrap()` on an `Err` value: MissingSourceContractIdentity
+
+---- queue::dispatch_binding::preparation::tests::preparation_kernarg_and_commit_stages_retain_all_controls stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_kernarg_and_commit_stages_retain_all_controls' (513668) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding.rs:6095:14:
+called `Result::unwrap()` on an `Err` value: MissingSourceContractIdentity
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_kernarg_and_commit_stages_retain_all_controls' (513668) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs:123:24:
+called `Result::unwrap()` on an `Err` value: Any { .. }
+
+---- queue::dispatch_binding::preparation::tests::preparation_late_packet_resolution_keeps_earlier_packet_and_all_controls stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_late_packet_resolution_keeps_earlier_packet_and_all_controls' (513669) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding.rs:6095:14:
+called `Result::unwrap()` on an `Err` value: MissingSourceContractIdentity
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_late_packet_resolution_keeps_earlier_packet_and_all_controls' (513669) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs:360:5:
+assertion `left == right` failed
+  left: 0
+ right: 1
+
+---- queue::dispatch_binding::preparation::tests::preparation_materialization_access_and_currentness_panics_keep_borrowed_token stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_materialization_access_and_currentness_panics_keep_borrowed_token' (513671) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding.rs:6095:14:
+called `Result::unwrap()` on an `Err` value: MissingSourceContractIdentity
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_materialization_access_and_currentness_panics_keep_borrowed_token' (513671) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs:214:9:
+assertion failed: result.unwrap_err().downcast_ref::<(&str, &str)>().is_some()
+
+---- queue::dispatch_binding::preparation::tests::preparation_partial_mapping_keeps_current_session_token_and_prefix stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_partial_mapping_keeps_current_session_token_and_prefix' (513672) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding.rs:6095:14:
+called `Result::unwrap()` on an `Err` value: MissingSourceContractIdentity
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_partial_mapping_keeps_current_session_token_and_prefix' (513672) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs:216:24:
+called `Result::unwrap()` on an `Err` value: Any { .. }
+
+---- queue::dispatch_binding::preparation::tests::preparation_pre_effect_stage_failures_leave_native_state_unchanged stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_pre_effect_stage_failures_leave_native_state_unchanged' (513673) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding.rs:6095:14:
+called `Result::unwrap()` on an `Err` value: MissingSourceContractIdentity
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_pre_effect_stage_failures_leave_native_state_unchanged' (513673) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs:123:24:
+called `Result::unwrap()` on an `Err` value: Any { .. }
+
+---- queue::dispatch_binding::preparation::tests::preparation_single_persistent_wrapper_preserves_role_and_generation stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_single_persistent_wrapper_preserves_role_and_generation' (513676) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding.rs:6095:14:
+called `Result::unwrap()` on an `Err` value: MissingSourceContractIdentity
+
+---- queue::dispatch_binding::preparation::tests::preparation_mapping_panics_and_currentness_failures_keep_exact_custody stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_mapping_panics_and_currentness_failures_keep_exact_custody' (513670) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding.rs:6095:14:
+called `Result::unwrap()` on an `Err` value: MissingSourceContractIdentity
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_mapping_panics_and_currentness_failures_keep_exact_custody' (513670) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs:214:9:
+assertion failed: result.unwrap_err().downcast_ref::<(&str, &str)>().is_some()
+
+---- queue::dispatch_binding::preparation::tests::preparation_terminal_variant_retains_actual_completed_owner stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_terminal_variant_retains_actual_completed_owner' (513677) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding.rs:6095:14:
+called `Result::unwrap()` on an `Err` value: MissingSourceContractIdentity
+
+---- queue::dispatch_binding::preparation::tests::preparation_seal_native_and_currentness_failures_keep_exact_session_handoff stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_seal_native_and_currentness_failures_keep_exact_session_handoff' (513675) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding.rs:6095:14:
+called `Result::unwrap()` on an `Err` value: MissingSourceContractIdentity
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_seal_native_and_currentness_failures_keep_exact_session_handoff' (513675) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs:216:24:
+called `Result::unwrap()` on an `Err` value: Any { .. }
+
+---- queue::dispatch_binding::preparation::tests::preparation_preserves_mixed_roster_and_full_successful_images stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_preserves_mixed_roster_and_full_successful_images' (513674) panicked at crates/fe2o3-kfd/src/queue_dispatch_binding.rs:6095:14:
+called `Result::unwrap()` on an `Err` value: MissingSourceContractIdentity
+
+
+failures:
+    queue::dispatch_binding::preparation::tests::preparation_allocation_native_failures_keep_prior_code_and_pending_custody
+    queue::dispatch_binding::preparation::tests::preparation_allocation_projection_failure_keeps_actual_returned_control
+    queue::dispatch_binding::preparation::tests::preparation_completed_owner_survives_caller_unwind_before_transfer
+    queue::dispatch_binding::preparation::tests::preparation_every_program_stage_retains_exact_prefix_on_error_and_panic
+    queue::dispatch_binding::preparation::tests::preparation_foreign_data_rejection_keeps_the_complete_original_roster
+    queue::dispatch_binding::preparation::tests::preparation_invalid_generation_and_plan_keep_original_inputs
+    queue::dispatch_binding::preparation::tests::preparation_kernarg_and_commit_stages_retain_all_controls
+    queue::dispatch_binding::preparation::tests::preparation_late_packet_resolution_keeps_earlier_packet_and_all_controls
+    queue::dispatch_binding::preparation::tests::preparation_mapping_panics_and_currentness_failures_keep_exact_custody
+    queue::dispatch_binding::preparation::tests::preparation_materialization_access_and_currentness_panics_keep_borrowed_token
+    queue::dispatch_binding::preparation::tests::preparation_partial_mapping_keeps_current_session_token_and_prefix
+    queue::dispatch_binding::preparation::tests::preparation_pre_effect_stage_failures_leave_native_state_unchanged
+    queue::dispatch_binding::preparation::tests::preparation_preserves_mixed_roster_and_full_successful_images
+    queue::dispatch_binding::preparation::tests::preparation_seal_native_and_currentness_failures_keep_exact_session_handoff
+    queue::dispatch_binding::preparation::tests::preparation_single_persistent_wrapper_preserves_role_and_generation
+    queue::dispatch_binding::preparation::tests::preparation_terminal_variant_retains_actual_completed_owner
+
+test result: FAILED. 0 passed; 16 failed; 0 ignored; 0 measured; 855 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

@@ -1,0 +1,13 @@
+*** Begin Patch
+*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_dispatch_binding/preparation.rs
+@@
+-            let CodeStageV1::Cpu(token) = &mut self.current_code else {
++            let CodeStageV1::Cpu(mut token) = core::mem::replace(&mut self.current_code, CodeStageV1::Empty) else {
+@@
+-                    .write_code(token, |bytes| {
++                    .write_code(&mut token, |bytes| {
+@@
+-            self.step(PreparationStageV1::CodeSeal(index))?;
++            self.current_code = CodeStageV1::Cpu(token);
++            self.step(PreparationStageV1::CodeSeal(index))?;
+*** End Patch

@@ -1,0 +1,174 @@
+{
+  "gnu-tests": {
+    "passed": 2454,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "musl-tests": {
+    "passed": 2454,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "gnu-docs": {
+    "passed": 108,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 7
+  },
+  "musl-docs": {
+    "passed": 91,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 5
+  },
+  "musl-host-docs": {
+    "passed": 16,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 2
+  },
+  "gnu-host": {
+    "passed": 258,
+    "failed": 0,
+    "ignored": 4,
+    "harnesses": 1
+  },
+  "musl-host": {
+    "passed": 141,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "macro-fixtures": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_preparation": {
+    "passed": 19,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_transitions": {
+    "passed": 20,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_memory": {
+    "passed": 195,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_allocation": {
+    "passed": 14,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_retention": {
+    "passed": 13,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_readback": {
+    "passed": 10,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_charged": {
+    "passed": 50,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_shells": {
+    "passed": 19,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_storage": {
+    "passed": 9,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 2
+  },
+  "focused_adoption": {
+    "passed": 15,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_async": {
+    "passed": 233,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "base_commit": "0a040ece9816335fe4ad0178df9213eb84eca108",
+  "final_gate_attempt": "r89-final",
+  "non_documentation_source_identities_checked": 5627,
+  "new_kfd_cpu_test_functions": 19,
+  "new_runtime_cpu_test_functions": 0,
+  "new_host_cpu_test_functions": 0,
+  "new_compile_fail_doctests": 0,
+  "control2_complete_preparation_custody_implemented": true,
+  "one_production_sequencer_and_existing_planner": true,
+  "generation_precedes_first_fallible_stage": true,
+  "original_data_descriptors_and_actual_native_bytes_preserved": true,
+  "exact_control_marker_to_session_token_linkage": true,
+  "successful_preparation_rooted_across_persistent_construction_retake": true,
+  "full_control3_bind_settlement_implemented": false,
+  "queue_constructor_outer_custody_implemented": false,
+  "native_generated_adoption_hooks_installed": false,
+  "kernarg_executable_control_budgets_implemented": false,
+  "linux_control2_qualified": false,
+  "adapter_refinement_proved": false,
+  "gpu_performance_measured": false,
+  "verus_solver_rerun": false,
+  "new_verus_theorems": 0,
+  "negative_inventory_files": 686,
+  "model_and_proof_sources_unchanged_from": "fb1e27e66cee27bb11f0b7c08f2d5994c5d168da",
+  "manifests_and_lockfiles_unchanged": true,
+  "expected_negative_mutations": [
+    {
+      "label": "current-token-final",
+      "assertion": "missing actual control owner",
+      "source_sha256": "680dcb1b27db1e3f87466be386e2b0eff97b5f9a719e24171cbc3f7704fc23e1",
+      "patch_sha256": "aab740bf8f7367031c648973070ecd4aa237ca261c60fd5fdf5d414893e7ef3d"
+    },
+    {
+      "label": "content",
+      "assertion": "left: None",
+      "source_sha256": "369bd5e15c4ef161f85c0274f8a43492380410264a151e11fc740827e66bfaa5",
+      "patch_sha256": "7565b113f8f5773e3f54bff79a6c6c65e66785995a560cfced5382576a94aea4"
+    },
+    {
+      "label": "marker",
+      "assertion": "every terminal transition must have its exact preparation handoff marker",
+      "source_sha256": "cbe43b9246fde7cfedc2ccbfe2453eefccbd808487d920970d6dea540e5b5c19",
+      "patch_sha256": "c2523ec130d8dda71c7bdee801e15c1d063cedfc30bcb00fd961a7079032a975"
+    }
+  ],
+  "restored_r89_source_sha256": {
+    "crates/fe2o3-kfd/src/persistent_compute.rs": "4536d52dd049af2822fabf8b32b801dcda34c290f32ab4ab79c23ca4bc8fc17b",
+    "crates/fe2o3-kfd/src/queue_dispatch_binding.rs": "a9fde197c26595e998efb0307ffb6851898fabd111cad6d104f2ee098d5b5143",
+    "crates/fe2o3-kfd/src/queue_dispatch_binding/preparation.rs": "4f61d46459318187e83073af52b3b839c8d5f30c96fafd9dab1b789480d4cc92",
+    "crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs": "416a3ac8db2598030bb60b3da5cd23e151f17a35baece20378885faf85efeec3",
+    "crates/fe2o3-kfd/src/queue_dispatch_binding/pristine_abort.rs": "03675d752f780e401ef0ba8639c19b8e8f682df1324ff0fbbc154abe9dda6164",
+    "crates/fe2o3-kfd/src/queue_live.rs": "cf065307790404b4b839cab5a3b476fe0ff8fa09688ad7418206b3c529928802",
+    "crates/fe2o3-kfd/src/queue_live/fixed_dispatch.rs": "3e816dd5004c94a3be726fd021c6fbd0aa339685ae3192eaff092357e40855b8",
+    "crates/fe2o3-kfd/src/shared_memory.rs": "cd7bba895b95a27b1059ff6deb75e5aaafb4188b1ec27234a2525b4379c924b1",
+    "crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs": "279df6fb7f475f6630159155a87cfea1debc370822942599a3f8298dad3d7998"
+  },
+  "focused_snapshot_scope": "nine R89 Rust files, not every historical focused run",
+  "production_metadata_sha256": "6c0cac53358224a31c356d91228b602ae8545f7c156a0c695f103533238054ca"
+}

@@ -1,0 +1,9 @@
+*** Begin Patch
+*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_dispatch_binding/preparation.rs
+@@
+             let CodeStageV1::Immutable(token) = &self.current_code else {
+                 unreachable!("sealed code token")
+             };
+-            let marker = CodeStageV1::InSession(token.storage_identity());
++            let marker = CodeStageV1::Empty;
+*** End Patch

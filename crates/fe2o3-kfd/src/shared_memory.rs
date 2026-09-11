@@ -5,6 +5,8 @@ mod coherent_initialization;
 mod dispatch_retention;
 mod transitions;
 
+pub(crate) use dispatch_retention::RetainedDispatchDataRosterV1;
+
 use core::fmt;
 use core::marker::PhantomData;
 #[cfg(test)]
@@ -6370,6 +6372,11 @@ const _: () = {
 };
 
 #[cfg(test)]
+pub(crate) use tests::preparation::{
+    PreparationMemoryCallV1, PreparationMemoryFixtureV1, PreparationMemoryObservationV1,
+    PreparationNativeFaultV1,
+};
+#[cfg(test)]
 pub(crate) use tests::pristine_abort::PristineAbortMemoryFixtureV1;
 
 #[cfg(test)]
@@ -6379,6 +6386,7 @@ mod tests {
     mod device_pool;
     mod dispatch_retention;
     mod host_backing;
+    pub(super) mod preparation;
     pub(super) mod pristine_abort;
     mod transitions;
     use super::*;

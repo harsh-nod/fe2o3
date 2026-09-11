@@ -22,7 +22,9 @@ use crate::persistent_directional_sdma::{
     Gfx942DirectionalPersistentSdmaFrontierRetirementFailureV1,
     Gfx942DirectionalPersistentSdmaWindowCompletedV1, Gfx942DirectionalQueuePersistentAllocationV1,
 };
-use crate::queue::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1;
+use crate::queue::dispatch_binding::{
+    FixedDispatchPreparationCustodyV1, MAX_DISPATCH_DATA_LEASES_V1,
+};
 use crate::queue::{
     ComputeAqlQueueSessionErrorV1, Gfx942CompletedDispatchBatchV1,
     Gfx942CompletionRecycleObservationV1, Gfx942DispatchBatchV1, Gfx942FixedDispatchDataV1,
@@ -693,6 +695,7 @@ pub(crate) enum PersistentComputeUseStateV1 {
 // Terminal authority stays inline so failure handling never allocates.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum PersistentComputeTerminalNativeCustodyV1 {
+    Preparation(FixedDispatchPreparationCustodyV1<1>),
     Attached,
     Published(Gfx942DispatchBatchV1<1>),
     Completed(Gfx942CompletedDispatchBatchV1<1>),
@@ -748,6 +751,7 @@ impl Deref for PersistentComputeTerminalDataV1 {
 /// Address-free observation of native custody retained after a terminal fault.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Gfx942PersistentComputeTerminalStageV1 {
+    Preparing,
     Attached,
     Published,
     Completed,
@@ -760,6 +764,10 @@ pub enum Gfx942PersistentComputeTerminalStageV1 {
 impl PersistentComputeTerminalNativeCustodyV1 {
     pub(crate) const fn stage(&self) -> Gfx942PersistentComputeTerminalStageV1 {
         match self {
+            Self::Preparation(preparation) => {
+                let _ = core::mem::size_of_val(preparation);
+                Gfx942PersistentComputeTerminalStageV1::Preparing
+            }
             Self::Attached => Gfx942PersistentComputeTerminalStageV1::Attached,
             Self::Published(batch) => {
                 let _ = core::mem::size_of_val(batch);

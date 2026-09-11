@@ -221,9 +221,8 @@ pub(in crate::queue) fn prepare_public_fixed_dispatch_resources_after_pristine_a
     let generation = continuation.resume()?;
     // Like ordinary preparation, failures retain native records terminally, not a retry token.
     prepare_public_fixed_dispatch_resources_with_generation(
-        memory, programs, packets, data, generation, false,
+        memory, programs, packets, data, generation,
     )
-    .map_err(|failure| failure.error)
 }
 
 #[cfg(test)]

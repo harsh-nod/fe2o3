@@ -1,0 +1,36 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+warning: unused variable: `token`
+   --> crates/fe2o3-kfd/src/queue_dispatch_binding/preparation.rs:376:40
+    |
+376 |             let CodeStageV1::Immutable(token) = &self.current_code else {
+    |                                        ^^^^^ help: if this is intentional, prefix it with an underscore: `_token`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fe2o3-kfd` (lib test) generated 1 warning (run `cargo fix --lib -p fe2o3-kfd --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 27.93s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::dispatch_binding::preparation::tests::preparation_mapping_panics_and_currentness_failures_keep_exact_custody ... FAILED
+
+failures:
+
+---- queue::dispatch_binding::preparation::tests::preparation_mapping_panics_and_currentness_failures_keep_exact_custody stdout ----
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_mapping_panics_and_currentness_failures_keep_exact_custody' (588620) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6523:17:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::dispatch_binding::preparation::tests::preparation_mapping_panics_and_currentness_failures_keep_exact_custody' (588620) panicked at crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs:345:13:
+assertion `left == right` failed: every terminal transition must have its exact preparation handoff marker
+  left: []
+ right: [SharedGttAllocationIdentityV1 { session_id: 1, id: 3, generation: 1 }]
+
+
+failures:
+    queue::dispatch_binding::preparation::tests::preparation_mapping_panics_and_currentness_failures_keep_exact_custody
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 873 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

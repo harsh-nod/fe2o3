@@ -1,0 +1,6 @@
+*** Begin Patch
+*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_dispatch_binding/preparation.rs
+@@
+-                initialized_content: input.initialized_content,
++                initialized_content: None,
+*** End Patch
