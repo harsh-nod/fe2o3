@@ -262,14 +262,34 @@ impl<D: LinuxMemoryDevice> LinuxMemoryBackendFor<D> {
     pub(super) fn initialize_engineering_signal(
         mapping: &mut LinuxCpuMapping,
     ) -> Result<(), MemorySessionError> {
-        let pointer = checked_mapping_pointer(mapping, 4096, 0, AMD_SIGNAL_BYTES_V1, 64)?;
-        // SAFETY: the exact exclusively owned aligned slot is initialized
-        // before queue creation; no outstanding GPU use or reference exists.
-        unsafe {
-            pointer
-                .cast::<fe2o3_aql::AmdBusyCompletionSignalV1>()
-                .write(fe2o3_aql::AmdBusyCompletionSignalV1::new_pending())
-        };
+        Self::initialize_engineering_signal_slots(mapping, 1)
+    }
+
+    /// Caller retains an idle queue: no GPU use of any signal may be pending.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn initialize_engineering_signal_slots(
+        mapping: &mut LinuxCpuMapping,
+        count: usize,
+    ) -> Result<(), MemorySessionError> {
+        if !(1..=crate::engineering_wire::MAX_ORDERED_BATCH_DISPATCHES_V1).contains(&count) {
+            return Err(malformed_aql_mapping("engineering signal slot count"));
+        }
+        for index in 0..count {
+            let pointer = checked_mapping_pointer(
+                mapping,
+                4096,
+                index * AMD_SIGNAL_BYTES_V1,
+                AMD_SIGNAL_BYTES_V1,
+                64,
+            )?;
+            // SAFETY: each exact, exclusively owned aligned slot is initialized
+            // before publication; the caller retains no outstanding GPU use.
+            unsafe {
+                pointer
+                    .cast::<fe2o3_aql::AmdBusyCompletionSignalV1>()
+                    .write(fe2o3_aql::AmdBusyCompletionSignalV1::new_pending())
+            };
+        }
         Ok(())
     }
 
@@ -1564,6 +1584,61 @@ mod tests {
                 2,
             )
             .is_err()
+        );
+    }
+
+    #[cfg(feature = "engineering-gfx950")]
+    #[test]
+    fn ordered_signal_initialization_preserves_tail_and_rejects_invalid_count() {
+        let mut page = MinimumRing([0xa5; 4096]);
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut page).cast(),
+            bytes: 4096,
+            active: true,
+            accessible: true,
+            reservation_phase: Arc::new(AtomicU8::new(VA_IDENTITY_MAPPED)),
+        };
+        for count in [0, 17, usize::MAX] {
+            assert!(
+                LinuxGfx950MemoryBackend::initialize_engineering_signal_slots(&mut mapping, count)
+                    .is_err()
+            );
+            assert_eq!(page.0, [0xa5; 4096]);
+        }
+        LinuxGfx950MemoryBackend::initialize_engineering_signal_slots(&mut mapping, 16).unwrap();
+        for slot in 0..16 {
+            assert_eq!(
+                LinuxGfx950MemoryBackend::observe_completion_signal_state_acquire(
+                    &mut mapping,
+                    4096,
+                    slot
+                )
+                .unwrap(),
+                (
+                    fe2o3_aql::AMD_SIGNAL_KIND_USER_V1,
+                    AMD_SIGNAL_VALUE_PENDING_V1
+                ),
+            );
+            checked_completion_value(&mut mapping, 4096, slot)
+                .unwrap()
+                .store(0, Ordering::Release);
+            LinuxGfx950MemoryBackend::reset_completion_signal_release(&mut mapping, 4096, slot)
+                .unwrap();
+            assert_eq!(
+                LinuxGfx950MemoryBackend::observe_completion_signal_acquire(
+                    &mut mapping,
+                    4096,
+                    slot
+                )
+                .unwrap(),
+                AqlCompletionObservationV1::Pending,
+            );
+        }
+        assert_eq!(&page.0[1024..], &[0xa5; 3072]);
+        mapping.accessible = false;
+        assert!(
+            LinuxGfx950MemoryBackend::initialize_engineering_signal_slots(&mut mapping, 16)
+                .is_err()
         );
     }
 }

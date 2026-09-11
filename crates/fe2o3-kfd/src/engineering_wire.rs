@@ -18,6 +18,7 @@ pub const MAX_OBJECT_BYTES_V1: u32 = 64 * 1024 * 1024;
 pub const MAX_KERNARG_BYTES_V1: u32 = 65_536;
 pub const MAX_POINTER_FIXUPS_V1: usize = 256;
 pub const MAX_SEQUENCE_DISPATCHES_V1: usize = 16;
+pub const MAX_ORDERED_BATCH_DISPATCHES_V1: usize = 16;
 /// Conservative dispatch budget when hardware read-pointer reports never advance.
 pub const MAX_UNRETIRED_RING_PACKETS_V1: u64 = 131_072;
 
@@ -48,6 +49,40 @@ pub struct SequenceDispatchV1 {
     pub grid: [u32; 3],
     pub pointers: Vec<PointerFixupV1>,
     pub timeout_ms: u32,
+}
+
+/// One member of a dependent ordered batch. Its deadline belongs to the batch,
+/// not to an individual kernel; no per-kernel timing is returned.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrderedBatchDispatchV1 {
+    pub kernel: u64,
+    pub payload_bytes: u32,
+    pub workgroup: [u16; 3],
+    pub grid: [u32; 3],
+    pub pointers: Vec<PointerFixupV1>,
+}
+
+fn ordered_batch_payload_bytes(
+    dispatches: &[OrderedBatchDispatchV1],
+    timeout_ms: u32,
+) -> io::Result<usize> {
+    if !(1..=MAX_ORDERED_BATCH_DISPATCHES_V1).contains(&dispatches.len())
+        || !(1..=600_000).contains(&timeout_ms)
+    {
+        return Err(invalid("engineering ordered batch count or deadline"));
+    }
+    dispatches.iter().try_fold(0_usize, |total, dispatch| {
+        if dispatch.payload_bytes > MAX_KERNARG_BYTES_V1
+            || dispatch.pointers.len() > MAX_POINTER_FIXUPS_V1
+        {
+            return Err(invalid("engineering ordered batch dispatch limits"));
+        }
+        total
+            .checked_add(dispatch.payload_bytes as usize)
+            .filter(|bytes| *bytes <= MAX_TRANSFER_BYTES_V1 as usize)
+            .ok_or_else(|| invalid("engineering ordered batch payload limit"))
+    })
 }
 
 fn sequence_payload_bytes(dispatches: &[SequenceDispatchV1]) -> io::Result<usize> {
@@ -94,6 +129,12 @@ pub enum CommandV1 {
     DispatchSequence {
         dispatches: Vec<SequenceDispatchV1>,
     },
+    /// Explicit single-queue, 1..16 dependent packets, with one aggregate
+    /// publication-to-observed-completion deadline and no per-kernel timings.
+    DispatchOrderedBatch {
+        dispatches: Vec<OrderedBatchDispatchV1>,
+        timeout_ms: u32,
+    },
     Allocate {
         bytes: u64,
     },
@@ -131,6 +172,12 @@ impl CommandV1 {
     pub fn payload_bytes(&self) -> io::Result<usize> {
         let length = match self {
             Self::DispatchSequence { dispatches } => return sequence_payload_bytes(dispatches),
+            Self::DispatchOrderedBatch {
+                dispatches,
+                timeout_ms,
+            } => {
+                return ordered_batch_payload_bytes(dispatches, *timeout_ms);
+            }
             Self::Write { payload_bytes, .. } if *payload_bytes <= MAX_TRANSFER_BYTES_V1 => {
                 *payload_bytes
             }
@@ -226,6 +273,12 @@ pub struct ExplicitArgumentV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ResponseV1 {
+    /// Every retained signal completed and the full exit fence passed. Elapsed
+    /// time is aggregate host wall time, never a sum of GPU/kernel timestamps.
+    DispatchOrderedBatchCompleted {
+        completed_dispatches: u32,
+        elapsed_ns: u64,
+    },
     DispatchSequenceCompleted {
         elapsed_ns: Vec<u64>,
     },

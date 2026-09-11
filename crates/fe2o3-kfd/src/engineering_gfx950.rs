@@ -29,6 +29,8 @@ use crate::queue_linux::{
 };
 use crate::{CheckedGfx950XnackMinusDevice, DeviceSelector, OpenedKfd};
 
+#[path = "engineering_gfx950_ordered_batch.rs"]
+mod ordered_batch;
 #[path = "engineering_gfx950_peer.rs"]
 mod peer;
 pub use peer::{
@@ -106,6 +108,7 @@ struct Context {
     last_observed_read: u64,
     performance: Option<PerformanceOptions>,
     counters: PerformanceCountersV1,
+    ordered_batch_poisoned: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -209,6 +212,7 @@ impl Context {
             last_observed_read: 0,
             performance: None,
             counters: PerformanceCountersV1::default(),
+            ordered_batch_poisoned: false,
         };
         if let Err(error) = context.initialize() {
             std::mem::forget(context);
@@ -510,6 +514,9 @@ impl Context {
     }
 
     fn check_idle(&mut self) -> Result<()> {
+        if self.ordered_batch_poisoned {
+            return Err("ordered batch context is terminally poisoned".into());
+        }
         self.check_currentness(false)?;
         let (write, read) =
             Backend::observe_aql_counters(&mut self.internal[CONTROL].mapping, PAGE_BYTES)
@@ -1413,6 +1420,14 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
                     // SAFETY: the entry's disposable-process/trusted-code contract
                     // covers every item, and the complete sequence is prevalidated.
                     unsafe { context.dispatch_sequence(dispatches, payload) }
+                }
+                CommandV1::DispatchOrderedBatch {
+                    dispatches,
+                    timeout_ms,
+                } => {
+                    // SAFETY: the same dedicated-process trusted-code contract
+                    // applies; this command retains every operand until its fence.
+                    unsafe { context.dispatch_ordered_batch(dispatches, payload, timeout_ms) }?
                 }
                 CommandV1::Allocate { bytes } => context.allocate(bytes)?,
                 CommandV1::Free { buffer } => {
