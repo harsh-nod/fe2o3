@@ -76,14 +76,15 @@ refinement is claimed for Rust ownership, allocation, decoder or device adapters
 
 R74 owns a standalone checked device. Persistent Context integration cannot
 construct one such owner per launch: the device model rejects a second live
-admission of the same physical GPU. GEN-2B must instead prepare against the
-backend's retained device, binding private Context/backend/device generations.
+admission of the same physical GPU. R76 now implements the nonexecuting
+[Context-bound preparation](runtime-context-generated-preparation-v1.md) against
+the backend's retained device, binding private Context/backend/device generations.
 The same owner may move into its lazy VM/queue; actual native incarnation checks
 belong at adoption/publication. No fresh-device or second-queue workaround is
 part of this contract.
 
-GEN-2B needs a runtime-defined admitted interface because host already depends
-on runtime. It must bind Context/allocation generations, revalidate at actual
+The runtime-defined preparation interface avoids a dependency from runtime back
+to host. GEN-2B-3 must still bind allocation generations, revalidate at actual
 publication, consume authority once, retain resources through exact retirement
 and authorize decoding only for that completed invocation. Blocking execution
 must join this same path. Timeout, observer drop or failed observation cannot
@@ -99,4 +100,4 @@ Send factories create local drivers, and unresolved driver custody survives owne
 Context cleanup. R73's decoder and this invocation's authority are not yet
 integrated with that path. Native completion status alone also supplies no
 decoded host output. Remaining integration is not acceptance implied by either
-GEN-2A storage tests or R75's mock driver tests.
+GEN-2A storage tests, R75's mock driver tests or R76's preparation/type checks.

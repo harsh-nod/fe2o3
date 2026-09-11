@@ -193,12 +193,12 @@ pub use generated_kfd_arguments::{
 };
 pub use generated_kfd_invocation::{
     GENERATED_KFD_DIFFERENTIAL_OBSERVATION_SCHEMA_V1,
-    GENERATED_WORKER_V3_DIRECT_KFD_RUNTIME_CONTRACT_V1,
-    GeneratedWorkerV3KfdDifferentialAvailabilityV1, GeneratedWorkerV3KfdDifferentialBindingV1,
-    GeneratedWorkerV3KfdDifferentialObservationV1, GeneratedWorkerV3KfdExecutionError,
-    GeneratedWorkerV3KfdInvocation, GeneratedWorkerV3KfdInvocationError,
-    GeneratedWorkerV3RuntimeInvocationErrorV1, GeneratedWorkerV3RuntimeInvocationV1,
-    WorkerV3ApplicationExecutionBindingV1,
+    GENERATED_WORKER_V3_DIRECT_KFD_RUNTIME_CONTRACT_V1, GeneratedWorkerV3ContextInvocationErrorV1,
+    GeneratedWorkerV3ContextInvocationV1, GeneratedWorkerV3KfdDifferentialAvailabilityV1,
+    GeneratedWorkerV3KfdDifferentialBindingV1, GeneratedWorkerV3KfdDifferentialObservationV1,
+    GeneratedWorkerV3KfdExecutionError, GeneratedWorkerV3KfdInvocation,
+    GeneratedWorkerV3KfdInvocationError, GeneratedWorkerV3RuntimeInvocationErrorV1,
+    GeneratedWorkerV3RuntimeInvocationV1, WorkerV3ApplicationExecutionBindingV1,
 };
 pub use generated_runtime_arguments::{
     CompilerGeneratedRuntimeArguments, GeneratedRuntimeArgumentBindingV1,

@@ -87,6 +87,7 @@ use crate::{
 mod compute_dispatch;
 mod compute_state;
 mod drain_capture;
+mod generated_preparation;
 mod native_budget;
 #[cfg(feature = "hardware-qualification")]
 mod qualification_coexistence;
@@ -5459,7 +5460,7 @@ impl KfdRuntimeBackendV1 {
     }
 
     #[cfg(test)]
-    fn mock() -> Self {
+    pub(crate) fn mock() -> Self {
         Self::mock_with_staging_budgets(StagingBudgetsV1 {
             max_allocation_bytes: KFD_RUNTIME_MAX_STAGED_ALLOCATION_BYTES_V1,
             max_context_bytes: KFD_RUNTIME_MAX_STAGED_CONTEXT_BYTES_V1,

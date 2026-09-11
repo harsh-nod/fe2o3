@@ -4,7 +4,11 @@ use std::{error::Error, fmt, marker::PhantomData, rc::Rc};
 
 use fe2o3_aql::AqlDispatchGeometryV1;
 use fe2o3_kfd::CheckedGfx942XnackMinusDevice;
-use fe2o3_runtime::PreparedGfx942RuntimeDispatchV1;
+use fe2o3_runtime::{
+    KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1, PreparedGfx942RuntimeDispatchV1,
+    RuntimeContextV1, RuntimeDeviceIdV1, RuntimeErrorV1, RuntimeGfx942PreparationErrorV1,
+    RuntimeGfx942PreparedV1,
+};
 
 use super::{
     GeneratedWorkerV3KfdExecutionAuthority, GeneratedWorkerV3KfdInvocationError,
@@ -35,6 +39,56 @@ pub struct GeneratedWorkerV3RuntimeInvocationV1<K> {
     device: CheckedGfx942XnackMinusDevice,
     footprint: GeneratedRuntimeArgumentFootprintV1,
     owner_local: PhantomData<Rc<()>>,
+}
+
+struct GeneratedContextPreparationV1<K> {
+    storage: GeneratedRuntimeStorageV1<PreparedGfx942RuntimeDispatchV1>,
+    authority: GeneratedWorkerV3KfdExecutionAuthority<K>,
+    footprint: GeneratedRuntimeArgumentFootprintV1,
+}
+
+/// Generated custody prepared against an existing Context's retained device.
+///
+/// The private payload and decoder remain owner-local. There is no native
+/// publication, output completion, device extraction or qualification fallback.
+/// This may outlive the Context only as inert host storage; validation requires
+/// the same live Context and exact native device generation.
+#[must_use]
+pub struct GeneratedWorkerV3ContextInvocationV1<K> {
+    prepared: RuntimeGfx942PreparedV1<GeneratedContextPreparationV1<K>>,
+}
+
+pub type GeneratedWorkerV3ContextInvocationErrorV1 =
+    RuntimeGfx942PreparationErrorV1<GeneratedWorkerV3RuntimeInvocationErrorV1>;
+
+impl<K: CompilerGeneratedKernelExpectationV1> GeneratedWorkerV3ContextInvocationV1<K> {
+    pub fn kernel_name(&self) -> &str {
+        self.prepared.value().storage.prepared().kernel_name()
+    }
+
+    pub fn dispatch_contract_sha256(&self) -> [u8; 32] {
+        self.prepared
+            .value()
+            .storage
+            .prepared()
+            .dispatch_contract_sha256()
+    }
+
+    pub fn footprint(&self) -> GeneratedRuntimeArgumentFootprintV1 {
+        self.prepared.value().footprint
+    }
+
+    pub fn application_binding(&self) -> &WorkerV3ApplicationExecutionBindingV1<K> {
+        &self.prepared.value().authority.binding
+    }
+
+    /// Nonexecuting revalidation, not admission or permission to replay.
+    pub fn validate_context(
+        &self,
+        context: &mut RuntimeContextV1<KfdRuntimeBackendV1>,
+    ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+        context.validate_gfx942_prepared_v1(&self.prepared)
+    }
 }
 
 impl<K: CompilerGeneratedKernelExpectationV1> GeneratedWorkerV3RuntimeInvocationV1<K> {
@@ -70,7 +124,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
     /// allocation, queue or dispatch. There is no qualification fallback.
     #[allow(clippy::too_many_arguments)]
     pub fn prepare_generated_runtime_invocation<Arguments>(
-        mut self,
+        self,
         arguments: Arguments,
         mut device: CheckedGfx942XnackMinusDevice,
         geometry: AqlDispatchGeometryV1,
@@ -82,19 +136,112 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
     where
         Arguments: CompilerGeneratedRuntimeArguments<K>,
     {
-        if !self
+        self.require_runtime_evidence()?;
+        let prepared = device
+            .with_retained_device_v1(|device| {
+                self.prepare_context_payload(
+                    arguments,
+                    device,
+                    geometry,
+                    dynamic_group_segment_bytes,
+                    timeout_milliseconds,
+                    limits,
+                    result_budget,
+                )
+            })
+            .map_err(GeneratedWorkerV3KfdInvocationError::DeviceCurrentness)??;
+        let GeneratedContextPreparationV1 {
+            storage,
+            authority,
+            footprint,
+        } = prepared;
+        Ok(GeneratedWorkerV3RuntimeInvocationV1 {
+            storage,
+            authority,
+            device,
+            footprint,
+            owner_local: PhantomData,
+        })
+    }
+
+    /// Consumes generated arguments without consuming or readmitting the Context device.
+    /// Missing protected evidence rejects before Context access or argument callbacks.
+    ///
+    /// ```no_run
+    /// use fe2o3_host::{AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedKernelExpectationV1,
+    ///     CompilerGeneratedRuntimeArguments, GeneratedRuntimeArgumentLimitsV1,
+    ///     GeneratedRuntimeResultBudgetV1, GeneratedWorkerV3ContextInvocationV1,
+    ///     GeneratedWorkerV3ContextInvocationErrorV1, AqlDispatchGeometryV1};
+    /// use fe2o3_runtime::{RuntimeContextV1, KfdRuntimeBackendV1, RuntimeDeviceIdV1};
+    /// fn prepare<K: CompilerGeneratedKernelExpectationV1, A: CompilerGeneratedRuntimeArguments<K>>(
+    ///     executable: AuthenticatedWorkerV3ExecutableV1<K>, args: A,
+    ///     context: &mut RuntimeContextV1<KfdRuntimeBackendV1>, device: RuntimeDeviceIdV1,
+    ///     geometry: AqlDispatchGeometryV1, budget: &GeneratedRuntimeResultBudgetV1,
+    /// ) -> Result<GeneratedWorkerV3ContextInvocationV1<K>, GeneratedWorkerV3ContextInvocationErrorV1> {
+    ///     let invocation = executable.prepare_generated_context_invocation(args, context,
+    ///         device, geometry, 0, 1000, GeneratedRuntimeArgumentLimitsV1::new(4096, 4096, 16), budget)?;
+    ///     let _devices = context.devices(); // No Context borrow remains in the invocation.
+    ///     Ok(invocation)
+    /// }
+    /// ```
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_generated_context_invocation<Arguments>(
+        self,
+        arguments: Arguments,
+        context: &mut RuntimeContextV1<KfdRuntimeBackendV1>,
+        device: RuntimeDeviceIdV1,
+        geometry: AqlDispatchGeometryV1,
+        dynamic_group_segment_bytes: u32,
+        timeout_milliseconds: u32,
+        limits: GeneratedRuntimeArgumentLimitsV1,
+        result_budget: &GeneratedRuntimeResultBudgetV1,
+    ) -> Result<GeneratedWorkerV3ContextInvocationV1<K>, GeneratedWorkerV3ContextInvocationErrorV1>
+    where
+        Arguments: CompilerGeneratedRuntimeArguments<K>,
+    {
+        self.require_runtime_evidence()
+            .map_err(RuntimeGfx942PreparationErrorV1::Preparation)?;
+        let prepared = context.with_gfx942_preparation_device_v1(device, |device| {
+            self.prepare_context_payload(
+                arguments,
+                device,
+                geometry,
+                dynamic_group_segment_bytes,
+                timeout_milliseconds,
+                limits,
+                result_budget,
+            )
+        })?;
+        Ok(GeneratedWorkerV3ContextInvocationV1 { prepared })
+    }
+
+    fn require_runtime_evidence(&self) -> Result<(), GeneratedWorkerV3RuntimeInvocationErrorV1> {
+        if self
             .verification()
             .retains_protected_application_execution_evidence()
         {
-            return Err(
-                GeneratedWorkerV3KfdInvocationError::ProtectedProductionEvidenceUnavailable.into(),
-            );
+            Ok(())
+        } else {
+            Err(GeneratedWorkerV3KfdInvocationError::ProtectedProductionEvidenceUnavailable.into())
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_context_payload<Arguments>(
+        mut self,
+        arguments: Arguments,
+        device: &CheckedGfx942XnackMinusDevice,
+        geometry: AqlDispatchGeometryV1,
+        dynamic_group_segment_bytes: u32,
+        timeout_milliseconds: u32,
+        limits: GeneratedRuntimeArgumentLimitsV1,
+        result_budget: &GeneratedRuntimeResultBudgetV1,
+    ) -> Result<GeneratedContextPreparationV1<K>, GeneratedWorkerV3RuntimeInvocationErrorV1>
+    where
+        Arguments: CompilerGeneratedRuntimeArguments<K>,
+    {
         self.revalidate_currentness()
             .map_err(GeneratedWorkerV3KfdInvocationError::CurrentPublication)?;
-        device
-            .check_observable_currentness()
-            .map_err(GeneratedWorkerV3KfdInvocationError::DeviceCurrentness)?;
         validate_gfx942_target(&self)?;
 
         let parts = self
@@ -110,15 +257,12 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
             .map_err(GeneratedWorkerV3KfdInvocationError::RuntimePreparation)?;
         validate_runtime_binding(&self, storage.prepared())?;
 
-        device
-            .check_observable_currentness()
-            .map_err(GeneratedWorkerV3KfdInvocationError::DeviceCurrentness)?;
         self.admission()
             .revalidate_retained_currentness_token(self.current_publication_token())
             .map_err(GeneratedWorkerV3KfdInvocationError::CurrentPublication)?;
         let application = application_execution_admission(
             &mut self,
-            &device,
+            device,
             parts.kernel_id,
             &parts.packing,
             geometry,
@@ -132,12 +276,10 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
             parts.packing,
             application,
         );
-        Ok(GeneratedWorkerV3RuntimeInvocationV1 {
+        Ok(GeneratedContextPreparationV1 {
             storage,
             authority,
-            device,
             footprint: parts.footprint,
-            owner_local: PhantomData,
         })
     }
 }

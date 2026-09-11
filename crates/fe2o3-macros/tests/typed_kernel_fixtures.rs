@@ -201,6 +201,23 @@ fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
             &["error[E0382]", "executable"],
         ),
         ("invocation_nonexecuting", &["no method named `execute`"]),
+        ("context_invocation_non_clone", &["no method named `clone`"]),
+        (
+            "context_invocation_not_send",
+            &["error[E0277]", "Rc<()>", "Send"],
+        ),
+        (
+            "context_invocation_not_sync",
+            &["error[E0277]", "Rc<()>", "Sync"],
+        ),
+        (
+            "context_invocation_private",
+            &["error[E0616]", "field `prepared`"],
+        ),
+        (
+            "context_invocation_nonexecuting",
+            &["no method named `execute`"],
+        ),
     ];
 
     for (bin, expected_diagnostics) in cases {

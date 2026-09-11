@@ -86,6 +86,10 @@ impl LinuxMemoryBackend {
         self.device.model_admission()
     }
 
+    pub(super) fn retained_device_v1(&self) -> &CheckedGfx942XnackMinusDevice {
+        &self.device
+    }
+
     pub(super) fn model_aperture(&self) -> InclusiveAperture {
         self.device.observation().aperture().gpuvm()
     }

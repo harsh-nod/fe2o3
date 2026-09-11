@@ -4519,6 +4519,37 @@ impl DeviceBackingUnwindTargetV1 for SharedGttMemorySessionV1 {
     }
 }
 
+fn retained_device_domain_matches_v1(
+    expected_vm: VmKeyV1,
+    session_vm: VmKeyV1,
+    session_device: ModelDeviceAdmissionV1,
+    retained_device: ModelDeviceAdmissionV1,
+) -> bool {
+    expected_vm == session_vm
+        && session_vm.device == session_device.model_key()
+        && session_device == retained_device
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+impl crate::retained_device::RetainedDeviceScopeOwnerV1 for SharedGttMemorySessionV1 {
+    type Subject = CheckedGfx942XnackMinusDevice;
+    type Error = MemorySessionError;
+
+    fn check_scope(&mut self) -> Result<(), Self::Error> {
+        self.validate_retained_device_domain_v1(self.vm)?;
+        self.check_queue_currentness()
+    }
+
+    fn subject(&self) -> &Self::Subject {
+        self.retained_device_v1()
+    }
+
+    fn poison_scope(&mut self) {
+        self.engine.phase = SharedMemorySessionPhaseV1::Quarantined;
+        crate::queue_linux::permanently_poison_process_global_kfd_runtime_gate_v1();
+    }
+}
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl CheckedGfx942XnackMinusDevice {
     /// Acquires one process VM that can retain several bounded typed GTT BOs.
@@ -4613,6 +4644,36 @@ impl CheckedGfx942XnackMinusDevice {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl SharedGttMemorySessionV1 {
+    /// Borrows the retained checked device without lending memory/model custody.
+    /// Full currentness brackets even an error-valued callback result. Failure
+    /// or unwind quarantines this session; the result cannot borrow the device.
+    pub fn with_retained_device_v1<R>(
+        &mut self,
+        observe: impl FnOnce(&CheckedGfx942XnackMinusDevice) -> R,
+    ) -> Result<R, MemorySessionError> {
+        crate::retained_device::with_retained_device_scope_v1(self, observe)
+    }
+
+    pub(crate) fn retained_device_v1(&self) -> &CheckedGfx942XnackMinusDevice {
+        self.engine.backend.retained_device_v1()
+    }
+
+    pub(crate) fn validate_retained_device_domain_v1(
+        &self,
+        vm: VmKeyV1,
+    ) -> Result<(), MemorySessionError> {
+        self.engine.require_active()?;
+        if !retained_device_domain_matches_v1(
+            vm,
+            self.vm,
+            self.model_device,
+            self.retained_device_v1().model_admission(),
+        ) {
+            return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
+        }
+        Ok(())
+    }
+
     pub fn phase(&self) -> SharedMemorySessionPhaseV1 {
         self.engine.phase()
     }
@@ -7026,6 +7087,37 @@ mod tests {
             })
             .unwrap();
         (identity, memory, device, vm.model_key())
+    }
+
+    #[test]
+    fn retained_device_scope_domain_rejects_vm_and_device_generation_substitutions() {
+        let (_, _, device, vm) = transferred_model_foundation();
+        assert!(retained_device_domain_matches_v1(vm, vm, device, device));
+        let mut wrong_vm = vm;
+        wrong_vm.id = VmIdV1(vm.id.0 + 1);
+        assert!(!retained_device_domain_matches_v1(
+            wrong_vm, vm, device, device
+        ));
+        wrong_vm = vm;
+        wrong_vm.device.generation = model::DeviceGenerationV1(2);
+        assert!(!retained_device_domain_matches_v1(
+            wrong_vm, wrong_vm, device, device
+        ));
+        let (_, replacement) = model::DeviceIdentityStateV1::new(model_domain())
+            .register_device_model_only(model_correlation(), model::DeviceGenerationV1(2))
+            .unwrap();
+        assert!(!retained_device_domain_matches_v1(
+            vm,
+            vm,
+            device,
+            replacement
+        ));
+        assert!(!retained_device_domain_matches_v1(
+            vm,
+            vm,
+            replacement,
+            replacement
+        ));
     }
 
     #[test]

@@ -15,8 +15,10 @@ pub(crate) use graph::*;
 mod allocation_admission;
 mod drain;
 mod drain_capture;
+mod generated_preparation;
 use allocation_admission::ContextAllocationAdmissionV1;
 pub use drain_capture::*;
+pub use generated_preparation::*;
 
 /// Maximum number of devices retained by one runtime context.
 pub const MAX_RUNTIME_DEVICES_V1: usize = 256;

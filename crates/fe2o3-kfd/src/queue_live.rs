@@ -4941,7 +4941,69 @@ fn barrier_probe_creation_failure(
     }
 }
 
+fn retained_device_queue_is_active_v1(
+    terminal: bool,
+    authority_poisoned: bool,
+    phase: Option<ComputeAqlQueuePhaseV1>,
+) -> bool {
+    !terminal && !authority_poisoned && phase == Some(ComputeAqlQueuePhaseV1::Active)
+}
+
+impl crate::retained_device::RetainedDeviceScopeOwnerV1 for ComputeAqlQueueSessionV1 {
+    type Subject = CheckedGfx942XnackMinusDevice;
+    type Error = ComputeAqlQueueSessionErrorV1;
+
+    fn check_scope(&mut self) -> Result<(), Self::Error> {
+        let engine = self
+            .engine
+            .as_ref()
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "missing retained-device queue engine",
+            ))?;
+        if !retained_device_queue_is_active_v1(
+            self.terminal_poisoned,
+            engine.authority_poisoned,
+            engine.phase(self.key),
+        ) {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "inactive retained-device queue",
+            ));
+        }
+        engine
+            .backend
+            .session
+            .validate_retained_device_domain_v1(self.key.vm)?;
+        self.check_currentness()
+    }
+
+    fn subject(&self) -> &Self::Subject {
+        self.engine
+            .as_ref()
+            .expect("checked retained-device engine")
+            .backend
+            .session
+            .retained_device_v1()
+    }
+
+    fn poison_scope(&mut self) {
+        self.poison_terminal();
+        crate::queue_linux::permanently_poison_process_global_kfd_runtime_gate_v1();
+    }
+}
+
 impl ComputeAqlQueueSessionV1 {
+    /// Borrows the exact session-owned device inside full currentness checks.
+    ///
+    /// This neither selects a lane nor lends the queue's memory/model foundation.
+    /// The result cannot borrow the device. Failure or panic poisons retained
+    /// queue custody and the process runtime gate; it never authorizes retry.
+    pub fn with_retained_device_v1<R>(
+        &mut self,
+        observe: impl FnOnce(&CheckedGfx942XnackMinusDevice) -> R,
+    ) -> Result<R, ComputeAqlQueueSessionErrorV1> {
+        crate::retained_device::with_retained_device_scope_v1(self, observe)
+    }
+
     /// Maximum number of independently publishable compute queues retained by
     /// one checked process-VM session in the reviewed runtime profile.
     pub const MAX_COMPUTE_LANES_V1: usize = 2;
@@ -14479,6 +14541,32 @@ fn map_dependency_target_use_error_v1(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn retained_device_scope_requires_exact_live_queue_phase_and_unpoisoned_owners() {
+        use super::ComputeAqlQueuePhaseV1::*;
+        for phase in [
+            None,
+            Some(Planned),
+            Some(CreatePending),
+            Some(Active),
+            Some(UpdatePending),
+            Some(DisablePending),
+            Some(Disabled),
+            Some(DestroyPending),
+            Some(CancelledBeforeCreate),
+            Some(Destroyed),
+            Some(Ambiguous),
+        ] {
+            for terminal in [false, true] {
+                for poisoned in [false, true] {
+                    assert_eq!(
+                        super::retained_device_queue_is_active_v1(terminal, poisoned, phase),
+                        !terminal && !poisoned && phase == Some(Active)
+                    );
+                }
+            }
+        }
+    }
     use super::*;
 
     #[test]

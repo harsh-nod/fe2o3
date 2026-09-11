@@ -21,6 +21,7 @@ use crate::{
 #[path = "generated_runtime_invocation.rs"]
 mod generated_runtime_invocation;
 pub use generated_runtime_invocation::{
+    GeneratedWorkerV3ContextInvocationErrorV1, GeneratedWorkerV3ContextInvocationV1,
     GeneratedWorkerV3RuntimeInvocationErrorV1, GeneratedWorkerV3RuntimeInvocationV1,
 };
 
@@ -599,11 +600,14 @@ impl<K> GeneratedWorkerV3KfdExecutionAuthority<K> {
 }
 
 // SAFETY: this private implementation is constructed only by
-// `prepare_generated_kfd_invocation` and `prepare_generated_runtime_invocation` through
-// `from_application` after consuming application admission. Both retain the exact Worker V3
-// decision and its current-publication token, admits only compiler-generated argument capabilities,
-// prepares the runtime request from the token's exact HSACO bytes, validates the selected kernel
-// and artifact identities, and retains the same checked KFD device whose identity is named here.
+// `prepare_generated_kfd_invocation` or the shared `prepare_context_payload` used by
+// `prepare_generated_runtime_invocation` and `prepare_generated_context_invocation`,
+// through `from_application` after consuming application admission. All retain the exact
+// Worker V3 decision/current-publication token, use compiler-generated arguments and the
+// token's exact HSACO, and validate selected-kernel/artifact identity. Standalone invocations
+// own the named checked device. Context preparation retains only an inert, generation-bound
+// payload after closing currentness; later persistent publication requires its own exact
+// Context/device revalidation and request projection, not this constructor alone.
 unsafe impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3Gfx942ExecutionAuthorityV1
     for GeneratedWorkerV3KfdExecutionAuthority<K>
 {
