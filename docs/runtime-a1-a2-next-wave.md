@@ -1,8 +1,12 @@
 # A1/A2 Next-Wave Dispatch
 
-Dispatch refreshed 2026-09-10 after the three-agent review of local R83.
-The [current swarm overlay](runtime-a1-a2-swarm-dispatch-r83.md) splits DATA-SHELL,
-the independent COMPLETE-ORACLE and VER-1A work before native integration.
+Dispatch refreshed 2026-09-11 after the three-agent review of signed R83
+`e07de3bfb87955fc885ef0c88788678ce8170aaa` and uncommitted DATA-SHELL work.
+The [current swarm overlay](runtime-a1-a2-swarm-dispatch-r83.md) assigns
+DATA-SHELL-FINISH hardening/tests, independent COMPLETE-ORACLE and VER-1A work
+before native integration. Its checklist and integration batches supersede
+older next-assignment rows below. This planning refresh does not publish or
+qualify the in-flight DATA-SHELL source.
 The preceding signed R81 checkpoint is
 `72bec68d2968f4815f23c84d41ed6510f433ba96`, on both topic-branch remotes.
 R82 now implements [pristine dispatch abort](runtime-pristine-dispatch-abort-v1.md)

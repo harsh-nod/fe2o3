@@ -1,7 +1,11 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Current implementation: local R83 on signed R82 baseline
-`5184428b7bb9bbb0e9cc30c6929d3c77ee60cbdb`, reviewed 2026-09-10. Historical
+Current accepted implementation: signed R83
+`e07de3bfb87955fc885ef0c88788678ce8170aaa`, reviewed 2026-09-11 alongside
+uncommitted DATA-SHELL source. The
+[current dispatch](runtime-a1-a2-swarm-dispatch-r83.md) assigns the draft's
+remaining hardening/tests and independent completion/version work. The draft is
+not an accepted R84 packet; this refresh is planning only. Historical
 packet validation and exact source/evidence identities are retained below.
 This decomposes the remaining local
 A1/A2 work in
