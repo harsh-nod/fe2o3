@@ -8,8 +8,9 @@ The issue was checked through the GitHub API and remains open; its reported
 This document supersedes the immediate assignment rows in the
 [detailed dispatch](runtime-a1-a2-swarm-dispatch-r83.md) and
 [next-wave roadmap](runtime-a1-a2-next-wave.md), not their historical evidence.
-R96 locally accepts **NATIVE-2B.5A**, production-used auxiliary preparation and
-CREATE/install phase composition, above signed planning checkpoint
+Signed R96 `369f99835cfb2af5df9fda45cc828d462ef6b156` locally accepts
+**NATIVE-2B.5A**, production-used auxiliary preparation and CREATE/install phase
+composition, above signed planning checkpoint
 `10902ca32a853448f79b59cfcf22072e3cdd9325`. The preceding accepted runtime source
 is signed R95 `da90a0038c6ec4c697faf0fbe93d597e9fa36e1a`.
 The [R96 record](evidence/local-r96-auxiliary-shared-engine-2026-09-11/README.md)
@@ -18,18 +19,34 @@ negative mutations. GNU/musl each pass 2,519 runtime tests with five ignored;
 5,648 source identities remain unchanged and restored. The failed first
 full-source attempt and formatting check remain historical, not acceptance.
 
-The shared-engine fixtures cover success and eight late-failure cells with
-original owners, plus a production-glue guard. They use a fixture outer scope
+At accepted R96, the shared-engine fixtures cover success and eight late-failure
+cells with original owners, plus a production-glue guard. They use a fixture outer scope
 and scripted platform leaves, not complete concrete Linux outer settlement.
 The remaining native sequence is **complete .5B -> 2C -> DATA-ADOPT**.
 R96's duplicate-primary-ID case reaches lower CREATE
 `Ambiguous` rejection with no committed ID or outputs. It does not exercise the
 later retained auxiliary/SDMA roster rejection.
 
+### In-Progress R97
+
+The uncommitted .5B-1 candidate now has a private original-parent adapter, an
+owning outer scope and one production-used auxiliary driver. The shared-engine
+fixture calls that driver instead of copying its orchestration. A development
+run of `cargo +nightly-2026-04-03 test --locked --offline -p fe2o3-kfd
+--all-features --lib queue::live::construction` passes 41 tests on unchanged
+source during that run. This is not frozen R97 acceptance or a new full-suite,
+formal, hardware or performance result.
+
+The stage-aware early-failure oracle and new failure matrix remain missing.
+The new operation/reclaim and preparation-stage injections are present but not
+yet exercised by the two migrated shared-engine tests. R96 stays the accepted
+baseline; this planning refresh does not publish the unfinished source changes.
+
 ## Swarm Ownership
 
-Three existing workers performed independent, read-only source and evidence
-reviews of R96 and returned these work orders. Their review turns
+At the user's renewed swarm request, three existing workers independently
+reviewed the current source, the R97 candidate and the remaining roadmap. They
+returned the bounded work orders below. Their read-only review turns
 are complete. The implementation queues below are assignments, not unattended
 background jobs. Primary owns
 edits, integration, conflict resolution, tests, proofs and publication. Shared
@@ -37,7 +54,7 @@ Context/backend/queue changes and builds are serialized.
 
 | Lane and worker | First bounded task | Follow-on queue |
 | --- | --- | --- |
-| Native: `r66_native_coexistence` | .5B-1 original-parent outer settlement | .5B-2 local platform composition / .5B-3 CREATE and installation matrix -> replacement/insertion -> generated data adoption -> native publication handoff |
+| Native: `r66_native_coexistence` | R97-1 stage-aware ownership oracle, then R97-2 .5B-1 matrix/acceptance | .5B-2 local platform composition / .5B-3 CREATE and installation matrix -> replacement/insertion -> generated data adoption -> native publication handoff |
 | Admission: `r66_runtime_coexistence` | CO-1 allocation-free completion outcome contract and table tests | Exact identity -> reply/custody composition -> issue/completion integration -> typed future -> generated graph/drain |
 | Resources: `r66_coexistence_model` | VER-1A.1 Context journal contract and complete mutation inventory | Model/proofs -> bounded journal -> mutation hooks -> cross-run leases; aggregate budgets and residency |
 | Primary | Integrate the next reviewed .5B-1, CO-1 or VER-1A.1 packet without conflicting shared edits | Cross-lane integration, formal correspondence, hardware scheduling, matched benchmarks and signed pushes to both topic remotes |
@@ -46,15 +63,23 @@ Context/backend/queue changes and builds are serialized.
 
 | Lane | First deliverable | Source boundary and cross-review |
 | --- | --- | --- |
-| Native | Exact .5B-1 opening/operation/reclaim error-and-panic matrix with the original primary | KFD `queue_live/construction_auxiliary.rs`, its integration tests and shared primary fixtures. Resources checks exact charges; Admission checks terminal-outcome meaning. |
+| Native | R97-1 prefix ownership oracle, then the exact .5B-1 opening/operation/reclaim error-and-panic matrix with the original primary | KFD `queue_live/construction_auxiliary.rs`, its integration tests and shared primary fixtures. Resources checks exact charges; Admission checks terminal-outcome meaning. |
 | Admission | CO-1 allocation-free observation/reply/disposal table and focused tests | Proposed runtime `async_engine/generated_operation/completion_contract.rs`, existing generated preparation/reply tests. Native reviews outcome authority; no native receipts are invented. |
-| Resources | VER-1A.1 identity/capacity contract and a complete Context mutation/retirement inventory | Inspect existing `context.rs` and its children; proposed journal belongs in `context/versions.rs`. Admission reviews settlement-before-callback ordering; Native reviews logical-to-native identity preservation. |
+| Resources | Proposed `docs/runtime-context-version-journal-v1.md`: identity/capacity contract and complete Context mutation/retirement inventory | Inspect existing `context.rs` and its children; proposed journal belongs in `context/versions.rs`. Admission reviews settlement-before-callback ordering; Native reviews logical-to-native identity preservation. |
 | Primary | Integrate one reviewed packet at a time and record its exact acceptance scope | Shared Context/backend/queue edits, builds, proof runs, hardware and publication remain serialized. |
 
 CO-1 and VER-1A.1 do not wait for .5B. The .5B test designs can be reviewed
 independently, but their source edits share fixtures and must be integrated
 serially. Neither `completion_contract.rs` nor `context/versions.rs` exists at
 this checkpoint; their rows are assignments, not implementation claims.
+
+The first execution wave is **R97-1/2 + CO-1 + VER-1A.1**. CO-2 and CO-3 follow
+the frozen CO-1 interface; Resources then takes the executable model before the
+journal implementation. The Native .5B-2/.5B-3 designs can be reviewed now, but
+their integration follows accepted .5B-1 and shares the primary trace, platform
+and memory fixtures. Do not defer all Admission/Resources work until Native
+finishes. Shared module wiring, Context mutation hooks, backend issue and fixture
+edits still pass through Primary one packet at a time.
 
 ## Native Queue
 
@@ -95,6 +120,24 @@ execution; Native owns each design/review handoff.
 | .5B-2 local platform composition | After .5B-1; primary `integration_platform.rs`, auxiliary platform cases and existing `queue_linux/primary_fixture.rs` helpers | Retain the primary runtime lease while adding auxiliary event/shadow/gate owners. Cover arm failures, exact prepublication cleanup and postpublication retention. Check identities and cleanup ordering. Local Linux mappings are not live KFD qualification. |
 | .5B-3 CREATE and installation | After .5B-1; combine with .5B-2 for platform cells; auxiliary integration tests and narrow existing fixture injections | Cover no-effect, indeterminate, malformed and panicking CREATE; output/ID recovery; retained auxiliary/SDMA roster collisions; both late currentness failures; doorbell/gate failures; occupied and reusable slots. No failed installation, spent-generation reuse or lost original owner. Full-source and compiled mutation gates close only this named CPU/local-helper matrix. |
 
+### R97 Work Units
+
+| Unit | Deliverable and exit assertion |
+| --- | --- |
+| R97-1: early-prefix oracle | Add a separate stage-aware oracle; preserve R96's stricter late `assert_pair`. Join original primary owners with auxiliary data, preparation/control prefixes, real terminal tokens and exact account/native records, without double counting markers. Observe real foundation location rather than assuming reclaim succeeded. |
+| R97-1: terminal transport | On admitted terminal failure require an empty live parent slot, occupied terminal-parent slot and actual poisoned ledgers. On success require the inverse; pure pre-effect rejection leaves the original parent unchanged. Snapshot equality alone misses poison and slot-transfer omissions. |
+| R97-2: ingress/opening | Pure capacity rejection has no opening, loan, preparation, retake or CREATE. Opening and loan errors/panics preserve the original parent; no retake without a returned loan. |
+| R97-2: returned prefixes | Inject every preparation/control error and panic after original primary success. Auxiliary code-memory ordinals are session-global 3-5; preparation-stage ordinals remain local 0-2. Preserve the trace and exact original bytes, owners and charges. |
+| R97-2: operation/reclaim | Cross operation success/error/panic with reclaim success/pre-error/pre-panic/post-error/post-panic. Exercise actual loan/reclaim and separately genuine certificate rejection. Pre/post-call probes alone do not establish certificate-rejection coverage. Failed reclaim permits no CREATE. |
+| R97-2: cleanup/acceptance | Store the complete terminal parent before cleanup; preserve the first panic even when cleanup panics. Add targeted compiled negative mutations, then freeze and run the full applicable gates with exact source restoration. |
+
+The subsequent 2C packet owns existing replacement in
+`queue_live.rs::recreate_compute_aql_queue_with_fixed_dispatch` and binding in
+`queue_live/fixed_dispatch.rs`, not a second constructor. DATA-ADOPT then owns
+the proposed runtime `kfd_backend/generated_adoption.rs` and narrow existing
+shell/Context/compute hooks. Local slot-reuse tests do not establish a native
+destroy/recreate cycle.
+
 Full 2B acceptance still does not establish callback-internal unreturned-owner
 custody, concurrent bootstrap, live device behavior, new formal refinement or
 performance. Keep those boundaries explicit rather than absorbing them into a
@@ -125,6 +168,28 @@ green fixture count.
    cancellation and owner-local non-Send contracts. Then qualify repeated
    generated graphs, dependencies, accepted-prefix drain and dropped observers.
    Cross-run input reuse additionally requires the complete version journal.
+
+### CO-1 First Handoff
+
+Use the existing completion statuses, preparation driver, roster and R80 reply.
+Add the private classifier and focused tests alongside
+`async_engine/tests/owned_tests/preparation_tests/`; do not add another public
+completion API, native receipt, readback allocation or decoder.
+
+| Observation family | Required classification/test |
+| --- | --- |
+| Pending or rejected | Reply remains pending; retain ownership. Re-observation is allowed, reissue is not. |
+| Succeeded | Candidate only, with no decode, readiness or disposal authority. |
+| Failed or cancelled | No typed output; failure reporting and confirmed native retirement are separate. |
+| Quiescent without result | No successful content or decode permission. |
+| Terminal or uncertain | Error reporting cannot release potentially live ownership or authorize retry. |
+| Already settled or replayed | No second reply, adapter call or state reopening. |
+
+The first focused tests cover each row, relevant status combinations, sticky
+settlement, allocation-free classification and zero adapter invocation. Later
+CO-3 composes the existing reservation/adoption Harness rather than duplicating
+its Stop, observer-loss and waker machinery. Production adoption hooks remain
+absent; R85 decoding is implemented but not native-connected.
 
 ## Resources Queue
 
@@ -162,6 +227,32 @@ settlement must precede callbacks in `transition_submission_status`. Existing
 single-account credits are not aggregate domains. Complete version hooks block
 cross-run input leases, not the first non-reusing generated ISSUE; freeze that
 submission's mutation hook now without inventing a second identity allocator.
+
+### VER-1A.1 First Handoff
+
+Freeze a separate journal/profile capacity and reject allocation admission before
+creating an untrackable allocation. Context's 1,048,576-entry bounds and the
+credit engine's 65,536-record bound are different quantities, not a journal
+capacity choice. Bounded metadata alone does not establish aggregate charging;
+bootstrap/account-arena charging remains MEM-DOM/MEM-5 work.
+
+The contract must name the following actual mutation surfaces under
+`crates/fe2o3-runtime/src/` before journal implementation:
+
+| Family | Inventory boundary |
+| --- | --- |
+| Allocation lifecycle | `context.rs::allocate/release_allocation/cleanup`; `context/generated_shells.rs::install_generated_shells_v1/retire_generated_shells_v1` |
+| Host writes | `write_allocation`: range validation before journal admission, journal admission before backend effects |
+| Ordinary/graph copies | Shared `prepare_context_copy_v1` and `submit_prepared_copy_v1`; preserve original logical destination/device |
+| Peer copies | `peer_copy`: preserve logical identity before backend translation |
+| Kernel writers | Shared `prepare_context_launch_v1` and `submit_prepared_launch_v1`, including snapshot/graph/atomic/collective families and future generated ISSUE |
+| Settlement/retirement | `transition_submission_status`, `completion_backend_result`, `mark_stream_quiescent`, cancellation/drain, protocol sealing, terminal/panic/currentness and cleanup |
+
+Use existing Context IDs for synchronous writers and exact runtime submission
+IDs for asynchronous writers. The Context retains complete pending rosters;
+dropped tickets cannot restore availability. Available describes mutation
+lineage, not initialized or correct contents. Complete VER-1B coverage remains a
+prerequisite for cross-run leases, not for the first non-reusing generated ISSUE.
 
 ## Integration And Qualification
 
