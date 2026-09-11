@@ -1,6 +1,17 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Current sequence/integration increment: R93, with
+Current three-agent dispatch: R94 acceptance repair for Native, CO-1 completion
+outcomes for Admission, and VER-1A.1 journal contract/inventory for Resources.
+The [current checkpoint and bounded work orders](runtime-a1-a2-swarm-dispatch-r83.md#checkpoint-and-ownership)
+were refreshed against signed planning commit
+`3b8a0b1bd85ca20ba4b901228e4781268ae6798c` and the dirty R94 candidate.
+R94's fixtures now exist and focused tests/mutations passed, but its first full
+gate failed on a stale source-shape assertion. R93 remains the latest accepted
+implementation. This planning publication does not include or qualify R94 code.
+The three read-only reviews are complete; follow-on work is queued, not running
+unattended. Primary owns implementation, integration and acceptance.
+
+Latest accepted sequence/integration increment: R93, with
 [contract](runtime-primary-queue-construction-custody-v1.md) and
 [local evidence](evidence/local-r93-primary-sequence-2026-09-11/README.md), above
 signed R92 `777cbefae2721bb2edd60187a666e8d84dc80c91`. The one production sequence

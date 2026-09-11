@@ -1,11 +1,16 @@
 # A1/A2 Next-Wave Dispatch
 
-The latest three-agent refresh at signed R93 `c35bb542f338d41a8247850e24166282c22d4926`
+The latest three-agent refresh at signed planning checkpoint
+`3b8a0b1bd85ca20ba4b901228e4781268ae6798c`, above accepted R93
+`c35bb542f338d41a8247850e24166282c22d4926`,
 assigns the [bounded work orders](runtime-a1-a2-swarm-dispatch-r83.md#bounded-work-orders)
-to Native, Admission and Resources. First tickets are the missing R94 platform
-fixture/late-failure matrix, CO-1 completion classifier and VER-1A.1 journal
-contract/inventory. The local R94 source candidate remains incomplete and
-unaccepted; this documentation-only refresh neither publishes nor reverts it.
+to Native, Admission and Resources. First tickets are R94 acceptance repair,
+CO-1 completion classifier and VER-1A.1 journal contract/inventory.
+The R94 fixtures now exist: seventeen focused tests/548 loop cases, corrected
+Clippy and five compiled mutations passed. Its first full-source gate failed
+on one stale dependency-constructor source guard (KFD: 927 passed, one failed).
+R94 remains unaccepted pending the guard repair and fresh complete gates; this
+documentation-only refresh neither publishes nor reverts the source candidate.
 All three read-only audits have returned. Primary owns implementation and gates;
 queued tickets are not continuing background jobs. Issue #182 remains open at
 the 2026-09-11 API refresh (`updatedAt` `2026-09-11T08:01:35Z`).
@@ -137,10 +142,10 @@ Under the current ownership policy workers are read-only; Primary owns edits.
 
 | Worker | First bounded packet | Follow-on queue | Exit gate for first packet |
 | --- | --- | --- | --- |
-| Native: `r66_native_coexistence` | NATIVE-2A.3 integrated acceptance, then 2B auxiliary and 2C replacement/insertion | NATIVE-3 DATA-ADOPT; ISSUE native interface; SCALE-1A fixtures; native-budget and R76/R78/R82 qualification harnesses; admitted profiles and capacity | Exercise R92 primary custody with exact same-session per-stage failures. Cover closing retake only in paths that use it. Preserve USERPTR, unpublished cleanup and queue-lifecycle thresholds; return no usable uncertain lane. |
+| Native: `r66_native_coexistence` | NATIVE-2A.3 R94 acceptance repair, then 2B auxiliary and 2C replacement/insertion | NATIVE-3 DATA-ADOPT; ISSUE native interface; SCALE-1A fixtures; native-budget and R76/R78/R82 qualification harnesses; admitted profiles and capacity | Preserve the relocated constructor's exactly-one issuer and call chain; rerun focused, mutation/restoration, full-source and auxiliary gates. Retain the failed attempt. Do not repeat the completed R94 fixture work or call local-helper tests live KFD qualification. |
 | Admission: `r66_runtime_coexistence` | CO-1 outcome contract, then CO-2 identity and CO-3 reply/custody fixtures | CO-4 native completion integration with ISSUE -> COMPLETE -> API -> generated graph/drain | Runtime fixtures count data-only completion-adapter calls without reversing the host/runtime dependency. Actual R85/native integration follows adoption and issue; no duplicate decoder or reply reservation. |
 | Resources: `r66_coexistence_model` | VER-1A.1 contract/inventory -> .2 model -> .3 journal -> .4 initial write/copy hooks -> .5 acceptance | VER-1B complete hooks; aggregate domains; remaining backing/control/code budgets; VER-2 leases; MEM-5 closure | Nonwrapping Available/Pending/Unknown whole-allocation versions; bounded, atomic whole-roster admission/settlement. Cross-run leases remain disabled until every mutation hook is integrated. |
-| Primary | Implement the remaining native/runtime/journal packets and DATA-ADOPT above R92 | Cross-review, executable refinement, signed hardware qualification and matched performance | Serialize shared edits/builds/proofs and preserve R80 credit ownership. Accept CPU, proof, Linux and performance results separately; publish signed source/evidence to both topic remotes. |
+| Primary | Integrate R94 acceptance above R93, then the remaining native/runtime/journal packets and DATA-ADOPT | Cross-review, executable refinement, signed hardware qualification and matched performance | Serialize shared edits/builds/proofs and preserve R80 credit ownership. Accept CPU, proof, Linux and performance results separately; publish signed accepted packets to both topic remotes. This refresh publishes planning only. |
 
 ADOPT-LIFE and DATA-ADOPT are coupled contracts; neither may introduce effects
 before their custody interface is integrated. VER-1A is independent. COMPLETE's
