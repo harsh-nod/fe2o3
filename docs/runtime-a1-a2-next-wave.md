@@ -1,7 +1,7 @@
 # A1/A2 Next-Wave Dispatch
 
-Updated 2026-09-10 against signed R78
-`042dcec1bc67f919e02ce4908a62ecc8d1e8b113`, pushed to both remotes.
+Updated 2026-09-10 against signed R79
+`2d14fda36c91df9e776cf3044790af6f597f15f1`, pushed to both remotes.
 R79 B3-OWNER now implements finite async preparation with the
 [contract](runtime-async-generated-preparation-v1.md) and
 [local gates](evidence/local-r79-async-preparation-2026-09-10/README.md) recorded below.
@@ -16,7 +16,8 @@ The user-requested swarm refresh completed on 2026-09-10. All three named
 workers returned source-grounded assignments; their review turns are complete,
 not continuing implementation jobs. The issue remains open (last issue update
 observed: `2026-09-10T10:50:51Z`). The next generated packets are Native's
-B3-DATA-REP and Admission/Resources' B4-RESERVE. Ordinary host-cache limits and
+B3-DATA-REP and the separately assigned B4-RESERVE-ENGINE and B4-RESERVE-HOST
+parts of B4-RESERVE. Ordinary host-cache limits and
 SCALE-1A-FIXTURE remain independent work. Implemented reservations must precede
 native adoption effects. The
 [integration queue](#generated-integration-queue) below names the individual
@@ -197,8 +198,8 @@ claim new implementation, proof or hardware acceptance.
 | Worker | First deliverable | Source boundary | Dependency and exit gate |
 | --- | --- | --- | --- |
 | Native | B3-DATA-REP; independent SCALE-1A-FIXTURE; then ADOPT | Proposed `kfd_backend/generated_materialization.rs` with R78's borrowed hooks; isolated fixture policy/oracle | Representation must retain original vectors and all ordinals without the ordinary snapshot path. Adoption requires implemented B4-RESERVE, changes custody before effects, retains partial native prefixes and cannot publish. |
-| Admission | B4 retained-owner reservation transition, then issue contract | Existing R79 `async_engine/generated_operation.rs`; narrow Context and host invocation adapters | R79 local gates are complete. Preserve exact ticket/owner identity and custody while reserving a new completion reply and complete readback roster. Publication follows DATA-ADOPT plus reservations; no early public launch API. |
-| Resources | MEM-2B-HOST ordinary coherent host-cache limits | Proposed `sdma/host_pool_policy.rs` and model checker; Native reviews exact records; Primary integrates shared-memory, queue and runtime budget hooks | Independent of generated execution and broader N1B. Preserve the same R72 debit; validate padded bytes, complete mixed rosters and exact identities. Zero disables caching, pressure disposes, defaults remain unchanged. |
+| Admission | B4-RESERVE-ENGINE, then issue contract | Existing R79 `async_engine/generated_operation.rs`, isolated reservation transition and narrow registry/Context hooks | Reserve a finite acknowledgement and a separate completion reply; preserve exact ticket/owner identity, including queued Stop recovery. Integrate the Resources hook without native effects. Publication follows DATA-ADOPT plus reservations; no early public launch API. |
+| Resources | B4-RESERVE-HOST first; MEM-2B-HOST is independent next work | Proposed host `generated_runtime_arguments/readback.rs`, private storage and result gate; later KFD `sdma/host_pool_policy.rs` | First reserve every readback destination in the original R73 account and test actual charged storage. Host-cache policy separately preserves the R72 debit, padded byte/record limits and unchanged defaults; zero disables caching and pressure disposes. |
 | Primary | Freeze interfaces, integrate and qualify | Shared exports, Context/native hooks, proof rosters, tests and evidence | Build on R79's locally validated owner. Integrate reservations/adoption in bounded commits, run authenticated proofs for changed model properties and publish to both remotes. Serialize shared-machine campaigns. |
 
 R77 reconciles a concrete format difference: the prepared request
@@ -224,6 +225,50 @@ and after bootstrap; existing OVL-QUAL-2 and DRN-2A signed campaigns; and N1/N2/
 hardware checks after MEM-QUAL-HARNESS exists. Protected production construction
 still requires the compiler owner's exact artifact/refinement handoff. None of
 these dependencies blocks host-cache policy, fixture or version-journal work.
+
+### First Integration Packet
+
+The latest user-requested breakdown uses the three existing worker slots below.
+Their read-only planning turns have completed. These are ready implementation
+assignments, not claims that code is being written in background. Primary owns
+implementation and integration; workers review their scoped changes and the
+cross-lane handoffs. No fourth worker or shared-machine campaign is active.
+
+| Assignment | Lead and concrete deliverable | Required local acceptance |
+| --- | --- | --- |
+| B3-DATA-REP | Native: closed borrowed view of the complete projection, retained HSACO and existing Worker authority; bounded metadata for every original buffer ordinal | Preserve source pointers/content, digest, timeout, unused/read-only buffers and private decoder/account custody. Reject artifact, authority, Context, ordinal and bound substitutions. No generic extraction, cropped snapshots, extra encoded copy or native calls. |
+| B4-RESERVE-HOST | Resources: private complete readback owner, original-account reservation through the result gate, and disposal-before-refund guards | Actual R73 storage tests: byte/record exhaustion, duplicate reservation, full-roster validation, unchanged original pointers/debits, allocation failure at each member, unwind and dropped observers. An unrelated budget must not substitute for the original account. |
+| B4-RESERVE-ENGINE | Admission: finite exact-ticket `Prepared -> Reserved` transition and private typed carrier adapter | Reserve two new bounded cells before enqueue: acknowledgement and eventual completion. Reject generic/foreign/stale/replayed tickets, recover the original ticket on ordinary pre-effect failure or queued Stop, test wakeups and panic retention, and assert zero native effects. |
+| Integration and gates | Primary: compose the three contracts in the retained Context owner; serialize shared exports and host/Context changes | Reserved custody remains host-only and explicitly disposable. No completion future is exposed before issue/progress exists. Cross-review, focused storage/engine tests, type checks and current-source regression gates precede signed dual publication. |
+
+All three contracts can be developed against R79 now. Their production wiring
+is one integration boundary: an unused representation or an uncalled storage
+helper does not complete its assignment. Generic R79 preparations remain
+discard-only. Runtime independently checks the source identities; the safe
+descriptive interface is not another execution authorizer.
+
+The subsequent generated sequence is:
+
+```text
+B3-DATA-REP + B4-RESERVE-HOST + B4-RESERVE-ENGINE
+  -> B3-DATA-ADOPT -> B3-ISSUE -> B4-COMPLETE -> B5-API -> B6-GRAPH/DRAIN
+```
+
+Before ADOPT's first native effect, the same rooted owner must become
+non-discardable and join active lane, graph, drain and cleanup accounting.
+ISSUE needs publication-time authority surviving deferred flush/retry;
+COMPLETE needs exact submission validation and all-or-nothing typed outputs.
+Tests and proof obligations start with each packet, not only at final closure.
+Neither an abstract proof nor successful CPU fixtures supplies missing protected
+compiler evidence or Linux acceptance.
+
+Independent queues keep available slots useful: Native takes SCALE-1A-FIXTURE,
+MEM-QUAL-HARNESS and the R76/R78 qualification harness; Resources takes ordinary
+host-cache policy and may move the version journal earlier. These are sequential
+assignments to the same workers, not additional concurrent agents. Primary can
+schedule existing OVL-QUAL-2 and DRN-2A campaigns separately, subject to an idle
+selected GPU and bounded private staging. Missing compiler evidence blocks
+positive production-generated acceptance, not these local tasks.
 
 ### Generated Integration Queue
 
@@ -286,8 +331,10 @@ completion reply, same-account readback reservation, complete destination and
 metadata allocation, native/control adoption, then issue. Preparation's already
 completed reply cannot serve as the launch-completion reply. Fail fast rather
 than waiting while holding a partial progress reservation. Before native effects,
-destroy new destinations before cancelling their unissued credits and preserve
-the original parked carrier/ticket for a retry. After native effects, retained
+destroy partially constructed destinations before cancelling an unissued
+reservation; an installed readback owner releases its retained credit only
+after actual storage disposal. Preserve the original parked carrier/ticket for
+a retry. After native effects, retained
 custody, not ticket disposal, governs cleanup. A whole-roster overlap debit avoids
 assuming unsupported partial credit splitting; it remains until all additional
 storage is destroyed. This is the next implementation contract, not an accepted
@@ -389,8 +436,8 @@ fixture implementation. A busy selected GPU does not block local proof/tests.
 | GEN-2B-3 through -6 | Admission/Native; Primary integration | Build on implemented local drivers and Context preparation with exact persistent publication/readback, one completion future and shared blocking/async execution, followed by graph/drain qualification. See the ordered breakdown above. |
 | GEN-2B-PROFILES | Native; Admission/Resources review | Extend the fixed path for scalar-only/empty rosters, larger rosters, admitted overlapping aliases and runtime-service hidden fields. Each needs explicit native representation, complete bounded accounting and profile-specific authority/tests/qualification; weakening projection rejection does not implement support. |
 | MEM-2B-HOST | Resources policy; Native hooks | Bound ordinary coherent host-cache reuse with cache-or-dispose admission using R72 N1A. Test padded byte/record limits, zero caching, generation reuse and failed trim; retain charges for incompletely disposed backing, but never resurrect confirmed-disposed charges. Broader N1B is not a prerequisite for this narrow profile. |
-| MEM-N1B | Resources/Native | Implement canonical cost/admission/disposal for userptr, doubled-VA AQL, executable, kernarg and control profiles, then qualify each separately. Distinguish physical backing, aliases and reserved VA; test exact lifetime/disposal and avoid double charging. |
-| MEM-DOM-1 | Resources; Primary construction hooks | Root/device/Context account ownership with bootstrap and terminal headroom reserved in advance. Repeated Context creation and simultaneous quarantine must not reset or exceed aggregate limits. |
+| MEM-N1B-1, then MEM-N1B-2 | Resources/Native | First canonical non-userptr kernarg/executable cost and lifetime adapters; then AQL aliases, userptr and remaining control profiles. Qualify each separately. Distinguish physical backing, aliases and reserved VA; do not label executable GTT as VRAM or charge shared backing twice. |
+| MEM-DOM-1A/B | Resources; Primary construction hooks | First domain/headroom contract, then root/device/Context account ownership integration. Reserve bootstrap, account-arena and terminal headroom in advance. Repeated Context creation and simultaneous quarantine must not reset or exceed aggregate limits. |
 | MEM-3A/B | Resources/Native | Account for queue/ring, signal, kernarg/control storage and occupied slots. Adopt exact MEM-TXN-1 members without duplicate backing debits; enforce a progress-safe acquisition order before publication. |
 | MEM-4A/B | Resources/Native | Bound retained host executable images and materialized code/control caches. Exact identity and live-operation leases govern eviction; ambiguous unload retains charges. |
 | VER-1A/B, then VER-2 | Resources; Primary mutation hooks | Bounded persistent Context mutation journal, conservative invalidation of every mutation path, and private cross-run input leases. Reject foreign, stale, unknown, mixed-generation and replayed versions before issue. |
@@ -552,5 +599,5 @@ actual source and pushed to both remotes. A topic-branch push is not a main merg
 
 A1/A2 remain open. The later A3-A7 table assigns milestone leads and exit gates;
 those milestones still need packet-level designs and their own test environments.
-Neither this plan nor R76 establishes full HIP/HSA
+Neither this plan nor R79 establishes full HIP/HSA
 parity or an unmeasured speedup.
