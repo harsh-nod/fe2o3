@@ -1,5 +1,17 @@
 # A1/A2 Next-Wave Dispatch
 
+R100 locally accepts **.5B-3A admitted CREATE outcomes**, with
+[retained evidence](evidence/local-r100-auxiliary-create-outcomes-2026-09-11/README.md).
+Two new tests cover fourteen failure cases; frozen/restored construction suites
+each pass 56. All seventeen source gates, ten auxiliary checks and four compiled
+behavioral negatives pass. GNU/musl each pass 2,542 tests with five ignored;
+all 5,656 source hashes match. Only four test-fixture files change. No production
+mechanism, solver, live KFD or performance result is added. The immediate swarm
+wave is **.5B-3B recovery/currentness**, then **3C roster/slots**; **CO-2A Context
+identity**; and **VER-1A.2a issuance model**, followed by membership, settlement
+and authenticated proofs. The [current board](runtime-a1-a2-swarm-current.md#remaining-work-at-a-glance)
+records the reviewed file boundaries, dependencies and acceptance gates.
+
 Use the [current work-order board](runtime-a1-a2-swarm-current.md) for immediate
 assignments. R99 locally accepts **.5B-2 auxiliary local platform composition**,
 with [retained evidence](evidence/local-r99-auxiliary-local-platform-2026-09-11/README.md).
@@ -7,7 +19,7 @@ Seventeen source gates, ten auxiliary checks and five compiled behavioral
 negatives pass; GNU/musl each pass 2,540 tests with five ignored. All 5,655 source
 identities match. The named matrix has 34 auxiliary runs plus two registration
 tests; frozen integration/restored construction suites pass 32/54 tests. No new
-production mechanism, solver, live KFD or performance is accepted. Next:
+production mechanism, solver, live KFD or performance is accepted. At R99, next was:
 **.5B-3A/B/C**, **CO-2A** and **VER-1A.2**.
 
 R98 locally accepts the CO-1 classifier and VER-1A.1 journal
@@ -29,8 +41,8 @@ functions cover 369 shared-driver runs plus a separate primary-only capacity
 fixture. This adds no live KFD, new formal refinement or performance result;
 historical acceptance below applies to its named source only.
 
-The renewed three-agent breakdown assigns Native **.5B-3A CREATE outcomes**,
-then **3B recovery/currentness**, **3C roster/slots**, 2C and DATA-ADOPT.
+The renewed three-agent breakdown advances Native to **3B recovery/currentness**,
+then **3C roster/slots**, 2C and DATA-ADOPT after R100's CREATE acceptance.
 Admission next takes Context identity coverage; Resources takes the executable
 journal model/proofs, including exact NoEffect settlement without attempt-epoch
 rollback. Three read-only workers completed these source-grounded handoffs;

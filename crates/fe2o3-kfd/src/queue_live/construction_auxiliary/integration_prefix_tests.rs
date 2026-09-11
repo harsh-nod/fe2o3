@@ -6,6 +6,9 @@ mod memory_cases;
 #[path = "integration_platform_tests.rs"]
 mod platform_cases;
 
+#[path = "integration_create_tests.rs"]
+mod create_cases;
+
 type PrefixCaseResult = (
     Box<Scope>,
     Result<(), Box<dyn std::any::Any + Send>>,
@@ -20,6 +23,21 @@ fn prefix_case_with_setup(
     external_runtime: bool,
     setup: impl FnOnce(&Rc<RefCell<Trace>>),
     configure: impl FnOnce(&mut Scope, &Rc<RefCell<Trace>>),
+) -> PrefixCaseResult {
+    prefix_case_with_oracle(external_runtime, setup, configure, |scope, failed| {
+        if failed && scope.construction.key.is_none() {
+            assert_early_pair(scope);
+        } else {
+            assert_pair(scope);
+        }
+    })
+}
+
+fn prefix_case_with_oracle(
+    external_runtime: bool,
+    setup: impl FnOnce(&Rc<RefCell<Trace>>),
+    configure: impl FnOnce(&mut Scope, &Rc<RefCell<Trace>>),
+    assert_custody: impl FnOnce(&Scope, bool),
 ) -> PrefixCaseResult {
     let (memory, trace) = setup_memory_with_host_budget(2 << 20);
     let (primary, trace) = setup_with_memory(memory, trace);
@@ -112,12 +130,8 @@ fn prefix_case_with_setup(
         primary.engine.backend.foundation_in_engine,
         after_loan.1.is_none()
     );
+    assert_custody(&scope, result.is_err());
     if result.is_err() {
-        if scope.construction.key.is_some() {
-            assert_pair(&scope);
-        } else {
-            assert_early_pair(&scope);
-        }
         let t = trace.borrow();
         let retained = t
             .calls
@@ -131,8 +145,6 @@ fn prefix_case_with_setup(
             t.cleanup,
             usize::from(scope.construction.unpublished.is_some() && t.cleanup_panic != Some(false))
         );
-    } else {
-        assert_pair(&scope);
     }
     (scope, result, trace)
 }

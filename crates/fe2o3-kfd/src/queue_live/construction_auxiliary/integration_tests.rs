@@ -233,7 +233,7 @@ fn run_auxiliary(
     )
 }
 
-fn assert_pair(scope: &Scope) {
+fn assert_pair_custody(scope: &Scope) {
     let primary = scope.primary.completed.as_ref().unwrap();
     let memory = &primary.engine.backend.session;
     let installed = scope.lanes.first().and_then(|s| s.state.as_ref());
@@ -298,6 +298,11 @@ fn assert_pair(scope: &Scope) {
     assert_eq!(primary.engine.resources.len(), 2);
     assert_ne!(primary.key, scope.construction.key.unwrap());
     assert_eq!(primary.engine.native_queue_id(primary.key), Some(7));
+}
+
+fn assert_pair(scope: &Scope) {
+    assert_pair_custody(scope);
+    let primary = scope.primary.completed.as_ref().unwrap();
     if trace().borrow().create_collision {
         assert_eq!(
             primary.engine.phase(scope.construction.key.unwrap()),

@@ -1,0 +1,124 @@
+{
+  "source_parent": "e6ac41c7fe61fbbb3e9a7003a8e9fd9a8a0c97a4",
+  "scope": "NATIVE-2B.5B-3A named CPU/local-helper admitted CREATE outcome matrix",
+  "source_identities": 5656,
+  "changed_test_files": [
+    "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_create_tests.rs",
+    "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_prefix_tests.rs",
+    "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_tests.rs",
+    "crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs"
+  ],
+  "source_gates": 17,
+  "auxiliary_checks": 10,
+  "compiled_behavioral_mutations": 4,
+  "new_test_functions": [
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_create_outcomes_retain_admitted_prefix_and_exact_history",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_malformed_create_outputs_retain_admitted_prefix_and_exact_history"
+  ],
+  "new_matrix": {
+    "scenarios": 7,
+    "original_runtime_routes": 2,
+    "auxiliary_runs": 14,
+    "successes": 0,
+    "failures": 14
+  },
+  "frozen_construction_tests": 56,
+  "restored_construction_tests": 56,
+  "tests": {
+    "gnu-tests": {
+      "harnesses": 48,
+      "passed": 2542,
+      "failed": 0,
+      "ignored": 5
+    },
+    "musl-tests": {
+      "harnesses": 48,
+      "passed": 2542,
+      "failed": 0,
+      "ignored": 5
+    },
+    "gnu-docs": {
+      "harnesses": 7,
+      "passed": 108,
+      "failed": 0,
+      "ignored": 0
+    },
+    "musl-docs": {
+      "harnesses": 5,
+      "passed": 91,
+      "failed": 0,
+      "ignored": 0
+    },
+    "musl-host-docs": {
+      "harnesses": 2,
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0
+    },
+    "gnu-host": {
+      "harnesses": 1,
+      "passed": 258,
+      "failed": 0,
+      "ignored": 4
+    },
+    "musl-host": {
+      "harnesses": 1,
+      "passed": 141,
+      "failed": 0,
+      "ignored": 0
+    },
+    "macro-fixtures": {
+      "harnesses": 1,
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    },
+    "registration": {
+      "harnesses": 1,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "ordinary": {
+      "harnesses": 1,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    "linux-helpers": {
+      "harnesses": 1,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    },
+    "initialization": {
+      "harnesses": 1,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    "transitions": {
+      "harnesses": 1,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    },
+    "preparation": {
+      "harnesses": 1,
+      "passed": 23,
+      "failed": 0,
+      "ignored": 0
+    },
+    "bind": {
+      "harnesses": 1,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    }
+  },
+  "preliminary_failure": "raw/r100-create-first.json",
+  "environment_record": "raw/r100-environment.json",
+  "live_kfd": false,
+  "solver_rerun": false,
+  "performance_measurement": false
+}

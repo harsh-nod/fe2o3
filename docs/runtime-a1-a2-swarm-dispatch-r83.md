@@ -1,4 +1,17 @@
-# A1/A2 Swarm Dispatch At R99 Local Platform Composition
+# A1/A2 Swarm Dispatch At R100 CREATE Outcomes
+
+R100 locally accepts **.5B-3A admitted CREATE outcomes**, with
+[final evidence](evidence/local-r100-auxiliary-create-outcomes-2026-09-11/README.md).
+Two new tests exercise fourteen failure cases. Frozen/restored construction
+suites each pass 56; all seventeen source gates, ten auxiliary checks and four
+compiled behavioral negatives pass. GNU/musl each pass 2,542 tests with five
+ignored, and all 5,656 source identities match. Four test-fixture files change;
+no new production mechanism, solver, live KFD or performance is accepted.
+Native next takes **.5B-3B**, then **3C**; Admission takes **CO-2A**, then reviewed
+CO-2B/CO-3A; Resources takes **VER-1A.2a-d**, then the production journal in .3.
+The [current board](runtime-a1-a2-swarm-current.md#remaining-work-at-a-glance)
+records exact work orders. Review turns are complete; implementation queues are
+not unattended jobs. Primary owns edits, serialized gates and publication.
 
 Use the [current work-order board](runtime-a1-a2-swarm-current.md) for immediate
 assignments. R99 locally accepts .5B-2's named auxiliary CPU/local Linux helper
@@ -7,7 +20,7 @@ Seventeen source gates, ten auxiliary checks and five compiled behavioral
 negatives pass; GNU/musl each pass 2,540 tests with five ignored. All 5,655 source
 identities match. The 34-case matrix and two registration tests add no new
 production mechanism, formal refinement, live KFD or performance acceptance.
-The immediate wave is Native **.5B-3A CREATE**, then **3B recovery/currentness**
+The immediate wave at R99 was Native **.5B-3A CREATE**, then **3B recovery/currentness**
 and **3C roster/slots**; Admission **CO-2A Context identity**; Resources
 **VER-1A.2 executable model/proofs**. Three read-only workers returned bounded
 handoffs and cross-reviews. Primary owns edits and serialized integration;

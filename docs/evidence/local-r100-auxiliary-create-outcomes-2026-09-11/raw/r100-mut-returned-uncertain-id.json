@@ -1,0 +1,22 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_create_outcomes_retain_admitted_prefix_and_exact_history",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r100-mut-returned-uncertain-id.log",
+  "source": "/home/harsh/.codex-tmp/r100-mut-returned-uncertain-id-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "elapsed_seconds": 52.927
+}

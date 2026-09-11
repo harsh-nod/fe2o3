@@ -368,13 +368,16 @@ impl PrimaryMemoryV1 for Memory {
         if mode == 4 {
             args.ring_size *= 2;
         }
+        if mode == 6 {
+            args.doorbell_offset = u64::MAX;
+        }
         trace().borrow_mut().create_return = Some((args.queue_id, args.doorbell_offset));
         trace()
             .borrow_mut()
             .create_returns
             .push((args.queue_id, args.doorbell_offset));
         let status = match mode {
-            1 => fe2o3_runtime_model::QueueSyscallStatusV1::FailedNoEffect,
+            1 | 7 => fe2o3_runtime_model::QueueSyscallStatusV1::FailedNoEffect,
             2 | 3 => fe2o3_runtime_model::QueueSyscallStatusV1::Indeterminate,
             _ => fe2o3_runtime_model::QueueSyscallStatusV1::Succeeded,
         };

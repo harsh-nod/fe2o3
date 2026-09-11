@@ -1,0 +1,35 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 38.28s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 2 tests
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_malformed_create_outputs_retain_admitted_prefix_and_exact_history ... FAILED
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_create_outcomes_retain_admitted_prefix_and_exact_history ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_malformed_create_outputs_retain_admitted_prefix_and_exact_history stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_malformed_create_outputs_retain_admitted_prefix_and_exact_history' (3139921) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:225:27:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_malformed_create_outputs_retain_admitted_prefix_and_exact_history' (3139921) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_create_tests.rs:66:5:
+assertion failed: root.authority.is_none() && root.resource_prefix.is_none()
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_create_outcomes_retain_admitted_prefix_and_exact_history stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_create_outcomes_retain_admitted_prefix_and_exact_history' (3139920) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:225:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_create_outcomes_retain_admitted_prefix_and_exact_history' (3139920) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_create_tests.rs:66:5:
+assertion failed: root.authority.is_none() && root.resource_prefix.is_none()
+
+
+failures:
+    queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_create_outcomes_retain_admitted_prefix_and_exact_history
+    queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_malformed_create_outputs_retain_admitted_prefix_and_exact_history
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 954 filtered out; finished in 3.22s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

@@ -1,0 +1,42 @@
+[
+  {
+    "name": "create-result-propagation",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_create_outcomes_retain_admitted_prefix_and_exact_history",
+    "edits": [[
+      "        engine\n            .create_at_native_boundary(key, || {\n                self.published = Some(E::publish_shadows(\n                    self.unpublished.take().expect(\"unpublished shadows\"),\n                ));\n            })\n            .map_err(map_create)?;",
+      "        let _ = engine\n            .create_at_native_boundary(key, || {\n                self.published = Some(E::publish_shadows(\n                    self.unpublished.take().expect(\"unpublished shadows\"),\n                ));\n            })\n            .map_err(map_create);"
+    ]],
+    "expected": ["assertion `left == right` failed: runtime-created", "left: 2", "right: 1"]
+  },
+  {
+    "name": "returned-uncertain-id",
+    "path": "crates/fe2o3-runtime-model/src/queue_lifecycle.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_create_outcomes_retain_admitted_prefix_and_exact_history",
+    "edits": [[
+      "                after.queue_id = if collision || unresolved_other {\n                    None\n                } else {\n                    queue_id\n                };",
+      "                after.queue_id = if collision || unresolved_other {\n                    None\n                } else {\n                    None\n                };"
+    ]],
+    "expected": ["assertion `left == right` failed", "left: None", "right: Some(8)"]
+  },
+  {
+    "name": "invalid-output-phase",
+    "path": "crates/fe2o3-kfd/src/queue.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_malformed_create_outputs_retain_admitted_prefix_and_exact_history",
+    "edits": [[
+      "                Err(_) => {\n                    status = QueueSyscallStatusV1::Indeterminate;\n                    malformed = Some(\"CREATE_QUEUE outputs\");\n                    None\n                }",
+      "                Err(_) => {\n                    status = QueueSyscallStatusV1::Succeeded;\n                    malformed = Some(\"CREATE_QUEUE outputs\");\n                    None\n                }"
+    ]],
+    "expected": ["assertion `left == right` failed", "left: Some(Active)", "right: Some(Ambiguous)"]
+  },
+  {
+    "name": "failed-noeffect-outputs",
+    "path": "crates/fe2o3-kfd/src/queue.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::create_cases::same_engine_auxiliary_malformed_create_outputs_retain_admitted_prefix_and_exact_history",
+    "edits": [[
+      "            if status == QueueSyscallStatusV1::FailedNoEffect\n                && (outcome.value.queue_id != CREATE_QUEUE_ID_SENTINEL_V1",
+      "            if false && status == QueueSyscallStatusV1::FailedNoEffect\n                && (outcome.value.queue_id != CREATE_QUEUE_ID_SENTINEL_V1"
+    ]],
+    "expected": ["assertion `left == right` failed", "left: false", "right: true"]
+  }
+]

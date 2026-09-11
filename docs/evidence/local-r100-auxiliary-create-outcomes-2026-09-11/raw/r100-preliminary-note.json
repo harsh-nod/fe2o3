@@ -1,0 +1,10 @@
+{
+  "attempt": "r100-create-first",
+  "compiled": true,
+  "passed": 0,
+  "failed": 2,
+  "finding": "The new oracle incorrectly required the consumed QueueResourcePrefixV1 container to be absent.",
+  "correction": "Require construction authority absent, retained prefix container present with zero token identities, and the exact authority in the original engine.",
+  "production_change": false,
+  "accepted_followup": "r100-create-second"
+}

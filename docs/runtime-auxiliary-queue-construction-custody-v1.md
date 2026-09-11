@@ -1,5 +1,26 @@
 # Auxiliary Queue Construction Custody V1
 
+R100 locally accepts **NATIVE-2B.5B-3A**, the admitted CREATE outcome matrix,
+above signed R99 `e6ac41c7fe61fbbb3e9a7003a8e9fd9a8a0c97a4`.
+The [R100 evidence](evidence/local-r100-auxiliary-create-outcomes-2026-09-11/README.md)
+records seventeen source gates, ten auxiliary checks, four compiled behavioral
+negatives and 2,542 tests per GNU/musl target with five ignored. Frozen/restored
+construction suites each pass 56 and all 5,656 source hashes match. Only four
+test-fixture files change; production mechanisms remain unchanged. Recovery/
+currentness (.5B-3B), roster/slot composition (.5B-3C), 2C and DATA-ADOPT remain
+open, as do formal correspondence, live KFD and performance qualification.
+
+The new matrix exercises seven scripted CREATE outcomes through both original
+runtime routes using R99's actual local Linux helpers. It distinguishes
+definite no-effect, uncertainty without/with a returned ID, input drift, panic,
+invalid successful doorbell output and changed outputs on failed-no-effect.
+Exact original records/history survive; admitted authority belongs to the engine
+while the construction retains an empty resource-prefix container. Published
+shadows, dispatch/completion owners and the terminal parent remain rooted.
+No failure manufactures outputs, advances the auxiliary runtime to queue-live,
+installs a lane or permits published-shadow cleanup. Local fixture disposal is
+not confirmed native teardown.
+
 R99 locally accepts **NATIVE-2B.5B-2**, the named CPU/local Linux helper
 composition, above signed R98 `7506596f805af49e432aaa4ef66ec9a586ca4734`.
 The [R99 evidence](evidence/local-r99-auxiliary-local-platform-2026-09-11/README.md)
