@@ -3097,7 +3097,7 @@ fn rust_workgroup_pipeline_contract_v1<'tcx>(
     Some((
         *element,
         u32::try_from(*buffers).ok()?,
-        u64::try_from(*elements).ok()?,
+        *elements,
         u32::try_from(*prefetch_distance).ok()?,
     ))
 }

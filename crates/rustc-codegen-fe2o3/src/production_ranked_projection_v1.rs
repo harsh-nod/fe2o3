@@ -2321,15 +2321,11 @@ fn scalar_defined_callable_rvalue_v1(
                 && scalar_defined_callable_operand_v1(types, function, unchecked.left(), work)?
                 && scalar_defined_callable_operand_v1(types, function, unchecked.right(), work)?)
         }
-        SemanticRvalueKindV1::Cast { kind, operand }
-            if matches!(
-                kind,
-                SemanticCastKindV1::Integer | SemanticCastKindV1::Float
-            ) =>
-        {
-            Ok(scalar_defined_callable_type_v1(types, value.result_type())
-                && scalar_defined_callable_operand_v1(types, function, operand, work)?)
-        }
+        SemanticRvalueKindV1::Cast {
+            kind: SemanticCastKindV1::Integer | SemanticCastKindV1::Float,
+            operand,
+        } => Ok(scalar_defined_callable_type_v1(types, value.result_type())
+            && scalar_defined_callable_operand_v1(types, function, operand, work)?),
         SemanticRvalueKindV1::Cast { .. }
         | SemanticRvalueKindV1::Borrow { .. }
         | SemanticRvalueKindV1::AddressOf { .. }
@@ -11269,8 +11265,7 @@ fn project_uniform_inductions_v1(
             explicit_value,
             ..
         } = &topology.preheader_control
-        {
-            if !exact_optional_induction_selector_v1(
+            && !exact_optional_induction_selector_v1(
                 types,
                 function,
                 discriminant,
@@ -11279,11 +11274,11 @@ fn project_uniform_inductions_v1(
                 stable_argument_origins,
                 local_definitions,
                 &semantic_ranges.address_escaped,
-            ) {
-                return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                    "an optional uniform induction preheader is not controlled by one exact lane-uniform selector",
-                ));
-            }
+            )
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "an optional uniform induction preheader is not controlled by one exact lane-uniform selector",
+            ));
         }
         let induction_type = function
             .locals()
