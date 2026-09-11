@@ -8,7 +8,11 @@ enum EdgeKind {
     Equal,
 }
 
-fn duplicate_target_loop(context: &mut Context, kind: EdgeKind, reset: Option<usize>) -> FuncOp {
+fn duplicate_target_loop(
+    context: &mut Context,
+    kind: EdgeKind,
+    reset: Option<(usize, usize)>,
+) -> FuncOp {
     let (function, arguments) = make_function(context, "duplicate_target_loop", 1);
     let entry = function.get_entry_block(context);
     let (header, induction) = index_block_n(context, &function, "header", 2);
@@ -41,8 +45,8 @@ fn duplicate_target_loop(context: &mut Context, kind: EdgeKind, reset: Option<us
     let mut first = body_values.clone();
     let mut second = body_values.clone();
     match reset {
-        Some(0) => first[0] = zero.result(context),
-        Some(1) => second[0] = zero.result(context),
+        Some((0, argument)) => first[argument] = zero.result(context),
+        Some((1, argument)) => second[argument] = zero.result(context),
         None => {}
         _ => panic!("invalid reset edge"),
     }
@@ -104,18 +108,28 @@ fn identical_duplicate_target_arguments_preserve_nested_progress() {
 
 #[test]
 fn first_duplicate_target_edge_cannot_reset_induction() {
-    reject_reset_edge(0);
+    reject_mismatched_edge(0, 0);
 }
 
 #[test]
 fn second_duplicate_target_edge_cannot_reset_induction() {
-    reject_reset_edge(1);
+    reject_mismatched_edge(1, 0);
 }
 
-fn reject_reset_edge(edge: usize) {
+#[test]
+fn first_duplicate_target_edge_cannot_change_only_an_auxiliary_argument() {
+    reject_mismatched_edge(0, 1);
+}
+
+#[test]
+fn second_duplicate_target_edge_cannot_change_only_an_auxiliary_argument() {
+    reject_mismatched_edge(1, 1);
+}
+
+fn reject_mismatched_edge(edge: usize, argument: usize) {
     for kind in [EdgeKind::Split, EdgeKind::LessThan, EdgeKind::Equal] {
         let mut context = setup();
-        let function = duplicate_target_loop(&mut context, kind, Some(edge));
+        let function = duplicate_target_loop(&mut context, kind, Some((edge, argument)));
         let report = run_pliron_progress_check_v1(&context, &function);
         assert_eq!(
             report.status(),
