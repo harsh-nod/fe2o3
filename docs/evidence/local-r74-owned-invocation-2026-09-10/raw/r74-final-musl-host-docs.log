@@ -1,0 +1,22 @@
+   Compiling fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.73s
+   Doc-tests fe2o3_host
+
+running 14 tests
+test crates/fe2o3-host/src/worker_v3_verification_admission.rs - worker_v3_verification_admission::WorkerV3SemanticMachineRefinementReceiptV1 (line 612) - compile fail ... ok
+test crates/fe2o3-host/src/compiler_execution_current_record_audit.rs - compiler_execution_current_record_audit::WorkerV3CompilerCurrentRecordEvidenceViewV1 (line 43) - compile fail ... ok
+test crates/fe2o3-host/src/generated_runtime_results.rs - generated_runtime_results::GeneratedRuntimeChargedResultV1 (line 229) - compile fail ... ok
+test crates/fe2o3-host/src/generated_kfd_invocation.rs - generated_kfd_invocation::WorkerV3ApplicationExecutionBindingV1 (line 318) - compile fail ... ok
+test crates/fe2o3-host/src/compiler_execution_current_record_audit.rs - compiler_execution_current_record_audit::InheritedWorkerV3CompilerCurrentRecordAuditorV1 (line 366) - compile fail ... ok
+test crates/fe2o3-host/src/authenticated_service_queue.rs - authenticated_service_queue::AuthenticatedServiceQueueSessionV1<N>::destroy_and_release (line 781) - compile fail ... ok
+test crates/fe2o3-host/src/worker_v3_verification_admission.rs - worker_v3_verification_admission::WorkerV3RosterLoadEnvelopeEvidenceViewV1 (line 2394) - compile fail ... ok
+test crates/fe2o3-host/src/generated_runtime_results.rs - generated_runtime_results::ChargedTypedResultV1 (line 68) - compile fail ... ok
+test crates/fe2o3-host/src/worker_v3_verification_admission.rs - worker_v3_verification_admission::WorkerV3SemanticMachineRefinementReceiptV1 (line 601) - compile fail ... ok
+test crates/fe2o3-host/src/generated_runtime_arguments.rs - generated_runtime_arguments::GeneratedRuntimeChargedArgumentsV1 (line 772) - compile fail ... ok
+test crates/fe2o3-host/src/generated_runtime_arguments.rs - generated_runtime_arguments::GeneratedRuntimeReadSlice (line 389) - compile fail ... ok
+test crates/fe2o3-host/src/application_descriptor_handoff.rs - application_descriptor_handoff::consume_inherited_worker_v3_application_roster_handoff_v1 (line 250) - compile fail ... ok
+test crates/fe2o3-host/src/compiler_execution_current_record_audit.rs - compiler_execution_current_record_audit::WorkerV3CompilerCurrentRecordAuditV1 (line 124) - compile fail ... ok
+test crates/fe2o3-host/src/generated_runtime_results.rs - generated_runtime_results::ChargedTypedResultV1 (line 73) - compile fail ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+

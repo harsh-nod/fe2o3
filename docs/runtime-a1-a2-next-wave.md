@@ -50,8 +50,25 @@ The public charged arguments are data only: native publication, Context
 generations, runtime-owner shutdown and authenticated compiler execution remain
 GEN-2B/integration acceptance, not consequences of the storage tests.
 
-Resources now takes ordinary host-cache limits without reimplementing GEN-2R.
-Admission takes GEN-2A against the implemented private result interface.
+### R74 Follow-On
+
+GEN-2A nonexecuting invocation custody is now implemented in the
+[owned invocation contract](runtime-owned-generated-invocation-v1.md), with
+[local evidence](evidence/local-r74-owned-invocation-2026-09-10/README.md).
+It consumes raw generated arguments and their authenticated executable, retains
+the private production-only authority and uses a storage-before-decoder owner
+through preparation failures and unwind. Explicit `!Send`/`!Sync` checks do not
+rely on the checked-device documentation. The borrowed qualification path is
+unchanged. Positive production construction, native execution, GEN-2B and
+whole-executor refinement remain open.
+
+R74's seventeen source gates pass 2,222 runtime tests per GNU/musl target,
+233 GNU and 116 musl host tests, all generated fixtures and lint/policy gates.
+Model/proof sources are unchanged; the 686-negative inventory was rechecked,
+not the Verus solver. These results do not prove the new ownership adapter.
+
+Resources takes ordinary host-cache limits without reimplementing GEN-2R.
+Admission advances to GEN-2B and the runtime-defined admitted interface.
 Native's bounded fixture work is independent of both. Primary owns all edits,
 cross-lane integration, gates and releases.
 
@@ -66,7 +83,7 @@ are sequential queues, not additional concurrent workers or delegated edits.
 | --- | --- | --- |
 | Native: `r66_native_coexistence` | SCALE-1A-FIXTURE: bounded short/long artifacts and full-output oracles | Specify new runtime fixture directories, isolated `qualification_gfx942_scale_v1.rs`, mutation tests and sequential correctness checker. Primary owns artifact builds, shared admission hooks and edits. No GEN-2 prerequisite. |
 | Resources: `r66_coexistence_model` | MEM-2B-HOST: ordinary coherent host-cache bounds | Specify isolated `sdma/host_pool_policy.rs`, exact padded-cost/identity projection and policy/model tests. Preserve R72 backing debit across reuse; zero cache limit disables caching, default stays unchanged. Coordinate native hooks before integration. |
-| Admission: `r66_runtime_coexistence` | GEN-2A: owned nonexecuting invocation preparation | Specify `fe2o3-host/src/generated_runtime_invocation.rs` and unit/compile-fail fixtures. Reuse protected admission, packing and GEN-2R helpers. Context admission and native publication remain GEN-2B. |
+| Admission: `r66_runtime_coexistence` | GEN-2B: Context/publication/completion bridge | Consume implemented GEN-2A through a runtime-defined admitted interface. Bind Context generations, exact retirement and charged decoding; add wake/retry and shutdown tests. No second queue or qualification fallback. |
 | Primary | Shared GEN-2/cache integration, proof composition and qualification | Own every edit, integration/build/proof run, evidence record and signed dual push. Schedule existing OVL-QUAL-2 and DRN-2A against frozen signed source; native-budget pressure first needs MEM-QUAL-HARNESS. |
 
 Admission and Resources agree the permit/decoder/result boundary before code
@@ -76,17 +93,18 @@ lane's contract before the packet's local gates.
 
 After this wave, Native takes the sequential fixture qualifier and
 MEM-QUAL-HARNESS, then ordinary host-cache and broader native budget hooks.
-Resources takes MEM-N1B, MEM-DOM-1, MEM-3/4, VER-1/2 and MEM-5. Admission takes
-GEN-2B, then generated graph/drain qualification. Waiting for hardware must not
+Resources takes MEM-N1B, MEM-DOM-1, MEM-3/4, VER-1/2 and MEM-5. Admission follows
+GEN-2B with generated graph/drain qualification. Waiting for hardware must not
 block CPU harness work. Version-journal mechanics or host-image accounting may
 move earlier when the Resources slot is free.
 
 ### First Handoffs
 
-The current three-agent review completed without runtime edits, builds or
-hardware activity. Its implementation queues start with these bounded packets:
+The three-agent dispatch review itself made no runtime edits or hardware
+observations. R74 subsequently implemented its first Admission handoff below;
+Resources and Native remain independent implementation queues:
 
-1. Admission hands GEN-2A's consuming API and rejection sequence to Primary.
+1. Completed local handoff: GEN-2A's consuming API and rejection sequence.
    Resources reviews an input/prepared-payload carrier that disposes all encoded
    storage before decoder credits on success, rejection and unwind. Native
    reviews exact device/artifact currentness and production-only authority.
@@ -113,7 +131,7 @@ needs the compiler handoff; fixture correctness and fixture drain do not.
 | Stage | Ready work | Gate before advancing |
 | --- | --- | --- |
 | 0: R73 locally complete | Charged result data and nonblocking extraction; reviewed next-packet contracts | Retained current-source gates and property proofs; native/whole-executor acceptance remains separate |
-| 1: independent local packets | Host-cache policy/hooks, GEN-2A, short/long fixtures and native-budget harness | Freeze cross-lane interfaces; complete deterministic rejection, ownership, failure and oracle tests |
+| 1: independent local packets | Host-cache policy/hooks, short/long fixtures and native-budget harness; GEN-2A custody is implemented | Freeze cross-lane interfaces; complete deterministic rejection, ownership, failure and oracle tests |
 | 2: compose ownership | Broader native profiles, domains, control/code budgets, versions and GEN-2B | No duplicate backing debit, unbounded child accounts, stale input authority or detached decoder; preserve progress headroom |
 | 3: qualify A1/A2 | Out-of-order native depth, repeated generated graphs, active drain, memory pressure and overlap | Admitted workloads, exact compiler evidence for production generated cells, signed full-output captures and cleanup; existing copy/overlap campaigns may run earlier |
 | 4: measure and close | Matched KFD/HSA/HIP producers, executable proof composition and exit audit | Predeclared workloads/thresholds, resource/CPU/tail metrics, separate device-timeline evidence for physical overlap; every A1/A2 acceptance cell resolved |
@@ -128,7 +146,7 @@ fixture implementation. A busy selected GPU does not block local proof/tests.
 | --- | --- | --- |
 | MEM-QUAL-HARNESS | Native; Resources review, Primary runner integration | New example/checker exercises actual optional N1/N2 budgets and device-cache limits in both startup orders, with pressure, retained backing, reuse and disposal. Existing R66/drain examples only configure logical requested-byte limits; rerunning them cannot qualify native budgets. |
 | MEM-N1A-QUAL and N2/pool qualification | Primary after MEM-QUAL-HARNESS | Signed Linux admission-pressure captures, exact native usage/identities, complete data and cleanup. Host-cache cells follow that policy's implementation. Fake-backend tests do not fill these cells. |
-| GEN-2A | Admission | Move-only nonexecuting executable/arguments/decoder preparation and private protected permit. Reject changed artifact, packing, geometry, device and publication; compile-fail tests prohibit borrowed escapes and duplication. Context allocation generations/admission belong to GEN-2B. |
+| GEN-2A production acceptance | Admission/Primary | Nonexecuting custody and local adapter/type tests are implemented in R74. Positive full construction still requires an actual checked device and exact production compiler evidence; local predicate/structural fixtures do not fill that cell. Context allocation generations/admission belong to GEN-2B. |
 | GEN-2R runtime integration | Primary; Resources/Admission review with GEN-2B | R73 data storage is implemented and locally validated. Bind its private decoder and credits to exact runtime-owner lifetime; ordinary host-thread tests do not qualify shutdown. Preserve no raw escape, partial publication or capacity mismatch. |
 | GEN-2B | Admission/Native; Primary integration | Consume the permit once in actual nonblocking publication/retirement. Revalidate at publication, retain all authority through quiescence, and gate decoding on exact completion. Blocking execution joins this path. |
 | MEM-2B-HOST | Resources policy; Native hooks | Bound ordinary coherent host-cache reuse/eviction using R72 N1A. Test padded byte/record limits, zero caching, generation reuse and failed trim; retain charges for incompletely disposed backing, but never resurrect confirmed-disposed charges. Broader N1B is not a prerequisite for this narrow profile. |
@@ -263,9 +281,9 @@ unresolved backing and cannot resurrect already disposed charges.
    Ordinary host-cache limits can follow immediately; broader N1 profiles,
    domain ownership and control/code budgets remain separate prerequisites;
    MEM-5 cannot close before all owners are accounted for.
-2. GEN-2R's data interface is implemented; GEN-2A preparation can proceed with
-   its private custody contract. Local rejection, ownership and proof tests need
-   no compiler deployment. GEN-2B
+2. GEN-2R's data interface and GEN-2A's nonexecuting custody are implemented.
+   Their local predicate, ownership and type tests do not establish a positive
+   production constructor or native completion. GEN-2B
    consumes these interfaces; positive production
    execution also needs the next handoff. VER-1 may move earlier when its slot
    is free.

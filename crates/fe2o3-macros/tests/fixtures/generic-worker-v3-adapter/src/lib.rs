@@ -129,6 +129,35 @@ pub fn prepare_charged_generated_arguments(
     Ok((prepared, observer))
 }
 
+// Compile-only: callers must supply genuine executable and device owners.
+pub fn prepare_owned_generated_invocation(
+    executable: gpu_host::AuthenticatedWorkerV3ExecutableV1<transform_gpu::Marker>,
+    device: gpu_host::CheckedGfx942XnackMinusDevice,
+    geometry: gpu_host::AqlDispatchGeometryV1,
+    budget: &gpu_host::GeneratedRuntimeResultBudgetV1,
+) -> Result<
+    (
+        gpu_host::GeneratedWorkerV3RuntimeInvocationV1<transform_gpu::Marker>,
+        gpu_host::GeneratedRuntimeChargedResultV1<f32>,
+    ),
+    gpu_host::GeneratedWorkerV3RuntimeInvocationErrorV1,
+> {
+    let source = gpu_host::GeneratedRuntimeReadSlice::new(vec![1f32, 2.0].into_boxed_slice());
+    let (output, observer) = gpu_host::GeneratedRuntimeReadWriteSlice::new_charged(
+        vec![0f32; 2].into_boxed_slice(),
+    );
+    let invocation = executable.prepare_generated_runtime_invocation(
+        transform_gpu::RuntimeArguments::new(2.0, source, output),
+        device,
+        geometry,
+        0,
+        1000,
+        gpu_host::GeneratedRuntimeArgumentLimitsV1::new(4096, 4096, 3),
+        budget,
+    )?;
+    Ok((invocation, observer))
+}
+
 pub fn mapped_kfd_arguments<'allocation>(
     first: &'allocation [u16],
     second: &'allocation [u16],

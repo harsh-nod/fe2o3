@@ -17,7 +17,16 @@ const SECTION_OFFSET: usize = 0x4200;
 /// Structurally valid loader fixture. Its entry bytes are not executable and
 /// must only be used with the no-device mock backend.
 pub(super) fn module() -> Vec<u8> {
-    module_with_metadata(metadata_document(), 272)
+    module_with_metadata(metadata_document(16), 272)
+}
+
+/// No-device preparation variant; still contains deliberately nonexecutable entry bytes.
+#[allow(dead_code, reason = "also shared by host invocation custody tests")]
+pub(super) fn preparation_module() -> Vec<u8> {
+    let mut bytes = module_with_metadata(metadata_document(0), 272);
+    write_u32(&mut bytes, DESCRIPTOR_OFFSET + 4, 0);
+    write_u32(&mut bytes, DESCRIPTOR_OFFSET + 52, 0x1390);
+    bytes
 }
 
 /// Structurally valid three-global-buffer fixture for the no-device backend.
@@ -48,7 +57,7 @@ fn module_with_metadata(metadata: Value, kernarg_segment_size: u32) -> Vec<u8> {
     bytes
 }
 
-fn metadata_document() -> Value {
+fn metadata_document(private_segment_bytes: u32) -> Value {
     Value::Map(vec![
         (
             Value::from("amdhsa.version"),
@@ -60,7 +69,7 @@ fn metadata_document() -> Value {
         ),
         (
             Value::from("amdhsa.kernels"),
-            Value::Array(vec![kernel_metadata()]),
+            Value::Array(vec![kernel_metadata(private_segment_bytes)]),
         ),
     ])
 }
@@ -82,7 +91,7 @@ fn three_binding_metadata_document() -> Value {
     ])
 }
 
-fn kernel_metadata() -> Value {
+fn kernel_metadata(private_segment_bytes: u32) -> Value {
     let mut arguments = vec![
         argument(Some("a_ptr"), 0, 8, "global_buffer", Some("global")),
         argument(Some("a_len"), 8, 8, "by_value", None),
@@ -95,7 +104,10 @@ fn kernel_metadata() -> Value {
         (".kernarg_segment_size", Value::from(272)),
         (".kernarg_segment_align", Value::from(8)),
         (".group_segment_fixed_size", Value::from(0)),
-        (".private_segment_fixed_size", Value::from(16)),
+        (
+            ".private_segment_fixed_size",
+            Value::from(private_segment_bytes),
+        ),
         (".wavefront_size", Value::from(64)),
         (".sgpr_count", Value::from(14)),
         (".vgpr_count", Value::from(11)),

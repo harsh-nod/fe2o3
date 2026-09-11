@@ -2,8 +2,10 @@
 
 R73 implements GEN-2R: owned generated data with result-peak admission. It does
 not implement generated invocation authority, native publication or completion.
-Those remain GEN-2A/B and the compiler's exact protected-verification and
-semantic-to-machine handoff. The legacy GEN-1 data API remains available and
+R74 adds [GEN-2A nonexecuting invocation custody](runtime-owned-generated-invocation-v1.md).
+Native publication/completion remain GEN-2B, with the compiler's exact protected
+verification and semantic-to-machine handoff required for positive production
+execution. The legacy GEN-1 data API remains available and
 unchanged; its bare `Box<[T]>` result state never receives charged-path data.
 
 ## Public Boundary

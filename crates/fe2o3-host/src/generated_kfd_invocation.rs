@@ -18,6 +18,12 @@ use crate::{
     GeneratedKfdPackingObservationV1, GeneratedKfdPrepareError, RecoveredWorkerV3AdmissionErrorV1,
 };
 
+#[path = "generated_runtime_invocation.rs"]
+mod generated_runtime_invocation;
+pub use generated_runtime_invocation::{
+    GeneratedWorkerV3RuntimeInvocationErrorV1, GeneratedWorkerV3RuntimeInvocationV1,
+};
+
 const DIFFERENTIAL_BINDING_DOMAIN_V1: &[u8] = b"FE2O3/HOST/GENERATED-KFD-DIFFERENTIAL-BINDING/V1\0";
 const APPLICATION_EXECUTION_BINDING_DOMAIN_V1: &[u8] =
     b"FE2O3/HOST/WORKER-V3-APPLICATION-EXECUTION-BINDING/V1\0";
@@ -573,8 +579,28 @@ struct GeneratedWorkerV3KfdExecutionAuthority<K> {
     device_unique_id: u64,
 }
 
+impl<K> GeneratedWorkerV3KfdExecutionAuthority<K> {
+    fn from_application(
+        authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
+        packing: GeneratedKfdPackingObservationV1,
+        application: WorkerV3ApplicationExecutionAdmissionV1,
+    ) -> Self {
+        Self {
+            dispatch_contract_sha256: application.coordinates.dispatch_contract_sha256,
+            device_unique_id: application.coordinates.device_unique_id,
+            binding: Box::new(WorkerV3ApplicationExecutionBindingV1 {
+                authenticated,
+                semantic_machine_refinement: application.refinement,
+                coordinates: application.coordinates,
+                packing,
+            }),
+        }
+    }
+}
+
 // SAFETY: this private implementation is constructed only by
-// `prepare_generated_kfd_invocation`. That transition retains the exact authenticated Worker V3
+// `prepare_generated_kfd_invocation` and `prepare_generated_runtime_invocation` through
+// `from_application` after consuming application admission. Both retain the exact Worker V3
 // decision and its current-publication token, admits only compiler-generated argument capabilities,
 // prepares the runtime request from the token's exact HSACO bytes, validates the selected kernel
 // and artifact identities, and retains the same checked KFD device whose identity is named here.
@@ -685,16 +711,11 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         let authority = match application_admission {
             Some(application) => GeneratedWorkerV3KfdInvocationAuthorityV1 {
                 custody: ProductionExecutionCustodyV1::Production(
-                    GeneratedWorkerV3KfdExecutionAuthority {
-                        binding: Box::new(WorkerV3ApplicationExecutionBindingV1 {
-                            authenticated: self,
-                            semantic_machine_refinement: application.refinement,
-                            coordinates: application.coordinates,
-                            packing,
-                        }),
-                        dispatch_contract_sha256: prepared.dispatch_contract_sha256(),
-                        device_unique_id: device.observation().unique_id(),
-                    },
+                    GeneratedWorkerV3KfdExecutionAuthority::from_application(
+                        self,
+                        packing,
+                        application,
+                    ),
                 ),
             },
             None => {

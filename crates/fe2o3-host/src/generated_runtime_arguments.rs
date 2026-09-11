@@ -8,6 +8,8 @@ use fe2o3_aql::AqlDispatchGeometryV1;
 use fe2o3_artifacts::{RustDisjointIndexSpaceV1, RustScalarElementTypeV1};
 use fe2o3_runtime::{
     Gfx942RuntimeBufferAccessV1, Gfx942RuntimeDispatchBufferV1, Gfx942RuntimeDispatchInputsV1,
+    Gfx942RuntimePreparationErrorV1, PreparedGfx942RuntimeDispatchV1,
+    prepare_gfx942_runtime_dispatch_v1,
 };
 
 use crate::generated_argument_borrow::GeneratedArgumentBorrowV1;
@@ -789,19 +791,76 @@ impl GeneratedRuntimeChargedArgumentsV1 {
         self.packed.packing_observation()
     }
 
-    // GEN-2A/B must retain this private decoder with exact invocation/completion authority.
-    #[allow(dead_code)]
     pub(crate) fn into_runtime_inputs(
         self,
         geometry: AqlDispatchGeometryV1,
         dynamic_group_segment_bytes: u32,
         timeout_milliseconds: u32,
-    ) -> (
-        Gfx942RuntimeDispatchInputsV1,
-        GeneratedRuntimeOutputDecoderV1,
-    ) {
-        self.packed
-            .into_runtime_inputs(geometry, dynamic_group_segment_bytes, timeout_milliseconds)
+    ) -> GeneratedRuntimeInvocationPartsV1 {
+        let GeneratedRuntimePackedArgumentsV1 {
+            packed,
+            footprint,
+            decoder,
+        } = self.packed;
+        GeneratedRuntimeInvocationPartsV1 {
+            storage: GeneratedRuntimeStorageV1 {
+                payload: Gfx942RuntimeDispatchInputsV1::new(
+                    packed.explicit_kernarg,
+                    packed.buffers,
+                    packed.pointer_fixups,
+                    geometry,
+                    dynamic_group_segment_bytes,
+                    timeout_milliseconds,
+                ),
+                decoder,
+            },
+            kernel_id: packed.kernel_id,
+            footprint,
+            packing: packed.packing_observation,
+        }
+    }
+}
+
+pub(crate) struct GeneratedRuntimeInvocationPartsV1 {
+    pub(crate) storage: GeneratedRuntimeStorageV1<Gfx942RuntimeDispatchInputsV1>,
+    pub(crate) kernel_id: KernelId,
+    pub(crate) footprint: GeneratedRuntimeArgumentFootprintV1,
+    pub(crate) packing: GeneratedKfdPackingObservationV1,
+}
+
+// Declaration order is the disposal contract: complete input/prepared storage before credits.
+// Keep both fields private; GEN-2B must add an exact completion transition, not an extraction API.
+pub(crate) struct GeneratedRuntimeStorageV1<P> {
+    payload: P,
+    #[allow(
+        dead_code,
+        reason = "retains charged custody until GEN-2B's completion transition"
+    )]
+    decoder: GeneratedRuntimeOutputDecoderV1,
+}
+
+impl GeneratedRuntimeStorageV1<Gfx942RuntimeDispatchInputsV1> {
+    pub(crate) fn prepare(
+        self,
+        hsaco: &[u8],
+        kernel_name: &str,
+    ) -> Result<
+        GeneratedRuntimeStorageV1<PreparedGfx942RuntimeDispatchV1>,
+        Gfx942RuntimePreparationErrorV1,
+    > {
+        // The callee disposes consumed inputs on Err/unwind before our retained decoder drops.
+        // This closed error type cannot return input storage outside its charged owner.
+        let payload = prepare_gfx942_runtime_dispatch_v1(hsaco, kernel_name, self.payload)?;
+        Ok(GeneratedRuntimeStorageV1 {
+            payload,
+            decoder: self.decoder,
+        })
+    }
+}
+
+impl GeneratedRuntimeStorageV1<PreparedGfx942RuntimeDispatchV1> {
+    pub(crate) fn prepared(&self) -> &PreparedGfx942RuntimeDispatchV1 {
+        &self.payload
     }
 }
 

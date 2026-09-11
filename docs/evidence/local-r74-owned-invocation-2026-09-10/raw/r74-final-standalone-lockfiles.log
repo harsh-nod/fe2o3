@@ -1,0 +1,35 @@
+checking standalone lockfile: crates/fe2o3-macros/tests/fixtures/generic-worker-v3-adapter/Cargo.lock
+checking standalone lockfile: crates/fe2o3-macros/tests/fixtures/renamed-device/Cargo.lock
+checking standalone lockfile: crates/fe2o3-macros/tests/fixtures/renamed-typed-host/Cargo.lock
+checking standalone lockfile: crates/fe2o3-macros/tests/fixtures/typed-invalid/Cargo.lock
+checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/Cargo.lock
+checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/collected-tiled-gemm-v1/Cargo.lock
+checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-binding/kernel-a/Cargo.lock
+checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-binding/kernel-b/Cargo.lock
+checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-import/provider/Cargo.lock
+checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/g2-semantics/Cargo.lock
+checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/general-gemm-provider-dependency-impostor/Cargo.lock
+checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/general-gemm-provider-equivalent-manifest/Cargo.lock
+checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/general-gemm-provider-impostor/Cargo.lock
+checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/general-gemm-semantic-frontend/Cargo.lock
+checking standalone lockfile: crates/rustc-codegen-fe2o3/tests/fixtures/tiled-gemm-provider-impostor/Cargo.lock
+checking standalone lockfile: examples/device-link-ffi/Cargo.lock
+checking standalone lockfile: examples/flash_attention_general_v1/Cargo.lock
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+checking standalone lockfile: examples/flash_attention_v1/Cargo.lock
+checking standalone lockfile: examples/gemm_autoresearch_v1/Cargo.lock
+checking standalone lockfile: examples/gfx950_advanced_attention/Cargo.lock
+checking standalone lockfile: examples/gfx950_advanced_systems/Cargo.lock
+checking standalone lockfile: examples/gfx950_gpt_oss_decode/Cargo.lock
+checking standalone lockfile: examples/gfx950_low_precision/Cargo.lock
+checking standalone lockfile: examples/moe_expert_v1/Cargo.lock
+checking standalone lockfile: examples/moe_grouped_expert_general_v1/Cargo.lock
+checking standalone lockfile: examples/moe_top2_v1/Cargo.lock
+checking standalone lockfile: examples/row_softmax_general_v1/Cargo.lock
+checking standalone lockfile: examples/row_softmax_v1/Cargo.lock
+checking standalone lockfile: examples/tiled_gemm_general_v1/Cargo.lock
+checking standalone lockfile: examples/wave64_collectives_v1/Cargo.lock
+checking standalone lockfile: examples/workgroup_sync_v1/Cargo.lock
+checking standalone lockfile: tests/fixtures/device-link/rust-device/Cargo.lock
+standalone lockfiles: OK (32 checked)

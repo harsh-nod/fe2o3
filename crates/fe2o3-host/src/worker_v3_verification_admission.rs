@@ -4864,22 +4864,19 @@ mod tests {
 
     #[test]
     fn protected_application_provenance_rejects_synthetic_and_failed_currentness() {
-        assert!(
-            !WorkerV3VerifierAuthorityEvidenceV1::ProtectedBackend
-                .admits_production_application(true, false)
-        );
-        assert!(
-            WorkerV3VerifierAuthorityEvidenceV1::ProtectedBackend
-                .admits_production_application(true, true)
-        );
-        assert!(
-            !WorkerV3VerifierAuthorityEvidenceV1::ProtectedBackend
-                .admits_production_application(false, true)
-        );
-        assert!(
-            !WorkerV3VerifierAuthorityEvidenceV1::Synthetic
-                .admits_production_application(true, true)
-        );
+        for current in [false, true] {
+            for refinement in [false, true] {
+                assert_eq!(
+                    WorkerV3VerifierAuthorityEvidenceV1::ProtectedBackend
+                        .admits_production_application(current, refinement),
+                    current && refinement,
+                );
+                assert!(
+                    !WorkerV3VerifierAuthorityEvidenceV1::Synthetic
+                        .admits_production_application(current, refinement)
+                );
+            }
+        }
     }
 
     fn refinement_host_coordinates() -> WorkerV3SemanticMachineHostCoordinatesV1 {

@@ -185,6 +185,22 @@ fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
             &["no method named `into_boxed_slice`"],
         ),
         ("charged_decoder_escape", &["private method"]),
+        ("invocation_non_clone", &["no method named `clone`"]),
+        ("invocation_not_send", &["error[E0277]", "Rc<()>", "Send"]),
+        ("invocation_not_sync", &["error[E0277]", "Rc<()>", "Sync"]),
+        (
+            "invocation_storage_private",
+            &["error[E0616]", "field `storage`"],
+        ),
+        (
+            "invocation_decoder_private",
+            &["error[E0616]", "field `storage`"],
+        ),
+        (
+            "invocation_consumes_executable",
+            &["error[E0382]", "executable"],
+        ),
+        ("invocation_nonexecuting", &["no method named `execute`"]),
     ];
 
     for (bin, expected_diagnostics) in cases {
