@@ -7,10 +7,9 @@ use std::sync::{Arc, Mutex};
 use fe2o3_aql::AqlDispatchGeometryV1;
 use fe2o3_artifacts::{RustDisjointIndexSpaceV1, RustScalarElementTypeV1};
 use fe2o3_runtime::{
-    Gfx942RuntimeBufferAccessV1, Gfx942RuntimeDispatchBufferV1, Gfx942RuntimeDispatchInputsV1,
-    Gfx942RuntimePreparationErrorV1, Gfx942RuntimeProjectionErrorV1,
-    PreparedGfx942PersistentDispatchV1, PreparedGfx942RuntimeDispatchV1,
-    prepare_gfx942_runtime_dispatch_v1,
+    GeneratedGfx942PersistentStorageV1, Gfx942RuntimeBufferAccessV1, Gfx942RuntimeDispatchBufferV1,
+    Gfx942RuntimeDispatchInputsV1, Gfx942RuntimePreparationErrorV1, Gfx942RuntimeProjectionErrorV1,
+    PreparedGfx942RuntimeDispatchV1, prepare_gfx942_runtime_dispatch_v1,
 };
 
 use crate::generated_argument_borrow::GeneratedArgumentBorrowV1;
@@ -873,11 +872,14 @@ impl GeneratedRuntimeStorageV1<PreparedGfx942RuntimeDispatchV1> {
         self,
         hsaco: &[u8],
     ) -> Result<
-        GeneratedRuntimeStorageV1<PreparedGfx942PersistentDispatchV1>,
+        GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1>,
         Gfx942RuntimeProjectionErrorV1,
     > {
         // A closed failure cannot detach consumed storage from its retained decoder.
-        let payload = self.payload.into_persistent_projection_v1(hsaco)?;
+        let payload = self
+            .payload
+            .into_persistent_projection_v1(hsaco)?
+            .into_generated_storage_v1();
         Ok(GeneratedRuntimeStorageV1 {
             payload,
             readback: self.readback,
@@ -886,9 +888,13 @@ impl GeneratedRuntimeStorageV1<PreparedGfx942RuntimeDispatchV1> {
     }
 }
 
-impl GeneratedRuntimeStorageV1<PreparedGfx942PersistentDispatchV1> {
-    pub(crate) fn prepared(&self) -> &PreparedGfx942PersistentDispatchV1 {
+impl GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1> {
+    pub(crate) fn prepared(&self) -> &GeneratedGfx942PersistentStorageV1 {
         &self.payload
+    }
+
+    pub(crate) fn prepared_mut(&mut self) -> &mut GeneratedGfx942PersistentStorageV1 {
+        &mut self.payload
     }
 }
 

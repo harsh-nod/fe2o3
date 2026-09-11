@@ -898,7 +898,9 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    mod generated_storage;
+
     use super::*;
     use fe2o3_kfd::{
         KfdDebuggerTelemetryEndpointV1, KfdTargetDebugSessionNonceV1,
@@ -930,7 +932,7 @@ mod tests {
         }
     }
 
-    struct TestAuthorityV1 {
+    pub(crate) struct TestAuthorityV1 {
         object: [u8; 32],
         length: u64,
         kernel: &'static str,
@@ -939,8 +941,8 @@ mod tests {
         current: bool,
     }
 
-    // SAFETY: this implementation is confined to pure identity-comparison unit tests and can
-    // never reach a native device token or the execution function.
+    // SAFETY: only identity, inert storage and shell unit tests use this fixture;
+    // it never supplies a native checked-device token or reaches execution.
     unsafe impl WorkerV3Gfx942ExecutionAuthorityV1 for TestAuthorityV1 {
         type CurrentnessError = &'static str;
 
@@ -1026,7 +1028,15 @@ mod tests {
         ));
     }
 
-    fn source_projection() -> (Vec<u8>, crate::PreparedGfx942PersistentDispatchV1) {
+    pub(crate) fn source_projection() -> (Vec<u8>, crate::PreparedGfx942PersistentDispatchV1) {
+        source_projection_with_geometry(
+            fe2o3_aql::AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+        )
+    }
+
+    fn source_projection_with_geometry(
+        geometry: fe2o3_aql::AqlDispatchGeometryV1,
+    ) -> (Vec<u8>, crate::PreparedGfx942PersistentDispatchV1) {
         let hsaco = crate::synthetic_cov6::preparation_module();
         let mut explicit = vec![0; 16];
         explicit[8..].copy_from_slice(&4u64.to_le_bytes());
@@ -1045,7 +1055,7 @@ mod tests {
                     })
                     .collect(),
                 vec![fe2o3_kfd::Gfx942KfdDispatchPointerFixupV1::new(0, 0, 0, 4)],
-                fe2o3_aql::AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+                geometry,
                 0,
                 4321,
             ),
@@ -1056,7 +1066,9 @@ mod tests {
         (hsaco, projection)
     }
 
-    fn source_authority(projection: &crate::PreparedGfx942PersistentDispatchV1) -> TestAuthorityV1 {
+    pub(crate) fn source_authority(
+        projection: &crate::PreparedGfx942PersistentDispatchV1,
+    ) -> TestAuthorityV1 {
         TestAuthorityV1 {
             object: projection.identity().object_sha256(),
             length: projection.finalized_hsaco_length(),

@@ -38,7 +38,7 @@ impl Drop for PendingReadback {
     }
 }
 
-impl GeneratedRuntimeStorageV1<PreparedGfx942PersistentDispatchV1> {
+impl GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1> {
     pub(crate) fn prepare_readback(&self) -> Result<GeneratedRuntimeReadbackOwnerV1, Error> {
         self.prepare_readback_with(|length| {
             let mut bytes = Vec::new();

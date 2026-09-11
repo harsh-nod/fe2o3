@@ -174,6 +174,7 @@ impl KfdRuntimeBackendV1 {
             return Err(Failure::Terminal);
         }
         if self.any_compute_active_v1()
+            || self.allocations.has_generated()
             || !self.pending_compute.is_empty()
             || !self.compute_pipeline.is_empty()
             || !self.modules.is_empty()
@@ -378,7 +379,7 @@ impl KfdRuntimeBackendV1 {
                 return Err(Failure::Submission);
             }
         }
-        for (&allocation, record) in &self.allocations {
+        for (&allocation, record) in self.allocations.ordinary_iter() {
             match record.sdma_storage {
                 KfdRuntimeSdmaStorageV1::ComputeInFlight(_)
                 | KfdRuntimeSdmaStorageV1::InFlight(KfdRuntimeSdmaInFlightV1::Synchronous) => {

@@ -37,11 +37,11 @@ fn generated_roster_rejects_policy_count_length_access_and_read_only_seed_mismat
             .unwrap();
         match field {
             0 => {
-                projection.buffer_policies.pop();
+                projection.data.buffer_policies.pop();
             }
-            1 => projection.buffer_policies[2].byte_length += 1,
-            2 => projection.buffer_policies[2].access = Gfx942RuntimeBufferAccessV1::ReadOnly,
-            _ => projection.buffer_policies[2].read_only_initial_bytes = Some(vec![0; 40]),
+            1 => projection.data.buffer_policies[2].byte_length += 1,
+            2 => projection.data.buffer_policies[2].access = Gfx942RuntimeBufferAccessV1::ReadOnly,
+            _ => projection.data.buffer_policies[2].read_only_initial_bytes = Some(vec![0; 40]),
         }
         assert!(matches!(
             crate::generated_source::GeneratedHostRosterV1::from_projection(&projection),
@@ -80,12 +80,12 @@ fn persistent_projection_retains_complete_roster_identity_timeout_and_allocation
     assert_eq!(projection.identity(), identity);
     assert_eq!(projection.dispatch_contract_sha256(), digest);
     assert_eq!(projection.timeout_milliseconds(), 4321);
-    assert_eq!(projection.buffers.len(), 3);
-    for (index, buffer) in projection.buffers.iter().enumerate() {
+    assert_eq!(projection.data.buffers.len(), 3);
+    for (index, buffer) in projection.data.buffers.iter().enumerate() {
         assert_eq!(buffer.bytes(), vec![index as u8 + 1; 32 + index * 4]);
     }
     assert_eq!(
-        projection.pointer_fixups[0],
+        projection.data.pointer_fixups[0],
         Gfx942KfdDispatchPointerFixupV1::new(0, 0, 8, 4)
     );
     assert_eq!(projection.packet.buffer_count(), 1);
@@ -96,17 +96,21 @@ fn persistent_projection_retains_complete_roster_identity_timeout_and_allocation
     assert_eq!(projection.kernarg_alignment(), 16);
     assert_eq!(
         (
-            projection.executable_image.as_ptr(),
-            projection.executable_image.capacity()
+            projection.data.executable_image.as_ptr(),
+            projection.data.executable_image.capacity()
         ),
         image
     );
     assert_eq!(
-        (projection.buffers.as_ptr(), projection.buffers.capacity()),
+        (
+            projection.data.buffers.as_ptr(),
+            projection.data.buffers.capacity()
+        ),
         buffers
     );
     assert_eq!(
         projection
+            .data
             .buffers
             .iter()
             .map(|buffer| buffer.bytes().as_ptr())
@@ -115,15 +119,15 @@ fn persistent_projection_retains_complete_roster_identity_timeout_and_allocation
     );
     assert_eq!(
         (
-            projection.pointer_fixups.as_ptr(),
-            projection.pointer_fixups.capacity()
+            projection.data.pointer_fixups.as_ptr(),
+            projection.data.pointer_fixups.capacity()
         ),
         fixups
     );
     assert_eq!(
         (
-            projection.buffer_policies.as_ptr(),
-            projection.buffer_policies.capacity()
+            projection.data.buffer_policies.as_ptr(),
+            projection.data.buffer_policies.capacity()
         ),
         policies
     );
@@ -143,6 +147,96 @@ fn rebuild(parts: Gfx942KfdDispatchRequestPartsV1) -> Gfx942KfdDispatchRequestV1
         parts.timeout_milliseconds,
     )
     .unwrap()
+}
+
+#[test]
+fn generated_storage_moves_all_original_allocations_and_capacities_without_copying() {
+    let hsaco = synthetic_cov6::preparation_module();
+    let mut source = prepared(&hsaco, 3, 8);
+    let mut parts = source.request.into_parts_v1();
+    let mut original_bytes = Vec::new();
+    parts.buffers = parts
+        .buffers
+        .into_iter()
+        .map(|buffer| {
+            let mut bytes = buffer.into_bytes();
+            bytes.reserve_exact(97);
+            original_bytes.push((bytes.as_ptr(), bytes.len(), bytes.capacity()));
+            Gfx942KfdDispatchBufferV1::new(bytes).unwrap()
+        })
+        .collect();
+    source.request = rebuild(parts);
+    let projection = source.into_persistent_projection_v1(&hsaco).unwrap();
+    let identity = std::sync::Arc::clone(projection.data.source_identity());
+    let image = (
+        projection.data.executable_image.as_ptr(),
+        projection.data.executable_image.capacity(),
+    );
+    let buffers = (
+        projection.data.buffers.as_ptr(),
+        projection.data.buffers.capacity(),
+    );
+    let fixups = (
+        projection.data.pointer_fixups.as_ptr(),
+        projection.data.pointer_fixups.capacity(),
+    );
+    let policies = (
+        projection.data.buffer_policies.as_ptr(),
+        projection.data.buffer_policies.capacity(),
+    );
+    let digest = projection.dispatch_contract_sha256();
+    let geometry = projection.packet().geometry();
+    let mut storage = projection.into_generated_storage_v1();
+    assert!(std::sync::Arc::ptr_eq(
+        storage.data.source_identity(),
+        &identity
+    ));
+    assert_eq!(
+        (
+            storage.data.executable_image.as_ptr(),
+            storage.data.executable_image.capacity()
+        ),
+        image
+    );
+    assert_eq!(
+        (
+            storage.data.buffers.as_ptr(),
+            storage.data.buffers.capacity()
+        ),
+        buffers
+    );
+    assert_eq!(
+        (
+            storage.data.pointer_fixups.as_ptr(),
+            storage.data.pointer_fixups.capacity()
+        ),
+        fixups
+    );
+    assert_eq!(
+        (
+            storage.data.buffer_policies.as_ptr(),
+            storage.data.buffer_policies.capacity()
+        ),
+        policies
+    );
+    assert_eq!(storage.dispatch_contract_sha256(), digest);
+    assert_eq!(storage.timeout_milliseconds(), 4321);
+    let mut control = None;
+    assert!(storage.transfer_control_into(&mut control));
+    assert_eq!(control.as_ref().unwrap().geometry(), geometry);
+    assert_eq!(control.as_ref().unwrap().buffer_count(), 1);
+    drop(control);
+    for (ordinal, (buffer, original)) in storage
+        .data
+        .buffers
+        .into_iter()
+        .zip(original_bytes)
+        .enumerate()
+    {
+        let bytes = buffer.into_bytes();
+        assert_eq!((bytes.as_ptr(), bytes.len(), bytes.capacity()), original);
+        assert_eq!(bytes, vec![ordinal as u8 + 1; 32 + ordinal * 4]);
+    }
 }
 
 #[test]
@@ -259,8 +353,8 @@ fn persistent_projection_preserves_dynamic_lds_and_nondefault_timeout() {
     .unwrap();
     let projected = source.into_persistent_projection_v1(&hsaco).unwrap();
     assert_eq!(projected.packet.dynamic_group_segment_bytes(), 1024);
-    assert_eq!(projected.description.packet_group_segment_bytes, 1024);
-    assert_eq!(projected.timeout_milliseconds, 60_000);
+    assert_eq!(projected.data.description.packet_group_segment_bytes, 1024);
+    assert_eq!(projected.timeout_milliseconds(), 60_000);
 }
 
 #[test]
@@ -310,7 +404,7 @@ fn persistent_projection_preserves_reordered_fixups_and_rejects_alias_or_missing
         .unwrap();
         let projected = source.into_persistent_projection_v1(&hsaco);
         if mode == 0 {
-            assert_eq!(projected.unwrap().pointer_fixups, expected);
+            assert_eq!(projected.unwrap().pointer_fixups(), expected);
         } else {
             assert!(projected.is_err(), "mode {mode}");
         }
@@ -350,7 +444,7 @@ fn persistent_projection_enforces_actual_fixed_roster_limit_without_truncation()
         prepared(&hsaco, 16, 0)
             .into_persistent_projection_v1(&hsaco)
             .unwrap()
-            .buffers
+            .buffers()
             .len(),
         16
     );

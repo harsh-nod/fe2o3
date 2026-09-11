@@ -3,6 +3,31 @@ use std::cell::Cell;
 
 use super::*;
 
+mod shell_tests;
+
+impl RuntimeContextV1<KfdRuntimeBackendV1> {
+    // Descriptive IDs for backend metadata tests, never native device authority.
+    pub(crate) fn generated_shell_test_binding_v1(
+        backend: &mut KfdRuntimeBackendV1,
+    ) -> (
+        crate::kfd_backend::GeneratedShellBindingV1,
+        Vec<RuntimeAllocationIdV1>,
+    ) {
+        (
+            crate::kfd_backend::GeneratedShellBindingV1 {
+                context_generation: 1,
+                device: RuntimeDeviceIdV1::new(1, 1),
+                stream: RuntimeStreamIdV1::new(1, 2),
+                hold: 3,
+                backend_device: 7,
+                backend_stream: backend.create_stream_v1(7).unwrap(),
+                native_device: admission(1, 1).1,
+            },
+            (4..7).map(|id| RuntimeAllocationIdV1::new(1, id)).collect(),
+        )
+    }
+}
+
 struct StagedReadback(std::rc::Rc<Cell<usize>>);
 impl Drop for StagedReadback {
     fn drop(&mut self) {
@@ -37,6 +62,7 @@ impl crate::RuntimeGfx942GeneratedCarrierV1 for StagedCarrier {
 
 fn staged_roster() -> crate::generated_source::GeneratedHostRosterV1 {
     crate::generated_source::GeneratedHostRosterV1 {
+        source_identity: std::sync::Arc::new(()),
         buffers: [None; fe2o3_kfd::GFX942_MAX_FIXED_DISPATCH_DATA_V1],
         count: 0,
         readback_bytes: 0,

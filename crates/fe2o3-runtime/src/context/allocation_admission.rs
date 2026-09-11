@@ -13,6 +13,32 @@ pub(super) struct ContextAllocationAdmissionV1 {
 }
 
 impl ContextAllocationAdmissionV1 {
+    pub(super) fn prepare_roster(
+        &mut self,
+        device: RuntimeDeviceIdV1,
+        bytes: &[u64],
+    ) -> Result<
+        Option<Box<[crate::resource_credits::RuntimeResourceReservationV1]>>,
+        RuntimeResourceCreditErrorV1,
+    > {
+        let Some(account) = self.accounts.get(&device) else {
+            return Ok(None);
+        };
+        self.retained
+            .try_reserve(bytes.len())
+            .map_err(|_| RuntimeResourceCreditErrorV1::AllocationFailed)?;
+        let mut charges = Vec::new();
+        charges
+            .try_reserve_exact(bytes.len())
+            .map_err(|_| RuntimeResourceCreditErrorV1::AllocationFailed)?;
+        charges.extend(bytes.iter().map(|&bytes| {
+            RuntimeResourceVectorV1::ZERO
+                .with(RuntimeResourceKindV1::RequestedAllocationBytes, bytes)
+                .with(RuntimeResourceKindV1::AllocationRecords, 1)
+        }));
+        account.reserve_batch(&charges).map(Some)
+    }
+
     pub(super) fn retained_records(&self) -> usize {
         self.accounts
             .values()

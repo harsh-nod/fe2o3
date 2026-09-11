@@ -8,12 +8,30 @@ pub(crate) struct ContextUnpublishedHoldV1 {
 }
 
 impl ContextUnpublishedHoldV1 {
+    pub(super) fn identity(&self) -> u64 {
+        self.local
+    }
     pub(crate) fn stream(&self) -> RuntimeStreamIdV1 {
         self.stream
     }
 }
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+    pub(super) fn validate_unpublished_hold_v1(
+        &self,
+        hold: &ContextUnpublishedHoldV1,
+    ) -> Result<(), RuntimeValidationErrorV1> {
+        self.require_live()?;
+        if self
+            .streams
+            .get(&hold.stream)
+            .is_some_and(|record| record.unpublished == Some(hold.local))
+        {
+            Ok(())
+        } else {
+            Err(RuntimeValidationErrorV1::ContextReserved)
+        }
+    }
     pub(crate) fn hold_unpublished_stream_v1(
         &mut self,
         stream: RuntimeStreamIdV1,
@@ -48,7 +66,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .streams
             .get_mut(&hold.stream())
             .ok_or(RuntimeValidationErrorV1::UnknownStream)?;
-        if record.unpublished != Some(hold.local) {
+        if record.unpublished != Some(hold.local) || record.generated.is_some() {
             return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
         }
         record.unpublished = None;

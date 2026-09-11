@@ -1,14 +1,15 @@
 # A1/A2 Next-Wave Dispatch
 
-Dispatch refreshed 2026-09-11 after the three-agent review of signed R83
-`e07de3bfb87955fc885ef0c88788678ce8170aaa` and uncommitted DATA-SHELL work.
-The [current swarm overlay](runtime-a1-a2-swarm-dispatch-r83.md) assigns
-final R84 DATA-SHELL acceptance, NATIVE-1 build escrow followed by NATIVE-2
-constructor custody, and independent COMPLETE-ORACLE and VER-1A work before
-native integration. Shell hardening/regressions are present, not yet accepted
-by the complete final frozen-source gate run. Its checklist and batches supersede
-older next-assignment rows below. This planning refresh does not publish or
-qualify the in-flight DATA-SHELL source.
+Dispatch refreshed 2026-09-11 after the three-agent review and local acceptance
+of R84 DATA-SHELL on signed R83 `e07de3bfb87955fc885ef0c88788678ce8170aaa`.
+The [R84 evidence](evidence/local-r84-generated-shells-2026-09-11/README.md)
+records all seventeen final source gates, 2,388 runtime tests per GNU/musl target,
+and focused source/storage/accounting regressions. Native hooks remain absent.
+The [current swarm overlay](runtime-a1-a2-swarm-dispatch-r83.md) assigns NATIVE-1
+build escrow followed by NATIVE-2 constructor custody, independent
+COMPLETE-ORACLE/private host completion substrate, and VER-1A before native
+integration. Its checklist and batches supersede older next-assignment rows
+below; local shell acceptance is not native execution or adapter refinement.
 The preceding signed R81 checkpoint is
 `72bec68d2968f4815f23c84d41ed6510f433ba96`, on both topic-branch remotes.
 R82 now implements [pristine dispatch abort](runtime-pristine-dispatch-abort-v1.md)
@@ -77,7 +78,7 @@ Under the current ownership policy workers are read-only; Primary owns edits.
 | Native: `r66_native_coexistence` | NATIVE-1 rooted dispatch-build escrow, then NATIVE-2 constructor/closing-retake custody | NATIVE-3 DATA-ADOPT; ISSUE native interface; SCALE-1A fixtures; native-budget and R76/R78/R82 qualification harnesses; admitted profiles and capacity | Preserve all original inputs and converted/control prefixes through error/panic. Retain successful results before retake and distinguish unchanged rejection, partial pre-queue effects and terminal post-create custody. Reuse existing constructors/allocator, with zero publication. |
 | Admission: `r66_runtime_coexistence` | COMPLETE-ORACLE: exact completion, failure and storage-disposal contract; then R83 native integration | ISSUE -> COMPLETE -> public async/blocking API -> generated graph/drain | Reuse R83 activation/hold/retirement. Integrate exact native lane/prefix and actual charged-carrier custody before effects; freeze full-roster failures and disposal-before-readiness before ISSUE. |
 | Resources: `r66_coexistence_model` | VER-1A: bounded Context mutation journal and mutation-path inventory | VER-1B hooks; aggregate domains; remaining backing/control/code budgets; VER-2 leases; MEM-5 closure | Nonwrapping Available/Pending/Unknown whole-allocation versions; bounded exhaustion and unknown-outcome tests. Cross-run leases remain disabled until every mutation hook is integrated. |
-| Primary | Finish final R84 DATA-SHELL acceptance, then implement the reviewed native/oracle/journal packets and DATA-ADOPT | Cross-review, executable refinement, signed hardware qualification and matched performance | Serialize shared edits/builds/proofs and preserve R80 credit ownership. Accept CPU, proof, Linux and performance results separately; publish signed source/evidence to both topic remotes. |
+| Primary | Implement the reviewed native/host/journal packets and DATA-ADOPT on accepted R84 | Cross-review, executable refinement, signed hardware qualification and matched performance | Serialize shared edits/builds/proofs and preserve R80 credit ownership. Accept CPU, proof, Linux and performance results separately; publish signed source/evidence to both topic remotes. |
 
 ADOPT-LIFE and DATA-ADOPT are coupled contracts; neither may introduce effects
 before their custody interface is integrated. VER-1A is independent. COMPLETE's

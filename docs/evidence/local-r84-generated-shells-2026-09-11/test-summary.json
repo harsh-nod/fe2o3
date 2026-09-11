@@ -1,0 +1,98 @@
+{
+  "gnu-tests": {
+    "passed": 2388,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "musl-tests": {
+    "passed": 2388,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "gnu-docs": {
+    "passed": 108,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 7
+  },
+  "musl-docs": {
+    "passed": 91,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 5
+  },
+  "musl-host-docs": {
+    "passed": 16,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 2
+  },
+  "gnu-host": {
+    "passed": 248,
+    "failed": 0,
+    "ignored": 4,
+    "harnesses": 1
+  },
+  "musl-host": {
+    "passed": 131,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "macro-fixtures": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "base_commit": "e7334b8f2c0d8ddf2645e6c6d9c84746da108d81",
+  "final_gate_attempt": "r84-accepted",
+  "non_documentation_source_identities_checked": 5616,
+  "focused_shells": {
+    "passed": 19,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_storage": {
+    "passed": 9,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 2
+  },
+  "focused_storage_overlaps_shells_by_one_runtime_test": true,
+  "focused_adoption": {
+    "passed": 15,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_async": {
+    "passed": 233,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "model_and_proof_sources_unchanged_from": "fb1e27e66cee27bb11f0b7c08f2d5994c5d168da",
+  "manifests_and_lockfiles_unchanged": true,
+  "verus_solver_rerun": false,
+  "new_verus_theorems": 0,
+  "negative_inventory_files": 686,
+  "new_runtime_cpu_test_functions": 25,
+  "new_kfd_cpu_test_functions": 0,
+  "new_host_cpu_test_functions": 2,
+  "generated_shell_metadata_cpu_validated": true,
+  "exact_source_and_one_shot_control_cpu_validated": true,
+  "whole_roster_context_accounting_cpu_validated": true,
+  "canonical_retained_roster_disposal_cpu_validated": true,
+  "actual_charged_host_storage_drop_and_readback_cpu_validated": true,
+  "charged_r73_carrier_through_adoption_qualified": false,
+  "native_generated_adoption_hooks_installed": false,
+  "native_generated_adoption_implemented": false,
+  "linux_adoption_qualified": false,
+  "generated_shell_adapter_refinement_proved": false,
+  "gpu_performance_measured": false,
+  "production_metadata_sha256": "6c0cac53358224a31c356d91228b602ae8545f7c156a0c695f103533238054ca"
+}

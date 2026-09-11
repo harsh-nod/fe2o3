@@ -16,6 +16,7 @@ mod allocation_admission;
 mod drain;
 mod drain_capture;
 mod generated_preparation;
+mod generated_shells;
 mod unpublished;
 use allocation_admission::ContextAllocationAdmissionV1;
 pub use drain_capture::*;
@@ -917,6 +918,7 @@ struct StreamRecordV1 {
     backend_stream: u64,
     device: RuntimeDeviceIdV1,
     unpublished: Option<u64>,
+    generated: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1664,6 +1666,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 backend_stream,
                 device,
                 unpublished: None,
+                generated: None,
             },
         );
         if protocol_error.is_none() {

@@ -68,6 +68,13 @@ impl RuntimeResourceCreditAccountV1 {
     ) -> Result<RuntimeResourceReservationV1, RuntimeResourceCreditErrorV1> {
         self.inner.reserve(charge)
     }
+
+    pub(crate) fn reserve_batch(
+        &self,
+        charges: &[RuntimeResourceVectorV1],
+    ) -> Result<Box<[RuntimeResourceReservationV1]>, RuntimeResourceCreditErrorV1> {
+        self.inner.reserve_batch(charges)
+    }
 }
 
 #[cfg(test)]

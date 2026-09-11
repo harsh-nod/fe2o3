@@ -19,7 +19,7 @@ pub(super) fn three_binding_persistent_compute_access_shape_v1(
 pub(super) fn three_binding_requires_persistent_admission_v1(
     semantic_launch: KfdRuntimeSemanticLaunchV1,
     bindings: &[BackendBindingV1],
-    allocations: &HashMap<u64, AllocationRecordV1>,
+    allocations: &AllocationTableV1,
 ) -> bool {
     // Only fully resolved host-visible rosters may use ordinary materialization.
     // Mixed or device-local candidates still require authenticated persistence.
@@ -35,7 +35,7 @@ pub(super) fn three_binding_persistent_compute_admission_v1(
     semantic_launch: KfdRuntimeSemanticLaunchV1,
     bindings: &[BackendBindingV1],
     stream_device: u64,
-    allocations: &HashMap<u64, AllocationRecordV1>,
+    allocations: &AllocationTableV1,
 ) -> Option<ThreeBindingPersistentComputeAdmissionV1> {
     let [a, b, c] = bindings else {
         return None;
@@ -4278,13 +4278,17 @@ impl KfdRuntimeBackendV1 {
             dirty
                 .try_reserve_exact(self.allocations.len())
                 .map_err(|_| Self::capacity("KFD native-dirty synchronization roster failed"))?;
-            dirty.extend(self.allocations.iter().filter_map(|(allocation, record)| {
-                record
-                    .native_dirty
-                    .iter()
-                    .any(|extent| extent.compute_lane == lane)
-                    .then_some(*allocation)
-            }));
+            dirty.extend(
+                self.allocations
+                    .ordinary_iter()
+                    .filter_map(|(allocation, record)| {
+                        record
+                            .native_dirty
+                            .iter()
+                            .any(|extent| extent.compute_lane == lane)
+                            .then_some(*allocation)
+                    }),
+            );
             for allocation in dirty {
                 self.synchronize_native_allocation_lane_v1(allocation, lane)?;
             }
@@ -4612,7 +4616,7 @@ pub(super) const fn collective_profile_is_admissible_v1(
     matches!(profile.scope, RuntimeMemoryScopeV1::Workgroup)
 }
 pub(super) fn snapshot_three_binding_persistent_data_v1(
-    allocations: &HashMap<u64, AllocationRecordV1>,
+    allocations: &AllocationTableV1,
     bindings: &[BackendBindingV1],
     stream_device: u64,
     admission: ThreeBindingPersistentComputeAdmissionV1,
@@ -4656,7 +4660,7 @@ pub(super) fn snapshot_three_binding_persistent_data_v1(
 }
 
 pub(super) fn snapshot_persistent_full_range_data_v1(
-    allocations: &HashMap<u64, AllocationRecordV1>,
+    allocations: &AllocationTableV1,
     binding: &BackendBindingV1,
     stream_device: u64,
     admission: PersistentFullRangeComputeAdmissionV1,
@@ -4738,7 +4742,7 @@ pub(super) fn snapshot_persistent_full_range_data_v1(
 }
 
 pub(super) fn snapshot_bound_data_v1(
-    allocations: &HashMap<u64, AllocationRecordV1>,
+    allocations: &AllocationTableV1,
     bindings: &[BackendBindingV1],
     stream_device: u64,
 ) -> Result<StagedDataRosterV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {

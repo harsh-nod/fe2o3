@@ -3,7 +3,7 @@ use super::*;
 fn projected(
     budget: &GeneratedRuntimeResultBudgetV1,
 ) -> (
-    GeneratedRuntimeStorageV1<PreparedGfx942PersistentDispatchV1>,
+    GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1>,
     GeneratedRuntimeChargedResultV1<u32>,
 ) {
     let (parts, observer) = input_parts(budget);
@@ -106,17 +106,92 @@ fn readback_installed_and_staged_unwind_dispose_all_host_storage() {
 fn mixed(
     budget: &GeneratedRuntimeResultBudgetV1,
 ) -> (
-    GeneratedRuntimeStorageV1<PreparedGfx942PersistentDispatchV1>,
+    GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1>,
     GeneratedRuntimeChargedResultV1<u32>,
 ) {
     mixed_with_read_length(budget, 4)
+}
+
+#[test]
+fn generated_storage_mutable_view_preserves_charged_full_roster_and_readback() {
+    let budget = GeneratedRuntimeResultBudgetV1::new(80, 3).unwrap();
+    let (mut storage, observer) = mixed(&budget);
+    let original = storage
+        .prepared()
+        .buffers()
+        .iter()
+        .map(|buffer| (buffer.bytes().as_ptr(), buffer.bytes().to_vec()))
+        .collect::<Vec<_>>();
+    assert_eq!(budget.usage().reserved_peak_bytes, 48);
+    assert_eq!(storage.prepared_mut().buffers().len(), 2);
+    assert_eq!(
+        storage.prepared().buffer_access(1),
+        Some(Gfx942RuntimeBufferAccessV1::ReadOnly)
+    );
+    let readback = storage.prepare_readback().unwrap();
+    let destinations = readback
+        .buffers()
+        .iter()
+        .map(|(_, bytes)| bytes.as_ptr())
+        .collect::<Vec<_>>();
+    storage.install_readback(readback);
+    for (buffer, (pointer, bytes)) in storage.prepared_mut().buffers().iter().zip(original) {
+        assert_eq!(buffer.bytes().as_ptr(), pointer);
+        assert_eq!(buffer.bytes(), bytes);
+    }
+    assert_eq!(
+        storage
+            .readback
+            .as_ref()
+            .unwrap()
+            .buffers()
+            .iter()
+            .map(|(_, bytes)| bytes.as_ptr())
+            .collect::<Vec<_>>(),
+        destinations
+    );
+    assert_eq!(budget.usage().reserved_peak_bytes, 80);
+    drop(observer);
+    assert_eq!(budget.usage().reserved_peak_bytes, 80);
+    drop(storage);
+    assert_empty(&budget);
+}
+
+#[test]
+fn generated_storage_with_readback_disposes_payload_before_refund_on_drop_and_unwind() {
+    for unwind in [false, true] {
+        let budget = GeneratedRuntimeResultBudgetV1::new(80, 3).unwrap();
+        let (mut storage, mut observer) = mixed(&budget);
+        storage.install_readback(storage.prepare_readback().unwrap());
+        let disposed = Arc::new(AtomicBool::new(false));
+        let witnessed = GeneratedRuntimeStorageV1 {
+            payload: DisposalWitness {
+                payload: Some(storage.payload),
+                budget: budget.clone(),
+                disposed: Arc::clone(&disposed),
+                expected_bytes: 80,
+            },
+            readback: storage.readback,
+            decoder: storage.decoder,
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _storage = witnessed;
+            if unwind {
+                panic!("after complete charged readback reservation");
+            }
+        }));
+        assert_eq!(result.is_err(), unwind);
+        assert!(disposed.load(Ordering::SeqCst));
+        assert_empty(&budget);
+        assert!(matches!(observer.try_take(), Err(Error::OutputUnavailable)));
+    }
 }
 
 fn mixed_with_read_length(
     budget: &GeneratedRuntimeResultBudgetV1,
     elements: usize,
 ) -> (
-    GeneratedRuntimeStorageV1<PreparedGfx942PersistentDispatchV1>,
+    GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1>,
     GeneratedRuntimeChargedResultV1<u32>,
 ) {
     let plan = tests::plan::<u32>(&[Access::ReadWrite, Access::ReadOnly], None);
@@ -194,7 +269,7 @@ fn readback_zero_length_expectation_does_not_add_a_native_buffer() {
 fn readback_includes_unused_read_only_buffers_and_exact_access() {
     let budget = GeneratedRuntimeResultBudgetV1::new(80, 3).unwrap();
     let (storage, mut observer) = mixed(&budget);
-    assert_eq!(storage.prepared().packet().buffer_count(), 1);
+    assert_eq!(storage.prepared().pointer_fixups().len(), 1);
     assert_eq!(storage.prepared().buffers().len(), 2);
     let staged = storage.prepare_readback().unwrap();
     assert_eq!(staged.buffers().len(), 2);

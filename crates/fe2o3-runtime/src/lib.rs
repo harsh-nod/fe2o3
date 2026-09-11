@@ -38,13 +38,15 @@ pub use fe2o3_host_api as contract;
 pub use fe2o3_profiler_protocol as profiler;
 pub use generated_source::{
     RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedReservationErrorV1,
-    RuntimeGfx942GeneratedSourceV1, RuntimeGfx942ReadbackErrorV1,
+    RuntimeGfx942GeneratedSourceMutV1, RuntimeGfx942GeneratedSourceV1,
+    RuntimeGfx942ReadbackErrorV1,
 };
 pub use kfd_backend::*;
 pub use kfd_profile::*;
 pub use kfd_timestamp_profile::*;
 pub use persistent_projection::{
-    Gfx942RuntimeProjectionErrorV1, PreparedGfx942PersistentDispatchV1,
+    GeneratedGfx942PersistentStorageV1, Gfx942RuntimeProjectionErrorV1,
+    PreparedGfx942PersistentDispatchV1,
 };
 pub use resource_credits::{
     MAX_RUNTIME_RESOURCE_CREDIT_RECORDS_V1, RuntimeResourceCreditErrorV1,

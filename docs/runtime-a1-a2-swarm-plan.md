@@ -1,13 +1,13 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Current accepted implementation: signed R83
-`e07de3bfb87955fc885ef0c88788678ce8170aaa`, reviewed 2026-09-11 alongside
-uncommitted DATA-SHELL source. The
-[current dispatch](runtime-a1-a2-swarm-dispatch-r83.md) assigns final R84 shell
-acceptance, native build-escrow and constructor-custody prerequisites, and
-independent completion/version work. Shell hardening/regressions are implemented
-but not an accepted R84 packet; this refresh is planning only. Historical
-packet validation and exact source/evidence identities are retained below.
+Current locally accepted implementation: R84 DATA-SHELL, on signed R83
+`e07de3bfb87955fc885ef0c88788678ce8170aaa`. Its
+[evidence](evidence/local-r84-generated-shells-2026-09-11/README.md) records all
+seventeen final source gates and 2,388 runtime tests per GNU/musl target.
+The [current dispatch](runtime-a1-a2-swarm-dispatch-r83.md) assigns native
+build-escrow and constructor-custody prerequisites, independent completion/host
+substrate and version work. Shell acceptance does not enable native execution.
+Historical packet validation and exact source/evidence identities remain below.
 This decomposes the remaining local
 A1/A2 work in
 [#182](https://github.com/harsh-nod/fe2o3/issues/182), not the later multi-GPU
@@ -43,8 +43,8 @@ Native review also identified a pristine never-published dispatch abort/detach
 prerequisite for reusable bound ADOPT. Recycled detach cannot stand in for it.
 R82 now implements [pristine abort](runtime-pristine-dispatch-abort-v1.md), with
 [local evidence](evidence/local-r82-pristine-abort-2026-09-10/README.md).
-The next handoffs are Primary's final R84 shell gates, Native's NATIVE-1 build
-escrow then NATIVE-2 constructor custody and NATIVE-3 DATA-ADOPT, Admission's
+The next handoffs are Native's NATIVE-1 build escrow then NATIVE-2 constructor
+custody and NATIVE-3 DATA-ADOPT, Admission's
 independent COMPLETE-ORACLE and native integration, and Resources' VER-1A journal.
 The three read-only reviews completed;
 Primary owns implementation and integration. R82 has no Linux qualification or
@@ -55,7 +55,7 @@ with [local gates](evidence/local-r83-unpublished-lifecycle-2026-09-10/README.md
 Same-owner activation, nonflushing progress, Context holds and explicit
 drain/shutdown retirement are locally implemented. Real native callbacks are
 not installed. DATA allocation shells and closed packet transfer now have
-uncommitted R84 implementations/regressions awaiting final acceptance. Native
+locally accepted R84 implementations/regressions. Native
 prefix and lane ownership, protected construction, charged-carrier native
 integration and adapter proofs remain open. This does not complete coupled
 ADOPT-LIFE/DATA.

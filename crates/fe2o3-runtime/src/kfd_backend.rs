@@ -84,10 +84,14 @@ use crate::{
     RuntimeFlushBackendV1, RuntimeMemoryKindV1, RuntimeMemoryOrderV1, RuntimeMemoryScopeV1,
 };
 
+mod allocation_table;
+use allocation_table::AllocationTableV1;
 mod compute_dispatch;
 mod compute_state;
 mod drain_capture;
 mod generated_preparation;
+mod generated_shells;
+pub(crate) use generated_shells::GeneratedShellBindingV1;
 mod native_budget;
 #[cfg(feature = "hardware-qualification")]
 mod qualification_coexistence;
@@ -1143,7 +1147,8 @@ pub struct KfdRuntimeBackendV1 {
     terminal: bool,
     next_handle: u64,
     streams: HashMap<u64, u64>,
-    allocations: HashMap<u64, AllocationRecordV1>,
+    allocations: AllocationTableV1,
+    generated_shells: HashMap<u64, generated_shells::GeneratedShellRecordV1>,
     modules: HashMap<u64, ModuleRecordV1>,
     kernels: HashMap<u64, KernelRecordV1>,
     submissions: HashMap<u64, SubmissionRecordV1>,
@@ -1505,7 +1510,8 @@ impl KfdRuntimeBackendV1 {
             terminal: false,
             next_handle: 1,
             streams: HashMap::new(),
-            allocations: HashMap::new(),
+            allocations: AllocationTableV1::default(),
+            generated_shells: HashMap::new(),
             modules: HashMap::new(),
             kernels: HashMap::new(),
             submissions: HashMap::new(),
@@ -6186,12 +6192,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         allocation: u64,
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
-        if !self.allocations.contains_key(&allocation) {
-            return Err(Self::rejected(
-                KfdRuntimeBackendErrorKindV1::UnknownHandle,
-                "unknown KFD allocation",
-            ));
-        }
+        self.allocations.require_ordinary(allocation)?;
         if self.allocation_is_active(allocation) {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
@@ -6252,6 +6253,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         bytes: &[u8],
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        self.allocations.reject_generated(allocation)?;
         if self.allocation_is_active(allocation) {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
@@ -6372,6 +6374,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         destination: &mut [u8],
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        self.allocations.reject_generated(allocation)?;
         if self.allocation_is_active(allocation) {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
@@ -6606,6 +6609,10 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         launch: BackendLaunchV1<'_>,
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        for binding in launch.bindings {
+            self.allocations
+                .reject_generated(binding.region.allocation)?;
+        }
         if self.queue_retired || !self.native_available {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Unsupported,
@@ -11853,6 +11860,8 @@ impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
         dependencies: &[u64],
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        self.allocations.reject_generated(source.allocation)?;
+        self.allocations.reject_generated(destination.allocation)?;
         if !self.native_available {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Unsupported,
@@ -23578,7 +23587,7 @@ mod tests {
     #[test]
     fn launch_snapshot_copies_only_the_alignment_preserving_bound_window() {
         let bytes = (0_u8..64).collect::<Vec<_>>();
-        let mut allocations = HashMap::new();
+        let mut allocations = AllocationTableV1::default();
         allocations.insert(
             9,
             AllocationRecordV1 {

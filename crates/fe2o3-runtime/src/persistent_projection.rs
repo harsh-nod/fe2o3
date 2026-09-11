@@ -22,12 +22,17 @@ use super::*;
 /// ```
 /// ```compile_fail,E0616
 /// use fe2o3_runtime::PreparedGfx942PersistentDispatchV1;
-/// fn extract(value: PreparedGfx942PersistentDispatchV1) { let _ = value.buffers; }
+/// fn extract(value: PreparedGfx942PersistentDispatchV1) { let _ = value.data; }
 /// ```
 #[must_use]
 pub struct PreparedGfx942PersistentDispatchV1 {
-    description: RuntimeDispatchDescriptionV1,
     packet: Gfx942FixedDispatchPacketV1,
+    data: PersistentDispatchDataV1,
+}
+
+pub(crate) struct PersistentDispatchDataV1 {
+    source_identity: std::sync::Arc<()>,
+    description: RuntimeDispatchDescriptionV1,
     executable_image: Vec<u8>,
     kernarg_alignment: u64,
     buffers: Vec<Gfx942KfdDispatchBufferV1>,
@@ -36,7 +41,10 @@ pub struct PreparedGfx942PersistentDispatchV1 {
     timeout_milliseconds: u32,
 }
 
-impl PreparedGfx942PersistentDispatchV1 {
+impl PersistentDispatchDataV1 {
+    pub(crate) fn source_identity(&self) -> &std::sync::Arc<()> {
+        &self.source_identity
+    }
     pub fn kernel_name(&self) -> &str {
         &self.description.kernel_name
     }
@@ -69,10 +77,6 @@ impl PreparedGfx942PersistentDispatchV1 {
         self.timeout_milliseconds
     }
 
-    pub const fn packet(&self) -> &Gfx942FixedDispatchPacketV1 {
-        &self.packet
-    }
-
     pub fn executable_image(&self) -> &[u8] {
         &self.executable_image
     }
@@ -90,13 +94,121 @@ impl PreparedGfx942PersistentDispatchV1 {
     }
 }
 
+// Both inert representations expose the same immutable description, never control.
+macro_rules! persistent_data_accessors {
+    ($name:ident) => {
+        impl $name {
+            pub fn kernel_name(&self) -> &str {
+                self.data.kernel_name()
+            }
+            pub const fn identity(&self) -> KernelIdentityInputsV1 {
+                self.data.identity()
+            }
+            pub const fn finalized_hsaco_length(&self) -> u64 {
+                self.data.finalized_hsaco_length()
+            }
+            pub const fn dispatch_contract_sha256(&self) -> [u8; 32] {
+                self.data.dispatch_contract_sha256()
+            }
+            pub const fn descriptor_offset(&self) -> u64 {
+                self.data.descriptor_offset()
+            }
+            pub const fn kernarg_alignment(&self) -> u64 {
+                self.data.kernarg_alignment()
+            }
+            pub const fn timeout_milliseconds(&self) -> u32 {
+                self.data.timeout_milliseconds()
+            }
+            pub fn executable_image(&self) -> &[u8] {
+                self.data.executable_image()
+            }
+            pub fn buffers(&self) -> &[Gfx942KfdDispatchBufferV1] {
+                self.data.buffers()
+            }
+            pub fn pointer_fixups(&self) -> &[Gfx942KfdDispatchPointerFixupV1] {
+                self.data.pointer_fixups()
+            }
+            pub fn buffer_access(&self, index: usize) -> Option<Gfx942RuntimeBufferAccessV1> {
+                self.data.buffer_access(index)
+            }
+            pub(crate) fn data(&self) -> &PersistentDispatchDataV1 {
+                &self.data
+            }
+        }
+    };
+}
+
+persistent_data_accessors!(PreparedGfx942PersistentDispatchV1);
+persistent_data_accessors!(GeneratedGfx942PersistentStorageV1);
+
+impl PreparedGfx942PersistentDispatchV1 {
+    pub const fn packet(&self) -> &Gfx942FixedDispatchPacketV1 {
+        &self.packet
+    }
+
+    /// Moves the complete inert recipe into closed generated custody without copying.
+    pub fn into_generated_storage_v1(self) -> GeneratedGfx942PersistentStorageV1 {
+        GeneratedGfx942PersistentStorageV1 {
+            data: self.data,
+            control: Some(self.packet),
+        }
+    }
+}
+
+/// Complete generated source storage with a private one-shot control transfer.
+/// Descriptive access grants neither native ownership nor publication authority.
+///
+/// ```compile_fail,E0599
+/// use fe2o3_runtime::GeneratedGfx942PersistentStorageV1;
+/// fn duplicate(value: GeneratedGfx942PersistentStorageV1) { let _ = value.clone(); }
+/// ```
+/// ```compile_fail,E0616
+/// use fe2o3_runtime::GeneratedGfx942PersistentStorageV1;
+/// fn extract(value: GeneratedGfx942PersistentStorageV1) { let _ = value.control; }
+/// ```
+/// ```compile_fail,E0599
+/// use fe2o3_runtime::GeneratedGfx942PersistentStorageV1;
+/// fn packet(value: &GeneratedGfx942PersistentStorageV1) { let _ = value.packet(); }
+/// ```
+/// ```compile_fail,E0624
+/// use fe2o3_runtime::GeneratedGfx942PersistentStorageV1;
+/// fn take(value: &mut GeneratedGfx942PersistentStorageV1) {
+///     value.transfer_control_into(&mut None);
+/// }
+/// ```
+#[doc(hidden)]
+#[must_use]
+pub struct GeneratedGfx942PersistentStorageV1 {
+    data: PersistentDispatchDataV1,
+    // Only the runtime's exact rooted adoption destination may take this packet.
+    control: Option<Gfx942FixedDispatchPacketV1>,
+}
+
+impl GeneratedGfx942PersistentStorageV1 {
+    pub(crate) fn control_available(&self) -> bool {
+        self.control.is_some()
+    }
+
+    pub(crate) fn transfer_control_into(
+        &mut self,
+        destination: &mut Option<Gfx942FixedDispatchPacketV1>,
+    ) -> bool {
+        if destination.is_some() || self.control.is_none() {
+            return false;
+        }
+        // No callback, allocation or fallible native work separates these moves.
+        *destination = self.control.take();
+        true
+    }
+}
+
 impl fmt::Debug for PreparedGfx942PersistentDispatchV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PreparedGfx942PersistentDispatchV1")
-            .field("description", &self.description)
-            .field("buffers", &self.buffers.len())
-            .field("timeout_milliseconds", &self.timeout_milliseconds)
+            .field("description", &self.data.description)
+            .field("buffers", &self.data.buffers.len())
+            .field("timeout_milliseconds", &self.data.timeout_milliseconds)
             .finish_non_exhaustive()
     }
 }
@@ -223,14 +335,17 @@ impl PreparedGfx942RuntimeDispatchV1 {
         let packet = project_gfx942_fixed_host_packet_v1(&kernel, packet, &lengths)
             .map_err(Error::FixedDispatch)?;
         Ok(PreparedGfx942PersistentDispatchV1 {
-            description,
             packet,
-            executable_image: request.executable_image,
-            kernarg_alignment: request.kernarg_alignment,
-            buffers: request.buffers,
-            pointer_fixups: request.pointer_fixups,
-            buffer_policies,
-            timeout_milliseconds: request.timeout_milliseconds,
+            data: PersistentDispatchDataV1 {
+                source_identity: std::sync::Arc::new(()),
+                description,
+                executable_image: request.executable_image,
+                kernarg_alignment: request.kernarg_alignment,
+                buffers: request.buffers,
+                pointer_fixups: request.pointer_fixups,
+                buffer_policies,
+                timeout_milliseconds: request.timeout_milliseconds,
+            },
         })
     }
 }

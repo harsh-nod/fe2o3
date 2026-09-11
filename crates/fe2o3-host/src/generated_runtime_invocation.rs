@@ -5,10 +5,10 @@ use std::{error::Error, fmt, marker::PhantomData, rc::Rc};
 use fe2o3_aql::AqlDispatchGeometryV1;
 use fe2o3_kfd::CheckedGfx942XnackMinusDevice;
 use fe2o3_runtime::{
-    Gfx942RuntimeProjectionErrorV1, KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1,
-    PreparedGfx942PersistentDispatchV1, PreparedGfx942RuntimeDispatchV1,
-    RuntimeAsyncEngineCallErrorV1, RuntimeAsyncPreparationV1, RuntimeAsyncProgressHandleV1,
-    RuntimeContextV1, RuntimeDeviceIdV1, RuntimeErrorV1, RuntimeGfx942GeneratedCarrierV1,
+    GeneratedGfx942PersistentStorageV1, Gfx942RuntimeProjectionErrorV1, KfdRuntimeBackendErrorV1,
+    KfdRuntimeBackendV1, PreparedGfx942RuntimeDispatchV1, RuntimeAsyncEngineCallErrorV1,
+    RuntimeAsyncPreparationV1, RuntimeAsyncProgressHandleV1, RuntimeContextV1, RuntimeDeviceIdV1,
+    RuntimeErrorV1, RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedSourceMutV1,
     RuntimeGfx942GeneratedSourceV1, RuntimeGfx942PreparationErrorV1, RuntimeGfx942PreparedV1,
     RuntimeGfx942ReadbackErrorV1,
 };
@@ -55,7 +55,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> GeneratedContextPreparationV1<K> {
     fn project_persistent(
         self,
     ) -> Result<
-        GeneratedContextPreparationV1<K, PreparedGfx942PersistentDispatchV1>,
+        GeneratedContextPreparationV1<K, GeneratedGfx942PersistentStorageV1>,
         GeneratedWorkerV3RuntimeInvocationErrorV1,
     > {
         let storage = self
@@ -78,13 +78,13 @@ impl<K: CompilerGeneratedKernelExpectationV1> GeneratedContextPreparationV1<K> {
 }
 
 impl<K: CompilerGeneratedKernelExpectationV1> RuntimeGfx942GeneratedCarrierV1
-    for GeneratedContextPreparationV1<K, PreparedGfx942PersistentDispatchV1>
+    for GeneratedContextPreparationV1<K, GeneratedGfx942PersistentStorageV1>
 {
     type CurrentnessError = crate::RecoveredWorkerV3AdmissionErrorV1;
     type Readback = crate::generated_runtime_arguments::GeneratedRuntimeReadbackOwnerV1;
 
     fn source(&self) -> RuntimeGfx942GeneratedSourceV1<'_, Self::CurrentnessError> {
-        RuntimeGfx942GeneratedSourceV1::new(
+        RuntimeGfx942GeneratedSourceV1::from_generated_storage(
             self.storage.prepared(),
             self.authority
                 .binding
@@ -93,6 +93,20 @@ impl<K: CompilerGeneratedKernelExpectationV1> RuntimeGfx942GeneratedCarrierV1
                 .exact_artifact_bytes(),
             &self.authority,
         )
+    }
+
+    fn source_mut(
+        &mut self,
+    ) -> Option<RuntimeGfx942GeneratedSourceMutV1<'_, Self::CurrentnessError>> {
+        Some(RuntimeGfx942GeneratedSourceMutV1::new(
+            self.storage.prepared_mut(),
+            self.authority
+                .binding
+                .authenticated
+                .current_publication_token()
+                .exact_artifact_bytes(),
+            &self.authority,
+        ))
     }
 
     fn prepare_readback(&self) -> Result<Self::Readback, RuntimeGfx942ReadbackErrorV1> {
@@ -126,7 +140,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> RuntimeGfx942GeneratedCarrierV1
 #[must_use]
 pub struct GeneratedWorkerV3ContextInvocationV1<K> {
     prepared: RuntimeGfx942PreparedV1<
-        GeneratedContextPreparationV1<K, PreparedGfx942PersistentDispatchV1>,
+        GeneratedContextPreparationV1<K, GeneratedGfx942PersistentStorageV1>,
     >,
 }
 

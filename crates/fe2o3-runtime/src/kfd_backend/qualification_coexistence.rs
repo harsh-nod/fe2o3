@@ -145,7 +145,10 @@ impl KfdRuntimeBackendV1 {
                 return Err(Failure::ShapeUnaccountedSubmission);
             }
         }
-        for (&allocation, record) in &self.allocations {
+        if self.allocations.has_generated() {
+            return Err(Failure::ShapeUnaccountedComputeStorage);
+        }
+        for (&allocation, record) in self.allocations.ordinary_iter() {
             match record.sdma_storage {
                 KfdRuntimeSdmaStorageV1::ComputeInFlight(id)
                     if !self.active.as_ref().is_some_and(|active| {

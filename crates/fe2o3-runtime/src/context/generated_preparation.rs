@@ -96,6 +96,62 @@ impl<E: Error + 'static> Error for RuntimeGfx942PreparationErrorV1<E> {
 }
 
 impl RuntimeContextV1<KfdRuntimeBackendV1> {
+    #[allow(
+        dead_code,
+        reason = "private DATA adoption handoff; native effects are not installed"
+    )]
+    pub(crate) fn register_gfx942_generated_shells_v1<T: crate::RuntimeGfx942GeneratedCarrierV1>(
+        &mut self,
+        prepared: &mut RuntimeGfx942PreparedV1<T>,
+        hold: &ContextUnpublishedHoldV1,
+        expected: &crate::generated_source::GeneratedHostRosterV1,
+    ) -> Result<(), crate::RuntimeGfx942GeneratedReservationErrorV1> {
+        use crate::RuntimeGfx942GeneratedReservationErrorV1 as Error;
+        self.validate_unpublished_hold_v1(hold)
+            .map_err(|error| Error::Context(error.into()))?;
+        let binding = prepared.binding;
+        let stream = self.streams.get(&hold.stream()).expect("exact held stream");
+        if stream.device != binding.device || stream.generated.is_some() {
+            return Err(Error::Context(
+                RuntimeValidationErrorV1::ContextReserved.into(),
+            ));
+        }
+        let backend_device = self
+            .preparation_backend_device_v1(binding.device)
+            .map_err(Error::Context)?;
+        if !binding.matches_context(self.context_generation, binding.device, backend_device) {
+            return Err(Error::Context(
+                RuntimeValidationErrorV1::InvalidBackendDescription.into(),
+            ));
+        }
+        let mut source = prepared
+            .value
+            .source_mut()
+            .ok_or(Error::UnsupportedPreparation)?;
+        let roster = self
+            .with_preparation_owner_v1(backend_device, |owner| {
+                if !binding.matches_native(owner.model_admission()) {
+                    return Err(Error::Context(
+                        RuntimeValidationErrorV1::InvalidBackendDescription.into(),
+                    ));
+                }
+                let roster = source.validate(owner.observation().unique_id())?;
+                if !roster.matches(expected) {
+                    return Err(Error::InvalidRoster);
+                }
+                Ok(roster)
+            })
+            .map_err(Error::Context)??;
+        self.install_generated_shells_v1(
+            binding.device,
+            binding.native_device,
+            hold,
+            &mut source,
+            &roster,
+        )
+        .map_err(Error::Context)
+    }
+
     pub(crate) fn reserve_gfx942_prepared_v1<T: crate::RuntimeGfx942GeneratedCarrierV1>(
         &mut self,
         prepared: &mut RuntimeGfx942PreparedV1<T>,

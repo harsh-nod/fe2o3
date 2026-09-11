@@ -15,12 +15,13 @@ struct DisposalWitness<P> {
     payload: Option<P>,
     budget: GeneratedRuntimeResultBudgetV1,
     disposed: Arc<AtomicBool>,
+    expected_bytes: u64,
 }
 
 impl<P> Drop for DisposalWitness<P> {
     fn drop(&mut self) {
         drop(self.payload.take());
-        assert_eq!(self.budget.usage().reserved_peak_bytes, 32);
+        assert_eq!(self.budget.usage().reserved_peak_bytes, self.expected_bytes);
         self.disposed.store(true, Ordering::SeqCst);
     }
 }
@@ -119,6 +120,7 @@ fn invocation_storage_disposes_payload_before_decoder_even_during_unwind() {
                 payload: Some(storage.payload),
                 budget: budget.clone(),
                 disposed: Arc::clone(&disposed),
+                expected_bytes: 32,
             },
             readback: storage.readback,
             decoder: storage.decoder,
@@ -240,6 +242,7 @@ fn invocation_persistent_projection_disposes_payload_before_decoder_on_drop_and_
                 payload: Some(storage.payload),
                 budget: budget.clone(),
                 disposed: Arc::clone(&disposed),
+                expected_bytes: 32,
             },
             readback: storage.readback,
             decoder: storage.decoder,
