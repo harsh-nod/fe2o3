@@ -6,8 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::{Value, json};
 
 const TYPED_LAYOUT_ABI: [u8; 32] = [
-    0xc4, 0x96, 0x7b, 0xf0, 0x41, 0xec, 0x52, 0xe3, 0x12, 0x89, 0x49, 0x0d, 0x54, 0x9a, 0x1f, 0xfd,
-    0x94, 0xfa, 0x32, 0x39, 0x15, 0x00, 0x68, 0xc7, 0xa5, 0x22, 0x1f, 0x60, 0x50, 0x60, 0xcb, 0xa3,
+    0x1d, 0xdf, 0x03, 0x4d, 0xa9, 0x01, 0xd4, 0x69, 0x52, 0x51, 0x89, 0x22, 0x69, 0x2f, 0xe6, 0xdb,
+    0xa6, 0x4e, 0x7f, 0xe2, 0xfc, 0xd8, 0x03, 0x23, 0x0b, 0x03, 0xf7, 0x1e, 0xd2, 0xb6, 0x2d, 0x16,
 ];
 
 struct TypedLayoutRuntimeArguments {
@@ -2150,8 +2150,13 @@ fn ordinary_kernel_sources_export_and_query_exact_v2_source_variables() {
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions() {
+    use fe2o3_kernel_ir::{
+        AccessMode, AddressSpace, SemanticArgumentOwnershipV1, SemanticKirStorageRepresentationV1,
+        SemanticStorageBindingV1, Type,
+    };
     use fe2o3_mir_model::semantic_mir_v1::{
-        AdmittedInertSemanticMirV1, SemanticMirLimitsV1, SemanticTypeShapeV1,
+        AdmittedInertSemanticMirV1, SemanticAbiPassModeV1, SemanticLocalRoleV1,
+        SemanticMirLimitsV1, SemanticSourceArgumentOwnershipV1, SemanticTypeShapeV1,
     };
 
     let target = ScratchTarget::new();
@@ -2218,16 +2223,98 @@ fn ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions() {
     let storage =
         fe2o3_kernel_ir::SemanticStorageMapV1::from_canonical_json_bytes(bundle.storage_map())
             .expect("decode exact compiler storage map");
-    assert_eq!(
-        semantic.functions()[storage.kernels()[0].semantic_root() as usize]
-            .abi()
-            .identity()
-            .as_bytes(),
-        &TYPED_LAYOUT_ABI,
-        "ordinary Rust semantic ABI identity changed without regenerating its typed runtime arguments",
-    );
     assert_eq!(storage.kernels().len(), 1);
-    assert_eq!(storage.kernels()[0].arguments().len(), 3);
+    let kernel_storage = &storage.kernels()[0];
+    assert_eq!(kernel_storage.arguments().len(), 3);
+    let semantic_root = &semantic.functions()[kernel_storage.semantic_root() as usize];
+    let semantic_body = &semantic.functions()[kernel_storage.semantic_body() as usize];
+    let abi = semantic_root.abi();
+    assert_eq!(abi.source_input_types().len(), 3);
+    assert_eq!(abi.arguments().len(), 3);
+    assert_eq!(
+        abi.source_argument_ownership(),
+        &[
+            SemanticSourceArgumentOwnershipV1::ByValue,
+            SemanticSourceArgumentOwnershipV1::SharedBorrow,
+            SemanticSourceArgumentOwnershipV1::ExclusiveOwner,
+        ],
+    );
+    let kir = fe2o3_kernel_ir::decode_module_v7(bundle.inner_v1().canonical_kir_v7())
+        .expect("decode compiler-produced KIR argument contract");
+    let kir_function = &kir.functions[kernel_storage.kir_function_ordinal() as usize];
+    assert_eq!(
+        kir_function.signature.parameters,
+        vec![
+            Type::F32,
+            Type::slice(Type::F32, AddressSpace::Global, AccessMode::ReadOnly),
+            Type::slice(Type::F32, AddressSpace::Global, AccessMode::ReadWrite),
+        ],
+    );
+    let kir_body = kir_function.body.as_ref().expect("kernel KIR body");
+    assert_eq!(kir_body.parameters.len(), 3);
+    let expected_storage = [
+        (
+            SemanticArgumentOwnershipV1::ByValue,
+            SemanticKirStorageRepresentationV1::Scalar,
+        ),
+        (
+            SemanticArgumentOwnershipV1::SharedBorrow,
+            SemanticKirStorageRepresentationV1::RegionSlice,
+        ),
+        (
+            SemanticArgumentOwnershipV1::ExclusiveOwner,
+            SemanticKirStorageRepresentationV1::RegionSlice,
+        ),
+    ];
+    let mut next_byte = 0u64;
+    let mut offsets = Vec::new();
+    let mut layout_summary = Vec::new();
+    for (index, argument) in kernel_storage.arguments().iter().enumerate() {
+        let source_type = abi.source_input_types()[index];
+        let physical = &abi.arguments()[index];
+        let local = &semantic_body.locals()[argument.semantic_local() as usize];
+        assert_eq!(argument.source_ordinal() as usize, index);
+        assert_eq!(argument.semantic_type(), source_type.index());
+        assert_eq!(local.ty(), source_type);
+        assert_eq!(local.role(), SemanticLocalRoleV1::Argument(index as u32));
+        assert!(physical.is_source());
+        assert_eq!(physical.ty(), source_type);
+        assert!(physical.value().adjusted().is_none());
+        assert!(matches!(
+            (index, physical.mode()),
+            (0, SemanticAbiPassModeV1::Direct(_)) | (1 | 2, SemanticAbiPassModeV1::Pair { .. })
+        ));
+        let (ownership, representation) = expected_storage[index];
+        assert_eq!(argument.ownership(), ownership);
+        assert_eq!(
+            argument.storage(),
+            &SemanticStorageBindingV1::ExactKirParameter {
+                kir_parameter_ordinal: index as u32,
+                kir_value_ordinal: kir_body.parameters[index].0,
+                representation,
+            },
+        );
+        let layout = semantic.types()[source_type.index() as usize].layout();
+        let size = layout.size_bytes().expect("sized runtime argument");
+        let alignment = layout.alignment_bytes();
+        assert_eq!((size, alignment), [(4, 4), (16, 8), (16, 8)][index]);
+        // Independent fixed-fixture oracle for the V3 aligned source-argument packing rule.
+        let offset = next_byte.next_multiple_of(alignment);
+        next_byte = offset + size;
+        offsets.push(offset);
+        layout_summary.push((index, size, alignment, physical.mode(), layout.fields()));
+    }
+    assert_eq!(offsets, [0, 8, 24]);
+    assert_eq!([offsets[1] + 8, offsets[2] + 8], [16, 32]);
+    assert_eq!(next_byte.next_multiple_of(8), 40);
+    assert_eq!(
+        abi.identity().as_bytes(),
+        &TYPED_LAYOUT_ABI,
+        "ordinary Rust semantic ABI identity changed; independently checked offsets={offsets:?}, bytes=40, alignment=8, function={}, ABI={}, ABI layout={}, source layouts={layout_summary:?}",
+        hex(semantic_root.identity().as_bytes()),
+        hex(abi.identity().as_bytes()),
+        hex(abi.layout_identity().as_bytes()),
+    );
     assert_eq!(
         storage.target_layout_identity(),
         semantic.target_layout_identity().as_bytes()
@@ -3573,6 +3660,8 @@ fn simulation_export_command_for_feature(
     let mut command = Command::new(env!("CARGO_BIN_EXE_fe2o3-export-sim"));
     command
         .current_dir(workspace())
+        // Bind source ABI identities to the same limited-debug profile as source CI.
+        .env("CARGO_PROFILE_DEV_DEBUG", "1")
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env_remove("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS")
