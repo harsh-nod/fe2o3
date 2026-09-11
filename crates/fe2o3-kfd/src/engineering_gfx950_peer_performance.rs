@@ -70,7 +70,7 @@ struct NativeSequence<'group, 'kernel> {
 impl SerialSequenceBackend for NativeSequence<'_, '_> {
     type Prepared = (PreparedDispatch, u32);
     fn full_fence(&mut self) -> Result<()> {
-        check_contexts(&mut self.group.contexts)
+        check_contexts(&mut self.group.contexts, self.group.shared_full_currentness)
     }
     fn operational_fence(&mut self) -> Result<()> {
         for context in &mut self.group.contexts {
@@ -113,6 +113,21 @@ impl Gfx950EngineeringPeerGroupV1 {
         cache_kernel_admission: bool,
         operational_currentness: bool,
     ) -> Result<()> {
+        self.configure_performance_v2(cache_kernel_admission, operational_currentness, false)
+    }
+
+    /// Configures the same once/fresh performance policy with an additional
+    /// explicit full-fence observation mode. In shared mode all participants'
+    /// full mutable checks bracket one fresh complete topology discovery per
+    /// group fence. Every retained snapshot must match; nothing is cached across
+    /// calls. Public device checks and single-context lifecycle checks are
+    /// unchanged. No all-reset or topology-ABA proof is claimed by either mode.
+    pub fn configure_performance_v2(
+        &mut self,
+        cache_kernel_admission: bool,
+        operational_currentness: bool,
+        shared_full_currentness: bool,
+    ) -> Result<()> {
         self.require_active()?;
         let result = (|| {
             for context in &self.contexts {
@@ -123,7 +138,7 @@ impl Gfx950EngineeringPeerGroupV1 {
                     context.ring.write(),
                 )?;
             }
-            check_contexts(&mut self.contexts)?;
+            check_contexts(&mut self.contexts, self.shared_full_currentness)?;
             let options = PerformanceOptions {
                 cache_kernel_admission,
                 operational_currentness,
@@ -132,7 +147,12 @@ impl Gfx950EngineeringPeerGroupV1 {
             for context in &mut self.contexts {
                 context.configure_performance(options)?;
             }
-            check_contexts(&mut self.contexts)
+            check_contexts(&mut self.contexts, self.shared_full_currentness)?;
+            if shared_full_currentness {
+                self.shared_full_currentness = true;
+                check_contexts(&mut self.contexts, true)?;
+            }
+            Ok(())
         })();
         self.finish(result)
     }

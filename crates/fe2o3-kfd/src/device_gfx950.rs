@@ -2,6 +2,12 @@
 
 use super::*;
 
+#[cfg(feature = "engineering-gfx950")]
+#[path = "device_gfx950_group_currentness.rs"]
+mod group_currentness;
+#[cfg(feature = "engineering-gfx950")]
+pub(crate) use group_currentness::check_engineering_group_currentness;
+
 pub const GFX950_ADMITTED_KERNEL_RELEASE_V1: &str = "6.8.0-124-generic";
 pub const GFX950_ADMITTED_AMDGPU_MODULE_VERSION_V1: &str = "6.16.13";
 pub const GFX950_ADMITTED_AMDGPU_MODULE_SRCVERSION_V1: &str = "703B1127E578BC5D4BD6615";
@@ -191,6 +197,15 @@ impl CheckedGfx950XnackMinusDevice {
     }
 
     fn check_currentness_inner(&mut self) -> Result<(), DeviceBindingError> {
+        self.check_currentness_before_topology()?;
+        let topology = topology::discover_default_topology_for_target(topology::GfxTarget::Gfx950)?;
+        if topology != self.topology {
+            return Err(DeviceBindingError::TopologySnapshotChanged);
+        }
+        self.check_currentness_after_topology()
+    }
+
+    fn check_currentness_before_topology(&mut self) -> Result<(), DeviceBindingError> {
         self.kfd
             .opened
             .ensure_process(std::process::id())
@@ -228,10 +243,10 @@ impl CheckedGfx950XnackMinusDevice {
         if apertures != self.apertures {
             return Err(DeviceBindingError::AperturesChanged);
         }
-        let topology = topology::discover_default_topology_for_target(topology::GfxTarget::Gfx950)?;
-        if topology != self.topology {
-            return Err(DeviceBindingError::TopologySnapshotChanged);
-        }
+        Ok(())
+    }
+
+    fn check_currentness_after_topology(&mut self) -> Result<(), DeviceBindingError> {
         crate::linux::revalidate_descriptor(
             &self.kfd.opened.fd,
             self.kfd.opened.node_observation(),
@@ -241,13 +256,13 @@ impl CheckedGfx950XnackMinusDevice {
             &self.render_fd,
             self.observation.render_descriptor(),
         )?;
-        if crate::linux::observe_process_incarnation()? != process_before {
+        if crate::linux::observe_process_incarnation()? != self.process {
             return Err(DeviceBindingError::ProcessIncarnationChanged);
         }
         if crate::linux::query_xnack_mode(&self.kfd.opened.fd)? != 0 {
             return Err(DeviceBindingError::UnsupportedXnackMode);
         }
-        if crate::linux::observe_drm_identity(&self.render_fd)? != drm {
+        if crate::linux::observe_drm_identity(&self.render_fd)? != self.observation.drm() {
             return Err(DeviceBindingError::ObservableCurrentnessChanged(
                 "DRM identity during currentness check",
             ));

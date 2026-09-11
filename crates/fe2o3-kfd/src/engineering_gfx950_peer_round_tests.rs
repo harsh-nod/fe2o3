@@ -238,6 +238,7 @@ fn empty_group() -> Gfx950EngineeringPeerGroupV1 {
         next_buffer: 1,
         poisoned: false,
         closed: false,
+        shared_full_currentness: false,
     }
 }
 

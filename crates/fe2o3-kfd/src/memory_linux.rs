@@ -58,6 +58,10 @@ impl LinuxMemoryBackendFor<crate::CheckedGfx950XnackMinusDevice> {
         self.device.topology_snapshot()
     }
 
+    pub(super) fn engineering_peer_device(&mut self) -> &mut crate::CheckedGfx950XnackMinusDevice {
+        &mut self.device
+    }
+
     pub(super) fn check_engineering_operational_currentness(
         &mut self,
     ) -> Result<(), MemorySessionError> {

@@ -941,6 +941,41 @@ pub fn discover_default_topology_for_target(
     )
 }
 
+/// Completes an engineering group fence after all participant-local checks.
+/// The input is the fresh default-root snapshot obtained inside that fence.
+#[cfg(feature = "engineering-gfx950")]
+pub(crate) fn recheck_default_topology_generation(
+    snapshot: &HostTopologySnapshot,
+) -> Result<(), TopologyError> {
+    recheck_topology_generation_at(
+        Path::new(DEFAULT_TOPOLOGY_ROOT),
+        &snapshot.topology.provenance,
+    )
+}
+
+#[cfg(feature = "engineering-gfx950")]
+fn recheck_topology_generation_at(
+    root: &Path,
+    provenance: &TopologyProvenance,
+) -> Result<(), TopologyError> {
+    let identity = ensure_directory(root)?;
+    if root != provenance.root
+        || identity.device != provenance.file_system_device
+        || identity.inode != provenance.inode
+    {
+        return Err(TopologyError::ChangedDuringRead(root.to_path_buf()));
+    }
+    let after = read_scalar(&root.join("generation_id"))?;
+    let before = provenance.generation;
+    if before != after {
+        return Err(TopologyError::TopologyChanged { before, after });
+    }
+    if ensure_directory(root)? != identity {
+        return Err(TopologyError::ChangedDuringRead(root.to_path_buf()));
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 pub enum TopologyError {
     Io {
@@ -2816,6 +2851,33 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.base).unwrap();
         }
+    }
+
+    #[cfg(feature = "engineering-gfx950")]
+    #[test]
+    fn engineering_group_final_generation_check_binds_root_and_fresh_generation() {
+        let fixture = Fixture::valid(2);
+        let snapshot = fixture.discover().unwrap();
+        let provenance = snapshot.provenance();
+        recheck_topology_generation_at(&fixture.root, provenance).unwrap();
+        let other = Fixture::valid(2);
+        assert!(recheck_topology_generation_at(&other.root, provenance).is_err());
+        let mut replaced = provenance.clone();
+        replaced.inode += 1;
+        assert!(recheck_topology_generation_at(&fixture.root, &replaced).is_err());
+        replaced = provenance.clone();
+        replaced.file_system_device += 1;
+        assert!(recheck_topology_generation_at(&fixture.root, &replaced).is_err());
+        fs::write(fixture.root.join("generation_id"), "8\n").unwrap();
+        assert!(matches!(
+            recheck_topology_generation_at(&fixture.root, provenance),
+            Err(TopologyError::TopologyChanged {
+                before: 7,
+                after: 8
+            })
+        ));
+        fs::remove_file(fixture.root.join("generation_id")).unwrap();
+        assert!(recheck_topology_generation_at(&fixture.root, provenance).is_err());
     }
 
     #[test]

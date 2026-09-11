@@ -157,7 +157,7 @@ impl ConcurrentRoundBackend for NativeRound<'_, '_> {
     type Pending = (usize, PendingDispatch);
 
     fn full_fence(&mut self) -> Result<()> {
-        check_contexts(&mut self.group.contexts)
+        check_contexts(&mut self.group.contexts, self.group.shared_full_currentness)
     }
 
     fn prepare(&mut self, index: usize) -> Result<Self::Prepared> {

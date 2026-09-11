@@ -186,21 +186,33 @@ struct BufferRecord {
 
 struct NativeTransaction<'a> {
     contexts: &'a mut [Context],
+    shared_full_currentness: bool,
     owner: usize,
     local_id: u64,
 }
 
-fn check_contexts(contexts: &mut [Context]) -> Result<()> {
-    for context in contexts {
-        context.check_currentness(true)?;
-        context.check_idle()?;
+fn check_contexts(contexts: &mut [Context], shared_full_currentness: bool) -> Result<()> {
+    if shared_full_currentness {
+        let mut devices = contexts
+            .iter_mut()
+            .map(|context| context.backend.engineering_peer_device())
+            .collect::<Vec<_>>();
+        crate::device::check_engineering_group_currentness(&mut devices).map_err(explain)?;
+        for context in contexts {
+            context.check_idle()?;
+        }
+    } else {
+        for context in contexts {
+            context.check_currentness(true)?;
+            context.check_idle()?;
+        }
     }
     Ok(())
 }
 
 impl PeerTransactionBackend for NativeTransaction<'_> {
     fn check(&mut self) -> Result<()> {
-        check_contexts(self.contexts)
+        check_contexts(self.contexts, self.shared_full_currentness)
     }
     fn map(&mut self, peers: &[u32]) -> KernelOutcome<u32> {
         let context = &mut self.contexts[self.owner];
@@ -350,6 +362,7 @@ pub struct Gfx950EngineeringPeerGroupV1 {
     next_buffer: u64,
     poisoned: bool,
     closed: bool,
+    shared_full_currentness: bool,
 }
 
 impl Gfx950EngineeringPeerGroupV1 {
@@ -378,6 +391,7 @@ impl Gfx950EngineeringPeerGroupV1 {
             next_buffer: 1,
             poisoned: false,
             closed: false,
+            shared_full_currentness: false,
         };
         let result = (|| {
             for &unique_id in unique_ids {
@@ -389,7 +403,7 @@ impl Gfx950EngineeringPeerGroupV1 {
                     .map_err(explain)?;
                 group.contexts.push(Context::open(device)?);
             }
-            check_contexts(&mut group.contexts)?;
+            check_contexts(&mut group.contexts, group.shared_full_currentness)?;
             let snapshot = group.contexts[0].backend.engineering_peer_topology();
             if group
                 .contexts
@@ -462,7 +476,7 @@ impl Gfx950EngineeringPeerGroupV1 {
             {
                 return Err("invalid peer allocation roster".into());
             }
-            check_contexts(&mut self.contexts)?;
+            check_contexts(&mut self.contexts, self.shared_full_currentness)?;
             let id = self.next_buffer;
             self.next_buffer = id.checked_add(1).ok_or("peer buffer identity exhausted")?;
             let ResponseV1::Allocated {
@@ -504,6 +518,7 @@ impl Gfx950EngineeringPeerGroupV1 {
             let record = self.buffers.get_mut(&id).ok_or("missing new peer record")?;
             record.mapping.map(&mut NativeTransaction {
                 contexts: &mut self.contexts,
+                shared_full_currentness: self.shared_full_currentness,
                 owner,
                 local_id,
             })?;
@@ -525,9 +540,9 @@ impl Gfx950EngineeringPeerGroupV1 {
             }
             let record = self.validate_token(buffer)?;
             let local = record.local_id;
-            check_contexts(&mut self.contexts)?;
+            check_contexts(&mut self.contexts, self.shared_full_currentness)?;
             self.contexts[buffer.owner].write(local, offset, bytes)?;
-            check_contexts(&mut self.contexts)
+            check_contexts(&mut self.contexts, self.shared_full_currentness)
         })();
         self.finish(result)
     }
@@ -544,9 +559,9 @@ impl Gfx950EngineeringPeerGroupV1 {
                 return Err("peer host read limit".into());
             }
             let local = self.validate_token(buffer)?.local_id;
-            check_contexts(&mut self.contexts)?;
+            check_contexts(&mut self.contexts, self.shared_full_currentness)?;
             let result = self.contexts[buffer.owner].read(local, offset, bytes)?;
-            check_contexts(&mut self.contexts)?;
+            check_contexts(&mut self.contexts, self.shared_full_currentness)?;
             Ok(result)
         })();
         self.finish(result)
@@ -567,13 +582,13 @@ impl Gfx950EngineeringPeerGroupV1 {
             {
                 return Err("kernel rank or object outside peer bounds".into());
             }
-            check_contexts(&mut self.contexts)?;
+            check_contexts(&mut self.contexts, self.shared_full_currentness)?;
             let ResponseV1::LoadedKernel { kernel, metadata } =
                 self.contexts[rank].load(object, hash, symbol)?
             else {
                 return Err("peer kernel admission response".into());
             };
-            check_contexts(&mut self.contexts)?;
+            check_contexts(&mut self.contexts, self.shared_full_currentness)?;
             Ok(Gfx950EngineeringPeerKernelV1 {
                 group: self.incarnation,
                 rank,
@@ -600,7 +615,7 @@ impl Gfx950EngineeringPeerGroupV1 {
     ) -> Result<u64> {
         self.require_active()?;
         let result = (|| {
-            check_contexts(&mut self.contexts)?;
+            check_contexts(&mut self.contexts, self.shared_full_currentness)?;
             let prepared =
                 self.prepare_peer_dispatch(kernel, bytes, workgroup, grid, pointers, timeout_ms)?;
             // SAFETY: group retains all owners and only exposes checked read-only
@@ -608,7 +623,7 @@ impl Gfx950EngineeringPeerGroupV1 {
             let elapsed = unsafe {
                 self.contexts[kernel.rank].execute_prepared_dispatch(prepared, timeout_ms)
             }?;
-            check_contexts(&mut self.contexts)?;
+            check_contexts(&mut self.contexts, self.shared_full_currentness)?;
             Ok(elapsed)
         })();
         self.finish(result)
@@ -676,6 +691,7 @@ impl Gfx950EngineeringPeerGroupV1 {
                 .ok_or("missing peer buffer")?;
             record.mapping.release(&mut NativeTransaction {
                 contexts: &mut self.contexts,
+                shared_full_currentness: self.shared_full_currentness,
                 owner: buffer.owner,
                 local_id: record.local_id,
             })?;
@@ -697,7 +713,7 @@ impl Gfx950EngineeringPeerGroupV1 {
             for token in tokens {
                 self.release(token)?;
             }
-            check_contexts(&mut self.contexts)?;
+            check_contexts(&mut self.contexts, self.shared_full_currentness)?;
             for context in &mut self.contexts {
                 context.close_inner()?;
             }
