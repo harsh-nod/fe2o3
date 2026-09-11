@@ -10,6 +10,11 @@ R80 now implements the local [generated reservation](runtime-generated-reservati
 packet: complete source description plus staged same-account readback and a
 finite reserved ticket. Its [local record](evidence/local-r80-generated-reservation-2026-09-10/README.md)
 separates source gates from native, production-constructor and proof acceptance.
+R81 implements the independent [ordinary host-cache limits](runtime-host-cache-limits-v1.md)
+packet (MEM-2B-HOST). Its local acceptance does not complete native pressure
+qualification, aggregate accounting or a host-cache adapter proof. The current
+Resources queue advances to proof/qualification handoff and MEM-DOM-1/VER-1;
+historical host-cache assignments below describe the now-implemented packet.
 Three read-only agents reconciled the remaining work with source and the current
 open [#182](https://github.com/harsh-nod/fe2o3/issues/182). This document assigns
 bounded analysis/review queues, not unattended implementation jobs. Primary
@@ -21,8 +26,12 @@ workers returned source-grounded assignments; their review turns are complete,
 not continuing implementation jobs. The issue remains open (last issue update
 observed: `2026-09-10T10:50:51Z`). R80 integrates Native's B3-DATA-REP and
 the separately assigned B4-RESERVE-ENGINE and B4-RESERVE-HOST parts of B4-RESERVE.
-The next generated packet is B3-DATA-ADOPT, then B3-ISSUE. Ordinary host-cache limits and
-SCALE-1A-FIXTURE remain independent work. Implemented reservations must precede
+The next generated packet is B3-DATA-ADOPT, then B3-ISSUE. R81's native review
+identified a prerequisite: a pristine never-published fixed recipe needs a
+distinct abort/detach transition, since recycled detach requires a real recycled
+generation and returning-destroy tears down the queue. That prerequisite is
+unimplemented; no synthetic completion receipt is allowed. SCALE-1A-FIXTURE
+remains independent work. Implemented reservations must precede
 native adoption effects. The
 [integration queue](#generated-integration-queue) below names the individual
 handoffs; the [remaining tickets](#remaining-tickets) include qualification-only
@@ -174,7 +183,7 @@ are sequential queues, not additional concurrent workers or delegated edits.
 | Lead | Next bounded assignment | Module scope and primary handoff |
 | --- | --- | --- |
 | Native: `r66_native_coexistence` | B3-DATA-ADOPT; independent SCALE-1A-FIXTURE | R80 supplies host-only reservations and the complete source roster. Adoption still needs exact native registration, retained partial prefixes and active lane/drain custody. Fixtures need bounded policy and complete-output oracles. R76 still needs live bootstrap qualification. |
-| Resources: `r66_coexistence_model` | MEM-2B-HOST; review ADOPT and later COMPLETE | R80 supplies the original-account readback owner. Host-cache policy remains isolated in `sdma/host_pool_policy.rs`: preserve R72 debit through reuse, zero disables caching and defaults stay unchanged. |
+| Resources: `r66_coexistence_model` | Host-cache proof/qualification handoff, MEM-DOM-1/VER-1; review ADOPT and later COMPLETE | R81 implements `sdma/host_pool_policy.rs` with exact padded costs and retained R72 debits. Aggregate domains, persistent versions and proof composition remain open. |
 | Admission: `r66_runtime_coexistence` | ADOPT active-owner handoff, then B3-ISSUE | Reserved remains parked and host-only. Native effects require non-discardable active custody; publication then requires a private submission-bound permit surviving actual flush/retry. Reservation is not a launch API. |
 | Primary | Reviewed reservation/adoption integration, proof composition and qualification | Own every edit, integration/build/proof run, evidence record and signed dual push. Serialize shared native hooks. Schedule existing OVL-QUAL-2 and DRN-2A against frozen signed source; native-budget pressure first needs MEM-QUAL-HARNESS. |
 
@@ -203,7 +212,7 @@ claim new implementation, proof or hardware acceptance.
 | --- | --- | --- | --- |
 | Native | B3-DATA-ADOPT; independent SCALE-1A-FIXTURE | Proposed `kfd_backend/generated_materialization.rs` with R78's borrowed hooks; isolated fixture policy/oracle | Build on R80's complete source/reservations. Change custody before effects, retain partial native prefixes and do not publish. |
 | Admission | Active adopting-state integration, then issue contract | `async_engine/generated_operation.rs`, registry, Context and publication hooks | Host-only R80 reservation is implemented. Join lane/graph/drain/cleanup tracking before native effects; publication follows DATA-ADOPT and requires exact deferred authority. |
-| Resources | MEM-2B-HOST; review native/completion credit handoff | Proposed KFD `sdma/host_pool_policy.rs`, existing host readback owner | R80 complete readback overlap is implemented. Host-cache policy preserves the R72 debit, padded byte/record limits and unchanged defaults; zero disables caching and pressure disposes. |
+| Resources | Host-cache proof/qualification handoff; MEM-DOM-1/VER-1 | Implemented KFD `sdma/host_pool_policy.rs`, existing native accounts and version boundaries | R81 supplies padded byte/record limits, zero caching and pressure disposal. Native extraction/disposal refinement and Linux acceptance remain separate. |
 | Primary | Freeze interfaces, integrate and qualify | Shared exports, Context/native hooks, proof rosters, tests and evidence | Build on R80's host-only reservation. Integrate adoption in bounded commits, run authenticated proofs for changed model properties and publish to both remotes. Serialize shared-machine campaigns. |
 
 R77 reconciles a concrete format difference: the prepared request
@@ -300,6 +309,26 @@ integration. The three worker slots rotate through the queues; the primary
 serializes shared-file edits, proof execution and shared-machine campaigns.
 
 ### Reviewed B3 Handoff
+
+R81's read-only native review identified the next required native primitive:
+`detach_recycled_fixed_dispatch` reaches `returned_generation`, which requires
+an actual recycled completion generation. A pristine bound recipe cannot use
+it; returning-destroy permits generation zero but destroys the shared queue.
+Before reusable bound ADOPT, add a distinct unpublished abort/detach with an
+opaque continuation retaining the actual `next_generation`. Admit only an
+unpoisoned pristine recipe: no `recipe_queue`, no recycled generation, every
+epoch vacant with zero slot generation, no persistent attachments and releasable
+completion custody. Preserve complete data identities and currentness through
+control disposal. Partial disposal or failed closing currentness returns no
+reusable continuation. Do not invent a completion receipt from a counter.
+
+ADOPT then needs backend-rooted prefixes visible to Context cleanup, genuine
+generated allocation metadata without ordinary Arc shadows, and distinct lane
+occupancy without a fake active submission. Stream destruction must test actual
+adoption ownership rather than relying on its existing debug assertion about
+lane leases. Driver phases and drain must explicitly retire never-published
+adoptions; putting them in a deferred-flush roster would publish unexpectedly.
+These are open implementation/test requirements, not R81 acceptance claims.
 
 The refreshed swarm reviewed these interfaces. R78 implements the borrowed
 initializer subset; R79's local owner and R80's host-only representation/reservation
@@ -440,7 +469,7 @@ fixture implementation. A busy selected GPU does not block local proof/tests.
 | GEN-2B-2 native acceptance | Primary; Native/Admission review | Qualify repeated immutable scopes on a genuine retained device before and after lazy bootstrap. Positive generated construction additionally needs exact protected compiler evidence. |
 | GEN-2B-3 through -6 | Admission/Native; Primary integration | Build on implemented local drivers and Context preparation with exact persistent publication/readback, one completion future and shared blocking/async execution, followed by graph/drain qualification. See the ordered breakdown above. |
 | GEN-2B-PROFILES | Native; Admission/Resources review | Extend the fixed path for scalar-only/empty rosters, larger rosters, admitted overlapping aliases and runtime-service hidden fields. Each needs explicit native representation, complete bounded accounting and profile-specific authority/tests/qualification; weakening projection rejection does not implement support. |
-| MEM-2B-HOST | Resources policy; Native hooks | Bound ordinary coherent host-cache reuse with cache-or-dispose admission using R72 N1A. Test padded byte/record limits, zero caching, generation reuse and failed trim; retain charges for incompletely disposed backing, but never resurrect confirmed-disposed charges. Broader N1B is not a prerequisite for this narrow profile. |
+| MEM-2B-HOST / R81 acceptance | Resources proof; Native/Primary qualification | Implemented locally: padded byte/record ceilings, exact native record projection, retained N1 debit, pressure disposal, runtime forwarding and fake-backend regressions. Host-cache adapter proof and Linux pressure/reuse/disposal qualification remain open. Broader N1B is not a prerequisite for this ordinary coherent profile. |
 | MEM-N1B-1, then MEM-N1B-2 | Resources/Native | First canonical non-userptr kernarg/executable cost and lifetime adapters; then AQL aliases, userptr and remaining control profiles. Qualify each separately. Distinguish physical backing, aliases and reserved VA; do not label executable GTT as VRAM or charge shared backing twice. |
 | MEM-DOM-1A/B | Resources; Primary construction hooks | First domain/headroom contract, then root/device/Context account ownership integration. Reserve bootstrap, account-arena and terminal headroom in advance. Repeated Context creation and simultaneous quarantine must not reset or exceed aggregate limits. |
 | MEM-3A/B | Resources/Native | Account for queue/ring, signal, kernarg/control storage and occupied slots. Adopt exact MEM-TXN-1 members without duplicate backing debits; enforce a progress-safe acquisition order before publication. |

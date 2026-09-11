@@ -188,20 +188,22 @@ use crate::queue_linux::{
 use crate::sdma::{
     DevicePoolDispositionV1, GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1, Gfx942CombinedSdmaCapacityV1,
     Gfx942DevicePoolLimitsV1, Gfx942DevicePoolUsageV1, Gfx942DirectionalSdmaQueueObservationV1,
-    Gfx942SdmaBufferKindV1, Gfx942SdmaBufferStorageIdentityV1, Gfx942SdmaBufferStorageV1,
-    Gfx942SdmaBufferV1, Gfx942SdmaCompletedCopyV1, Gfx942SdmaCopyPollV1, Gfx942SdmaCopyRequestV1,
+    Gfx942HostPoolLimitsV1, Gfx942HostPoolUsageV1, Gfx942SdmaBufferKindV1,
+    Gfx942SdmaBufferStorageIdentityV1, Gfx942SdmaBufferStorageV1, Gfx942SdmaBufferV1,
+    Gfx942SdmaCompletedCopyV1, Gfx942SdmaCopyPollV1, Gfx942SdmaCopyRequestV1,
     Gfx942SdmaCopyTicketV1, Gfx942SdmaErrorV1, Gfx942SdmaLogicalMuxObservationV2,
     Gfx942SdmaMemoryPoolObservationV1, Gfx942SdmaQueueObservationV1,
-    Gfx942SdmaQueueProgressObservationV1, Gfx942SdmaQueueSetV1, PersistentSdmaWindowPollV1,
-    PreparedPersistentSdmaWindowPublicationFailureV1, PreparedPersistentSdmaWindowV1,
-    PreparedSdmaPublicationFailureV1, PreparedSingleSdmaPublicationFailureV1, PreparedSingleSdmaV1,
-    SdmaWaitProfileV1, SingleSdmaWaitInCurrentScopeV1, allocate_device_buffer,
-    allocate_host_buffer, combined_striped_sdma_queue_count_is_admitted,
-    device_pool_recycle_decision_v1, device_pool_usage_v1,
-    exact_full_host_write_is_authenticatable, gfx942_sdma_logical_mux_lane_count_is_admitted_v2,
-    persistent_sdma_window_packet_count, planned_ticket_matches_queue_occurrence, read_host_buffer,
-    release_buffer, striped_sdma_queue_count_is_admitted, write_full_host_buffer_authenticated,
-    write_host_buffer,
+    Gfx942SdmaQueueProgressObservationV1, Gfx942SdmaQueueSetV1, HostPoolDispositionV1,
+    PersistentSdmaWindowPollV1, PreparedPersistentSdmaWindowPublicationFailureV1,
+    PreparedPersistentSdmaWindowV1, PreparedSdmaPublicationFailureV1,
+    PreparedSingleSdmaPublicationFailureV1, PreparedSingleSdmaV1, SdmaWaitProfileV1,
+    SingleSdmaWaitInCurrentScopeV1, allocate_device_buffer, allocate_host_buffer,
+    combined_striped_sdma_queue_count_is_admitted, device_pool_recycle_decision_v1,
+    device_pool_usage_v1, exact_full_host_write_is_authenticatable,
+    gfx942_sdma_logical_mux_lane_count_is_admitted_v2, host_pool_recycle_decision_v1,
+    host_pool_usage_v1, persistent_sdma_window_packet_count,
+    planned_ticket_matches_queue_occurrence, read_host_buffer, release_buffer,
+    striped_sdma_queue_count_is_admitted, write_full_host_buffer_authenticated, write_host_buffer,
 };
 use crate::shared_memory::{
     AqlCompletionSignalResourceRoleV1, AqlContextSaveResourceRoleV1, AqlControlResourceRoleV1,
@@ -3763,6 +3765,8 @@ pub struct ComputeAqlQueueSessionV1 {
     sdma_pool_free: Vec<Gfx942SdmaBufferV1>,
     sdma_pool_reuse_count: u64,
     sdma_device_pool: SdmaDevicePoolConfigurationV1,
+    // Both policies share sdma_device_pool's irreversible activity latch.
+    sdma_host_pool_limits: Option<Gfx942HostPoolLimitsV1>,
     terminal_poisoned: bool,
     observation: ComputeAqlQueueObservationV1,
     auxiliary_compute_lanes: Vec<AuxiliaryComputeLaneSlotV1<ComputeAqlQueueLaneStateV1>>,
@@ -6629,6 +6633,7 @@ impl ComputeAqlQueueSessionV1 {
             sdma_pool_free: Vec::new(),
             sdma_pool_reuse_count: 0,
             sdma_device_pool: SdmaDevicePoolConfigurationV1::default(),
+            sdma_host_pool_limits: None,
             terminal_poisoned: false,
             observation: ComputeAqlQueueObservationV1 {
                 queue_id,
@@ -6746,6 +6751,66 @@ impl ComputeAqlQueueSessionV1 {
         )
         .map(Some)
         .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("invalid SDMA device pool roster"))
+    }
+
+    /// Installs ordinary coherent host-cache limits before any SDMA attempt.
+    /// Compute queue certification alone does not close this configuration.
+    pub fn configure_sdma_host_pool_v1(
+        &mut self,
+        limits: Gfx942HostPoolLimitsV1,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned
+            || self.sdma_host_pool_limits.is_some()
+            || self.sdma_device_pool.activity_started
+            || self.sdma.is_some()
+            || self.striped_sdma.is_some()
+            || self.sdma_outstanding_buffers != 0
+            || !self.sdma_pool_free.is_empty()
+            || self.sdma_pool_reuse_count != 0
+        {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "SDMA host pool configuration requires a fresh SDMA resource history",
+            ));
+        }
+        self.engine
+            .as_ref()
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "missing queue engine",
+            ))?
+            .backend
+            .session
+            .validate_host_pool_domain_v1(self.key.vm)?;
+        self.sdma_host_pool_limits = Some(limits);
+        Ok(())
+    }
+
+    /// Observes padded idle Host backing, not checked-out bytes or currentness.
+    /// `None` means unconfigured, not proof of empty native custody.
+    pub fn sdma_host_pool_usage_v1(
+        &self,
+    ) -> Result<Option<Gfx942HostPoolUsageV1>, ComputeAqlQueueSessionErrorV1> {
+        let Some(limits) = self.sdma_host_pool_limits else {
+            return Ok(None);
+        };
+        if self.terminal_poisoned {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "terminal queue session requires process teardown",
+            ));
+        }
+        let engine = self
+            .engine
+            .as_ref()
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "missing queue engine",
+            ))?;
+        host_pool_usage_v1(
+            &engine.backend.session,
+            self.key,
+            limits,
+            &self.sdma_pool_free,
+        )
+        .map(Some)
+        .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("invalid SDMA host pool roster"))
     }
 
     /// Adds one generic gfx942 SDMA queue to this session.
@@ -10388,6 +10453,39 @@ impl ComputeAqlQueueSessionV1 {
                 }
             }
         }
+        if let Some(limits) = self.sdma_host_pool_limits
+            && buffer.kind() == Gfx942SdmaBufferKindV1::HostVisibleCoherent
+        {
+            let decision = self
+                .engine
+                .as_ref()
+                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                    "missing queue engine",
+                ))
+                .and_then(|engine| {
+                    host_pool_recycle_decision_v1(
+                        &engine.backend.session,
+                        self.key,
+                        limits,
+                        &self.sdma_pool_free,
+                        &buffer,
+                    )
+                    .map_err(|_| {
+                        ComputeAqlQueueSessionErrorV1::Contract("invalid SDMA host pool recycle")
+                    })
+                });
+            match decision {
+                Ok(HostPoolDispositionV1::Cache) => {}
+                Ok(HostPoolDispositionV1::Dispose) => return self.release_sdma_buffer(buffer),
+                Err(error) => {
+                    self.poison_terminal();
+                    return Err(Gfx942SdmaBufferTransitionFailureV1 {
+                        error,
+                        recovered: None,
+                    });
+                }
+            }
+        }
         if self.sdma_pool_free.try_reserve(1).is_err() {
             return Err(Gfx942SdmaBufferTransitionFailureV1 {
                 error: ComputeAqlQueueSessionErrorV1::Contract("SDMA pool allocation failed"),
@@ -10410,6 +10508,7 @@ impl ComputeAqlQueueSessionV1 {
         self.sdma_device_pool.begin_activity();
         self.require_sdma_enabled()?;
         self.validate_configured_device_pool_v1()?;
+        self.validate_configured_host_pool_v1()?;
         let mut released = 0_usize;
         while let Some(buffer) = self.sdma_pool_free.pop() {
             let result = self.with_live_queue_memory_model(|memory| {
@@ -13743,6 +13842,7 @@ impl ComputeAqlQueueSessionV1 {
             ));
         }
         self.validate_configured_device_pool_v1()?;
+        self.validate_configured_host_pool_v1()?;
         let best = self
             .sdma_pool_free
             .iter()
@@ -13771,6 +13871,14 @@ impl ComputeAqlQueueSessionV1 {
 
     fn validate_configured_device_pool_v1(&mut self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         if let Err(error) = self.sdma_device_pool_usage_v1() {
+            self.poison_terminal();
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn validate_configured_host_pool_v1(&mut self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        if let Err(error) = self.sdma_host_pool_usage_v1() {
             self.poison_terminal();
             return Err(error);
         }
@@ -14673,6 +14781,12 @@ mod tests {
                     .is_err()
             );
             assert!(session.sdma_device_pool.limits.is_none());
+            assert!(
+                session
+                    .configure_sdma_host_pool_v1(Gfx942HostPoolLimitsV1::new(4096, 1).unwrap())
+                    .is_err()
+            );
+            assert!(session.sdma_host_pool_limits.is_none());
         }
     }
 
@@ -14688,6 +14802,7 @@ mod tests {
         session.recycle_sdma_buffer(device).unwrap();
         session.recycle_sdma_buffer(host).unwrap();
         assert_eq!(session.sdma_device_pool_usage_v1().unwrap(), None);
+        assert_eq!(session.sdma_host_pool_usage_v1().unwrap(), None);
         let recycled = session.allocate_sdma_pooled_device_buffer(16, 4).unwrap();
         assert_eq!(recycled.storage_identity(), identity);
         assert_eq!(recycled.pool_generation(), 2);
@@ -14703,6 +14818,90 @@ mod tests {
         assert!(session.sdma_device_pool_usage_v1().is_err());
         // Missing native session cannot be mistaken for a configured zero usage result.
         assert!(!session.terminal_poisoned);
+    }
+
+    #[test]
+    fn host_pool_configured_missing_owner_and_terminal_observation_are_not_empty_usage() {
+        let queue = test_queue_key(803, 1);
+        let limits = Gfx942HostPoolLimitsV1::new(4096, 1).unwrap();
+        let mut session = persistent_compute_cancellation_test_session(queue, None, None);
+        assert_eq!(session.sdma_host_pool_usage_v1().unwrap(), None);
+        assert!(session.configure_sdma_host_pool_v1(limits).is_err());
+        assert!(session.sdma_host_pool_limits.is_none());
+        session.sdma_host_pool_limits = Some(limits);
+        assert!(session.sdma_host_pool_usage_v1().is_err());
+        assert!(session.configure_sdma_host_pool_v1(limits).is_err());
+        session.terminal_poisoned = true;
+        assert!(session.sdma_host_pool_usage_v1().is_err());
+        assert!(session.configure_sdma_host_pool_v1(limits).is_err());
+        assert_eq!(session.sdma_host_pool_limits, Some(limits));
+    }
+
+    #[test]
+    fn host_pool_invalid_native_roster_poison_precedes_checkout_or_trim_mutation() {
+        for trim in [false, true] {
+            let queue = test_queue_key(804, 1);
+            let mut session = persistent_compute_cancellation_test_session(queue, None, None);
+            session.sdma = Some(Gfx942SdmaQueueSetV1::Generic(Vec::new()));
+            let (_, host) = crate::sdma::persistent_sdma_buffers_for_test(queue, 3);
+            session.sdma_pool_free.push(host);
+            session.sdma_host_pool_limits = Some(Gfx942HostPoolLimitsV1::new(4096, 1).unwrap());
+            if trim {
+                assert!(session.trim_sdma_memory_pool().is_err());
+            } else {
+                assert!(
+                    session
+                        .checkout_sdma_pool(Gfx942SdmaBufferKindV1::HostVisibleCoherent, 16, 1)
+                        .is_err()
+                );
+            }
+            assert!(session.terminal_poisoned);
+            assert_eq!(session.sdma_pool_free.len(), 1);
+            assert_eq!(session.sdma_outstanding_buffers, 0);
+            assert_eq!(session.sdma_pool_reuse_count, 0);
+        }
+    }
+
+    #[test]
+    fn host_pool_linux_wiring_uses_exact_domain_before_recycle_checkout_trim() {
+        // Static wiring complements the fake native record tests, not Linux acceptance.
+        let source = include_str!("queue_live.rs");
+        let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
+        let config = production
+            .split_once("pub fn configure_sdma_host_pool_v1(")
+            .unwrap()
+            .1
+            .split_once("pub fn sdma_host_pool_usage_v1(")
+            .unwrap()
+            .0;
+        assert!(config.contains("self.sdma_device_pool.activity_started"));
+        assert!(config.contains("validate_host_pool_domain_v1(self.key.vm)"));
+        assert!(!config.contains("begin_activity()"));
+        let recycle = production
+            .split_once("pub fn recycle_sdma_buffer(")
+            .unwrap()
+            .1
+            .split_once("pub fn trim_sdma_memory_pool(")
+            .unwrap()
+            .0;
+        assert!(recycle.contains(
+            "Ok(HostPoolDispositionV1::Dispose) => return self.release_sdma_buffer(buffer)"
+        ));
+        assert!(
+            recycle.find("host_pool_recycle_decision_v1(").unwrap()
+                < recycle.find("try_reserve(1)").unwrap()
+        );
+        for (function, mutation) in [
+            ("fn checkout_sdma_pool(", "swap_remove("),
+            ("pub fn trim_sdma_memory_pool(", ".pop()"),
+        ] {
+            let body = production.split_once(function).unwrap().1;
+            assert!(
+                body.find("self.validate_configured_host_pool_v1()?")
+                    .unwrap()
+                    < body.find(mutation).unwrap()
+            );
+        }
     }
 
     #[test]
@@ -16621,6 +16820,7 @@ mod tests {
             sdma_pool_free: Vec::new(),
             sdma_pool_reuse_count: 0,
             sdma_device_pool: SdmaDevicePoolConfigurationV1::default(),
+            sdma_host_pool_limits: None,
             terminal_poisoned: false,
             observation: ComputeAqlQueueObservationV1 {
                 queue_id: 0,

@@ -1180,6 +1180,7 @@ pub struct KfdRuntimeBackendV1 {
     staging_budgets: StagingBudgetsV1,
     device_backing_budget: Option<Gfx942DeviceBackingBudgetV1>,
     host_visible_backing_budget: Option<Gfx942HostVisibleBackingBudgetV1>,
+    host_pool_limits: Option<fe2o3_kfd::Gfx942HostPoolLimitsV1>,
     device_pool_limits: Option<Gfx942DevicePoolLimitsV1>,
     staged_context_bytes: u64,
     sdma_enabled: bool,
@@ -1275,6 +1276,7 @@ impl fmt::Debug for KfdRuntimeBackendV1 {
                 &self.host_visible_backing_budget,
             )
             .field("device_pool_limits", &self.device_pool_limits)
+            .field("host_pool_limits", &self.host_pool_limits)
             .field("launch_gate", &self.launch_gate)
             .field("profiler", &self.profiler)
             .finish()
@@ -1541,6 +1543,7 @@ impl KfdRuntimeBackendV1 {
             device_backing_budget: None,
             host_visible_backing_budget: None,
             device_pool_limits: None,
+            host_pool_limits: None,
             staged_context_bytes: 0,
             sdma_enabled: false,
             native_available,
@@ -3009,6 +3012,7 @@ impl KfdRuntimeBackendV1 {
                 .map_err(|error| self.terminal_error(format!("KFD queue creation: {error}")))?;
             self.queue = Some(queue);
             self.configure_native_device_pool_v1()?;
+            self.configure_native_host_pool_v1()?;
         }
         if !self.sdma_enabled {
             self.queue

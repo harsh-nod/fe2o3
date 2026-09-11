@@ -1,0 +1,81 @@
+{
+  "gnu-tests": {
+    "passed": 2329,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "musl-tests": {
+    "passed": 2329,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "gnu-docs": {
+    "passed": 101,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 7
+  },
+  "musl-docs": {
+    "passed": 84,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 5
+  },
+  "musl-host-docs": {
+    "passed": 16,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 2
+  },
+  "gnu-host": {
+    "passed": 246,
+    "failed": 0,
+    "ignored": 4,
+    "harnesses": 1
+  },
+  "musl-host": {
+    "passed": 129,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "macro-fixtures": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "base_commit": "a41719eb45540ac3f631e6989366b2dd3924a4c3",
+  "final_gate_attempt": "r81-final2",
+  "non_documentation_source_identities_checked": 5604,
+  "focused_host_pool": {
+    "passed": 19,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 2
+  },
+  "focused_host_backing": {
+    "passed": 36,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "model_and_proof_sources_unchanged_from": "fb1e27e66cee27bb11f0b7c08f2d5994c5d168da",
+  "manifests_and_lockfiles_unchanged": true,
+  "verus_solver_rerun": false,
+  "new_verus_theorems": 0,
+  "negative_inventory_files": 686,
+  "new_runtime_cpu_test_functions": 4,
+  "new_kfd_cpu_test_functions": 15,
+  "host_cache_policy_cpu_validated": true,
+  "exact_native_record_fake_backend_validated": true,
+  "n1_retained_reuse_and_disposal_fake_backend_validated": true,
+  "both_startup_forwarding_source_reviewed": true,
+  "host_cache_linux_qualified": false,
+  "host_cache_adapter_refinement_proved": false,
+  "native_generated_adoption_implemented": false,
+  "gpu_performance_measured": false,
+  "production_metadata_sha256": "6c0cac53358224a31c356d91228b602ae8545f7c156a0c695f103533238054ca"
+}

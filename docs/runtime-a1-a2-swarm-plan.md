@@ -27,6 +27,14 @@ same-account readback staging, exact reserved tickets and host-only disposal.
 The [R80 local record](evidence/local-r80-generated-reservation-2026-09-10/README.md)
 does not fill native adoption, protected construction, adapter-proof or
 performance acceptance. The next generated packet is B3-DATA-ADOPT.
+R81 implements independent [ordinary host-cache limits](runtime-host-cache-limits-v1.md)
+with exact R72 backing/charge projection, native cache-or-dispose admission and
+both runtime startup paths. Its [local record](evidence/local-r81-host-cache-2026-09-10/README.md)
+does not fill the host-cache proof or Linux qualification cells. Earlier
+MEM-2B-HOST implementation assignments below are historical; Resources next
+takes proof/qualification handoff, account domains and persistent versions.
+Native review also identified a pristine never-published dispatch abort/detach
+prerequisite for reusable bound ADOPT. Recycled detach cannot stand in for it.
 
 The [R65 contract](runtime-async-drain-versions-v1.md) is the current baseline:
 cooperative drain, reply-count admission and graph-local version lineage are
@@ -298,7 +306,7 @@ not proof of simultaneous GPU execution.
 | Lane | Assigned agent | Implementation backlog |
 | --- | --- | --- |
 | Native execution and qualification | `r66_native_coexistence` | GEN-2B-3 native adoption, SCALE-1 fixtures, MEM-QUAL-HARNESS, existing coexistence/drain hardware acceptance, SCALE-CAP/2/3 and matched performance |
-| Resources and versions | `r66_coexistence_model` | MEM-2B-HOST, broader N1B profiles, account domains, MEM-3 through MEM-5 and VER-1/2; existing credit/backing primitives need composition and hardware acceptance, not reimplementation |
+| Resources and versions | `r66_coexistence_model` | R81 host-cache proof/qualification handoff, broader N1B profiles, account domains, MEM-3 through MEM-5 and VER-1/2; existing credit/backing primitives need composition and hardware acceptance, not reimplementation |
 | Admission and drain | `r66_runtime_coexistence` | GEN-2B-3 through -6 adoption/publication, charged completion, public async API and generated graph/drain; existing copy/drain qualifiers need signed acceptance |
 | Integration and proof composition | Primary | PRF-1/2: shared Context hooks, executable refinement, authenticated proof roster, cross-review, hardware scheduling and publication |
 
@@ -508,7 +516,7 @@ backing admission alone does not provide any of these mechanisms.
 | MEM-2A-FWD | Implemented in R70; resources contract and native/primary hooks | Immutable session-local limits precede N2 allocation and queue certification in both startup orders. CPU tests cover defaults, late/replacement/foreign rejection and actual configuration transfer/loan/retake; live acceptance remains open |
 | MEM-N1A | Implemented locally in R72 | Ordinary coherent non-userptr GTT backing, page-padded host bytes and one allocation record, charged before VA/allocation/map effects; same object has one charge across CPU/GPU views and queue loans. Linux hardware acceptance remains separate |
 | MEM-N1B | Broader profiles after N1A layout/disposal review | Userptr, doubled-VA AQL, executable and control variants; distinguish physical backing from reserved VA. The current resource vector has no VA-byte dimension; do not substitute VA bytes for residency |
-| MEM-2B-HOST | Resources policy and native hooks after R72 N1A | Bound only the existing ordinary coherent host cache; preserve the resident debit through checkout/recycle and uncertain disposal. This narrow profile need not wait for all N1B variants |
+| MEM-2B-HOST / R81 | Implemented locally; Resources proof and Native/Primary qualification remain | Ordinary coherent cache bounds preserve native debit through reuse and uncertain disposal. New host-cache adapter proof and Linux acceptance are open; all N1B variants are not prerequisites |
 | MEM-QUAL-HARNESS | Native example/checker; primary runner integration | Exercise actual optional N1/N2/cache budgets in both startup orders before signed pressure/reuse/disposal acceptance. Existing overlap/drain examples configure logical requested-byte limits, not these native budgets |
 | MEM-TXN-1 | Implemented in R70; prerequisite for compound MEM-3 creation | Atomic complete roster of vectors and owner slots returns independent move-only reservations. Ordinary late-member/record/generation failure leaves state unchanged; detected internal corruption poisons. Native composition remains open |
 | MEM-DOM-1 | Resources domain contract; primary root/construction hooks; prerequisite for MEM-5 aggregate closure | Bind root/device/Context accounts and reserve bootstrap/terminal headroom before ownership. Repeated Context creation and simultaneous failures cannot reset the ceiling or require unreserved bookkeeping. Session-local accounting may land first only with its narrower scope explicit |

@@ -865,6 +865,10 @@ pub(crate) struct SharedGttAllocationIdentityV1 {
 }
 
 impl SharedGttAllocationIdentityV1 {
+    pub(crate) fn same_retained_allocation_v1(self, other: Self) -> bool {
+        self.session_id == other.session_id && self.id == other.id
+    }
+
     pub(crate) fn same_retained_session_v1(self, other: Self) -> bool {
         self.session_id != 0
             && self.session_id == other.session_id
@@ -2769,6 +2773,51 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             && record.layout == token.layout
             && record.userptr == P::IS_USERPTR
             && self.shared_host_backing_charge_matches(record)
+    }
+
+    fn validate_host_pool_domain_v1(
+        &self,
+        device: DeviceKeyV1,
+        vm: VmKeyV1,
+    ) -> Result<(), MemorySessionError> {
+        self.require_active()?;
+        if self.session_id == 0
+            || device.generation.0 == 0
+            || vm.id.0 == 0
+            || vm.device != device
+            || self
+                .host_backing_account
+                .as_ref()
+                .is_some_and(|account| !account.matches_domain(self.session_id, device, vm))
+        {
+            return Err(MemorySessionError::InvalidAllocationAuthority);
+        }
+        Ok(())
+    }
+
+    fn host_pool_backing_bytes_v1(
+        &self,
+        token: &SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+        device: DeviceKeyV1,
+        vm: VmKeyV1,
+    ) -> Result<u64, MemorySessionError> {
+        self.validate_host_pool_domain_v1(device, vm)?;
+        let index = self.index(token, SharedAllocationPhaseV1::GpuAccessibleMutable)?;
+        let record = &self.allocations[index];
+        if record.id == 0
+            || record.generation == 0
+            || record.userptr
+            || record.handle.is_none()
+            || record.reservation.is_none()
+            || record.mapping.is_none()
+            || record.free_attempted
+            || profile_layout::<HostVisibleCoherentGttV1>(record.layout.requested_bytes)?
+                != record.layout
+        {
+            return Err(MemorySessionError::InvalidAllocationAuthority);
+        }
+        u64::try_from(record.layout.cpu_mapping_bytes())
+            .map_err(|_| MemorySessionError::InvalidAllocationAuthority)
     }
 
     fn shared_host_backing_charge_matches(&self, record: &SharedAllocationRecord<B>) -> bool {
@@ -4754,6 +4803,25 @@ impl SharedGttMemorySessionV1 {
     ) -> Result<u64, MemorySessionError> {
         self.engine
             .device_pool_backing_bytes_v1(lease, self.model_device.model_key(), self.vm)
+    }
+
+    pub(crate) fn validate_host_pool_domain_v1(
+        &self,
+        vm: VmKeyV1,
+    ) -> Result<(), MemorySessionError> {
+        let device = self.model_device.model_key();
+        if vm != self.vm {
+            return Err(MemorySessionError::InvalidAllocationAuthority);
+        }
+        self.engine.validate_host_pool_domain_v1(device, vm)
+    }
+
+    pub(crate) fn host_pool_backing_bytes_v1(
+        &self,
+        token: &SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
+    ) -> Result<u64, MemorySessionError> {
+        self.engine
+            .host_pool_backing_bytes_v1(token, self.model_device.model_key(), self.vm)
     }
 
     pub fn retained_allocation_count(&self) -> usize {

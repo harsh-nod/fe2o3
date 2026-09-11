@@ -1,0 +1,32 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-f9eea0dcd3ca45b2)
+
+running 15 tests
+test queue::live::tests::host_pool_configured_missing_owner_and_terminal_observation_are_not_empty_usage ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_byte_record_and_zero_ceilings_are_independent ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_empty_roster_rejects_foreign_session_account_and_invalid_domain ... ok
+test queue::live::tests::host_pool_invalid_native_roster_poison_precedes_checkout_or_trim_mutation ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_checkout_and_recycle_retain_native_identity_and_n1_debit ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_invalid_candidate_never_becomes_pressure_disposal ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_limits_accept_zero_and_reject_outside_native_envelope ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_mixed_roster_excludes_device_cost_but_bounds_shape ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_padded_cost_is_inert_with_or_without_n1_and_pressure_disposes ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_exact_record_projection_rejects_substitutions_without_native_effects ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_disposal_currentness_errors_and_panics_never_refund ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_pressure_and_partial_trim_keep_every_uncertain_disposal_charge ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_unconfigured_record_still_requires_canonical_layout ... ok
+test queue::live::tests::host_pool_linux_wiring_uses_exact_domain_before_recycle_checkout_trim ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_full_roster_checks_last_ordinal_and_generation_independent_aliases ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 774 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-21f716eca27caec8)
+
+running 4 tests
+test kfd_backend::native_budget::host_pool_tests::host_pool_both_startup_paths_retain_queue_and_forward_before_any_sdma_activity ... ok
+test kfd_backend::native_budget::host_pool_tests::host_pool_zero_limits_leave_allocation_enabled_and_terminal_usage_is_not_zero ... ok
+test kfd_backend::native_budget::host_pool_tests::host_pool_configuration_rejects_logical_and_native_history_after_release ... ok
+test kfd_backend::native_budget::host_pool_tests::host_pool_four_independent_configurations_accept_every_order_and_cannot_be_replaced ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 665 filtered out; finished in 0.01s
+

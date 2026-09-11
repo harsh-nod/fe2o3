@@ -1,0 +1,44 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.10s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 36 tests
+test shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_failures_retain_backing_without_initialized_authority_or_retry ... ok
+test shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_empty_and_each_budget_reject_before_native_entry ... ok
+test shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_copies_complete_source_and_preserves_one_padded_debit ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_checkout_and_recycle_retain_native_identity_and_n1_debit ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_byte_record_and_zero_ceilings_are_independent ... ok
+test shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_live_facade_uses_model_aware_sequence_without_encoded_copy ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_empty_roster_rejects_foreign_session_account_and_invalid_domain ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_exact_record_projection_rejects_substitutions_without_native_effects ... ok
+test shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_panics_preserve_original_payload_and_quarantined_charge ... ok
+test shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_all_currentness_boundaries_preserve_existing_prefix_and_debits ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_disposal_currentness_errors_and_panics_never_refund ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_invalid_candidate_never_becomes_pressure_disposal ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_limits_accept_zero_and_reject_outside_native_envelope ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_mixed_roster_excludes_device_cost_but_bounds_shape ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_padded_cost_is_inert_with_or_without_n1_and_pressure_disposes ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_unconfigured_record_still_requires_canonical_layout ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_pressure_and_partial_trim_keep_every_uncertain_disposal_charge ... ok
+test shared_memory::tests::host_backing::n1_cpu_and_mapped_post_currentness_panic_retains_written_record ... ok
+test shared_memory::tests::host_backing::n1_cpu_callback_panic_keeps_original_payload_without_post_currentness ... ok
+test shared_memory::tests::host_backing::n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders ... ok
+test shared_memory::tests::host_backing::n1_every_pre_record_native_failure_retains_quarantined_charge ... ok
+test shared_memory::tests::host_backing::n1_configuration_rejects_replacement_domain_history_and_failed_preflight ... ok
+test shared_memory::tests::host_backing::n1_bootstrap_profile_order_and_real_completion_arena_size_obey_both_limits ... ok
+test shared_memory::tests::host_backing::n1_defaults_and_excluded_profiles_keep_original_allocation_behavior ... ok
+test shared_memory::tests::host_backing::n1_disposal_failure_matrix_retains_debit_through_final_currentness ... ok
+test shared_memory::tests::host_backing::n1_exact_charge_survives_cpu_and_mapped_access_until_full_disposal ... ok
+test shared_memory::tests::host_backing::n1_foreign_tokens_and_substituted_account_never_release_or_refund ... ok
+test shared_memory::tests::host_backing::n1_failed_retake_retains_live_debit_but_does_not_resurrect_disposed_backing ... ok
+test shared_memory::tests::host_backing::n1_padding_and_each_capacity_dimension_reject_before_native_effects ... ok
+test shared_memory::tests::host_backing::n1_gpu_mapping_errors_and_panics_never_refund_or_allow_retry ... ok
+test shared_memory::tests::host_backing::n1_mapped_data_access_panics_retain_charge_and_close_spare_capacity ... ok
+test shared_memory::tests::host_backing::n1_unconfigured_transfer_cannot_reopen_budget_after_restore_or_live_loan ... ok
+test shared_memory::tests::host_backing::n1_pre_effect_currentness_error_or_panic_cancels_only_unissued_credit ... ok
+test shared_memory::tests::host_backing::n1_every_signal_ingress_quarantines_original_backend_panic ... ok
+test shared_memory::tests::host_backing::n1_confirmed_disposal_reuses_credit_and_record_slot_not_old_identity ... ok
+test shared_memory::tests::host_backing::host_pool::host_pool_full_roster_checks_last_ordinal_and_generation_independent_aliases ... ok
+
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 753 filtered out; finished in 0.02s
+

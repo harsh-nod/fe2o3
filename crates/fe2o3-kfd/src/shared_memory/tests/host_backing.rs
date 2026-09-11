@@ -1,5 +1,6 @@
 //! Actual native records and model ownership with a fake backend, not Linux/GPU evidence.
 mod borrowed_initialization;
+mod host_pool;
 
 use super::*;
 use crate::sdma::{Gfx942SdmaBufferStorageV1, Gfx942SdmaBufferV1};
@@ -895,11 +896,41 @@ fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders()
             1,
             4100,
         );
+        let limits = crate::sdma::Gfx942HostPoolLimitsV1::new(8192, 1).unwrap();
+        assert_eq!(
+            crate::sdma::host_pool_policy::host_pool_recycle_decision_with_v1(
+                owner,
+                limits,
+                &[],
+                &buffer,
+                &mut |token| fixture.engine.host_pool_backing_bytes_v1(
+                    token,
+                    fixture.device.model_key(),
+                    fixture.vm
+                )
+            ),
+            Ok(crate::sdma::HostPoolDispositionV1::Cache)
+        );
         // Exercise the production move-only buffer generation/logical-extent
         // transitions; the fake fixture is not the Linux queue pool facade.
         buffer.advance_pool_generation().unwrap();
         buffer.set_logical_bytes(1024);
         let mut cached = vec![buffer];
+        assert_eq!(
+            crate::sdma::host_pool_policy::host_pool_usage_with_v1(
+                owner,
+                limits,
+                &cached,
+                &mut |token| fixture.engine.host_pool_backing_bytes_v1(
+                    token,
+                    fixture.device.model_key(),
+                    fixture.vm
+                )
+            )
+            .unwrap()
+            .cached_backing_bytes,
+            8192
+        );
         fixture
             .ownership
             .reclaim_foundation(
@@ -923,6 +954,21 @@ fn n1_actual_foundation_loans_and_pool_retags_keep_exact_charge_in_both_orders()
             )
             .unwrap();
         let mut buffer = cached.pop().unwrap();
+        assert_eq!(
+            crate::sdma::host_pool_policy::host_pool_usage_with_v1(
+                owner,
+                limits,
+                &cached,
+                &mut |token| fixture.engine.host_pool_backing_bytes_v1(
+                    token,
+                    fixture.device.model_key(),
+                    fixture.vm
+                )
+            )
+            .unwrap()
+            .cached_backing_bytes,
+            0
+        );
         buffer.advance_pool_generation().unwrap();
         buffer.set_logical_bytes(4100);
         let (Gfx942SdmaBufferStorageV1::Host(mut token), _, _, _) = buffer.into_bridge_parts()
@@ -1056,6 +1102,34 @@ fn n1_failed_retake_retains_live_debit_but_does_not_resurrect_disposed_backing()
                 fixture.vm,
             )
             .unwrap();
+        let owner = QueueKeyV1 {
+            vm: fixture.vm,
+            id: QueueInstanceIdV1(33),
+            generation: QueueGenerationV1(1),
+        };
+        let buffer = Gfx942SdmaBufferV1::from_bridge_parts(
+            Gfx942SdmaBufferStorageV1::Host(token),
+            owner,
+            1,
+            4100,
+        );
+        assert_eq!(
+            crate::sdma::host_pool_policy::host_pool_recycle_decision_with_v1(
+                owner,
+                crate::sdma::Gfx942HostPoolLimitsV1::new(0, 0).unwrap(),
+                &[],
+                &buffer,
+                &mut |token| fixture.engine.host_pool_backing_bytes_v1(
+                    token,
+                    fixture.device.model_key(),
+                    fixture.vm
+                )
+            ),
+            Ok(crate::sdma::HostPoolDispositionV1::Dispose)
+        );
+        let (Gfx942SdmaBufferStorageV1::Host(token), _, _, _) = buffer.into_bridge_parts() else {
+            unreachable!();
+        };
         if dispose {
             projected_dispose(&mut fixture, token);
         } else {

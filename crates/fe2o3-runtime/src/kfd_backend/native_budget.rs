@@ -1,14 +1,73 @@
-//! Immutable session-local backing and device-cache limits, not aggregate accounting.
+//! Immutable session-local backing and cache limits, not aggregate accounting.
 
 use super::*;
 use fe2o3_kfd::{
-    Gfx942DeviceBackingUsageV1, Gfx942DevicePoolUsageV1, Gfx942HostVisibleBackingUsageV1,
+    Gfx942DeviceBackingUsageV1, Gfx942DevicePoolUsageV1, Gfx942HostPoolLimitsV1,
+    Gfx942HostPoolUsageV1, Gfx942HostVisibleBackingUsageV1,
 };
 
 #[cfg(test)]
 mod host_backing_tests;
+#[cfg(test)]
+mod host_pool_tests;
 
 impl KfdRuntimeBackendV1 {
+    /// Bounds cached-free ordinary coherent Host backing. Configure once before
+    /// resource creation. Zero disables caching; pressure disposes the idle buffer.
+    /// Existing N1 charges survive reuse and uncertain disposal. Unconfigured
+    /// behavior is unchanged. This does not bound all host/process memory.
+    pub fn configure_host_pool_limits_v1(
+        &mut self,
+        limits: Gfx942HostPoolLimitsV1,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.require_pristine_native_resource_configuration_v1()?;
+        if self.host_pool_limits.is_some() {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "host pool limits must be configured once before resource creation",
+            ));
+        }
+        self.host_pool_limits = Some(limits);
+        Ok(())
+    }
+
+    pub const fn host_pool_limits_v1(&self) -> Option<Gfx942HostPoolLimitsV1> {
+        self.host_pool_limits
+    }
+
+    /// Inert cache occupancy. `None` is unavailable/unconfigured, not a refund.
+    pub fn host_pool_usage_v1(
+        &self,
+    ) -> Result<Option<Gfx942HostPoolUsageV1>, KfdRuntimeBackendErrorV1> {
+        if self.terminal {
+            return Err(KfdRuntimeBackendErrorV1::new(
+                KfdRuntimeBackendErrorKindV1::Terminal,
+                "KFD backend is terminal",
+            ));
+        }
+        self.queue.as_ref().map_or(Ok(None), |queue| {
+            queue.sdma_host_pool_usage_v1().map_err(|error| {
+                KfdRuntimeBackendErrorV1::new(
+                    KfdRuntimeBackendErrorKindV1::Native,
+                    format!("KFD host pool observation: {error}"),
+                )
+            })
+        })
+    }
+
+    pub(super) fn configure_native_host_pool_v1(
+        &mut self,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let Some(limits) = self.host_pool_limits else {
+            return Ok(());
+        };
+        self.queue
+            .as_mut()
+            .expect("new native queue remains retained before pool configuration")
+            .configure_sdma_host_pool_v1(limits)
+            .map_err(|error| self.terminal_error(format!("KFD host pool configuration: {error}")))
+    }
+
     /// Selects immutable ordinary coherent GTT backing limits before resource use.
     ///
     /// Charges actual page-padded backing and one native record, including ordinary

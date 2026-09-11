@@ -41,6 +41,12 @@ pub(crate) use pool_policy::{
 };
 pub use pool_policy::{Gfx942DevicePoolLimitsV1, Gfx942DevicePoolUsageV1};
 
+pub(crate) mod host_pool_policy;
+pub use host_pool_policy::{Gfx942HostPoolLimitsV1, Gfx942HostPoolUsageV1};
+pub(crate) use host_pool_policy::{
+    HostPoolDispositionV1, host_pool_recycle_decision_v1, host_pool_usage_v1,
+};
+
 mod multi_queue;
 use multi_queue::next_striped_owner;
 pub use multi_queue::{
