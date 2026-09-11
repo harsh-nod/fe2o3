@@ -3659,6 +3659,80 @@ fn plan_public_fixed_dispatch_resources<const N: usize>(
     })
 }
 
+/// Converts initialized hidden arguments to the fixed queue's zero template.
+///
+/// The entire hidden suffix must equal the independently derived native values,
+/// including padding. The existing fixed-dispatch planner then checks the exact
+/// ABI, geometry, aliases and complete coherent-host roster. Lengths describe
+/// future initialized storage; success creates no native initialization witness,
+/// allocation, queue or execution authority. Unsupported fixed profiles reject.
+pub fn project_gfx942_fixed_host_packet_v1(
+    program: &ValidatedKernelEnvelope<'_>,
+    mut packet: Gfx942FixedDispatchPacketV1,
+    buffer_lengths: &[usize],
+) -> Result<Gfx942FixedDispatchPacketV1, Gfx942DispatchBindingErrorV1> {
+    if buffer_lengths.is_empty() || buffer_lengths.len() > MAX_DISPATCH_DATA_LEASES_V1 {
+        return Err(Gfx942DispatchBindingErrorV1::DataLeaseCount {
+            requested: buffer_lengths.len(),
+            maximum: MAX_DISPATCH_DATA_LEASES_V1,
+        });
+    }
+    let kernel = program.selected_kernel();
+    if let Some(plan) = validate_cov6_implicit_kernarg_layout(kernel)? {
+        let values = derive_cov6_implicit_kernarg_values(
+            packet.geometry,
+            packet.dynamic_group_segment_bytes,
+            kernel.uniform_work_group_size(),
+        )
+        .map_err(|detail| Gfx942DispatchBindingErrorV1::Geometry { packet: 0, detail })?;
+        let mut expected = [0; COV6_IMPLICIT_ARGUMENT_BYTES_V1];
+        initialize_cov6_implicit_suffix(&mut expected, &plan.fields, values);
+        let end = plan.byte_offset.checked_add(expected.len()).ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet: 0,
+                detail: "initialized implicit-kernarg extent",
+            },
+        )?;
+        let suffix = packet.kernarg_bytes.get_mut(plan.byte_offset..end).ok_or(
+            Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet: 0,
+                detail: "initialized implicit-kernarg extent",
+            },
+        )?;
+        if suffix != expected {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+                packet: 0,
+                detail: "initialized implicit-kernarg bytes differ from native derivation",
+            });
+        }
+        suffix.fill(0);
+    }
+    let layouts = buffer_lengths
+        .iter()
+        .enumerate()
+        .map(|(index, &bytes)| {
+            let layout = crate::shared_memory::coherent_host_layout_v1(bytes).map_err(|_| {
+                Gfx942DispatchBindingErrorV1::InvalidData {
+                    index,
+                    detail: "invalid future coherent-host layout",
+                }
+            })?;
+            Ok(Gfx942FixedDispatchDataLayoutV1 {
+                kind: Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+                requested_bytes: layout.requested_bytes() as u64,
+                alignment: crate::HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
+            })
+        })
+        .collect::<Result<Vec<_>, Gfx942DispatchBindingErrorV1>>()?;
+    plan_public_fixed_dispatch_resources(
+        core::slice::from_ref(program),
+        core::array::from_ref(&packet),
+        &layouts,
+        &vec![true; layouts.len()],
+    )?;
+    Ok(packet)
+}
+
 /// Validates every deterministic replacement fixed-dispatch property without
 /// consuming allocation, executable, packet, or queue custody.
 ///
@@ -4338,16 +4412,24 @@ fn initialize_cov6_implicit_kernarg(
     plan: &Cov6ImplicitKernargPlanV1,
     values: Cov6ImplicitKernargValuesV1,
 ) {
+    initialize_cov6_implicit_suffix(
+        &mut kernarg[plan.byte_offset..plan.byte_offset + COV6_IMPLICIT_ARGUMENT_BYTES_V1],
+        &plan.fields,
+        values,
+    );
+}
+
+fn initialize_cov6_implicit_suffix(
+    kernarg: &mut [u8],
+    fields: &[Cov6ImplicitKernargFieldV1],
+    values: Cov6ImplicitKernargValuesV1,
+) {
     let block_count = values.dispatch_shape.block_count();
     let group_size = values.dispatch_shape.group_size();
     let remainder = values.dispatch_shape.remainder();
-    debug_assert!(
-        kernarg[plan.byte_offset..plan.byte_offset + COV6_IMPLICIT_ARGUMENT_BYTES_V1]
-            .iter()
-            .all(|byte| *byte == 0)
-    );
-    for field in &plan.fields {
-        let offset = plan.byte_offset + field.relative_offset;
+    debug_assert!(kernarg.iter().all(|byte| *byte == 0));
+    for field in fields {
+        let offset = field.relative_offset;
         match field.kind {
             Cov6ImplicitKernargFieldKindV1::BlockCount(axis) => {
                 put_u32(kernarg, offset, block_count[axis]);

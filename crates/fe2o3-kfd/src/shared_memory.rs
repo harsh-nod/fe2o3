@@ -4179,6 +4179,12 @@ pub(crate) fn device_memory_layout(
     })
 }
 
+pub(crate) fn coherent_host_layout_v1(
+    requested_bytes: usize,
+) -> Result<SharedGttAllocationLayoutV1, MemorySessionError> {
+    profile_layout::<HostVisibleCoherentGttV1>(requested_bytes)
+}
+
 fn profile_layout<P: GttProfileV1>(
     requested_bytes: usize,
 ) -> Result<SharedGttAllocationLayoutV1, MemorySessionError> {

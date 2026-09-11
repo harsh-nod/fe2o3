@@ -31,7 +31,53 @@ pub(super) fn preparation_module() -> Vec<u8> {
 
 /// Structurally valid three-global-buffer fixture for the no-device backend.
 pub(super) fn three_binding_module() -> Vec<u8> {
-    module_with_metadata(three_binding_metadata_document(), 288)
+    module_with_metadata(three_binding_metadata_document(16), 288)
+}
+
+#[allow(dead_code, reason = "shared by nonexecuting projection tests")]
+pub(super) fn three_binding_preparation_module() -> Vec<u8> {
+    let mut bytes = module_with_metadata(three_binding_metadata_document(0), 288);
+    write_u32(&mut bytes, DESCRIPTOR_OFFSET + 4, 0);
+    write_u32(&mut bytes, DESCRIPTOR_OFFSET + 52, 0x1390);
+    bytes
+}
+
+#[allow(dead_code, reason = "shared by nonexecuting projection tests")]
+pub(super) fn dynamic_preparation_module() -> Vec<u8> {
+    preparation_module_with_hidden(16 + 120, 4, "hidden_dynamic_lds_size")
+}
+
+#[allow(dead_code, reason = "shared by nonexecuting projection tests")]
+pub(super) fn service_preparation_module() -> Vec<u8> {
+    preparation_module_with_hidden(16 + 200, 8, "hidden_queue_ptr")
+}
+
+fn preparation_module_with_hidden(offset: u64, size: u64, kind: &str) -> Vec<u8> {
+    let mut metadata = kernel_metadata(0);
+    let Value::Map(ref mut fields) = metadata else {
+        unreachable!()
+    };
+    let (_, Value::Array(args)) = fields
+        .iter_mut()
+        .find(|(key, _)| key.as_str() == Some(".args"))
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    args.push(argument(None, offset, size, kind, None));
+    let mut document = metadata_document(0);
+    let Value::Map(ref mut fields) = document else {
+        unreachable!()
+    };
+    fields
+        .iter_mut()
+        .find(|(key, _)| key.as_str() == Some("amdhsa.kernels"))
+        .unwrap()
+        .1 = Value::Array(vec![metadata]);
+    let mut bytes = module_with_metadata(document, 272);
+    write_u32(&mut bytes, DESCRIPTOR_OFFSET + 4, 0);
+    write_u32(&mut bytes, DESCRIPTOR_OFFSET + 52, 0x1390);
+    bytes
 }
 
 fn module_with_metadata(metadata: Value, kernarg_segment_size: u32) -> Vec<u8> {
@@ -74,7 +120,7 @@ fn metadata_document(private_segment_bytes: u32) -> Value {
     ])
 }
 
-fn three_binding_metadata_document() -> Value {
+fn three_binding_metadata_document(private_segment_bytes: u32) -> Value {
     Value::Map(vec![
         (
             Value::from("amdhsa.version"),
@@ -86,7 +132,7 @@ fn three_binding_metadata_document() -> Value {
         ),
         (
             Value::from("amdhsa.kernels"),
-            Value::Array(vec![three_binding_kernel_metadata()]),
+            Value::Array(vec![three_binding_kernel_metadata(private_segment_bytes)]),
         ),
     ])
 }
@@ -118,7 +164,7 @@ fn kernel_metadata(private_segment_bytes: u32) -> Value {
     ])
 }
 
-fn three_binding_kernel_metadata() -> Value {
+fn three_binding_kernel_metadata(private_segment_bytes: u32) -> Value {
     let mut arguments = vec![
         argument(Some("a_ptr"), 0, 8, "global_buffer", Some("global")),
         argument(Some("b_ptr"), 8, 8, "global_buffer", Some("global")),
@@ -133,7 +179,10 @@ fn three_binding_kernel_metadata() -> Value {
         (".kernarg_segment_size", Value::from(288)),
         (".kernarg_segment_align", Value::from(8)),
         (".group_segment_fixed_size", Value::from(0)),
-        (".private_segment_fixed_size", Value::from(16)),
+        (
+            ".private_segment_fixed_size",
+            Value::from(private_segment_bytes),
+        ),
         (".wavefront_size", Value::from(64)),
         (".sgpr_count", Value::from(14)),
         (".vgpr_count", Value::from(11)),

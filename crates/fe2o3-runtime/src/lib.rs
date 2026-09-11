@@ -9,6 +9,7 @@ mod context;
 mod kfd_backend;
 mod kfd_profile;
 mod kfd_timestamp_profile;
+mod persistent_projection;
 #[cfg(feature = "hardware-qualification")]
 pub mod qualification_gfx942_inplace_transform_v1;
 #[cfg(feature = "hardware-qualification")]
@@ -16,6 +17,9 @@ pub mod qualification_gfx942_r57_n3_v1;
 #[cfg(feature = "hardware-qualification")]
 pub mod qualification_gfx942_vecadd_v1;
 mod resource_credits;
+#[cfg(test)]
+#[path = "kfd_backend/tests/synthetic_cov6.rs"]
+mod synthetic_cov6;
 mod worker;
 
 pub use async_engine::*;
@@ -34,6 +38,9 @@ pub use fe2o3_profiler_protocol as profiler;
 pub use kfd_backend::*;
 pub use kfd_profile::*;
 pub use kfd_timestamp_profile::*;
+pub use persistent_projection::{
+    Gfx942RuntimeProjectionErrorV1, PreparedGfx942PersistentDispatchV1,
+};
 pub use resource_credits::{
     MAX_RUNTIME_RESOURCE_CREDIT_RECORDS_V1, RuntimeResourceCreditErrorV1,
     RuntimeResourceCreditUsageV1, RuntimeResourceKindV1, RuntimeResourceVectorV1,
@@ -185,12 +192,17 @@ impl Gfx942RuntimeDispatchInputsV1 {
 
 /// Loader-bound request plus exact immutable object and selected-kernel identities.
 ///
-/// This value is not launch authority. Its only transition yields the unsafe
-/// KFD mechanics request consumed later by the Worker V3 runtime gate.
+/// This value is not launch authority. Its consuming transitions yield only
+/// mechanics or a checked persistent recipe, never permission to publish.
 #[must_use = "preparation does not execute or authorize the selected kernel"]
 pub struct PreparedGfx942RuntimeDispatchV1 {
     request: Gfx942KfdDispatchRequestV1,
     buffer_policies: Vec<Gfx942RuntimePreparedBufferPolicyV1>,
+    description: RuntimeDispatchDescriptionV1,
+}
+
+#[derive(Debug)]
+struct RuntimeDispatchDescriptionV1 {
     identity: KernelIdentityInputsV1,
     finalized_hsaco_length: u64,
     dispatch_contract_sha256: [u8; 32],
@@ -206,33 +218,18 @@ impl fmt::Debug for PreparedGfx942RuntimeDispatchV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PreparedGfx942RuntimeDispatchV1")
-            .field("finalized_hsaco_length", &self.finalized_hsaco_length)
-            .field("dispatch_contract_sha256", &self.dispatch_contract_sha256)
-            .field("kernel_name", &self.kernel_name)
-            .field("descriptor_offset", &self.descriptor_offset)
-            .field(
-                "static_group_segment_bytes",
-                &self.static_group_segment_bytes,
-            )
-            .field(
-                "dynamic_group_segment_bytes",
-                &self.dynamic_group_segment_bytes,
-            )
-            .field(
-                "packet_group_segment_bytes",
-                &self.packet_group_segment_bytes,
-            )
+            .field("description", &self.description)
             .finish_non_exhaustive()
     }
 }
 
 impl PreparedGfx942RuntimeDispatchV1 {
     pub const fn identity(&self) -> KernelIdentityInputsV1 {
-        self.identity
+        self.description.identity
     }
 
     pub const fn finalized_hsaco_length(&self) -> u64 {
-        self.finalized_hsaco_length
+        self.description.finalized_hsaco_length
     }
 
     /// Canonical identity of the complete address-free invocation presented to KFD.
@@ -242,31 +239,31 @@ impl PreparedGfx942RuntimeDispatchV1 {
     /// geometry, resource sizes, and timeout. It is descriptive until an admitting Worker V3
     /// authority independently names the same identity.
     pub const fn dispatch_contract_sha256(&self) -> [u8; 32] {
-        self.dispatch_contract_sha256
+        self.description.dispatch_contract_sha256
     }
 
     pub fn kernel_name(&self) -> &str {
-        &self.kernel_name
+        &self.description.kernel_name
     }
 
     pub const fn descriptor_offset(&self) -> u64 {
-        self.descriptor_offset
+        self.description.descriptor_offset
     }
 
     pub const fn static_group_segment_bytes(&self) -> u64 {
-        self.static_group_segment_bytes
+        self.description.static_group_segment_bytes
     }
 
     pub const fn dynamic_group_segment_bytes(&self) -> u32 {
-        self.dynamic_group_segment_bytes
+        self.description.dynamic_group_segment_bytes
     }
 
     pub const fn packet_group_segment_bytes(&self) -> u32 {
-        self.packet_group_segment_bytes
+        self.description.packet_group_segment_bytes
     }
 
     pub(crate) const fn geometry(&self) -> AqlDispatchGeometryV1 {
-        self.geometry
+        self.description.geometry
     }
 
     /// Returns the mechanics-only request. Calling its KFD execution function
@@ -415,7 +412,10 @@ pub fn prepare_gfx942_runtime_dispatch_v1(
         descriptor_offset,
         &kernarg,
         kernarg_alignment,
-        &inputs.buffers,
+        inputs
+            .buffers
+            .iter()
+            .map(|buffer| (buffer.access(), buffer.bytes())),
         &inputs.pointer_fixups,
         inputs.geometry,
         packet_group_segment_bytes,
@@ -452,20 +452,22 @@ pub fn prepare_gfx942_runtime_dispatch_v1(
     Ok(PreparedGfx942RuntimeDispatchV1 {
         request,
         buffer_policies,
-        identity,
-        finalized_hsaco_length,
-        dispatch_contract_sha256,
-        kernel_name: kernel_name.to_owned(),
-        descriptor_offset,
-        static_group_segment_bytes,
-        dynamic_group_segment_bytes: inputs.dynamic_group_segment_bytes,
-        packet_group_segment_bytes,
-        geometry: inputs.geometry,
+        description: RuntimeDispatchDescriptionV1 {
+            identity,
+            finalized_hsaco_length,
+            dispatch_contract_sha256,
+            kernel_name: kernel_name.to_owned(),
+            descriptor_offset,
+            static_group_segment_bytes,
+            dynamic_group_segment_bytes: inputs.dynamic_group_segment_bytes,
+            packet_group_segment_bytes,
+            geometry: inputs.geometry,
+        },
     })
 }
 
 #[allow(clippy::too_many_arguments)]
-fn derive_dispatch_contract_sha256_v1(
+fn derive_dispatch_contract_sha256_v1<'a>(
     finalized_hsaco_length: u64,
     identity: Gfx942RuntimeKernelIdentityProjectionV1,
     kernel_name: &str,
@@ -473,7 +475,7 @@ fn derive_dispatch_contract_sha256_v1(
     descriptor_offset: u64,
     kernarg: &[u8],
     kernarg_alignment: u64,
-    buffers: &[Gfx942RuntimeDispatchBufferV1],
+    buffers: impl ExactSizeIterator<Item = (Gfx942RuntimeBufferAccessV1, &'a [u8])>,
     pointer_fixups: &[Gfx942KfdDispatchPointerFixupV1],
     geometry: AqlDispatchGeometryV1,
     packet_group_segment_bytes: u32,
@@ -498,9 +500,9 @@ fn derive_dispatch_contract_sha256_v1(
             .expect("bounded runtime buffer count fits u64")
             .to_le_bytes(),
     );
-    for buffer in buffers {
-        digest.update([buffer.access().canonical_tag()]);
-        update_length_delimited_v1(&mut digest, buffer.bytes());
+    for (access, bytes) in buffers {
+        digest.update([access.canonical_tag()]);
+        update_length_delimited_v1(&mut digest, bytes);
     }
     digest.update(
         u64::try_from(pointer_fixups.len())
@@ -758,7 +760,9 @@ mod tests {
                 self.descriptor_offset,
                 &self.kernarg,
                 self.kernarg_alignment,
-                &buffers,
+                buffers
+                    .iter()
+                    .map(|buffer| (buffer.access(), buffer.bytes())),
                 &self.pointer_fixups,
                 self.geometry,
                 self.group_segment_bytes,

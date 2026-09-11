@@ -5,9 +5,9 @@ use std::{error::Error, fmt, marker::PhantomData, rc::Rc};
 use fe2o3_aql::AqlDispatchGeometryV1;
 use fe2o3_kfd::CheckedGfx942XnackMinusDevice;
 use fe2o3_runtime::{
-    KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1, PreparedGfx942RuntimeDispatchV1,
-    RuntimeContextV1, RuntimeDeviceIdV1, RuntimeErrorV1, RuntimeGfx942PreparationErrorV1,
-    RuntimeGfx942PreparedV1,
+    Gfx942RuntimeProjectionErrorV1, KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1,
+    PreparedGfx942PersistentDispatchV1, PreparedGfx942RuntimeDispatchV1, RuntimeContextV1,
+    RuntimeDeviceIdV1, RuntimeErrorV1, RuntimeGfx942PreparationErrorV1, RuntimeGfx942PreparedV1,
 };
 
 use super::{
@@ -41,10 +41,35 @@ pub struct GeneratedWorkerV3RuntimeInvocationV1<K> {
     owner_local: PhantomData<Rc<()>>,
 }
 
-struct GeneratedContextPreparationV1<K> {
-    storage: GeneratedRuntimeStorageV1<PreparedGfx942RuntimeDispatchV1>,
+struct GeneratedContextPreparationV1<K, P = PreparedGfx942RuntimeDispatchV1> {
+    storage: GeneratedRuntimeStorageV1<P>,
     authority: GeneratedWorkerV3KfdExecutionAuthority<K>,
     footprint: GeneratedRuntimeArgumentFootprintV1,
+}
+
+impl<K: CompilerGeneratedKernelExpectationV1> GeneratedContextPreparationV1<K> {
+    fn project_persistent(
+        self,
+    ) -> Result<
+        GeneratedContextPreparationV1<K, PreparedGfx942PersistentDispatchV1>,
+        GeneratedWorkerV3RuntimeInvocationErrorV1,
+    > {
+        let storage = self
+            .storage
+            .project_persistent(
+                self.authority
+                    .binding
+                    .authenticated
+                    .current_publication_token()
+                    .exact_artifact_bytes(),
+            )
+            .map_err(GeneratedWorkerV3RuntimeInvocationErrorV1::Projection)?;
+        Ok(GeneratedContextPreparationV1 {
+            storage,
+            authority: self.authority,
+            footprint: self.footprint,
+        })
+    }
 }
 
 /// Generated custody prepared against an existing Context's retained device.
@@ -55,7 +80,9 @@ struct GeneratedContextPreparationV1<K> {
 /// the same live Context and exact native device generation.
 #[must_use]
 pub struct GeneratedWorkerV3ContextInvocationV1<K> {
-    prepared: RuntimeGfx942PreparedV1<GeneratedContextPreparationV1<K>>,
+    prepared: RuntimeGfx942PreparedV1<
+        GeneratedContextPreparationV1<K, PreparedGfx942PersistentDispatchV1>,
+    >,
 }
 
 pub type GeneratedWorkerV3ContextInvocationErrorV1 =
@@ -210,7 +237,8 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
                 timeout_milliseconds,
                 limits,
                 result_budget,
-            )
+            )?
+            .project_persistent()
         })?;
         Ok(GeneratedWorkerV3ContextInvocationV1 { prepared })
     }
@@ -289,6 +317,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
 pub enum GeneratedWorkerV3RuntimeInvocationErrorV1 {
     Invocation(GeneratedWorkerV3KfdInvocationError),
     Arguments(GeneratedRuntimeArgumentErrorV1),
+    Projection(Gfx942RuntimeProjectionErrorV1),
 }
 
 impl From<GeneratedWorkerV3KfdInvocationError> for GeneratedWorkerV3RuntimeInvocationErrorV1 {
@@ -301,6 +330,9 @@ impl fmt::Display for GeneratedWorkerV3RuntimeInvocationErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Invocation(error) => error.fmt(formatter),
+            Self::Projection(error) => {
+                write!(formatter, "generated persistent projection failed: {error}")
+            }
             Self::Arguments(error) => {
                 write!(formatter, "generated runtime arguments failed: {error}")
             }
@@ -312,6 +344,7 @@ impl Error for GeneratedWorkerV3RuntimeInvocationErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Invocation(error) => Some(error),
+            Self::Projection(error) => Some(error),
             Self::Arguments(error) => Some(error),
         }
     }

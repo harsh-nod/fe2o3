@@ -185,6 +185,21 @@ pub struct Gfx942KfdDispatchRequestV1 {
     timeout_milliseconds: u32,
 }
 
+/// Owned, address-free mechanics only. These fields carry no execution authority.
+/// Reassembly must repeat request validation; extraction moves every allocation.
+pub struct Gfx942KfdDispatchRequestPartsV1 {
+    pub executable_image: Vec<u8>,
+    pub descriptor_offset: u64,
+    pub kernarg_template: Vec<u8>,
+    pub kernarg_alignment: u64,
+    pub buffers: Vec<Gfx942KfdDispatchBufferV1>,
+    pub pointer_fixups: Vec<Gfx942KfdDispatchPointerFixupV1>,
+    pub geometry: AqlDispatchGeometryV1,
+    pub private_segment_size: u32,
+    pub group_segment_size: u32,
+    pub timeout_milliseconds: u32,
+}
+
 impl fmt::Debug for Gfx942KfdDispatchRequestV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -204,6 +219,22 @@ impl fmt::Debug for Gfx942KfdDispatchRequestV1 {
 }
 
 impl Gfx942KfdDispatchRequestV1 {
+    /// Consumes the checked request without copying storage or performing native work.
+    pub fn into_parts_v1(self) -> Gfx942KfdDispatchRequestPartsV1 {
+        Gfx942KfdDispatchRequestPartsV1 {
+            executable_image: self.executable_image,
+            descriptor_offset: self.descriptor_offset,
+            kernarg_template: self.kernarg_template,
+            kernarg_alignment: self.kernarg_alignment,
+            buffers: self.buffers,
+            pointer_fixups: self.pointer_fixups,
+            geometry: self.geometry,
+            private_segment_size: self.private_segment_size,
+            group_segment_size: self.group_segment_size,
+            timeout_milliseconds: self.timeout_milliseconds,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         executable_image: Vec<u8>,
@@ -1065,6 +1096,72 @@ mod tests {
             256,
             1_000,
         )
+    }
+
+    #[test]
+    fn request_parts_move_every_coordinate_and_allocation_without_copying() {
+        let request = valid_request().unwrap();
+        let image = (
+            request.executable_image.as_ptr(),
+            request.executable_image.capacity(),
+        );
+        let kernarg = (
+            request.kernarg_template.as_ptr(),
+            request.kernarg_template.capacity(),
+        );
+        let roster = (request.buffers.as_ptr(), request.buffers.capacity());
+        let bytes = (
+            request.buffers[0].bytes.as_ptr(),
+            request.buffers[0].bytes.capacity(),
+        );
+        let fixups = (
+            request.pointer_fixups.as_ptr(),
+            request.pointer_fixups.capacity(),
+        );
+        let parts = request.into_parts_v1();
+        assert_eq!(
+            (
+                parts.executable_image.as_ptr(),
+                parts.executable_image.capacity()
+            ),
+            image
+        );
+        assert_eq!(
+            (
+                parts.kernarg_template.as_ptr(),
+                parts.kernarg_template.capacity()
+            ),
+            kernarg
+        );
+        assert_eq!((parts.buffers.as_ptr(), parts.buffers.capacity()), roster);
+        assert_eq!(
+            (
+                parts.buffers[0].bytes.as_ptr(),
+                parts.buffers[0].bytes.capacity()
+            ),
+            bytes
+        );
+        assert_eq!(
+            (
+                parts.pointer_fixups.as_ptr(),
+                parts.pointer_fixups.capacity()
+            ),
+            fixups
+        );
+        assert_eq!(parts.descriptor_offset, 64);
+        assert_eq!(parts.kernarg_alignment, 16);
+        assert_eq!(
+            parts.geometry,
+            AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap()
+        );
+        assert_eq!(parts.private_segment_size, 0);
+        assert_eq!(parts.group_segment_size, 256);
+        assert_eq!(parts.timeout_milliseconds, 1000);
+        assert_eq!(
+            parts.pointer_fixups,
+            [Gfx942KfdDispatchPointerFixupV1::new(0, 0, 0, 4)]
+        );
+        assert_eq!(parts.buffers[0].bytes, [0; 64]);
     }
 
     #[test]

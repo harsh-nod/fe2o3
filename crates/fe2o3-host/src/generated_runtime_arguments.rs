@@ -8,7 +8,8 @@ use fe2o3_aql::AqlDispatchGeometryV1;
 use fe2o3_artifacts::{RustDisjointIndexSpaceV1, RustScalarElementTypeV1};
 use fe2o3_runtime::{
     Gfx942RuntimeBufferAccessV1, Gfx942RuntimeDispatchBufferV1, Gfx942RuntimeDispatchInputsV1,
-    Gfx942RuntimePreparationErrorV1, PreparedGfx942RuntimeDispatchV1,
+    Gfx942RuntimePreparationErrorV1, Gfx942RuntimeProjectionErrorV1,
+    PreparedGfx942PersistentDispatchV1, PreparedGfx942RuntimeDispatchV1,
     prepare_gfx942_runtime_dispatch_v1,
 };
 
@@ -860,6 +861,27 @@ impl GeneratedRuntimeStorageV1<Gfx942RuntimeDispatchInputsV1> {
 
 impl GeneratedRuntimeStorageV1<PreparedGfx942RuntimeDispatchV1> {
     pub(crate) fn prepared(&self) -> &PreparedGfx942RuntimeDispatchV1 {
+        &self.payload
+    }
+
+    pub(crate) fn project_persistent(
+        self,
+        hsaco: &[u8],
+    ) -> Result<
+        GeneratedRuntimeStorageV1<PreparedGfx942PersistentDispatchV1>,
+        Gfx942RuntimeProjectionErrorV1,
+    > {
+        // A closed failure cannot detach consumed storage from its retained decoder.
+        let payload = self.payload.into_persistent_projection_v1(hsaco)?;
+        Ok(GeneratedRuntimeStorageV1 {
+            payload,
+            decoder: self.decoder,
+        })
+    }
+}
+
+impl GeneratedRuntimeStorageV1<PreparedGfx942PersistentDispatchV1> {
+    pub(crate) fn prepared(&self) -> &PreparedGfx942PersistentDispatchV1 {
         &self.payload
     }
 }

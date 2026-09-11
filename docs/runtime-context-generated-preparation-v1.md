@@ -66,6 +66,11 @@ preparation; its final device check now encloses application-authority creation.
 Both reuse the existing production-only admission and authority implementation.
 There is no synthetic-verifier or qualification fallback.
 
+R77 adds a [checked persistent projection](runtime-persistent-generated-projection-v1.md)
+to the Context constructor inside the same currentness scope. It preserves the
+original storage and authority identity while rejecting shapes unsupported by
+the existing fixed queue. Standalone preparation remains in the one-shot format.
+
 The public `GeneratedWorkerV3ContextInvocationV1` privately retains complete prepared
 storage before decoder credits and application authority. It exposes descriptive
 metadata and nonexecuting Context validation, not its payload, decoder or device.
@@ -95,6 +100,7 @@ Those hardware and protected-compiler acceptance cells remain open.
 
 No model/proof source or Verus theorem is added. Existing device-identity and
 resource proofs do not establish this callback/owner/Context/host composition.
-GEN-2B-3 through -6 still require exact persistent projection, publication-time
-authority, readback/charged result commit, shared async/blocking execution and
-graph/drain integration. No full HIP/HSA parity or performance gain is claimed.
+R77 implements the nonexecuting projection portion of GEN-2B-3. Operation
+adoption/publication-time authority, readback/charged result commit,
+shared async/blocking execution and graph/drain integration remain open.
+No full HIP/HSA parity or performance gain is claimed.

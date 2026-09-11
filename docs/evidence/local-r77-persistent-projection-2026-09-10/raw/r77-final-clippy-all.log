@@ -1,0 +1,23 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Checking fe2o3-service-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-service-host)
+error: file is loaded as a module multiple times: `crates/fe2o3-runtime/src/kfd_backend/tests/synthetic_cov6.rs`
+     --> crates/fe2o3-runtime/src/kfd_backend.rs:12864:5
+      |
+12864 |       mod synthetic_cov6;
+      |       ^^^^^^^^^^^^^^^^^^^ first loaded here
+      |
+     ::: crates/fe2o3-runtime/src/persistent_projection/tests.rs:3:1
+      |
+    3 | / #[allow(dead_code)]
+    4 | | #[path = "../kfd_backend/tests/synthetic_cov6.rs"]
+    5 | | mod synthetic_cov6;
+      | |___________________^ loaded again here
+      |
+      = help: replace all but one `mod` item with `use` items
+      = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#duplicate_mod
+      = note: `-D clippy::duplicate-mod` implied by `-D warnings`
+      = help: to override `-D warnings` add `#[allow(clippy::duplicate_mod)]`
+
+    Checking fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host)
+error: could not compile `fe2o3-runtime` (lib test) due to 1 previous error

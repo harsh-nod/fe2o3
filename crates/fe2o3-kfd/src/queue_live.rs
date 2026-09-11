@@ -243,9 +243,9 @@ pub use dispatch::{
     GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1,
     GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_V1, Gfx942KfdDebugTargetDispatchErrorV2,
     Gfx942KfdDebugTargetDispatchResultV2, Gfx942KfdDispatchBufferV1, Gfx942KfdDispatchErrorV1,
-    Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1, Gfx942KfdDispatchRequestV1,
-    Gfx942KfdDispatchResultV1, Gfx942KfdQueueExceptionObservationV1,
-    execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
+    Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1,
+    Gfx942KfdDispatchRequestPartsV1, Gfx942KfdDispatchRequestV1, Gfx942KfdDispatchResultV1,
+    Gfx942KfdQueueExceptionObservationV1, execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
     execute_gfx942_kfd_debug_target_dispatch_unchecked_v2,
     execute_gfx942_kfd_dispatch_unchecked_v1,
 };

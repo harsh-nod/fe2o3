@@ -12861,7 +12861,7 @@ mod tests {
     };
     use super::*;
 
-    mod synthetic_cov6;
+    use crate::synthetic_cov6;
 
     #[test]
     fn initial_persistent_timing_keeps_binding_exclusive_from_publication() {
