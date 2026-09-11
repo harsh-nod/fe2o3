@@ -137,7 +137,6 @@ fn static_1d(
     subgroup: u64,
     extent: u64,
     modulus: Option<u64>,
-    partition: OwnershipPartitionAttr,
 ) -> FuncOp {
     static_1d_with_coverage(
         context,
@@ -148,7 +147,7 @@ fn static_1d(
         extent,
         modulus,
         OwnershipCoverageAttr::ExactView,
-        partition,
+        OwnershipPartitionAttr::ExactSets,
     )
 }
 
@@ -320,16 +319,7 @@ fn complete_two_dimensional_domain_builds_all_hierarchy_summaries() {
 #[test]
 fn overlap_witness_identifies_within_subgroup_owners() {
     let context = &mut setup();
-    let function = static_1d(
-        context,
-        "within_subgroup_overlap",
-        2,
-        2,
-        2,
-        1,
-        Some(1),
-        OwnershipPartitionAttr::ExactSets,
-    );
+    let function = static_1d(context, "within_subgroup_overlap", 2, 2, 2, 1, Some(1));
     let report = run_pliron_hierarchical_ownership_check_v1(context, &function);
     assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
     assert!(matches!(
@@ -378,7 +368,6 @@ fn overlap_witness_distinguishes_cross_subgroup_and_cross_workgroup() {
             subgroup,
             modulus,
             Some(modulus),
-            OwnershipPartitionAttr::ExactSets,
         );
         assert!(matches!(
             run_pliron_hierarchical_ownership_check_v1(context, &function).findings(),
@@ -391,16 +380,7 @@ fn overlap_witness_distinguishes_cross_subgroup_and_cross_workgroup() {
 #[test]
 fn exact_coverage_reports_first_unowned_coordinate() {
     let context = &mut setup();
-    let function = static_1d(
-        context,
-        "coverage_hole",
-        8,
-        4,
-        2,
-        9,
-        None,
-        OwnershipPartitionAttr::ExactSets,
-    );
+    let function = static_1d(context, "coverage_hole", 8, 4, 2, 9, None);
     let report = run_pliron_hierarchical_ownership_check_v1(context, &function);
     assert!(matches!(
         report.findings(),
@@ -420,16 +400,7 @@ fn exact_coverage_reports_first_unowned_coordinate() {
 #[test]
 fn out_of_range_owner_has_exact_hierarchy_witness() {
     let context = &mut setup();
-    let function = static_1d(
-        context,
-        "out_of_range_owner",
-        8,
-        4,
-        2,
-        7,
-        None,
-        OwnershipPartitionAttr::ExactSets,
-    );
+    let function = static_1d(context, "out_of_range_owner", 8, 4, 2, 7, None);
     let report = run_pliron_hierarchical_ownership_check_v1(context, &function);
     assert!(matches!(
         report.findings(),
@@ -1125,16 +1096,7 @@ fn production_pipeline_runs_ownership_after_race_and_fails_closed_on_holes() {
         ]
     );
     let context = &mut setup();
-    let function = static_1d(
-        context,
-        "pipeline_coverage_hole",
-        8,
-        4,
-        2,
-        9,
-        None,
-        OwnershipPartitionAttr::ExactSets,
-    );
+    let function = static_1d(context, "pipeline_coverage_hole", 8, 4, 2, 9, None);
     let error = require_production_pliron_checks_before_lowering_v2(context, &function)
         .expect_err("production lowering must reject incomplete output ownership");
     assert!(matches!(
@@ -1277,7 +1239,7 @@ fn total_view_rejects_unknown_launch_out_of_range_and_duplicate_writers() {
             coordinate,
             owner,
             ..
-        }] if coordinate == &[1] && owner.invocation() == &[1, 0, 0]
+        }] if coordinate == &[1] && owner.invocation() == [1, 0, 0]
     ));
 
     let context = &mut setup();
@@ -1300,8 +1262,8 @@ fn total_view_rejects_unknown_launch_out_of_range_and_duplicate_writers() {
             second,
             ..
         }] if coordinate == &[0]
-            && first.invocation() == &[0, 0, 0]
-            && second.invocation() == &[1, 0, 0]
+            && first.invocation() == [0, 0, 0]
+            && second.invocation() == [1, 0, 0]
     ));
 }
 
@@ -1336,7 +1298,7 @@ fn total_view_requires_normal_completion_and_disjoint_output_allocations() {
             invocation,
             location,
             ..
-        }] if invocation.invocation() == &[0, 0, 0] && location.operation() == 5
+        }] if invocation.invocation() == [0, 0, 0] && location.operation() == 5
     ));
 
     let context = &mut setup();
