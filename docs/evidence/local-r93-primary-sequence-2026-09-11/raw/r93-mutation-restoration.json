@@ -1,0 +1,12 @@
+{
+  "command": [
+    "node",
+    "/home/harsh/.codex-tmp/r93-restoration.js"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r93-mutation-restoration.log",
+  "source": "/home/harsh/.codex-tmp/r93-mutation-restoration-source.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "elapsed_seconds": 0.71
+}

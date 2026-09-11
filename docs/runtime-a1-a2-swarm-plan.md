@@ -1,6 +1,16 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Current primary-owner implementation: R92 NATIVE-2A.2, with
+Current sequence/integration increment: R93, with
+[contract](runtime-primary-queue-construction-custody-v1.md) and
+[local evidence](evidence/local-r93-primary-sequence-2026-09-11/README.md), above
+signed R92 `777cbefae2721bb2edd60187a666e8d84dc80c91`. The one production sequence
+now supports original-session/account integration through actual queue admission,
+CREATE and doorbell settlement. Five new CPU functions exercise 121 cases;
+scripted platform leaves do not qualify Linux behavior. Full NATIVE-2A.3 remains
+open for preparation-prefix, generic-return, late-output and exact platform
+coverage, followed by 2B/2C. CO-1/2/3 and VER-1A remain independent.
+
+Preceding primary-owner implementation: R92 NATIVE-2A.2, with
 [contract](runtime-primary-queue-construction-custody-v1.md) and
 [local evidence](evidence/local-r92-primary-construction-2026-09-11/README.md)
 above signed R91 `a04060137e8df20f434682f7ee4dd6f06fb10174`.

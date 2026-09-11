@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 4 tests
+test queue::tests::initialization::initialization_success_transfers_once_and_rejects_reentry ... ok
+test queue::tests::initialization::initialization_failure_retains_exact_backend_and_returned_foundation ... ok
+test queue::tests::initialization::admission_success_and_revision_exhaustion_transfer_only_into_engine ... ok
+test queue::tests::initialization::admission_precommit_failures_keep_exact_caller_authority ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 912 filtered out; finished in 0.00s
+

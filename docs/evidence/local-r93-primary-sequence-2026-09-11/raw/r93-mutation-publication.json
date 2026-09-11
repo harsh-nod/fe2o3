@@ -1,0 +1,22 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::live::construction_primary::integration_tests::same_session_primary_currentness_faults_cover_create_and_both_doorbell_checks",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r93-mutation-publication.log",
+  "source": "/home/harsh/.codex-tmp/r93-mutation-publication-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "elapsed_seconds": 35.856
+}

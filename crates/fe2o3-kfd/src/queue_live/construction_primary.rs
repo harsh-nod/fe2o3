@@ -6,9 +6,20 @@ use crate::queue_linux::{
 };
 use crate::shared_memory::{GttExecutableImmutableV1, GttProfileV1, SharedGttAllocationIdentityV1};
 
+#[path = "construction_primary/environment.rs"]
+mod environment;
+#[path = "construction_primary/memory.rs"]
+mod memory;
+use environment::{CompletedPrimaryV1, LinuxPrimaryEnvironmentV1, PrimaryEnvironmentV1};
+pub(super) use memory::PrimaryMemoryV1;
+
 #[cfg(test)]
 #[path = "construction_primary/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "construction_primary/integration_tests.rs"]
+mod integration_tests;
 
 type Cpu<P> = SharedGttAllocationV1<P, GttCpuWritableV1>;
 type Mapped<P> = SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>;
@@ -96,32 +107,38 @@ fn advance_token_v1<M, I, O>(
     Ok(())
 }
 
-pub(super) struct PrimaryQueueConstructionV1<P> {
-    pub(super) memory: Option<SharedGttMemorySessionV1>,
+pub(super) struct PrimaryQueueConstructionV1<P, E: PrimaryEnvironmentV1 = LinuxPrimaryEnvironmentV1>
+{
+    pub(super) memory: Option<E::Memory>,
     pub(super) preparation: P,
     pub(super) dispatch: Option<DispatchResourceOwnerV1>,
-    pub(super) completed: Option<ComputeAqlQueueSessionV1>,
+    pub(super) completed: Option<CompletedPrimaryV1<E>>,
     ring: Option<RingConstructionV1>,
     control: MutablePrefixV1<UserptrAqlControlGttV1, ControlAuthority>,
     completion: MutablePrefixV1<HostVisibleCoherentGttV1, CompletionSignalAuthority>,
     eop: ExecutablePrefixV1<EopAuthority>,
     context: ExecutablePrefixV1<ContextSaveAuthority>,
-    runtime: Option<LinuxKfdRuntimeEnabledV1>,
-    runtime_control: Option<KfdWithAdmittedUapi>,
-    event: Option<LinuxQueueExceptionEventV1>,
-    unpublished: Option<LinuxUnpublishedCwsrShadowPagesV1>,
-    published: Option<LinuxCwsrShadowPagesV1>,
+    runtime: Option<E::Runtime>,
+    runtime_control: Option<E::RuntimeControl>,
+    event: Option<E::Event>,
+    unpublished: Option<E::Unpublished>,
+    published: Option<E::Published>,
     resource_prefix: Option<QueueResourcePrefixV1>,
     authority: Option<QueueResourceAuthorityV1>,
     completion_owner: Option<CompletionSignalArenaOwnerV1>,
     submission: Option<NativeAqlSubmissionOwnerV1>,
     dependency_owner: Option<ComputeDependencySessionOwnerV1>,
     foundation: Option<QueueModelFoundationV1>,
-    initialization: Option<NativeQueueEngineInitializationV1<LinuxNativeQueueBackendV1>>,
-    engine: Option<NativeQueueEngineV1<LinuxNativeQueueBackendV1>>,
+    initialization: Option<NativeQueueEngineInitializationV1<PrimaryQueueBackendV1<E::Memory>>>,
+    engine: Option<NativeQueueEngineV1<PrimaryQueueBackendV1<E::Memory>>>,
     outputs: Option<fe2o3_kfd_uapi::KfdGfx942CreateQueueOutputs>,
-    creation_arm: Option<ProcessGlobalKfdRuntimeCreationArmV1>,
+    creation_arm: Option<E::CreationArm>,
 }
+
+type ExternalPrimaryRuntimeV1<'a, E> = (
+    &'a mut Option<<E as PrimaryEnvironmentV1>::Runtime>,
+    &'a mut Option<<E as PrimaryEnvironmentV1>::RuntimeControl>,
+);
 
 pub(super) struct UserptrConstructionEntryV1<'a> {
     stage: Option<&'static str>,
@@ -148,6 +165,12 @@ impl Drop for UserptrConstructionEntryV1<'_> {
 
 impl<P> PrimaryQueueConstructionV1<P> {
     pub(super) fn new(memory: SharedGttMemorySessionV1, preparation: P) -> Box<Self> {
+        Self::new_with(memory, preparation)
+    }
+}
+
+impl<P, E: PrimaryEnvironmentV1> PrimaryQueueConstructionV1<P, E> {
+    fn new_with(memory: E::Memory, preparation: P) -> Box<Self> {
         Box::new(Self {
             memory: Some(memory),
             preparation,
@@ -183,11 +206,19 @@ impl<P> PrimaryQueueConstructionV1<P> {
             &mut UserptrConstructionEntryV1,
         ) -> Result<(), ComputeAqlQueueSessionErrorV1>,
     ) -> Result<Box<Self>, ComputeAqlQueueSessionErrorV1> {
-        run_rooted_construction_v1(self, work, |root| {
-            if let Some(unpublished) = root.unpublished.as_mut() {
-                unpublished.cleanup_payload_for_terminal_retention();
-            }
-        })
+        run_rooted_construction_with_v1(
+            self,
+            work,
+            |root| {
+                if let Some(unpublished) = root.unpublished.as_mut() {
+                    E::cleanup_unpublished(unpublished);
+                }
+            },
+            &E::poison,
+            |root| {
+                let _retained = Box::into_raw(root);
+            },
+        )
     }
 
     pub(super) fn construct(
@@ -196,7 +227,7 @@ impl<P> PrimaryQueueConstructionV1<P> {
         geometry: Gfx942AqlQueueResourcePlanV1,
         ring_bytes: u32,
         backing: QueueRingBackingV1,
-        external_runtime: Option<ExternalRuntimeV1<'_>>,
+        external_runtime: Option<ExternalPrimaryRuntimeV1<'_, E>>,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         if self.ring.is_some() || self.completed.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
@@ -209,9 +240,9 @@ impl<P> PrimaryQueueConstructionV1<P> {
         if matches!(backing, QueueRingBackingV1::UserptrProbe) {
             entry.enter("USERPTR queue-ring creation");
         }
-        self.ring = Some(RingConstructionV1::Cpu(CpuRingAuthorityV1::allocate(
-            memory, backing, bytes,
-        )?));
+        self.ring = Some(RingConstructionV1::Cpu(
+            memory.allocate_ring(backing, bytes)?,
+        ));
         entry.enter("USERPTR queue-control creation");
         self.control.cpu = Some(memory.allocate_userptr_aql_control()?);
         self.completion.cpu =
@@ -230,7 +261,8 @@ impl<P> PrimaryQueueConstructionV1<P> {
         let RingConstructionV1::Cpu(ring) = self.ring.as_mut().expect("allocated ring") else {
             unreachable!("initial CPU ring")
         };
-        ring.initialize_invalid(memory)?
+        memory
+            .initialize_ring(ring)?
             .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("INVALID ring initialization"))?;
         memory
             .with_bytes_mut(
@@ -258,19 +290,14 @@ impl<P> PrimaryQueueConstructionV1<P> {
             .as_ref()
             .expect("completed queue")
             .engine
-            .as_ref()
-            .expect("completed engine")
             .opener_pid;
-        self.creation_arm
-            .as_mut()
-            .expect("creation arm")
-            .finish_checked(pid)?;
+        E::finish_creation(self.creation_arm.as_mut().expect("creation arm"), pid)?;
         Ok(())
     }
 
     fn prepare_runtime_and_shadows(
         &mut self,
-        mut external_runtime: Option<ExternalRuntimeV1<'_>>,
+        mut external_runtime: Option<ExternalPrimaryRuntimeV1<'_, E>>,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         let memory = self.memory.as_mut().expect("construction memory");
         match external_runtime.as_mut() {
@@ -285,20 +312,10 @@ impl<P> PrimaryQueueConstructionV1<P> {
                     .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
                         "missing debug runtime control descriptor",
                     ))?;
-                runtime.validate_active(control.opened.fd.as_fd(), control.opened.opener_pid)?;
+                E::validate_runtime(runtime, Some(control), memory)?;
             }
             None => {
-                self.runtime = Some(
-                    match LinuxKfdRuntimeEnabledV1::enable(memory.kfd_fd(), memory.opener_pid()) {
-                        Ok(runtime) => runtime,
-                        Err(error) => {
-                            let _ = memory.quarantine_queue_composition(
-                                "RUNTIME_ENABLE enable ambiguous failure",
-                            );
-                            return Err(error.into());
-                        }
-                    },
-                );
+                self.runtime = Some(E::enable_runtime(memory)?);
             }
         }
         if let Some((runtime, control)) = external_runtime.as_ref() {
@@ -306,12 +323,13 @@ impl<P> PrimaryQueueConstructionV1<P> {
             let control = control
                 .as_ref()
                 .expect("validated debug runtime control descriptor");
-            runtime.validate_active(control.opened.fd.as_fd(), control.opened.opener_pid)?;
+            E::validate_runtime(runtime, Some(control), memory)?;
         } else {
-            self.runtime
-                .as_ref()
-                .expect("enabled queue runtime")
-                .validate_active(memory.kfd_fd(), memory.opener_pid())?;
+            E::validate_runtime(
+                self.runtime.as_ref().expect("enabled queue runtime"),
+                None,
+                memory,
+            )?;
         }
         memory.check_queue_currentness()?;
         if let Some((runtime, control)) = external_runtime.as_mut() {
@@ -323,62 +341,23 @@ impl<P> PrimaryQueueConstructionV1<P> {
             );
         }
         // Admission must precede this arm. The external token is already empty.
-        self.creation_arm = Some(arm_process_global_kfd_runtime_gate_for_creation_v1()?);
-        self.event = Some(
-            match LinuxQueueExceptionEventV1::create(memory.kfd_fd(), memory.opener_pid()) {
-                Ok(event) => event,
-                Err(error) => {
-                    let _ = memory.quarantine_queue_composition("CREATE_EVENT ambiguous failure");
-                    return Err(error.into());
-                }
-            },
-        );
+        self.creation_arm = Some(E::arm_creation(memory)?);
+        self.event = Some(E::create_event(memory)?);
         memory.check_queue_currentness()?;
-        let shadow_plan =
-            memory.cwsr_shadow_plan(self.context.cpu.as_ref().expect("context-save"))?;
-        self.unpublished = Some(
-            match LinuxCwsrShadowPagesV1::install(shadow_plan, self.event.as_ref().expect("event"))
-            {
-                Ok(shadows) => shadows,
-                Err(error) => {
-                    let _ = memory.quarantine_queue_composition("CWSR shadow setup failure");
-                    return Err(error.into());
-                }
-            },
-        );
+        self.unpublished = Some(E::install_shadows(
+            memory,
+            self.context.cpu.as_ref().expect("context-save"),
+            self.event.as_ref().expect("event"),
+        )?);
         let unpublished = self.unpublished.as_ref().expect("unpublished shadows");
-        let initialization =
-            match memory.with_bytes_mut(self.context.cpu.as_mut().expect("context-save"), |bytes| {
-                unpublished
-                    .shadows()
-                    .initialize_and_validate_bo_headers(bytes)
-            }) {
-                Ok(initialization) => initialization,
-                Err(error) => {
-                    let _ = memory.quarantine_queue_composition("CWSR BO initialization failure");
-                    return Err(error.into());
-                }
-            };
-        if initialization.is_err() {
-            let _ = memory.quarantine_queue_composition("CWSR header readback failure");
-            return Err(ComputeAqlQueueSessionErrorV1::Contract(
-                "gfx942 CWSR header initialization",
-            ));
-        }
+        E::initialize_shadows(
+            memory,
+            self.context.cpu.as_mut().expect("context-save"),
+            unpublished,
+        )?;
         let runtime = self.runtime.as_ref().expect("runtime");
-        if let Some(control) = self.runtime_control.as_ref() {
-            runtime.validate_active(control.opened.fd.as_fd(), control.opened.opener_pid)?;
-        } else {
-            runtime.validate_active(memory.kfd_fd(), memory.opener_pid())?;
-        }
-        self.event
-            .as_ref()
-            .expect("event")
-            .validate_live_with_shadows(
-                memory.kfd_fd(),
-                memory.opener_pid(),
-                unpublished.shadows(),
-            )?;
+        E::validate_runtime(runtime, self.runtime_control.as_ref(), memory)?;
+        E::validate_event(memory, self.event.as_ref().expect("event"), unpublished)?;
         memory.check_queue_currentness()?;
         Ok(())
     }
@@ -390,11 +369,7 @@ impl<P> PrimaryQueueConstructionV1<P> {
         let memory = self.memory.as_mut().expect("construction memory");
         self.eop.seal(memory)?;
         self.context.seal(memory)?;
-        self.unpublished
-            .as_ref()
-            .expect("unpublished shadows")
-            .shadows()
-            .restore_kernel_write_access_after_bo_seal()?;
+        E::restore_shadow_write(self.unpublished.as_ref().expect("unpublished shadows"))?;
         let ring = self.ring.as_mut().expect("ring");
         ring.map_in_place(memory)?;
         ring.retain_in_place(memory)?;
@@ -405,22 +380,18 @@ impl<P> PrimaryQueueConstructionV1<P> {
         retain_mutable_prefix(
             memory,
             &mut self.control,
-            SharedGttMemorySessionV1::retain_aql_control_resource,
+            E::Memory::retain_aql_control_resource,
         )?;
         retain_mutable_prefix(
             memory,
             &mut self.completion,
-            SharedGttMemorySessionV1::retain_aql_completion_signal_resource,
+            E::Memory::retain_aql_completion_signal_resource,
         )?;
-        retain_executable_prefix(
-            memory,
-            &mut self.eop,
-            SharedGttMemorySessionV1::retain_aql_eop_resource,
-        )?;
+        retain_executable_prefix(memory, &mut self.eop, E::Memory::retain_aql_eop_resource)?;
         retain_executable_prefix(
             memory,
             &mut self.context,
-            SharedGttMemorySessionV1::retain_aql_context_save_resource,
+            E::Memory::retain_aql_context_save_resource,
         )?;
         // All four role slots were established above, without intervening callbacks.
         self.resource_prefix = Some(QueueResourcePrefixV1::new(
@@ -464,7 +435,7 @@ impl<P> PrimaryQueueConstructionV1<P> {
             None => memory.take_queue_model_foundation()?,
         });
         self.initialization = Some(NativeQueueEngineInitializationV1::new(
-            LinuxNativeQueueBackendV1 {
+            PrimaryQueueBackendV1 {
                 session: self.memory.take().expect("transferred memory"),
                 foundation: self.foundation.take(),
                 foundation_in_engine: false,
@@ -481,7 +452,7 @@ impl<P> PrimaryQueueConstructionV1<P> {
         let key = match engine.admit_in_place(&mut self.authority) {
             Ok(key) => key,
             Err(error @ NativeQueueAdapterErrorV1::AuthorityPoisoned) => {
-                permanently_poison_process_global_kfd_runtime_gate_v1();
+                E::poison();
                 return Err(terminal_creation(
                     "queue model admission",
                     map_native(error),
@@ -491,19 +462,12 @@ impl<P> PrimaryQueueConstructionV1<P> {
         };
         engine
             .create_at_native_boundary(key, || {
-                self.published = Some(
-                    self.unpublished
-                        .take()
-                        .expect("unpublished shadow owner")
-                        .publish_for_native_queue_creation(),
-                );
+                self.published = Some(E::publish_shadows(
+                    self.unpublished.take().expect("unpublished shadow owner"),
+                ));
             })
             .map_err(map_create)?;
-        self.runtime
-            .as_mut()
-            .expect("runtime")
-            .mark_queue_created()
-            .map_err(|error| terminal_creation("runtime queue-live transition", error.into()))?;
+        E::mark_queue_created(self.runtime.as_mut().expect("runtime"))?;
         self.outputs = Some(engine.create_outputs(key).ok_or_else(|| {
             terminal_creation(
                 "CREATE_QUEUE output recovery",
@@ -532,42 +496,21 @@ impl<P> PrimaryQueueConstructionV1<P> {
                     ComputeAqlQueueSessionErrorV1::Contract("CWSR shadow page count"),
                 )
             })?;
-        let event_id = self.event.as_ref().expect("event").event_id_observation();
+        let event_id = E::event_id(self.event.as_ref().expect("event"));
         // Every fallible assembly value is rooted or computed before extracting owners.
-        self.completed = Some(ComputeAqlQueueSessionV1 {
-            engine: self.engine.take(),
+        self.completed = Some(CompletedPrimaryV1 {
+            engine: self.engine.take().expect("engine"),
             key,
-            compute_lane_session: key,
             doorbell: None,
-            submission: self.submission.take(),
-            completion_signals: self.completion.retained.take(),
+            submission: self.submission.take().expect("submission"),
+            completion_signals: self.completion.retained.take().expect("completion signals"),
             completion_owner: self.completion_owner.take().expect("completion owner"),
             dependency_owner: self.dependency_owner.take().expect("dependency owner"),
-            terminal_dependency: None,
             dispatch: self.dispatch.take(),
-            unpublished_dispatch: UnpublishedDispatchStateV1::default(),
-            detached_data_count: 0,
-            detached_dispatch_generation: None,
-            detached_data_identities: Vec::new(),
-            detached_next_insertion_index: None,
-            persistent_compute: None,
-            #[cfg(test)]
-            persistent_compute_test_release: None,
-            next_persistent_compute_generation: 1,
-            exception: Some(QueueExceptionStateV1 {
-                runtime: self.runtime.take().expect("runtime"),
-                runtime_control: self.runtime_control.take(),
-                event: self.event.take().expect("event"),
-                shadows: self.published.take().expect("published shadows"),
-            }),
-            sdma: None,
-            striped_sdma: None,
-            sdma_outstanding_buffers: 0,
-            sdma_pool_free: Vec::new(),
-            sdma_pool_reuse_count: 0,
-            sdma_device_pool: SdmaDevicePoolConfigurationV1::default(),
-            sdma_host_pool_limits: None,
-            terminal_poisoned: false,
+            runtime: self.runtime.take().expect("runtime"),
+            runtime_control: self.runtime_control.take(),
+            event: self.event.take().expect("event"),
+            shadows: self.published.take().expect("published shadows"),
             observation: ComputeAqlQueueObservationV1 {
                 queue_id,
                 ring_bytes,
@@ -576,7 +519,6 @@ impl<P> PrimaryQueueConstructionV1<P> {
                 event_id,
                 cwsr_shadow_pages,
             },
-            auxiliary_compute_lanes: Vec::new(),
         });
         Ok(())
     }
@@ -585,23 +527,30 @@ impl<P> PrimaryQueueConstructionV1<P> {
         let session = self.completed.as_mut().expect("completed session custody");
         let outputs = self.outputs.expect("retained CREATE outputs");
         session
-            .check_currentness()
+            .engine
+            .prepare_operation()
+            .map_err(map_native)
             .map_err(|error| terminal_creation("post-create currentness before doorbell", error))?;
-        let engine = session.engine.as_ref().expect("session engine");
-        session.doorbell = Some(
-            LinuxDoorbellSliceV1::map(engine.backend.session.kfd_fd(), outputs, engine.opener_pid)
-                .map_err(|error| terminal_creation("doorbell mapping", error.into()))?,
-        );
+        let engine = &session.engine;
+        session.doorbell = Some(E::map_doorbell(
+            &engine.backend.session,
+            outputs,
+            engine.opener_pid,
+        )?);
         let doorbell = session.doorbell.as_ref().expect("rooted doorbell");
-        session.observation.doorbell_slice_bytes = doorbell.slice_bytes();
-        session.observation.doorbell_byte_offset = doorbell.queue_byte_offset();
+        let (slice_bytes, byte_offset) = E::doorbell_observation(doorbell);
+        session.observation.doorbell_slice_bytes = slice_bytes;
+        session.observation.doorbell_byte_offset = byte_offset;
         session
-            .check_currentness()
+            .engine
+            .prepare_operation()
+            .map_err(map_native)
             .map_err(|error| terminal_creation("post-doorbell currentness", error))?;
         Ok(())
     }
 }
 
+#[cfg(test)]
 fn run_rooted_construction_v1<T>(
     root: Box<T>,
     work: impl FnOnce(
@@ -695,7 +644,7 @@ pub(super) fn terminal_control_failure_for_test(
 }
 
 fn map_mutable_prefix<P: crate::shared_memory::MutableGpuGttProfileV1, R>(
-    memory: &mut SharedGttMemorySessionV1,
+    memory: &mut impl PrimaryMemoryV1,
     prefix: &mut MutablePrefixV1<P, R>,
 ) -> Result<(), MemorySessionError> {
     advance_token_v1(
@@ -707,14 +656,14 @@ fn map_mutable_prefix<P: crate::shared_memory::MutableGpuGttProfileV1, R>(
             memory.preflight_cpu_queue_token_v1(token)?;
             Ok(token.storage_identity())
         },
-        SharedGttMemorySessionV1::map_to_gpu,
+        |memory, token| memory.map_to_gpu(token),
     )
 }
 
-fn retain_mutable_prefix<P: crate::shared_memory::MutableGpuGttProfileV1, R>(
-    memory: &mut SharedGttMemorySessionV1,
+fn retain_mutable_prefix<P: crate::shared_memory::MutableGpuGttProfileV1, R, M: PrimaryMemoryV1>(
+    memory: &mut M,
     prefix: &mut MutablePrefixV1<P, R>,
-    retain: impl FnOnce(&mut SharedGttMemorySessionV1, Mapped<P>) -> Result<R, MemorySessionError>,
+    retain: impl FnOnce(&mut M, Mapped<P>) -> Result<R, MemorySessionError>,
 ) -> Result<(), MemorySessionError> {
     advance_token_v1(
         memory,
@@ -730,7 +679,7 @@ fn retain_mutable_prefix<P: crate::shared_memory::MutableGpuGttProfileV1, R>(
 }
 
 impl<R> ExecutablePrefixV1<R> {
-    fn seal(&mut self, memory: &mut SharedGttMemorySessionV1) -> Result<(), MemorySessionError> {
+    fn seal(&mut self, memory: &mut impl PrimaryMemoryV1) -> Result<(), MemorySessionError> {
         advance_token_v1(
             memory,
             &mut self.cpu,
@@ -740,13 +689,13 @@ impl<R> ExecutablePrefixV1<R> {
                 memory.preflight_cpu_queue_token_v1(token)?;
                 Ok(token.storage_identity())
             },
-            SharedGttMemorySessionV1::seal_executable,
+            |memory, token| memory.seal_executable(token),
         )
     }
 }
 
 fn map_executable_prefix<R>(
-    memory: &mut SharedGttMemorySessionV1,
+    memory: &mut impl PrimaryMemoryV1,
     prefix: &mut ExecutablePrefixV1<R>,
 ) -> Result<(), MemorySessionError> {
     advance_token_v1(
@@ -758,14 +707,14 @@ fn map_executable_prefix<R>(
             memory.preflight_immutable_queue_token_v1(token)?;
             Ok(token.storage_identity())
         },
-        SharedGttMemorySessionV1::map_executable_to_gpu,
+        |memory, token| memory.map_executable_to_gpu(token),
     )
 }
 
-fn retain_executable_prefix<R>(
-    memory: &mut SharedGttMemorySessionV1,
+fn retain_executable_prefix<R, M: PrimaryMemoryV1>(
+    memory: &mut M,
     prefix: &mut ExecutablePrefixV1<R>,
-    retain: impl FnOnce(&mut SharedGttMemorySessionV1, Executable) -> Result<R, MemorySessionError>,
+    retain: impl FnOnce(&mut M, Executable) -> Result<R, MemorySessionError>,
 ) -> Result<(), MemorySessionError> {
     advance_token_v1(
         memory,

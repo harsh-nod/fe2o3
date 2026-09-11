@@ -1,0 +1,19 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error: using `map_err` over `inspect_err`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs:130:14
+    |
+130 |             .map_err(|error| {
+    |              ^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#manual_inspect
+    = note: `-D clippy::manual-inspect` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::manual_inspect)]`
+help: try
+    |
+130 ~             .inspect_err(|error| {
+131 ~                 let _ = memory.quarantine_queue_composition("CWSR BO initialization failure");
+    |
+
+error: could not compile `fe2o3-kfd` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `fe2o3-kfd` (lib test) due to 1 previous error

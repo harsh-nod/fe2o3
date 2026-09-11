@@ -1,0 +1,21 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0616]: field `session_id` of struct `shared_memory::SharedGttAllocationIdentityV1` is private
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:704:58
+    |
+704 |     let order = |id: &SharedGttAllocationIdentityV1| (id.session_id, id.id, id.generation);
+    |                                                          ^^^^^^^^^^ private field
+
+error[E0616]: field `id` of struct `shared_memory::SharedGttAllocationIdentityV1` is private
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:704:73
+    |
+704 |     let order = |id: &SharedGttAllocationIdentityV1| (id.session_id, id.id, id.generation);
+    |                                                                         ^^ private field
+
+error[E0616]: field `generation` of struct `shared_memory::SharedGttAllocationIdentityV1` is private
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:704:80
+    |
+704 |     let order = |id: &SharedGttAllocationIdentityV1| (id.session_id, id.id, id.generation);
+    |                                                                                ^^^^^^^^^^ private field
+
+For more information about this error, try `rustc --explain E0616`.
+error: could not compile `fe2o3-kfd` (lib test) due to 3 previous errors

@@ -1,0 +1,147 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 28.95s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 5 tests
+test queue::live::construction_primary::integration_tests::same_session_primary_success_uses_actual_preparation_resources_foundation_and_create ... FAILED
+test queue::live::construction_primary::integration_tests::same_session_primary_create_uncertainty_retains_published_owners_without_cleanup ... FAILED
+test queue::live::construction_primary::integration_tests::same_session_primary_currentness_faults_cover_create_and_both_doorbell_checks ... FAILED
+test queue::live::construction_primary::integration_tests::same_session_primary_real_native_failures_preserve_r88_and_original_accounts ... FAILED
+test queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::same_session_primary_success_uses_actual_preparation_resources_foundation_and_create stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_success_uses_actual_preparation_resources_foundation_and_create' (1268399) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_success_uses_actual_preparation_resources_foundation_and_create' (1268399) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:725:13:
+construction should succeed
+
+---- queue::live::construction_primary::integration_tests::same_session_primary_create_uncertainty_retains_published_owners_without_cleanup stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_create_uncertainty_retains_published_owners_without_cleanup' (1268396) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_create_uncertainty_retains_published_owners_without_cleanup' (1268396) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:886:47:
+called `Option::unwrap()` on a `None` value
+
+---- queue::live::construction_primary::integration_tests::same_session_primary_currentness_faults_cover_create_and_both_doorbell_checks stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_currentness_faults_cover_create_and_both_doorbell_checks' (1268397) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_currentness_faults_cover_create_and_both_doorbell_checks' (1268397) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_currentness_faults_cover_create_and_both_doorbell_checks' (1268397) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:914:17:
+assertion `left == right` failed
+  left: None
+ right: Some(("currentness", 1))
+
+---- queue::live::construction_primary::integration_tests::same_session_primary_real_native_failures_preserve_r88_and_original_accounts stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_real_native_failures_preserve_r88_and_original_accounts' (1268398) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_real_native_failures_preserve_r88_and_original_accounts' (1268398) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6586:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_real_native_failures_preserve_r88_and_original_accounts' (1268398) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_real_native_failures_preserve_r88_and_original_accounts' (1268398) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6586:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_real_native_failures_preserve_r88_and_original_accounts' (1268398) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_real_native_failures_preserve_r88_and_original_accounts' (1268398) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6586:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_real_native_failures_preserve_r88_and_original_accounts' (1268398) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_real_native_failures_preserve_r88_and_original_accounts' (1268398) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6586:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_real_native_failures_preserve_r88_and_original_accounts' (1268398) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_real_native_failures_preserve_r88_and_original_accounts' (1268398) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:860:17:
+wrong error: TerminalCreation { stage: "USERPTR queue-control creation", source: Completion(Initialization) }
+
+---- queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:47:13:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:47:13:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:47:13:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:47:13:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:47:13:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:47:13:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:47:13:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:47:13:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:524:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary' (1268395) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:808:17:
+assertion `left == right` failed
+  left: None
+ right: Some(("initialize-bytes", 3))
+
+
+failures:
+    queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary
+    queue::live::construction_primary::integration_tests::same_session_primary_create_uncertainty_retains_published_owners_without_cleanup
+    queue::live::construction_primary::integration_tests::same_session_primary_currentness_faults_cover_create_and_both_doorbell_checks
+    queue::live::construction_primary::integration_tests::same_session_primary_real_native_failures_preserve_r88_and_original_accounts
+    queue::live::construction_primary::integration_tests::same_session_primary_success_uses_actual_preparation_resources_foundation_and_create
+
+test result: FAILED. 0 passed; 5 failed; 0 ignored; 0 measured; 911 filtered out; finished in 0.12s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

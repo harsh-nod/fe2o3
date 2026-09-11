@@ -1,0 +1,13 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 26.85s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 5 tests
+test queue::live::construction_primary::integration_tests::same_session_primary_create_uncertainty_retains_published_owners_without_cleanup ... ok
+test queue::live::construction_primary::integration_tests::same_session_primary_success_uses_actual_preparation_resources_foundation_and_create ... ok
+test queue::live::construction_primary::integration_tests::same_session_primary_currentness_faults_cover_create_and_both_doorbell_checks ... ok
+test queue::live::construction_primary::integration_tests::same_session_primary_real_native_failures_preserve_r88_and_original_accounts ... ok
+test queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 911 filtered out; finished in 40.99s
+

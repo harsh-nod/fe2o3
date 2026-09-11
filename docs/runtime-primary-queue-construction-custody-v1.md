@@ -7,6 +7,14 @@ R91 `a04060137e8df20f434682f7ee4dd6f06fb10174`. It composes the existing
 The full per-stage integrated failure campaign remains NATIVE-2A.3, and Linux
 qualification and executable refinement are separate requirements.
 
+R93 adds one shared production/test construction sequence above signed R92
+`777cbefae2721bb2edd60187a666e8d84dc80c91`. Private memory/platform primitive
+interfaces retain the same concrete Linux forwards, actual resource authority,
+foundation authentication and queue engine. The completed generic bundle stays
+rooted through checked finalization; conversion to the unchanged public Linux
+session then performs only field moves and inert defaults. There is no second
+test-only construction algorithm or public backend selection API.
+
 ## Retained Owner
 
 `queue_live/construction_primary.rs` owns one preallocated private `Box` from
@@ -94,10 +102,32 @@ Local mapped-shadow and mutex fixtures check disposed metadata, abort-on-cleanup
 failure and final gate admission. Existing R89 matrices now call the same ordinary
 forwarding helper used by the primary constructor.
 
-Source guards check actual integration placement and native ordering. These are
-not a complete Linux constructor simulation: the single same-session per-stage
-allocation/initialization/CREATE/doorbell error-and-panic matrix is NATIVE-2A.3.
-The primary owner implementation does not by itself complete that acceptance.
+R93's five integrated CPU tests run 121 cases through the shared primary sequence:
+six successes across three ring backings and owned/external runtime, 72 borrowed
+boundary failures, 22 actual fake-native failures, five CREATE uncertainty cases
+and sixteen independent currentness failures. The original R89 preparation
+fixture, session, Host/Device accounts and native records pass into the actual
+foundation and queue engine without substitution. Exact GTT token partition,
+Device lease/facts identity, native data bytes, pending allocation custody and
+N1/N2 usage are checked. Native errors/panics require their specific injected
+results; currentness checks before/after doorbell installation are independently
+required. Unpublished cleanup and published retention remain distinct.
+
+The platform leaves for runtime, event, CWSR shadows, doorbell and final gate are
+scripted and drop-counted. Their callbacks do not qualify Linux descriptors,
+CWSR BO headers, mapped shadow cleanup or the real gate as one composed sequence.
+Source guards and earlier local Linux-helper tests remain separate evidence.
+The [R93 record](evidence/local-r93-primary-sequence-2026-09-11/README.md)
+lists exact acceptance and deliberately rejected sequence mutations.
+
+NATIVE-2A.3 still needs integrated preparation-prefix failures and retained
+initialization descriptors/premises, generic borrowed/non-`Send` returned values,
+early external-runtime failures with caller slots retained, stronger exact platform
+owner identities, late CREATE output/ID and dependency failures, remaining
+projection/retain/partial-map variants and local Linux-helper composition.
+The larger fixture aperture requires a genuinely out-of-range projection fault;
+the old small-aperture constant cannot establish that rejection. This initial
+matrix does not complete full NATIVE-2A.3 acceptance.
 
 ## Remaining Boundaries
 

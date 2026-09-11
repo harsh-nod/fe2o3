@@ -4905,6 +4905,29 @@ fn ranges_overlap_usize(left: usize, left_len: usize, right: usize, right_len: u
 }
 
 #[cfg(test)]
+pub(super) use tests::actual_persistent_control_test_program;
+
+#[cfg(test)]
+impl DispatchResourceOwnerV1 {
+    pub(super) fn primary_fixture_identities_v1(
+        &self,
+    ) -> Vec<crate::shared_memory::SharedGttAllocationIdentityV1> {
+        use crate::shared_memory::PreparationMemoryFixtureV1 as Memory;
+        let mut identities: Vec<_> = self.code.iter().map(Memory::code_identity).collect();
+        identities.push(Memory::kernarg_identity(&self.kernarg));
+        identities.extend(
+            self.data
+                .iter()
+                .filter_map(|data| match Memory::data_storage(data) {
+                    Gfx942SdmaBufferStorageIdentityV1::Host(identity) => Some(identity),
+                    Gfx942SdmaBufferStorageIdentityV1::Device(_) => None,
+                }),
+        );
+        identities
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use fe2o3_amdhsa_loader::{AdmittedProfile, KernelGlobalBufferAbiV1, validate};
@@ -6089,7 +6112,7 @@ mod tests {
         }
     }
 
-    pub(super) fn actual_persistent_control_test_program<'a>(
+    pub(in crate::queue) fn actual_persistent_control_test_program<'a>(
         image: &'a [u8],
         signature: [u8; 32],
     ) -> ValidatedKernelEnvelope<'a> {

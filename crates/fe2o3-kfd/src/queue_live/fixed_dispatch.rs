@@ -80,7 +80,11 @@ impl SharedGttMemorySessionV1 {
                 None,
             )
         })?;
-        Ok(root.completed.take().expect("validated completed queue"))
+        Ok(root
+            .completed
+            .take()
+            .expect("validated completed queue")
+            .into_session())
     }
 }
 

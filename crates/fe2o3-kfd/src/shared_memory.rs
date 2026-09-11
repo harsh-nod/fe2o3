@@ -6448,6 +6448,7 @@ mod tests {
     mod dispatch_retention;
     mod host_backing;
     pub(super) mod preparation;
+    mod primary_construction;
     pub(super) mod pristine_abort;
     pub(super) mod queue_construction;
     mod transitions;
@@ -6484,6 +6485,7 @@ mod tests {
     struct FakeMapping {
         address: u64,
         bytes: Vec<u8>,
+        byte_offset: usize,
         active: bool,
         writable: bool,
         corrupt_readback: bool,
@@ -6712,6 +6714,7 @@ mod tests {
             let mut mapping = FakeMapping {
                 address: reservation.0,
                 bytes: vec![0; bytes],
+                byte_offset: 0,
                 active: true,
                 writable: false,
                 corrupt_readback: self.corrupt_readback,
@@ -6778,6 +6781,7 @@ mod tests {
                     reservation.0
                 },
                 bytes: vec![0; bytes],
+                byte_offset: 0,
                 active: true,
                 writable: false,
                 corrupt_readback: self.corrupt_readback,
@@ -6891,11 +6895,13 @@ mod tests {
             assert!(mapping.active);
             mapping.readback_calls.set(mapping.readback_calls.get() + 1);
             if mapping.corrupt_readback {
-                let mut corrupted = mapping.bytes[..requested_bytes].to_vec();
+                let mut corrupted = mapping.bytes
+                    [mapping.byte_offset..mapping.byte_offset + requested_bytes]
+                    .to_vec();
                 corrupted[0] ^= 1;
                 f(&corrupted)
             } else {
-                f(&mapping.bytes[..requested_bytes])
+                f(&mapping.bytes[mapping.byte_offset..mapping.byte_offset + requested_bytes])
             }
         }
         fn with_bytes_mut<R>(
@@ -6907,7 +6913,7 @@ mod tests {
                 std::panic::panic_any(("N2 native panic", "with_bytes_mut"));
             }
             assert!(mapping.active && mapping.writable);
-            f(&mut mapping.bytes[..requested_bytes])
+            f(&mut mapping.bytes[mapping.byte_offset..mapping.byte_offset + requested_bytes])
         }
         fn observe_i64_acquire(
             mapping: &mut Self::Mapping,
@@ -6922,7 +6928,8 @@ mod tests {
             )?;
             let bytes: [u8; 8] = mapping
                 .bytes
-                .get(offset..end.min(requested_bytes))
+                .get(mapping.byte_offset..)
+                .and_then(|bytes| bytes.get(offset..end.min(requested_bytes)))
                 .and_then(|bytes| bytes.try_into().ok())
                 .ok_or(MemorySessionError::KernelResultMalformed(
                     "fake acquired i64 range",

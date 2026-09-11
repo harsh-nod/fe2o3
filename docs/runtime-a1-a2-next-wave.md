@@ -1,5 +1,14 @@
 # A1/A2 Next-Wave Dispatch
 
+R93 adds the shared [primary construction sequence](runtime-primary-queue-construction-custody-v1.md)
+above signed R92 `777cbefae2721bb2edd60187a666e8d84dc80c91`, with
+[initial same-session evidence](evidence/local-r93-primary-sequence-2026-09-11/README.md).
+Five new CPU tests exercise 121 cases with original memory/accounts and actual
+resource authority; platform leaves remain scripted. Native next extends
+NATIVE-2A.3's preparation-prefix, generic-return, late-output and exact platform
+coverage before 2B auxiliary and 2C replacement custody. CO-1/2/3 and VER-1A
+remain independently ready. No new proof, Linux or performance acceptance is claimed.
+
 R92 implements the [primary constructor root](runtime-primary-queue-construction-custody-v1.md)
 above signed R91 `a04060137e8df20f434682f7ee4dd6f06fb10174`.
 Its [local evidence](evidence/local-r92-primary-construction-2026-09-11/README.md)

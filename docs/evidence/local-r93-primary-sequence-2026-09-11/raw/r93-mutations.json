@@ -1,0 +1,38 @@
+[
+  {
+    "name": "pre-doorbell",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+    "test": "queue::live::construction_primary::integration_tests::same_session_primary_currentness_faults_cover_create_and_both_doorbell_checks",
+    "assertion": "left: true\n right: false",
+    "edits": [
+      [
+        "        session\n            .engine\n            .prepare_operation()\n            .map_err(map_native)\n            .map_err(|error| terminal_creation(\"post-create currentness before doorbell\", error))?;\n",
+        ""
+      ]
+    ]
+  },
+  {
+    "name": "post-doorbell",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+    "test": "queue::live::construction_primary::integration_tests::same_session_primary_currentness_faults_cover_create_and_both_doorbell_checks",
+    "assertion": "each required currentness boundary must be reached",
+    "edits": [
+      [
+        "        session\n            .engine\n            .prepare_operation()\n            .map_err(map_native)\n            .map_err(|error| terminal_creation(\"post-doorbell currentness\", error))?;\n",
+        ""
+      ]
+    ]
+  },
+  {
+    "name": "publication",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+    "test": "queue::live::construction_primary::integration_tests::same_session_primary_currentness_faults_cover_create_and_both_doorbell_checks",
+    "assertion": "assertion failed: !t.calls.contains(&\"publish\")",
+    "edits": [
+      [
+        "        engine\n            .create_at_native_boundary(key, || {\n                self.published = Some(E::publish_shadows(\n                    self.unpublished.take().expect(\"unpublished shadow owner\"),\n                ));\n            })\n            .map_err(map_create)?;\n",
+        "        self.published = Some(E::publish_shadows(\n            self.unpublished.take().expect(\"unpublished shadow owner\"),\n        ));\n        engine\n            .create_at_native_boundary(key, || {})\n            .map_err(map_create)?;\n"
+      ]
+    ]
+  }
+]

@@ -1,0 +1,14 @@
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary.rs
+@@ -526,11 +526,6 @@
+     fn finish_doorbell(&mut self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+         let session = self.completed.as_mut().expect("completed session custody");
+         let outputs = self.outputs.expect("retained CREATE outputs");
+-        session
+-            .engine
+-            .prepare_operation()
+-            .map_err(map_native)
+-            .map_err(|error| terminal_creation("post-create currentness before doorbell", error))?;
+         let engine = &session.engine;
+         session.doorbell = Some(E::map_doorbell(
+             &engine.backend.session,

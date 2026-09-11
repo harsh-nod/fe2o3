@@ -45,7 +45,7 @@ pub(crate) enum PreparationNativeFaultV1 {
 }
 
 pub(crate) struct PreparationMemoryFixtureV1 {
-    fixture: BackingConstructorFixture,
+    pub(super) fixture: BackingConstructorFixture,
     code_count: usize,
     pub(crate) fault: Option<(PreparationMemoryCallV1, PreparationNativeFaultV1)>,
 }
@@ -96,8 +96,13 @@ impl PreparationMemoryFixtureV1 {
         )
     }
     pub(crate) fn new(configured: bool) -> Self {
-        let mut fixture = BackingConstructorFixture::new(
+        Self::with_aperture(configured, 0x20_0000)
+    }
+
+    pub(crate) fn with_aperture(configured: bool, bytes: u64) -> Self {
+        let mut fixture = BackingConstructorFixture::with_aperture(
             configured.then(|| Gfx942DeviceBackingBudgetV1::new(1 << 20, 64).unwrap()),
+            bytes,
         );
         if configured {
             fixture
@@ -116,7 +121,7 @@ impl PreparationMemoryFixtureV1 {
         }
     }
 
-    fn allocate<P: GttProfileV1>(
+    pub(crate) fn allocate<P: GttProfileV1>(
         &mut self,
         bytes: usize,
     ) -> Result<SharedGttAllocationV1<P, GttCpuWritableV1>, MemorySessionError> {
@@ -129,7 +134,7 @@ impl PreparationMemoryFixtureV1 {
         )
     }
 
-    fn map<P: MutableGpuGttProfileV1>(
+    pub(crate) fn map<P: MutableGpuGttProfileV1>(
         &mut self,
         token: SharedGttAllocationV1<P, GttCpuWritableV1>,
     ) -> Result<SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>, MemorySessionError> {
@@ -325,6 +330,22 @@ impl PreparationMemoryFixtureV1 {
         );
     }
 
+    pub(crate) fn assert_original_data_unchanged(&self, before: &PreparationMemoryObservationV1) {
+        let after = self.observation();
+        for expected in &before.data {
+            assert_eq!(
+                after
+                    .data
+                    .iter()
+                    .filter(|r| r.identity == expected.identity)
+                    .collect::<Vec<_>>(),
+                vec![expected],
+                "original data bytes, mapping and native record"
+            );
+        }
+        assert_eq!(after.device, before.device, "original N2 usage unchanged");
+    }
+
     pub(crate) fn assert_control_custody(
         &self,
         owners: &[SharedGttAllocationIdentityV1],
@@ -432,7 +453,8 @@ impl PreparationMemoryFixtureV1 {
             .iter()
             .find(|r| model_keys(self.fixture.vm, r.id, r.generation).2 == mapping)
             .unwrap();
-        &record.mapping.as_ref().unwrap().bytes[..record.layout.requested_bytes]
+        let mapping = record.mapping.as_ref().unwrap();
+        &mapping.bytes[mapping.byte_offset..mapping.byte_offset + record.layout.requested_bytes]
     }
 }
 

@@ -1,0 +1,14 @@
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary.rs
+@@ -541,11 +541,6 @@
+         let (slice_bytes, byte_offset) = E::doorbell_observation(doorbell);
+         session.observation.doorbell_slice_bytes = slice_bytes;
+         session.observation.doorbell_byte_offset = byte_offset;
+-        session
+-            .engine
+-            .prepare_operation()
+-            .map_err(map_native)
+-            .map_err(|error| terminal_creation("post-doorbell currentness", error))?;
+         Ok(())
+     }
+ }

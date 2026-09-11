@@ -1,0 +1,17 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "-p",
+    "fe2o3-kfd",
+    "--lib",
+    "--all-features"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r93-kfd-first.log",
+  "source": "/home/harsh/.codex-tmp/r93-kfd-first-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "elapsed_seconds": 73.508
+}

@@ -240,7 +240,9 @@ pub use compute_sdma_coexistence::Gfx942R66NativeObservationFailureV1;
 use construction::{QueueResourcePrefixV1, RingConstructionV1};
 #[cfg(test)]
 pub(super) use construction_primary::settle_queue_constructor_fixture_v1;
-use construction_primary::{PrimaryQueueConstructionV1, capture_returned_preparation_v1};
+use construction_primary::{
+    PrimaryMemoryV1, PrimaryQueueConstructionV1, capture_returned_preparation_v1,
+};
 #[allow(unsafe_code)]
 #[path = "queue_dispatch_live.rs"]
 mod dispatch;
@@ -690,13 +692,15 @@ impl NativeAqlSubmissionBackendV1 for LinuxAqlSubmissionBackendV1<'_> {
     }
 }
 
-struct LinuxNativeQueueBackendV1 {
-    session: SharedGttMemorySessionV1,
+type LinuxNativeQueueBackendV1 = PrimaryQueueBackendV1<SharedGttMemorySessionV1>;
+
+struct PrimaryQueueBackendV1<M> {
+    session: M,
     foundation: Option<QueueModelFoundationV1>,
     foundation_in_engine: bool,
 }
 
-impl NativeQueueBackendV1 for LinuxNativeQueueBackendV1 {
+impl<M: PrimaryMemoryV1> NativeQueueBackendV1 for PrimaryQueueBackendV1<M> {
     type ResourceAuthority = QueueResourceAuthorityV1;
 
     fn opener_pid(&self) -> u32 {
@@ -741,44 +745,23 @@ impl NativeQueueBackendV1 for LinuxNativeQueueBackendV1 {
 
     fn create(
         &mut self,
-        mut args: fe2o3_kfd_uapi::KfdIoctlCreateQueueArgs,
+        args: fe2o3_kfd_uapi::KfdIoctlCreateQueueArgs,
     ) -> QueueKernelOutcomeV1<fe2o3_kfd_uapi::KfdIoctlCreateQueueArgs> {
-        let status = match crate::queue_linux::create_queue(self.session.kfd_fd(), &mut args) {
-            Ok(()) => fe2o3_runtime_model::QueueSyscallStatusV1::Succeeded,
-            Err(_) => fe2o3_runtime_model::QueueSyscallStatusV1::Indeterminate,
-        };
-        QueueKernelOutcomeV1 {
-            value: args,
-            status,
-        }
+        self.session.create_queue(args)
     }
 
     fn update(
         &mut self,
         args: fe2o3_kfd_uapi::KfdIoctlUpdateQueueArgs,
     ) -> QueueKernelOutcomeV1<fe2o3_kfd_uapi::KfdIoctlUpdateQueueArgs> {
-        let status = match crate::queue_linux::update_queue(self.session.kfd_fd(), &args) {
-            Ok(()) => fe2o3_runtime_model::QueueSyscallStatusV1::Succeeded,
-            Err(_) => fe2o3_runtime_model::QueueSyscallStatusV1::Indeterminate,
-        };
-        QueueKernelOutcomeV1 {
-            value: args,
-            status,
-        }
+        self.session.update_queue(args)
     }
 
     fn destroy(
         &mut self,
-        mut args: fe2o3_kfd_uapi::KfdIoctlDestroyQueueArgs,
+        args: fe2o3_kfd_uapi::KfdIoctlDestroyQueueArgs,
     ) -> QueueKernelOutcomeV1<fe2o3_kfd_uapi::KfdIoctlDestroyQueueArgs> {
-        let status = match crate::queue_linux::destroy_queue(self.session.kfd_fd(), &mut args) {
-            Ok(()) => fe2o3_runtime_model::QueueSyscallStatusV1::Succeeded,
-            Err(_) => fe2o3_runtime_model::QueueSyscallStatusV1::Indeterminate,
-        };
-        QueueKernelOutcomeV1 {
-            value: args,
-            status,
-        }
+        self.session.destroy_queue(args)
     }
 }
 
@@ -4810,7 +4793,10 @@ impl CheckedGfx942XnackMinusDevice {
             )
         })?;
         Ok((
-            root.completed.take().expect("validated completed queue"),
+            root.completed
+                .take()
+                .expect("validated completed queue")
+                .into_session(),
             root.preparation.take().expect("returned preparation"),
         ))
     }
@@ -6407,7 +6393,11 @@ impl ComputeAqlQueueSessionV1 {
             root.dispatch = prepare_dispatch(root.memory.as_mut().expect("construction memory"))?;
             root.construct(entry, geometry, ring_bytes, ring_backing, external_runtime)
         })?;
-        Ok(root.completed.take().expect("validated completed queue"))
+        Ok(root
+            .completed
+            .take()
+            .expect("validated completed queue")
+            .into_session())
     }
 
     pub const fn observation(&self) -> ComputeAqlQueueObservationV1 {
@@ -19660,15 +19650,13 @@ mod tests {
             .split("fn map_and_retain_resources(")
             .next()
             .unwrap();
-        let enable = runtime.find("LinuxKfdRuntimeEnabledV1::enable").unwrap();
+        let enable = runtime.find("E::enable_runtime").unwrap();
         let handoff = runtime
             .find("runtime.take().expect(\"validated debug runtime authority\")")
             .unwrap();
-        let arm = runtime
-            .find("arm_process_global_kfd_runtime_gate_for_creation_v1()")
-            .unwrap();
-        let event = runtime.find("LinuxQueueExceptionEventV1::create").unwrap();
-        let shadows = runtime.find("LinuxCwsrShadowPagesV1::install").unwrap();
+        let arm = runtime.find("E::arm_creation(memory)").unwrap();
+        let event = runtime.find("E::create_event(memory)").unwrap();
+        let shadows = runtime.find("E::install_shadows").unwrap();
         assert!(enable < handoff && handoff < arm && arm < event && event < shadows);
         assert!(!runtime.contains("publish_for_native_queue_creation"));
 
@@ -19689,7 +19677,7 @@ mod tests {
         let mapping = construct.find("self.map_and_retain_resources(").unwrap();
         let create = construct.find("self.create_and_assemble(").unwrap();
         let doorbell = construct.find("self.finish_doorbell()?").unwrap();
-        let finish = construct.find(".finish_checked(pid)?").unwrap();
+        let finish = construct.find("E::finish_creation(").unwrap();
         assert!(
             control_entry < control
                 && control < runtime
@@ -19707,18 +19695,15 @@ mod tests {
             .next()
             .unwrap();
         let native = create.find(".create_at_native_boundary(key").unwrap();
-        let publish = create.find(".publish_for_native_queue_creation()").unwrap();
+        let publish = create.find("E::publish_shadows(").unwrap();
         let dependency = create
             .find("ComputeDependencySessionOwnerV1::new(key.id.0)")
             .unwrap();
         let assembled = create
-            .find("self.completed = Some(ComputeAqlQueueSessionV1")
+            .find("self.completed = Some(CompletedPrimaryV1")
             .unwrap();
         assert!(native < publish && publish < dependency && dependency < assembled);
-        assert_eq!(
-            create.matches("publish_for_native_queue_creation").count(),
-            1
-        );
+        assert_eq!(create.matches("E::publish_shadows").count(), 1);
         let commit = &create[assembled..];
         assert!(!commit.contains('?'));
 
@@ -19730,10 +19715,34 @@ mod tests {
             .next()
             .unwrap();
         assert!(doorbell.contains("self.completed.as_mut()"));
-        assert_eq!(doorbell.matches(".check_currentness()").count(), 2);
-        let map = doorbell.find("LinuxDoorbellSliceV1::map").unwrap();
-        let observation = doorbell.find("doorbell.slice_bytes()").unwrap();
+        assert_eq!(doorbell.matches(".prepare_operation()").count(), 2);
+        let map = doorbell.find("E::map_doorbell").unwrap();
+        let observation = doorbell.find("E::doorbell_observation").unwrap();
         assert!(doorbell.find("session.doorbell = Some(").unwrap() < map && map < observation);
+        let platform = include_str!("queue_live/construction_primary/environment.rs");
+        for primitive in [
+            "LinuxKfdRuntimeEnabledV1::enable",
+            "LinuxQueueExceptionEventV1::create",
+            "LinuxCwsrShadowPagesV1::install",
+            "LinuxDoorbellSliceV1::map",
+            "arm.finish_checked(pid)",
+        ] {
+            assert!(platform.contains(primitive));
+        }
+        let conversion = platform.split("fn into_session(self)").nth(1).unwrap();
+        for forbidden in [
+            "?",
+            "check_currentness",
+            "prepare_operation",
+            "::map(",
+            "::allocate",
+            "::enable(",
+        ] {
+            assert!(
+                !conversion.contains(forbidden),
+                "fallible post-gate conversion: {forbidden}"
+            );
+        }
     }
 
     #[test]

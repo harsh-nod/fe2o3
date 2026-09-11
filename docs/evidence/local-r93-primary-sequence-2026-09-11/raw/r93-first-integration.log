@@ -1,0 +1,33 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0425]: cannot find type `ValidatedKernelEnvelope` in this scope
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:448:9
+    |
+448 |     Vec<ValidatedKernelEnvelope<'static>>,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+    = note: struct `crate::queue::dispatch_binding::tests::ValidatedKernelEnvelope` exists but is inaccessible
+help: consider importing this struct
+    |
+  1 + use fe2o3_amdhsa_loader::ValidatedKernelEnvelope;
+    |
+
+error[E0433]: cannot find type `AqlDispatchGeometryV1` in this scope
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:471:13
+    |
+471 |             AqlDispatchGeometryV1::new([256, 1, 1], [256, 1, 1]).unwrap(),
+    |             ^^^^^^^^^^^^^^^^^^^^^ use of undeclared type `AqlDispatchGeometryV1`
+    |
+    = note: struct `crate::queue::dispatch_binding::tests::AqlDispatchGeometryV1` exists but is inaccessible
+help: a struct with a similar name exists
+    |
+471 -             AqlDispatchGeometryV1::new([256, 1, 1], [256, 1, 1]).unwrap(),
+471 +             DispatchGeometryV1::new([256, 1, 1], [256, 1, 1]).unwrap(),
+    |
+help: consider importing this struct
+    |
+  1 + use fe2o3_aql::AqlDispatchGeometryV1;
+    |
+
+Some errors have detailed explanations: E0425, E0433.
+For more information about an error, try `rustc --explain E0425`.
+error: could not compile `fe2o3-kfd` (lib test) due to 2 previous errors

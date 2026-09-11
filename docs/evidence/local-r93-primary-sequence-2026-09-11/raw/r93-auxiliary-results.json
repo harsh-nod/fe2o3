@@ -1,0 +1,193 @@
+[
+  {
+    "name": "primary",
+    "command": [
+      "cargo",
+      "+nightly-2026-04-03",
+      "test",
+      "--locked",
+      "--offline",
+      "-p",
+      "fe2o3-kfd",
+      "--all-features",
+      "--lib",
+      "queue::live::construction_primary::"
+    ],
+    "log": "/home/harsh/.codex-tmp/r93-primary.log",
+    "returncode": 0,
+    "elapsed_seconds": 78.122
+  },
+  {
+    "name": "ordinary",
+    "command": [
+      "cargo",
+      "+nightly-2026-04-03",
+      "test",
+      "--locked",
+      "--offline",
+      "-p",
+      "fe2o3-kfd",
+      "--all-features",
+      "--lib",
+      "ordinary_constructor_root_"
+    ],
+    "log": "/home/harsh/.codex-tmp/r93-ordinary.log",
+    "returncode": 0,
+    "elapsed_seconds": 0.319
+  },
+  {
+    "name": "construction",
+    "command": [
+      "cargo",
+      "+nightly-2026-04-03",
+      "test",
+      "--locked",
+      "--offline",
+      "-p",
+      "fe2o3-kfd",
+      "--all-features",
+      "--lib",
+      "queue::live::construction::"
+    ],
+    "log": "/home/harsh/.codex-tmp/r93-construction.log",
+    "returncode": 0,
+    "elapsed_seconds": 0.267
+  },
+  {
+    "name": "linux-helpers",
+    "command": [
+      "cargo",
+      "+nightly-2026-04-03",
+      "test",
+      "--locked",
+      "--offline",
+      "-p",
+      "fe2o3-kfd",
+      "--all-features",
+      "--lib",
+      "queue_linux::tests::"
+    ],
+    "log": "/home/harsh/.codex-tmp/r93-linux-helpers.log",
+    "returncode": 0,
+    "elapsed_seconds": 0.471
+  },
+  {
+    "name": "initialization",
+    "command": [
+      "cargo",
+      "+nightly-2026-04-03",
+      "test",
+      "--locked",
+      "--offline",
+      "-p",
+      "fe2o3-kfd",
+      "--all-features",
+      "--lib",
+      "queue::tests::initialization::"
+    ],
+    "log": "/home/harsh/.codex-tmp/r93-initialization.log",
+    "returncode": 0,
+    "elapsed_seconds": 0.267
+  },
+  {
+    "name": "transitions",
+    "command": [
+      "cargo",
+      "+nightly-2026-04-03",
+      "test",
+      "--locked",
+      "--offline",
+      "-p",
+      "fe2o3-kfd",
+      "--all-features",
+      "--lib",
+      "shared_memory::tests::transitions::"
+    ],
+    "log": "/home/harsh/.codex-tmp/r93-transitions.log",
+    "returncode": 0,
+    "elapsed_seconds": 0.267
+  },
+  {
+    "name": "preparation",
+    "command": [
+      "cargo",
+      "+nightly-2026-04-03",
+      "test",
+      "--locked",
+      "--offline",
+      "-p",
+      "fe2o3-kfd",
+      "--all-features",
+      "--lib",
+      "preparation::tests::"
+    ],
+    "log": "/home/harsh/.codex-tmp/r93-preparation.log",
+    "returncode": 0,
+    "elapsed_seconds": 0.731
+  },
+  {
+    "name": "bind",
+    "command": [
+      "cargo",
+      "+nightly-2026-04-03",
+      "test",
+      "--locked",
+      "--offline",
+      "-p",
+      "fe2o3-kfd",
+      "--all-features",
+      "--lib",
+      "persistent_bind_"
+    ],
+    "log": "/home/harsh/.codex-tmp/r93-bind.log",
+    "returncode": 0,
+    "elapsed_seconds": 0.267
+  },
+  {
+    "name": "proof-inventory",
+    "command": [
+      "python3",
+      "-I",
+      "crates/fe2o3-runtime-model/verus/check-negative-quality.py",
+      "crates/fe2o3-runtime-model/verus/negative",
+      "crates/fe2o3-runtime-model/verus/verify-verus.sh"
+    ],
+    "log": "/home/harsh/.codex-tmp/r93-proof-inventory.log",
+    "returncode": 0,
+    "elapsed_seconds": 1.576
+  },
+  {
+    "name": "production-metadata",
+    "command": [
+      "cargo",
+      "+nightly-2026-04-03",
+      "metadata",
+      "--locked",
+      "--offline",
+      "--no-default-features",
+      "--format-version",
+      "1",
+      "--filter-platform",
+      "x86_64-unknown-linux-musl"
+    ],
+    "log": "/home/harsh/.codex-tmp/r93-production-metadata.log",
+    "returncode": 0,
+    "elapsed_seconds": 0.521
+  },
+  {
+    "name": "production-audit",
+    "command": [
+      "python3",
+      "-B",
+      "scripts/runtime_pure_rust_audit.py",
+      "metadata",
+      "--input",
+      "/home/harsh/.codex-tmp/r93-production-metadata.log",
+      "--root",
+      "fe2o3-runtime"
+    ],
+    "log": "/home/harsh/.codex-tmp/r93-production-audit.log",
+    "returncode": 0,
+    "elapsed_seconds": 0.168
+  }
+]

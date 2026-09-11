@@ -1,0 +1,144 @@
+{
+  "gnu-tests": {
+    "passed": 2496,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "musl-tests": {
+    "passed": 2496,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "gnu-docs": {
+    "passed": 108,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 7
+  },
+  "musl-docs": {
+    "passed": 91,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 5
+  },
+  "musl-host-docs": {
+    "passed": 16,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 2
+  },
+  "gnu-host": {
+    "passed": 258,
+    "failed": 0,
+    "ignored": 4,
+    "harnesses": 1
+  },
+  "musl-host": {
+    "passed": 141,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "macro-fixtures": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "primary": {
+    "passed": 13,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "ordinary": {
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "construction": {
+    "passed": 6,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "linux-helpers": {
+    "passed": 20,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "initialization": {
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "transitions": {
+    "passed": 20,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "preparation": {
+    "passed": 23,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "bind": {
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "base_commit": "777cbefae2721bb2edd60187a666e8d84dc80c91",
+  "final_gate_attempt": "r93-final",
+  "non_documentation_source_identities_checked": 5639,
+  "new_kfd_cpu_test_functions": 5,
+  "shared_production_primary_sequence": true,
+  "same_session_integration_cases": 121,
+  "original_accounts_and_actual_resource_authority": true,
+  "scripted_platform_leaves": true,
+  "integrated_generic_returned_preparation": false,
+  "full_native2a3_per_stage_integration_accepted": false,
+  "auxiliary_constructor_outer_custody": false,
+  "replacement_preparation_outer_custody": false,
+  "unreturned_callback_values_retained": false,
+  "new_bootstrap_backing_charges": false,
+  "native_generated_adoption_hooks_installed": false,
+  "linux_qualified": false,
+  "adapter_refinement_proved": false,
+  "gpu_performance_measured": false,
+  "verus_solver_rerun": false,
+  "new_verus_theorems": 0,
+  "negative_inventory_files": 686,
+  "model_and_proof_sources_unchanged_from": "fb1e27e66cee27bb11f0b7c08f2d5994c5d168da",
+  "expected_negative_mutations": [
+    {
+      "name": "pre-doorbell",
+      "source": "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+      "assertion": "left: true\n right: false",
+      "mutated_source_sha256": "7d23426b113d503d13a90f69230c512131311fb4fcdc837deb492feea0def4db",
+      "patch_sha256": "dcad5daa8f8ec3339159dedc0ba25952e8e3323bdca23e78f7ee6a4c636d7f52"
+    },
+    {
+      "name": "post-doorbell",
+      "source": "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+      "assertion": "each required currentness boundary must be reached",
+      "mutated_source_sha256": "d7e89afc3b7da5ccea93f88b157340862d36bef86481bf21b0739aab514813f0",
+      "patch_sha256": "8e3a14964c9a80e5fd2d8010974ddb5907e1f6da2b7cdc2729ce2f0e50423032"
+    },
+    {
+      "name": "publication",
+      "source": "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+      "assertion": "assertion failed: !t.calls.contains(&\"publish\")",
+      "mutated_source_sha256": "6b8d088a4be89b36546964cdd2a95efea85a035c05c6a933aac6ee3b1b214d9f",
+      "patch_sha256": "0bdc7931667d2a05730a18149b3b372b200b66854ef78ade145a829ddf65948d"
+    }
+  ],
+  "production_metadata_sha256": "6c0cac53358224a31c356d91228b602ae8545f7c156a0c695f103533238054ca"
+}

@@ -1,0 +1,155 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+warning: trait `shared_memory::GpuMappedGttStateV1` is more private than the item `primary_construction::<impl PreparationMemoryFixtureV1>::primary_retain`
+   --> crates/fe2o3-kfd/src/shared_memory/tests/primary_construction.rs:87:5
+    |
+ 87 | /     pub(crate) fn primary_retain<R, P, S>(
+ 88 | |         &mut self,
+ 89 | |         token: SharedGttAllocationV1<P, S>,
+ 90 | |     ) -> Result<SharedGttQueueResourceAuthorityV1<R, P, S>, MemorySessionError>
+...   |
+ 93 | |         P: GttProfileV1,
+ 94 | |         S: GpuMappedGttStateV1,
+    | |_______________________________^ method `primary_construction::<impl PreparationMemoryFixtureV1>::primary_retain` is reachable at visibility `pub(crate)`
+    |
+note: but trait `shared_memory::GpuMappedGttStateV1` is only usable at visibility `pub(self)`
+   --> crates/fe2o3-kfd/src/shared_memory.rs:897:1
+    |
+897 | trait GpuMappedGttStateV1: GttAllocationStateV1 {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: `#[warn(private_bounds)]` on by default
+
+warning: trait `environment::PrimaryEnvironmentV1` is more private than the item `live::construction_primary::PrimaryQueueConstructionV1`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary.rs:110:1
+    |
+110 | pub(super) struct PrimaryQueueConstructionV1<P, E: PrimaryEnvironmentV1 = LinuxPrimaryEnvironmentV1>
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ struct `live::construction_primary::PrimaryQueueConstructionV1` is reachable at visibility `pub(in crate::queue::live)`
+    |
+note: but trait `environment::PrimaryEnvironmentV1` is only usable at visibility `pub(in crate::queue::live::construction_primary)`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs:5:1
+    |
+  5 | pub(super) trait PrimaryEnvironmentV1 {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated type `environment::PrimaryEnvironmentV1::Memory` is more private than the item `live::construction_primary::PrimaryQueueConstructionV1::memory`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary.rs:112:5
+    |
+112 |     pub(super) memory: Option<E::Memory>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ field `live::construction_primary::PrimaryQueueConstructionV1::memory` is reachable at visibility `pub(in crate::queue::live)`
+    |
+note: but associated type `environment::PrimaryEnvironmentV1::Memory` is only usable at visibility `pub(in crate::queue::live::construction_primary)`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs:6:5
+    |
+  6 |     type Memory: PrimaryMemoryV1;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: `#[warn(private_interfaces)]` on by default
+
+warning: trait `environment::PrimaryEnvironmentV1` is more private than the item `live::construction_primary::PrimaryQueueConstructionV1::memory`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary.rs:112:5
+    |
+112 |     pub(super) memory: Option<E::Memory>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ field `live::construction_primary::PrimaryQueueConstructionV1::memory` is reachable at visibility `pub(in crate::queue::live)`
+    |
+note: but trait `environment::PrimaryEnvironmentV1` is only usable at visibility `pub(in crate::queue::live::construction_primary)`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs:5:1
+    |
+  5 | pub(super) trait PrimaryEnvironmentV1 {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: trait `environment::PrimaryEnvironmentV1` is more private than the item `live::construction_primary::PrimaryQueueConstructionV1<P, E>`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary.rs:172:1
+    |
+172 | impl<P, E: PrimaryEnvironmentV1> PrimaryQueueConstructionV1<P, E> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ implementation `live::construction_primary::PrimaryQueueConstructionV1<P, E>` is reachable at visibility `pub(in crate::queue::live)`
+    |
+note: but trait `environment::PrimaryEnvironmentV1` is only usable at visibility `pub(in crate::queue::live::construction_primary)`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs:5:1
+    |
+  5 | pub(super) trait PrimaryEnvironmentV1 {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated type `environment::PrimaryEnvironmentV1::Runtime` is more private than the item `live::construction_primary::PrimaryQueueConstructionV1::<P, E>::construct`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary.rs:224:5
+    |
+224 | /     pub(super) fn construct(
+225 | |         &mut self,
+226 | |         entry: &mut UserptrConstructionEntryV1,
+227 | |         geometry: Gfx942AqlQueueResourcePlanV1,
+...   |
+230 | |         external_runtime: Option<ExternalPrimaryRuntimeV1<'_, E>>,
+231 | |     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+    | |__________________________________________________^ method `live::construction_primary::PrimaryQueueConstructionV1::<P, E>::construct` is reachable at visibility `pub(in crate::queue::live)`
+    |
+note: but associated type `environment::PrimaryEnvironmentV1::Runtime` is only usable at visibility `pub(in crate::queue::live::construction_primary)`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs:7:5
+    |
+  7 |     type Runtime;
+    |     ^^^^^^^^^^^^
+
+warning: trait `environment::PrimaryEnvironmentV1` is more private than the item `live::construction_primary::PrimaryQueueConstructionV1::<P, E>::construct`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary.rs:224:5
+    |
+224 | /     pub(super) fn construct(
+225 | |         &mut self,
+226 | |         entry: &mut UserptrConstructionEntryV1,
+227 | |         geometry: Gfx942AqlQueueResourcePlanV1,
+...   |
+230 | |         external_runtime: Option<ExternalPrimaryRuntimeV1<'_, E>>,
+231 | |     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+    | |__________________________________________________^ method `live::construction_primary::PrimaryQueueConstructionV1::<P, E>::construct` is reachable at visibility `pub(in crate::queue::live)`
+    |
+note: but trait `environment::PrimaryEnvironmentV1` is only usable at visibility `pub(in crate::queue::live::construction_primary)`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs:5:1
+    |
+  5 | pub(super) trait PrimaryEnvironmentV1 {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated type `environment::PrimaryEnvironmentV1::RuntimeControl` is more private than the item `live::construction_primary::PrimaryQueueConstructionV1::<P, E>::construct`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary.rs:224:5
+    |
+224 | /     pub(super) fn construct(
+225 | |         &mut self,
+226 | |         entry: &mut UserptrConstructionEntryV1,
+227 | |         geometry: Gfx942AqlQueueResourcePlanV1,
+...   |
+230 | |         external_runtime: Option<ExternalPrimaryRuntimeV1<'_, E>>,
+231 | |     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+    | |__________________________________________________^ method `live::construction_primary::PrimaryQueueConstructionV1::<P, E>::construct` is reachable at visibility `pub(in crate::queue::live)`
+    |
+note: but associated type `environment::PrimaryEnvironmentV1::RuntimeControl` is only usable at visibility `pub(in crate::queue::live::construction_primary)`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs:8:5
+    |
+  8 |     type RuntimeControl;
+    |     ^^^^^^^^^^^^^^^^^^^
+
+warning: trait `environment::PrimaryEnvironmentV1` is more private than the item `CompletedPrimaryV1`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs:200:1
+    |
+200 | pub(in crate::queue::live) struct CompletedPrimaryV1<E: PrimaryEnvironmentV1> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ struct `CompletedPrimaryV1` is reachable at visibility `pub(in crate::queue::live)`
+    |
+note: but trait `environment::PrimaryEnvironmentV1` is only usable at visibility `pub(in crate::queue::live::construction_primary)`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs:5:1
+    |
+  5 | pub(super) trait PrimaryEnvironmentV1 {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: associated type `environment::PrimaryEnvironmentV1::Runtime` is private
+    --> crates/fe2o3-kfd/src/queue_live.rs:4787:18
+     |
+4787 |             root.construct(
+     |                  ^^^^^^^^^ private associated type
+
+error: associated type `environment::PrimaryEnvironmentV1::Runtime` is private
+    --> crates/fe2o3-kfd/src/queue_live.rs:6394:18
+     |
+6394 |             root.construct(entry, geometry, ring_bytes, ring_backing, external_runtime)
+     |                  ^^^^^^^^^ private associated type
+
+error: associated type `environment::PrimaryEnvironmentV1::Runtime` is private
+  --> crates/fe2o3-kfd/src/queue_live/fixed_dispatch.rs:75:18
+   |
+75 |             root.construct(
+   |                  ^^^^^^^^^ private associated type
+
+warning: `fe2o3-kfd` (lib test) generated 9 warnings
+error: could not compile `fe2o3-kfd` (lib test) due to 3 previous errors; 9 warnings emitted

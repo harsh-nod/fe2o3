@@ -140,6 +140,42 @@ pub(super) struct QueueResourcePrefixV1 {
 }
 
 impl QueueResourcePrefixV1 {
+    #[cfg(test)]
+    pub(super) fn primary_fixture_identities_v1(&self) -> Vec<SharedGttAllocationIdentityV1> {
+        use crate::shared_memory::PreparationMemoryFixtureV1 as Memory;
+        let mut ids = Vec::new();
+        let mut ring = |ring: &RingAuthority| {
+            ids.push(match ring {
+                RingAuthority::AqlSpecial(t) => Memory::primary_token_identity(t),
+                RingAuthority::ExecutableProbe(t) => Memory::primary_token_identity(t),
+                RingAuthority::UserptrProbe(t) => Memory::primary_token_identity(t),
+            })
+        };
+        if let Some(r) = &self.ring {
+            ring(r);
+        }
+        if let Some(complete) = &self.complete {
+            ring(&complete.ring);
+        }
+        if let Some(t) = &self.control {
+            ids.push(Memory::primary_token_identity(t));
+        }
+        if let Some(t) = &self.eop {
+            ids.push(Memory::primary_token_identity(t));
+        }
+        if let Some(t) = &self.context_save {
+            ids.push(Memory::primary_token_identity(t));
+        }
+        if let Some(a) = &self.complete {
+            ids.extend([
+                Memory::primary_token_identity(&a.control),
+                Memory::primary_token_identity(&a.eop),
+                Memory::primary_token_identity(&a.context_save),
+            ]);
+        }
+        ids
+    }
+
     pub(super) fn new(
         ring: RingAuthority,
         control: ControlAuthority,

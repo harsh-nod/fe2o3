@@ -1,0 +1,19 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "check",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--all-targets"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r93-first-check.log",
+  "source": "/home/harsh/.codex-tmp/r93-first-check-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "elapsed_seconds": 13.118
+}

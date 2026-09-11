@@ -1,0 +1,19 @@
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary.rs
+@@ -460,12 +460,11 @@
+             }
+             Err(error) => return Err(map_native(error)),
+         };
++        self.published = Some(E::publish_shadows(
++            self.unpublished.take().expect("unpublished shadow owner"),
++        ));
+         engine
+-            .create_at_native_boundary(key, || {
+-                self.published = Some(E::publish_shadows(
+-                    self.unpublished.take().expect("unpublished shadow owner"),
+-                ));
+-            })
++            .create_at_native_boundary(key, || {})
+             .map_err(map_create)?;
+         E::mark_queue_created(self.runtime.as_mut().expect("runtime"))?;
+         self.outputs = Some(engine.create_outputs(key).ok_or_else(|| {
