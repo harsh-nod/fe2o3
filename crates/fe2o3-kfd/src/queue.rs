@@ -598,29 +598,66 @@ struct NativeQueueEngineV1<B: NativeQueueBackendV1> {
     authority_poisoned: bool,
 }
 
-#[allow(dead_code)]
-impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
-    fn new(mut backend: B) -> Result<Self, NativeQueueAdapterErrorV1> {
+struct NativeQueueEngineInitializationV1<B: NativeQueueBackendV1> {
+    backend: Option<B>,
+    foundation: Option<QueueModelFoundationV1>,
+    started: bool,
+}
+
+impl<B: NativeQueueBackendV1> NativeQueueEngineInitializationV1<B> {
+    fn new(backend: B) -> Self {
+        Self {
+            backend: Some(backend),
+            foundation: None,
+            started: false,
+        }
+    }
+
+    fn initialize(&mut self) -> Result<NativeQueueEngineV1<B>, NativeQueueAdapterErrorV1> {
+        if self.started {
+            return Err(NativeQueueAdapterErrorV1::AuthorityPoisoned);
+        }
+        self.started = true;
+        let backend = self.backend.as_mut().expect("initial backend custody");
         let opener_pid = backend.opener_pid();
         if opener_pid != std::process::id() {
             return Err(NativeQueueAdapterErrorV1::ProcessChanged);
         }
-        let foundation = backend.take_model_foundation()?;
-        backend.authenticate_model_foundation(&foundation)?;
-        let domain = foundation.identity().domain_id();
-        Ok(Self {
-            backend,
+        self.foundation = Some(backend.take_model_foundation()?);
+        let foundation = self
+            .foundation
+            .as_ref()
+            .expect("returned foundation custody");
+        backend.authenticate_model_foundation(foundation)?;
+        let model = QueueLifecycleStateV1::new(foundation.identity().domain_id());
+        // Only nonallocating moves follow the final borrowed authentication.
+        Ok(NativeQueueEngineV1 {
+            backend: self.backend.take().expect("authenticated backend"),
             opener_pid,
-            foundation,
-            model: QueueLifecycleStateV1::new(domain),
+            foundation: self.foundation.take().expect("authenticated foundation"),
+            model,
             resources: Vec::new(),
             authority_poisoned: false,
         })
+    }
+}
+
+#[allow(dead_code)]
+impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
+    fn new(backend: B) -> Result<Self, NativeQueueAdapterErrorV1> {
+        NativeQueueEngineInitializationV1::new(backend).initialize()
     }
 
     fn admit(
         &mut self,
         authority: B::ResourceAuthority,
+    ) -> Result<QueueKeyV1, NativeQueueAdapterErrorV1> {
+        self.admit_in_place(&mut Some(authority))
+    }
+
+    fn admit_in_place(
+        &mut self,
+        authority: &mut Option<B::ResourceAuthority>,
     ) -> Result<QueueKeyV1, NativeQueueAdapterErrorV1> {
         if self.authority_poisoned {
             return Err(NativeQueueAdapterErrorV1::AuthorityPoisoned);
@@ -628,7 +665,9 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
         self.resources
             .try_reserve(1)
             .map_err(|_| NativeQueueAdapterErrorV1::JournalCapacity)?;
-        let view = self.backend.resource_view(&authority)?;
+        let view = self.backend.resource_view(authority.as_ref().ok_or(
+            NativeQueueAdapterErrorV1::InvalidResource("missing queue authority"),
+        )?)?;
         if view.buffers.ring_base_address == 0
             || view.buffers.write_pointer_address == 0
             || view.buffers.read_pointer_address == 0
@@ -651,7 +690,7 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
             self.authority_poisoned = true;
             self.resources.push(RetainedQueueResourcesV1 {
                 key: view.plan.queue,
-                authority: Some(authority),
+                authority: authority.take(),
                 view,
                 create_outputs: None,
             });
@@ -673,7 +712,7 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
         self.model = model;
         self.resources.push(RetainedQueueResourcesV1 {
             key,
-            authority: Some(authority),
+            authority: authority.take(),
             view,
             create_outputs: None,
         });

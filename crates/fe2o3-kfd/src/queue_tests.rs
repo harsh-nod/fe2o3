@@ -12,6 +12,9 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 
+#[path = "queue_initialization_tests.rs"]
+mod initialization;
+
 const TEST_KFD_DYNAMIC_MAJOR: u32 = 511;
 
 fn digest(seed: u8) -> IdentityDigestV1 {
@@ -527,6 +530,14 @@ struct ScriptedOutcome {
     mutation: Mutation,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BootstrapCallV1 {
+    Opener,
+    Take,
+    Authenticate,
+    ResourceView,
+}
+
 struct FakeBackend {
     foundation: Option<QueueModelFoundationV1>,
     opener_pid: Rc<Cell<u32>>,
@@ -534,6 +545,9 @@ struct FakeBackend {
     fail_currentness_at: Option<usize>,
     outcomes: VecDeque<ScriptedOutcome>,
     calls: Rc<RefCell<Vec<LoggedCall>>>,
+    bootstrap_calls: Rc<RefCell<Vec<BootstrapCallV1>>>,
+    bootstrap_fault: Option<(BootstrapCallV1, bool)>,
+    drops: Rc<Cell<usize>>,
 }
 
 impl FakeBackend {
@@ -545,11 +559,33 @@ impl FakeBackend {
             fail_currentness_at: None,
             outcomes: outcomes.into(),
             calls: Rc::new(RefCell::new(Vec::new())),
+            bootstrap_calls: Rc::new(RefCell::new(Vec::new())),
+            bootstrap_fault: None,
+            drops: Rc::new(Cell::new(0)),
         }
     }
 
     fn outcome(&mut self) -> ScriptedOutcome {
         self.outcomes.pop_front().expect("missing scripted outcome")
+    }
+
+    fn bootstrap(&self, call: BootstrapCallV1) -> Result<(), NativeQueueAdapterErrorV1> {
+        self.bootstrap_calls.borrow_mut().push(call);
+        if let Some((at, panic)) = self.bootstrap_fault
+            && at == call
+        {
+            if panic {
+                std::panic::panic_any(call);
+            }
+            return Err(NativeQueueAdapterErrorV1::ModelProjection);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for FakeBackend {
+    fn drop(&mut self) {
+        self.drops.set(self.drops.get() + 1);
     }
 }
 
@@ -557,12 +593,15 @@ impl NativeQueueBackendV1 for FakeBackend {
     type ResourceAuthority = FakeAuthority;
 
     fn opener_pid(&self) -> u32 {
+        self.bootstrap(BootstrapCallV1::Opener)
+            .expect("injected opener error");
         self.opener_pid.get()
     }
 
     fn take_model_foundation(
         &mut self,
     ) -> Result<QueueModelFoundationV1, NativeQueueAdapterErrorV1> {
+        self.bootstrap(BootstrapCallV1::Take)?;
         self.foundation
             .take()
             .ok_or(NativeQueueAdapterErrorV1::ModelProjection)
@@ -572,6 +611,7 @@ impl NativeQueueBackendV1 for FakeBackend {
         &self,
         foundation: &QueueModelFoundationV1,
     ) -> Result<(), NativeQueueAdapterErrorV1> {
+        self.bootstrap(BootstrapCallV1::Authenticate)?;
         foundation
             .authenticate_origin()
             .map_err(|_| NativeQueueAdapterErrorV1::ModelProjection)
@@ -581,6 +621,7 @@ impl NativeQueueBackendV1 for FakeBackend {
         &self,
         authority: &Self::ResourceAuthority,
     ) -> Result<NativeQueueResourceViewV1, NativeQueueAdapterErrorV1> {
+        self.bootstrap(BootstrapCallV1::ResourceView)?;
         Ok(authority.0)
     }
 

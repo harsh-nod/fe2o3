@@ -1,6 +1,16 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Current locally accepted implementation: R90 CONTROL-3 bind settlement, with
+Current lower-handoff implementation: R91 NATIVE-2A.1, with
+[contract](runtime-queue-construction-handoffs-v1.md) and
+[local evidence](evidence/local-r91-queue-handoffs-2026-09-11/README.md) above
+signed planning checkpoint `b66e52d3246a88d76eb30252b9cfe465fa2c9882`.
+Primary and auxiliary callers use typed ring/resource and engine handoffs;
+their local holders still require full outer error/unwind retention.
+Next are NATIVE-2A.2 primary root and .3 integrated acceptance, then 2B auxiliary
+and 2C replacement/insertion. CO-1/2/3 and VER-1A proceed independently.
+This does not install generated adoption or qualify Linux, proofs or performance.
+
+Preceding locally accepted implementation: R90 CONTROL-3 bind settlement, with
 [contract](runtime-persistent-bind-settlement-v1.md) and
 [local evidence](evidence/local-r90-persistent-bind-2026-09-11/README.md) above
 signed planning commit `287f2b77`. Initial single/three binds and retained-control
@@ -17,7 +27,8 @@ all seventeen source gates and auxiliary checks, with 5,627 unchanged source
 identities, 2,454 runtime tests per GNU/musl target, nineteen new KFD tests
 and three rejected mutations. Historical R87/R88 evidence remains unchanged.
 The [current dispatch](runtime-a1-a2-swarm-dispatch-r83.md) retains the now-implemented
-CONTROL-3A/B/C/D acceptance contract and assigns NATIVE-2A/B/C constructor custody; independent
+CONTROL-3A/B/C/D and NATIVE-2A.1 acceptance contracts and assigns remaining
+NATIVE-2A.2/.3/B/C constructor custody; independent
 CO-1/2/3 completion fixtures and VER-1A.1 through .5 journal work.
 R88 retains successful tokens across model projection. R89 now retains full
 preparation, including original data/premises, generation, code/kernarg stages

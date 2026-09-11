@@ -1,0 +1,19 @@
+--- a/crates/fe2o3-kfd/src/queue.rs
++++ b/crates/fe2o3-kfd/src/queue.rs
+@@ -623,12 +623,10 @@
+         if opener_pid != std::process::id() {
+             return Err(NativeQueueAdapterErrorV1::ProcessChanged);
+         }
+-        self.foundation = Some(backend.take_model_foundation()?);
+-        let foundation = self
+-            .foundation
+-            .as_ref()
+-            .expect("returned foundation custody");
+-        backend.authenticate_model_foundation(foundation)?;
++        let foundation = backend.take_model_foundation()?;
++        backend.authenticate_model_foundation(&foundation)?;
++        self.foundation = Some(foundation);
++        let foundation = self.foundation.as_ref().expect("returned foundation custody");
+         let model = QueueLifecycleStateV1::new(foundation.identity().domain_id());
+         // Only nonallocating moves follow the final borrowed authentication.
+         Ok(NativeQueueEngineV1 {

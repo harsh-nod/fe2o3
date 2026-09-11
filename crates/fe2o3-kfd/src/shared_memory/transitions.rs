@@ -156,6 +156,23 @@ where
     }
 }
 
+pub(super) fn preflight_borrowed_v1<B, P, S>(
+    engine: &SharedMemoryEngine<B>,
+    token: &SharedGttAllocationV1<P, S>,
+    expected: SharedAllocationPhaseV1,
+) -> Result<(), MemorySessionError>
+where
+    B: MemoryBackend,
+    P: GttProfileV1,
+    S: GttAllocationStateV1,
+{
+    engine.require_active()?;
+    if engine.terminal_transition.is_some() {
+        return Err(MemorySessionError::SharedSessionQuarantined);
+    }
+    engine.index(token, expected).map(|_| ())
+}
+
 pub(super) struct ProjectionV1<'a> {
     foundation: &'a mut QueueModelFoundationV1,
     device: ModelDeviceAdmissionV1,

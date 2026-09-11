@@ -1,0 +1,10 @@
+--- a/crates/fe2o3-kfd/src/queue_live/construction.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction.rs
+@@ -86,7 +86,6 @@
+             return Err(MemorySessionError::Model("queue ring construction phase"));
+         };
+         // Rejection before R88 admission must leave the actual token here.
+-        memory.preflight_cpu(ring)?;
+         let identity = match ring {
+             CpuRingAuthorityV1::AqlSpecial(token) => token.storage_identity(),
+             CpuRingAuthorityV1::ExecutableProbe(token) => token.storage_identity(),

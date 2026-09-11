@@ -1,0 +1,28 @@
+--- a/crates/fe2o3-kfd/src/queue_live/construction.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction.rs
+@@ -176,6 +176,7 @@
+             ));
+         }
+         self.started = true;
++        let context_save = self.context_save.take();
+         let missing = || ComputeAqlQueueSessionErrorV1::Contract("missing queue resource prefix");
+         let view = build_resource_view(
+             device,
+@@ -183,7 +184,7 @@
+             self.ring.as_ref().ok_or_else(missing)?,
+             self.control.as_ref().ok_or_else(missing)?,
+             self.eop.as_ref().ok_or_else(missing)?,
+-            self.context_save.as_ref().ok_or_else(missing)?,
++            context_save.as_ref().ok_or_else(missing)?,
+             next_queue,
+         )?;
+         // Every check precedes extraction. These moves neither allocate nor call native code.
+@@ -191,7 +192,7 @@
+             ring: self.ring.take().expect("validated ring"),
+             control: self.control.take().expect("validated control"),
+             eop: self.eop.take().expect("validated EOP"),
+-            context_save: self.context_save.take().expect("validated context-save"),
++            context_save: context_save.expect("validated context-save"),
+             view,
+         });
+         Ok(())

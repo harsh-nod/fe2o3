@@ -1,0 +1,51 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+warning: method `preflight_cpu_queue_token_v1` is never used
+    --> crates/fe2o3-kfd/src/shared_memory.rs:5404:19
+     |
+4604 | impl SharedGttMemorySessionV1 {
+     | ----------------------------- method in this implementation
+...
+5404 |     pub(crate) fn preflight_cpu_queue_token_v1<P: MutableGpuGttProfileV1>(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `preflight_cpu` is never used
+  --> crates/fe2o3-kfd/src/shared_memory/tests/queue_construction.rs:95:19
+   |
+24 | impl QueueConstructionMemoryFixtureV1 {
+   | ------------------------------------- method in this implementation
+...
+95 |     pub(crate) fn preflight_cpu<P: MutableGpuGttProfileV1>(
+   |                   ^^^^^^^^^^^^^
+
+warning: method `preflight_cpu` is never used
+  --> crates/fe2o3-kfd/src/queue_live/construction.rs:18:8
+   |
+17 | pub(super) trait RingMemoryV1 {
+   |                  ------------ method in this trait
+18 |     fn preflight_cpu(&self, ring: &CpuRingAuthorityV1) -> Result<(), MemorySessionError>;
+   |        ^^^^^^^^^^^^^
+
+warning: `fe2o3-kfd` (lib test) generated 3 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 25.71s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction::tests::ring_preflight_rejects_foreign_and_closed_sessions_without_moving_tokens ... FAILED
+
+failures:
+
+---- queue::live::construction::tests::ring_preflight_rejects_foreign_and_closed_sessions_without_moving_tokens stdout ----
+
+thread 'queue::live::construction::tests::ring_preflight_rejects_foreign_and_closed_sessions_without_moving_tokens' (990567) panicked at crates/fe2o3-kfd/src/queue_live/construction/tests.rs:86:14:
+expected actual construction token
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::live::construction::tests::ring_preflight_rejects_foreign_and_closed_sessions_without_moving_tokens
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 897 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

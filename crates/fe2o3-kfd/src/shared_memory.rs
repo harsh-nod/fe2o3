@@ -5401,6 +5401,28 @@ impl SharedGttMemorySessionV1 {
         )
     }
 
+    pub(crate) fn preflight_cpu_queue_token_v1<P: MutableGpuGttProfileV1>(
+        &self,
+        token: &SharedGttAllocationV1<P, GttCpuWritableV1>,
+    ) -> Result<(), MemorySessionError> {
+        transitions::preflight_borrowed_v1(
+            &self.engine,
+            token,
+            SharedAllocationPhaseV1::CpuWritable,
+        )
+    }
+
+    pub(crate) fn preflight_mapped_queue_token_v1<P: MutableGpuGttProfileV1>(
+        &self,
+        token: &SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>,
+    ) -> Result<(), MemorySessionError> {
+        transitions::preflight_borrowed_v1(
+            &self.engine,
+            token,
+            SharedAllocationPhaseV1::GpuAccessibleMutable,
+        )
+    }
+
     #[allow(dead_code)]
     pub(crate) fn retain_aql_ring_resource(
         &mut self,
@@ -6391,6 +6413,10 @@ pub(crate) use tests::preparation::{
 };
 #[cfg(test)]
 pub(crate) use tests::pristine_abort::PristineAbortMemoryFixtureV1;
+#[cfg(test)]
+pub(crate) use tests::queue_construction::{
+    QueueConstructionFaultV1, QueueConstructionMemoryFixtureV1,
+};
 
 #[cfg(test)]
 mod tests {
@@ -6401,6 +6427,7 @@ mod tests {
     mod host_backing;
     pub(super) mod preparation;
     pub(super) mod pristine_abort;
+    pub(super) mod queue_construction;
     mod transitions;
     use super::*;
     use core::cell::Cell;
@@ -7012,6 +7039,17 @@ mod tests {
         ModelDeviceAdmissionV1,
         VmKeyV1,
     ) {
+        transferred_model_foundation_with_aperture(0x20_0000)
+    }
+
+    fn transferred_model_foundation_with_aperture(
+        byte_len: u64,
+    ) -> (
+        model::DeviceIdentityStateV1,
+        MemoryLifecycleStateV1,
+        ModelDeviceAdmissionV1,
+        VmKeyV1,
+    ) {
         let domain_id = model_domain();
         let (identity, device) = model::DeviceIdentityStateV1::new(domain_id)
             .register_device_model_only(model_correlation(), model::DeviceGenerationV1(1))
@@ -7037,7 +7075,7 @@ mod tests {
                 handle: UntrustedVmHandleObservationV1(1),
                 aperture: GpuVaRangeV1 {
                     base: 0x1_0000,
-                    byte_len: 0x20_0000,
+                    byte_len,
                 },
             })
             .unwrap();
@@ -7293,7 +7331,11 @@ mod tests {
 
     impl BackingConstructorFixture {
         fn new(budget: Option<Gfx942DeviceBackingBudgetV1>) -> Self {
-            let (identity, memory, device, vm) = transferred_model_foundation();
+            Self::with_aperture(budget, 0x20_0000)
+        }
+
+        fn with_aperture(budget: Option<Gfx942DeviceBackingBudgetV1>, bytes: u64) -> Self {
+            let (identity, memory, device, vm) = transferred_model_foundation_with_aperture(bytes);
             let mut fixture = Self {
                 engine: acquired(),
                 ownership: QueueModelOwnershipV1::new(),

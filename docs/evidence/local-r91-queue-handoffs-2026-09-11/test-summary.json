@@ -1,0 +1,121 @@
+{
+  "gnu-tests": {
+    "passed": 2478,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "musl-tests": {
+    "passed": 2478,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "gnu-docs": {
+    "passed": 108,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 7
+  },
+  "musl-docs": {
+    "passed": 91,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 5
+  },
+  "musl-host-docs": {
+    "passed": 16,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 2
+  },
+  "gnu-host": {
+    "passed": 258,
+    "failed": 0,
+    "ignored": 4,
+    "harnesses": 1
+  },
+  "musl-host": {
+    "passed": 141,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "macro-fixtures": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "construction": {
+    "passed": 6,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "initialization": {
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "transitions": {
+    "passed": 20,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "preparation": {
+    "passed": 22,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "bind": {
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "base_commit": "b66e52d3246a88d76eb30252b9cfe465fa2c9882",
+  "final_gate_attempt": "r91-final",
+  "non_documentation_source_identities_checked": 5633,
+  "new_kfd_cpu_test_functions": 10,
+  "native2a1_lower_handoffs_implemented": true,
+  "primary_and_auxiliary_callers_use_helpers": true,
+  "queue_constructor_outer_custody_implemented": false,
+  "unreturned_callback_values_retained": false,
+  "new_bootstrap_backing_charges": false,
+  "native_generated_adoption_hooks_installed": false,
+  "linux_qualified": false,
+  "adapter_refinement_proved": false,
+  "gpu_performance_measured": false,
+  "verus_solver_rerun": false,
+  "new_verus_theorems": 0,
+  "negative_inventory_files": 686,
+  "model_and_proof_sources_unchanged_from": "fb1e27e66cee27bb11f0b7c08f2d5994c5d168da",
+  "expected_negative_mutations": [
+    {
+      "name": "preflight",
+      "source": "crates/fe2o3-kfd/src/queue_live/construction.rs",
+      "assertion": "expected actual construction token",
+      "mutated_source_sha256": "8f0d2ea43767b071817839bd8fbe1f2cb02be1bc4174744376d0fda649026d39",
+      "patch_sha256": "7b70aa447d5593d15eee1153abac7107e1c1c48c4424bcd39536cff4885a5213"
+    },
+    {
+      "name": "foundation",
+      "source": "crates/fe2o3-kfd/src/queue.rs",
+      "assertion": "called `Option::unwrap()` on a `None` value",
+      "mutated_source_sha256": "03fa328c611120e8848da0c661dfa13cef307ef7f713d3920c22d46753cc9f17",
+      "patch_sha256": "3265ee7504e8efd8b5b3de8514fc70f389467351b135fcb813c5a10c48e9d756"
+    },
+    {
+      "name": "early-move",
+      "source": "crates/fe2o3-kfd/src/queue_live/construction.rs",
+      "assertion": "assertion `left == right` failed",
+      "mutated_source_sha256": "f08493acebb05cfb031f48421ada303ca2dea6d717654592bb5cef70084e90c4",
+      "patch_sha256": "1b8401ac54311c501b1c77b66f2162d30d42a1734533811c06992f3cf52519ac"
+    }
+  ],
+  "production_metadata_sha256": "6c0cac53358224a31c356d91228b602ae8545f7c156a0c695f103533238054ca"
+}

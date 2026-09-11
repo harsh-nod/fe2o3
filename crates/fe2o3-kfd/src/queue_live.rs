@@ -232,7 +232,10 @@ use fe2o3_aql::{
 
 #[path = "queue_live/compute_sdma_coexistence.rs"]
 mod compute_sdma_coexistence;
+#[path = "queue_live/construction.rs"]
+mod construction;
 pub use compute_sdma_coexistence::Gfx942R66NativeObservationFailureV1;
+use construction::{QueueResourcePrefixV1, RingConstructionV1};
 #[allow(unsafe_code)]
 #[path = "queue_dispatch_live.rs"]
 mod dispatch;
@@ -523,32 +526,6 @@ impl CpuRingAuthorityV1 {
             Self::AqlSpecial(ring) => memory.with_bytes_mut(ring, initialize_invalid_ring),
             Self::ExecutableProbe(ring) => memory.with_bytes_mut(ring, initialize_invalid_ring),
             Self::UserptrProbe(ring) => memory.with_bytes_mut(ring, initialize_invalid_ring),
-        }
-    }
-
-    fn map_and_retain(
-        self,
-        memory: &mut SharedGttMemorySessionV1,
-    ) -> Result<RingAuthority, MemorySessionError> {
-        match self {
-            Self::AqlSpecial(ring) => {
-                let ring = memory.map_to_gpu(ring)?;
-                memory
-                    .retain_aql_ring_resource(ring)
-                    .map(RingAuthority::AqlSpecial)
-            }
-            Self::ExecutableProbe(ring) => {
-                let ring = memory.map_to_gpu(ring)?;
-                memory
-                    .retain_executable_aql_probe_ring_resource(ring)
-                    .map(RingAuthority::ExecutableProbe)
-            }
-            Self::UserptrProbe(ring) => {
-                let ring = memory.map_to_gpu(ring)?;
-                memory
-                    .retain_userptr_aql_probe_ring_resource(ring)
-                    .map(RingAuthority::UserptrProbe)
-            }
         }
     }
 
@@ -6136,7 +6113,9 @@ impl ComputeAqlQueueSessionV1 {
             unpublished_shadows
                 .shadows()
                 .restore_kernel_write_access_after_bo_seal()?;
-            let ring = ring.map_and_retain(memory)?;
+            let mut ring = RingConstructionV1::Cpu(ring);
+            ring.map_in_place(memory)?;
+            ring.retain_in_place(memory)?;
             let control = memory.map_to_gpu(control)?;
             let completion_signals = memory.map_to_gpu(completion_signals)?;
             let eop = memory.map_executable_to_gpu(eop)?;
@@ -6146,14 +6125,10 @@ impl ComputeAqlQueueSessionV1 {
                 memory.retain_aql_completion_signal_resource(completion_signals)?;
             let eop = memory.retain_aql_eop_resource(eop)?;
             let context_save = memory.retain_aql_context_save_resource(context_save)?;
-            let authority = build_resource_authority(
-                memory.queue_model_device(),
-                geometry,
-                ring,
-                control,
-                eop,
-                context_save,
-            )?;
+            let mut resource_prefix =
+                QueueResourcePrefixV1::new(ring.take_retained()?, control, eop, context_save);
+            resource_prefix.build_in_place(memory.queue_model_device(), geometry)?;
+            let authority = resource_prefix.take_complete()?;
             let completion_owner = CompletionSignalArenaOwnerV1::new(
                 authority.view.plan.queue,
                 completion_signals.facts(),
@@ -6203,6 +6178,7 @@ impl ComputeAqlQueueSessionV1 {
             unpublished_shadows,
             ring_bytes,
         } = prepared;
+        let mut authority = Some(authority);
         let (key, outputs, queue_id, shadows) = {
             let engine = self
                 .engine
@@ -6210,7 +6186,7 @@ impl ComputeAqlQueueSessionV1 {
                 .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
                     "missing queue engine",
                 ))?;
-            let key = match engine.admit(authority) {
+            let key = match engine.admit_in_place(&mut authority) {
                 Ok(key) => key,
                 Err(error @ NativeQueueAdapterErrorV1::AuthorityPoisoned) => {
                     self.poison_terminal();
@@ -6572,7 +6548,9 @@ impl ComputeAqlQueueSessionV1 {
         unpublished_shadows
             .shadows()
             .restore_kernel_write_access_after_bo_seal()?;
-        let ring = ring.map_and_retain(&mut memory)?;
+        let mut ring = RingConstructionV1::Cpu(ring);
+        ring.map_in_place(&mut memory)?;
+        ring.retain_in_place(&mut memory)?;
         let control = memory.map_to_gpu(control)?;
         let completion_signals = memory.map_to_gpu(completion_signals)?;
         let eop = memory.map_executable_to_gpu(eop)?;
@@ -6582,16 +6560,17 @@ impl ComputeAqlQueueSessionV1 {
             memory.retain_aql_completion_signal_resource(completion_signals)?;
         let eop = memory.retain_aql_eop_resource(eop)?;
         let context_save = memory.retain_aql_context_save_resource(context_save)?;
-        let authority = build_resource_authority(
-            memory.queue_model_device(),
-            geometry,
-            ring,
-            control,
-            eop,
-            context_save,
-        )?;
+        let mut resource_prefix =
+            QueueResourcePrefixV1::new(ring.take_retained()?, control, eop, context_save);
+        resource_prefix.build_in_place(memory.queue_model_device(), geometry)?;
+        let mut authority = Some(resource_prefix.take_complete()?);
         let completion_owner = CompletionSignalArenaOwnerV1::new(
-            authority.view.plan.queue,
+            authority
+                .as_ref()
+                .expect("completed resources")
+                .view
+                .plan
+                .queue,
             completion_signals.facts(),
         )?;
         let submission = NativeAqlSubmissionOwnerV1::new(ring_bytes)
@@ -6608,8 +6587,9 @@ impl ComputeAqlQueueSessionV1 {
             foundation: Some(foundation),
             foundation_in_engine: false,
         };
-        let mut engine = NativeQueueEngineV1::new(backend).map_err(map_native)?;
-        let key = match engine.admit(authority) {
+        let mut initialization = NativeQueueEngineInitializationV1::new(backend);
+        let mut engine = initialization.initialize().map_err(map_native)?;
+        let key = match engine.admit_in_place(&mut authority) {
             Ok(key) => key,
             Err(error @ NativeQueueAdapterErrorV1::AuthorityPoisoned) => {
                 permanently_poison_process_global_kfd_runtime_gate_v1();
@@ -14329,14 +14309,15 @@ impl Drop for ComputeAqlQueueSessionV1 {
     }
 }
 
-fn build_resource_authority(
+fn build_resource_view(
     current_device: fe2o3_runtime_model::ModelDeviceAdmissionV1,
     geometry: Gfx942AqlQueueResourcePlanV1,
-    ring: RingAuthority,
-    control: ControlAuthority,
-    eop: EopAuthority,
-    context_save: ContextSaveAuthority,
-) -> Result<QueueResourceAuthorityV1, ComputeAqlQueueSessionErrorV1> {
+    ring: &RingAuthority,
+    control: &ControlAuthority,
+    eop: &EopAuthority,
+    context_save: &ContextSaveAuthority,
+    next_queue: &AtomicU64,
+) -> Result<NativeQueueResourceViewV1, ComputeAqlQueueSessionErrorV1> {
     let rf = ring.facts();
     let cf = control.facts();
     let ef = eop.facts();
@@ -14409,7 +14390,7 @@ fn build_resource_authority(
     // CREATE_QUEUE fields are per-XCC. The retained CWSR BO covers the
     // driver's independently checked aggregate across all XCCs.
     let ctl_stack_size = geometry.context_save().control_stack_bytes_per_xcc();
-    let queue_number = NEXT_QUEUE_INSTANCE
+    let queue_number = next_queue
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
             value.checked_add(1)
         })
@@ -14479,27 +14460,28 @@ fn build_resource_authority(
         priority: admit_kfd_queue_priority(0)
             .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("queue priority"))?,
     };
-    let authority = QueueResourceAuthorityV1 {
-        ring,
-        control,
-        eop,
-        context_save,
-        view,
-    };
-    validate_resource_authority(&authority).map_err(map_native)?;
-    Ok(authority)
+    validate_resource_view(view, [rf, cf, ef, sf]).map_err(map_native)?;
+    Ok(view)
 }
 
 fn validate_resource_authority(
     authority: &QueueResourceAuthorityV1,
 ) -> Result<(), NativeQueueAdapterErrorV1> {
-    let view = authority.view;
-    let facts = [
-        authority.ring.facts(),
-        authority.control.facts(),
-        authority.eop.facts(),
-        authority.context_save.facts(),
-    ];
+    validate_resource_view(
+        authority.view,
+        [
+            authority.ring.facts(),
+            authority.control.facts(),
+            authority.eop.facts(),
+            authority.context_save.facts(),
+        ],
+    )
+}
+
+fn validate_resource_view(
+    view: NativeQueueResourceViewV1,
+    facts: [&SharedGttMappedResourceFactsV1; 4],
+) -> Result<(), NativeQueueAdapterErrorV1> {
     for (binding, facts) in view
         .plan
         .resources
@@ -19992,9 +19974,11 @@ mod tests {
             "LinuxCwsrShadowPagesV1::install",
             "initialize_and_validate_bo_headers",
             "memory.seal_executable(eop)",
-            "ring.map_and_retain(&mut memory)",
+            "ring.map_in_place(&mut memory)",
+            "ring.retain_in_place(&mut memory)",
             "memory.take_queue_model_foundation()?",
-            "NativeQueueEngineV1::new(backend)",
+            "NativeQueueEngineInitializationV1::new(backend)",
+            "initialization.initialize()",
             "NativeAqlSubmissionOwnerV1::new(ring_bytes)",
             "create_at_native_boundary(key",
             "mark_queue_created()",
