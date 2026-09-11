@@ -1,11 +1,15 @@
 # Native Resource Accounting Contract V1
 
-Status: MEM-BASE, the optional session-local MEM-2A N2 backing adapter and
-MEM-2A-FWD runtime configuration and device-only MEM-2B cache limits are
-implemented locally. The remaining MEM-5 inventory/interface contract is
+Status: MEM-BASE, the optional session-local MEM-2A N2 backing adapter,
+MEM-2A-FWD runtime configuration, device-only MEM-2B cache limits,
+[R72 ordinary coherent host backing](runtime-host-visible-backing-v1.md) and
+[R81 ordinary host-cache limits](runtime-host-cache-limits-v1.md) are implemented
+locally. The remaining MEM-5 inventory/interface contract is
 proposed, reviewed on 2026-09-10. This does not close MEM-2 through MEM-5.
-Live pool qualification, host-pool accounting, compound native ownership, parent/split operations and
-global physical accounting still require the reviewed handoffs below.
+Live backing/pool qualification, native adapter refinement, broader GTT profiles,
+compound native ownership, parent/split operations and global physical accounting
+still require the reviewed handoffs below. R70's single-account batch reservation
+does not implement parent admission or arbitrary splitting of an issued debit.
 The [A1/A2 swarm plan](runtime-a1-a2-swarm-plan.md) owns scheduling and acceptance.
 
 ## Current Boundary
