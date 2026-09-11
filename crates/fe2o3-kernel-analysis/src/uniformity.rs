@@ -69,13 +69,13 @@ fn analyze_function_with_contract(
     workgroup_size: Option<WorkgroupSize>,
     exact_d1_workgroup: Option<u32>,
 ) -> AnalysisReport {
-    let mut report = AnalysisReport {
-        function: function.id.clone(),
-        values: BTreeMap::new(),
-        block_controls: BTreeMap::new(),
-        diagnostics: Vec::new(),
-    };
     let Some(body) = &function.body else {
+        let mut report = AnalysisReport {
+            function: function.id.clone(),
+            values: BTreeMap::new(),
+            block_controls: BTreeMap::new(),
+            diagnostics: Vec::new(),
+        };
         report.diagnostics.push(Diagnostic::Unsupported {
             block: None,
             operation_index: None,
@@ -87,7 +87,6 @@ fn analyze_function_with_contract(
     Analyzer::new(
         function,
         body,
-        report,
         parameter_variations,
         summarized_calls,
         uniform_input_calls,
@@ -380,13 +379,18 @@ impl<'a> Analyzer<'a> {
     fn new(
         function: &'a Function,
         body: &'a FunctionBody,
-        mut report: AnalysisReport,
         parameter_variations: &'a [Variation],
         summarized_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
         uniform_input_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
         workgroup_size: Option<WorkgroupSize>,
         exact_d1_workgroup: Option<u32>,
     ) -> Self {
+        let mut report = AnalysisReport {
+            function: function.id.clone(),
+            values: BTreeMap::new(),
+            block_controls: BTreeMap::new(),
+            diagnostics: Vec::new(),
+        };
         let mut blocks = BTreeMap::new();
         let mut malformed = false;
         for block in &body.blocks {
