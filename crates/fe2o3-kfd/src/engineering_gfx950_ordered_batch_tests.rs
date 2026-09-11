@@ -344,3 +344,31 @@ fn ordered_ring_capacity_wrap_and_identity_contract_remain_exact() {
         dispatch_completed(79, 63, (79, 63), AqlCompletionObservationV1::Completed, 0).unwrap()
     );
 }
+
+#[test]
+fn optional_arena_and_signals_are_reinitialized_after_confirmed_queue_rollover() {
+    let context = include_str!("engineering_gfx950.rs");
+    let rollover = context.split("    fn rollover_queue(").nth(1).unwrap()
+        .split("    fn close_inner(").next().unwrap();
+    let destroy = rollover.find("self.destroy_queue()?").unwrap();
+    let pop = rollover.find("while let Some(allocation) = self.internal.pop()").unwrap();
+    let release = rollover.find("self.release_resource(allocation)?").unwrap();
+    let initialize = rollover.find("self.initialize_queue()?").unwrap();
+    assert!(destroy < pop && pop < release && release < initialize);
+    assert!(!rollover.contains("kernels.pop"));
+    assert!(!rollover.contains("buffers.pop"));
+    let queue = context.split("    fn initialize_queue(").nth(1).unwrap()
+        .split("    fn ").next().unwrap();
+    assert!(queue.contains("!self.internal.is_empty()"));
+    assert!(queue.contains("Backend::initialize_engineering_signal("));
+    assert!(!queue.contains("ORDERED_KERNARG"));
+    let ordered = include_str!("engineering_gfx950_ordered_batch.rs");
+    let retain = ordered.split("    fn retain_storage(").nth(1).unwrap()
+        .split("    fn publish_fixed").next().unwrap();
+    assert!(retain.find("self.context.check_idle()?").unwrap()
+        < retain.find("self.context.allocate_resource(").unwrap());
+    assert!(retain.find("self.context.internal.push(allocation)").unwrap()
+        < retain.find("Backend::initialize_engineering_signal_slots(").unwrap());
+    assert!(retain.contains("ORDERED_KERNARG =>"));
+    assert!(retain.contains("count if count == ORDERED_KERNARG + 1 => {}"));
+}
