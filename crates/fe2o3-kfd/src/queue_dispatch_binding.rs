@@ -533,6 +533,36 @@ impl Gfx942FixedDispatchDataV1 {
             },
         }
     }
+
+    pub(crate) fn storage_ref(&self) -> DispatchDataStorageRefV1<'_> {
+        match &self.storage {
+            DispatchDataStorageV1::Uninitialized(lease)
+            | DispatchDataStorageV1::InitializedAfterDispatch(lease) => {
+                DispatchDataStorageRefV1::Device(lease)
+            }
+            DispatchDataStorageV1::InitializedContent(memory) => {
+                DispatchDataStorageRefV1::Device(memory.lease())
+            }
+            DispatchDataStorageV1::HostVisibleUninitialized(token) => {
+                DispatchDataStorageRefV1::HostVisible(token)
+            }
+            DispatchDataStorageV1::HostVisibleInitialized(memory) => {
+                DispatchDataStorageRefV1::HostVisible(memory.token())
+            }
+        }
+    }
+
+    pub(crate) fn initialized_content(&self) -> Option<Gfx942DeviceContentDescriptorV1> {
+        match &self.storage {
+            DispatchDataStorageV1::InitializedContent(memory) => Some(memory.content()),
+            _ => None,
+        }
+    }
+}
+
+pub(crate) enum DispatchDataStorageRefV1<'a> {
+    Device(&'a Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>),
+    HostVisible(&'a SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>),
 }
 
 pub(crate) enum DispatchDataInputStorageV1 {
@@ -705,7 +735,7 @@ type HostDataAuthority = SharedGttQueueResourceAuthorityV1<
     GttGpuAccessibleMutableV1,
 >;
 
-enum DispatchDataAuthorityV1 {
+pub(crate) enum DispatchDataAuthorityV1 {
     Device(Gfx942DeviceMemoryDispatchAuthorityV1),
     HostVisible(HostDataAuthority),
 }
@@ -3942,7 +3972,7 @@ fn prepare_public_fixed_dispatch_resources_with_generation<const N: usize>(
     memory: &mut SharedGttMemorySessionV1,
     programs: Vec<ValidatedKernelEnvelope<'_>>,
     packets: [Gfx942FixedDispatchPacketV1; N],
-    data: Vec<Gfx942FixedDispatchDataV1>,
+    mut data: Vec<Gfx942FixedDispatchDataV1>,
     generation: DispatchGenerationOwnerV1,
     retain_failure_data: bool,
 ) -> Result<DispatchResourceOwnerV1, PersistentFixedDispatchPreparationFailureV1> {
@@ -3975,52 +4005,40 @@ fn prepare_public_fixed_dispatch_resources_with_generation<const N: usize>(
         }
     };
 
-    let mut data_authorities = Vec::with_capacity(data.len());
-    let mut data_premises = Vec::with_capacity(data.len());
-    for (input, plan) in data.into_iter().zip(data_plans) {
-        let input = input.into_parts();
+    let mut data_authorities = Vec::new();
+    let mut data_premises = Vec::new();
+    if data_authorities.try_reserve_exact(data.len()).is_err()
+        || data_premises.try_reserve_exact(data.len()).is_err()
+    {
+        return Err(PersistentFixedDispatchPreparationFailureV1 {
+            error: Gfx942DispatchBindingErrorV1::InvalidData {
+                index: data.len(),
+                detail: "data retention output capacity",
+            },
+            data: if retain_failure_data {
+                data
+            } else {
+                Vec::new()
+            },
+        });
+    }
+    let retained = match memory.retain_fixed_dispatch_data_v1(&mut data) {
+        Ok(retained) => retained,
+        Err(error) => {
+            return Err(PersistentFixedDispatchPreparationFailureV1 {
+                error: error.into(),
+                data: if retain_failure_data {
+                    data
+                } else {
+                    Vec::new()
+                },
+            });
+        }
+    };
+    for (input, plan) in retained.into_iter().zip(data_plans) {
         debug_assert_eq!(input.layout, plan.layout);
         debug_assert_eq!(input.fully_initialized, plan.fully_initialized);
-        let authority = match input.storage {
-            DispatchDataInputStorageV1::Device(lease) if retain_failure_data => {
-                match memory.retain_gfx942_device_memory_for_dispatch_recovering(lease) {
-                    Ok(authority) => DispatchDataAuthorityV1::Device(authority),
-                    Err((error, lease)) => {
-                        let input = DispatchDataInputV1 {
-                            storage: DispatchDataInputStorageV1::Device(lease),
-                            ..input
-                        };
-                        return Err(PersistentFixedDispatchPreparationFailureV1 {
-                            error: error.into(),
-                            data: vec![recover_dispatch_input_v1(input)],
-                        });
-                    }
-                }
-            }
-            DispatchDataInputStorageV1::Device(lease) => {
-                match memory.retain_gfx942_device_memory_for_dispatch(lease) {
-                    Ok(authority) => DispatchDataAuthorityV1::Device(authority),
-                    Err(error) => {
-                        return Err(PersistentFixedDispatchPreparationFailureV1 {
-                            error: error.into(),
-                            data: Vec::new(),
-                        });
-                    }
-                }
-            }
-            DispatchDataInputStorageV1::HostVisible(token) => {
-                match memory.retain_aql_dispatch_host_data_resource(token) {
-                    Ok(authority) => DispatchDataAuthorityV1::HostVisible(authority),
-                    Err(error) => {
-                        return Err(PersistentFixedDispatchPreparationFailureV1 {
-                            error: error.into(),
-                            data: Vec::new(),
-                        });
-                    }
-                }
-            }
-        };
-        data_authorities.push(authority);
+        data_authorities.push(input.authority);
         data_premises.push(RetainedDataPremiseV1 {
             layout: plan.layout,
             role_identity: [0; 32],

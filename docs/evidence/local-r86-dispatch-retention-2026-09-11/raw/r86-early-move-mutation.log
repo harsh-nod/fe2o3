@@ -1,0 +1,27 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.39s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test shared_memory::tests::dispatch_retention::dispatch_retention_preflight_panic_leaves_complete_original_owner ... FAILED
+
+failures:
+
+---- shared_memory::tests::dispatch_retention::dispatch_retention_preflight_panic_leaves_complete_original_owner stdout ----
+
+thread 'shared_memory::tests::dispatch_retention::dispatch_retention_preflight_panic_leaves_complete_original_owner' (79980) panicked at crates/fe2o3-kfd/src/shared_memory/tests/dispatch_retention.rs:396:21:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'shared_memory::tests::dispatch_retention::dispatch_retention_preflight_panic_leaves_complete_original_owner' (79980) panicked at crates/fe2o3-kfd/src/shared_memory/tests/dispatch_retention.rs:405:9:
+assertion `left == right` failed
+  left: []
+ right: [InputIdentity { storage: DeviceUninitialized(Gfx942DeviceMemoryIdentityV1 { id: 1, generation: 1, device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(9), generation: DeviceGenerationV1(1) }, vm: VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(9), generation: DeviceGenerationV1(1) }, id: VmIdV1(11) } }), layout: Gfx942FixedDispatchDataLayoutV1 { kind: DeviceLocal, requested_bytes: 17, alignment: 4 }, initialized: false, content: None }, InputIdentity { storage: HostVisibleInitialized(SharedGttAllocationIdentityV1 { session_id: 1, id: 1, generation: 1 }), layout: Gfx942FixedDispatchDataLayoutV1 { kind: HostVisibleCoherent, requested_bytes: 17, alignment: 4096 }, initialized: true, content: None }, InputIdentity { storage: DeviceInitializedContent(Gfx942DeviceMemoryIdentityV1 { id: 2, generation: 1, device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(9), generation: DeviceGenerationV1(1) }, vm: VmKeyV1 { device: DeviceKeyV1 { physical: PhysicalDeviceIdV1(9), generation: DeviceGenerationV1(1) }, id: VmIdV1(11) } }), layout: Gfx942FixedDispatchDataLayoutV1 { kind: DeviceLocal, requested_bytes: 17, alignment: 4 }, initialized: true, content: Some(Gfx942DeviceContentDescriptorV1 { role: Gfx942DeviceContentRoleV1 { identity: [81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81, 81], ordinal: 7 }, byte_len: 17, sha256: [237, 218, 131, 244, 188, 93, 66, 224, 20, 155, 180, 160, 83, 75, 183, 16, 1, 178, 17, 22, 116, 139, 16, 136, 151, 139, 251, 0, 129, 73, 99, 15], identity: [28, 10, 4, 111, 160, 80, 94, 29, 1, 8, 106, 108, 161, 199, 133, 124, 51, 104, 22, 110, 93, 198, 8, 102, 66, 100, 199, 116, 99, 158, 230, 80] }) }, InputIdentity { storage: HostVisibleUninitialized(SharedGttAllocationIdentityV1 { session_id: 1, id: 2, generation: 1 }), layout: Gfx942FixedDispatchDataLayoutV1 { kind: HostVisibleCoherent, requested_bytes: 17, alignment: 4096 }, initialized: false, content: None }]
+
+
+failures:
+    shared_memory::tests::dispatch_retention::dispatch_retention_preflight_panic_leaves_complete_original_owner
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 820 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

@@ -1,0 +1,17 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_host-2cf4148bcf65e09d)
+
+running 10 tests
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_dropped_observer_retains_credits_until_completion ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_completion_preserves_owner_through_decode ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_missing_owner_never_decodes ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_unused_read_only_mutation_rejects_all_outputs ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_read_only_only_completion_releases_all_members ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_decoder_panic_disposes_overlap_before_seed_refund ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_zero_output_does_not_shift_physical_ordinals ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_settlement_failure_never_commits_ready_outputs ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_foreign_gate_rejects_with_shared_or_separate_budgets ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_late_shape_and_decoder_mutations_reject_before_delivery ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 252 filtered out; finished in 0.04s
+

@@ -1,6 +1,7 @@
 //! Bounded shared KFD VM authority for typed host-visible GTT allocations.
 
 mod coherent_initialization;
+mod dispatch_retention;
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -533,6 +534,12 @@ impl Gfx942InitializedHostVisibleMemoryV1 {
     ) -> &mut SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1> {
         &mut self.token
     }
+
+    pub(crate) fn token(
+        &self,
+    ) -> &SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1> {
+        &self.token
+    }
 }
 
 impl fmt::Debug for Gfx942InitializedDeviceMemoryV1 {
@@ -546,6 +553,10 @@ impl fmt::Debug for Gfx942InitializedDeviceMemoryV1 {
 }
 
 impl Gfx942InitializedDeviceMemoryV1 {
+    pub(crate) fn lease(&self) -> &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1> {
+        &self.lease
+    }
+
     /// Seals an already-mapped lease after a separate trusted transfer path
     /// authenticated the complete requested extent against `content`.
     pub(crate) fn from_authenticated_full_transfer(
@@ -5640,18 +5651,11 @@ impl SharedGttMemorySessionV1 {
         self.retain_queue_resource(token)
     }
 
-    pub(crate) fn retain_aql_dispatch_host_data_resource(
+    pub(crate) fn retain_fixed_dispatch_data_v1(
         &self,
-        token: SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
-    ) -> Result<
-        SharedGttQueueResourceAuthorityV1<
-            AqlDispatchHostDataResourceRoleV1,
-            HostVisibleCoherentGttV1,
-            GttGpuAccessibleMutableV1,
-        >,
-        MemorySessionError,
-    > {
-        self.retain_queue_resource(token)
+        data: &mut Vec<crate::queue::dispatch_binding::Gfx942FixedDispatchDataV1>,
+    ) -> Result<dispatch_retention::RetainedDispatchDataRosterV1, MemorySessionError> {
+        dispatch_retention::retain_v1(&self.engine, self.model_device.model_key(), self.vm, data)
     }
 
     pub(crate) fn copy_completed_dispatch_host_data_subrange(
@@ -6553,6 +6557,7 @@ pub(crate) use tests::pristine_abort::PristineAbortMemoryFixtureV1;
 mod tests {
     mod device_backing;
     mod device_pool;
+    mod dispatch_retention;
     mod host_backing;
     pub(super) mod pristine_abort;
     use super::*;

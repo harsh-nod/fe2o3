@@ -1,14 +1,15 @@
 # A1/A2 Next-Wave Dispatch
 
 Dispatch refreshed 2026-09-11 after the three-agent review and local acceptance
-of R85 COMPLETE-HOST-SUBSTRATE on signed R84
-`f346aab2e958725291229eae3fffaee127230112`.
-The [R85 evidence](evidence/local-r85-charged-readback-2026-09-11/README.md)
-records all seventeen final source gates, 2,388 runtime tests per GNU/musl target,
-258 GNU and 141 musl host tests, and ten new reserved-readback regressions.
-Native hooks remain absent; the private host substrate is no longer queued work.
+of R86's NATIVE-1 data-conversion portion on signed R85
+`9f8779faab169271d716f4a241f849fef0af3567`.
+The [R86 evidence](evidence/local-r86-dispatch-retention-2026-09-11/README.md)
+records all seventeen final source gates, 2,401 runtime tests per GNU/musl target,
+258 GNU and 141 musl host tests, and thirteen new KFD conversion regressions.
+Native hooks remain absent; R85 host decoding and R86 atomic data conversion
+are implemented, while complete NATIVE-1 control/build custody remains open.
 The [current swarm overlay](runtime-a1-a2-swarm-dispatch-r83.md) assigns NATIVE-1
-build escrow followed by NATIVE-2 constructor custody, independent
+control/build ownership above R86 followed by NATIVE-2 constructor custody, independent
 runtime COMPLETE-ORACLE above R85, and VER-1A before native
 integration. Its checklist and batches supersede older next-assignment rows
 below; local shell acceptance is not native execution or adapter refinement.
@@ -77,10 +78,10 @@ Under the current ownership policy workers are read-only; Primary owns edits.
 
 | Worker | First bounded packet | Follow-on queue | Exit gate for first packet |
 | --- | --- | --- | --- |
-| Native: `r66_native_coexistence` | NATIVE-1 rooted dispatch-build escrow, then NATIVE-2 constructor/closing-retake custody | NATIVE-3 DATA-ADOPT; ISSUE native interface; SCALE-1A fixtures; native-budget and R76/R78/R82 qualification harnesses; admitted profiles and capacity | Preserve all original inputs and converted/control prefixes through error/panic. Retain successful results before retake and distinguish unchanged rejection, partial pre-queue effects and terminal post-create custody. Reuse existing constructors/allocator, with zero publication. |
+| Native: `r66_native_coexistence` | Complete NATIVE-1 control/build ownership above accepted R86 conversion, then NATIVE-2 constructor/closing-retake custody | NATIVE-3 DATA-ADOPT; ISSUE native interface; SCALE-1A fixtures; native-budget and R76/R78/R82 qualification harnesses; admitted profiles and capacity | Root packet/plan/generation, exact data premises, code/kernarg stages and successful outputs outside fallible construction. Retain results before retake; distinguish rejection, partial pre-queue effects and terminal post-create custody. Reuse existing constructors/allocator, with zero publication. |
 | Admission: `r66_runtime_coexistence` | Runtime COMPLETE-ORACLE: exact completion identity, one reserved reply and failure contract above accepted R85; then R83 native integration | ISSUE -> COMPLETE -> public async/blocking API -> generated graph/drain | Reuse R83 activation/hold/retirement and R85 decoding/disposal. Reject stale/foreign/uncertain completion before invoking R85; retain native lane/prefix and charged custody. |
 | Resources: `r66_coexistence_model` | VER-1A: bounded Context mutation journal and mutation-path inventory | VER-1B hooks; aggregate domains; remaining backing/control/code budgets; VER-2 leases; MEM-5 closure | Nonwrapping Available/Pending/Unknown whole-allocation versions; bounded exhaustion and unknown-outcome tests. Cross-run leases remain disabled until every mutation hook is integrated. |
-| Primary | Implement the reviewed native/runtime/journal packets and DATA-ADOPT on accepted R84/R85 | Cross-review, executable refinement, signed hardware qualification and matched performance | Serialize shared edits/builds/proofs and preserve R80 credit ownership. Accept CPU, proof, Linux and performance results separately; publish signed source/evidence to both topic remotes. |
+| Primary | Implement the remaining native/runtime/journal packets and DATA-ADOPT on accepted R84/R85/R86 | Cross-review, executable refinement, signed hardware qualification and matched performance | Serialize shared edits/builds/proofs and preserve R80 credit ownership. Accept CPU, proof, Linux and performance results separately; publish signed source/evidence to both topic remotes. |
 
 ADOPT-LIFE and DATA-ADOPT are coupled contracts; neither may introduce effects
 before their custody interface is integrated. VER-1A is independent. COMPLETE's
@@ -93,7 +94,7 @@ The critical path is:
 
 ```text
 accepted R84 + R83 + R82 + R80 -> DATA-ADOPT
-NATIVE-1 build escrow -> NATIVE-2 constructor custody -> DATA-ADOPT
+R86 data conversion -> complete NATIVE-1 -> NATIVE-2 constructor custody -> DATA-ADOPT
 DATA-ADOPT + COMPLETE-ORACLE -> ISSUE -> COMPLETE -> API -> GRAPH/DRAIN
 accepted R85 private host substrate + ISSUE -> runtime COMPLETE
 VER-1A -> complete VER-1B mutation hooks -> VER-2 cross-run input leases

@@ -1,13 +1,15 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Current locally accepted implementation: R85 COMPLETE-HOST-SUBSTRATE, on signed R84
-`f346aab2e958725291229eae3fffaee127230112`. Its
-[evidence](evidence/local-r85-charged-readback-2026-09-11/README.md) records all
-seventeen final source gates, 2,388 runtime tests per GNU/musl target and ten new
-host readback regressions (258 GNU / 141 musl host tests total).
+Current locally accepted implementation: R86's NATIVE-1 data-conversion portion,
+on signed R85 `9f8779faab169271d716f4a241f849fef0af3567`. Its
+[evidence](evidence/local-r86-dispatch-retention-2026-09-11/README.md) records all
+seventeen final source gates, 2,401 runtime tests per GNU/musl target and thirteen
+new KFD regressions (host suites unchanged at 258 GNU / 141 musl).
 The [current dispatch](runtime-a1-a2-swarm-dispatch-r83.md) assigns native
-build-escrow and constructor-custody prerequisites, independent runtime completion
-and version work. R85's private host decoder is implemented; runtime COMPLETE
+remaining NATIVE-1 control/build ownership and NATIVE-2 constructor custody,
+independent runtime completion and version work. R86's atomic data conversion
+does not yet retain full code/kernarg or outer unwind/retake state.
+R85's private host decoder is implemented; runtime COMPLETE
 must call it, not recreate it. Local acceptance does not enable native execution.
 Historical packet validation and exact source/evidence identities remain below.
 This decomposes the remaining local

@@ -413,6 +413,57 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_retention_after_pristine_abort_preserves_all_five_input_variants() {
+        let (mut memory, owner) = pristine_dispatch_fixture_v1(8);
+        let buffers = owner.prepare_pristine_abort_v1().unwrap();
+        let mut abort = owner.begin_pristine_abort_v1(buffers);
+        abort.release_controls(&mut memory).unwrap();
+        let (_, mut data, _) = abort.into_detached();
+        let expected: Vec<_> = data
+            .iter()
+            .map(|input| {
+                (
+                    input.sdma_storage_identity(),
+                    input.layout(),
+                    input.is_fully_initialized(),
+                    input.initialized_content(),
+                )
+            })
+            .collect();
+        assert!(matches!(
+            data[1].storage,
+            DispatchDataStorageV1::InitializedAfterDispatch(_)
+        ));
+        let calls = memory.native_calls();
+        let usage = memory.usage();
+        let retained = memory.retain_data(&mut data).unwrap();
+        assert!(data.is_empty());
+        assert_eq!(retained.len(), 5);
+        assert!(retained[1].fully_initialized);
+        assert!(retained[1].initialized_content.is_none());
+        for (input, (identity, layout, initialized, content)) in retained.into_iter().zip(expected)
+        {
+            assert_eq!(input.layout, layout);
+            assert_eq!(input.fully_initialized, initialized);
+            assert_eq!(input.initialized_content, content);
+            let actual = match input.authority {
+                DispatchDataAuthorityV1::Device(authority) => {
+                    Gfx942SdmaBufferStorageIdentityV1::Device(authority.storage_identity())
+                }
+                DispatchDataAuthorityV1::HostVisible(authority) => {
+                    Gfx942SdmaBufferStorageIdentityV1::Host(
+                        authority.into_token().storage_identity(),
+                    )
+                }
+            };
+            assert_eq!(actual, identity);
+        }
+        assert_eq!(memory.native_calls(), calls);
+        assert_eq!(memory.usage(), usage);
+        assert!(memory.data_is_retained());
+    }
+
+    #[test]
     fn pristine_abort_rejects_malformed_premises_before_native_effects() {
         for mutation in 0..6 {
             let (memory, mut owner) = pristine_dispatch_fixture_v1(1);

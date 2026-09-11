@@ -136,6 +136,21 @@ impl PristineAbortMemoryFixtureV1 {
         )
     }
 
+    pub(crate) fn retain_data(
+        &self,
+        data: &mut Vec<crate::queue::dispatch_binding::Gfx942FixedDispatchDataV1>,
+    ) -> Result<
+        crate::shared_memory::dispatch_retention::RetainedDispatchDataRosterV1,
+        MemorySessionError,
+    > {
+        crate::shared_memory::dispatch_retention::retain_v1(
+            &self.fixture.engine,
+            self.fixture.device.model_key(),
+            self.fixture.vm,
+            data,
+        )
+    }
+
     pub(crate) fn fail(&mut self, operation: &'static str, panic: bool) {
         if panic {
             self.fixture.engine.backend.panic_operation = Some(operation);
