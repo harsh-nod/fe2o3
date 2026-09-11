@@ -50,6 +50,27 @@ pub(super) trait EngineOperationV1<B: RuntimeBackendV1> {
     ) -> Result<(), crate::RuntimeGfx942GeneratedReservationErrorV1> {
         Err(crate::RuntimeGfx942GeneratedReservationErrorV1::UnsupportedPreparation)
     }
+    fn preflight_adoption(
+        &mut self,
+        _context: &mut RuntimeContextV1<B>,
+        _stream: RuntimeStreamIdV1,
+    ) -> Result<(), RuntimeErrorV1<B::Error>> {
+        Err(crate::RuntimeValidationErrorV1::Unsupported.into())
+    }
+    fn activate_adoption(
+        &mut self,
+        _hold: crate::context::ContextUnpublishedHoldV1,
+        _ticket: RuntimeAsyncReservedTicketV1,
+    ) {
+        unreachable!("only an admitted generated driver activates")
+    }
+    /// True permits disposal only after exact unpublished native retirement.
+    fn retire_unpublished(
+        &mut self,
+        _context: &mut RuntimeContextV1<B>,
+    ) -> Result<bool, RuntimeErrorV1<B::Error>> {
+        Ok(false)
+    }
     /// Called after the driver is rooted in the preallocated parked roster.
     fn complete_preparation(&mut self) {}
     /// Infallibly detach/resolve the reply before any fallible handling, without
@@ -186,6 +207,108 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
                 RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket,
             ))?;
         entry.driver.reserve_generated(context, completion)
+    }
+
+    pub(super) fn activate_reserved(
+        &mut self,
+        context: &mut RuntimeContextV1<B>,
+        ticket: &mut Option<RuntimeAsyncReservedTicketV1>,
+        stream: RuntimeStreamIdV1,
+    ) -> Result<(), generated_operation::adoption::ActivationErrorV1<B::Error>> {
+        use generated_operation::adoption::ActivationErrorV1 as Error;
+        if context.is_terminal() || !self.owner_cleanup {
+            return Err(Error::Engine(RuntimeAsyncEngineCallErrorV1::EngineStopped));
+        }
+        let key = &ticket.as_ref().expect("queued reserved ticket").key;
+        if key.context_generation != context.capture_context_generation_v1() {
+            return Err(Error::Engine(
+                RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket,
+            ));
+        }
+        let index = self
+            .parked
+            .iter()
+            .position(|entry| {
+                entry
+                    .driver
+                    .reserved_key()
+                    .is_some_and(|stored| Arc::ptr_eq(stored, key))
+            })
+            .ok_or(Error::Engine(
+                RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket,
+            ))?;
+        if self.entries.len() == self.entries.capacity() {
+            return Err(Error::Engine(
+                RuntimeAsyncEngineCallErrorV1::OperationCapacity,
+            ));
+        }
+        self.parked[index]
+            .driver
+            .preflight_adoption(context, stream)
+            .map_err(Error::Context)?;
+        let hold = context
+            .hold_unpublished_stream_v1(stream)
+            .map_err(|error| Error::Context(error.into()))?;
+        let entry = self.parked.remove(index).expect("exact parked entry");
+        debug_assert!(
+            entry.stream.is_none(),
+            "adoption never enters the flush roster"
+        );
+        self.entries.push_back(entry);
+        // Root the same driver before its phase changes or any adapter effect.
+        self.entries
+            .back_mut()
+            .expect("rooted adoption")
+            .driver
+            .activate_adoption(hold, ticket.take().expect("consumed exact reserved ticket"));
+        Ok(())
+    }
+
+    pub(super) fn retire_unpublished_v1(
+        &mut self,
+        context: &mut RuntimeContextV1<B>,
+        budget: usize,
+    ) {
+        if context.is_terminal() {
+            return;
+        }
+        let mut index = 0;
+        for _ in 0..budget.min(self.entries.len()) {
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                let retired = self
+                    .entries
+                    .get_mut(index)
+                    .expect("bounded retirement roster")
+                    .driver
+                    .retire_unpublished(context)?;
+                if context.is_terminal() {
+                    return Err(crate::RuntimeValidationErrorV1::ContextTerminal.into());
+                }
+                if retired {
+                    let entry = self
+                        .entries
+                        .remove(index)
+                        .expect("retired unpublished owner");
+                    self.retire_stream(entry.stream);
+                    drop(entry);
+                } else {
+                    // Progress owns round-robin rotation. Rotating again here
+                    // can starve both scans when their equal budgets alias.
+                    index += 1;
+                }
+                Ok::<_, RuntimeErrorV1<B::Error>>(())
+            }));
+            match result {
+                Ok(Ok(())) if !context.is_terminal() => {}
+                failed => {
+                    if let Err(payload) = failed {
+                        core::mem::forget(payload);
+                    }
+                    context.quarantine_after_async_command_panic_v1();
+                    return;
+                }
+            }
+        }
     }
 
     pub(super) fn dispose_quiescent(&mut self) {

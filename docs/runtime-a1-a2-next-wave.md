@@ -1,6 +1,8 @@
 # A1/A2 Next-Wave Dispatch
 
-Dispatch refreshed 2026-09-10 after the three-agent review of local R82.
+Dispatch refreshed 2026-09-10 after the three-agent review of local R83.
+The [current swarm overlay](runtime-a1-a2-swarm-dispatch-r83.md) splits DATA-SHELL,
+the independent COMPLETE-ORACLE and VER-1A work before native integration.
 The preceding signed R81 checkpoint is
 `72bec68d2968f4815f23c84d41ed6510f433ba96`, on both topic-branch remotes.
 R82 now implements [pristine dispatch abort](runtime-pristine-dispatch-abort-v1.md)
@@ -9,6 +11,12 @@ Its local evidence is recorded in the
 [R82 record](evidence/local-r82-pristine-abort-2026-09-10/README.md).
 Native adoption is the next integration packet; signed Linux abort/rebind and
 the new adapter's formal refinement remain separate open gates.
+R83 now adds the private [unpublished lifecycle substrate](runtime-unpublished-operation-lifecycle-v1.md)
+with [local evidence](evidence/local-r83-unpublished-lifecycle-2026-09-10/README.md).
+Native callbacks remain uninstalled: production generated preparation has no
+adoption hooks, and its private activation transition rejects unsupported work.
+ADOPT-LIFE's native prefix/lane integration and
+DATA-ADOPT are the next coupled handoff, not completed by these lifecycle tests.
 R79 B3-OWNER now implements finite async preparation with the
 [contract](runtime-async-generated-preparation-v1.md) and
 [local gates](evidence/local-r79-async-preparation-2026-09-10/README.md) recorded below.
@@ -60,10 +68,10 @@ Under the current ownership policy workers are read-only; Primary owns edits.
 
 | Worker | First bounded packet | Follow-on queue | Exit gate for first packet |
 | --- | --- | --- | --- |
-| Native: `r66_native_coexistence` | DATA-ADOPT: backend-rooted complete native prefixes and original-ordinal registration | ISSUE native interface; SCALE-1A fixtures; native-budget and R76/R78/R82 qualification harnesses; admitted profiles and capacity | Compose with ADOPT-LIFE, R80 reservations and R82 abort. Retain every partial allocation/copy/map prefix across error, panic and retake failure; exact lane/VM identities and zero publication. |
-| Admission: `r66_runtime_coexistence` | ADOPT-LIFE: reserved owner becomes non-discardable before native effects | ISSUE -> COMPLETE -> public async/blocking API -> generated graph/drain | Join lane, graph, drain and cleanup accounting without a fabricated submission or auto-flushing entry. Test ticket replay, Stop, observer loss, stream destruction, capacity and cleanup failures. |
+| Native: `r66_native_coexistence` | DATA-SHELL: closed packet transfer and genuine generated allocation records, then DATA-ADOPT | ISSUE native interface; SCALE-1A fixtures; native-budget and R76/R78/R82 qualification harnesses; admitted profiles and capacity | Preserve full original ordinals without encoded Arc-backed shadows. Compose complete native prefixes with R83, R80 reservations and R82 abort; retain every partial effect across error/panic/retake failure, with zero publication. |
+| Admission: `r66_runtime_coexistence` | COMPLETE-ORACLE: exact completion, failure and storage-disposal contract; then R83 native integration | ISSUE -> COMPLETE -> public async/blocking API -> generated graph/drain | Reuse R83 activation/hold/retirement. Integrate exact native lane/prefix and actual charged-carrier custody before effects; freeze full-roster failures and disposal-before-readiness before ISSUE. |
 | Resources: `r66_coexistence_model` | VER-1A: bounded Context mutation journal and mutation-path inventory | VER-1B hooks; aggregate domains; remaining backing/control/code budgets; VER-2 leases; MEM-5 closure | Nonwrapping Available/Pending/Unknown whole-allocation versions; bounded exhaustion and unknown-outcome tests. Cross-run leases remain disabled until every mutation hook is integrated. |
-| Primary | Compose ADOPT-LIFE/DATA-ADOPT and preserve R80 credit ownership | Cross-review, executable refinement, signed hardware qualification and matched performance | Serialize shared edits/builds/proofs. Accept CPU, proof, Linux and performance results separately; publish signed source/evidence to both topic remotes. |
+| Primary | Compose DATA-SHELL/DATA-ADOPT on accepted local R83 and preserve R80 credit ownership | Cross-review, executable refinement, signed hardware qualification and matched performance | Serialize shared edits/builds/proofs. Accept CPU, proof, Linux and performance results separately; publish signed source/evidence to both topic remotes. |
 
 ADOPT-LIFE and DATA-ADOPT are coupled contracts; neither may introduce effects
 before their custody interface is integrated. VER-1A is independent. COMPLETE's
@@ -75,7 +83,8 @@ allocate them again. R73 decoder and peak-storage custody remain attached.
 The critical path is:
 
 ```text
-local R82 + R80 -> ADOPT-LIFE/DATA-ADOPT -> ISSUE -> COMPLETE -> API -> GRAPH/DRAIN
+R83 + R82 + R80 -> DATA-SHELL -> native ADOPT -> ISSUE -> COMPLETE -> API -> GRAPH/DRAIN
+COMPLETE-ORACLE --------------------------------^
 VER-1A -> complete VER-1B mutation hooks -> VER-2 cross-run input leases
 ```
 
@@ -229,7 +238,7 @@ are sequential queues, not additional concurrent workers or delegated edits.
 | --- | --- | --- |
 | Native: `r66_native_coexistence` | B3-DATA-ADOPT after local R82; independent fixture/harness queue | R82 preserves exact unpublished continuation and complete data through control cleanup. Adoption needs exact native registration, retained partial prefixes and active lane/drain custody. SCALE-1A, MEM-QUAL-HARNESS and R76/R78 coverage remain independent. |
 | Resources: `r66_coexistence_model` | VER-1A journal; review R82 and COMPLETE; then account/proof queue | Start an independently bounded Context journal, not cross-run authority. R81 host-cache implementation is complete locally; its proof/qualification, aggregate domains and broader accounting remain open. |
-| Admission: `r66_runtime_coexistence` | ADOPT-LIFE active-owner handoff, then B3-ISSUE | Reserved remains parked and host-only. Define non-discardable adopting custody before effects, then private submission-bound authority surviving actual flush/retry. COMPLETE, API and graph/drain follow. |
+| Admission: `r66_runtime_coexistence` | COMPLETE-ORACLE and R83 native integration, then B3-ISSUE | R83 supplies private non-discardable custody; native hooks remain absent. Bind actual charged carrier, lane and prefix before effects, then private submission-bound authority through actual flush/retry. COMPLETE, API and graph/drain follow. |
 | Primary | R82/adoption integration, proof composition and qualification | Own every edit, integration/build/proof run, evidence record and signed dual push. Serialize shared hooks. Existing OVL-QUAL-2 and DRN-2A can be scheduled against frozen signed source; native-budget pressure first needs MEM-QUAL-HARNESS. |
 
 Admission and Resources agree the permit/decoder/result boundary before code
@@ -237,7 +246,7 @@ integration. Native's fixture work does not mint production generated-launch
 authority. Primary serializes shared-file edits; each worker reviews another
 lane's contract before the packet's local gates.
 
-With local R82 and the still-required active-owner contract, Native can build adoption against R80's
+With local R82 and R83's private active-owner substrate, Native can build adoption against R80's
 complete-roster representation and implemented B4 reservations. Fixtures, their
 sequential qualifier and MEM-QUAL-HARNESS remain independent; host-cache
 proof/qualification and broader budget hooks remain coordinated follow-ons.
@@ -258,7 +267,7 @@ claim new implementation, proof or hardware acceptance.
 | Worker | First deliverable | Source boundary | Dependency and exit gate |
 | --- | --- | --- | --- |
 | Native | R82-ABORT implemented; handoff to DATA-ADOPT | KFD `queue_dispatch_binding/pristine_abort.rs`, `queue_live/pristine_abort.rs`, session/lane integration | Local strict pristine admission, exact next generation and retained failure custody. Separate signed same-queue abort/rebind qualification and native adapter refinement remain open. |
-| Admission | ADOPT-LIFE state/ownership contract and deterministic lifecycle fixtures | `async_engine/generated_operation.rs`, registry, Context and drain hooks | Non-discardable custody joins lane/graph/drain/cleanup before effects without a fabricated submission or deferred-flush entry. Integrate only with R82 and Native's complete prefix owner. Freeze COMPLETE's failure oracle independently. |
+| Admission | COMPLETE's failure oracle and R83 native integration | `async_engine/generated_operation.rs`, registry, Context and drain hooks | R83 state/hold/retirement fixtures exist. Join real lane/prefix and charged-carrier custody without a fabricated submission or deferred-flush entry; integrate only with Native's complete owner. Freeze COMPLETE's failure oracle independently. |
 | Resources | VER-1A bounded journal contract and mutation inventory | Proposed `context/versions.rs` and isolated model; existing graph-local `async_engine/graph/versions.rs` | Nonwrapping whole-allocation Available/Pending/Unknown versions, invalidation before host-write/copy effects, bounded exhaustion and unknown-outcome tests. VER-1B must cover every mutation before VER-2 may issue cross-run leases. Review R82 failure retention in parallel. |
 | Primary | Local R82 integration complete; next ADOPT-LIFE/DATA-ADOPT integration | Shared exports, Context/native hooks, proof rosters, tests and evidence | Preserve R80 reservation and R81 cache policy. Cross-review, focused gates and current-source integration precede signed dual publication. Serialize builds, proofs and shared-machine campaigns. |
 
@@ -327,8 +336,8 @@ The subsequent generated sequence is:
 
 ```text
 R80: B3-DATA-REP + B4-RESERVE-HOST + B4-RESERVE-ENGINE [implemented locally]
-  + R82-ABORT [implemented locally] + ADOPT-LIFE [open]
-  -> B3-DATA-ADOPT -> B3-ISSUE -> B4-COMPLETE -> B5-API -> B6-GRAPH/DRAIN
+  + R82-ABORT + R83 private ADOPT-LIFE [implemented locally]
+  -> DATA-SHELL -> B3-DATA-ADOPT/native LIFE -> B3-ISSUE -> B4-COMPLETE -> B5-API -> B6-GRAPH/DRAIN
 ```
 
 Before ADOPT's first native effect, the same rooted owner must become
@@ -360,7 +369,7 @@ publishing state to bypass a dependency.
 | B4-RESERVE / R80 | Implemented locally; Admission/Resources review, Primary integration | Separate acknowledgement/completion cells and full original-account readback overlap. Staging precedes closing currentness; installation follows it. Tests cover actual charged storage and runtime ticket/owner behavior separately, not successful protected construction or native completion. |
 | B3-DATA-REP / R80 | Implemented locally in `generated_source.rs` and narrow host/Context views | Checked borrowed source join and fixed complete-roster metadata retain original vectors, decoder/account, artifact, authority, timeout and ordinals. Reuses immutable R77 packet/fixup invariants; no generic extraction, native registration or publication permit. |
 | R82-ABORT | Implemented locally; Native/Admission/Resources cross-review | Distinct pristine continuation, complete retained data and one-shot control disposal; exact generation preserved without recycled authority. CPU/fake-native failures and scripted closing/settlement tests are not signed same-queue Linux or adapter-proof acceptance. |
-| ADOPT-LIFE | Admission; Native/Resources review | Missing; ready after local R82. Existing reserved owner becomes non-discardable and participates in lane, graph, drain and cleanup ownership before effects. No fake submission or deferred publication. |
+| ADOPT-LIFE | Admission; Native/Resources review | R83 implements private exact-ticket activation, Context stream hold, nonflushing active custody and explicit drain/shutdown retirement. Real DATA callbacks, native lane/prefix integration, charged-carrier acceptance and adapter proof remain open. No public activation API exists; production preparation installs no hooks. |
 | B3-DATA-ADOPT | Native with Admission/Resources: retained-prefix owner and logical/native registration | Requires R82, ADOPT-LIFE, REP and implemented B4-RESERVE; reuse R78 slices. Preallocate prefix slots and register every original ordinal before exposing adopted state. Test bootstrap states, exact generations, partial allocation/copy/map/retake failures and panic retention. Include lane/drain/graph/cleanup ownership; still no publication. |
 | B3-ISSUE | Admission with Native: `compute_state.rs`, `compute_dispatch.rs`, Context registration | Requires DATA-ADOPT and implemented RESERVE. Retain a private linear permit bound to the exact submission and resource incarnations through actual deferred flush/retry. Test substitutions, replay, contention, ambiguous issue and timeout retention. |
 | B4-COMPLETE | Admission with Resources/Native: driver, private decoder/storage and readback | Requires ISSUE. Validate the exact submission and complete returned roster before any output publication. Test malformed late output, read-only mutation, failed readback/currentness, decoder panic, one reply and retained results after shutdown. |
@@ -513,8 +522,8 @@ fixture drain do not require that production handoff.
 
 | Stage | Ready work | Gate before advancing |
 | --- | --- | --- |
-| 0: through R82 locally complete | Charged results, retained preparation, complete source/readback reservation, ordinary host-cache policy and pristine abort | Retained packet-specific source gates and property proofs; R82 adds no new proof, and native/whole-executor acceptance remains separate |
-| 1: ready local packets | ADOPT-LIFE and DATA-ADOPT on local R82; independent VER-1A, short/long fixtures and native-budget harness | Freeze cross-lane interfaces; complete deterministic rejection, ownership, failure and oracle tests; no native adoption before composed custody |
+| 0: through R83 local substrate | Charged results, retained preparation, complete source/readback reservation, ordinary host-cache policy, pristine abort and private unpublished lifecycle | Retained packet-specific source gates and property proofs; R82/R83 add no new proof, and native/whole-executor acceptance remains separate |
+| 1: ready local packets | DATA-SHELL and native ADOPT integration; independent COMPLETE-ORACLE, VER-1A, short/long fixtures and native-budget harness | Freeze cross-lane interfaces; complete deterministic rejection, ownership, failure and oracle tests; no native adoption before composed custody |
 | 2: compose ownership | Broader native profiles, domains, control/code budgets, versions and GEN-2B | No duplicate backing debit, unbounded child accounts, stale input authority or detached decoder; preserve progress headroom |
 | 3: qualify A1/A2 | Out-of-order native depth, repeated generated graphs, active drain, memory pressure and overlap | Admitted workloads, exact compiler evidence for production generated cells, signed full-output captures and cleanup; existing copy/overlap campaigns may run earlier |
 | 4: measure and close | Matched KFD/HSA/HIP producers, executable proof composition and exit audit | Predeclared workloads/thresholds, resource/CPU/tail metrics, separate device-timeline evidence for physical overlap; every A1/A2 acceptance cell resolved |

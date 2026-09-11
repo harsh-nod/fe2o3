@@ -849,6 +849,7 @@ enum RuntimeAsyncEngineCommandV1<B: RuntimeBackendV1> {
         reply: owned::Reply<()>,
     },
     ReservePrepared(generated_operation::ReserveCommandV1),
+    ActivateReserved(generated_operation::adoption::ActivateCommandV1<B>),
     DiscardReserved {
         ticket: RuntimeAsyncReservedTicketV1,
         reply: owned::Reply<()>,
@@ -1529,6 +1530,13 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
             );
         }
         if !stopped && let (Some(request), Some(mode)) = (draining.as_mut(), progress.as_ref()) {
+            if queue_exhausted {
+                operations.retire_unpublished_v1(context, config.polls_per_tick);
+                if context.is_terminal() {
+                    stopped = true;
+                    continue;
+                }
+            }
             stopped = match catch_unwind(AssertUnwindSafe(|| {
                 request.tick(
                     context,
@@ -1639,6 +1647,14 @@ fn handle_command_v1<B: RuntimeBackendV1 + 'static>(
         }
         RuntimeAsyncEngineCommandV1::ReservePrepared(mut command) => {
             command.run(context, operations);
+            context.is_terminal()
+        }
+        RuntimeAsyncEngineCommandV1::ActivateReserved(mut command) => {
+            if graph.is_some() {
+                command.reject_reserved_context();
+            } else {
+                command.run(context, operations);
+            }
             context.is_terminal()
         }
         RuntimeAsyncEngineCommandV1::DiscardReserved { ticket, mut reply } => {
@@ -2085,6 +2101,9 @@ mod tests {
 
     #[derive(Default)]
     struct MockState {
+        adoption_retire_calls: usize,
+        adoption_retire_mode: u8,
+        adoption_order: Vec<&'static str>,
         next: u64,
         statuses: HashMap<u64, BackendPollV1>,
         poll_threads: HashSet<ThreadId>,

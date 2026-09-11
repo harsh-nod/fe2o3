@@ -16,9 +16,11 @@ mod allocation_admission;
 mod drain;
 mod drain_capture;
 mod generated_preparation;
+mod unpublished;
 use allocation_admission::ContextAllocationAdmissionV1;
 pub use drain_capture::*;
 pub use generated_preparation::*;
+pub(crate) use unpublished::ContextUnpublishedHoldV1;
 
 /// Maximum number of devices retained by one runtime context.
 pub const MAX_RUNTIME_DEVICES_V1: usize = 256;
@@ -914,6 +916,7 @@ fn map_backend_error<E>(error: RuntimeBackendFailureV1<E>) -> RuntimeErrorV1<E> 
 struct StreamRecordV1 {
     backend_stream: u64,
     device: RuntimeDeviceIdV1,
+    unpublished: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1204,7 +1207,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     /// immediately and permanently seals the context.
     pub fn cleanup(&mut self) -> RuntimeCleanupReportV1<B::Error> {
         let mut failures = Vec::new();
-        if self.terminal || self.graph_reservation.is_some() {
+        if self.terminal || self.graph_reservation.is_some() || self.has_unpublished_holds_v1() {
             return self.cleanup_report(failures);
         }
 
@@ -1660,6 +1663,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             StreamRecordV1 {
                 backend_stream,
                 device,
+                unpublished: None,
             },
         );
         if protocol_error.is_none() {
@@ -1673,10 +1677,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         stream: RuntimeStreamIdV1,
     ) -> Result<(), RuntimeErrorV1<B::Error>> {
         self.require_live()?;
-        let record = *self
-            .streams
-            .get(&stream)
-            .ok_or(RuntimeValidationErrorV1::UnknownStream)?;
+        let record = *self.unheld_stream_v1(stream)?;
         let result = self.backend.destroy_stream_v1(record.backend_stream);
         if matches!(&result, Err(RuntimeBackendFailureV1::Quiescent(_))) {
             self.mark_stream_quiescent(stream);
@@ -2033,10 +2034,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 return Err(RuntimeValidationErrorV1::DuplicateDependency.into());
             }
         }
-        let stream_record = *self
-            .streams
-            .get(&stream)
-            .ok_or(RuntimeValidationErrorV1::UnknownStream)?;
+        let stream_record = *self.unheld_stream_v1(stream)?;
         if !self
             .device(stream_record.device)?
             .capabilities
@@ -2159,6 +2157,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         ) -> Result<u64, RuntimeBackendFailureV1<B::Error>>,
     {
         self.require_graph_access(access)?;
+        self.require_stream_unheld_v1(prepared.stream)?;
         if self.submissions.len() >= MAX_RUNTIME_SUBMISSIONS_V1 {
             return Err(RuntimeValidationErrorV1::Capacity.into());
         }
@@ -2437,11 +2436,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         B: RuntimeFlushBackendV1,
     {
         self.require_graph_access(access)?;
-        let backend_stream = self
-            .streams
-            .get(&stream)
-            .ok_or(RuntimeValidationErrorV1::UnknownStream)?
-            .backend_stream;
+        let backend_stream = self.unheld_stream_v1(stream)?.backend_stream;
         let result = self.backend.flush_stream_v1(backend_stream);
         self.backend_result(result)
     }
@@ -2743,10 +2738,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 return Err(RuntimeValidationErrorV1::DuplicateDependency.into());
             }
         }
-        let stream_record = *self
-            .streams
-            .get(&stream)
-            .ok_or(RuntimeValidationErrorV1::UnknownStream)?;
+        let stream_record = *self.unheld_stream_v1(stream)?;
         let peer_contract_identity = peer_copy_contract_identity(stream, source, destination);
         let translate = |region: RuntimeMemoryRegionV1| -> Result<
             (BackendMemoryRegionV1, RuntimeDeviceIdV1),
@@ -2891,10 +2883,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 return Err(RuntimeValidationErrorV1::DuplicateDependency.into());
             }
         }
-        let stream_record = *self
-            .streams
-            .get(&stream)
-            .ok_or(RuntimeValidationErrorV1::UnknownStream)?;
+        let stream_record = *self.unheld_stream_v1(stream)?;
         if source.allocation == destination.allocation {
             return Err(RuntimeValidationErrorV1::InvalidRange.into());
         }
@@ -2969,6 +2958,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         B: RuntimeAsyncCopyBackendV1,
     {
         self.require_graph_access(access)?;
+        self.require_stream_unheld_v1(prepared.stream)?;
         if self.submissions.len() >= MAX_RUNTIME_SUBMISSIONS_V1 {
             return Err(RuntimeValidationErrorV1::Capacity.into());
         }

@@ -1,6 +1,7 @@
 # A1/A2 Swarm Dispatch After Local R83
 
-Planning-only checkpoint, 2026-09-10. This is the current assignment overlay for
+Dispatch established by planning-only commit `32c1beff`, 2026-09-10, and updated
+after the R83 local release gates. This is the current assignment overlay for
 [next-wave dispatch](runtime-a1-a2-next-wave.md) and the
 [historical roadmap](runtime-a1-a2-swarm-plan.md). It supersedes their current
 assignment rows, not their packet-specific evidence or historical contracts.
@@ -10,13 +11,15 @@ update `2026-09-10T10:50:51Z`. Later A3-A7 milestones remain separate.
 
 ## Checkpoint And Ownership
 
-The signed implementation baseline is R82
+The signed pre-R83 implementation baseline is R82
 `5184428b7bb9bbb0e9cc30c6929d3c77ee60cbdb`, on both topic remotes.
-R83 is an uncommitted local patch: private activation, nonflushing active
-custody, stream holds and explicit drain/shutdown retirement are implemented.
-Its focused tests have run, but final frozen-source gates and retained evidence
-are pending; preliminary Clippy reports callback type-complexity errors.
-This planning commit does not publish or qualify that runtime patch.
+R83 implements private activation, nonflushing active custody, stream holds and
+explicit drain/shutdown retirement. Its
+[local evidence](evidence/local-r83-unpublished-lifecycle-2026-09-10/README.md)
+records all seventeen frozen-source gates, 2,363 runtime tests per GNU/musl
+target, fifteen new lifecycle tests and the resolved callback type-complexity
+lint. The original planning-only checkpoint did not publish or qualify R83;
+the later source/evidence packet supplies this local acceptance.
 
 Production generated preparation installs no adoption hooks. Activation is a
 private boundary, not a public API. Native DATA adoption, publication and typed
@@ -36,7 +39,7 @@ Primary, not one worker per ticket. Shared Context/backend edits are serialized.
 | Native: `r66_native_coexistence` | DATA-SHELL, the nonexecuting prerequisite to DATA-ADOPT | Closed one-shot packet transfer and genuine generated allocation records without ordinary encoded `Arc<[u8]>` snapshots. Preserve the full original ordinal roster, pointers, authority and decoder custody. Reject substitution/capacity failures before effects. |
 | Admission: `r66_runtime_coexistence` | COMPLETE-ORACLE, independent of native adoption | Exact invocation/submission/generation and full-roster validation contract; failure and disposal-order fixtures covering malformed late output, decoder panic, observer loss and shutdown. No native completion authority from fixtures. |
 | Resources: `r66_coexistence_model` | VER-1A, independent Context mutation journal | Bounded nonwrapping whole-allocation `Available/Pending/Unknown` transitions, atomic multi-destination admission, exact writer completion and a complete mutation-site inventory. Cross-run leases stay disabled. |
-| Primary | R83 release gate, then integration | Resolve existing lint, freeze source, run current-source gates and retain evidence before publishing R83. Compose reviewed interfaces; do not install adoption callbacks before complete native custody exists. |
+| Primary | DATA-SHELL/DATA-ADOPT integration on accepted local R83 | Preserve R80 reservations and R83 custody. Compose reviewed interfaces; do not install adoption callbacks before complete native custody exists. Run current-source gates and retain separate proof/Linux/performance results. |
 
 Native and Admission first agree on the exact packet/hold/native-key boundary.
 Admission can develop COMPLETE-ORACLE while Native designs DATA-SHELL; Resources
@@ -90,15 +93,16 @@ unless explicitly stated.
 | DRN-2B / generated drain | Fixture compute drain follows sequential fixture correctness; production graph/drain follows generated integration and exact compiler evidence. | Outstanding compute, dropped observers, complete outputs and cleanup. Fixture results do not fill production-generated cells. |
 | SCALE-3 | Matched KFD/HSA/HIP producers and signed correctness-first performance campaigns remain open. | Predeclared workloads/thresholds, identical work, full-output checks, CPU/memory/tail metrics and independent device timelines for physical overlap. No parity or speedup claim from API shape or CPU tests. |
 
-No SSH, GPU workload, solver or runtime test was started for this planning
-refresh. Future shared-MI300X campaigns require an idle admitted GPU, bounded
+No SSH, GPU workload, solver or runtime test was started for the original
+planning-only refresh; subsequent R83 runtime tests are recorded separately
+above. Future shared-MI300X campaigns require an idle admitted GPU, bounded
 private staging, one owned campaign at a time and cleanup of only owned resources.
 Disruptive fault tests require an agreed isolated window.
 
 ## Ordering And Closure
 
 ```text
-R83 release gate -> DATA-SHELL -> DATA-ADOPT -> ISSUE -> COMPLETE -> API -> GRAPH/DRAIN
+local R83 -> DATA-SHELL -> DATA-ADOPT -> ISSUE -> COMPLETE -> API -> GRAPH/DRAIN
                                   ^           ^
                          R80 + R82 custody     |
 COMPLETE-ORACLE -------------------------------+
@@ -125,5 +129,5 @@ After A1/A2, the same slots rotate through the remaining
 | A7: production performance | Native + Primary: predeclared single-device, multi-GPU and two-host performance gates with direct-KFD dependency/symbol audits. |
 
 This dispatch does not close A1/A2, #182, full HIP/HSA parity or any performance
-target. Only the planning document is published at this checkpoint; local R83
-source and provisional evidence remain separate pending their release gates.
+target. Local R83 acceptance covers its private lifecycle only, not the queued
+native adoption, completion, proof, hardware or performance work.

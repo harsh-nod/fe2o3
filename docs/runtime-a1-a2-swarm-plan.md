@@ -1,7 +1,7 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Current implementation: local R82 on signed dispatch baseline
-`3c534e88843a8fdd64a5b3397ec6937ce3696b48`, reviewed 2026-09-10. Historical
+Current implementation: local R83 on signed R82 baseline
+`5184428b7bb9bbb0e9cc30c6929d3c77ee60cbdb`, reviewed 2026-09-10. Historical
 packet validation and exact source/evidence identities are retained below.
 This decomposes the remaining local
 A1/A2 work in
@@ -13,8 +13,9 @@ The checkpoint history distinguishes local
 implementation from hardware acceptance; queued tickets are not completed work
 or unattended background jobs.
 
-The [next-wave dispatch](runtime-a1-a2-next-wave.md#next-three-assignments) is the
-current ticket split from the three-agent read-only audit after local R82.
+The [R83 swarm overlay](runtime-a1-a2-swarm-dispatch-r83.md) and
+[next-wave dispatch](runtime-a1-a2-next-wave.md#next-three-assignments) contain the
+current ticket split from the three-agent read-only audit after local R83.
 It records generated-admission/result ownership, independent native fixtures,
 the missing native-budget qualification harness and completion gates. That
 planning audit adds no runtime implementation or hardware acceptance; the
@@ -37,10 +38,19 @@ Native review also identified a pristine never-published dispatch abort/detach
 prerequisite for reusable bound ADOPT. Recycled detach cannot stand in for it.
 R82 now implements [pristine abort](runtime-pristine-dispatch-abort-v1.md), with
 [local evidence](evidence/local-r82-pristine-abort-2026-09-10/README.md).
-The next handoffs are Native's DATA-ADOPT, Admission's ADOPT-LIFE contract/fixtures
-and Resources' independent VER-1A journal. The three read-only reviews completed;
+The next handoffs are Native's DATA-SHELL then DATA-ADOPT, Admission's independent
+COMPLETE-ORACLE and native integration, and Resources' VER-1A journal.
+The three read-only reviews completed;
 Primary owns implementation and integration. R82 has no Linux qualification or
 new authenticated Verus proof. The earlier dispatch refresh added no runtime code.
+
+R83 implements the private [unpublished lifecycle substrate](runtime-unpublished-operation-lifecycle-v1.md)
+with [local gates](evidence/local-r83-unpublished-lifecycle-2026-09-10/README.md).
+Same-owner activation, nonflushing progress, Context holds and explicit
+drain/shutdown retirement are locally implemented. Real native callbacks are
+not installed. DATA allocation shells, closed packet transfer, native prefix
+and lane ownership, protected construction, charged-carrier integration and
+adapter proofs remain open. This does not complete coupled ADOPT-LIFE/DATA.
 
 The [R65 contract](runtime-async-drain-versions-v1.md) is the current baseline:
 cooperative drain, reply-count admission and graph-local version lineage are

@@ -76,6 +76,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             self.submissions.len(),
             self.events.len(),
         ) || self.completion_callback_count != 0
+            || self.has_unpublished_holds_v1()
         {
             return Err(RuntimeValidationErrorV1::ContextReserved);
         }

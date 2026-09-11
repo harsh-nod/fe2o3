@@ -5,6 +5,7 @@ use crate::{KfdRuntimeBackendV1, RuntimeDeviceIdV1, RuntimeGfx942PreparationErro
 use crate::{RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedReservationErrorV1};
 use operation::{EngineOperationFactoryV1, EngineOperationV1, stop_reply};
 
+pub(super) mod adoption;
 mod reservation;
 pub(super) use reservation::ReserveCommandV1;
 pub use reservation::*;
@@ -99,6 +100,7 @@ struct PreparationFactory<B: RuntimeBackendV1, P, E> {
     key: Arc<PreparedKeyV1>,
     control: Option<RuntimeAsyncOperationControlV1>,
     reserve: Option<Reserve<B, P>>,
+    adoption: Option<adoption::AdoptionHooksV1<B, P>>,
 }
 
 struct PreparationDriver<B: RuntimeBackendV1, P, E> {
@@ -111,6 +113,8 @@ struct PreparationDriver<B: RuntimeBackendV1, P, E> {
     reserve: Option<Reserve<B, P>>,
     roster: Option<crate::generated_source::GeneratedHostRosterV1>,
     completion: Option<owned::Reply<()>>,
+    adoption: Option<adoption::AdoptionHooksV1<B, P>>,
+    unpublished: Option<adoption::UnpublishedAdoptionV1>,
 }
 
 impl<B: RuntimeBackendV1 + 'static, P: 'static, E: Send + 'static> EngineOperationFactoryV1<B>
@@ -133,6 +137,8 @@ impl<B: RuntimeBackendV1 + 'static, P: 'static, E: Send + 'static> EngineOperati
             reserve: self.reserve,
             roster: None,
             completion: None,
+            adoption: self.adoption,
+            unpublished: None,
         })
     }
 
@@ -153,6 +159,9 @@ impl<B: RuntimeBackendV1, P, E> Drop for PreparationFactory<B, P, E> {
 
 impl<B: RuntimeBackendV1, P, E> EngineOperationV1<B> for PreparationDriver<B, P, E> {
     fn advance(&mut self, context: &mut RuntimeContextV1<B>) -> bool {
+        if self.unpublished.is_some() {
+            return self.advance_unpublished_v1(context);
+        }
         if self.key.context_generation != context.capture_context_generation_v1() {
             self.reject(RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket);
             return true;
@@ -184,12 +193,47 @@ impl<B: RuntimeBackendV1, P, E> EngineOperationV1<B> for PreparationDriver<B, P,
     fn prepared_key(&self) -> Option<&Arc<PreparedKeyV1>> {
         self.prepared
             .as_ref()
-            .filter(|_| self.roster.is_none())
+            .filter(|_| self.roster.is_none() && self.unpublished.is_none())
             .map(|_| &self.key)
     }
 
     fn reserved_key(&self) -> Option<&Arc<PreparedKeyV1>> {
-        self.roster.as_ref().map(|_| &self.key)
+        self.roster
+            .as_ref()
+            .filter(|_| self.unpublished.is_none())
+            .map(|_| &self.key)
+    }
+
+    fn preflight_adoption(
+        &mut self,
+        context: &mut RuntimeContextV1<B>,
+        stream: RuntimeStreamIdV1,
+    ) -> Result<(), RuntimeErrorV1<B::Error>> {
+        let hooks = self
+            .adoption
+            .as_ref()
+            .ok_or(crate::RuntimeValidationErrorV1::Unsupported)?;
+        (hooks.preflight)(
+            context,
+            self.prepared.as_ref().expect("reserved payload"),
+            self.roster.as_ref().expect("reserved roster"),
+            stream,
+        )
+    }
+
+    fn activate_adoption(
+        &mut self,
+        hold: crate::context::ContextUnpublishedHoldV1,
+        ticket: RuntimeAsyncReservedTicketV1,
+    ) {
+        self.unpublished = Some(adoption::UnpublishedAdoptionV1::new(hold, ticket));
+    }
+
+    fn retire_unpublished(
+        &mut self,
+        context: &mut RuntimeContextV1<B>,
+    ) -> Result<bool, RuntimeErrorV1<B::Error>> {
+        self.retire_unpublished_v1(context)
     }
 
     fn reserve_generated(
@@ -252,6 +296,15 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         prepare: Prepare<B, P, E>,
         reserve: Option<Reserve<B, P>>,
     ) -> Result<RuntimeAsyncPreparationV1<E>, RuntimeAsyncEngineCallErrorV1> {
+        self.enqueue_preparation_with_adoption_v1(prepare, reserve, None)
+    }
+
+    pub(super) fn enqueue_preparation_with_adoption_v1<P: 'static, E: Send + 'static>(
+        &self,
+        prepare: Prepare<B, P, E>,
+        reserve: Option<Reserve<B, P>>,
+        adoption: Option<adoption::AdoptionHooksV1<B, P>>,
+    ) -> Result<RuntimeAsyncPreparationV1<E>, RuntimeAsyncEngineCallErrorV1> {
         if self.observer.is_worker_thread() {
             return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
         }
@@ -265,6 +318,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
             }),
             control: Some(control.clone()),
             reserve,
+            adoption,
         };
         match self
             .observer

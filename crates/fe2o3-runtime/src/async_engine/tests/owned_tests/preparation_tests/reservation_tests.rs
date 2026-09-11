@@ -7,7 +7,7 @@ struct ReservablePayload {
     outcome: u8,
 }
 
-fn roster() -> crate::generated_source::GeneratedHostRosterV1 {
+pub(super) fn roster() -> crate::generated_source::GeneratedHostRosterV1 {
     let hsaco = crate::synthetic_cov6::preparation_module();
     let mut explicit = vec![0; 16];
     explicit[8..].copy_from_slice(&4u64.to_le_bytes());

@@ -329,6 +329,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
                         }),
                         worker_admission,
                     );
+                    operations.retire_unpublished_v1(&mut context, usize::MAX);
                     let cleanup = context.cleanup();
                     let native_failure = if cleanup.is_complete() {
                         context.shutdown_owned_backend_v1().err()
