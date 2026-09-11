@@ -1,7 +1,8 @@
 use super::*;
 use dialect_kernel::{
     AccessKindAttr, BranchArgsOp, IndexBinaryKindAttr, IndexBinaryOp, IndexLessThanBranchArgsOp,
-    IndexType, MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType,
+    IndexType, MemorySpaceAttr, PipelineCreateOp, PipelineEventKindAttr, PipelineEventOp,
+    RankedAccessOp, RankedViewOp, RankedViewType,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckStatusV1, PlironBarrierReportV1, run_pliron_progress_check_v1,
@@ -16,6 +17,8 @@ enum Case {
     TrapMismatch,
     ReturnExit,
     HiddenBarrier,
+    HiddenTensor,
+    HiddenPipeline,
     NestedFinite,
     ZeroInnerStep,
     ZeroStep,
@@ -53,7 +56,12 @@ fn append_barrier(context: &mut Context, block: Ptr<BasicBlock>) {
 }
 
 fn branchy_loop(context: &mut Context, case: Case) -> FuncOp {
-    let function = function(context, "barrier_free_scc");
+    let lanes = if matches!(case, Case::HiddenTensor) {
+        64
+    } else {
+        4
+    };
+    let function = function_with_layout(context, "barrier_free_scc", lanes, lanes);
     let entry = function.get_entry_block(context);
     let (header, induction) = index_block(context, &function, "header");
     let (body, body_i) = index_block(context, &function, "body");
@@ -78,8 +86,8 @@ fn branchy_loop(context: &mut Context, case: Case) -> FuncOp {
             2
         },
     );
-    let invocation = InvocationIndexOp::new(context, 0, 4);
-    let view_type = RankedViewType::new(context, 32, true, vec![4]).unwrap();
+    let invocation = InvocationIndexOp::new(context, 0, lanes);
+    let view_type = RankedViewType::new(context, 32, true, vec![lanes]).unwrap();
     let memory =
         RankedViewOp::new_in_space(context, view_type, vec![], MemorySpaceAttr::Global).unwrap();
     for operation in [
@@ -93,6 +101,32 @@ fn branchy_loop(context: &mut Context, case: Case) -> FuncOp {
     }
     if matches!(case, Case::TrapPrefix | Case::TrapMismatch) {
         append_barrier(context, entry);
+    }
+    if matches!(case, Case::HiddenTensor) {
+        let tensor = TensorLayoutOp::new(
+            context,
+            &TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64(),
+            TensorConvergenceAttr::UniformSubgroup,
+            64,
+        );
+        append(context, left, &tensor);
+    }
+    if matches!(case, Case::HiddenPipeline) {
+        let ty = RankedViewType::new(context, 32, true, vec![2, 1]).unwrap();
+        let storage =
+            RankedViewOp::new_in_space(context, ty, vec![], MemorySpaceAttr::Workgroup).unwrap();
+        let pipeline = PipelineCreateOp::new(context, storage.result(context), 2, 1).unwrap();
+        append(context, entry, &storage);
+        append(context, entry, &pipeline);
+        let event = PipelineEventOp::new(
+            context,
+            pipeline.pipeline(context),
+            zero.result(context),
+            zero.result(context),
+            PipelineEventKindAttr::Stage,
+        )
+        .unwrap();
+        append(context, left, &event);
     }
     let enter = BranchArgsOp::new(context, vec![zero.result(context)], header);
     append(context, entry, &enter);
@@ -320,6 +354,16 @@ fn cyclic_convergence_fails_closed_without_exact_progress_and_event_contracts() 
             Case::HiddenBarrier,
             KernelCheckStatusV1::Clean,
             "contains a barrier",
+        ),
+        (
+            Case::HiddenTensor,
+            KernelCheckStatusV1::Clean,
+            "cyclic block 3 contains a barrier, tensor collective, or pipeline event",
+        ),
+        (
+            Case::HiddenPipeline,
+            KernelCheckStatusV1::Clean,
+            "cyclic block 3 contains a barrier, tensor collective, or pipeline event",
         ),
         (
             Case::ZeroInnerStep,
