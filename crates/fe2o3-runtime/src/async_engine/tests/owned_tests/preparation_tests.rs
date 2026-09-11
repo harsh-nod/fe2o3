@@ -1,6 +1,8 @@
 use super::*;
 use std::sync::atomic::AtomicUsize;
 
+mod reservation_tests;
+
 fn ready<F: Future + Unpin>(mut future: F) -> F::Output {
     match Pin::new(&mut future).poll(&mut Context::from_waker(Waker::noop())) {
         Poll::Ready(value) => value,

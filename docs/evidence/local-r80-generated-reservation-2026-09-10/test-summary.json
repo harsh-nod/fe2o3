@@ -1,0 +1,89 @@
+{
+  "gnu-tests": {
+    "passed": 2310,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "musl-tests": {
+    "passed": 2310,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "gnu-docs": {
+    "passed": 101,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 7
+  },
+  "musl-docs": {
+    "passed": 84,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 5
+  },
+  "musl-host-docs": {
+    "passed": 16,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 2
+  },
+  "gnu-host": {
+    "passed": 246,
+    "failed": 0,
+    "ignored": 4,
+    "harnesses": 1
+  },
+  "musl-host": {
+    "passed": 129,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "macro-fixtures": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "base_commit": "5c5133e631f186a35d9d649915e609a7ea00c2e2",
+  "final_gate_attempt": "r80-final",
+  "non_documentation_source_identities_checked": 5601,
+  "focused_async": {
+    "passed": 218,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_async_owned": {
+    "passed": 202,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_charged_host": {
+    "passed": 38,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "model_and_proof_sources_unchanged_from": "fb1e27e66cee27bb11f0b7c08f2d5994c5d168da",
+  "manifests_and_lockfiles_unchanged": true,
+  "verus_solver_rerun": false,
+  "new_verus_theorems": 0,
+  "negative_inventory_files": 686,
+  "new_runtime_cpu_test_functions": 21,
+  "new_host_charged_storage_test_functions": 9,
+  "new_compile_fail_doctests": 2,
+  "complete_source_join_cpu_validated": true,
+  "charged_readback_storage_cpu_validated": true,
+  "finite_reservation_registry_cpu_validated": true,
+  "host_protected_constructor_wiring_reviewed": true,
+  "genuine_native_closing_currentness_qualified": false,
+  "native_adoption_qualified": false,
+  "production_generated_execution_qualified": false,
+  "whole_adapter_refinement_proved": false,
+  "actual_charged_storage_in_protected_engine_constructor_qualified": false,
+  "gpu_performance_measured": false
+}

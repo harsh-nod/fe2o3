@@ -32,6 +32,8 @@ use crate::{AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedKernelExpectatio
 
 #[cfg(test)]
 mod charged_tests;
+mod readback;
+pub(crate) use readback::GeneratedRuntimeReadbackOwnerV1;
 
 /// Compiler-generated owned counterpart of the borrowed KFD argument bridge.
 ///
@@ -813,6 +815,7 @@ impl GeneratedRuntimeChargedArgumentsV1 {
                     dynamic_group_segment_bytes,
                     timeout_milliseconds,
                 ),
+                readback: None,
                 decoder,
             },
             kernel_id: packed.kernel_id,
@@ -830,9 +833,10 @@ pub(crate) struct GeneratedRuntimeInvocationPartsV1 {
 }
 
 // Declaration order is the disposal contract: complete input/prepared storage before credits.
-// Keep both fields private; GEN-2B must add an exact completion transition, not an extraction API.
+// Keep storage and decoder private; completion must not become an extraction API.
 pub(crate) struct GeneratedRuntimeStorageV1<P> {
     payload: P,
+    readback: Option<GeneratedRuntimeReadbackOwnerV1>,
     #[allow(
         dead_code,
         reason = "retains charged custody until GEN-2B's completion transition"
@@ -854,6 +858,7 @@ impl GeneratedRuntimeStorageV1<Gfx942RuntimeDispatchInputsV1> {
         let payload = prepare_gfx942_runtime_dispatch_v1(hsaco, kernel_name, self.payload)?;
         Ok(GeneratedRuntimeStorageV1 {
             payload,
+            readback: self.readback,
             decoder: self.decoder,
         })
     }
@@ -875,6 +880,7 @@ impl GeneratedRuntimeStorageV1<PreparedGfx942RuntimeDispatchV1> {
         let payload = self.payload.into_persistent_projection_v1(hsaco)?;
         Ok(GeneratedRuntimeStorageV1 {
             payload,
+            readback: self.readback,
             decoder: self.decoder,
         })
     }

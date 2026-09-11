@@ -1,5 +1,7 @@
 use super::*;
 
+mod readback_tests;
+
 // Reuse the loader's structural builder without introducing executable or verifier evidence.
 #[allow(dead_code)]
 #[path = "../../../../fe2o3-runtime/src/kfd_backend/tests/synthetic_cov6.rs"]
@@ -118,6 +120,7 @@ fn invocation_storage_disposes_payload_before_decoder_even_during_unwind() {
                 budget: budget.clone(),
                 disposed: Arc::clone(&disposed),
             },
+            readback: storage.readback,
             decoder: storage.decoder,
         };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -238,6 +241,7 @@ fn invocation_persistent_projection_disposes_payload_before_decoder_on_drop_and_
                 budget: budget.clone(),
                 disposed: Arc::clone(&disposed),
             },
+            readback: storage.readback,
             decoder: storage.decoder,
         };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

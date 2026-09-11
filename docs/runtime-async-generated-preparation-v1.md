@@ -92,10 +92,10 @@ for exact source gates and their separate proof/hardware boundaries.
 
 ## Following Packets
 
-B3-DATA-REP must provide closed complete-roster access without generic payload
-extraction, cropping or another encoded-host copy. B4-RESERVE must implement a
-new completion reply and complete readback ownership in the original account.
-Only then can B3-DATA-ADOPT move the same rooted carrier into non-discardable
+[R80 reservation](runtime-generated-reservation-v1.md) now supplies closed
+complete-roster access, separate acknowledgement/completion replies and staged
+readback ownership in the original account. It remains host-only and adds no
+native adoption or result completion. B3-DATA-ADOPT must next move the same rooted carrier into non-discardable
 adopting custody before native effects. That custody must join lane exclusion,
 graph, drain and cleanup tracking; today's parked state is not native-ready.
 

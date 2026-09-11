@@ -6,6 +6,10 @@ R79 B3-OWNER now implements finite async preparation with the
 [contract](runtime-async-generated-preparation-v1.md) and
 [local gates](evidence/local-r79-async-preparation-2026-09-10/README.md) recorded below.
 Native generated execution and whole-adapter refinement remain open.
+R80 now implements the local [generated reservation](runtime-generated-reservation-v1.md)
+packet: complete source description plus staged same-account readback and a
+finite reserved ticket. Its [local record](evidence/local-r80-generated-reservation-2026-09-10/README.md)
+separates source gates from native, production-constructor and proof acceptance.
 Three read-only agents reconciled the remaining work with source and the current
 open [#182](https://github.com/harsh-nod/fe2o3/issues/182). This document assigns
 bounded analysis/review queues, not unattended implementation jobs. Primary
@@ -15,9 +19,9 @@ ticket is not new implementation or an accepted proof/hardware result.
 The user-requested swarm refresh completed on 2026-09-10. All three named
 workers returned source-grounded assignments; their review turns are complete,
 not continuing implementation jobs. The issue remains open (last issue update
-observed: `2026-09-10T10:50:51Z`). The next generated packets are Native's
-B3-DATA-REP and the separately assigned B4-RESERVE-ENGINE and B4-RESERVE-HOST
-parts of B4-RESERVE. Ordinary host-cache limits and
+observed: `2026-09-10T10:50:51Z`). R80 integrates Native's B3-DATA-REP and
+the separately assigned B4-RESERVE-ENGINE and B4-RESERVE-HOST parts of B4-RESERVE.
+The next generated packet is B3-DATA-ADOPT, then B3-ISSUE. Ordinary host-cache limits and
 SCALE-1A-FIXTURE remain independent work. Implemented reservations must precede
 native adoption effects. The
 [integration queue](#generated-integration-queue) below names the individual
@@ -155,8 +159,8 @@ protected construction. Native generated execution, new adapter proofs and
 performance acceptance do not follow from these results.
 
 Ticket readiness does not expose the projection or authorize native adoption.
-Native must first design the closed complete-roster representation, then change
-the same rooted owner to a non-discardable adopting state before native effects.
+R80 supplies the closed complete-roster description and host readback reservation.
+Native must next change the same rooted owner to a non-discardable adopting state before native effects.
 That state must participate in lane exclusion, drain, graph and cleanup tracking.
 Neither today's parked state nor `MaterializedPrepared` is that state; the latter
 can publish through deferred flush. Fixtures and host-cache policy remain
@@ -169,9 +173,9 @@ are sequential queues, not additional concurrent workers or delegated edits.
 
 | Lead | Next bounded assignment | Module scope and primary handoff |
 | --- | --- | --- |
-| Native: `r66_native_coexistence` | B3-DATA-REP now; independent SCALE-1A-FIXTURE; then B3-DATA-ADOPT | R79 supplies the locally gated owner. Adoption additionally needs implemented B4-RESERVE, the closed representation, retained native prefix and lane/drain contract. Fixtures need bounded policy and complete-output oracles. R76 still needs live bootstrap qualification. |
-| Resources: `r66_coexistence_model` | Shared B4-RESERVE; independent MEM-2B-HOST | B4 reserves a new completion reply and full readback storage in the original result account. Host-cache policy remains isolated in `sdma/host_pool_policy.rs`: preserve R72 debit through reuse, zero disables caching and defaults stay unchanged. |
-| Admission: `r66_runtime_coexistence` | B4-RESERVE with Resources, then B3-ISSUE | Integrate the retained-owner transition with complete readback/reply ownership; native publication follows DATA-ADOPT and requires a private submission-bound permit surviving actual flush/retry. R79 preparation is not a launch API. |
+| Native: `r66_native_coexistence` | B3-DATA-ADOPT; independent SCALE-1A-FIXTURE | R80 supplies host-only reservations and the complete source roster. Adoption still needs exact native registration, retained partial prefixes and active lane/drain custody. Fixtures need bounded policy and complete-output oracles. R76 still needs live bootstrap qualification. |
+| Resources: `r66_coexistence_model` | MEM-2B-HOST; review ADOPT and later COMPLETE | R80 supplies the original-account readback owner. Host-cache policy remains isolated in `sdma/host_pool_policy.rs`: preserve R72 debit through reuse, zero disables caching and defaults stay unchanged. |
+| Admission: `r66_runtime_coexistence` | ADOPT active-owner handoff, then B3-ISSUE | Reserved remains parked and host-only. Native effects require non-discardable active custody; publication then requires a private submission-bound permit surviving actual flush/retry. Reservation is not a launch API. |
 | Primary | Reviewed reservation/adoption integration, proof composition and qualification | Own every edit, integration/build/proof run, evidence record and signed dual push. Serialize shared native hooks. Schedule existing OVL-QUAL-2 and DRN-2A against frozen signed source; native-budget pressure first needs MEM-QUAL-HARNESS. |
 
 Admission and Resources agree the permit/decoder/result boundary before code
@@ -179,8 +183,8 @@ integration. Native's fixture work does not mint production generated-launch
 authority. Primary serializes shared-file edits; each worker reviews another
 lane's contract before the packet's local gates.
 
-Native can integrate the complete-roster representation against R79's owner.
-Adoption waits for implemented B4 reservations. Fixtures, their sequential
+Native can now build adoption against R80's complete-roster representation and
+implemented B4 reservations. Fixtures, their sequential
 qualifier and MEM-QUAL-HARNESS remain independent; ordinary host-cache and
 broader budget hooks remain coordinated follow-ons.
 Resources takes MEM-N1B, MEM-DOM-1, MEM-3/4, VER-1/2 and MEM-5. Admission follows
@@ -197,10 +201,10 @@ claim new implementation, proof or hardware acceptance.
 
 | Worker | First deliverable | Source boundary | Dependency and exit gate |
 | --- | --- | --- | --- |
-| Native | B3-DATA-REP; independent SCALE-1A-FIXTURE; then ADOPT | Proposed `kfd_backend/generated_materialization.rs` with R78's borrowed hooks; isolated fixture policy/oracle | Representation must retain original vectors and all ordinals without the ordinary snapshot path. Adoption requires implemented B4-RESERVE, changes custody before effects, retains partial native prefixes and cannot publish. |
-| Admission | B4-RESERVE-ENGINE, then issue contract | Existing R79 `async_engine/generated_operation.rs`, isolated reservation transition and narrow registry/Context hooks | Reserve a finite acknowledgement and a separate completion reply; preserve exact ticket/owner identity, including queued Stop recovery. Integrate the Resources hook without native effects. Publication follows DATA-ADOPT plus reservations; no early public launch API. |
-| Resources | B4-RESERVE-HOST first; MEM-2B-HOST is independent next work | Proposed host `generated_runtime_arguments/readback.rs`, private storage and result gate; later KFD `sdma/host_pool_policy.rs` | First reserve every readback destination in the original R73 account and test actual charged storage. Host-cache policy separately preserves the R72 debit, padded byte/record limits and unchanged defaults; zero disables caching and pressure disposes. |
-| Primary | Freeze interfaces, integrate and qualify | Shared exports, Context/native hooks, proof rosters, tests and evidence | Build on R79's locally validated owner. Integrate reservations/adoption in bounded commits, run authenticated proofs for changed model properties and publish to both remotes. Serialize shared-machine campaigns. |
+| Native | B3-DATA-ADOPT; independent SCALE-1A-FIXTURE | Proposed `kfd_backend/generated_materialization.rs` with R78's borrowed hooks; isolated fixture policy/oracle | Build on R80's complete source/reservations. Change custody before effects, retain partial native prefixes and do not publish. |
+| Admission | Active adopting-state integration, then issue contract | `async_engine/generated_operation.rs`, registry, Context and publication hooks | Host-only R80 reservation is implemented. Join lane/graph/drain/cleanup tracking before native effects; publication follows DATA-ADOPT and requires exact deferred authority. |
+| Resources | MEM-2B-HOST; review native/completion credit handoff | Proposed KFD `sdma/host_pool_policy.rs`, existing host readback owner | R80 complete readback overlap is implemented. Host-cache policy preserves the R72 debit, padded byte/record limits and unchanged defaults; zero disables caching and pressure disposes. |
+| Primary | Freeze interfaces, integrate and qualify | Shared exports, Context/native hooks, proof rosters, tests and evidence | Build on R80's host-only reservation. Integrate adoption in bounded commits, run authenticated proofs for changed model properties and publish to both remotes. Serialize shared-machine campaigns. |
 
 R77 reconciles a concrete format difference: the prepared request
 contains initialized COV6 hidden arguments, whereas the fixed-dispatch packet
@@ -226,13 +230,13 @@ hardware checks after MEM-QUAL-HARNESS exists. Protected production construction
 still requires the compiler owner's exact artifact/refinement handoff. None of
 these dependencies blocks host-cache policy, fixture or version-journal work.
 
-### First Integration Packet
+### R80 Integration Packet
 
 The latest user-requested breakdown uses the three existing worker slots below.
-Their read-only planning turns have completed. These are ready implementation
-assignments, not claims that code is being written in background. Primary owns
-implementation and integration; workers review their scoped changes and the
-cross-lane handoffs. No fourth worker or shared-machine campaign is active.
+Their read-only review turns have completed. Primary implemented and integrated
+these assignments; workers reviewed the scoped changes and cross-lane handoffs.
+The local contract and evidence above retain exact acceptance boundaries.
+No fourth worker or shared-machine campaign is active.
 
 | Assignment | Lead and concrete deliverable | Required local acceptance |
 | --- | --- | --- |
@@ -241,9 +245,10 @@ cross-lane handoffs. No fourth worker or shared-machine campaign is active.
 | B4-RESERVE-ENGINE | Admission: finite exact-ticket `Prepared -> Reserved` transition and private typed carrier adapter | Reserve two new bounded cells before enqueue: acknowledgement and eventual completion. Reject generic/foreign/stale/replayed tickets, recover the original ticket on ordinary pre-effect failure or queued Stop, test wakeups and panic retention, and assert zero native effects. |
 | Integration and gates | Primary: compose the three contracts in the retained Context owner; serialize shared exports and host/Context changes | Reserved custody remains host-only and explicitly disposable. No completion future is exposed before issue/progress exists. Cross-review, focused storage/engine tests, type checks and current-source regression gates precede signed dual publication. |
 
-All three contracts can be developed against R79 now. Their production wiring
-is one integration boundary: an unused representation or an uncalled storage
-helper does not complete its assignment. Generic R79 preparations remain
+R80 wires all three contracts through the real generated-host preparation route.
+Positive protected construction remains a separate acceptance cell; the runtime
+tests use private nonauthorizing fixtures and the host tests use actual R73
+charged storage. Generic R79 preparations remain
 discard-only. Runtime independently checks the source identities; the safe
 descriptive interface is not another execution authorizer.
 
@@ -280,8 +285,8 @@ publishing state to bypass a dependency.
 | Ticket | Worker handoff and source scope | Prerequisite and exit gate |
 | --- | --- | --- |
 | B3-OWNER / R79 | Implemented; Admission review and Primary integration | Finite preparation, bounded parked custody, exact ticket and discard pass the full local gates. Eighteen new runtime tests plus host wiring/type checks do not establish positive protected construction, actual R73 engine accounting, native execution or a new adapter proof. |
-| B4-RESERVE | Admission with Resources: private generated readback owner and reply budgets | Contract work is independent of OWNER release. Reserve a new completion reply and every readback destination, including unused/read-only buffers, before native execution integration. Reuse encoded storage through a closed transition or precharge full overlap in the original account. Test late-member exhaustion, rollback and disposal-before-refund. |
-| B3-DATA-REP | Native with Admission: proposed `kfd_backend/generated_materialization.rs` plus narrow host/Context views | Design now; integration requires accepted OWNER. Add a closed descriptive view and complete-roster backing representation, retaining original vectors, decoder/account, artifact, authority, timeout and ordinal identity. No generic payload extraction or ordinary allocate/write/snapshot substitution. |
+| B4-RESERVE / R80 | Implemented locally; Admission/Resources review, Primary integration | Separate acknowledgement/completion cells and full original-account readback overlap. Staging precedes closing currentness; installation follows it. Tests cover actual charged storage and runtime ticket/owner behavior separately, not successful protected construction or native completion. |
+| B3-DATA-REP / R80 | Implemented locally in `generated_source.rs` and narrow host/Context views | Checked borrowed source join and fixed complete-roster metadata retain original vectors, decoder/account, artifact, authority, timeout and ordinals. Reuses immutable R77 packet/fixup invariants; no generic extraction, native registration or publication permit. |
 | B3-DATA-ADOPT | Native with Admission/Resources: retained-prefix owner and logical/native registration | Requires REP, implemented B4-RESERVE and agreed lane contract; reuse R78 slices. Change custody to non-discardable Adopting before effects, preallocate prefix slots and register every ordinal. Test bootstrap states, exact generations, partial allocation/copy/map/retake failures and panic retention. Include lane/drain/graph/cleanup ownership; still no publication. |
 | B3-ISSUE | Admission with Native: `compute_state.rs`, `compute_dispatch.rs`, Context registration | Requires DATA-ADOPT and implemented RESERVE. Retain a private linear permit bound to the exact submission and resource incarnations through actual deferred flush/retry. Test substitutions, replay, contention, ambiguous issue and timeout retention. |
 | B4-COMPLETE | Admission with Resources/Native: driver, private decoder/storage and readback | Requires ISSUE. Validate the exact submission and complete returned roster before any output publication. Test malformed late output, read-only mutation, failed readback/currentness, decoder panic, one reply and retained results after shutdown. |
@@ -297,8 +302,8 @@ serializes shared-file edits, proof execution and shared-machine campaigns.
 ### Reviewed B3 Handoff
 
 The refreshed swarm reviewed these interfaces. R78 implements the borrowed
-initializer subset; R79's local owner passes the source gates. Native
-representation/adoption, publication and completion remain unimplemented:
+initializer subset; R79's local owner and R80's host-only representation/reservation
+are implemented. Native adoption, publication and completion remain unimplemented:
 
 - Keep the entire `RuntimeGfx942PreparedV1` carrier in the owner-local driver.
   A runtime-defined safe borrowed-view interface may expose descriptive projection,
@@ -337,8 +342,8 @@ after actual storage disposal. Preserve the original parked carrier/ticket for
 a retry. After native effects, retained
 custody, not ticket disposal, governs cleanup. A whole-roster overlap debit avoids
 assuming unsupported partial credit splitting; it remains until all additional
-storage is destroyed. This is the next implementation contract, not an accepted
-B4 adapter proof.
+storage is destroyed. R80 implements the host-only reservation portion of this
+contract; it does not establish a B4 adapter proof or native execution.
 
 Resources independently reviewed the carrier/permit and complete-readback
 contract with no blocking conflict. These decisions are design handoffs, not a
@@ -366,7 +371,7 @@ host readback or authorize the private decoder.
 | --- | --- | --- |
 | GEN-2B-1: owner-local drivers | Implemented in R75; Admission review, Primary integration. `async_engine/operation.rs`, `async_engine.rs`, `owned.rs`. | CPU tests cover Rc-holding drivers, queue/operation/reply exhaustion, cancellation, observer drop, factory/advance panic and Stop/cleanup failure; Send-Context APIs and reply lifetime are preserved. Exact generated/native custody and whole-executor refinement are not established by this packet. |
 | GEN-2B-2: reusable preparation | Implemented in R76: immutable native scopes and runtime-defined Context/host wrapper. | CPU/type checks cover currentness envelope, owner/domain guards, exact Context/native identity, rejection, no mutable borrow escape and inert shutdown storage. Successful Linux scopes before/after lazy bootstrap and positive production construction remain separate acceptance cells. Native operation adoption follows in -3. |
-| GEN-2B-3: persistent publication | R77 implements nonexecuting projection; Native/Admission still own consuming Context/native adoption and publication in `compute_dispatch.rs` and `compute_state.rs`. Requires -1 and -2. | Preserve artifact, ABI, complete buffers/fixups, hidden kernargs, geometry and timeout through deferred/active custody. Retain per-invocation authority before native effects and revalidate at actual publication. Reject substitutions/double consumption; pending polls and ambiguous publication never authorize replay. Readback reservation and unsupported fixed-profile expansion remain open. |
+| GEN-2B-3: persistent publication | R77 implements nonexecuting projection; R80 adds source/readback reservation. Native/Admission still own consuming Context/native adoption and publication in `compute_dispatch.rs` and `compute_state.rs`. Requires -1 and -2. | Preserve artifact, ABI, complete buffers/fixups, hidden kernargs, geometry and timeout through deferred/active custody. Retain per-invocation authority before native effects and revalidate at actual publication. Reject substitutions/double consumption; pending polls and ambiguous publication never authorize replay. Unsupported fixed-profile expansion remains open. |
 | GEN-2B-4: completion/results | Admission; Resources reviews private charged decoder/reply boundary. Completion tests can start early; integration requires -3. | Reserve readback resources before issue; bind exact invocation/submission/generations and validate every returned buffer, including read-only effects. Decode the complete roster, dispose encoded storage, commit all outputs, drop producer custody, then resolve one budgeted completion future. Test malformed late output, readback/currentness failure, decode panic, retained results after shutdown and credit conservation. |
 | GEN-2B-5: public async/blocking API | Primary integration; Admission API review. Requires -1 through -4 composed. | Both entry points use the same nonblocking publication/retirement engine; no blocking one-shot executor inside a command callback. Test reentrancy, equivalent outcomes, completion-before/during-poll, waker replacement and no lost wakeups. Private decoder and owner-local authority remain inaccessible. |
 | GEN-2B-6: generated graph/drain | Admission; Native/Resources review. Requires -5 and exact compiler evidence for production cells; cross-run input reuse also requires VER-1/2. | Repeated/concurrent launches and graphs, dependencies, active drain, dropped observers, complete typed outputs and owned cleanup. Keep fixture and production acceptance distinct and preserve existing graph/standalone exclusivity. |
@@ -599,5 +604,5 @@ actual source and pushed to both remotes. A topic-branch push is not a main merg
 
 A1/A2 remain open. The later A3-A7 table assigns milestone leads and exit gates;
 those milestones still need packet-level designs and their own test environments.
-Neither this plan nor R79 establishes full HIP/HSA
+Neither this plan nor R80 establishes full HIP/HSA
 parity or an unmeasured speedup.

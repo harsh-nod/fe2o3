@@ -96,6 +96,40 @@ impl<E: Error + 'static> Error for RuntimeGfx942PreparationErrorV1<E> {
 }
 
 impl RuntimeContextV1<KfdRuntimeBackendV1> {
+    pub(crate) fn reserve_gfx942_prepared_v1<T: crate::RuntimeGfx942GeneratedCarrierV1>(
+        &mut self,
+        prepared: &mut RuntimeGfx942PreparedV1<T>,
+    ) -> Result<
+        crate::generated_source::GeneratedHostRosterV1,
+        crate::RuntimeGfx942GeneratedReservationErrorV1,
+    > {
+        use crate::RuntimeGfx942GeneratedReservationErrorV1 as Error;
+        let binding = prepared.binding;
+        let backend_device = self
+            .preparation_backend_device_v1(binding.device)
+            .map_err(Error::Context)?;
+        if !binding.matches_context(self.context_generation, binding.device, backend_device) {
+            return Err(Error::Context(
+                RuntimeValidationErrorV1::InvalidBackendDescription.into(),
+            ));
+        }
+        install_checked_readback(&mut prepared.value, |value| {
+            self.with_preparation_owner_v1(backend_device, |owner| {
+                if !binding.matches_native(owner.model_admission()) {
+                    return Err(Error::Context(
+                        RuntimeValidationErrorV1::InvalidBackendDescription.into(),
+                    ));
+                }
+                let source = value.source();
+                let roster = source.validate(owner.observation().unique_id())?;
+                let readback = value.prepare_readback().map_err(Error::Readback)?;
+                source.revalidate()?;
+                Ok((roster, readback))
+            })
+            .map_err(Error::Context)?
+        })
+    }
+
     /// Runs nonexecuting preparation against this Context's retained checked device.
     ///
     /// The immutable borrow cannot escape or replace device custody. Full native
@@ -197,6 +231,25 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             }
         }
     }
+}
+
+fn install_checked_readback<T: crate::RuntimeGfx942GeneratedCarrierV1>(
+    value: &mut T,
+    checked_stage: impl FnOnce(
+        &T,
+    ) -> Result<
+        (crate::generated_source::GeneratedHostRosterV1, T::Readback),
+        crate::RuntimeGfx942GeneratedReservationErrorV1,
+    >,
+) -> Result<
+    crate::generated_source::GeneratedHostRosterV1,
+    crate::RuntimeGfx942GeneratedReservationErrorV1,
+> {
+    // The scope, including its closing device checks, must return success
+    // before installation can change the original carrier.
+    let (roster, readback) = checked_stage(value)?;
+    value.install_readback(readback);
+    Ok(roster)
 }
 
 #[cfg(test)]

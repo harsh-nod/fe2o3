@@ -2,7 +2,20 @@
 
 use super::*;
 use crate::{KfdRuntimeBackendV1, RuntimeDeviceIdV1, RuntimeGfx942PreparationErrorV1};
+use crate::{RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedReservationErrorV1};
 use operation::{EngineOperationFactoryV1, EngineOperationV1, stop_reply};
+
+mod reservation;
+pub(super) use reservation::ReserveCommandV1;
+pub use reservation::*;
+
+type Reserve<B, P> = fn(
+    &mut RuntimeContextV1<B>,
+    &mut P,
+) -> Result<
+    crate::generated_source::GeneratedHostRosterV1,
+    RuntimeGfx942GeneratedReservationErrorV1,
+>;
 
 pub(super) struct PreparedKeyV1 {
     pub(super) context_generation: u64,
@@ -85,6 +98,7 @@ struct PreparationFactory<B: RuntimeBackendV1, P, E> {
     reply: Option<PreparationReply<E>>,
     key: Arc<PreparedKeyV1>,
     control: Option<RuntimeAsyncOperationControlV1>,
+    reserve: Option<Reserve<B, P>>,
 }
 
 struct PreparationDriver<B: RuntimeBackendV1, P, E> {
@@ -94,6 +108,9 @@ struct PreparationDriver<B: RuntimeBackendV1, P, E> {
     reply: Option<PreparationReply<E>>,
     key: Arc<PreparedKeyV1>,
     control: RuntimeAsyncOperationControlV1,
+    reserve: Option<Reserve<B, P>>,
+    roster: Option<crate::generated_source::GeneratedHostRosterV1>,
+    completion: Option<owned::Reply<()>>,
 }
 
 impl<B: RuntimeBackendV1 + 'static, P: 'static, E: Send + 'static> EngineOperationFactoryV1<B>
@@ -113,6 +130,9 @@ impl<B: RuntimeBackendV1 + 'static, P: 'static, E: Send + 'static> EngineOperati
                 .take()
                 .expect("one preparation control transfer"),
             reply: self.reply.take(),
+            reserve: self.reserve,
+            roster: None,
+            completion: None,
         })
     }
 
@@ -162,7 +182,29 @@ impl<B: RuntimeBackendV1, P, E> EngineOperationV1<B> for PreparationDriver<B, P,
     }
 
     fn prepared_key(&self) -> Option<&Arc<PreparedKeyV1>> {
-        self.prepared.as_ref().map(|_| &self.key)
+        self.prepared
+            .as_ref()
+            .filter(|_| self.roster.is_none())
+            .map(|_| &self.key)
+    }
+
+    fn reserved_key(&self) -> Option<&Arc<PreparedKeyV1>> {
+        self.roster.as_ref().map(|_| &self.key)
+    }
+
+    fn reserve_generated(
+        &mut self,
+        context: &mut RuntimeContextV1<B>,
+        completion: &mut Option<owned::Reply<()>>,
+    ) -> Result<(), RuntimeGfx942GeneratedReservationErrorV1> {
+        let reserve = self
+            .reserve
+            .ok_or(RuntimeGfx942GeneratedReservationErrorV1::UnsupportedPreparation)?;
+        let prepared = self.prepared.as_mut().expect("parked preparation");
+        let roster = reserve(context, prepared)?;
+        self.roster = Some(roster);
+        self.completion = completion.take();
+        Ok(())
     }
 
     fn complete_preparation(&mut self) {
@@ -176,12 +218,18 @@ impl<B: RuntimeBackendV1, P, E> EngineOperationV1<B> for PreparationDriver<B, P,
 
     fn reject(&mut self, error: RuntimeAsyncEngineCallErrorV1) {
         stop_reply(&mut self.reply, Some(&self.control), error);
+        stop_reply(&mut self.completion, None, error);
         drop(self.prepare.take());
     }
 }
 
 impl<B: RuntimeBackendV1, P, E> Drop for PreparationDriver<B, P, E> {
     fn drop(&mut self) {
+        stop_reply(
+            &mut self.completion,
+            None,
+            RuntimeAsyncEngineCallErrorV1::EngineStopped,
+        );
         stop_reply(
             &mut self.reply,
             Some(&self.control),
@@ -196,6 +244,14 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         &self,
         prepare: Prepare<B, P, E>,
     ) -> Result<RuntimeAsyncPreparationV1<E>, RuntimeAsyncEngineCallErrorV1> {
+        self.enqueue_preparation_with_reservation_v1(prepare, None)
+    }
+
+    pub(super) fn enqueue_preparation_with_reservation_v1<P: 'static, E: Send + 'static>(
+        &self,
+        prepare: Prepare<B, P, E>,
+        reserve: Option<Reserve<B, P>>,
+    ) -> Result<RuntimeAsyncPreparationV1<E>, RuntimeAsyncEngineCallErrorV1> {
         if self.observer.is_worker_thread() {
             return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
         }
@@ -208,6 +264,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
                 context_generation: self.observer.context_generation,
             }),
             control: Some(control.clone()),
+            reserve,
         };
         match self
             .observer
@@ -265,6 +322,26 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
 }
 
 impl RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1> {
+    /// Nonexecuting generated-host bridge. Retains a typed source/readback
+    /// adapter without exposing payload extraction or native execution.
+    #[doc(hidden)]
+    pub fn try_prepare_generated_gfx942_v1<
+        P: RuntimeGfx942GeneratedCarrierV1 + 'static,
+        E: Send + 'static,
+    >(
+        &self,
+        device: RuntimeDeviceIdV1,
+        prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<P, E> + Send + 'static,
+    ) -> Result<
+        RuntimeAsyncPreparationV1<RuntimeGfx942PreparationErrorV1<E>>,
+        RuntimeAsyncEngineCallErrorV1,
+    > {
+        self.enqueue_preparation_with_reservation_v1(
+            Box::new(move |context| context.with_gfx942_preparation_device_v1(device, prepare)),
+            Some(RuntimeContextV1::reserve_gfx942_prepared_v1::<P>),
+        )
+    }
+
     /// Runtime-defined bridge for generated-host preparation. The callback gets
     /// only an immutable checked-device borrow, bracketed by full currentness.
     /// The complete Context-bound result remains owner-local; no native storage,

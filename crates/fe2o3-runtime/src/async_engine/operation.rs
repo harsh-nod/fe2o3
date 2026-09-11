@@ -40,6 +40,16 @@ pub(super) trait EngineOperationV1<B: RuntimeBackendV1> {
     fn prepared_key(&self) -> Option<&Arc<generated_operation::PreparedKeyV1>> {
         None
     }
+    fn reserved_key(&self) -> Option<&Arc<generated_operation::PreparedKeyV1>> {
+        None
+    }
+    fn reserve_generated(
+        &mut self,
+        _context: &mut RuntimeContextV1<B>,
+        _completion: &mut Option<owned::Reply<()>>,
+    ) -> Result<(), crate::RuntimeGfx942GeneratedReservationErrorV1> {
+        Err(crate::RuntimeGfx942GeneratedReservationErrorV1::UnsupportedPreparation)
+    }
     /// Called after the driver is rooted in the preallocated parked roster.
     fn complete_preparation(&mut self) {}
     /// Infallibly detach/resolve the reply before any fallible handling, without
@@ -127,17 +137,55 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
         &mut self,
         key: &Arc<generated_operation::PreparedKeyV1>,
     ) -> bool {
+        self.discard_parked(key, false)
+    }
+
+    pub(super) fn discard_reserved(
+        &mut self,
+        key: &Arc<generated_operation::PreparedKeyV1>,
+    ) -> bool {
+        self.discard_parked(key, true)
+    }
+
+    fn discard_parked(
+        &mut self,
+        key: &Arc<generated_operation::PreparedKeyV1>,
+        reserved: bool,
+    ) -> bool {
         let Some(index) = self.parked.iter().position(|entry| {
-            entry
-                .driver
-                .prepared_key()
-                .is_some_and(|stored| Arc::ptr_eq(stored, key))
+            (if reserved {
+                entry.driver.reserved_key()
+            } else {
+                entry.driver.prepared_key()
+            })
+            .is_some_and(|stored| Arc::ptr_eq(stored, key))
         }) else {
             return false;
         };
         // The caller contains destructor panic and owns the discard reply.
         drop(self.parked.remove(index).expect("matched parked owner"));
         true
+    }
+
+    pub(super) fn reserve_generated(
+        &mut self,
+        context: &mut RuntimeContextV1<B>,
+        key: &Arc<generated_operation::PreparedKeyV1>,
+        completion: &mut Option<owned::Reply<()>>,
+    ) -> Result<(), crate::RuntimeGfx942GeneratedReservationErrorV1> {
+        let entry = self
+            .parked
+            .iter_mut()
+            .find(|entry| {
+                entry
+                    .driver
+                    .prepared_key()
+                    .is_some_and(|stored| Arc::ptr_eq(stored, key))
+            })
+            .ok_or(crate::RuntimeGfx942GeneratedReservationErrorV1::Engine(
+                RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket,
+            ))?;
+        entry.driver.reserve_generated(context, completion)
     }
 
     pub(super) fn dispose_quiescent(&mut self) {

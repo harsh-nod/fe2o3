@@ -22,6 +22,11 @@ history below retains the earlier packet boundaries. R79 now implements
 [finite preparation and parked custody](runtime-async-generated-preparation-v1.md)
 with full [local gates](evidence/local-r79-async-preparation-2026-09-10/README.md).
 That boundary is not native generated execution or whole-adapter refinement.
+R80 now integrates [complete generated source and finite reservation](runtime-generated-reservation-v1.md):
+same-account readback staging, exact reserved tickets and host-only disposal.
+The [R80 local record](evidence/local-r80-generated-reservation-2026-09-10/README.md)
+does not fill native adoption, protected construction, adapter-proof or
+performance acceptance. The next generated packet is B3-DATA-ADOPT.
 
 The [R65 contract](runtime-async-drain-versions-v1.md) is the current baseline:
 cooperative drain, reply-count admission and graph-local version lineage are

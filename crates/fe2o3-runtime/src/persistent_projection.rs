@@ -45,6 +45,14 @@ impl PreparedGfx942PersistentDispatchV1 {
         self.description.identity
     }
 
+    pub const fn finalized_hsaco_length(&self) -> u64 {
+        self.description.finalized_hsaco_length
+    }
+
+    pub(crate) fn complete_buffer_policies_match(&self) -> bool {
+        complete_buffer_policies_match(&self.buffer_policies, &self.buffers)
+    }
+
     pub const fn dispatch_contract_sha256(&self) -> [u8; 32] {
         self.description.dispatch_contract_sha256
     }
@@ -276,20 +284,7 @@ fn validate_projection_source(
             "geometry, descriptor resources or kernarg alignment",
         ));
     }
-    if policies.len() != request.buffers.len()
-        || policies
-            .iter()
-            .zip(&request.buffers)
-            .any(|(policy, buffer)| {
-                policy.byte_length != buffer.bytes().len() as u64
-                    || match policy.access {
-                        Gfx942RuntimeBufferAccessV1::ReadOnly => {
-                            policy.read_only_initial_bytes.as_deref() != Some(buffer.bytes())
-                        }
-                        _ => policy.read_only_initial_bytes.is_some(),
-                    }
-            })
-    {
+    if !complete_buffer_policies_match(policies, &request.buffers) {
         return Err(Error::Mismatch("complete buffer-policy roster"));
     }
     let digest = derive_dispatch_contract_sha256_v1(
@@ -313,6 +308,22 @@ fn validate_projection_source(
         return Err(Error::Mismatch("complete original dispatch contract"));
     }
     Ok(())
+}
+
+fn complete_buffer_policies_match(
+    policies: &[Gfx942RuntimePreparedBufferPolicyV1],
+    buffers: &[Gfx942KfdDispatchBufferV1],
+) -> bool {
+    policies.len() == buffers.len()
+        && policies.iter().zip(buffers).all(|(policy, buffer)| {
+            policy.byte_length == buffer.bytes().len() as u64
+                && match policy.access {
+                    Gfx942RuntimeBufferAccessV1::ReadOnly => {
+                        policy.read_only_initial_bytes.as_deref() == Some(buffer.bytes())
+                    }
+                    _ => policy.read_only_initial_bytes.is_none(),
+                }
+        })
 }
 
 // Compare the canonical zero-then-copy image without allocating another image.

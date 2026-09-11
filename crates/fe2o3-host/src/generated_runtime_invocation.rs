@@ -8,8 +8,9 @@ use fe2o3_runtime::{
     Gfx942RuntimeProjectionErrorV1, KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1,
     PreparedGfx942PersistentDispatchV1, PreparedGfx942RuntimeDispatchV1,
     RuntimeAsyncEngineCallErrorV1, RuntimeAsyncPreparationV1, RuntimeAsyncProgressHandleV1,
-    RuntimeContextV1, RuntimeDeviceIdV1, RuntimeErrorV1, RuntimeGfx942PreparationErrorV1,
-    RuntimeGfx942PreparedV1,
+    RuntimeContextV1, RuntimeDeviceIdV1, RuntimeErrorV1, RuntimeGfx942GeneratedCarrierV1,
+    RuntimeGfx942GeneratedSourceV1, RuntimeGfx942PreparationErrorV1, RuntimeGfx942PreparedV1,
+    RuntimeGfx942ReadbackErrorV1,
 };
 
 use super::{
@@ -73,6 +74,46 @@ impl<K: CompilerGeneratedKernelExpectationV1> GeneratedContextPreparationV1<K> {
             footprint: self.footprint,
             result_budget: self.result_budget,
         })
+    }
+}
+
+impl<K: CompilerGeneratedKernelExpectationV1> RuntimeGfx942GeneratedCarrierV1
+    for GeneratedContextPreparationV1<K, PreparedGfx942PersistentDispatchV1>
+{
+    type CurrentnessError = crate::RecoveredWorkerV3AdmissionErrorV1;
+    type Readback = crate::generated_runtime_arguments::GeneratedRuntimeReadbackOwnerV1;
+
+    fn source(&self) -> RuntimeGfx942GeneratedSourceV1<'_, Self::CurrentnessError> {
+        RuntimeGfx942GeneratedSourceV1::new(
+            self.storage.prepared(),
+            self.authority
+                .binding
+                .authenticated
+                .current_publication_token()
+                .exact_artifact_bytes(),
+            &self.authority,
+        )
+    }
+
+    fn prepare_readback(&self) -> Result<Self::Readback, RuntimeGfx942ReadbackErrorV1> {
+        self.storage
+            .prepare_readback()
+            .map_err(|error| match error {
+                GeneratedRuntimeArgumentErrorV1::ResultCredit(error) => {
+                    RuntimeGfx942ReadbackErrorV1::Credit(error)
+                }
+                GeneratedRuntimeArgumentErrorV1::Allocation => {
+                    RuntimeGfx942ReadbackErrorV1::Allocation
+                }
+                GeneratedRuntimeArgumentErrorV1::StaleOrAliasedOutput => {
+                    RuntimeGfx942ReadbackErrorV1::AlreadyReserved
+                }
+                _ => RuntimeGfx942ReadbackErrorV1::InvalidStorage,
+            })
+    }
+
+    fn install_readback(&mut self, readback: Self::Readback) {
+        self.storage.install_readback(readback);
     }
 }
 
@@ -307,7 +348,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         self.require_runtime_evidence()?;
         let result_budget = result_budget.clone();
         owner
-            .try_prepare_gfx942_v1(device, move |device| {
+            .try_prepare_generated_gfx942_v1(device, move |device| {
                 self.prepare_context_payload(
                     arguments,
                     device,
@@ -440,7 +481,7 @@ mod async_preparation_tests {
         let budget = body
             .find("let result_budget = result_budget.clone()")
             .unwrap();
-        let enqueue = body.find(".try_prepare_gfx942_v1(").unwrap();
+        let enqueue = body.find(".try_prepare_generated_gfx942_v1(").unwrap();
         let payload = body.find("self.prepare_context_payload(").unwrap();
         let projection = body.find(".project_persistent()").unwrap();
         assert!(

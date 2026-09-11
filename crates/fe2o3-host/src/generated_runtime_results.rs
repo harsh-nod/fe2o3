@@ -114,19 +114,35 @@ impl<T: GeneratedDeviceScalarV1> Drop for ChargedTypedResultV1<T> {
     }
 }
 
-pub(crate) struct ResultReadyGateV1(AtomicBool);
+pub(crate) struct ResultReadyGateV1 {
+    ready: AtomicBool,
+    budget: GeneratedRuntimeResultBudgetV1,
+}
 
 impl ResultReadyGateV1 {
-    fn new() -> Self {
-        Self(AtomicBool::new(false))
+    fn new(budget: &GeneratedRuntimeResultBudgetV1) -> Self {
+        Self {
+            ready: AtomicBool::new(false),
+            budget: budget.clone(),
+        }
+    }
+
+    pub(crate) fn reserve_readback(&self, bytes: u64) -> Result<ResourceReservationV1, Error> {
+        if self.ready() {
+            return Err(Error::StaleOrAliasedOutput);
+        }
+        self.budget
+            .account
+            .reserve(ResourceVectorV1::ZERO.with(ResourceKindV1::ReplyBytes, bytes))
+            .map_err(Error::ResultCredit)
     }
 
     pub(crate) fn commit(&self) {
-        self.0.store(true, Ordering::Release);
+        self.ready.store(true, Ordering::Release);
     }
 
     fn ready(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.ready.load(Ordering::Acquire)
     }
 }
 
@@ -456,7 +472,7 @@ impl ResultPreflightV1 {
             }
             *charge = descriptor.charge()?;
         }
-        let gate = Arc::new(ResultReadyGateV1::new());
+        let gate = Arc::new(ResultReadyGateV1::new(budget));
         let reservations = if self.descriptors.is_empty() {
             Vec::new()
         } else {

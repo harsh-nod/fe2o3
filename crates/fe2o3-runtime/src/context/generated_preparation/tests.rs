@@ -3,6 +3,114 @@ use std::cell::Cell;
 
 use super::*;
 
+struct StagedReadback(std::rc::Rc<Cell<usize>>);
+impl Drop for StagedReadback {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
+struct StagedCarrier {
+    installed: Option<StagedReadback>,
+    install_calls: usize,
+    panic_after_install: bool,
+}
+
+impl crate::RuntimeGfx942GeneratedCarrierV1 for StagedCarrier {
+    type CurrentnessError = ();
+    type Readback = StagedReadback;
+    fn source(&self) -> crate::RuntimeGfx942GeneratedSourceV1<'_, ()> {
+        panic!("this transaction fixture has no Worker/native authority")
+    }
+    fn prepare_readback(&self) -> Result<Self::Readback, crate::RuntimeGfx942ReadbackErrorV1> {
+        panic!("test checked-stage callback supplies the destination")
+    }
+    fn install_readback(&mut self, readback: Self::Readback) {
+        self.install_calls += 1;
+        self.installed = Some(readback);
+        assert!(
+            !self.panic_after_install,
+            "install panic after custody transfer"
+        );
+    }
+}
+
+fn staged_roster() -> crate::generated_source::GeneratedHostRosterV1 {
+    crate::generated_source::GeneratedHostRosterV1 {
+        buffers: [None; fe2o3_kfd::GFX942_MAX_FIXED_DISPATCH_DATA_V1],
+        count: 0,
+        readback_bytes: 0,
+        fixup_count: 0,
+        dispatch_contract_sha256: [0; 32],
+    }
+}
+
+#[test]
+fn generated_reservation_checked_stage_error_disposes_destination_without_install() {
+    let drops = std::rc::Rc::new(Cell::new(0));
+    let mut carrier = StagedCarrier {
+        installed: None,
+        install_calls: 0,
+        panic_after_install: false,
+    };
+    let result = install_checked_readback(&mut carrier, |_| {
+        let _staged = StagedReadback(drops.clone());
+        // Models the existing native scope rejecting its closing check, after
+        // the callback returned staged storage. No device token is fabricated.
+        Err(crate::RuntimeGfx942GeneratedReservationErrorV1::AuthorityNotCurrent)
+    });
+    assert!(result.is_err());
+    assert_eq!(drops.get(), 1);
+    assert_eq!(carrier.install_calls, 0);
+    assert!(carrier.installed.is_none());
+    install_checked_readback(&mut carrier, |_| {
+        Ok((staged_roster(), StagedReadback(drops.clone())))
+    })
+    .unwrap();
+    assert_eq!(carrier.install_calls, 1);
+    assert_eq!(drops.get(), 1);
+    drop(carrier);
+    assert_eq!(drops.get(), 2);
+}
+
+#[test]
+fn generated_reservation_install_panic_retains_transferred_storage_in_original_carrier() {
+    let drops = std::rc::Rc::new(Cell::new(0));
+    let mut carrier = StagedCarrier {
+        installed: None,
+        install_calls: 0,
+        panic_after_install: true,
+    };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        install_checked_readback(&mut carrier, |_| {
+            Ok((staged_roster(), StagedReadback(drops.clone())))
+        })
+    }));
+    assert!(result.is_err());
+    assert!(carrier.installed.is_some());
+    assert_eq!(drops.get(), 0);
+    drop(carrier);
+    assert_eq!(drops.get(), 1);
+}
+
+#[test]
+fn generated_reservation_context_rejections_do_not_call_source_or_install() {
+    let mut foreign = context();
+    let mut context = context();
+    let mut prepared = bound(
+        &context,
+        StagedCarrier {
+            installed: None,
+            install_calls: 0,
+            panic_after_install: false,
+        },
+    );
+    assert!(foreign.reserve_gfx942_prepared_v1(&mut prepared).is_err());
+    assert!(context.reserve_gfx942_prepared_v1(&mut prepared).is_err());
+    assert_eq!(prepared.value.install_calls, 0);
+    assert!(prepared.value.installed.is_none());
+}
+
 // Model-only identity fixtures never construct a native checked device.
 fn admission(domain_seed: u8, generation: u64) -> (DeviceIdentityStateV1, ModelDeviceAdmissionV1) {
     let digest = |seed| IdentityDigestV1::from_untrusted_bytes([seed; 32]);

@@ -868,7 +868,7 @@ where
     )
 }
 
-fn validate_authority_bindings_v1<A>(
+pub(crate) fn validate_authority_bindings_v1<A>(
     authority: &A,
     finalized_hsaco_sha256: [u8; 32],
     finalized_hsaco_length: u64,
@@ -877,7 +877,7 @@ fn validate_authority_bindings_v1<A>(
     device_unique_id: u64,
 ) -> Result<(), Gfx942AuthorizedRuntimeExecutionErrorV1<A::CurrentnessError>>
 where
-    A: WorkerV3Gfx942ExecutionAuthorityV1,
+    A: WorkerV3Gfx942ExecutionAuthorityV1 + ?Sized,
 {
     if authority.finalized_hsaco_sha256() != finalized_hsaco_sha256 {
         return Err(Gfx942AuthorizedRuntimeExecutionErrorV1::ArtifactIdentityMismatch);
@@ -936,12 +936,13 @@ mod tests {
         kernel: &'static str,
         dispatch: [u8; 32],
         device: u64,
+        current: bool,
     }
 
     // SAFETY: this implementation is confined to pure identity-comparison unit tests and can
     // never reach a native device token or the execution function.
     unsafe impl WorkerV3Gfx942ExecutionAuthorityV1 for TestAuthorityV1 {
-        type CurrentnessError = core::convert::Infallible;
+        type CurrentnessError = &'static str;
 
         fn finalized_hsaco_sha256(&self) -> [u8; 32] {
             self.object
@@ -964,7 +965,11 @@ mod tests {
         }
 
         fn revalidate_currentness(&self) -> Result<(), Self::CurrentnessError> {
-            Ok(())
+            if self.current {
+                Ok(())
+            } else {
+                Err("stale test authority")
+            }
         }
     }
 
@@ -975,12 +980,13 @@ mod tests {
             kernel: "kernel_v1",
             dispatch: [2; 32],
             device: 0x1234,
+            current: true,
         }
     }
 
     fn validate(
         authority: &TestAuthorityV1,
-    ) -> Result<(), Gfx942AuthorizedRuntimeExecutionErrorV1<core::convert::Infallible>> {
+    ) -> Result<(), Gfx942AuthorizedRuntimeExecutionErrorV1<&'static str>> {
         validate_authority_bindings_v1(authority, [1; 32], 7_000, "kernel_v1", [2; 32], 0x1234)
     }
 
@@ -1018,6 +1024,121 @@ mod tests {
             validate(&changed),
             Err(Gfx942AuthorizedRuntimeExecutionErrorV1::DeviceIdentityMismatch)
         ));
+    }
+
+    fn source_projection() -> (Vec<u8>, crate::PreparedGfx942PersistentDispatchV1) {
+        let hsaco = crate::synthetic_cov6::preparation_module();
+        let mut explicit = vec![0; 16];
+        explicit[8..].copy_from_slice(&4u64.to_le_bytes());
+        let projection = crate::prepare_gfx942_runtime_dispatch_v1(
+            &hsaco,
+            "vecadd",
+            crate::Gfx942RuntimeDispatchInputsV1::new(
+                explicit,
+                (0..3)
+                    .map(|index| {
+                        crate::Gfx942RuntimeDispatchBufferV1::new(
+                            vec![index as u8; 16 + index * 4],
+                            crate::Gfx942RuntimeBufferAccessV1::ReadWrite,
+                        )
+                        .unwrap()
+                    })
+                    .collect(),
+                vec![fe2o3_kfd::Gfx942KfdDispatchPointerFixupV1::new(0, 0, 0, 4)],
+                fe2o3_aql::AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+                0,
+                4321,
+            ),
+        )
+        .unwrap()
+        .into_persistent_projection_v1(&hsaco)
+        .unwrap();
+        (hsaco, projection)
+    }
+
+    fn source_authority(projection: &crate::PreparedGfx942PersistentDispatchV1) -> TestAuthorityV1 {
+        TestAuthorityV1 {
+            object: projection.identity().object_sha256(),
+            length: projection.finalized_hsaco_length(),
+            kernel: "vecadd",
+            dispatch: projection.dispatch_contract_sha256(),
+            device: 7,
+            current: true,
+        }
+    }
+
+    #[test]
+    fn generated_source_join_retains_full_roster_and_original_source() {
+        let (hsaco, projection) = source_projection();
+        let authority = source_authority(&projection);
+        let addresses = projection
+            .buffers()
+            .iter()
+            .map(|buffer| buffer.bytes().as_ptr())
+            .collect::<Vec<_>>();
+        let source = crate::RuntimeGfx942GeneratedSourceV1::new(&projection, &hsaco, &authority);
+        let roster = source.validate(7).unwrap();
+        assert_eq!(roster.count, 3);
+        assert_eq!(roster.fixup_count, 1);
+        assert_eq!(roster.readback_bytes, 60);
+        assert_eq!(
+            roster.dispatch_contract_sha256,
+            projection.dispatch_contract_sha256()
+        );
+        assert_eq!(projection.timeout_milliseconds(), 4321);
+        for (ordinal, buffer) in projection.buffers().iter().enumerate() {
+            assert_eq!(buffer.bytes().as_ptr(), addresses[ordinal]);
+            let slot = roster.buffers[ordinal].unwrap();
+            assert_eq!(slot.ordinal, ordinal);
+            assert_eq!(slot.bytes, (16 + ordinal * 4) as u64);
+            assert_eq!(slot.access, crate::Gfx942RuntimeBufferAccessV1::ReadWrite);
+        }
+        assert!(roster.buffers[3..].iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn generated_source_join_rejects_every_authority_coordinate_and_currentness() {
+        use crate::RuntimeGfx942GeneratedReservationErrorV1 as Error;
+        let (hsaco, projection) = source_projection();
+        for field in 0..6 {
+            let mut authority = source_authority(&projection);
+            match field {
+                0 => authority.object[0] ^= 1,
+                1 => authority.length += 1,
+                2 => authority.kernel = "other",
+                3 => authority.dispatch[0] ^= 1,
+                4 => authority.device += 1,
+                _ => authority.current = false,
+            }
+            let source =
+                crate::RuntimeGfx942GeneratedSourceV1::new(&projection, &hsaco, &authority);
+            let result = source.validate(7);
+            if field < 5 {
+                assert!(matches!(result, Err(Error::AuthorityMismatch)));
+            } else {
+                assert!(matches!(result, Err(Error::AuthorityNotCurrent)));
+            }
+        }
+    }
+
+    #[test]
+    fn generated_source_join_rejects_retained_artifact_length_and_byte_substitution() {
+        let (hsaco, projection) = source_projection();
+        let authority = source_authority(&projection);
+        for length in [false, true] {
+            let mut changed = hsaco.clone();
+            if length {
+                changed.push(0);
+            } else {
+                changed[0] ^= 1;
+            }
+            let source =
+                crate::RuntimeGfx942GeneratedSourceV1::new(&projection, &changed, &authority);
+            assert!(matches!(
+                source.validate(7),
+                Err(crate::RuntimeGfx942GeneratedReservationErrorV1::ArtifactMismatch)
+            ));
+        }
     }
 
     #[test]

@@ -29,6 +29,28 @@ fn prepared(hsaco: &[u8], count: usize, offset: usize) -> PreparedGfx942RuntimeD
 }
 
 #[test]
+fn generated_roster_rejects_policy_count_length_access_and_read_only_seed_mismatch() {
+    for field in 0..4 {
+        let hsaco = synthetic_cov6::preparation_module();
+        let mut projection = prepared(&hsaco, 3, 0)
+            .into_persistent_projection_v1(&hsaco)
+            .unwrap();
+        match field {
+            0 => {
+                projection.buffer_policies.pop();
+            }
+            1 => projection.buffer_policies[2].byte_length += 1,
+            2 => projection.buffer_policies[2].access = Gfx942RuntimeBufferAccessV1::ReadOnly,
+            _ => projection.buffer_policies[2].read_only_initial_bytes = Some(vec![0; 40]),
+        }
+        assert!(matches!(
+            crate::generated_source::GeneratedHostRosterV1::from_projection(&projection),
+            Err(crate::RuntimeGfx942GeneratedReservationErrorV1::InvalidRoster)
+        ));
+    }
+}
+
+#[test]
 fn persistent_projection_retains_complete_roster_identity_timeout_and_allocations() {
     let hsaco = synthetic_cov6::preparation_module();
     let mut source = prepared(&hsaco, 3, 8);
