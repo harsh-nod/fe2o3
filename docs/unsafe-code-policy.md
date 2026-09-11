@@ -111,6 +111,28 @@ The peer owner and serial-sequence inventory entries are unchanged. The new
 test block contains no GPU operation. Host fault tests and inventory checks are
 required but do not substitute for independently scheduled native qualification.
 
+### Ordered Engineering Batches
+
+The ordered-batch additions reviewed against `21682228486f` retain the same
+exclusive disposable-process and trusted-machine-code obligations. The worker
+call in `engineering_gfx950.rs` enters the private unsafe
+`Context::dispatch_ordered_batch` boundary; neither site establishes safe
+arbitrary-kernel execution or production gfx950 admission.
+
+All dispatches are checked before exposure. The context retains kernels,
+buffers, and separate kernarg and signal slots through ordered publication and
+completion. Observing the final signal is insufficient: every retained signal,
+queue identity and completion frontier is checked before reuse. Any error
+poisons the ordered path; the worker retains uncertain native ownership until
+the caller terminates the process. Existing host regressions cover incomplete
+publication, deadlines, signal failures, identity checks, and queue rollover.
+They do not discharge the trusted-code or native queue/MMIO obligations.
+
+This review changes only the inventory to six blocks/five unsafe functions in
+`engineering_gfx950.rs` and one unsafe function in
+`engineering_gfx950_ordered_batch.rs`. The library, doctest and inventory
+commands above remain required; no runtime behavior is changed.
+
 ## Initial Reduction
 
 The initial audit of `d9f6bbcd0` found 1,924 source sites in 288 Rust files:

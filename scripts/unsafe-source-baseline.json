@@ -684,8 +684,11 @@
     "block": 4
   },
   "crates/fe2o3-kfd/src/engineering_gfx950.rs": {
-    "block": 5,
+    "block": 6,
     "function": 5
+  },
+  "crates/fe2o3-kfd/src/engineering_gfx950_ordered_batch.rs": {
+    "function": 1
   },
   "crates/fe2o3-kfd/src/engineering_gfx950_peer.rs": {
     "block": 1,
