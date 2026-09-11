@@ -1,0 +1,62 @@
+[
+  {
+    "name": "opening",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_opening_and_loan_failures_never_enter_preparation_or_reclaim",
+    "edits": [
+      [
+        "            opening(&mut scope.parent)?;",
+        "            let _opening = opening;"
+      ]
+    ],
+    "expected": [
+      "assertion failed:",
+      "ComputeAqlQueueSessionErrorV1::Native(\"queue currentness lost\")"
+    ]
+  },
+  {
+    "name": "retake",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_operation_reclaim_matrix_retains_actual_foundation_and_parent",
+    "edits": [
+      [
+        "            retake?;",
+        "            let _ = retake;"
+      ]
+    ],
+    "expected": [
+      "assertion failed:",
+      "ComputeAqlQueueSessionErrorV1::Contract(actual)"
+    ]
+  },
+  {
+    "name": "operation-result",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_operation_reclaim_matrix_retains_actual_foundation_and_parent",
+    "edits": [
+      [
+        "            result?;",
+        "            let _ = result;"
+      ]
+    ],
+    "expected": [
+      "operation or reclaim must fail: ()"
+    ]
+  },
+  {
+    "name": "parent-transport",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_opening_and_loan_failures_never_enter_preparation_or_reclaim",
+    "edits": [
+      [
+        "            scope.terminal_parent = Some(scope.parent.take_terminal_parent());",
+        "            scope.terminal_parent = None;"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed",
+      "left: false",
+      "right: true"
+    ]
+  }
+]

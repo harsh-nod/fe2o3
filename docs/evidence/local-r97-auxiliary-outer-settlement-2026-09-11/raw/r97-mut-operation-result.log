@@ -1,0 +1,34 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 43.23s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_operation_reclaim_matrix_retains_actual_foundation_and_parent ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_operation_reclaim_matrix_retains_actual_foundation_and_parent stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_operation_reclaim_matrix_retains_actual_foundation_and_parent' (2604324) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:225:27:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_operation_reclaim_matrix_retains_actual_foundation_and_parent' (2604324) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:34:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_operation_reclaim_matrix_retains_actual_foundation_and_parent' (2604324) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:225:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_operation_reclaim_matrix_retains_actual_foundation_and_parent' (2604324) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:34:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_operation_reclaim_matrix_retains_actual_foundation_and_parent' (2604324) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_prefix_tests.rs:156:34:
+operation or reclaim must fail: ()
+
+
+failures:
+    queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_operation_reclaim_matrix_retains_actual_foundation_and_parent
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 950 filtered out; finished in 13.02s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

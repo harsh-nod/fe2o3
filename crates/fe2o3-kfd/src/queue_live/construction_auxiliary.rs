@@ -9,6 +9,12 @@ use super::construction_primary::{
 use super::*;
 use crate::queue::dispatch_binding::preparation::PreparationMemoryV1;
 
+#[path = "construction_auxiliary/parent.rs"]
+mod parent;
+pub(super) use parent::AuxiliaryParentV1;
+#[cfg(test)]
+pub(super) use parent::PreparationResultV1;
+
 pub(super) struct AuxiliaryQueueTargetV1<'a, E: PrimaryEnvironmentV1> {
     pub(super) engine: &'a mut NativeQueueEngineV1<PrimaryQueueBackendV1<E::Memory>>,
     pub(super) primary: &'a ComputeAqlQueueObservationV1,
@@ -102,6 +108,11 @@ impl ComputeAqlQueueSessionV1 {
 }
 
 pub(super) struct AuxiliaryConstructionV1<const N: usize, E: PrimaryEnvironmentV1 = Platform> {
+    #[cfg(test)]
+    pub(super) preparation_fault: Option<(
+        crate::queue::dispatch_binding::preparation::PreparationStageV1,
+        bool,
+    )>,
     packets: Option<[Gfx942FixedDispatchPacketV1; N]>,
     pub(super) data: Option<Vec<Gfx942FixedDispatchDataV1>>,
     pub(super) preparation: Option<FixedDispatchPreparationCustodyV1<N>>,
@@ -125,15 +136,17 @@ pub(super) struct AuxiliaryConstructionV1<const N: usize, E: PrimaryEnvironmentV
     pub(super) creation_arm: Option<E::CreationArm>,
 }
 
-struct AuxiliaryConstructionScopeV1<'a, const N: usize> {
-    parent: &'a mut ComputeAqlQueueSessionV1,
-    construction: AuxiliaryConstructionV1<N>,
-    terminal_parent: Option<ComputeAqlQueueSessionV1>,
+pub(super) struct AuxiliaryConstructionScopeV1<const N: usize, P: AuxiliaryParentV1> {
+    pub(super) parent: P,
+    pub(super) construction: AuxiliaryConstructionV1<N, P::Environment>,
+    pub(super) terminal_parent: Option<P::TerminalParent>,
 }
 
 impl<const N: usize, E: PrimaryEnvironmentV1> AuxiliaryConstructionV1<N, E> {
     pub(super) fn new(packets: [Gfx942FixedDispatchPacketV1; N]) -> Self {
         Self {
+            #[cfg(test)]
+            preparation_fault: None,
             packets: Some(packets),
             data: None,
             preparation: None,
@@ -181,6 +194,10 @@ impl<const N: usize, E: PrimaryEnvironmentV1> AuxiliaryConstructionV1<N, E> {
             self.data.take().expect("returned data"),
         ));
         let preparation = self.preparation.as_mut().expect("preparation custody");
+        #[cfg(test)]
+        if let Some((stage, panic)) = self.preparation_fault {
+            preparation.primary_inject_stage_v1(stage, panic);
+        }
         super::super::dispatch_binding::prepare_public_fixed_dispatch_resources_in_place(
             memory,
             programs,
@@ -434,39 +451,12 @@ pub(super) fn construct_auxiliary_compute_lane_v1<const N: usize>(
         construction: AuxiliaryConstructionV1::new(packets),
         terminal_parent: None,
     });
-    let scope = settle_auxiliary_construction_with_v1(
+    let scope = run_auxiliary_construction_with_v1(
         scope,
-        ComputeAqlQueueSessionV1::check_currentness,
-        |scope, entry| {
-            let root = &mut scope.construction;
-            let (result, retake) = scope
-                .parent
-                .with_live_queue_memory_model_custody(|memory| {
-                    let geometry = memory.plan_aql_queue_resources(ring_bytes)?;
-                    root.prepare_dispatch(
-                        memory,
-                        entry,
-                        geometry,
-                        ring_bytes,
-                        &programs,
-                        prepare_data,
-                    )
-                })?;
-            retake?;
-            result?;
-            root.create_and_install(
-                AuxiliaryQueueTargetV1 {
-                    engine: scope.parent.engine.as_mut().expect("checked queue engine"),
-                    primary: &scope.parent.observation,
-                    lanes: &mut scope.parent.auxiliary_compute_lanes,
-                    sdma: scope.parent.sdma.as_ref(),
-                    striped_sdma: scope.parent.striped_sdma.as_ref(),
-                },
-                ring_bytes,
-                slot,
-            )
-        },
-        &Platform::poison,
+        ring_bytes,
+        &programs,
+        slot,
+        prepare_data,
         |root| {
             let _retained = Box::into_raw(root);
         },
@@ -478,27 +468,58 @@ pub(super) fn construct_auxiliary_compute_lane_v1<const N: usize>(
     })
 }
 
-fn settle_auxiliary_construction_with_v1<'a, const N: usize>(
-    scope: Box<AuxiliaryConstructionScopeV1<'a, N>>,
-    opening: impl FnOnce(&mut ComputeAqlQueueSessionV1) -> Result<(), ComputeAqlQueueSessionErrorV1>,
+pub(super) fn run_auxiliary_construction_with_v1<const N: usize, P: AuxiliaryParentV1>(
+    scope: Box<AuxiliaryConstructionScopeV1<N, P>>,
+    ring_bytes: u32,
+    programs: &[fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>],
+    slot: PreparedAuxiliaryComputeLaneSlotV1,
+    prepare_data: impl FnOnce(
+        &mut <P::Environment as PrimaryEnvironmentV1>::Memory,
+    )
+        -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1>,
+    retain: impl FnOnce(Box<AuxiliaryConstructionScopeV1<N, P>>),
+) -> Result<Box<AuxiliaryConstructionScopeV1<N, P>>, ComputeAqlQueueSessionErrorV1>
+where
+    <P::Environment as PrimaryEnvironmentV1>::Memory: PreparationMemoryV1,
+{
+    settle_auxiliary_construction_with_v1(
+        scope,
+        P::check_currentness,
+        |scope, entry| {
+            let root = &mut scope.construction;
+            let (result, retake) = scope.parent.with_preparation_custody(|memory| {
+                let geometry = memory.plan_aql_queue_resources(ring_bytes)?;
+                root.prepare_dispatch(memory, entry, geometry, ring_bytes, programs, prepare_data)
+            })?;
+            retake?;
+            result?;
+            root.create_and_install(scope.parent.target(), ring_bytes, slot)
+        },
+        &P::Environment::poison,
+        retain,
+    )
+}
+
+fn settle_auxiliary_construction_with_v1<const N: usize, P: AuxiliaryParentV1>(
+    scope: Box<AuxiliaryConstructionScopeV1<N, P>>,
+    opening: impl FnOnce(&mut P) -> Result<(), ComputeAqlQueueSessionErrorV1>,
     work: impl FnOnce(
-        &mut AuxiliaryConstructionScopeV1<'a, N>,
+        &mut AuxiliaryConstructionScopeV1<N, P>,
         &mut UserptrConstructionEntryV1,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1>,
     poison: &dyn Fn(),
-    retain: impl FnOnce(Box<AuxiliaryConstructionScopeV1<'a, N>>),
-) -> Result<Box<AuxiliaryConstructionScopeV1<'a, N>>, ComputeAqlQueueSessionErrorV1> {
+    retain: impl FnOnce(Box<AuxiliaryConstructionScopeV1<N, P>>),
+) -> Result<Box<AuxiliaryConstructionScopeV1<N, P>>, ComputeAqlQueueSessionErrorV1> {
     run_rooted_construction_with_v1(
         scope,
         |scope, entry| {
-            opening(scope.parent)?;
+            opening(&mut scope.parent)?;
             work(scope, entry)
         },
         |scope| {
-            scope.terminal_parent =
-                Some(scope.parent.take_for_terminal_auxiliary_construction_v1());
+            scope.terminal_parent = Some(scope.parent.take_terminal_parent());
             if let Some(unpublished) = scope.construction.unpublished.as_mut() {
-                Platform::cleanup_unpublished(unpublished);
+                P::Environment::cleanup_unpublished(unpublished);
             }
         },
         poison,

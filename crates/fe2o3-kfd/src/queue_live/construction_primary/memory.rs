@@ -6,6 +6,10 @@ use crate::shared_memory::Gfx942DeviceMemoryDispatchAuthorityV1;
 pub(in crate::queue::live) trait PrimaryMemoryV1:
     construction::RingMemoryV1
 {
+    fn plan_aql_queue_resources(
+        &self,
+        ring_bytes: u32,
+    ) -> Result<Gfx942AqlQueueResourcePlanV1, ComputeAqlQueueSessionErrorV1>;
     fn allocate_ring(
         &mut self,
         backing: QueueRingBackingV1,
@@ -97,6 +101,12 @@ pub(in crate::queue::live) trait PrimaryMemoryV1:
 }
 
 impl PrimaryMemoryV1 for SharedGttMemorySessionV1 {
+    fn plan_aql_queue_resources(
+        &self,
+        ring_bytes: u32,
+    ) -> Result<Gfx942AqlQueueResourcePlanV1, ComputeAqlQueueSessionErrorV1> {
+        Ok(Self::plan_aql_queue_resources(self, ring_bytes)?)
+    }
     fn allocate_ring(
         &mut self,
         backing: QueueRingBackingV1,

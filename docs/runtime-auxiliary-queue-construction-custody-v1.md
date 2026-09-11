@@ -1,5 +1,15 @@
 # Auxiliary Queue Construction Custody V1
 
+R97 locally accepts **NATIVE-2B.5B-1**, the shared production-used outer driver
+and named CPU/fake-native prefix matrix, above signed planning checkpoint
+`82c8cd854bc6cb8b300a4f5a6b9a2467827dcc6f` and signed R96
+`369f99835cfb2af5df9fda45cc828d462ef6b156`. The
+[R97 evidence](evidence/local-r97-auxiliary-outer-settlement-2026-09-11/README.md)
+records all seventeen source gates, twelve auxiliary checks and four compiled
+behavioral negatives. Local platform composition (.5B-2) and complete
+CREATE/install coverage (.5B-3) remain open. No live KFD, new adapter proof or
+performance result is added.
+
 R96 locally accepts the production-used preparation and CREATE/install phase
 composition (NATIVE-2B.5A), above signed planning checkpoint
 `10902ca32a853448f79b59cfcf22072e3cdd9325` and signed R95
@@ -132,7 +142,7 @@ ordering. Four compiled mutations and all final source/auxiliary gates pass.
 The duplicate-primary-ID cell is lower CREATE `Ambiguous` rejection with no
 committed ID or outputs, not execution of the later retained-roster check.
 
-NATIVE-2B.5B still needs original-parent production outer settlement through
+At R96, NATIVE-2B.5B still needed original-parent production outer settlement through
 opening/preparation/control-prefix and real loan/reclaim failures; retained
 primary runtime-lease/local Linux-helper composition; full CREATE
 uncertainty/malformed/panic; both failing late currentness checks; occupied/reused
@@ -140,6 +150,51 @@ slots and retained auxiliary/SDMA rosters; cleanup failure and exact first-panic
 transport. .5A uses a fixture outer scope and scripted platform leaves. Its
 acceptance does not inherit the existing primary local-Linux-helper coverage.
 Live KFD and new adapter-refinement proofs remain separate.
+
+## R97 Outer Settlement Acceptance
+
+Private `AuxiliaryParentV1` forwards the original Linux parent's currentness,
+loan/reclaim envelope, borrowed engine/observation/auxiliary/SDMA target and
+nonallocating terminal-parent move. The generic owning scope and
+`run_auxiliary_construction_with_v1` are used by both production and the fixture.
+Geometry planning stays inside the actual loan, before the callback; retake
+settles before the operation result, and both precede CREATE/install. The
+complete parent is stored before unpublished cleanup. Shared root unwinding and
+the public concrete session's lifetime/capability boundaries are unchanged.
+
+The fixture starts with the successfully constructed original primary. It uses
+the actual live-model custody envelope and foundation loan/reclaim, including
+genuine generation exhaustion and certificate revision-floor rejection. The
+separate early-prefix oracle joins raw, prepared, authority and completed owners
+without double-counting in-session markers. R96's strict late paired oracle is
+preserved. Tests observe actual foundation location, exact per-record
+Host/Device charges and layouts, complete terminal-parent transport and actual
+primary dispatch/submission/completion/dependency poison state.
+
+Fourteen named integrated functions are listed in the
+[test summary](evidence/local-r97-auxiliary-outer-settlement-2026-09-11/test-summary.json).
+Twelve are new over R96. Their named loops execute 369 shared-driver runs, with
+366 failures and three successes. Separately, one primary-only fixture exercises
+two real borrowed capacity-preflight rejections after model-only update history.
+The suite includes opening/loan failures, a fifteen-cell operation/reclaim
+matrix, preparation/control prefixes, allocation/map/seal/write and projection
+failures, callback failure before allocation, cleanup panic before/after disposal
+and first-panic preservation. The control sweep pins 36 occurrences and 72
+error/panic cells.
+
+Both frozen and restored construction suites pass 53 tests. GNU/musl each pass
+2,531 tests with five ignored; all 5,651 non-documentation source identities are
+unchanged and exactly restored. Mutations that remove opening, retake gating,
+operation-result gating or terminal-parent transport each compile and fail an
+exact behavioral test. The retake negative establishes lost exact error
+precedence; it does not observe an additional CREATE. Production forwarding is
+also source-guarded, not executed concrete-Linux evidence.
+
+R97 platform leaves remain scripted. The append-only native pending-slot matrix
+does not qualify released-slot reuse. .5B-2 must compose the retained original
+runtime registration and actual local Linux gate/shadow helpers; .5B-3 must add
+full CREATE uncertainty/malformed/panic, output recovery, retained auxiliary/SDMA
+rosters, both late currentness failures and occupied/reused installation cases.
 
 Callback/installer-internal owners that fail before returning remain outside
 the returned-prefix guarantee. Concurrent bootstrap, replacement/insertion,

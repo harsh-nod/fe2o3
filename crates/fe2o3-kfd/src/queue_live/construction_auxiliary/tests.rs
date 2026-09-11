@@ -17,23 +17,40 @@ fn auxiliary_production_glue_uses_shared_phases_and_original_target_after_retake
         .split("fn settle_auxiliary_construction_with_v1")
         .next()
         .unwrap();
-    let loan = wrapper
-        .find("with_live_queue_memory_model_custody(")
-        .unwrap();
+    let loan = wrapper.find("with_preparation_custody(").unwrap();
     let preparation = wrapper.find("root.prepare_dispatch(").unwrap();
     let retake = wrapper.find("retake?;").unwrap();
     let result = wrapper.find("result?;").unwrap();
     let create = wrapper.find("root.create_and_install(").unwrap();
     assert!(loan < preparation && preparation < retake && retake < result && result < create);
+    let parent = include_str!("parent.rs");
+    assert!(wrapper.contains("run_auxiliary_construction_with_v1("));
+    assert!(wrapper.contains("scope.parent.target()"));
+    assert!(parent.contains("self.with_live_queue_memory_model_custody(work)"));
+    assert!(parent.contains("self.take_for_terminal_auxiliary_construction_v1()"));
+    let settlement = source
+        .split("fn settle_auxiliary_construction_with_v1")
+        .nth(1)
+        .unwrap();
+    let store_parent = settlement
+        .find("scope.terminal_parent = Some(scope.parent.take_terminal_parent());")
+        .unwrap();
+    let cleanup = settlement
+        .find("P::Environment::cleanup_unpublished(unpublished);")
+        .unwrap();
+    assert!(
+        store_parent < cleanup,
+        "complete original parent stored before cleanup"
+    );
     for binding in [
-        "engine: scope.parent.engine.as_mut().expect(\"checked queue engine\")",
-        "primary: &scope.parent.observation",
-        "lanes: &mut scope.parent.auxiliary_compute_lanes",
-        "sdma: scope.parent.sdma.as_ref()",
-        "striped_sdma: scope.parent.striped_sdma.as_ref()",
+        "engine: self.engine.as_mut().expect(\"checked queue engine\")",
+        "primary: &self.observation",
+        "lanes: &mut self.auxiliary_compute_lanes",
+        "sdma: self.sdma.as_ref()",
+        "striped_sdma: self.striped_sdma.as_ref()",
     ] {
         assert!(
-            wrapper.contains(binding),
+            parent.contains(binding),
             "original target binding: {binding}"
         );
     }
@@ -305,7 +322,10 @@ fn auxiliary_opening_is_rooted_before_preparation_loan_and_retake() {
     assert!(!public.contains("self.check_currentness()"));
     assert!(public.contains("engine.preflight_operation()"));
     let construction = include_str!("../construction_auxiliary.rs");
-    assert!(construction.contains("ComputeAqlQueueSessionV1::check_currentness,"));
+    assert!(construction.contains("P::check_currentness,"));
+    assert!(
+        include_str!("parent.rs").contains("ComputeAqlQueueSessionV1::check_currentness(self)")
+    );
 
     for opening in 0..3 {
         let mut parent = parent_fixture();

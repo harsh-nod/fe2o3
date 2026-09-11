@@ -78,13 +78,20 @@ impl PreparationMemoryFixtureV1 {
     }
 
     pub(crate) fn primary_assert_projection_v1<P: GttProfileV1>(&self) {
+        self.primary_assert_projection_with_foundation_v1::<P>(&self.fixture.foundation);
+    }
+
+    pub(crate) fn primary_assert_projection_with_foundation_v1<P: GttProfileV1>(
+        &self,
+        foundation: &QueueModelFoundationV1,
+    ) {
         let (case, before) = self
             .projection_observation
             .as_ref()
             .expect("selected real projection was entered");
         assert!(self.projection_fault.is_none());
         assert_eq!(
-            self.fixture.foundation.memory(),
+            foundation.memory(),
             before,
             "failed projection cannot commit model state"
         );

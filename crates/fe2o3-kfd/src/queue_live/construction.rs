@@ -141,6 +141,14 @@ pub(super) struct QueueResourcePrefixV1 {
 
 impl QueueResourcePrefixV1 {
     #[cfg(test)]
+    pub(super) fn primary_context_identity_v1(&self) -> Option<SharedGttAllocationIdentityV1> {
+        self.context_save
+            .as_ref()
+            .or_else(|| self.complete.as_ref().map(|a| &a.context_save))
+            .map(crate::shared_memory::PreparationMemoryFixtureV1::primary_token_identity)
+    }
+
+    #[cfg(test)]
     pub(super) fn primary_fixture_identities_v1(&self) -> Vec<SharedGttAllocationIdentityV1> {
         use crate::shared_memory::PreparationMemoryFixtureV1 as Memory;
         let mut ids = Vec::new();

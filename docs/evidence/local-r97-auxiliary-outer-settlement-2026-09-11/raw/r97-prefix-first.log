@@ -1,0 +1,88 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+warning: type `queue::dispatch_binding::DispatchResourceOwnerV1` is more private than the item `PreparationOwnerRefsV1::<'a>::dispatch`
+    --> crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs:290:5
+     |
+ 290 |     pub(crate) fn dispatch(&mut self, owner: &'a DispatchResourceOwnerV1) {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method `PreparationOwnerRefsV1::<'a>::dispatch` is reachable at visibility `pub(crate)`
+     |
+note: but type `queue::dispatch_binding::DispatchResourceOwnerV1` is only usable at visibility `pub(in crate::queue)`
+    --> crates/fe2o3-kfd/src/queue_dispatch_binding.rs:2098:1
+     |
+2098 | pub(super) struct DispatchResourceOwnerV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: `#[warn(private_interfaces)]` on by default
+
+warning: `fe2o3-kfd` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 44.57s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 7 tests
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_preparation_stage_failures_retain_every_returned_prefix ... FAILED
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_cleanup_panic_preserves_first_panic_and_terminal_parent ... FAILED
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_operation_reclaim_matrix_retains_actual_foundation_and_parent ... FAILED
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_success_preserves_primary_and_exact_owner_partition ... FAILED
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_real_loan_exhaustion_and_reclaim_revision_rejection_preserve_custody ... FAILED
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_opening_and_loan_failures_never_enter_preparation_or_reclaim ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_late_failures_retain_both_queues_without_installation ... ok
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_preparation_stage_failures_retain_every_returned_prefix stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_preparation_stage_failures_retain_every_returned_prefix' (2440622) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:219:27:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_preparation_stage_failures_retain_every_returned_prefix' (2440622) panicked at crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs:350:9:
+assertion `left == right` failed: original N2 usage unchanged
+  left: Some(Gfx942DeviceBackingUsageV1 { budget: Gfx942DeviceBackingBudgetV1 { max_backing_bytes: 1048576, max_allocations: 64 }, used_backing_bytes: 16384, used_allocation_records: 4, reserved_records: 0, retained_records: 4, quarantined_records: 0, poisoned: false })
+ right: Some(Gfx942DeviceBackingUsageV1 { budget: Gfx942DeviceBackingBudgetV1 { max_backing_bytes: 1048576, max_allocations: 64 }, used_backing_bytes: 8192, used_allocation_records: 2, reserved_records: 0, retained_records: 2, quarantined_records: 0, poisoned: false })
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_cleanup_panic_preserves_first_panic_and_terminal_parent stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_cleanup_panic_preserves_first_panic_and_terminal_parent' (2440618) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/integration_platform.rs:249:13:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_cleanup_panic_preserves_first_panic_and_terminal_parent' (2440618) panicked at crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs:350:9:
+assertion `left == right` failed: original N2 usage unchanged
+  left: Some(Gfx942DeviceBackingUsageV1 { budget: Gfx942DeviceBackingBudgetV1 { max_backing_bytes: 1048576, max_allocations: 64 }, used_backing_bytes: 16384, used_allocation_records: 4, reserved_records: 0, retained_records: 4, quarantined_records: 0, poisoned: false })
+ right: Some(Gfx942DeviceBackingUsageV1 { budget: Gfx942DeviceBackingBudgetV1 { max_backing_bytes: 1048576, max_allocations: 64 }, used_backing_bytes: 8192, used_allocation_records: 2, reserved_records: 0, retained_records: 2, quarantined_records: 0, poisoned: false })
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_operation_reclaim_matrix_retains_actual_foundation_and_parent stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_operation_reclaim_matrix_retains_actual_foundation_and_parent' (2440621) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:360:5:
+assertion `left == right` failed
+  left: true
+ right: false
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_success_preserves_primary_and_exact_owner_partition stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_success_preserves_primary_and_exact_owner_partition' (2440624) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:360:5:
+assertion `left == right` failed
+  left: true
+ right: false
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_real_loan_exhaustion_and_reclaim_revision_rejection_preserve_custody stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_real_loan_exhaustion_and_reclaim_revision_rejection_preserve_custody' (2440623) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:219:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_real_loan_exhaustion_and_reclaim_revision_rejection_preserve_custody' (2440623) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_tests.rs:219:27:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_real_loan_exhaustion_and_reclaim_revision_rejection_preserve_custody' (2440623) panicked at crates/fe2o3-kfd/src/shared_memory/tests/preparation.rs:350:9:
+assertion `left == right` failed: original N2 usage unchanged
+  left: Some(Gfx942DeviceBackingUsageV1 { budget: Gfx942DeviceBackingBudgetV1 { max_backing_bytes: 1048576, max_allocations: 64 }, used_backing_bytes: 16384, used_allocation_records: 4, reserved_records: 0, retained_records: 4, quarantined_records: 0, poisoned: false })
+ right: Some(Gfx942DeviceBackingUsageV1 { budget: Gfx942DeviceBackingBudgetV1 { max_backing_bytes: 1048576, max_allocations: 64 }, used_backing_bytes: 8192, used_allocation_records: 2, reserved_records: 0, retained_records: 2, quarantined_records: 0, poisoned: false })
+
+
+failures:
+    queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_cleanup_panic_preserves_first_panic_and_terminal_parent
+    queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_operation_reclaim_matrix_retains_actual_foundation_and_parent
+    queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_preparation_stage_failures_retain_every_returned_prefix
+    queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_real_loan_exhaustion_and_reclaim_revision_rejection_preserve_custody
+    queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_success_preserves_primary_and_exact_owner_partition
+
+test result: FAILED. 2 passed; 5 failed; 0 ignored; 0 measured; 937 filtered out; finished in 31.69s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

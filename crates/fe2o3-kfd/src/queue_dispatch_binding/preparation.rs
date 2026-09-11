@@ -5,7 +5,7 @@
 mod tests;
 
 #[cfg(test)]
-pub(crate) use tests::PrimaryPreparationSnapshotV1;
+pub(crate) use tests::{PreparationOwnerRefsV1, PrimaryPreparationSnapshotV1};
 
 use super::*;
 use crate::shared_memory::{

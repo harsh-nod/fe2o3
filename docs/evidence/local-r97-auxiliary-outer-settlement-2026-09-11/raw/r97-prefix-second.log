@@ -1,0 +1,16 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 52.88s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 7 tests
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_success_preserves_primary_and_exact_owner_partition ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_real_loan_exhaustion_and_reclaim_revision_rejection_preserve_custody ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_opening_and_loan_failures_never_enter_preparation_or_reclaim ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_cleanup_panic_preserves_first_panic_and_terminal_parent ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_late_failures_retain_both_queues_without_installation ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_operation_reclaim_matrix_retains_actual_foundation_and_parent ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_preparation_stage_failures_retain_every_returned_prefix has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_preparation_stage_failures_retain_every_returned_prefix ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 937 filtered out; finished in 96.30s
+

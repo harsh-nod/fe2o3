@@ -14870,8 +14870,12 @@ mod tests {
         assert!(auxiliary.contains("construction_auxiliary::construct_auxiliary_compute_lane_v1("));
         let construction = include_str!("queue_live/construction_auxiliary.rs");
         let envelope = construction
-            .find("with_live_queue_memory_model_custody(|memory|")
+            .find("with_preparation_custody(|memory|")
             .unwrap();
+        assert!(
+            include_str!("queue_live/construction_auxiliary/parent.rs")
+                .contains("self.with_live_queue_memory_model_custody(work)")
+        );
         let callback = construction.find("root.prepare_dispatch(").unwrap();
         assert!(envelope < callback);
         let preparation = construction

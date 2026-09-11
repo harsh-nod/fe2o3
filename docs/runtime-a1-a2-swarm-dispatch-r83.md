@@ -1,4 +1,23 @@
-# A1/A2 Swarm Dispatch At R96 Auxiliary Composition
+# A1/A2 Swarm Dispatch At R97 Outer Settlement
+
+R97 locally accepts NATIVE-2B.5B-1 above signed planning checkpoint
+`82c8cd854bc6cb8b300a4f5a6b9a2467827dcc6f` and signed R96
+`369f99835cfb2af5df9fda45cc828d462ef6b156`, with the
+[final source record](evidence/local-r97-auxiliary-outer-settlement-2026-09-11/README.md).
+The original-parent adapter and shared outer driver now cover the named
+early-prefix, operation/reclaim and cleanup matrix. All seventeen source gates,
+twelve auxiliary checks and four compiled behavioral negatives pass; GNU/musl
+each pass 2,531 tests with five ignored. Frozen/restored construction suites
+pass 53 tests and all 5,651 source identities match. This does not accept full
+local Linux platform composition, complete CREATE/install coverage, new formal
+refinement, live KFD or performance.
+
+The renewed three-worker dispatch assigns Native .5B-2 then .5B-3, Admission
+CO-1, and Resources VER-1A.1 independently. The journal contract must distinguish
+monotonic attempt epochs, content lineage and initialization/readiness; exact
+NoEffect evidence can restore prior lineage without restoring old epochs.
+Read-only handoffs are complete. Primary retains implementation, integration,
+gates and publication; queued work is not running unattended.
 
 R96 locally accepts NATIVE-2B.5A above signed planning checkpoint
 `10902ca32a853448f79b59cfcf22072e3cdd9325`, with the
@@ -11,8 +30,8 @@ with five ignored. This is CPU phase composition, not complete Linux outer
 settlement, new formal refinement or performance acceptance.
 
 The [current work-order board](runtime-a1-a2-swarm-current.md) supersedes the
-immediate assignments below: next is .5B outer settlement, local platform
-composition and CREATE/installation coverage, then 2C. CO-1 and VER-1A.1 remain
+immediate assignments below: next is .5B-2 local platform
+composition and .5B-3 CREATE/installation coverage, then 2C. CO-1 and VER-1A.1 remain
 independent. The R95 and earlier sections below retain their historical scope.
 
 R95 implements the [auxiliary construction root and checked handoff](runtime-auxiliary-queue-construction-custody-v1.md)
@@ -616,7 +635,7 @@ panic, cancellation or quiescence after entry cannot publish successful content.
 | Subpacket | Dependencies | Deliverable and exit gate |
 | --- | --- | --- |
 | VER-1A.1: contract/inventory | Independent of native construction and completion. | Freeze exact Context/allocation/device/writer identity, finite capacity and whole-allocation Available/Pending/Unknown semantics. Name every mutation hook below. |
-| VER-1A.2: executable transitions | .1. | Isolated runtime-model transitions consumed by the journal, with matching Verus statements/negatives. Begin and finish preflight the entire roster before mutation; first/middle/last failure changes no entry. Only exact successful writer settlement restores availability. |
+| VER-1A.2: executable transitions | .1. | Isolated runtime-model transitions consumed by the journal, with matching Verus statements/negatives. Begin and finish preflight the entire roster before mutation; first/middle/last failure changes no entry. Exact success commits new lineage; exact attempt-bound NoEffect restores prior lineage but never rolls back the attempt epoch or Context ID. Rejected polling is not NoEffect evidence. |
 | VER-1A.3: bounded journal | .2; proposed `context/versions.rs` and child tests. | Preallocate metadata/scratch, prevent live-entry eviction and epoch wrap, retain exact membership and move-only writer tickets. Failed disposal retains entries; Pending/Unknown yield no reusable authority. |
 | VER-1A.4: initial hooks | .3; Primary owns shared Context and graph edits. | Wire host writes and ordinary/graph copies into the actual journal. Retain logical destinations before backend translation, invalidate before effects and settle before callbacks. Comprehensive hook closure stays VER-1B. |
 | VER-1A.5: acceptance | .1 through .4. | Focused/full source gates and authenticated property proofs; omitted-member, wrong-writer and wrapping mutations must fail. Report CPU and proved properties separately; leases remain disabled. |

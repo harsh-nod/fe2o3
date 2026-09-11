@@ -1,22 +1,24 @@
 # A1/A2 Next-Wave Dispatch
 
 Use the [current work-order board](runtime-a1-a2-swarm-current.md) for immediate
-assignments. R96 now locally accepts .5A's production-used auxiliary phase
-composition, with [final evidence](evidence/local-r96-auxiliary-shared-engine-2026-09-11/README.md):
-seventeen source gates, twelve auxiliary checks, four compiled mutations and
-2,519 runtime tests per GNU/musl target pass. Full .5B remains three bounded
-follow-on packets. CO-1 and VER-1A.1 can proceed independently. This adds no live
-KFD, new formal refinement or performance result; historical acceptance below
-applies to its named source only.
+assignments. R97 now locally accepts .5B-1's production-used auxiliary outer
+settlement, with [final evidence](evidence/local-r97-auxiliary-outer-settlement-2026-09-11/README.md):
+seventeen source gates, twelve auxiliary checks, four compiled behavioral
+negatives and 2,531 tests per GNU/musl target pass. Frozen/restored focused
+suites pass 53 tests; all 5,651 source identities match. Fourteen integrated
+functions cover 369 shared-driver runs plus a separate primary-only capacity
+fixture. This adds no live KFD, new formal refinement or performance result;
+historical acceptance below applies to its named source only.
 
-The renewed three-agent breakdown advances the first Native assignment to
-**R97-3 acceptance**: the uncommitted .5B-1 driver, early ownership oracle and
-failure matrix now exist. A development run passed thirteen auxiliary tests;
-later final test/guard edits still need validation. This is not an accepted
-runtime checkpoint. Admission independently starts the production-used CO-1
-classifier in ordinary operation progress; Resources starts the VER-1A.1
-Context journal contract/inventory. The current board records the exact ready,
-dependent and qualification work; earlier assignment rows below are historical.
+The renewed three-agent breakdown assigns Native **.5B-2 local platform
+composition**, then **.5B-3 CREATE/install coverage**, 2C and DATA-ADOPT.
+Admission independently starts the production-used CO-1 classifier in ordinary
+operation progress; Resources starts the VER-1A.1 Context journal
+contract/inventory, including exact NoEffect settlement without attempt-epoch
+rollback. Three read-only workers completed these source-grounded handoffs;
+Primary owns edits and serialized integration. The current board records the
+exact ready, dependent and qualification work; earlier assignment rows below
+are historical, not unattended background implementation jobs.
 
 R95 now implements the [auxiliary constructor root and checked installation](runtime-auxiliary-queue-construction-custody-v1.md)
 above signed planning checkpoint `cb29dc6216cdf57c76d1f952264ceed9e257c40a`.

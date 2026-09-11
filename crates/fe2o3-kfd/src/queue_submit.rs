@@ -113,6 +113,11 @@ pub(super) struct NativeAqlSubmissionOwnerV1 {
 }
 
 impl NativeAqlSubmissionOwnerV1 {
+    #[cfg(test)]
+    pub(super) fn is_poisoned_for_test(&self) -> bool {
+        self.phase == SubmissionPhaseV1::Poisoned
+    }
+
     pub(super) fn new(ring_bytes: u32) -> Result<Self, NativeAqlSubmissionErrorV1> {
         Self::from_counters(ring_bytes, 0, 0)
     }

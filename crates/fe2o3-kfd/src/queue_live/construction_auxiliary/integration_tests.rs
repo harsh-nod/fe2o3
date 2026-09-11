@@ -1,14 +1,195 @@
-//! Same-engine composition of the production preparation and CREATE phases.
+//! Same-engine construction through the production outer ownership boundary.
 
 use super::*;
-use crate::queue::live::construction_auxiliary::{AuxiliaryConstructionV1, AuxiliaryQueueTargetV1};
+use crate::queue::live::construction_auxiliary::{
+    AuxiliaryConstructionScopeV1, AuxiliaryConstructionV1, AuxiliaryParentV1,
+    AuxiliaryQueueTargetV1, PreparationResultV1, run_auxiliary_construction_with_v1,
+};
 
-struct Scope {
+type Scope = AuxiliaryConstructionScopeV1<3, Parent>;
+
+#[path = "integration_prefix_tests.rs"]
+mod prefix_cases;
+
+struct Original {
     primary: Box<Root>,
-    auxiliary: AuxiliaryConstructionV1<3, Fixture>,
     lanes: Vec<AuxiliaryComputeLaneSlotV1<ComputeAqlQueueLaneStateV1<Fixture>>>,
-    data: Option<crate::shared_memory::PreparationMemoryObservationV1>,
-    preparation: PrimaryPreparationSnapshotV1,
+    data: Rc<RefCell<Option<crate::shared_memory::PreparationMemoryObservationV1>>>,
+    preparation: Rc<RefCell<PrimaryPreparationSnapshotV1>>,
+}
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+enum Outcome {
+    #[default]
+    Success,
+    Error,
+    Panic,
+}
+
+fn outcome(name: &'static str, value: Outcome) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+    let occurrence = record(name);
+    match value {
+        Outcome::Success => Ok(()),
+        Outcome::Error => Err(ComputeAqlQueueSessionErrorV1::Contract(name)),
+        Outcome::Panic => std::panic::panic_any((name, occurrence)),
+    }
+}
+
+#[derive(Default)]
+struct Faults {
+    loan: Outcome,
+    prepare_data: Outcome,
+    operation: Outcome,
+    reclaim_before: Outcome,
+    reclaim_after: Outcome,
+    regress_revision: bool,
+}
+
+struct Parent {
+    original: Option<Original>,
+    poisoned: bool,
+    faults: Faults,
+}
+
+impl core::ops::Deref for Scope {
+    type Target = Original;
+
+    fn deref(&self) -> &Original {
+        self.parent
+            .original
+            .as_ref()
+            .or(self.terminal_parent.as_ref())
+            .expect("complete original parent retained")
+    }
+}
+
+impl Parent {
+    fn poison(&mut self) {
+        self.poisoned = true;
+        let primary = self
+            .original
+            .as_mut()
+            .unwrap()
+            .primary
+            .completed
+            .as_mut()
+            .unwrap();
+        primary.dependency_owner.poison();
+        primary.completion_owner.poison_owner();
+        if let Some(dispatch) = primary.dispatch.as_mut() {
+            dispatch.poison();
+        }
+        primary.submission.poison();
+    }
+}
+
+impl AuxiliaryParentV1 for Parent {
+    type Environment = Fixture;
+    type TerminalParent = Original;
+
+    fn check_currentness(&mut self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.original
+            .as_mut()
+            .unwrap()
+            .primary
+            .completed
+            .as_mut()
+            .unwrap()
+            .engine
+            .prepare_operation()
+            .map_err(map_native)
+    }
+
+    fn with_preparation_custody(
+        &mut self,
+        work: impl FnOnce(&mut Memory) -> Result<(), ComputeAqlQueueSessionErrorV1>,
+    ) -> PreparationResultV1 {
+        execute_live_model_custody_v1(
+            self,
+            |parent| {
+                outcome("auxiliary-loan", parent.faults.loan)?;
+                let engine = &mut parent
+                    .original
+                    .as_mut()
+                    .unwrap()
+                    .primary
+                    .completed
+                    .as_mut()
+                    .unwrap()
+                    .engine;
+                assert!(engine.backend.foundation_in_engine);
+                let loan = engine
+                    .backend
+                    .session
+                    .primary_loan(&mut engine.foundation)?;
+                engine.backend.foundation_in_engine = false;
+                record("auxiliary-loan-complete");
+                Ok::<_, ComputeAqlQueueSessionErrorV1>(loan)
+            },
+            |parent| {
+                let memory = &mut parent
+                    .original
+                    .as_mut()
+                    .unwrap()
+                    .primary
+                    .completed
+                    .as_mut()
+                    .unwrap()
+                    .engine
+                    .backend
+                    .session;
+                work(memory)?;
+                outcome("auxiliary-operation-return", parent.faults.operation)
+            },
+            |parent, loan| {
+                outcome("auxiliary-retake", parent.faults.reclaim_before)?;
+                let engine = &mut parent
+                    .original
+                    .as_mut()
+                    .unwrap()
+                    .primary
+                    .completed
+                    .as_mut()
+                    .unwrap()
+                    .engine;
+                assert!(!engine.backend.foundation_in_engine);
+                if parent.faults.regress_revision {
+                    engine
+                        .backend
+                        .session
+                        .primary_regress_loan_revision_v1(&loan);
+                }
+                engine
+                    .backend
+                    .session
+                    .primary_reclaim(&mut engine.foundation, loan)?;
+                engine.backend.foundation_in_engine = true;
+                outcome("auxiliary-retake-complete", parent.faults.reclaim_after)
+            },
+            |parent| {
+                parent.poison();
+                Fixture::poison();
+            },
+        )
+    }
+
+    fn target(&mut self) -> AuxiliaryQueueTargetV1<'_, Fixture> {
+        let original = self.original.as_mut().unwrap();
+        let primary = original.primary.completed.as_mut().unwrap();
+        AuxiliaryQueueTargetV1 {
+            engine: &mut primary.engine,
+            primary: &primary.observation,
+            lanes: &mut original.lanes,
+            sdma: None,
+            striped_sdma: None,
+        }
+    }
+
+    fn take_terminal_parent(&mut self) -> Original {
+        self.poison();
+        record("auxiliary-parent-retain");
+        self.original.take().unwrap()
+    }
 }
 
 fn run_auxiliary(
@@ -17,89 +198,23 @@ fn run_auxiliary(
 ) -> (Box<Scope>, Result<(), Box<dyn std::any::Any + Send>>) {
     let mut retained = None;
     let mut success = None;
+    let slot = prepare_auxiliary_compute_lane_slot_v1(&scope.lanes).unwrap();
+    let data_snapshot = scope.data.clone();
+    let preparation = scope.preparation.clone();
+    let prepare_data = scope.parent.faults.prepare_data;
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let result = run_rooted_construction_with_v1(
+        let result = run_auxiliary_construction_with_v1(
             scope,
-            |scope, entry| {
-                scope
-                    .primary
-                    .completed
-                    .as_mut()
-                    .unwrap()
-                    .engine
-                    .prepare_operation()
-                    .map_err(map_native)?;
-                let slot = prepare_auxiliary_compute_lane_slot_v1(&scope.lanes)?;
-                let (result, retake) = execute_live_model_custody_v1(
-                    scope,
-                    |scope| {
-                        step("auxiliary-loan")?;
-                        let engine = &mut scope.primary.completed.as_mut().unwrap().engine;
-                        assert!(engine.backend.foundation_in_engine);
-                        let loan = engine
-                            .backend
-                            .session
-                            .primary_loan(&mut engine.foundation)?;
-                        engine.backend.foundation_in_engine = false;
-                        Ok::<_, ComputeAqlQueueSessionErrorV1>(loan)
-                    },
-                    |scope| {
-                        let memory = &mut scope
-                            .primary
-                            .completed
-                            .as_mut()
-                            .unwrap()
-                            .engine
-                            .backend
-                            .session;
-                        scope.auxiliary.prepare_dispatch(
-                            memory,
-                            entry,
-                            queue_resource_plan_for_test_v1(4096),
-                            4096,
-                            &programs,
-                            |memory| {
-                                let data = memory.roster();
-                                scope.preparation.capture_data(&data);
-                                scope.data = Some(memory.observation());
-                                Ok(data)
-                            },
-                        )
-                    },
-                    |scope, loan| {
-                        step("auxiliary-retake")?;
-                        let engine = &mut scope.primary.completed.as_mut().unwrap().engine;
-                        assert!(!engine.backend.foundation_in_engine);
-                        engine
-                            .backend
-                            .session
-                            .primary_reclaim(&mut engine.foundation, loan)?;
-                        engine.backend.foundation_in_engine = true;
-                        Ok(())
-                    },
-                    |_| Fixture::poison(),
-                )?;
-                retake?;
-                result?;
-                let primary = scope.primary.completed.as_mut().unwrap();
-                scope.auxiliary.create_and_install(
-                    AuxiliaryQueueTargetV1 {
-                        engine: &mut primary.engine,
-                        primary: &primary.observation,
-                        lanes: &mut scope.lanes,
-                        sdma: None,
-                        striped_sdma: None,
-                    },
-                    4096,
-                    slot,
-                )
+            4096,
+            &programs,
+            slot,
+            |memory| {
+                outcome("auxiliary-data", prepare_data)?;
+                let data = memory.roster();
+                preparation.borrow_mut().capture_data(&data);
+                *data_snapshot.borrow_mut() = Some(memory.observation());
+                Ok(data)
             },
-            |scope| {
-                if let Some(shadows) = scope.auxiliary.unpublished.as_mut() {
-                    Fixture::cleanup_unpublished(shadows);
-                }
-            },
-            &Fixture::poison,
             |scope| {
                 record("retain-auxiliary-root");
                 retained = Some(scope);
@@ -122,17 +237,17 @@ fn assert_pair(scope: &Scope) {
     let primary = scope.primary.completed.as_ref().unwrap();
     let memory = &primary.engine.backend.session;
     let installed = scope.lanes.first().and_then(|s| s.state.as_ref());
-    let lane = installed.or(scope.auxiliary.completed.as_ref());
+    let lane = installed.or(scope.construction.completed.as_ref());
     let dispatch = lane
         .and_then(|l| l.dispatch.as_ref())
-        .or(scope.auxiliary.dispatch.as_ref())
+        .or(scope.construction.dispatch.as_ref())
         .unwrap();
     let primary_dispatch = primary.dispatch.as_ref().unwrap();
     let mut owners = primary_dispatch.primary_fixture_identities_v1();
     owners.extend(dispatch.primary_fixture_identities_v1());
     let mut markers = Vec::new();
     mutable_ids(
-        &scope.auxiliary.completion,
+        &scope.construction.completion,
         &mut owners,
         &mut markers,
         Memory::primary_token_identity,
@@ -146,8 +261,8 @@ fn assert_pair(scope: &Scope) {
             lane.submission.is_some(),
             "completed lane retains its submission owner"
         );
-        assert!(scope.auxiliary.completion_owner.is_none());
-        assert!(scope.auxiliary.submission.is_none());
+        assert!(scope.construction.completion_owner.is_none());
+        assert!(scope.construction.submission.is_none());
         owners.push(Memory::primary_token_identity(
             lane.completion_signals.as_ref().unwrap(),
         ));
@@ -163,58 +278,60 @@ fn assert_pair(scope: &Scope) {
         .collect();
     memory.primary_assert_device_owners(&devices);
     memory.primary_assert_accounts_and_records(trace().borrow().session);
-    memory.assert_original_data_unchanged(scope.data.as_ref().unwrap());
+    memory.assert_original_data_unchanged(scope.data.borrow().as_ref().unwrap());
     scope.primary.preparation.1.primary_assert_snapshot_v1(
         memory,
         trace().borrow().initial_preparation.as_ref().unwrap(),
         Some(primary_dispatch),
     );
     scope
-        .auxiliary
+        .construction
         .preparation
         .as_ref()
         .unwrap()
-        .primary_assert_snapshot_v1(memory, &scope.preparation, Some(dispatch));
-    platform::assert_auxiliary_platform(&scope.primary, &scope.auxiliary, installed);
+        .primary_assert_snapshot_v1(memory, &scope.preparation.borrow(), Some(dispatch));
+    platform::assert_auxiliary_platform(&scope.primary, &scope.construction, installed);
     assert!(primary.engine.backend.foundation_in_engine);
     memory
         .primary_authenticate(&primary.engine.foundation)
         .unwrap();
     assert_eq!(primary.engine.resources.len(), 2);
-    assert_ne!(primary.key, scope.auxiliary.key.unwrap());
+    assert_ne!(primary.key, scope.construction.key.unwrap());
     assert_eq!(primary.engine.native_queue_id(primary.key), Some(7));
     if trace().borrow().create_collision {
         assert_eq!(
-            primary.engine.phase(scope.auxiliary.key.unwrap()),
+            primary.engine.phase(scope.construction.key.unwrap()),
             Some(fe2o3_runtime_model::ComputeAqlQueuePhaseV1::Ambiguous)
         );
         assert!(
             primary
                 .engine
-                .create_outputs(scope.auxiliary.key.unwrap())
+                .create_outputs(scope.construction.key.unwrap())
                 .is_none()
         );
         assert!(
             primary
                 .engine
-                .native_queue_id(scope.auxiliary.key.unwrap())
+                .native_queue_id(scope.construction.key.unwrap())
                 .is_none()
         );
-        assert!(scope.auxiliary.outputs.is_none());
+        assert!(scope.construction.outputs.is_none());
     } else {
         let outputs = primary
             .engine
-            .create_outputs(scope.auxiliary.key.unwrap())
+            .create_outputs(scope.construction.key.unwrap())
             .unwrap();
         assert_eq!(
-            primary.engine.native_queue_id(scope.auxiliary.key.unwrap()),
+            primary
+                .engine
+                .native_queue_id(scope.construction.key.unwrap()),
             Some(outputs.queue_id().value())
         );
         assert_eq!(
             trace().borrow().create_returns[1],
             (outputs.queue_id().value(), outputs.doorbell_offset().raw())
         );
-        if let Some(recovered) = scope.auxiliary.outputs {
+        if let Some(recovered) = scope.construction.outputs {
             assert_eq!(recovered, outputs);
         }
     }
@@ -238,6 +355,107 @@ fn assert_pair(scope: &Scope) {
         t.cleanup, 0,
         "published shadows cannot be cleaned as unpublished"
     );
+    assert_eq!(t.drops, 0);
+}
+
+fn assert_parent_transport(scope: &Scope, failed: bool) {
+    assert_eq!(scope.parent.original.is_none(), failed);
+    assert_eq!(scope.terminal_parent.is_some(), failed);
+    assert_eq!(scope.parent.poisoned, failed);
+    let primary = scope.primary.completed.as_ref().unwrap();
+    assert_eq!(primary.completion_owner.is_poisoned_for_test(), failed);
+    assert_eq!(primary.submission.is_poisoned_for_test(), failed);
+    assert_eq!(
+        matches!(
+            primary.dispatch.as_ref().unwrap().ensure_releasable(),
+            Err(Gfx942DispatchBindingErrorV1::Poisoned)
+        ),
+        failed
+    );
+    assert_eq!(
+        matches!(
+            primary.dependency_owner.ensure_idle(),
+            Err(ComputeDependencyTargetUseErrorV1::Poisoned)
+        ),
+        failed
+    );
+}
+
+fn assert_early_pair(scope: &Scope) {
+    use crate::queue::dispatch_binding::preparation::PreparationOwnerRefsV1;
+    let primary = scope.primary.completed.as_ref().unwrap();
+    let memory = &primary.engine.backend.session;
+    let root = &scope.construction;
+    assert!(scope.lanes.is_empty());
+    assert_eq!(primary.engine.resources.len(), 1);
+    assert_eq!(primary.engine.native_queue_id(primary.key), Some(7));
+    let mut refs = PreparationOwnerRefsV1::default();
+    let primary_dispatch = primary.dispatch.as_ref().unwrap();
+    refs.dispatch(primary_dispatch);
+    scope.primary.preparation.1.primary_assert_snapshot_v1(
+        memory,
+        trace().borrow().initial_preparation.as_ref().unwrap(),
+        Some(primary_dispatch),
+    );
+    if let Some(data) = &root.data {
+        refs.data(data);
+        scope.preparation.borrow().assert_data(data);
+    }
+    if let Some(preparation) = &root.preparation {
+        preparation.primary_collect_owners_v1(&mut refs);
+        preparation
+            .primary_assert_descriptors_v1(&scope.preparation.borrow(), root.dispatch.as_ref());
+    }
+    if let Some(dispatch) = &root.dispatch {
+        refs.dispatch(dispatch);
+    }
+    memory.primary_assert_device_partition_v1(&refs.device_leases, &refs.device_authorities);
+    memory.primary_assert_shared_layouts_v1(&refs.shared);
+    let mut owners = refs.shared.iter().map(|(id, _)| *id).collect();
+    let mut markers = refs.in_session;
+    ring_ids(&root.ring, &mut owners, &mut markers);
+    mutable_ids(
+        &root.control,
+        &mut owners,
+        &mut markers,
+        Memory::primary_token_identity,
+    );
+    mutable_ids(
+        &root.completion,
+        &mut owners,
+        &mut markers,
+        Memory::primary_token_identity,
+    );
+    executable_ids(
+        &root.eop,
+        &mut owners,
+        &mut markers,
+        Memory::primary_token_identity,
+    );
+    executable_ids(
+        &root.context,
+        &mut owners,
+        &mut markers,
+        Memory::primary_token_identity,
+    );
+    if let Some(prefix) = &root.resource_prefix {
+        owners.extend(prefix.primary_fixture_identities_v1());
+    }
+    if let Some(authority) = &root.authority {
+        owners.extend(authority_ids(authority));
+    }
+    assert_partition_with_markers(&scope.primary, owners, markers);
+    memory.primary_assert_accounts_and_records(trace().borrow().session);
+    memory.assert_original_records_unchanged(trace().borrow().initial_data.as_ref().unwrap());
+    if let Some(data) = scope.data.borrow().as_ref() {
+        memory.assert_original_data_unchanged(data);
+    }
+    platform::assert_auxiliary_early_platform(&scope.primary, root);
+    let t = trace();
+    let t = t.borrow();
+    for name in ["foundation", "dependency", "create", "publish"] {
+        assert_eq!(t.calls.iter().filter(|&&s| s == name).count(), 1, "{name}");
+    }
     assert_eq!(t.drops, 0);
 }
 
@@ -268,15 +486,23 @@ fn exercise(fault: Option<(&'static str, bool)>, collision: bool) {
     }
     trace.borrow_mut().create_collision = collision;
     let scope = Box::new(Scope {
-        primary,
-        auxiliary: AuxiliaryConstructionV1::new(packets),
-        lanes: Vec::with_capacity(1),
-        data: None,
-        preparation,
+        parent: Parent {
+            original: Some(Original {
+                primary,
+                lanes: Vec::with_capacity(1),
+                data: Rc::new(RefCell::new(None)),
+                preparation: Rc::new(RefCell::new(preparation)),
+            }),
+            poisoned: false,
+            faults: Faults::default(),
+        },
+        construction: AuxiliaryConstructionV1::new(packets),
+        terminal_parent: None,
     });
     let scope_address = &*scope as *const Scope as usize;
     let slot_storage = scope.lanes.as_ptr();
     let (scope, result) = run_auxiliary(scope, programs);
+    assert_parent_transport(&scope, result.is_err());
     assert_eq!(
         trace
             .borrow()
@@ -389,7 +615,7 @@ fn exercise(fault: Option<(&'static str, bool)>, collision: bool) {
             }
         }
         assert_eq!(
-            scope.auxiliary.completed.is_none(),
+            scope.construction.completed.is_none(),
             collision
                 || fault.is_some_and(|(name, _)| matches!(name, "recover-outputs" | "recover-id"))
         );
@@ -408,7 +634,7 @@ fn exercise(fault: Option<(&'static str, bool)>, collision: bool) {
         assert_eq!(lane.observation.queue_id, 8);
         assert_eq!(lane.observation.event_id, 12);
         assert_eq!(lane.observation.doorbell_byte_offset, 16);
-        assert!(scope.auxiliary.completed.is_none());
+        assert!(scope.construction.completed.is_none());
         let t = trace.borrow();
         assert_eq!(
             &t.calls[t.calls.len() - 5..],

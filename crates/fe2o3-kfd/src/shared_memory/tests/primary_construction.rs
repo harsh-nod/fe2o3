@@ -6,6 +6,77 @@ use crate::shared_memory::allocation::PendingAllocationStageV1;
 use crate::shared_memory::transitions::{self as adapter, ProjectionV1};
 
 impl PreparationMemoryFixtureV1 {
+    pub(crate) fn primary_assert_control_native_fault_v1<P: GttProfileV1>(
+        &self,
+        operation: &str,
+        panic: bool,
+        bytes: usize,
+    ) {
+        let e = &self.fixture.engine;
+        assert_eq!(e.phase, SharedMemorySessionPhaseV1::Quarantined);
+        let layout = profile_layout::<P>(bytes).unwrap();
+        if matches!(operation, "alloc" | "alloc_userptr") {
+            let pending = e.pending_allocation.as_ref().unwrap();
+            assert_eq!(pending.stage, PendingAllocationStageV1::Allocate);
+            assert_eq!(pending.profile, P::PROFILE);
+            assert_eq!(pending.layout, layout);
+            assert_eq!(pending.record_slot, e.allocations.len());
+            assert_eq!(pending.id.checked_add(1), Some(e.next_id));
+            assert!(pending.reservation.is_some());
+            assert_eq!(pending.allocation_output.is_some(), !panic);
+            assert_eq!(pending.mapping.is_some(), P::IS_USERPTR);
+            if let Some(raw) = pending.allocation_output {
+                assert_eq!(Some(raw), e.backend.last_allocation_output);
+                assert_eq!(raw.va_addr, pending.reservation.unwrap().0);
+                assert_eq!(raw.size, layout.gpu_va_bytes());
+            }
+            if let Some(mapping) = &pending.mapping {
+                assert!(mapping.active);
+                assert_eq!(mapping.address, pending.reservation.unwrap().0);
+                assert_eq!(mapping.bytes.len(), layout.cpu_mapping_bytes());
+            }
+            assert!(e.terminal_transition.is_none());
+        } else {
+            assert!(e.pending_allocation.is_none());
+            let terminal = e.terminal_transition.as_ref().unwrap();
+            let mapping = operation == "map_gpu";
+            assert_eq!(
+                terminal.stage,
+                if mapping {
+                    adapter::TransitionStageV1::Map
+                } else {
+                    assert_eq!(operation, "protect_cpu_read_only");
+                    adapter::TransitionStageV1::Seal
+                }
+            );
+            assert!(terminal.output.is_none());
+            let input = terminal.input.as_ref().unwrap();
+            assert_eq!(input.profile_type, std::any::TypeId::of::<P>());
+            assert_eq!(input.profile, P::PROFILE);
+            assert_eq!(input.layout, layout);
+            assert_eq!(input.session_id, e.session_id);
+            assert_eq!(
+                input.state_type,
+                if mapping && P::PROFILE == SharedGttProfileV1::Executable {
+                    std::any::TypeId::of::<GttExecutableImmutableV1>()
+                } else {
+                    std::any::TypeId::of::<GttCpuWritableV1>()
+                }
+            );
+            let record = e.allocations.iter().find(|r| r.id == input.id).unwrap();
+            assert_eq!(input.generation, record.generation);
+            assert_eq!(record.layout, layout);
+            assert_eq!(
+                terminal.progress,
+                adapter::NativeTransitionProgressV1 {
+                    attempted: true,
+                    returned_success: (!panic).then_some(false),
+                    returned_map_prefix: (mapping && !panic).then_some(1),
+                }
+            );
+        }
+    }
+
     pub(crate) fn primary_assert_preparation_fault_v1(
         &self,
         call: super::preparation::PreparationMemoryCallV1,
@@ -319,6 +390,54 @@ impl PreparationMemoryFixtureV1 {
             )
             .map_err(|()| MemorySessionError::Model("fixture live foundation reclaim"))
     }
+
+    pub(crate) fn primary_loan_state_v1(
+        &self,
+        queue: &QueueModelFoundationV1,
+    ) -> (u64, Option<u64>, u64) {
+        let f = &self.fixture;
+        let (issuer, generation, active, placeholder) = match f.ownership.phase {
+            QueueModelOwnershipPhaseV1::QueueOwned { issuer } => {
+                (issuer, None, queue, &f.foundation)
+            }
+            QueueModelOwnershipPhaseV1::SessionOwnedLiveLoan { issuer, generation } => {
+                (issuer, Some(generation), &f.foundation, queue)
+            }
+            QueueModelOwnershipPhaseV1::SessionOwned => panic!("primary already queue-owned"),
+        };
+        assert!(active.is_certified_for_test());
+        assert!(!placeholder.is_certified_for_test());
+        assert_eq!(active.issuer().unwrap(), issuer);
+        assert_eq!(active.memory().domain_id(), f.device.domain_id());
+        assert_eq!(placeholder.memory().domain_id(), f.device.domain_id());
+        active
+            .authenticate(f.engine.session_id, f.device, f.vm, issuer)
+            .unwrap();
+        (issuer, generation, f.ownership.next_live_loan_generation)
+    }
+
+    pub(crate) fn primary_expire_loan_generation_v1(&mut self) {
+        assert!(matches!(
+            self.fixture.ownership.phase,
+            QueueModelOwnershipPhaseV1::QueueOwned { .. }
+        ));
+        self.fixture.ownership.next_live_loan_generation = u64::MAX;
+    }
+
+    pub(crate) fn primary_regress_loan_revision_v1(
+        &mut self,
+        loan: &LiveQueueModelFoundationLoanV1,
+    ) {
+        assert_eq!(loan.session_id, self.fixture.engine.session_id);
+        self.fixture
+            .foundation
+            .set_certificate_revision_for_test(
+                loan.starting_revision
+                    .checked_sub(1)
+                    .expect("primary populated foundation revision"),
+            )
+            .unwrap();
+    }
     pub(crate) fn primary_arm_native(&mut self, operation: &'static str, panic: bool) {
         if panic {
             self.fixture.engine.backend.panic_operation = Some(operation);
@@ -412,8 +531,29 @@ impl PreparationMemoryFixtureV1 {
         &self,
         authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
     ) {
+        self.primary_assert_device_partition_v1(&[], authorities);
+    }
+
+    pub(crate) fn primary_assert_shared_layouts_v1(
+        &self,
+        owners: &[(SharedGttAllocationIdentityV1, SharedGttAllocationLayoutV1)],
+    ) {
+        for (id, layout) in owners {
+            let e = &self.fixture.engine;
+            assert_eq!(id.session_id, e.session_id);
+            let record = e.allocations.iter().find(|r| r.id == id.id).unwrap();
+            assert_eq!(record.generation, id.generation);
+            assert_eq!(record.layout, *layout);
+        }
+    }
+
+    pub(crate) fn primary_assert_device_partition_v1(
+        &self,
+        leases: &[&Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>],
+        authorities: &[&Gfx942DeviceMemoryDispatchAuthorityV1],
+    ) {
         let e = &self.fixture.engine;
-        assert_eq!(authorities.len(), e.device_memory.len());
+        assert_eq!(leases.len() + authorities.len(), e.device_memory.len());
         for record in &e.device_memory {
             let expected = Gfx942DeviceMemoryIdentityV1 {
                 id: record.id,
@@ -425,14 +565,27 @@ impl PreparationMemoryFixtureV1 {
                 .iter()
                 .filter(|a| a.lease.storage_identity() == expected)
                 .collect();
-            assert_eq!(owners.len(), 1, "exact Device token retained once");
-            assert_eq!(owners[0].lease.layout(), record.layout);
-            assert_eq!(owners[0].facts.id, record.id);
-            assert_eq!(owners[0].facts.generation, record.generation);
-            assert_eq!(owners[0].facts.device, record.device);
-            assert_eq!(owners[0].facts.vm, record.vm);
-            assert_eq!(owners[0].facts.gpu_va, record.gpu_va);
-            assert_eq!(owners[0].facts.layout, record.layout);
+            let raw: Vec<_> = leases
+                .iter()
+                .filter(|l| l.storage_identity() == expected)
+                .collect();
+            assert_eq!(
+                owners.len() + raw.len(),
+                1,
+                "exact Device token retained once"
+            );
+            for lease in raw {
+                assert_eq!(lease.layout(), record.layout);
+            }
+            for owner in owners {
+                assert_eq!(owner.lease.layout(), record.layout);
+                assert_eq!(owner.facts.id, record.id);
+                assert_eq!(owner.facts.generation, record.generation);
+                assert_eq!(owner.facts.device, record.device);
+                assert_eq!(owner.facts.vm, record.vm);
+                assert_eq!(owner.facts.gpu_va, record.gpu_va);
+                assert_eq!(owner.facts.layout, record.layout);
+            }
         }
     }
     pub(crate) fn primary_terminal_identities(&self) -> Vec<SharedGttAllocationIdentityV1> {

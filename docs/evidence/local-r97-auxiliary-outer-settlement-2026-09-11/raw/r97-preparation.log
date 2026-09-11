@@ -1,0 +1,30 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.56s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 23 tests
+test queue::dispatch_binding::preparation::tests::preparation_bind_callers_root_before_loan_and_transfer_after_settlement ... ok
+test queue::dispatch_binding::preparation::tests::preparation_foreign_data_rejection_keeps_the_complete_original_roster ... ok
+test queue::dispatch_binding::preparation::tests::preparation_completed_owner_survives_caller_unwind_before_transfer ... ok
+test queue::dispatch_binding::preparation::tests::preparation_invalid_generation_and_plan_keep_original_inputs ... ok
+test queue::dispatch_binding::preparation::tests::preparation_single_persistent_wrapper_preserves_role_and_generation ... ok
+test queue::dispatch_binding::preparation::tests::preparation_terminal_variant_retains_actual_completed_owner ... ok
+test queue::dispatch_binding::preparation::tests::preparation_generation_owner_precedes_the_first_fallible_stage ... ok
+test queue::dispatch_binding::preparation::tests::preparation_late_packet_resolution_keeps_earlier_packet_and_all_controls ... ok
+test queue::dispatch_binding::preparation::tests::ordinary_constructor_root_preserves_real_preparation_before_control_entry ... ok
+test queue::dispatch_binding::preparation::tests::preparation_three_binding_wrapper_preserves_exact_roles_and_data_effects ... ok
+test queue::dispatch_binding::preparation::tests::persistent_single_bind_settlement_retains_real_data_controls_and_generation ... ok
+test queue::dispatch_binding::preparation::tests::preparation_preserves_mixed_roster_and_full_successful_images ... ok
+test queue::dispatch_binding::preparation::tests::preparation_allocation_projection_failure_keeps_actual_returned_control ... ok
+test queue::dispatch_binding::preparation::tests::persistent_three_bind_settlement_retains_real_roster_controls_roles_and_generation ... ok
+test queue::dispatch_binding::preparation::tests::persistent_replay_settlement_keeps_real_control_and_data_without_rebuilding ... ok
+test queue::dispatch_binding::preparation::tests::preparation_pre_effect_stage_failures_leave_native_state_unchanged ... ok
+test queue::dispatch_binding::preparation::tests::preparation_kernarg_and_commit_stages_retain_all_controls ... ok
+test queue::dispatch_binding::preparation::tests::preparation_seal_native_and_currentness_failures_keep_exact_session_handoff ... ok
+test queue::dispatch_binding::preparation::tests::preparation_mapping_panics_and_currentness_failures_keep_exact_custody ... ok
+test queue::dispatch_binding::preparation::tests::preparation_partial_mapping_keeps_current_session_token_and_prefix ... ok
+test queue::dispatch_binding::preparation::tests::preparation_materialization_access_and_currentness_panics_keep_borrowed_token ... ok
+test queue::dispatch_binding::preparation::tests::preparation_every_program_stage_retains_exact_prefix_on_error_and_panic ... ok
+test queue::dispatch_binding::preparation::tests::preparation_allocation_native_failures_keep_prior_code_and_pending_custody ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 928 filtered out; finished in 1.57s
+

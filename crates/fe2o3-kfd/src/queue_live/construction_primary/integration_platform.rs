@@ -243,11 +243,20 @@ impl PrimaryEnvironmentV1 for Fixture {
         let mut t = trace.borrow_mut();
         assert!(t.poison, "poison must precede cleanup");
         assert_eq!(owner.shadow.unwrap().0, ShadowPhase::Unpublished);
+        let fault = t.cleanup_panic;
+        if fault == Some(false) {
+            drop(t);
+            std::panic::panic_any(("auxiliary cleanup", false));
+        }
         owner.shadow.as_mut().unwrap().0 = ShadowPhase::Disposed;
         if let Some(local) = &mut owner.local_unpublished {
             local.cleanup_terminal();
         }
         t.cleanup += 1;
+        drop(t);
+        if fault == Some(true) {
+            std::panic::panic_any(("auxiliary cleanup", true));
+        }
     }
     fn mark_queue_created(runtime: &mut Owner) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         assert_eq!(runtime.identity.role, Role::Runtime);
@@ -496,6 +505,63 @@ pub(super) fn assert_auxiliary_platform(
                 (output.queue_id().value(), output.doorbell_offset().raw())
             );
         }
+    }
+    assert_platform_partition(owners);
+}
+
+pub(super) fn assert_auxiliary_early_platform(
+    primary: &Root,
+    auxiliary: &crate::queue::live::construction_auxiliary::AuxiliaryConstructionV1<3, Fixture>,
+) {
+    assert!(auxiliary.key.is_none() && auxiliary.outputs.is_none());
+    assert!(auxiliary.completed.is_none() && auxiliary.published.is_none());
+    let mut owners = platform_identities(primary, None);
+    let memory = memory(primary);
+    for (owner, role) in [
+        (auxiliary.runtime.as_ref(), Role::Runtime),
+        (auxiliary.creation_arm.as_ref(), Role::CreationArm),
+        (auxiliary.event.as_ref(), Role::Event),
+        (auxiliary.unpublished.as_ref(), Role::Shadow),
+    ] {
+        if let Some(owner) = owner {
+            owner.validate(role, memory).unwrap();
+            owners.push(owner.identity);
+        }
+    }
+    if let Some(shadows) = &auxiliary.unpublished {
+        let (phase, event, context) = shadows.shadow.unwrap();
+        assert_eq!(
+            phase,
+            if trace().borrow().cleanup_panic == Some(false) {
+                ShadowPhase::Unpublished
+            } else {
+                ShadowPhase::Disposed
+            }
+        );
+        assert_eq!(event, auxiliary.event.as_ref().unwrap().identity);
+        let mut contexts = Vec::new();
+        let mut markers = Vec::new();
+        executable_ids(
+            &auxiliary.context,
+            &mut contexts,
+            &mut markers,
+            Memory::primary_token_identity,
+        );
+        if let Some(prefix) = &auxiliary.resource_prefix {
+            contexts.extend(prefix.primary_context_identity_v1());
+        }
+        if let Some(authority) = &auxiliary.authority {
+            contexts.push(Memory::primary_token_identity(&authority.context_save));
+        }
+        for marker in &markers {
+            assert!(memory.primary_terminal_identities().contains(marker));
+        }
+        contexts.extend(markers);
+        assert_eq!(
+            contexts,
+            [context],
+            "exact auxiliary context owner backs the shadow"
+        );
     }
     assert_platform_partition(owners);
 }

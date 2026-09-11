@@ -1033,6 +1033,11 @@ pub(super) struct CompletionCustodySnapshotV1 {
 
 impl CompletionSignalArenaOwnerV1 {
     #[cfg(test)]
+    pub(super) fn is_poisoned_for_test(&self) -> bool {
+        self.phase == CompletionOwnerPhaseV1::Poisoned
+    }
+
+    #[cfg(test)]
     pub(super) fn custody_snapshot_for_test(&self) -> CompletionCustodySnapshotV1 {
         // Poisoning changes the owner's phase, not its exact slots or ledger storage.
         CompletionCustodySnapshotV1 {

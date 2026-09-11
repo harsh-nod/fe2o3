@@ -2,8 +2,9 @@
 
 use super::*;
 use crate::shared_memory::{
-    PreparationMemoryCallV1 as Call, PreparationMemoryFixtureV1 as Memory,
-    PreparationMemoryObservationV1, PreparationNativeFaultV1 as NativeFault,
+    Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryMappedV1, PreparationMemoryCallV1 as Call,
+    PreparationMemoryFixtureV1 as Memory, PreparationMemoryObservationV1,
+    PreparationNativeFaultV1 as NativeFault, SharedGttAllocationLayoutV1,
     SharedMemorySessionPhaseV1,
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -256,6 +257,53 @@ pub(crate) struct PrimaryPreparationSnapshotV1 {
     kernargs: Vec<Box<[u8]>>,
 }
 
+#[derive(Default)]
+pub(crate) struct PreparationOwnerRefsV1<'a> {
+    pub(crate) shared: Vec<(SharedGttAllocationIdentityV1, SharedGttAllocationLayoutV1)>,
+    pub(crate) device_leases: Vec<&'a Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>>,
+    pub(crate) device_authorities: Vec<&'a Gfx942DeviceMemoryDispatchAuthorityV1>,
+    pub(crate) in_session: Vec<SharedGttAllocationIdentityV1>,
+}
+
+impl<'a> PreparationOwnerRefsV1<'a> {
+    pub(crate) fn data(&mut self, data: &'a [Gfx942FixedDispatchDataV1]) {
+        for data in data {
+            match data.storage_ref() {
+                DispatchDataStorageRefV1::HostVisible(token) => {
+                    self.shared.push((token.storage_identity(), token.layout()));
+                }
+                DispatchDataStorageRefV1::Device(lease) => self.device_leases.push(lease),
+            }
+        }
+    }
+
+    fn authority(&mut self, data: &'a DispatchDataAuthorityV1) {
+        match data {
+            DispatchDataAuthorityV1::HostVisible(authority) => self.shared.push((
+                Memory::primary_token_identity(authority),
+                authority.layout(),
+            )),
+            DispatchDataAuthorityV1::Device(authority) => self.device_authorities.push(authority),
+        }
+    }
+
+    pub(in crate::queue) fn dispatch(&mut self, owner: &'a DispatchResourceOwnerV1) {
+        self.shared.extend(
+            owner
+                .code
+                .iter()
+                .map(|a| (Memory::code_identity(a), a.layout())),
+        );
+        self.shared.push((
+            Memory::kernarg_identity(&owner.kernarg),
+            owner.kernarg.layout(),
+        ));
+        for data in &owner.data {
+            self.authority(data);
+        }
+    }
+}
+
 impl PrimaryPreparationSnapshotV1 {
     pub(crate) fn packets(packets: &[Gfx942FixedDispatchPacketV1]) -> Self {
         Self {
@@ -267,9 +315,50 @@ impl PrimaryPreparationSnapshotV1 {
     pub(crate) fn capture_data(&mut self, data: &[Gfx942FixedDispatchDataV1]) {
         self.data = inputs(data);
     }
+
+    pub(crate) fn assert_data(&self, data: &[Gfx942FixedDispatchDataV1]) {
+        assert_eq!(inputs(data), self.data);
+    }
 }
 
 impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
+    pub(crate) fn primary_collect_owners_v1<'a>(&'a self, out: &mut PreparationOwnerRefsV1<'a>) {
+        out.data(&self.original_data);
+        if let Some(retained) = &self.retained_data {
+            for data in retained.iter() {
+                out.authority(&data.authority);
+            }
+        }
+        for data in &self.data_authorities {
+            out.authority(data);
+        }
+        out.shared.extend(
+            self.code
+                .iter()
+                .map(|a| (Memory::code_identity(a), a.layout())),
+        );
+        match &self.current_code {
+            CodeStageV1::Cpu(t) => out.shared.push((t.storage_identity(), t.layout())),
+            CodeStageV1::Immutable(t) => out.shared.push((t.storage_identity(), t.layout())),
+            CodeStageV1::Mapped(t) => out.shared.push((t.storage_identity(), t.layout())),
+            CodeStageV1::Retained(a) => out.shared.push((Memory::code_identity(a), a.layout())),
+            CodeStageV1::InSession(id) => out.in_session.push(*id),
+            CodeStageV1::Empty | CodeStageV1::Allocating => {}
+        }
+        match &self.kernarg {
+            KernargStageV1::Cpu(t) => out.shared.push((t.storage_identity(), t.layout())),
+            KernargStageV1::Mapped(t) => out.shared.push((t.storage_identity(), t.layout())),
+            KernargStageV1::Retained(a) => {
+                out.shared.push((Memory::kernarg_identity(a), a.layout()))
+            }
+            KernargStageV1::InSession(id) => out.in_session.push(*id),
+            KernargStageV1::Empty | KernargStageV1::Allocating => {}
+        }
+        if let Some(completed) = &self.completed {
+            out.dispatch(completed);
+        }
+    }
+
     pub(crate) fn primary_snapshot_v1(&self) -> PrimaryPreparationSnapshotV1 {
         PrimaryPreparationSnapshotV1 {
             data: inputs(&self.original_data),
@@ -321,6 +410,17 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
         expected: &PrimaryPreparationSnapshotV1,
         transferred: Option<&DispatchResourceOwnerV1>,
     ) {
+        self.primary_assert_descriptors_v1(expected, transferred);
+        if transferred.is_none() {
+            assert_custody(memory, self);
+        }
+    }
+
+    pub(in crate::queue) fn primary_assert_descriptors_v1(
+        &self,
+        expected: &PrimaryPreparationSnapshotV1,
+        transferred: Option<&DispatchResourceOwnerV1>,
+    ) {
         assert_eq!(
             self.packets
                 .iter()
@@ -333,9 +433,7 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
             &expected.data,
             transferred.or(self.completed.as_ref()),
         );
-        if transferred.is_none() {
-            assert_custody(memory, self);
-        } else {
+        if transferred.is_some() {
             assert_eq!(self.stage, PreparationStageV1::Transferred);
             assert!(!self.failed && self.completed.is_none());
         }

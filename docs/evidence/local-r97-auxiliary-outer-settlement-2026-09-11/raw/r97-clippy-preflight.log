@@ -1,0 +1,21 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Checking fe2o3-service-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-service-host)
+error: very complex type used. Consider factoring parts into `type` definitions
+  --> crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_prefix_tests.rs:8:6
+   |
+ 8 |   ) -> (
+   |  ______^
+ 9 | |     Box<Scope>,
+10 | |     Result<(), Box<dyn std::any::Any + Send>>,
+11 | |     Rc<RefCell<Trace>>,
+12 | | ) {
+   | |_^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#type_complexity
+   = note: `-D clippy::type-complexity` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+    Checking fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host)
+error: could not compile `fe2o3-kfd` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

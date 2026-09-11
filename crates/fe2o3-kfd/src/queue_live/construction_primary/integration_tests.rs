@@ -37,6 +37,7 @@ struct Trace {
     create: u8,
     poison: bool,
     cleanup: usize,
+    cleanup_panic: Option<bool>,
     drops: usize,
     session: u64,
     initial_data: Option<crate::shared_memory::PreparationMemoryObservationV1>,
@@ -163,6 +164,13 @@ impl construction::RingMemoryV1 for Memory {
 }
 
 impl PrimaryMemoryV1 for Memory {
+    fn plan_aql_queue_resources(
+        &self,
+        ring_bytes: u32,
+    ) -> Result<Gfx942AqlQueueResourcePlanV1, ComputeAqlQueueSessionErrorV1> {
+        step("plan-auxiliary-resources")?;
+        Ok(queue_resource_plan_for_test_v1(ring_bytes))
+    }
     fn allocate_ring(
         &mut self,
         backing: QueueRingBackingV1,
@@ -633,10 +641,12 @@ fn executable_ids<R>(
     markers.extend(prefix.in_session);
 }
 
-fn assert_partition<P>(root: &Root<P>, mut owners: Vec<SharedGttAllocationIdentityV1>) {
-    let memory = memory(root);
-    let mut markers = Vec::new();
-    if let Some(ring) = &root.ring {
+fn ring_ids(
+    ring: &Option<RingConstructionV1>,
+    owners: &mut Vec<SharedGttAllocationIdentityV1>,
+    markers: &mut Vec<SharedGttAllocationIdentityV1>,
+) {
+    if let Some(ring) = ring {
         match ring {
             RingConstructionV1::Cpu(CpuRingAuthorityV1::AqlSpecial(t)) => {
                 owners.push(t.storage_identity())
@@ -661,6 +671,19 @@ fn assert_partition<P>(root: &Root<P>, mut owners: Vec<SharedGttAllocationIdenti
             RingConstructionV1::Transferred => (),
         }
     }
+}
+
+fn assert_partition<P>(root: &Root<P>, owners: Vec<SharedGttAllocationIdentityV1>) {
+    assert_partition_with_markers(root, owners, Vec::new());
+}
+
+fn assert_partition_with_markers<P>(
+    root: &Root<P>,
+    mut owners: Vec<SharedGttAllocationIdentityV1>,
+    mut markers: Vec<SharedGttAllocationIdentityV1>,
+) {
+    let memory = memory(root);
+    ring_ids(&root.ring, &mut owners, &mut markers);
     mutable_ids(
         &root.control,
         &mut owners,
