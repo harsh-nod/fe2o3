@@ -1353,6 +1353,12 @@ run_rocm_compile() {
         --test production_neutral_workgroup_reduce_driver_v1 \
         ordinary_scan_sources_export_v5_and_execute_every_cpu_observation_path -- \
         --ignored --exact
+  run_step rocm-production-simulation-bundle-v3-typed-layouts \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions -- \
+        --ignored --exact
   run_step rocm-production-integer-scan-overflow \
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \
