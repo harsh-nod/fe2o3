@@ -82,6 +82,7 @@ mod simulation_bundle_v4;
 mod simulation_bundle_v5;
 mod simulation_bundle_v6;
 mod standard_atomics;
+mod terminator_operands_v1;
 mod types;
 mod verify;
 mod wave_operations;

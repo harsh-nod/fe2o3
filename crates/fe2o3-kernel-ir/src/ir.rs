@@ -7,6 +7,9 @@ use crate::{
     SynchronizationScope, TargetCapability, Type, WaveF32ReductionKindV1, WaveWidth, WorkgroupSize,
 };
 
+#[path = "operation_operands_v1.rs"]
+mod operation_operands_v1;
+
 macro_rules! string_id {
     ($name:ident) => {
         #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -656,53 +659,6 @@ impl OperationKind {
             Self::Intrinsic(intrinsic) => Some(intrinsic),
             Self::MemoryIntrinsic(intrinsic) => Some(intrinsic),
             _ => None,
-        }
-    }
-
-    pub fn operands(&self) -> Vec<ValueId> {
-        match self {
-            Self::Constant(_)
-            | Self::Intrinsic(_)
-            | Self::Barrier(_)
-            | Self::Fence(_)
-            | Self::WorkgroupBarrier(_)
-            | Self::WorkgroupMemory(_)
-            | Self::Wave(WaveOperation {
-                kind: WaveOperationKind::LaneId,
-                ..
-            }) => Vec::new(),
-            Self::MemoryIntrinsic(intrinsic) => intrinsic.operands(),
-            Self::Matrix(matrix) => matrix.operands(),
-            Self::Gfx950LdsTranspose(transpose) => transpose.operands(),
-            Self::Unary { operand, .. } => vec![*operand],
-            Self::Binary { lhs, rhs, .. } | Self::Compare { lhs, rhs, .. } => vec![*lhs, *rhs],
-            Self::Cast { value, .. } => vec![*value],
-            Self::Select {
-                condition,
-                true_value,
-                false_value,
-            } => vec![*condition, *true_value, *false_value],
-            Self::Call { arguments, .. } => arguments.clone(),
-            Self::Alloca { count, .. } => count.iter().copied().collect(),
-            Self::SliceLength { slice } | Self::SliceData { slice } => vec![*slice],
-            Self::GetElementPointer { base, offset } => vec![*base, *offset],
-            Self::Load { pointer, .. } => vec![*pointer],
-            Self::GuardedLoad {
-                pointer,
-                predicate,
-                fallback,
-                ..
-            } => vec![*pointer, *predicate, *fallback],
-            Self::GuardedStore {
-                pointer,
-                predicate,
-                value,
-                ..
-            } => vec![*pointer, *predicate, *value],
-            Self::Store { pointer, value, .. } => vec![*pointer, *value],
-            Self::Atomic(atomic) => atomic.operands(),
-            Self::Wave(wave) => wave.operands(),
-            Self::InlineAssembly(assembly) => assembly.operands(),
         }
     }
 }
@@ -1965,51 +1921,6 @@ pub enum Terminator {
 }
 
 impl Terminator {
-    pub fn operands(&self) -> Vec<ValueId> {
-        match self {
-            Self::Branch { arguments, .. } => arguments.clone(),
-            Self::ConditionalBranch {
-                condition,
-                then_arguments,
-                else_arguments,
-                ..
-            } => {
-                let mut operands = vec![*condition];
-                operands.extend(then_arguments);
-                operands.extend(else_arguments);
-                operands
-            }
-            Self::Switch {
-                selector,
-                cases,
-                default_arguments,
-                ..
-            } => {
-                let mut operands = vec![*selector];
-                for case in cases {
-                    operands.extend(&case.arguments);
-                }
-                operands.extend(default_arguments);
-                operands
-            }
-            Self::IntegerSwitch {
-                selector,
-                cases,
-                default_arguments,
-                ..
-            } => {
-                let mut operands = vec![*selector];
-                for case in cases {
-                    operands.extend(&case.arguments);
-                }
-                operands.extend(default_arguments);
-                operands
-            }
-            Self::Return { values } => values.clone(),
-            Self::Unreachable => Vec::new(),
-        }
-    }
-
     pub fn successors(&self) -> Vec<BlockId> {
         match self {
             Self::Branch { target, .. } => vec![*target],

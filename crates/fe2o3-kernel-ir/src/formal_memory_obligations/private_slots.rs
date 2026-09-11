@@ -78,9 +78,9 @@ pub(super) fn classify_eligible_private_slots(
     {
         for (operation_index, operation) in block.operations.iter().enumerate() {
             let location = FunctionOperationLocation::new(block.id, operation_index);
-            for operand in operation.kind.operands() {
+            operation.kind.visit_operands(|operand| {
                 let Some(slot) = exact_slot(operand) else {
-                    continue;
+                    return;
                 };
                 let exact_access = match &operation.kind {
                     OperationKind::Load { pointer, access } => {
@@ -114,7 +114,7 @@ pub(super) fn classify_eligible_private_slots(
                 if !exact_access {
                     escapes.entry(slot).or_insert((location, operand));
                 }
-            }
+            });
         }
 
         let Some(terminator) = &block.terminator else {

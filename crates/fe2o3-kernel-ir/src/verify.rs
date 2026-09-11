@@ -783,16 +783,16 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                         "terminating AMDGPU diagnostic must be the final operation of a block terminated by unreachable",
                     );
                 }
-                for operand in operation.kind.operands() {
+                operation.kind.visit_operands(|operand| {
                     self.verify_use(operand, block.id, Some(operation_index), location.clone());
-                }
+                });
                 self.verify_operation(operation, location);
             }
             if let Some(terminator) = &block.terminator {
                 let location = base_location.clone().at_block(block.id);
-                for operand in terminator.operands() {
+                terminator.visit_operands(|operand| {
                     self.verify_use(operand, block.id, None, location.clone());
-                }
+                });
                 self.verify_terminator(block, terminator, location);
             }
         }
