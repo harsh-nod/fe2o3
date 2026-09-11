@@ -1,0 +1,22 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue_linux::tests::terminal_unpublished_cleanup_retains_metadata_and_rejects_publication",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r92-mutation-shadow.log",
+  "source": "/home/harsh/.codex-tmp/r92-mutation-shadow-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "elapsed_seconds": 28.127
+}

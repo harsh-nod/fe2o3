@@ -1,0 +1,13 @@
+--- a/crates/fe2o3-kfd/src/queue_linux.rs
++++ b/crates/fe2o3-kfd/src/queue_linux.rs
+@@ -107,9 +107,7 @@
+                 if owner == opener_pid && leases != 0);
+         if self.finished
+             || !gate.creation_in_flight
+-            || gate.permanently_poisoned
+-            || gate.teardown_arms != 0
+-            || !enabled_here
++            || (false && (gate.permanently_poisoned || gate.teardown_arms != 0 || !enabled_here))
+         {
+             gate.poison();
+             return Err(LinuxDoorbellErrorV1::Runtime(

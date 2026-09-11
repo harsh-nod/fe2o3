@@ -1,11 +1,19 @@
 # A1/A2 Next-Wave Dispatch
 
+R92 implements the [primary constructor root](runtime-primary-queue-construction-custody-v1.md)
+above signed R91 `a04060137e8df20f434682f7ee4dd6f06fb10174`.
+Its [local evidence](evidence/local-r92-primary-construction-2026-09-11/README.md)
+distinguishes composed helper acceptance from NATIVE-2A.3's complete per-stage
+integration campaign. Native next takes .3, then auxiliary and replacement
+custody. CO-1/2/3 and VER-1A remain independently ready. Callback-internal
+unreturned ownership, proofs, Linux qualification and performance remain open.
+
 R91 implements NATIVE-2A.1 [queue construction handoffs](runtime-queue-construction-handoffs-v1.md)
 above signed planning checkpoint `b66e52d3246a88d76eb30252b9cfe465fa2c9882`.
 Its [local evidence](evidence/local-r91-queue-handoffs-2026-09-11/README.md)
-separates lower-handoff CPU acceptance from the still-open complete constructor
-root. Native next takes NATIVE-2A.2/.3, then 2B auxiliary and 2C replacement;
-CO-1/2/3 and VER-1A remain independently ready. No generated adoption, new
+separates lower-handoff CPU acceptance from the then-open complete constructor
+root. At R91, Native next took NATIVE-2A.2/.3, then 2B auxiliary and 2C replacement;
+R92 now supplies .2. CO-1/2/3 and VER-1A remain independently ready. No generated adoption, new
 adapter proof, Linux qualification or performance is claimed.
 
 The preceding R90 implements CONTROL-3A/B/C/D under the
@@ -110,10 +118,10 @@ Under the current ownership policy workers are read-only; Primary owns edits.
 
 | Worker | First bounded packet | Follow-on queue | Exit gate for first packet |
 | --- | --- | --- | --- |
-| Native: `r66_native_coexistence` | NATIVE-2A.2 primary root and .3 acceptance, then 2B auxiliary and 2C replacement/insertion | NATIVE-3 DATA-ADOPT; ISSUE native interface; SCALE-1A fixtures; native-budget and R76/R78/R82 qualification harnesses; admitted profiles and capacity | Preserve R90 settlement and R91 lower handoffs; root all returned data/control/queue prefixes before later effects. Cover closing retake only in paths that use it. Preserve USERPTR, unpublished cleanup and queue-lifecycle thresholds; return no usable uncertain lane. |
+| Native: `r66_native_coexistence` | NATIVE-2A.3 integrated acceptance, then 2B auxiliary and 2C replacement/insertion | NATIVE-3 DATA-ADOPT; ISSUE native interface; SCALE-1A fixtures; native-budget and R76/R78/R82 qualification harnesses; admitted profiles and capacity | Exercise R92 primary custody with exact same-session per-stage failures. Cover closing retake only in paths that use it. Preserve USERPTR, unpublished cleanup and queue-lifecycle thresholds; return no usable uncertain lane. |
 | Admission: `r66_runtime_coexistence` | CO-1 outcome contract, then CO-2 identity and CO-3 reply/custody fixtures | CO-4 native completion integration with ISSUE -> COMPLETE -> API -> generated graph/drain | Runtime fixtures count data-only completion-adapter calls without reversing the host/runtime dependency. Actual R85/native integration follows adoption and issue; no duplicate decoder or reply reservation. |
 | Resources: `r66_coexistence_model` | VER-1A.1 contract/inventory -> .2 model -> .3 journal -> .4 initial write/copy hooks -> .5 acceptance | VER-1B complete hooks; aggregate domains; remaining backing/control/code budgets; VER-2 leases; MEM-5 closure | Nonwrapping Available/Pending/Unknown whole-allocation versions; bounded, atomic whole-roster admission/settlement. Cross-run leases remain disabled until every mutation hook is integrated. |
-| Primary | Implement the remaining native/runtime/journal packets and DATA-ADOPT above R91 | Cross-review, executable refinement, signed hardware qualification and matched performance | Serialize shared edits/builds/proofs and preserve R80 credit ownership. Accept CPU, proof, Linux and performance results separately; publish signed source/evidence to both topic remotes. |
+| Primary | Implement the remaining native/runtime/journal packets and DATA-ADOPT above R92 | Cross-review, executable refinement, signed hardware qualification and matched performance | Serialize shared edits/builds/proofs and preserve R80 credit ownership. Accept CPU, proof, Linux and performance results separately; publish signed source/evidence to both topic remotes. |
 
 ADOPT-LIFE and DATA-ADOPT are coupled contracts; neither may introduce effects
 before their custody interface is integrated. VER-1A is independent. COMPLETE's
@@ -126,7 +134,7 @@ The critical path is:
 
 ```text
 accepted R84 + R83 + R82 + R80 -> DATA-ADOPT
-R86 through R90 + R91 lower handoffs -> remaining NATIVE-2 custody -> DATA-ADOPT
+R86 through R91 + R92 primary root -> remaining NATIVE-2 custody -> DATA-ADOPT
 DATA-ADOPT + CO-1/2/3 -> ISSUE -> CO-4 / COMPLETE -> API -> GRAPH/DRAIN
 accepted R85 private host substrate + ISSUE -> runtime COMPLETE
 VER-1A -> complete VER-1B mutation hooks -> VER-2 cross-run input leases

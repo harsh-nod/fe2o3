@@ -1,0 +1,22 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 27.74s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue_linux::tests::terminal_unpublished_cleanup_retains_metadata_and_rejects_publication ... FAILED
+
+failures:
+
+---- queue_linux::tests::terminal_unpublished_cleanup_retains_metadata_and_rejects_publication stdout ----
+
+thread 'queue_linux::tests::terminal_unpublished_cleanup_retains_metadata_and_rejects_publication' (1139129) panicked at crates/fe2o3-kfd/src/queue_linux.rs:2073:46:
+called `Option::unwrap()` on a `None` value
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue_linux::tests::terminal_unpublished_cleanup_retains_metadata_and_rejects_publication
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 910 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

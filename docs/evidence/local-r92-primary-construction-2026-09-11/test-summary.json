@@ -1,0 +1,142 @@
+{
+  "gnu-tests": {
+    "passed": 2491,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "musl-tests": {
+    "passed": 2491,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "gnu-docs": {
+    "passed": 108,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 7
+  },
+  "musl-docs": {
+    "passed": 91,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 5
+  },
+  "musl-host-docs": {
+    "passed": 16,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 2
+  },
+  "gnu-host": {
+    "passed": 258,
+    "failed": 0,
+    "ignored": 4,
+    "harnesses": 1
+  },
+  "musl-host": {
+    "passed": 141,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "macro-fixtures": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "primary": {
+    "passed": 8,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "ordinary": {
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "construction": {
+    "passed": 6,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "linux-helpers": {
+    "passed": 20,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "initialization": {
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "transitions": {
+    "passed": 20,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "preparation": {
+    "passed": 23,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "bind": {
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "base_commit": "a04060137e8df20f434682f7ee4dd6f06fb10174",
+  "final_gate_attempt": "r92-final",
+  "non_documentation_source_identities_checked": 5635,
+  "new_kfd_cpu_test_functions": 13,
+  "native2a2_primary_root_implemented": true,
+  "ordinary_fixed_preparation_rooted_before_validation": true,
+  "returned_generic_preparation_rooted": true,
+  "full_native2a3_per_stage_integration_accepted": false,
+  "auxiliary_constructor_outer_custody": false,
+  "replacement_preparation_outer_custody": false,
+  "unreturned_callback_values_retained": false,
+  "new_bootstrap_backing_charges": false,
+  "native_generated_adoption_hooks_installed": false,
+  "linux_qualified": false,
+  "adapter_refinement_proved": false,
+  "gpu_performance_measured": false,
+  "verus_solver_rerun": false,
+  "new_verus_theorems": 0,
+  "negative_inventory_files": 686,
+  "model_and_proof_sources_unchanged_from": "fb1e27e66cee27bb11f0b7c08f2d5994c5d168da",
+  "expected_negative_mutations": [
+    {
+      "name": "cleanup",
+      "source": "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+      "assertion": "retained terminal allocation",
+      "mutated_source_sha256": "678092b32eda3b76dd50ef86027e6196aee738ed98457768eed8a60b1d3805ec",
+      "patch_sha256": "0b3aa4d54580cc28b75f51a1550468c56be3080fbc6aae91db154d743280a5b6"
+    },
+    {
+      "name": "gate",
+      "source": "crates/fe2o3-kfd/src/queue_linux.rs",
+      "assertion": "assertion failed: result.is_err()",
+      "mutated_source_sha256": "be5df298bee5793e7079d3e349d2a9bc73437c6301cba536c7316d844e502cc1",
+      "patch_sha256": "d62ce22eb0d18e75a2293d76067f5ca735c435a0450c6708474b3ef13932155e"
+    },
+    {
+      "name": "shadow",
+      "source": "crates/fe2o3-kfd/src/queue_linux.rs",
+      "assertion": "called `Option::unwrap()` on a `None` value",
+      "mutated_source_sha256": "ad5b37727a1f9d574408dece95af5ad18f378bfdb07ef39c56f3585dee0d9550",
+      "patch_sha256": "ce3ac8dceaaac89111ee6051d67398552e7ac43be1ae2749234f99e34a939ce1"
+    }
+  ],
+  "production_metadata_sha256": "6c0cac53358224a31c356d91228b602ae8545f7c156a0c695f103533238054ca"
+}

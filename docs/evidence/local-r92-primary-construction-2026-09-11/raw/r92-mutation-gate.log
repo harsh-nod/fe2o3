@@ -1,0 +1,24 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 26.93s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue_linux::tests::checked_creation_finalization_requires_healthy_admitted_runtime ... FAILED
+
+failures:
+
+---- queue_linux::tests::checked_creation_finalization_requires_healthy_admitted_runtime stdout ----
+
+thread 'queue_linux::tests::checked_creation_finalization_requires_healthy_admitted_runtime' (1136371) panicked at crates/fe2o3-kfd/src/queue_linux.rs:2325:17:
+assertion failed: result.is_err()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue_linux::tests::checked_creation_finalization_requires_healthy_admitted_runtime
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 910 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

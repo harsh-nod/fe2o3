@@ -289,4 +289,19 @@ impl QueueConstructionMemoryFixtureV1 {
         assert!(!record.free_attempted);
         assert_eq!(&self.calls()[5..], &[0, 0, 0]);
     }
+
+    pub(crate) fn terminal_native_progress(&self) -> (bool, Option<bool>, Option<u32>) {
+        let progress = &self
+            .fixture
+            .engine
+            .terminal_transition
+            .as_ref()
+            .unwrap()
+            .progress;
+        (
+            progress.attempted,
+            progress.returned_success,
+            progress.returned_map_prefix,
+        )
+    }
 }

@@ -234,8 +234,13 @@ use fe2o3_aql::{
 mod compute_sdma_coexistence;
 #[path = "queue_live/construction.rs"]
 mod construction;
+#[path = "queue_live/construction_primary.rs"]
+mod construction_primary;
 pub use compute_sdma_coexistence::Gfx942R66NativeObservationFailureV1;
 use construction::{QueueResourcePrefixV1, RingConstructionV1};
+#[cfg(test)]
+pub(super) use construction_primary::settle_queue_constructor_fixture_v1;
+use construction_primary::{PrimaryQueueConstructionV1, capture_returned_preparation_v1};
 #[allow(unsafe_code)]
 #[path = "queue_dispatch_live.rs"]
 mod dispatch;
@@ -4785,20 +4790,29 @@ impl CheckedGfx942XnackMinusDevice {
             self.observation().unique_id(),
             ring_bytes,
         )?;
-        let mut memory = self.acquire_shared_gtt_memory_session_with_backing_budgets_v1(
+        let memory = self.acquire_shared_gtt_memory_session_with_backing_budgets_v1(
             device_backing_budget,
             host_visible_backing_budget,
         )?;
-        let prepared = prepare(&mut memory)?;
-        let session = ComputeAqlQueueSessionV1::create_compute_aql_queue_inner(
-            memory,
-            geometry,
-            ring_bytes,
-            QueueRingBackingV1::AqlSpecial,
-            |_| Ok(None),
-            external_runtime,
-        )?;
-        Ok((session, prepared))
+        let root = PrimaryQueueConstructionV1::new(memory, None);
+        let mut root = root.run(|root, entry| {
+            capture_returned_preparation_v1(
+                root.memory.as_mut().expect("construction memory"),
+                &mut root.preparation,
+                prepare,
+            )?;
+            root.construct(
+                entry,
+                geometry,
+                ring_bytes,
+                QueueRingBackingV1::AqlSpecial,
+                external_runtime,
+            )
+        })?;
+        Ok((
+            root.completed.take().expect("validated completed queue"),
+            root.preparation.take().expect("returned preparation"),
+        ))
     }
 
     /// Runs one fresh-queue BARRIER_AND liveness probe through full teardown.
@@ -6376,7 +6390,7 @@ impl ComputeAqlQueueSessionV1 {
     }
 
     fn create_compute_aql_queue_inner(
-        mut memory: SharedGttMemorySessionV1,
+        memory: SharedGttMemorySessionV1,
         geometry: Gfx942AqlQueueResourcePlanV1,
         ring_bytes: u32,
         ring_backing: QueueRingBackingV1,
@@ -6388,318 +6402,12 @@ impl ComputeAqlQueueSessionV1 {
         >,
         external_runtime: Option<ExternalRuntimeV1<'_>>,
     ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
-        let dispatch = prepare_dispatch(&mut memory)?;
-
-        let ring = CpuRingAuthorityV1::allocate(
-            &mut memory,
-            ring_backing,
-            usize::try_from(ring_bytes)
-                .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("ring size conversion"))?,
-        )?;
-        Self::create_compute_aql_queue_after_userptr_control_entry(
-            memory,
-            geometry,
-            ring_bytes,
-            ring,
-            dispatch,
-            external_runtime,
-        )
-        .map_err(terminal_userptr_control_creation)
-    }
-
-    fn create_compute_aql_queue_after_userptr_control_entry(
-        mut memory: SharedGttMemorySessionV1,
-        geometry: Gfx942AqlQueueResourcePlanV1,
-        ring_bytes: u32,
-        mut ring: CpuRingAuthorityV1,
-        dispatch: Option<DispatchResourceOwnerV1>,
-        mut external_runtime: Option<ExternalRuntimeV1<'_>>,
-    ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
-        let mut control = memory.allocate_userptr_aql_control()?;
-        let mut completion_signals =
-            memory.allocate_host_visible_coherent(COMPLETION_SIGNAL_ARENA_BYTES_V1)?;
-        let mut eop = memory.allocate_executable(
-            usize::try_from(geometry.end_of_pipe().mapping_bytes())
-                .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("EOP size conversion"))?,
-        )?;
-        let mut context_save = memory.allocate_executable(
-            usize::try_from(geometry.context_save().mapping_bytes()).map_err(|_| {
-                ComputeAqlQueueSessionErrorV1::Contract("context-save size conversion")
-            })?,
-        )?;
-        let ring_initialization = ring.initialize_invalid(&mut memory)?;
-        ring_initialization
-            .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("INVALID ring initialization"))?;
-        let control_initialization =
-            memory.with_bytes_mut(&mut control, initialize_amd_aql_control)?;
-        control_initialization.map_err(|_| {
-            ComputeAqlQueueSessionErrorV1::Contract("AMD AQL control initialization")
+        let root = PrimaryQueueConstructionV1::new(memory, ());
+        let mut root = root.run(|root, entry| {
+            root.dispatch = prepare_dispatch(root.memory.as_mut().expect("construction memory"))?;
+            root.construct(entry, geometry, ring_bytes, ring_backing, external_runtime)
         })?;
-        let completion_initialization = memory.with_bytes_mut(
-            &mut completion_signals,
-            initialize_pending_completion_signal_arena,
-        )?;
-        completion_initialization?;
-        memory.with_bytes_mut(&mut eop, |bytes| bytes.fill(0))?;
-        memory.with_bytes_mut(&mut context_save, |bytes| bytes.fill(0))?;
-        memory.check_queue_currentness()?;
-        let mut owned_runtime = None;
-        match external_runtime.as_mut() {
-            Some((runtime, control)) => {
-                let runtime = runtime
-                    .as_ref()
-                    .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                        "missing debug runtime authority",
-                    ))?;
-                let control = control
-                    .as_ref()
-                    .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                        "missing debug runtime control descriptor",
-                    ))?;
-                runtime.validate_active(control.opened.fd.as_fd(), control.opened.opener_pid)?;
-            }
-            None => {
-                let runtime =
-                    match LinuxKfdRuntimeEnabledV1::enable(memory.kfd_fd(), memory.opener_pid()) {
-                        Ok(runtime) => runtime,
-                        Err(error) => {
-                            let _ = memory.quarantine_queue_composition(
-                                "RUNTIME_ENABLE enable ambiguous failure",
-                            );
-                            return Err(error.into());
-                        }
-                    };
-                owned_runtime = Some(runtime);
-            }
-        }
-        if let Some((runtime, control)) = external_runtime.as_ref() {
-            let runtime = runtime.as_ref().expect("validated debug runtime authority");
-            let control = control
-                .as_ref()
-                .expect("validated debug runtime control descriptor");
-            runtime.validate_active(control.opened.fd.as_fd(), control.opened.opener_pid)?;
-        } else {
-            owned_runtime
-                .as_ref()
-                .expect("enabled queue runtime")
-                .validate_active(memory.kfd_fd(), memory.opener_pid())?;
-        }
-        memory.check_queue_currentness()?;
-        let (mut runtime, runtime_control) = match external_runtime.as_mut() {
-            Some((runtime, control)) => (
-                runtime.take().expect("validated debug runtime authority"),
-                Some(
-                    control
-                        .take()
-                        .expect("validated debug runtime control descriptor"),
-                ),
-            ),
-            None => (owned_runtime.take().expect("enabled queue runtime"), None),
-        };
-        // Event creation is the first queue-lifecycle mutation. Debug runtime
-        // authority has left the original token before this boundary, so no
-        // later failure can issue a stale no-queue disable transition.
-        let event = match LinuxQueueExceptionEventV1::create(memory.kfd_fd(), memory.opener_pid()) {
-            Ok(event) => event,
-            Err(error) => {
-                let _ = memory.quarantine_queue_composition("CREATE_EVENT ambiguous failure");
-                return Err(error.into());
-            }
-        };
-        memory.check_queue_currentness()?;
-        let shadow_plan = memory.cwsr_shadow_plan(&context_save)?;
-        let unpublished_shadows = match LinuxCwsrShadowPagesV1::install(shadow_plan, &event) {
-            Ok(shadows) => shadows,
-            Err(error) => {
-                let _ = memory.quarantine_queue_composition("CWSR shadow setup failure");
-                return Err(error.into());
-            }
-        };
-        let cwsr_initialization = match memory.with_bytes_mut(&mut context_save, |bytes| {
-            unpublished_shadows
-                .shadows()
-                .initialize_and_validate_bo_headers(bytes)
-        }) {
-            Ok(initialization) => initialization,
-            Err(error) => {
-                let _ = memory.quarantine_queue_composition("CWSR BO initialization failure");
-                return Err(error.into());
-            }
-        };
-        if cwsr_initialization.is_err() {
-            let _ = memory.quarantine_queue_composition("CWSR header readback failure");
-            return Err(ComputeAqlQueueSessionErrorV1::Contract(
-                "gfx942 CWSR header initialization",
-            ));
-        }
-        if let Some(control) = runtime_control.as_ref() {
-            runtime.validate_active(control.opened.fd.as_fd(), control.opened.opener_pid)?;
-        } else {
-            runtime.validate_active(memory.kfd_fd(), memory.opener_pid())?;
-        }
-        event.validate_live_with_shadows(
-            memory.kfd_fd(),
-            memory.opener_pid(),
-            unpublished_shadows.shadows(),
-        )?;
-        memory.check_queue_currentness()?;
-        let eop = memory.seal_executable(eop)?;
-        let context_save = memory.seal_executable(context_save)?;
-        unpublished_shadows
-            .shadows()
-            .restore_kernel_write_access_after_bo_seal()?;
-        let mut ring = RingConstructionV1::Cpu(ring);
-        ring.map_in_place(&mut memory)?;
-        ring.retain_in_place(&mut memory)?;
-        let control = memory.map_to_gpu(control)?;
-        let completion_signals = memory.map_to_gpu(completion_signals)?;
-        let eop = memory.map_executable_to_gpu(eop)?;
-        let context_save = memory.map_executable_to_gpu(context_save)?;
-        let control = memory.retain_aql_control_resource(control)?;
-        let completion_signals =
-            memory.retain_aql_completion_signal_resource(completion_signals)?;
-        let eop = memory.retain_aql_eop_resource(eop)?;
-        let context_save = memory.retain_aql_context_save_resource(context_save)?;
-        let mut resource_prefix =
-            QueueResourcePrefixV1::new(ring.take_retained()?, control, eop, context_save);
-        resource_prefix.build_in_place(memory.queue_model_device(), geometry)?;
-        let mut authority = Some(resource_prefix.take_complete()?);
-        let completion_owner = CompletionSignalArenaOwnerV1::new(
-            authority
-                .as_ref()
-                .expect("completed resources")
-                .view
-                .plan
-                .queue,
-            completion_signals.facts(),
-        )?;
-        let submission = NativeAqlSubmissionOwnerV1::new(ring_bytes)
-            .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("AQL ring submission model"))?;
-        let foundation = match dispatch.as_ref() {
-            Some(dispatch) => {
-                let device_authorities = dispatch.device_authorities_inline_v1();
-                memory.take_queue_model_foundation_with_dispatch_memory(&device_authorities)?
-            }
-            None => memory.take_queue_model_foundation()?,
-        };
-        let backend = LinuxNativeQueueBackendV1 {
-            session: memory,
-            foundation: Some(foundation),
-            foundation_in_engine: false,
-        };
-        let mut initialization = NativeQueueEngineInitializationV1::new(backend);
-        let mut engine = initialization.initialize().map_err(map_native)?;
-        let key = match engine.admit_in_place(&mut authority) {
-            Ok(key) => key,
-            Err(error @ NativeQueueAdapterErrorV1::AuthorityPoisoned) => {
-                permanently_poison_process_global_kfd_runtime_gate_v1();
-                return Err(terminal_creation(
-                    "queue model admission",
-                    map_native(error),
-                ));
-            }
-            Err(error) => return Err(map_native(error)),
-        };
-        let mut shadows = None;
-        engine
-            .create_at_native_boundary(key, || {
-                // The backend call is the first boundary where KFD may retain
-                // the header's payload pointer. Ambiguous native effects from
-                // this point require process teardown.
-                shadows = Some(unpublished_shadows.publish_for_native_queue_creation());
-            })
-            .map_err(map_create)?;
-        let shadows = shadows.expect("native CREATE_QUEUE boundary published CWSR shadows");
-        runtime
-            .mark_queue_created()
-            .map_err(|error| terminal_creation("runtime queue-live transition", error.into()))?;
-        let outputs = engine.create_outputs(key).ok_or_else(|| {
-            terminal_creation(
-                "CREATE_QUEUE output recovery",
-                ComputeAqlQueueSessionErrorV1::Contract("missing CREATE outputs"),
-            )
-        })?;
-        let queue_id = engine.native_queue_id(key).ok_or_else(|| {
-            terminal_creation(
-                "CREATE_QUEUE identity recovery",
-                ComputeAqlQueueSessionErrorV1::Contract("missing queue id"),
-            )
-        })?;
-        let mut session = ComputeAqlQueueSessionV1 {
-            engine: Some(engine),
-            key,
-            compute_lane_session: key,
-            doorbell: None,
-            submission: Some(submission),
-            completion_signals: Some(completion_signals),
-            completion_owner,
-            dependency_owner: ComputeDependencySessionOwnerV1::new(key.id.0).map_err(|_| {
-                terminal_creation(
-                    "compute dependency session owner",
-                    ComputeAqlQueueSessionErrorV1::Contract(
-                        "invalid compute dependency session occurrence",
-                    ),
-                )
-            })?,
-            terminal_dependency: None,
-            dispatch,
-            unpublished_dispatch: UnpublishedDispatchStateV1::default(),
-            detached_data_count: 0,
-            detached_dispatch_generation: None,
-            detached_data_identities: Vec::new(),
-            detached_next_insertion_index: None,
-            persistent_compute: None,
-            #[cfg(test)]
-            persistent_compute_test_release: None,
-            next_persistent_compute_generation: 1,
-            exception: Some(QueueExceptionStateV1 {
-                runtime,
-                runtime_control,
-                event,
-                shadows,
-            }),
-            sdma: None,
-            striped_sdma: None,
-            sdma_outstanding_buffers: 0,
-            sdma_pool_free: Vec::new(),
-            sdma_pool_reuse_count: 0,
-            sdma_device_pool: SdmaDevicePoolConfigurationV1::default(),
-            sdma_host_pool_limits: None,
-            terminal_poisoned: false,
-            observation: ComputeAqlQueueObservationV1 {
-                queue_id,
-                ring_bytes,
-                doorbell_slice_bytes: 0,
-                doorbell_byte_offset: 0,
-                event_id: 0,
-                cwsr_shadow_pages: 0,
-            },
-            auxiliary_compute_lanes: Vec::new(),
-        };
-        let exception = session.exception.as_ref().expect("queue exception state");
-        session.observation.event_id = exception.event.event_id_observation();
-        session.observation.cwsr_shadow_pages =
-            u8::try_from(crate::queue_linux::GFX942_CWSR_SHADOW_PAGES_V1).map_err(|_| {
-                terminal_creation(
-                    "CWSR shadow page count",
-                    ComputeAqlQueueSessionErrorV1::Contract("CWSR shadow page count"),
-                )
-            })?;
-        session
-            .check_currentness()
-            .map_err(|error| terminal_creation("post-create currentness before doorbell", error))?;
-        let doorbell = {
-            let engine = session.engine.as_ref().expect("session engine");
-            LinuxDoorbellSliceV1::map(engine.backend.session.kfd_fd(), outputs, engine.opener_pid)
-        }
-        .map_err(|error| terminal_creation("doorbell mapping", error.into()))?;
-        session.observation.doorbell_slice_bytes = doorbell.slice_bytes();
-        session.observation.doorbell_byte_offset = doorbell.queue_byte_offset();
-        session.doorbell = Some(doorbell);
-        session
-            .check_currentness()
-            .map_err(|error| terminal_creation("post-doorbell currentness", error))?;
-        Ok(session)
+        Ok(root.completed.take().expect("validated completed queue"))
     }
 
     pub const fn observation(&self) -> ComputeAqlQueueObservationV1 {
@@ -14591,17 +14299,6 @@ fn terminal_creation(
     }
 }
 
-fn terminal_userptr_control_creation(
-    error: ComputeAqlQueueSessionErrorV1,
-) -> ComputeAqlQueueSessionErrorV1 {
-    permanently_poison_process_global_kfd_runtime_gate_v1();
-    if error.is_terminal_creation() {
-        error
-    } else {
-        terminal_creation("USERPTR queue-control creation", error)
-    }
-}
-
 fn map_create(error: NativeQueueAdapterErrorV1) -> ComputeAqlQueueSessionErrorV1 {
     if matches!(
         error,
@@ -15043,11 +14740,14 @@ mod tests {
             arguments,
             ["device_backing_budget", "host_visible_backing_budget"]
         );
-        let prepare = constructor.find("prepare(&mut memory)?").unwrap();
-        let create = constructor
-            .find("ComputeAqlQueueSessionV1::create_compute_aql_queue_inner(")
+        let root = constructor
+            .find("PrimaryQueueConstructionV1::new(memory, None)")
             .unwrap();
-        assert!(acquire < prepare && prepare < create);
+        let prepare = constructor
+            .find("capture_returned_preparation_v1(")
+            .unwrap();
+        let create = constructor.find("root.construct(").unwrap();
+        assert!(acquire < root && root < prepare && prepare < create);
         assert!(production.contains(
             "self.create_compute_aql_queue_with_runtime(ring_bytes, prepare, None, None, None)"
         ));
@@ -15116,7 +14816,10 @@ mod tests {
         assert_eq!(
             production
                 .matches("ComputeDependencySessionOwnerV1::new(key.id.0)")
-                .count(),
+                .count()
+                + include_str!("queue_live/construction_primary.rs")
+                    .matches("ComputeDependencySessionOwnerV1::new(key.id.0)")
+                    .count(),
             1
         );
         let lane_state = production
@@ -19309,9 +19012,9 @@ mod tests {
             Gfx942BarrierProbeRingBackingV1::ExecutableGttOneX,
             Gfx942BarrierProbeRingBackingV1::UserptrOneX,
         ] {
-            let error = terminal_userptr_control_creation(ComputeAqlQueueSessionErrorV1::Contract(
-                "control fault injection",
-            ));
+            let error = construction_primary::terminal_control_failure_for_test(
+                ComputeAqlQueueSessionErrorV1::Contract("control fault injection"),
+            );
             assert!(error.is_terminal_creation());
             let failure = barrier_probe_creation_failure(error, backing);
             assert!(matches!(
@@ -19949,51 +19652,88 @@ mod tests {
 
     #[test]
     fn production_handoff_precedes_event_create_and_all_fallible_queue_steps() {
-        let source = include_str!("queue_live.rs");
-        let body = source
-            .split("fn create_compute_aql_queue_after_userptr_control_entry(")
+        let source = include_str!("queue_live/construction_primary.rs");
+        let runtime = source
+            .split("fn prepare_runtime_and_shadows(")
             .nth(1)
             .unwrap()
-            .split("pub const fn observation")
+            .split("fn map_and_retain_resources(")
             .next()
             .unwrap();
-        let handoff = body
+        let enable = runtime.find("LinuxKfdRuntimeEnabledV1::enable").unwrap();
+        let handoff = runtime
             .find("runtime.take().expect(\"validated debug runtime authority\")")
             .unwrap();
-        let event_create = body.find("LinuxQueueExceptionEventV1::create").unwrap();
-        let native_boundary = body
-            .find("engine\n            .create_at_native_boundary")
+        let arm = runtime
+            .find("arm_process_global_kfd_runtime_gate_for_creation_v1()")
             .unwrap();
-        let unpublished_payload_disarm = body
-            .find("unpublished_shadows.publish_for_native_queue_creation()")
+        let event = runtime.find("LinuxQueueExceptionEventV1::create").unwrap();
+        let shadows = runtime.find("LinuxCwsrShadowPagesV1::install").unwrap();
+        assert!(enable < handoff && handoff < arm && arm < event && event < shadows);
+        assert!(!runtime.contains("publish_for_native_queue_creation"));
+
+        let construct = source
+            .split("pub(super) fn construct(")
+            .nth(1)
+            .unwrap()
+            .split("fn prepare_runtime_and_shadows(")
+            .next()
             .unwrap();
-        assert!(handoff < event_create);
-        assert!(event_create < native_boundary);
-        assert!(native_boundary < unpublished_payload_disarm);
-        for post_handoff_step in [
-            "LinuxCwsrShadowPagesV1::install",
-            "initialize_and_validate_bo_headers",
-            "memory.seal_executable(eop)",
-            "ring.map_in_place(&mut memory)",
-            "ring.retain_in_place(&mut memory)",
-            "memory.take_queue_model_foundation()?",
-            "NativeQueueEngineInitializationV1::new(backend)",
-            "initialization.initialize()",
-            "NativeAqlSubmissionOwnerV1::new(ring_bytes)",
-            "create_at_native_boundary(key",
-            "mark_queue_created()",
-            ".create_outputs(key)",
-            ".native_queue_id(key)",
-            "let mut session = ComputeAqlQueueSessionV1",
-            "session\n            .check_currentness()",
-            "LinuxDoorbellSliceV1::map",
-            "session.doorbell = Some(doorbell)",
-        ] {
-            assert!(
-                event_create < body.find(post_handoff_step).unwrap(),
-                "{post_handoff_step}"
-            );
-        }
+        let control_entry = construct
+            .find("entry.enter(\"USERPTR queue-control creation\")")
+            .unwrap();
+        let control = construct
+            .find("memory.allocate_userptr_aql_control()")
+            .unwrap();
+        let runtime = construct.find("self.prepare_runtime_and_shadows(").unwrap();
+        let mapping = construct.find("self.map_and_retain_resources(").unwrap();
+        let create = construct.find("self.create_and_assemble(").unwrap();
+        let doorbell = construct.find("self.finish_doorbell()?").unwrap();
+        let finish = construct.find(".finish_checked(pid)?").unwrap();
+        assert!(
+            control_entry < control
+                && control < runtime
+                && runtime < mapping
+                && mapping < create
+                && create < doorbell
+                && doorbell < finish
+        );
+
+        let create = source
+            .split("fn create_and_assemble(")
+            .nth(1)
+            .unwrap()
+            .split("fn finish_doorbell(")
+            .next()
+            .unwrap();
+        let native = create.find(".create_at_native_boundary(key").unwrap();
+        let publish = create.find(".publish_for_native_queue_creation()").unwrap();
+        let dependency = create
+            .find("ComputeDependencySessionOwnerV1::new(key.id.0)")
+            .unwrap();
+        let assembled = create
+            .find("self.completed = Some(ComputeAqlQueueSessionV1")
+            .unwrap();
+        assert!(native < publish && publish < dependency && dependency < assembled);
+        assert_eq!(
+            create.matches("publish_for_native_queue_creation").count(),
+            1
+        );
+        let commit = &create[assembled..];
+        assert!(!commit.contains('?'));
+
+        let doorbell = source
+            .split("fn finish_doorbell(")
+            .nth(1)
+            .unwrap()
+            .split("fn run_rooted_construction_v1")
+            .next()
+            .unwrap();
+        assert!(doorbell.contains("self.completed.as_mut()"));
+        assert_eq!(doorbell.matches(".check_currentness()").count(), 2);
+        let map = doorbell.find("LinuxDoorbellSliceV1::map").unwrap();
+        let observation = doorbell.find("doorbell.slice_bytes()").unwrap();
+        assert!(doorbell.find("session.doorbell = Some(").unwrap() < map && map < observation);
     }
 
     #[test]

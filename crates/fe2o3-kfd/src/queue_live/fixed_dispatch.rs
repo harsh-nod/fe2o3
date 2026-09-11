@@ -55,20 +55,32 @@ impl SharedGttMemorySessionV1 {
         packets: [Gfx942FixedDispatchPacketV1; N],
         data: Vec<Gfx942FixedDispatchDataV1>,
     ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
-        validate_fixed_batch_ring::<N>(ring_bytes)?;
-        let geometry = self.plan_aql_queue_resources(ring_bytes)?;
-        ComputeAqlQueueSessionV1::create_compute_aql_queue_inner(
+        let root = PrimaryQueueConstructionV1::new(
             self,
-            geometry,
-            ring_bytes,
-            QueueRingBackingV1::AqlSpecial,
-            move |memory| {
-                prepare_public_fixed_dispatch_resources(memory, programs, packets, data)
-                    .map(Some)
-                    .map_err(ComputeAqlQueueSessionErrorV1::DispatchBinding)
-            },
-            None,
-        )
+            (
+                programs,
+                FixedDispatchPreparationCustodyV1::new(packets, data),
+            ),
+        );
+        let mut root = root.run(|root, entry| {
+            validate_fixed_batch_ring::<N>(ring_bytes)?;
+            let memory = root.memory.as_mut().expect("construction memory");
+            let geometry = memory.plan_aql_queue_resources(ring_bytes)?;
+            super::super::dispatch_binding::prepare_public_fixed_dispatch_resources_in_place(
+                memory,
+                &root.preparation.0,
+                &mut root.preparation.1,
+            )?;
+            root.dispatch = Some(root.preparation.1.take_completed()?);
+            root.construct(
+                entry,
+                geometry,
+                ring_bytes,
+                QueueRingBackingV1::AqlSpecial,
+                None,
+            )
+        })?;
+        Ok(root.completed.take().expect("validated completed queue"))
     }
 }
 

@@ -1,0 +1,11 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+warning: function `terminal_userptr_control_creation` is never used
+     --> crates/fe2o3-kfd/src/queue_live.rs:14296:4
+      |
+14296 | fn terminal_userptr_control_creation(
+      |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      |
+      = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fe2o3-kfd` (lib) generated 1 warning
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.38s

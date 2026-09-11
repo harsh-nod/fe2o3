@@ -247,12 +247,7 @@ fn run<const N: usize>(
     owner: &mut FixedDispatchPreparationCustodyV1<N>,
     memory: &mut Memory,
 ) -> Result<(), Gfx942DispatchBindingErrorV1> {
-    owner.prepare_in_place(
-        memory,
-        &programs(),
-        DispatchGenerationOwnerV1::new(),
-        PersistentFixedDispatchControlStateV1::Ordinary,
-    )
+    prepare_public_fixed_dispatch_resources_in_place(memory, &programs(), owner)
 }
 
 fn stage_fault(stage: PreparationStageV1, panic: bool, configured: bool) {
@@ -316,6 +311,59 @@ fn stage_fault(stage: PreparationStageV1, panic: bool, configured: bool) {
     assert!(run(&mut owner, &mut memory).is_err());
     assert_eq!(memory.observation(), unchanged);
     assert_custody(&memory, &owner);
+}
+
+#[test]
+fn ordinary_constructor_root_preserves_real_preparation_before_control_entry() {
+    use std::cell::RefCell;
+    for prepared in [false, true] {
+        for panics in [false, true] {
+            let mut memory = Memory::new(true);
+            let data = memory.roster();
+            let expected = inputs(&data);
+            let before = memory.observation();
+            let owner = FixedDispatchPreparationCustodyV1::new([packet(0)], data);
+            let root = Box::new((memory, owner));
+            let original = &*root as *const _;
+            let retained = RefCell::new(None);
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                crate::queue::live::settle_queue_constructor_fixture_v1(
+                    root,
+                    |root| {
+                        if prepared {
+                            run(&mut root.1, &mut root.0)?;
+                        }
+                        if panics {
+                            std::panic::panic_any("before USERPTR control");
+                        }
+                        validate_fixed_batch_ring::<0>(4096)?;
+                        panic!("empty fixed batch unexpectedly accepted");
+                    },
+                    |root| *retained.borrow_mut() = Some(root),
+                )
+            }));
+            match result {
+                Err(payload) => {
+                    assert!(panics);
+                    assert_eq!(
+                        payload.downcast_ref::<&str>(),
+                        Some(&"before USERPTR control")
+                    );
+                }
+                Ok(Err(error)) => assert!(!panics && !error.is_terminal_creation()),
+                Ok(Ok(_)) => panic!("injected construction rejection succeeded"),
+            }
+            let root = retained.into_inner().unwrap();
+            assert_eq!(&*root as *const _, original);
+            assert_inputs(&root.1, &expected);
+            assert_custody(&root.0, &root.1);
+            assert_backing(&root.0, &before);
+            assert_eq!(root.1.completed.is_some(), prepared);
+            if !prepared {
+                assert_eq!(root.0.observation(), before);
+            }
+        }
+    }
 }
 
 #[test]

@@ -1,0 +1,38 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.71s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 6 tests
+test queue::live::construction_primary::tests::rooted_settlement_does_not_destroy_secondary_panicking_payload ... ok
+test queue::live::construction_primary::tests::rooted_success_transfers_non_send_borrowed_preparation_without_cleanup ... ok
+test queue::live::construction_primary::tests::rooted_settlement_preserves_original_owner_and_first_panic_through_cleanup ... ok
+test queue::live::construction_primary::tests::construction_token_preflight_preserves_foreign_closed_and_occupied_inputs ... ok
+test queue::live::construction_primary::tests::construction_token_success_installs_exact_output_and_clears_marker_once ... ok
+test queue::live::construction_primary::tests::rooted_control_and_completion_handoffs_retain_actual_r88_tokens_and_accounts ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::tests::rooted_control_and_completion_handoffs_retain_actual_r88_tokens_and_accounts stdout ----
+
+thread 'queue::live::construction_primary::tests::rooted_control_and_completion_handoffs_retain_actual_r88_tokens_and_accounts' (1095538) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6585:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::tests::rooted_control_and_completion_handoffs_retain_actual_r88_tokens_and_accounts' (1095538) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6585:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::tests::rooted_control_and_completion_handoffs_retain_actual_r88_tokens_and_accounts' (1095538) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6632:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::tests::rooted_control_and_completion_handoffs_retain_actual_r88_tokens_and_accounts' (1095538) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6632:17:
+Box<dyn Any>
+
+thread 'queue::live::construction_primary::tests::rooted_control_and_completion_handoffs_retain_actual_r88_tokens_and_accounts' (1095538) panicked at crates/fe2o3-kfd/src/shared_memory/tests/queue_construction.rs:261:39:
+called `Option::unwrap()` on a `None` value
+
+
+failures:
+    queue::live::construction_primary::tests::rooted_control_and_completion_handoffs_retain_actual_r88_tokens_and_accounts
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 902 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

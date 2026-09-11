@@ -5401,7 +5401,7 @@ impl SharedGttMemorySessionV1 {
         )
     }
 
-    pub(crate) fn preflight_cpu_queue_token_v1<P: MutableGpuGttProfileV1>(
+    pub(crate) fn preflight_cpu_queue_token_v1<P: GttProfileV1>(
         &self,
         token: &SharedGttAllocationV1<P, GttCpuWritableV1>,
     ) -> Result<(), MemorySessionError> {
@@ -5420,6 +5420,28 @@ impl SharedGttMemorySessionV1 {
             &self.engine,
             token,
             SharedAllocationPhaseV1::GpuAccessibleMutable,
+        )
+    }
+
+    pub(crate) fn preflight_immutable_queue_token_v1(
+        &self,
+        token: &SharedGttAllocationV1<ExecutableGttV1, GttExecutableImmutableV1>,
+    ) -> Result<(), MemorySessionError> {
+        transitions::preflight_borrowed_v1(
+            &self.engine,
+            token,
+            SharedAllocationPhaseV1::ExecutableImmutable,
+        )
+    }
+
+    pub(crate) fn preflight_executable_queue_token_v1(
+        &self,
+        token: &SharedGttAllocationV1<ExecutableGttV1, GttGpuAccessibleExecutableV1>,
+    ) -> Result<(), MemorySessionError> {
+        transitions::preflight_borrowed_v1(
+            &self.engine,
+            token,
+            SharedAllocationPhaseV1::GpuAccessibleExecutable,
         )
     }
 

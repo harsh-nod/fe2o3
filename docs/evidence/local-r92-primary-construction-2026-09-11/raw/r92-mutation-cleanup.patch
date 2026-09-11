@@ -1,0 +1,11 @@
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary.rs
+@@ -643,7 +643,7 @@
+     }
+     let stage = entry.stage;
+     entry.poison_now();
+-    let cleanup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cleanup(&mut root)));
++    let cleanup: Result<(), Box<dyn std::any::Any + Send>> = { cleanup(&mut root); Ok(()) };
+     // No public error carries native authority; the original allocation stays retained.
+     retain(root);
+     if let Err(payload) = cleanup {

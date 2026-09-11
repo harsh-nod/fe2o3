@@ -100,6 +100,27 @@ struct RuntimeGateTerminalCreationArmV1<'a> {
 }
 
 impl RuntimeGateTerminalCreationArmV1<'_> {
+    fn finish_checked(&mut self, opener_pid: u32) -> Result<(), LinuxDoorbellErrorV1> {
+        let mut gate = lock_runtime_gate_v1(self.gate);
+        let enabled_here = matches!(gate.runtime,
+            ProcessKfdRuntimeStateV1::Enabled { opener_pid: owner, leases }
+                if owner == opener_pid && leases != 0);
+        if self.finished
+            || !gate.creation_in_flight
+            || gate.permanently_poisoned
+            || gate.teardown_arms != 0
+            || !enabled_here
+        {
+            gate.poison();
+            return Err(LinuxDoorbellErrorV1::Runtime(
+                "creation finalization unavailable",
+            ));
+        }
+        gate.finish_creation_arm(true);
+        self.finished = true;
+        Ok(())
+    }
+
     fn disarm(mut self) {
         finish_runtime_gate_creation_arm(self.gate, true);
         self.finished = true;
@@ -133,6 +154,10 @@ fn finish_runtime_gate_creation_arm(gate: &Mutex<ProcessGlobalKfdRuntimeGateV1>,
 pub(crate) struct ProcessGlobalKfdRuntimeCreationArmV1(RuntimeGateTerminalCreationArmV1<'static>);
 
 impl ProcessGlobalKfdRuntimeCreationArmV1 {
+    pub(crate) fn finish_checked(&mut self, opener_pid: u32) -> Result<(), LinuxDoorbellErrorV1> {
+        self.0.finish_checked(opener_pid)
+    }
+
     pub(crate) fn disarm(self) {
         self.0.disarm();
     }
@@ -985,6 +1010,7 @@ pub(crate) struct LinuxCwsrShadowPagesV1 {
 
 pub(crate) struct LinuxUnpublishedCwsrShadowPagesV1 {
     shadows: Option<LinuxCwsrShadowPagesV1>,
+    terminal_payload_released: bool,
 }
 
 pub(crate) struct LinuxCwsrShadowsAfterEventDestroyedV1 {
@@ -1123,6 +1149,7 @@ impl LinuxCwsrShadowPagesV1 {
         };
         admit_installed_cwsr_shadows(owner).map(|shadows| LinuxUnpublishedCwsrShadowPagesV1 {
             shadows: Some(shadows),
+            terminal_payload_released: false,
         })
     }
 
@@ -1356,20 +1383,43 @@ impl LinuxCwsrShadowsAfterEventDestroyedV1 {
 
 impl LinuxUnpublishedCwsrShadowPagesV1 {
     pub(crate) fn shadows(&self) -> &LinuxCwsrShadowPagesV1 {
+        assert!(
+            !self.terminal_payload_released,
+            "terminal unpublished CWSR custody"
+        );
         self.shadows
             .as_ref()
             .expect("unpublished CWSR shadow custody is armed")
     }
 
     pub(crate) fn publish_for_native_queue_creation(mut self) -> LinuxCwsrShadowPagesV1 {
+        assert!(
+            !self.terminal_payload_released,
+            "terminal unpublished CWSR custody"
+        );
         self.shadows
             .take()
             .expect("unpublished CWSR shadow custody is armed")
+    }
+
+    pub(crate) fn cleanup_payload_for_terminal_retention(&mut self) {
+        if self.terminal_payload_released {
+            return;
+        }
+        let shadows = self.shadows.as_mut().expect("unpublished CWSR custody");
+        if shadows.release_payload_page().is_err() {
+            std::process::abort();
+        }
+        shadows.active = false;
+        self.terminal_payload_released = true;
     }
 }
 
 impl Drop for LinuxUnpublishedCwsrShadowPagesV1 {
     fn drop(&mut self) {
+        if self.terminal_payload_released {
+            return;
+        }
         let Some(mut shadows) = self.shadows.take() else {
             return;
         };
@@ -2003,12 +2053,76 @@ mod tests {
     }
 
     #[test]
+    fn terminal_unpublished_cleanup_retains_metadata_and_rejects_publication() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        let (shadows, _storage, _event, _file) = mapped_diagnostic_shadow_fixture();
+        let identity = (
+            shadows.pages,
+            shadows.payload_page,
+            shadows.payload,
+            shadows.binding,
+            shadows.page_bytes,
+        );
+        let mut owner = LinuxUnpublishedCwsrShadowPagesV1 {
+            shadows: Some(shadows),
+            terminal_payload_released: false,
+        };
+        owner.cleanup_payload_for_terminal_retention();
+        assert!(owner.terminal_payload_released);
+        let shadows = owner.shadows.as_ref().unwrap();
+        assert_eq!(
+            identity,
+            (
+                shadows.pages,
+                shadows.payload_page,
+                shadows.payload,
+                shadows.binding,
+                shadows.page_bytes
+            )
+        );
+        assert!(!shadows.active && !shadows.payload_page_active);
+        assert!(shadows.observe_reason().is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| owner.shadows())).is_err());
+        owner.cleanup_payload_for_terminal_retention();
+        // The rejected consuming publication also drops the disposed wrapper;
+        // a second payload release would abort this process.
+        assert!(
+            catch_unwind(AssertUnwindSafe(
+                || owner.publish_for_native_queue_creation()
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn terminal_unpublished_cleanup_failure_aborts_instead_of_losing_custody() {
+        const CHILD_ENV: &str = "FE2O3_TEST_TERMINAL_UNPUBLISHED_PAYLOAD_ABORT";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let (mut shadows, _storage, _event, _file) = mapped_diagnostic_shadow_fixture();
+            shadows.page_bytes = 0;
+            let mut owner = LinuxUnpublishedCwsrShadowPagesV1 {
+                shadows: Some(shadows),
+                terminal_payload_released: false,
+            };
+            owner.cleanup_payload_for_terminal_retention();
+            panic!("terminal payload cleanup unexpectedly returned");
+        }
+        use std::os::unix::process::ExitStatusExt;
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("queue_linux::tests::terminal_unpublished_cleanup_failure_aborts_instead_of_losing_custody")
+            .env(CHILD_ENV, "1").status().unwrap();
+        assert_eq!(status.signal(), Some(libc::SIGABRT));
+    }
+
+    #[test]
     fn unpublished_custody_unmaps_payload_on_early_return() {
         let (shadows, _storage, _event, _file) = mapped_diagnostic_shadow_fixture();
         // The unpublished owner aborts if release fails. Returning from this
         // drop therefore proves the page completed its release path.
         drop(LinuxUnpublishedCwsrShadowPagesV1 {
             shadows: Some(shadows),
+            terminal_payload_released: false,
         });
     }
 
@@ -2020,6 +2134,7 @@ mod tests {
             shadows.page_bytes = 0;
             drop(LinuxUnpublishedCwsrShadowPagesV1 {
                 shadows: Some(shadows),
+                terminal_payload_released: false,
             });
             panic!("unpublished payload cleanup failure returned instead of terminating");
         }
@@ -2172,6 +2287,72 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(lock_runtime_gate_v1(&panic_gate).teardown_arms, 0);
         assert!(lock_runtime_gate_v1(&panic_gate).permanently_poisoned);
+    }
+
+    #[test]
+    fn checked_creation_finalization_requires_healthy_admitted_runtime() {
+        for fault in 0..7 {
+            let gate = Mutex::new(ProcessGlobalKfdRuntimeGateV1::new());
+            {
+                let mut state = lock_runtime_gate_v1(&gate);
+                assert!(state.admit_runtime(41).unwrap());
+                state.runtime.commit_first_enabled(41);
+            }
+            let mut arm = arm_runtime_gate_for_terminal_creation(&gate).unwrap();
+            {
+                let mut state = lock_runtime_gate_v1(&gate);
+                assert!(state.admit_runtime(41).is_err());
+                match fault {
+                    1 => state.poison(),
+                    2 => {
+                        state.arm_teardown();
+                    }
+                    3 => state.runtime = ProcessKfdRuntimeStateV1::Disabled,
+                    4 => {
+                        state.runtime = ProcessKfdRuntimeStateV1::Enabled {
+                            opener_pid: 41,
+                            leases: 0,
+                        }
+                    }
+                    5 => state.creation_in_flight = false,
+                    _ => (),
+                }
+            }
+            let result = arm.finish_checked(if fault == 6 { 42 } else { 41 });
+            if fault == 0 {
+                result.unwrap();
+                assert!(!lock_runtime_gate_v1(&gate).is_blocked());
+                assert!(arm.finish_checked(41).is_err());
+            } else {
+                assert!(result.is_err());
+            }
+            assert!(lock_runtime_gate_v1(&gate).permanently_poisoned);
+            drop(arm);
+            assert!(lock_runtime_gate_v1(&gate).permanently_poisoned);
+        }
+    }
+
+    #[test]
+    fn checked_creation_finish_disarms_once_after_runtime_admission() {
+        let gate = Mutex::new(ProcessGlobalKfdRuntimeGateV1::new());
+        {
+            let mut state = lock_runtime_gate_v1(&gate);
+            assert!(state.admit_runtime(41).unwrap());
+            state.runtime.commit_first_enabled(41);
+        }
+        let mut arm = arm_runtime_gate_for_terminal_creation(&gate).unwrap();
+        arm.finish_checked(41).unwrap();
+        drop(arm);
+        let mut state = lock_runtime_gate_v1(&gate);
+        assert!(!state.is_blocked());
+        assert!(!state.admit_runtime(41).unwrap());
+        assert_eq!(
+            state.runtime,
+            ProcessKfdRuntimeStateV1::Enabled {
+                opener_pid: 41,
+                leases: 2
+            }
+        );
     }
 
     #[test]

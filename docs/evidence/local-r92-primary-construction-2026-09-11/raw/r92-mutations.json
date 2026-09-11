@@ -1,0 +1,38 @@
+[
+  {
+    "name": "cleanup",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+    "edits": [
+      [
+        "    let cleanup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cleanup(&mut root)));",
+        "    let cleanup: Result<(), Box<dyn std::any::Any + Send>> = { cleanup(&mut root); Ok(()) };"
+      ]
+    ],
+    "filter": "queue::live::construction_primary::tests::rooted_settlement_preserves_original_owner_and_first_panic_through_cleanup",
+    "assertion": "retained terminal allocation"
+  },
+  {
+    "name": "gate",
+    "path": "crates/fe2o3-kfd/src/queue_linux.rs",
+    "edits": [
+      [
+        "            || gate.permanently_poisoned\n            || gate.teardown_arms != 0\n            || !enabled_here",
+        "            || (false && (gate.permanently_poisoned || gate.teardown_arms != 0 || !enabled_here))"
+      ]
+    ],
+    "filter": "queue_linux::tests::checked_creation_finalization_requires_healthy_admitted_runtime",
+    "assertion": "assertion failed: result.is_err()"
+  },
+  {
+    "name": "shadow",
+    "path": "crates/fe2o3-kfd/src/queue_linux.rs",
+    "edits": [
+      [
+        "        self.terminal_payload_released = true;",
+        "        self.terminal_payload_released = true;\n        self.shadows = None;"
+      ]
+    ],
+    "filter": "queue_linux::tests::terminal_unpublished_cleanup_retains_metadata_and_rejects_publication",
+    "assertion": "called `Option::unwrap()` on a `None` value"
+  }
+]

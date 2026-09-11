@@ -1,0 +1,10 @@
+--- a/crates/fe2o3-kfd/src/queue_linux.rs
++++ b/crates/fe2o3-kfd/src/queue_linux.rs
+@@ -1412,6 +1412,7 @@
+         }
+         shadows.active = false;
+         self.terminal_payload_released = true;
++        self.shadows = None;
+     }
+ }
+ 

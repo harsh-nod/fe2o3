@@ -1,0 +1,16 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 25.12s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 8 tests
+test queue::live::construction_primary::tests::constructor_error_keeps_public_auto_traits_without_native_custody ... ok
+test queue::live::construction_primary::tests::rooted_settlement_does_not_destroy_secondary_panicking_payload ... ok
+test queue::live::construction_primary::tests::captured_preparation_survives_later_rejection_and_panic_without_reinvocation ... ok
+test queue::live::construction_primary::tests::rooted_settlement_preserves_original_owner_and_first_panic_through_cleanup ... ok
+test queue::live::construction_primary::tests::construction_token_success_installs_exact_output_and_clears_marker_once ... ok
+test queue::live::construction_primary::tests::rooted_success_transfers_non_send_borrowed_preparation_without_cleanup ... ok
+test queue::live::construction_primary::tests::construction_token_preflight_preserves_foreign_closed_and_occupied_inputs ... ok
+test queue::live::construction_primary::tests::rooted_control_and_completion_handoffs_retain_actual_r88_tokens_and_accounts ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 903 filtered out; finished in 0.01s
+

@@ -1,0 +1,22 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::live::construction_primary::tests::rooted_settlement_preserves_original_owner_and_first_panic_through_cleanup",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r92-mutation-cleanup.log",
+  "source": "/home/harsh/.codex-tmp/r92-mutation-cleanup-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "elapsed_seconds": 28.871
+}

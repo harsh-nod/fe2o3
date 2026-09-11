@@ -3919,6 +3919,19 @@ fn recover_dispatch_input_v1(input: DispatchDataInputV1) -> Gfx942FixedDispatchD
     }
 }
 
+pub(super) fn prepare_public_fixed_dispatch_resources_in_place<const N: usize>(
+    memory: &mut impl preparation::PreparationMemoryV1,
+    programs: &[ValidatedKernelEnvelope<'_>],
+    custody: &mut FixedDispatchPreparationCustodyV1<N>,
+) -> Result<(), Gfx942DispatchBindingErrorV1> {
+    custody.prepare_in_place(
+        memory,
+        programs,
+        DispatchGenerationOwnerV1::new(),
+        PersistentFixedDispatchControlStateV1::Ordinary,
+    )
+}
+
 fn prepare_public_fixed_dispatch_resources_with_generation<const N: usize>(
     memory: &mut SharedGttMemorySessionV1,
     programs: Vec<ValidatedKernelEnvelope<'_>>,
