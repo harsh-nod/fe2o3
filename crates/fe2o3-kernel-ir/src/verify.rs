@@ -22,6 +22,10 @@ use crate::{
 #[path = "verification_definition_borrow_tests.rs"]
 mod definition_borrow_tests;
 
+#[cfg(test)]
+#[path = "verification_capability_borrow_tests.rs"]
+mod capability_borrow_tests;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum DiagnosticCode {
     InvalidIdentity,
@@ -236,7 +240,7 @@ fn verify_module_impl(
         module,
         diagnostics: Vec::new(),
         functions: BTreeMap::new(),
-        supported_capabilities: supported_capabilities.cloned(),
+        supported_capabilities,
     };
     verifier.verify();
     verifier.diagnostics.sort();
@@ -249,14 +253,14 @@ fn verify_module_impl(
     }
 }
 
-struct ModuleVerifier<'module> {
+struct ModuleVerifier<'module, 'capabilities> {
     module: &'module Module,
     diagnostics: Vec<Diagnostic>,
     functions: BTreeMap<&'module FunctionId, &'module Function>,
-    supported_capabilities: Option<BTreeSet<TargetCapability>>,
+    supported_capabilities: Option<&'capabilities BTreeSet<TargetCapability>>,
 }
 
-impl<'module> ModuleVerifier<'module> {
+impl<'module, 'capabilities> ModuleVerifier<'module, 'capabilities> {
     fn verify(&mut self) {
         if self.module.id.as_str().is_empty() {
             self.emit(
@@ -266,8 +270,8 @@ impl<'module> ModuleVerifier<'module> {
             );
         }
 
-        if let Some(supported) = self.supported_capabilities.clone() {
-            self.verify_capabilities(&supported, DiagnosticLocation::module(self.module));
+        if let Some(supported) = self.supported_capabilities {
+            self.verify_capabilities(supported, DiagnosticLocation::module(self.module));
         }
 
         self.verify_capabilities(
@@ -447,7 +451,7 @@ impl<'module> ModuleVerifier<'module> {
             self.module,
             function,
             &self.functions,
-            self.supported_capabilities.as_ref(),
+            self.supported_capabilities,
             &mut self.diagnostics,
             control_flow,
         );
@@ -638,7 +642,6 @@ impl<'module> ModuleVerifier<'module> {
                 );
             } else if self
                 .supported_capabilities
-                .as_ref()
                 .is_some_and(|supported| !capability_is_supported(capability, supported))
             {
                 self.emit(
