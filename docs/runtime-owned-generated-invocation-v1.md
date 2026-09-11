@@ -74,6 +74,14 @@ refinement is claimed for Rust ownership, allocation, decoder or device adapters
 
 ## Next Transition
 
+R74 owns a standalone checked device. Persistent Context integration cannot
+construct one such owner per launch: the device model rejects a second live
+admission of the same physical GPU. GEN-2B must instead prepare against the
+backend's retained device, binding private Context/backend/device generations.
+The same owner may move into its lazy VM/queue; actual native incarnation checks
+belong at adoption/publication. No fresh-device or second-queue workaround is
+part of this contract.
+
 GEN-2B needs a runtime-defined admitted interface because host already depends
 on runtime. It must bind Context/allocation generations, revalidate at actual
 publication, consume authority once, retain resources through exact retirement
@@ -81,3 +89,12 @@ and authorize decoding only for that completed invocation. Blocking execution
 must join this same path. Timeout, observer drop or failed observation cannot
 grant replay or early-release permission. Contention retry/wakeup and lost-wakeup
 tests are required; R73's `try_take` does not provide Future progress by itself.
+
+The [six-packet dispatch](runtime-a1-a2-next-wave.md#gen-2b-breakdown) separates
+owner-local drivers and cleanup retention, reusable device preparation, checked
+persistent projection/publication, exact readback/results, public API convergence
+and generated graph/drain qualification. Current operation drivers require
+`Send` and their registry drops before owned Context cleanup; neither boundary
+can hold the proposed owner-local issued authority unchanged. Native completion
+status alone also supplies no decoded host output. These remain unimplemented
+integration work, not acceptance implied by GEN-2A's storage tests.

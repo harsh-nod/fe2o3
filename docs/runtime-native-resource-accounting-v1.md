@@ -115,9 +115,10 @@ pool-path qualification and do not prove whole-executor refinement.
 
 ## Units And Counting Rules
 
-The next N1A packet is ordinary coherent non-userptr host-GTT backing only.
-It must distinguish page-padded physical backing from VA reservations and charge
-the same object once across CPU/GPU views. Broader AQL/userptr/executable profiles,
+R72 implements [N1A ordinary coherent non-userptr host-GTT backing](runtime-host-visible-backing-v1.md).
+It distinguishes page-padded backing from VA reservations and charges
+the same object once across CPU/GPU views; live hardware acceptance remains open.
+Broader AQL/userptr/executable profiles,
 native adoption of exact batch member credits, and root/bootstrap accounting
 remain separately required; see the swarm plan's explicit prerequisites.
 
