@@ -20,7 +20,15 @@ use crate::generated_kfd_arguments::{
     GeneratedKfdArgumentBinding, GeneratedKfdArgumentError, GeneratedKfdOwnedPackedParts,
     GeneratedKfdPackingObservationV1, GeneratedKfdPrepareError, GeneratedKfdSliceBinding,
 };
+use crate::generated_runtime_results::{
+    ChargedOutputCustodyV1, GeneratedRuntimeChargedResultV1, GeneratedRuntimeResultBudgetV1,
+    ReadResultCreditV1, ResultBindingBudgetV1, ResultDescriptorV1, ResultMemberV1,
+    ResultPreflightV1, ResultReadyGateV1,
+};
 use crate::{AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedKernelExpectationV1, KernelId};
+
+#[cfg(test)]
+mod charged_tests;
 
 /// Compiler-generated owned counterpart of the borrowed KFD argument bridge.
 ///
@@ -91,6 +99,13 @@ pub struct GeneratedRuntimeArgumentFootprintV1 {
 pub struct GeneratedRuntimeArgumentBudgetV1 {
     limits: GeneratedRuntimeArgumentLimitsV1,
     footprint: GeneratedRuntimeArgumentFootprintV1,
+    result_mode: ResultMode,
+}
+
+enum ResultMode {
+    Legacy,
+    Preflight(ResultPreflightV1),
+    Binding(ResultBindingBudgetV1),
 }
 
 impl GeneratedRuntimeArgumentBudgetV1 {
@@ -108,6 +123,7 @@ impl GeneratedRuntimeArgumentBudgetV1 {
         }
         Ok(Self {
             limits,
+            result_mode: ResultMode::Legacy,
             footprint: GeneratedRuntimeArgumentFootprintV1 {
                 kernarg_bytes,
                 payload_bytes,
@@ -165,9 +181,129 @@ impl GeneratedRuntimeArgumentBudgetV1 {
     pub const fn footprint(&self) -> GeneratedRuntimeArgumentFootprintV1 {
         self.footprint
     }
+
+    fn account_slice<T: GeneratedDeviceScalarV1>(
+        &mut self,
+        elements: usize,
+        access: Gfx942RuntimeBufferAccessV1,
+        custody: Option<&OutputCustody>,
+    ) -> Result<(), GeneratedRuntimeArgumentErrorV1> {
+        let bytes = elements
+            .checked_mul(size_of::<T>())
+            .ok_or(GeneratedRuntimeArgumentErrorV1::ByteLength)?;
+        let descriptor = self.result_descriptor::<T>(elements, access, custody)?;
+        let before = self.footprint;
+        self.charge(bytes, custody.is_some())?;
+        match (&mut self.result_mode, descriptor) {
+            (ResultMode::Legacy, None) => Ok(()),
+            (ResultMode::Preflight(roster), Some(descriptor)) => {
+                if let Err(error) = roster.push(descriptor) {
+                    self.footprint = before;
+                    return Err(error);
+                }
+                Ok(())
+            }
+            _ => {
+                self.footprint = before;
+                Err(GeneratedRuntimeArgumentErrorV1::BindingMismatch)
+            }
+        }
+    }
+
+    fn result_descriptor<T: GeneratedDeviceScalarV1>(
+        &self,
+        elements: usize,
+        access: Gfx942RuntimeBufferAccessV1,
+        custody: Option<&OutputCustody>,
+    ) -> Result<Option<ResultDescriptorV1>, GeneratedRuntimeArgumentErrorV1> {
+        match (&self.result_mode, custody) {
+            (ResultMode::Legacy, Some(OutputCustody::Charged(_)))
+            | (ResultMode::Preflight(_) | ResultMode::Binding(_), Some(OutputCustody::Legacy(_))) => {
+                Err(GeneratedRuntimeArgumentErrorV1::BindingMismatch)
+            }
+            (ResultMode::Legacy, _) => Ok(None),
+            (_, custody) => Ok(Some(ResultDescriptorV1::new::<T>(
+                elements,
+                access,
+                custody.and_then(|custody| match custody {
+                    OutputCustody::Charged(charged) => Some(charged),
+                    _ => None,
+                }),
+            )?)),
+        }
+    }
+
+    fn bind_slice<T: GeneratedDeviceScalarV1>(
+        &mut self,
+        elements: usize,
+        access: Gfx942RuntimeBufferAccessV1,
+        custody: Option<&OutputCustody>,
+    ) -> Result<Option<ResultMemberV1>, GeneratedRuntimeArgumentErrorV1> {
+        let descriptor = self.result_descriptor::<T>(elements, access, custody)?;
+        let bytes = elements
+            .checked_mul(size_of::<T>())
+            .ok_or(GeneratedRuntimeArgumentErrorV1::ByteLength)?;
+        let before = self.footprint;
+        self.charge(bytes, custody.is_some())?;
+        let result = match (&mut self.result_mode, descriptor) {
+            (ResultMode::Legacy, None) => Ok(None),
+            (ResultMode::Binding(roster), Some(descriptor)) => roster.take(&descriptor).map(Some),
+            _ => Err(GeneratedRuntimeArgumentErrorV1::BindingMismatch),
+        };
+        if result.is_err() {
+            self.footprint = before;
+        }
+        result
+    }
 }
 
 impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<K> {
+    /// Preflights and reserves the complete result roster before encoding owned inputs.
+    ///
+    /// This returns charged data custody only. It does not admit a Context operation,
+    /// authorize publication, or expose a decoder accepting caller-supplied results.
+    pub fn prepare_generated_runtime_arguments_charged<Arguments>(
+        &self,
+        arguments: Arguments,
+        limits: GeneratedRuntimeArgumentLimitsV1,
+        result_budget: &GeneratedRuntimeResultBudgetV1,
+    ) -> Result<GeneratedRuntimeChargedArgumentsV1, GeneratedRuntimeArgumentErrorV1>
+    where
+        Arguments: CompilerGeneratedRuntimeArguments<K>,
+    {
+        let current = self.current_publication_token();
+        let admission = self.admission();
+        let check_current = || {
+            admission
+                .revalidate_retained_currentness_token(current)
+                .map_err(GeneratedKfdPrepareError::CurrentPublication)
+                .map_err(GeneratedRuntimeArgumentErrorV1::Prepare)
+        };
+        check_current()?;
+        let packed = (|| {
+            let generated = Arguments::generated_argument_layout()
+                .map_err(GeneratedKfdPrepareError::GeneratedLayout)
+                .map_err(GeneratedRuntimeArgumentErrorV1::Prepare)?;
+            let plan = validate_worker_v3_argument_packing(
+                admission.descriptor_table(),
+                admission.descriptor(),
+                &generated,
+            )
+            .map_err(GeneratedKfdPrepareError::PackingPlan)
+            .map_err(GeneratedRuntimeArgumentErrorV1::Prepare)?;
+            prepare_charged_with_plan(
+                arguments,
+                &plan,
+                limits,
+                result_budget,
+                Arguments::account_runtime_arguments,
+                |arguments, budget| arguments.bind_runtime_arguments(&plan, budget),
+            )
+        })();
+        check_current()?;
+        packed
+    }
+
     /// Validates current compiler publication and packs owned data for one exact descriptor.
     ///
     /// This does not admit a Context allocation, prove its freshness, or authorize execution.
@@ -216,6 +352,36 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
     }
 }
 
+fn prepare_charged_with_plan<A>(
+    arguments: A,
+    plan: &GeneratedArgumentPackingPlanV1,
+    limits: GeneratedRuntimeArgumentLimitsV1,
+    result_budget: &GeneratedRuntimeResultBudgetV1,
+    account: impl FnOnce(
+        &A,
+        &mut GeneratedRuntimeArgumentBudgetV1,
+    ) -> Result<(), GeneratedRuntimeArgumentErrorV1>,
+    bind: impl FnOnce(
+        A,
+        &mut GeneratedRuntimeArgumentBudgetV1,
+    ) -> Result<GeneratedRuntimeArgumentBindingV1, GeneratedRuntimeArgumentErrorV1>,
+) -> Result<GeneratedRuntimeChargedArgumentsV1, GeneratedRuntimeArgumentErrorV1> {
+    let mut preflight = GeneratedRuntimeArgumentBudgetV1::new(plan, limits)?;
+    preflight.result_mode = ResultMode::Preflight(ResultPreflightV1::new()?);
+    account(&arguments, &mut preflight)?;
+    let expected = preflight.footprint;
+    let ResultMode::Preflight(roster) = preflight.result_mode else {
+        unreachable!()
+    };
+    let mut budget = GeneratedRuntimeArgumentBudgetV1::new(plan, limits)?;
+    budget.result_mode = ResultMode::Binding(roster.reserve(result_budget)?);
+    let packed = bind(arguments, &mut budget)?.pack_inner(plan, budget, true)?;
+    if packed.footprint() != expected {
+        return Err(GeneratedRuntimeArgumentErrorV1::BindingMismatch);
+    }
+    Ok(GeneratedRuntimeChargedArgumentsV1 { packed })
+}
+
 /// Owned immutable input. Safe construction cannot alias another owned slice or retain a borrow.
 ///
 /// ```compile_fail
@@ -245,12 +411,10 @@ impl<T: GeneratedDeviceScalarV1> GeneratedRuntimeReadSlice<T> {
         &self,
         budget: &mut GeneratedRuntimeArgumentBudgetV1,
     ) -> Result<(), GeneratedRuntimeArgumentErrorV1> {
-        budget.charge(
-            self.values
-                .len()
-                .checked_mul(size_of::<T>())
-                .ok_or(GeneratedRuntimeArgumentErrorV1::ByteLength)?,
-            false,
+        budget.account_slice::<T>(
+            self.values.len(),
+            Gfx942RuntimeBufferAccessV1::ReadOnly,
+            None,
         )
     }
 
@@ -291,12 +455,25 @@ macro_rules! owned_output_slice {
                 (
                     Self {
                         values,
-                        custody: OutputCustody {
+                        custody: OutputCustody::Legacy(LegacyOutputCustody {
                             state,
                             scalar: T::RUST_SCALAR_TYPE,
-                        },
+                        }),
                     },
                     result,
+                )
+            }
+
+            /// Retains a caller-owned typed seed for the distinct charged preparation path.
+            /// No result credit or invocation authority exists until preparation succeeds.
+            pub fn new_charged(values: Box<[T]>) -> (Self, GeneratedRuntimeChargedResultV1<T>) {
+                let (custody, observer) = ChargedOutputCustodyV1::new(values.len());
+                (
+                    Self {
+                        values,
+                        custody: OutputCustody::Charged(custody),
+                    },
+                    observer,
                 )
             }
 
@@ -313,12 +490,10 @@ macro_rules! owned_output_slice {
                 &self,
                 budget: &mut GeneratedRuntimeArgumentBudgetV1,
             ) -> Result<(), GeneratedRuntimeArgumentErrorV1> {
-                budget.charge(
-                    self.values
-                        .len()
-                        .checked_mul(size_of::<T>())
-                        .ok_or(GeneratedRuntimeArgumentErrorV1::ByteLength)?,
-                    true,
+                budget.account_slice::<T>(
+                    self.values.len(),
+                    Gfx942RuntimeBufferAccessV1::$access,
+                    Some(&self.custody),
                 )
             }
 
@@ -379,7 +554,6 @@ fn bind_owned_slice<T: GeneratedDeviceScalarV1>(
         .len()
         .checked_mul(size_of::<T>())
         .ok_or(GeneratedRuntimeArgumentErrorV1::ByteLength)?;
-    budget.charge(byte_len, custody.is_some())?;
     let borrow = GeneratedArgumentBorrowV1::new();
     let input = match (access, index_space) {
         (Gfx942RuntimeBufferAccessV1::ReadOnly, None) => plan
@@ -409,7 +583,8 @@ fn bind_owned_slice<T: GeneratedDeviceScalarV1>(
         _ => return Err(GeneratedRuntimeArgumentErrorV1::BindingMismatch),
     }
     .map_err(GeneratedRuntimeArgumentErrorV1::Pack)?;
-    if let Some(custody) = &custody {
+    let member = budget.bind_slice::<T>(values.len(), access, custody.as_ref())?;
+    if let Some(OutputCustody::Legacy(custody)) = &custody {
         let mut state = custody
             .state
             .lock()
@@ -419,22 +594,16 @@ fn bind_owned_slice<T: GeneratedDeviceScalarV1>(
         }
         *state = OutputState::Bound;
     }
-    let buffer = if values.is_empty() {
-        None
+    let mut read_credit = None;
+    let buffer = if let Some(OutputCustody::Charged(custody)) = &custody {
+        custody.bind_seed(
+            values,
+            member.ok_or(GeneratedRuntimeArgumentErrorV1::BindingMismatch)?,
+        )?;
+        custody.with_seed::<T, _>(|values| encode_owned_slice(values, byte_len, access))?
     } else {
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(byte_len)
-            .map_err(|_| GeneratedRuntimeArgumentErrorV1::Allocation)?;
-        for value in &values {
-            let (encoded, width) = value.encode_le_bytes_v1();
-            bytes.extend_from_slice(&encoded[..usize::from(width)]);
-        }
-        Some(
-            Gfx942RuntimeDispatchBufferV1::new(bytes, access)
-                .map_err(GeneratedKfdArgumentError::Buffer)
-                .map_err(GeneratedRuntimeArgumentErrorV1::Binding)?,
-        )
+        read_credit = member.map(ResultMemberV1::retain_read);
+        encode_owned_slice(&values, byte_len, access)?
     };
     Ok(GeneratedRuntimeSliceBindingV1 {
         binding: GeneratedKfdSliceBinding::from_owned_buffer(
@@ -446,6 +615,31 @@ fn bind_owned_slice<T: GeneratedDeviceScalarV1>(
         byte_len,
         access,
         custody,
+        read_credit,
+    })
+}
+
+fn encode_owned_slice<T: GeneratedDeviceScalarV1>(
+    values: &[T],
+    byte_len: usize,
+    access: Gfx942RuntimeBufferAccessV1,
+) -> Result<Option<Gfx942RuntimeDispatchBufferV1>, GeneratedRuntimeArgumentErrorV1> {
+    Ok(if values.is_empty() {
+        None
+    } else {
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(byte_len)
+            .map_err(|_| GeneratedRuntimeArgumentErrorV1::Allocation)?;
+        for value in values {
+            let (encoded, width) = value.encode_le_bytes_v1();
+            bytes.extend_from_slice(&encoded[..usize::from(width)]);
+        }
+        Some(
+            Gfx942RuntimeDispatchBufferV1::new(bytes, access)
+                .map_err(GeneratedKfdArgumentError::Buffer)
+                .map_err(GeneratedRuntimeArgumentErrorV1::Binding)?,
+        )
     })
 }
 
@@ -455,6 +649,7 @@ pub struct GeneratedRuntimeSliceBindingV1 {
     byte_len: usize,
     access: Gfx942RuntimeBufferAccessV1,
     custody: Option<OutputCustody>,
+    read_credit: Option<ReadResultCreditV1>,
 }
 
 #[doc(hidden)]
@@ -479,6 +674,20 @@ impl GeneratedRuntimeArgumentBindingV1 {
         plan: &GeneratedArgumentPackingPlanV1,
         budget: GeneratedRuntimeArgumentBudgetV1,
     ) -> Result<GeneratedRuntimePackedArgumentsV1, GeneratedRuntimeArgumentErrorV1> {
+        self.pack_inner(plan, budget, false)
+    }
+
+    fn pack_inner(
+        self,
+        plan: &GeneratedArgumentPackingPlanV1,
+        budget: GeneratedRuntimeArgumentBudgetV1,
+        charged: bool,
+    ) -> Result<GeneratedRuntimePackedArgumentsV1, GeneratedRuntimeArgumentErrorV1> {
+        let result_gate = match (&budget.result_mode, charged) {
+            (ResultMode::Legacy, false) => None,
+            (ResultMode::Binding(roster), true) if roster.complete() => Some(roster.gate.clone()),
+            _ => return Err(GeneratedRuntimeArgumentErrorV1::BindingMismatch),
+        };
         let count = self
             .scalar_inputs
             .len()
@@ -495,19 +704,17 @@ impl GeneratedRuntimeArgumentBindingV1 {
                     earlier
                         .custody
                         .as_ref()
-                        .is_some_and(|other| Arc::ptr_eq(&custody.state, &other.state))
+                        .is_some_and(|other| custody.same(other))
                 }) {
                     return Err(GeneratedRuntimeArgumentErrorV1::StaleOrAliasedOutput);
                 }
-                if !matches!(
-                    *custody
-                        .state
-                        .lock()
-                        .map_err(|_| GeneratedRuntimeArgumentErrorV1::Custody)?,
-                    OutputState::Bound
-                ) {
-                    return Err(GeneratedRuntimeArgumentErrorV1::StaleOrAliasedOutput);
-                }
+                custody.bound_to(result_gate.as_ref())?;
+            } else if !match (&memory.read_credit, &result_gate) {
+                (None, None) => true,
+                (Some(credit), Some(gate)) => credit.bound_to(gate),
+                _ => false,
+            } {
+                return Err(GeneratedRuntimeArgumentErrorV1::BindingMismatch);
             }
         }
         if measured.footprint != budget.footprint {
@@ -527,6 +734,7 @@ impl GeneratedRuntimeArgumentBindingV1 {
                 byte_len: memory.byte_len,
                 access: memory.access,
                 custody: memory.custody,
+                read_credit: memory.read_credit,
             });
         }
         let packed = GeneratedKfdArgumentBinding::from_compiler_generated_parts(
@@ -540,7 +748,10 @@ impl GeneratedRuntimeArgumentBindingV1 {
         Ok(GeneratedRuntimePackedArgumentsV1 {
             packed,
             footprint: measured.footprint,
-            decoder: GeneratedRuntimeOutputDecoderV1 { expectations },
+            decoder: GeneratedRuntimeOutputDecoderV1 {
+                expectations,
+                result_gate,
+            },
         })
     }
 }
@@ -551,6 +762,47 @@ pub struct GeneratedRuntimePackedArgumentsV1 {
     packed: GeneratedKfdOwnedPackedParts,
     footprint: GeneratedRuntimeArgumentFootprintV1,
     decoder: GeneratedRuntimeOutputDecoderV1,
+}
+
+/// Charged owned arguments for the private generated-invocation adapter.
+/// This value neither launches work nor grants completion authority.
+///
+/// ```compile_fail
+/// use fe2o3_host::GeneratedRuntimeChargedArgumentsV1;
+/// fn expose_decoder(packed: GeneratedRuntimeChargedArgumentsV1) {
+///     packed.into_runtime_inputs(todo!(), 0, 1000);
+/// }
+/// ```
+#[must_use]
+pub struct GeneratedRuntimeChargedArgumentsV1 {
+    packed: GeneratedRuntimePackedArgumentsV1,
+}
+
+impl GeneratedRuntimeChargedArgumentsV1 {
+    pub fn kernel_id(&self) -> KernelId {
+        self.packed.kernel_id()
+    }
+    pub fn footprint(&self) -> GeneratedRuntimeArgumentFootprintV1 {
+        self.packed.footprint()
+    }
+    pub fn packing_observation(&self) -> &GeneratedKfdPackingObservationV1 {
+        self.packed.packing_observation()
+    }
+
+    // GEN-2A/B must retain this private decoder with exact invocation/completion authority.
+    #[allow(dead_code)]
+    pub(crate) fn into_runtime_inputs(
+        self,
+        geometry: AqlDispatchGeometryV1,
+        dynamic_group_segment_bytes: u32,
+        timeout_milliseconds: u32,
+    ) -> (
+        Gfx942RuntimeDispatchInputsV1,
+        GeneratedRuntimeOutputDecoderV1,
+    ) {
+        self.packed
+            .into_runtime_inputs(geometry, dynamic_group_segment_bytes, timeout_milliseconds)
+    }
 }
 
 impl GeneratedRuntimePackedArgumentsV1 {
@@ -602,6 +854,7 @@ struct OwnedBufferExpectation {
     byte_len: usize,
     access: Gfx942RuntimeBufferAccessV1,
     custody: Option<OutputCustody>,
+    read_credit: Option<ReadResultCreditV1>,
 }
 
 /// Data-only decoder. Successfully decoded bytes are not proof that any kernel ran.
@@ -611,6 +864,7 @@ struct OwnedBufferExpectation {
 #[must_use]
 pub struct GeneratedRuntimeOutputDecoderV1 {
     expectations: Vec<OwnedBufferExpectation>,
+    result_gate: Option<Arc<ResultReadyGateV1>>,
 }
 
 impl GeneratedRuntimeOutputDecoderV1 {
@@ -621,6 +875,9 @@ impl GeneratedRuntimeOutputDecoderV1 {
         self,
         buffers: Vec<(Gfx942RuntimeBufferAccessV1, Vec<u8>)>,
     ) -> Result<(), GeneratedRuntimeArgumentErrorV1> {
+        if self.result_gate.is_some() {
+            return Err(GeneratedRuntimeArgumentErrorV1::BindingMismatch);
+        }
         let count = self
             .expectations
             .iter()
@@ -642,16 +899,8 @@ impl GeneratedRuntimeOutputDecoderV1 {
                     return Err(GeneratedRuntimeArgumentErrorV1::BindingMismatch);
                 }
             }
-            if let Some(custody) = &expected.custody
-                && !matches!(
-                    *custody
-                        .state
-                        .lock()
-                        .map_err(|_| GeneratedRuntimeArgumentErrorV1::Custody)?,
-                    OutputState::Bound
-                )
-            {
-                return Err(GeneratedRuntimeArgumentErrorV1::StaleOrAliasedOutput);
+            if let Some(custody) = &expected.custody {
+                custody.bound_to(None)?;
             }
         }
         let mut data = buffers.into_iter();
@@ -663,7 +912,7 @@ impl GeneratedRuntimeOutputDecoderV1 {
                     .ok_or(GeneratedRuntimeArgumentErrorV1::BindingMismatch)?
                     .1
             };
-            if let Some(custody) = expected.custody {
+            if let Some(OutputCustody::Legacy(custody)) = expected.custody {
                 *custody
                     .state
                     .lock()
@@ -674,6 +923,92 @@ impl GeneratedRuntimeOutputDecoderV1 {
                     };
             }
         }
+        Ok(())
+    }
+
+    // Data decoding remains private until GEN-2 binds it to exact completed invocation custody.
+    #[allow(dead_code)]
+    pub(crate) fn decode_charged_buffers(
+        self,
+        buffers: Vec<(Gfx942RuntimeBufferAccessV1, Vec<u8>)>,
+    ) -> Result<(), GeneratedRuntimeArgumentErrorV1> {
+        self.decode_charged_with(buffers, |_| {})
+    }
+
+    fn decode_charged_with(
+        self,
+        buffers: Vec<(Gfx942RuntimeBufferAccessV1, Vec<u8>)>,
+        after_output: impl Fn(usize),
+    ) -> Result<(), GeneratedRuntimeArgumentErrorV1> {
+        // Field order disposes returned encoded buffers before any result credit on all exits.
+        struct DecodeTransaction {
+            buffers: Vec<(Gfx942RuntimeBufferAccessV1, Vec<u8>)>,
+            decoder: GeneratedRuntimeOutputDecoderV1,
+        }
+        let mut transaction = DecodeTransaction {
+            buffers,
+            decoder: self,
+        };
+        let gate = transaction
+            .decoder
+            .result_gate
+            .as_ref()
+            .ok_or(GeneratedRuntimeArgumentErrorV1::BindingMismatch)?;
+        let expected_count = transaction
+            .decoder
+            .expectations
+            .iter()
+            .filter(|expected| expected.byte_len != 0)
+            .count();
+        if expected_count != transaction.buffers.len() {
+            return Err(GeneratedRuntimeArgumentErrorV1::BindingMismatch);
+        }
+        let mut buffers = transaction.buffers.iter();
+        for expected in &transaction.decoder.expectations {
+            if expected.byte_len != 0 {
+                let (access, bytes) = buffers
+                    .next()
+                    .ok_or(GeneratedRuntimeArgumentErrorV1::BindingMismatch)?;
+                if !fe2o3_runtime_model::r73_generated_result_shape_v1(
+                    u64::try_from(expected.byte_len)
+                        .map_err(|_| GeneratedRuntimeArgumentErrorV1::ByteLength)?,
+                    u64::try_from(bytes.len())
+                        .map_err(|_| GeneratedRuntimeArgumentErrorV1::ByteLength)?,
+                    u64::try_from(bytes.capacity())
+                        .map_err(|_| GeneratedRuntimeArgumentErrorV1::ByteLength)?,
+                    *access == expected.access,
+                ) {
+                    return Err(GeneratedRuntimeArgumentErrorV1::BindingMismatch);
+                }
+            }
+            if let Some(custody) = &expected.custody {
+                custody.bound_to(Some(gate))?;
+            } else if !expected
+                .read_credit
+                .as_ref()
+                .is_some_and(|credit| credit.bound_to(gate))
+            {
+                return Err(GeneratedRuntimeArgumentErrorV1::BindingMismatch);
+            }
+        }
+        let mut buffers = transaction.buffers.iter();
+        for (index, expected) in transaction.decoder.expectations.iter().enumerate() {
+            let bytes = if expected.byte_len == 0 {
+                &[][..]
+            } else {
+                buffers
+                    .next()
+                    .ok_or(GeneratedRuntimeArgumentErrorV1::BindingMismatch)?
+                    .1
+                    .as_slice()
+            };
+            if let Some(OutputCustody::Charged(custody)) = &expected.custody {
+                custody.decode(bytes, gate)?;
+                after_output(index);
+            }
+        }
+        drop(std::mem::take(&mut transaction.buffers));
+        gate.commit();
         Ok(())
     }
 }
@@ -689,12 +1024,56 @@ enum OutputState {
     Unavailable,
 }
 
-struct OutputCustody {
+enum OutputCustody {
+    Legacy(LegacyOutputCustody),
+    Charged(ChargedOutputCustodyV1),
+}
+
+impl OutputCustody {
+    fn same(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Legacy(left), Self::Legacy(right)) => Arc::ptr_eq(&left.state, &right.state),
+            (Self::Charged(left), Self::Charged(right)) => left.same(right),
+            _ => false,
+        }
+    }
+
+    fn bound_to(
+        &self,
+        gate: Option<&Arc<ResultReadyGateV1>>,
+    ) -> Result<(), GeneratedRuntimeArgumentErrorV1> {
+        match (self, gate) {
+            (Self::Legacy(custody), None)
+                if matches!(
+                    *custody
+                        .state
+                        .lock()
+                        .map_err(|_| GeneratedRuntimeArgumentErrorV1::Custody)?,
+                    OutputState::Bound
+                ) =>
+            {
+                Ok(())
+            }
+            (Self::Charged(custody), Some(gate)) => custody.bound_to(gate),
+            _ => Err(GeneratedRuntimeArgumentErrorV1::StaleOrAliasedOutput),
+        }
+    }
+
+    #[cfg(test)]
+    fn legacy(&self) -> &LegacyOutputCustody {
+        match self {
+            Self::Legacy(custody) => custody,
+            _ => panic!("legacy test custody"),
+        }
+    }
+}
+
+struct LegacyOutputCustody {
     state: Arc<Mutex<OutputState>>,
     scalar: RustScalarElementTypeV1,
 }
 
-impl Drop for OutputCustody {
+impl Drop for LegacyOutputCustody {
     fn drop(&mut self) {
         let mut state = self
             .state
@@ -759,6 +1138,7 @@ pub enum GeneratedRuntimeArgumentErrorV1 {
     OutputUnavailable,
     Allocation,
     Custody,
+    ResultCredit(fe2o3_resource_accounting::ResourceCreditErrorV1),
 }
 
 impl fmt::Display for GeneratedRuntimeArgumentErrorV1 {
@@ -782,6 +1162,9 @@ impl fmt::Display for GeneratedRuntimeArgumentErrorV1 {
             }
             Self::Allocation => f.write_str("owned generated storage allocation failed"),
             Self::Custody => f.write_str("owned generated output custody lock is poisoned"),
+            Self::ResultCredit(error) => {
+                write!(f, "owned generated result reservation failed: {error}")
+            }
         }
     }
 }
@@ -798,7 +1181,7 @@ mod tests {
         Mutability, Name, PointerWidth,
     };
 
-    fn plan<T: GeneratedDeviceScalarV1>(
+    pub(super) fn plan<T: GeneratedDeviceScalarV1>(
         accesses: &[Access],
         mapping: Option<RustDisjointIndexSpaceV1>,
     ) -> GeneratedArgumentPackingPlanV1 {
@@ -1020,11 +1403,11 @@ mod tests {
         ));
         assert_eq!(preflight.footprint(), before);
         assert!(matches!(
-            *first.custody.state.lock().unwrap(),
+            *first.custody.legacy().state.lock().unwrap(),
             OutputState::Unbound
         ));
         assert!(matches!(
-            *second.custody.state.lock().unwrap(),
+            *second.custody.legacy().state.lock().unwrap(),
             OutputState::Unbound
         ));
         assert_eq!(&*first.values, &[3]);
@@ -1075,10 +1458,10 @@ mod tests {
             GeneratedRuntimeReadWriteSlice::new(vec![1_u32].into_boxed_slice());
         let duplicate = GeneratedRuntimeReadWriteSlice {
             values: vec![2_u32].into_boxed_slice(),
-            custody: OutputCustody {
-                state: Arc::clone(&first.custody.state),
+            custody: OutputCustody::Legacy(LegacyOutputCustody {
+                state: Arc::clone(&first.custody.legacy().state),
                 scalar: u32::RUST_SCALAR_TYPE,
-            },
+            }),
         };
         let first = first.bind_argument(&plan, 0, &mut budget).unwrap();
         assert!(matches!(
@@ -1092,7 +1475,7 @@ mod tests {
         drop(first);
 
         let (stale, _) = GeneratedRuntimeReadWriteSlice::new(vec![1_u32].into_boxed_slice());
-        *stale.custody.state.lock().unwrap() = OutputState::Taken;
+        *stale.custody.legacy().state.lock().unwrap() = OutputState::Taken;
         assert!(matches!(
             stale.bind_argument(&plan, 0, &mut budget),
             Err(GeneratedRuntimeArgumentErrorV1::StaleOrAliasedOutput)

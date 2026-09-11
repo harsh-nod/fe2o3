@@ -115,6 +115,20 @@ pub fn prepare_owned_generated_arguments(
     )
 }
 
+pub fn prepare_charged_generated_arguments(
+    executable: &gpu_host::AuthenticatedWorkerV3ExecutableV1<transform_gpu::Marker>,
+    budget: &gpu_host::GeneratedRuntimeResultBudgetV1,
+) -> Result<(gpu_host::GeneratedRuntimeChargedArgumentsV1, gpu_host::GeneratedRuntimeChargedResultV1<f32>), gpu_host::GeneratedRuntimeArgumentErrorV1> {
+    let source = gpu_host::GeneratedRuntimeReadSlice::new(vec![1f32, 2.0].into_boxed_slice());
+    let (output, observer) = gpu_host::GeneratedRuntimeReadWriteSlice::new_charged(vec![0f32; 2].into_boxed_slice());
+    let prepared = executable.prepare_generated_runtime_arguments_charged(
+        transform_gpu::RuntimeArguments::new(2.0, source, output),
+        gpu_host::GeneratedRuntimeArgumentLimitsV1::new(4096, 4096, 3),
+        budget,
+    )?;
+    Ok((prepared, observer))
+}
+
 pub fn mapped_kfd_arguments<'allocation>(
     first: &'allocation [u16],
     second: &'allocation [u16],

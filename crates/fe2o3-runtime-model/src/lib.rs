@@ -77,6 +77,7 @@ mod r69_host_capture;
 mod r70_resource_batch;
 mod r71_device_pool;
 mod r72_host_visible_backing_credits;
+mod r73_generated_result_storage;
 mod r9_native_evidence;
 mod typed_async;
 
@@ -141,6 +142,7 @@ pub use r69_host_capture::*;
 pub use r70_resource_batch::*;
 pub use r71_device_pool::*;
 pub use r72_host_visible_backing_credits::*;
+pub use r73_generated_result_storage::*;
 pub use typed_async::*;
 
 #[cfg(test)]

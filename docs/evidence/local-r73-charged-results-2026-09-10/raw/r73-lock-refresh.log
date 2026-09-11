@@ -1,0 +1,7 @@
+Checking host dependency edges: Cargo.lock
+Checking host dependency edges: crates/fe2o3-macros/tests/fixtures/generic-worker-v3-adapter/Cargo.lock
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/r73-refresh-locks.py", line 20, in <module>
+    host['dependencies'] = sorted(set(host['dependencies']) | {'fe2o3-resource-accounting', 'fe2o3-runtime-model'})
+                                      ~~~~^^^^^^^^^^^^^^^^
+KeyError: 'dependencies'

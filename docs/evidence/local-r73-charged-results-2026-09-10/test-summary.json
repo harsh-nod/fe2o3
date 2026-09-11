@@ -1,0 +1,93 @@
+{
+  "gnu-tests": {
+    "passed": 2222,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "musl-tests": {
+    "passed": 2222,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "gnu-docs": {
+    "passed": 86,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 6
+  },
+  "musl-docs": {
+    "passed": 71,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 5
+  },
+  "musl-host-docs": {
+    "passed": 14,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "gnu-host": {
+    "passed": 227,
+    "failed": 0,
+    "ignored": 4,
+    "harnesses": 1
+  },
+  "musl-host": {
+    "passed": 110,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "macro-fixtures": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "verus": {
+    "positive_sources": 62,
+    "obligations": 1374,
+    "expected_negatives": 686,
+    "native_or_whole_executor_proof": false
+  },
+  "polling_regression": {
+    "before_fix": "expected timeout after bounded cleanup",
+    "focused_after_fix_passed": 31,
+    "blocking_or_mutex_refinement_proof": false
+  },
+  "base_commit": "96212b87bb67eef0dc4e8f6e0137ebf3c35e2d37",
+  "dependency_edges_added": [
+    "fe2o3-resource-accounting",
+    "fe2o3-runtime-model"
+  ],
+  "lockfiles_checked": [
+    "Cargo.lock",
+    "crates/fe2o3-macros/tests/fixtures/generic-worker-v3-adapter/Cargo.lock",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/Cargo.lock",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/collected-tiled-gemm-v1/Cargo.lock",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-binding/kernel-a/Cargo.lock",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-binding/kernel-b/Cargo.lock",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-import/provider/Cargo.lock",
+    "examples/flash_attention_general_v1/Cargo.lock",
+    "examples/flash_attention_v1/Cargo.lock",
+    "examples/gemm_autoresearch_v1/Cargo.lock",
+    "examples/gfx950_advanced_attention/Cargo.lock",
+    "examples/gfx950_advanced_systems/Cargo.lock",
+    "examples/gfx950_gpt_oss_decode/Cargo.lock",
+    "examples/gfx950_low_precision/Cargo.lock",
+    "examples/moe_expert_v1/Cargo.lock",
+    "examples/moe_grouped_expert_general_v1/Cargo.lock",
+    "examples/moe_top2_v1/Cargo.lock",
+    "examples/row_softmax_general_v1/Cargo.lock",
+    "examples/row_softmax_v1/Cargo.lock",
+    "examples/tiled_gemm_general_v1/Cargo.lock",
+    "examples/wave64_collectives_v1/Cargo.lock",
+    "examples/workgroup_sync_v1/Cargo.lock"
+  ],
+  "new_dependency_packages": 0,
+  "final_gate_attempt": "r73-final2",
+  "non_documentation_source_identities_checked": 5569
+}

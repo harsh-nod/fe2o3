@@ -14,6 +14,7 @@ mod generated_argument_plan;
 mod generated_kfd_arguments;
 mod generated_kfd_invocation;
 mod generated_runtime_arguments;
+mod generated_runtime_results;
 #[cfg(feature = "qualification-legacy-hip-hsa")]
 mod generated_worker_v3_dispatch;
 #[cfg(feature = "qualification-legacy-hip-hsa")]
@@ -202,9 +203,13 @@ pub use generated_runtime_arguments::{
     CompilerGeneratedRuntimeArguments, GeneratedRuntimeArgumentBindingV1,
     GeneratedRuntimeArgumentBudgetV1, GeneratedRuntimeArgumentErrorV1,
     GeneratedRuntimeArgumentFootprintV1, GeneratedRuntimeArgumentLimitsV1,
-    GeneratedRuntimeOutputDecoderV1, GeneratedRuntimePackedArgumentsV1, GeneratedRuntimeReadSlice,
-    GeneratedRuntimeReadWriteSlice, GeneratedRuntimeResultV1, GeneratedRuntimeSliceBindingV1,
-    GeneratedRuntimeWriteSlice,
+    GeneratedRuntimeChargedArgumentsV1, GeneratedRuntimeOutputDecoderV1,
+    GeneratedRuntimePackedArgumentsV1, GeneratedRuntimeReadSlice, GeneratedRuntimeReadWriteSlice,
+    GeneratedRuntimeResultV1, GeneratedRuntimeSliceBindingV1, GeneratedRuntimeWriteSlice,
+};
+pub use generated_runtime_results::{
+    ChargedTypedResultV1, GeneratedRuntimeChargedResultV1, GeneratedRuntimeResultBudgetV1,
+    GeneratedRuntimeResultUsageV1,
 };
 #[doc(hidden)]
 #[cfg(feature = "qualification-legacy-hip-hsa")]

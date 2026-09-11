@@ -1,0 +1,38 @@
+   Compiling fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.91s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_host-fee15e70660320e5)
+
+running 30 tests
+test generated_runtime_arguments::charged_tests::both_preparation_routes_reject_mixed_custody_before_encoding ... ok
+test generated_runtime_arguments::charged_tests::charged_decoder_cannot_be_used_as_legacy_data_decoder ... ok
+test generated_runtime_arguments::charged_tests::changed_accounting_roster_or_private_seed_scalar_rejects ... ok
+test generated_runtime_arguments::charged_tests::abandoned_observer_retains_seed_until_producer_disposal ... ok
+test generated_runtime_arguments::charged_tests::charged_preparation_reuses_seed_and_preserves_exact_packing ... ok
+test generated_runtime_arguments::charged_tests::empty_typed_output_owns_a_member_and_read_only_returns_have_their_own_charge ... ok
+test generated_runtime_arguments::charged_tests::equal_capacity_foreign_read_member_cannot_cross_invocation_gates ... ok
+test generated_runtime_arguments::charged_tests::charged_write_only_mapped_output_uses_the_existing_binding_rules ... ok
+test generated_runtime_arguments::charged_tests::failed_or_panicking_binding_disposes_prepared_and_unissued_members ... ok
+test generated_runtime_arguments::charged_tests::full_roster_exhaustion_prevents_binding_every_earlier_seed ... ok
+test generated_runtime_arguments::charged_tests::extracted_result_outlives_joined_producer_and_all_other_owners ... ok
+test generated_runtime_arguments::charged_tests::lower_pack_rejection_disposes_all_bound_outputs_and_credits ... ok
+test generated_runtime_arguments::charged_tests::output_members_dispose_independently_without_partial_peak_refunds ... ok
+test generated_runtime_arguments::charged_tests::every_sealed_scalar_decodes_into_the_original_typed_extent ... ok
+test generated_runtime_arguments::charged_tests::late_shape_or_access_or_capacity_error_never_publishes_earlier_outputs ... ok
+test generated_runtime_arguments::charged_tests::poisoned_seed_custody_rejects_decode_and_refunds_after_abandonment ... ok
+test generated_runtime_arguments::charged_tests::zero_buffer_preparation_bypasses_the_nonempty_batch_api ... ok
+test generated_runtime_arguments::charged_tests::public_pack_cannot_shed_the_charged_route ... ok
+test generated_runtime_arguments::tests::borrowed_writeback_cannot_be_extracted_as_owned_storage ... ok
+test generated_runtime_arguments::charged_tests::concurrent_observers_cannot_extract_a_partially_decoded_roster ... ok
+test generated_runtime_arguments::tests::byte_limits_reject_before_encoding_and_checked_charges_do_not_partially_debit ... ok
+test generated_runtime_arguments::tests::decoder_checks_every_shape_before_delivering_any_output ... ok
+test generated_runtime_arguments::tests::dropped_observer_does_not_withdraw_owned_storage_or_decoder_custody ... ok
+test generated_runtime_arguments::tests::empty_write_only_output_and_mapped_initialized_seed_are_preserved ... ok
+test generated_runtime_arguments::tests::owned_packing_reuses_exact_borrowed_abi_bytes_and_observations ... ok
+test generated_runtime_arguments::tests::stale_private_output_custody_and_duplicate_binding_reject ... ok
+test generated_runtime_arguments::tests::owned_type_access_and_index_mapping_substitution_reject ... ok
+test generated_runtime_arguments::tests::owned_result_outlives_input_and_rejects_wrong_type_and_repeated_take ... ok
+test generated_runtime_arguments::tests::uncharged_binding_and_excess_result_capacity_reject ... ok
+test generated_runtime_arguments::tests::whole_invocation_preflight_rejects_without_binding_or_encoding_earlier_outputs ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 79 filtered out; finished in 0.01s
+

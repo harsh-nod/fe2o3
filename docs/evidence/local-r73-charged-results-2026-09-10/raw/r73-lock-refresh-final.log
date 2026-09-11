@@ -1,0 +1,29 @@
+Checking host dependency edges: Cargo.lock
+Checking host dependency edges: crates/fe2o3-macros/tests/fixtures/generic-worker-v3-adapter/Cargo.lock
+Checking host dependency edges: crates/fe2o3-macros/tests/fixtures/renamed-typed-host/Cargo.lock
+Fixture stub host is unchanged
+Checking host dependency edges: crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1/Cargo.lock
+Checking host dependency edges: crates/rustc-codegen-fe2o3/tests/fixtures/collected-tiled-gemm-v1/Cargo.lock
+Checking host dependency edges: crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-binding/kernel-a/Cargo.lock
+Checking host dependency edges: crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-binding/kernel-b/Cargo.lock
+Checking host dependency edges: crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-import/provider/Cargo.lock
+Checking host dependency edges: examples/flash_attention_general_v1/Cargo.lock
+Checking host dependency edges: examples/flash_attention_v1/Cargo.lock
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+Checking host dependency edges: examples/gemm_autoresearch_v1/Cargo.lock
+Checking host dependency edges: examples/gfx950_advanced_attention/Cargo.lock
+Checking host dependency edges: examples/gfx950_advanced_systems/Cargo.lock
+Checking host dependency edges: examples/gfx950_gpt_oss_decode/Cargo.lock
+Checking host dependency edges: examples/gfx950_low_precision/Cargo.lock
+Checking host dependency edges: examples/moe_expert_v1/Cargo.lock
+Checking host dependency edges: examples/moe_grouped_expert_general_v1/Cargo.lock
+Checking host dependency edges: examples/moe_top2_v1/Cargo.lock
+Checking host dependency edges: examples/row_softmax_general_v1/Cargo.lock
+Checking host dependency edges: examples/row_softmax_v1/Cargo.lock
+Checking host dependency edges: examples/tiled_gemm_general_v1/Cargo.lock
+Checking host dependency edges: examples/wave64_collectives_v1/Cargo.lock
+Checking host dependency edges: examples/workgroup_sync_v1/Cargo.lock
+Only the two intended host dependency edges changed; 22 real-host lockfiles checked

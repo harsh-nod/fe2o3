@@ -178,6 +178,13 @@ fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
             "runtime_trait_requires_unsafe",
             &["error[E0200]", "CompilerGeneratedRuntimeArguments"],
         ),
+        ("charged_borrow_escape", &["error[E0308]", "new_charged"]),
+        ("charged_result_clone", &["no method named `clone`"]),
+        (
+            "charged_result_storage_escape",
+            &["no method named `into_boxed_slice`"],
+        ),
+        ("charged_decoder_escape", &["private method"]),
     ];
 
     for (bin, expected_diagnostics) in cases {

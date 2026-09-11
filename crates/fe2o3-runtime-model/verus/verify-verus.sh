@@ -133,6 +133,15 @@ negative_r70_record_shortage="$script_dir/negative/r70_resource_batch_v1_record_
 negative_r70_generation_wrap="$script_dir/negative/r70_resource_batch_v1_generation_wrap.rs"
 negative_r70_duplicate_owner="$script_dir/negative/r70_resource_batch_v1_duplicate_owner.rs"
 negative_r70_sibling_refund="$script_dir/negative/r70_resource_batch_v1_sibling_refund.rs"
+r73_generated_result_storage_proof="$script_dir/r73_generated_result_storage_v1.rs"
+negative_r73_typed_half_charge="$script_dir/negative/r73_generated_result_storage_v1_typed_half_charge.rs"
+negative_r73_readonly_double_charge="$script_dir/negative/r73_generated_result_storage_v1_readonly_double_charge.rs"
+negative_r73_overflow_accepted="$script_dir/negative/r73_generated_result_storage_v1_overflow_accepted.rs"
+negative_r73_wrong_coordinate="$script_dir/negative/r73_generated_result_storage_v1_wrong_coordinate.rs"
+negative_r73_shape_length_omitted="$script_dir/negative/r73_generated_result_storage_v1_shape_length_omitted.rs"
+negative_r73_shape_capacity_omitted="$script_dir/negative/r73_generated_result_storage_v1_shape_capacity_omitted.rs"
+negative_r73_shape_access_omitted="$script_dir/negative/r73_generated_result_storage_v1_shape_access_omitted.rs"
+negative_r73_zero_rejected="$script_dir/negative/r73_generated_result_storage_v1_zero_rejected.rs"
 r72_host_visible_backing_credits_proof="$script_dir/r72_host_visible_backing_credits_v1.rs"
 negative_r72_zero_accepted="$script_dir/negative/r72_host_visible_backing_credits_v1_zero_accepted.rs"
 negative_r72_oversized_accepted="$script_dir/negative/r72_host_visible_backing_credits_v1_oversized_accepted.rs"
@@ -900,6 +909,15 @@ expected_negative_r70_record_shortage=$(read_pin "$pin_dir/NEGATIVE_R70_RECORD_S
 expected_negative_r70_generation_wrap=$(read_pin "$pin_dir/NEGATIVE_R70_GENERATION_WRAP_SHA256")
 expected_negative_r70_duplicate_owner=$(read_pin "$pin_dir/NEGATIVE_R70_DUPLICATE_OWNER_SHA256")
 expected_negative_r70_sibling_refund=$(read_pin "$pin_dir/NEGATIVE_R70_SIBLING_REFUND_SHA256")
+expected_r73_generated_result_storage=$(read_pin "$pin_dir/R73_GENERATED_RESULT_STORAGE_SHA256")
+expected_negative_r73_typed_half_charge=$(read_pin "$pin_dir/NEGATIVE_R73_TYPED_HALF_CHARGE_SHA256")
+expected_negative_r73_readonly_double_charge=$(read_pin "$pin_dir/NEGATIVE_R73_READONLY_DOUBLE_CHARGE_SHA256")
+expected_negative_r73_overflow_accepted=$(read_pin "$pin_dir/NEGATIVE_R73_OVERFLOW_ACCEPTED_SHA256")
+expected_negative_r73_wrong_coordinate=$(read_pin "$pin_dir/NEGATIVE_R73_WRONG_COORDINATE_SHA256")
+expected_negative_r73_shape_length_omitted=$(read_pin "$pin_dir/NEGATIVE_R73_SHAPE_LENGTH_OMITTED_SHA256")
+expected_negative_r73_shape_capacity_omitted=$(read_pin "$pin_dir/NEGATIVE_R73_SHAPE_CAPACITY_OMITTED_SHA256")
+expected_negative_r73_shape_access_omitted=$(read_pin "$pin_dir/NEGATIVE_R73_SHAPE_ACCESS_OMITTED_SHA256")
+expected_negative_r73_zero_rejected=$(read_pin "$pin_dir/NEGATIVE_R73_ZERO_REJECTED_SHA256")
 expected_r72_host_visible_backing_credits=$(read_pin "$pin_dir/R72_HOST_VISIBLE_BACKING_CREDITS_SHA256")
 expected_negative_r72_zero_accepted=$(read_pin "$pin_dir/NEGATIVE_R72_ZERO_ACCEPTED_SHA256")
 expected_negative_r72_oversized_accepted=$(read_pin "$pin_dir/NEGATIVE_R72_OVERSIZED_ACCEPTED_SHA256")
@@ -1679,6 +1697,15 @@ check_sources() {
     check_digest "$expected_negative_r70_generation_wrap" "$negative_r70_generation_wrap"
     check_digest "$expected_negative_r70_duplicate_owner" "$negative_r70_duplicate_owner"
     check_digest "$expected_negative_r70_sibling_refund" "$negative_r70_sibling_refund"
+    check_digest "$expected_r73_generated_result_storage" "$r73_generated_result_storage_proof"
+    check_digest "$expected_negative_r73_typed_half_charge" "$negative_r73_typed_half_charge"
+    check_digest "$expected_negative_r73_readonly_double_charge" "$negative_r73_readonly_double_charge"
+    check_digest "$expected_negative_r73_overflow_accepted" "$negative_r73_overflow_accepted"
+    check_digest "$expected_negative_r73_wrong_coordinate" "$negative_r73_wrong_coordinate"
+    check_digest "$expected_negative_r73_shape_length_omitted" "$negative_r73_shape_length_omitted"
+    check_digest "$expected_negative_r73_shape_capacity_omitted" "$negative_r73_shape_capacity_omitted"
+    check_digest "$expected_negative_r73_shape_access_omitted" "$negative_r73_shape_access_omitted"
+    check_digest "$expected_negative_r73_zero_rejected" "$negative_r73_zero_rejected"
     check_digest "$expected_r72_host_visible_backing_credits" "$r72_host_visible_backing_credits_proof"
     check_digest "$expected_negative_r72_zero_accepted" "$negative_r72_zero_accepted"
     check_digest "$expected_negative_r72_oversized_accepted" "$negative_r72_oversized_accepted"
@@ -2429,6 +2456,15 @@ check_sources
     "$negative_r70_generation_wrap" \
     "$negative_r70_duplicate_owner" \
     "$negative_r70_sibling_refund" \
+    "$r73_generated_result_storage_proof" \
+    "$negative_r73_typed_half_charge" \
+    "$negative_r73_readonly_double_charge" \
+    "$negative_r73_overflow_accepted" \
+    "$negative_r73_wrong_coordinate" \
+    "$negative_r73_shape_length_omitted" \
+    "$negative_r73_shape_capacity_omitted" \
+    "$negative_r73_shape_access_omitted" \
+    "$negative_r73_zero_rejected" \
     "$r72_host_visible_backing_credits_proof" \
     "$negative_r72_zero_accepted" \
     "$negative_r72_oversized_accepted" \
@@ -3205,6 +3241,7 @@ check_positive "$r67_resource_credits_proof" 'verification results:: 14 verified
 check_positive "$r68_device_backing_credits_proof" 'verification results:: 4 verified, 0 errors' r68-device-backing-credits
 check_positive "$r69_host_capture_proof" 'verification results:: 4 verified, 0 errors' r69-host-capture
 check_positive "$r70_resource_batch_proof" 'verification results:: 9 verified, 0 errors' r70-resource-batch
+check_positive "$r73_generated_result_storage_proof" 'verification results:: 7 verified, 0 errors' r73-generated-result-storage
 check_positive "$r72_host_visible_backing_credits_proof" 'verification results:: 5 verified, 0 errors' r72-host-visible-backing-credits
 check_positive "$r71_device_pool_proof" 'verification results:: 15 verified, 0 errors' r71-device-pool
 check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 release-while-published
@@ -3866,6 +3903,14 @@ check_negative "$negative_r70_record_shortage" mutated_record_shortage_v1 r70-re
 check_negative "$negative_r70_generation_wrap" mutated_generation_wrap_v1 r70-generation-wrap
 check_negative "$negative_r70_duplicate_owner" mutated_duplicate_owner_v1 r70-duplicate-owner
 check_negative "$negative_r70_sibling_refund" mutated_sibling_refund_v1 r70-sibling-refund
+check_negative "$negative_r73_typed_half_charge" mutated_typed_half_charge_v1 r73-typed-half-charge
+check_negative "$negative_r73_readonly_double_charge" mutated_readonly_double_charge_v1 r73-readonly-double-charge
+check_negative "$negative_r73_overflow_accepted" mutated_overflow_accepted_v1 r73-overflow-accepted
+check_negative "$negative_r73_wrong_coordinate" mutated_wrong_coordinate_v1 r73-wrong-coordinate
+check_negative "$negative_r73_shape_length_omitted" mutated_shape_length_omitted_v1 r73-shape-length-omitted
+check_negative "$negative_r73_shape_capacity_omitted" mutated_shape_capacity_omitted_v1 r73-shape-capacity-omitted
+check_negative "$negative_r73_shape_access_omitted" mutated_shape_access_omitted_v1 r73-shape-access-omitted
+check_negative "$negative_r73_zero_rejected" mutated_zero_rejected_v1 r73-zero-rejected
 check_negative "$negative_r72_zero_accepted" mutated_zero_accepted_v1 r72-zero-accepted
 check_negative "$negative_r72_oversized_accepted" mutated_oversized_accepted_v1 r72-oversized-accepted
 check_negative "$negative_r72_logical_bytes_substitution" mutated_logical_bytes_substitution_v1 r72-logical-bytes-substitution
@@ -3893,7 +3938,7 @@ check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 r57_three_binding_compute_obligations=35 r57_three_binding_compute_mutations=23 r60_ordinary_fixed_dispatch_pipeline_obligations=46 r60_ordinary_fixed_dispatch_pipeline_mutations=26 r61_owner_async_custody_obligations=8 r61_owner_async_custody_mutations=8 r62_operation_control_obligations=8 r62_operation_control_mutations=8 r63_graph_reservation_obligations=8 r63_graph_reservation_mutations=8 r64_payload_budget_obligations=8 r64_payload_budget_mutations=8 r65_graph_versions_obligations=8 r65_graph_versions_mutations=8 r66_compute_sdma_coexistence_obligations=16 r66_compute_sdma_coexistence_mutations=8 r67_resource_credits_obligations=14 r67_resource_credits_mutations=8 r68_device_backing_credits_obligations=4 r68_device_backing_credits_mutations=5 r69_host_capture_obligations=4 r69_host_capture_mutations=5 r70_resource_batch_obligations=9 r70_resource_batch_mutations=9 r71_device_pool_obligations=15 r71_device_pool_mutations=10 r72_host_visible_backing_credits_obligations=5 r72_host_visible_backing_credits_mutations=9 expected_negative_files=678'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 r57_three_binding_compute_obligations=35 r57_three_binding_compute_mutations=23 r60_ordinary_fixed_dispatch_pipeline_obligations=46 r60_ordinary_fixed_dispatch_pipeline_mutations=26 r61_owner_async_custody_obligations=8 r61_owner_async_custody_mutations=8 r62_operation_control_obligations=8 r62_operation_control_mutations=8 r63_graph_reservation_obligations=8 r63_graph_reservation_mutations=8 r64_payload_budget_obligations=8 r64_payload_budget_mutations=8 r65_graph_versions_obligations=8 r65_graph_versions_mutations=8 r66_compute_sdma_coexistence_obligations=16 r66_compute_sdma_coexistence_mutations=8 r67_resource_credits_obligations=14 r67_resource_credits_mutations=8 r68_device_backing_credits_obligations=4 r68_device_backing_credits_mutations=5 r69_host_capture_obligations=4 r69_host_capture_mutations=5 r70_resource_batch_obligations=9 r70_resource_batch_mutations=9 r71_device_pool_obligations=15 r71_device_pool_mutations=10 r72_host_visible_backing_credits_obligations=5 r72_host_visible_backing_credits_mutations=9 r73_generated_result_storage_obligations=7 r73_generated_result_storage_mutations=8 expected_negative_files=686'
 actual_transcript=$(printf '%s\n' "$transcript" | /usr/bin/sha256sum | /usr/bin/awk '{ print $1 }')
 if [ "$actual_transcript" != "$expected_transcript" ]; then
     printf 'FAIL: verification transcript does not match the pin\n' >&2
