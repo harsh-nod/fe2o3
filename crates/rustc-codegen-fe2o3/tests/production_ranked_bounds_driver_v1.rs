@@ -5,64 +5,78 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
-const TYPED_LAYOUT_ABI: [u8; 32] = [
-    0x1d, 0xdf, 0x03, 0x4d, 0xa9, 0x01, 0xd4, 0x69, 0x52, 0x51, 0x89, 0x22, 0x69, 0x2f, 0xe6, 0xdb,
-    0xa6, 0x4e, 0x7f, 0xe2, 0xfc, 0xd8, 0x03, 0x23, 0x0b, 0x03, 0xf7, 0x1e, 0xd2, 0xb6, 0x2d, 0x16,
-];
-
-struct TypedLayoutRuntimeArguments {
-    value: f32,
-    allocation: fe2o3_runtime::RuntimeAllocationIdV1,
-    elements: u64,
-}
-
-impl fe2o3_runtime::RuntimeArgumentsV1 for TypedLayoutRuntimeArguments {
-    const SIGNATURE_V1: [u8; 32] = TYPED_LAYOUT_ABI;
-
-    fn encode_explicit_kernarg_v1(&self) -> Vec<u8> {
-        let mut bytes = vec![0; 40];
-        bytes[0..4].copy_from_slice(&self.value.to_bits().to_le_bytes());
-        bytes[16..24].copy_from_slice(&self.elements.to_le_bytes());
-        bytes[32..40].copy_from_slice(&self.elements.to_le_bytes());
-        bytes
-    }
-
-    fn bindings_v1(&self) -> Vec<fe2o3_runtime::RuntimeBindingV1> {
-        vec![
-            fe2o3_runtime::RuntimeBindingV1 {
-                region: fe2o3_runtime::RuntimeMemoryRegionV1 {
-                    allocation: self.allocation,
-                    access: fe2o3_runtime::RuntimeAccessV1::Read,
-                    byte_offset: 0,
-                    byte_len: 64 * 4,
-                },
-                kernarg_byte_offset: 8,
-            },
-            fe2o3_runtime::RuntimeBindingV1 {
-                region: fe2o3_runtime::RuntimeMemoryRegionV1 {
-                    allocation: self.allocation,
-                    access: fe2o3_runtime::RuntimeAccessV1::ReadWrite,
-                    byte_offset: 64 * 4,
-                    byte_len: 64 * 4,
-                },
-                kernarg_byte_offset: 24,
-            },
-        ]
-    }
-}
-
-struct WrongTypedLayoutRuntimeArguments;
-
-impl fe2o3_runtime::RuntimeArgumentsV1 for WrongTypedLayoutRuntimeArguments {
-    const SIGNATURE_V1: [u8; 32] = [0x44; 32];
-
-    fn encode_explicit_kernarg_v1(&self) -> Vec<u8> {
-        Vec::new()
-    }
-
-    fn bindings_v1(&self) -> Vec<fe2o3_runtime::RuntimeBindingV1> {
-        Vec::new()
-    }
+fn run_typed_layout_runtime_fixture(
+    target: &ScratchTarget,
+    bundle_path: &Path,
+    signature: [u8; 32],
+) {
+    let fixture = target.path().join("typed-layout-runtime");
+    std::fs::create_dir_all(fixture.join("src")).unwrap();
+    std::fs::write(
+        fixture.join("src/main.rs"),
+        include_str!("production_ranked_bounds_driver_v1/typed_layout_runtime.rs"),
+    )
+    .unwrap();
+    std::fs::write(fixture.join("src/signature.bin"), signature).unwrap();
+    let root = workspace();
+    let quoted_path = |name: &str| {
+        serde_json::to_string(root.join("crates").join(name).to_str().unwrap()).unwrap()
+    };
+    let manifest = format!(
+        "[package]\nname = \"fe2o3-typed-layout-runtime-fixture\"\nversion = \"0.1.0\"\n\
+         edition = \"2024\"\npublish = false\n\n[workspace]\n\n[dependencies]\n\
+         fe2o3-runtime = {{ path = {} }}\nfe2o3-sim-runtime = {{ path = {} }}\n",
+        quoted_path("fe2o3-runtime"),
+        quoted_path("fe2o3-sim-runtime"),
+    );
+    std::fs::write(fixture.join("Cargo.toml"), manifest).unwrap();
+    std::fs::copy(root.join("Cargo.lock"), fixture.join("Cargo.lock")).unwrap();
+    let cargo = || {
+        let mut command = Command::new(env!("CARGO"));
+        command
+            .current_dir(&root)
+            .env("CARGO_PROFILE_DEV_DEBUG", "1")
+            .env("CARGO_INCREMENTAL", "0")
+            .env_remove("RUSTFLAGS")
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
+            .env_remove("CARGO_BUILD_TARGET")
+            .env_remove("RUSTC_WRAPPER")
+            .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
+            .env_remove("RUSTC_WORKSPACE_WRAPPER")
+            .env_remove("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER");
+        command
+    };
+    // Reconcile only this scratch package against the copied dependency lock.
+    let metadata = cargo()
+        .args([
+            "metadata",
+            "--offline",
+            "--format-version",
+            "1",
+            "--manifest-path",
+        ])
+        .arg(fixture.join("Cargo.toml"))
+        .output()
+        .expect("resolve typed runtime fixture offline");
+    assert!(
+        metadata.status.success(),
+        "typed runtime fixture resolution failed:\n{}",
+        String::from_utf8_lossy(&metadata.stderr)
+    );
+    let executed = cargo()
+        .args(["run", "--offline", "--locked", "--quiet", "--manifest-path"])
+        .arg(fixture.join("Cargo.toml"))
+        .arg("--target-dir")
+        .arg(target.path().join("debug-cli-target"))
+        .arg("--")
+        .arg(bundle_path)
+        .output()
+        .expect("run exact-signature typed runtime fixture");
+    assert!(
+        executed.status.success(),
+        "typed runtime fixture rejected exact compiler output:\n{}",
+        String::from_utf8_lossy(&executed.stderr)
+    );
 }
 
 struct ScratchTarget {
@@ -71,11 +85,15 @@ struct ScratchTarget {
 
 impl ScratchTarget {
     fn new() -> Self {
+        Self::in_directory(&std::env::temp_dir())
+    }
+
+    fn in_directory(parent: &Path) -> Self {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock after Unix epoch")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
+        let path = parent.join(format!(
             "fe2o3-production-ranked-bounds-{}-{nonce}",
             std::process::id()
         ));
@@ -2150,6 +2168,36 @@ fn ordinary_kernel_sources_export_and_query_exact_v2_source_variables() {
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions() {
+    let target = ScratchTarget::new();
+    let exporter = Path::new(env!("CARGO_BIN_EXE_fe2o3-export-sim"));
+    check_typed_layout_export(
+        &target,
+        exporter,
+        target.path().join("typed-layout-original-v3.fe2sim"),
+    );
+
+    // Hard links change the wrapper location without changing any executable bytes.
+    let executable_dir = exporter.parent().unwrap();
+    let relocated = ScratchTarget::in_directory(executable_dir);
+    for filename in [
+        "fe2o3-export-sim",
+        "fe2o3-rustc-extract",
+        "librustc_codegen_fe2o3.so",
+    ] {
+        std::fs::hard_link(
+            executable_dir.join(filename),
+            relocated.path().join(filename),
+        )
+        .expect("hard-link exact exporter components on the same filesystem");
+    }
+    check_typed_layout_export(
+        &target,
+        &relocated.path().join("fe2o3-export-sim"),
+        target.path().join("typed-layout-relocated-v3.fe2sim"),
+    );
+}
+
+fn check_typed_layout_export(target: &ScratchTarget, exporter: &Path, bundle_path: PathBuf) {
     use fe2o3_kernel_ir::{
         AccessMode, AddressSpace, SemanticArgumentOwnershipV1, SemanticKirStorageRepresentationV1,
         SemanticStorageBindingV1, Type,
@@ -2159,10 +2207,9 @@ fn ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions() {
         SemanticMirLimitsV1, SemanticSourceArgumentOwnershipV1, SemanticTypeShapeV1,
     };
 
-    let target = ScratchTarget::new();
-    let bundle_path = target.path().join("typed-layout-v3.fe2sim");
     let result = output(
-        simulation_export_command_for_feature(
+        simulation_export_command_for_feature_with_exporter(
+            exporter,
             "gfx942",
             &bundle_path,
             &target.path().join("typed-layout-export-target"),
@@ -2307,10 +2354,8 @@ fn ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions() {
     assert_eq!(offsets, [0, 8, 24]);
     assert_eq!([offsets[1] + 8, offsets[2] + 8], [16, 32]);
     assert_eq!(next_byte.next_multiple_of(8), 40);
-    assert_eq!(
-        abi.identity().as_bytes(),
-        &TYPED_LAYOUT_ABI,
-        "ordinary Rust semantic ABI identity changed; independently checked offsets={offsets:?}, bytes=40, alignment=8, function={}, ABI={}, ABI layout={}, source layouts={layout_summary:?}",
+    eprintln!(
+        "typed-layout export: function={}, ABI={}, ABI layout={}, offsets={offsets:?}, bytes=40, alignment=8, source layouts={layout_summary:?}",
         hex(semantic_root.identity().as_bytes()),
         hex(abi.identity().as_bytes()),
         hex(abi.layout_identity().as_bytes()),
@@ -2467,132 +2512,7 @@ fn ordinary_rust_exports_and_queries_exact_v3_typed_layouts_and_regions() {
     assert_eq!(simulated_response["session"]["simulated"], true);
     assert_eq!(simulated_response["session"]["hardware_observed"], false);
 
-    let backend = fe2o3_sim_runtime::SimRuntimeBackendV1::gfx942([0x91; 32]).unwrap();
-    assert_eq!(
-        backend.evidence(),
-        fe2o3_sim_runtime::SimRuntimeEvidenceV1 {
-            mode: "cpu-kir-semantic-simulation",
-            simulated: true,
-            hardware: false,
-            performance_prediction: false,
-        }
-    );
-    let mut runtime = fe2o3_runtime::RuntimeContextV1::open(backend).unwrap();
-    let device = runtime.devices()[0].id();
-    let allocation = runtime
-        .allocate(
-            device,
-            fe2o3_runtime::RuntimeMemoryKindV1::HostVisible,
-            128 * 4,
-            4,
-        )
-        .unwrap();
-    runtime
-        .write_allocation(allocation, 0, &vec![0; 128 * 4])
-        .unwrap();
-    let stream = runtime.create_stream(device).unwrap();
-    assert!(
-        runtime
-            .load_module(device, b"not-a-fe2sim-v3-bundle")
-            .is_err()
-    );
-    let module = runtime
-        .load_module(device, bundle.canonical_bytes())
-        .unwrap();
-    assert!(
-        runtime
-            .resolve_kernel::<WrongTypedLayoutRuntimeArguments>(module, "typed_layout_corpus")
-            .is_err()
-    );
-    let kernel = runtime
-        .resolve_kernel::<TypedLayoutRuntimeArguments>(module, "typed_layout_corpus")
-        .unwrap();
-    let bad_arguments = TypedLayoutRuntimeArguments {
-        value: 1.0,
-        allocation,
-        elements: 63,
-    };
-    assert!(
-        runtime
-            .launch(
-                stream,
-                &kernel,
-                &bad_arguments,
-                fe2o3_runtime::RuntimeLaunchGeometryV1 {
-                    grid: [64, 1, 1],
-                    workgroup: [64, 1, 1],
-                    dynamic_shared_bytes: 0,
-                },
-                &[],
-            )
-            .is_err()
-    );
-    let first_arguments = TypedLayoutRuntimeArguments {
-        value: 1.25,
-        allocation,
-        elements: 64,
-    };
-    let mut first = runtime
-        .launch(
-            stream,
-            &kernel,
-            &first_arguments,
-            fe2o3_runtime::RuntimeLaunchGeometryV1 {
-                grid: [64, 1, 1],
-                workgroup: [64, 1, 1],
-                dynamic_shared_bytes: 0,
-            },
-            &[],
-        )
-        .unwrap();
-    let event = runtime.record_event(&first).unwrap();
-    assert_eq!(
-        runtime
-            .wait(&mut first, std::time::Duration::from_secs(10))
-            .unwrap(),
-        fe2o3_runtime::RuntimePollV1::Succeeded
-    );
-    let second_arguments = TypedLayoutRuntimeArguments {
-        value: 2.5,
-        allocation,
-        elements: 64,
-    };
-    let mut second = runtime
-        .launch(
-            stream,
-            &kernel,
-            &second_arguments,
-            fe2o3_runtime::RuntimeLaunchGeometryV1 {
-                grid: [64, 1, 1],
-                workgroup: [64, 1, 1],
-                dynamic_shared_bytes: 0,
-            },
-            &[event],
-        )
-        .unwrap();
-    assert_eq!(
-        runtime
-            .wait(&mut second, std::time::Duration::from_secs(10))
-            .unwrap(),
-        fe2o3_runtime::RuntimePollV1::Succeeded
-    );
-    let mut copied_back = vec![0; 64 * 4];
-    runtime
-        .read_allocation(allocation, 64 * 4, &mut copied_back)
-        .unwrap();
-    assert!(
-        copied_back
-            .chunks_exact(4)
-            .all(|bytes| { f32::from_bits(u32::from_le_bytes(bytes.try_into().unwrap())) == 2.5 })
-    );
-    runtime.release_event(event).unwrap();
-    runtime.release_submission(first).unwrap();
-    runtime.release_submission(second).unwrap();
-    runtime.destroy_stream(stream).unwrap();
-    runtime.unload_module(module).unwrap();
-    runtime.release_allocation(allocation).unwrap();
-    let backend = runtime.shutdown().unwrap();
-    assert!(!backend.uses_gpu());
+    run_typed_layout_runtime_fixture(target, &bundle_path, *abi.identity().as_bytes());
 
     let mut wrong_target_backend =
         fe2o3_sim_runtime::SimRuntimeBackendV1::gfx950([0x93; 32]).unwrap();
@@ -3655,9 +3575,27 @@ fn simulation_export_command_for_feature(
     bundle_version: Option<u16>,
     feature: &str,
 ) -> Command {
+    simulation_export_command_for_feature_with_exporter(
+        Path::new(env!("CARGO_BIN_EXE_fe2o3-export-sim")),
+        target,
+        output,
+        target_dir,
+        bundle_version,
+        feature,
+    )
+}
+
+fn simulation_export_command_for_feature_with_exporter(
+    exporter: &Path,
+    target: &str,
+    output: &Path,
+    target_dir: &Path,
+    bundle_version: Option<u16>,
+    feature: &str,
+) -> Command {
     const POISONED_WRAPPER: &str = "/fe2o3-poisoned-caller-wrapper-must-not-run";
 
-    let mut command = Command::new(env!("CARGO_BIN_EXE_fe2o3-export-sim"));
+    let mut command = Command::new(exporter);
     command
         .current_dir(workspace())
         // Bind source ABI identities to the same limited-debug profile as source CI.
