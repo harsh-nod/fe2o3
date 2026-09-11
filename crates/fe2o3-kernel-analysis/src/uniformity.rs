@@ -483,17 +483,14 @@ impl<'a> Analyzer<'a> {
             &private_load_slots,
             &private_slot_stores,
         );
-        let value_definitions = body
-            .blocks
-            .iter()
-            .flat_map(|block| &block.operations)
-            .flat_map(|operation| {
-                operation
-                    .results
-                    .iter()
-                    .map(move |result| (result.id, operation))
-            })
-            .collect();
+        let mut value_definitions = BTreeMap::new();
+        for block in &body.blocks {
+            for operation in &block.operations {
+                for result in &operation.results {
+                    value_definitions.insert(result.id, operation);
+                }
+            }
+        }
         let mut effective_successors = effective_successors(body, &known_integer_values);
         if !malformed && !malformed_values && !malformed_edges && !control_flow_malformed {
             contextual_control::refine_successors(
@@ -3361,3 +3358,6 @@ fn immediate_postdominator(
         })
     })
 }
+
+#[cfg(test)]
+mod source_ordered_definitions_v1_tests;
