@@ -256,6 +256,19 @@ pub(crate) struct PrimaryPreparationSnapshotV1 {
     kernargs: Vec<Box<[u8]>>,
 }
 
+impl PrimaryPreparationSnapshotV1 {
+    pub(crate) fn packets(packets: &[Gfx942FixedDispatchPacketV1]) -> Self {
+        Self {
+            data: Vec::new(),
+            kernargs: packets.iter().map(|p| p.kernarg_bytes.clone()).collect(),
+        }
+    }
+
+    pub(crate) fn capture_data(&mut self, data: &[Gfx942FixedDispatchDataV1]) {
+        self.data = inputs(data);
+    }
+}
+
 impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
     pub(crate) fn primary_snapshot_v1(&self) -> PrimaryPreparationSnapshotV1 {
         PrimaryPreparationSnapshotV1 {

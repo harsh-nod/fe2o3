@@ -1,0 +1,50 @@
+[
+  {
+    "name": "v2-completion-owner",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_success_preserves_primary_and_exact_owner_partition",
+    "expected": "completed lane retains its completion ledger",
+    "edits": [
+      [
+        "completion_signals: self.completion.retained.take(),\n            completion_owner: QueueOwnerSlotV1(self.completion_owner.take()),",
+        "completion_signals: self.completion.retained.take(),\n            completion_owner: QueueOwnerSlotV1(None),"
+      ]
+    ]
+  },
+  {
+    "name": "v2-closing-currentness",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_success_preserves_primary_and_exact_owner_partition",
+    "expected": "assertion `left == right` failed",
+    "edits": [
+      [
+        "        parent.engine.prepare_operation().map_err(map_native)?;\n        let destination = check_auxiliary_compute_lane_slot_v1(parent.lanes, slot)?;",
+        "        let destination = check_auxiliary_compute_lane_slot_v1(parent.lanes, slot)?;"
+      ]
+    ]
+  },
+  {
+    "name": "v2-installed-generation",
+    "path": "crates/fe2o3-kfd/src/queue_live.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_success_preserves_primary_and_exact_owner_partition",
+    "expected": "assertion `left == right` failed",
+    "edits": [
+      [
+        "                generation: 1,\n                state: Some(state),",
+        "                generation: 2,\n                state: Some(state),"
+      ]
+    ]
+  },
+  {
+    "name": "v2-original-sdma-roster",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_auxiliary::tests::auxiliary_production_glue_uses_shared_phases_and_original_target_after_retake",
+    "expected": "original target binding: sdma: scope.parent.sdma.as_ref()",
+    "edits": [
+      [
+        "                    sdma: scope.parent.sdma.as_ref(),",
+        "                    sdma: None,"
+      ]
+    ]
+  }
+]

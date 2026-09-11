@@ -21,6 +21,9 @@ mod preparation_cases;
 #[path = "integration_projection_tests.rs"]
 mod projection_cases;
 
+#[path = "../construction_auxiliary/integration_tests.rs"]
+mod auxiliary_cases;
+
 #[path = "integration_platform.rs"]
 mod platform;
 use crate::queue_linux::primary_fixture::{LocalGateV1, LocalResourcesV1};
@@ -40,6 +43,8 @@ struct Trace {
     initial_preparation: Option<PrimaryPreparationSnapshotV1>,
     minted: Vec<OwnerIdentity>,
     create_return: Option<(u32, u64)>,
+    create_returns: Vec<(u32, u64)>,
+    create_collision: bool,
     dependency_invalid: bool,
     local_gate: Option<LocalGateV1>,
     local_resources: LocalResourcesV1,
@@ -164,7 +169,13 @@ impl PrimaryMemoryV1 for Memory {
         bytes: usize,
     ) -> Result<CpuRingAuthorityV1, MemorySessionError> {
         memory_step("allocate-ring")?;
-        projection_step(self, "allocate-ring", 1);
+        let occurrence = trace()
+            .borrow()
+            .calls
+            .iter()
+            .filter(|&&c| c == "allocate-ring")
+            .count();
+        projection_step(self, "allocate-ring", occurrence);
         match backing {
             QueueRingBackingV1::AqlSpecial => {
                 self.allocate(bytes).map(CpuRingAuthorityV1::AqlSpecial)
@@ -328,22 +339,30 @@ impl PrimaryMemoryV1 for Memory {
         &mut self,
         mut args: fe2o3_kfd_uapi::KfdIoctlCreateQueueArgs,
     ) -> QueueKernelOutcomeV1<fe2o3_kfd_uapi::KfdIoctlCreateQueueArgs> {
-        record("create");
+        let occurrence = record("create");
         let mode = trace().borrow().create;
         if mode == 5 {
             std::panic::panic_any("CREATE panic");
         }
         if !matches!(mode, 1 | 2) {
-            args.queue_id = 7;
+            args.queue_id = if trace().borrow().create_collision {
+                7
+            } else {
+                6 + occurrence as u32
+            };
             args.doorbell_offset = (fe2o3_kfd_uapi::KFD_MMAP_TYPE_DOORBELL
                 << fe2o3_kfd_uapi::KFD_MMAP_TYPE_SHIFT)
                 | ((u64::from(args.gpu_id) & 0xffff) << fe2o3_kfd_uapi::KFD_MMAP_GPU_ID_HASH_SHIFT)
-                | 8;
+                | (8 * occurrence as u64);
         }
         if mode == 4 {
             args.ring_size *= 2;
         }
         trace().borrow_mut().create_return = Some((args.queue_id, args.doorbell_offset));
+        trace()
+            .borrow_mut()
+            .create_returns
+            .push((args.queue_id, args.doorbell_offset));
         let status = match mode {
             1 => fe2o3_runtime_model::QueueSyscallStatusV1::FailedNoEffect,
             2 | 3 => fe2o3_runtime_model::QueueSyscallStatusV1::Indeterminate,
@@ -382,7 +401,11 @@ struct ExternalSlots {
 }
 
 fn setup_memory() -> (Memory, Rc<RefCell<Trace>>) {
-    let memory = Memory::with_aperture(true, 1 << 30);
+    setup_memory_with_host_budget(1 << 20)
+}
+
+fn setup_memory_with_host_budget(bytes: u64) -> (Memory, Rc<RefCell<Trace>>) {
+    let memory = Memory::with_host_budget(true, 1 << 30, bytes);
     let trace = Rc::new(RefCell::new(Trace {
         session: memory.primary_session_id(),
         initial_data: Some(memory.observation()),
@@ -392,11 +415,13 @@ fn setup_memory() -> (Memory, Rc<RefCell<Trace>>) {
     (memory, trace)
 }
 
-fn setup() -> (Box<Root>, Rc<RefCell<Trace>>) {
+fn recipe() -> (
+    Vec<ValidatedKernelEnvelope<'static>>,
+    [Gfx942FixedDispatchPacketV1; 3],
+) {
     const IMAGE: &[u8] = include_bytes!(
         "../../../../fe2o3-runtime/fixtures/trusted-gfx942-inplace-transform-v1/inplace_transform.hsaco"
     );
-    let (mut memory, trace) = setup_memory();
     let programs = (1..=3)
         .map(|i| actual_persistent_control_test_program(IMAGE, [i; 32]))
         .collect();
@@ -411,6 +436,19 @@ fn setup() -> (Box<Root>, Rc<RefCell<Trace>>) {
             vec![Gfx942DispatchBufferBindingV1::new(0, 0, 0, 4096)].into_boxed_slice(),
         )
     });
+    (programs, packets)
+}
+
+fn setup() -> (Box<Root>, Rc<RefCell<Trace>>) {
+    let (memory, trace) = setup_memory();
+    setup_with_memory(memory, trace)
+}
+
+fn setup_with_memory(
+    mut memory: Memory,
+    trace: Rc<RefCell<Trace>>,
+) -> (Box<Root>, Rc<RefCell<Trace>>) {
+    let (programs, packets) = recipe();
     let custody = FixedDispatchPreparationCustodyV1::new(packets, memory.roster());
     trace.borrow_mut().initial_data = Some(memory.observation());
     trace.borrow_mut().initial_preparation = Some(custody.primary_snapshot_v1());

@@ -1,0 +1,16 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "fmt",
+    "--all",
+    "--",
+    "--check"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r96-format-preflight.log",
+  "source": "/home/harsh/.codex-tmp/r96-format-preflight-source.json",
+  "source_unchanged": true,
+  "returncode": 1,
+  "elapsed_seconds": 21.005
+}

@@ -1,0 +1,22 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::live::tests::every_live_foundation_mutation_and_moved_owner_uses_the_unwind_envelope",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r96-final-freeze.log",
+  "source": "/home/harsh/.codex-tmp/r96-final-freeze-source.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "elapsed_seconds": 28.57
+}

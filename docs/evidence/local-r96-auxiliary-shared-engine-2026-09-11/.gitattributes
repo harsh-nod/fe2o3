@@ -1,0 +1,2 @@
+# Preserve authenticated command output exactly, including whitespace.
+raw/** -text -whitespace

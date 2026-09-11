@@ -1,0 +1,11 @@
+Diff in /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live.rs:14872:
+         let envelope = construction
+             .find("with_live_queue_memory_model_custody(|memory|")
+             .unwrap();
+-        let callback = construction
+-            .find("root.prepare_dispatch(")
+-            .unwrap();
++        let callback = construction.find("root.prepare_dispatch(").unwrap();
+         assert!(envelope < callback);
+         let preparation = construction
+             .split("pub(super) fn prepare_dispatch(")

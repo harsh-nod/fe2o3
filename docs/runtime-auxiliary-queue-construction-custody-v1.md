@@ -1,5 +1,14 @@
 # Auxiliary Queue Construction Custody V1
 
+R96 locally accepts the production-used preparation and CREATE/install phase
+composition (NATIVE-2B.5A), above signed planning checkpoint
+`10902ca32a853448f79b59cfcf22072e3cdd9325` and signed R95
+`da90a0038c6ec4c697faf0fbe93d597e9fa36e1a`. The
+[R96 evidence](evidence/local-r96-auxiliary-shared-engine-2026-09-11/README.md)
+covers same-engine CPU fixtures with scripted platform leaves, not the complete
+production outer settlement or .5B platform matrix. The public Linux session
+and existing ownership/capability boundaries remain unchanged.
+
 R95 implements the auxiliary construction owner and checked lane handoff above
 signed planning checkpoint `cb29dc6216cdf57c76d1f952264ceed9e257c40a`.
 Implementation began above `d464dc442c903e6915fe6ed11dcdfff8fee5db94`;
@@ -63,7 +72,8 @@ settlement also preserves that panic over a cleanup panic, including a secondary
 panic payload whose destructor would panic.
 
 After poisoning, a nonallocating `mem::replace` moves the entire original parent
-into the construction root. It includes its separate runtime-control descriptor,
+into the outer scope's `terminal_parent` slot, beside the auxiliary construction
+root. It includes its separate runtime-control descriptor,
 both ledgers, dispatch/submission/completion ownership, existing auxiliary lanes,
 SDMA sets/caches, memory/account anchor and metadata. Private Option-backed
 completion/dependency slots allow a terminal empty shell without constructing
@@ -90,7 +100,7 @@ It borrows the exact Vec or vacant slot, so another check or callback cannot
 change the destination before installation. The completed owner remains outside
 the fallible preflight. The existing two-compute-lane profile is unchanged.
 
-## Acceptance Boundary
+## R95 Acceptance
 
 Seven new auxiliary CPU functions cover eleven rejected vacancy plans, three successful
 append/reuse transfers, exact parent/auxiliary completion storage and slot
@@ -105,13 +115,31 @@ but uses a scripted loan and a synthetic parent with no native engine. It is
 not evidence of complete auxiliary foundation, runtime, CREATE or doorbell
 execution. Existing primary integration tests are not auxiliary acceptance.
 
-NATIVE-2B.5 still needs one production-used auxiliary sequence exercised with
-the original preparation, shared foundation/engine and exact platform owners:
-opening rejection/panic, every preparation/control prefix, existing primary
-runtime lease, arm failure, CREATE uncertainty, recovery/collision, both
-doorbell checks, gate finalization and unpublished cleanup. Exact records,
-account anchors, first-panic behavior and mutation sensitivity must be checked
-at those boundaries. Live KFD and new adapter-refinement proofs remain separate.
+## R96 Acceptance And Remaining Matrix
+
+Private `AuxiliaryConstructionV1` phases and `AuxiliaryQueueTargetV1` make the
+production preparation/CREATE/install sequence usable with the existing primary
+fixture environment. The Linux wrapper calls those phases inside the original
+loan/retake envelope and forwards its actual engine, observation, slots and both
+SDMA rosters. It does not introduce another constructor implementation.
+
+Two new integration functions cover success and eight late failures after a
+completed primary constructor using the same foundation, engine, accounts and
+original platform owners. Exact combined native-record/owner partitions,
+original data/preparation snapshots, primary ledgers and per-record charges
+are checked. A third new function guards the production wrapper's bindings and
+ordering. Four compiled mutations and all final source/auxiliary gates pass.
+The duplicate-primary-ID cell is lower CREATE `Ambiguous` rejection with no
+committed ID or outputs, not execution of the later retained-roster check.
+
+NATIVE-2B.5B still needs original-parent production outer settlement through
+opening/preparation/control-prefix and real loan/reclaim failures; retained
+primary runtime-lease/local Linux-helper composition; full CREATE
+uncertainty/malformed/panic; both failing late currentness checks; occupied/reused
+slots and retained auxiliary/SDMA rosters; cleanup failure and exact first-panic
+transport. .5A uses a fixture outer scope and scripted platform leaves. Its
+acceptance does not inherit the existing primary local-Linux-helper coverage.
+Live KFD and new adapter-refinement proofs remain separate.
 
 Callback/installer-internal owners that fail before returning remain outside
 the returned-prefix guarantee. Concurrent bootstrap, replacement/insertion,

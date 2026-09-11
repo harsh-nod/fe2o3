@@ -1,6 +1,16 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Current local acceptance: R95's [auxiliary construction owner](runtime-auxiliary-queue-construction-custody-v1.md)
+Current local acceptance: R96's production-used auxiliary phase composition
+(NATIVE-2B.5A), above signed planning checkpoint
+`10902ca32a853448f79b59cfcf22072e3cdd9325`. Its
+[local evidence](evidence/local-r96-auxiliary-shared-engine-2026-09-11/README.md)
+records seventeen source gates, twelve auxiliary checks, four compiled mutations
+and 2,519 runtime tests per GNU/musl target. The
+[current board](runtime-a1-a2-swarm-current.md) advances Native to .5B's complete
+outer/platform matrix before 2C. CO-1 and VER-1A.1 remain independent. This is
+CPU source acceptance, not live KFD, new formal refinement or performance.
+
+Preceding local acceptance: R95's [auxiliary construction owner](runtime-auxiliary-queue-construction-custody-v1.md)
 above signed planning checkpoint `cb29dc6216cdf57c76d1f952264ceed9e257c40a`.
 The [local record](evidence/local-r95-auxiliary-custody-2026-09-11/README.md)
 covers composed slot/ledger/settlement tests, not complete auxiliary platform

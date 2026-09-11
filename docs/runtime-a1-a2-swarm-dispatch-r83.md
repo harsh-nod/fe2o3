@@ -1,11 +1,19 @@
-# A1/A2 Swarm Dispatch At R95 Auxiliary Implementation
+# A1/A2 Swarm Dispatch At R96 Auxiliary Composition
+
+R96 locally accepts NATIVE-2B.5A above signed planning checkpoint
+`10902ca32a853448f79b59cfcf22072e3cdd9325`, with the
+[final source record](evidence/local-r96-auxiliary-shared-engine-2026-09-11/README.md).
+Shared production phases run after successful primary construction with the
+original engine/accounts/platform owners. Success and eight late failures plus
+a production-glue guard pass; all seventeen source gates, twelve auxiliary
+checks and four compiled mutations pass. GNU/musl each pass 2,519 runtime tests
+with five ignored. This is CPU phase composition, not complete Linux outer
+settlement, new formal refinement or performance acceptance.
 
 The [current work-order board](runtime-a1-a2-swarm-current.md) supersedes the
-immediate assignments below. Its latest planning-only refresh distinguishes
-signed R95 from the unaccepted R96 .5A candidate and splits the remaining .5B
-matrix into outer settlement, local platform composition and CREATE/installation
-packets. CO-1 and VER-1A.1 remain independent. The checkpoint history below does
-not establish final R96 acceptance.
+immediate assignments below: next is .5B outer settlement, local platform
+composition and CREATE/installation coverage, then 2C. CO-1 and VER-1A.1 remain
+independent. The R95 and earlier sections below retain their historical scope.
 
 R95 implements the [auxiliary construction root and checked handoff](runtime-auxiliary-queue-construction-custody-v1.md)
 above signed planning checkpoint `cb29dc6216cdf57c76d1f952264ceed9e257c40a`.

@@ -7,6 +7,59 @@ use crate::shared_memory::QueueConstructionMemoryFixtureV1;
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+#[test]
+fn auxiliary_production_glue_uses_shared_phases_and_original_target_after_retake() {
+    let source = include_str!("../construction_auxiliary.rs");
+    let wrapper = source
+        .split("pub(super) fn construct_auxiliary_compute_lane_v1")
+        .nth(1)
+        .unwrap()
+        .split("fn settle_auxiliary_construction_with_v1")
+        .next()
+        .unwrap();
+    let loan = wrapper
+        .find("with_live_queue_memory_model_custody(")
+        .unwrap();
+    let preparation = wrapper.find("root.prepare_dispatch(").unwrap();
+    let retake = wrapper.find("retake?;").unwrap();
+    let result = wrapper.find("result?;").unwrap();
+    let create = wrapper.find("root.create_and_install(").unwrap();
+    assert!(loan < preparation && preparation < retake && retake < result && result < create);
+    for binding in [
+        "engine: scope.parent.engine.as_mut().expect(\"checked queue engine\")",
+        "primary: &scope.parent.observation",
+        "lanes: &mut scope.parent.auxiliary_compute_lanes",
+        "sdma: scope.parent.sdma.as_ref()",
+        "striped_sdma: scope.parent.striped_sdma.as_ref()",
+    ] {
+        assert!(
+            wrapper.contains(binding),
+            "original target binding: {binding}"
+        );
+    }
+    let creation = source
+        .split("pub(super) fn create_and_install(")
+        .nth(1)
+        .unwrap()
+        .split("pub(super) fn construct_auxiliary_compute_lane_v1")
+        .next()
+        .unwrap();
+    assert_eq!(
+        creation
+            .matches("parent.engine.prepare_operation()")
+            .count(),
+        2
+    );
+    let vacancy = creation
+        .find("check_auxiliary_compute_lane_slot_v1(")
+        .unwrap();
+    let finish = creation.find("E::finish_creation(").unwrap();
+    let install = creation
+        .find("install_auxiliary_compute_lane_slot_v1(")
+        .unwrap();
+    assert!(vacancy < finish && finish < install);
+}
+
 struct DropProbe {
     identity: usize,
     drops: Rc<Cell<usize>>,
@@ -259,6 +312,7 @@ fn auxiliary_opening_is_rooted_before_preparation_loan_and_retake() {
         let completion = parent.completion_owner.custody_snapshot_for_test();
         let dependency = parent.dependency_owner.custody_snapshot_for_test();
         let scope = Box::new(AuxiliaryConstructionScopeV1 {
+            terminal_parent: None,
             parent: &mut parent,
             construction: AuxiliaryConstructionV1::new([]),
         });
@@ -299,7 +353,7 @@ fn auxiliary_opening_is_rooted_before_preparation_loan_and_retake() {
                 &|| panic!("pre-USERPTR process poison"),
                 |scope| {
                     assert_eq!(&*scope as *const _, identity);
-                    let parent = scope.construction.terminal_parent.as_ref().unwrap();
+                    let parent = scope.terminal_parent.as_ref().unwrap();
                     assert_retained_parent_poisoned(parent);
                     assert_eq!(
                         parent.completion_owner.custody_snapshot_for_test(),
@@ -320,7 +374,7 @@ fn auxiliary_opening_is_rooted_before_preparation_loan_and_retake() {
                 &["opening", "loan", "preparation", "retake"]
             );
             assert!(retained.borrow().is_none());
-            assert!(scope.construction.terminal_parent.is_none());
+            assert!(scope.terminal_parent.is_none());
             assert!(!scope.parent.terminal_poisoned);
             assert_eq!(
                 scope.parent.completion_owner.custody_snapshot_for_test(),
@@ -423,6 +477,7 @@ fn auxiliary_settlement_retains_completed_lane_and_original_scope_on_error_or_pa
             .completion_owner
             .custody_snapshot_for_test();
         let scope = Box::new(AuxiliaryConstructionScopeV1 {
+            terminal_parent: None,
             parent: &mut parent,
             construction,
         });
@@ -468,7 +523,7 @@ fn auxiliary_settlement_retains_completed_lane_and_original_scope_on_error_or_pa
         }
         assert_eq!(poisons.get(), 1);
         let scope = retained.into_inner().unwrap();
-        assert_retained_parent_poisoned(scope.construction.terminal_parent.as_ref().unwrap());
+        assert_retained_parent_poisoned(scope.terminal_parent.as_ref().unwrap());
         assert_eq!(&*scope as *const _, identity);
         assert_eq!(
             scope
@@ -482,7 +537,6 @@ fn auxiliary_settlement_retains_completed_lane_and_original_scope_on_error_or_pa
         );
         assert_eq!(
             scope
-                .construction
                 .terminal_parent
                 .as_ref()
                 .unwrap()
@@ -502,6 +556,7 @@ fn auxiliary_returned_completion_survives_composed_operation_and_retake_matrix()
             let parent_before = parent.completion_owner.custody_snapshot_for_test();
             let mut memory = QueueConstructionMemoryFixtureV1::new();
             let scope = Box::new(AuxiliaryConstructionScopeV1 {
+                terminal_parent: None,
                 parent: &mut parent,
                 construction: AuxiliaryConstructionV1::new([]),
             });
@@ -561,7 +616,7 @@ fn auxiliary_returned_completion_survives_composed_operation_and_retake_matrix()
             let scope = if operation == 0 && retake == 0 {
                 let scope = result.unwrap().unwrap();
                 assert!(retained.borrow().is_none());
-                assert!(scope.construction.terminal_parent.is_none());
+                assert!(scope.terminal_parent.is_none());
                 assert_eq!(
                     scope.parent.completion_owner.custody_snapshot_for_test(),
                     parent_before
@@ -581,12 +636,9 @@ fn auxiliary_returned_completion_survives_composed_operation_and_retake_matrix()
                     assert!(result.unwrap().err().unwrap().is_terminal_creation());
                 }
                 let scope = retained.into_inner().unwrap();
-                assert_retained_parent_poisoned(
-                    scope.construction.terminal_parent.as_ref().unwrap(),
-                );
+                assert_retained_parent_poisoned(scope.terminal_parent.as_ref().unwrap());
                 assert_eq!(
                     scope
-                        .construction
                         .terminal_parent
                         .as_ref()
                         .unwrap()
@@ -636,6 +688,7 @@ fn auxiliary_success_installs_only_new_lane_and_leaves_parent_ledgers_unchanged(
         .custody_snapshot_for_test();
     let scope = settle_auxiliary_construction_with_v1(
         Box::new(AuxiliaryConstructionScopeV1 {
+            terminal_parent: None,
             parent: &mut parent,
             construction,
         }),
@@ -657,7 +710,7 @@ fn auxiliary_success_installs_only_new_lane_and_leaves_parent_ledgers_unchanged(
     )
     .unwrap();
     assert!(scope.construction.completed.is_none());
-    assert!(scope.construction.terminal_parent.is_none());
+    assert!(scope.terminal_parent.is_none());
     assert!(!scope.parent.terminal_poisoned);
     assert_eq!(
         scope.parent.completion_owner.custody_snapshot_for_test(),

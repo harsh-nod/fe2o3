@@ -1,0 +1,128 @@
+{
+  "source_parent": "da90a0038c6ec4c697faf0fbe93d597e9fa36e1a",
+  "planning_parent": "10902ca32a853448f79b59cfcf22072e3cdd9325",
+  "scope": "NATIVE-2B.5A production-used phase composition; not full NATIVE-2B.5",
+  "source_identities": 5648,
+  "source_gates": 17,
+  "auxiliary_checks": 12,
+  "compiled_negative_mutations": 4,
+  "mutation_command_identity_checked": true,
+  "preliminary_runs": [
+    "r96-focused",
+    "r96-clippy-preflight",
+    "r96-accepted",
+    "r96-final-freeze",
+    "r96-format-preflight",
+    "r96-mut-completion-owner",
+    "r96-mut-closing-currentness",
+    "r96-mut-installed-generation",
+    "r96-mut-original-sdma-roster"
+  ],
+  "tests": {
+    "gnu-tests": {
+      "harnesses": 48,
+      "passed": 2519,
+      "failed": 0,
+      "ignored": 5
+    },
+    "musl-tests": {
+      "harnesses": 48,
+      "passed": 2519,
+      "failed": 0,
+      "ignored": 5
+    },
+    "gnu-docs": {
+      "harnesses": 7,
+      "passed": 108,
+      "failed": 0,
+      "ignored": 0
+    },
+    "musl-docs": {
+      "harnesses": 5,
+      "passed": 91,
+      "failed": 0,
+      "ignored": 0
+    },
+    "musl-host-docs": {
+      "harnesses": 2,
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0
+    },
+    "gnu-host": {
+      "harnesses": 1,
+      "passed": 258,
+      "failed": 0,
+      "ignored": 4
+    },
+    "musl-host": {
+      "harnesses": 1,
+      "passed": 141,
+      "failed": 0,
+      "ignored": 0
+    },
+    "macro-fixtures": {
+      "harnesses": 1,
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    },
+    "auxiliary-construction": {
+      "harnesses": 1,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    "primary": {
+      "harnesses": 1,
+      "passed": 27,
+      "failed": 0,
+      "ignored": 0
+    },
+    "ordinary": {
+      "harnesses": 1,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    "construction": {
+      "harnesses": 1,
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    "linux-helpers": {
+      "harnesses": 1,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    },
+    "initialization": {
+      "harnesses": 1,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    "transitions": {
+      "harnesses": 1,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    },
+    "preparation": {
+      "harnesses": 1,
+      "passed": 23,
+      "failed": 0,
+      "ignored": 0
+    },
+    "bind": {
+      "harnesses": 1,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    }
+  },
+  "live_kfd": false,
+  "solver_rerun": false,
+  "performance_measurement": false
+}

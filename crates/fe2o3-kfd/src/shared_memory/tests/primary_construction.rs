@@ -287,6 +287,38 @@ impl PreparationMemoryFixtureV1 {
             .authenticate(f.engine.session_id, f.device, f.vm, issuer)
             .map_err(MemorySessionError::Model)
     }
+    pub(crate) fn primary_loan(
+        &mut self,
+        queue: &mut QueueModelFoundationV1,
+    ) -> Result<LiveQueueModelFoundationLoanV1, MemorySessionError> {
+        let f = &mut self.fixture;
+        f.ownership
+            .loan_foundation(
+                f.engine.session_id,
+                &mut f.foundation,
+                queue,
+                f.device,
+                f.vm,
+            )
+            .map_err(|()| MemorySessionError::Model("fixture live foundation loan"))
+    }
+    pub(crate) fn primary_reclaim(
+        &mut self,
+        queue: &mut QueueModelFoundationV1,
+        loan: LiveQueueModelFoundationLoanV1,
+    ) -> Result<(), MemorySessionError> {
+        let f = &mut self.fixture;
+        f.ownership
+            .reclaim_foundation(
+                f.engine.session_id,
+                &mut f.foundation,
+                queue,
+                f.device,
+                f.vm,
+                loan,
+            )
+            .map_err(|()| MemorySessionError::Model("fixture live foundation reclaim"))
+    }
     pub(crate) fn primary_arm_native(&mut self, operation: &'static str, panic: bool) {
         if panic {
             self.fixture.engine.backend.panic_operation = Some(operation);

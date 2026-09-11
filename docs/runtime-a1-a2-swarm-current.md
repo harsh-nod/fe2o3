@@ -8,36 +8,28 @@ The issue was checked through the GitHub API and remains open; its reported
 This document supersedes the immediate assignment rows in the
 [detailed dispatch](runtime-a1-a2-swarm-dispatch-r83.md) and
 [next-wave roadmap](runtime-a1-a2-next-wave.md), not their historical evidence.
-The committed, locally accepted runtime checkpoint is signed R95
-`da90a0038c6ec4c697faf0fbe93d597e9fa36e1a`, observed on both topic remotes at
-this refresh. R95 accepts auxiliary-constructor custody above signed planning
-checkpoint `cb29dc6216cdf57c76d1f952264ceed9e257c40a`; preceding accepted runtime
-source is R94 `363ce6b79938def9365016c34f020a00493c1f87`.
-The [R95 record](evidence/local-r95-auxiliary-custody-2026-09-11/README.md) includes
-seventeen final source gates, twelve auxiliary checks and eight compiled negative
-mutations. Each GNU/musl runtime suite passes 2,516 tests with five ignored.
-Opening currentness is now rooted, but composed tests do not establish the
-complete shared-engine/platform matrix.
+R96 locally accepts **NATIVE-2B.5A**, production-used auxiliary preparation and
+CREATE/install phase composition, above signed planning checkpoint
+`10902ca32a853448f79b59cfcf22072e3cdd9325`. The preceding accepted runtime source
+is signed R95 `da90a0038c6ec4c697faf0fbe93d597e9fa36e1a`.
+The [R96 record](evidence/local-r96-auxiliary-shared-engine-2026-09-11/README.md)
+contains seventeen final source gates, twelve auxiliary checks and four compiled
+negative mutations. GNU/musl each pass 2,519 runtime tests with five ignored;
+5,648 source identities remain unchanged and restored. The failed first
+full-source attempt and formatting check remain historical, not acceptance.
 
-**R96 / NATIVE-2B.5A is an uncommitted candidate, not accepted evidence.** It
-extracts production-used auxiliary preparation and CREATE/install phases and
-adds same-engine fixtures after successful primary construction. The candidate
-covers success and eight late-failure cells with original owners, plus a
-production-glue guard. Its first full-source attempt stopped at a stale guard;
-the repaired guard passed a focused rerun, but the subsequent format check
-still requires a correction. Fresh final-source gates, final-source mutations,
-evidence review and signed publication remain outstanding. This planning
-refresh leaves that source patch unchanged and publishes no new acceptance.
-
-The remaining native sequence is therefore **accept .5A -> complete .5B ->
-2C -> DATA-ADOPT**. R96's duplicate-primary-ID case reaches lower CREATE
+The shared-engine fixtures cover success and eight late-failure cells with
+original owners, plus a production-glue guard. They use a fixture outer scope
+and scripted platform leaves, not complete concrete Linux outer settlement.
+The remaining native sequence is **complete .5B -> 2C -> DATA-ADOPT**.
+R96's duplicate-primary-ID case reaches lower CREATE
 `Ambiguous` rejection with no committed ID or outputs. It does not exercise the
 later retained auxiliary/SDMA roster rejection.
 
 ## Swarm Ownership
 
-Three existing workers performed fresh independent, read-only source audits of
-R95 plus the R96 candidate and returned these work orders. Their audit turns
+Three existing workers performed independent, read-only source and evidence
+reviews of R96 and returned these work orders. Their review turns
 are complete. The implementation queues below are assignments, not unattended
 background jobs. Primary owns
 edits, integration, conflict resolution, tests, proofs and publication. Shared
@@ -45,16 +37,16 @@ Context/backend/queue changes and builds are serialized.
 
 | Lane and worker | First bounded task | Follow-on queue |
 | --- | --- | --- |
-| Native: `r66_native_coexistence` | Review .5A acceptance, then .5B-1 original-parent outer settlement | .5B-2 local platform composition / .5B-3 CREATE and installation matrix -> replacement/insertion -> generated data adoption -> native publication handoff |
+| Native: `r66_native_coexistence` | .5B-1 original-parent outer settlement | .5B-2 local platform composition / .5B-3 CREATE and installation matrix -> replacement/insertion -> generated data adoption -> native publication handoff |
 | Admission: `r66_runtime_coexistence` | CO-1 allocation-free completion outcome contract and table tests | Exact identity -> reply/custody composition -> issue/completion integration -> typed future -> generated graph/drain |
 | Resources: `r66_coexistence_model` | VER-1A.1 Context journal contract and complete mutation inventory | Model/proofs -> bounded journal -> mutation hooks -> cross-run leases; aggregate budgets and residency |
-| Primary | Finish the existing R96 formatting/final-validation packet before new native source changes | Cross-lane integration, formal correspondence, hardware scheduling, matched benchmarks and signed pushes to both topic remotes |
+| Primary | Integrate the next reviewed .5B-1, CO-1 or VER-1A.1 packet without conflicting shared edits | Cross-lane integration, formal correspondence, hardware scheduling, matched benchmarks and signed pushes to both topic remotes |
 
 ### Immediate Handoffs
 
 | Lane | First deliverable | Source boundary and cross-review |
 | --- | --- | --- |
-| Native | .5A frozen-source acceptance, then an exact .5B-1 opening/operation/reclaim error-and-panic matrix | KFD `queue_live/construction_auxiliary.rs`, its integration tests and shared primary fixtures. Resources checks exact charges; Admission checks terminal-outcome meaning. |
+| Native | Exact .5B-1 opening/operation/reclaim error-and-panic matrix with the original primary | KFD `queue_live/construction_auxiliary.rs`, its integration tests and shared primary fixtures. Resources checks exact charges; Admission checks terminal-outcome meaning. |
 | Admission | CO-1 allocation-free observation/reply/disposal table and focused tests | Proposed runtime `async_engine/generated_operation/completion_contract.rs`, existing generated preparation/reply tests. Native reviews outcome authority; no native receipts are invented. |
 | Resources | VER-1A.1 identity/capacity contract and a complete Context mutation/retirement inventory | Inspect existing `context.rs` and its children; proposed journal belongs in `context/versions.rs`. Admission reviews settlement-before-callback ordering; Native reviews logical-to-native identity preservation. |
 | Primary | Integrate one reviewed packet at a time and record its exact acceptance scope | Shared Context/backend/queue edits, builds, proof runs, hardware and publication remain serialized. |
@@ -73,7 +65,7 @@ this checkpoint; their rows are assignments, not implementation claims.
    guard and both ledger poison assertions are present. Eight compiled mutations
    reject and exact source restoration passes. All seventeen final source gates
    and twelve auxiliary checks pass; broader native integration remains open.
-2. **NATIVE-2B.5: accept .5A, then finish .5B below.** Run the actual
+2. **NATIVE-2B.5: R96 accepts .5A; finish .5B below.** Run the actual
    production-used sequence after a completed primary constructor, borrowing
    the same engine, foundation, memory/accounts and original platform owners.
    Compare exact primary-plus-auxiliary owners, not just counters. A second
@@ -98,7 +90,7 @@ execution; Native owns each design/review handoff.
 
 | Packet | Dependency and affected files | Exit gate |
 | --- | --- | --- |
-| .5A acceptance | Existing R96 candidate in `queue_live.rs`, `construction_auxiliary` and shared primary/preparation fixtures | Correct formatting, freeze source, rerun focused tests, all four final compiled negative mutations, all seventeen source gates and twelve auxiliary checks. Restore exact source, review evidence and sign/push. Do not rewrite the constructor or substitute preliminary runs. |
+| .5A accepted R96 | `queue_live.rs`, `queue_live/construction_auxiliary` and shared primary/preparation fixtures | Frozen focused suite, all four final compiled negative mutations, all seventeen source gates and twelve auxiliary checks pass. Exact source is restored; final evidence is independently reviewed. Full outer/platform acceptance remains .5B. |
 | .5B-1 outer settlement | After .5A; `queue_live/construction_auxiliary.rs`, its integration tests and narrow real loan/reclaim fixture forwards | Exercise the production outer ownership boundary after successful original primary construction. Cover opening rejection, every returned preparation/control prefix, operation/reclaim success/error/panic, first-panic preservation, terminal cleanup failure and whole-parent transport. No preparation or retake after opening failure; no CREATE after failed retake; pure capacity rejection remains pre-effect. |
 | .5B-2 local platform composition | After .5B-1; primary `integration_platform.rs`, auxiliary platform cases and existing `queue_linux/primary_fixture.rs` helpers | Retain the primary runtime lease while adding auxiliary event/shadow/gate owners. Cover arm failures, exact prepublication cleanup and postpublication retention. Check identities and cleanup ordering. Local Linux mappings are not live KFD qualification. |
 | .5B-3 CREATE and installation | After .5B-1; combine with .5B-2 for platform cells; auxiliary integration tests and narrow existing fixture injections | Cover no-effect, indeterminate, malformed and panicking CREATE; output/ID recovery; retained auxiliary/SDMA roster collisions; both late currentness failures; doorbell/gate failures; occupied and reusable slots. No failed installation, spent-generation reuse or lost original owner. Full-source and compiled mutation gates close only this named CPU/local-helper matrix. |
@@ -174,7 +166,7 @@ submission's mutation hook now without inventing a second identity allocator.
 ## Integration And Qualification
 
 ```text
-accept .5A -> complete .5B -> 2C -> DATA-ADOPT --+
+R96 .5A -> complete .5B -> 2C -> DATA-ADOPT -----+
 CO-1 -> CO-2/CO-3 -----------------------------+-> ISSUE -> COMPLETE -> API -> GRAPH/DRAIN
 VER-1A -> complete VER-1B -> VER-2 ------------------------------------------> cross-run input reuse
 ```

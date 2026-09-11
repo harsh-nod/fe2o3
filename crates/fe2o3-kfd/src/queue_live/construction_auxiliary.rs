@@ -2,11 +2,42 @@
 
 use super::construction_primary::{
     ExecutablePrefixV1, LinuxPrimaryEnvironmentV1 as Platform, MutablePrefixV1,
-    PrimaryEnvironmentV1, UserptrConstructionEntryV1, map_executable_prefix, map_mutable_prefix,
-    retain_executable_prefix, retain_mutable_prefix, run_rooted_construction_with_v1,
+    PrimaryEnvironmentV1, PrimaryMemoryV1, UserptrConstructionEntryV1, map_executable_prefix,
+    map_mutable_prefix, retain_executable_prefix, retain_mutable_prefix,
+    run_rooted_construction_with_v1,
 };
 use super::*;
-use crate::queue_linux::ProcessGlobalKfdRuntimeCreationArmV1;
+use crate::queue::dispatch_binding::preparation::PreparationMemoryV1;
+
+pub(super) struct AuxiliaryQueueTargetV1<'a, E: PrimaryEnvironmentV1> {
+    pub(super) engine: &'a mut NativeQueueEngineV1<PrimaryQueueBackendV1<E::Memory>>,
+    pub(super) primary: &'a ComputeAqlQueueObservationV1,
+    pub(super) lanes: &'a mut Vec<AuxiliaryComputeLaneSlotV1<ComputeAqlQueueLaneStateV1<E>>>,
+    pub(super) sdma: Option<&'a Gfx942SdmaQueueSetV1>,
+    pub(super) striped_sdma: Option<&'a Gfx942SdmaQueueSetV1>,
+}
+
+impl<E: PrimaryEnvironmentV1> AuxiliaryQueueTargetV1<'_, E> {
+    fn session_owned_queue_id_is_retained_v1(&self, queue_id: u32) -> bool {
+        let auxiliary_collision = self
+            .lanes
+            .iter()
+            .filter_map(|slot| slot.state.as_ref())
+            .any(|lane| lane.observation.queue_id == queue_id);
+        let sdma_collision = self
+            .sdma
+            .is_some_and(|owner| owner.contains_confirmed_queue_id(queue_id))
+            || self
+                .striped_sdma
+                .is_some_and(|owner| owner.contains_confirmed_queue_id(queue_id));
+        queue_id_collides_with_session_owned_roster_v1(
+            queue_id,
+            self.primary.queue_id,
+            auxiliary_collision,
+            sdma_collision,
+        )
+    }
+}
 
 pub(super) struct QueueOwnerSlotV1<T>(pub(super) Option<T>);
 
@@ -70,38 +101,38 @@ impl ComputeAqlQueueSessionV1 {
     }
 }
 
-struct AuxiliaryConstructionV1<const N: usize> {
+pub(super) struct AuxiliaryConstructionV1<const N: usize, E: PrimaryEnvironmentV1 = Platform> {
     packets: Option<[Gfx942FixedDispatchPacketV1; N]>,
-    data: Option<Vec<Gfx942FixedDispatchDataV1>>,
-    preparation: Option<FixedDispatchPreparationCustodyV1<N>>,
-    dispatch: Option<DispatchResourceOwnerV1>,
-    ring: Option<RingConstructionV1>,
-    control: MutablePrefixV1<UserptrAqlControlGttV1, ControlAuthority>,
-    completion: MutablePrefixV1<HostVisibleCoherentGttV1, CompletionSignalAuthority>,
-    eop: ExecutablePrefixV1<EopAuthority>,
-    context: ExecutablePrefixV1<ContextSaveAuthority>,
-    runtime: Option<LinuxKfdRuntimeEnabledV1>,
-    event: Option<LinuxQueueExceptionEventV1>,
-    unpublished: Option<LinuxUnpublishedCwsrShadowPagesV1>,
-    published: Option<LinuxCwsrShadowPagesV1>,
-    resource_prefix: Option<QueueResourcePrefixV1>,
-    authority: Option<QueueResourceAuthorityV1>,
-    completion_owner: Option<CompletionSignalArenaOwnerV1>,
-    submission: Option<NativeAqlSubmissionOwnerV1>,
-    key: Option<QueueKeyV1>,
-    outputs: Option<fe2o3_kfd_uapi::KfdGfx942CreateQueueOutputs>,
-    completed: Option<ComputeAqlQueueLaneStateV1>,
-    creation_arm: Option<ProcessGlobalKfdRuntimeCreationArmV1>,
-    terminal_parent: Option<ComputeAqlQueueSessionV1>,
+    pub(super) data: Option<Vec<Gfx942FixedDispatchDataV1>>,
+    pub(super) preparation: Option<FixedDispatchPreparationCustodyV1<N>>,
+    pub(super) dispatch: Option<DispatchResourceOwnerV1>,
+    pub(super) ring: Option<RingConstructionV1>,
+    pub(super) control: MutablePrefixV1<UserptrAqlControlGttV1, ControlAuthority>,
+    pub(super) completion: MutablePrefixV1<HostVisibleCoherentGttV1, CompletionSignalAuthority>,
+    pub(super) eop: ExecutablePrefixV1<EopAuthority>,
+    pub(super) context: ExecutablePrefixV1<ContextSaveAuthority>,
+    pub(super) runtime: Option<E::Runtime>,
+    pub(super) event: Option<E::Event>,
+    pub(super) unpublished: Option<E::Unpublished>,
+    pub(super) published: Option<E::Published>,
+    pub(super) resource_prefix: Option<QueueResourcePrefixV1>,
+    pub(super) authority: Option<QueueResourceAuthorityV1>,
+    pub(super) completion_owner: Option<CompletionSignalArenaOwnerV1>,
+    pub(super) submission: Option<NativeAqlSubmissionOwnerV1>,
+    pub(super) key: Option<QueueKeyV1>,
+    pub(super) outputs: Option<fe2o3_kfd_uapi::KfdGfx942CreateQueueOutputs>,
+    pub(super) completed: Option<ComputeAqlQueueLaneStateV1<E>>,
+    pub(super) creation_arm: Option<E::CreationArm>,
 }
 
 struct AuxiliaryConstructionScopeV1<'a, const N: usize> {
     parent: &'a mut ComputeAqlQueueSessionV1,
     construction: AuxiliaryConstructionV1<N>,
+    terminal_parent: Option<ComputeAqlQueueSessionV1>,
 }
 
-impl<const N: usize> AuxiliaryConstructionV1<N> {
-    fn new(packets: [Gfx942FixedDispatchPacketV1; N]) -> Self {
+impl<const N: usize, E: PrimaryEnvironmentV1> AuxiliaryConstructionV1<N, E> {
+    pub(super) fn new(packets: [Gfx942FixedDispatchPacketV1; N]) -> Self {
         Self {
             packets: Some(packets),
             data: None,
@@ -124,23 +155,55 @@ impl<const N: usize> AuxiliaryConstructionV1<N> {
             outputs: None,
             completed: None,
             creation_arm: None,
-            terminal_parent: None,
         }
+    }
+
+    pub(super) fn prepare_dispatch(
+        &mut self,
+        memory: &mut E::Memory,
+        entry: &mut UserptrConstructionEntryV1,
+        geometry: Gfx942AqlQueueResourcePlanV1,
+        ring_bytes: u32,
+        programs: &[fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>],
+        prepare_data: impl FnOnce(
+            &mut E::Memory,
+        ) -> Result<
+            Vec<Gfx942FixedDispatchDataV1>,
+            ComputeAqlQueueSessionErrorV1,
+        >,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1>
+    where
+        E::Memory: PreparationMemoryV1,
+    {
+        capture_returned_preparation_v1(memory, &mut self.data, prepare_data)?;
+        self.preparation = Some(FixedDispatchPreparationCustodyV1::new(
+            self.packets.take().expect("fixed packets"),
+            self.data.take().expect("returned data"),
+        ));
+        let preparation = self.preparation.as_mut().expect("preparation custody");
+        super::super::dispatch_binding::prepare_public_fixed_dispatch_resources_in_place(
+            memory,
+            programs,
+            preparation,
+        )?;
+        self.dispatch = Some(preparation.take_completed()?);
+        self.prepare(memory, entry, geometry, ring_bytes)
     }
 
     fn prepare(
         &mut self,
-        memory: &mut SharedGttMemorySessionV1,
+        memory: &mut E::Memory,
         entry: &mut UserptrConstructionEntryV1,
         geometry: Gfx942AqlQueueResourcePlanV1,
         ring_bytes: u32,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        self.ring = Some(RingConstructionV1::Cpu(CpuRingAuthorityV1::allocate(
-            memory,
-            QueueRingBackingV1::AqlSpecial,
-            usize::try_from(ring_bytes)
-                .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("ring size conversion"))?,
-        )?));
+        self.ring = Some(RingConstructionV1::Cpu(
+            memory.allocate_ring(
+                QueueRingBackingV1::AqlSpecial,
+                usize::try_from(ring_bytes)
+                    .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("ring size conversion"))?,
+            )?,
+        ));
         entry.enter("USERPTR auxiliary queue-control creation");
         self.control.cpu = Some(memory.allocate_userptr_aql_control()?);
         self.completion.cpu =
@@ -159,7 +222,8 @@ impl<const N: usize> AuxiliaryConstructionV1<N> {
         let RingConstructionV1::Cpu(ring) = self.ring.as_mut().expect("allocated ring") else {
             unreachable!("initial CPU ring")
         };
-        ring.initialize_invalid(memory)?
+        memory
+            .initialize_ring(ring)?
             .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("INVALID ring initialization"))?;
         memory
             .with_bytes_mut(
@@ -179,30 +243,30 @@ impl<const N: usize> AuxiliaryConstructionV1<N> {
         })?;
         memory.check_queue_currentness()?;
 
-        self.runtime = Some(Platform::enable_runtime(memory)?);
-        Platform::validate_runtime(self.runtime.as_ref().expect("runtime"), None, memory)?;
+        self.runtime = Some(E::enable_runtime(memory)?);
+        E::validate_runtime(self.runtime.as_ref().expect("runtime"), None, memory)?;
         memory.check_queue_currentness()?;
-        self.creation_arm = Some(Platform::arm_creation(memory)?);
-        self.event = Some(Platform::create_event(memory)?);
+        self.creation_arm = Some(E::arm_creation(memory)?);
+        self.event = Some(E::create_event(memory)?);
         memory.check_queue_currentness()?;
-        self.unpublished = Some(Platform::install_shadows(
+        self.unpublished = Some(E::install_shadows(
             memory,
             self.context.cpu.as_ref().expect("context-save"),
             self.event.as_ref().expect("event"),
         )?);
         let unpublished = self.unpublished.as_ref().expect("unpublished shadows");
-        Platform::initialize_shadows(
+        E::initialize_shadows(
             memory,
             self.context.cpu.as_mut().expect("context-save"),
             unpublished,
         )?;
-        Platform::validate_runtime(self.runtime.as_ref().expect("runtime"), None, memory)?;
-        Platform::validate_event(memory, self.event.as_ref().expect("event"), unpublished)?;
+        E::validate_runtime(self.runtime.as_ref().expect("runtime"), None, memory)?;
+        E::validate_event(memory, self.event.as_ref().expect("event"), unpublished)?;
         memory.check_queue_currentness()?;
 
         self.eop.seal(memory)?;
         self.context.seal(memory)?;
-        Platform::restore_shadow_write(unpublished)?;
+        E::restore_shadow_write(unpublished)?;
         let ring = self.ring.as_mut().expect("ring");
         ring.map_in_place(memory)?;
         ring.retain_in_place(memory)?;
@@ -213,22 +277,18 @@ impl<const N: usize> AuxiliaryConstructionV1<N> {
         retain_mutable_prefix(
             memory,
             &mut self.control,
-            SharedGttMemorySessionV1::retain_aql_control_resource,
+            E::Memory::retain_aql_control_resource,
         )?;
         retain_mutable_prefix(
             memory,
             &mut self.completion,
-            SharedGttMemorySessionV1::retain_aql_completion_signal_resource,
+            E::Memory::retain_aql_completion_signal_resource,
         )?;
-        retain_executable_prefix(
-            memory,
-            &mut self.eop,
-            SharedGttMemorySessionV1::retain_aql_eop_resource,
-        )?;
+        retain_executable_prefix(memory, &mut self.eop, E::Memory::retain_aql_eop_resource)?;
         retain_executable_prefix(
             memory,
             &mut self.context,
-            SharedGttMemorySessionV1::retain_aql_context_save_resource,
+            E::Memory::retain_aql_context_save_resource,
         )?;
         self.resource_prefix = Some(QueueResourcePrefixV1::new(
             ring.take_retained()?,
@@ -259,18 +319,13 @@ impl<const N: usize> AuxiliaryConstructionV1<N> {
         Ok(())
     }
 
-    fn create_and_install(
+    pub(super) fn create_and_install(
         &mut self,
-        parent: &mut ComputeAqlQueueSessionV1,
+        parent: AuxiliaryQueueTargetV1<'_, E>,
         ring_bytes: u32,
         slot: PreparedAuxiliaryComputeLaneSlotV1,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        let engine = parent
-            .engine
-            .as_mut()
-            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                "missing queue engine",
-            ))?;
+        let engine = &mut *parent.engine;
         self.key = Some(
             engine
                 .admit_in_place(&mut self.authority)
@@ -285,21 +340,19 @@ impl<const N: usize> AuxiliaryConstructionV1<N> {
         let key = self.key.expect("admitted auxiliary key");
         engine
             .create_at_native_boundary(key, || {
-                self.published = Some(Platform::publish_shadows(
+                self.published = Some(E::publish_shadows(
                     self.unpublished.take().expect("unpublished shadows"),
                 ));
             })
             .map_err(map_create)?;
-        Platform::mark_queue_created(self.runtime.as_mut().expect("runtime"))?;
-        self.outputs = Some(
-            Platform::recover_create_outputs(engine, key).ok_or_else(|| {
-                terminal_creation(
-                    "CREATE_QUEUE output recovery",
-                    ComputeAqlQueueSessionErrorV1::Contract("missing CREATE outputs"),
-                )
-            })?,
-        );
-        let queue_id = Platform::recover_native_queue_id(engine, key).ok_or_else(|| {
+        E::mark_queue_created(self.runtime.as_mut().expect("runtime"))?;
+        self.outputs = Some(E::recover_create_outputs(engine, key).ok_or_else(|| {
+            terminal_creation(
+                "CREATE_QUEUE output recovery",
+                ComputeAqlQueueSessionErrorV1::Contract("missing CREATE outputs"),
+            )
+        })?);
+        let queue_id = E::recover_native_queue_id(engine, key).ok_or_else(|| {
             terminal_creation(
                 "CREATE_QUEUE identity recovery",
                 ComputeAqlQueueSessionErrorV1::Contract("missing queue id"),
@@ -318,7 +371,7 @@ impl<const N: usize> AuxiliaryConstructionV1<N> {
             ring_bytes,
             doorbell_slice_bytes: 0,
             doorbell_byte_offset: 0,
-            event_id: Platform::event_id(self.event.as_ref().expect("event")),
+            event_id: E::event_id(self.event.as_ref().expect("event")),
             cwsr_shadow_pages: 8,
         };
         self.completed = Some(ComputeAqlQueueLaneStateV1 {
@@ -341,23 +394,22 @@ impl<const N: usize> AuxiliaryConstructionV1<N> {
             }),
             observation,
         });
-        parent.check_currentness()?;
-        let engine = parent.engine.as_ref().expect("checked queue engine");
+        parent.engine.prepare_operation().map_err(map_native)?;
+        let engine = &*parent.engine;
         let pid = engine.opener_pid;
         let completed = self.completed.as_mut().expect("completed auxiliary lane");
-        completed.doorbell = Some(Platform::map_doorbell(
+        completed.doorbell = Some(E::map_doorbell(
             &engine.backend.session,
             self.outputs.expect("CREATE outputs"),
             pid,
         )?);
         let (bytes, offset) =
-            Platform::doorbell_observation(completed.doorbell.as_ref().expect("doorbell"));
+            E::doorbell_observation(completed.doorbell.as_ref().expect("doorbell"));
         completed.observation.doorbell_slice_bytes = bytes;
         completed.observation.doorbell_byte_offset = offset;
-        parent.check_currentness()?;
-        let destination =
-            check_auxiliary_compute_lane_slot_v1(&mut parent.auxiliary_compute_lanes, slot)?;
-        Platform::finish_creation(self.creation_arm.as_mut().expect("creation arm"), pid)?;
+        parent.engine.prepare_operation().map_err(map_native)?;
+        let destination = check_auxiliary_compute_lane_slot_v1(parent.lanes, slot)?;
+        E::finish_creation(self.creation_arm.as_mut().expect("creation arm"), pid)?;
         install_auxiliary_compute_lane_slot_v1(
             destination,
             self.completed.take().expect("completed auxiliary lane"),
@@ -380,26 +432,39 @@ pub(super) fn construct_auxiliary_compute_lane_v1<const N: usize>(
     let scope = Box::new(AuxiliaryConstructionScopeV1 {
         parent,
         construction: AuxiliaryConstructionV1::new(packets),
+        terminal_parent: None,
     });
     let scope = settle_auxiliary_construction_with_v1(
         scope,
         ComputeAqlQueueSessionV1::check_currentness,
         |scope, entry| {
             let root = &mut scope.construction;
-            let (result, retake) = scope.parent.with_live_queue_memory_model_custody(|memory| {
-                let geometry = memory.plan_aql_queue_resources(ring_bytes)?;
-                capture_returned_preparation_v1(memory, &mut root.data, prepare_data)?;
-                root.preparation = Some(FixedDispatchPreparationCustodyV1::new(
-                    root.packets.take().expect("fixed packets"), root.data.take().expect("returned data"),
-                ));
-                let preparation = root.preparation.as_mut().expect("preparation custody");
-                super::super::dispatch_binding::prepare_public_fixed_dispatch_resources_in_place(memory, &programs, preparation)?;
-                root.dispatch = Some(preparation.take_completed()?);
-                root.prepare(memory, entry, geometry, ring_bytes)
-            })?;
+            let (result, retake) = scope
+                .parent
+                .with_live_queue_memory_model_custody(|memory| {
+                    let geometry = memory.plan_aql_queue_resources(ring_bytes)?;
+                    root.prepare_dispatch(
+                        memory,
+                        entry,
+                        geometry,
+                        ring_bytes,
+                        &programs,
+                        prepare_data,
+                    )
+                })?;
             retake?;
             result?;
-            root.create_and_install(scope.parent, ring_bytes, slot)
+            root.create_and_install(
+                AuxiliaryQueueTargetV1 {
+                    engine: scope.parent.engine.as_mut().expect("checked queue engine"),
+                    primary: &scope.parent.observation,
+                    lanes: &mut scope.parent.auxiliary_compute_lanes,
+                    sdma: scope.parent.sdma.as_ref(),
+                    striped_sdma: scope.parent.striped_sdma.as_ref(),
+                },
+                ring_bytes,
+                slot,
+            )
         },
         &Platform::poison,
         |root| {
@@ -430,7 +495,7 @@ fn settle_auxiliary_construction_with_v1<'a, const N: usize>(
             work(scope, entry)
         },
         |scope| {
-            scope.construction.terminal_parent =
+            scope.terminal_parent =
                 Some(scope.parent.take_for_terminal_auxiliary_construction_v1());
             if let Some(unpublished) = scope.construction.unpublished.as_mut() {
                 Platform::cleanup_unpublished(unpublished);

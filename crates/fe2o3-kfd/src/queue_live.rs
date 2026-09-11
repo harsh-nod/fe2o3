@@ -4094,9 +4094,11 @@ enum AdmittedComputeLaneV1 {
     Auxiliary(usize),
 }
 
-struct ComputeAqlQueueLaneStateV1 {
+struct ComputeAqlQueueLaneStateV1<
+    E: construction_primary::PrimaryEnvironmentV1 = construction_primary::LinuxPrimaryEnvironmentV1,
+> {
     key: QueueKeyV1,
-    doorbell: Option<LinuxDoorbellSliceV1>,
+    doorbell: Option<E::Doorbell>,
     submission: Option<NativeAqlSubmissionOwnerV1>,
     completion_signals: Option<CompletionSignalAuthority>,
     completion_owner: QueueOwnerSlotV1<CompletionSignalArenaOwnerV1>,
@@ -4106,7 +4108,7 @@ struct ComputeAqlQueueLaneStateV1 {
     detached_dispatch_generation: Option<u64>,
     detached_data_identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
     detached_next_insertion_index: Option<usize>,
-    exception: Option<QueueExceptionStateV1>,
+    exception: Option<QueueExceptionStateV1<E>>,
     observation: ComputeAqlQueueObservationV1,
 }
 
@@ -4540,11 +4542,13 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
     }
 }
 
-struct QueueExceptionStateV1 {
-    runtime: LinuxKfdRuntimeEnabledV1,
-    runtime_control: Option<KfdWithAdmittedUapi>,
-    event: LinuxQueueExceptionEventV1,
-    shadows: LinuxCwsrShadowPagesV1,
+struct QueueExceptionStateV1<
+    E: construction_primary::PrimaryEnvironmentV1 = construction_primary::LinuxPrimaryEnvironmentV1,
+> {
+    runtime: E::Runtime,
+    runtime_control: Option<E::RuntimeControl>,
+    event: E::Event,
+    shadows: E::Published,
 }
 
 type ExternalRuntimeV1<'a> = (
@@ -12601,28 +12605,6 @@ impl ComputeAqlQueueSessionV1 {
         Ok(queue_ids)
     }
 
-    fn session_owned_queue_id_is_retained_v1(&self, queue_id: u32) -> bool {
-        let auxiliary_collision = self
-            .auxiliary_compute_lanes
-            .iter()
-            .filter_map(|slot| slot.state.as_ref())
-            .any(|lane| lane.observation.queue_id == queue_id);
-        let sdma_collision = self
-            .sdma
-            .as_ref()
-            .is_some_and(|owner| owner.contains_confirmed_queue_id(queue_id))
-            || self
-                .striped_sdma
-                .as_ref()
-                .is_some_and(|owner| owner.contains_confirmed_queue_id(queue_id));
-        queue_id_collides_with_session_owned_roster_v1(
-            queue_id,
-            self.observation.queue_id,
-            auxiliary_collision,
-            sdma_collision,
-        )
-    }
-
     fn striped_sdma_is_poisoned(&self) -> bool {
         self.striped_sdma
             .as_ref()
@@ -14890,10 +14872,20 @@ mod tests {
         let envelope = construction
             .find("with_live_queue_memory_model_custody(|memory|")
             .unwrap();
-        let callback = construction
-            .find("capture_returned_preparation_v1(memory, &mut root.data, prepare_data)")
-            .unwrap();
+        let callback = construction.find("root.prepare_dispatch(").unwrap();
         assert!(envelope < callback);
+        let preparation = construction
+            .split("pub(super) fn prepare_dispatch(")
+            .nth(1)
+            .unwrap()
+            .split("fn prepare(")
+            .next()
+            .unwrap();
+        let capture = preparation
+            .find("capture_returned_preparation_v1(memory, &mut self.data, prepare_data)")
+            .unwrap();
+        let retained = preparation.find("self.preparation = Some(").unwrap();
+        assert!(capture < retained);
 
         for wrapper in [
             "fn with_sdma_owner_memory<R>",
@@ -19611,7 +19603,7 @@ mod tests {
             .split("struct AuxiliaryConstructionScopeV1")
             .next()
             .unwrap();
-        assert!(prepared_state.contains("unpublished: Option<LinuxUnpublishedCwsrShadowPagesV1>"));
+        assert!(prepared_state.contains("unpublished: Option<E::Unpublished>"));
         assert!(!prepared_state.contains("exception: QueueExceptionStateV1"));
 
         let body = source
@@ -19622,19 +19614,19 @@ mod tests {
             .next()
             .unwrap();
         let install = body
-            .find("self.unpublished = Some(Platform::install_shadows")
+            .find("self.unpublished = Some(E::install_shadows")
             .unwrap();
-        let restore = body.find("Platform::restore_shadow_write").unwrap();
+        let restore = body.find("E::restore_shadow_write").unwrap();
         let native_boundary = body.find("create_at_native_boundary(key").unwrap();
         let publish = body
-            .find("self.published = Some(Platform::publish_shadows(")
+            .find("self.published = Some(E::publish_shadows(")
             .unwrap();
         let published_exception = body.find("exception: Some(QueueExceptionStateV1").unwrap();
         assert!(install < restore);
         assert!(restore < native_boundary);
         assert!(native_boundary < publish);
         assert!(publish < published_exception);
-        assert_eq!(body.matches("Platform::publish_shadows(").count(), 1);
+        assert_eq!(body.matches("E::publish_shadows(").count(), 1);
         assert!(!body.contains("engine.create(key)"));
     }
 

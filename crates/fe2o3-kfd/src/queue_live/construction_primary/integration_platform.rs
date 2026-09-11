@@ -62,8 +62,9 @@ impl Owner {
         }
         let local_event =
             (role == Role::Event && t.local_gate.is_some()).then(|| t.local_resources.event());
+        let event_id = 10 + t.minted.iter().filter(|id| id.role == Role::Event).count() as u32;
         let native_event_id =
-            (role == Role::Event).then(|| local_event.as_ref().map_or(11, LocalEventV1::id));
+            (role == Role::Event).then(|| local_event.as_ref().map_or(event_id, LocalEventV1::id));
         drop(t);
         Self {
             trace,
@@ -337,6 +338,13 @@ impl PrimaryEnvironmentV1 for Fixture {
 }
 
 pub(super) fn assert_platform<P>(root: &Root<P>, external: Option<&ExternalSlots>) {
+    assert_platform_partition(platform_identities(root, external));
+}
+
+pub(super) fn platform_identities<P>(
+    root: &Root<P>,
+    external: Option<&ExternalSlots>,
+) -> Vec<OwnerIdentity> {
     let trace = trace();
     let mut owners = Vec::new();
     let mut add = |owner: &Owner, role: Role, phase: Option<ShadowPhase>| {
@@ -395,6 +403,11 @@ pub(super) fn assert_platform<P>(root: &Root<P>, external: Option<&ExternalSlots
             }
         }
     }
+    owners
+}
+
+fn assert_platform_partition(owners: Vec<OwnerIdentity>) {
+    let trace = trace();
     let t = trace.borrow();
     assert_eq!(t.drops, 0);
     assert_eq!(
@@ -406,4 +419,83 @@ pub(super) fn assert_platform<P>(root: &Root<P>, external: Option<&ExternalSlots
     let expected: std::collections::HashSet<_> = t.minted.iter().copied().collect();
     assert_eq!(actual.len(), t.minted.len(), "unique platform custody");
     assert_eq!(actual, expected);
+}
+
+pub(super) fn assert_auxiliary_platform(
+    primary: &Root,
+    auxiliary: &crate::queue::live::construction_auxiliary::AuxiliaryConstructionV1<3, Fixture>,
+    installed: Option<&ComputeAqlQueueLaneStateV1<Fixture>>,
+) {
+    let mut owners = platform_identities(primary, None);
+    let memory = memory(primary);
+    let lane = installed.or(auxiliary.completed.as_ref());
+    let exception = lane.and_then(|l| l.exception.as_ref());
+    let event = exception.map(|e| &e.event).or(auxiliary.event.as_ref());
+    let mut add = |owner: &Owner, role: Role| {
+        owner.validate(role, memory).unwrap();
+        owners.push(owner.identity);
+    };
+    for (owner, role) in [
+        (
+            exception.map(|e| &e.runtime).or(auxiliary.runtime.as_ref()),
+            Role::Runtime,
+        ),
+        (event, Role::Event),
+        (auxiliary.creation_arm.as_ref(), Role::CreationArm),
+    ] {
+        if let Some(owner) = owner {
+            add(owner, role);
+        }
+    }
+    if let Some(shadows) = exception
+        .map(|e| &e.shadows)
+        .or(auxiliary.published.as_ref())
+        .or(auxiliary.unpublished.as_ref())
+    {
+        add(shadows, Role::Shadow);
+        let (phase, parent, context) = shadows.shadow.unwrap();
+        assert_eq!(
+            phase,
+            if auxiliary.unpublished.is_some() {
+                ShadowPhase::Disposed
+            } else {
+                ShadowPhase::Published
+            }
+        );
+        assert_eq!(parent, event.unwrap().identity);
+        let engine = &primary.completed.as_ref().unwrap().engine;
+        let authority = engine
+            .resources
+            .iter()
+            .find(|record| {
+                record
+                    .authority
+                    .as_ref()
+                    .is_some_and(|a| a.view.plan.queue == auxiliary.key.unwrap())
+            })
+            .unwrap()
+            .authority
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            context,
+            Memory::primary_token_identity(&authority.context_save)
+        );
+    }
+    if let Some(lane) = lane {
+        assert_eq!(
+            Some(lane.observation.event_id),
+            event.unwrap().native_event_id
+        );
+        if let Some(doorbell) = &lane.doorbell {
+            add(doorbell, Role::Doorbell);
+            assert_eq!(doorbell.doorbell, auxiliary.outputs);
+            let output = auxiliary.outputs.unwrap();
+            assert_eq!(
+                trace().borrow().create_returns[1],
+                (output.queue_id().value(), output.doorbell_offset().raw())
+            );
+        }
+    }
+    assert_platform_partition(owners);
 }

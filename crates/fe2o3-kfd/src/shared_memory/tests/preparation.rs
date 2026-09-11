@@ -107,6 +107,10 @@ impl PreparationMemoryFixtureV1 {
     }
 
     pub(crate) fn with_aperture(configured: bool, bytes: u64) -> Self {
+        Self::with_host_budget(configured, bytes, 1 << 20)
+    }
+
+    pub(crate) fn with_host_budget(configured: bool, bytes: u64, host_bytes: u64) -> Self {
         let mut fixture = BackingConstructorFixture::with_aperture(
             configured.then(|| Gfx942DeviceBackingBudgetV1::new(1 << 20, 64).unwrap()),
             bytes,
@@ -117,7 +121,7 @@ impl PreparationMemoryFixtureV1 {
                 .configure_host_visible_backing_budget_v1(
                     fixture.device.model_key(),
                     fixture.vm,
-                    Gfx942HostVisibleBackingBudgetV1::new(1 << 20, 64).unwrap(),
+                    Gfx942HostVisibleBackingBudgetV1::new(host_bytes, 64).unwrap(),
                 )
                 .unwrap();
         }
@@ -342,6 +346,18 @@ impl PreparationMemoryFixtureV1 {
     }
 
     pub(crate) fn assert_original_data_unchanged(&self, before: &PreparationMemoryObservationV1) {
+        self.assert_original_records_unchanged(before);
+        assert_eq!(
+            self.observation().device,
+            before.device,
+            "original N2 usage unchanged"
+        );
+    }
+
+    pub(crate) fn assert_original_records_unchanged(
+        &self,
+        before: &PreparationMemoryObservationV1,
+    ) {
         let after = self.observation();
         for expected in &before.data {
             assert_eq!(
@@ -354,7 +370,6 @@ impl PreparationMemoryFixtureV1 {
                 "original data bytes, mapping and native record"
             );
         }
-        assert_eq!(after.device, before.device, "original N2 usage unchanged");
     }
 
     pub(crate) fn assert_control_custody(
