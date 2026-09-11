@@ -39,6 +39,8 @@ pub struct RuntimeAsyncDrainReportV1 {
     pub ticks: usize,
     pub retained_submissions: RuntimeAsyncDrainCountsV1,
     pub queued_commands_exhausted: bool,
+    /// Drivers still requiring progress. Never-adopted parked preparations are
+    /// excluded; their storage remains retained until discard or owned shutdown.
     pub operations_remaining: usize,
     pub graph_active: bool,
 }

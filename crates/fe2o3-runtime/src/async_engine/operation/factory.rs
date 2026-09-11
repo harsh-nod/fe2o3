@@ -77,7 +77,7 @@ impl<B: RuntimeBackendV1, A> Drop for OperationFactoryV1<B, A> {
     }
 }
 
-pub(super) fn stop_reply<R>(
+pub(in crate::async_engine) fn stop_reply<R>(
     reply: &mut Option<owned::Reply<R>>,
     control: Option<&RuntimeAsyncOperationControlV1>,
     error: RuntimeAsyncEngineCallErrorV1,

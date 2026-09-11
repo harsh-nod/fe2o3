@@ -6,8 +6,10 @@ use fe2o3_aql::AqlDispatchGeometryV1;
 use fe2o3_kfd::CheckedGfx942XnackMinusDevice;
 use fe2o3_runtime::{
     Gfx942RuntimeProjectionErrorV1, KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1,
-    PreparedGfx942PersistentDispatchV1, PreparedGfx942RuntimeDispatchV1, RuntimeContextV1,
-    RuntimeDeviceIdV1, RuntimeErrorV1, RuntimeGfx942PreparationErrorV1, RuntimeGfx942PreparedV1,
+    PreparedGfx942PersistentDispatchV1, PreparedGfx942RuntimeDispatchV1,
+    RuntimeAsyncEngineCallErrorV1, RuntimeAsyncPreparationV1, RuntimeAsyncProgressHandleV1,
+    RuntimeContextV1, RuntimeDeviceIdV1, RuntimeErrorV1, RuntimeGfx942PreparationErrorV1,
+    RuntimeGfx942PreparedV1,
 };
 
 use super::{
@@ -45,6 +47,7 @@ struct GeneratedContextPreparationV1<K, P = PreparedGfx942RuntimeDispatchV1> {
     storage: GeneratedRuntimeStorageV1<P>,
     authority: GeneratedWorkerV3KfdExecutionAuthority<K>,
     footprint: GeneratedRuntimeArgumentFootprintV1,
+    result_budget: GeneratedRuntimeResultBudgetV1,
 }
 
 impl<K: CompilerGeneratedKernelExpectationV1> GeneratedContextPreparationV1<K> {
@@ -68,6 +71,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> GeneratedContextPreparationV1<K> {
             storage,
             authority: self.authority,
             footprint: self.footprint,
+            result_budget: self.result_budget,
         })
     }
 }
@@ -181,6 +185,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
             storage,
             authority,
             footprint,
+            result_budget: _,
         } = prepared;
         Ok(GeneratedWorkerV3RuntimeInvocationV1 {
             storage,
@@ -254,6 +259,69 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         }
     }
 
+    /// Prepares on the owned runtime thread and returns a finite preparation future.
+    ///
+    /// Success is an opaque retained ticket, not a launch or GPU completion.
+    /// The complete Context-bound storage, decoder, original result account and
+    /// authority remain owner-local until explicit discard or owned shutdown.
+    /// Missing protected evidence rejects before queue admission or callbacks;
+    /// otherwise capacity admission precedes encoding and device preparation.
+    ///
+    /// ```no_run
+    /// use fe2o3_host::{AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedKernelExpectationV1,
+    ///     CompilerGeneratedRuntimeArguments, GeneratedRuntimeArgumentLimitsV1,
+    ///     GeneratedRuntimeResultBudgetV1, AqlDispatchGeometryV1};
+    /// use fe2o3_runtime::{RuntimeAsyncProgressHandleV1, KfdRuntimeBackendV1, RuntimeDeviceIdV1};
+    /// async fn prepare_and_discard<K: CompilerGeneratedKernelExpectationV1 + 'static,
+    ///     A: CompilerGeneratedRuntimeArguments<K>>(
+    ///     executable: AuthenticatedWorkerV3ExecutableV1<K>, args: A,
+    ///     owner: &RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1>, device: RuntimeDeviceIdV1,
+    ///     geometry: AqlDispatchGeometryV1, budget: &GeneratedRuntimeResultBudgetV1,
+    /// ) -> Result<(), Box<dyn std::error::Error>> {
+    ///     let preparation = executable.prepare_generated_context_invocation_async(args, owner,
+    ///         device, geometry, 0, 1000, GeneratedRuntimeArgumentLimitsV1::new(4096, 4096, 16), budget)?;
+    ///     let ticket = preparation.await??;
+    ///     owner.try_discard_prepared_v1(ticket).map_err(|failure| failure.error)?.await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_generated_context_invocation_async<Arguments>(
+        self,
+        arguments: Arguments,
+        owner: &RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1>,
+        device: RuntimeDeviceIdV1,
+        geometry: AqlDispatchGeometryV1,
+        dynamic_group_segment_bytes: u32,
+        timeout_milliseconds: u32,
+        limits: GeneratedRuntimeArgumentLimitsV1,
+        result_budget: &GeneratedRuntimeResultBudgetV1,
+    ) -> Result<
+        RuntimeAsyncPreparationV1<GeneratedWorkerV3ContextInvocationErrorV1>,
+        GeneratedWorkerV3RuntimeInvocationErrorV1,
+    >
+    where
+        Arguments: CompilerGeneratedRuntimeArguments<K>,
+        K: 'static,
+    {
+        self.require_runtime_evidence()?;
+        let result_budget = result_budget.clone();
+        owner
+            .try_prepare_gfx942_v1(device, move |device| {
+                self.prepare_context_payload(
+                    arguments,
+                    device,
+                    geometry,
+                    dynamic_group_segment_bytes,
+                    timeout_milliseconds,
+                    limits,
+                    &result_budget,
+                )?
+                .project_persistent()
+            })
+            .map_err(GeneratedWorkerV3RuntimeInvocationErrorV1::Engine)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn prepare_context_payload<Arguments>(
         mut self,
@@ -308,6 +376,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
             storage,
             authority,
             footprint: parts.footprint,
+            result_budget: result_budget.clone(),
         })
     }
 }
@@ -318,6 +387,7 @@ pub enum GeneratedWorkerV3RuntimeInvocationErrorV1 {
     Invocation(GeneratedWorkerV3KfdInvocationError),
     Arguments(GeneratedRuntimeArgumentErrorV1),
     Projection(Gfx942RuntimeProjectionErrorV1),
+    Engine(RuntimeAsyncEngineCallErrorV1),
 }
 
 impl From<GeneratedWorkerV3KfdInvocationError> for GeneratedWorkerV3RuntimeInvocationErrorV1 {
@@ -330,6 +400,7 @@ impl fmt::Display for GeneratedWorkerV3RuntimeInvocationErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Invocation(error) => error.fmt(formatter),
+            Self::Engine(error) => error.fmt(formatter),
             Self::Projection(error) => {
                 write!(formatter, "generated persistent projection failed: {error}")
             }
@@ -346,6 +417,50 @@ impl Error for GeneratedWorkerV3RuntimeInvocationErrorV1 {
             Self::Invocation(error) => Some(error),
             Self::Projection(error) => Some(error),
             Self::Arguments(error) => Some(error),
+            Self::Engine(error) => Some(error),
         }
+    }
+}
+
+#[cfg(test)]
+mod async_preparation_tests {
+    #[test]
+    fn async_preparation_reuses_protected_constructor_and_original_account() {
+        // Source wiring supplements runtime engine tests; it is not successful
+        // compiler-backed construction or native qualification.
+        let source = include_str!("generated_runtime_invocation.rs");
+        let body = source
+            .split_once("pub fn prepare_generated_context_invocation_async<Arguments>(")
+            .unwrap()
+            .1
+            .split_once("fn prepare_context_payload<Arguments>(")
+            .unwrap()
+            .0;
+        let protected = body.find("self.require_runtime_evidence()?").unwrap();
+        let budget = body
+            .find("let result_budget = result_budget.clone()")
+            .unwrap();
+        let enqueue = body.find(".try_prepare_gfx942_v1(").unwrap();
+        let payload = body.find("self.prepare_context_payload(").unwrap();
+        let projection = body.find(".project_persistent()").unwrap();
+        assert!(
+            protected < budget && budget < enqueue && enqueue < payload && payload < projection
+        );
+        for forbidden in [
+            "ResultBudgetV1::new",
+            "execute_",
+            ".launch(",
+            "into_runtime_inputs(",
+        ] {
+            assert!(!body.contains(forbidden));
+        }
+        let projection = source
+            .split_once("fn project_persistent(")
+            .unwrap()
+            .1
+            .split_once("/// Generated custody")
+            .unwrap()
+            .0;
+        assert!(projection.contains("result_budget: self.result_budget"));
     }
 }

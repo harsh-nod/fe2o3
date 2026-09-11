@@ -7,6 +7,7 @@ mod drain_tests;
 mod executor_tests;
 mod graph_tests;
 mod local_operation_tests;
+mod preparation_tests;
 mod snapshot_tests;
 
 #[derive(Default)]
@@ -734,8 +735,8 @@ fn owned_operation_flush_cursor_rotates_when_full_poll_round_restores_order() {
         fn advance(&mut self, _: &mut RuntimeContextV1<MockBackend>) -> bool {
             false
         }
-        fn stream(&self) -> RuntimeStreamIdV1 {
-            self.0
+        fn stream(&self) -> Option<RuntimeStreamIdV1> {
+            Some(self.0)
         }
         fn reject(&mut self, _: RuntimeAsyncEngineCallErrorV1) {}
     }

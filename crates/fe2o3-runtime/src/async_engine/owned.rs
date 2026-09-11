@@ -335,6 +335,9 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
                     } else {
                         None
                     };
+                    if cleanup.is_complete() && native_failure.is_none() {
+                        operations.dispose_quiescent();
+                    }
                     (cleanup, native_failure)
                 }));
                 match outcome {

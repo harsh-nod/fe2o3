@@ -18,10 +18,10 @@ ticket split from the three-agent read-only audit, signed R78 and local R79.
 It records generated-admission/result ownership, independent native fixtures,
 the missing native-budget qualification harness and completion gates. That
 planning audit adds no runtime implementation or hardware acceptance; the
-history below retains the earlier packet boundaries. R79 finite preparation is
-implemented in the working tree with focused CPU tests passing, but is not
-committed or release-qualified. This documentation-only refresh does not publish
-that implementation or promote it to native generated execution.
+history below retains the earlier packet boundaries. R79 now implements
+[finite preparation and parked custody](runtime-async-generated-preparation-v1.md)
+with full [local gates](evidence/local-r79-async-preparation-2026-09-10/README.md).
+That boundary is not native generated execution or whole-adapter refinement.
 
 The [R65 contract](runtime-async-drain-versions-v1.md) is the current baseline:
 cooperative drain, reply-count admission and graph-local version lineage are
@@ -230,6 +230,17 @@ needs an explicit nonpublishing owner before using these hooks; ordinary
 `MaterializedPrepared` can publish through deferred flush. Publication, result
 readback, Linux qualification and matched performance remain open.
 
+R79 supplies the explicitly nonpublishing owner with a finite preparation
+future, opaque ticket and owner-thread discard. Active plus parked entries share
+the operation ceiling; parked preparation does not flush or block drain/graphs.
+The complete host/Context carrier retains original account, decoder and authority.
+Eighteen new runtime tests, one host wiring test, four runtime compile-fail
+examples and one host compile-only example pass local gates. The focused async
+suite passes 204 tests; GNU/musl runtime gates each pass 2,289. These tests use
+generic local payloads, not successful protected construction or actual R73
+charged bytes through the engine. Native adoption, readback reservations,
+publication/completion, executable refinement and performance remain open.
+
 | Slice | Implemented locally | Boundary still open |
 | --- | --- | --- |
 | OVL-QUAL-1 | Eight-cell R26 coexistence example, immutable native-custody observations, independent checker, signed-source runner and negative tests | Signed live capture, native extraction refinement, physical overlap and production generated-kernel authority |
@@ -240,7 +251,8 @@ readback, Linux qualification and matched performance remain open.
 | GEN-2B-1 | Inert Send factory transport, owner-local operation registry, shutdown/quarantine retention and independent reply disposal | Context-bound generated authority, persistent publication/readback, R73 byte-owner integration and whole-executor refinement |
 | GEN-2B-2 | Immutable full-currentness retained-device scope, exact Context/native binding and nonexecuting host invocation | Live pre/post-bootstrap scope qualification, protected production construction, operation adoption/publication and whole-adapter refinement |
 | GEN-2B-3 projection | Complete consuming fixed-host recipe, exact source/hidden-byte equivalence, native policy preflight and charged host custody | One-shot adoption, publication-time authority, timeout behavior, complete readback, unsupported fixed profiles and executable refinement |
-| GEN-2B-3 native hooks | Borrowed coherent initialization/insertion/replacement and ordinary HostVisible copy removal, with unchanged native custody paths | Explicitly nonpublishing generated owner, complete-roster adapter, native qualification and executable refinement |
+| GEN-2B-3 native hooks | Borrowed coherent initialization/insertion/replacement and ordinary HostVisible copy removal, with unchanged native custody paths | Complete-roster representation/adoption, native qualification and executable refinement; R79 supplies the inert owner |
+| B3-OWNER / R79 | Finite preparation, parked Context-bound custody, opaque tickets and owner-thread discard | Closed native-ready representation, readback reservations, adoption/publication and complete charged results; positive protected construction and adapter proof remain open |
 | DRN-3A/B | Earlier accepted-submit/observation/cancellation regressions plus twelve DRN-3B graph, operation/waiter, capture and Stop scenarios | Active-work hardware drain and whole-executor refinement |
 | SCALE-3-PROTO | Bounded matched-plan/checker protocol; fourteen tests and independent cross-review pass | Signed producers, genuine correctness/timing captures, performance and physical overlap |
 | MEM-BASE / MEM-5 inventory | Shared credit-engine extraction and device-branded wrapper; concrete allocation-site inventory | Parent budgets, compound native admission and complete aggregate byte-budget closure |
@@ -302,10 +314,10 @@ admission; R73 adds charged result storage and passes its local/proof gates.
 R74 adds standalone nonexecuting invocation custody, and R75 implements
 GEN-2B-1 owner-local drivers/retention. R76 implements reusable Context/device
 preparation. R77 adds checked nonexecuting projection; R78 supplies borrowed
-coherent initialization hooks. Admission first supplies an explicitly
-nonpublishing retained owner in local R79; its broader validation/release is the
-next Primary/Admission task. Native takes independent fixtures and Resources
-takes host-cache limits plus the shared readback reservation contract. The
+coherent initialization hooks. R79 supplies the locally validated nonpublishing
+owner. Native now takes complete-roster representation; Admission/Resources take
+implemented readback/reply reservations. Native fixtures and host-cache limits
+remain independent work. The
 [integration queue](runtime-a1-a2-next-wave.md#generated-integration-queue)
 refines the [six-packet breakdown](runtime-a1-a2-next-wave.md#gen-2b-breakdown):
 the owner precedes full-roster adoption, and adoption plus complete result/reply
@@ -317,10 +329,10 @@ hardware remain primary-owned.
 
 | Lane | Next bounded packet | Dependency and exit gate |
 | --- | --- | --- |
-| Native | SCALE-1A-FIXTURE now; B3-DATA-REP then ADOPT; R78 rebound qualifier and MEM-QUAL-HARNESS | R78 hooks are implemented; do not duplicate them. Accepted OWNER precedes representation integration; ADOPT additionally requires implemented B4-RESERVE. Before effects, custody becomes non-discardable and joins lane/drain/graph/cleanup tracking. Fixtures need full-output oracles |
-| Resources | Host-cache policy and B4-RESERVE contract, then N1B and MEM-DOM-1 | R72 suffices for ordinary host-cache policy. B4 needs a new completion reply and full readback ownership in the original account. Parent accounts and bootstrap/terminal headroom remain separate |
-| Admission | Review/validate R79, share B4-RESERVE, then B3-ISSUE, completion/API/graph integration | R79 is host preparation, not launch completion. DATA-ADOPT and implemented reservations precede issue; charged completion precedes public async/blocking and graph/drain. Production execution requires exact compiler/machine evidence |
-| Primary | Finish R79 full gates/release, then reviewed implementation and shared integration; signed OVL/DRN/MEM campaigns | The current dispatch commit changes documentation only. MEM campaigns first need the new pressure harness. Hardware requires idle selected GPU, real binary/census and complete cleanup. Do not promote fixtures to production authority |
+| Native | B3-DATA-REP now; independent SCALE-1A-FIXTURE; then ADOPT, R78 rebound qualifier and MEM-QUAL-HARNESS | R79 supplies the locally gated owner; reuse R78's hooks. ADOPT additionally requires implemented B4-RESERVE. Before effects, custody becomes non-discardable and joins lane/drain/graph/cleanup tracking. Fixtures need full-output oracles |
+| Resources | B4-RESERVE and independent host-cache policy, then N1B and MEM-DOM-1 | R72 suffices for ordinary host-cache policy. B4 needs a new completion reply and full readback ownership in the original account. Parent accounts and bootstrap/terminal headroom remain separate |
+| Admission | B4-RESERVE against R79, then B3-ISSUE, completion/API/graph integration | R79 is locally validated host preparation, not launch completion. DATA-ADOPT and implemented reservations precede issue; charged completion precedes public async/blocking and graph/drain. Production execution requires exact compiler/machine evidence |
+| Primary | Reviewed reservation/adoption implementation and shared integration; signed OVL/DRN/MEM campaigns | R79 local gates are complete. MEM campaigns first need the new pressure harness. Hardware requires idle selected GPU, real binary/census and complete cleanup. Do not promote fixtures to production authority |
 
 ### R71 Implementation Ownership
 
@@ -623,7 +635,7 @@ or fixture results exist. None of the rows establishes runtime-wide parity.
 | GEN-2A | R74 nonexecuting typed invocation, protected-only authority and guarded decoder custody | No new proof; compiler evidence and executable refinement open | Six storage/loader tests, seven new negative fixtures and compile-only consuming API; no full production constructor | Nonexecuting boundary; fixtures cannot fill production cells | Positive construction open | Unmeasured |
 | GEN-2B-1/2 | R75 owner-local drivers and R76 nonexecuting Context preparation implemented locally | Compiler evidence and adapter/async composition open | Driver retention, Context identity/rejection, shutdown storage and type-boundary checks pass; positive native construction remains open | Live retained-device bootstrap scopes open; fixtures cannot fill production cells | Open | Unmeasured |
 | GEN-2B-3 projection | R77 complete nonexecuting fixed-host projection and Context carrier integration | No new theorem; native/whole-transform refinement open | Exact identity/roster/hidden bytes, pointer/capacity retention, native policy rejection and charged disposal tests | No native work; unsupported fixed profiles remain open | Open | Unmeasured |
-| B3-OWNER / R79 | Finite preparation, parked custody, opaque ticket and discard exist only in working tree; release pending | No new adapter proof | Focused 22 runtime/10 host tests pass, including 16 new runtime and one host wiring case; full release gates pending | Nonexecuting host custody only | Positive protected construction open | Unmeasured |
+| B3-OWNER / R79 | Finite preparation, parked custody, opaque ticket and discard implemented with local gates | No new adapter proof | Eighteen new runtime cases and one host wiring test; focused 204-test async suite and full source gates pass; actual R73 engine-accounting integration unqualified | Nonexecuting host custody only | Positive protected construction open | Unmeasured |
 | GEN-2B-3 adoption, -4..6 | Native adoption/publication, completion/results, public async API and generated graph/drain integration open | Compiler evidence and async composition open | Publication/retirement, wake/retry and composed generated shutdown matrix open | Fixtures cannot fill production cells | Open | Unmeasured |
 | DRN-1/2/3 | R65 drain, DRN-1A capture and DRN-3A/B failure composition exist | R69 range guard only; whole drain/executor refinement open | R69 tests plus twelve DRN-3B operation/waiter, graph, exhaustion and Stop scenarios | R65 idle only; DRN-2 outstanding-work open | Open | Unmeasured |
 | DRN-2A | Eight-cell copy qualifier/checker/runner | No whole-drain or native refinement proof | Eight observer tests, actual scripted async-copy/pending-poll regression and seventeen checker/runner tests | Signed outstanding-work campaign open | Generated cells require GEN-2 | Unmeasured |
@@ -1112,7 +1124,7 @@ merging to either main branch.
 | Follow-on, R76 packet | Immutable retained-device scope, full currentness and queue/VM guard review | Exact identity and payload-before-credit review | Runtime/host Context binding and nonescaping interface review | Shared scope/host implementation and local gates; native bootstrap and production compiler acceptance remain open |
 | Follow-on, R77 packet | Complete fixed-host projection, canonical hidden/layout validation and mechanics transfer review | No-copy storage, original credits and disposal-order review | Context carrier integration and source-identity review | Source gates/evidence; no native adoption, deadline or completion acceptance |
 | Follow-on, R78 packet | Borrowed coherent initialization/insertion/replacement and fault-envelope review | Exact padded debit, currentness, retained-prefix and refund review | Ordinary HostVisible copy removal and source-lifetime review | Local gates/evidence; full generated adoption and native initial/rebound qualification remain open |
-| Next dependency-ready packet | SCALE-1A-FIXTURE/qualifier, R78 rebound qualifier and MEM-QUAL-HARNESS; B3-DATA-REP then ADOPT after accepted OWNER; R76 native acceptance | Host-cache policy and shared B4-RESERVE; then N1B and MEM-DOM-1; VER-1 can move earlier | R79 review/validation and B4-RESERVE; B3-ISSUE after DATA-ADOPT and RESERVE; then completion/API/graph integration | R79 full release gates; own edits/shared hooks; OVL-QUAL-2 and DRN-2A signed campaigns; native-budget hardware after its new harness; compiler handoff |
+| Next dependency-ready packet | B3-DATA-REP against R79, then ADOPT after implemented RESERVE; independent SCALE-1A-FIXTURE, R78 rebound and MEM-QUAL harnesses; R76 native acceptance | Shared B4-RESERVE and independent host-cache policy; then N1B and MEM-DOM-1; VER-1 can move earlier | B4-RESERVE; B3-ISSUE after DATA-ADOPT and RESERVE; then completion/API/graph integration | Reviewed reservation/adoption integration; own edits/shared hooks; OVL-QUAL-2 and DRN-2A signed campaigns; native-budget hardware after its new harness; compiler handoff |
 | 3, bounded local integration | MEM-3/4 native hooks, then SCALE-CAP | MEM-3A/B, MEM-4A/B, VER-1/2 and MEM-5 closure | Compose GEN-2B with resource/version owners; DRN-2 fixture campaign support | Incremental PRF-1; production GEN-2 requires matching compiler/machine evidence |
 | 4, acceptance campaigns | SCALE-2 depth/out-of-order, then SCALE-3 producers/measurements | Budget/version stress and independent review | Repeated generated graphs and active/failure drain | PRF-2, full A1/A2 exit audit and signed dual-remote publication |
 

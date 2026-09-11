@@ -30,7 +30,9 @@ mod drain_capture;
 pub use drain_capture::*;
 mod drain_capture_storage;
 pub use drain_capture_storage::RuntimeAsyncCapturedBytesV1;
+mod generated_operation;
 mod operation;
+pub use generated_operation::*;
 mod reply_budget;
 pub use operation::*;
 mod snapshot;
@@ -422,6 +424,7 @@ impl Error for RuntimeAsyncProgressEngineSpawnErrorV1 {
 pub enum RuntimeAsyncEngineCallErrorV1 {
     CommandQueueFull,
     OperationCapacity,
+    InvalidPreparedTicket,
     /// This operation never entered context submission. Not GPU completion.
     CancelledBeforeSubmission,
     EngineStopped,
@@ -841,6 +844,10 @@ type RuntimeContextCommandV1<B> = Box<dyn FnOnce(&mut RuntimeContextV1<B>) + Sen
 enum RuntimeAsyncEngineCommandV1<B: RuntimeBackendV1> {
     Context(RuntimeContextCommandV1<B>),
     Operation(Box<dyn operation::EngineOperationFactoryV1<B>>),
+    DiscardPrepared {
+        ticket: RuntimeAsyncPreparedTicketV1,
+        reply: owned::Reply<()>,
+    },
     Graph(Box<dyn graph::EngineGraphV1<B>>),
     Register {
         event: RuntimeEventIdV1,
@@ -1521,7 +1528,7 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
                 request.tick(
                     context,
                     queue_exhausted,
-                    operations.len(),
+                    operations.active_len(),
                     graph.is_some(),
                     waiters.entries.is_empty(),
                     config,
@@ -1583,7 +1590,7 @@ fn handle_command_v1<B: RuntimeBackendV1 + 'static>(
         RuntimeAsyncEngineCommandV1::Graph(mut incoming) => {
             if progress_config.is_none()
                 || graph.is_some()
-                || operations.len() != 0
+                || operations.active_len() != 0
                 || !waiters.is_empty()
                 || progress
                     .as_ref()
@@ -1623,6 +1630,27 @@ fn handle_command_v1<B: RuntimeBackendV1 + 'static>(
                     core::mem::forget(payload);
                 }
             }
+            context.is_terminal()
+        }
+        RuntimeAsyncEngineCommandV1::DiscardPrepared { ticket, mut reply } => {
+            let result = if context.is_terminal() {
+                Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
+            } else if ticket.key.context_generation != context.capture_context_generation_v1() {
+                Err(RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket)
+            } else {
+                match catch_unwind(AssertUnwindSafe(|| {
+                    operations.discard_prepared(&ticket.key)
+                })) {
+                    Ok(true) => Ok(()),
+                    Ok(false) => Err(RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket),
+                    Err(payload) => {
+                        core::mem::forget(payload);
+                        context.quarantine_after_async_command_panic_v1();
+                        Err(RuntimeAsyncEngineCallErrorV1::CommandPanicked)
+                    }
+                }
+            };
+            reply.complete(result);
             context.is_terminal()
         }
         RuntimeAsyncEngineCommandV1::Context(command) => {

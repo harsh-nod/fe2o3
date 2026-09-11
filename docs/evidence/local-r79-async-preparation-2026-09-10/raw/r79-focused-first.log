@@ -1,0 +1,40 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+   Compiling fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.45s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_host-58f6f4400a07ddbb)
+
+running 9 tests
+test generated_runtime_arguments::charged_tests::both_preparation_routes_reject_mixed_custody_before_encoding ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::invocation_preparation_failure_disposes_inputs_and_credits ... ok
+test generated_runtime_arguments::charged_tests::charged_preparation_reuses_seed_and_preserves_exact_packing ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::invocation_preparation_does_not_relax_private_segment_validation ... ok
+test generated_runtime_arguments::charged_tests::zero_buffer_preparation_bypasses_the_nonempty_batch_api ... ok
+test prepared_launch::tests::preparation_binds_identity_context_device_geometry_and_resources ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::invocation_preparation_retains_exact_identity_and_disposes_without_outputs ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::invocation_preparation_retains_credits_through_unwind ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::invocation_read_only_preparation_retains_credit_with_policy_copies ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 231 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-f0c3ce0f97c244ed)
+
+running 16 tests
+test async_engine::tests::owned_tests::preparation_tests::preparation_discard_budget_and_queue_rejection_return_same_ticket ... ok
+test async_engine::tests::owned_tests::preparation_tests::preparation_cancellation_precedes_callback_and_does_not_stop_engine ... ok
+test async_engine::tests::owned_tests::preparation_tests::preparation_error_and_callback_panic_never_create_a_ready_ticket ... ok
+test async_engine::tests::owned_tests::preparation_tests::preparation_discard_exact_identity_rejects_foreign_and_replayed_tickets ... ok
+test async_engine::tests::owned_tests::preparation_tests::preparation_parked_and_active_entries_share_one_capacity ... ok
+test async_engine::tests::owned_tests::preparation_tests::preparation_owner_requirement_and_capacity_reject_before_callback ... ok
+test async_engine::tests::owned_tests::preparation_tests::preparation_observer_and_ticket_drop_do_not_dispose_parked_owner ... ok
+test async_engine::tests::owned_tests::preparation_tests::preparation_discard_and_shutdown_drop_panics_retain_later_owners ... ok
+test async_engine::tests::owned_tests::preparation_tests::preparation_parks_once_without_flush_and_discard_reclaims_capacity_after_drop ... ok
+test async_engine::tests::owned_tests::preparation_tests::preparation_parked_only_owned_drain_completes_and_disposes_on_owner ... ok
+test context::generated_preparation::tests::preparation_rejects_foreign_unknown_terminal_and_synthetic_before_callback ... ok
+test context::generated_preparation::tests::preparation_binding_survives_model_vm_creation_without_readmitting_device ... ok
+test context::generated_preparation::tests::preparation_outliving_shutdown_is_inert_and_rejected ... ok
+test context::generated_preparation::tests::preparation_binding_rejects_each_identity_coordinate ... ok
+test context::generated_preparation::tests::preparation_validation_rejects_foreign_context_and_binding_before_native_access ... ok
+test kfd_backend::generated_preparation::tests::preparation_backend_rejects_terminal_retired_synthetic_and_foreign_before_callback ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 620 filtered out; finished in 0.01s
+

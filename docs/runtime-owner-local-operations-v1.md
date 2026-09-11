@@ -6,6 +6,11 @@ launch, copy, peer-copy and frozen-request entry points use this factory path.
 There is no new public generated-launch API or native publication mechanism.
 GEN-2B-2 through -6 remain in the [dispatch plan](runtime-a1-a2-next-wave.md#gen-2b-breakdown).
 
+R79 extends this boundary with [finite preparation and parked custody](runtime-async-generated-preparation-v1.md).
+Never-adopted parked owners remain capacity-bounded and shutdown-retained, but
+do not count as pending execution for progress, graphs or drain. The test totals
+below describe the R75 checkpoint, not the later R79 integration.
+
 ## Admission And Progress
 
 The private [factory](../crates/fe2o3-runtime/src/async_engine/operation/factory.rs)
@@ -68,7 +73,7 @@ or outer unwind retains both owners until process exit. Existing Context-owned
 graph machinery is unchanged; this packet does not admit generated graph custody.
 
 One registry accounts for installed, advancing and stopped-retained entries under
-the existing `waiter_capacity`. Retained entries cannot create free operation
+the existing `waiter_capacity`. Unresolved execution entries cannot create free operation
 capacity or a quiescent drain observation. There is no additional growing
 quarantine list. Per-tick advance/flush limits and cyclic stream selection remain
 unchanged; single-entry rotation is constant work, stream-count updates use the
@@ -76,9 +81,10 @@ existing ordered map, and each stop-observation pass scans the bounded roster on
 These are algorithmic bounds, not a measured performance gain.
 
 Record bounds do not bound arbitrary arguments, factories, drivers, wakers or
-result bytes. R73 charged generated storage and R74 production authority have
-not yet been placed in these drivers. MEM-5 and exact generated completion remain
-separate integration requirements.
+result bytes. R75 did not place R73 charged generated storage or R74 production
+authority in these drivers. R79 later retains their complete preparation carrier;
+positive charged production construction, MEM-5 and exact generated completion
+remain separate integration requirements.
 
 ## Validation Boundary
 

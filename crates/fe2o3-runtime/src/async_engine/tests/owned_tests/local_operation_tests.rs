@@ -98,9 +98,9 @@ impl<B: RuntimeBackendV1> EngineOperationV1<B> for LocalDriver {
         }
     }
 
-    fn stream(&self) -> RuntimeStreamIdV1 {
+    fn stream(&self) -> Option<RuntimeStreamIdV1> {
         assert_eq!(self.stream_calls.replace(1), 0, "stream must be cached");
-        self.stream
+        Some(self.stream)
     }
 
     fn reject(&mut self, error: RuntimeAsyncEngineCallErrorV1) {

@@ -8,7 +8,7 @@ use crate::{
 use std::collections::{BTreeMap, VecDeque};
 
 mod factory;
-pub(super) use factory::EngineOperationFactoryV1;
+pub(super) use factory::{EngineOperationFactoryV1, stop_reply};
 
 /// An exact submission and its final host observation. An error is not GPU
 /// completion; the context continues to retain possibly reachable resources.
@@ -34,8 +34,14 @@ pub(super) trait EngineOperationV1<B: RuntimeBackendV1> {
     /// True grants driver disposal, not merely completion of its reply. Issued
     /// custody must remain here or in the Context until conclusively retired.
     fn advance(&mut self, context: &mut RuntimeContextV1<B>) -> bool;
-    /// Inert identity, cached at admission before the first advance.
-    fn stream(&self) -> RuntimeStreamIdV1;
+    /// Inert flush identity, cached before first advance. Preparation has none.
+    fn stream(&self) -> Option<RuntimeStreamIdV1>;
+    /// Only a fully host-owned, never-adopted preparation may park.
+    fn prepared_key(&self) -> Option<&Arc<generated_operation::PreparedKeyV1>> {
+        None
+    }
+    /// Called after the driver is rooted in the preallocated parked roster.
+    fn complete_preparation(&mut self) {}
     /// Infallibly detach/resolve the reply before any fallible handling, without
     /// disposing possibly reachable native custody. Panic containment preserves
     /// custody, but cannot recover a reply hidden by a broken implementation.
@@ -43,12 +49,13 @@ pub(super) trait EngineOperationV1<B: RuntimeBackendV1> {
 }
 
 struct OperationEntryV1<B: RuntimeBackendV1> {
-    stream: RuntimeStreamIdV1,
+    stream: Option<RuntimeStreamIdV1>,
     driver: Box<dyn EngineOperationV1<B>>,
 }
 
 pub(super) struct OperationRegistryV1<B: RuntimeBackendV1> {
     entries: VecDeque<OperationEntryV1<B>>,
+    parked: VecDeque<OperationEntryV1<B>>,
     streams: BTreeMap<RuntimeStreamIdV1, usize>,
     flush_cursor: Option<RuntimeStreamIdV1>,
     owner_cleanup: bool,
@@ -58,6 +65,7 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
     pub(super) fn new(capacity: usize, owner_cleanup: bool) -> Self {
         Self {
             entries: VecDeque::with_capacity(capacity),
+            parked: VecDeque::with_capacity(capacity),
             streams: BTreeMap::new(),
             flush_cursor: None,
             owner_cleanup,
@@ -65,12 +73,18 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
     }
 
     pub(super) fn len(&self) -> usize {
+        self.entries.len() + self.parked.len()
+    }
+
+    pub(super) fn active_len(&self) -> usize {
         self.entries.len()
     }
 
     pub(super) fn insert(&mut self, operation: Box<dyn EngineOperationV1<B>>) {
         let stream = operation.stream();
-        *self.streams.entry(stream).or_default() += 1;
+        if let Some(stream) = stream {
+            *self.streams.entry(stream).or_default() += 1;
+        }
         self.entries.push_back(OperationEntryV1 {
             stream,
             driver: operation,
@@ -84,7 +98,7 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
     /// Resolving a reply never removes its driver from the custody roster.
     pub(super) fn stop_observations(&mut self) -> bool {
         let mut panicked = false;
-        for entry in &mut self.entries {
+        for entry in self.entries.iter_mut().chain(&mut self.parked) {
             if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
                 entry
                     .driver
@@ -97,7 +111,8 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
         panicked
     }
 
-    fn retire_stream(&mut self, stream: RuntimeStreamIdV1) {
+    fn retire_stream(&mut self, stream: Option<RuntimeStreamIdV1>) {
+        let Some(stream) = stream else { return };
         let count = self
             .streams
             .get_mut(&stream)
@@ -106,6 +121,34 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
         if *count == 0 {
             self.streams.remove(&stream);
         }
+    }
+
+    pub(super) fn discard_prepared(
+        &mut self,
+        key: &Arc<generated_operation::PreparedKeyV1>,
+    ) -> bool {
+        let Some(index) = self.parked.iter().position(|entry| {
+            entry
+                .driver
+                .prepared_key()
+                .is_some_and(|stored| Arc::ptr_eq(stored, key))
+        }) else {
+            return false;
+        };
+        // The caller contains destructor panic and owns the discard reply.
+        drop(self.parked.remove(index).expect("matched parked owner"));
+        true
+    }
+
+    pub(super) fn dispose_quiescent(&mut self) {
+        // Pop one at a time so outer panic containment retains every later owner.
+        while let Some(entry) = self.entries.pop_front() {
+            drop(entry);
+        }
+        while let Some(entry) = self.parked.pop_front() {
+            drop(entry);
+        }
+        self.streams.clear();
     }
 }
 
@@ -212,8 +255,8 @@ impl<B: RuntimeBackendV1, A> EngineOperationV1<B> for Operation<B, A> {
         }
     }
 
-    fn stream(&self) -> RuntimeStreamIdV1 {
-        self.stream
+    fn stream(&self) -> Option<RuntimeStreamIdV1> {
+        Some(self.stream)
     }
 
     fn reject(&mut self, error: RuntimeAsyncEngineCallErrorV1) {
@@ -431,20 +474,43 @@ pub(super) fn advance_operations_v1<B: RuntimeBackendV1>(
     flush_budget: usize,
     flush: RuntimeAsyncFlushDriverV1<B>,
 ) {
-    for _ in 0..poll_budget.min(operations.len()) {
+    for _ in 0..poll_budget.min(operations.active_len()) {
         let entry = operations
             .entries
             .front_mut()
             .expect("bounded operation roster");
         // An adapter may have performed a side effect before unwinding. Do not
         // let command panic containment turn that into permission to retry.
-        match catch_unwind(AssertUnwindSafe(|| entry.driver.advance(context))) {
+        match catch_unwind(AssertUnwindSafe(|| {
+            let retired = entry.driver.advance(context);
+            (retired, !retired && entry.driver.prepared_key().is_some())
+        })) {
             Ok(_) if context.is_terminal() => return,
-            Ok(true) => {
+            Ok((true, _)) => {
                 let retired = operations.entries.pop_front().expect("retired driver");
                 operations.retire_stream(retired.stream);
             }
-            Ok(false) => operations.entries.rotate_left(1),
+            Ok((false, false)) => operations.entries.rotate_left(1),
+            Ok((false, true)) => {
+                let parked = operations.entries.pop_front().expect("prepared driver");
+                operations.retire_stream(parked.stream);
+                operations.parked.push_back(parked);
+                let entry = operations.parked.back_mut().expect("parked driver");
+                if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                    entry.driver.complete_preparation();
+                })) {
+                    core::mem::forget(payload);
+                    context.quarantine_after_async_command_panic_v1();
+                    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                        entry
+                            .driver
+                            .reject(RuntimeAsyncEngineCallErrorV1::CommandPanicked);
+                    })) {
+                        core::mem::forget(payload);
+                    }
+                    return;
+                }
+            }
             Err(payload) => {
                 core::mem::forget(payload);
                 context.quarantine_after_async_command_panic_v1();
