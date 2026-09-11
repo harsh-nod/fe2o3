@@ -89,3 +89,46 @@ The current candidate removes those extra full scans only for the already
 opted-in operational policy. It requires separate host/native/model validation;
 the earlier receipts are not evidence of a performance improvement or of this
 new boundary selection.
+
+## Dispatch-Policy Checkpoint
+
+The boundary selection at `c110ac55c655579e0969b310402800b0c2666694` passes
+483 engineering library tests, 20 integration tests, 420 default library tests,
+31 doctests, strict all-target release Clippy, formatting and the release worker
+build. Worker SHA-256:
+`b91ddef78135829f607d1b83f5cf898d745b36013327f0d2d12771aba1b5150b`.
+
+Separate native counter probes compare the old worker above and this candidate
+under full and operational policies. Each fresh worker executes a cold one-packet
+chain, a warm one-packet chain and a warm sixteen-packet chain. Fixture allocation
+precedes snapshot A; snapshot B precedes full-array/guard readback. Every delta
+contains two commands (including the earlier snapshot command), the exact packet
+count, and no reads, writes or kernel admissions. Full-currentness check counts:
+
+| Worker / Policy | Cold 1 | Warm 1 | Warm 16 |
+| --- | ---: | ---: | ---: |
+| Old / full | 13 | 11 | 26 |
+| Candidate / full | 13 | 11 | 26 |
+| Old / operational | 4 | 2 | 2 |
+| Candidate / operational | 2 | 0 | 0 |
+
+Periodic polling can add checks; these are observed counts, not universal exact
+full-mode counts. The candidate's cold operational call retains two full checks
+for lazy allocation. All four probes pass exact dependency arrays, immutable
+inputs and guards, free their 39 fixture allocations, close/reap normally and
+leave all eight physical GPUs idle. These overlapping host counters do not
+establish exclusive CPU time or GPU/model performance.
+
+Candidate full/operational counter-result SHA-256 values:
+`6d2e1d69a6e9aaec88b10c8329c2f53b0fd77a5e8ef8cac51d60b55f6650dfeb`
+and `9fd7dee0650ba82f2ae374886a37794fb89117a8bc0fa4637d5a8de060948fb1`.
+
+The frozen 184-packet/26-chain lifecycle fixture also passes again on this
+candidate in both modes, including storage reuse and a real rollover at 152
+retired packets followed by 32 more packets with live buffers. Full arrays,
+guards, close/reap, unforced process cleanup and all-eight idle checks pass.
+Full/operational lifecycle-result SHA-256 values:
+`e5b4001c4c2497ce9f719d846c8631b6cef55f3d2262ef7688ec6e5f539845dd`
+and `94886ad068f34d1db036c66a9d7631ae63269ba8b4c06255f6f3cd4090de3e3c`.
+Image-specific fixtures remain external. Deliberate GPU faults remain excluded
+on the shared host; host-injected failure coverage is unchanged.
