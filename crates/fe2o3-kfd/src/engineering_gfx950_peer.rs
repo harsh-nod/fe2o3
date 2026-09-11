@@ -9,6 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 mod performance;
 pub use performance::Gfx950EngineeringPeerDispatchV1;
 
+#[path = "engineering_gfx950_peer_round.rs"]
+mod round;
+
 static NEXT_GROUP: AtomicU64 = AtomicU64::new(1);
 const LINK_ENABLED: u32 = 1;
 const LINK_NO_ATOMICS: u32 = (1 << 2) | (1 << 3);
@@ -329,11 +332,12 @@ fn require_peer_access(
     Ok(())
 }
 
-/// One serial, disposable-process owner of gfx950 contexts and peer mappings.
+/// One single-threaded, disposable-process owner of gfx950 peer mappings.
 ///
-/// Peer mappings admit reads only in kernel argument binding. Owner-rank writes
-/// and all host operations require complete group quiescence. No method returns
-/// a native pointer/handle, and no protected gfx942 capability is created.
+/// Peer mappings admit reads only in kernel argument binding. Host/lifecycle
+/// operations require group quiescence. The separately opted-in round API may
+/// overlap independent owner-rank dispatches under one exclusive borrow. No
+/// method returns a native pointer/handle or a protected gfx942 capability.
 ///
 /// ```compile_fail
 /// fn requires_send<T: Send>() {}

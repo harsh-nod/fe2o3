@@ -93,6 +93,24 @@ These checks do not qualify native queue/MMIO execution, authenticate kernel
 semantics, or grant protected runtime authority. No runtime behavior changes
 as part of this inventory reconciliation.
 
+### Independent-Rank Engineering Rounds
+
+The additive round API separates private publication and completion observation
+under the same exclusive owner. Its extra private unsafe publication boundary
+does not manufacture a safe launch API: unauthenticated machine code still needs
+the trusted-kernel obligations documented in
+`gfx950-engineering-peer-round-v1.md`. Cross-command write conflicts reject,
+all commands prepare before publication, and each distinct queue retains its
+own kernarg and signal. Full group entry/exit checks remain, with live checks
+during overlap. Errors retain every uncertain native owner until process exit.
+
+The revised inventory records five blocks/five unsafe functions in
+`engineering_gfx950.rs`, one block/one unsafe function in the new round module,
+and one test-only block exercising empty-round rejection without native owners.
+The peer owner and serial-sequence inventory entries are unchanged. The new
+test block contains no GPU operation. Host fault tests and inventory checks are
+required but do not substitute for independently scheduled native qualification.
+
 ## Initial Reduction
 
 The initial audit of `d9f6bbcd0` found 1,924 source sites in 288 Rust files:

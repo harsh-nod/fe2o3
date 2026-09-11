@@ -70,6 +70,18 @@ struct PreparedDispatch {
     group_bytes: u32,
 }
 
+struct PendingDispatch {
+    unique_id: u64,
+    queue_epoch: u64,
+    next: u64,
+    started: Instant,
+    deadline: Instant,
+    next_currentness: Instant,
+    wait_started: Option<Instant>,
+    profiled: bool,
+    completed: bool,
+}
+
 /// Crate-private owner used only by explicit disposable-process engineering
 /// entries, including the separately opted-in peer group. Any uncertain native
 /// result retains the owner until process teardown instead of retrying frees.
@@ -753,6 +765,28 @@ impl Context {
         prepared: PreparedDispatch,
         timeout_ms: u32,
     ) -> Result<u64> {
+        // SAFETY: the same dedicated-process and trusted-code contract applies;
+        // this serial path retains the context until observed completion.
+        let mut pending = unsafe { self.publish_prepared_dispatch(prepared, timeout_ms) }?;
+        loop {
+            if let Some(elapsed) = self.poll_pending_dispatch(&mut pending)? {
+                return Ok(elapsed);
+            }
+            std::thread::sleep(Duration::from_micros(50));
+        }
+    }
+
+    /// Retains this queue's sole kernarg/signal until `poll_pending_dispatch`
+    /// observes completion. The caller must quarantine the context on any error.
+    unsafe fn publish_prepared_dispatch(
+        &mut self,
+        prepared: PreparedDispatch,
+        timeout_ms: u32,
+    ) -> Result<PendingDispatch> {
+        require_completed_frontier(self.completed_write, self.ring.write())?;
+        if timeout_ms == 0 || timeout_ms > 600_000 {
+            return Err("dispatch timeout is outside 1..600000 ms".into());
+        }
         let PreparedDispatch {
             bytes,
             geometry,
@@ -767,6 +801,9 @@ impl Context {
         let next = reservation.next_write();
         let publish_started = self.profile_started();
         let started = Instant::now();
+        let deadline = started
+            .checked_add(Duration::from_millis(u64::from(timeout_ms)))
+            .ok_or("dispatch deadline")?;
         Backend::with_bytes_mut(
             &mut self.internal[KERNARG].mapping,
             MAX_KERNARG_BYTES_V1 as usize,
@@ -804,58 +841,74 @@ impl Context {
             .store_packet_id_release(reservation.packet_id())
             .map_err(explain)?;
         record_elapsed(&mut self.counters.dispatch_publish_ns, publish_started)?;
-        let wait_started = self.profile_started();
-        let deadline = started
-            .checked_add(Duration::from_millis(u64::from(timeout_ms)))
-            .ok_or("dispatch deadline")?;
-        let mut next_currentness = started;
-        loop {
-            if wait_started.is_some() {
-                add_counter(&mut self.counters.completion_polls, 1)?;
-            }
-            let completion = Backend::observe_completion_signal_acquire(
-                &mut self.internal[SIGNAL].mapping,
-                PAGE_BYTES,
-                0,
-            )
-            .map_err(explain)?;
-            let counters =
-                Backend::observe_aql_counters(&mut self.internal[CONTROL].mapping, PAGE_BYTES)
-                    .map_err(explain)?;
-            let exception =
-                Backend::observe_i64_acquire(&mut self.internal[CONTROL].mapping, PAGE_BYTES, 256)
-                    .map_err(explain)?;
-            let completed = dispatch_completed(
-                next,
-                self.last_observed_read,
-                counters,
-                completion,
-                exception,
-            )?;
-            self.last_observed_read = counters.1;
-            if completed {
-                break;
-            }
+        Ok(PendingDispatch {
+            unique_id: self.unique_id,
+            queue_epoch: self.queue_epoch,
+            next,
+            started,
+            deadline,
+            next_currentness: started,
+            wait_started: self.profile_started(),
+            profiled: publish_started.is_some(),
+            completed: false,
+        })
+    }
+
+    fn poll_pending_dispatch(&mut self, pending: &mut PendingDispatch) -> Result<Option<u64>> {
+        if pending.unique_id != self.unique_id
+            || pending.queue_epoch != self.queue_epoch
+            || pending.next != self.ring.write()
+            || pending.completed
+        {
+            return Err("pending dispatch queue identity or state changed".into());
+        }
+        if pending.wait_started.is_some() {
+            add_counter(&mut self.counters.completion_polls, 1)?;
+        }
+        let completion = Backend::observe_completion_signal_acquire(
+            &mut self.internal[SIGNAL].mapping,
+            PAGE_BYTES,
+            0,
+        )
+        .map_err(explain)?;
+        let counters =
+            Backend::observe_aql_counters(&mut self.internal[CONTROL].mapping, PAGE_BYTES)
+                .map_err(explain)?;
+        let exception =
+            Backend::observe_i64_acquire(&mut self.internal[CONTROL].mapping, PAGE_BYTES, 256)
+                .map_err(explain)?;
+        let completed = dispatch_completed(
+            pending.next,
+            self.last_observed_read,
+            counters,
+            completion,
+            exception,
+        )?;
+        self.last_observed_read = counters.1;
+        if !completed {
             let now = Instant::now();
-            if now >= deadline {
+            if now >= pending.deadline {
                 return Err(format!(
-                    "dispatch timeout: expected_write={next}, write={}, read={}, completion={completion:?}, exception={exception}; process teardown required",
-                    counters.0, counters.1
+                    "dispatch timeout: expected_write={}, write={}, read={}, completion={completion:?}, exception={exception}; process teardown required",
+                    pending.next, counters.0, counters.1
                 ));
             }
-            if now >= next_currentness {
+            if now >= pending.next_currentness {
                 self.check_currentness(false)?;
-                next_currentness = now + Duration::from_millis(100);
+                pending.next_currentness = now + Duration::from_millis(100);
             }
-            std::thread::sleep(Duration::from_micros(50));
+            return Ok(None);
         }
-        self.completed_write = next;
-        record_elapsed(&mut self.counters.dispatch_wait_ns, wait_started)?;
+        self.completed_write = pending.next;
+        record_elapsed(&mut self.counters.dispatch_wait_ns, pending.wait_started)?;
         self.check_idle()?;
-        if publish_started.is_some() {
+        if pending.profiled {
             add_counter(&mut self.counters.dispatches, 1)?;
         }
-        u64::try_from(started.elapsed().as_nanos()).map_err(explain)
+        pending.completed = true;
+        Ok(Some(
+            u64::try_from(pending.started.elapsed().as_nanos()).map_err(explain)?,
+        ))
     }
 
     unsafe fn dispatch_sequence(
