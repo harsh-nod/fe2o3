@@ -2,7 +2,7 @@
 
 Dispatch established by planning-only commit `32c1beff`, 2026-09-10, and refreshed
 by three read-only workers on 2026-09-11 against R89 preparation custody,
-then reviewed through R90 bind settlement above signed planning commit `287f2b77`.
+then refreshed by the same swarm at signed R90 `022e90ea04587f1335aa7d8f679ce4df7b09ee1d`.
 The latest decomposition advances to constructor custody before DATA-ADOPT,
 with independent completion and version-journal packets. This is the current assignment overlay for
 [next-wave dispatch](runtime-a1-a2-next-wave.md) and the
@@ -118,7 +118,7 @@ CONTROL-3 implementation; NATIVE-2, new adapter proof, Linux execution and
 performance remain open.
 
 Three read-only workers completed a fresh user-requested breakdown at signed
-R89 on 2026-09-11. Native audited bind settlement and constructor ownership;
+R90 on 2026-09-11. Native audited constructor ownership and adoption;
 Admission checked completion integration; Resources checked version journals,
 mutation hooks and aggregate accounting. Their review turns are complete;
 the follow-on queues are assignments, not unattended implementation jobs.
@@ -126,11 +126,19 @@ Primary owns all edits, integration, conflict resolution, tests, proofs,
 hardware scheduling and signed publication. There are three worker slots plus
 Primary, not one worker per ticket. Shared Context/backend edits are serialized.
 
+At this review, the only source worktree change was an untested partial
+NATIVE-2A edit in `crates/fe2o3-kfd/src/queue.rs`: an externally ownable engine
+initializer and in-place resource admission. The legacy consuming wrappers
+still create temporary owners; production constructors do not yet retain those
+owners externally. This candidate is not accepted constructor custody and is
+excluded from this documentation-only dispatch refresh. No runtime, solver or
+hardware acceptance is added by the refresh.
+
 ## First Parallel Packets
 
 | Worker | First bounded assignment | Deliverable and exit gate |
 | --- | --- | --- |
-| Native: `r66_native_coexistence` | NATIVE-2A primary bootstrap, then 2B auxiliary and 2C replacement/insertion | Preserve R90 settlement and root every returned data/control/queue prefix before later effects, including successful output across closing retake. Respect existing USERPTR and queue-lifecycle terminal thresholds. |
+| Native: `r66_native_coexistence` | NATIVE-2A.1 lower handoffs, then .2 primary root and .3 failure acceptance; 2B/2C follow | Preserve R90 settlement and root every returned data/control/queue prefix through final validation. The primary constructor takes its foundation once; closing-retake coverage belongs to paths that actually use a model loan. Respect existing USERPTR and queue-lifecycle terminal thresholds. |
 | Admission: `r66_runtime_coexistence` | CO-1/2/3 completion contract and fixtures, independent of native adoption | Exact invocation/submission/generation and full-roster validation contract; failure and disposal-order fixtures covering malformed late output, adapter panic, observer loss and shutdown. CO-4 native completion follows ISSUE; fixtures supply no native authority. |
 | Resources: `r66_coexistence_model` | VER-1A, independent Context mutation journal | Bounded nonwrapping whole-allocation `Available/Pending/Unknown` transitions, atomic multi-destination admission, exact writer completion and a complete mutation-site inventory. Cross-run leases stay disabled. |
 | Primary | Implement the reviewed constructor, completion and journal packets above R90 | Preserve R84 through R90, R80 reservations and R83 custody. Own all edits and shared module changes. Do not install adoption callbacks before complete native custody exists. Retain separate CPU/proof/Linux/performance results and publish accepted packets to both topic remotes. |
@@ -140,7 +148,7 @@ Admission can develop COMPLETE-ORACLE while Native specifies construction custod
 Resources does not depend on either. This avoids assigning both workers the same shared
 implementation or recreating R83's existing phase/hold machinery.
 
-The first review handoffs are ready. NATIVE-2A, CO-1 and VER-1A.1 can begin
+The first review handoffs are ready. NATIVE-2A.1, CO-1 and VER-1A.1 can proceed
 independently; later packets in each row are dependency-ordered queues. At this
 checkpoint `async_engine/generated_operation/completion_contract.rs` and
 `context/versions.rs` do not exist. R80's reserved reply, R85's host decoder and
@@ -209,27 +217,15 @@ owning return values and outer constructor custody remain NATIVE-2.
 | CONTROL-3C: implemented R90 | Earlier three-binding validation/pre-detach paths and matching single-binding tests. Review can run beside 3A; Primary serializes shared-file edits. | Retake terminalization followed by successful local cancellation remains terminal, never Retryable. Genuinely pre-effect rejection retains recoverable inputs. Test both classifications against actual settlement behavior. |
 | CONTROL-3D: implemented R90 | `bind_retained_persistent_fixed_dispatch_control_replay_v1` and `execute_persistent_retained_control_replay_pipeline_v1`. Depends on 3A; shares 3B/3C custody and classification rules. | Root existing Request/Storage/Data/Attached phases outside callbacks and closing retake. Inject error/panic at each phase and retake after successful replay; retain exact predecessor, control, data, descriptors and prepared lease. Preserve one model loan, existing currentness checks and no control rebuild. |
 
-The generic model-loan custody wrapper retains a successful output across a
-retake error but can lose that locally held output on retake panic. Store success
-outside the closure; returning a richer error alone does not fix unwind.
-R89 applies external preparation custody to the two bind construction calls,
-but does not settle subsequent validation/attachment or simultaneous panics.
-The earlier three-binding validation loop and pre-detach rejection also must not
-return Retryable after a closing retake has already terminalized the queue, even
-if attachment cancellation succeeds. Terminal state must dominate local
-cancellation-based retry classification.
-Test this classification against the corresponding single-binding path.
-
-Early mapped-facts checks validate immutable records through a model loan;
-they are not native-currentness syscalls. The later dispatch-memory validation
-is a separate boundary. Replay's ordinary error results already carry their
-owners, but consuming intermediate phases can lose custody on callback panic;
-its completed outcome also needs protection from closing-retake panic. Fixing
-only initial preparation or only the final validation does not close CONTROL-3.
-Keep existing loan return/error precedence and exactly one retake attempt after
-a successful loan; opening rejection must not fabricate a retake.
-Ordinary constructor outputs and consuming release/teardown custody remain
-separate gaps; this packet does not claim to retain arbitrary generic outputs.
+The pre-R90 findings about bind validation, simultaneous operation/retake panics,
+retry classification and consuming replay phases are addressed by CONTROL-3.
+Preserve those regression contracts rather than assigning them again. Generic
+model-loan wrappers still do not establish arbitrary callback-internal or
+successful-output unwind custody. Ordinary constructor outputs and consuming
+release/teardown remain separate scope; R90 does not close them. Where a loan
+is used, preserve exactly one closing retake after successful opening and no
+retake after opening rejection. Early immutable mapped-facts checks are not
+native-currentness syscalls.
 
 Every subpacket exercises production-used sequencers/settlement helpers with
 fake-native records, exact custody/charges and zero publication. An early-drop
@@ -241,9 +237,32 @@ existing queue modules. None authorizes DATA-ADOPT by itself.
 
 | Subpacket | Source boundary | Exit gate |
 | --- | --- | --- |
-| NATIVE-2A: primary bootstrap | Primary constructor in `queue_live.rs`; ordinary preparation wrapper. | Root every returned control/preparation/queue prefix before later effects or retake. Distinguish pre-effect rejection, partial pre-queue effects and CREATE_QUEUE-attempted uncertainty. |
+| NATIVE-2A: primary bootstrap | `queue.rs`, primary constructor in `queue_live.rs`, `queue_live/fixed_dispatch.rs` and ordinary preparation wrapper. | Root every returned control/preparation/queue prefix through final currentness validation. Distinguish pre-effect rejection, partial pre-queue effects and CREATE_QUEUE-attempted uncertainty. Complete all three smaller packets below. |
 | NATIVE-2B: auxiliary bootstrap | Auxiliary constructor and shared-session lane ownership in `queue_live.rs`; follows 2A's custody contract. | Inject doorbell/currentness and partial-construction failures without losing either lane's ownership. Return a usable lane only after complete success. |
 | NATIVE-2C: replacement/insertion | `Gfx942RecycledDispatchResourcesV1::recreate_compute_aql_queue_with_fixed_dispatch` in `queue_live.rs`, plus ordinary rebind/insertion paths in `queue_live/fixed_dispatch.rs`; follows 2A/2B. | Retain the consumed session/data through replacement planning/construction, and old/new owners and successful insertion output through closing observation. No occupied-slot overwrite, generation reuse or fabricated pristine-abort continuation. |
+
+#### Primary Constructor Packets
+
+Native owns read-only design/test review; Primary owns these overlapping source
+edits and acceptance. The packets are serial implementation steps, not three
+additional concurrent workers.
+
+| Packet | Deliverable | Exit gate |
+| --- | --- | --- |
+| NATIVE-2A.1: lower handoffs | Keep typed ring/map/retain stages externally owned; split borrowed resource validation from owner transfer; finish externally rooted engine initialization and admission in `queue.rs`. | Production-used helpers retain exact session/backend/foundation/resource owners through each error and panic. Successful transfer happens once after all fallible checks. Temporary compatibility wrappers do not count as constructor integration. |
+| NATIVE-2A.2: complete primary root | Reuse R89 preparation in place; root memory, dispatch, control/completion/EOP/context, runtime/event/shadows, foundation/engine and the completed session through final doorbell/currentness checks. Retain returned generic preparation values too. | Preserve pre-control error classification; mark USERPTR terminal entry before the first control attempt. Preserve original accounts/charges, explicit gate poisoning and the frozen unpublished CWSR payload-cleanup contract. No early shadow publication or native owners hidden in public error types. |
+| NATIVE-2A.3: integrated acceptance | Exercise actual production-used helpers with existing preparation, native-engine and global-gate fixtures; retain focused/full-suite and negative-mutation evidence. | Cover first/middle/last allocation, initialization, seal/map/retain, foundation/authentication/admission, CREATE and both doorbell currentness boundaries with returned errors and panics. Assert exact retained identities/descriptors/debits, one success transfer and no unsafe retry/cleanup. Test public error auto-traits and unpublished cleanup versus published retention. CPU results do not qualify Linux creation or formal refinement. |
+
+An outer panic catch cannot retain values already consumed and dropped inside
+a callee. The generic preparation callback and private legacy dispatch builder
+therefore need explicit coverage or an explicit remaining limitation; merely
+rooting their returned value does not protect their internal partial work.
+Preallocate the terminal owner before covered effects, and retain the original
+session/account anchors, not only counters or reconstructed token descriptions.
+Process-lifetime retention is not aggregate memory-budget closure. Runtime gate
+arming must not precede owned runtime admission if doing so rejects that same
+admission. The primary path has no closing live-model retake; do not invent one
+in its successful trace or acceptance claims.
 
 Native hands Admission an exact nonpublishing adoption identity and retirement
 outcome, not a completion receipt. Reuse the existing allocator, planner and
@@ -460,7 +479,7 @@ substituted for that source acceptance.
 
 | Batch | Parallel worker work | Primary integration and exit |
 | --- | --- | --- |
-| 1: ready now | Native: NATIVE-2A/B/C. Admission: CO-1, then CO-2/3. Resources: VER-1A.1 through .5. | Build on R90; implement independently reviewed native/runtime/journal changes as separate bounded packets. No native publication or cross-run leases. |
+| 1: ready now | Native: NATIVE-2A.1 through .3, then 2B/2C. Admission: CO-1, then CO-2/3. Resources: VER-1A.1 through .5. | Build on R90; implement independently reviewed native/runtime/journal changes as separate bounded packets. The current queue helper edit remains unvalidated. No native publication or cross-run leases. |
 | 2: native custody | Native: accepted NATIVE-1/2, then NATIVE-3 DATA-ADOPT. Admission: exact ISSUE/completion interface review. Resources: VER-1B inventory/hooks and domain/headroom work. | Serialize Context/backend and native shared-memory edits; accept full partial-prefix/lane custody and R82 abort before connecting ISSUE. Keep proof and Linux gates separate. |
 | 3: execution and reuse | Admission: ISSUE, then COMPLETE, then API. Native: fixtures and native qualification harnesses. Resources: close all mutation hooks before VER-2; backing/control/residency work. | Gate each execution transition, retain R73/R80 charge ownership and one completion cell. No API-only claim of graph, native-depth or budget closure. |
 | 4: A1/A2 qualification | Admission: generated GRAPH/DRAIN. Native: depth/overlap/copy/performance campaigns. Resources: resource/proof composition and aggregate bounds. | Signed source, independent evidence review, complete outputs, actual native-depth and repeated graph/version/resource checks, matched baselines and owned-resource cleanup. |
@@ -496,6 +515,7 @@ After A1/A2, the same slots rotate through the remaining
 
 | Milestone | Lead and boundary |
 | --- | --- |
+| A0 remainder: distributed semantics | Admission + Resources, Primary integration; required before A4/A5 implementation. Freeze participant/session/coordinator and membership epochs, artifact/version identity, authority/authentication boundaries, publication/receipt uncertainty, and bounded wire/staging/lease budgets. Model/table negatives cover stale epoch, replay, duplicate receipt, interrupted publication and capacity exhaustion. Contract design may start independently when a slot is free; process-local identities and graph history do not satisfy it. |
 | A3: local multi-GPU | Native, with Resources/Admission: placement, shards/replicas, compute/peer ownership and group failure/drain. Existing two-device copy support is insufficient. |
 | A4: distributed control | Admission: authenticated membership, artifact/plan exchange, publication receipts and terminal run records. |
 | A5: distributed data/collectives | Native + Resources: bounded transfers, versions/credits and separately qualified collective plans. |
