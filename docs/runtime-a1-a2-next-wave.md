@@ -1,7 +1,7 @@
 # A1/A2 Next-Wave Dispatch
 
-Reviewed 2026-09-10 against locally validated R73, based on signed
-`96212b87bb67eef0dc4e8f6e0137ebf3c35e2d37` (R72 plus the dispatch audit).
+Reviewed 2026-09-10 against signed R73
+`fb1e27e66cee27bb11f0b7c08f2d5994c5d168da`, pushed to both remotes.
 Three read-only agents reconciled the remaining work with source and the current
 open [#182](https://github.com/harsh-nod/fe2o3/issues/182). This document assigns
 bounded analysis/review queues, not unattended implementation jobs. Primary
@@ -81,6 +81,33 @@ GEN-2B, then generated graph/drain qualification. Waiting for hardware must not
 block CPU harness work. Version-journal mechanics or host-image accounting may
 move earlier when the Resources slot is free.
 
+### First Handoffs
+
+The current three-agent review completed without runtime edits, builds or
+hardware activity. Its implementation queues start with these bounded packets:
+
+1. Admission hands GEN-2A's consuming API and rejection sequence to Primary.
+   Resources reviews an input/prepared-payload carrier that disposes all encoded
+   storage before decoder credits on success, rejection and unwind. Native
+   reviews exact device/artifact currentness and production-only authority.
+   Add compile-fail ownership/privacy/auto-trait tests; do not infer `!Send`
+   from the existing checked-device documentation.
+2. Resources hands MEM-2B-HOST's isolated policy, usage and Cache/Dispose
+   decisions to Primary. Native reviews the canonical padded-cost projection,
+   generation identity and partial-disposal behavior. Test zero caching,
+   byte/record pressure and charged reuse before integrating shared queue and
+   runtime configuration hooks. R72 is sufficient for this ordinary profile.
+3. Native hands SCALE-1A-FIXTURE's bounded short/long artifacts, ABI/effects,
+   identity mutations and independent complete-output/padding oracles to
+   Primary. Admission reviews qualification-only authority; Resources reviews
+   finite work and storage bounds. Sequential correctness qualification and
+   MEM-QUAL-HARNESS follow in this lane, not as additional concurrent workers.
+
+Primary freezes these interfaces before implementation and owns shared-file
+edits, focused tests, proof registration and cross-lane integration. These local
+packets need no hardware window. Positive production generated execution still
+needs the compiler handoff; fixture correctness and fixture drain do not.
+
 ## Execution Order
 
 | Stage | Ready work | Gate before advancing |
@@ -114,7 +141,8 @@ fixture implementation. A busy selected GPU does not block local proof/tests.
 | OVL-QUAL-2 and DRN-2A hardware | Primary; Native/Admission review | Independently checked signed coexistence and copy-only outstanding-work drain captures, complete outputs/canaries, exact native identity and owned-process/stage cleanup. Retention alone does not prove physical overlap. |
 | SCALE-1A-FIXTURE / QUAL | Native; Primary builds/hardware | Freeze bounded geometry, ABI/effects, source/object/toolchain and complete-output oracles. CPU policy tests precede signed sequential Linux correctness. Intended short/long work classes are not measured durations. |
 | SCALE-CAP, then SCALE-2 | Native | Real backing/control/slot admission precedes any larger native profile; preserve existing defaults. Measure native publication/retention, unresolved work and retirement separately from host queue depth. Thousands of queued records do not establish thousands native in flight. |
-| DRN-2B and repeated generated graphs | Admission; Primary hardware | After GEN-2B and exact per-kernel compiler evidence, qualify repeated kernel/copy graphs, active drain, dropped observers, complete typed outputs and cleanup. Cross-run input reuse also needs VER-1/2. Keep fixture and production cells separate. |
+| DRN-2B-FIXTURE | Admission/Native; Primary hardware | After SCALE-1 fixture admission and signed sequential correctness, qualify queued/native-retained compute work, streams, dropped observers and drain under explicit qualification authority. No production compiler handoff is required; complete outputs and cleanup remain mandatory. |
+| Repeated generated graphs and production drain | Admission; Primary hardware | After GEN-2B and exact per-kernel compiler evidence, qualify repeated kernel/copy graphs, active drain, dropped observers, complete typed outputs and cleanup. Cross-run input reuse also needs VER-1/2. Fixture acceptance cannot fill production cells. |
 | PRF-1/2 | Primary; rotating cross-review | Compose production executor transitions with lifecycle, credits, dependency readiness, versions, reuse and drain proofs. Run authenticated positives/negative mutations and integration gates; retain explicit external contracts. |
 | SCALE-3 measurements | Native; Primary hardware | Signed matched HIP/HSA/KFD producers and correctness-first captures for latency, throughput, copy bandwidth, CPU use and memory bounds. Device timelines are separately required for physical-overlap claims. |
 
@@ -126,7 +154,9 @@ fixture implementation. A busy selected GPU does not block local proof/tests.
   backing already confirmed disposed. Broader N1B is not required for this profile.
 - GEN-2A: changed artifact/packing/geometry/effects/device/publication reject;
   compile-fail tests prohibit borrowed escape, duplicate permits and decoder
-  extraction. Preserve the checked device's owner-local `!Send`/`!Sync` contract.
+  extraction. Explicitly enforce and compile-check the new invocation's
+  owner-local `!Send`/`!Sync` requirement; the existing device's documented
+  auto-trait claim is not sufficient evidence.
 - Fixtures: freeze bounded geometry, ABI/effects, complete ReadWrite footprint,
   source/object/toolchain identity and independent output/padding oracles;
   mutate coordinates to test rejection. Short/long labels are not measurements.
@@ -174,9 +204,14 @@ but before record insertion must retain/quarantine the charge. Pre-effect
 rejection cancels only the unissued reservation. Later queue-retake failure cannot resurrect a
 debit already returned after confirmed disposal.
 
-GEN-2 must bind the deliberately non-Send/non-Sync
-[checked device](../crates/fe2o3-kfd/src/device.rs) inside its owner, not widen
-its lifetime or thread-safety. Existing GEN-1
+GEN-2 must bind the actual
+[checked device](../crates/fe2o3-kfd/src/device.rs) inside an explicitly
+owner-local invocation, without lifetime or thread-safety widening. Source
+review found that `OpenedKfd` uses `PhantomData<Cell<()>>`, which prevents
+`Sync` but does not itself prevent `Send`; the concrete device auto traits have
+not been compile-checked in this planning pass. Enforce the new invocation's
+`!Send`/`!Sync` requirement directly and test it rather than relying on device
+rustdoc or changing the existing device API implicitly. Existing GEN-1
 [`try_take()`](../crates/fe2o3-host/src/generated_runtime_arguments.rs)
 returns bare `Box<[T]>` and represents decoded data only. R73 adds
 a distinct charged result owner whose credit follows the returned storage,
@@ -209,6 +244,12 @@ GEN-2B needs a runtime-defined admitted interface rather than a Context
 dependency on a concrete host type. Runtime preparation's executable/hidden
 kernarg allocations and read-only initialization copies are outside R73's result
 budget and need their own accounting.
+
+Guard storage-before-credit disposal during preparation errors and unwind, not
+just the final invocation's field-drop order. The whole prepared dispatch,
+including its read-only initialization copies, must be disposed before its
+decoder. GEN-2B also owns contention retry/wakeup and lost-wakeup tests; R73's
+nonblocking `try_take` alone does not provide Future progress.
 
 MEM-2B-HOST must project the exact native record's page-padded
 `cpu_mapping_bytes()`, not the SDMA token's requested `physical_bytes()`.

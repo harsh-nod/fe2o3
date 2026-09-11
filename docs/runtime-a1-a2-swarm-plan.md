@@ -1,8 +1,8 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Baseline: signed `96212b87bb67eef0dc4e8f6e0137ebf3c35e2d37` (R72 plus the
-dispatch audit, pushed to both remotes), reviewed 2026-09-10. The locally
-validated R73 follow-on and its exact source/evidence identities are below.
+Baseline: signed `fb1e27e66cee27bb11f0b7c08f2d5994c5d168da` (R73,
+pushed to both remotes), reviewed 2026-09-10. Its local validation and exact
+source/evidence identities are below.
 This decomposes the remaining local
 A1/A2 work in
 [#182](https://github.com/harsh-nod/fe2o3/issues/182), not the later multi-GPU
@@ -247,7 +247,7 @@ hardware remain primary-owned.
 | --- | --- | --- |
 | Native | SCALE-1A-FIXTURE, then MEM-QUAL-HARNESS and ordinary host-cache hooks | Independent bounded artifacts and complete-output oracles; new harness must exercise actual N1/N2/cache limits before signed qualification. Capacity and timing follow correctness |
 | Resources | Host-cache policy, then N1B and MEM-DOM-1 | GEN-2R data storage is implemented locally. R72 suffices for ordinary host-cache policy; root/device/Context and bootstrap/terminal headroom remain separate |
-| Admission | GEN-2A owner-local nonexecuting invocation and private permit/decoder | Bind artifact, packing, device, geometry, ABI/effects and publication; Context allocation generations/admission and publication belong to GEN-2B. Positive execution requires exact compiler/machine evidence |
+| Admission | GEN-2A owner-local nonexecuting invocation and private permit/decoder | Bind artifact, packing, device, geometry, ABI/effects and publication; explicitly enforce/test invocation auto traits and storage-before-credit disposal. Context admission/publication belong to GEN-2B; positive production execution requires exact compiler/machine evidence |
 | Primary | Implement reviewed packets and shared GEN-2/cache/account integration; signed OVL/DRN/MEM campaigns | MEM campaigns first need the new pressure harness. Hardware requires idle selected GPU, real binary/census and complete cleanup. Do not promote fixtures to production authority |
 
 ### R71 Implementation Ownership
@@ -881,8 +881,11 @@ The current dispatch splits this into GEN-2A nonexecuting owner-local preparatio
 GEN-2R charged typed storage and GEN-2B Context/native publication integration.
 Resources and Admission review separate host module contracts; Primary owns
 all edits, including existing argument-binding, export, dependency and macro
-changes. GEN-2R's implemented data interface has passed its local gates. The checked
-device remains owner-local without widened lifetimes or thread-safety claims.
+changes. GEN-2R's implemented data interface has passed its local gates. The new
+invocation must enforce owner-local behavior without widened lifetimes or unsafe
+thread-safety claims; existing checked-device rustdoc is not proof of its auto
+traits. The next-wave dispatch records the source-review concern and required
+compile-fail checks.
 GEN-2R uses a distinct production result state: the existing GEN-1 bare-`Box`
 result path must never receive production bytes. One R70 member per output
 retains its complete encoded-plus-typed peak reservation through charged-result
@@ -942,9 +945,9 @@ after quiescence, not legitimate post-cutoff execution of pre-admitted work.
 
 **DRN-2A copy qualifier/checker/signed runner implemented; hardware acceptance
 open.** Run its existing eight copy-only cells against signed source on an
-admitted idle GPU. Subsequent DRN-2B extends coverage to separately named compute
-fixtures under their own explicit qualification authority. Generated production
-cells require GEN-2B and exact per-kernel compiler evidence.
+admitted idle GPU. Subsequent DRN-2B-FIXTURE extends coverage to separately named
+compute fixtures under their own explicit qualification authority. Generated
+production cells require GEN-2B and exact per-kernel compiler evidence.
 Cover queued and already published unresolved work, multiple streams and dropped
 observers; do not rebuild the copy qualifier or drain lifecycle.
 
