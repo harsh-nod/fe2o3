@@ -1,13 +1,22 @@
 # Auxiliary Queue Construction Custody V1
 
+R99 locally accepts **NATIVE-2B.5B-2**, the named CPU/local Linux helper
+composition, above signed R98 `7506596f805af49e432aaa4ef66ec9a586ca4734`.
+The [R99 evidence](evidence/local-r99-auxiliary-local-platform-2026-09-11/README.md)
+records seventeen source gates, ten auxiliary checks, five compiled behavioral
+negatives and 2,540 tests per GNU/musl target with five ignored. All 5,655 source
+identities match. Seven test-fixture files change; no production mechanism,
+new proof, live KFD or performance acceptance is added. Complete .5B-3
+CREATE/recovery/roster-slot coverage remains next, followed by 2C and DATA-ADOPT.
+
 R97 locally accepts **NATIVE-2B.5B-1**, the shared production-used outer driver
 and named CPU/fake-native prefix matrix, above signed planning checkpoint
 `82c8cd854bc6cb8b300a4f5a6b9a2467827dcc6f` and signed R96
 `369f99835cfb2af5df9fda45cc828d462ef6b156`. The
 [R97 evidence](evidence/local-r97-auxiliary-outer-settlement-2026-09-11/README.md)
 records all seventeen source gates, twelve auxiliary checks and four compiled
-behavioral negatives. Local platform composition (.5B-2) and complete
-CREATE/install coverage (.5B-3) remain open. No live KFD, new adapter proof or
+behavioral negatives. At R97, local platform composition (.5B-2) and complete
+CREATE/install coverage (.5B-3) remained open. No live KFD, new adapter proof or
 performance result is added.
 
 R96 locally accepts the production-used preparation and CREATE/install phase
@@ -191,7 +200,7 @@ precedence; it does not observe an additional CREATE. Production forwarding is
 also source-guarded, not executed concrete-Linux evidence.
 
 R97 platform leaves remain scripted. The append-only native pending-slot matrix
-does not qualify released-slot reuse. .5B-2 must compose the retained original
+does not qualify released-slot reuse. R99 now composes the retained original
 runtime registration and actual local Linux gate/shadow helpers; .5B-3 must add
 full CREATE uncertainty/malformed/panic, output recovery, retained auxiliary/SDMA
 rosters, both late currentness failures and occupied/reused installation cases.
@@ -201,3 +210,39 @@ the returned-prefix guarantee. Concurrent bootstrap, replacement/insertion,
 native generated adoption, aggregate budgets, protected compiler integration and
 matched HIP/HSA performance remain open. No performance improvement or new
 formal theorem follows from this ownership change.
+
+## R99 Local Platform Acceptance
+
+The fixture installs its local gate before original primary construction.
+`LocalRuntimeRegistrationV1` retains that exact gate, opener PID and runtime
+phase, using the existing admission and lifecycle transition helpers. Rejection
+occurs before minting an owner. A successful auxiliary admission joins the
+actual local lease count while retaining the primary registration. Binding
+remains inspectable after poison. Registration Drop poisons only the local
+gate; it does not fabricate a confirmed runtime-disable ioctl.
+
+Seventeen scenarios run through both original-runtime routes: 34 auxiliary
+constructions, two successes and 32 failures. The matrix covers runtime/arm/event/
+shadow-install rejection, initialization and restore error/panic, cleanup panic
+before/after disposal, doorbell/finalization error/panic, actual finalization-gate
+rejection and exact cross-event binding. Both original primary and all minted
+auxiliary owners remain accounted for. Unpublished cleanup disposes only the
+auxiliary payload; published payloads remain retained. Exact mapping/file counts
+are inspected before deliberately disposing the fixture, then return to zero.
+
+Two separate registration tests cover foreign binding, active-arm admission
+rejection, actual lease joining and duplicate phase rejection. Five compiled
+mutations exercise lease count, shared phase transition, unpublished cleanup,
+event binding and the actual auxiliary phase handoff. The shared phase mutation
+fails primary setup; the auxiliary-only mutation independently detects omission
+of the production auxiliary handoff. Frozen integration and broader restored
+construction suites pass 32 and 54 tests respectively, with exact named rosters.
+
+CREATE remains scripted successful. Synthetic events, VM reservations and real
+local protection/cleanup helpers do not qualify KFD BO aliasing, runtime-enable
+ioctls, real doorbells, native teardown or callback-internal unreturned custody.
+The next .5B-3 packet needs a separate admitted-prefix oracle for unsuccessful
+CREATE without weakening the existing strict late paired oracle. Currentness
+before/after CREATE and before/after doorbell, recovery, retained rosters and
+occupied/reusable slots remain explicit coverage. The current profile still
+allows only a primary plus one auxiliary lane.

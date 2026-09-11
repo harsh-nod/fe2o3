@@ -1,0 +1,127 @@
+{
+  "source_parent": "7506596f805af49e432aaa4ef66ec9a586ca4734",
+  "scope": "NATIVE-2B.5B-2 named CPU/local Linux helper composition",
+  "source_identities": 5655,
+  "changed_test_files": [
+    "crates/fe2o3-kfd/src/queue_linux/primary_fixture.rs",
+    "crates/fe2o3-kfd/src/queue_linux/primary_fixture_tests.rs",
+    "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_platform_tests.rs",
+    "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_prefix_tests.rs",
+    "crates/fe2o3-kfd/src/queue_live/construction_primary/integration_platform.rs",
+    "crates/fe2o3-kfd/src/queue_live/construction_primary/integration_platform_tests.rs",
+    "crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs"
+  ],
+  "source_gates": 17,
+  "auxiliary_checks": 10,
+  "compiled_behavioral_mutations": 5,
+  "new_test_functions": [
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::platform_cases::same_engine_auxiliary_local_platform_matrix_retains_exact_primary_and_auxiliary_owners",
+    "queue_linux::primary_fixture::tests::local_runtime_registration_rejects_foreign_binding_without_mutation",
+    "queue_linux::primary_fixture::tests::local_runtime_registrations_share_gate_with_single_queue_transition"
+  ],
+  "new_matrix": {
+    "scenarios": 17,
+    "original_runtime_routes": 2,
+    "auxiliary_runs": 34,
+    "successes": 2,
+    "failures": 32
+  },
+  "frozen_integration_tests": 32,
+  "restored_construction_tests": 54,
+  "tests": {
+    "gnu-tests": {
+      "harnesses": 48,
+      "passed": 2540,
+      "failed": 0,
+      "ignored": 5
+    },
+    "musl-tests": {
+      "harnesses": 48,
+      "passed": 2540,
+      "failed": 0,
+      "ignored": 5
+    },
+    "gnu-docs": {
+      "harnesses": 7,
+      "passed": 108,
+      "failed": 0,
+      "ignored": 0
+    },
+    "musl-docs": {
+      "harnesses": 5,
+      "passed": 91,
+      "failed": 0,
+      "ignored": 0
+    },
+    "musl-host-docs": {
+      "harnesses": 2,
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0
+    },
+    "gnu-host": {
+      "harnesses": 1,
+      "passed": 258,
+      "failed": 0,
+      "ignored": 4
+    },
+    "musl-host": {
+      "harnesses": 1,
+      "passed": 141,
+      "failed": 0,
+      "ignored": 0
+    },
+    "macro-fixtures": {
+      "harnesses": 1,
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    },
+    "registration": {
+      "harnesses": 1,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "ordinary": {
+      "harnesses": 1,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    "linux-helpers": {
+      "harnesses": 1,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    },
+    "initialization": {
+      "harnesses": 1,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    "transitions": {
+      "harnesses": 1,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    },
+    "preparation": {
+      "harnesses": 1,
+      "passed": 23,
+      "failed": 0,
+      "ignored": 0
+    },
+    "bind": {
+      "harnesses": 1,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    }
+  },
+  "environment_record": "raw/r99-environment.json",
+  "live_kfd": false,
+  "solver_rerun": false,
+  "performance_measurement": false
+}

@@ -1,0 +1,52 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 32 tests
+test queue::live::construction_primary::integration_tests::preparation_cases::primary_preparation_projection_failures_keep_exact_tokens_and_uncommitted_model ... ok
+test queue::live::construction_primary::integration_tests::preparation_cases::primary_preparation_native_allocation_failures_retain_exact_pending_or_returned_output ... ok
+test queue::live::construction_primary::integration_tests::preparation_cases::primary_preparation_stage_failures_preserve_original_inputs_and_every_control_prefix ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_capacity_preflight_leaves_original_parent_and_native_calls_unchanged ... ok
+test queue::live::construction_primary::integration_tests::preparation_cases::primary_preparation_seal_map_and_materialization_faults_preserve_original_session_tokens ... ok
+test queue::live::construction_primary::integration_tests::platform::tests::external_missing_or_foreign_authority_never_consumes_present_caller_slots ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_data_callback_failure_reclaims_without_returned_data_or_controls ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_success_preserves_primary_and_exact_owner_partition ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_real_loan_exhaustion_and_reclaim_revision_rejection_preserve_custody ... ok
+test queue::live::construction_primary::integration_tests::platform::tests::observation_panics_keep_dependency_and_returned_doorbell_before_assembly_updates ... ok
+test queue::live::construction_primary::integration_tests::platform::tests::platform_success_and_shadow_settlement_keep_original_bindings_and_phase ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_opening_and_loan_failures_never_enter_preparation_or_reclaim ... ok
+test queue::live::construction_primary::integration_tests::same_session_primary_success_uses_actual_preparation_resources_foundation_and_create ... ok
+test queue::live::construction_primary::integration_tests::same_session_primary_create_uncertainty_retains_published_owners_without_cleanup ... ok
+test queue::live::construction_primary::integration_tests::preparation_cases::primary_generic_return_keeps_borrowed_non_send_and_actual_charged_owner_through_finalization ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_cleanup_panic_preserves_first_panic_and_terminal_parent ... ok
+test queue::live::construction_primary::integration_tests::platform::tests::external_runtime_handoff_retains_exact_caller_slots_until_closing_currentness ... ok
+test queue::live::construction_primary::integration_tests::platform::tests::late_create_recovery_preserves_exact_engine_outputs_and_unassembled_owners ... ok
+test queue::live::construction_primary::integration_tests::same_session_primary_currentness_faults_cover_create_and_both_doorbell_checks ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::memory_cases::same_engine_auxiliary_control_projection_failures_preserve_actual_tokens_and_model has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::memory_cases::same_engine_auxiliary_native_control_failures_retain_pending_and_in_session_custody has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::memory_cases::same_engine_auxiliary_native_preparation_allocation_failures_keep_pending_or_returned_owners has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::memory_cases::same_engine_auxiliary_native_preparation_map_seal_write_failures_keep_exact_prefix has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::platform_cases::same_engine_auxiliary_local_platform_matrix_retains_exact_primary_and_auxiliary_owners has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_control_and_platform_preflight_failures_keep_exact_returned_prefixes has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_operation_reclaim_matrix_retains_actual_foundation_and_parent has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_preparation_stage_failures_retain_every_returned_prefix has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_late_failures_retain_both_queues_without_installation has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::platform::tests::local_linux_shadow_and_gate_helpers_compose_with_primary_custody_and_dispose_owned_mappings has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::projection_cases::primary_control_projection_failures_retain_actual_input_or_output_without_model_commit has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::same_session_primary_real_native_failures_preserve_r88_and_original_accounts has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::same_session_primary_real_native_failures_preserve_r88_and_original_accounts ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::same_engine_auxiliary_late_failures_retain_both_queues_without_installation ... ok
+test queue::live::construction_primary::integration_tests::platform::tests::local_linux_shadow_and_gate_helpers_compose_with_primary_custody_and_dispose_owned_mappings ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_operation_reclaim_matrix_retains_actual_foundation_and_parent ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::memory_cases::same_engine_auxiliary_native_control_failures_retain_pending_and_in_session_custody ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::memory_cases::same_engine_auxiliary_native_preparation_map_seal_write_failures_keep_exact_prefix ... ok
+test queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary ... ok
+test queue::live::construction_primary::integration_tests::projection_cases::primary_control_projection_failures_retain_actual_input_or_output_without_model_commit ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::platform_cases::same_engine_auxiliary_local_platform_matrix_retains_exact_primary_and_auxiliary_owners ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::memory_cases::same_engine_auxiliary_native_preparation_allocation_failures_keep_pending_or_returned_owners ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_preparation_stage_failures_retain_every_returned_prefix ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::same_engine_auxiliary_control_and_platform_preflight_failures_keep_exact_returned_prefixes ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::memory_cases::same_engine_auxiliary_control_projection_failures_preserve_actual_tokens_and_model ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 922 filtered out; finished in 266.10s
+

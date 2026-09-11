@@ -1,13 +1,25 @@
-# A1/A2 Swarm Dispatch At R98 Completion Contract
+# A1/A2 Swarm Dispatch At R99 Local Platform Composition
 
 Use the [current work-order board](runtime-a1-a2-swarm-current.md) for immediate
-assignments. R98 locally accepts CO-1 and VER-1A.1 contract/inventory only, with
+assignments. R99 locally accepts .5B-2's named auxiliary CPU/local Linux helper
+composition, with [final evidence](evidence/local-r99-auxiliary-local-platform-2026-09-11/README.md).
+Seventeen source gates, ten auxiliary checks and five compiled behavioral
+negatives pass; GNU/musl each pass 2,540 tests with five ignored. All 5,655 source
+identities match. The 34-case matrix and two registration tests add no new
+production mechanism, formal refinement, live KFD or performance acceptance.
+The immediate wave is Native **.5B-3A CREATE**, then **3B recovery/currentness**
+and **3C roster/slots**; Admission **CO-2A Context identity**; Resources
+**VER-1A.2 executable model/proofs**. Three read-only workers returned bounded
+handoffs and cross-reviews. Primary owns edits and serialized integration;
+queued follow-ons are not unattended background jobs.
+
+R98 locally accepts CO-1 and VER-1A.1 contract/inventory only, with
 [final evidence](evidence/local-r98-completion-contract-2026-09-11/README.md):
 seventeen source gates, eight auxiliary checks, four compiled behavioral
 negatives and 2,537 tests per GNU/musl target with five ignored. All 5,653 source
 identities match. No model/journal, new proof, live KFD or performance is added.
 The next bounded
-wave is Native **.5B-2 local platform composition**, Admission **CO-2A Context
+wave at R98 was Native **.5B-2 local platform composition**, Admission **CO-2A Context
 identity**, and Resources **VER-1A.2 executable model/proofs**. Three read-only
 workers reconciled the packets against current source; Primary owns edits and
 serialized integration. CO-2B and the preissue CO-3 contract/oracle can be
@@ -44,8 +56,8 @@ with five ignored. This is CPU phase composition, not complete Linux outer
 settlement, new formal refinement or performance acceptance.
 
 The [current work-order board](runtime-a1-a2-swarm-current.md) supersedes the
-immediate assignments below: next is .5B-2 local platform
-composition and .5B-3 CREATE/installation coverage, then 2C. Admission takes
+immediate assignments below: next is .5B-3 CREATE/installation
+coverage, then 2C. Admission takes
 CO-2A after accepted R98; Resources takes VER-1A.2 after the reviewed contract.
 The R95 and earlier sections below retain their historical scope.
 

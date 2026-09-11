@@ -1,6 +1,7 @@
 use super::*;
 use crate::queue_linux::primary_fixture::{
-    LocalCreationArmV1, LocalEventV1, LocalPublishedV1, LocalUnpublishedV1,
+    LocalCreationArmV1, LocalEventV1, LocalPublishedV1, LocalRuntimeRegistrationV1,
+    LocalUnpublishedV1,
 };
 use fe2o3_kfd_uapi::{KFD_GFX942_PROCESS_DOORBELL_SLICE_BYTES, KfdGfx942CreateQueueOutputs};
 
@@ -38,6 +39,7 @@ pub(super) struct Owner {
     shadow: Option<(ShadowPhase, OwnerIdentity, SharedGttAllocationIdentityV1)>,
     doorbell: Option<KfdGfx942CreateQueueOutputs>,
     native_event_id: Option<u32>,
+    local_runtime: Option<LocalRuntimeRegistrationV1>,
     local_arm: Option<LocalCreationArmV1>,
     local_event: Option<LocalEventV1>,
     local_unpublished: Option<LocalUnpublishedV1>,
@@ -46,37 +48,48 @@ pub(super) struct Owner {
 
 impl Owner {
     pub(super) fn new(role: Role) -> Self {
+        Self::try_new(role).expect("fixture owner setup")
+    }
+
+    fn try_new(role: Role) -> Result<Self, ComputeAqlQueueSessionErrorV1> {
         let trace = trace();
+        let pid = std::process::id();
+        let local_runtime = if role == Role::Runtime {
+            trace
+                .borrow()
+                .local_gate
+                .as_ref()
+                .map(|gate| gate.register_runtime(pid))
+                .transpose()?
+        } else {
+            None
+        };
         let mut t = trace.borrow_mut();
         let identity = OwnerIdentity {
             id: t.minted.len() + 1,
             role,
             session: t.session,
-            pid: std::process::id(),
+            pid,
         };
         t.minted.push(identity);
-        if role == Role::Runtime
-            && let Some(gate) = &t.local_gate
-        {
-            gate.admit(identity.pid).unwrap();
-        }
         let local_event =
             (role == Role::Event && t.local_gate.is_some()).then(|| t.local_resources.event());
         let event_id = 10 + t.minted.iter().filter(|id| id.role == Role::Event).count() as u32;
         let native_event_id =
             (role == Role::Event).then(|| local_event.as_ref().map_or(event_id, LocalEventV1::id));
         drop(t);
-        Self {
+        Ok(Self {
             trace,
             identity,
             shadow: None,
             doorbell: None,
             native_event_id,
+            local_runtime,
             local_arm: None,
             local_event,
             local_unpublished: None,
             local_published: None,
-        }
+        })
     }
 
     fn validate(&self, role: Role, memory: &Memory) -> Result<(), ComputeAqlQueueSessionErrorV1> {
@@ -89,7 +102,43 @@ impl Owner {
                 "platform owner binding",
             ));
         }
+        if role == Role::Runtime {
+            match (&self.local_runtime, &self.trace.borrow().local_gate) {
+                (Some(runtime), Some(gate)) => {
+                    runtime.validate_binding(gate, memory.opener_pid())?
+                }
+                (None, None) => {}
+                _ => {
+                    return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                        "local runtime binding",
+                    ));
+                }
+            }
+        }
         Ok(())
+    }
+
+    pub(super) fn assert_local_runtime(&self, gate: &LocalGateV1, queue_live: bool) {
+        let runtime = self.local_runtime.as_ref().expect("local registration");
+        runtime.validate_binding(gate, self.identity.pid).unwrap();
+        assert_eq!(runtime.is_queue_live(), queue_live);
+    }
+
+    pub(super) fn assert_local_published(&self) {
+        assert!(self.local_unpublished.is_none());
+        assert_eq!(self.local_published.as_ref().unwrap().state(), (true, true));
+    }
+
+    pub(super) fn assert_local_unpublished(&self, disposed: bool) {
+        assert!(self.local_published.is_none());
+        assert_eq!(
+            self.local_unpublished.as_ref().unwrap().state(),
+            (disposed, !disposed, !disposed)
+        );
+    }
+
+    pub(super) fn local_event_clone(&self) -> LocalEventV1 {
+        self.local_event.as_ref().unwrap().clone()
     }
 }
 
@@ -122,7 +171,7 @@ impl PrimaryEnvironmentV1 for Fixture {
 
     fn enable_runtime(_: &mut Memory) -> Result<Owner, ComputeAqlQueueSessionErrorV1> {
         step("runtime-enable")?;
-        Ok(Owner::new(Role::Runtime))
+        Owner::try_new(Role::Runtime)
     }
     fn validate_runtime(
         runtime: &Owner,
@@ -138,6 +187,9 @@ impl PrimaryEnvironmentV1 for Fixture {
     }
     fn arm_creation(_: &Memory) -> Result<Owner, ComputeAqlQueueSessionErrorV1> {
         step("gate-arm")?;
+        if trace().borrow().local_arm_poison {
+            trace().borrow().local_gate.as_ref().unwrap().poison();
+        }
         let arm = trace()
             .borrow()
             .local_gate
@@ -213,7 +265,12 @@ impl PrimaryEnvironmentV1 for Fixture {
         assert_eq!(phase, ShadowPhase::Unpublished);
         assert_eq!(parent, event.identity);
         if let Some(local) = &shadows.local_unpublished {
-            local.validate(event.local_event.as_ref().unwrap())?;
+            let substitute = trace().borrow_mut().local_event_substitute.take();
+            local.validate(
+                substitute
+                    .as_ref()
+                    .unwrap_or_else(|| event.local_event.as_ref().unwrap()),
+            )?;
         }
         Ok(())
     }
@@ -260,7 +317,14 @@ impl PrimaryEnvironmentV1 for Fixture {
     }
     fn mark_queue_created(runtime: &mut Owner) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         assert_eq!(runtime.identity.role, Role::Runtime);
-        step("runtime-created").map_err(|e| terminal_creation("runtime queue-live transition", e))
+        step("runtime-created")
+            .map_err(|e| terminal_creation("runtime queue-live transition", e))?;
+        if let Some(local) = &mut runtime.local_runtime {
+            local
+                .mark_queue_created()
+                .map_err(|e| terminal_creation("runtime queue-live transition", e.into()))?;
+        }
+        Ok(())
     }
     fn recover_create_outputs(
         engine: &NativeQueueEngineV1<PrimaryQueueBackendV1<Memory>>,

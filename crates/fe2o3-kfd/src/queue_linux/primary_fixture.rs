@@ -4,6 +4,9 @@ use super::*;
 use std::os::fd::AsFd;
 use std::sync::{Arc, atomic::AtomicUsize};
 
+#[path = "primary_fixture_tests.rs"]
+mod tests;
+
 #[derive(Default)]
 struct Counts {
     reservations: AtomicUsize,
@@ -56,6 +59,7 @@ impl Drop for LocalEventInnerV1 {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct LocalEventV1(Arc<LocalEventInnerV1>);
 
 impl LocalEventV1 {
@@ -253,16 +257,35 @@ impl Drop for LocalPublishedV1 {
 #[derive(Clone)]
 pub(crate) struct LocalGateV1(Arc<Mutex<ProcessGlobalKfdRuntimeGateV1>>);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LocalRuntimeObservationV1 {
+    Disabled,
+    Enabled { opener_pid: u32, leases: usize },
+    Poisoned,
+}
+
 impl LocalGateV1 {
     pub(crate) fn new() -> Self {
         Self(Arc::new(Mutex::new(ProcessGlobalKfdRuntimeGateV1::new())))
     }
-    pub(crate) fn admit(&self, pid: u32) -> Result<(), LinuxDoorbellErrorV1> {
-        let mut gate = lock_runtime_gate_v1(&self.0);
-        if gate.admit_runtime(pid)? {
-            gate.runtime.commit_first_enabled(pid);
+    pub(crate) fn register_runtime(
+        &self,
+        opener_pid: u32,
+    ) -> Result<LocalRuntimeRegistrationV1, LinuxDoorbellErrorV1> {
+        if opener_pid != std::process::id() {
+            return Err(LinuxDoorbellErrorV1::ProcessChanged);
         }
-        Ok(())
+        {
+            let mut gate = lock_runtime_gate_v1(&self.0);
+            if gate.admit_runtime(opener_pid)? {
+                gate.runtime.commit_first_enabled(opener_pid);
+            }
+        }
+        Ok(LocalRuntimeRegistrationV1 {
+            gate: self.clone(),
+            opener_pid,
+            phase: KfdRuntimeLifecyclePhaseV1::EnabledBeforeQueue,
+        })
     }
     pub(crate) fn arm(&self) -> Result<LocalCreationArmV1, LinuxDoorbellErrorV1> {
         lock_runtime_gate_v1(&self.0).arm_creation()?;
@@ -277,6 +300,55 @@ impl LocalGateV1 {
     pub(crate) fn observation(&self) -> (bool, bool) {
         let gate = lock_runtime_gate_v1(&self.0);
         (gate.creation_in_flight, gate.permanently_poisoned)
+    }
+    pub(crate) fn runtime_observation(&self) -> LocalRuntimeObservationV1 {
+        match lock_runtime_gate_v1(&self.0).runtime {
+            ProcessKfdRuntimeStateV1::Disabled => LocalRuntimeObservationV1::Disabled,
+            ProcessKfdRuntimeStateV1::Enabled { opener_pid, leases } => {
+                LocalRuntimeObservationV1::Enabled { opener_pid, leases }
+            }
+            ProcessKfdRuntimeStateV1::Poisoned => LocalRuntimeObservationV1::Poisoned,
+        }
+    }
+}
+
+pub(crate) struct LocalRuntimeRegistrationV1 {
+    gate: LocalGateV1,
+    opener_pid: u32,
+    phase: KfdRuntimeLifecyclePhaseV1,
+}
+
+impl LocalRuntimeRegistrationV1 {
+    pub(crate) fn validate_binding(
+        &self,
+        gate: &LocalGateV1,
+        opener_pid: u32,
+    ) -> Result<(), LinuxDoorbellErrorV1> {
+        if self.opener_pid != opener_pid || opener_pid != std::process::id() {
+            return Err(LinuxDoorbellErrorV1::ProcessChanged);
+        }
+        if !Arc::ptr_eq(&self.gate.0, &gate.0) {
+            return Err(LinuxDoorbellErrorV1::Runtime("local runtime gate binding"));
+        }
+        Ok(())
+    }
+    pub(crate) fn mark_queue_created(&mut self) -> Result<(), LinuxDoorbellErrorV1> {
+        self.phase = admit_runtime_transition(
+            self.phase,
+            KfdRuntimeLifecyclePhaseV1::EnabledBeforeQueue,
+            KfdRuntimeLifecyclePhaseV1::QueueLive,
+        )?;
+        Ok(())
+    }
+    pub(crate) fn is_queue_live(&self) -> bool {
+        self.phase == KfdRuntimeLifecyclePhaseV1::QueueLive
+    }
+}
+
+impl Drop for LocalRuntimeRegistrationV1 {
+    fn drop(&mut self) {
+        // Fixture disposal is not a confirmed native runtime-disable operation.
+        self.gate.poison();
     }
 }
 

@@ -1,0 +1,10 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 42.59s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::platform_cases::same_engine_auxiliary_local_platform_matrix_retains_exact_primary_and_auxiliary_owners has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::platform_cases::same_engine_auxiliary_local_platform_matrix_retains_exact_primary_and_auxiliary_owners ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 953 filtered out; finished in 72.84s
+

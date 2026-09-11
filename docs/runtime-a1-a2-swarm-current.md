@@ -8,6 +8,16 @@ The issue was checked through the GitHub API and remains open; its reported
 This document supersedes the immediate assignment rows in the
 [detailed dispatch](runtime-a1-a2-swarm-dispatch-r83.md) and
 [next-wave roadmap](runtime-a1-a2-next-wave.md), not their historical evidence.
+R99 locally accepts **NATIVE-2B.5B-2**, the named auxiliary CPU/local Linux
+platform composition, above signed R98
+`7506596f805af49e432aaa4ef66ec9a586ca4734`. The
+[R99 record](evidence/local-r99-auxiliary-local-platform-2026-09-11/README.md)
+contains seventeen source gates, ten auxiliary checks and five compiled
+behavioral negatives. GNU/musl each pass 2,540 tests with five ignored; all
+5,655 non-documentation source identities match. No new production mechanism,
+solver, live KFD or performance acceptance is added. Next:
+**.5B-3A/B/C + CO-2A + VER-1A.2**.
+
 R98 locally accepts **CO-1**, the production-used completion classifier and six
 focused CPU tests, plus **VER-1A.1 contract/inventory only**, above signed R97
 `1b53ef417d0f4184e2b4e6024b37271b5f719832`. The
@@ -15,7 +25,7 @@ focused CPU tests, plus **VER-1A.1 contract/inventory only**, above signed R97
 contains seventeen successful source gates, eight auxiliary checks and four
 compiled behavioral negatives. GNU/musl each pass 2,537 tests with five ignored;
 all 5,653 non-documentation source identities match. No solver, live KFD or
-performance acceptance is added. Next: **.5B-2 + CO-2A + VER-1A.2**.
+performance acceptance is added. At R98, next was **.5B-2 + CO-2A + VER-1A.2**.
 
 R97 locally accepts **NATIVE-2B.5B-1**, production-used outer settlement and the
 named CPU/fake-native prefix matrix, above signed planning checkpoint
@@ -41,7 +51,7 @@ full-source attempt and formatting check remain historical, not acceptance.
 At accepted R96, the shared-engine fixtures cover success and eight late-failure
 cells with original owners, plus a production-glue guard. They use a fixture outer scope
 and scripted platform leaves, not complete concrete Linux outer settlement.
-The remaining native sequence is **.5B-2/.5B-3 -> 2C -> DATA-ADOPT**.
+After R99, the remaining native sequence is **.5B-3 -> 2C -> DATA-ADOPT**.
 R96's duplicate-primary-ID case reaches lower CREATE
 `Ambiguous` rejection with no committed ID or outputs. It does not exercise the
 later retained auxiliary/SDMA roster rejection.
@@ -65,7 +75,7 @@ and restored construction suites pass 53 tests. All four final mutations compile
 and fail their intended behavioral test; the retake mutation detects lost error
 precedence, not an observed extra CREATE.
 
-The next Native task is **.5B-2 local platform composition**, followed by
+At R97, the next Native task was **.5B-2 local platform composition**, followed by
 **.5B-3 CREATE/installation coverage**. R97's scripted platform leaves do not
 qualify the concrete Linux platform composition. Callback failures are tested
 before allocating/returning owners, not for callback-internal unreturned custody.
@@ -86,10 +96,25 @@ still absent. Ordered writers and recovery are mandatory before whole-surface
 reuse; the initial one-writer profile must not silently restrict ordinary work.
 No new formal, live KFD or performance acceptance follows from either packet.
 
+### Accepted R99 Scope
+
+The .5B-2 implementation composes one fixture-local runtime registration/gate/phase
+with the original primary and shared auxiliary driver. Seventeen scenarios run
+through both original-runtime routes, for 34 auxiliary constructions. The first
+matrix, two registration tests, 32 frozen integration tests and all-feature/all-target
+Clippy pass. Five compiled behavioral negatives reject and all 5,655 source
+identities are restored. The broader 54-test restored construction run also
+passes with unchanged source; all seventeen source gates and ten auxiliary
+checks pass, with independently reviewed source and evidence. Local mappings,
+event bindings, protection and cleanup are real
+helpers; CREATE remains scripted successful. .5B-3, native qualification and
+formal adapter correspondence are not closed by this packet. Only seven
+test-fixture files change; production mechanisms and proof inputs remain unchanged.
+
 ## Swarm Ownership
 
 At the user's renewed swarm request, three existing workers independently
-reviewed the current source, R98 acceptance and the remaining roadmap. They
+reviewed the current source, R99 evidence and the remaining roadmap. They
 returned the bounded work orders below. Their read-only review turns
 are complete. The implementation queues below are assignments, not unattended
 background jobs. Primary owns
@@ -98,26 +123,26 @@ Context/backend/queue changes and builds are serialized.
 
 | Lane and worker | First bounded task | Follow-on queue |
 | --- | --- | --- |
-| Native: `r66_native_coexistence` | .5B-2 local platform composition after accepted .5B-1 | .5B-3 CREATE and installation matrix -> replacement/insertion -> generated data adoption -> native publication handoff |
+| Native: `r66_native_coexistence` | .5B-3A admitted-prefix/CREATE oracle, then 3B recovery/currentness and 3C roster/slots | Replacement/insertion -> generated data adoption -> native publication handoff |
 | Admission: `r66_runtime_coexistence` | CO-2A exact Context submission-identity tests | CO-2B descriptive identity and CO-3 reply/custody composition -> issue/completion integration -> typed future -> generated graph/drain |
 | Resources: `r66_coexistence_model` | VER-1A.2 executable journal model and property proofs after the reviewed contract | Bounded journal -> complete mutation hooks, ordered writers and recovery -> cross-run leases; aggregate budgets and residency |
-| Primary | Integrate .5B-2, CO-2A and VER-1A.2 without conflicting shared edits | Cross-lane integration, formal correspondence, hardware scheduling, matched benchmarks and signed pushes to both topic remotes |
+| Primary | Integrate .5B-3, CO-2A and VER-1A.2 without conflicting shared edits | Cross-lane integration, formal correspondence, hardware scheduling, matched benchmarks and signed pushes to both topic remotes |
 
 ### Immediate Handoffs
 
 | Lane | First deliverable | Source boundary and cross-review |
 | --- | --- | --- |
-| Native | .5B-2 fixture setup before successful primary construction, then the unchanged shared auxiliary driver | KFD primary `integration_platform.rs`, auxiliary integration tests and `queue_linux/primary_fixture.rs`. Resources checks charges; Admission checks terminal-outcome meaning. |
+| Native | .5B-3A separate admitted-prefix oracle and CREATE outcome/malformed-output matrix | Auxiliary integration tests and narrow existing primary fixture injections; preserve the strict late `assert_pair`. Resources checks charges; Admission checks terminal-outcome meaning. |
 | Admission | CO-2A five-case submission-identity matrix using the existing Context validators | New `context/tests/submission_identity_tests.rs`; Primary wires `context.rs`. Resources checks stale/reused identity; Native checks rejection before backend entry. No replacement validator or native receipt. |
 | Resources | VER-1A.2 production-consumed model and property-specific proofs/negatives | New `runtime-model/src/context_version_journal.rs` and corresponding proof sources; Primary owns exports and authenticated pins. Admission reviews settlement ordering; Native reviews identity preservation. |
 | Primary | Integrate one reviewed packet at a time and record its exact acceptance scope | Shared Context/backend/queue edits, builds, proof runs, hardware and publication remain serialized. |
 
 R98 supplies `completion_contract.rs` and the reviewed journal contract;
 `context/versions.rs` and its executable model remain absent. After accepted
-R98, the next execution wave is **.5B-2 + CO-2A + VER-1A.2**. CO-2B descriptor
+R99, the next execution wave is **.5B-3 + CO-2A + VER-1A.2**. CO-2B descriptor
 coverage and the CO-3 gap audit can use the next available review slot without
 waiting for native adoption. Resources implements the model before the journal.
-The .5B-2/.5B-3 designs are independently reviewable, but their integration shares
+The .5B-3A/B/C designs are independently reviewable, but their integration shares
 the primary trace, platform and memory fixtures. Shared module wiring, Context
 mutation hooks, backend issue and fixture edits pass through Primary one packet
 at a time.
@@ -126,8 +151,8 @@ at a time.
 
 | Wave | Native | Admission | Resources |
 | --- | --- | --- | --- |
-| Ready now | .5B-2 local helper composition; review .5B-3 matrix | CO-2A Context identity; independently review CO-2B and CO-3 | VER-1A.2 executable model/proofs |
-| After each lane's first gate | .5B-3 complete CREATE/install matrix | CO-2B descriptor matrix and CO-3 lifecycle composition | VER-1A.3 bounded journal |
+| Ready now | .5B-3A CREATE oracle; review 3B/3C | CO-2A Context identity; independently review CO-2B and CO-3 | VER-1A.2 executable model/proofs |
+| After each lane's first gate | .5B-3B recovery/currentness, then 3C roster/slots | CO-2B descriptor matrix and CO-3 lifecycle composition | VER-1A.3 bounded journal |
 | Integration | 2C replacement/insertion, then nonpublishing DATA-ADOPT | ISSUE with Native, then CO-4/COMPLETE and typed API | .4/.5 initial mutation hooks, then complete VER-1B with ordered writers and recovery |
 | A1/A2 closure | Native depth, memory pressure and overlap qualification | Generated GRAPH/DRAIN and end-to-end typed execution | VER-2 cross-run leases, aggregate accounting and residency closure |
 
@@ -148,7 +173,8 @@ reviewed with each packet; it is not deferred to the final hardware wave.
    guard and both ledger poison assertions are present. Eight compiled mutations
    reject and exact source restoration passes. All seventeen final source gates
    and twelve auxiliary checks pass; broader native integration remains open.
-2. **NATIVE-2B.5: R96 accepts .5A; R97 accepts .5B-1.** Finish .5B-2/.5B-3 below.
+2. **NATIVE-2B.5: R96 accepts .5A; R97 accepts .5B-1; R99 accepts .5B-2.**
+   Finish .5B-3A/B/C below.
    Run the actual
    production-used sequence after a completed primary constructor, borrowing
    the same engine, foundation, memory/accounts and original platform owners.
@@ -176,8 +202,8 @@ execution; Native owns each design/review handoff.
 | --- | --- | --- |
 | .5A accepted R96 | `queue_live.rs`, `queue_live/construction_auxiliary` and shared primary/preparation fixtures | Frozen focused suite, all four final compiled negative mutations, all seventeen source gates and twelve auxiliary checks pass. Exact source is restored; final evidence is independently reviewed. Full outer/platform acceptance remains .5B. |
 | .5B-1 accepted R97 | After .5A; `queue_live/construction_auxiliary.rs`, its integration tests and narrow real loan/reclaim fixture forwards | Shared production outer driver after successful primary construction; named early-prefix/operation/reclaim/cleanup matrix, full-parent transport and pure borrowed capacity rejection. Frozen/restored 53-test suites, all 17 source gates, 12 auxiliary checks and four behavioral mutations pass. Concrete local platform and complete CREATE/install coverage remain below. |
-| .5B-2 local platform composition | After .5B-1; primary `integration_platform.rs`, auxiliary platform cases and existing `queue_linux/primary_fixture.rs` helpers | Retain the primary runtime lease while adding auxiliary event/shadow/gate owners. Cover arm failures, exact prepublication cleanup and postpublication retention. Check identities and cleanup ordering. Local Linux mappings are not live KFD qualification. |
-| .5B-3 CREATE and installation | After .5B-1; combine with .5B-2 for platform cells; auxiliary integration tests and narrow existing fixture injections | Cover no-effect, indeterminate, malformed and panicking CREATE; output/ID recovery; retained auxiliary/SDMA roster collisions; both late currentness failures; doorbell/gate failures; occupied and reusable slots. No failed installation, spent-generation reuse or lost original owner. Full-source and compiled mutation gates close only this named CPU/local-helper matrix. |
+| .5B-2 accepted R99 | After .5B-1; primary `integration_platform.rs`, auxiliary platform cases and existing `queue_linux/primary_fixture.rs` helpers | Named 34-case matrix plus two registration tests; 32 frozen integration and 54 restored construction tests, 17 source gates, 10 auxiliary checks and five compiled negatives pass. Original primary retention, actual local lease/phase, cleanup and event binding are checked. Local Linux mappings are not live KFD qualification. |
+| .5B-3 CREATE and installation | After .5B-1; combine with .5B-2 for platform cells; auxiliary integration tests and narrow existing fixture injections | Cover no-effect, indeterminate, malformed and panicking CREATE; output/ID recovery; retained auxiliary/SDMA roster collisions; pre/post-CREATE and pre/post-doorbell currentness; doorbell/gate failures; occupied and reusable slots. No failed installation, spent-generation reuse or lost original owner. Full-source and compiled mutation gates close only this named CPU/local-helper matrix. |
 
 ### R97 Completed Work Units
 
@@ -191,28 +217,28 @@ execution; Native owns each design/review handoff.
 | R97-2: cleanup, locally accepted | Store the complete terminal parent before cleanup; preserve the first panic even when cleanup panics. |
 | R97-3: local acceptance complete | Final lint, frozen/restored tests, four compiled behavioral negatives, all 17 source gates and 12 auxiliary checks pass with 5,651 exact source identities. Retained evidence includes preliminary failed attempts; independent source/evidence review covers only the named .5B-1 scope. |
 
-### Native First Handoff
+### R99 Implemented Local Platform Handoff
 
-Install one fixture-local gate before original primary construction and retain
-the same local resources through auxiliary construction. Make runtime admission
-fallible before minting a fixture owner, so a real gate rejection cannot create
-a phantom owner. Reuse actual local registration/phase, shadow initialization,
-protection, restore, publication and cleanup helpers; do not create a second
-constructor or a fake production runtime descriptor whose Drop touches the
-process-global gate.
+R99 installs one fixture-local gate before original primary
+construction and retains the same local resources through auxiliary construction.
+Runtime admission is fallible before minting a fixture owner, so a real gate
+rejection cannot create a phantom owner. It reuses actual local registration/phase,
+shadow initialization, protection, restore, publication and cleanup helpers,
+without a second constructor or a fake production runtime descriptor whose Drop
+touches the process-global gate.
 
-The test-local `LocalRuntimeRegistrationV1` should retain the exact local gate,
+The test-local `LocalRuntimeRegistrationV1` retains the exact local gate,
 opener PID and runtime phase, using existing `admit_runtime`,
 `commit_first_enabled` and `admit_runtime_transition` helpers. Its Drop poisons
-only that local gate, not a fabricated successful native disable. Update the
-existing primary fixture's post-Drop expectation accordingly; observe owner
-identity independently of whether the retained gate has become poisoned.
+only that local gate, not a fabricated successful native disable. The existing
+primary fixture's post-Drop expectation reflects this; owner identity is observed
+independently of whether the retained gate has become poisoned.
 
-The first matrix covers success, arm/event/install rejection, shadow-init and
+The matrix covers success, admission/arm/event/install rejection, shadow-init and
 restore error/panic, cleanup panic before/after disposal, late doorbell/gate
-failure and cross-event substitution. Assert original primary retention,
+failure and cross-event substitution. It asserts original primary retention,
 auxiliary-only unpublished cleanup and both published payloads retained after
-late failure. Inspect owned local mappings before fixture disposal. Synthetic
+late failure, inspecting owned local mappings before fixture disposal. Synthetic
 events and independent VM reservations are not real KFD BO aliasing, native
 doorbell execution, runtime-enable ioctls or confirmed native teardown.
 
@@ -227,6 +253,38 @@ Full 2B acceptance still does not establish callback-internal unreturned-owner
 custody, concurrent bootstrap, live device behavior, new formal refinement or
 performance. Keep those boundaries explicit rather than absorbing them into a
 green fixture count.
+
+### .5B-3 Patch-Ready Handoff
+
+Native owns three bounded review/implementation packets. **3A** adds the
+admitted-prefix oracle and CREATE outcome/malformed-output matrix. **3B** uses
+that oracle for recovery, currentness and assembly. **3C** adds retained-roster
+and destination-slot coverage; its design can run alongside 3A/3B, but shared
+fixture edits remain serialized. All three are required before 2C. Each needs
+focused tests, compiled behavioral negatives and applicable full gates; none
+supplies native or formal acceptance merely by passing its CPU matrix.
+
+Add a separate admitted-prefix oracle; do not weaken `assert_pair`, which
+assumes successful CREATE outputs except its existing duplicate-primary-ID case.
+The new oracle must cover admitted-but-unpublished authority and unsuccessful
+CREATE while retaining exact original engine/account owners.
+
+| Group | Existing control or narrow addition | Required distinction |
+| --- | --- | --- |
+| CREATE outcomes | Set `Trace.create` modes 1-5 only after primary success | No-effect leaves `Planned`; indeterminate/drift leaves `Ambiguous`; panic leaves `CreatePending`. Returned ID and admitted outputs differ. All five crossed publication; no retry or published-shadow cleanup follows. |
+| Malformed outputs | Narrow fake-leaf cases for successful invalid doorbell output and failed-no-effect with changed outputs | Reject without manufacturing accepted output authority or dropping the rooted prefix. |
+| Recovery/assembly | Existing `Trace.fault` at recovery, runtime-created and event-id boundaries | Engine-owned outputs survive before construction output recovery; queue confirmation alone does not advance the local runtime phase. |
+| Currentness | Freeze successful-trace occurrences for pre-CREATE, post-CREATE, pre-doorbell and post-doorbell Err/panic | Pre-CREATE retains unpublished state and performs no CREATE; post-CREATE retains engine outputs; doorbell stages retain the completed lane with absent/present doorbell respectively. |
+| Roster/slot checks | Explicit fixture-owned retained rosters and real prepare/check/install slot helpers | No destination overwrite, lost roster owner or spent-generation reuse; distinguish pure preflight from late retained failure. |
+
+The current profile permits exactly primary plus one auxiliary lane. A second
+live auxiliary is not a valid-profile success fixture. Label injected late
+roster/slot inconsistency honestly; natural duplicate IDs reject earlier in the
+shared engine. Directional/striped SDMA roster checks need narrow rooted
+test-only inputs and do not qualify native SDMA bootstrap. Generalize target-slot
+observations instead of globally weakening first-slot/resource-count assertions.
+The existing runner unwraps initial slot preparation, so pure rejection tests
+must call the real preflight directly against the retained successful primary.
 
 ## Admission Queue
 
@@ -300,8 +358,8 @@ wiring. The five focused cases are:
 
 1. Change one Context brand, logical submission ID, backend submission, stream
    or device coordinate at a time, using real neighboring handles where possible.
-2. Exercise poll, wait, pure query, event recording, completion callbacks and
-   consuming release. Reject before backend calls, callback delivery or record
+2. Exercise poll, wait, pure query, event recording, completion callbacks,
+   cancel, drain and consuming release. Reject before backend calls, callback delivery or record
    changes; rejected consuming release returns the supplied handle.
 3. A cached successful status, in either the handle or retained record, cannot
    bypass exact identity validation.
@@ -318,6 +376,15 @@ immutable-source positive path after one-shot control transfer. Lane,
 queue/publication occurrence and allocation incarnations require actual
 DATA-ADOPT/ISSUE records; descriptive fixtures cannot close native identity.
 CO-2A closes only Context submission-identity coverage, not full CO-2.
+
+The patch-ready fixture uses genuine neighboring submissions plus private
+test-only handle snapshots. Snapshot submission/event records, existing ID
+allocators, backend counters and cleanup logs; add only the missing test-backend
+cancel entry counter. Use a future drain deadline for identity rejection:
+drain checks deadline before identity, whereas wait validates live binding first.
+After actual stream destruction, pure query, cached cancel/drain and live
+poll/wait/event paths intentionally differ. Preserve real graph-reservation and
+terminal-Context precedence instead of moving every ingress to live validation.
 
 ### CO-2B And CO-3 Follow-On Packets
 
@@ -382,6 +449,26 @@ The reviewed [contract and inventory](runtime-context-version-journal-v1.md)
 is the input to VER-1A.2, not another drafting assignment. It does not implement
 the executable model, Context journal, hooks or cross-run leases.
 
+Resources' next model handoff is an allocation-free whole-roster transition
+planner consumed by the eventual journal. Validate the complete canonical input
+and output capacity before writing scratch; first/middle/last failures leave it
+unchanged. An exact writer cannot be replayed after its record is freed. A
+high-water observation of existing Context IDs is one proposed guard, not a
+second allocator: admission ordering or explicit reservations for pre-minted IDs
+must be resolved before adopting that design. Do not silently prohibit valid
+out-of-order admission. Proofs must cover the shared planner definitions and
+separately identify roster extraction and actual Context commit obligations.
+
+Before implementation, Resources and Primary must freeze the exact capacity,
+canonical roster representation, writer replay rule and planner/commit boundary.
+Counts come from retained private journal state, not caller witnesses. A checked
+transition-plan proof is not a proof of Context's eventual atomic commit.
+The .3 journal consumes that model with preallocated entries, writer records and
+scratch, retaining complete membership independently of dropped tickets. Its
+acceptance includes late-member rejection, replay, exhaustion and unwind before
+.4/.5 adds real Context hooks. NoEffect receipt producers and bounded ordered
+writer/Unknown recovery remain explicit VER-1B work.
+
 Freeze a separate journal/profile capacity and reject allocation admission before
 creating an untrackable allocation. Context's 1,048,576-entry bounds and the
 credit engine's 65,536-record bound are different quantities, not a journal
@@ -437,7 +524,7 @@ or newer adapter refinement.
 ## Integration And Qualification
 
 ```text
-R97 .5B-1 -> .5B-2/.5B-3 -> 2C -> DATA-ADOPT -----+
+R97 .5B-1 -> R99 .5B-2 -> .5B-3 -> 2C -> DATA-ADOPT --+
 CO-1 -> CO-2A/2B + preissue CO-3 -----------------+-> ISSUE -> COMPLETE -> API -> GRAPH/DRAIN
                          native identity joins DATA-ADOPT/ISSUE -> CO-4
 VER-1A -> complete VER-1B -> VER-2 --------------------------------------------> cross-run input reuse
@@ -486,6 +573,22 @@ These remain outside A1/A2 closure and reuse the same three worker slots.
 Broad device-language support and production atomics/collectives also depend on
 their compiler semantic-to-machine contracts. Closing A1/A2 alone does not close
 those ownership boundaries or issue #182.
+
+The renewed issue-list check still finds open runtime-labeled work outside
+this A1/A2 swarm. Primary coordinates these dependencies rather than assigning
+their implementation to an idle runtime lane:
+
+| Handoff | Owning work and acceptance boundary |
+| --- | --- |
+| Worker/capsule authority | #209 and broker/handoff #130/#131/#132; concrete reviewed Worker V3 refinement backend and owned proof artifacts, not caller-provided digests or qualification gates |
+| Protected kernels | #89/#88/#98/#104/#105/#123 plus the compiler-owned device-language G2/G4 milestones; exact ABI/effect contracts, independent output/layout oracles and architecture-specific execution |
+| Release and diagnostics | Offline installation #252, disposable-machine deployment #253 and debugger descendant containment #269; keep deployment and debugger ownership separate from queue construction |
+| Broad qualification | G8 and A6/A7: differential testing, supported-target evidence, isolated fault campaigns and matched complete-output performance, not CPU suite wall time |
+
+These are coordination queues, not additional running agents. Worker V3's
+concrete refinement backend and owned verification artifacts are not supplied
+by the present host admission module. The Native, Admission and Resources
+workers own the bounded A1/A2 packets above; Primary owns cross-team integration.
 
 Protected scalar GEMM still depends on the separately open
 [#214 machine/IEEE refinement](https://github.com/harsh-nod/fe2o3/issues/214),

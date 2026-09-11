@@ -1,0 +1,8 @@
+{
+  "phase": "runner invocation before frozen construction suite",
+  "attempt_name": "r99-frozen",
+  "result": "exclusive creation of r99-frozen-source.json rejected because that file already holds the frozen baseline",
+  "test_process_started": false,
+  "source_changed": false,
+  "correction": "use the distinct r99-frozen-construction attempt name; preserve the existing baseline"
+}

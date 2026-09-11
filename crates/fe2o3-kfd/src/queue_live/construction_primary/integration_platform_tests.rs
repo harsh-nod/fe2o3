@@ -69,7 +69,7 @@ fn local_linux_shadow_and_gate_helpers_compose_with_primary_custody_and_dispose_
                 (0, 0, 0),
                 "owned reservation, payload and event/file disposed"
             );
-            assert_eq!(gate.observation(), (false, boundary.is_some()));
+            assert_eq!(gate.observation(), (false, true));
         }
     }
 }

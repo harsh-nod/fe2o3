@@ -1,0 +1,22 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue_linux::primary_fixture::tests::local_runtime_registrations_share_gate_with_single_queue_transition",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r99-mut-lease-count.log",
+  "source": "/home/harsh/.codex-tmp/r99-mut-lease-count-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "elapsed_seconds": 38.793
+}

@@ -26,7 +26,7 @@ mod auxiliary_cases;
 
 #[path = "integration_platform.rs"]
 mod platform;
-use crate::queue_linux::primary_fixture::{LocalGateV1, LocalResourcesV1};
+use crate::queue_linux::primary_fixture::{LocalEventV1, LocalGateV1, LocalResourcesV1};
 use platform::{Fixture, Owner, OwnerIdentity, Role, assert_platform};
 
 #[derive(Default)]
@@ -50,6 +50,8 @@ struct Trace {
     local_gate: Option<LocalGateV1>,
     local_resources: LocalResourcesV1,
     local_finish_poison: bool,
+    local_arm_poison: bool,
+    local_event_substitute: Option<LocalEventV1>,
     projection_fault: Option<(
         &'static str,
         usize,

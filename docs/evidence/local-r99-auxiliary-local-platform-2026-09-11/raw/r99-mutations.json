@@ -1,0 +1,82 @@
+[
+  {
+    "name": "lease-count",
+    "path": "crates/fe2o3-kfd/src/queue_linux.rs",
+    "test": "queue_linux::primary_fixture::tests::local_runtime_registrations_share_gate_with_single_queue_transition",
+    "edits": [
+      [
+        "let leases = leases\n                    .checked_add(1)\n                    .ok_or(LinuxDoorbellErrorV1::Runtime(\"runtime lease capacity\"))?;",
+        "let leases = leases\n                    .checked_add(0)\n                    .ok_or(LinuxDoorbellErrorV1::Runtime(\"runtime lease capacity\"))?;"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed",
+      "leases: 1",
+      "leases: 2"
+    ]
+  },
+  {
+    "name": "queue-phase",
+    "path": "crates/fe2o3-kfd/src/queue_linux.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::platform_cases::same_engine_auxiliary_local_platform_matrix_retains_exact_primary_and_auxiliary_owners",
+    "edits": [
+      [
+        "    if current == required {\n        Ok(next)\n    } else {\n        Err(LinuxDoorbellErrorV1::Runtime(\n            \"runtime/queue/event ordering\",",
+        "    if current == required {\n        Ok(current)\n    } else {\n        Err(LinuxDoorbellErrorV1::Runtime(\n            \"runtime/queue/event ordering\","
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed",
+      "left: false",
+      "right: true"
+    ]
+  },
+  {
+    "name": "payload-cleanup",
+    "path": "crates/fe2o3-kfd/src/queue_linux.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::platform_cases::same_engine_auxiliary_local_platform_matrix_retains_exact_primary_and_auxiliary_owners",
+    "edits": [
+      [
+        "    pub(crate) fn cleanup_payload_for_terminal_retention(&mut self) {\n        if self.terminal_payload_released {",
+        "    pub(crate) fn cleanup_payload_for_terminal_retention(&mut self) {\n        if true || self.terminal_payload_released {"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed",
+      "left: (false, true, true)",
+      "right: (true, false, false)"
+    ]
+  },
+  {
+    "name": "event-binding",
+    "path": "crates/fe2o3-kfd/src/queue_linux.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::platform_cases::same_engine_auxiliary_local_platform_matrix_retains_exact_primary_and_auxiliary_owners",
+    "edits": [
+      [
+        "    pub(crate) fn validate_live_with_shadows(\n        &self,\n        kfd: BorrowedFd<'_>,\n        opener_pid: u32,\n        shadows: &LinuxCwsrShadowPagesV1,\n    ) -> Result<(), LinuxDoorbellErrorV1> {\n        self.check_binding(kfd, opener_pid)?;\n        if !shadows.matches(self.binding) {",
+        "    pub(crate) fn validate_live_with_shadows(\n        &self,\n        kfd: BorrowedFd<'_>,\n        opener_pid: u32,\n        shadows: &LinuxCwsrShadowPagesV1,\n    ) -> Result<(), LinuxDoorbellErrorV1> {\n        self.check_binding(kfd, opener_pid)?;\n        if false && !shadows.matches(self.binding) {"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed: CrossEvent, external=false",
+      "left: true",
+      "right: false"
+    ]
+  },
+  {
+    "name": "auxiliary-phase",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::platform_cases::same_engine_auxiliary_local_platform_matrix_retains_exact_primary_and_auxiliary_owners",
+    "edits": [
+      [
+        "        E::mark_queue_created(self.runtime.as_mut().expect(\"runtime\"))?;",
+        "        if false {\n            E::mark_queue_created(self.runtime.as_mut().expect(\"runtime\"))?;\n        }"
+      ]
+    ],
+    "expected": [
+      "assertion `left == right` failed",
+      "left: false",
+      "right: true"
+    ]
+  }
+]
