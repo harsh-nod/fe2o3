@@ -474,8 +474,8 @@ fn prove_nested_positive_induction_loops_v1(
             header: header_index,
             body: body_index,
             exit: exit_index,
-            induction: induction.unique_name(context).to_string(),
-            bound: branch.rhs(context).unique_name(context).to_string(),
+            induction: induction.id(context).into(),
+            bound: branch.rhs(context).id(context).into(),
             step,
         });
     }
@@ -1171,8 +1171,8 @@ fn canonical_positive_induction_loop(
             header: *header_index,
             body: body_index,
             exit: exit_index,
-            induction: branch.lhs(context).unique_name(context).to_string(),
-            bound: branch.rhs(context).unique_name(context).to_string(),
+            induction: branch.lhs(context).id(context).into(),
+            bound: branch.rhs(context).id(context).into(),
             step,
         });
     }

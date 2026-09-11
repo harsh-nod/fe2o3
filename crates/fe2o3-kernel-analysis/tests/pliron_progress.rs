@@ -24,6 +24,9 @@ use pliron::{
     value::Value,
 };
 
+#[path = "pliron_progress/numeric_labels_v1_tests.rs"]
+mod numeric_labels_v1_tests;
+
 fn setup() -> Context {
     let mut context = Context::new();
     register_dialect(&mut context, &DialectName::try_new(DIALECT_NAME).unwrap()).unwrap();
