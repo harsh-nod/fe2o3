@@ -37,9 +37,11 @@ of possibly live allocations is attempted.
 
 One host wait phase observes the final ordered signal. Success additionally
 requires acquiring every retained signal as completed, unchanged device/queue
-epoch/frontier identities, valid counters, zero exception payload, and full exit
-currentness/idle checks. Operational currentness checks occur before publication
-and periodically during the wait; full checks bracket the operation. No host
+epoch/frontier identities, valid counters, zero exception payload, and exit
+currentness/idle checks. Dispatch boundaries, publication and periodic wait
+checks honor the existing explicit operational-currentness option; default-mode
+checks remain full. Allocation (including the lazy ordered arena), queue rollover
+and teardown retain full lifecycle checks. No host
 read/write, free, load or unrelated command interleaves with this worker call.
 
 The aggregate deadline starts after staging and before publication, and covers
@@ -80,3 +82,10 @@ The image-specific external fixture and its raw protocol records remain outside
 the generic runtime implementation. These checks establish neither arbitrary
 kernel correctness nor model/serving performance. Deliberate GPU faults were not
 injected on shared hardware; failure-path coverage remains host-injected.
+
+Those frozen native receipts predate the dispatch-boundary policy change:
+their operational runs still forced full checks around every ordered call.
+The current candidate removes those extra full scans only for the already
+opted-in operational policy. It requires separate host/native/model validation;
+the earlier receipts are not evidence of a performance improvement or of this
+new boundary selection.

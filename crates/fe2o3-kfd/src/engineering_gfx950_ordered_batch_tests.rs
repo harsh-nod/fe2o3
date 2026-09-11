@@ -92,8 +92,8 @@ impl OrderedBackend for Fake {
     type Prepared = usize;
     type Staged = usize;
     type Pending = usize;
-    fn full_fence(&mut self) -> Result<()> {
-        self.event("full_fence".into())
+    fn dispatch_fence(&mut self) -> Result<()> {
+        self.event("dispatch_fence".into())
     }
     fn prepare(&mut self, index: usize) -> Result<usize> {
         self.event(format!("prepare:{index}"))?;
@@ -190,7 +190,7 @@ fn ordered_one_and_sixteen_stage_every_argument_before_one_publication_and_final
                 .count(),
             count
         );
-        assert_eq!(fake.events.last().unwrap(), "full_fence");
+        assert_eq!(fake.events.last().unwrap(), "dispatch_fence");
     }
 }
 
@@ -219,6 +219,47 @@ fn every_preparation_reset_publication_completion_and_exit_failure_is_terminal()
             assert!(run_ordered_batch(&mut fake, count, 600_000).is_err());
             assert_eq!(fake.events.len(), fail_at + 1);
         }
+    }
+}
+
+#[test]
+fn ordered_boundaries_use_dispatch_policy_without_changing_lifecycle_fences() {
+    let ordered = include_str!("engineering_gfx950_ordered_batch.rs");
+    let boundary = ordered
+        .split("    fn dispatch_fence(&mut self) -> Result<()> {")
+        .nth(1)
+        .unwrap()
+        .split("    fn prepare(")
+        .next()
+        .unwrap();
+    assert!(boundary.contains("self.context.check_currentness(false)?"));
+    assert!(boundary.contains("self.context.check_idle()"));
+    assert_eq!(ordered.matches("backend.dispatch_fence()?").count(), 2);
+    let context = include_str!("engineering_gfx950.rs");
+    let policy = context
+        .split("    fn check_currentness(&mut self, lifecycle: bool)")
+        .nth(1)
+        .unwrap()
+        .split("    fn allocate_resource(")
+        .next()
+        .unwrap();
+    assert!(policy.contains("let operational = !lifecycle"));
+    assert!(policy.contains("options.operational_currentness"));
+    assert!(policy.contains("self.backend.check_engineering_operational_currentness()"));
+    assert!(policy.contains("self.backend.check_currentness()"));
+    let allocation = context
+        .split("    fn allocate_resource(")
+        .nth(1)
+        .unwrap()
+        .split("    fn ")
+        .next()
+        .unwrap();
+    assert!(allocation.contains("self.check_currentness(true)?"));
+    for count in [1, 16] {
+        let mut fake = Fake::default();
+        run_ordered_batch(&mut fake, count, 600_000).unwrap();
+        assert_eq!(fake.events.first().unwrap(), "dispatch_fence");
+        assert_eq!(fake.events.last().unwrap(), "dispatch_fence");
     }
 }
 

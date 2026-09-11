@@ -14,7 +14,7 @@ trait OrderedBackend {
     type Prepared;
     type Staged;
     type Pending;
-    fn full_fence(&mut self) -> Result<()>;
+    fn dispatch_fence(&mut self) -> Result<()>;
     fn prepare(&mut self, index: usize) -> Result<Self::Prepared>;
     fn stage(&mut self, prepared: Vec<Self::Prepared>) -> Result<Self::Staged>;
     fn publish(&mut self, staged: Self::Staged, deadline: Instant) -> Result<Self::Pending>;
@@ -43,7 +43,7 @@ fn run_ordered_batch(
         {
             return Err("ordered batch count or aggregate timeout".into());
         }
-        backend.full_fence()?;
+        backend.dispatch_fence()?;
         let prepared = (0..count)
             .map(|index| backend.prepare(index))
             .collect::<Result<Vec<_>>>()?;
@@ -64,7 +64,7 @@ fn run_ordered_batch(
         // observing every retained signal before storage/frontier reuse.
         backend.validate_all(&pending)?;
         backend.complete(pending)?;
-        backend.full_fence()?;
+        backend.dispatch_fence()?;
         require_deadline(Instant::now(), deadline)?;
         u64::try_from(started.elapsed().as_nanos()).map_err(explain)
     })();
@@ -192,8 +192,10 @@ impl OrderedBackend for NativeOrdered<'_> {
     type Staged = Vec<AqlPreparedKernelDispatchV1>;
     type Pending = OrderedPending;
 
-    fn full_fence(&mut self) -> Result<()> {
-        self.context.check_currentness(true)?;
+    fn dispatch_fence(&mut self) -> Result<()> {
+        // Reuse the explicit dispatch policy; allocation and lifecycle fences
+        // remain full checks, including first-use ordered arena allocation.
+        self.context.check_currentness(false)?;
         self.context.check_idle()
     }
 
