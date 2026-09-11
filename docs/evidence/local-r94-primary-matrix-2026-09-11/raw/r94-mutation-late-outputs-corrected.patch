@@ -1,0 +1,27 @@
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary.rs
+@@ -468,18 +468,18 @@
+             })
+             .map_err(map_create)?;
+         E::mark_queue_created(self.runtime.as_mut().expect("runtime"))?;
++        let queue_id = E::recover_native_queue_id(engine, key).ok_or_else(|| {
++            terminal_creation(
++                "CREATE_QUEUE identity recovery",
++                ComputeAqlQueueSessionErrorV1::Contract("missing queue id"),
++            )
++        })?;
+         self.outputs = Some(E::recover_create_outputs(engine, key).ok_or_else(|| {
+             terminal_creation(
+                 "CREATE_QUEUE output recovery",
+                 ComputeAqlQueueSessionErrorV1::Contract("missing CREATE outputs"),
+             )
+         })?);
+-        let queue_id = E::recover_native_queue_id(engine, key).ok_or_else(|| {
+-            terminal_creation(
+-                "CREATE_QUEUE identity recovery",
+-                ComputeAqlQueueSessionErrorV1::Contract("missing queue id"),
+-            )
+-        })?;
+         self.dependency_owner = Some(E::create_dependency_owner(key).map_err(|error| {
+             terminal_creation(
+                 "compute dependency session owner",

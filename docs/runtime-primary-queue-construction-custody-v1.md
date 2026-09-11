@@ -4,8 +4,8 @@ R92 implements the NATIVE-2A.2 outer primary-constructor owner above signed
 R91 `a04060137e8df20f434682f7ee4dd6f06fb10174`. It composes the existing
 [lower handoffs](runtime-queue-construction-handoffs-v1.md) and
 [R89 preparation](runtime-fixed-dispatch-preparation-custody-v1.md).
-The full per-stage integrated failure campaign remains NATIVE-2A.3, and Linux
-qualification and executable refinement are separate requirements.
+At R92 the full per-stage integrated failure campaign remained NATIVE-2A.3.
+Linux qualification and executable refinement are separate requirements.
 
 R93 adds one shared production/test construction sequence above signed R92
 `777cbefae2721bb2edd60187a666e8d84dc80c91`. Private memory/platform primitive
@@ -14,6 +14,12 @@ foundation authentication and queue engine. The completed generic bundle stays
 rooted through checked finalization; conversion to the unchanged public Linux
 session then performs only field moves and inert defaults. There is no second
 test-only construction algorithm or public backend selection API.
+
+R94 extends that sequence's named CPU/local-helper matrix, including preparation,
+projection, exact platform custody and late recovery. Private environment
+defaults still use the original engine and dependency constructor. Dependency
+allocation errors now use the existing error mapper instead of being mislabeled
+as invalid session occurrences. No new public backend or constructor is added.
 
 ## Retained Owner
 
@@ -113,21 +119,33 @@ N1/N2 usage are checked. Native errors/panics require their specific injected
 results; currentness checks before/after doorbell installation are independently
 required. Unpublished cleanup and published retention remain distinct.
 
-The platform leaves for runtime, event, CWSR shadows, doorbell and final gate are
+At R93, platform leaves for runtime, event, CWSR shadows, doorbell and final gate were
 scripted and drop-counted. Their callbacks do not qualify Linux descriptors,
 CWSR BO headers, mapped shadow cleanup or the real gate as one composed sequence.
 Source guards and earlier local Linux-helper tests remain separate evidence.
 The [R93 record](evidence/local-r93-primary-sequence-2026-09-11/README.md)
 lists exact acceptance and deliberately rejected sequence mutations.
 
-NATIVE-2A.3 still needs integrated preparation-prefix failures and retained
-initialization descriptors/premises, generic borrowed/non-`Send` returned values,
-early external-runtime failures with caller slots retained, stronger exact platform
-owner identities, late CREATE output/ID and dependency failures, remaining
-projection/retain/partial-map variants and local Linux-helper composition.
-The larger fixture aperture requires a genuinely out-of-range projection fault;
-the old small-aperture constant cannot establish that rejection. This initial
-matrix does not complete full NATIVE-2A.3 acceptance.
+R94's seventeen functions exercise 548 loop cases, including preparation-prefix
+failures with original initialization descriptors/premises, generic borrowed and
+non-`Send` returned owners, exact caller-slot handoff, role/session/platform
+identities, late CREATE output/ID/dependency failures and actual allocation/map
+projection faults. Out-of-range observations are derived from the fixture's
+actual aperture. Pending native prefixes, retained input typestate and installed
+projection outputs are checked separately, with exact account and owner partitions.
+
+The local Linux fixture owns its entire mmap reservation and composes existing
+shadow installation, BO-header initialization/readback, write-access restoration,
+payload cleanup and the shared checked gate-finalization helper. It checks actual
+payload state before Drop and reservation/event disposal afterward. Its gate is
+an isolated mutex and its event is synthetic; it executes no KFD event/queue ioctl
+or doorbell mapping. This does not qualify native BO aliasing, live creation or
+unreturned installer prefixes. See the [R94 record](evidence/local-r94-primary-matrix-2026-09-11/README.md)
+for exact cells and compiled mutations. All seventeen frozen-source gates and
+eleven auxiliary checks pass, with 2,508 runtime tests per GNU/musl target and
+exact source restoration after five corrected compiled mutations. This locally
+accepts the named NATIVE-2A.3 CPU/local-helper matrix, not live KFD or formal
+adapter refinement.
 
 ## Remaining Boundaries
 

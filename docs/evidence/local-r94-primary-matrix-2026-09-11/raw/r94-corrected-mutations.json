@@ -1,0 +1,63 @@
+[
+  {
+    "name": "external-handoff-corrected",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+    "edits": [
+      [
+        "        memory.check_queue_currentness()?;\n        if let Some((runtime, control)) = external_runtime.as_mut() {\n            self.runtime = Some(runtime.take().expect(\"validated debug runtime authority\"));\n            self.runtime_control = Some(\n                control\n                    .take()\n                    .expect(\"validated debug runtime control descriptor\"),\n            );\n        }\n",
+        "        if let Some((runtime, control)) = external_runtime.as_mut() {\n            self.runtime = Some(runtime.take().expect(\"validated debug runtime authority\"));\n            self.runtime_control = Some(\n                control\n                    .take()\n                    .expect(\"validated debug runtime control descriptor\"),\n            );\n        }\n        memory.check_queue_currentness()?;\n"
+      ]
+    ],
+    "test": "queue::live::construction_primary::integration_tests::platform::tests::external_runtime_handoff_retains_exact_caller_slots_until_closing_currentness",
+    "assertion": "left: (None, None)"
+  },
+  {
+    "name": "late-outputs-corrected",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+    "edits": [
+      [
+        "        self.outputs = Some(E::recover_create_outputs(engine, key).ok_or_else(|| {\n            terminal_creation(\n                \"CREATE_QUEUE output recovery\",\n                ComputeAqlQueueSessionErrorV1::Contract(\"missing CREATE outputs\"),\n            )\n        })?);\n        let queue_id = E::recover_native_queue_id(engine, key).ok_or_else(|| {\n            terminal_creation(\n                \"CREATE_QUEUE identity recovery\",\n                ComputeAqlQueueSessionErrorV1::Contract(\"missing queue id\"),\n            )\n        })?;\n",
+        "        let queue_id = E::recover_native_queue_id(engine, key).ok_or_else(|| {\n            terminal_creation(\n                \"CREATE_QUEUE identity recovery\",\n                ComputeAqlQueueSessionErrorV1::Contract(\"missing queue id\"),\n            )\n        })?;\n        self.outputs = Some(E::recover_create_outputs(engine, key).ok_or_else(|| {\n            terminal_creation(\n                \"CREATE_QUEUE output recovery\",\n                ComputeAqlQueueSessionErrorV1::Contract(\"missing CREATE outputs\"),\n            )\n        })?);\n"
+      ]
+    ],
+    "test": "queue::live::construction_primary::integration_tests::platform::tests::late_create_recovery_preserves_exact_engine_outputs_and_unassembled_owners",
+    "assertion": "right: Some(KfdGfx942CreateQueueOutputs"
+  },
+  {
+    "name": "doorbell-pid-corrected",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+    "edits": [
+      [
+        "            &engine.backend.session,\n            outputs,\n            engine.opener_pid,\n",
+        "            &engine.backend.session,\n            outputs,\n            engine.opener_pid.wrapping_add(1),\n"
+      ]
+    ],
+    "test": "queue::live::construction_primary::integration_tests::same_session_primary_success_uses_actual_preparation_resources_foundation_and_create",
+    "assertion": "exact opener PID passed to doorbell mapping"
+  },
+  {
+    "name": "event-identity-corrected",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+    "edits": [
+      [
+        "                event_id,\n                cwsr_shadow_pages,",
+        "                event_id: event_id.wrapping_add(1),\n                cwsr_shadow_pages,"
+      ]
+    ],
+    "test": "queue::live::construction_primary::integration_tests::same_session_primary_success_uses_actual_preparation_resources_foundation_and_create",
+    "assertion": "left: Some(12)"
+  },
+  {
+    "name": "payload-cleanup-corrected",
+    "path": "crates/fe2o3-kfd/src/queue_linux.rs",
+    "edits": [
+      [
+        "    pub(crate) fn cleanup_payload_for_terminal_retention(&mut self) {\n        if self.terminal_payload_released {",
+        "    pub(crate) fn cleanup_payload_for_terminal_retention(&mut self) {\n        if !self.terminal_payload_released {"
+      ]
+    ],
+    "test": "queue::live::construction_primary::integration_tests::platform::tests::local_linux_shadow_and_gate_helpers_compose_with_primary_custody_and_dispose_owned_mappings",
+    "assertion": "left: (1, 1, 1)"
+  }
+]
+

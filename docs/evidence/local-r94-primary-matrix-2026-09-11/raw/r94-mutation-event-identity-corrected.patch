@@ -1,0 +1,11 @@
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary.rs
+@@ -513,7 +513,7 @@
+                 ring_bytes,
+                 doorbell_slice_bytes: 0,
+                 doorbell_byte_offset: 0,
+-                event_id,
++                event_id: event_id.wrapping_add(1),
+                 cwsr_shadow_pages,
+             },
+         });

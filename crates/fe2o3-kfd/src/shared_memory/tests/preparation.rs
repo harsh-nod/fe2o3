@@ -42,12 +42,19 @@ pub(crate) enum PreparationNativeFaultV1 {
     AccessPanic,
     PartialMap(u32, bool),
     ProjectionRejection,
+    Projection(super::primary_projection::PrimaryProjectionCaseV1),
 }
 
 pub(crate) struct PreparationMemoryFixtureV1 {
     pub(super) fixture: BackingConstructorFixture,
     code_count: usize,
+    projection_rejection_va: u64,
     pub(crate) fault: Option<(PreparationMemoryCallV1, PreparationNativeFaultV1)>,
+    pub(super) projection_fault: Option<super::primary_projection::PrimaryProjectionCaseV1>,
+    pub(super) projection_observation: Option<(
+        super::primary_projection::PrimaryProjectionCaseV1,
+        MemoryLifecycleStateV1,
+    )>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -117,7 +124,10 @@ impl PreparationMemoryFixtureV1 {
         Self {
             fixture,
             code_count: 0,
+            projection_rejection_va: 0x1_0000_u64.checked_add(bytes).unwrap(),
             fault: None,
+            projection_fault: None,
+            projection_observation: None,
         }
     }
 
@@ -125,26 +135,26 @@ impl PreparationMemoryFixtureV1 {
         &mut self,
         bytes: usize,
     ) -> Result<SharedGttAllocationV1<P, GttCpuWritableV1>, MemorySessionError> {
+        let fault = self.take_primary_projection_v1();
         let f = &mut self.fixture;
-        adapter::allocate_v1(
-            &mut f.engine,
-            &mut ProjectionV1::new(&mut f.foundation, f.device, f.vm),
-            bytes,
-            || panic!("unexpected preparation revision exhaustion"),
-        )
+        let mut projection = ProjectionV1::new(&mut f.foundation, f.device, f.vm);
+        projection.fault = fault;
+        adapter::allocate_v1(&mut f.engine, &mut projection, bytes, || {
+            panic!("unexpected preparation revision exhaustion")
+        })
     }
 
     pub(crate) fn map<P: MutableGpuGttProfileV1>(
         &mut self,
         token: SharedGttAllocationV1<P, GttCpuWritableV1>,
     ) -> Result<SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>, MemorySessionError> {
+        let fault = self.take_primary_projection_v1();
         let f = &mut self.fixture;
-        adapter::map_mutable_v1(
-            &mut f.engine,
-            &mut ProjectionV1::new(&mut f.foundation, f.device, f.vm),
-            token,
-            || panic!("unexpected preparation revision exhaustion"),
-        )
+        let mut projection = ProjectionV1::new(&mut f.foundation, f.device, f.vm);
+        projection.fault = fault;
+        adapter::map_mutable_v1(&mut f.engine, &mut projection, token, || {
+            panic!("unexpected preparation revision exhaustion")
+        })
     }
 
     pub(crate) fn host(&mut self, initialized: bool) -> Gfx942FixedDispatchDataV1 {
@@ -242,8 +252,9 @@ impl PreparationMemoryFixtureV1 {
                 f.engine.backend.map_errno = errno;
             }
             PreparationNativeFaultV1::ProjectionRejection => {
-                f.engine.backend.fixed_va = Some(0x30_0000)
+                f.engine.backend.fixed_va = Some(self.projection_rejection_va)
             }
+            PreparationNativeFaultV1::Projection(case) => self.primary_arm_projection_v1(case),
         }
     }
 
@@ -590,13 +601,13 @@ impl PreparationMemoryV1 for PreparationMemoryFixtureV1 {
     }
     fn map_code(&mut self, token: CodeImmutable) -> Result<CodeMapped, MemorySessionError> {
         self.arm(PreparationMemoryCallV1::MapCode(self.code_count - 1));
+        let fault = self.take_primary_projection_v1();
         let f = &mut self.fixture;
-        adapter::map_executable_v1(
-            &mut f.engine,
-            &mut ProjectionV1::new(&mut f.foundation, f.device, f.vm),
-            token,
-            || panic!("unexpected preparation revision exhaustion"),
-        )
+        let mut projection = ProjectionV1::new(&mut f.foundation, f.device, f.vm);
+        projection.fault = fault;
+        adapter::map_executable_v1(&mut f.engine, &mut projection, token, || {
+            panic!("unexpected preparation revision exhaustion")
+        })
     }
     fn retain_code(&mut self, token: CodeMapped) -> Result<CodeAuthority, MemorySessionError> {
         adapter::retain_v1(&mut self.fixture.engine, self.fixture.vm, token)

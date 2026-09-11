@@ -1,0 +1,41 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0432]: unresolved import `allocation::PendingAllocationStageV1`
+  --> crates/fe2o3-kfd/src/shared_memory/tests/primary_construction.rs:16:13
+   |
+16 |         use allocation::PendingAllocationStageV1 as Stage;
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `PendingAllocationStageV1` in `shared_memory::tests::allocation`
+   |
+help: a similar name exists in the module
+   |
+16 -         use allocation::PendingAllocationStageV1 as Stage;
+16 +         use allocation::GttAllocationStateV1 as Stage;
+   |
+help: consider importing this enum instead
+   |
+16 |         use crate::shared_memory::allocation::PendingAllocationStageV1 as Stage;
+   |             ++++++++++++++++++++++
+
+error[E0433]: cannot find `PendingAllocationStageV1` in `allocation`
+   --> crates/fe2o3-kfd/src/shared_memory/tests/primary_construction.rs:295:46
+    |
+295 |                 pending.stage == allocation::PendingAllocationStageV1::ReserveVa
+    |                                              ^^^^^^^^^^^^^^^^^^^^^^^^ could not find `PendingAllocationStageV1` in `allocation`
+    |
+help: a trait with a similar name exists
+    |
+295 -                 pending.stage == allocation::PendingAllocationStageV1::ReserveVa
+295 +                 pending.stage == allocation::GttAllocationStateV1::ReserveVa
+    |
+help: consider importing this enum
+    |
+  3 + use crate::shared_memory::allocation::PendingAllocationStageV1;
+    |
+help: if you import `PendingAllocationStageV1`, refer to it directly
+    |
+295 -                 pending.stage == allocation::PendingAllocationStageV1::ReserveVa
+295 +                 pending.stage == PendingAllocationStageV1::ReserveVa
+    |
+
+Some errors have detailed explanations: E0432, E0433.
+For more information about an error, try `rustc --explain E0432`.
+error: could not compile `fe2o3-kfd` (lib test) due to 2 previous errors

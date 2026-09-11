@@ -123,7 +123,15 @@ fn inputs(data: &[Gfx942FixedDispatchDataV1]) -> Vec<Input> {
 }
 
 fn assert_inputs<const N: usize>(owner: &FixedDispatchPreparationCustodyV1<N>, expected: &[Input]) {
-    if let Some(completed) = &owner.completed {
+    assert_inputs_with_completed(owner, expected, owner.completed.as_ref());
+}
+
+fn assert_inputs_with_completed<const N: usize>(
+    owner: &FixedDispatchPreparationCustodyV1<N>,
+    expected: &[Input],
+    completed: Option<&DispatchResourceOwnerV1>,
+) {
+    if let Some(completed) = completed {
         assert_eq!(completed.data.len(), expected.len());
         assert_eq!(completed.data_premises.len(), expected.len());
         for (index, ((authority, premise), input)) in completed
@@ -241,6 +249,84 @@ fn assert_backing(memory: &Memory, before: &PreparationMemoryObservationV1) {
     );
     let allocations = after.calls[2] - before.calls[2];
     assert!(allocations == after.controls || after.pending && allocations == after.controls + 1);
+}
+
+pub(crate) struct PrimaryPreparationSnapshotV1 {
+    data: Vec<Input>,
+    kernargs: Vec<Box<[u8]>>,
+}
+
+impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
+    pub(crate) fn primary_snapshot_v1(&self) -> PrimaryPreparationSnapshotV1 {
+        PrimaryPreparationSnapshotV1 {
+            data: inputs(&self.original_data),
+            kernargs: self
+                .packets
+                .iter()
+                .map(|p| p.kernarg_bytes.clone())
+                .collect(),
+        }
+    }
+
+    pub(crate) fn primary_inject_stage_v1(&mut self, stage: PreparationStageV1, panic: bool) {
+        assert_eq!(self.stage, PreparationStageV1::Fresh);
+        self.fault = Some((stage, panic));
+    }
+
+    pub(crate) fn primary_assert_failed_stage_v1(&self, stage: PreparationStageV1) {
+        assert_eq!(self.stage, stage);
+        assert!(self.failed);
+        assert!(self.completed().is_err());
+        let prefix = match stage {
+            PreparationStageV1::CodeAllocate(i)
+            | PreparationStageV1::CodeMaterialize(i)
+            | PreparationStageV1::CodeSeal(i)
+            | PreparationStageV1::CodeMap(i)
+            | PreparationStageV1::CodeRetain(i)
+            | PreparationStageV1::CodeResolve(i) => i,
+            PreparationStageV1::KernargAllocate
+            | PreparationStageV1::KernargMaterialize
+            | PreparationStageV1::KernargMap
+            | PreparationStageV1::KernargRetain
+            | PreparationStageV1::PacketResolve(_)
+            | PreparationStageV1::Commit => self.program_identity.len(),
+            _ => 0,
+        };
+        assert_eq!(self.code.len(), prefix);
+        assert_eq!(self.code_identity.len(), prefix);
+        if stage == PreparationStageV1::Complete {
+            let completed = self.completed.as_ref().unwrap();
+            assert_eq!(completed.code.len(), self.program_identity.len());
+            assert_eq!(completed.code_identity.len(), self.program_identity.len());
+            assert_eq!(completed.packets.len(), N);
+        }
+    }
+
+    pub(in crate::queue) fn primary_assert_snapshot_v1(
+        &self,
+        memory: &Memory,
+        expected: &PrimaryPreparationSnapshotV1,
+        transferred: Option<&DispatchResourceOwnerV1>,
+    ) {
+        assert_eq!(
+            self.packets
+                .iter()
+                .map(|p| &p.kernarg_bytes)
+                .collect::<Vec<_>>(),
+            expected.kernargs.iter().collect::<Vec<_>>()
+        );
+        assert_inputs_with_completed(
+            self,
+            &expected.data,
+            transferred.or(self.completed.as_ref()),
+        );
+        if transferred.is_none() {
+            assert_custody(memory, self);
+        } else {
+            assert_eq!(self.stage, PreparationStageV1::Transferred);
+            assert!(!self.failed && self.completed.is_none());
+        }
+    }
 }
 
 fn run<const N: usize>(

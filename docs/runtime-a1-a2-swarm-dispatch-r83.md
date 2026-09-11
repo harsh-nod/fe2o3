@@ -1,15 +1,19 @@
-# A1/A2 Swarm Dispatch At R93 With R94 Awaiting Acceptance
+# A1/A2 Swarm Dispatch At Locally Accepted R94
 
-The latest user-requested three-agent breakdown was completed on 2026-09-11
-against signed planning checkpoint `3b8a0b1bd85ca20ba4b901228e4781268ae6798c`,
-accepted R93 `c35bb542f338d41a8247850e24166282c22d4926` and the local,
-unaccepted R94 candidate. Both topic remotes were checked at that planning commit.
-[#182](https://github.com/harsh-nod/fe2o3/issues/182) was refreshed through the
-GitHub API and remains open, with `updatedAt` `2026-09-11T08:01:35Z`.
+R94 now locally accepts the named NATIVE-2A.3 CPU/local-helper matrix above signed
+planning checkpoint `56ba2556c9572d30f65faab3e579d95fa3fb7c3e` and accepted R93
+`c35bb542f338d41a8247850e24166282c22d4926`. The
+[R94 evidence](evidence/local-r94-primary-matrix-2026-09-11/README.md) records
+all seventeen source gates, eleven auxiliary checks and five corrected compiled
+mutations. Native advances to 2B auxiliary custody; Admission's CO-1 and
+Resources' VER-1A.1 remain independently ready. The preceding three-agent
+planning refresh checked both topic remotes at its baseline and observed
+[#182](https://github.com/harsh-nod/fe2o3/issues/182) open through the GitHub API,
+with `updatedAt` `2026-09-11T08:01:35Z`. This packet does not close the issue.
 The [bounded work orders](#bounded-work-orders) below assign one dependency-ready
 ticket to each of the three existing workers; subsequent tickets are queues,
-not additional agents or unattended implementation jobs. This refresh is
-planning only. Primary retains implementation, integration and acceptance.
+not additional agents or unattended implementation jobs. Primary retains
+implementation, integration and acceptance; workers provide bounded reviews.
 
 Dispatch established by planning-only commit `32c1beff`, 2026-09-10, and refreshed
 by three read-only workers on 2026-09-11 against R89 preparation custody,
@@ -17,12 +21,13 @@ then refreshed by the same swarm at signed R90 `022e90ea04587f1335aa7d8f679ce4df
 R91 implements the first lower-handoff packet above signed planning checkpoint
 `b66e52d3246a88d76eb30252b9cfe465fa2c9882`; the remaining assignments below
 advanced to the complete primary constructor root and its integrated acceptance.
-R92 now implements the primary root above signed R91
-`a04060137e8df20f434682f7ee4dd6f06fb10174`; the next native packet is its
+R92 implemented the primary root above signed R91
+`a04060137e8df20f434682f7ee4dd6f06fb10174`; its then-next native packet was
 NATIVE-2A.3 per-stage integrated acceptance, then auxiliary and replacement work.
-R93 adds the shared sequence and initial same-session integration above signed
-R92 `777cbefae2721bb2edd60187a666e8d84dc80c91`; NATIVE-2A.3's remaining acceptance
-cells still precede auxiliary/replacement custody and native generated adoption.
+R93 added the shared sequence and initial same-session integration above signed
+R92 `777cbefae2721bb2edd60187a666e8d84dc80c91`. At R93, the remaining .3 cells
+still preceded auxiliary/replacement custody; R94 now locally accepts that named
+matrix. Remaining 2B/2C custody still precedes native generated adoption.
 The latest decomposition advances to constructor custody before DATA-ADOPT,
 with independent completion and version-journal packets. This is the current assignment overlay for
 [next-wave dispatch](runtime-a1-a2-next-wave.md) and the
@@ -35,24 +40,27 @@ issue. Later A3-A7 milestones remain separate.
 
 ## Checkpoint And Ownership
 
-R93 remains the latest accepted implementation. The local R94 candidate now has
-the platform, preparation/projection, generic-return and local Linux-helper
-fixtures. Its seventeen focused integration tests exercise 548 loop cases;
-corrected Clippy and five compiled negative mutations passed. It is implemented
-but unaccepted, not a missing-fixture task.
+R94 is locally accepted for the named primary-construction matrix. Seventeen
+integrated functions exercise 548 loop cases with original preparation, memory,
+accounts and actual queue resource authority. Exact platform identities, caller
+handoff, late recovery, projection failures and local Linux-helper composition
+are covered. The GNU and musl runtime suites each pass 2,508 tests with five
+ignored across 48 harnesses. All seventeen source gates and eleven auxiliary
+checks pass, with 5,645 non-documentation source identities unchanged.
 
 The first full-source attempt, `r94-final-source-gate.json`, stopped at GNU tests
 with exit 101: the KFD harness passed 927 tests and failed one source-shape guard,
 `production_dependency_owner_lane_envelope_and_teardown_shape_is_sealed`.
-The guard still searches the old constructor location; the actual dependency
-owner constructor now lives in `construction_primary/environment.rs`. Native's
-first handoff is to review that path/call-chain repair while preserving the
-exactly-one production constructor invariant. Primary must then run fresh
-focused, mutation/restoration, full-source and auxiliary acceptance and retain
-both attempts. Passing focused tests does not qualify the current worktree.
-This planning refresh changes no candidate source and excludes R94 code and its
-unfinished evidence from publication. Local mmap/shadow/gate composition is not
-live KFD creation, a new adapter proof or a performance result.
+The guard searched the old constructor location. R94's correction includes
+`construction_primary/environment.rs`, retains the exactly-one real constructor
+check and checks its default forwarding body and primary call. Fresh focused
+tests, all five compiled mutations, exact restoration and the complete corrected
+gates passed. Both full-source attempts and both mutation campaigns are retained;
+the original campaign is preliminary, not final-source acceptance. Three
+read-only reviews checked custody, local cleanup and evidence boundaries.
+Local mmap/shadow/gate composition is not live KFD creation, a new adapter proof
+or a performance result. Auxiliary/replacement custody and generated adoption
+remain open, as do unreturned callback/installer prefixes and aggregate bounds.
 
 R93 makes the [primary construction sequence](runtime-primary-queue-construction-custody-v1.md)
 directly testable through private primitive interfaces, with
@@ -63,8 +71,8 @@ Five new CPU tests exercise 121 cases and exact ownership/accounting checks.
 All seventeen frozen-source gates and eleven auxiliary checks pass: 5,639
 unchanged source identities and 2,496 runtime tests per GNU/musl target. Three
 compiled sequence mutations reject and the complete source inventory is restored.
-Platform leaves remain scripted; full NATIVE-2A.3, Linux qualification and new
-adapter refinement are not accepted. Three read-only reviews checked production
+At R93, platform leaves remained scripted; those tests alone did not accept
+full NATIVE-2A.3, Linux qualification or new adapter refinement. Three read-only reviews checked production
 equivalence, mutation sensitivity and exact accounting; primary corrected the
 fixture's USERPTR-versus-charged-Host classification before acceptance.
 
@@ -223,10 +231,10 @@ patch and acceptance; no solver or hardware acceptance is added.
 
 | Worker | First bounded assignment | Deliverable and exit gate |
 | --- | --- | --- |
-| Native: `r66_native_coexistence` | NATIVE-2A.3 R94 acceptance repair | Review the relocated dependency-constructor source guard without weakening its unique-issuer/call-chain invariant. Primary reruns focused, mutation/restoration, full-source and auxiliary gates before accepting the existing matrix. Then advance to 2B auxiliary custody. |
+| Native: `r66_native_coexistence` | NATIVE-2B auxiliary construction custody | Root preparation, controls and platform owners across shared-session loan/retake, CREATE, collision checks, doorbell and installation. Test exact primary/auxiliary ownership and first-panic preservation; occupied or stale slots cannot overwrite an owner. |
 | Admission: `r66_runtime_coexistence` | CO-1 allocation-free outcome classifier | Separate observation, reply disposition and owner-disposal permission. Table tests cover pending, rejected, success-candidate, conclusive failure, quiescence without result and uncertainty. Do not create native receipts or a public launch API. |
 | Resources: `r66_coexistence_model` | VER-1A.1 identity/capacity contract and mutation inventory | Freeze one Context-wide journal's exact identities, nonwrapping versions, retained writer rosters and every mutation/retirement hook before implementing transitions. Graph-local history is not persistent authority. |
-| Primary | Integrate accepted handoffs and own all shared edits | Publish only this planning refresh; preserve the unaccepted R94 candidate. Own its acceptance repair and later source/proof/hardware runs. Serialize shared Context/backend edits; do not enable adoption or leases ahead of prerequisites. |
+| Primary | Integrate accepted handoffs and own all shared edits | Publish accepted R94 source/evidence, then implement 2B/2C, CO and VER packets with shared Context/backend edits serialized. Keep CPU, proof, Linux and performance gates separate; do not enable adoption or leases ahead of prerequisites. |
 
 ### Bounded Work Orders
 
@@ -243,8 +251,8 @@ Paths in the first three rows are relative to `crates/fe2o3-kfd/src/`.
 
 | Packet | Scope and prerequisite | Acceptance gate |
 | --- | --- | --- |
-| NATIVE-2A.3 | Ready now: repair the stale `queue_live.rs` dependency-owner source guard, then qualify the implemented R94 matrix. | Preserve exactly one real constructor and the production call chain. Run the corrected guard, fresh compiled mutations with exact restoration, all frozen-source/auxiliary gates and independent evidence review. Retain the failed attempt; local mmap/shadow/gate tests are not live KFD acceptance. |
-| NATIVE-2B | After 2A.3: auxiliary construction and shared-session lane handoff in `queue_live.rs`. | Root every preparation/control/platform prefix across loan/retake, CREATE, collision checks, doorbell and installation. Error/panic retains both lanes; occupied/stale slots reject without overwriting an owner. |
+| NATIVE-2A.3 | Locally accepted R94: named primary CPU/local-helper matrix, including the repaired dependency-owner source guard. | Seventeen integrated functions/548 cases, five corrected compiled mutations and all source/auxiliary gates pass. Retain the failed attempt and exact source identities; no live KFD or new proof acceptance. |
+| NATIVE-2B | Ready now after local 2A.3: auxiliary construction and shared-session lane handoff in `queue_live.rs`. | Root every preparation/control/platform prefix across loan/retake, CREATE, collision checks, doorbell and installation. Error/panic retains both lanes; occupied/stale slots reject without overwriting an owner. |
 | NATIVE-2C | After 2B: recycled replacement in `queue_live.rs` and ordinary rebind/insertion in `queue_live/fixed_dispatch.rs`. | Retain consumed session/data before planning and completed outputs through closing observation. Preserve old/new identities and recycled versus pristine-abort provenance; no spent-generation reuse. |
 | DATA-ADOPT | After 2A/2B/2C: proposed runtime `kfd_backend/generated_adoption.rs`, existing shell/allocation/compute state and narrow Context hooks. | Enter non-discardable native custody before effects; bind original bytes without publication. Initial/auxiliary/reused lanes retain every partial prefix and retire only through exact abort/disposal. Reuse R80 reservations and R83 lifecycle. |
 | ISSUE native handoff | Admission leads after DATA-ADOPT and CO-1/2/3; Native reviews `compute_state.rs`, `compute_dispatch.rs` and submission registration. | One exact linear publication permit survives real flush/retry. Reject substitution/replay; definite nonpublication and unknown publication remain distinct. |
@@ -295,7 +303,7 @@ Admission can develop COMPLETE-ORACLE while Native specifies construction custod
 Resources does not depend on either. This avoids assigning both workers the same shared
 implementation or recreating R83's existing phase/hold machinery.
 
-The next review handoffs are ready. NATIVE-2A.3, CO-1 and VER-1A.1 can proceed
+The next review handoffs are ready. NATIVE-2B, CO-1 and VER-1A.1 can proceed
 independently; later packets in each row are dependency-ordered queues. At this
 checkpoint `async_engine/generated_operation/completion_contract.rs` and
 `context/versions.rs` do not exist. R80's reserved reply, R85's host decoder and
@@ -308,8 +316,8 @@ journal; do not add a second decoder or graph-specific mutation authority.
 1. Native: R86 atomic data conversion, R87 pending allocation custody and R88
    session transitions, R89 preparation custody and R90 bind settlement are
    implemented. R91 adds NATIVE-2A.1 lower handoffs and R92 implements the primary
-   root in .2. R93 adds the shared sequence and initial integrated matrix; next complete NATIVE-2A.3
-   and 2B/2C. Preserve the
+   root in .2. R93 adds the shared sequence and initial integrated matrix; R94
+   locally accepts the named .3 CPU/local-helper matrix. Next complete 2B/2C. Preserve the
    preparation owner in `queue_dispatch_binding.rs` and its private child module.
    Retain packet descriptions, plan, generation, converted data and exact
    premises, code prefixes/current code typestate, kernarg typestate and
@@ -400,12 +408,11 @@ additional concurrent workers.
 | --- | --- | --- |
 | NATIVE-2A.1: implemented R91 | Typed ring/map/retain stages, borrowed resource validation before owner transfer, externally ownable engine initialization and in-place admission. | Ten new CPU tests and three rejected mutations cover exact lower-handoff ownership. R91 alone left local holders exposed to later constructor failure. R92 supplies the primary outer root; that custody is not historical R91 acceptance. |
 | NATIVE-2A.2: implemented R92 | Ordinary R89 preparation and returned generic values stay in the original primary root with memory/control/runtime/engine/queue owners through final doorbell/currentness and checked global-gate completion. | Thirteen new CPU tests and existing R89/R91 regressions cover composed helpers and source placement. Default/executable pre-control classification is preserved; USERPTR-probe poisoning now starts before its own ring allocation. Unpublished payload cleanup retains disposed metadata. Full per-stage integration is .3; callback-internal unreturned values remain excluded. |
-| NATIVE-2A.3: partially implemented R93 | One production-used sequence now runs with the same preparation memory/account fixture and actual resource authority/queue engine. Five functions exercise 121 cases; platform leaves are scripted. | Retain the accepted partition/account/currentness matrix. Add preparation-prefix errors/panics and original descriptors, generic borrowed/non-Send output, early external caller slots, late output/ID/dependency failures, remaining projection/retain/partial-map variants and exact platform/local Linux composition. CPU results do not qualify Linux creation or formal refinement. |
+| NATIVE-2A.3: locally accepted R94 | One production-used sequence with original preparation/accounts and actual resource authority/queue engine. Seventeen functions exercise 548 cells, including preparation/projection, borrowed/non-Send output, caller/platform identity, late recovery and local Linux-helper composition. | All source/auxiliary gates and five corrected compiled mutations pass with exact source restoration. This named CPU/local-helper acceptance does not qualify live KFD creation, unreturned installer prefixes or formal refinement. |
 
-The .3 matrix was broken into the following bounded review handoffs. R94 now
-implements these named CPU/local-helper cells and all three read-only reviews
-have returned; full acceptance remains pending the source-guard repair above.
-Do not reassign the completed fixture implementation as new work:
+The .3 matrix was broken into the following completed review handoffs. R94 now
+locally accepts these named CPU/local-helper cells after all three read-only
+reviews and corrected gates. Do not reassign this fixture implementation as new work:
 
 1. Preparation and returned output: extend the existing R89 fixture through failed
    preparation; compare original content descriptors/premises. Exercise an empty
@@ -670,7 +677,7 @@ substituted for that source acceptance.
 
 | Batch | Parallel worker work | Primary integration and exit |
 | --- | --- | --- |
-| 1: ready now | Native: remaining NATIVE-2A.3, then 2B/2C. Admission: CO-1, then CO-2/3. Resources: VER-1A.1 through .5. | Build on R93's initial same-session matrix; accept full per-stage construction and implement remaining native/runtime/journal packets. Complete constructor retention before adoption. No native publication or cross-run leases. |
+| 1: ready now | Native: NATIVE-2B, then 2C. Admission: CO-1, then CO-2/3. Resources: VER-1A.1 through .5. | Build on R94's locally accepted primary matrix; implement remaining auxiliary/replacement, runtime and journal packets. Complete constructor retention before adoption. No native publication or cross-run leases. |
 | 2: native custody | Native: accepted NATIVE-1/2, then NATIVE-3 DATA-ADOPT. Admission: exact ISSUE/completion interface review. Resources: VER-1B inventory/hooks and domain/headroom work. | Serialize Context/backend and native shared-memory edits; accept full partial-prefix/lane custody and R82 abort before connecting ISSUE. Keep proof and Linux gates separate. |
 | 3: execution and reuse | Admission: ISSUE, then COMPLETE, then API. Native: fixtures and native qualification harnesses. Resources: close all mutation hooks before VER-2; backing/control/residency work. | Gate each execution transition, retain R73/R80 charge ownership and one completion cell. No API-only claim of graph, native-depth or budget closure. |
 | 4: A1/A2 qualification | Admission: generated GRAPH/DRAIN. Native: depth/overlap/copy/performance campaigns. Resources: resource/proof composition and aggregate bounds. | Signed source, independent evidence review, complete outputs, actual native-depth and repeated graph/version/resource checks, matched baselines and owned-resource cleanup. |
@@ -685,7 +692,7 @@ turns have finished, so queued implementation packets are not background jobs.
 
 ```text
 signed R83 -> final R84 DATA-SHELL acceptance -------------------> DATA-ADOPT
-R86 through R93 primary custody/sequence -> remaining NATIVE-2 -> DATA-ADOPT
+R86 through R94 primary custody/matrix -> NATIVE-2B/2C ---------> DATA-ADOPT
 R80 reservations + R82 abort + R83 lifecycle --------------------> DATA-ADOPT
 DATA-ADOPT -> ISSUE -> CO-4 / COMPLETE -> API -> GRAPH/DRAIN
 CO-1/2/3 completion contract and fixtures -> ISSUE

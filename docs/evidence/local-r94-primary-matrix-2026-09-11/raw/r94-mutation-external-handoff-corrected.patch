@@ -1,0 +1,18 @@
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary.rs
+@@ -331,7 +331,6 @@
+                 memory,
+             )?;
+         }
+-        memory.check_queue_currentness()?;
+         if let Some((runtime, control)) = external_runtime.as_mut() {
+             self.runtime = Some(runtime.take().expect("validated debug runtime authority"));
+             self.runtime_control = Some(
+@@ -340,6 +339,7 @@
+                     .expect("validated debug runtime control descriptor"),
+             );
+         }
++        memory.check_queue_currentness()?;
+         // Admission must precede this arm. The external token is already empty.
+         self.creation_arm = Some(E::arm_creation(memory)?);
+         self.event = Some(E::create_event(memory)?);

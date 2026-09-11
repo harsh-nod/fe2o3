@@ -1,25 +1,28 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Current three-agent dispatch: R94 acceptance repair for Native, CO-1 completion
-outcomes for Admission, and VER-1A.1 journal contract/inventory for Resources.
+Current local implementation: R94's named primary CPU/local-helper matrix,
+above signed planning checkpoint `56ba2556c9572d30f65faab3e579d95fa3fb7c3e`.
+Its [evidence](evidence/local-r94-primary-matrix-2026-09-11/README.md) records
+seventeen source gates, eleven auxiliary checks, 2,508 runtime tests per GNU/musl
+target and five corrected compiled mutations. Seventeen integrated functions
+exercise 548 loop cases; the initial failed full gate is retained separately.
+This is not live KFD qualification, new adapter refinement or performance evidence.
 The [current checkpoint and bounded work orders](runtime-a1-a2-swarm-dispatch-r83.md#checkpoint-and-ownership)
-were refreshed against signed planning commit
-`3b8a0b1bd85ca20ba4b901228e4781268ae6798c` and the dirty R94 candidate.
-R94's fixtures now exist and focused tests/mutations passed, but its first full
-gate failed on a stale source-shape assertion. R93 remains the latest accepted
-implementation. This planning publication does not include or qualify R94 code.
-The three read-only reviews are complete; follow-on work is queued, not running
-unattended. Primary owns implementation, integration and acceptance.
+advance Native to NATIVE-2B auxiliary custody, while Admission takes CO-1 outcomes
+and Resources takes VER-1A.1 journal contract/inventory. Three read-only reviews
+are complete; follow-on work is queued, not running unattended. Primary owns
+implementation, integration and acceptance.
 
-Latest accepted sequence/integration increment: R93, with
+Preceding accepted sequence/integration increment: R93, with
 [contract](runtime-primary-queue-construction-custody-v1.md) and
 [local evidence](evidence/local-r93-primary-sequence-2026-09-11/README.md), above
 signed R92 `777cbefae2721bb2edd60187a666e8d84dc80c91`. The one production sequence
 now supports original-session/account integration through actual queue admission,
 CREATE and doorbell settlement. Five new CPU functions exercise 121 cases;
-scripted platform leaves do not qualify Linux behavior. Full NATIVE-2A.3 remains
-open for preparation-prefix, generic-return, late-output and exact platform
-coverage, followed by 2B/2C. CO-1/2/3 and VER-1A remain independent.
+scripted platform leaves do not qualify Linux behavior. At R93, full NATIVE-2A.3
+remained open for preparation-prefix, generic-return, late-output and exact
+platform coverage. R94 now supplies the named matrix; 2B/2C remain next.
+CO-1/2/3 and VER-1A remain independent.
 
 Preceding primary-owner implementation: R92 NATIVE-2A.2, with
 [contract](runtime-primary-queue-construction-custody-v1.md) and
@@ -27,8 +30,8 @@ Preceding primary-owner implementation: R92 NATIVE-2A.2, with
 above signed R91 `a04060137e8df20f434682f7ee4dd6f06fb10174`.
 Ordinary fixed preparation, generic returned values and primary queue owners
 remain rooted through final validation and checked gate completion. Composed
-CPU/source coverage does not complete NATIVE-2A.3's per-stage integration
-campaign, which is next, followed by 2B auxiliary and 2C replacement/insertion.
+CPU/source coverage did not complete NATIVE-2A.3's per-stage integration
+campaign, which was next at R92, followed by 2B auxiliary and 2C replacement/insertion.
 CO-1/2/3 and VER-1A remain independent. No Linux, new proof or performance
 qualification is implied.
 
@@ -59,8 +62,8 @@ all seventeen source gates and auxiliary checks, with 5,627 unchanged source
 identities, 2,454 runtime tests per GNU/musl target, nineteen new KFD tests
 and three rejected mutations. Historical R87/R88 evidence remains unchanged.
 The [current dispatch](runtime-a1-a2-swarm-dispatch-r83.md) retains the now-implemented
-CONTROL-3A/B/C/D and NATIVE-2A.1/.2 acceptance contracts and assigns remaining
-NATIVE-2A.3/B/C constructor custody; independent
+CONTROL-3A/B/C/D and NATIVE-2A acceptance contracts and assigns remaining
+NATIVE-2B/2C constructor custody; independent
 CO-1/2/3 completion fixtures and VER-1A.1 through .5 journal work.
 R88 retains successful tokens across model projection. R89 now retains full
 preparation, including original data/premises, generation, code/kernarg stages

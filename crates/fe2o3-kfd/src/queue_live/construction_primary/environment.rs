@@ -49,6 +49,23 @@ pub(in crate::queue::live) trait PrimaryEnvironmentV1 {
     fn cleanup_unpublished(shadows: &mut Self::Unpublished);
     fn mark_queue_created(runtime: &mut Self::Runtime)
     -> Result<(), ComputeAqlQueueSessionErrorV1>;
+    fn recover_create_outputs(
+        engine: &NativeQueueEngineV1<PrimaryQueueBackendV1<Self::Memory>>,
+        key: QueueKeyV1,
+    ) -> Option<fe2o3_kfd_uapi::KfdGfx942CreateQueueOutputs> {
+        engine.create_outputs(key)
+    }
+    fn recover_native_queue_id(
+        engine: &NativeQueueEngineV1<PrimaryQueueBackendV1<Self::Memory>>,
+        key: QueueKeyV1,
+    ) -> Option<u32> {
+        engine.native_queue_id(key)
+    }
+    fn create_dependency_owner(
+        key: QueueKeyV1,
+    ) -> Result<ComputeDependencySessionOwnerV1, ComputeDependencyTargetUseErrorV1> {
+        ComputeDependencySessionOwnerV1::new(key.id.0)
+    }
     fn event_id(event: &Self::Event) -> u32;
     fn map_doorbell(
         memory: &Self::Memory,

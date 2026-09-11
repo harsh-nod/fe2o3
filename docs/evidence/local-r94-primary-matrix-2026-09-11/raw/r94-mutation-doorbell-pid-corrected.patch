@@ -1,0 +1,11 @@
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary.rs
+@@ -532,7 +532,7 @@
+         session.doorbell = Some(E::map_doorbell(
+             &engine.backend.session,
+             outputs,
+-            engine.opener_pid,
++            engine.opener_pid.wrapping_add(1),
+         )?);
+         let doorbell = session.doorbell.as_ref().expect("rooted doorbell");
+         let (slice_bytes, byte_offset) = E::doorbell_observation(doorbell);

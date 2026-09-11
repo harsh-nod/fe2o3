@@ -1,0 +1,22 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "clippy",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--all-targets",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r94-clippy-corrected.log",
+  "source": "/home/harsh/.codex-tmp/r94-clippy-corrected-source.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "elapsed_seconds": 23.441
+}

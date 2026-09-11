@@ -1,0 +1,13 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 6 tests
+test queue::live::construction::tests::ring_handoffs_preserve_each_profile_and_transfer_once ... ok
+test queue::live::construction::tests::borrowed_view_rejects_every_mapping_and_publication_substitution ... ok
+test queue::live::construction::tests::ring_preflight_rejects_foreign_and_closed_sessions_without_moving_tokens ... ok
+test queue::live::construction::tests::resource_prefix_success_transfers_exact_roster_once_without_native_calls ... ok
+test queue::live::construction::tests::resource_prefix_rejections_preserve_all_present_owners_and_identity_order ... ok
+test queue::live::construction::tests::ring_admitted_map_failures_match_exact_r88_custody_and_keep_existing_charges ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 922 filtered out; finished in 0.02s
+

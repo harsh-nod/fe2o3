@@ -24,6 +24,10 @@ use fe2o3_kfd_uapi::{
 use rustix::ioctl::{Opcode, Setter, Updater};
 use rustix::mm::{Advice, MapFlags, MprotectFlags, ProtFlags};
 
+#[cfg(test)]
+#[path = "queue_linux/primary_fixture.rs"]
+pub(crate) mod primary_fixture;
+
 const CREATE_QUEUE_OPCODE: Opcode = AMDKFD_IOC_CREATE_QUEUE as Opcode;
 const DESTROY_QUEUE_OPCODE: Opcode = AMDKFD_IOC_DESTROY_QUEUE as Opcode;
 const CREATE_EVENT_OPCODE: Opcode = AMDKFD_IOC_CREATE_EVENT as Opcode;
@@ -101,30 +105,38 @@ struct RuntimeGateTerminalCreationArmV1<'a> {
 
 impl RuntimeGateTerminalCreationArmV1<'_> {
     fn finish_checked(&mut self, opener_pid: u32) -> Result<(), LinuxDoorbellErrorV1> {
-        let mut gate = lock_runtime_gate_v1(self.gate);
-        let enabled_here = matches!(gate.runtime,
-            ProcessKfdRuntimeStateV1::Enabled { opener_pid: owner, leases }
-                if owner == opener_pid && leases != 0);
-        if self.finished
-            || !gate.creation_in_flight
-            || gate.permanently_poisoned
-            || gate.teardown_arms != 0
-            || !enabled_here
-        {
-            gate.poison();
-            return Err(LinuxDoorbellErrorV1::Runtime(
-                "creation finalization unavailable",
-            ));
-        }
-        gate.finish_creation_arm(true);
-        self.finished = true;
-        Ok(())
+        finish_runtime_gate_creation_checked_v1(self.gate, &mut self.finished, opener_pid)
     }
 
     fn disarm(mut self) {
         finish_runtime_gate_creation_arm(self.gate, true);
         self.finished = true;
     }
+}
+
+fn finish_runtime_gate_creation_checked_v1(
+    gate: &Mutex<ProcessGlobalKfdRuntimeGateV1>,
+    finished: &mut bool,
+    opener_pid: u32,
+) -> Result<(), LinuxDoorbellErrorV1> {
+    let mut gate = lock_runtime_gate_v1(gate);
+    let enabled_here = matches!(gate.runtime,
+        ProcessKfdRuntimeStateV1::Enabled { opener_pid: owner, leases }
+            if owner == opener_pid && leases != 0);
+    if *finished
+        || !gate.creation_in_flight
+        || gate.permanently_poisoned
+        || gate.teardown_arms != 0
+        || !enabled_here
+    {
+        gate.poison();
+        return Err(LinuxDoorbellErrorV1::Runtime(
+            "creation finalization unavailable",
+        ));
+    }
+    gate.finish_creation_arm(true);
+    *finished = true;
+    Ok(())
 }
 
 impl Drop for RuntimeGateTerminalCreationArmV1<'_> {

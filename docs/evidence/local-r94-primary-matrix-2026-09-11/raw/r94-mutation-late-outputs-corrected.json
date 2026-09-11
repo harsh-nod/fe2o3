@@ -1,0 +1,22 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::live::construction_primary::integration_tests::platform::tests::late_create_recovery_preserves_exact_engine_outputs_and_unassembled_owners",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r94-mutation-late-outputs-corrected.log",
+  "source": "/home/harsh/.codex-tmp/r94-mutation-late-outputs-corrected-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "elapsed_seconds": 36.515
+}

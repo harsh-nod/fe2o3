@@ -2,9 +2,153 @@
 
 use super::preparation::PreparationMemoryFixtureV1;
 use super::*;
+use crate::shared_memory::allocation::PendingAllocationStageV1;
 use crate::shared_memory::transitions::{self as adapter, ProjectionV1};
 
 impl PreparationMemoryFixtureV1 {
+    pub(crate) fn primary_assert_preparation_fault_v1(
+        &self,
+        call: super::preparation::PreparationMemoryCallV1,
+        fault: super::preparation::PreparationNativeFaultV1,
+    ) {
+        use super::preparation::{
+            PreparationMemoryCallV1 as Call, PreparationNativeFaultV1 as Fault,
+        };
+        use PendingAllocationStageV1 as Stage;
+        let e = &self.fixture.engine;
+        assert_eq!(e.phase, SharedMemorySessionPhaseV1::Quarantined);
+        if matches!(fault, Fault::Projection(_)) {
+            match call {
+                Call::AllocateCode(_) | Call::MapCode(_) => {
+                    self.primary_assert_projection_v1::<ExecutableGttV1>()
+                }
+                Call::AllocateKernarg | Call::MapKernarg => {
+                    self.primary_assert_projection_v1::<KernargGttV1>()
+                }
+                _ => panic!("projection must select allocation or mapping"),
+            }
+            return;
+        }
+        if matches!(call, Call::AllocateCode(_) | Call::AllocateKernarg) {
+            if matches!(fault, Fault::ProjectionRejection) {
+                assert!(e.pending_allocation.is_none());
+                let terminal = e.terminal_transition.as_ref().unwrap();
+                assert_eq!(
+                    terminal.stage,
+                    adapter::TransitionStageV1::AllocationProjection
+                );
+                assert!(terminal.input.is_none());
+                let token = terminal.output.as_ref().unwrap();
+                assert_eq!(token.state_type, std::any::TypeId::of::<GttCpuWritableV1>());
+                let record = e.allocations.iter().find(|r| r.id == token.id).unwrap();
+                assert_eq!(record.generation, token.generation);
+                assert_eq!(record.layout, token.layout);
+                assert_eq!(record.gpu_va, e.backend.fixed_va.unwrap());
+                return;
+            }
+            if matches!(
+                fault,
+                Fault::CurrentnessError(1) | Fault::CurrentnessPanic(1)
+            ) {
+                assert!(e.pending_allocation.is_none());
+                assert!(self.primary_terminal_identities().is_empty());
+                return;
+            }
+            let (stage, reservation, output, mapping) = match fault {
+                Fault::Error("reserve_va") | Fault::Panic("reserve_va") => {
+                    (Stage::ReserveVa, false, false, false)
+                }
+                Fault::Error("alloc") => (Stage::Allocate, true, true, false),
+                Fault::Panic("alloc") => (Stage::Allocate, true, false, false),
+                Fault::Error("map_cpu") | Fault::Panic("map_cpu") => {
+                    (Stage::MapCpu, true, true, false)
+                }
+                Fault::Error("prepare_cpu_mapping") | Fault::Panic("prepare_cpu_mapping") => {
+                    (Stage::PrepareCpuMapping, true, true, true)
+                }
+                Fault::CurrentnessError(2) | Fault::CurrentnessPanic(2) => {
+                    (Stage::CheckAllocation, true, true, false)
+                }
+                Fault::CurrentnessError(3) | Fault::CurrentnessPanic(3) => {
+                    (Stage::CheckMapping, true, true, true)
+                }
+                _ => panic!("unexpected allocation fault"),
+            };
+            let pending = e.pending_allocation.as_ref().unwrap();
+            assert_eq!(pending.stage, stage);
+            assert_eq!(pending.reservation.is_some(), reservation);
+            assert_eq!(pending.allocation_output.is_some(), output);
+            assert_eq!(pending.mapping.is_some(), mapping);
+            if let Some(raw) = &pending.allocation_output {
+                assert_eq!(Some(*raw), e.backend.last_allocation_output);
+                assert_eq!(raw.va_addr, pending.reservation.unwrap().0);
+                assert_eq!(raw.size, pending.layout.gpu_va_bytes);
+            }
+            if let Some(mapping) = &pending.mapping {
+                assert!(mapping.active);
+                assert_eq!(mapping.address, pending.reservation.unwrap().0);
+                assert_eq!(mapping.bytes.len(), pending.layout.cpu_mapping_bytes);
+            }
+            assert!(self.primary_terminal_identities().is_empty());
+        } else if matches!(call, Call::MapCode(_) | Call::MapKernarg) {
+            let terminal = e.terminal_transition.as_ref().unwrap();
+            assert!(terminal.input.is_some() && terminal.output.is_none());
+            let token = terminal.input.as_ref().unwrap();
+            assert_eq!(
+                token.state_type,
+                if matches!(call, Call::MapCode(_)) {
+                    std::any::TypeId::of::<GttExecutableImmutableV1>()
+                } else {
+                    std::any::TypeId::of::<GttCpuWritableV1>()
+                }
+            );
+            assert_eq!(
+                token.profile_type,
+                if matches!(call, Call::MapCode(_)) {
+                    std::any::TypeId::of::<ExecutableGttV1>()
+                } else {
+                    std::any::TypeId::of::<KernargGttV1>()
+                }
+            );
+            let record = e.allocations.iter().find(|r| r.id == token.id).unwrap();
+            assert_eq!(
+                (token.session_id, token.generation, token.layout),
+                (e.session_id, record.generation, record.layout)
+            );
+            assert_eq!(terminal.stage, adapter::TransitionStageV1::Map);
+            let expected = match fault {
+                Fault::CurrentnessError(1) | Fault::CurrentnessPanic(1) => (false, None, None),
+                Fault::Panic("map_gpu") => (true, None, None),
+                Fault::Error("map_gpu") => (true, Some(false), Some(1)),
+                Fault::PartialMap(prefix, errno) => (true, Some(!errno), Some(prefix)),
+                Fault::CurrentnessError(2) | Fault::CurrentnessPanic(2) => {
+                    (true, Some(true), Some(1))
+                }
+                _ => panic!("unexpected map fault"),
+            };
+            assert_eq!(
+                (
+                    terminal.progress.attempted,
+                    terminal.progress.returned_success,
+                    terminal.progress.returned_map_prefix
+                ),
+                expected
+            );
+        } else if matches!(call, Call::SealCode(_)) {
+            let terminal = e.terminal_transition.as_ref().unwrap();
+            assert!(terminal.input.is_some() && terminal.output.is_none());
+            assert_eq!(
+                terminal.input.as_ref().unwrap().state_type,
+                std::any::TypeId::of::<GttCpuWritableV1>()
+            );
+        } else {
+            assert!(
+                e.terminal_transition.is_none(),
+                "materialization borrows the rooted CPU token"
+            );
+        }
+    }
+
     pub(crate) fn primary_align_completion(
         &mut self,
         token: &SharedGttAllocationV1<HostVisibleCoherentGttV1, GttCpuWritableV1>,
@@ -103,13 +247,13 @@ impl PreparationMemoryFixtureV1 {
         SharedGttAllocationV1<ExecutableGttV1, GttGpuAccessibleExecutableV1>,
         MemorySessionError,
     > {
+        let fault = self.take_primary_projection_v1();
         let f = &mut self.fixture;
-        adapter::map_executable_v1(
-            &mut f.engine,
-            &mut ProjectionV1::new(&mut f.foundation, f.device, f.vm),
-            token,
-            || panic!("unexpected primary fixture revision exhaustion"),
-        )
+        let mut projection = ProjectionV1::new(&mut f.foundation, f.device, f.vm);
+        projection.fault = fault;
+        adapter::map_executable_v1(&mut f.engine, &mut projection, token, || {
+            panic!("unexpected primary fixture revision exhaustion")
+        })
     }
     #[allow(private_bounds)]
     pub(crate) fn primary_retain<R, P, S>(
@@ -181,7 +325,10 @@ impl PreparationMemoryFixtureV1 {
         if let Some(pending) = &e.pending_allocation {
             assert_eq!(e.phase, SharedMemorySessionPhaseV1::Quarantined);
             assert_eq!(pending.id + 1, e.next_id);
-            assert!(pending.reservation.is_some());
+            assert_eq!(
+                pending.reservation.is_none(),
+                pending.stage == PendingAllocationStageV1::ReserveVa
+            );
             assert!(e.allocations.iter().all(|r| r.id != pending.id));
         }
         if let Some(account) = &e.host_backing_account {

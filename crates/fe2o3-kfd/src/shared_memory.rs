@@ -6434,6 +6434,8 @@ pub(crate) use tests::preparation::{
     PreparationNativeFaultV1,
 };
 #[cfg(test)]
+pub(crate) use tests::primary_projection::PrimaryProjectionCaseV1;
+#[cfg(test)]
 pub(crate) use tests::pristine_abort::PristineAbortMemoryFixtureV1;
 #[cfg(test)]
 pub(crate) use tests::queue_construction::{
@@ -6449,6 +6451,7 @@ mod tests {
     mod host_backing;
     pub(super) mod preparation;
     mod primary_construction;
+    pub(super) mod primary_projection;
     pub(super) mod pristine_abort;
     pub(super) mod queue_construction;
     mod transitions;

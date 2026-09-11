@@ -1,0 +1,22 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0432]: unresolved import `crate::shared_memory::PrimaryProjectionCaseV1`
+ --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_projection_tests.rs:3:35
+  |
+3 |     ExecutableAqlQueueProbeGttV1, PrimaryProjectionCaseV1, UserptrAqlQueueProbeGttV1,
+  |                                   ^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0603]: module `primary_projection` is private
+    --> crates/fe2o3-kfd/src/shared_memory.rs:6437:23
+     |
+6437 | pub(crate) use tests::primary_projection::PrimaryProjectionCaseV1;
+     |                       ^^^^^^^^^^^^^^^^^^ private module
+     |
+note: the module `primary_projection` is defined here
+    --> crates/fe2o3-kfd/src/shared_memory.rs:6454:5
+     |
+6454 |     mod primary_projection;
+     |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+Some errors have detailed explanations: E0432, E0603.
+For more information about an error, try `rustc --explain E0432`.
+error: could not compile `fe2o3-kfd` (lib test) due to 2 previous errors

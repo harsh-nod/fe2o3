@@ -1,0 +1,12 @@
+{
+  "command": [
+    "node",
+    "/home/harsh/.codex-tmp/r94-final-mutation-check.js"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r94-final-mutation-check.log",
+  "source": "/home/harsh/.codex-tmp/r94-final-mutation-check-source.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "elapsed_seconds": 0.677
+}

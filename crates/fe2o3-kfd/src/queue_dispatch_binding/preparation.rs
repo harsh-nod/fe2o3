@@ -4,6 +4,9 @@
 #[path = "preparation_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+pub(crate) use tests::PrimaryPreparationSnapshotV1;
+
 use super::*;
 use crate::shared_memory::{
     GttCpuWritableV1, GttExecutableImmutableV1, RetainedDispatchDataRosterV1,
@@ -105,7 +108,7 @@ impl PreparationMemoryV1 for SharedGttMemorySessionV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PreparationStageV1 {
+pub(crate) enum PreparationStageV1 {
     Fresh,
     Generation,
     Plan,

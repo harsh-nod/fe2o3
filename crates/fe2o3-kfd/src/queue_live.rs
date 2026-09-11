@@ -14794,6 +14794,8 @@ mod tests {
         let source = include_str!("queue_live.rs");
         let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
         let fixed = include_str!("queue_live/fixed_dispatch.rs");
+        let primary = include_str!("queue_live/construction_primary.rs");
+        let environment = include_str!("queue_live/construction_primary/environment.rs");
         assert_eq!(
             production
                 .lines()
@@ -14807,9 +14809,29 @@ mod tests {
             production
                 .matches("ComputeDependencySessionOwnerV1::new(key.id.0)")
                 .count()
-                + include_str!("queue_live/construction_primary.rs")
+                + primary
+                    .matches("ComputeDependencySessionOwnerV1::new(key.id.0)")
+                    .count()
+                + environment
                     .matches("ComputeDependencySessionOwnerV1::new(key.id.0)")
                     .count(),
+            1
+        );
+        assert_eq!(
+            primary.matches("E::create_dependency_owner(key)").count(),
+            1
+        );
+        let dependency_constructor = environment
+            .split("fn create_dependency_owner(")
+            .nth(1)
+            .unwrap()
+            .split("fn ")
+            .next()
+            .unwrap();
+        assert_eq!(
+            dependency_constructor
+                .matches("ComputeDependencySessionOwnerV1::new(key.id.0)")
+                .count(),
             1
         );
         let lane_state = production
@@ -19696,9 +19718,7 @@ mod tests {
             .unwrap();
         let native = create.find(".create_at_native_boundary(key").unwrap();
         let publish = create.find("E::publish_shadows(").unwrap();
-        let dependency = create
-            .find("ComputeDependencySessionOwnerV1::new(key.id.0)")
-            .unwrap();
+        let dependency = create.find("E::create_dependency_owner(key)").unwrap();
         let assembled = create
             .find("self.completed = Some(CompletedPrimaryV1")
             .unwrap();
@@ -19726,6 +19746,7 @@ mod tests {
             "LinuxCwsrShadowPagesV1::install",
             "LinuxDoorbellSliceV1::map",
             "arm.finish_checked(pid)",
+            "ComputeDependencySessionOwnerV1::new(key.id.0)",
         ] {
             assert!(platform.contains(primitive));
         }

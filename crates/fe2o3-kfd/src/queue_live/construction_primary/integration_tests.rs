@@ -1,4 +1,7 @@
 use super::*;
+use crate::queue::dispatch_binding::preparation::{
+    PreparationStageV1, PrimaryPreparationSnapshotV1,
+};
 use crate::queue::dispatch_binding::{
     actual_persistent_control_test_program, prepare_public_fixed_dispatch_resources_in_place,
 };
@@ -12,6 +15,17 @@ use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
+#[path = "integration_preparation_tests.rs"]
+mod preparation_cases;
+
+#[path = "integration_projection_tests.rs"]
+mod projection_cases;
+
+#[path = "integration_platform.rs"]
+mod platform;
+use crate::queue_linux::primary_fixture::{LocalGateV1, LocalResourcesV1};
+use platform::{Fixture, Owner, OwnerIdentity, Role, assert_platform};
+
 #[derive(Default)]
 struct Trace {
     calls: Vec<&'static str>,
@@ -23,6 +37,18 @@ struct Trace {
     drops: usize,
     session: u64,
     initial_data: Option<crate::shared_memory::PreparationMemoryObservationV1>,
+    initial_preparation: Option<PrimaryPreparationSnapshotV1>,
+    minted: Vec<OwnerIdentity>,
+    create_return: Option<(u32, u64)>,
+    dependency_invalid: bool,
+    local_gate: Option<LocalGateV1>,
+    local_resources: LocalResourcesV1,
+    local_finish_poison: bool,
+    projection_fault: Option<(
+        &'static str,
+        usize,
+        crate::shared_memory::PrimaryProjectionCaseV1,
+    )>,
 }
 
 thread_local! { static ACTIVE: RefCell<Option<Rc<RefCell<Trace>>>> = const { RefCell::new(None) }; }
@@ -58,11 +84,20 @@ fn memory_step(name: &'static str) -> Result<(), MemorySessionError> {
 
 fn native_step(memory: &mut Memory, name: &'static str, operation: &'static str) {
     let occurrence = record(name);
+    projection_step(memory, name, occurrence);
     let fault = trace().borrow().native_fault;
     if let Some((at, nth, panic)) = fault
         && (at, nth) == (name, occurrence)
     {
         memory.primary_arm_native(operation, panic);
+    }
+}
+
+fn projection_step(memory: &mut Memory, name: &'static str, occurrence: usize) {
+    if let Some((at, nth, case)) = trace().borrow().projection_fault
+        && (at, nth) == (name, occurrence)
+    {
+        memory.primary_arm_projection_v1(case);
     }
 }
 
@@ -129,6 +164,7 @@ impl PrimaryMemoryV1 for Memory {
         bytes: usize,
     ) -> Result<CpuRingAuthorityV1, MemorySessionError> {
         memory_step("allocate-ring")?;
+        projection_step(self, "allocate-ring", 1);
         match backing {
             QueueRingBackingV1::AqlSpecial => {
                 self.allocate(bytes).map(CpuRingAuthorityV1::AqlSpecial)
@@ -307,6 +343,7 @@ impl PrimaryMemoryV1 for Memory {
         if mode == 4 {
             args.ring_size *= 2;
         }
+        trace().borrow_mut().create_return = Some((args.queue_id, args.doorbell_offset));
         let status = match mode {
             1 => fe2o3_runtime_model::QueueSyscallStatusV1::FailedNoEffect,
             2 | 3 => fe2o3_runtime_model::QueueSyscallStatusV1::Indeterminate,
@@ -331,140 +368,35 @@ impl PrimaryMemoryV1 for Memory {
     }
 }
 
-struct Owner {
-    trace: Rc<RefCell<Trace>>,
-    session: u64,
-}
-impl Owner {
-    fn new() -> Self {
-        let trace = trace();
-        let session = trace.borrow().session;
-        Self { trace, session }
-    }
-}
-impl Drop for Owner {
-    fn drop(&mut self) {
-        self.trace.borrow_mut().drops += 1;
-    }
-}
-
-struct Fixture;
-impl PrimaryEnvironmentV1 for Fixture {
-    type Memory = Memory;
-    type Runtime = Owner;
-    type RuntimeControl = Owner;
-    type Event = Owner;
-    type Unpublished = Owner;
-    type Published = Owner;
-    type Doorbell = Owner;
-    type CreationArm = Owner;
-    fn enable_runtime(_: &mut Memory) -> Result<Owner, ComputeAqlQueueSessionErrorV1> {
-        step("runtime-enable")?;
-        Ok(Owner::new())
-    }
-    fn validate_runtime(
-        runtime: &Owner,
-        control: Option<&Owner>,
-        memory: &Memory,
-    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        step("runtime-validate")?;
-        assert_eq!(runtime.session, memory.primary_session_id());
-        if let Some(control) = control {
-            assert_eq!(control.session, runtime.session);
-        }
-        Ok(())
-    }
-    fn arm_creation(_: &Memory) -> Result<Owner, ComputeAqlQueueSessionErrorV1> {
-        step("gate-arm")?;
-        Ok(Owner::new())
-    }
-    fn create_event(_: &mut Memory) -> Result<Owner, ComputeAqlQueueSessionErrorV1> {
-        step("event")?;
-        Ok(Owner::new())
-    }
-    fn install_shadows(
-        _: &mut Memory,
-        _: &Cpu<ExecutableGttV1>,
-        _: &Owner,
-    ) -> Result<Owner, ComputeAqlQueueSessionErrorV1> {
-        step("shadow-install")?;
-        Ok(Owner::new())
-    }
-    fn initialize_shadows(
-        memory: &mut Memory,
-        context: &mut Cpu<ExecutableGttV1>,
-        _: &Owner,
-    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        step("shadow-init")?;
-        memory.primary_write(context, |bytes| {
-            assert!(bytes.iter().all(|&b| b == 0));
-        })?;
-        Ok(())
-    }
-    fn validate_event(
-        _: &Memory,
-        _: &Owner,
-        _: &Owner,
-    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        step("event-validate")
-    }
-    fn restore_shadow_write(_: &Owner) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        step("shadow-restore")
-    }
-    fn publish_shadows(owner: Owner) -> Owner {
-        record("publish");
-        owner
-    }
-    fn cleanup_unpublished(_: &mut Owner) {
-        record("cleanup");
-        let trace = trace();
-        let mut t = trace.borrow_mut();
-        assert!(t.poison, "poison must precede cleanup");
-        t.cleanup += 1;
-    }
-    fn mark_queue_created(_: &mut Owner) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        step("runtime-created")
-    }
-    fn event_id(_: &Owner) -> u32 {
-        11
-    }
-    fn map_doorbell(
-        _: &Memory,
-        _: fe2o3_kfd_uapi::KfdGfx942CreateQueueOutputs,
-        _: u32,
-    ) -> Result<Owner, ComputeAqlQueueSessionErrorV1> {
-        step("doorbell")?;
-        Ok(Owner::new())
-    }
-    fn doorbell_observation(_: &Owner) -> (usize, u64) {
-        record("doorbell-observe");
-        (4096, 8)
-    }
-    fn finish_creation(_: &mut Owner, _: u32) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        step("gate-finish")
-    }
-    fn poison() {
-        record("poison");
-        trace().borrow_mut().poison = true;
-    }
-}
-
 type Preparation = (
     Vec<ValidatedKernelEnvelope<'static>>,
     FixedDispatchPreparationCustodyV1<3>,
 );
-type Root = PrimaryQueueConstructionV1<Preparation, Fixture>;
+type Root<P = Preparation> = PrimaryQueueConstructionV1<P, Fixture>;
+type RunResult<P = Preparation> = (Box<Root<P>>, Result<(), Box<dyn std::any::Any + Send>>);
+
+#[derive(Default)]
+struct ExternalSlots {
+    runtime: Option<Owner>,
+    control: Option<Owner>,
+}
+
+fn setup_memory() -> (Memory, Rc<RefCell<Trace>>) {
+    let memory = Memory::with_aperture(true, 1 << 30);
+    let trace = Rc::new(RefCell::new(Trace {
+        session: memory.primary_session_id(),
+        initial_data: Some(memory.observation()),
+        ..Trace::default()
+    }));
+    ACTIVE.with(|a| *a.borrow_mut() = Some(trace.clone()));
+    (memory, trace)
+}
 
 fn setup() -> (Box<Root>, Rc<RefCell<Trace>>) {
     const IMAGE: &[u8] = include_bytes!(
         "../../../../fe2o3-runtime/fixtures/trusted-gfx942-inplace-transform-v1/inplace_transform.hsaco"
     );
-    let mut memory = Memory::with_aperture(true, 1 << 30);
-    let trace = Rc::new(RefCell::new(Trace {
-        session: memory.primary_session_id(),
-        ..Trace::default()
-    }));
-    ACTIVE.with(|a| *a.borrow_mut() = Some(trace.clone()));
+    let (mut memory, trace) = setup_memory();
     let programs = (1..=3)
         .map(|i| actual_persistent_control_test_program(IMAGE, [i; 32]))
         .collect();
@@ -481,35 +413,53 @@ fn setup() -> (Box<Root>, Rc<RefCell<Trace>>) {
     });
     let custody = FixedDispatchPreparationCustodyV1::new(packets, memory.roster());
     trace.borrow_mut().initial_data = Some(memory.observation());
+    trace.borrow_mut().initial_preparation = Some(custody.primary_snapshot_v1());
     (Root::new_with(memory, (programs, custody)), trace)
 }
 
-fn run(
-    root: Box<Root>,
+fn run(root: Box<Root>, backing: QueueRingBackingV1, external: bool) -> RunResult {
+    let mut slots = external.then(|| ExternalSlots {
+        runtime: Some(Owner::new(Role::Runtime)),
+        control: Some(Owner::new(Role::Control)),
+    });
+    let result = run_with(root, backing, slots.as_mut(), prepare_fixed);
+    if let Some(slots) = slots
+        && trace().borrow().calls.contains(&"event")
+    {
+        assert!(slots.runtime.is_none() && slots.control.is_none());
+    }
+    result
+}
+
+fn prepare_fixed(root: &mut Root) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+    prepare_public_fixed_dispatch_resources_in_place(
+        root.memory.as_mut().unwrap(),
+        &root.preparation.0,
+        &mut root.preparation.1,
+    )?;
+    root.dispatch = Some(root.preparation.1.take_completed()?);
+    Ok(())
+}
+
+fn run_with<P>(
+    root: Box<Root<P>>,
     backing: QueueRingBackingV1,
-    external: bool,
-) -> (Box<Root>, Result<(), Box<dyn std::any::Any + Send>>) {
+    mut external: Option<&mut ExternalSlots>,
+    prepare: impl FnOnce(&mut Root<P>) -> Result<(), ComputeAqlQueueSessionErrorV1>,
+) -> RunResult<P> {
     let mut retained = None;
     let mut success = None;
-    let mut runtime = external.then(Owner::new);
-    let mut control = external.then(Owner::new);
     let result = catch_unwind(AssertUnwindSafe(|| {
         let result = run_rooted_construction_with_v1(
             root,
             |root, entry| {
-                let memory = root.memory.as_mut().unwrap();
-                prepare_public_fixed_dispatch_resources_in_place(
-                    memory,
-                    &root.preparation.0,
-                    &mut root.preparation.1,
-                )?;
-                root.dispatch = Some(root.preparation.1.take_completed()?);
+                prepare(root)?;
                 root.construct(
                     entry,
                     queue_resource_plan_for_test_v1(4096),
                     4096,
                     backing,
-                    external.then_some((&mut runtime, &mut control)),
+                    external.as_mut().map(|s| (&mut s.runtime, &mut s.control)),
                 )
             },
             |root| {
@@ -531,14 +481,10 @@ fn run(
     let root = retained
         .or(success)
         .expect("original constructor root retained or returned");
-    // External slots transfer before event entry; early rejected validation leaves them intact.
-    if trace().borrow().calls.contains(&"event") {
-        assert!(runtime.is_none() && control.is_none());
-    }
     (root, result)
 }
 
-fn memory(root: &Root) -> &Memory {
+fn memory<P>(root: &Root<P>) -> &Memory {
     if let Some(memory) = &root.memory {
         return memory;
     }
@@ -553,9 +499,9 @@ fn memory(root: &Root) -> &Memory {
     &root.completed.as_ref().unwrap().engine.backend.session
 }
 
-fn assert_root(root: &Root, expected: usize, trace: &Rc<RefCell<Trace>>) {
+fn assert_common<P>(root: &Root<P>, expected: usize, trace: &Rc<RefCell<Trace>>) {
     assert_eq!(
-        root as *const Root as usize, expected,
+        root as *const Root<P> as usize, expected,
         "exact original root allocation"
     );
     let t = trace.borrow();
@@ -572,14 +518,39 @@ fn assert_root(root: &Root, expected: usize, trace: &Rc<RefCell<Trace>>) {
     } else if root.unpublished.is_some() {
         assert_eq!(t.cleanup, 1);
     }
+}
+
+fn assert_root(root: &Root, expected: usize, trace: &Rc<RefCell<Trace>>) {
+    assert_root_with_external(root, expected, trace, None);
+}
+
+fn assert_root_with_external(
+    root: &Root,
+    expected: usize,
+    trace: &Rc<RefCell<Trace>>,
+    external: Option<&ExternalSlots>,
+) {
+    assert_common(root, expected, trace);
+    assert_platform(root, external);
     let original_dispatch = root
         .dispatch
         .as_ref()
-        .or_else(|| root.completed.as_ref().and_then(|c| c.dispatch.as_ref()))
-        .unwrap();
+        .or_else(|| root.completed.as_ref().and_then(|c| c.dispatch.as_ref()));
+    root.preparation.1.primary_assert_snapshot_v1(
+        memory(root),
+        trace.borrow().initial_preparation.as_ref().unwrap(),
+        original_dispatch,
+    );
+    let Some(original_dispatch) = original_dispatch else {
+        assert!(
+            root.ring.is_none(),
+            "failed preparation must not enter queue construction"
+        );
+        return;
+    };
     assert_eq!(original_dispatch.primary_fixture_identities_v1().len(), 6);
     memory(root).primary_assert_device_owners(&original_dispatch.device_authorities_inline_v1());
-    assert_partition(root, original_dispatch);
+    assert_partition(root, original_dispatch.primary_fixture_identities_v1());
 }
 
 fn ring_identity(ring: &RingAuthority) -> SharedGttAllocationIdentityV1 {
@@ -624,9 +595,8 @@ fn executable_ids<R>(
     markers.extend(prefix.in_session);
 }
 
-fn assert_partition(root: &Root, dispatch: &DispatchResourceOwnerV1) {
+fn assert_partition<P>(root: &Root<P>, mut owners: Vec<SharedGttAllocationIdentityV1>) {
     let memory = memory(root);
-    let mut owners = dispatch.primary_fixture_identities_v1();
     let mut markers = Vec::new();
     if let Some(ring) = &root.ring {
         match ring {
@@ -701,10 +671,17 @@ fn assert_partition(root: &Root, dispatch: &DispatchResourceOwnerV1) {
         owners.push(Memory::primary_token_identity(&c.completion_signals));
     }
     let terminal = memory.primary_terminal_identities();
-    assert_eq!(
-        markers, terminal,
-        "markers name exactly the R88-owned token, not another owner"
-    );
+    if memory.primary_terminal_allocation_v1() {
+        assert!(
+            markers.is_empty(),
+            "allocation output has no consumed-input marker"
+        );
+    } else {
+        assert_eq!(
+            markers, terminal,
+            "markers name exactly the R88-owned token, not another owner"
+        );
+    }
     owners.extend(terminal);
     let expected = memory.primary_identities();
     assert_eq!(owners.len(), expected.len(), "one owner per native record");
@@ -747,7 +724,10 @@ fn same_session_primary_success_uses_actual_preparation_resources_foundation_and
                     complete.observation.doorbell_slice_bytes,
                     complete.observation.doorbell_byte_offset
                 ),
-                (4096, 8)
+                (
+                    fe2o3_kfd_uapi::KFD_GFX942_PROCESS_DOORBELL_SLICE_BYTES as usize,
+                    8
+                )
             );
             let t = trace.borrow();
             assert!(!t.poison);
@@ -807,6 +787,9 @@ fn same_session_primary_borrowed_failures_retain_original_owner_at_every_observe
         ("foundation", 1),
         ("authenticate", 1),
         ("runtime-created", 1),
+        ("recover-outputs", 1),
+        ("recover-id", 1),
+        ("dependency", 1),
         ("doorbell", 1),
         ("gate-finish", 1),
     ];

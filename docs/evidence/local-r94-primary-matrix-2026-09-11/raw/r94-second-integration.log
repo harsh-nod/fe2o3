@@ -1,0 +1,36 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+warning: type `queue::dispatch_binding::DispatchResourceOwnerV1` is more private than the item `queue::dispatch_binding::preparation::tests::<impl queue::dispatch_binding::preparation::FixedDispatchPreparationCustodyV1<N>>::primary_assert_snapshot_v1`
+    --> crates/fe2o3-kfd/src/queue_dispatch_binding/preparation_tests.rs:282:5
+     |
+ 282 | /     pub(crate) fn primary_assert_snapshot_v1(
+ 283 | |         &self,
+ 284 | |         memory: &Memory,
+ 285 | |         expected: &PrimaryPreparationSnapshotV1,
+ 286 | |         transferred: Option<&DispatchResourceOwnerV1>,
+ 287 | |     ) {
+     | |_____^ method `queue::dispatch_binding::preparation::tests::<impl queue::dispatch_binding::preparation::FixedDispatchPreparationCustodyV1<N>>::primary_assert_snapshot_v1` is reachable at visibility `pub(crate)`
+     |
+note: but type `queue::dispatch_binding::DispatchResourceOwnerV1` is only usable at visibility `pub(in crate::queue)`
+    --> crates/fe2o3-kfd/src/queue_dispatch_binding.rs:2098:1
+     |
+2098 | pub(super) struct DispatchResourceOwnerV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: `#[warn(private_interfaces)]` on by default
+
+warning: `fe2o3-kfd` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.45s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 9 tests
+test queue::live::construction_primary::integration_tests::preparation_cases::primary_preparation_stage_failures_preserve_original_inputs_and_every_control_prefix ... ok
+test queue::live::construction_primary::integration_tests::preparation_cases::primary_preparation_native_allocation_failures_retain_exact_pending_or_returned_output ... ok
+test queue::live::construction_primary::integration_tests::preparation_cases::primary_preparation_seal_map_and_materialization_faults_preserve_original_session_tokens ... ok
+test queue::live::construction_primary::integration_tests::same_session_primary_create_uncertainty_retains_published_owners_without_cleanup ... ok
+test queue::live::construction_primary::integration_tests::same_session_primary_success_uses_actual_preparation_resources_foundation_and_create ... ok
+test queue::live::construction_primary::integration_tests::preparation_cases::primary_generic_return_keeps_borrowed_non_send_and_actual_charged_owner_through_finalization ... ok
+test queue::live::construction_primary::integration_tests::same_session_primary_currentness_faults_cover_create_and_both_doorbell_checks ... ok
+test queue::live::construction_primary::integration_tests::same_session_primary_real_native_failures_preserve_r88_and_original_accounts ... ok
+test queue::live::construction_primary::integration_tests::same_session_primary_borrowed_failures_retain_original_owner_at_every_observed_boundary ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 911 filtered out; finished in 47.16s
+

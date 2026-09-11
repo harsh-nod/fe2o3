@@ -1,0 +1,12 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs:452:6
+    |
+452 | ) -> (Box<Root<P>>, Result<(), Box<dyn std::any::Any + Send>>) {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#type_complexity
+    = note: `-D clippy::type-complexity` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: could not compile `fe2o3-kfd` (lib test) due to 1 previous error

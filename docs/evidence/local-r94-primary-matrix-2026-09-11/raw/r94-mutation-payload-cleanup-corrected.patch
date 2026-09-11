@@ -1,0 +1,11 @@
+--- a/crates/fe2o3-kfd/src/queue_linux.rs
++++ b/crates/fe2o3-kfd/src/queue_linux.rs
+@@ -1415,7 +1415,7 @@
+     }
+ 
+     pub(crate) fn cleanup_payload_for_terminal_retention(&mut self) {
+-        if self.terminal_payload_released {
++        if !self.terminal_payload_released {
+             return;
+         }
+         let shadows = self.shadows.as_mut().expect("unpublished CWSR custody");

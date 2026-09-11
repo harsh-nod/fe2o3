@@ -1,0 +1,168 @@
+{
+  "gnu-tests": {
+    "passed": 2508,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "musl-tests": {
+    "passed": 2508,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "gnu-docs": {
+    "passed": 108,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 7
+  },
+  "musl-docs": {
+    "passed": 91,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 5
+  },
+  "musl-host-docs": {
+    "passed": 16,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 2
+  },
+  "gnu-host": {
+    "passed": 258,
+    "failed": 0,
+    "ignored": 4,
+    "harnesses": 1
+  },
+  "musl-host": {
+    "passed": 141,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "macro-fixtures": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "primary": {
+    "passed": 25,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "ordinary": {
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "construction": {
+    "passed": 6,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "linux-helpers": {
+    "passed": 20,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "initialization": {
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "transitions": {
+    "passed": 20,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "preparation": {
+    "passed": 23,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "bind": {
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "base_commit": "56ba2556c9572d30f65faab3e579d95fa3fb7c3e",
+  "final_gate_attempt": "r94-corrected",
+  "preliminary_source_gate_attempt": "r94-final",
+  "preliminary_mutation_campaign": "r94-mutations.json",
+  "accepted_mutation_campaign": "r94-corrected-mutations.json",
+  "mutation_command_identity_checked": true,
+  "non_documentation_source_identities_checked": 5645,
+  "new_kfd_cpu_test_functions": 12,
+  "shared_production_primary_sequence": true,
+  "same_session_integration_cases": 548,
+  "original_accounts_and_actual_resource_authority": true,
+  "scripted_kfd_event_create_and_doorbells": true,
+  "integrated_generic_returned_preparation": true,
+  "named_native2a3_cpu_matrix_accepted": true,
+  "local_linux_helper_composition": true,
+  "auxiliary_constructor_outer_custody": false,
+  "replacement_preparation_outer_custody": false,
+  "unreturned_callback_values_retained": false,
+  "new_bootstrap_backing_charges": false,
+  "native_generated_adoption_hooks_installed": false,
+  "linux_qualified": false,
+  "adapter_refinement_proved": false,
+  "gpu_performance_measured": false,
+  "verus_solver_rerun": false,
+  "new_verus_theorems": 0,
+  "negative_inventory_files": 686,
+  "model_and_proof_sources_unchanged_from": "fb1e27e66cee27bb11f0b7c08f2d5994c5d168da",
+  "expected_negative_mutations": [
+    {
+      "name": "external-handoff-corrected",
+      "source": "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+      "test": "queue::live::construction_primary::integration_tests::platform::tests::external_runtime_handoff_retains_exact_caller_slots_until_closing_currentness",
+      "assertion": "left: (None, None)",
+      "mutated_source_sha256": "ae3922a1b3e41fdaa04e45a06b0aa67dc3bf0a760f296d4888f93488e8a8f3cd",
+      "patch_sha256": "471a6c375466645ca1c41e6fd7fca20042313e87d44412b16ba72efc260649f4"
+    },
+    {
+      "name": "late-outputs-corrected",
+      "source": "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+      "test": "queue::live::construction_primary::integration_tests::platform::tests::late_create_recovery_preserves_exact_engine_outputs_and_unassembled_owners",
+      "assertion": "right: Some(KfdGfx942CreateQueueOutputs",
+      "mutated_source_sha256": "6652decdff4bad23be29ea259057f23e0d4194ea1035a7a2405b45958cf1af8b",
+      "patch_sha256": "a328454c50e92552740b97717d0f9cee33c05dc090779f994754d53b9a1e36f7"
+    },
+    {
+      "name": "doorbell-pid-corrected",
+      "source": "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+      "test": "queue::live::construction_primary::integration_tests::same_session_primary_success_uses_actual_preparation_resources_foundation_and_create",
+      "assertion": "exact opener PID passed to doorbell mapping",
+      "mutated_source_sha256": "41fc5b04b2217b777a6f955ce8f357a42797d14b1f19c8ec0dd519b8a27bb3c9",
+      "patch_sha256": "939ec941e7056666c8499f66d9c38555e8e035dea0108771dca6600542c099d5"
+    },
+    {
+      "name": "event-identity-corrected",
+      "source": "crates/fe2o3-kfd/src/queue_live/construction_primary.rs",
+      "test": "queue::live::construction_primary::integration_tests::same_session_primary_success_uses_actual_preparation_resources_foundation_and_create",
+      "assertion": "left: Some(12)",
+      "mutated_source_sha256": "46a823e78b3ceccd9f64e600c84cf507f1a9e466a37bf5e8c7d904dc19558302",
+      "patch_sha256": "e3e919202498094593224726d2d5d8377e05226d9ce6b47bc049e53e76e1c8ac"
+    },
+    {
+      "name": "payload-cleanup-corrected",
+      "source": "crates/fe2o3-kfd/src/queue_linux.rs",
+      "test": "queue::live::construction_primary::integration_tests::platform::tests::local_linux_shadow_and_gate_helpers_compose_with_primary_custody_and_dispose_owned_mappings",
+      "assertion": "left: (1, 1, 1)",
+      "mutated_source_sha256": "a0b001ef4c38f1b5d3d5fefcecfc5bbbf8071ba517078f5b38490e0727c1cbb1",
+      "patch_sha256": "ea54bf4a3ce85988749ca755dea2025240816510445fb5cf7a4e37c358d9d81d"
+    }
+  ],
+  "production_metadata_sha256": "6c0cac53358224a31c356d91228b602ae8545f7c156a0c695f103533238054ca"
+}

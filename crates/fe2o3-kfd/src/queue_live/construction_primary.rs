@@ -468,27 +468,24 @@ impl<P, E: PrimaryEnvironmentV1> PrimaryQueueConstructionV1<P, E> {
             })
             .map_err(map_create)?;
         E::mark_queue_created(self.runtime.as_mut().expect("runtime"))?;
-        self.outputs = Some(engine.create_outputs(key).ok_or_else(|| {
+        self.outputs = Some(E::recover_create_outputs(engine, key).ok_or_else(|| {
             terminal_creation(
                 "CREATE_QUEUE output recovery",
                 ComputeAqlQueueSessionErrorV1::Contract("missing CREATE outputs"),
             )
         })?);
-        let queue_id = engine.native_queue_id(key).ok_or_else(|| {
+        let queue_id = E::recover_native_queue_id(engine, key).ok_or_else(|| {
             terminal_creation(
                 "CREATE_QUEUE identity recovery",
                 ComputeAqlQueueSessionErrorV1::Contract("missing queue id"),
             )
         })?;
-        self.dependency_owner =
-            Some(ComputeDependencySessionOwnerV1::new(key.id.0).map_err(|_| {
-                terminal_creation(
-                    "compute dependency session owner",
-                    ComputeAqlQueueSessionErrorV1::Contract(
-                        "invalid compute dependency session occurrence",
-                    ),
-                )
-            })?);
+        self.dependency_owner = Some(E::create_dependency_owner(key).map_err(|error| {
+            terminal_creation(
+                "compute dependency session owner",
+                map_dependency_target_use_error_v1(error),
+            )
+        })?);
         let cwsr_shadow_pages = u8::try_from(crate::queue_linux::GFX942_CWSR_SHADOW_PAGES_V1)
             .map_err(|_| {
                 terminal_creation(

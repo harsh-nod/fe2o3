@@ -1,0 +1,22 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::live::construction_primary::integration_tests::platform::tests::local_linux_shadow_and_gate_helpers_compose_with_primary_custody_and_dispose_owned_mappings",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r94-mutation-payload-cleanup.log",
+  "source": "/home/harsh/.codex-tmp/r94-mutation-payload-cleanup-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "elapsed_seconds": 33.937
+}

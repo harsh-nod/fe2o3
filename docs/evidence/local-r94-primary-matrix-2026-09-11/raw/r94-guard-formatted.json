@@ -1,0 +1,22 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::live::tests::production_dependency_owner_lane_envelope_and_teardown_shape_is_sealed",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r94-guard-formatted.log",
+  "source": "/home/harsh/.codex-tmp/r94-guard-formatted-source.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "elapsed_seconds": 26.791
+}
