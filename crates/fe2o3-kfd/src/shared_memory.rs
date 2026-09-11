@@ -3,6 +3,7 @@
 mod allocation;
 mod coherent_initialization;
 mod dispatch_retention;
+mod transitions;
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -1194,6 +1195,7 @@ struct SharedMemoryEngine<B: MemoryBackend> {
     phase: SharedMemorySessionPhaseV1,
     allocations: Vec<SharedAllocationRecord<B>>,
     pending_allocation: Option<allocation::PendingSharedAllocationV1<B>>,
+    terminal_transition: Option<transitions::TerminalTransitionV1>,
     allocation_record_slots: HashMap<u64, usize>,
     next_id: u64,
     retained_gpu_va_bytes: u64,
@@ -1296,6 +1298,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             phase: SharedMemorySessionPhaseV1::Active,
             allocations,
             pending_allocation: None,
+            terminal_transition: None,
             allocation_record_slots,
             next_id: 1,
             retained_gpu_va_bytes: 0,
@@ -2732,6 +2735,21 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         token: &mut SharedGttAllocationV1<P, GttCpuWritableV1>,
         f: impl FnOnce(&mut [u8]) -> R,
     ) -> Result<R, MemorySessionError> {
+        if matches!(
+            P::PROFILE,
+            SharedGttProfileV1::Executable | SharedGttProfileV1::Kernarg
+        ) {
+            self.require_active()?;
+            return match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.with_bytes_mut_inner(token, f)
+            })) {
+                Ok(result) => result,
+                Err(payload) => {
+                    self.phase = SharedMemorySessionPhaseV1::Quarantined;
+                    std::panic::resume_unwind(payload)
+                }
+            };
+        }
         self.with_host_backing_unwind_quarantine::<P, _>(|engine| {
             engine.with_bytes_mut_inner(token, f)
         })
@@ -2754,7 +2772,22 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                 B::with_bytes_mut(mapping, requested, f)
             }))
         };
-        let outcome = self.preserve_host_backing_access_panic::<P, _>(outcome);
+        // Control materialization retains its borrowed token at the caller.
+        // Do not let a second currentness panic replace the original failure.
+        let outcome = if matches!(
+            P::PROFILE,
+            SharedGttProfileV1::Executable | SharedGttProfileV1::Kernarg
+        ) {
+            match outcome {
+                Ok(value) => Ok(value),
+                Err(payload) => {
+                    self.phase = SharedMemorySessionPhaseV1::Quarantined;
+                    std::panic::resume_unwind(payload)
+                }
+            }
+        } else {
+            self.preserve_host_backing_access_panic::<P, _>(outcome)
+        };
         let post = self.check_currentness();
         match outcome {
             Ok(value) => {
@@ -3491,46 +3524,64 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         Ok(())
     }
 
+    #[cfg(test)]
     fn seal_executable(
         &mut self,
         token: SharedGttAllocationV1<ExecutableGttV1, GttCpuWritableV1>,
     ) -> Result<SharedGttAllocationV1<ExecutableGttV1, GttExecutableImmutableV1>, MemorySessionError>
     {
+        self.seal_executable_borrowed(&token, &mut Default::default())?;
+        Ok(token.retag())
+    }
+
+    fn seal_executable_borrowed(
+        &mut self,
+        token: &SharedGttAllocationV1<ExecutableGttV1, GttCpuWritableV1>,
+        progress: &mut transitions::NativeTransitionProgressV1,
+    ) -> Result<(), MemorySessionError> {
         self.check_currentness()?;
-        let index = self.index(&token, SharedAllocationPhaseV1::CpuWritable)?;
+        let index = self.index(token, SharedAllocationPhaseV1::CpuWritable)?;
         let result = {
             let (backend, allocations) = (&mut self.backend, &mut self.allocations);
             let mapping = allocations[index]
                 .mapping
                 .as_mut()
                 .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+            progress.attempted = true;
             backend.protect_cpu_read_only(mapping)
         };
+        progress.returned_success = Some(result.is_ok());
         if let Err(error) = result {
             return self.quarantine(error);
         }
         self.check_currentness()?;
         self.allocations[index].phase = SharedAllocationPhaseV1::ExecutableImmutable;
-        Ok(token.retag())
+        Ok(())
     }
 
+    #[cfg(test)]
     fn map_mutable<P: MutableGpuGttProfileV1>(
         &mut self,
         token: SharedGttAllocationV1<P, GttCpuWritableV1>,
     ) -> Result<SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>, MemorySessionError> {
-        self.with_host_backing_unwind_quarantine::<P, _>(|engine| engine.map_mutable_inner(token))
-    }
-
-    fn map_mutable_inner<P: MutableGpuGttProfileV1>(
-        &mut self,
-        token: SharedGttAllocationV1<P, GttCpuWritableV1>,
-    ) -> Result<SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>, MemorySessionError> {
-        let index = self.index(&token, SharedAllocationPhaseV1::CpuWritable)?;
-        self.map_index(index)?;
-        self.allocations[index].phase = SharedAllocationPhaseV1::GpuAccessibleMutable;
+        self.map_mutable_borrowed(&token, &mut Default::default())?;
         Ok(token.retag())
     }
 
+    fn map_mutable_borrowed<P: MutableGpuGttProfileV1>(
+        &mut self,
+        token: &SharedGttAllocationV1<P, GttCpuWritableV1>,
+        progress: &mut transitions::NativeTransitionProgressV1,
+    ) -> Result<(), MemorySessionError> {
+        self.with_host_backing_unwind_quarantine::<P, _>(|engine| {
+            let index = engine.index(token, SharedAllocationPhaseV1::CpuWritable)?;
+            engine.map_index(index, progress)?;
+            engine.allocations[index].phase = SharedAllocationPhaseV1::GpuAccessibleMutable;
+            Ok(())
+        })
+    }
+
+    #[cfg(test)]
     fn map_executable(
         &mut self,
         token: SharedGttAllocationV1<ExecutableGttV1, GttExecutableImmutableV1>,
@@ -3538,18 +3589,34 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         SharedGttAllocationV1<ExecutableGttV1, GttGpuAccessibleExecutableV1>,
         MemorySessionError,
     > {
-        let index = self.index(&token, SharedAllocationPhaseV1::ExecutableImmutable)?;
-        self.map_index(index)?;
-        self.allocations[index].phase = SharedAllocationPhaseV1::GpuAccessibleExecutable;
+        self.map_executable_borrowed(&token, &mut Default::default())?;
         Ok(token.retag())
     }
 
-    fn map_index(&mut self, index: usize) -> Result<(), MemorySessionError> {
+    fn map_executable_borrowed(
+        &mut self,
+        token: &SharedGttAllocationV1<ExecutableGttV1, GttExecutableImmutableV1>,
+        progress: &mut transitions::NativeTransitionProgressV1,
+    ) -> Result<(), MemorySessionError> {
+        let index = self.index(token, SharedAllocationPhaseV1::ExecutableImmutable)?;
+        self.map_index(index, progress)?;
+        self.allocations[index].phase = SharedAllocationPhaseV1::GpuAccessibleExecutable;
+        Ok(())
+    }
+
+    fn map_index(
+        &mut self,
+        index: usize,
+        progress: &mut transitions::NativeTransitionProgressV1,
+    ) -> Result<(), MemorySessionError> {
         self.check_currentness()?;
         let handle = self.allocations[index]
             .handle
             .ok_or(MemorySessionError::InvalidAllocationAuthority)?;
+        progress.attempted = true;
         let outcome = self.backend.map_gpu(handle, 0);
+        progress.returned_map_prefix = Some(outcome.value);
+        progress.returned_success = Some(outcome.result.is_ok());
         if outcome.value > 1 {
             return self.quarantine(MemorySessionError::KernelResultMalformed(
                 "shared MAP_MEMORY_TO_GPU cumulative n_success",
@@ -5334,7 +5401,7 @@ impl SharedGttMemorySessionV1 {
 
     #[allow(dead_code)]
     pub(crate) fn retain_aql_ring_resource(
-        &self,
+        &mut self,
         token: SharedGttAllocationV1<AqlQueueGttV1, GttGpuAccessibleMutableV1>,
     ) -> Result<
         SharedGttQueueResourceAuthorityV1<
@@ -5348,7 +5415,7 @@ impl SharedGttMemorySessionV1 {
     }
 
     pub(crate) fn retain_executable_aql_probe_ring_resource(
-        &self,
+        &mut self,
         token: SharedGttAllocationV1<ExecutableAqlQueueProbeGttV1, GttGpuAccessibleMutableV1>,
     ) -> Result<
         SharedGttQueueResourceAuthorityV1<
@@ -5362,7 +5429,7 @@ impl SharedGttMemorySessionV1 {
     }
 
     pub(crate) fn retain_userptr_aql_probe_ring_resource(
-        &self,
+        &mut self,
         token: SharedGttAllocationV1<UserptrAqlQueueProbeGttV1, GttGpuAccessibleMutableV1>,
     ) -> Result<
         SharedGttQueueResourceAuthorityV1<
@@ -5377,7 +5444,7 @@ impl SharedGttMemorySessionV1 {
 
     #[allow(dead_code)]
     pub(crate) fn retain_aql_control_resource(
-        &self,
+        &mut self,
         token: SharedGttAllocationV1<UserptrAqlControlGttV1, GttGpuAccessibleMutableV1>,
     ) -> Result<
         SharedGttQueueResourceAuthorityV1<
@@ -5392,7 +5459,7 @@ impl SharedGttMemorySessionV1 {
 
     #[allow(dead_code)]
     pub(crate) fn retain_aql_eop_resource(
-        &self,
+        &mut self,
         token: SharedGttAllocationV1<ExecutableGttV1, GttGpuAccessibleExecutableV1>,
     ) -> Result<
         SharedGttQueueResourceAuthorityV1<
@@ -5407,7 +5474,7 @@ impl SharedGttMemorySessionV1 {
 
     #[allow(dead_code)]
     pub(crate) fn retain_aql_context_save_resource(
-        &self,
+        &mut self,
         token: SharedGttAllocationV1<ExecutableGttV1, GttGpuAccessibleExecutableV1>,
     ) -> Result<
         SharedGttQueueResourceAuthorityV1<
@@ -5422,7 +5489,7 @@ impl SharedGttMemorySessionV1 {
 
     #[allow(dead_code)]
     pub(crate) fn retain_aql_completion_signal_resource(
-        &self,
+        &mut self,
         token: SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
     ) -> Result<
         SharedGttQueueResourceAuthorityV1<
@@ -5436,7 +5503,7 @@ impl SharedGttMemorySessionV1 {
     }
 
     pub(crate) fn retain_aql_dispatch_code_resource(
-        &self,
+        &mut self,
         token: SharedGttAllocationV1<ExecutableGttV1, GttGpuAccessibleExecutableV1>,
     ) -> Result<
         SharedGttQueueResourceAuthorityV1<
@@ -5450,7 +5517,7 @@ impl SharedGttMemorySessionV1 {
     }
 
     pub(crate) fn retain_aql_dispatch_kernarg_resource(
-        &self,
+        &mut self,
         token: SharedGttAllocationV1<KernargGttV1, GttGpuAccessibleMutableV1>,
     ) -> Result<
         SharedGttQueueResourceAuthorityV1<
@@ -5611,7 +5678,7 @@ impl SharedGttMemorySessionV1 {
 
     #[allow(dead_code, private_bounds)]
     fn retain_queue_resource<R, P, S>(
-        &self,
+        &mut self,
         token: SharedGttAllocationV1<P, S>,
     ) -> Result<SharedGttQueueResourceAuthorityV1<R, P, S>, MemorySessionError>
     where
@@ -5619,24 +5686,7 @@ impl SharedGttMemorySessionV1 {
         P: GttProfileV1,
         S: GpuMappedGttStateV1,
     {
-        let index = self.engine.index(&token, S::PHASE)?;
-        let record = &self.engine.allocations[index];
-        let (_, _, mapping) = model_keys(self.vm, record.id, record.generation);
-        Ok(SharedGttQueueResourceAuthorityV1 {
-            token,
-            facts: SharedGttMappedResourceFactsV1 {
-                gpu_va: record.gpu_va,
-                logical_bytes: record.layout.requested_bytes,
-                cpu_mapping_bytes: record.layout.cpu_mapping_bytes,
-                gpu_va_bytes: record.layout.gpu_va_bytes,
-                mapping,
-                publication: MemoryPublicationKeyV1 {
-                    mapping,
-                    id: MemoryPublicationIdV1(record.id),
-                },
-            },
-            role: PhantomData,
-        })
+        transitions::retain_v1(&mut self.engine, self.vm, token)
     }
 
     pub fn allocate_host_visible_coherent(
@@ -5725,38 +5775,12 @@ impl SharedGttMemorySessionV1 {
         &mut self,
         requested_bytes: usize,
     ) -> Result<SharedGttAllocationV1<P, GttCpuWritableV1>, MemorySessionError> {
-        self.preflight_native_memory_transition_revisions(2)?;
-        let checkpoint = self
-            .foundation
-            .memory()
-            .checkpoint_released()
-            .map_err(|_| MemorySessionError::Model("shared memory journal checkpoint"))?;
-        self.foundation
-            .replace_memory_after_sealed_transition(checkpoint)
-            .map_err(MemorySessionError::Model)?;
-        let token = self.engine.allocate::<P>(requested_bytes)?;
-        let (id, generation, layout, base, handle) = self.engine.evidence(&token)?;
-        let (reservation, allocation, _) = model_keys(self.vm, id, generation);
-        let projected = project_allocation(
-            self.foundation.memory(),
-            reservation,
-            allocation,
-            base,
-            layout,
-            handle,
-            P::KIND,
-        );
-        match projected {
-            Ok(model) => {
-                self.foundation
-                    .replace_memory_after_sealed_transition(model)
-                    .map_err(MemorySessionError::Model)?;
-                Ok(token)
-            }
-            Err(_) => self
-                .engine
-                .quarantine(MemorySessionError::Model("shared allocation projection")),
-        }
+        transitions::allocate_v1(
+            &mut self.engine,
+            &mut transitions::ProjectionV1::new(&mut self.foundation, self.model_device, self.vm),
+            requested_bytes,
+            crate::queue_linux::permanently_poison_process_global_kfd_runtime_gate_v1,
+        )
     }
 
     pub fn with_bytes<P, S, R>(
@@ -6114,19 +6138,19 @@ impl SharedGttMemorySessionV1 {
         token: SharedGttAllocationV1<ExecutableGttV1, GttCpuWritableV1>,
     ) -> Result<SharedGttAllocationV1<ExecutableGttV1, GttExecutableImmutableV1>, MemorySessionError>
     {
-        self.engine.seal_executable(token)
+        transitions::seal_v1(&mut self.engine, token)
     }
 
     pub fn map_to_gpu<P: MutableGpuGttProfileV1>(
         &mut self,
         token: SharedGttAllocationV1<P, GttCpuWritableV1>,
     ) -> Result<SharedGttAllocationV1<P, GttGpuAccessibleMutableV1>, MemorySessionError> {
-        self.preflight_native_memory_transition_revisions(1)?;
-        let (id, generation, _, _, _) = self.engine.evidence(&token)?;
-        let (_, _, mapping) = model_keys(self.vm, id, generation);
-        let mapped = self.engine.map_mutable(token)?;
-        self.commit_map_projection(mapping)?;
-        Ok(mapped)
+        transitions::map_mutable_v1(
+            &mut self.engine,
+            &mut transitions::ProjectionV1::new(&mut self.foundation, self.model_device, self.vm),
+            token,
+            crate::queue_linux::permanently_poison_process_global_kfd_runtime_gate_v1,
+        )
     }
 
     pub fn map_executable_to_gpu(
@@ -6136,12 +6160,12 @@ impl SharedGttMemorySessionV1 {
         SharedGttAllocationV1<ExecutableGttV1, GttGpuAccessibleExecutableV1>,
         MemorySessionError,
     > {
-        self.preflight_native_memory_transition_revisions(1)?;
-        let (id, generation, _, _, _) = self.engine.evidence(&token)?;
-        let (_, _, mapping) = model_keys(self.vm, id, generation);
-        let mapped = self.engine.map_executable(token)?;
-        self.commit_map_projection(mapping)?;
-        Ok(mapped)
+        transitions::map_executable_v1(
+            &mut self.engine,
+            &mut transitions::ProjectionV1::new(&mut self.foundation, self.model_device, self.vm),
+            token,
+            crate::queue_linux::permanently_poison_process_global_kfd_runtime_gate_v1,
+        )
     }
 
     pub fn unmap_from_gpu<P: MutableGpuGttProfileV1>(
@@ -6198,23 +6222,6 @@ impl SharedGttMemorySessionV1 {
             .replace_memory_after_sealed_transition(projected)
             .map_err(MemorySessionError::Model)?;
         Ok(())
-    }
-
-    fn commit_map_projection(
-        &mut self,
-        mapping: MemoryMappingKeyV1,
-    ) -> Result<(), MemorySessionError> {
-        match project_map(self.foundation.memory(), mapping, self.model_device) {
-            Ok(model) => {
-                self.foundation
-                    .replace_memory_after_sealed_transition(model)
-                    .map_err(MemorySessionError::Model)?;
-                Ok(())
-            }
-            Err(_) => self
-                .engine
-                .quarantine(MemorySessionError::Model("shared map projection")),
-        }
     }
 
     fn commit_unmap_projection(
@@ -6373,6 +6380,7 @@ mod tests {
     mod dispatch_retention;
     mod host_backing;
     pub(super) mod pristine_abort;
+    mod transitions;
     use super::*;
     use core::cell::Cell;
     use fe2o3_kfd_uapi::KfdIoctlAllocMemoryOfGpuArgs;
@@ -7782,25 +7790,35 @@ mod tests {
         }
 
         let source = include_str!("shared_memory.rs");
-        let cases = [
+        // Allocation and mapping now use the production transition helper;
+        // its revision/native-effect ordering is exercised by transitions tests.
+        for (start, end, helper) in [
             (
                 "fn allocate_profile<P:",
                 "pub fn with_bytes<",
-                2,
-                "self.engine.allocate::<P>",
+                "transitions::allocate_v1",
             ),
             (
                 "pub fn map_to_gpu<P:",
                 "pub fn map_executable_to_gpu",
-                1,
-                "self.engine.map_mutable",
+                "transitions::map_mutable_v1",
             ),
             (
                 "pub fn map_executable_to_gpu",
                 "pub fn unmap_from_gpu<P:",
-                1,
-                "self.engine.map_executable",
+                "transitions::map_executable_v1",
             ),
+        ] {
+            let body = source
+                .split(start)
+                .nth(1)
+                .unwrap()
+                .split(end)
+                .next()
+                .unwrap();
+            assert!(body.contains(helper), "{start} must delegate to {helper}");
+        }
+        let cases = [
             (
                 "pub fn unmap_from_gpu<P:",
                 "pub fn unmap_executable_from_gpu",
@@ -7815,7 +7833,7 @@ mod tests {
             ),
             (
                 "fn release_with_phase<P:",
-                "fn commit_map_projection",
+                "fn commit_unmap_projection",
                 1,
                 "self.engine.release",
             ),

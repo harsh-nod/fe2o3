@@ -1,18 +1,19 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Current locally accepted implementation: R87 pending GTT allocation custody,
-on signed R86 `1fa69f17e526e2b96ba69a22047f209c261c367e` and signed dispatch-only
-`d2e65f47d942af8307d3d54ffa6ee82bef5d2c30`. Its
-[evidence](evidence/local-r87-pending-allocation-2026-09-11/README.md) records all
-seventeen final source gates, 2,415 runtime tests per GNU/musl target and fourteen
-new KFD regressions (host suites unchanged at 258 GNU / 141 musl).
+Current locally accepted implementation: R88 CONTROL-1 session transition custody,
+on signed R87 `29462c524104d9bb01052376a0ef79c9ffdc3d61`. Its
+[evidence](evidence/local-r88-session-transitions-2026-09-11/README.md) records
+all seventeen source gates and auxiliary checks, with 5,624 unchanged source
+identities, 2,435 runtime tests per GNU/musl target, twenty new KFD regressions
+and three rejected mutations. Historical R87 evidence remains unchanged.
 The [current dispatch](runtime-a1-a2-swarm-dispatch-r83.md) assigns native
-remaining CONTROL-1 session transitions, CONTROL-2 preparation ownership and
+remaining CONTROL-2 preparation ownership and
 CONTROL-3 both bind settlements, then NATIVE-2 constructor custody; independent
 CO-1/2/3 completion fixtures and VER-1A.1 through .5 journal work.
-R86 atomic data conversion and R87 pending allocation custody do not yet retain
-successful tokens across model projection, full code/kernarg construction or
-outer unwind/retake/validation state. They add no native adoption or control budgets.
+R88 now retains successful tokens across model projection. R86 atomic data
+conversion, R87 pending allocation and R88 transitions do not yet root full
+code/kernarg preparation or outer unwind/retake/validation state. They add no
+native adoption or control budgets.
 R85's private host decoder is implemented; runtime COMPLETE
 must call it, not recreate it. Local acceptance does not enable native execution.
 Historical packet validation and exact source/evidence identities remain below.

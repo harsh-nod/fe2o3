@@ -1,0 +1,7 @@
+a0da1dda7635a9ba04ca608aa80397426466878b059f7df5c9624e0ef1a97508  crates/fe2o3-kfd/src/shared_memory.rs
+386b6d0c922a1c598c56cf2be640f19046aa3af9c56249172f2ba87e0b60ab6f  crates/fe2o3-kfd/src/shared_memory/tests/transitions.rs
+18e8c9d885aa4356b4427435108ce7490cb3c3e7cfa62c3ba45c9554f80a6edd  crates/fe2o3-kfd/src/shared_memory/transitions.rs
+ad1668b4ab8ef038c5876153569ad89a826b7d714accd0bc6244d090ce3fa9f4  docs/runtime-a1-a2-next-wave.md
+9d1b7de4607b702d58e4cde29eee43e5599b36c0834a9991086a63b0ddbdaebd  docs/runtime-a1-a2-swarm-dispatch-r83.md
+6e44514df2edc29556599802bc5b88b1cf40dfcc117a5651915edd29afdd4f38  docs/runtime-a1-a2-swarm-plan.md
+5effef57cfafccd1ebe8688a75ce0bdfd7252916e1508292d02390f0cdd4c9d2  docs/runtime-session-transition-custody-v1.md

@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 15 tests
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_hold_rejects_work_on_only_its_stream_and_blocks_graph_and_cleanup ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_preserves_owner_capacity_reply_and_never_flushes_or_discards ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_dropped_acknowledgement_does_not_release_active_custody ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_graph_reservation_and_ack_capacity_leave_ticket_retryable ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_replayed_key_cannot_consume_another_reserved_owner ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_stop_before_first_advance_retires_empty_prefix_without_adopting ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_retirement_error_or_panic_preserves_owner_and_hold_without_retry ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_and_ordinary_progress_do_not_starve_with_unit_drain_budget ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_foreign_ticket_unknown_stream_and_occupied_hold_preserve_parked_owner ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_pending_submission_rejects_hold_until_exact_quiescence ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_unsupported_and_preflight_rejection_recover_exact_ticket_without_hold ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_owned_failed_retirement_quarantines_carrier_and_context ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_queued_stop_and_admission_failures_return_original_reserved_ticket ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_owned_drain_and_shutdown_retire_before_carrier_disposal ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_panic_terminal_preflight_and_post_effect_errors_never_retry_or_drop ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 694 filtered out; finished in 0.05s
+
