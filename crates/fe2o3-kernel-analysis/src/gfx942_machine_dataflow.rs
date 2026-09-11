@@ -593,12 +593,16 @@ mod tests {
             .map(|block| BlockFactsV1 {
                 first_instruction: 0,
                 instruction_end: 0,
-                predecessors: (block != 0)
-                    .then(|| vec![(block - 1) as u32])
-                    .unwrap_or_default(),
-                successors: (block + 1 < count)
-                    .then(|| vec![(block + 1) as u32])
-                    .unwrap_or_default(),
+                predecessors: if block != 0 {
+                    vec![(block - 1) as u32]
+                } else {
+                    Vec::new()
+                },
+                successors: if block + 1 < count {
+                    vec![(block + 1) as u32]
+                } else {
+                    Vec::new()
+                },
             })
             .collect::<Vec<_>>();
         let mut work = 0;

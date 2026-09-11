@@ -1050,93 +1050,6 @@ fn finding_failure(finding: RankedBoundsFindingV1) -> RankedBoundsReportV1 {
     }
 }
 
-#[cfg(test)]
-mod status_tests {
-    use super::*;
-
-    fn unproved_bound() -> RankedBoundsFindingV1 {
-        RankedBoundsFindingV1::UnprovedBound {
-            block: 0,
-            operation: 0,
-            access: AccessKindAttr::Read,
-            view: "v0".to_owned(),
-            dimension: 0,
-            index: "i".to_owned(),
-            extent: "n".to_owned(),
-        }
-    }
-
-    fn static_out_of_bounds() -> RankedBoundsFindingV1 {
-        RankedBoundsFindingV1::StaticOutOfBounds {
-            block: 0,
-            operation: 0,
-            access: AccessKindAttr::Write,
-            view: "v0".to_owned(),
-            dimension: 0,
-            index: 4,
-            extent: 4,
-        }
-    }
-
-    fn presburger_out_of_bounds() -> RankedBoundsFindingV1 {
-        RankedBoundsFindingV1::PresburgerOutOfBounds {
-            block: 0,
-            operation: 0,
-            access: AccessKindAttr::Write,
-            view: "v0".to_owned(),
-            dimension: 0,
-            invocation: vec![3],
-            index: 7,
-            extent: 7,
-        }
-    }
-
-    #[test]
-    fn every_bounds_finding_has_the_shared_status() {
-        let incomplete = [
-            RankedBoundsFindingV1::StructuralVerificationFailed,
-            RankedBoundsFindingV1::ResourceLimitExceeded {
-                resource: "operation",
-                limit: 1,
-                actual: 2,
-            },
-            RankedBoundsFindingV1::UnreachableBlock { block: 1 },
-            RankedBoundsFindingV1::UnsupportedTerminator {
-                block: 0,
-                operation: "test.terminator".to_owned(),
-            },
-            RankedBoundsFindingV1::UnsupportedOperation {
-                block: 0,
-                operation: 1,
-                kind: "test.operation".to_owned(),
-            },
-            RankedBoundsFindingV1::SparseIndexAnalysisFailed {
-                detail: "unresolved".to_owned(),
-            },
-            unproved_bound(),
-        ];
-        for finding in incomplete {
-            assert_eq!(finding.status(), KernelCheckStatusV1::Incomplete);
-        }
-        for finding in [static_out_of_bounds(), presburger_out_of_bounds()] {
-            assert_eq!(finding.status(), KernelCheckStatusV1::Rejected);
-        }
-    }
-
-    #[test]
-    fn rejected_bounds_finding_dominates_an_incomplete_finding() {
-        let report = RankedBoundsReportV1 {
-            findings: vec![unproved_bound(), static_out_of_bounds()],
-        };
-        assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
-        assert!(!report.is_clean());
-        assert_eq!(
-            RankedBoundsReportV1 { findings: vec![] }.status(),
-            KernelCheckStatusV1::Clean
-        );
-    }
-}
-
 fn push_finding(
     findings: &mut Vec<RankedBoundsFindingV1>,
     budget: &mut RankedBoundsBudget,
@@ -1459,4 +1372,91 @@ fn canonical_index_expr(value: Value, context: &Context) -> IndexExpr {
         }
     }
     IndexExpr::Value(value)
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    fn unproved_bound() -> RankedBoundsFindingV1 {
+        RankedBoundsFindingV1::UnprovedBound {
+            block: 0,
+            operation: 0,
+            access: AccessKindAttr::Read,
+            view: "v0".to_owned(),
+            dimension: 0,
+            index: "i".to_owned(),
+            extent: "n".to_owned(),
+        }
+    }
+
+    fn static_out_of_bounds() -> RankedBoundsFindingV1 {
+        RankedBoundsFindingV1::StaticOutOfBounds {
+            block: 0,
+            operation: 0,
+            access: AccessKindAttr::Write,
+            view: "v0".to_owned(),
+            dimension: 0,
+            index: 4,
+            extent: 4,
+        }
+    }
+
+    fn presburger_out_of_bounds() -> RankedBoundsFindingV1 {
+        RankedBoundsFindingV1::PresburgerOutOfBounds {
+            block: 0,
+            operation: 0,
+            access: AccessKindAttr::Write,
+            view: "v0".to_owned(),
+            dimension: 0,
+            invocation: vec![3],
+            index: 7,
+            extent: 7,
+        }
+    }
+
+    #[test]
+    fn every_bounds_finding_has_the_shared_status() {
+        let incomplete = [
+            RankedBoundsFindingV1::StructuralVerificationFailed,
+            RankedBoundsFindingV1::ResourceLimitExceeded {
+                resource: "operation",
+                limit: 1,
+                actual: 2,
+            },
+            RankedBoundsFindingV1::UnreachableBlock { block: 1 },
+            RankedBoundsFindingV1::UnsupportedTerminator {
+                block: 0,
+                operation: "test.terminator".to_owned(),
+            },
+            RankedBoundsFindingV1::UnsupportedOperation {
+                block: 0,
+                operation: 1,
+                kind: "test.operation".to_owned(),
+            },
+            RankedBoundsFindingV1::SparseIndexAnalysisFailed {
+                detail: "unresolved".to_owned(),
+            },
+            unproved_bound(),
+        ];
+        for finding in incomplete {
+            assert_eq!(finding.status(), KernelCheckStatusV1::Incomplete);
+        }
+        for finding in [static_out_of_bounds(), presburger_out_of_bounds()] {
+            assert_eq!(finding.status(), KernelCheckStatusV1::Rejected);
+        }
+    }
+
+    #[test]
+    fn rejected_bounds_finding_dominates_an_incomplete_finding() {
+        let report = RankedBoundsReportV1 {
+            findings: vec![unproved_bound(), static_out_of_bounds()],
+        };
+        assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
+        assert!(!report.is_clean());
+        assert_eq!(
+            RankedBoundsReportV1 { findings: vec![] }.status(),
+            KernelCheckStatusV1::Clean
+        );
+    }
 }

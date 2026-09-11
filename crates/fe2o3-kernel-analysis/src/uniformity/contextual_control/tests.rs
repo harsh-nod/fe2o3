@@ -338,7 +338,7 @@ fn geometry_and_typed_identity_are_required_for_aligned_comparisons() {
         assert_eq!(exact_d1_workgroup(&module, &function), None);
     }
     for bad in 0..6 {
-        let mut operations = vec![global(0), constant(1, 8)];
+        let mut operations = [global(0), constant(1, 8)];
         let extent = match bad {
             0 => None,
             1 => Some(0),

@@ -959,10 +959,10 @@ builtin.func @bounds_witness_safe: builtin.function <() -> ()>
         FuncOp::from_operation(operation)
     }
 
-    fn bounds_envelope<'a>(
-        report: &'a crate::ProductionPlironPreloweringReportV2,
+    fn bounds_envelope(
+        report: &crate::ProductionPlironPreloweringReportV2,
     ) -> (
-        &'a crate::ProductionAnalysisStageValidationV1,
+        &crate::ProductionAnalysisStageValidationV1,
         ProductionAnalysisWitnessEnvelopeV1,
     ) {
         let stage = &report.report_validation().stages()[1];
