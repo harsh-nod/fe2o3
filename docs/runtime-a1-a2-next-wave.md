@@ -12,8 +12,12 @@ The [bounded work orders](runtime-a1-a2-swarm-dispatch-r83.md#bounded-work-order
 now start with NATIVE-2B auxiliary custody, CO-1 completion outcomes and VER-1A.1
 journal contract/inventory. Three read-only reviews returned; Primary owns
 implementation and gates, and queued tickets are not continuing background jobs.
+The latest planning-only refresh at signed R94
+`363ce6b79938def9365016c34f020a00493c1f87` confirms these three independent lanes
+and splits [NATIVE-2B into five handoffs](runtime-a1-a2-swarm-dispatch-r83.md#auxiliary-constructor-packets).
+No source implementation or new runtime/proof/hardware result is added by that refresh.
 Live KFD, new adapter proof and performance acceptance remain open. Issue #182
-was observed open at the preceding 2026-09-11 API refresh
+was observed open again at the 2026-09-11 API refresh
 (`updatedAt` `2026-09-11T08:01:35Z`); R94 does not close it.
 
 R93 adds the shared [primary construction sequence](runtime-primary-queue-construction-custody-v1.md)
@@ -147,7 +151,7 @@ Under the current ownership policy workers are read-only; Primary owns edits.
 | Native: `r66_native_coexistence` | NATIVE-2B auxiliary custody, then 2C replacement/insertion | NATIVE-3 DATA-ADOPT; ISSUE native interface; SCALE-1A fixtures; native-budget and R76/R78/R82 qualification harnesses; admitted profiles and capacity | Retain both lanes and every returned preparation/control/platform prefix through loan/retake, CREATE, collision checks, doorbell and installation. Preserve first panic and reject occupied/stale slots without overwriting owners. |
 | Admission: `r66_runtime_coexistence` | CO-1 outcome contract, then CO-2 identity and CO-3 reply/custody fixtures | CO-4 native completion integration with ISSUE -> COMPLETE -> API -> generated graph/drain | Runtime fixtures count data-only completion-adapter calls without reversing the host/runtime dependency. Actual R85/native integration follows adoption and issue; no duplicate decoder or reply reservation. |
 | Resources: `r66_coexistence_model` | VER-1A.1 contract/inventory -> .2 model -> .3 journal -> .4 initial write/copy hooks -> .5 acceptance | VER-1B complete hooks; aggregate domains; remaining backing/control/code budgets; VER-2 leases; MEM-5 closure | Nonwrapping Available/Pending/Unknown whole-allocation versions; bounded, atomic whole-roster admission/settlement. Cross-run leases remain disabled until every mutation hook is integrated. |
-| Primary | Publish accepted R94, then integrate 2B/2C, runtime/journal packets and DATA-ADOPT | Cross-review, executable refinement, signed hardware qualification and matched performance | Serialize shared edits/builds/proofs and preserve R80 credit ownership. Accept CPU, proof, Linux and performance results separately; publish signed accepted packets to both topic remotes. |
+| Primary | Integrate 2B/2C, runtime/journal packets and DATA-ADOPT above signed R94 on both topic remotes | Cross-review, executable refinement, signed hardware qualification and matched performance | Serialize shared edits/builds/proofs and preserve R80 credit ownership. Accept CPU, proof, Linux and performance results separately; publish signed accepted packets to both topic remotes. |
 
 ADOPT-LIFE and DATA-ADOPT are coupled contracts; neither may introduce effects
 before their custody interface is integrated. VER-1A is independent. COMPLETE's
@@ -601,7 +605,7 @@ fixture drain do not require that production handoff.
 | Stage | Ready work | Gate before advancing |
 | --- | --- | --- |
 | 0: through R90 local substrate | Charged results, retained preparation, source/readback reservation, host-cache policy, pristine abort, private unpublished lifecycle, DATA-SHELL, R85 host readback, R86 data conversion, R87 pending allocation, R88 transitions, R89 preparation custody and R90 bind settlement | Retained packet-specific source gates; R82-R90 add no new adapter proof. Native/whole-executor and hardware acceptance remain separate |
-| 1: ready local packets | NATIVE-2A/B/C; independent COMPLETE-ORACLE, VER-1A, short/long fixtures and native-budget harness | Preserve R90 and freeze cross-lane interfaces; complete deterministic ownership/failure/oracle tests. DATA-ADOPT follows complete native construction custody; DATA-SHELL is already accepted |
+| 1: ready local packets | NATIVE-2B/2C; independent COMPLETE-ORACLE, VER-1A, short/long fixtures and native-budget harness | Preserve R94's named primary CPU/local-helper acceptance and freeze cross-lane interfaces; complete deterministic ownership/failure/oracle tests. Live primary qualification remains open. DATA-ADOPT follows complete native construction custody; DATA-SHELL is already accepted |
 | 2: compose ownership | Broader native profiles, domains, control/code budgets, versions and GEN-2B | No duplicate backing debit, unbounded child accounts, stale input authority or detached decoder; preserve progress headroom |
 | 3: qualify A1/A2 | Out-of-order native depth, repeated generated graphs, active drain, memory pressure and overlap | Admitted workloads, exact compiler evidence for production generated cells, signed full-output captures and cleanup; existing copy/overlap campaigns may run earlier |
 | 4: measure and close | Matched KFD/HSA/HIP producers, executable proof composition and exit audit | Predeclared workloads/thresholds, resource/CPU/tail metrics, separate device-timeline evidence for physical overlap; every A1/A2 acceptance cell resolved |

@@ -6,10 +6,14 @@ planning checkpoint `56ba2556c9572d30f65faab3e579d95fa3fb7c3e` and accepted R93
 [R94 evidence](evidence/local-r94-primary-matrix-2026-09-11/README.md) records
 all seventeen source gates, eleven auxiliary checks and five corrected compiled
 mutations. Native advances to 2B auxiliary custody; Admission's CO-1 and
-Resources' VER-1A.1 remain independently ready. The preceding three-agent
-planning refresh checked both topic remotes at its baseline and observed
+Resources' VER-1A.1 remain independently ready. The latest three-agent,
+planning-only refresh checked clean signed R94
+`363ce6b79938def9365016c34f020a00493c1f87` on both topic remotes and observed
 [#182](https://github.com/harsh-nod/fe2o3/issues/182) open through the GitHub API,
-with `updatedAt` `2026-09-11T08:01:35Z`. This packet does not close the issue.
+with `updatedAt` `2026-09-11T08:01:35Z`. All three read-only reviews returned.
+This refresh adds the [auxiliary subpackets](#auxiliary-constructor-packets)
+and corrects the stale next-wave execution row; it adds no runtime implementation,
+test, proof, hardware or performance acceptance and does not close the issue.
 The [bounded work orders](#bounded-work-orders) below assign one dependency-ready
 ticket to each of the three existing workers; subsequent tickets are queues,
 not additional agents or unattended implementation jobs. Primary retains
@@ -234,7 +238,17 @@ patch and acceptance; no solver or hardware acceptance is added.
 | Native: `r66_native_coexistence` | NATIVE-2B auxiliary construction custody | Root preparation, controls and platform owners across shared-session loan/retake, CREATE, collision checks, doorbell and installation. Test exact primary/auxiliary ownership and first-panic preservation; occupied or stale slots cannot overwrite an owner. |
 | Admission: `r66_runtime_coexistence` | CO-1 allocation-free outcome classifier | Separate observation, reply disposition and owner-disposal permission. Table tests cover pending, rejected, success-candidate, conclusive failure, quiescence without result and uncertainty. Do not create native receipts or a public launch API. |
 | Resources: `r66_coexistence_model` | VER-1A.1 identity/capacity contract and mutation inventory | Freeze one Context-wide journal's exact identities, nonwrapping versions, retained writer rosters and every mutation/retirement hook before implementing transitions. Graph-local history is not persistent authority. |
-| Primary | Integrate accepted handoffs and own all shared edits | Publish accepted R94 source/evidence, then implement 2B/2C, CO and VER packets with shared Context/backend edits serialized. Keep CPU, proof, Linux and performance gates separate; do not enable adoption or leases ahead of prerequisites. |
+| Primary | Integrate reviewed handoffs and own all shared edits | Build above signed R94 on both topic remotes; implement 2B/2C, CO and VER packets with shared Context/backend edits serialized. Keep CPU, proof, Linux and performance gates separate; do not enable adoption or leases ahead of prerequisites. |
+
+The first concrete handoffs are Native's 2B.1 root/slot contract, Admission's
+CO-1 outcome table and Resources' VER-1A.1 journal contract/inventory. Native
+reviews the existing KFD queue modules and proposed private auxiliary constructor;
+Admission reviews the proposed isolated completion contract/tests; Resources
+reviews the isolated model/journal contract and mutation inventory. Primary owns
+module exports and shared Context/backend changes. The same three slots rotate
+into the independent qualification queue after each handoff, not into additional
+simultaneous agents. The audit turns are complete; implementation tickets below
+are queued work, not running background jobs.
 
 ### Bounded Work Orders
 
@@ -472,6 +486,30 @@ needs an explicit custody contract or replacement: an outer owner cannot retain
 arbitrary state moved inside that callback. Reuse the R89 sequencer with an
 external preparation owner and root every returned ring/control/completion/EOP,
 context-save/runtime/event/shadow/queue prefix before the next fallible step.
+
+#### Auxiliary Constructor Packets
+
+These are the next Native handoffs above accepted R94, not implemented R95 work.
+Primary owns edits to `queue_live.rs` and any private
+`queue_live/construction_auxiliary.rs` module/tests. Reuse R89 preparation,
+R88 transitions, R91 typed handoffs and the existing Linux primitive helpers;
+do not create another allocator, foundation, engine or dependency-session owner.
+
+| Packet | Prerequisite and deliverable | Exit gate |
+| --- | --- | --- |
+| NATIVE-2B.1: root/slot | Ready now. Specify externally retained preparation/control/platform owners and the original session/account anchor. Reserve roster capacity and record the vacant destination/generation before effects; add a borrowed final vacancy check. | Occupied, stale, exhausted, malformed or unreserved destinations reject without moving or dropping either lane. Successful installation uses only preallocated, nonfallible moves; keep the existing two-compute-lane limit. |
+| NATIVE-2B.2: loan/preparation | After .1. Root returned callback data immediately, use R89 in-place preparation, and reuse `with_live_queue_memory_model_custody` with only an inert `Result<(), Error>` return. | Every successful prefix lives outside the loan callback. Opening rejection performs no preparation/retake; operation success/error/panic crossed with retake success/error/panic preserves exact owners and the first panic. |
+| NATIVE-2B.3: gate/CREATE | After .2. Retain runtime/event/shadows and reuse the existing engine/VM. Acquire the creation arm after runtime admission/validation and closing currentness, before event creation; retain it through later settlement. | Native CREATE errors/panic, malformed or missing outputs/ID and session-owned ID collisions cannot lose custody or publish a lane. Publish shadows only at the actual CREATE boundary; terminal cleanup releases only unpublished payload and retains its metadata. |
+| NATIVE-2B.4: completion/install | After .3. Root CREATE outputs before later recovery and the doorbell before observation; retain the completed lane through all final checks. Revalidate the slot before checked gate finalization and installation. | Late currentness, observation, mapping or gate failure exposes no handle and retains the original primary plus auxiliary owners. Success installs exactly one generation-bound lane without allocation or further fallible work. |
+| NATIVE-2B.5: integrated acceptance | After .1-.4. Exercise production-used sequencing with the original preparation/memory/accounts and actual model loan/resource authority. Extend local helper composition where applicable. | Exact-owner and account assertions, collision/replay cases, cleanup ordering, operation/retake panic precedence and compiled negative mutations pass alongside full source gates. CPU/local-helper coverage is not live KFD or executable-refinement acceptance. |
+
+Retained numeric identities are not substitutes for retained native owners.
+Terminal custody must retain the exact shared engine/account anchor as well as
+the auxiliary prefixes, including after the caller drops its terminal session.
+Do not add `Send`, `Sync` or `'static` requirements to borrowed program envelopes.
+Callback/installer-internal prefixes that fail before returning remain an
+explicit open boundary. Concurrent bootstrap remains unsupported. Complete 2B
+before 2C replacement/insertion, and both before native generated adoption.
 
 ### Admission: COMPLETE-ORACLE
 
