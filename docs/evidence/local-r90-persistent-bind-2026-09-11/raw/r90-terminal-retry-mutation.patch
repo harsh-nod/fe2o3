@@ -1,0 +1,7 @@
+*** Begin Patch
+*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live.rs
+@@
+-    session_healthy && cancellation_succeeded
++    let _ = session_healthy;
++    cancellation_succeeded
+*** End Patch

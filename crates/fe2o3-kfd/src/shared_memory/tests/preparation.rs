@@ -3,6 +3,7 @@
 use super::*;
 use crate::queue::dispatch_binding::preparation::PreparationMemoryV1;
 use crate::queue::dispatch_binding::{DispatchDataAuthorityV1, Gfx942FixedDispatchDataV1};
+use crate::shared_memory::dispatch_retention as replay_retention;
 use crate::shared_memory::transitions::{self as adapter, ProjectionV1};
 
 type CodeCpu = SharedGttAllocationV1<ExecutableGttV1, GttCpuWritableV1>;
@@ -80,6 +81,20 @@ struct DataRecordObservation {
 }
 
 impl PreparationMemoryFixtureV1 {
+    pub(crate) fn retain_replay(
+        &self,
+        data: &mut Option<Gfx942FixedDispatchDataV1>,
+        before_validation: impl FnOnce(),
+    ) -> Result<crate::shared_memory::RetainedDispatchDataV1, MemorySessionError> {
+        let f = &self.fixture;
+        replay_retention::retain_replay_with_v1(
+            &f.engine,
+            f.device.model_key(),
+            f.vm,
+            data,
+            before_validation,
+        )
+    }
     pub(crate) fn new(configured: bool) -> Self {
         let mut fixture = BackingConstructorFixture::new(
             configured.then(|| Gfx942DeviceBackingBudgetV1::new(1 << 20, 64).unwrap()),
@@ -418,6 +433,105 @@ impl PreparationMemoryFixtureV1 {
             .find(|r| model_keys(self.fixture.vm, r.id, r.generation).2 == mapping)
             .unwrap();
         &record.mapping.as_ref().unwrap().bytes[..record.layout.requested_bytes]
+    }
+}
+
+#[test]
+fn replay_retention_borrows_original_data_through_validation_panic() {
+    let mut memory = PreparationMemoryFixtureV1::new(true);
+    let mut data = Some(memory.device(true));
+    let identity = data.as_ref().unwrap().sdma_storage_identity();
+    let content = data.as_ref().unwrap().initialized_content();
+    let before = memory.observation();
+    let f = &memory.fixture;
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        replay_retention::retain_replay_with_v1(
+            &f.engine,
+            f.device.model_key(),
+            f.vm,
+            &mut data,
+            || std::panic::panic_any("replay validation"),
+        )
+    }));
+    let Err(payload) = caught else {
+        panic!("injected panic must escape")
+    };
+    assert_eq!(payload.downcast_ref::<&str>(), Some(&"replay validation"));
+    let data = data.as_ref().expect("original replay token remains rooted");
+    assert_eq!(data.sdma_storage_identity(), identity);
+    assert_eq!(data.initialized_content(), content);
+    assert_eq!(memory.observation(), before);
+}
+
+#[test]
+fn replay_retention_rejects_foreign_or_wrong_storage_without_moving_it() {
+    for host in [false, true] {
+        let memory = PreparationMemoryFixtureV1::new(true);
+        let mut source = PreparationMemoryFixtureV1::new(true);
+        let mut data = Some(if host {
+            source.host(true)
+        } else {
+            source.device(true)
+        });
+        let identity = data.as_ref().unwrap().sdma_storage_identity();
+        let content = data.as_ref().unwrap().initialized_content();
+        let before = source.observation();
+        let target_before = memory.observation();
+        let f = &memory.fixture;
+        assert!(
+            replay_retention::retain_replay_with_v1(
+                &f.engine,
+                f.device.model_key(),
+                f.vm,
+                &mut data,
+                || {},
+            )
+            .is_err()
+        );
+        assert_eq!(data.as_ref().unwrap().sdma_storage_identity(), identity);
+        assert_eq!(data.as_ref().unwrap().initialized_content(), content);
+        assert_eq!(source.observation(), before);
+        assert_eq!(memory.observation(), target_before);
+    }
+}
+
+#[test]
+fn replay_retention_commits_exact_descriptor_and_authority_without_native_effects() {
+    for initialized in [false, true] {
+        let mut memory = PreparationMemoryFixtureV1::new(true);
+        let mut data = Some(memory.device(initialized));
+        let identity = data.as_ref().unwrap().sdma_storage_identity();
+        let content = data.as_ref().unwrap().initialized_content();
+        let layout = data.as_ref().unwrap().layout();
+        let before = memory.observation();
+        let f = &memory.fixture;
+        let retained = replay_retention::retain_replay_with_v1(
+            &f.engine,
+            f.device.model_key(),
+            f.vm,
+            &mut data,
+            || {},
+        )
+        .unwrap();
+        assert!(data.is_none());
+        assert_eq!(
+            PreparationMemoryFixtureV1::data_storage(&retained.authority),
+            identity
+        );
+        assert_eq!(retained.initialized_content, content);
+        assert_eq!(retained.fully_initialized, initialized);
+        assert_eq!(retained.layout, layout);
+        assert_eq!(memory.observation(), before);
+        assert!(
+            replay_retention::retain_replay_with_v1(
+                &f.engine,
+                f.device.model_key(),
+                f.vm,
+                &mut data,
+                || {},
+            )
+            .is_err()
+        );
     }
 }
 

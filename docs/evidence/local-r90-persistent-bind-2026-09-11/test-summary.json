@@ -1,0 +1,190 @@
+{
+  "gnu-tests": {
+    "passed": 2468,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "musl-tests": {
+    "passed": 2468,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "gnu-docs": {
+    "passed": 108,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 7
+  },
+  "musl-docs": {
+    "passed": 91,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 5
+  },
+  "musl-host-docs": {
+    "passed": 16,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 2
+  },
+  "gnu-host": {
+    "passed": 258,
+    "failed": 0,
+    "ignored": 4,
+    "harnesses": 1
+  },
+  "musl-host": {
+    "passed": 141,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "macro-fixtures": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "r90-focused-adoption": {
+    "passed": 15,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "r90-focused-allocation": {
+    "passed": 14,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "r90-focused-async": {
+    "passed": 233,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "r90-focused-bind": {
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "r90-focused-charged": {
+    "passed": 50,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "r90-focused-loan": {
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "r90-focused-memory": {
+    "passed": 198,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "r90-focused-preparation": {
+    "passed": 19,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "r90-focused-readback": {
+    "passed": 10,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "r90-focused-replay": {
+    "passed": 21,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "r90-focused-retention": {
+    "passed": 13,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "r90-focused-settlement": {
+    "passed": 5,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "r90-focused-shells": {
+    "passed": 19,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "r90-focused-storage": {
+    "passed": 9,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 2
+  },
+  "r90-focused-transitions": {
+    "passed": 20,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "base_commit": "287f2b77be5eb8de333f64e3f73b1f892970ad1e",
+  "final_gate_attempt": "r90-accepted",
+  "non_documentation_source_identities_checked": 5629,
+  "new_kfd_cpu_test_functions": 14,
+  "new_runtime_cpu_test_functions": 0,
+  "new_host_cpu_test_functions": 0,
+  "control3_bind_settlement_implemented": true,
+  "first_operation_panic_preserved": true,
+  "exact_initial_and_replay_owners_retained": true,
+  "terminal_dominant_retry_for_self_owned_admitted_inputs": true,
+  "bind_installation_nonfallible_under_exclusive_empty_slot_invariant": true,
+  "replay_single_loan_no_control_rebuild": true,
+  "retake_and_final_validation_faults_are_scripted": true,
+  "replay_completion_is_model_only": true,
+  "early_ledger_native_leases_are_synthetic": true,
+  "queue_constructor_outer_custody_implemented": false,
+  "arbitrary_owning_loan_output_protected": false,
+  "native_generated_adoption_hooks_installed": false,
+  "linux_control3_qualified": false,
+  "adapter_refinement_proved": false,
+  "gpu_performance_measured": false,
+  "verus_solver_rerun": false,
+  "new_verus_theorems": 0,
+  "negative_inventory_files": 686,
+  "model_and_proof_sources_unchanged_from": "fb1e27e66cee27bb11f0b7c08f2d5994c5d168da",
+  "manifests_and_lockfiles_unchanged": true,
+  "expected_negative_mutations": [
+    {
+      "label": "first-panic",
+      "source": "crates/fe2o3-kfd/src/queue_live/model_loan.rs",
+      "assertion": "Some(\"retake\")",
+      "source_sha256": "81d248ff52803478a3c8d0d849a77a542386fe1d982f102dc84a2a81d37fe546",
+      "patch_sha256": "43dfe3bb58760c28d4a9c171210d206dc64c5868bdd7e095b5b06566bb22ec08"
+    },
+    {
+      "label": "terminal-retry",
+      "source": "crates/fe2o3-kfd/src/queue_live.rs",
+      "assertion": "left: true",
+      "source_sha256": "77e26011244329305d599bce7dd587c7d0ec62f2b16c26903d3fa6f9fd131f66",
+      "patch_sha256": "561008b1b2002f3e7f37fc59b1794eea4e3a16fcba4a608a15e686d9629e5842"
+    },
+    {
+      "label": "early-move",
+      "source": "crates/fe2o3-kfd/src/shared_memory/dispatch_retention.rs",
+      "assertion": "original replay token remains rooted",
+      "source_sha256": "01311c660d75114cc087052a01ce9f094341980e0eb33c91eb109106b3e70cc1",
+      "patch_sha256": "53497e0f5740891b4d0a4b65c9c4e00a7f3850476e4ba6b3c6444053341c5471"
+    }
+  ],
+  "production_metadata_sha256": "6c0cac53358224a31c356d91228b602ae8545f7c156a0c695f103533238054ca"
+}

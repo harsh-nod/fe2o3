@@ -5,7 +5,7 @@ mod coherent_initialization;
 mod dispatch_retention;
 mod transitions;
 
-pub(crate) use dispatch_retention::RetainedDispatchDataRosterV1;
+pub(crate) use dispatch_retention::{RetainedDispatchDataRosterV1, RetainedDispatchDataV1};
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -5643,6 +5643,19 @@ impl SharedGttMemorySessionV1 {
             gpu_va: record.gpu_va,
             layout: record.layout,
         })
+    }
+
+    pub(crate) fn retain_persistent_replay_data_in_place_v1(
+        &self,
+        data: &mut Option<crate::queue::dispatch_binding::Gfx942FixedDispatchDataV1>,
+    ) -> Result<dispatch_retention::RetainedDispatchDataV1, MemorySessionError> {
+        dispatch_retention::retain_replay_with_v1(
+            &self.engine,
+            self.model_device.model_key(),
+            self.vm,
+            data,
+            || {},
+        )
     }
 
     pub(crate) fn validate_gfx942_dispatch_allocation_requests(

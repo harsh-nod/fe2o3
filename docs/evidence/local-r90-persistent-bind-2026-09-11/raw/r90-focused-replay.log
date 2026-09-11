@@ -1,0 +1,28 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 21 tests
+test queue::dispatch_binding::tests::persistent_control_generation_advances_across_replay_cycles ... ok
+test queue::dispatch_binding::tests::cancelled_replay_preserves_predecessor_and_cannot_double_reattach ... ok
+test queue::dispatch_binding::tests::persistent_control_replay_rejects_every_bound_identity_substitution ... ok
+test queue::dispatch_binding::tests::write_only_replay_accepts_uninitialized_exact_storage ... ok
+test queue::dispatch_binding::tests::persistent_control_replay_requires_exact_identity_and_recycled_generation ... ok
+test queue::live::tests::retained_control_replay_cancellation_and_quarantine_preserve_prepared_authority ... ok
+test queue::live::tests::prepared_replay_cancellation_preserves_initialized_after_dispatch_without_digest ... ok
+test queue::live::tests::retained_control_replay_script_executes_the_production_pipeline_and_preserves_stage_custody ... ok
+test queue::live::tests::retained_control_replay_panics_keep_the_current_phase_outside_the_loan ... ok
+test shared_memory::tests::persistent_replay_uses_only_operational_currentness_before_bound_subset_validation ... ok
+test semantic_observation::tests::hostile_destroy_evidence_and_replay_fail_closed ... ok
+test queue::live::tests::persistent_control_replay_uses_the_active_queue_currentness_policy ... ok
+test shared_memory::tests::preparation::replay_retention_borrows_original_data_through_validation_panic ... ok
+test queue::live::tests::retained_control_replay_failure_matrix_requires_an_exact_clean_round_trip ... ok
+test shared_memory::tests::preparation::replay_retention_rejects_foreign_or_wrong_storage_without_moving_it ... ok
+test queue::live::tests::retained_control_replay_loan_resolution_distinguishes_open_retake_and_ready ... ok
+test queue::live::tests::retained_control_replay_terminal_custody_variants_preserve_exact_native_stage ... ok
+test shared_memory::tests::preparation::replay_retention_commits_exact_descriptor_and_authority_without_native_effects ... ok
+test queue::live::tests::retained_control_replay_public_input_failure_is_retryable_only_for_clean_round_trip ... ok
+test queue::live::tests::retained_control_replay_authority_carriers_are_move_only_and_private ... ok
+test queue::dispatch_binding::preparation::tests::persistent_replay_settlement_keeps_real_control_and_data_without_rebuilding ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 867 filtered out; finished in 0.05s
+

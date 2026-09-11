@@ -1,0 +1,9 @@
+*** Begin Patch
+*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/shared_memory/dispatch_retention.rs
+@@
+-    before_validation();
+     let index = engine.device_memory_index(lease, DeviceMemoryPhaseV1::Mapped)?;
+@@
+     let input = data.take().expect("validated replay input").into_parts();
++    before_validation();
+*** End Patch

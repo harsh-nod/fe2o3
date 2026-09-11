@@ -590,6 +590,17 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
         Ok(())
     }
 
+    pub(in crate::queue) fn completed(
+        &self,
+    ) -> Result<&DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {
+        if self.stage != PreparationStageV1::Complete || self.failed {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+        }
+        self.completed
+            .as_ref()
+            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)
+    }
+
     pub(in crate::queue) fn take_completed(
         &mut self,
     ) -> Result<DispatchResourceOwnerV1, Gfx942DispatchBindingErrorV1> {

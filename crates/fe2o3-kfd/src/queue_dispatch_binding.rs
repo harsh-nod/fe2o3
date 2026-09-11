@@ -2134,56 +2134,58 @@ impl DispatchResourceOwnerV1 {
         )
     }
 
-    #[allow(clippy::result_large_err)]
-    pub(super) fn retain_persistent_replay_data_v1(
+    pub(super) fn retain_persistent_replay_data_in_place_v1(
         &mut self,
-        memory: &mut SharedGttMemorySessionV1,
+        memory: &SharedGttMemorySessionV1,
         identity: PersistentFixedDispatchControlIdentityV1,
-        data: Gfx942FixedDispatchDataV1,
+        data: &mut Option<Gfx942FixedDispatchDataV1>,
         predecessor_generation: u64,
-    ) -> Result<(), (Gfx942DispatchBindingErrorV1, Gfx942FixedDispatchDataV1)> {
-        if let Err(error) = self.validate_persistent_replay_v1(identity, predecessor_generation) {
-            return Err((error, data));
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.retain_persistent_replay_data_with_v1(identity, data, predecessor_generation, |data| {
+            memory.retain_persistent_replay_data_in_place_v1(data)
+        })
+    }
+
+    fn retain_persistent_replay_data_with_v1(
+        &mut self,
+        identity: PersistentFixedDispatchControlIdentityV1,
+        data: &mut Option<Gfx942FixedDispatchDataV1>,
+        predecessor_generation: u64,
+        retain: impl FnOnce(
+            &mut Option<Gfx942FixedDispatchDataV1>,
+        )
+            -> Result<crate::shared_memory::RetainedDispatchDataV1, MemorySessionError>,
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        self.validate_persistent_replay_v1(identity, predecessor_generation)?;
+        if self.data.capacity() == 0 {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
         }
+        let input = data
+            .as_ref()
+            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?;
         let retained_initialized = self
             .data_premises
             .first()
             .is_some_and(|premise| premise.fully_initialized);
-        if data.layout() != identity.data_layout
-            || data.sdma_storage_identity() != identity.data_storage
+        if input.layout() != identity.data_layout
+            || input.sdma_storage_identity() != identity.data_storage
             || !persistent_replay_initialization_is_admitted_v1(
                 identity.effect,
-                data.is_fully_initialized(),
+                input.is_fully_initialized(),
                 retained_initialized,
             )
         {
-            return Err((
-                Gfx942DispatchBindingErrorV1::InvalidData {
-                    index: 0,
-                    detail: "persistent control replay storage, extent, or initialization",
-                },
-                data,
-            ));
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: 0,
+                detail: "persistent control replay storage, extent, or initialization",
+            });
         }
-        let input = data.into_parts();
-        let DispatchDataInputStorageV1::Device(lease) = input.storage else {
-            unreachable!("persistent replay identity admits only device-local data")
-        };
-        let authority = match memory.retain_gfx942_device_memory_for_dispatch_recovering(lease) {
-            Ok(authority) => authority,
-            Err((error, lease)) => {
-                let recovered = recover_dispatch_input_v1(DispatchDataInputV1 {
-                    storage: DispatchDataInputStorageV1::Device(lease),
-                    ..input
-                });
-                return Err((error.into(), recovered));
-            }
-        };
-        self.data.push(DispatchDataAuthorityV1::Device(authority));
         let premise = self
             .data_premises
             .first_mut()
             .expect("validated persistent replay premise");
+        let input = retain(data)?;
+        self.data.push(input.authority);
         premise.initialized_content = input.initialized_content;
         premise.fully_initialized = input.fully_initialized || retained_initialized;
         self.persistent_control = PersistentFixedDispatchControlStateV1::Attached(

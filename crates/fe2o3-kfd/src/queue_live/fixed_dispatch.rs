@@ -73,6 +73,22 @@ impl SharedGttMemorySessionV1 {
 }
 
 impl ComputeAqlQueueSessionV1 {
+    fn validate_persistent_bind_preparation_v1(
+        &mut self,
+        preparation: &FixedDispatchPreparationCustodyV1<1>,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        // Bind ingress reserved both empty slots. Callbacks can mutate memory,
+        // not the exclusively borrowed queue's attachment or dispatch slots.
+        let authorities = preparation.completed()?.device_authorities_inline_v1();
+        self.engine
+            .as_mut()
+            .expect("checked queue engine")
+            .backend
+            .session
+            .validate_live_queue_dispatch_memory(&authorities)
+            .map_err(Into::into)
+    }
+
     pub(super) const fn has_any_persistent_compute_attachment_v1(&self) -> bool {
         self.persistent_compute.is_some()
     }
@@ -572,171 +588,82 @@ impl ComputeAqlQueueSessionV1 {
     ) -> Result<Gfx942PreparedPersistentComputeDispatchV1, Gfx942PersistentComputeBindFailureV1>
     {
         let mut request = Some(request);
-        let mut outcome = None;
-        let fused_loan = self.with_live_queue_memory_model(|memory| {
-            let pipeline = execute_persistent_retained_control_replay_pipeline_v1(
-                memory,
-                request
-                    .take()
-                    .expect("opened replay loan consumes its request exactly once"),
-                |memory, replay_request| {
-                    let allocation =
-                        persistent_compute_input_allocation_mut_v1(&mut replay_request.input);
-                    let lease = allocation
-                        .owner
-                        .local_native_for_sdma()
-                        .expect("replay preflight validated attached local native custody");
-                    memory
-                        .mapped_gfx942_device_memory_facts(lease)
-                        .map(|_| ())
-                        .map_err(ComputeAqlQueueSessionErrorV1::from)
-                },
-                |_, mut replay_request| {
-                    let detached = {
-                        let allocation =
-                            persistent_compute_input_allocation_mut_v1(&mut replay_request.input);
-                        allocation
-                            .owner
-                            .detach_local_native_for_compute(&replay_request.prepared)
-                    };
-                    let lease = match detached {
-                        Ok(lease) => lease,
-                        Err(error) => {
-                            return Err((
-                                map_directional_persistent_sdma_use_error_v1(error),
-                                replay_request,
-                            ));
-                        }
-                    };
-                    let PersistentRetainedControlReplayRequestV1 {
-                        input,
-                        prepared,
-                        dispatch,
-                        initialized_content,
-                        control_identity,
-                        predecessor_generation,
-                    } = replay_request;
-                    let (allocation, authenticated_sha256, fully_initialized) = input.into_parts();
-                    Ok(PersistentRetainedControlReplayStorageV1 {
-                        replay: PersistentRetainedControlReplayDetachedV1 {
-                            allocation,
-                            prepared,
-                            dispatch,
-                            authenticated_sha256,
-                            fully_initialized,
-                        },
-                        lease,
-                        initialized_content,
-                        control_identity,
-                        predecessor_generation,
-                    })
-                },
-                |_, storage| {
-                    let PersistentRetainedControlReplayStorageV1 {
-                        replay,
-                        lease,
-                        initialized_content,
-                        control_identity,
-                        predecessor_generation,
-                    } = storage;
-                    let data = match initialized_content {
-                        Some(content) => {
-                            match Gfx942InitializedDeviceMemoryV1::from_authenticated_full_transfer(
-                                lease, content,
-                            ) {
-                                Ok(initialized) => Gfx942FixedDispatchDataV1::initialized(initialized),
-                                Err(lease) => {
-                                    return Err((
-                                        ComputeAqlQueueSessionErrorV1::Contract(
-                                            "persistent compute authenticated extent changed after preflight",
-                                        ),
-                                        PersistentRetainedControlReplayStorageV1 {
-                                            replay,
-                                            lease,
-                                            initialized_content,
-                                            control_identity,
-                                            predecessor_generation,
-                                        },
-                                    ));
-                                }
-                            }
-                        }
-                        None => Gfx942FixedDispatchDataV1::uninitialized(lease),
-                    };
-                    Ok(PersistentRetainedControlReplayDataV1 {
-                        replay,
-                        data,
-                        control_identity,
-                        predecessor_generation,
-                    })
-                },
-                |memory, data| {
-                    let PersistentRetainedControlReplayDataV1 {
-                        mut replay,
-                        data,
-                        control_identity,
-                        predecessor_generation,
-                    } = data;
-                    if let Err((error, data)) = replay.dispatch.retain_persistent_replay_data_v1(
-                        memory,
-                        control_identity,
-                        data,
-                        predecessor_generation,
-                    ) {
-                        return Err((
-                            error.into(),
-                            PersistentRetainedControlReplayDataV1 {
-                                replay,
-                                data,
-                                control_identity,
-                                predecessor_generation,
+        let mut phases = PersistentRetainedControlReplayCustodyV1::Empty;
+        let mut pipeline_result = None;
+        let fused_loan = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.with_live_queue_memory_model(|memory| {
+                phases = PersistentRetainedControlReplayCustodyV1::Input(
+                    request.take().expect("one replay input before opening"),
+                );
+                pipeline_result = Some(execute_persistent_retained_control_replay_pipeline_v1(
+                    memory,
+                    &mut phases,
+                    |memory, phases| phases.mapped_facts(memory),
+                    |_, phases| phases.detach(),
+                    |_, phases| phases.construct(),
+                    |memory, phases| phases.retain(memory),
+                    |memory, phases| phases.audit(memory),
+                ));
+                Ok(())
+            })
+        }));
+        let fused_loan = match fused_loan {
+            Ok(result) => result,
+            Err(payload) => {
+                if let Some(request) = request.take() {
+                    phases = PersistentRetainedControlReplayCustodyV1::Input(request);
+                }
+                let error = ComputeAqlQueueSessionErrorV1::Contract("persistent replay panicked");
+                match phases.into_bind_outcome(Err(error)) {
+                    PersistentRetainedControlReplayOutcomeV1::BeforeDetach { request, .. } => {
+                        let (mut allocation, authenticated_sha256, fully_initialized) =
+                            request.input.into_parts();
+                        let state = quarantine_persistent_retained_control_replay_prepared_v1(
+                            &mut allocation.owner,
+                            request.prepared,
+                        );
+                        self.dispatch = Some(request.dispatch);
+                        self.set_single_persistent_compute_attachment_v1(
+                            PersistentComputeAttachmentV1 {
+                                allocation,
+                                authenticated_sha256,
+                                fully_initialized,
+                                state,
+                                binding: PersistentComputeBindingKeyV1 {
+                                    queue: self.key,
+                                    attachment_generation: commit.attachment_generation,
+                                },
+                                storage_identity: commit.storage_identity,
+                                effect: commit.effect,
+                                predecessor_dispatch_generation: Some(
+                                    commit.predecessor_generation,
+                                ),
+                                terminal_custody: Some(
+                                    PersistentComputeTerminalNativeCustodyV1::Attached,
+                                ),
                             },
-                        ));
+                        );
+                        self.next_persistent_compute_generation = commit.next_attachment_generation;
                     }
-                    Ok(replay)
-                },
-                |memory, replay| {
-                    let device_authorities = replay.dispatch.device_authorities_inline_v1();
-                    memory
-                        .validate_persistent_replay_dispatch_memory(&device_authorities)
-                        .map_err(Into::into)
-                },
-            );
-            outcome = Some(match pipeline {
-                PersistentRetainedControlReplayPipelineOutcomeV1::BeforeDetach {
-                    request,
-                    error,
-                } => PersistentRetainedControlReplayOutcomeV1::BeforeDetach { request, error },
-                PersistentRetainedControlReplayPipelineOutcomeV1::Storage { storage, error } => {
                     PersistentRetainedControlReplayOutcomeV1::AfterDetach {
-                        replay: storage.replay,
-                        custody: PersistentComputeTerminalNativeCustodyV1::Storage(
-                            Gfx942SdmaBufferStorageV1::Device(storage.lease),
-                        ),
+                        replay,
+                        custody,
                         error,
+                    } => {
+                        let _ = self.terminal_persistent_retained_control_replay_after_detach_v1(
+                            replay, custody, error, commit,
+                        );
+                    }
+                    PersistentRetainedControlReplayOutcomeV1::Ready(_) => {
+                        unreachable!("panic is not completion")
                     }
                 }
-                PersistentRetainedControlReplayPipelineOutcomeV1::Data { data, error } => {
-                    PersistentRetainedControlReplayOutcomeV1::AfterDetach {
-                        replay: data.replay,
-                        custody: PersistentComputeTerminalNativeCustodyV1::Data(PersistentComputeTerminalDataV1::from_one(data.data)),
-                        error,
-                    }
-                }
-                PersistentRetainedControlReplayPipelineOutcomeV1::Attached {
-                    attached,
-                    error,
-                } => PersistentRetainedControlReplayOutcomeV1::AfterDetach {
-                    replay: attached,
-                    custody: PersistentComputeTerminalNativeCustodyV1::Attached,
-                    error,
-                },
-                PersistentRetainedControlReplayPipelineOutcomeV1::Ready(replay) => {
-                    PersistentRetainedControlReplayOutcomeV1::Ready(replay)
-                }
-            });
-            Ok(())
-        });
+                self.poison_terminal();
+                poison_process_global_after_persistent_unwind_v1();
+                std::panic::resume_unwind(payload)
+            }
+        };
+        let outcome = pipeline_result.map(|result| phases.into_bind_outcome(result));
 
         let (outcome, loan_error) = match resolve_persistent_retained_control_replay_loan_v1(
             request,
@@ -1151,25 +1078,29 @@ impl ComputeAqlQueueSessionV1 {
                 }
             }
         }
-        for entry in &entries {
-            let lease = entry
-                .allocation
-                .owner
-                .local_native_for_sdma()
-                .expect("validated three-binding local native custody");
-            let validation = self.with_live_queue_memory_model(|memory| {
-                memory
-                    .mapped_gfx942_device_memory_facts(lease)
-                    .map(|_| ())
-                    .map_err(Into::into)
-            });
-            if let Err(error) = validation {
-                if cancel_persistent_compute_prepublication_entries_v1(entries.each_mut()) {
-                    return Err(recover(
-                        error,
-                        three_binding_entries_into_inputs_v1(entries),
-                    ));
-                }
+        let validation = validate_persistent_bind_inputs_v1(
+            self,
+            &entries.each_ref().map(|entry| &entry.allocation),
+            |session, allocation| {
+                let lease = allocation
+                    .owner
+                    .local_native_for_sdma()
+                    .expect("validated persistent local native custody");
+                session.with_live_queue_memory_model(|memory| {
+                    memory
+                        .mapped_gfx942_device_memory_facts(lease)
+                        .map(|_| ())
+                        .map_err(Into::into)
+                })
+            },
+        );
+        let validation = match validation {
+            Ok(result) => result,
+            Err(payload) => {
+                quarantine_persistent_compute_entries_v1(
+                    entries.each_mut(),
+                    Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+                );
                 self.set_three_binding_persistent_compute_attachment_v1(
                     ThreeBindingPersistentComputeAttachmentV1 {
                         entries,
@@ -1183,16 +1114,45 @@ impl ComputeAqlQueueSessionV1 {
                 );
                 self.next_persistent_compute_generation = next_attachment_generation;
                 self.poison_terminal();
+                poison_process_global_after_persistent_unwind_v1();
+                std::panic::resume_unwind(payload)
+            }
+        };
+        if let Err(error) = validation {
+            if cancel_persistent_compute_prepublication_entries_v1(entries.each_mut()) {
+                let inputs = three_binding_entries_into_inputs_v1(entries);
                 return Err(Gfx942ThreeBindingPersistentComputeBindFailureV1 {
                     error,
-                    custody:
+                    custody: if persistent_bind_retryable_v1(!self.terminal_poisoned, true) {
+                        Gfx942ThreeBindingPersistentComputeBindFailureCustodyV1::Retryable(inputs)
+                    } else {
                         Gfx942ThreeBindingPersistentComputeBindFailureCustodyV1::ProcessTeardown(
                             Gfx942ThreeBindingPersistentComputeBindTerminalCustodyV1 {
-                                inputs: None,
+                                inputs: Some(inputs),
                             },
-                        ),
+                        )
+                    },
                 });
             }
+            self.set_three_binding_persistent_compute_attachment_v1(
+                ThreeBindingPersistentComputeAttachmentV1 {
+                    entries,
+                    binding: PersistentComputeBindingKeyV1 {
+                        queue: self.key,
+                        attachment_generation,
+                    },
+                    predecessor_dispatch_generation: detached_generation,
+                    terminal_custody: Some(PersistentComputeTerminalNativeCustodyV1::Attached),
+                },
+            );
+            self.next_persistent_compute_generation = next_attachment_generation;
+            self.poison_terminal();
+            return Err(Gfx942ThreeBindingPersistentComputeBindFailureV1 {
+                error,
+                custody: Gfx942ThreeBindingPersistentComputeBindFailureCustodyV1::ProcessTeardown(
+                    Gfx942ThreeBindingPersistentComputeBindTerminalCustodyV1 { inputs: None },
+                ),
+            });
         }
         for index in 0..3 {
             let state = core::mem::replace(
@@ -1302,21 +1262,25 @@ impl ComputeAqlQueueSessionV1 {
             data.push(item);
         }
         let mut preparation = FixedDispatchPreparationCustodyV1::new(packets, data);
-        let prepared_dispatch = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.with_live_queue_memory_model_custody(|memory| {
-                prepare_three_binding_persistent_fixed_dispatch_resources_v1(
-                    memory,
-                    &programs,
-                    &mut preparation,
-                    detached_generation,
-                    control_identity,
-                )
-            })
-        }));
+        let prepared_dispatch = settle_persistent_bind_preparation_v1(
+            self,
+            &mut preparation,
+            |session, preparation| {
+                session.with_live_queue_memory_model(|memory| {
+                    prepare_three_binding_persistent_fixed_dispatch_resources_v1(
+                        memory,
+                        &programs,
+                        preparation,
+                        detached_generation,
+                        control_identity,
+                    )
+                    .map_err(Into::into)
+                })
+            },
+            Self::validate_persistent_bind_preparation_v1,
+        );
         let prepared_dispatch = match prepared_dispatch {
-            Ok(Ok((Ok(()), Ok(())))) => Ok(()),
-            Ok(Ok((Err(error), Ok(())))) => Err(error.into()),
-            Ok(Ok((_, Err(error)))) | Ok(Err(error)) => Err(error),
+            Ok(result) => result,
             Err(payload) => {
                 quarantine_persistent_compute_entries_v1(
                     entries.each_mut(),
@@ -1376,41 +1340,6 @@ impl ComputeAqlQueueSessionV1 {
                 });
             }
         };
-        let validation = {
-            let device_authorities = prepared_dispatch.device_authorities_inline_v1();
-            self.engine
-                .as_mut()
-                .expect("checked queue engine")
-                .backend
-                .session
-                .validate_live_queue_dispatch_memory(&device_authorities)
-        };
-        if let Err(error) = validation {
-            quarantine_persistent_compute_entries_v1(
-                entries.each_mut(),
-                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
-            );
-            self.dispatch = Some(prepared_dispatch);
-            self.set_three_binding_persistent_compute_attachment_v1(
-                ThreeBindingPersistentComputeAttachmentV1 {
-                    entries,
-                    binding: PersistentComputeBindingKeyV1 {
-                        queue: self.key,
-                        attachment_generation,
-                    },
-                    predecessor_dispatch_generation: detached_generation,
-                    terminal_custody: Some(PersistentComputeTerminalNativeCustodyV1::Attached),
-                },
-            );
-            self.next_persistent_compute_generation = next_attachment_generation;
-            self.poison_terminal();
-            return Err(Gfx942ThreeBindingPersistentComputeBindFailureV1 {
-                error: error.into(),
-                custody: Gfx942ThreeBindingPersistentComputeBindFailureCustodyV1::ProcessTeardown(
-                    Gfx942ThreeBindingPersistentComputeBindTerminalCustodyV1 { inputs: None },
-                ),
-            });
-        }
         let binding = PersistentComputeBindingKeyV1 {
             queue: self.key,
             attachment_generation,
@@ -1706,17 +1635,46 @@ impl ComputeAqlQueueSessionV1 {
                 },
             );
         }
-        let validation = {
-            let lease = allocation
-                .owner
-                .local_native_for_sdma()
-                .expect("validated local native custody");
-            self.with_live_queue_memory_model(|memory| {
-                memory
-                    .mapped_gfx942_device_memory_facts(lease)
-                    .map(|_| ())
-                    .map_err(Into::into)
-            })
+        let validation =
+            validate_persistent_bind_inputs_v1(self, &[&*allocation], |session, allocation| {
+                let lease = allocation
+                    .owner
+                    .local_native_for_sdma()
+                    .expect("validated persistent local native custody");
+                session.with_live_queue_memory_model(|memory| {
+                    memory
+                        .mapped_gfx942_device_memory_facts(lease)
+                        .map(|_| ())
+                        .map_err(Into::into)
+                })
+            });
+        let validation = match validation {
+            Ok(result) => result,
+            Err(payload) => {
+                let (mut allocation, authenticated_sha256, fully_initialized) = input.into_parts();
+                let state = quarantine_persistent_retained_control_replay_prepared_v1(
+                    &mut allocation.owner,
+                    prepared,
+                );
+                self.set_single_persistent_compute_attachment_v1(PersistentComputeAttachmentV1 {
+                    allocation,
+                    authenticated_sha256,
+                    fully_initialized,
+                    state,
+                    binding: PersistentComputeBindingKeyV1 {
+                        queue: self.key,
+                        attachment_generation,
+                    },
+                    storage_identity,
+                    effect,
+                    predecessor_dispatch_generation: detached_generation,
+                    terminal_custody: Some(PersistentComputeTerminalNativeCustodyV1::Attached),
+                });
+                self.next_persistent_compute_generation = next_attachment_generation;
+                self.poison_terminal();
+                poison_process_global_after_persistent_unwind_v1();
+                std::panic::resume_unwind(payload)
+            }
         };
         if let Err(error) = validation {
             let (allocation, authenticated_sha256, fully_initialized) = input.into_parts();
@@ -1740,7 +1698,7 @@ impl ComputeAqlQueueSessionV1 {
                     attachment.authenticated_sha256,
                     attachment.fully_initialized,
                 );
-                if !self.terminal_poisoned {
+                if persistent_bind_retryable_v1(!self.terminal_poisoned, true) {
                     return Err(recover(error, input));
                 }
                 return Err(Gfx942PersistentComputeBindFailureV1 {
@@ -1855,21 +1813,25 @@ impl ComputeAqlQueueSessionV1 {
             None => Gfx942FixedDispatchDataV1::uninitialized(lease),
         };
         let mut preparation = FixedDispatchPreparationCustodyV1::new(packets, vec![data]);
-        let prepared_dispatch = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.with_live_queue_memory_model_custody(|memory| {
-                prepare_persistent_fixed_dispatch_resources_v1(
-                    memory,
-                    &programs,
-                    &mut preparation,
-                    detached_generation,
-                    control_identity,
-                )
-            })
-        }));
+        let prepared_dispatch = settle_persistent_bind_preparation_v1(
+            self,
+            &mut preparation,
+            |session, preparation| {
+                session.with_live_queue_memory_model(|memory| {
+                    prepare_persistent_fixed_dispatch_resources_v1(
+                        memory,
+                        &programs,
+                        preparation,
+                        detached_generation,
+                        control_identity,
+                    )
+                    .map_err(Into::into)
+                })
+            },
+            Self::validate_persistent_bind_preparation_v1,
+        );
         let prepared_dispatch = match prepared_dispatch {
-            Ok(Ok((Ok(()), Ok(())))) => Ok(()),
-            Ok(Ok((Err(error), Ok(())))) => Err(error.into()),
-            Ok(Ok((_, Err(error)))) | Ok(Err(error)) => Err(error),
+            Ok(result) => result,
             Err(payload) => {
                 let state = quarantine_persistent_retained_control_replay_prepared_v1(
                     &mut allocation.owner,
@@ -1933,45 +1895,6 @@ impl ComputeAqlQueueSessionV1 {
                 });
             }
         };
-        let validation = {
-            let device_authorities = prepared_dispatch.device_authorities_inline_v1();
-            self.engine
-                .as_mut()
-                .expect("checked queue engine")
-                .backend
-                .session
-                .validate_live_queue_dispatch_memory(&device_authorities)
-        };
-        if let Err(error) = validation {
-            let state = quarantine_persistent_compute_prepared_v1(
-                &mut allocation.owner,
-                prepared,
-                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
-            );
-            self.set_single_persistent_compute_attachment_v1(PersistentComputeAttachmentV1 {
-                allocation,
-                authenticated_sha256,
-                fully_initialized: initialized,
-                state,
-                binding: PersistentComputeBindingKeyV1 {
-                    queue: self.key,
-                    attachment_generation,
-                },
-                storage_identity,
-                effect,
-                predecessor_dispatch_generation: detached_generation,
-                terminal_custody: Some(PersistentComputeTerminalNativeCustodyV1::Attached),
-            });
-            self.next_persistent_compute_generation = next_attachment_generation;
-            self.dispatch = Some(prepared_dispatch);
-            self.poison_terminal();
-            return Err(Gfx942PersistentComputeBindFailureV1 {
-                error: error.into(),
-                custody: Gfx942PersistentComputeBindFailureCustodyV1::ProcessTeardown(
-                    Gfx942PersistentComputeBindTerminalCustodyV1 { input: None },
-                ),
-            });
-        }
         let binding = PersistentComputeBindingKeyV1 {
             queue: self.key,
             attachment_generation,

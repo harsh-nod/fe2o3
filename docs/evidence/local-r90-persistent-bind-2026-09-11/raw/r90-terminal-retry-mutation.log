@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 30.97s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::tests::persistent_bind_terminal_retake_dominates_successful_roster_cancellation ... FAILED
+
+failures:
+
+---- queue::live::tests::persistent_bind_terminal_retake_dominates_successful_roster_cancellation stdout ----
+
+thread 'queue::live::tests::persistent_bind_terminal_retake_dominates_successful_roster_cancellation' (819714) panicked at crates/fe2o3-kfd/src/queue_live.rs:20392:17:
+assertion `left == right` failed
+  left: true
+ right: false
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::live::tests::persistent_bind_terminal_retake_dominates_successful_roster_cancellation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 887 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

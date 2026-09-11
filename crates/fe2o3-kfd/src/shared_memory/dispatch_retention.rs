@@ -22,6 +22,50 @@ enum DataFacts {
     Host(SharedGttMappedResourceFactsV1),
 }
 
+pub(super) fn retain_replay_with_v1<B: MemoryBackend>(
+    engine: &SharedMemoryEngine<B>,
+    device: DeviceKeyV1,
+    vm: VmKeyV1,
+    data: &mut Option<Gfx942FixedDispatchDataV1>,
+    before_validation: impl FnOnce(),
+) -> Result<RetainedDispatchDataV1, MemorySessionError> {
+    let input = data
+        .as_ref()
+        .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)?;
+    let DispatchDataStorageRefV1::Device(lease) = input.storage_ref() else {
+        return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
+    };
+    before_validation();
+    let index = engine.device_memory_index(lease, DeviceMemoryPhaseV1::Mapped)?;
+    let record = &engine.device_memory[index];
+    if record.device != device || record.vm != vm {
+        return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
+    }
+    let facts = Gfx942DeviceMemoryDispatchFactsV1 {
+        id: record.id,
+        generation: record.generation,
+        device: record.device,
+        vm: record.vm,
+        gpu_va: record.gpu_va,
+        layout: record.layout,
+    };
+    // The exclusive source and immutable engine preserve the validated pair.
+    // There are no callbacks, allocations or fallible checks after this move.
+    let input = data.take().expect("validated replay input").into_parts();
+    let DispatchDataInputStorageV1::Device(lease) = input.storage else {
+        unreachable!("validated device replay storage")
+    };
+    Ok(RetainedDispatchDataV1 {
+        authority: DispatchDataAuthorityV1::Device(Gfx942DeviceMemoryDispatchAuthorityV1 {
+            lease,
+            facts,
+        }),
+        layout: input.layout,
+        initialized_content: input.initialized_content,
+        fully_initialized: input.fully_initialized,
+    })
+}
+
 pub(super) fn retain_v1<B: MemoryBackend>(
     engine: &SharedMemoryEngine<B>,
     device: DeviceKeyV1,

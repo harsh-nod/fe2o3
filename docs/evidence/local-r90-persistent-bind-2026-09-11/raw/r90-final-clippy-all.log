@@ -1,0 +1,30 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error: called `.err().expect()` on a `Result` value
+    --> crates/fe2o3-kfd/src/queue_live.rs:2717:31
+     |
+2717 |                 error: result.err().expect("input phase failed"),
+     |                               ^^^^^^^^^^^^ help: try: `expect_err`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#err_expect
+     = note: `-D clippy::err-expect` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::err_expect)]`
+
+error: called `.err().expect()` on a `Result` value
+    --> crates/fe2o3-kfd/src/queue_live.rs:2721:31
+     |
+2721 |                 error: result.err().expect("storage phase failed"),
+     |                               ^^^^^^^^^^^^ help: try: `expect_err`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#err_expect
+
+error: called `.err().expect()` on a `Result` value
+    --> crates/fe2o3-kfd/src/queue_live.rs:2725:31
+     |
+2725 |                 error: result.err().expect("data phase failed"),
+     |                               ^^^^^^^^^^^^ help: try: `expect_err`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#err_expect
+
+error: could not compile `fe2o3-kfd` (lib) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `fe2o3-kfd` (lib test) due to 3 previous errors

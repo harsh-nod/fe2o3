@@ -1,0 +1,12 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 5 tests
+test persistent_allocation::tests::release_requires_settlement_and_returns_exact_native_owner ... ok
+test queue::live::pristine_abort::tests::pristine_rebind_settlement_roots_prepared_owner_before_closing_or_validation_failure ... ok
+test queue::dispatch_binding::preparation::tests::persistent_three_bind_settlement_retains_real_roster_controls_roles_and_generation ... ok
+test queue::dispatch_binding::preparation::tests::persistent_replay_settlement_keeps_real_control_and_data_without_rebuilding ... ok
+test queue::dispatch_binding::preparation::tests::persistent_single_bind_settlement_retains_real_data_controls_and_generation ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 883 filtered out; finished in 0.05s
+

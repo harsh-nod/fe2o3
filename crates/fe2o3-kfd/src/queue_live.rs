@@ -238,6 +238,12 @@ pub use compute_sdma_coexistence::Gfx942R66NativeObservationFailureV1;
 mod dispatch;
 #[path = "queue_live/fixed_dispatch.rs"]
 mod fixed_dispatch;
+#[path = "queue_live/model_loan.rs"]
+pub(in crate::queue) mod model_loan;
+use model_loan::execute_live_model_custody_v1;
+#[path = "queue_live/persistent_bind.rs"]
+pub(in crate::queue) mod persistent_bind;
+use persistent_bind::{settle_persistent_bind_preparation_v1, validate_persistent_bind_inputs_v1};
 #[path = "queue_live/pristine_abort.rs"]
 mod pristine_abort;
 use pristine_abort::UnpublishedDispatchStateV1;
@@ -706,26 +712,6 @@ struct LinuxNativeQueueBackendV1 {
     session: SharedGttMemorySessionV1,
     foundation: Option<QueueModelFoundationV1>,
     foundation_in_engine: bool,
-}
-
-#[cold]
-fn resume_live_queue_model_panic_v1(
-    payload: Box<dyn std::any::Any + Send>,
-    _retake: Result<(), ComputeAqlQueueSessionErrorV1>,
-) -> ! {
-    // Retake failure must not replace the original panic payload.
-    std::panic::resume_unwind(payload)
-}
-
-fn fail_closed_live_queue_model_retake_v1<E>(
-    retake: &Result<(), E>,
-    terminal_poison: impl FnOnce(),
-    process_poison: impl FnOnce(),
-) {
-    if retake.is_err() {
-        terminal_poison();
-        process_poison();
-    }
 }
 
 impl NativeQueueBackendV1 for LinuxNativeQueueBackendV1 {
@@ -2603,7 +2589,8 @@ const fn classify_persistent_retained_control_replay_failure_v1(
 ) -> PersistentRetainedControlReplayDispositionV1 {
     match stage {
         PersistentRetainedControlReplayCustodyStageV1::Input
-            if loan_succeeded && cancellation_succeeded && session_healthy =>
+            if loan_succeeded
+                && persistent_bind_retryable_v1(session_healthy, cancellation_succeeded) =>
         {
             PersistentRetainedControlReplayDispositionV1::RetryableInput
         }
@@ -2621,6 +2608,10 @@ const fn classify_persistent_retained_control_replay_failure_v1(
             PersistentRetainedControlReplayDispositionV1::TerminalData
         }
     }
+}
+
+const fn persistent_bind_retryable_v1(session_healthy: bool, cancellation_succeeded: bool) -> bool {
+    session_healthy && cancellation_succeeded
 }
 
 fn persistent_retained_control_replay_input_failure_v1(
@@ -2667,7 +2658,7 @@ struct PersistentRetainedControlReplayStorageV1 {
 
 struct PersistentRetainedControlReplayDataV1 {
     replay: PersistentRetainedControlReplayDetachedV1,
-    data: Gfx942FixedDispatchDataV1,
+    data: Option<Gfx942FixedDispatchDataV1>,
     control_identity: PersistentFixedDispatchControlIdentityV1,
     predecessor_generation: u64,
 }
@@ -2703,51 +2694,66 @@ enum PersistentRetainedControlReplayPipelineOutcomeV1<Request, Storage, Data, At
     Ready(Attached),
 }
 
-#[allow(clippy::too_many_arguments)]
-fn execute_persistent_retained_control_replay_pipeline_v1<
-    Context,
-    Request,
-    Storage,
-    Data,
-    Attached,
-    Error,
->(
-    context: &mut Context,
-    mut request: Request,
-    mapped_facts: impl FnOnce(&mut Context, &mut Request) -> Result<(), Error>,
-    detach: impl FnOnce(&mut Context, Request) -> Result<Storage, (Error, Request)>,
-    construct: impl FnOnce(&mut Context, Storage) -> Result<Data, (Error, Storage)>,
-    retain: impl FnOnce(&mut Context, Data) -> Result<Attached, (Error, Data)>,
-    final_audit: impl FnOnce(&mut Context, &Attached) -> Result<(), Error>,
-) -> PersistentRetainedControlReplayPipelineOutcomeV1<Request, Storage, Data, Attached, Error> {
-    if let Err(error) = mapped_facts(context, &mut request) {
-        return PersistentRetainedControlReplayPipelineOutcomeV1::BeforeDetach { request, error };
-    }
-    let storage = match detach(context, request) {
-        Ok(storage) => storage,
-        Err((error, request)) => {
-            return PersistentRetainedControlReplayPipelineOutcomeV1::BeforeDetach {
+enum PersistentRetainedControlReplayPipelineCustodyV1<Request, Storage, Data, Attached> {
+    Empty,
+    Input(Request),
+    Storage(Storage),
+    Data(Data),
+    Attached(Attached),
+}
+
+impl<Request, Storage, Data, Attached>
+    PersistentRetainedControlReplayPipelineCustodyV1<Request, Storage, Data, Attached>
+{
+    fn into_outcome<E>(
+        self,
+        result: Result<(), E>,
+    ) -> PersistentRetainedControlReplayPipelineOutcomeV1<Request, Storage, Data, Attached, E> {
+        use PersistentRetainedControlReplayPipelineOutcomeV1 as Outcome;
+        match self {
+            Self::Empty => unreachable!("an executed replay retains one phase"),
+            Self::Input(request) => Outcome::BeforeDetach {
                 request,
-                error,
-            };
+                error: result.expect_err("input phase failed"),
+            },
+            Self::Storage(storage) => Outcome::Storage {
+                storage,
+                error: result.expect_err("storage phase failed"),
+            },
+            Self::Data(data) => Outcome::Data {
+                data,
+                error: result.expect_err("data phase failed"),
+            },
+            Self::Attached(attached) => match result {
+                Ok(()) => Outcome::Ready(attached),
+                Err(error) => Outcome::Attached { attached, error },
+            },
         }
-    };
-    let data = match construct(context, storage) {
-        Ok(data) => data,
-        Err((error, storage)) => {
-            return PersistentRetainedControlReplayPipelineOutcomeV1::Storage { storage, error };
-        }
-    };
-    let attached = match retain(context, data) {
-        Ok(attached) => attached,
-        Err((error, data)) => {
-            return PersistentRetainedControlReplayPipelineOutcomeV1::Data { data, error };
-        }
-    };
-    if let Err(error) = final_audit(context, &attached) {
-        return PersistentRetainedControlReplayPipelineOutcomeV1::Attached { attached, error };
     }
-    PersistentRetainedControlReplayPipelineOutcomeV1::Ready(attached)
+}
+
+type PersistentRetainedControlReplayCustodyV1 = PersistentRetainedControlReplayPipelineCustodyV1<
+    PersistentRetainedControlReplayRequestV1,
+    PersistentRetainedControlReplayStorageV1,
+    PersistentRetainedControlReplayDataV1,
+    PersistentRetainedControlReplayDetachedV1,
+>;
+
+#[allow(clippy::too_many_arguments)]
+fn execute_persistent_retained_control_replay_pipeline_v1<Context, Custody, Error>(
+    context: &mut Context,
+    custody: &mut Custody,
+    mapped_facts: impl FnOnce(&mut Context, &mut Custody) -> Result<(), Error>,
+    detach: impl FnOnce(&mut Context, &mut Custody) -> Result<(), Error>,
+    construct: impl FnOnce(&mut Context, &mut Custody) -> Result<(), Error>,
+    retain: impl FnOnce(&mut Context, &mut Custody) -> Result<(), Error>,
+    final_audit: impl FnOnce(&mut Context, &mut Custody) -> Result<(), Error>,
+) -> Result<(), Error> {
+    mapped_facts(context, custody)?;
+    detach(context, custody)?;
+    construct(context, custody)?;
+    retain(context, custody)?;
+    final_audit(context, custody)
 }
 
 enum PersistentRetainedControlReplayLoanResolutionV1<Request, Outcome, Error> {
@@ -14040,28 +14046,22 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         operation: impl FnOnce(&mut SharedGttMemorySessionV1) -> R,
     ) -> Result<(R, Result<(), ComputeAqlQueueSessionErrorV1>), ComputeAqlQueueSessionErrorV1> {
-        let loan = self.restore_model_ownership_for_live_mutation()?;
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let engine = self
-                .engine
-                .as_mut()
-                .expect("model loan requires queue engine");
-            operation(&mut engine.backend.session)
-        }));
-        let retake = self.retake_model_ownership_after_live_mutation(loan);
-        fail_closed_live_queue_model_retake_v1(
-            &retake,
-            || self.poison_terminal(),
-            permanently_poison_process_global_kfd_runtime_gate_v1,
-        );
-        match result {
-            Ok(result) => Ok((result, retake)),
-            Err(payload) => {
-                self.poison_terminal();
+        execute_live_model_custody_v1(
+            self,
+            |session| session.restore_model_ownership_for_live_mutation(),
+            |session| {
+                let engine = session
+                    .engine
+                    .as_mut()
+                    .expect("model loan requires queue engine");
+                operation(&mut engine.backend.session)
+            },
+            |session, loan| session.retake_model_ownership_after_live_mutation(loan),
+            |session| {
+                session.poison_terminal();
                 permanently_poison_process_global_kfd_runtime_gate_v1();
-                resume_live_queue_model_panic_v1(payload, retake)
-            }
-        }
+            },
+        )
     }
 
     fn with_sdma_queue_creation_custody_v1<R>(
@@ -15235,19 +15235,17 @@ mod tests {
 
     #[test]
     fn nonpanic_retake_failure_requests_local_and_process_terminal_poison() {
-        let terminal_poisoned = core::cell::Cell::new(false);
-        let process_poisoned = core::cell::Cell::new(false);
-        let retake = Err::<(), _>(ComputeAqlQueueSessionErrorV1::Contract(
-            "injected retake failure",
-        ));
-        fail_closed_live_queue_model_retake_v1(
-            &retake,
-            || terminal_poisoned.set(true),
-            || process_poisoned.set(true),
-        );
-        assert!(terminal_poisoned.get());
-        assert!(process_poisoned.get());
-
+        let mut poison = (false, false);
+        let ((), retake) = execute_live_model_custody_v1(
+            &mut poison,
+            |_| Ok(()),
+            |_| (),
+            |_, ()| Err("injected retake failure"),
+            |poison| *poison = (true, true),
+        )
+        .unwrap();
+        assert_eq!(retake, Err("injected retake failure"));
+        assert_eq!(poison, (true, true));
         let source = include_str!("queue_live.rs");
         let envelope = source
             .split("fn with_live_queue_memory_model_custody<R>")
@@ -15256,18 +15254,9 @@ mod tests {
             .split("fn with_sdma_queue_creation_custody_v1<R>")
             .next()
             .unwrap();
-        let failure = envelope
-            .find("fail_closed_live_queue_model_retake_v1(")
-            .unwrap();
-        let terminal = envelope[failure..].find("self.poison_terminal()").unwrap() + failure;
-        let process = envelope[failure..]
-            .find("permanently_poison_process_global_kfd_runtime_gate_v1")
-            .unwrap()
-            + failure;
-        let result = envelope.find("match result").unwrap();
-        assert!(failure < terminal);
-        assert!(terminal < process);
-        assert!(process < result);
+        assert!(envelope.contains("execute_live_model_custody_v1("));
+        assert!(envelope.contains("session.poison_terminal()"));
+        assert!(envelope.contains("permanently_poison_process_global_kfd_runtime_gate_v1()"));
     }
 
     #[test]
@@ -15304,45 +15293,32 @@ mod tests {
 
     #[test]
     fn retake_failure_does_not_replace_the_original_panic_payload() {
-        let caught = std::panic::catch_unwind(|| {
-            resume_live_queue_model_panic_v1(
-                Box::new("original queue mutation panic"),
-                Err(ComputeAqlQueueSessionErrorV1::Contract(
-                    "injected retake failure",
-                )),
+        let mut poisoned = false;
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_live_model_custody_v1(
+                &mut poisoned,
+                |_| Ok(()),
+                |_| -> () { std::panic::panic_any("original queue mutation panic") },
+                |_, ()| Err("injected retake failure"),
+                |poisoned| *poisoned = true,
             )
-        })
+        }))
         .expect_err("panic resumption must escape the cleanup boundary");
+        assert!(poisoned);
         assert_eq!(
-            caught.downcast_ref::<&'static str>(),
+            caught.downcast_ref::<&str>(),
             Some(&"original queue mutation panic")
         );
-
-        let source = include_str!("queue_live.rs");
-        let envelope = source
-            .split("fn with_live_queue_memory_model_custody<R>")
-            .nth(1)
-            .unwrap()
-            .split("fn with_sdma_queue_creation_custody_v1<R>")
-            .next()
+        let helper = include_str!("queue_live/model_loan.rs");
+        let operation = helper
+            .find("catch_unwind(AssertUnwindSafe(|| operation(context)))")
             .unwrap();
-        let retake = envelope
-            .find("retake_model_ownership_after_live_mutation(loan)")
+        let retake = helper
+            .find("catch_unwind(AssertUnwindSafe(|| retake(context, loan)))")
             .unwrap();
-        let unwind = envelope.find("Err(payload)").unwrap();
-        let terminal = envelope[unwind..].find("self.poison_terminal()").unwrap() + unwind;
-        let process_gate = envelope[unwind..]
-            .find("permanently_poison_process_global_kfd_runtime_gate_v1()")
-            .unwrap()
-            + unwind;
-        let resume = envelope[unwind..]
-            .find("resume_live_queue_model_panic_v1(payload, retake)")
-            .unwrap()
-            + unwind;
-        assert!(retake < unwind);
-        assert!(unwind < terminal);
-        assert!(terminal < process_gate);
-        assert!(process_gate < resume);
+        let poison = helper[retake..].find("poison(context)").unwrap() + retake;
+        let retain_secondary = helper.find("core::mem::forget(closing)").unwrap();
+        assert!(operation < retake && retake < poison && poison < retain_secondary);
 
         let bind = include_str!("queue_live/fixed_dispatch.rs")
             .split("pub fn bind_directional_persistent_fixed_dispatch_v1")
@@ -17056,6 +17032,29 @@ mod tests {
         for (queue_id, binding_count) in [(190, 1), (191, 3)] {
             let queue = test_queue_key(queue_id, 1);
             let mut session = persistent_compute_gate_test_session_v1(queue, binding_count);
+            let roster_snapshot = |session: &ComputeAqlQueueSessionV1| {
+                let attachment = session.persistent_compute.as_ref().unwrap();
+                (
+                    attachment.binding,
+                    attachment
+                        .entries
+                        .iter()
+                        .map(|entry| {
+                            (
+                                entry.storage_identity,
+                                entry.authenticated_sha256,
+                                entry.fully_initialized,
+                                entry.effect,
+                                entry.allocation.byte_len(),
+                                entry.allocation.owner.live_use_count(),
+                                entry.allocation.owner.quarantine_reason(),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                    session.next_persistent_compute_generation,
+                )
+            };
+            let existing = roster_snapshot(&session);
             assert!(session.has_any_persistent_compute_attachment_v1());
             assert_eq!(
                 session
@@ -17109,9 +17108,16 @@ mod tests {
                 ))
             ));
 
-            let input = Gfx942PersistentComputeInputV1::InitializedAfterDispatch(
-                persistent_compute_gate_test_allocation_v1(queue, 0x5400 + queue_id),
+            let allocation = persistent_compute_gate_test_allocation_v1(queue, 0x5400 + queue_id);
+            let incoming = (
+                allocation
+                    .owner
+                    .local_native_for_sdma()
+                    .unwrap()
+                    .storage_identity(),
+                allocation.byte_len(),
             );
+            let input = Gfx942PersistentComputeInputV1::InitializedAfterDispatch(allocation);
             let packet = Gfx942FixedDispatchPacketV1::new(
                 0,
                 fe2o3_aql::AqlDispatchGeometryV1::new([1, 1, 1], [1, 1, 1]).unwrap(),
@@ -17135,10 +17141,25 @@ mod tests {
                 )
             ));
             let (_, custody) = failure.into_parts();
-            assert!(matches!(
-                custody,
-                Gfx942PersistentComputeBindFailureCustodyV1::Retryable(_)
-            ));
+            let Gfx942PersistentComputeBindFailureCustodyV1::Retryable(input) = custody else {
+                panic!("occupied-slot rejection must return the exact incoming input")
+            };
+            let (allocation, digest, initialized) = input.into_parts();
+            assert_eq!(digest, None);
+            assert!(initialized);
+            assert_eq!(allocation.attachment.queue, queue);
+            assert_eq!(
+                (
+                    allocation
+                        .owner
+                        .local_native_for_sdma()
+                        .unwrap()
+                        .storage_identity(),
+                    allocation.byte_len(),
+                ),
+                incoming
+            );
+            assert_eq!(roster_snapshot(&session), existing);
             assert!(session.has_any_persistent_compute_attachment_v1());
             assert!(!session.terminal_poisoned);
         }
@@ -17213,6 +17234,66 @@ mod tests {
                 span.contains("self.has_any_persistent_compute_attachment_v1()"),
                 "transition bypasses unified persistent roster gate: {start}"
             );
+        }
+    }
+
+    #[test]
+    fn persistent_bind_terminal_ingress_retains_self_but_returns_foreign_input() {
+        let receiver = test_queue_key(291, 1);
+        for source in [receiver, test_queue_key(292, 1)] {
+            let mut session = persistent_compute_cancellation_test_session(receiver, None, None);
+            session.poison_terminal();
+            let allocation = persistent_compute_gate_test_allocation_v1(source, 0x9100);
+            let identity = allocation
+                .owner
+                .local_native_for_sdma()
+                .unwrap()
+                .storage_identity();
+            let input = Gfx942PersistentComputeInputV1::InitializedAfterDispatch(allocation);
+            let packet = Gfx942FixedDispatchPacketV1::new(
+                0,
+                fe2o3_aql::AqlDispatchGeometryV1::new([1, 1, 1], [1, 1, 1]).unwrap(),
+                0,
+                Vec::new().into_boxed_slice(),
+                Vec::new().into_boxed_slice(),
+            );
+            let failure = match session.bind_directional_persistent_fixed_dispatch_v1(
+                Vec::new(),
+                [packet],
+                input,
+                Gfx942DeviceContentRoleV1::new([0x54; 32], 0).unwrap(),
+            ) {
+                Err(failure) => failure,
+                Ok(_) => panic!("terminal ingress must reject"),
+            };
+            assert!(matches!(
+                failure.error(),
+                ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                    Gfx942DispatchBindingErrorV1::Poisoned
+                )
+            ));
+            let input = match failure.into_parts().1 {
+                Gfx942PersistentComputeBindFailureCustodyV1::Retryable(input) => {
+                    assert_ne!(source, receiver);
+                    input
+                }
+                Gfx942PersistentComputeBindFailureCustodyV1::ProcessTeardown(terminal) => {
+                    assert_eq!(source, receiver);
+                    terminal.input.unwrap()
+                }
+            };
+            let (allocation, _, _) = input.into_parts();
+            assert_eq!(allocation.attachment.queue, source);
+            assert_eq!(
+                allocation
+                    .owner
+                    .local_native_for_sdma()
+                    .unwrap()
+                    .storage_identity(),
+                identity
+            );
+            assert!(session.persistent_compute.is_none());
+            assert!(session.dispatch.is_none());
         }
     }
 
@@ -19984,7 +20065,24 @@ mod tests {
 
     struct RetainedReplayScriptV1 {
         fail: Option<RetainedReplayInjectedStageV1>,
+        panic: bool,
         trace: Vec<RetainedReplayInjectedStageV1>,
+    }
+
+    impl RetainedReplayScriptV1 {
+        fn observe(
+            &mut self,
+            stage: RetainedReplayInjectedStageV1,
+        ) -> Result<(), RetainedReplayInjectedStageV1> {
+            self.trace.push(stage);
+            if self.fail == Some(stage) {
+                if self.panic {
+                    std::panic::panic_any(stage);
+                }
+                return Err(stage);
+            }
+            Ok(())
+        }
     }
 
     struct RetainedReplayScriptRequestV1(u64);
@@ -19999,6 +20097,73 @@ mod tests {
         RetainedReplayScriptAttachedV1,
         RetainedReplayInjectedStageV1,
     >;
+    type RetainedReplayScriptCustodyV1 = PersistentRetainedControlReplayPipelineCustodyV1<
+        RetainedReplayScriptRequestV1,
+        RetainedReplayScriptStorageV1,
+        RetainedReplayScriptDataV1,
+        RetainedReplayScriptAttachedV1,
+    >;
+
+    fn execute_retained_replay_script_v1(
+        script: &mut RetainedReplayScriptV1,
+        phases: &mut RetainedReplayScriptCustodyV1,
+    ) -> Result<(), RetainedReplayInjectedStageV1> {
+        use PersistentRetainedControlReplayPipelineCustodyV1 as Phase;
+        execute_persistent_retained_control_replay_pipeline_v1(
+            script,
+            phases,
+            |script, phases| {
+                let Phase::Input(request) = phases else {
+                    panic!("input phase")
+                };
+                assert_eq!(request.0, 0x35);
+                script.observe(RetainedReplayInjectedStageV1::MappedFacts)
+            },
+            |script, phases| {
+                let Phase::Input(request) = phases else {
+                    panic!("input phase")
+                };
+                assert_eq!(request.0, 0x35);
+                script.observe(RetainedReplayInjectedStageV1::Detach)?;
+                let Phase::Input(request) = core::mem::replace(phases, Phase::Empty) else {
+                    unreachable!()
+                };
+                *phases = Phase::Storage(RetainedReplayScriptStorageV1(request.0));
+                Ok(())
+            },
+            |script, phases| {
+                let Phase::Storage(storage) = phases else {
+                    panic!("storage phase")
+                };
+                assert_eq!(storage.0, 0x35);
+                script.observe(RetainedReplayInjectedStageV1::AuthenticatedConstruction)?;
+                let Phase::Storage(storage) = core::mem::replace(phases, Phase::Empty) else {
+                    unreachable!()
+                };
+                *phases = Phase::Data(RetainedReplayScriptDataV1(storage.0));
+                Ok(())
+            },
+            |script, phases| {
+                let Phase::Data(data) = phases else {
+                    panic!("data phase")
+                };
+                assert_eq!(data.0, 0x35);
+                script.observe(RetainedReplayInjectedStageV1::Retain)?;
+                let Phase::Data(data) = core::mem::replace(phases, Phase::Empty) else {
+                    unreachable!()
+                };
+                *phases = Phase::Attached(RetainedReplayScriptAttachedV1(data.0));
+                Ok(())
+            },
+            |script, phases| {
+                let Phase::Attached(attached) = phases else {
+                    panic!("attached phase")
+                };
+                assert_eq!(attached.0, 0x35);
+                script.observe(RetainedReplayInjectedStageV1::FinalAudit)
+            },
+        )
+    }
 
     fn run_retained_replay_script_v1(
         fail: Option<RetainedReplayInjectedStageV1>,
@@ -20008,61 +20173,66 @@ mod tests {
     ) {
         let mut script = RetainedReplayScriptV1 {
             fail,
+            panic: false,
             trace: Vec::new(),
         };
-        let outcome = execute_persistent_retained_control_replay_pipeline_v1(
-            &mut script,
-            RetainedReplayScriptRequestV1(0x35),
-            |script, request| {
-                assert_eq!(request.0, 0x35);
-                script
-                    .trace
-                    .push(RetainedReplayInjectedStageV1::MappedFacts);
-                (script.fail != Some(RetainedReplayInjectedStageV1::MappedFacts))
-                    .then_some(())
-                    .ok_or(RetainedReplayInjectedStageV1::MappedFacts)
-            },
-            |script, request| {
-                assert_eq!(request.0, 0x35);
-                script.trace.push(RetainedReplayInjectedStageV1::Detach);
-                if script.fail == Some(RetainedReplayInjectedStageV1::Detach) {
-                    Err((RetainedReplayInjectedStageV1::Detach, request))
-                } else {
-                    Ok(RetainedReplayScriptStorageV1(request.0))
-                }
-            },
-            |script, storage| {
-                assert_eq!(storage.0, 0x35);
-                script
-                    .trace
-                    .push(RetainedReplayInjectedStageV1::AuthenticatedConstruction);
-                if script.fail == Some(RetainedReplayInjectedStageV1::AuthenticatedConstruction) {
-                    Err((
-                        RetainedReplayInjectedStageV1::AuthenticatedConstruction,
-                        storage,
-                    ))
-                } else {
-                    Ok(RetainedReplayScriptDataV1(storage.0))
-                }
-            },
-            |script, data| {
-                assert_eq!(data.0, 0x35);
-                script.trace.push(RetainedReplayInjectedStageV1::Retain);
-                if script.fail == Some(RetainedReplayInjectedStageV1::Retain) {
-                    Err((RetainedReplayInjectedStageV1::Retain, data))
-                } else {
-                    Ok(RetainedReplayScriptAttachedV1(data.0))
-                }
-            },
-            |script, attached| {
-                assert_eq!(attached.0, 0x35);
-                script.trace.push(RetainedReplayInjectedStageV1::FinalAudit);
-                (script.fail != Some(RetainedReplayInjectedStageV1::FinalAudit))
-                    .then_some(())
-                    .ok_or(RetainedReplayInjectedStageV1::FinalAudit)
-            },
-        );
-        (outcome, script.trace)
+        let mut phases = RetainedReplayScriptCustodyV1::Input(RetainedReplayScriptRequestV1(0x35));
+        let result = execute_retained_replay_script_v1(&mut script, &mut phases);
+        (phases.into_outcome(result), script.trace)
+    }
+
+    #[test]
+    fn retained_control_replay_panics_keep_the_current_phase_outside_the_loan() {
+        let stages = [
+            RetainedReplayInjectedStageV1::MappedFacts,
+            RetainedReplayInjectedStageV1::Detach,
+            RetainedReplayInjectedStageV1::AuthenticatedConstruction,
+            RetainedReplayInjectedStageV1::Retain,
+            RetainedReplayInjectedStageV1::FinalAudit,
+        ];
+        for (index, stage) in stages.into_iter().enumerate() {
+            let mut script = RetainedReplayScriptV1 {
+                fail: Some(stage),
+                panic: true,
+                trace: Vec::new(),
+            };
+            let mut phases =
+                RetainedReplayScriptCustodyV1::Input(RetainedReplayScriptRequestV1(0x35));
+            let mut retakes = 0;
+            let mut poisoned = false;
+            let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                execute_live_model_custody_v1(
+                    &mut script,
+                    |_| Ok::<_, ()>(()),
+                    |script| {
+                        let _ = execute_retained_replay_script_v1(script, &mut phases);
+                    },
+                    |_, ()| {
+                        retakes += 1;
+                        std::panic::panic_any("secondary retake");
+                    },
+                    |_| poisoned = true,
+                )
+            }));
+            assert_eq!(
+                caught
+                    .unwrap_err()
+                    .downcast_ref::<RetainedReplayInjectedStageV1>(),
+                Some(&stage)
+            );
+            assert_eq!(retakes, 1);
+            assert!(poisoned);
+            assert_eq!(script.trace, stages[..=index]);
+            let outcome = phases.into_outcome(Err(stage));
+            use PersistentRetainedControlReplayPipelineOutcomeV1 as Outcome;
+            match (index, outcome) {
+                (0 | 1, Outcome::BeforeDetach { request, .. }) => assert_eq!(request.0, 0x35),
+                (2, Outcome::Storage { storage, .. }) => assert_eq!(storage.0, 0x35),
+                (3, Outcome::Data { data, .. }) => assert_eq!(data.0, 0x35),
+                (4, Outcome::Attached { attached, .. }) => assert_eq!(attached.0, 0x35),
+                _ => panic!("panic lost the active replay phase"),
+            }
+        }
     }
 
     fn retained_replay_prepared_owner_fixture_v1(
@@ -20087,6 +20257,156 @@ mod tests {
         let reserved = allocation.owner.reserve(request, None).unwrap();
         let prepared = allocation.owner.prepare(reserved).unwrap();
         (allocation, prepared)
+    }
+
+    fn persistent_bind_prepared_entries_for_test(
+        count: usize,
+    ) -> Vec<PersistentComputeAttachmentEntryV1> {
+        (0..count)
+            .map(|index| {
+                let (allocation, prepared) = retained_replay_prepared_owner_fixture_v1(
+                    test_queue_key(293, 1),
+                    0x9200 + index as u64,
+                );
+                let storage_identity = Some(
+                    allocation
+                        .owner
+                        .local_native_for_sdma()
+                        .unwrap()
+                        .storage_identity(),
+                );
+                PersistentComputeAttachmentEntryV1 {
+                    allocation,
+                    authenticated_sha256: None,
+                    fully_initialized: true,
+                    state: PersistentComputeUseStateV1::Prepared(prepared),
+                    storage_identity,
+                    effect: Gfx942PersistentComputeEffectV1::ReadWrite,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn persistent_bind_early_validation_retains_each_prepared_entry_on_error_and_panic() {
+        for count in [1, 3] {
+            for failed in 0..count {
+                for panic in [false, true] {
+                    let entries = persistent_bind_prepared_entries_for_test(count);
+                    let expected: Vec<_> = entries
+                        .iter()
+                        .map(|entry| entry.storage_identity.unwrap())
+                        .collect();
+                    let mut visited = 0;
+                    let result = validate_persistent_bind_inputs_v1(
+                        &mut visited,
+                        &entries,
+                        |visited, entry| {
+                            let index = *visited;
+                            *visited += 1;
+                            assert_eq!(
+                                entry
+                                    .allocation
+                                    .owner
+                                    .local_native_for_sdma()
+                                    .unwrap()
+                                    .storage_identity(),
+                                expected[index]
+                            );
+                            if index == failed {
+                                if panic {
+                                    std::panic::panic_any(index);
+                                }
+                                return Err(index);
+                            }
+                            Ok(())
+                        },
+                    );
+                    assert_eq!(visited, failed + 1);
+                    if panic {
+                        assert_eq!(result.unwrap_err().downcast_ref::<usize>(), Some(&failed));
+                    } else {
+                        assert_eq!(result.unwrap(), Err(failed));
+                    }
+                    for (entry, identity) in entries.iter().zip(expected) {
+                        assert!(matches!(
+                            entry.state,
+                            PersistentComputeUseStateV1::Prepared(_)
+                        ));
+                        assert_eq!(entry.allocation.owner.live_use_count(), 1);
+                        assert_eq!(
+                            entry
+                                .allocation
+                                .owner
+                                .local_native_for_sdma()
+                                .unwrap()
+                                .storage_identity(),
+                            identity
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn persistent_bind_terminal_retake_dominates_successful_roster_cancellation() {
+        for count in [1, 3] {
+            for terminal in [false, true] {
+                let mut entries = persistent_bind_prepared_entries_for_test(count);
+                let expected: Vec<_> = entries
+                    .iter()
+                    .map(|entry| entry.storage_identity.unwrap())
+                    .collect();
+                let mut session = persistent_compute_cancellation_test_session(
+                    test_queue_key(293, 1),
+                    None,
+                    None,
+                );
+                let (operation, retake) = execute_live_model_custody_v1(
+                    &mut session,
+                    |_| Ok(()),
+                    |_| Err::<(), _>("early validation"),
+                    |_, ()| {
+                        if terminal {
+                            Err("closing retake")
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    |session| session.poison_terminal(),
+                )
+                .unwrap();
+                assert_eq!(operation, Err("early validation"));
+                assert_eq!(retake.is_err(), terminal);
+                let cancelled = if count == 1 {
+                    cancel_persistent_compute_prepublication_entries_v1([&mut entries[0]])
+                } else {
+                    let [a, b, c] = entries.as_mut_slice() else {
+                        unreachable!()
+                    };
+                    cancel_persistent_compute_prepublication_entries_v1([a, b, c])
+                };
+                assert!(cancelled);
+                assert_eq!(
+                    persistent_bind_retryable_v1(!session.terminal_poisoned, cancelled),
+                    !terminal
+                );
+                for (entry, identity) in entries.iter().zip(expected) {
+                    assert_eq!(entry.allocation.owner.live_use_count(), 0);
+                    assert_eq!(
+                        entry
+                            .allocation
+                            .owner
+                            .local_native_for_sdma()
+                            .unwrap()
+                            .storage_identity(),
+                        identity
+                    );
+                }
+                assert!(session.dispatch.is_none());
+            }
+        }
     }
 
     #[test]
@@ -20333,15 +20653,22 @@ mod tests {
             .next()
             .unwrap();
         assert_eq!(replay.matches("with_live_queue_memory_model").count(), 1);
-        let mapped = replay.find("mapped_gfx942_device_memory_facts").unwrap();
-        let detach = replay.find("detach_local_native_for_compute").unwrap();
-        let construct = replay
-            .find("Gfx942InitializedDeviceMemoryV1::from_authenticated_full_transfer")
-            .unwrap();
-        let retain = replay.find("retain_persistent_replay_data_v1").unwrap();
-        let replay_validation = replay
-            .find("validate_persistent_replay_dispatch_memory")
-            .unwrap();
+        let mapped = replay.find("phases.mapped_facts(memory)").unwrap();
+        let detach = replay.find("phases.detach()").unwrap();
+        let construct = replay.find("phases.construct()").unwrap();
+        let retain = replay.find("phases.retain(memory)").unwrap();
+        let replay_validation = replay.find("phases.audit(memory)").unwrap();
+        let phases = include_str!("queue_live/persistent_bind.rs");
+        for operation in [
+            "mapped_gfx942_device_memory_facts",
+            "detach_local_native_for_compute",
+            "from_authenticated_full_transfer",
+            "retain_persistent_replay_data_in_place_v1",
+            "validate_persistent_replay_dispatch_memory",
+        ] {
+            assert!(phases.contains(operation));
+        }
+        assert!(!phases.contains("validate_live_queue_dispatch_memory"));
         let loan_close = replay
             .find("resolve_persistent_retained_control_replay_loan_v1")
             .unwrap();
@@ -20367,10 +20694,14 @@ mod tests {
             0
         );
         assert!(replay.contains("let mut request = Some(request)"));
-        assert!(replay.contains("let mut outcome = None"));
+        assert!(
+            replay.contains("let mut phases = PersistentRetainedControlReplayCustodyV1::Empty")
+        );
+        assert!(replay.contains("let mut pipeline_result = None"));
+        assert!(replay.find("let mut phases").unwrap() < replay.find("catch_unwind").unwrap());
         assert!(replay.contains("PersistentRetainedControlReplayOutcomeV1::Ready(replay)"));
-        assert!(replay.contains("PersistentComputeTerminalNativeCustodyV1::Storage"));
-        assert!(replay.contains("PersistentComputeTerminalNativeCustodyV1::Data"));
+        assert!(phases.contains("PersistentComputeTerminalNativeCustodyV1::Storage"));
+        assert!(phases.contains("PersistentComputeTerminalNativeCustodyV1::Data"));
         assert!(replay.contains("PersistentComputeTerminalNativeCustodyV1::Attached"));
         assert!(
             replay.contains("predecessor_dispatch_generation: Some(commit.predecessor_generation)")
@@ -20401,7 +20732,7 @@ mod tests {
         let replay_call = bind
             .find("bind_retained_persistent_fixed_dispatch_control_replay_v1")
             .unwrap();
-        let initial_start = bind.find("let validation = {").unwrap();
+        let initial_start = bind.find("validate_persistent_bind_inputs_v1(").unwrap();
         assert!(retained < replay_call);
         assert!(replay_call < initial_start);
         let initial = &bind[initial_start..];
@@ -20409,13 +20740,13 @@ mod tests {
             initial
                 .matches("with_live_queue_memory_model(|memory|")
                 .count(),
-            1
+            2
         );
         assert_eq!(
             initial
                 .matches("with_live_queue_memory_model_custody")
                 .count(),
-            1
+            0
         );
         assert_eq!(
             initial
@@ -20431,13 +20762,13 @@ mod tests {
         );
         assert_eq!(
             initial
-                .matches("validate_live_queue_dispatch_memory")
+                .matches("Self::validate_persistent_bind_preparation_v1")
                 .count(),
             1
         );
         assert!(initial.contains("prepare_persistent_fixed_dispatch_resources_v1"));
         assert!(!initial.contains("validate_persistent_replay_dispatch_memory"));
-        assert!(!initial.contains("retain_persistent_replay_data_v1"));
+        assert!(!initial.contains("retain_persistent_replay_data_in_place_v1"));
 
         let release = production
             .split("pub fn release_retained_persistent_fixed_dispatch_control_v1")

@@ -1,0 +1,9 @@
+*** Begin Patch
+*** Update File: /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live/model_loan.rs
+@@
+-            core::mem::forget(closing);
++            match closing {
++                Err(secondary) => resume_unwind(secondary),
++                other => core::mem::forget(other),
++            }
+*** End Patch
