@@ -1,0 +1,26 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 19 tests
+test context::generated_preparation::tests::shell_tests::shell_batch_drop_returns_all_unissued_reservations ... ok
+test context::generated_preparation::tests::shell_tests::shell_context_identity_exhaustion_is_atomic_and_adjacent_range_succeeds ... ok
+test kfd_backend::generated_shells::tests::shell_invalid_disposal_counts_and_handle_bounds_reject_without_panicking ... ok
+test kfd_backend::generated_shells::tests::shell_copy_drain_qualification_rejects_unaccounted_generated_storage ... ok
+test kfd_backend::generated_shells::tests::shell_backend_identity_exhaustion_rejects_before_commit ... ok
+test kfd_backend::generated_shells::tests::shell_ordinary_apis_reject_before_native_lookup_or_destination_changes ... ok
+test kfd_backend::generated_shells::tests::shell_table_keeps_generated_slots_without_ordinary_bytes_or_native_effects ... ok
+test kfd_backend::generated_shells::tests::shell_late_handle_collision_preserves_existing_ordinary_allocation ... ok
+test context::generated_preparation::tests::shell_tests::shell_source_substitution_preserves_both_control_owners ... ok
+test context::generated_preparation::tests::shell_tests::shell_registration_retains_exact_roster_and_refunds_only_after_retirement ... ok
+test context::generated_preparation::tests::shell_tests::shell_foreign_and_stale_holds_cannot_change_current_ownership ... ok
+test context::generated_preparation::tests::shell_tests::shell_retirement_preserves_unrelated_ordinary_bytes_and_credits ... ok
+test kfd_backend::generated_shells::tests::shell_reordered_retained_plan_and_extra_owner_member_reject ... ok
+test context::generated_preparation::tests::shell_tests::shell_late_context_roster_mismatch_preserves_control_and_all_credits ... ok
+test kfd_backend::generated_shells::tests::shell_table_duplicate_insert_and_wrong_remove_preserve_owners ... ok
+test context::generated_preparation::tests::shell_tests::shell_pure_ingress_rejects_before_mutable_carrier_callback ... ok
+test context::generated_preparation::tests::shell_tests::shell_credit_exhaustion_rejects_the_whole_roster_without_transfer ... ok
+test kfd_backend::generated_shells::tests::shell_malformed_preflight_rosters_never_commit_a_prefix ... ok
+test kfd_backend::generated_shells::tests::shell_corrupted_retained_rosters_reject_before_any_disposal ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 690 filtered out; finished in 0.07s
+

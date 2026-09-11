@@ -29,6 +29,7 @@ use crate::generated_runtime_results::{
 };
 use crate::{AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedKernelExpectationV1, KernelId};
 
+mod charged_decode;
 #[cfg(test)]
 mod charged_tests;
 mod readback;
@@ -1016,92 +1017,6 @@ impl GeneratedRuntimeOutputDecoderV1 {
                     };
             }
         }
-        Ok(())
-    }
-
-    // Data decoding remains private until GEN-2 binds it to exact completed invocation custody.
-    #[allow(dead_code)]
-    pub(crate) fn decode_charged_buffers(
-        self,
-        buffers: Vec<(Gfx942RuntimeBufferAccessV1, Vec<u8>)>,
-    ) -> Result<(), GeneratedRuntimeArgumentErrorV1> {
-        self.decode_charged_with(buffers, |_| {})
-    }
-
-    fn decode_charged_with(
-        self,
-        buffers: Vec<(Gfx942RuntimeBufferAccessV1, Vec<u8>)>,
-        after_output: impl Fn(usize),
-    ) -> Result<(), GeneratedRuntimeArgumentErrorV1> {
-        // Field order disposes returned encoded buffers before any result credit on all exits.
-        struct DecodeTransaction {
-            buffers: Vec<(Gfx942RuntimeBufferAccessV1, Vec<u8>)>,
-            decoder: GeneratedRuntimeOutputDecoderV1,
-        }
-        let mut transaction = DecodeTransaction {
-            buffers,
-            decoder: self,
-        };
-        let gate = transaction
-            .decoder
-            .result_gate
-            .as_ref()
-            .ok_or(GeneratedRuntimeArgumentErrorV1::BindingMismatch)?;
-        let expected_count = transaction
-            .decoder
-            .expectations
-            .iter()
-            .filter(|expected| expected.byte_len != 0)
-            .count();
-        if expected_count != transaction.buffers.len() {
-            return Err(GeneratedRuntimeArgumentErrorV1::BindingMismatch);
-        }
-        let mut buffers = transaction.buffers.iter();
-        for expected in &transaction.decoder.expectations {
-            if expected.byte_len != 0 {
-                let (access, bytes) = buffers
-                    .next()
-                    .ok_or(GeneratedRuntimeArgumentErrorV1::BindingMismatch)?;
-                if !fe2o3_runtime_model::r73_generated_result_shape_v1(
-                    u64::try_from(expected.byte_len)
-                        .map_err(|_| GeneratedRuntimeArgumentErrorV1::ByteLength)?,
-                    u64::try_from(bytes.len())
-                        .map_err(|_| GeneratedRuntimeArgumentErrorV1::ByteLength)?,
-                    u64::try_from(bytes.capacity())
-                        .map_err(|_| GeneratedRuntimeArgumentErrorV1::ByteLength)?,
-                    *access == expected.access,
-                ) {
-                    return Err(GeneratedRuntimeArgumentErrorV1::BindingMismatch);
-                }
-            }
-            if let Some(custody) = &expected.custody {
-                custody.bound_to(Some(gate))?;
-            } else if !expected
-                .read_credit
-                .as_ref()
-                .is_some_and(|credit| credit.bound_to(gate))
-            {
-                return Err(GeneratedRuntimeArgumentErrorV1::BindingMismatch);
-            }
-        }
-        let mut buffers = transaction.buffers.iter();
-        for (index, expected) in transaction.decoder.expectations.iter().enumerate() {
-            let bytes = if expected.byte_len == 0 {
-                &[][..]
-            } else {
-                buffers
-                    .next()
-                    .ok_or(GeneratedRuntimeArgumentErrorV1::BindingMismatch)?
-                    .1
-                    .as_slice()
-            };
-            if let Some(OutputCustody::Charged(custody)) = &expected.custody {
-                custody.decode(bytes, gate)?;
-                after_output(index);
-            }
-        }
-        drop(std::mem::take(&mut transaction.buffers));
-        gate.commit();
         Ok(())
     }
 }

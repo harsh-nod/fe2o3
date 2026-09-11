@@ -1,12 +1,14 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Current locally accepted implementation: R84 DATA-SHELL, on signed R83
-`e07de3bfb87955fc885ef0c88788678ce8170aaa`. Its
-[evidence](evidence/local-r84-generated-shells-2026-09-11/README.md) records all
-seventeen final source gates and 2,388 runtime tests per GNU/musl target.
+Current locally accepted implementation: R85 COMPLETE-HOST-SUBSTRATE, on signed R84
+`f346aab2e958725291229eae3fffaee127230112`. Its
+[evidence](evidence/local-r85-charged-readback-2026-09-11/README.md) records all
+seventeen final source gates, 2,388 runtime tests per GNU/musl target and ten new
+host readback regressions (258 GNU / 141 musl host tests total).
 The [current dispatch](runtime-a1-a2-swarm-dispatch-r83.md) assigns native
-build-escrow and constructor-custody prerequisites, independent completion/host
-substrate and version work. Shell acceptance does not enable native execution.
+build-escrow and constructor-custody prerequisites, independent runtime completion
+and version work. R85's private host decoder is implemented; runtime COMPLETE
+must call it, not recreate it. Local acceptance does not enable native execution.
 Historical packet validation and exact source/evidence identities remain below.
 This decomposes the remaining local
 A1/A2 work in
@@ -18,7 +20,7 @@ The checkpoint history distinguishes local
 implementation from hardware acceptance; queued tickets are not completed work
 or unattended background jobs.
 
-The [R83 swarm overlay](runtime-a1-a2-swarm-dispatch-r83.md) and
+The [current swarm overlay](runtime-a1-a2-swarm-dispatch-r83.md) and
 [next-wave dispatch](runtime-a1-a2-next-wave.md#next-three-assignments) contain the
 current ticket split from the three-agent read-only audit after local R83.
 It records generated-admission/result ownership, independent native fixtures,

@@ -536,6 +536,14 @@ impl ReadResultCreditV1 {
     pub(crate) fn bound_to(&self, gate: &Arc<ResultReadyGateV1>) -> bool {
         self.credit.is_some() && Arc::ptr_eq(&self.gate, gate) && !gate.ready()
     }
+
+    pub(crate) fn release_after_disposal(mut self) -> Result<(), Error> {
+        self.credit
+            .take()
+            .ok_or(Error::ResultCredit(ResourceCreditErrorV1::Invariant))?
+            .release_after_disposal()
+            .map_err(Error::ResultCredit)
+    }
 }
 
 impl ResultMemberV1 {

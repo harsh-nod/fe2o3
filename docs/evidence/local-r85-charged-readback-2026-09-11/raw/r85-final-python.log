@@ -1,0 +1,13 @@
+......................................................................................R61 rejected: cleanup failed; diagnostics=/tmp/tmp5pgtts1o/r61-rejected-1f518f98efee4017f16699b7a418182e
+.R61 rejected: constructor failed; diagnostics=None
+....R61 rejected: typed qualification rejection; diagnostics=/tmp/tmpxiv9lbz7/r61-rejected-a77c9e3c947e26a965254acb0d460f50
+.......R62 rejected: constructor failed; diagnostics=None
+....R63 rejected: constructor failed; diagnostics=None
+...R65 rejected: constructor failed; diagnostics=None
+..............R66 rejected: R66 retained-custody evidence rejected: invalid R66 evidence: Expecting value: line 1 column 1 (char 0); diagnostics=/tmp/tmpjb3kwpxx/r66-rejected-ce73528f229a83dbc2439e330fb823be
+...............................DRN2 rejected: DRN-2 capture evidence rejected: invalid drain-capture evidence: Expecting value: line 1 column 1 (char 0); diagnostics=/tmp/tmp1haj4hv_/drn2-rejected-c183e0659808fa9c8c004c3dc9dde0e8
+.
+----------------------------------------------------------------------
+Ran 151 tests in 8.304s
+
+OK

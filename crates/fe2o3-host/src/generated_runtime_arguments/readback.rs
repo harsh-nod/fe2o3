@@ -1,6 +1,8 @@
 //! Complete host destinations remain coupled to the original charged invocation.
 
-use fe2o3_resource_accounting::{ResourceReservationV1, RetainedResourceCreditsV1};
+use fe2o3_resource_accounting::{
+    ResourceCreditErrorV1, ResourceReservationV1, RetainedResourceCreditsV1,
+};
 
 use super::*;
 use GeneratedRuntimeArgumentErrorV1 as Error;
@@ -8,6 +10,7 @@ use GeneratedRuntimeArgumentErrorV1 as Error;
 pub(crate) struct GeneratedRuntimeReadbackOwnerV1 {
     buffers: Vec<(Gfx942RuntimeBufferAccessV1, Vec<u8>)>,
     credit: Option<RetainedResourceCreditsV1>,
+    gate: Arc<ResultReadyGateV1>,
 }
 
 impl Drop for GeneratedRuntimeReadbackOwnerV1 {
@@ -19,10 +22,31 @@ impl Drop for GeneratedRuntimeReadbackOwnerV1 {
     }
 }
 
-#[cfg(test)]
 impl GeneratedRuntimeReadbackOwnerV1 {
+    #[cfg(test)]
+    pub(super) fn buffers_mut(&mut self) -> &mut Vec<(Gfx942RuntimeBufferAccessV1, Vec<u8>)> {
+        &mut self.buffers
+    }
+
+    #[cfg(test)]
+    pub(super) fn quarantine_credit_for_test(&mut self) {
+        self.credit
+            .take()
+            .expect("owned readback credit")
+            .quarantine();
+    }
+
     pub(super) fn buffers(&self) -> &[(Gfx942RuntimeBufferAccessV1, Vec<u8>)] {
         &self.buffers
+    }
+
+    pub(super) fn dispose(mut self) -> Result<(), Error> {
+        drop(std::mem::take(&mut self.buffers));
+        self.credit
+            .take()
+            .ok_or(Error::ResultCredit(ResourceCreditErrorV1::Invariant))?
+            .release_after_disposal()
+            .map_err(Error::ResultCredit)
     }
 }
 
@@ -39,6 +63,63 @@ impl Drop for PendingReadback {
 }
 
 impl GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1> {
+    #[allow(
+        dead_code,
+        reason = "private host completion substrate; native admission is not installed"
+    )]
+    pub(crate) fn decode_reserved_readback(self) -> Result<(), Error> {
+        self.decode_reserved_readback_with(|_| {})
+    }
+
+    pub(super) fn decode_reserved_readback_with(
+        self,
+        after_output: impl Fn(usize),
+    ) -> Result<(), Error> {
+        self.validate_reserved_readback()?;
+        self.decode_validated_readback_with(after_output)
+    }
+
+    pub(super) fn validate_reserved_readback(&self) -> Result<(), Error> {
+        let readback = self.readback.as_ref().ok_or(Error::BindingMismatch)?;
+        let gate = self
+            .decoder
+            .result_gate
+            .as_ref()
+            .ok_or(Error::BindingMismatch)?;
+        let expected_count = self
+            .decoder
+            .expectations
+            .iter()
+            .filter(|expected| expected.byte_len != 0)
+            .count();
+        if !Arc::ptr_eq(&readback.gate, gate)
+            || expected_count != self.payload.buffers().len()
+            || expected_count != readback.buffers.len()
+        {
+            return Err(Error::BindingMismatch);
+        }
+        for (ordinal, expected) in self
+            .decoder
+            .expectations
+            .iter()
+            .filter(|expected| expected.byte_len != 0)
+            .enumerate()
+        {
+            let source = self.payload.buffers()[ordinal].bytes();
+            let (access, bytes) = &readback.buffers[ordinal];
+            if source.len() != expected.byte_len
+                || self.payload.buffer_access(ordinal) != Some(expected.access)
+                || *access != expected.access
+                || bytes.len() != expected.byte_len
+                || bytes.capacity() != expected.byte_len
+                || (*access == Gfx942RuntimeBufferAccessV1::ReadOnly && bytes.as_slice() != source)
+            {
+                return Err(Error::BindingMismatch);
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn prepare_readback(&self) -> Result<GeneratedRuntimeReadbackOwnerV1, Error> {
         self.prepare_readback_with(|length| {
             let mut bytes = Vec::new();
@@ -128,6 +209,7 @@ impl GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1> {
         Ok(GeneratedRuntimeReadbackOwnerV1 {
             buffers: std::mem::take(&mut pending.buffers),
             credit: Some(credit),
+            gate: Arc::clone(gate),
         })
     }
 }

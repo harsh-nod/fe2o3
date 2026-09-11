@@ -1,0 +1,23 @@
+   Compiling fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.91s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_host-58f6f4400a07ddbb)
+
+running 2 tests
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::generated_storage_mutable_view_preserves_charged_full_roster_and_readback ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::generated_storage_with_readback_disposes_payload_before_refund_on_drop_and_unwind ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 260 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-f0c3ce0f97c244ed)
+
+running 7 tests
+test authorized_execution::tests::generated_storage::generated_storage_conversion_preserves_reserved_source_identity ... ok
+test authorized_execution::tests::generated_storage::generated_storage_artifact_rejections_preserve_control ... ok
+test kfd_backend::generated_shells::tests::shell_copy_drain_qualification_rejects_unaccounted_generated_storage ... ok
+test authorized_execution::tests::generated_storage::generated_storage_control_transfer_is_one_shot_and_preserves_occupied_destination ... ok
+test authorized_execution::tests::generated_storage::generated_storage_byte_identical_replacement_is_not_the_reserved_source ... ok
+test authorized_execution::tests::generated_storage::generated_storage_authority_rejections_preserve_control_for_valid_retry ... ok
+test persistent_projection::tests::generated_storage_moves_all_original_allocations_and_capacities_without_copying ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 702 filtered out; finished in 0.02s
+
