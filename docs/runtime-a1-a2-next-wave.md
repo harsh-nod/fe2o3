@@ -1,5 +1,15 @@
 # A1/A2 Next-Wave Dispatch
 
+The latest three-agent refresh at signed R93 `c35bb542f338d41a8247850e24166282c22d4926`
+assigns the [bounded work orders](runtime-a1-a2-swarm-dispatch-r83.md#bounded-work-orders)
+to Native, Admission and Resources. First tickets are the missing R94 platform
+fixture/late-failure matrix, CO-1 completion classifier and VER-1A.1 journal
+contract/inventory. The local R94 source candidate remains incomplete and
+unaccepted; this documentation-only refresh neither publishes nor reverts it.
+All three read-only audits have returned. Primary owns implementation and gates;
+queued tickets are not continuing background jobs. Issue #182 remains open at
+the 2026-09-11 API refresh (`updatedAt` `2026-09-11T08:01:35Z`).
+
 R93 adds the shared [primary construction sequence](runtime-primary-queue-construction-custody-v1.md)
 above signed R92 `777cbefae2721bb2edd60187a666e8d84dc80c91`, with
 [initial same-session evidence](evidence/local-r93-primary-sequence-2026-09-11/README.md).
