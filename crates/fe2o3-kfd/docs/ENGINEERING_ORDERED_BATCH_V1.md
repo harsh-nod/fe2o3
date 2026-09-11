@@ -62,9 +62,21 @@ packets. They cover bounded framing/deadlines, distinct aligned argument/signal
 addresses, all-body-before-any-header ordering, ring wrap/exhaustion, stale
 identities, exception/counter faults and signal/tail initialization.
 
-Native qualification is still required. A bounded producer/consumer chain at
-counts 1, 2 and 16 should check exact data dependencies and guards, mix legacy
-dispatches before/after ordered batches, exercise queue rollover, and confirm
-explicit close/reap/global-idle receipts. Deliberate GPU faults are not required
-on shared hardware. No GPU, model correctness or performance claim accompanies
-the host-only implementation.
+Bounded native checks passed on gfx950 on 2026-09-11, separately with full and
+operational currentness. Each run executed 184 packets across 26 serial/ordered
+dyadic producer/consumer chains: counts 1, 2 and 16 at one and three active rows,
+repeated storage reuse, and one actual queue rollover with live user buffers.
+Every output array, immutable input and surrounding guard matched; serial and
+ordered paths agreed before and after rollover. Both workers closed/reaped and
+all eight physical GPUs returned to the checked idle roster.
+
+The checked source was `f64c86e0c` on upstream `c94e2101a`. Worker SHA-256:
+`761027c596b896a58da822cf919adf4d480e9b4b71d8c79e93265e3d4002c5b6`.
+Full-currentness result SHA-256:
+`376d2fb2adc88af1481fe3c89c8e768dd01f68fa50065cd95a6615230a770a4e`.
+Operational-currentness result SHA-256:
+`0cf0c74446e9d1945076aec74d33bb9dad0dfee849ee1a5ce5c5d3e58fc272fc`.
+The image-specific external fixture and its raw protocol records remain outside
+the generic runtime implementation. These checks establish neither arbitrary
+kernel correctness nor model/serving performance. Deliberate GPU faults were not
+injected on shared hardware; failure-path coverage remains host-injected.
