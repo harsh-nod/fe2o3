@@ -144,6 +144,17 @@ fn require_fresh_configuration(
     Ok(())
 }
 
+fn require_pending_dispatch_identity(
+    retained: [u64; 3],
+    pending: [u64; 3],
+    completed: bool,
+) -> Result<()> {
+    if retained != pending || completed {
+        return Err("pending dispatch queue identity or state changed".into());
+    }
+    Ok(())
+}
+
 fn next_queue_epoch(
     epoch: u64,
     expected_epoch: u64,
@@ -855,13 +866,11 @@ impl Context {
     }
 
     fn poll_pending_dispatch(&mut self, pending: &mut PendingDispatch) -> Result<Option<u64>> {
-        if pending.unique_id != self.unique_id
-            || pending.queue_epoch != self.queue_epoch
-            || pending.next != self.ring.write()
-            || pending.completed
-        {
-            return Err("pending dispatch queue identity or state changed".into());
-        }
+        require_pending_dispatch_identity(
+            [self.unique_id, self.queue_epoch, self.ring.write()],
+            [pending.unique_id, pending.queue_epoch, pending.next],
+            pending.completed,
+        )?;
         if pending.wait_started.is_some() {
             add_counter(&mut self.counters.completion_polls, 1)?;
         }
@@ -1490,6 +1499,20 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pending_dispatch_rejects_foreign_device_epoch_frontier_and_repeated_completion() {
+        let identity = [71, 3, 19];
+        require_pending_dispatch_identity(identity, identity, false).unwrap();
+        assert!(require_pending_dispatch_identity(identity, identity, true).is_err());
+        for axis in 0..3 {
+            for replacement in [0, identity[axis] - 1, identity[axis] + 1, u64::MAX] {
+                let mut changed = identity;
+                changed[axis] = replacement;
+                assert!(require_pending_dispatch_identity(identity, changed, false).is_err());
+            }
+        }
+    }
 
     #[test]
     fn sequence_capacity_never_fabricates_retirement_or_wraps() {

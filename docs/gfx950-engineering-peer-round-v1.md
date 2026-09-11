@@ -48,6 +48,12 @@ kernarg initialization/publication. Previously submitted deadlines are checked
 before further publication, and a round rejects expired work before polling;
 a late observed completion cannot retroactively authorize more work.
 
+The ordinary serial entry still observes completion before testing the timeout
+of an incomplete poll, as it did before publication/polling were factored. The
+new round entry is deliberately stricter: it checks the deadline before polling
+because other ranks' submission work can delay that first observation. Existing
+serial callers are not silently assigned the round's deadline semantics.
+
 The entire finite set is validated before any packet publication: kernel/group
 incarnation, live owner buffer and mapped peer-read authority, exact argument
 ABI/access/alignment and bounds, within-command aliasing, geometry, and capacity

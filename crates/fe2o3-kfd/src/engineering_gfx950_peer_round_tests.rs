@@ -102,7 +102,8 @@ fn cross_rank_aliases_reject_each_writer_and_allow_only_independent_ranges() {
 #[test]
 fn round_alias_checker_bounds_empty_oversized_and_overflow_ranges() {
     assert!(require_round_independence(&[]).is_err());
-    assert!(require_round_independence(&[&[]; 9]).is_err());
+    let empty: &[Gfx950EngineeringPeerPointerV1] = &[];
+    assert!(require_round_independence(&[empty; 9]).is_err());
     let too_many =
         vec![buffer(1).pointer(0, 0, 0, BufferAccessV1::Read); MAX_POINTER_FIXUPS_V1 + 1];
     assert!(require_round_independence(&[&too_many]).is_err());
@@ -253,7 +254,9 @@ fn every_round_fault_is_terminal_without_partial_success_or_more_publication() {
     for failure in faults {
         let mut backend = Recording::new(8);
         backend.fail = Some(failure.clone());
-        backend.finish_after = vec![1; 8];
+        if failure == "wait:0" {
+            backend.finish_after = vec![1; 8];
+        }
         let result = run_round(&mut backend, 8);
         assert!(result.is_err(), "{failure}");
         assert_eq!(backend.events.last().unwrap(), &failure);
@@ -263,6 +266,9 @@ fn every_round_fault_is_terminal_without_partial_success_or_more_publication() {
         if let Some(index) = failure.strip_prefix("publish:") {
             assert_eq!(backend.published.len(), index.parse::<usize>().unwrap() + 1);
             assert!(backend.completed.is_empty());
+        }
+        if let Some(index) = failure.strip_prefix("poll:") {
+            assert_eq!(backend.completed.len(), index.parse::<usize>().unwrap());
         }
         let mut group = empty_group();
         assert!(group.finish(result).is_err());
