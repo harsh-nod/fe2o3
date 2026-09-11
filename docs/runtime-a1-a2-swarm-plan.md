@@ -1,6 +1,6 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Baseline: signed `0193b8fa0c26ecef072acafd72979484d74d44e9` (R77,
+Baseline: signed `042dcec1bc67f919e02ce4908a62ecc8d1e8b113` (R78,
 pushed to both remotes), reviewed 2026-09-10. Its local validation and exact
 source/evidence identities are below.
 This decomposes the remaining local
@@ -14,11 +14,14 @@ implementation from hardware acceptance; queued tickets are not completed work
 or unattended background jobs.
 
 The [next-wave dispatch](runtime-a1-a2-next-wave.md) is the concise current
-ticket split from the three-agent read-only audit, R77 and the R78 follow-on.
+ticket split from the three-agent read-only audit, signed R78 and local R79.
 It records generated-admission/result ownership, independent native fixtures,
 the missing native-budget qualification harness and completion gates. That
 planning audit adds no runtime implementation or hardware acceptance; the
-history below retains the earlier packet boundaries.
+history below retains the earlier packet boundaries. R79 finite preparation is
+implemented in the working tree with focused CPU tests passing, but is not
+committed or release-qualified. This documentation-only refresh does not publish
+that implementation or promote it to native generated execution.
 
 The [R65 contract](runtime-async-drain-versions-v1.md) is the current baseline:
 cooperative drain, reply-count admission and graph-local version lineage are
@@ -300,8 +303,9 @@ R74 adds standalone nonexecuting invocation custody, and R75 implements
 GEN-2B-1 owner-local drivers/retention. R76 implements reusable Context/device
 preparation. R77 adds checked nonexecuting projection; R78 supplies borrowed
 coherent initialization hooks. Admission first supplies an explicitly
-nonpublishing retained owner, while Native takes independent fixtures and
-Resources takes host-cache limits. The
+nonpublishing retained owner in local R79; its broader validation/release is the
+next Primary/Admission task. Native takes independent fixtures and Resources
+takes host-cache limits plus the shared readback reservation contract. The
 [integration queue](runtime-a1-a2-next-wave.md#generated-integration-queue)
 refines the [six-packet breakdown](runtime-a1-a2-next-wave.md#gen-2b-breakdown):
 the owner precedes full-roster adoption, and adoption plus complete result/reply
@@ -313,10 +317,10 @@ hardware remain primary-owned.
 
 | Lane | Next bounded packet | Dependency and exit gate |
 | --- | --- | --- |
-| Native | SCALE-1A-FIXTURE now; R78 rebound qualifier and MEM-QUAL-HARNESS; full-roster B3-DATA after OWNER | R78 hooks are implemented; do not duplicate them. Adoption needs an explicitly nonpublishing retained owner and complete preallocated roster. R76 still needs live bootstrap qualification. Fixtures need complete-output oracles; native budgets need their new harness |
-| Resources | Host-cache policy, then N1B and MEM-DOM-1 | GEN-2R data storage is implemented locally. R72 suffices for ordinary host-cache policy; root/device/Context and bootstrap/terminal headroom remain separate |
-| Admission | B3-OWNER and shared B4-RESERVE now; B3-ISSUE after Native's B3-DATA; then completion/API/graph integration | Compose R75-R77 without publishing the preparation/adoption state. Complete readback/reply reservations precede issue; charged completion precedes public async/blocking and graph/drain. Production execution requires exact compiler/machine evidence |
-| Primary | Implement reviewed packets and shared GEN-2/cache/account integration; signed OVL/DRN/MEM campaigns | MEM campaigns first need the new pressure harness. Hardware requires idle selected GPU, real binary/census and complete cleanup. Do not promote fixtures to production authority |
+| Native | SCALE-1A-FIXTURE now; B3-DATA-REP then ADOPT; R78 rebound qualifier and MEM-QUAL-HARNESS | R78 hooks are implemented; do not duplicate them. Accepted OWNER precedes representation integration; ADOPT additionally requires implemented B4-RESERVE. Before effects, custody becomes non-discardable and joins lane/drain/graph/cleanup tracking. Fixtures need full-output oracles |
+| Resources | Host-cache policy and B4-RESERVE contract, then N1B and MEM-DOM-1 | R72 suffices for ordinary host-cache policy. B4 needs a new completion reply and full readback ownership in the original account. Parent accounts and bootstrap/terminal headroom remain separate |
+| Admission | Review/validate R79, share B4-RESERVE, then B3-ISSUE, completion/API/graph integration | R79 is host preparation, not launch completion. DATA-ADOPT and implemented reservations precede issue; charged completion precedes public async/blocking and graph/drain. Production execution requires exact compiler/machine evidence |
+| Primary | Finish R79 full gates/release, then reviewed implementation and shared integration; signed OVL/DRN/MEM campaigns | The current dispatch commit changes documentation only. MEM campaigns first need the new pressure harness. Hardware requires idle selected GPU, real binary/census and complete cleanup. Do not promote fixtures to production authority |
 
 ### R71 Implementation Ownership
 
@@ -619,6 +623,7 @@ or fixture results exist. None of the rows establishes runtime-wide parity.
 | GEN-2A | R74 nonexecuting typed invocation, protected-only authority and guarded decoder custody | No new proof; compiler evidence and executable refinement open | Six storage/loader tests, seven new negative fixtures and compile-only consuming API; no full production constructor | Nonexecuting boundary; fixtures cannot fill production cells | Positive construction open | Unmeasured |
 | GEN-2B-1/2 | R75 owner-local drivers and R76 nonexecuting Context preparation implemented locally | Compiler evidence and adapter/async composition open | Driver retention, Context identity/rejection, shutdown storage and type-boundary checks pass; positive native construction remains open | Live retained-device bootstrap scopes open; fixtures cannot fill production cells | Open | Unmeasured |
 | GEN-2B-3 projection | R77 complete nonexecuting fixed-host projection and Context carrier integration | No new theorem; native/whole-transform refinement open | Exact identity/roster/hidden bytes, pointer/capacity retention, native policy rejection and charged disposal tests | No native work; unsupported fixed profiles remain open | Open | Unmeasured |
+| B3-OWNER / R79 | Finite preparation, parked custody, opaque ticket and discard exist only in working tree; release pending | No new adapter proof | Focused 22 runtime/10 host tests pass, including 16 new runtime and one host wiring case; full release gates pending | Nonexecuting host custody only | Positive protected construction open | Unmeasured |
 | GEN-2B-3 adoption, -4..6 | Native adoption/publication, completion/results, public async API and generated graph/drain integration open | Compiler evidence and async composition open | Publication/retirement, wake/retry and composed generated shutdown matrix open | Fixtures cannot fill production cells | Open | Unmeasured |
 | DRN-1/2/3 | R65 drain, DRN-1A capture and DRN-3A/B failure composition exist | R69 range guard only; whole drain/executor refinement open | R69 tests plus twelve DRN-3B operation/waiter, graph, exhaustion and Stop scenarios | R65 idle only; DRN-2 outstanding-work open | Open | Unmeasured |
 | DRN-2A | Eight-cell copy qualifier/checker/runner | No whole-drain or native refinement proof | Eight observer tests, actual scripted async-copy/pending-poll regression and seventeen checker/runner tests | Signed outstanding-work campaign open | Generated cells require GEN-2 | Unmeasured |
@@ -1107,7 +1112,7 @@ merging to either main branch.
 | Follow-on, R76 packet | Immutable retained-device scope, full currentness and queue/VM guard review | Exact identity and payload-before-credit review | Runtime/host Context binding and nonescaping interface review | Shared scope/host implementation and local gates; native bootstrap and production compiler acceptance remain open |
 | Follow-on, R77 packet | Complete fixed-host projection, canonical hidden/layout validation and mechanics transfer review | No-copy storage, original credits and disposal-order review | Context carrier integration and source-identity review | Source gates/evidence; no native adoption, deadline or completion acceptance |
 | Follow-on, R78 packet | Borrowed coherent initialization/insertion/replacement and fault-envelope review | Exact padded debit, currentness, retained-prefix and refund review | Ordinary HostVisible copy removal and source-lifetime review | Local gates/evidence; full generated adoption and native initial/rebound qualification remain open |
-| Next dependency-ready packet | SCALE-1A-FIXTURE/qualifier, R78 rebound qualifier and MEM-QUAL-HARNESS; B3-DATA after OWNER; R76 native acceptance | Host-cache policy and shared B4-RESERVE; then N1B and MEM-DOM-1; VER-1 can move earlier | B3-OWNER and B4-RESERVE; B3-ISSUE after DATA; then completion/API/graph integration | Own edits/shared hooks; OVL-QUAL-2 and DRN-2A signed campaigns; native-budget hardware only after its new harness; compiler handoff |
+| Next dependency-ready packet | SCALE-1A-FIXTURE/qualifier, R78 rebound qualifier and MEM-QUAL-HARNESS; B3-DATA-REP then ADOPT after accepted OWNER; R76 native acceptance | Host-cache policy and shared B4-RESERVE; then N1B and MEM-DOM-1; VER-1 can move earlier | R79 review/validation and B4-RESERVE; B3-ISSUE after DATA-ADOPT and RESERVE; then completion/API/graph integration | R79 full release gates; own edits/shared hooks; OVL-QUAL-2 and DRN-2A signed campaigns; native-budget hardware after its new harness; compiler handoff |
 | 3, bounded local integration | MEM-3/4 native hooks, then SCALE-CAP | MEM-3A/B, MEM-4A/B, VER-1/2 and MEM-5 closure | Compose GEN-2B with resource/version owners; DRN-2 fixture campaign support | Incremental PRF-1; production GEN-2 requires matching compiler/machine evidence |
 | 4, acceptance campaigns | SCALE-2 depth/out-of-order, then SCALE-3 producers/measurements | Budget/version stress and independent review | Repeated generated graphs and active/failure drain | PRF-2, full A1/A2 exit audit and signed dual-remote publication |
 
