@@ -83,11 +83,14 @@ impl Harness {
         .unwrap()
     }
     fn pop(&self) -> Box<dyn operation::EngineOperationV1<MockBackend>> {
-        let RuntimeAsyncEngineCommandV1::Operation(operation) = self.receiver.try_recv().unwrap()
+        self.pop_factory().materialize()
+    }
+    fn pop_factory(&self) -> Box<dyn operation::EngineOperationFactoryV1<MockBackend>> {
+        let RuntimeAsyncEngineCommandV1::Operation(factory) = self.receiver.try_recv().unwrap()
         else {
             panic!("operation")
         };
-        operation
+        factory
     }
     fn used(&self) -> usize {
         self.handle.observer().snapshot_bytes_in_use()
@@ -104,7 +107,7 @@ fn r64_snapshot_budget_survives_observer_drop_and_cancel_until_disposal() {
         h.handle.enqueue_launch(h.request()),
         Err(RuntimeAsyncEngineCallErrorV1::SnapshotCapacity)
     ));
-    drop(h.pop());
+    drop(h.pop_factory());
     assert_eq!(h.used(), 0);
     let tracked = h.handle.enqueue_launch_tracked(h.request()).unwrap();
     let control = tracked.control();
@@ -355,7 +358,7 @@ fn r64_all_standalone_operations_preflight_dependencies_before_enqueue() {
     assert_eq!(h.used(), std::mem::size_of::<RuntimeEventIdV1>());
     drop(future);
     assert_eq!(h.used(), std::mem::size_of::<RuntimeEventIdV1>());
-    drop(h.pop());
+    drop(h.pop_factory());
     assert_eq!(h.used(), 0);
 }
 
@@ -373,7 +376,7 @@ fn r64_snapshot_submit_rejection_and_panic_return_payload_credit() {
                 .push_back(RuntimeBackendFailureV1::Rejected(MockError("capacity")));
         }
         let future = h.handle.enqueue_launch(h.request()).unwrap();
-        let mut operations = operation::OperationRegistryV1::new();
+        let mut operations = operation::OperationRegistryV1::new(1, false);
         operations.insert(h.pop());
         operation::advance_operations_v1(
             &mut h.context,
@@ -383,7 +386,7 @@ fn r64_snapshot_submit_rejection_and_panic_return_payload_credit() {
             flush_stream_v1::<MockBackend>,
         );
         assert_eq!(h.used(), 0);
-        assert_eq!(operations.len(), 0);
+        assert_eq!(operations.len(), usize::from(panics));
         assert!(h.state.lock().unwrap().issues.is_empty());
         if panics {
             assert!(h.context.is_terminal());
@@ -404,13 +407,13 @@ fn r64_snapshot_submit_rejection_and_panic_return_payload_credit() {
 fn r64_snapshot_registry_rejection_keeps_charge_until_actual_disposal() {
     let h = Harness::new(8, 1);
     let future = h.handle.enqueue_launch(h.request()).unwrap();
-    let mut operation = h.pop();
-    operation.reject(RuntimeAsyncEngineCallErrorV1::OperationCapacity);
+    let mut factory = h.pop_factory();
+    factory.reject(RuntimeAsyncEngineCallErrorV1::OperationCapacity);
     assert!(matches!(
         join_command(future),
         Err(RuntimeAsyncEngineCallErrorV1::OperationCapacity)
     ));
     assert_eq!(h.used(), 8);
-    drop(operation);
+    drop(factory);
     assert_eq!(h.used(), 0);
 }

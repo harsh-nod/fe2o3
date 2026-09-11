@@ -286,6 +286,8 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
                 worker_id
                     .set(thread::current().id())
                     .expect("one owner thread");
+                // Reserve the bounded roster before constructing native custody.
+                let operations = operation::OperationRegistryV1::new(config.waiter_capacity, true);
                 let mut context = match catch_unwind(AssertUnwindSafe(factory)) {
                     Ok(Ok(context)) => context,
                     Ok(Err(error)) => {
@@ -312,9 +314,13 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
                     }
                 };
                 let _ = startup_sender.send(Ok(context.capture_context_generation_v1()));
+                // Rebind after Context for successful drop order, outside the
+                // unwind boundary so both owners survive failed native shutdown.
+                let mut operations = operations;
                 let outcome = catch_unwind(AssertUnwindSafe(|| {
                     run_engine_context_v1(
                         &mut context,
+                        &mut operations,
                         receiver,
                         config,
                         Some(RuntimeAsyncProgressModeV1 {
@@ -350,6 +356,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
                         }
                     }
                     Ok((cleanup, native_failure)) => {
+                        core::mem::forget(operations);
                         core::mem::forget(context);
                         RuntimeAsyncOwnedShutdownV1 {
                             disposition: RuntimeAsyncOwnedDispositionV1::RetainedUntilProcessExit,
@@ -360,6 +367,8 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
                     }
                     Err(payload) => {
                         core::mem::forget(payload);
+                        operations.stop_observations();
+                        core::mem::forget(operations);
                         core::mem::forget(context);
                         RuntimeAsyncOwnedShutdownV1 {
                             disposition: RuntimeAsyncOwnedDispositionV1::RetainedUntilProcessExit,

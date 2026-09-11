@@ -1,0 +1,10 @@
+Diff in /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime/src/async_engine/owned.rs:287:
+                     .set(thread::current().id())
+                     .expect("one owner thread");
+                 // Reserve the bounded roster before constructing native custody.
+-                let operations =
+-                    operation::OperationRegistryV1::new(config.waiter_capacity, true);
++                let operations = operation::OperationRegistryV1::new(config.waiter_capacity, true);
+                 let mut context = match catch_unwind(AssertUnwindSafe(factory)) {
+                     Ok(Ok(context)) => context,
+                     Ok(Err(error)) => {

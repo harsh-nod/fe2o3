@@ -840,7 +840,7 @@ type RuntimeContextCommandV1<B> = Box<dyn FnOnce(&mut RuntimeContextV1<B>) + Sen
 
 enum RuntimeAsyncEngineCommandV1<B: RuntimeBackendV1> {
     Context(RuntimeContextCommandV1<B>),
-    Operation(Box<dyn operation::EngineOperationV1<B>>),
+    Operation(Box<dyn operation::EngineOperationFactoryV1<B>>),
     Graph(Box<dyn graph::EngineGraphV1<B>>),
     Register {
         event: RuntimeEventIdV1,
@@ -1388,12 +1388,21 @@ fn run_engine_v1<B: RuntimeBackendV1 + 'static>(
     progress: Option<RuntimeAsyncProgressModeV1<B>>,
     admission: Arc<drain::AdmissionV1>,
 ) -> RuntimeContextV1<B> {
-    run_engine_context_v1(&mut context, receiver, config, progress, admission);
+    let mut operations = operation::OperationRegistryV1::new(config.waiter_capacity, false);
+    run_engine_context_v1(
+        &mut context,
+        &mut operations,
+        receiver,
+        config,
+        progress,
+        admission,
+    );
     context
 }
 
 fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
     context: &mut RuntimeContextV1<B>,
+    operations: &mut operation::OperationRegistryV1<B>,
     receiver: Receiver<RuntimeAsyncEngineCommandV1<B>>,
     config: RuntimeAsyncEngineConfigV1,
     progress: Option<RuntimeAsyncProgressModeV1<B>>,
@@ -1403,7 +1412,6 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
     let mut draining = None;
     let mut queue_exhausted = false;
     let mut waiters = RuntimeAsyncWaiterRegistryV1::new();
-    let mut operations = operation::OperationRegistryV1::new();
     let mut graph = None;
     let mut progress_registry = progress
         .as_ref()
@@ -1420,7 +1428,7 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
                 stopped = handle_command_v1(
                     context,
                     &mut waiters.entries,
-                    &mut operations,
+                    operations,
                     &mut graph,
                     progress_registry.as_mut(),
                     command,
@@ -1436,7 +1444,7 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
                             stopped = handle_command_v1(
                                 context,
                                 &mut waiters.entries,
-                                &mut operations,
+                                operations,
                                 &mut graph,
                                 progress_registry.as_mut(),
                                 command,
@@ -1479,7 +1487,7 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
             }
             operation::advance_operations_v1(
                 context,
-                &mut operations,
+                operations,
                 config.polls_per_tick,
                 mode.config.flushes_per_tick,
                 mode.flush_stream,
@@ -1555,6 +1563,9 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
     for (_, cell) in core::mem::take(&mut waiters.entries) {
         cell.complete(Err(RuntimeAsyncEventErrorV1::EngineStopped));
     }
+    if operations.stop_observations() {
+        context.quarantine_after_async_command_panic_v1();
+    }
 }
 
 #[allow(clippy::too_many_arguments)] // Independently bounded observer and operation registries.
@@ -1591,18 +1602,28 @@ fn handle_command_v1<B: RuntimeBackendV1 + 'static>(
             }
             context.is_terminal()
         }
-        RuntimeAsyncEngineCommandV1::Operation(mut operation) => {
-            if progress_config.is_none() {
-                operation.reject(RuntimeAsyncEngineCallErrorV1::EngineStopped);
-            } else if !fe2o3_runtime_model::r61_operation_registry_accepts_v1(
-                operations.len(),
-                config.waiter_capacity,
-            ) {
-                operation.reject(RuntimeAsyncEngineCallErrorV1::OperationCapacity);
-            } else {
-                operations.insert(operation);
+        RuntimeAsyncEngineCommandV1::Operation(mut factory) => {
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                if progress_config.is_none() || !operations.accepts_factory(factory.as_ref()) {
+                    factory.reject(RuntimeAsyncEngineCallErrorV1::EngineStopped);
+                } else if !fe2o3_runtime_model::r61_operation_registry_accepts_v1(
+                    operations.len(),
+                    config.waiter_capacity,
+                ) {
+                    factory.reject(RuntimeAsyncEngineCallErrorV1::OperationCapacity);
+                } else {
+                    operations.insert(factory.materialize());
+                }
+            })) {
+                core::mem::forget(payload);
+                context.quarantine_after_async_command_panic_v1();
+                if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                    factory.reject(RuntimeAsyncEngineCallErrorV1::CommandPanicked);
+                })) {
+                    core::mem::forget(payload);
+                }
             }
-            false
+            context.is_terminal()
         }
         RuntimeAsyncEngineCommandV1::Context(command) => {
             command(context);

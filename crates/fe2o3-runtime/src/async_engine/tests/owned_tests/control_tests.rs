@@ -148,7 +148,7 @@ fn r62_cancel_survives_capacity_rejection_and_channel_drop() {
             Cancel::CancelledBeforeSubmission
         );
         if reject {
-            h.receive()
+            h.receive_factory()
                 .reject(RuntimeAsyncEngineCallErrorV1::OperationCapacity);
         }
         drop(h);
@@ -422,8 +422,12 @@ impl Harness {
     }
 
     fn receive(&self) -> Box<dyn EngineOperationV1<MockBackend>> {
+        self.receive_factory().materialize()
+    }
+
+    fn receive_factory(&self) -> Box<dyn operation::EngineOperationFactoryV1<MockBackend>> {
         match self.receiver.recv_timeout(Duration::from_secs(1)).unwrap() {
-            RuntimeAsyncEngineCommandV1::Operation(operation) => operation,
+            RuntimeAsyncEngineCommandV1::Operation(factory) => factory,
             _ => panic!("expected typed operation"),
         }
     }
@@ -441,7 +445,7 @@ fn r62_cancel_in_channel_and_registry_never_calls_submit() {
         let mut h = Harness::new();
         let future = h.launch();
         let control = future.control();
-        let mut registry = OperationRegistryV1::new();
+        let mut registry = OperationRegistryV1::new(1, false);
         if registered {
             registry.insert(h.receive());
         }
@@ -505,11 +509,12 @@ fn r62_cancel_vs_owner_race_has_one_winner_and_no_replay() {
         let mut h = Harness::new();
         let future = h.launch();
         let control = future.control();
-        let mut operation = h.receive();
+        let mut factory = h.receive_factory();
         let barrier = Arc::new(Barrier::new(2));
         let owner_barrier = Arc::clone(&barrier);
         let state = Arc::clone(&h.state);
         let owner = thread::spawn(move || {
+            let mut operation = factory.materialize();
             owner_barrier.wait();
             let retired = operation.advance(&mut h.context);
             if !retired {
@@ -800,12 +805,13 @@ fn r62_timeout_racing_completion_retains_exactly_one_result() {
         let mut h = Harness::new();
         let future = h.launch();
         let control = future.control();
-        let mut operation = h.receive();
-        assert!(!operation.advance(&mut h.context));
-        h.succeed();
+        let mut factory = h.receive_factory();
         let barrier = Arc::new(Barrier::new(2));
         let owner_barrier = Arc::clone(&barrier);
         let owner = thread::spawn(move || {
+            let mut operation = factory.materialize();
+            assert!(!operation.advance(&mut h.context));
+            h.succeed();
             owner_barrier.wait();
             assert!(operation.advance(&mut h.context));
             h

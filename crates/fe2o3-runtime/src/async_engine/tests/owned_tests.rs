@@ -6,6 +6,7 @@ mod control_tests;
 mod drain_tests;
 mod executor_tests;
 mod graph_tests;
+mod local_operation_tests;
 mod snapshot_tests;
 
 #[derive(Default)]
@@ -738,7 +739,7 @@ fn owned_operation_flush_cursor_rotates_when_full_poll_round_restores_order() {
         }
         fn reject(&mut self, _: RuntimeAsyncEngineCallErrorV1) {}
     }
-    let mut operations = operation::OperationRegistryV1::new();
+    let mut operations = operation::OperationRegistryV1::new(4, false);
     operations.insert(Box::new(Pending(a)));
     operations.insert(Box::new(Pending(b)));
     for _ in 0..4 {

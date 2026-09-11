@@ -1,0 +1,64 @@
+{
+  "gnu-tests": {
+    "passed": 2238,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "musl-tests": {
+    "passed": 2238,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "gnu-docs": {
+    "passed": 86,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 6
+  },
+  "musl-docs": {
+    "passed": 71,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 5
+  },
+  "musl-host-docs": {
+    "passed": 14,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "gnu-host": {
+    "passed": 233,
+    "failed": 0,
+    "ignored": 4,
+    "harnesses": 1
+  },
+  "musl-host": {
+    "passed": 116,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "macro-fixtures": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "base_commit": "f00e24d5e454b4575285170f17d8612c3bae0a49",
+  "final_gate_attempt": "r75-final2",
+  "non_documentation_source_identities_checked": 5580,
+  "manifests_and_lockfiles_unchanged": true,
+  "model_and_proof_sources_unchanged_from": "fb1e27e66cee27bb11f0b7c08f2d5994c5d168da",
+  "verus_solver_rerun": false,
+  "new_verus_theorems": 0,
+  "negative_inventory_files": 686,
+  "production_metadata_packages": 43,
+  "new_cpu_test_functions": 16,
+  "focused_async_tests_passed": 186,
+  "production_generated_execution_validated": false,
+  "native_execution_validated": false,
+  "generated_charged_result_driver_integration_validated": false
+}

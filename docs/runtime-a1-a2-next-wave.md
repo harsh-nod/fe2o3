@@ -68,10 +68,27 @@ Model/proof sources are unchanged; the 686-negative inventory was rechecked,
 not the Verus solver. These results do not prove the new ownership adapter.
 
 Resources takes ordinary host-cache limits without reimplementing GEN-2R.
-Admission advances to GEN-2B's owner-local operation and retention boundary.
 Native first supplies its reusable retained-device preparation scope.
 Native's bounded fixture work is independent of both. Primary owns all edits,
 cross-lane integration, gates and releases.
+
+### R75 Follow-On
+
+GEN-2B-1 now implements the [owner-local operation boundary](runtime-owner-local-operations-v1.md).
+Ordinary operations use Send factories materialized after capacity admission;
+installed drivers need not be Send. The owned engine retains unresolved drivers
+through cleanup/native shutdown and quarantines them with Context on failure.
+Reply disposal is independent of retained driver custody, while still-unissued
+ordinary host callbacks are discarded on stop. Context-returning APIs remain
+Send-compatible and reject owner-local factories before materialization.
+
+Sixteen new CPU tests and the 186-test focused async suite pass. The
+[R75 local record](evidence/local-r75-owner-local-operations-2026-09-10/README.md)
+separates final gates from the two intermediate payload/drop-order regressions.
+No new proof, native generated authority, R73 byte-owner integration or GPU
+acceptance follows from these driver tests. Admission now takes GEN-2B-2's
+Context/host adapter and the exact persistent projection contract with Native;
+GEN-2B-3 publication still depends on that retained-device scope.
 
 ## Current Swarm Dispatch
 
@@ -84,7 +101,7 @@ are sequential queues, not additional concurrent workers or delegated edits.
 | --- | --- | --- |
 | Native: `r66_native_coexistence` | GEN-2B-2 retained-device scope; then independent SCALE-1A-FIXTURE | Specify checked-device access through session/queue ownership and exact Context binding. Next, bounded short/long artifacts, isolated `qualification_gfx942_scale_v1.rs` and complete-output oracles. Fixtures have no GEN-2 prerequisite. |
 | Resources: `r66_coexistence_model` | MEM-2B-HOST: ordinary coherent host-cache bounds | Specify isolated `sdma/host_pool_policy.rs`, exact padded-cost/identity projection and policy/model tests. Preserve R72 backing debit across reuse; zero cache limit disables caching, default stays unchanged. Coordinate native hooks before integration. |
-| Admission: `r66_runtime_coexistence` | GEN-2B-1 owner-local operations and shutdown retention | Separate Send transport from owner-local drivers, admit capacity before materialization and retain unresolved custody through native cleanup/quarantine. Preserve existing Send-Context APIs. Then integrate GEN-2B-2 through -6 below. |
+| Admission: `r66_runtime_coexistence` | GEN-2B-2 Context/host adapter and GEN-2B-3 projection contract | Build on R75's owner-local operation/retention path and Native's retained-device scope. Bind exact Context/device generations and lossless persistent recipe coordinates before per-invocation publication. No public generated submit yet. |
 | Primary | Shared GEN-2/cache integration, proof composition and qualification | Own every edit, integration/build/proof run, evidence record and signed dual push. Schedule existing OVL-QUAL-2 and DRN-2A against frozen signed source; native-budget pressure first needs MEM-QUAL-HARNESS. |
 
 Admission and Resources agree the permit/decoder/result boundary before code
@@ -108,18 +125,16 @@ rejects a second live admission of the same physical GPU. Keep the actual device
 in the backend and prepare each invocation against that retained owner, without
 creating a second queue or widening thread-safety/lifetimes.
 
-There are two additional integration boundaries. The
-[operation driver](../crates/fe2o3-runtime/src/async_engine/operation.rs)
-currently requires `Send`, and its registry is destroyed before
-[owned Context cleanup](../crates/fe2o3-runtime/src/async_engine/owned.rs).
-Also, native compute success records dirty output extents; it does not itself
-provide generated host readback. These are prerequisites for adding generated
-custody, not evidence that the existing handle-only operations release native
-resources early.
+R74's additional operation-lifetime prerequisites are implemented in R75: Send
+factories now feed owner-local drivers, and the registry survives owned Context
+cleanup. This was not an early-native-release defect in the existing handle-only
+operations, whose native resources remain Context-owned. Native compute success
+still only records dirty output extents; it does not itself provide generated
+host readback or authorize the private decoder.
 
 | Packet | Lead, source boundary and dependency | Required acceptance |
 | --- | --- | --- |
-| GEN-2B-1: owner-local drivers | Admission; `async_engine/operation.rs`, `async_engine.rs`, `owned.rs`. Independent of retained-device scope. | Send command/factory transport, owner-local driver creation after capacity admission, unresolved custody surviving cleanup and quarantine. Test Rc-holding drivers, queue/operation exhaustion, cancellation, observer drop, factory/advance panic and Stop/cleanup failure; preserve Send-Context APIs and exactly-once replies. |
+| GEN-2B-1: owner-local drivers | Implemented in R75; Admission review, Primary integration. `async_engine/operation.rs`, `async_engine.rs`, `owned.rs`. | CPU tests cover Rc-holding drivers, queue/operation/reply exhaustion, cancellation, observer drop, factory/advance panic and Stop/cleanup failure; Send-Context APIs and reply lifetime are preserved. Exact generated/native custody and whole-executor refinement are not established by this packet. |
 | GEN-2B-2: reusable preparation | Native scope in `memory_linux.rs`, `shared_memory.rs`, `queue_live.rs`; Admission's runtime-defined Context/host adapter. Independent of -1. | Full pre/post currentness, exact private Context/backend/device generation and no device extraction. Multiple preparations before/after lazy VM/queue creation must work without a new admission; foreign/stale/terminal scopes and borrowed escape reject. Adopt prepared custody without retaining a mutable Context borrow. |
 | GEN-2B-3: persistent publication | Native/Admission; runtime `kfd_backend/compute_dispatch.rs`, `compute_state.rs` and narrow prepared-request projection. Requires -1 and -2. | Preserve artifact, ABI, buffers/fixups, hidden kernargs, geometry and timeout policy in the existing persistent path. Retain per-invocation authority before native effects and revalidate at actual publication, including deferred paths. Reject substitutions/double consumption; pending polls and ambiguous publication never authorize replay. |
 | GEN-2B-4: completion/results | Admission; Resources reviews private charged decoder/reply boundary. Completion tests can start early; integration requires -3. | Reserve readback resources before issue; bind exact invocation/submission/generations and validate every returned buffer, including read-only effects. Decode the complete roster, dispose encoded storage, commit all outputs, drop producer custody, then resolve one budgeted completion future. Test malformed late output, readback/currentness failure, decode panic, retained results after shutdown and credit conservation. |
@@ -158,8 +173,9 @@ examples do not configure those native budgets. Host-cache cells follow its
 implementation.
 
 Primary freezes interfaces, implements reviewed packets and owns focused tests,
-proof registration and shared-file integration. This dispatch changes no runtime
-code or acceptance status. CPU work needs no hardware window; positive production
+proof registration and shared-file integration. The dispatch itself changes no
+runtime code or acceptance status; R75's implemented boundary is recorded
+separately above. CPU work needs no hardware window; positive production
 generated execution still needs the compiler handoff. Fixture correctness and
 fixture drain do not require that production handoff.
 
@@ -185,7 +201,7 @@ fixture implementation. A busy selected GPU does not block local proof/tests.
 | MEM-N1A-QUAL and N2/pool qualification | Primary after MEM-QUAL-HARNESS | Signed Linux admission-pressure captures, exact native usage/identities, complete data and cleanup. Host-cache cells follow that policy's implementation. Fake-backend tests do not fill these cells. |
 | GEN-2A production acceptance | Admission/Primary | Nonexecuting custody and local adapter/type tests are implemented in R74. Positive full construction still requires an actual checked device and exact production compiler evidence; local predicate/structural fixtures do not fill that cell. Context allocation generations/admission belong to GEN-2B. |
 | GEN-2R runtime integration | Primary; Resources/Admission review with GEN-2B | R73 data storage is implemented and locally validated. Bind its private decoder and credits to exact runtime-owner lifetime; ordinary host-thread tests do not qualify shutdown. Preserve no raw escape, partial publication or capacity mismatch. |
-| GEN-2B-1 through -6 | Admission/Native; Primary integration | Reusable Context preparation, owner-local retention, exact persistent publication/readback, one completion future and shared blocking/async execution, followed by graph/drain qualification. See the ordered breakdown above. |
+| GEN-2B-2 through -6 | Admission/Native; Primary integration | Build on implemented owner-local retention with reusable Context preparation, exact persistent publication/readback, one completion future and shared blocking/async execution, followed by graph/drain qualification. See the ordered breakdown above. |
 | MEM-2B-HOST | Resources policy; Native hooks | Bound ordinary coherent host-cache reuse with cache-or-dispose admission using R72 N1A. Test padded byte/record limits, zero caching, generation reuse and failed trim; retain charges for incompletely disposed backing, but never resurrect confirmed-disposed charges. Broader N1B is not a prerequisite for this narrow profile. |
 | MEM-N1B | Resources/Native | Qualify userptr, doubled-VA AQL, executable, kernarg and control profiles separately. Distinguish physical backing, aliases and reserved VA; test exact lifetime/disposal and avoid double charging. |
 | MEM-DOM-1 | Resources; Primary construction hooks | Root/device/Context account ownership with bootstrap and terminal headroom reserved in advance. Repeated Context creation and simultaneous quarantine must not reset or exceed aggregate limits. |
@@ -350,5 +366,5 @@ actual source and pushed to both remotes. A topic-branch push is not a main merg
 
 A1/A2 remain open. The later A3-A7 table assigns milestone leads and exit gates;
 those milestones still need packet-level designs and their own test environments.
-Neither this plan nor R74 establishes full HIP/HSA
+Neither this plan nor R75 establishes full HIP/HSA
 parity or an unmeasured speedup.

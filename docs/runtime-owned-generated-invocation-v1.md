@@ -93,8 +93,10 @@ tests are required; R73's `try_take` does not provide Future progress by itself.
 The [six-packet dispatch](runtime-a1-a2-next-wave.md#gen-2b-breakdown) separates
 owner-local drivers and cleanup retention, reusable device preparation, checked
 persistent projection/publication, exact readback/results, public API convergence
-and generated graph/drain qualification. Current operation drivers require
-`Send` and their registry drops before owned Context cleanup; neither boundary
-can hold the proposed owner-local issued authority unchanged. Native completion
-status alone also supplies no decoded host output. These remain unimplemented
-integration work, not acceptance implied by GEN-2A's storage tests.
+and generated graph/drain qualification. R75 implements the
+[owner-local driver/retention prerequisite](runtime-owner-local-operations-v1.md):
+Send factories create local drivers, and unresolved driver custody survives owned
+Context cleanup. R73's decoder and this invocation's authority are not yet
+integrated with that path. Native completion status alone also supplies no
+decoded host output. Remaining integration is not acceptance implied by either
+GEN-2A storage tests or R75's mock driver tests.

@@ -7,6 +7,9 @@ use crate::{
 };
 use std::collections::{BTreeMap, VecDeque};
 
+mod factory;
+pub(super) use factory::EngineOperationFactoryV1;
+
 /// An exact submission and its final host observation. An error is not GPU
 /// completion; the context continues to retain possibly reachable resources.
 pub struct RuntimeAsyncOperationResultV1<A, E> {
@@ -26,24 +29,38 @@ pub struct RuntimeAsyncOperationResultV1<A, E> {
 pub type RuntimeAsyncOperationFutureV1<A, E> =
     RuntimeAsyncCommandFutureV1<RuntimeAsyncOperationResultV1<A, E>>;
 
-pub(super) trait EngineOperationV1<B: RuntimeBackendV1>: Send {
+/// Owner-local driver installed before its first Context/native effect.
+pub(super) trait EngineOperationV1<B: RuntimeBackendV1> {
+    /// True grants driver disposal, not merely completion of its reply. Issued
+    /// custody must remain here or in the Context until conclusively retired.
     fn advance(&mut self, context: &mut RuntimeContextV1<B>) -> bool;
+    /// Inert identity, cached at admission before the first advance.
     fn stream(&self) -> RuntimeStreamIdV1;
+    /// Infallibly detach/resolve the reply before any fallible handling, without
+    /// disposing possibly reachable native custody. Panic containment preserves
+    /// custody, but cannot recover a reply hidden by a broken implementation.
     fn reject(&mut self, error: RuntimeAsyncEngineCallErrorV1);
 }
 
+struct OperationEntryV1<B: RuntimeBackendV1> {
+    stream: RuntimeStreamIdV1,
+    driver: Box<dyn EngineOperationV1<B>>,
+}
+
 pub(super) struct OperationRegistryV1<B: RuntimeBackendV1> {
-    entries: VecDeque<Box<dyn EngineOperationV1<B>>>,
+    entries: VecDeque<OperationEntryV1<B>>,
     streams: BTreeMap<RuntimeStreamIdV1, usize>,
     flush_cursor: Option<RuntimeStreamIdV1>,
+    owner_cleanup: bool,
 }
 
 impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(capacity: usize, owner_cleanup: bool) -> Self {
         Self {
-            entries: VecDeque::new(),
+            entries: VecDeque::with_capacity(capacity),
             streams: BTreeMap::new(),
             flush_cursor: None,
+            owner_cleanup,
         }
     }
 
@@ -52,8 +69,32 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
     }
 
     pub(super) fn insert(&mut self, operation: Box<dyn EngineOperationV1<B>>) {
-        *self.streams.entry(operation.stream()).or_default() += 1;
-        self.entries.push_back(operation);
+        let stream = operation.stream();
+        *self.streams.entry(stream).or_default() += 1;
+        self.entries.push_back(OperationEntryV1 {
+            stream,
+            driver: operation,
+        });
+    }
+
+    pub(super) fn accepts_factory(&self, factory: &dyn EngineOperationFactoryV1<B>) -> bool {
+        self.owner_cleanup || !factory.requires_owned_shutdown()
+    }
+
+    /// Resolving a reply never removes its driver from the custody roster.
+    pub(super) fn stop_observations(&mut self) -> bool {
+        let mut panicked = false;
+        for entry in &mut self.entries {
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                entry
+                    .driver
+                    .reject(RuntimeAsyncEngineCallErrorV1::EngineStopped);
+            })) {
+                core::mem::forget(payload);
+                panicked = true;
+            }
+        }
+        panicked
     }
 
     fn retire_stream(&mut self, stream: RuntimeStreamIdV1) {
@@ -80,7 +121,7 @@ struct Operation<B: RuntimeBackendV1, A> {
     stream: RuntimeStreamIdV1,
     submit: Option<Submit<B, A>>,
     submission: Option<RuntimeSubmissionV1<A>>,
-    reply: owned::Reply<RuntimeAsyncOperationResultV1<A, B::Error>>,
+    reply: Option<owned::Reply<RuntimeAsyncOperationResultV1<A, B::Error>>>,
     rejected_observations: u64,
     last_rejected_observation: Option<B::Error>,
     control: Option<RuntimeAsyncOperationControlV1>,
@@ -91,25 +132,24 @@ impl<B: RuntimeBackendV1, A> Operation<B, A> {
         if let Some(control) = &self.control {
             control.finish_observation();
         }
-        self.reply.complete(Ok(RuntimeAsyncOperationResultV1 {
-            submission: self.submission.take(),
-            observation,
-            rejected_observations: self.rejected_observations,
-            last_rejected_observation: self.last_rejected_observation.take(),
-        }));
+        if let Some(mut reply) = self.reply.take() {
+            reply.complete(Ok(RuntimeAsyncOperationResultV1 {
+                submission: self.submission.take(),
+                observation,
+                rejected_observations: self.rejected_observations,
+                last_rejected_observation: self.last_rejected_observation.take(),
+            }));
+        }
     }
 }
 
 impl<B: RuntimeBackendV1, A> Drop for Operation<B, A> {
     fn drop(&mut self) {
-        if let Some(control) = &self.control {
-            control.stopped();
-            if control.phase() == RuntimeAsyncOperationPhaseV1::CancelledBeforeSubmission {
-                self.reply.complete(Err(
-                    RuntimeAsyncEngineCallErrorV1::CancelledBeforeSubmission,
-                ));
-            }
-        }
+        factory::stop_reply(
+            &mut self.reply,
+            self.control.as_ref(),
+            RuntimeAsyncEngineCallErrorV1::EngineStopped,
+        );
     }
 }
 
@@ -125,7 +165,7 @@ impl<B: RuntimeBackendV1, A> EngineOperationV1<B> for Operation<B, A> {
                     } else {
                         RuntimeAsyncEngineCallErrorV1::EngineStopped
                     };
-                self.reply.complete(Err(error));
+                factory::stop_reply(&mut self.reply, self.control.as_ref(), error);
                 return true;
             }
             match submit(context) {
@@ -177,16 +217,17 @@ impl<B: RuntimeBackendV1, A> EngineOperationV1<B> for Operation<B, A> {
     }
 
     fn reject(&mut self, error: RuntimeAsyncEngineCallErrorV1) {
-        if let Some(control) = &self.control {
-            control.stopped();
-            if control.phase() == RuntimeAsyncOperationPhaseV1::CancelledBeforeSubmission {
-                self.reply.complete(Err(
-                    RuntimeAsyncEngineCallErrorV1::CancelledBeforeSubmission,
-                ));
-                return;
-            }
+        let discard_unissued = matches!(
+            error,
+            RuntimeAsyncEngineCallErrorV1::EngineStopped
+                | RuntimeAsyncEngineCallErrorV1::CommandPanicked
+        );
+        factory::stop_reply(&mut self.reply, self.control.as_ref(), error);
+        if discard_unissued {
+            // This ordinary driver retains only an unissued host callback here;
+            // possibly live native resources remain owned by the Context.
+            drop(self.submit.take());
         }
-        self.reply.complete(Err(error));
     }
 }
 
@@ -229,18 +270,10 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
             return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
         }
         let (reply, future) = owned::Reply::budgeted_pair(&self.observer.reply_budget)?;
-        let operation = Operation {
-            stream,
-            submit: Some(submit),
-            submission: None,
-            reply,
-            rejected_observations: 0,
-            last_rejected_observation: None,
-            control,
-        };
+        let factory = factory::OperationFactoryV1::new(stream, submit, reply, control);
         match self
             .observer
-            .try_send_command(RuntimeAsyncEngineCommandV1::Operation(Box::new(operation)))
+            .try_send_command(RuntimeAsyncEngineCommandV1::Operation(Box::new(factory)))
         {
             Ok(()) => Ok(future),
             Err(TrySendError::Full(_)) => Err(RuntimeAsyncEngineCallErrorV1::CommandQueueFull),
@@ -399,24 +432,30 @@ pub(super) fn advance_operations_v1<B: RuntimeBackendV1>(
     flush: RuntimeAsyncFlushDriverV1<B>,
 ) {
     for _ in 0..poll_budget.min(operations.len()) {
-        let mut operation = operations
+        let entry = operations
             .entries
-            .pop_front()
+            .front_mut()
             .expect("bounded operation roster");
         // An adapter may have performed a side effect before unwinding. Do not
         // let command panic containment turn that into permission to retry.
-        match catch_unwind(AssertUnwindSafe(|| operation.advance(context))) {
+        match catch_unwind(AssertUnwindSafe(|| entry.driver.advance(context))) {
+            Ok(_) if context.is_terminal() => return,
             Ok(true) => {
-                operations.retire_stream(operation.stream());
+                let retired = operations.entries.pop_front().expect("retired driver");
+                operations.retire_stream(retired.stream);
             }
-            Ok(false) => {
-                operations.entries.push_back(operation);
-            }
+            Ok(false) => operations.entries.rotate_left(1),
             Err(payload) => {
                 core::mem::forget(payload);
                 context.quarantine_after_async_command_panic_v1();
-                operation.reject(RuntimeAsyncEngineCallErrorV1::CommandPanicked);
-                operations.retire_stream(operation.stream());
+                if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                    entry
+                        .driver
+                        .reject(RuntimeAsyncEngineCallErrorV1::CommandPanicked);
+                })) {
+                    core::mem::forget(payload);
+                }
+                return;
             }
         }
         if context.is_terminal() {
