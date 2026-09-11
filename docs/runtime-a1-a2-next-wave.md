@@ -9,6 +9,15 @@ follow-on packets. CO-1 and VER-1A.1 can proceed independently. This adds no liv
 KFD, new formal refinement or performance result; historical acceptance below
 applies to its named source only.
 
+The renewed three-agent breakdown advances the first Native assignment to
+**R97-3 acceptance**: the uncommitted .5B-1 driver, early ownership oracle and
+failure matrix now exist. A development run passed thirteen auxiliary tests;
+later final test/guard edits still need validation. This is not an accepted
+runtime checkpoint. Admission independently starts the production-used CO-1
+classifier in ordinary operation progress; Resources starts the VER-1A.1
+Context journal contract/inventory. The current board records the exact ready,
+dependent and qualification work; earlier assignment rows below are historical.
+
 R95 now implements the [auxiliary constructor root and checked installation](runtime-auxiliary-queue-construction-custody-v1.md)
 above signed planning checkpoint `cb29dc6216cdf57c76d1f952264ceed9e257c40a`.
 Its [local evidence](evidence/local-r95-auxiliary-custody-2026-09-11/README.md)

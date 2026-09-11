@@ -29,18 +29,28 @@ later retained auxiliary/SDMA roster rejection.
 
 ### In-Progress R97
 
-The uncommitted .5B-1 candidate now has a private original-parent adapter, an
-owning outer scope and one production-used auxiliary driver. The shared-engine
-fixture calls that driver instead of copying its orchestration. A development
-run of `cargo +nightly-2026-04-03 test --locked --offline -p fe2o3-kfd
---all-features --lib queue::live::construction` passes 41 tests on unchanged
-source during that run. This is not frozen R97 acceptance or a new full-suite,
-formal, hardware or performance result.
+The uncommitted .5B-1 candidate has a private original-parent adapter, an owning
+outer scope and one production-used auxiliary driver. The shared-engine fixture
+calls that driver instead of copying its orchestration. The separate early-prefix
+oracle and failure matrix now exist: original-parent transport and poisoned
+ledgers, exact memory/account/token ownership, real loan/reclaim rejection,
+preparation/control faults and cleanup-panic precedence are exercised without
+weakening R96's late oracle.
 
-The stage-aware early-failure oracle and new failure matrix remain missing.
-The new operation/reclaim and preparation-stage injections are present but not
-yet exercised by the two migrated shared-engine tests. R96 stays the accepted
-baseline; this planning refresh does not publish the unfinished source changes.
+The latest completed development run of `cargo +nightly-2026-04-03 test --locked
+--offline -p fe2o3-kfd --all-features --lib auxiliary_cases` passed 13 tests on
+unchanged source during that run. Subsequent edits pin the 36-boundary/72-cell
+control sweep, assert seal progress, add callback-before-allocation error/panic
+cases and strengthen the production-glue guard. Those final edits are formatted
+but have not completed their final test run. The local development log is
+`/home/harsh/.codex-tmp/r97-native-prefix-second.log`; it is not a published R97
+acceptance record.
+
+The next Native task is **R97-3 acceptance**, not reimplementation of the oracle
+or matrix. Final lint, frozen-source tests, compiled negative mutations, exact
+restoration, full applicable gates and reviewed evidence remain. R96 stays the
+accepted baseline; this planning refresh does not publish unfinished source or
+claim a new full-suite, formal, hardware or performance result.
 
 ## Swarm Ownership
 
@@ -54,8 +64,8 @@ Context/backend/queue changes and builds are serialized.
 
 | Lane and worker | First bounded task | Follow-on queue |
 | --- | --- | --- |
-| Native: `r66_native_coexistence` | R97-1 stage-aware ownership oracle, then R97-2 .5B-1 matrix/acceptance | .5B-2 local platform composition / .5B-3 CREATE and installation matrix -> replacement/insertion -> generated data adoption -> native publication handoff |
-| Admission: `r66_runtime_coexistence` | CO-1 allocation-free completion outcome contract and table tests | Exact identity -> reply/custody composition -> issue/completion integration -> typed future -> generated graph/drain |
+| Native: `r66_native_coexistence` | R97-3 acceptance of the implemented .5B-1 candidate | .5B-2 local platform composition / .5B-3 CREATE and installation matrix -> replacement/insertion -> generated data adoption -> native publication handoff |
+| Admission: `r66_runtime_coexistence` | CO-1 allocation-free completion classifier consumed by ordinary operation progress | Exact identity -> reply/custody composition -> issue/completion integration -> typed future -> generated graph/drain |
 | Resources: `r66_coexistence_model` | VER-1A.1 Context journal contract and complete mutation inventory | Model/proofs -> bounded journal -> mutation hooks -> cross-run leases; aggregate budgets and residency |
 | Primary | Integrate the next reviewed .5B-1, CO-1 or VER-1A.1 packet without conflicting shared edits | Cross-lane integration, formal correspondence, hardware scheduling, matched benchmarks and signed pushes to both topic remotes |
 
@@ -63,8 +73,8 @@ Context/backend/queue changes and builds are serialized.
 
 | Lane | First deliverable | Source boundary and cross-review |
 | --- | --- | --- |
-| Native | R97-1 prefix ownership oracle, then the exact .5B-1 opening/operation/reclaim error-and-panic matrix with the original primary | KFD `queue_live/construction_auxiliary.rs`, its integration tests and shared primary fixtures. Resources checks exact charges; Admission checks terminal-outcome meaning. |
-| Admission | CO-1 allocation-free observation/reply/disposal table and focused tests | Proposed runtime `async_engine/generated_operation/completion_contract.rs`, existing generated preparation/reply tests. Native reviews outcome authority; no native receipts are invented. |
+| Native | R97-3 frozen-source acceptance: final focused/full gates, compiled mutations, exact restoration and reviewed evidence | KFD `queue_live/construction_auxiliary.rs`, its integration tests and shared primary fixtures. Resources checks exact charges; Admission checks terminal-outcome meaning. |
+| Admission | CO-1 allocation-free observation classifier, real production consumer and focused tests | Proposed runtime `async_engine/generated_operation/completion_contract.rs`; Primary wires ordinary `async_engine/operation.rs::Operation::advance`. Native reviews outcome authority; no native receipts are invented. |
 | Resources | Proposed `docs/runtime-context-version-journal-v1.md`: identity/capacity contract and complete Context mutation/retirement inventory | Inspect existing `context.rs` and its children; proposed journal belongs in `context/versions.rs`. Admission reviews settlement-before-callback ordering; Native reviews logical-to-native identity preservation. |
 | Primary | Integrate one reviewed packet at a time and record its exact acceptance scope | Shared Context/backend/queue edits, builds, proof runs, hardware and publication remain serialized. |
 
@@ -73,13 +83,27 @@ independently, but their source edits share fixtures and must be integrated
 serially. Neither `completion_contract.rs` nor `context/versions.rs` exists at
 this checkpoint; their rows are assignments, not implementation claims.
 
-The first execution wave is **R97-1/2 + CO-1 + VER-1A.1**. CO-2 and CO-3 follow
+The first execution wave is **R97-3 + CO-1 + VER-1A.1**. CO-2 and CO-3 follow
 the frozen CO-1 interface; Resources then takes the executable model before the
 journal implementation. The Native .5B-2/.5B-3 designs can be reviewed now, but
 their integration follows accepted .5B-1 and shares the primary trace, platform
 and memory fixtures. Do not defer all Admission/Resources work until Native
 finishes. Shared module wiring, Context mutation hooks, backend issue and fixture
 edits still pass through Primary one packet at a time.
+
+### Ready And Dependent Work
+
+| Wave | Native | Admission | Resources |
+| --- | --- | --- | --- |
+| Ready now | Accept R97's existing candidate; review .5B-2/.5B-3 designs | Implement production-used CO-1 | Write VER-1A.1 contract and complete mutation inventory |
+| After each lane's first gate | .5B-2 and .5B-3, serialized shared fixtures | CO-2 identity and CO-3 lifecycle composition against frozen CO-1 | VER-1A.2 executable model/proofs, then .3 bounded journal |
+| Integration | 2C replacement/insertion, then nonpublishing DATA-ADOPT | ISSUE with Native, then CO-4/COMPLETE and typed API | .4/.5 initial mutation hooks, then complete VER-1B coverage |
+| A1/A2 closure | Native depth, memory pressure and overlap qualification | Generated GRAPH/DRAIN and end-to-end typed execution | VER-2 cross-run leases, aggregate accounting and residency closure |
+
+CO-2/3 do not require native adoption. First non-reusing ISSUE does not require
+cross-run leases, but its mutation hook must be specified with Resources.
+Cross-run reuse does require complete VER-1B and VER-2. Formal correspondence is
+reviewed with each packet; it is not deferred to the final hardware wave.
 
 ## Native Queue
 
@@ -124,12 +148,13 @@ execution; Native owns each design/review handoff.
 
 | Unit | Deliverable and exit assertion |
 | --- | --- |
-| R97-1: early-prefix oracle | Add a separate stage-aware oracle; preserve R96's stricter late `assert_pair`. Join original primary owners with auxiliary data, preparation/control prefixes, real terminal tokens and exact account/native records, without double counting markers. Observe real foundation location rather than assuming reclaim succeeded. |
-| R97-1: terminal transport | On admitted terminal failure require an empty live parent slot, occupied terminal-parent slot and actual poisoned ledgers. On success require the inverse; pure pre-effect rejection leaves the original parent unchanged. Snapshot equality alone misses poison and slot-transfer omissions. |
-| R97-2: ingress/opening | Pure capacity rejection has no opening, loan, preparation, retake or CREATE. Opening and loan errors/panics preserve the original parent; no retake without a returned loan. |
-| R97-2: returned prefixes | Inject every preparation/control error and panic after original primary success. Auxiliary code-memory ordinals are session-global 3-5; preparation-stage ordinals remain local 0-2. Preserve the trace and exact original bytes, owners and charges. |
-| R97-2: operation/reclaim | Cross operation success/error/panic with reclaim success/pre-error/pre-panic/post-error/post-panic. Exercise actual loan/reclaim and separately genuine certificate rejection. Pre/post-call probes alone do not establish certificate-rejection coverage. Failed reclaim permits no CREATE. |
-| R97-2: cleanup/acceptance | Store the complete terminal parent before cleanup; preserve the first panic even when cleanup panics. Add targeted compiled negative mutations, then freeze and run the full applicable gates with exact source restoration. |
+| R97-1: early-prefix oracle, candidate implemented | Separate stage-aware oracle preserves R96's stricter late `assert_pair`. Join original primary owners with auxiliary data, preparation/control prefixes, real terminal tokens and exact account/native records, without double counting markers. Observe real foundation location rather than assuming reclaim succeeded. |
+| R97-1: terminal transport, candidate implemented | On admitted terminal failure require an empty live parent slot, occupied terminal-parent slot and actual poisoned ledgers. On success require the inverse; pure pre-effect rejection leaves the original parent unchanged. Snapshot equality alone misses poison and slot-transfer omissions. |
+| R97-2: ingress/opening, candidate implemented | Pure capacity rejection has no opening, loan, preparation, retake or CREATE. Opening and loan errors/panics preserve the original parent; no retake without a returned loan. Capacity pressure uses model-only history and the real borrowed preflight, not the full public Linux entrypoint. |
+| R97-2: returned prefixes, candidate implemented | Exercise the named preparation/control error-and-panic matrix after original primary success. Auxiliary code-memory ordinals are session-global 3-5; preparation-stage ordinals remain local 0-2. Preserve the trace and exact original bytes, owners and charges. Callback failure before allocating or returning owners does not qualify callback-internal unreturned ownership. |
+| R97-2: operation/reclaim, candidate implemented | Cross operation success/error/panic with reclaim success/pre-error/pre-panic/post-error/post-panic. Exercise actual loan/reclaim and separately genuine certificate rejection. Failed reclaim permits no CREATE. |
+| R97-2: cleanup, candidate implemented | Store the complete terminal parent before cleanup; preserve the first panic even when cleanup panics. |
+| R97-3: remaining acceptance | Run final lint and focused tests; compile negative mutations of opening, retake/result gating and full-parent retention, requiring behavioral test failure rather than compilation failure. Restore exact source, run all applicable source/auxiliary gates, retain failure attempts and final evidence, independently review, sign and push both remotes. Only then mark .5B-1 locally accepted. |
 
 The subsequent 2C packet owns existing replacement in
 `queue_live.rs::recreate_compute_aql_queue_with_fixed_dispatch` and binding in
@@ -171,10 +196,20 @@ green fixture count.
 
 ### CO-1 First Handoff
 
-Use the existing completion statuses, preparation driver, roster and R80 reply.
-Add the private classifier and focused tests alongside
-`async_engine/tests/owned_tests/preparation_tests/`; do not add another public
-completion API, native receipt, readback allocation or decoder.
+Add the private classifier at the proposed
+`async_engine/generated_operation/completion_contract.rs`. Its initial real
+production consumer is ordinary `async_engine/operation.rs::Operation::advance`
+after submission, not generated preparation, whose adoption hooks remain absent.
+Borrow `&Result<RuntimeCompletionStatusV1, RuntimeErrorV1<E>>` so non-`Clone`
+backend errors remain owned by their existing path. Preserve one poll/query
+sequence, rejection counters, raw reply timing and Context custody.
+
+Classification is descriptive: no class grants typed decode, disposal, retry or
+native authority. Use existing `Reply::complete` / `r61_reply_may_resolve_v1` for
+the already-settled gate instead of adding another settlement state machine.
+Generated preparation, the R80 roster and its reserved reply are downstream
+consumers, not resources for CO-1 to recreate. Do not add another public
+completion API, native receipt, readback allocation, decoder or host dependency.
 
 | Observation family | Required classification/test |
 | --- | --- |
@@ -185,8 +220,11 @@ completion API, native receipt, readback allocation or decoder.
 | Terminal or uncertain | Error reporting cannot release potentially live ownership or authorize retry. |
 | Already settled or replayed | No second reply, adapter call or state reopening. |
 
-The first focused tests cover each row, relevant status combinations, sticky
-settlement, allocation-free classification and zero adapter invocation. Later
+The first focused tests cover each row, non-consuming/non-`Clone` error handling,
+sticky settlement and allocation-free classification over prebuilt inputs using
+the existing test-only allocator counter. Reuse ordinary rejected-poll,
+cancellation and DRN-3A regressions to check production behavior. No adapter is
+called by this classifier. Later
 CO-3 composes the existing reservation/adoption Harness rather than duplicating
 its Stop, observer-loss and waker machinery. Production adoption hooks remain
 absent; R85 decoding is implemented but not native-connected.
