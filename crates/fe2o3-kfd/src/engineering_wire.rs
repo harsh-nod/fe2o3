@@ -273,8 +273,8 @@ pub struct ExplicitArgumentV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ResponseV1 {
-    /// Every retained signal completed and the full exit fence passed. Elapsed
-    /// time is aggregate host wall time, never a sum of GPU/kernel timestamps.
+    /// Every retained signal completed and the selected exit currentness/idle
+    /// fence passed. Time is aggregate host wall time, not GPU/kernel time.
     DispatchOrderedBatchCompleted {
         completed_dispatches: u32,
         elapsed_ns: u64,
