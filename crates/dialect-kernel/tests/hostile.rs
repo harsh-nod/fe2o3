@@ -187,7 +187,7 @@ fn analysis_split_binds_control_and_successor_operand_segments_exactly() {
     let context = &mut Context::new();
     register_dialect(context, &kernel_name()).unwrap();
     let index: TypeHandle = IndexType::get(context).into();
-    let first = BasicBlock::new(context, None, vec![index.clone()]);
+    let first = BasicBlock::new(context, None, vec![index]);
     let second = BasicBlock::new(context, None, vec![index]);
     let zero = IndexConstantOp::new(context, 0);
     let one = IndexConstantOp::new(context, 1);
@@ -836,6 +836,66 @@ fn checked_tiled_index_verifier_rejects_malformed_geometry_and_payload() {
     missing_operand.set_attr_kernel_tile_columns(context, IndexValueAttr(16));
     missing_operand.set_attr_kernel_elements_per_lane(context, IndexValueAttr(4));
     assert!(verify_op(&missing_operand, context).is_err());
+}
+
+#[test]
+fn checked_tiled_geometry_rejects_overflow_in_both_structural_forms() {
+    let context = &mut Context::new();
+    register_dialect(context, &kernel_name()).unwrap();
+    let values = (0..6)
+        .map(|value| IndexConstantOp::new(context, value))
+        .collect::<Vec<_>>();
+    for (geometry, accepted) in [
+        ([64, 16, 16, 4], true),
+        ([u64::MAX, 1, u64::MAX, 1], true),
+        ([(1_u64 << 63) - 1, 2, (1_u64 << 63) - 1, 2], true),
+        ([1_u64 << 63, 2, 1_u64 << 63, 2], false),
+        ([1_u64 << 63, 4, 1_u64 << 62, 2], false),
+        ([u64::MAX, 2, u64::MAX, 2], false),
+        ([2, u64::MAX, 2, u64::MAX], false),
+    ] {
+        let [lanes, rows, columns, elements] = geometry;
+        let volume = u128::from(lanes) * u128::from(elements);
+        assert_eq!(volume, u128::from(rows) * u128::from(columns));
+        assert_eq!(volume <= u128::from(u64::MAX), accepted);
+        assert_eq!(lanes % columns, 0);
+        assert_eq!((lanes / columns).checked_mul(elements), Some(rows));
+        let ordinary = CheckedTiledIndex2DOp::new(
+            context,
+            values[0].result(context),
+            values[1].result(context),
+            values[2].result(context),
+            values[3].result(context),
+            values[4].result(context),
+            geometry,
+        );
+        let predicated = CheckedTiledIndex2DOp::new_predicated(
+            context,
+            values[0].result(context),
+            values[1].result(context),
+            values[2].result(context),
+            values[3].result(context),
+            values[4].result(context),
+            values[5].result(context),
+            geometry,
+        );
+        for (form, result) in [
+            ("ordinary", verify_op(&ordinary, context)),
+            ("predicated", verify_op(&predicated, context)),
+        ] {
+            if accepted {
+                assert!(result.is_ok(), "{geometry:?}, {form}: {result:?}");
+            } else {
+                let error = result.expect_err("overflowing geometry must reject");
+                assert!(
+                    error.to_string().contains(
+                        "kernel.checked_tiled_index_2d has malformed geometry or payload"
+                    ),
+                    "{geometry:?}, {form}: {error}",
+                );
+            }
+        }
+    }
 }
 
 #[test]

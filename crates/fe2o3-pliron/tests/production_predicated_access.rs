@@ -128,6 +128,71 @@ fn guarded_kernel(mut entry: Vec<ProductionRankedOperationV1>) -> ProductionRank
 }
 
 #[test]
+fn tiled_recipe_geometry_rejects_overflow_in_both_structural_forms() {
+    for (geometry, accepted) in [
+        ([64, 16, 16, 4], true),
+        ([u64::MAX, 1, u64::MAX, 1], true),
+        ([(1_u64 << 63) - 1, 2, (1_u64 << 63) - 1, 2], true),
+        ([1_u64 << 63, 2, 1_u64 << 63, 2], false),
+        ([1_u64 << 63, 4, 1_u64 << 62, 2], false),
+        ([u64::MAX, 2, u64::MAX, 2], false),
+        ([2, u64::MAX, 2, u64::MAX], false),
+    ] {
+        let [lanes, rows, columns, elements] = geometry;
+        let volume = u128::from(lanes) * u128::from(elements);
+        assert_eq!(volume, u128::from(rows) * u128::from(columns));
+        assert_eq!(volume <= u128::from(u64::MAX), accepted);
+        assert_eq!(lanes % columns, 0);
+        assert_eq!((lanes / columns).checked_mul(elements), Some(rows));
+        let [lanes_per_tile, tile_rows, tile_columns, elements_per_lane] = geometry;
+        for predicated in [false, true] {
+            let mut candidate = operations();
+            if !predicated {
+                candidate.pop();
+            }
+            candidate[4] = if predicated {
+                ProductionRankedOperationV1::PredicatedCheckedTiledIndex2D {
+                    result: INDEX,
+                    success: SUCCESS,
+                    invocation: local(INVOCATION),
+                    component: local(COMPONENT),
+                    rows: ProductionRankedValueV1::Argument(1),
+                    columns: ProductionRankedValueV1::Argument(2),
+                    row_stride: ProductionRankedValueV1::Argument(3),
+                    physical_extent: ProductionRankedValueV1::Argument(0),
+                    lanes_per_tile,
+                    tile_rows,
+                    tile_columns,
+                    elements_per_lane,
+                }
+            } else {
+                ProductionRankedOperationV1::CheckedTiledIndex2D {
+                    result: INDEX,
+                    invocation: local(INVOCATION),
+                    component: local(COMPONENT),
+                    rows: ProductionRankedValueV1::Argument(1),
+                    columns: ProductionRankedValueV1::Argument(2),
+                    row_stride: ProductionRankedValueV1::Argument(3),
+                    lanes_per_tile,
+                    tile_rows,
+                    tile_columns,
+                    elements_per_lane,
+                }
+            };
+            let result = kernel_with_operations(candidate);
+            if accepted {
+                assert!(
+                    result.is_ok(),
+                    "geometry={geometry:?}, predicated={predicated}"
+                );
+            } else {
+                assert_eq!(result, Err(ProductionRankedKernelErrorV1::InvalidShape));
+            }
+        }
+    }
+}
+
+#[test]
 fn public_predicated_recipe_materializes_and_proves_dynamic_race_freedom() {
     for operations in [operations(), row_operations()] {
         let kernel = guarded_kernel(operations);

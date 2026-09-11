@@ -1062,7 +1062,9 @@ impl Verify for CheckedTiledIndex2DOp {
                     || columns == 0
                     || elements == 0
                     || !lanes.is_multiple_of(columns)
-                    || lanes.checked_mul(elements) != rows.checked_mul(columns)
+                    || lanes
+                        .checked_mul(elements)
+                        .is_none_or(|extent| rows.checked_mul(columns) != Some(extent))
                     || (lanes / columns).checked_mul(elements) != Some(rows)
             })
             || !is_index_type(self.result(context), context)

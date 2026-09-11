@@ -7889,7 +7889,9 @@ fn tiled_2d_geometry_valid(
         && tile_columns != 0
         && elements_per_lane != 0
         && lanes_per_tile.is_multiple_of(tile_columns)
-        && lanes_per_tile.checked_mul(elements_per_lane) == tile_rows.checked_mul(tile_columns)
+        && lanes_per_tile
+            .checked_mul(elements_per_lane)
+            .is_some_and(|extent| tile_rows.checked_mul(tile_columns) == Some(extent))
         && (lanes_per_tile / tile_columns).checked_mul(elements_per_lane) == Some(tile_rows)
 }
 
@@ -19333,6 +19335,108 @@ fn encode_assert_message(
 #[cfg(test)]
 mod private_tests {
     use super::*;
+
+    #[test]
+    fn tiled_geometry_requires_finite_equal_products() {
+        for ([lanes, rows, columns, elements], expected) in [
+            ([4, 2, 4, 2], true),
+            ([8, 2, 4, 1], true),
+            ([64, 16, 16, 4], true),
+            ([u64::MAX, 1, u64::MAX, 1], true),
+            ([1, u64::MAX, 1, u64::MAX], true),
+            ([u64::MAX, u64::MAX, 1, 1], true),
+            ([(1_u64 << 63) - 1, 2, (1_u64 << 63) - 1, 2], true),
+            ([1_u64 << 63, 2, 1_u64 << 63, 2], false),
+            ([1_u64 << 63, 4, 1_u64 << 62, 2], false),
+            ([u64::MAX, 2, u64::MAX, 2], false),
+            ([2, u64::MAX, 2, u64::MAX], false),
+            ([u64::MAX, 1, u64::MAX, 2], false),
+            ([1, u64::MAX, 2, 1], false),
+            ([4, 3, 4, 2], false),
+            ([3, 2, 2, 1], false),
+            ([0, 2, 4, 2], false),
+            ([4, 0, 4, 2], false),
+            ([4, 2, 0, 2], false),
+            ([4, 2, 4, 0], false),
+        ] {
+            assert_eq!(
+                tiled_2d_geometry_valid(lanes, rows, columns, elements),
+                expected,
+                "geometry {:?}",
+                [lanes, rows, columns, elements],
+            );
+        }
+    }
+
+    #[test]
+    fn tiled_mapping_claims_require_finite_geometry() {
+        let id = SemanticTypeIdV1::from_index;
+        for ([lanes_per_tile, tile_rows, tile_columns, elements_per_lane], expected) in [
+            ([4, 2, 4, 2], true),
+            ([8, 2, 4, 1], true),
+            ([u64::MAX, 1, u64::MAX, 1], true),
+            ([1, u64::MAX, 1, u64::MAX], true),
+            ([u64::MAX, 2, u64::MAX, 2], false),
+            ([2, u64::MAX, 2, u64::MAX], false),
+            ([0, 2, 4, 2], false),
+            ([4, 2, 0, 2], false),
+            ([4, 3, 4, 2], false),
+        ] {
+            let mapping = SemanticDisjointIndexSpaceV1::Tiled2dIndex1d {
+                lanes_per_tile,
+                tile_rows,
+                tile_columns,
+                elements_per_lane,
+            };
+            let operations = [
+                SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedTiled2d {
+                    input_witness: id(1),
+                    output_tile: id(2),
+                    raw_index: id(0),
+                    input_space: SemanticDisjointIndexSpaceV1::Index1d,
+                    output_space: mapping,
+                    lanes_per_tile,
+                    tile_rows,
+                    tile_columns,
+                    elements_per_lane,
+                },
+                SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
+                    disjoint_slice: id(3),
+                    tile_witness: id(2),
+                    element: id(4),
+                    raw_index: id(0),
+                    index_space: mapping,
+                    lanes_per_tile,
+                    tile_rows,
+                    tile_columns,
+                    elements_per_lane,
+                },
+                SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+                    disjoint_slice: id(3),
+                    witness: id(2),
+                    element: id(4),
+                    raw_index: id(0),
+                    index_space: mapping,
+                    kind: SemanticWriteOnlyDisjointWriteKindV1::Tiled2d {
+                        lanes_per_tile,
+                        tile_rows,
+                        tile_columns,
+                        elements_per_lane,
+                    },
+                },
+            ];
+            for operation in operations {
+                assert_eq!(
+                    record_intrinsic_capability_claims(
+                        operation,
+                        &mut IntrinsicCapabilityClaimsV1::default(),
+                    ),
+                    expected,
+                    "{operation:?}",
+                );
+            }
+        }
+    }
 
     fn test_type(
         tag: u8,

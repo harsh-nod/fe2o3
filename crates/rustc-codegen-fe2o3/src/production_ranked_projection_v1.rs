@@ -17501,7 +17501,9 @@ fn tiled_2d_geometry_valid_v1(
         && tile_columns != 0
         && elements_per_lane != 0
         && lanes_per_tile.is_multiple_of(tile_columns)
-        && lanes_per_tile.checked_mul(elements_per_lane) == tile_rows.checked_mul(tile_columns)
+        && lanes_per_tile
+            .checked_mul(elements_per_lane)
+            .is_some_and(|extent| tile_rows.checked_mul(tile_columns) == Some(extent))
         && (lanes_per_tile / tile_columns).checked_mul(elements_per_lane) == Some(tile_rows)
 }
 

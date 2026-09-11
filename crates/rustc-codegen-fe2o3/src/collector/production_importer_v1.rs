@@ -3718,7 +3718,9 @@ fn rust_tiled_2d_geometry_valid_v1(
         && tile_columns != 0
         && elements_per_lane != 0
         && lanes_per_tile.is_multiple_of(tile_columns)
-        && lanes_per_tile.checked_mul(elements_per_lane) == tile_rows.checked_mul(tile_columns)
+        && lanes_per_tile
+            .checked_mul(elements_per_lane)
+            .is_some_and(|extent| tile_rows.checked_mul(tile_columns) == Some(extent))
         && (lanes_per_tile / tile_columns).checked_mul(elements_per_lane) == Some(tile_rows)
 }
 
@@ -4354,6 +4356,38 @@ mod typed_default_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tiled_geometry_requires_finite_equal_products() {
+        for ([lanes, rows, columns, elements], expected) in [
+            ([4, 2, 4, 2], true),
+            ([8, 2, 4, 1], true),
+            ([64, 16, 16, 4], true),
+            ([u64::MAX, 1, u64::MAX, 1], true),
+            ([1, u64::MAX, 1, u64::MAX], true),
+            ([u64::MAX, u64::MAX, 1, 1], true),
+            ([(1_u64 << 63) - 1, 2, (1_u64 << 63) - 1, 2], true),
+            ([1_u64 << 63, 2, 1_u64 << 63, 2], false),
+            ([1_u64 << 63, 4, 1_u64 << 62, 2], false),
+            ([u64::MAX, 2, u64::MAX, 2], false),
+            ([2, u64::MAX, 2, u64::MAX], false),
+            ([u64::MAX, 1, u64::MAX, 2], false),
+            ([1, u64::MAX, 2, 1], false),
+            ([4, 3, 4, 2], false),
+            ([3, 2, 2, 1], false),
+            ([0, 2, 4, 2], false),
+            ([4, 0, 4, 2], false),
+            ([4, 2, 0, 2], false),
+            ([4, 2, 4, 0], false),
+        ] {
+            assert_eq!(
+                rust_tiled_2d_geometry_valid_v1(lanes, rows, columns, elements),
+                expected,
+                "geometry {:?}",
+                [lanes, rows, columns, elements],
+            );
+        }
+    }
 
     #[test]
     fn root_custody_comparison_rejects_every_sequence_substitution() {
