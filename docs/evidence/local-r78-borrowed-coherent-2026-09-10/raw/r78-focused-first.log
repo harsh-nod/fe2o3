@@ -1,0 +1,78 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0689]: can't call method `div_ceil` on ambiguous numeric type `{integer}`
+  --> crates/fe2o3-kfd/src/shared_memory/tests/host_backing/borrowed_initialization.rs:59:29
+   |
+41 |     for length in [1, 4096, 4097] {
+   |         ------ you must specify a type for this binding, like `i32`
+...
+59 |         let padded = length.div_ceil(4096) as u64 * 4096;
+   |                             ^^^^^^^^
+
+error[E0277]: the trait bound `shared_memory::GttGpuAccessibleMutableV1: CpuReadableGttStateV1` is not satisfied
+    --> crates/fe2o3-kfd/src/shared_memory/tests/host_backing/borrowed_initialization.rs:70:17
+     |
+  69 |             .with_bytes(
+     |              ---------- required by a bound introduced by this call
+  70 |                 &token,
+     |                 ^^^^^^ unsatisfied trait bound
+     |
+help: the trait `CpuReadableGttStateV1` is not implemented for `shared_memory::GttGpuAccessibleMutableV1`
+    --> crates/fe2o3-kfd/src/shared_memory.rs:753:1
+     |
+ 753 | pub enum GttGpuAccessibleMutableV1 {}
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `CpuReadableGttStateV1`
+    --> crates/fe2o3-kfd/src/shared_memory.rs:767:1
+     |
+ 767 | impl CpuReadableGttStateV1 for GttCpuWritableV1 {}
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `shared_memory::GttCpuWritableV1`
+ 768 | impl CpuReadableGttStateV1 for GttExecutableImmutableV1 {}
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `GttExecutableImmutableV1`
+note: required by a bound in `shared_memory::SharedMemoryEngine::<B>::with_bytes`
+    --> crates/fe2o3-kfd/src/shared_memory.rs:2807:12
+     |
+2799 |     fn with_bytes<P, S, R>(
+     |        ---------- required by a bound in this associated function
+...
+2807 |         S: CpuReadableGttStateV1,
+     |            ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `SharedMemoryEngine::<B>::with_bytes`
+
+error[E0308]: mismatched types
+     --> crates/fe2o3-kfd/src/queue_live.rs:19327:33
+      |
+19326 | /  ...                   vec![
+19327 | |/ ...                       crate::shared_memory::mapped_host_for_persistent_sdma_test(1, 4096)
+19328 | || ...                           .storage_identity();
+      | ||_________________________________________________^ expected `Gfx942FixedDispatchStorageIdentityV1`, found `SharedGttAllocationIdentityV1`
+19329 | |  ...                       session.detached_data_count
+19330 | |  ...                   ];
+      | |________________________- arguments to this function are incorrect
+      |
+help: the return type of this call is `SharedGttAllocationIdentityV1` due to the type of the argument passed
+     --> crates/fe2o3-kfd/src/queue_live.rs:19326:29
+      |
+19326 | /  ...                   vec![
+19327 | |/ ...                       crate::shared_memory::mapped_host_for_persistent_sdma_test(1, 4096)
+19328 | || ...                           .storage_identity();
+      | ||_________________________________________________- this argument influences the return type of `from_elem`
+19329 | |  ...                       session.detached_data_count
+19330 | |  ...                   ];
+      | |________________________^
+note: function defined here
+     --> /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:3677:8
+      |
+ 3677 | pub fn from_elem<T: Clone>(elem: T, n: usize) -> Vec<T> {
+      |        ^^^^^^^^^
+help: try wrapping the expression in a variant of `queue::dispatch_binding::Gfx942FixedDispatchStorageIdentityV1`
+      |
+19327 ~                                 queue::dispatch_binding::Gfx942FixedDispatchStorageIdentityV1::HostVisibleUninitialized(crate::shared_memory::mapped_host_for_persistent_sdma_test(1, 4096)
+19328 ~                                     .storage_identity());
+      |
+19327 ~                                 queue::dispatch_binding::Gfx942FixedDispatchStorageIdentityV1::HostVisibleInitialized(crate::shared_memory::mapped_host_for_persistent_sdma_test(1, 4096)
+19328 ~                                     .storage_identity());
+      |
+
+Some errors have detailed explanations: E0277, E0308, E0689.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `fe2o3-kfd` (lib test) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...

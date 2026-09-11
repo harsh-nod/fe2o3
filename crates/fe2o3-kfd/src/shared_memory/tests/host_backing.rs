@@ -1,4 +1,6 @@
 //! Actual native records and model ownership with a fake backend, not Linux/GPU evidence.
+mod borrowed_initialization;
+
 use super::*;
 use crate::sdma::{Gfx942SdmaBufferStorageV1, Gfx942SdmaBufferV1};
 

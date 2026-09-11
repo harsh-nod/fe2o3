@@ -4889,13 +4889,13 @@ pub(super) fn materialize_initial_data_v1(
     data.try_reserve_exact(specs.len())
         .map_err(|_| "KFD native-data roster allocation failed".to_owned())?;
     for (index, spec) in specs.into_iter().enumerate() {
-        let owned_bytes = spec.try_owned_bytes()?;
         let item = match spec.kind {
             RuntimeMemoryKindV1::HostVisible => memory
-                .initialize_host_visible_coherent(owned_bytes)
+                .initialize_host_visible_coherent_from_slice_v1(spec.bytes())
                 .map(Gfx942FixedDispatchDataV1::host_visible_initialized)
                 .map_err(|error| format!("KFD host-visible initialization: {error}"))?,
             RuntimeMemoryKindV1::DeviceLocal => {
+                let owned_bytes = spec.try_owned_bytes()?;
                 let ordinal = u32::try_from(index)
                     .map_err(|_| "KFD device-content ordinal does not fit u32".to_owned())?;
                 let role = Gfx942DeviceContentRoleV1::new(role_identity, ordinal)
@@ -4974,12 +4974,15 @@ pub(super) fn materialize_rebound_data_v1(
         queue
             .preflight_fixed_dispatch_data_insertion(index)
             .map_err(|error| format!("KFD dispatch-data insertion preflight: {error}"))?;
-        let owned_bytes = spec.try_owned_bytes()?;
         let item = match spec.kind {
             RuntimeMemoryKindV1::HostVisible => queue
-                .insert_initialized_host_visible_fixed_dispatch_data(index, owned_bytes)
+                .insert_initialized_host_visible_fixed_dispatch_data_from_slice_v1(
+                    index,
+                    spec.bytes(),
+                )
                 .map_err(|error| format!("KFD host-visible insertion: {error}"))?,
             RuntimeMemoryKindV1::DeviceLocal => {
+                let owned_bytes = spec.try_owned_bytes()?;
                 let ordinal = u32::try_from(index)
                     .map_err(|_| "KFD device-content ordinal does not fit u32".to_owned())?;
                 let role = Gfx942DeviceContentRoleV1::new(role_identity, ordinal)
@@ -4999,4 +5002,79 @@ pub(super) fn materialize_rebound_data_v1(
         data.push(item);
     }
     Ok(data)
+}
+
+#[cfg(test)]
+mod borrowed_initialization_tests {
+    use super::*;
+
+    #[test]
+    fn borrowed_initialization_runtime_preserves_both_materializers_and_device_owned_path() {
+        let source = include_str!("compute_dispatch.rs");
+        for (name, next, borrowed) in [
+            (
+                "materialize_initial_data_v1",
+                "resident_descriptors_v1",
+                "initialize_host_visible_coherent_from_slice_v1(spec.bytes())",
+            ),
+            (
+                "materialize_rebound_data_v1",
+                "unused_end_marker",
+                "insert_initialized_host_visible_fixed_dispatch_data_from_slice_v1(index,spec.bytes()",
+            ),
+        ] {
+            let start = format!("pub(super) fn {name}(");
+            let end = format!("pub(super) fn {next}(");
+            let body = source
+                .split(&start)
+                .nth(1)
+                .unwrap()
+                .split(&end)
+                .next()
+                .unwrap()
+                .split("#[cfg(test)]")
+                .next()
+                .unwrap();
+            let (before_device, device) = body
+                .split_once("RuntimeMemoryKindV1::DeviceLocal =>")
+                .unwrap();
+            let host = before_device
+                .split_once("RuntimeMemoryKindV1::HostVisible =>")
+                .unwrap()
+                .1;
+            let normalized: String = host.chars().filter(|ch| !ch.is_whitespace()).collect();
+            assert!(normalized.contains(borrowed));
+            for forbidden in ["try_owned_bytes", "to_vec(", "to_owned(", "Box::from("] {
+                assert!(!host.contains(forbidden));
+            }
+            assert!(device.contains("let owned_bytes = spec.try_owned_bytes()?"));
+            assert!(device.contains("Gfx942DeviceContentDescriptorV1::from_bytes"));
+            assert!(!body.contains("submit_"));
+        }
+    }
+
+    #[test]
+    fn borrowed_initialization_runtime_views_need_no_encoded_host_allocation() {
+        let bytes: Arc<[u8]> = Arc::from([0x5a; 97]);
+        for range in [0..97, 3..91] {
+            let spec = DataSpecV1 {
+                allocation: 7,
+                kind: RuntimeMemoryKindV1::HostVisible,
+                alignment: 4,
+                allocation_offset: range.start as u64,
+                bytes: Arc::clone(&bytes),
+                byte_range: range.clone(),
+                content_sha256: None,
+            };
+            let (view, allocations) = super::super::drain_capture::tests::counted(|| spec.bytes());
+            assert_eq!(allocations, 0);
+            assert!(std::ptr::eq(view.as_ptr(), bytes[range.clone()].as_ptr()));
+            assert_eq!(view, &bytes[range]);
+            let (owned, allocations) =
+                super::super::drain_capture::tests::counted(|| spec.try_owned_bytes().unwrap());
+            assert!(allocations >= 1);
+            assert_eq!(&*owned, view);
+            assert_ne!(owned.as_ptr(), view.as_ptr());
+        }
+    }
 }

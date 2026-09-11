@@ -1,0 +1,10 @@
+Diff in /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live.rs:19322:
+                     4 => {
+                         session.detached_data_count =
+                             super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1;
+-                        session.detached_data_identities =
+-                            vec![
++                        session.detached_data_identities = vec![
+                                 Gfx942FixedDispatchDataV1::host_visible_uninitialized(
+                                     crate::shared_memory::mapped_host_for_persistent_sdma_test(
+                                         1, 4096

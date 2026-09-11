@@ -4404,6 +4404,23 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
             .insert_initialized_host_visible_fixed_dispatch_data(data_index, bytes)
     }
 
+    pub fn insert_initialized_host_visible_fixed_dispatch_data_from_slice_v1(
+        &mut self,
+        data_index: usize,
+        bytes: &[u8],
+    ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
+        self.session
+            .insert_initialized_host_visible_fixed_dispatch_data_from_slice_v1(data_index, bytes)
+    }
+
+    pub fn initialize_host_visible_fixed_dispatch_data_from_slice_v1(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
+        self.session
+            .initialize_host_visible_fixed_dispatch_data_from_slice_v1(bytes)
+    }
+
     pub fn release_detached_fixed_dispatch_data(
         &mut self,
         data: Gfx942FixedDispatchDataV1,
@@ -19281,6 +19298,146 @@ mod tests {
             first_ordered_identity_mismatch(&identities, &[11, 22, 13]),
             None
         );
+    }
+
+    #[test]
+    fn borrowed_initialization_queue_rejects_before_native_model_loan() {
+        for replacement in [false, true] {
+            for mode in 0..7 {
+                let mut session = persistent_compute_cancellation_test_session(
+                    test_queue_key(771, 1),
+                    None,
+                    None,
+                );
+                session.detached_dispatch_generation = Some(7);
+                session.detached_next_insertion_index = Some(0);
+                match mode {
+                    0 => session.terminal_poisoned = true,
+                    1 => session.detached_dispatch_generation = None,
+                    2 => session.detached_data_count = 1,
+                    3 => {
+                        session.detached_data_count =
+                            super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1 + 1
+                    }
+                    4 => {
+                        session.detached_data_count =
+                            super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1;
+                        let identity = Gfx942FixedDispatchDataV1::host_visible_uninitialized(
+                            crate::shared_memory::mapped_host_for_persistent_sdma_test(1, 4096),
+                        )
+                        .storage_identity();
+                        session.detached_data_identities =
+                            vec![identity; session.detached_data_count];
+                    }
+                    5 => session.detached_next_insertion_index = Some(1),
+                    _ => session.detached_next_insertion_index = None,
+                }
+                let before = (
+                    session.detached_data_count,
+                    session.detached_dispatch_generation,
+                    session.detached_next_insertion_index,
+                    session.detached_data_identities.clone(),
+                );
+                let source = [0x5a; 9];
+                let error = if replacement {
+                    session.initialize_host_visible_fixed_dispatch_data_from_slice_v1(&source)
+                } else {
+                    session.insert_initialized_host_visible_fixed_dispatch_data_from_slice_v1(
+                        1, &source,
+                    )
+                }
+                .unwrap_err();
+                match mode {
+                    0 => assert!(matches!(
+                        error,
+                        ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                            Gfx942DispatchBindingErrorV1::Poisoned
+                        )
+                    )),
+                    1 => assert!(matches!(
+                        error,
+                        ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                            Gfx942DispatchBindingErrorV1::ResourcePhase
+                        )
+                    )),
+                    2 | 3 | 5 => {
+                        assert!(matches!(error, ComputeAqlQueueSessionErrorV1::Contract(_)))
+                    }
+                    4 => assert!(matches!(
+                        error,
+                        ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                            Gfx942DispatchBindingErrorV1::DataLeaseCount { .. }
+                        )
+                    )),
+                    _ if replacement => assert!(matches!(
+                        error,
+                        ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                            Gfx942DispatchBindingErrorV1::ResourcePhase
+                        )
+                    )),
+                    _ => assert!(matches!(
+                        error,
+                        ComputeAqlQueueSessionErrorV1::DispatchBinding(
+                            Gfx942DispatchBindingErrorV1::InvalidData { .. }
+                        )
+                    )),
+                }
+                assert_eq!(
+                    before,
+                    (
+                        session.detached_data_count,
+                        session.detached_dispatch_generation,
+                        session.detached_next_insertion_index,
+                        session.detached_data_identities.clone()
+                    )
+                );
+                assert!(session.engine.is_none());
+                assert_eq!(source, [0x5a; 9]);
+            }
+        }
+    }
+
+    #[test]
+    fn borrowed_initialization_queue_wiring_keeps_guards_retake_and_identity_order() {
+        let source = include_str!("queue_live/fixed_dispatch.rs");
+        for (name, next, guard, record) in [
+            (
+                "insert_initialized_host_visible_fixed_dispatch_data_from_slice_v1",
+                "initialize_host_visible_fixed_dispatch_data",
+                "require_new_detached_data_index",
+                "record_new_detached_data_at",
+            ),
+            (
+                "initialize_host_visible_fixed_dispatch_data_from_slice_v1",
+                "insert_host_visible_fixed_dispatch_data",
+                "detached_next_insertion_index.is_none()",
+                "record_new_detached_data",
+            ),
+        ] {
+            let start = format!("pub fn {name}(");
+            let end = format!("pub fn {next}(");
+            let body = source
+                .split(&start)
+                .nth(1)
+                .unwrap()
+                .split(&end)
+                .next()
+                .unwrap();
+            let loan = body.find("self.with_live_queue_memory_model(").unwrap();
+            for preflight in [
+                "require_unbound_fixed_dispatch",
+                "require_detached_allocation_capacity",
+                guard,
+            ] {
+                assert!(body.find(preflight).unwrap() < loan);
+            }
+            assert!(body.contains("initialize_host_visible_coherent_from_slice_v1(bytes)"));
+            assert!(body.find(record).unwrap() > body.find("Ok(memory)").unwrap());
+            assert!(body.contains("self.poison_terminal()"));
+            for forbidden in ["submit_", "to_vec(", "to_owned(", "Box::from("] {
+                assert!(!body.contains(forbidden));
+            }
+        }
     }
 
     #[test]

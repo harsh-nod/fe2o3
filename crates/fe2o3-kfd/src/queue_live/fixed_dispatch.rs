@@ -4632,12 +4632,22 @@ impl ComputeAqlQueueSessionV1 {
         data_index: usize,
         bytes: Box<[u8]>,
     ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
+        self.insert_initialized_host_visible_fixed_dispatch_data_from_slice_v1(data_index, &bytes)
+    }
+
+    /// Synchronously copies a complete borrowed extent at an exact detached
+    /// ordinal. The source borrow does not escape; this does not publish work.
+    pub fn insert_initialized_host_visible_fixed_dispatch_data_from_slice_v1(
+        &mut self,
+        data_index: usize,
+        bytes: &[u8],
+    ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
         self.require_unbound_fixed_dispatch()?;
         self.require_detached_allocation_capacity()?;
         self.require_new_detached_data_index(data_index)?;
         let result = self.with_live_queue_memory_model(|memory| {
             memory
-                .initialize_host_visible_coherent(bytes)
+                .initialize_host_visible_coherent_from_slice_v1(bytes)
                 .map_err(Into::into)
         });
         match result {
@@ -4659,6 +4669,15 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         bytes: Box<[u8]>,
     ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
+        self.initialize_host_visible_fixed_dispatch_data_from_slice_v1(&bytes)
+    }
+
+    /// Synchronously initializes the exact vacated detached ordinal from a
+    /// borrowed extent, preserving the existing release/replacement ledger.
+    pub fn initialize_host_visible_fixed_dispatch_data_from_slice_v1(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
         self.require_unbound_fixed_dispatch()?;
         self.require_detached_allocation_capacity()?;
         if self.detached_next_insertion_index.is_none() {
@@ -4666,7 +4685,7 @@ impl ComputeAqlQueueSessionV1 {
         }
         let result = self.with_live_queue_memory_model(|memory| {
             memory
-                .initialize_host_visible_coherent(bytes)
+                .initialize_host_visible_coherent_from_slice_v1(bytes)
                 .map_err(Into::into)
         });
         match result {

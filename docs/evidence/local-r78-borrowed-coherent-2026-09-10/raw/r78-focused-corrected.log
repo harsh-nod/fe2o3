@@ -1,0 +1,25 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 14s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-f9eea0dcd3ca45b2)
+
+running 8 tests
+test shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_empty_and_each_budget_reject_before_native_entry ... ok
+test shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_copies_complete_source_and_preserves_one_padded_debit ... ok
+test queue::live::tests::borrowed_initialization_queue_wiring_keeps_guards_retake_and_identity_order ... ok
+test shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_all_currentness_boundaries_preserve_existing_prefix_and_debits ... ok
+test shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_failures_retain_backing_without_initialized_authority_or_retry ... ok
+test shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_live_facade_uses_model_aware_sequence_without_encoded_copy ... ok
+test shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_panics_preserve_original_payload_and_quarantined_charge ... ok
+test queue::live::tests::borrowed_initialization_queue_rejects_before_native_model_loan ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 766 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-21f716eca27caec8)
+
+running 2 tests
+test kfd_backend::compute_dispatch::borrowed_initialization_tests::borrowed_initialization_runtime_views_need_no_encoded_host_allocation ... ok
+test kfd_backend::compute_dispatch::borrowed_initialization_tests::borrowed_initialization_runtime_preserves_both_materializers_and_device_owned_path ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 624 filtered out; finished in 0.00s
+

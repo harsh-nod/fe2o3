@@ -1,5 +1,7 @@
 //! Bounded shared KFD VM authority for typed host-visible GTT allocations.
 
+mod coherent_initialization;
+
 use core::fmt;
 use core::marker::PhantomData;
 #[cfg(test)]
@@ -485,10 +487,11 @@ pub struct Gfx942InitializedDeviceMemoryV1 {
 }
 
 /// Linear host-visible coherent storage whose complete requested extent was
-/// copied from owned bytes before GPU mapping.
+/// copied from source bytes before GPU mapping.
 ///
 /// The mapped token and its native identities remain private. This authority
-/// can only be constructed by [`SharedGttMemorySessionV1::initialize_host_visible_coherent`].
+/// is constructed by the owned or borrowed coherent initializer, or preserved
+/// across an admitted completed-dispatch transition.
 #[must_use = "initialized host-visible authority must be retained or explicitly released"]
 pub struct Gfx942InitializedHostVisibleMemoryV1 {
     token: SharedGttAllocationV1<HostVisibleCoherentGttV1, GttGpuAccessibleMutableV1>,
@@ -5761,13 +5764,20 @@ impl SharedGttMemorySessionV1 {
         &mut self,
         bytes: Box<[u8]>,
     ) -> Result<Gfx942InitializedHostVisibleMemoryV1, MemorySessionError> {
-        if bytes.is_empty() {
-            return Err(MemorySessionError::InvalidRequestedSize);
-        }
-        let mut token = self.allocate_host_visible_coherent(bytes.len())?;
-        self.with_bytes_mut(&mut token, |mapped| mapped.copy_from_slice(&bytes))?;
-        let token = self.map_to_gpu(token)?;
-        Ok(Gfx942InitializedHostVisibleMemoryV1 { token })
+        self.initialize_host_visible_coherent_from_slice_v1(&bytes)
+    }
+
+    /// Copies the complete borrowed extent directly into a new coherent GTT
+    /// allocation, then maps that exact allocation to the selected GPU.
+    ///
+    /// The source is used synchronously and never retained. Success establishes
+    /// initialization, not dispatch authority or device completion. Errors and
+    /// panics preserve the existing native-record and backing-charge policy.
+    pub fn initialize_host_visible_coherent_from_slice_v1(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<Gfx942InitializedHostVisibleMemoryV1, MemorySessionError> {
+        coherent_initialization::initialize_v1(self, bytes)
     }
 
     pub fn allocate_kernarg(
