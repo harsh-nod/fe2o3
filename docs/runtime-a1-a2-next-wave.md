@@ -1,5 +1,10 @@
 # A1/A2 Next-Wave Dispatch
 
+Use the [current work-order board](runtime-a1-a2-swarm-current.md) for immediate
+assignments. The latest planning-only refresh records unaccepted R96 .5A and
+splits .5B into three bounded follow-on packets. CO-1 and VER-1A.1 can proceed
+independently; historical acceptance below applies to its named source only.
+
 R95 now implements the [auxiliary constructor root and checked installation](runtime-auxiliary-queue-construction-custody-v1.md)
 above signed planning checkpoint `cb29dc6216cdf57c76d1f952264ceed9e257c40a`.
 Its [local evidence](evidence/local-r95-auxiliary-custody-2026-09-11/README.md)

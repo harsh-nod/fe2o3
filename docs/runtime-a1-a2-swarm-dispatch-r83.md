@@ -1,5 +1,12 @@
 # A1/A2 Swarm Dispatch At R95 Auxiliary Implementation
 
+The [current work-order board](runtime-a1-a2-swarm-current.md) supersedes the
+immediate assignments below. Its latest planning-only refresh distinguishes
+signed R95 from the unaccepted R96 .5A candidate and splits the remaining .5B
+matrix into outer settlement, local platform composition and CREATE/installation
+packets. CO-1 and VER-1A.1 remain independent. The checkpoint history below does
+not establish final R96 acceptance.
+
 R95 implements the [auxiliary construction root and checked handoff](runtime-auxiliary-queue-construction-custody-v1.md)
 above signed planning checkpoint `cb29dc6216cdf57c76d1f952264ceed9e257c40a`.
 Seven new composed auxiliary CPU tests cover slot rejection/installation, exact ledger
