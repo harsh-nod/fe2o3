@@ -1,0 +1,14 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 39.24s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 6 tests
+test queue::live::construction_auxiliary::tests::auxiliary_vacancy_success_moves_once_without_vector_growth ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_vacancy_rejects_drift_without_consuming_or_overwriting_owners ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_terminal_transfer_preserves_exact_ledgers_after_caller_drop ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_success_installs_only_new_lane_and_leaves_parent_ledgers_unchanged ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_settlement_retains_completed_lane_and_original_scope_on_error_or_panic ... ok
+test queue::live::construction_auxiliary::tests::auxiliary_returned_completion_survives_composed_operation_and_retake_matrix ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 928 filtered out; finished in 0.02s
+

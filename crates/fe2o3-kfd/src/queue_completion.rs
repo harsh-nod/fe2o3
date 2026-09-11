@@ -1019,7 +1019,33 @@ pub(super) struct CompletionSignalArenaOwnerV1 {
     phase: CompletionOwnerPhaseV1,
 }
 
+#[cfg(test)]
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct CompletionCustodySnapshotV1 {
+    queue: QueueKeyV1,
+    signal_mapping: MemoryMappingKeyV1,
+    gpu_base: u64,
+    next_batch_id: u64,
+    slots: Vec<CompletionSlotRecordV1>,
+    slot_storage: usize,
+    dependency_storage: usize,
+}
+
 impl CompletionSignalArenaOwnerV1 {
+    #[cfg(test)]
+    pub(super) fn custody_snapshot_for_test(&self) -> CompletionCustodySnapshotV1 {
+        // Poisoning changes the owner's phase, not its exact slots or ledger storage.
+        CompletionCustodySnapshotV1 {
+            queue: self.queue,
+            signal_mapping: self.signal_mapping,
+            gpu_base: self.gpu_base,
+            next_batch_id: self.next_batch_id,
+            slots: self.slots.to_vec(),
+            slot_storage: self.slots.as_ptr() as usize,
+            dependency_storage: &*self.dependency_ledger as *const _ as usize,
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn fill_all_signals_for_test(
         &mut self,

@@ -48,7 +48,7 @@ use super::dispatch_binding::{
     Gfx942RecycledDispatchWriteRequestV1, PersistentFixedDispatchControlIdentityV1,
     PristineDispatchAbortV1, PristineDispatchContinuationV1, ReturnedDispatchDataV1,
     TypedKernargImageV1, persistent_fixed_dispatch_control_identity_v1, prepare_dispatch_resources,
-    prepare_persistent_fixed_dispatch_resources_v1, prepare_public_fixed_dispatch_resources,
+    prepare_persistent_fixed_dispatch_resources_v1,
     prepare_public_fixed_dispatch_resources_after_detach,
     prepare_public_fixed_dispatch_resources_after_pristine_abort_v1,
     prepare_public_fixed_dispatch_resources_after_recycle,
@@ -234,10 +234,13 @@ use fe2o3_aql::{
 mod compute_sdma_coexistence;
 #[path = "queue_live/construction.rs"]
 mod construction;
+#[path = "queue_live/construction_auxiliary.rs"]
+mod construction_auxiliary;
 #[path = "queue_live/construction_primary.rs"]
 mod construction_primary;
 pub use compute_sdma_coexistence::Gfx942R66NativeObservationFailureV1;
 use construction::{QueueResourcePrefixV1, RingConstructionV1};
+use construction_auxiliary::QueueOwnerSlotV1;
 #[cfg(test)]
 pub(super) use construction_primary::settle_queue_constructor_fixture_v1;
 use construction_primary::{
@@ -3722,8 +3725,8 @@ pub struct ComputeAqlQueueSessionV1 {
     doorbell: Option<LinuxDoorbellSliceV1>,
     submission: Option<NativeAqlSubmissionOwnerV1>,
     completion_signals: Option<CompletionSignalAuthority>,
-    completion_owner: CompletionSignalArenaOwnerV1,
-    dependency_owner: ComputeDependencySessionOwnerV1,
+    completion_owner: QueueOwnerSlotV1<CompletionSignalArenaOwnerV1>,
+    dependency_owner: QueueOwnerSlotV1<ComputeDependencySessionOwnerV1>,
     terminal_dependency: Option<Box<TerminalComputeDependencyTargetUseV1>>,
     dispatch: Option<DispatchResourceOwnerV1>,
     unpublished_dispatch: UnpublishedDispatchStateV1,
@@ -4096,7 +4099,7 @@ struct ComputeAqlQueueLaneStateV1 {
     doorbell: Option<LinuxDoorbellSliceV1>,
     submission: Option<NativeAqlSubmissionOwnerV1>,
     completion_signals: Option<CompletionSignalAuthority>,
-    completion_owner: CompletionSignalArenaOwnerV1,
+    completion_owner: QueueOwnerSlotV1<CompletionSignalArenaOwnerV1>,
     dispatch: Option<DispatchResourceOwnerV1>,
     unpublished_dispatch: UnpublishedDispatchStateV1,
     detached_data_count: usize,
@@ -4107,21 +4110,19 @@ struct ComputeAqlQueueLaneStateV1 {
     observation: ComputeAqlQueueObservationV1,
 }
 
-struct PreparedAuxiliaryComputeLaneV1 {
-    authority: QueueResourceAuthorityV1,
-    completion_signals: CompletionSignalAuthority,
-    completion_owner: CompletionSignalArenaOwnerV1,
-    submission: NativeAqlSubmissionOwnerV1,
-    dispatch: DispatchResourceOwnerV1,
-    runtime: LinuxKfdRuntimeEnabledV1,
-    event: LinuxQueueExceptionEventV1,
-    unpublished_shadows: LinuxUnpublishedCwsrShadowPagesV1,
-    ring_bytes: u32,
-}
-
 fn prepare_auxiliary_compute_lane_slot_v1<T>(
     slots: &[AuxiliaryComputeLaneSlotV1<T>],
 ) -> Result<PreparedAuxiliaryComputeLaneSlotV1, ComputeAqlQueueSessionErrorV1> {
+    if slots.len() >= ComputeAqlQueueSessionV1::MAX_COMPUTE_LANES_V1 {
+        return Err(ComputeAqlQueueSessionErrorV1::Contract(
+            "compute queue lane roster exceeds profile",
+        ));
+    }
+    if slots.iter().any(|slot| slot.generation == 0) {
+        return Err(ComputeAqlQueueSessionErrorV1::Contract(
+            "invalid compute queue lane generation",
+        ));
+    }
     if let Some((index, slot)) = slots
         .iter()
         .enumerate()
@@ -4151,20 +4152,51 @@ fn prepare_auxiliary_compute_lane_slot_v1<T>(
     })
 }
 
-fn install_auxiliary_compute_lane_slot_v1<T>(
+enum CheckedAuxiliaryComputeLaneSlotV1<'a, T> {
+    Append(&'a mut Vec<AuxiliaryComputeLaneSlotV1<T>>),
+    Reuse(&'a mut AuxiliaryComputeLaneSlotV1<T>, u64),
+}
+
+fn check_auxiliary_compute_lane_slot_v1<T>(
     slots: &mut Vec<AuxiliaryComputeLaneSlotV1<T>>,
     prepared: PreparedAuxiliaryComputeLaneSlotV1,
+) -> Result<CheckedAuxiliaryComputeLaneSlotV1<'_, T>, ComputeAqlQueueSessionErrorV1> {
+    if prepare_auxiliary_compute_lane_slot_v1(slots)? != prepared {
+        return Err(ComputeAqlQueueSessionErrorV1::Contract(
+            "compute queue lane destination changed",
+        ));
+    }
+    if prepared.append {
+        if slots.capacity() <= slots.len() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "compute queue lane destination not reserved",
+            ));
+        }
+        Ok(CheckedAuxiliaryComputeLaneSlotV1::Append(slots))
+    } else {
+        Ok(CheckedAuxiliaryComputeLaneSlotV1::Reuse(
+            &mut slots[prepared.index],
+            prepared.generation,
+        ))
+    }
+}
+
+fn install_auxiliary_compute_lane_slot_v1<T>(
+    destination: CheckedAuxiliaryComputeLaneSlotV1<'_, T>,
     state: T,
 ) {
-    if prepared.append {
-        slots.push(AuxiliaryComputeLaneSlotV1 {
-            generation: prepared.generation,
-            state: Some(state),
-        });
-    } else {
-        let slot = &mut slots[prepared.index];
-        slot.generation = prepared.generation;
-        slot.state = Some(state);
+    // The exclusive vacancy holds the checked roster unchanged through these moves.
+    match destination {
+        CheckedAuxiliaryComputeLaneSlotV1::Append(slots) => {
+            slots.push(AuxiliaryComputeLaneSlotV1 {
+                generation: 1,
+                state: Some(state),
+            });
+        }
+        CheckedAuxiliaryComputeLaneSlotV1::Reuse(slot, generation) => {
+            slot.generation = generation;
+            slot.state = Some(state);
+        }
     }
 }
 
@@ -6045,238 +6077,23 @@ impl ComputeAqlQueueSessionV1 {
                     ComputeAqlQueueSessionErrorV1::Contract("compute queue lane roster allocation")
                 })?;
         }
-        self.check_currentness()?;
-
-        let prepared = self.with_live_queue_memory_model(move |memory| {
-            let geometry = memory.plan_aql_queue_resources(ring_bytes)?;
-            let data = prepare_data(memory)?;
-            let dispatch = prepare_public_fixed_dispatch_resources(memory, programs, packets, data)
-                .map_err(ComputeAqlQueueSessionErrorV1::DispatchBinding)?;
-            let mut ring = CpuRingAuthorityV1::allocate(
-                memory,
-                QueueRingBackingV1::AqlSpecial,
-                usize::try_from(ring_bytes)
-                    .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("ring size conversion"))?,
-            )?;
-            let mut control = memory.allocate_userptr_aql_control()?;
-            let mut completion_signals =
-                memory.allocate_host_visible_coherent(COMPLETION_SIGNAL_ARENA_BYTES_V1)?;
-            let mut eop = memory.allocate_executable(
-                usize::try_from(geometry.end_of_pipe().mapping_bytes())
-                    .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("EOP size conversion"))?,
-            )?;
-            let mut context_save = memory.allocate_executable(
-                usize::try_from(geometry.context_save().mapping_bytes()).map_err(|_| {
-                    ComputeAqlQueueSessionErrorV1::Contract("context-save size conversion")
-                })?,
-            )?;
-            ring.initialize_invalid(memory)?.map_err(|_| {
-                ComputeAqlQueueSessionErrorV1::Contract("INVALID ring initialization")
-            })?;
-            memory
-                .with_bytes_mut(&mut control, initialize_amd_aql_control)?
-                .map_err(|_| {
-                    ComputeAqlQueueSessionErrorV1::Contract("AMD AQL control initialization")
-                })?;
-            memory.with_bytes_mut(
-                &mut completion_signals,
-                initialize_pending_completion_signal_arena,
-            )??;
-            memory.with_bytes_mut(&mut eop, |bytes| bytes.fill(0))?;
-            memory.with_bytes_mut(&mut context_save, |bytes| bytes.fill(0))?;
-            memory.check_queue_currentness()?;
-
-            let runtime = LinuxKfdRuntimeEnabledV1::enable(memory.kfd_fd(), memory.opener_pid())?;
-            runtime.validate_active(memory.kfd_fd(), memory.opener_pid())?;
-            let event = LinuxQueueExceptionEventV1::create(memory.kfd_fd(), memory.opener_pid())?;
-            memory.check_queue_currentness()?;
-            let shadow_plan = memory.cwsr_shadow_plan(&context_save)?;
-            let unpublished_shadows = LinuxCwsrShadowPagesV1::install(shadow_plan, &event)?;
-            let cwsr_initialization = memory.with_bytes_mut(&mut context_save, |bytes| {
-                unpublished_shadows
-                    .shadows()
-                    .initialize_and_validate_bo_headers(bytes)
-            })?;
-            cwsr_initialization.map_err(|_| {
-                ComputeAqlQueueSessionErrorV1::Contract("CWSR header initialization")
-            })?;
-            runtime.validate_active(memory.kfd_fd(), memory.opener_pid())?;
-            event.validate_live_with_shadows(
-                memory.kfd_fd(),
-                memory.opener_pid(),
-                unpublished_shadows.shadows(),
-            )?;
-            memory.check_queue_currentness()?;
-
-            let eop = memory.seal_executable(eop)?;
-            let context_save = memory.seal_executable(context_save)?;
-            unpublished_shadows
-                .shadows()
-                .restore_kernel_write_access_after_bo_seal()?;
-            let mut ring = RingConstructionV1::Cpu(ring);
-            ring.map_in_place(memory)?;
-            ring.retain_in_place(memory)?;
-            let control = memory.map_to_gpu(control)?;
-            let completion_signals = memory.map_to_gpu(completion_signals)?;
-            let eop = memory.map_executable_to_gpu(eop)?;
-            let context_save = memory.map_executable_to_gpu(context_save)?;
-            let control = memory.retain_aql_control_resource(control)?;
-            let completion_signals =
-                memory.retain_aql_completion_signal_resource(completion_signals)?;
-            let eop = memory.retain_aql_eop_resource(eop)?;
-            let context_save = memory.retain_aql_context_save_resource(context_save)?;
-            let mut resource_prefix =
-                QueueResourcePrefixV1::new(ring.take_retained()?, control, eop, context_save);
-            resource_prefix.build_in_place(memory.queue_model_device(), geometry)?;
-            let authority = resource_prefix.take_complete()?;
-            let completion_owner = CompletionSignalArenaOwnerV1::new(
-                authority.view.plan.queue,
-                completion_signals.facts(),
-            )?;
-            let submission = NativeAqlSubmissionOwnerV1::new(ring_bytes).map_err(|_| {
-                ComputeAqlQueueSessionErrorV1::Contract("AQL ring submission model")
-            })?;
-            Ok(PreparedAuxiliaryComputeLaneV1 {
-                authority,
-                completion_signals,
-                completion_owner,
-                submission,
-                dispatch,
-                runtime,
-                event,
-                unpublished_shadows,
-                ring_bytes,
-            })
-        });
-        let prepared = match prepared {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                self.poison_terminal();
-                return Err(error);
-            }
-        };
-        let result = self.finish_auxiliary_compute_lane_creation_v1(prepared, slot);
-        if result.is_err() {
-            self.poison_terminal();
+        if self.engine.as_ref().is_some_and(|engine| {
+            matches!(
+                engine.preflight_operation(),
+                Err(NativeQueueAdapterErrorV1::JournalCapacity)
+            )
+        }) {
+            return Err(map_native(NativeQueueAdapterErrorV1::JournalCapacity));
         }
-        result
-    }
 
-    fn finish_auxiliary_compute_lane_creation_v1(
-        &mut self,
-        prepared: PreparedAuxiliaryComputeLaneV1,
-        slot: PreparedAuxiliaryComputeLaneSlotV1,
-    ) -> Result<ComputeAqlQueueLaneV1, ComputeAqlQueueSessionErrorV1> {
-        let PreparedAuxiliaryComputeLaneV1 {
-            authority,
-            completion_signals,
-            completion_owner,
-            submission,
-            dispatch,
-            mut runtime,
-            event,
-            unpublished_shadows,
+        construction_auxiliary::construct_auxiliary_compute_lane_v1(
+            self,
             ring_bytes,
-        } = prepared;
-        let mut authority = Some(authority);
-        let (key, outputs, queue_id, shadows) = {
-            let engine = self
-                .engine
-                .as_mut()
-                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
-                    "missing queue engine",
-                ))?;
-            let key = match engine.admit_in_place(&mut authority) {
-                Ok(key) => key,
-                Err(error @ NativeQueueAdapterErrorV1::AuthorityPoisoned) => {
-                    self.poison_terminal();
-                    permanently_poison_process_global_kfd_runtime_gate_v1();
-                    return Err(terminal_creation(
-                        "auxiliary queue model admission",
-                        map_native(error),
-                    ));
-                }
-                Err(error) => return Err(map_native(error)),
-            };
-            let mut shadows = None;
-            engine
-                .create_at_native_boundary(key, || {
-                    shadows = Some(unpublished_shadows.publish_for_native_queue_creation());
-                })
-                .map_err(map_create)?;
-            let shadows = shadows.expect("native CREATE_QUEUE boundary published CWSR shadows");
-            runtime.mark_queue_created().map_err(|error| {
-                terminal_creation("runtime queue-live transition", error.into())
-            })?;
-            let outputs = engine.create_outputs(key).ok_or_else(|| {
-                terminal_creation(
-                    "CREATE_QUEUE output recovery",
-                    ComputeAqlQueueSessionErrorV1::Contract("missing CREATE outputs"),
-                )
-            })?;
-            let queue_id = engine.native_queue_id(key).ok_or_else(|| {
-                terminal_creation(
-                    "CREATE_QUEUE identity recovery",
-                    ComputeAqlQueueSessionErrorV1::Contract("missing queue id"),
-                )
-            })?;
-            (key, outputs, queue_id, shadows)
-        };
-        if self.session_owned_queue_id_is_retained_v1(queue_id) {
-            permanently_poison_process_global_kfd_runtime_gate_v1();
-            return Err(terminal_creation(
-                "auxiliary compute queue ID admission",
-                ComputeAqlQueueSessionErrorV1::Contract(
-                    "auxiliary compute queue ID collides with a session-owned queue",
-                ),
-            ));
-        }
-        let mut observation = ComputeAqlQueueObservationV1 {
-            queue_id,
-            ring_bytes,
-            doorbell_slice_bytes: 0,
-            doorbell_byte_offset: 0,
-            event_id: event.event_id_observation(),
-            cwsr_shadow_pages: 8,
-        };
-        self.check_currentness()?;
-        let doorbell = {
-            let engine = self.engine.as_ref().expect("checked queue engine");
-            LinuxDoorbellSliceV1::map(engine.backend.session.kfd_fd(), outputs, engine.opener_pid)
-        }
-        .map_err(|error| terminal_creation("doorbell mapping", error.into()))?;
-        observation.doorbell_slice_bytes = doorbell.slice_bytes();
-        observation.doorbell_byte_offset = doorbell.queue_byte_offset();
-        self.check_currentness()?;
-        install_auxiliary_compute_lane_slot_v1(
-            &mut self.auxiliary_compute_lanes,
+            programs,
+            packets,
             slot,
-            ComputeAqlQueueLaneStateV1 {
-                key,
-                doorbell: Some(doorbell),
-                submission: Some(submission),
-                completion_signals: Some(completion_signals),
-                completion_owner,
-                dispatch: Some(dispatch),
-                unpublished_dispatch: UnpublishedDispatchStateV1::default(),
-                detached_data_count: 0,
-                detached_dispatch_generation: None,
-                detached_data_identities: Vec::new(),
-                detached_next_insertion_index: None,
-                exception: Some(QueueExceptionStateV1 {
-                    runtime,
-                    runtime_control: None,
-                    event,
-                    shadows,
-                }),
-                observation,
-            },
-        );
-        Ok(ComputeAqlQueueLaneV1 {
-            session: self.compute_lane_session,
-            ordinal: slot.index + 1,
-            generation: slot.generation,
-        })
+            prepare_data,
+        )
     }
 
     pub fn auxiliary_compute_lane_count_v1(&self) -> usize {
@@ -6292,6 +6109,9 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         lane: ComputeAqlQueueLaneV1,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        if self.terminal_poisoned {
+            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+        }
         let admitted = admit_compute_lane_v1(
             self.compute_lane_session,
             &self.auxiliary_compute_lanes,
@@ -6302,9 +6122,6 @@ impl ComputeAqlQueueSessionV1 {
                 "the primary queue is destroyed with its session",
             ));
         };
-        if self.terminal_poisoned {
-            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
-        }
         self.dependency_owner
             .ensure_idle()
             .map_err(map_dependency_target_use_error_v1)?;
@@ -12204,8 +12021,12 @@ impl ComputeAqlQueueSessionV1 {
     fn poison_terminal(&mut self) {
         self.terminal_poisoned = true;
         self.unpublished_dispatch.continuation = None;
-        self.dependency_owner.poison();
-        self.completion_owner.poison_owner();
+        if let Some(owner) = self.dependency_owner.0.as_mut() {
+            owner.poison();
+        }
+        if let Some(owner) = self.completion_owner.0.as_mut() {
+            owner.poison_owner();
+        }
         if let Some(dispatch) = self.dispatch.as_mut() {
             dispatch.poison();
         }
@@ -14796,11 +14617,15 @@ mod tests {
         let fixed = include_str!("queue_live/fixed_dispatch.rs");
         let primary = include_str!("queue_live/construction_primary.rs");
         let environment = include_str!("queue_live/construction_primary/environment.rs");
+        let auxiliary = include_str!("queue_live/construction_auxiliary.rs");
+        assert!(!auxiliary.contains("ComputeDependencySessionOwnerV1::new("));
+        assert!(!auxiliary.contains("create_dependency_owner("));
         assert_eq!(
             production
                 .lines()
                 .filter(|line| {
-                    line.trim() == "dependency_owner: ComputeDependencySessionOwnerV1,"
+                    line.trim()
+                        == "dependency_owner: QueueOwnerSlotV1<ComputeDependencySessionOwnerV1>,"
                 })
                 .count(),
             1
@@ -14838,7 +14663,7 @@ mod tests {
             .split("struct ComputeAqlQueueLaneStateV1")
             .nth(1)
             .unwrap()
-            .split("struct PreparedAuxiliaryComputeLaneV1")
+            .split("fn prepare_auxiliary_compute_lane_slot_v1")
             .next()
             .unwrap();
         assert!(!lane_state.contains("ComputeDependencySessionOwnerV1"));
@@ -15060,10 +14885,14 @@ mod tests {
             .split("pub fn destroy_auxiliary_compute_lane_v1")
             .next()
             .unwrap();
-        let envelope = auxiliary
-            .find("with_live_queue_memory_model(move |memory|")
+        assert!(auxiliary.contains("construction_auxiliary::construct_auxiliary_compute_lane_v1("));
+        let construction = include_str!("queue_live/construction_auxiliary.rs");
+        let envelope = construction
+            .find("with_live_queue_memory_model_custody(|memory|")
             .unwrap();
-        let callback = auxiliary.find("prepare_data(memory)?").unwrap();
+        let callback = construction
+            .find("capture_returned_preparation_v1(memory, &mut root.data, prepare_data)")
+            .unwrap();
         assert!(envelope < callback);
 
         for wrapper in [
@@ -16129,18 +15958,17 @@ mod tests {
             13, 7, false, false
         ));
 
-        let live = include_str!("queue_live.rs")
-            .split("#[cfg(test)]\nmod tests")
-            .next()
-            .unwrap();
-        let auxiliary_finish = live
-            .split("fn finish_auxiliary_compute_lane_creation_v1")
+        let auxiliary = include_str!("queue_live/construction_auxiliary.rs");
+        let auxiliary_finish = auxiliary
+            .split("fn create_and_install(")
             .nth(1)
             .unwrap()
-            .split("pub fn auxiliary_compute_lane_count_v1")
+            .split("pub(super) fn construct_auxiliary_compute_lane_v1")
             .next()
             .unwrap();
-        let recover_queue_id = auxiliary_finish.find("native_queue_id(key)").unwrap();
+        let recover_queue_id = auxiliary_finish
+            .find("recover_native_queue_id(engine, key)")
+            .unwrap();
         let collision = auxiliary_finish
             .find("session_owned_queue_id_is_retained_v1(queue_id)")
             .unwrap();
@@ -16196,7 +16024,9 @@ mod tests {
                 append: true,
             }
         );
-        install_auxiliary_compute_lane_slot_v1(&mut slots, first, "first");
+        slots.try_reserve_exact(1).unwrap();
+        let destination = check_auxiliary_compute_lane_slot_v1(&mut slots, first).unwrap();
+        install_auxiliary_compute_lane_slot_v1(destination, "first");
         let first_handle = ComputeAqlQueueLaneV1 {
             session,
             ordinal: 1,
@@ -16218,7 +16048,8 @@ mod tests {
         assert_eq!(replacement.index, first.index);
         assert_eq!(replacement.generation, first.generation + 1);
         assert!(!replacement.append);
-        install_auxiliary_compute_lane_slot_v1(&mut slots, replacement, "replacement");
+        let destination = check_auxiliary_compute_lane_slot_v1(&mut slots, replacement).unwrap();
+        install_auxiliary_compute_lane_slot_v1(destination, "replacement");
 
         assert!(matches!(
             admit_compute_lane_v1(session, &slots, first_handle),
@@ -16538,9 +16369,12 @@ mod tests {
             doorbell: None,
             submission: None,
             completion_signals: None,
-            completion_owner:
+            completion_owner: QueueOwnerSlotV1(Some(
                 CompletionSignalArenaOwnerV1::for_persistent_compute_cancellation_test(queue),
-            dependency_owner: ComputeDependencySessionOwnerV1::new(queue.id.0).unwrap(),
+            )),
+            dependency_owner: QueueOwnerSlotV1(Some(
+                ComputeDependencySessionOwnerV1::new(queue.id.0).unwrap(),
+            )),
             terminal_dependency: None,
             dispatch: None,
             unpublished_dispatch: UnpublishedDispatchStateV1::default(),
@@ -17202,8 +17036,9 @@ mod tests {
             doorbell: None,
             submission: None,
             completion_signals: None,
-            completion_owner:
+            completion_owner: QueueOwnerSlotV1(Some(
                 CompletionSignalArenaOwnerV1::for_persistent_compute_cancellation_test(queue),
+            )),
             dispatch: None,
             unpublished_dispatch: UnpublishedDispatchStateV1::default(),
             detached_data_count: 0,
@@ -19768,43 +19603,38 @@ mod tests {
 
     #[test]
     fn auxiliary_queue_publishes_cwsr_payload_only_at_native_create_boundary() {
-        let source = include_str!("queue_live.rs");
+        let source = include_str!("queue_live/construction_auxiliary.rs");
         let prepared_state = source
-            .split("struct PreparedAuxiliaryComputeLaneV1")
+            .split("struct AuxiliaryConstructionV1")
             .nth(1)
             .unwrap()
-            .split("fn prepare_auxiliary_compute_lane_slot_v1")
+            .split("struct AuxiliaryConstructionScopeV1")
             .next()
             .unwrap();
-        assert!(prepared_state.contains("unpublished_shadows: LinuxUnpublishedCwsrShadowPagesV1"));
+        assert!(prepared_state.contains("unpublished: Option<LinuxUnpublishedCwsrShadowPagesV1>"));
         assert!(!prepared_state.contains("exception: QueueExceptionStateV1"));
 
         let body = source
-            .split("pub fn create_auxiliary_compute_lane_with_fixed_dispatch")
+            .split("fn prepare(")
             .nth(1)
             .unwrap()
-            .split("pub fn auxiliary_compute_lane_count_v1")
+            .split("pub(super) fn construct_auxiliary_compute_lane_v1")
             .next()
             .unwrap();
         let install = body
-            .find("let unpublished_shadows = LinuxCwsrShadowPagesV1::install")
+            .find("self.unpublished = Some(Platform::install_shadows")
             .unwrap();
-        let restore = body
-            .find("restore_kernel_write_access_after_bo_seal")
-            .unwrap();
+        let restore = body.find("Platform::restore_shadow_write").unwrap();
         let native_boundary = body.find("create_at_native_boundary(key").unwrap();
         let publish = body
-            .find("unpublished_shadows.publish_for_native_queue_creation()")
+            .find("self.published = Some(Platform::publish_shadows(")
             .unwrap();
         let published_exception = body.find("exception: Some(QueueExceptionStateV1").unwrap();
         assert!(install < restore);
         assert!(restore < native_boundary);
         assert!(native_boundary < publish);
         assert!(publish < published_exception);
-        assert_eq!(
-            body.matches("publish_for_native_queue_creation()").count(),
-            1
-        );
+        assert_eq!(body.matches("Platform::publish_shadows(").count(), 1);
         assert!(!body.contains("engine.create(key)"));
     }
 

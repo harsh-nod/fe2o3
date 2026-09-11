@@ -1,0 +1,12 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+warning: unused import: `prepare_public_fixed_dispatch_resources`
+  --> crates/fe2o3-kfd/src/queue_live.rs:51:53
+   |
+51 |     prepare_persistent_fixed_dispatch_resources_v1, prepare_public_fixed_dispatch_resources,
+   |                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fe2o3-kfd` (lib test) generated 1 warning (run `cargo fix --lib -p fe2o3-kfd --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 34.26s
+  Executable unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)

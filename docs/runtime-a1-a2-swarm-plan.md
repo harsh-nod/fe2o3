@@ -1,6 +1,16 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Current local implementation: R94's named primary CPU/local-helper matrix,
+Current local acceptance: R95's [auxiliary construction owner](runtime-auxiliary-queue-construction-custody-v1.md)
+above signed planning checkpoint `cb29dc6216cdf57c76d1f952264ceed9e257c40a`.
+The [local record](evidence/local-r95-auxiliary-custody-2026-09-11/README.md)
+covers composed slot/ledger/settlement tests, not complete auxiliary platform
+integration. Native next takes NATIVE-2B.5, then replacement/insertion; CO-1 and
+VER-1A.1 remain independent. No live KFD, new adapter proof or performance result
+is added. Primary owns source integration, tests, evidence and publication.
+Seventeen final source gates, twelve auxiliary checks and eight compiled
+mutations pass; GNU/musl each pass 2,516 runtime tests with five ignored.
+
+Preceding local acceptance: R94's named primary CPU/local-helper matrix,
 above signed planning checkpoint `56ba2556c9572d30f65faab3e579d95fa3fb7c3e`.
 Its [evidence](evidence/local-r94-primary-matrix-2026-09-11/README.md) records
 seventeen source gates, eleven auxiliary checks, 2,508 runtime tests per GNU/musl

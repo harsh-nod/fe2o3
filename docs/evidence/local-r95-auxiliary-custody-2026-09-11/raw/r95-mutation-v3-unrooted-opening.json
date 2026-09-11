@@ -1,0 +1,22 @@
+{
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "queue::live::construction_auxiliary::tests::auxiliary_opening_is_rooted_before_preparation_loan_and_retake",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r95-mutation-v3-unrooted-opening.log",
+  "source": "/home/harsh/.codex-tmp/r95-mutation-v3-unrooted-opening-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "elapsed_seconds": 32.262
+}

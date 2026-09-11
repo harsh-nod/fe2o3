@@ -1,0 +1,10 @@
+--- a/crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs
+@@ -430,6 +430,7 @@
+             work(scope, entry)
+         },
+         |scope| {
++            scope.construction.completion.cpu = None;
+             scope.construction.terminal_parent =
+                 Some(scope.parent.take_for_terminal_auxiliary_construction_v1());
+             if let Some(unpublished) = scope.construction.unpublished.as_mut() {

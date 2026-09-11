@@ -10,7 +10,8 @@ use crate::shared_memory::{GttExecutableImmutableV1, GttProfileV1, SharedGttAllo
 mod environment;
 #[path = "construction_primary/memory.rs"]
 mod memory;
-use environment::{CompletedPrimaryV1, LinuxPrimaryEnvironmentV1, PrimaryEnvironmentV1};
+use environment::CompletedPrimaryV1;
+pub(super) use environment::{LinuxPrimaryEnvironmentV1, PrimaryEnvironmentV1};
 pub(super) use memory::PrimaryMemoryV1;
 
 #[cfg(test)]
@@ -40,15 +41,15 @@ pub(super) fn capture_returned_preparation_v1<M, T>(
     Ok(())
 }
 
-struct MutablePrefixV1<P: GttProfileV1, R> {
-    cpu: Option<Cpu<P>>,
+pub(super) struct MutablePrefixV1<P: GttProfileV1, R> {
+    pub(super) cpu: Option<Cpu<P>>,
     mapped: Option<Mapped<P>>,
-    retained: Option<R>,
+    pub(super) retained: Option<R>,
     in_session: Option<SharedGttAllocationIdentityV1>,
 }
 
 impl<P: GttProfileV1, R> MutablePrefixV1<P, R> {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             cpu: None,
             mapped: None,
@@ -58,16 +59,16 @@ impl<P: GttProfileV1, R> MutablePrefixV1<P, R> {
     }
 }
 
-struct ExecutablePrefixV1<R> {
-    cpu: Option<Cpu<ExecutableGttV1>>,
+pub(super) struct ExecutablePrefixV1<R> {
+    pub(super) cpu: Option<Cpu<ExecutableGttV1>>,
     sealed: Option<Sealed>,
     mapped: Option<Executable>,
-    retained: Option<R>,
+    pub(super) retained: Option<R>,
     in_session: Option<SharedGttAllocationIdentityV1>,
 }
 
 impl<R> ExecutablePrefixV1<R> {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             cpu: None,
             sealed: None,
@@ -146,7 +147,7 @@ pub(super) struct UserptrConstructionEntryV1<'a> {
 }
 
 impl UserptrConstructionEntryV1<'_> {
-    fn enter(&mut self, stage: &'static str) {
+    pub(super) fn enter(&mut self, stage: &'static str) {
         self.stage.get_or_insert(stage);
     }
 
@@ -567,7 +568,7 @@ fn run_rooted_construction_v1<T>(
     )
 }
 
-fn run_rooted_construction_with_v1<T>(
+pub(super) fn run_rooted_construction_with_v1<T>(
     mut root: Box<T>,
     work: impl FnOnce(
         &mut T,
@@ -640,7 +641,7 @@ pub(super) fn terminal_control_failure_for_test(
     .unwrap_err()
 }
 
-fn map_mutable_prefix<P: crate::shared_memory::MutableGpuGttProfileV1, R>(
+pub(super) fn map_mutable_prefix<P: crate::shared_memory::MutableGpuGttProfileV1, R>(
     memory: &mut impl PrimaryMemoryV1,
     prefix: &mut MutablePrefixV1<P, R>,
 ) -> Result<(), MemorySessionError> {
@@ -657,7 +658,11 @@ fn map_mutable_prefix<P: crate::shared_memory::MutableGpuGttProfileV1, R>(
     )
 }
 
-fn retain_mutable_prefix<P: crate::shared_memory::MutableGpuGttProfileV1, R, M: PrimaryMemoryV1>(
+pub(super) fn retain_mutable_prefix<
+    P: crate::shared_memory::MutableGpuGttProfileV1,
+    R,
+    M: PrimaryMemoryV1,
+>(
     memory: &mut M,
     prefix: &mut MutablePrefixV1<P, R>,
     retain: impl FnOnce(&mut M, Mapped<P>) -> Result<R, MemorySessionError>,
@@ -676,7 +681,10 @@ fn retain_mutable_prefix<P: crate::shared_memory::MutableGpuGttProfileV1, R, M: 
 }
 
 impl<R> ExecutablePrefixV1<R> {
-    fn seal(&mut self, memory: &mut impl PrimaryMemoryV1) -> Result<(), MemorySessionError> {
+    pub(super) fn seal(
+        &mut self,
+        memory: &mut impl PrimaryMemoryV1,
+    ) -> Result<(), MemorySessionError> {
         advance_token_v1(
             memory,
             &mut self.cpu,
@@ -691,7 +699,7 @@ impl<R> ExecutablePrefixV1<R> {
     }
 }
 
-fn map_executable_prefix<R>(
+pub(super) fn map_executable_prefix<R>(
     memory: &mut impl PrimaryMemoryV1,
     prefix: &mut ExecutablePrefixV1<R>,
 ) -> Result<(), MemorySessionError> {
@@ -708,7 +716,7 @@ fn map_executable_prefix<R>(
     )
 }
 
-fn retain_executable_prefix<R, M: PrimaryMemoryV1>(
+pub(super) fn retain_executable_prefix<R, M: PrimaryMemoryV1>(
     memory: &mut M,
     prefix: &mut ExecutablePrefixV1<R>,
     retain: impl FnOnce(&mut M, Executable) -> Result<R, MemorySessionError>,

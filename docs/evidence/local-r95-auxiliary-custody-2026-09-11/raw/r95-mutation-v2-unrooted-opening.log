@@ -1,0 +1,33 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+warning: variable does not need to be mutable
+   --> crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs:417:5
+    |
+417 |     mut scope: Box<AuxiliaryConstructionScopeV1<'a, N>>,
+    |     ----^^^^^
+    |     |
+    |     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fe2o3-kfd` (lib test) generated 1 warning (run `cargo fix --lib -p fe2o3-kfd --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 34.02s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction_auxiliary::tests::auxiliary_opening_is_rooted_before_preparation_loan_and_retake ... FAILED
+
+failures:
+
+---- queue::live::construction_auxiliary::tests::auxiliary_opening_is_rooted_before_preparation_loan_and_retake stdout ----
+
+thread 'queue::live::construction_auxiliary::tests::auxiliary_opening_is_rooted_before_preparation_loan_and_retake' (1891820) panicked at crates/fe2o3-kfd/src/queue_live/construction_auxiliary/tests.rs:348:47:
+opening failure retained scope
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::live::construction_auxiliary::tests::auxiliary_opening_is_rooted_before_preparation_loan_and_retake
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 935 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

@@ -1,6 +1,6 @@
 # Current Runtime Swarm Work Orders
 
-Planning refresh: 2026-09-11. Scope: finish A1/A2, then advance the remaining
+Execution refresh: 2026-09-11. Scope: finish A1/A2, then advance the remaining
 [issue #182 milestones](https://github.com/harsh-nod/fe2o3/issues/182).
 The issue was checked through the GitHub API and remains open; its reported
 `updatedAt` is `2026-09-11T08:01:35Z`.
@@ -8,12 +8,14 @@ The issue was checked through the GitHub API and remains open; its reported
 This document supersedes the immediate assignment rows in the
 [detailed dispatch](runtime-a1-a2-swarm-dispatch-r83.md) and
 [next-wave roadmap](runtime-a1-a2-next-wave.md), not their historical evidence.
-Accepted runtime source remains signed R94
-`363ce6b79938def9365016c34f020a00493c1f87`, followed by planning checkpoint
-`d464dc442c903e6915fe6ed11dcdfff8fee5db94`.
-The working-tree R95 auxiliary-constructor implementation is **unaccepted** and
-is not included in this planning packet. Its composed tests do not establish
-the complete shared-engine/platform matrix or resolve the finding below.
+R95 now locally accepts auxiliary-constructor custody above signed planning
+checkpoint `cb29dc6216cdf57c76d1f952264ceed9e257c40a`; preceding accepted runtime
+source is R94 `363ce6b79938def9365016c34f020a00493c1f87`.
+The [R95 record](evidence/local-r95-auxiliary-custody-2026-09-11/README.md) includes
+seventeen final source gates, twelve auxiliary checks and eight compiled negative
+mutations. Each GNU/musl runtime suite passes 2,516 tests with five ignored.
+Opening currentness is now rooted, but composed tests do not establish the
+complete shared-engine/platform matrix. NATIVE-2B.5 remains next.
 
 ## Swarm Ownership
 
@@ -25,21 +27,20 @@ Context/backend/queue changes and builds are serialized.
 
 | Lane and worker | First bounded task | Follow-on queue |
 | --- | --- | --- |
-| Native: `r66_native_coexistence` | Review R95 opening-currentness repair and local acceptance; specify NATIVE-2B.5's same-engine fixture | Integrated auxiliary matrix -> replacement/insertion -> generated data adoption -> native publication handoff |
+| Native: `r66_native_coexistence` | NATIVE-2B.5 same-engine auxiliary integration matrix | Replacement/insertion -> generated data adoption -> native publication handoff |
 | Admission: `r66_runtime_coexistence` | CO-1 allocation-free completion outcome contract and table tests | Exact identity -> reply/custody composition -> issue/completion integration -> typed future -> generated graph/drain |
 | Resources: `r66_coexistence_model` | VER-1A.1 Context journal contract and complete mutation inventory | Model/proofs -> bounded journal -> mutation hooks -> cross-run leases; aggregate budgets and residency |
 | Primary | Resolve and accept one bounded source packet at a time, with cross-review | Cross-lane integration, formal correspondence, hardware scheduling, matched benchmarks and signed pushes to both topic remotes |
 
 ## Native Queue
 
-1. **R95 acceptance blocker.** The public auxiliary constructor currently calls
-   `check_currentness` before entering retained construction custody. Move the
-   actual observation inside that custody before the model loan. Preserve the
-   existing pure `JournalCapacity` rejection, or explicitly document and test a
-   changed terminal policy. Error/panic tests must retain the exact original
-   parent and execute no preparation, loan or retake. Extend the single-owner
-   guard to the auxiliary module and assert the retained parent and both
-   ledgers are poisoned. Rerun source gates and compiled negative mutations.
+1. **R95 locally accepted.** Opening currentness now runs inside retained
+   construction custody before the model loan. The shared borrowed preflight
+   preserves pure `JournalCapacity` rejection. Error/panic tests retain the exact
+   original parent without preparation, loan or retake; the auxiliary single-owner
+   guard and both ledger poison assertions are present. Eight compiled mutations
+   reject and exact source restoration passes. All seventeen final source gates
+   and twelve auxiliary checks pass; broader native integration remains open.
 2. **NATIVE-2B.5: integrated auxiliary acceptance.** Run the actual production-used
    sequence after a completed primary constructor, borrowing the same engine,
    foundation, memory/accounts and original platform owners. Cover every
@@ -113,7 +114,7 @@ Context/backend/queue changes and builds are serialized.
 ## Integration And Qualification
 
 ```text
-R95 repair/acceptance -> 2B.5 -> 2C -> DATA-ADOPT
+R95 local acceptance -> 2B.5 -> 2C -> DATA-ADOPT
 CO-1 -> CO-2/CO-3 ----------------> ISSUE -> COMPLETE -> API -> GRAPH/DRAIN
 VER-1A -> complete VER-1B -> VER-2 -------------------------> input reuse
 ```

@@ -1,0 +1,8 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error: expected one of `!` or `::`, found `.`
+ --> crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs:3:18
+  |
+3 |             scope.construction.completed = None;
+  |                  ^ expected one of `!` or `::`
+
+error: could not compile `fe2o3-kfd` (lib test) due to 1 previous error

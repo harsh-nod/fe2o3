@@ -1,0 +1,23 @@
+--- a/crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs
+@@ -414,7 +414,7 @@
+ }
+ 
+ fn settle_auxiliary_construction_with_v1<'a, const N: usize>(
+-    scope: Box<AuxiliaryConstructionScopeV1<'a, N>>,
++    mut scope: Box<AuxiliaryConstructionScopeV1<'a, N>>,
+     opening: impl FnOnce(&mut ComputeAqlQueueSessionV1) -> Result<(), ComputeAqlQueueSessionErrorV1>,
+     work: impl FnOnce(
+         &mut AuxiliaryConstructionScopeV1<'a, N>,
+@@ -423,10 +423,10 @@
+     poison: &dyn Fn(),
+     retain: impl FnOnce(Box<AuxiliaryConstructionScopeV1<'a, N>>),
+ ) -> Result<Box<AuxiliaryConstructionScopeV1<'a, N>>, ComputeAqlQueueSessionErrorV1> {
++    opening(scope.parent)?;
+     run_rooted_construction_with_v1(
+         scope,
+         |scope, entry| {
+-            opening(scope.parent)?;
+             work(scope, entry)
+         },
+         |scope| {

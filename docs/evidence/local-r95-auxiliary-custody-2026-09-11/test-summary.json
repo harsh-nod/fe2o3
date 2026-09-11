@@ -1,0 +1,210 @@
+{
+  "gnu-tests": {
+    "passed": 2516,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "musl-tests": {
+    "passed": 2516,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "gnu-docs": {
+    "passed": 108,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 7
+  },
+  "musl-docs": {
+    "passed": 91,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 5
+  },
+  "musl-host-docs": {
+    "passed": 16,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 2
+  },
+  "gnu-host": {
+    "passed": 258,
+    "failed": 0,
+    "ignored": 4,
+    "harnesses": 1
+  },
+  "musl-host": {
+    "passed": 141,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "macro-fixtures": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "auxiliary-construction": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "primary": {
+    "passed": 25,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "ordinary": {
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "construction": {
+    "passed": 6,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "linux-helpers": {
+    "passed": 20,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "initialization": {
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "transitions": {
+    "passed": 20,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "preparation": {
+    "passed": 23,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "bind": {
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "base_commit": "cb29dc6216cdf57c76d1f952264ceed9e257c40a",
+  "source_gate_count": 17,
+  "auxiliary_check_count": 12,
+  "implementation_start_commit": "d464dc442c903e6915fe6ed11dcdfff8fee5db94",
+  "preceding_accepted_runtime_commit": "363ce6b79938def9365016c34f020a00493c1f87",
+  "final_gate_attempt": "r95-accepted",
+  "preliminary_source_gate_attempt": "r95-final",
+  "stopped_source_gate_attempt": "r95-corrected",
+  "preliminary_compiled_campaign": "r95-v2-mutations.json",
+  "final_source_change_exactly_one_formatting_wrap": true,
+  "accepted_mutation_campaign": "r95-mutations.json",
+  "preliminary_mutation_campaign": "r95-preliminary-mutations.json",
+  "mutation_command_identity_checked": true,
+  "non_documentation_source_identities_checked": 5647,
+  "new_kfd_cpu_test_functions": 8,
+  "new_auxiliary_cpu_test_functions": 7,
+  "rejected_vacancy_cases": 11,
+  "successful_vacancy_transfers": 3,
+  "composed_operation_retake_cases": 9,
+  "composed_opening_cases": 3,
+  "auxiliary_constructor_outer_custody": true,
+  "original_parent_and_completed_lane_retained": true,
+  "opening_observation_inside_root": true,
+  "journal_capacity_preflight_observation_free": true,
+  "synthetic_parent_without_engine": true,
+  "scripted_model_loan": true,
+  "actual_charged_completion_token": true,
+  "integrated_auxiliary_native2b5_accepted": false,
+  "replacement_preparation_outer_custody": false,
+  "unreturned_callback_values_retained": false,
+  "new_bootstrap_backing_charges": false,
+  "native_generated_adoption_hooks_installed": false,
+  "linux_qualified": false,
+  "adapter_refinement_proved": false,
+  "gpu_performance_measured": false,
+  "verus_solver_rerun": false,
+  "new_verus_theorems": 0,
+  "negative_inventory_files": 686,
+  "model_and_proof_sources_unchanged_from": "fb1e27e66cee27bb11f0b7c08f2d5994c5d168da",
+  "expected_negative_mutations": [
+    {
+      "name": "v3-slot-identity",
+      "source": "crates/fe2o3-kfd/src/queue_live.rs",
+      "test": "queue::live::construction_auxiliary::tests::auxiliary_vacancy_rejects_drift_without_consuming_or_overwriting_owners",
+      "assertion": "case 1",
+      "mutated_source_sha256": "746f998a4f76198e4b5bfbf5255589a42d999c8d30bc196b3b84fc06fe459860",
+      "patch_sha256": "88b4731b739c792bbeb32f5aa9b0d75691027b595132679d78c81e10f6516a1a"
+    },
+    {
+      "name": "v3-slot-capacity",
+      "source": "crates/fe2o3-kfd/src/queue_live.rs",
+      "test": "queue::live::construction_auxiliary::tests::auxiliary_vacancy_rejects_drift_without_consuming_or_overwriting_owners",
+      "assertion": "case 0",
+      "mutated_source_sha256": "48a41de4225e2c14e272e96c2b19bc0cdd6516822831a5d44ce4a7baa38e14c1",
+      "patch_sha256": "2537f9b6f19bf9616b27f0136bdbccf90b362021ed0893217cf1aad5ba62564b"
+    },
+    {
+      "name": "v3b-completed-owner",
+      "source": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+      "test": "queue::live::construction_auxiliary::tests::auxiliary_settlement_retains_completed_lane_and_original_scope_on_error_or_panic",
+      "assertion": "completed auxiliary lane retained",
+      "mutated_source_sha256": "ef5595d006a4a291ec095a20574d76961b3ccb24f1d8d52b65ff2be8386766b1",
+      "patch_sha256": "bbbd207e6779dfa09b3e594859871452ad1d438925fee7e19f51c1cb26e8bee5"
+    },
+    {
+      "name": "v3-returned-token",
+      "source": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+      "test": "queue::live::construction_auxiliary::tests::auxiliary_returned_completion_survives_composed_operation_and_retake_matrix",
+      "assertion": "called `Option::unwrap()` on a `None` value",
+      "mutated_source_sha256": "dfa9cc615968321b28e5991a553590167aed117db19cd3d6ea9a4b9ecfdcf73d",
+      "patch_sha256": "9984462bc53dcf64bfa2da5d029593fae6a7211600869135d8efab90af1f8945"
+    },
+    {
+      "name": "v3-original-parent",
+      "source": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+      "test": "queue::live::construction_auxiliary::tests::auxiliary_settlement_retains_completed_lane_and_original_scope_on_error_or_panic",
+      "assertion": "called `Option::unwrap()` on a `None` value",
+      "mutated_source_sha256": "99eda86c1d398a79228d4f8ca3226420b309bc55ccf9c1c924b94b7088bb8933",
+      "patch_sha256": "9054e939e255ef30f9bf1ae9d561307a26998583438aea112597b0eed66f9ea9"
+    },
+    {
+      "name": "v3-parent-poison",
+      "source": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+      "test": "queue::live::construction_auxiliary::tests::auxiliary_terminal_transfer_preserves_exact_ledgers_after_caller_drop",
+      "assertion": "original parent terminal",
+      "mutated_source_sha256": "1974688470770f5e22ddfdec7078ac7daf24e117c157b9e41bc5c586c8e04800",
+      "patch_sha256": "3561df8dfd12f2faa5c14b97524e8dd5201e84b1a7b5576db95907532f3c537a"
+    },
+    {
+      "name": "v3-unrooted-opening",
+      "source": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+      "test": "queue::live::construction_auxiliary::tests::auxiliary_opening_is_rooted_before_preparation_loan_and_retake",
+      "assertion": "opening failure retained scope",
+      "mutated_source_sha256": "22f0515d789119bc904e3a950b11a064db5b9ef97295607c9de612818def8651",
+      "patch_sha256": "f606fac36eab29c1817e3d04b78e0afe401991cf3a7b1755cf4b0a482422f280"
+    },
+    {
+      "name": "v3-retained-history",
+      "source": "crates/fe2o3-kfd/src/queue.rs",
+      "test": "queue::tests::borrowed_operation_preflight_reserves_retained_queue_history_without_observation",
+      "assertion": "right: Err(JournalCapacity)",
+      "mutated_source_sha256": "c0f0051afb24b2df26683601ab09c686ad5214082b3799687631995e128960a3",
+      "patch_sha256": "a29b667534dd70a1b0e979bf61b7313610c826653eb2704aa0370c5ddf7592e0"
+    }
+  ],
+  "production_metadata_sha256": "6c0cac53358224a31c356d91228b602ae8545f7c156a0c695f103533238054ca"
+}

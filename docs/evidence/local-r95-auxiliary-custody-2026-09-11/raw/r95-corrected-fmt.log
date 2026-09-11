@@ -1,0 +1,11 @@
+Diff in /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/queue_live/construction_auxiliary/tests.rs:345:
+                 );
+             }
+             assert_eq!(&*trace.borrow(), &["opening"]);
+-            let scope = retained.into_inner().expect("opening failure retained scope");
++            let scope = retained
++                .into_inner()
++                .expect("opening failure retained scope");
+             assert_terminal_shell(scope.parent);
+             assert!(scope.construction.packets.is_some());
+             assert!(scope.construction.data.is_none());

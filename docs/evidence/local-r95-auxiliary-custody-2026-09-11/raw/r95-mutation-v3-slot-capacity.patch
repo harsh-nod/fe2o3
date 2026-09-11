@@ -1,0 +1,11 @@
+--- a/crates/fe2o3-kfd/src/queue_live.rs
++++ b/crates/fe2o3-kfd/src/queue_live.rs
+@@ -4167,7 +4167,7 @@
+         ));
+     }
+     if prepared.append {
+-        if slots.capacity() <= slots.len() {
++        if false && slots.capacity() <= slots.len() {
+             return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                 "compute queue lane destination not reserved",
+             ));

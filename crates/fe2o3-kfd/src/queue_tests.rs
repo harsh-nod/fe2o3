@@ -1170,6 +1170,21 @@ fn cumulative_history_capacity_rejects_before_currentness_or_ioctl() {
     assert_eq!(engine.model.history().len(), 255);
     let calls = engine.backend.calls.borrow().len();
     let currentness_calls = engine.backend.currentness_calls;
+    let bootstrap_calls = engine.backend.bootstrap_calls.borrow().clone();
+    let summary = engine.journal_summary();
+    let resources = (engine.resources.as_ptr(), engine.resources.len());
+    engine.backend.bootstrap_fault = Some((BootstrapCallV1::Opener, true));
+    for _ in 0..2 {
+        assert_eq!(
+            engine.preflight_operation(),
+            Err(NativeQueueAdapterErrorV1::JournalCapacity)
+        );
+        assert_eq!(engine.journal_summary(), summary);
+        assert_eq!(
+            (engine.resources.as_ptr(), engine.resources.len()),
+            resources
+        );
+    }
     assert_eq!(
         engine.update(
             key,
@@ -1181,7 +1196,59 @@ fn cumulative_history_capacity_rejects_before_currentness_or_ioctl() {
     );
     assert_eq!(engine.backend.calls.borrow().len(), calls);
     assert_eq!(engine.backend.currentness_calls, currentness_calls);
+    assert_eq!(*engine.backend.bootstrap_calls.borrow(), bootstrap_calls);
     assert_eq!(engine.phase(key), Some(ComputeAqlQueuePhaseV1::Active));
+    assert!(!engine.authority_poisoned);
+    engine.authority_poisoned = true;
+    assert_eq!(
+        engine.preflight_operation(),
+        Err(NativeQueueAdapterErrorV1::AuthorityPoisoned)
+    );
+    assert_eq!(*engine.backend.bootstrap_calls.borrow(), bootstrap_calls);
+}
+
+#[test]
+fn borrowed_operation_preflight_reserves_retained_queue_history_without_observation() {
+    const COMPLETED_UPDATES: usize = 125;
+    let (mut engine, key) = active_engine(vec![success(Mutation::None); COMPLETED_UPDATES]);
+    for index in 0..COMPLETED_UPDATES {
+        engine
+            .update(
+                key,
+                QueueConfigurationIdV1::from_untrusted_digest(digest(80 + index as u8)),
+                admit_kfd_queue_percentage(50).unwrap(),
+                admit_kfd_queue_priority(4).unwrap(),
+            )
+            .unwrap();
+    }
+    assert_eq!(engine.model.history().len(), 253);
+    let calls = engine.backend.calls.borrow().len();
+    let currentness_calls = engine.backend.currentness_calls;
+    let bootstrap_calls = engine.backend.bootstrap_calls.borrow().clone();
+    let resources = (engine.resources.as_ptr(), engine.resources.len());
+    engine.backend.bootstrap_fault = Some((BootstrapCallV1::Opener, true));
+    assert_eq!(engine.preflight_operation(), Ok(()));
+    engine
+        .begin(QueueTransitionV1::BeginUpdate {
+            queue: key,
+            configuration: QueueConfigurationIdV1::from_untrusted_digest(digest(79)),
+        })
+        .unwrap();
+    assert_eq!(engine.model.history().len(), 254);
+    let summary = engine.journal_summary();
+    assert_eq!(
+        engine.preflight_operation(),
+        Err(NativeQueueAdapterErrorV1::JournalCapacity)
+    );
+    assert_eq!(engine.journal_summary(), summary);
+    assert_eq!(
+        (engine.resources.as_ptr(), engine.resources.len()),
+        resources
+    );
+    assert_eq!(engine.backend.calls.borrow().len(), calls);
+    assert_eq!(engine.backend.currentness_calls, currentness_calls);
+    assert_eq!(*engine.backend.bootstrap_calls.borrow(), bootstrap_calls);
+    assert!(!engine.authority_poisoned);
 }
 
 #[test]

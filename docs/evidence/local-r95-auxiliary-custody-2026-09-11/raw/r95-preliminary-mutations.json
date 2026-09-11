@@ -1,0 +1,106 @@
+[
+  {
+    "name": "slot-identity",
+    "path": "crates/fe2o3-kfd/src/queue_live.rs",
+    "test": "queue::live::construction_auxiliary::tests::auxiliary_vacancy_rejects_drift_without_consuming_or_overwriting_owners",
+    "assertion": "case 1",
+    "edits": [
+      [
+        "if prepare_auxiliary_compute_lane_slot_v1(slots)? != prepared {",
+        "if false && prepare_auxiliary_compute_lane_slot_v1(slots)? != prepared {"
+      ]
+    ]
+  },
+  {
+    "name": "slot-capacity",
+    "path": "crates/fe2o3-kfd/src/queue_live.rs",
+    "test": "queue::live::construction_auxiliary::tests::auxiliary_vacancy_rejects_drift_without_consuming_or_overwriting_owners",
+    "assertion": "case 0",
+    "edits": [
+      [
+        "if slots.capacity() <= slots.len() {",
+        "if false && slots.capacity() <= slots.len() {"
+      ]
+    ]
+  },
+  {
+    "name": "completed-owner",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_auxiliary::tests::auxiliary_settlement_retains_completed_lane_and_original_scope_on_error_or_panic",
+    "assertion": "completed auxiliary lane retained",
+    "edits": [
+      [
+        "            scope.construction.terminal_parent =\n                Some(scope.parent.take_for_terminal_auxiliary_construction_v1());",
+        "            scope.construction.completed = None;\n            scope.construction.terminal_parent =\n                Some(scope.parent.take_for_terminal_auxiliary_construction_v1());"
+      ]
+    ]
+  },
+  {
+    "name": "returned-token",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_auxiliary::tests::auxiliary_returned_completion_survives_composed_operation_and_retake_matrix",
+    "assertion": "called `Option::unwrap()` on a `None` value",
+    "edits": [
+      [
+        "            scope.construction.terminal_parent =\n                Some(scope.parent.take_for_terminal_auxiliary_construction_v1());",
+        "            scope.construction.completion.cpu = None;\n            scope.construction.terminal_parent =\n                Some(scope.parent.take_for_terminal_auxiliary_construction_v1());"
+      ]
+    ]
+  },
+  {
+    "name": "original-parent",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_auxiliary::tests::auxiliary_settlement_retains_completed_lane_and_original_scope_on_error_or_panic",
+    "assertion": "called `Option::unwrap()` on a `None` value",
+    "edits": [
+      [
+        "            scope.construction.terminal_parent =\n                Some(scope.parent.take_for_terminal_auxiliary_construction_v1());",
+        "            scope.parent.poison_terminal();"
+      ]
+    ]
+  },
+  {
+    "name": "parent-poison",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_auxiliary::tests::auxiliary_terminal_transfer_preserves_exact_ledgers_after_caller_drop",
+    "assertion": "original parent terminal",
+    "edits": [
+      [
+        "        self.poison_terminal();\n        let shell = Self {",
+        "        let shell = Self {"
+      ]
+    ]
+  },
+  {
+    "name": "unrooted-opening",
+    "path": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs",
+    "test": "queue::live::construction_auxiliary::tests::auxiliary_opening_is_rooted_before_preparation_loan_and_retake",
+    "assertion": "opening failure retained scope",
+    "edits": [
+      [
+        "fn settle_auxiliary_construction_with_v1<'a, const N: usize>(\n    scope:",
+        "fn settle_auxiliary_construction_with_v1<'a, const N: usize>(\n    mut scope:"
+      ],
+      [
+        ") -> Result<Box<AuxiliaryConstructionScopeV1<'a, N>>, ComputeAqlQueueSessionErrorV1> {\n    run_rooted_construction_with_v1(",
+        ") -> Result<Box<AuxiliaryConstructionScopeV1<'a, N>>, ComputeAqlQueueSessionErrorV1> {\n    opening(scope.parent)?;\n    run_rooted_construction_with_v1("
+      ],
+      [
+        "            opening(scope.parent)?;\n            work(scope, entry)",
+        "            work(scope, entry)"
+      ]
+    ]
+  },
+  {
+    "name": "retained-history",
+    "path": "crates/fe2o3-kfd/src/queue.rs",
+    "test": "queue::tests::borrowed_operation_preflight_reserves_retained_queue_history_without_observation",
+    "assertion": "right: Err(JournalCapacity)",
+    "edits": [
+      [
+        ".checked_add(2 + retained)",
+        ".checked_add(2 + retained.saturating_sub(retained))"
+      ]
+    ]
+  }
+]

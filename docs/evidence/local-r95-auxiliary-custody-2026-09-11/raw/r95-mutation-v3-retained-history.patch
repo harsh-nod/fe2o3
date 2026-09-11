@@ -1,0 +1,11 @@
+--- a/crates/fe2o3-kfd/src/queue.rs
++++ b/crates/fe2o3-kfd/src/queue.rs
+@@ -1016,7 +1016,7 @@
+             .model
+             .history()
+             .len()
+-            .checked_add(2 + retained)
++            .checked_add(2 + retained.saturating_sub(retained))
+             .is_none_or(|needed| needed > MAX_QUEUE_HISTORY_ENTRIES_V1)
+         {
+             return Err(NativeQueueAdapterErrorV1::JournalCapacity);

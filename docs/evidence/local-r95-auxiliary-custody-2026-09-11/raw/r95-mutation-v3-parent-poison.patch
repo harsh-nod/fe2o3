@@ -1,0 +1,10 @@
+--- a/crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs
+@@ -30,7 +30,6 @@
+ 
+ impl ComputeAqlQueueSessionV1 {
+     fn take_for_terminal_auxiliary_construction_v1(&mut self) -> Self {
+-        self.poison_terminal();
+         let shell = Self {
+             engine: None,
+             key: self.key,

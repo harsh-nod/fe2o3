@@ -1,0 +1,33 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 20 tests
+
+running 1 test
+test queue_linux::tests::checked_creation_finalization_requires_healthy_admitted_runtime ... ok
+test queue_linux::tests::checked_creation_finish_disarms_once_after_runtime_admission ... ok
+test queue_linux::tests::payload_is_unmapped_at_event_destroy_boundary_before_later_cleanup ... ok
+test queue_linux::tests::process_runtime_context_rejects_cross_process_and_poisoned_joins ... ok
+test queue_linux::tests::destroy_event_setter_owns_the_wire_record_not_reference_bytes ... ok
+test queue_linux::tests::process_runtime_context_multiplexes_independent_queue_leases ... ok
+test queue_linux::tests::queue_exception_observation_cannot_be_reused ... ok
+test queue_linux::tests::runtime_queue_event_order_is_linear_and_hostile_reordering_fails ... ok
+test queue_linux::tests::shadow_plan_is_exact_and_hostile_geometry_fails_closed ... ok
+test queue_linux::tests::terminal_teardown_arm_clears_only_after_confirmed_success ... ok
+test queue_linux::tests::terminal_creation_arm_poisons_on_drop_or_unwind_and_disarms_only_on_success ... ok
+test queue_linux::tests::terminal_unpublished_cleanup_retains_metadata_and_rejects_publication ... ok
+test queue_linux::tests::timeout_diagnostic_admits_reason_but_rejects_malformed_shadow_state ... ok
+test queue_linux::tests::teardown_arm_attempt_after_admission_check_linearizes_after_lease ... ok
+test queue_linux::tests::unpublished_custody_unmaps_payload_on_early_return ... ok
+test queue_linux::tests::wait_and_payload_must_agree_and_unknown_reasons_are_rejected ... ok
+test queue_linux::tests::unpublished_payload_is_unmapped_when_final_admission_fails ... ok
+
+running 1 test
+
+running 1 test
+test queue_linux::tests::payload_release_failure_after_event_destroy_is_process_terminal ... ok
+test queue_linux::tests::unpublished_custody_cleanup_failure_is_process_terminal ... ok
+test queue_linux::tests::terminal_unpublished_cleanup_failure_aborts_instead_of_losing_custody ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 916 filtered out; finished in 0.25s
+

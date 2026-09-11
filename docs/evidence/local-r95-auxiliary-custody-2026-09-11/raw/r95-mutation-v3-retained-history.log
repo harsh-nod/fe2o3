@@ -1,0 +1,24 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.95s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::tests::borrowed_operation_preflight_reserves_retained_queue_history_without_observation ... FAILED
+
+failures:
+
+---- queue::tests::borrowed_operation_preflight_reserves_retained_queue_history_without_observation stdout ----
+
+thread 'queue::tests::borrowed_operation_preflight_reserves_retained_queue_history_without_observation' (1968984) panicked at crates/fe2o3-kfd/src/queue_tests.rs:1239:5:
+assertion `left == right` failed
+  left: Ok(())
+ right: Err(JournalCapacity)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::tests::borrowed_operation_preflight_reserves_retained_queue_history_without_observation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 935 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

@@ -1,0 +1,11 @@
+--- a/crates/fe2o3-kfd/src/queue_live.rs
++++ b/crates/fe2o3-kfd/src/queue_live.rs
+@@ -4161,7 +4161,7 @@
+     slots: &mut Vec<AuxiliaryComputeLaneSlotV1<T>>,
+     prepared: PreparedAuxiliaryComputeLaneSlotV1,
+ ) -> Result<CheckedAuxiliaryComputeLaneSlotV1<'_, T>, ComputeAqlQueueSessionErrorV1> {
+-    if prepare_auxiliary_compute_lane_slot_v1(slots)? != prepared {
++    if false && prepare_auxiliary_compute_lane_slot_v1(slots)? != prepared {
+         return Err(ComputeAqlQueueSessionErrorV1::Contract(
+             "compute queue lane destination changed",
+         ));

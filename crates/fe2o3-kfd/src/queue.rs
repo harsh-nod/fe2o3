@@ -1002,7 +1002,7 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
         }
     }
 
-    fn prepare_operation(&mut self) -> Result<(), NativeQueueAdapterErrorV1> {
+    fn preflight_operation(&self) -> Result<(), NativeQueueAdapterErrorV1> {
         if self.authority_poisoned {
             return Err(NativeQueueAdapterErrorV1::AuthorityPoisoned);
         }
@@ -1021,6 +1021,11 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
         {
             return Err(NativeQueueAdapterErrorV1::JournalCapacity);
         }
+        Ok(())
+    }
+
+    fn prepare_operation(&mut self) -> Result<(), NativeQueueAdapterErrorV1> {
+        self.preflight_operation()?;
         if self.opener_pid != std::process::id() || self.backend.opener_pid() != self.opener_pid {
             self.quarantine_all()?;
             return Err(NativeQueueAdapterErrorV1::ProcessChanged);

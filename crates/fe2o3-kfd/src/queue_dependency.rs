@@ -129,6 +129,17 @@ impl ComputeDependencySessionOwnerV1 {
         self.session_occurrence
     }
 
+    #[cfg(test)]
+    pub(super) fn custody_snapshot_for_test(&self) -> (u64, Option<u64>, Vec<(u64, usize)>) {
+        let mut active: Vec<_> = self
+            .active
+            .iter()
+            .map(|(epoch, owner)| (*epoch, owner as *const _ as usize))
+            .collect();
+        active.sort_unstable();
+        (self.session_occurrence, self.next_acceptance_epoch, active)
+    }
+
     pub(super) fn ensure_idle(&self) -> Result<(), ComputeDependencyTargetUseErrorV1> {
         if self.poisoned {
             return Err(ComputeDependencyTargetUseErrorV1::Poisoned);
