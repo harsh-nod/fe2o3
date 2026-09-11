@@ -1,10 +1,10 @@
-# A1/A2 Swarm Dispatch After Local R86
+# A1/A2 Swarm Dispatch After Signed R86
 
 Dispatch established by planning-only commit `32c1beff`, 2026-09-10, and refreshed
-by three read-only workers on 2026-09-11 against signed R85 and the locally
-accepted R86 whole-roster data conversion. The latest decomposition splits
-native construction custody into two prerequisites before DATA-ADOPT. This is
-the current assignment overlay for
+by three read-only workers on 2026-09-11 against the accepted R86 whole-roster
+data conversion, now signed and published to both topic remotes. The latest
+decomposition splits native construction custody into two prerequisites before
+DATA-ADOPT. This is the current assignment overlay for
 [next-wave dispatch](runtime-a1-a2-next-wave.md) and the
 [historical roadmap](runtime-a1-a2-swarm-plan.md). It supersedes their current
 assignment rows, not their packet-specific evidence or historical contracts.
@@ -14,11 +14,13 @@ update `2026-09-11T08:01:35Z` during this refresh. Later A3-A7 milestones remain
 
 ## Checkpoint And Ownership
 
-The current locally accepted implementation is R86's NATIVE-1 data-conversion portion, with
+The current accepted implementation is R86's NATIVE-1 data-conversion portion, with
 [final source evidence](evidence/local-r86-dispatch-retention-2026-09-11/README.md).
-Its signed implementation baseline is R85
-`9f8779faab169271d716f4a241f849fef0af3567`, on both repositories' topic branch
-`codex/r65-runtime-drain-versions`, not a main merge.
+Signed R86 is `1fa69f17e526e2b96ba69a22047f209c261c367e`, on both repositories'
+topic branch `codex/r65-runtime-drain-versions`, not a main merge.
+Its retained evidence records the source accepted at that commit, including
+the then-current documentation; this later dispatch-only refresh changes no
+runtime implementation or proof/hardware status.
 R83 implements private activation, nonflushing active custody, stream holds and
 explicit drain/shutdown retirement. Its
 [local evidence](evidence/local-r83-unpublished-lifecycle-2026-09-10/README.md)
@@ -103,9 +105,10 @@ implementation or recreating R83's existing phase/hold machinery.
    release native/charged custody. Integrate with Native's exact key/hold
    contract before ISSUE; do not introduce a second reply or result decoder.
 3. Resources: implement the isolated VER-1A Context journal and inventory every
-   mutation path. Reuse existing Context writer IDs; retain full logical
-   destination rosters before backend translation. Preflight capacity and
-   nonwrapping generations before an atomic multi-destination commit; test
+   mutation path. Reuse the existing Context identity allocator and submission
+   IDs; retain full logical destination rosters before backend translation.
+   Preflight capacity and nonwrapping generations before an atomic
+   multi-destination commit; test
    competing writers, stale completion and irreversible Unknown states.
    R65 graph-local history is not persistent version authority, and leases
    remain disabled until every VER-1B hook is integrated.
@@ -115,6 +118,82 @@ and acceptance. Native later takes fixture and native-budget harness reviews
 while Admission integrates ISSUE/COMPLETE. Resources takes domains, backing,
 residency and proof composition after the journal. These are queued handoffs,
 not concurrent edits or unattended implementation jobs.
+
+## Source-Grounded Work Orders
+
+These are the three dependency-ready implementation packets. The named workers
+have completed their read-only design reviews; Primary owns the following edits
+and acceptance runs. Proposed files and types below do not exist yet.
+
+### Native: NATIVE-1-CONTROL
+
+1. Introduce private `FixedDispatchPreparationCustodyV1` beside
+   `queue_dispatch_binding.rs`. Make preparation borrow the outer owner;
+   `PersistentFixedDispatchPreparationFailureV1`'s data-only result cannot
+   retain partial code/kernarg construction or survive unwind by itself.
+2. Root that owner before both persistent bind closures in
+   `queue_live/fixed_dispatch.rs`, including before `catch_unwind`. Add a
+   preparation variant to `PersistentComputeTerminalNativeCustodyV1` in
+   `persistent_compute.rs`. Preserve the original input descriptors, successful
+   code prefix, current control typestate and completed dispatch result.
+3. Inject error and panic at allocation, materialization, seal, map, retain and
+   closing-retake boundaries. Assert exact custody/charges, original panic
+   payload, zero publication and no retry authority from uncertainty. Exercise
+   the production sequencer with fake-native records; an early-move/drop mutation
+   must fail. Full source gates precede NATIVE-2 constructor integration.
+
+Native hands Admission an exact nonpublishing adoption identity and retirement
+outcome, not a completion receipt. Reuse the existing allocator, planner and
+R86 conversion; do not invent a second native runtime.
+
+### Admission: COMPLETE-ORACLE
+
+Introduce a private completion contract beside `async_engine/generated_operation`
+and focused fixtures under `async_engine/tests/preparation_tests`. Join the exact
+preparation/source Arc, Context generation, runtime/backend submission, device,
+stream/lane, publication occurrence and complete allocation-incarnation roster.
+Reuse the reserved completion producer/consumer and R85 decoder, not a second
+readback allocation, result decoder or completion cell.
+
+| Candidate or outcome | Required fixture result |
+| --- | --- |
+| Pending, rejected observation, foreign/stale candidate or replay | No decode, disposal, republish or reply duplication; retain the actual operation owner. |
+| Exact successful completion | Complete readback, closing currentness and native disposition checks precede one R85 call and one existing reply completion. |
+| Conclusive failure or quiescence without result | No typed output; release only after conclusive native retirement, then one failure reply. |
+| Publication uncertainty, currentness loss or partial retirement | No readiness or refund of possibly live custody; an error reply is not disposal authority. |
+| Decoder panic, dropped observer, Stop or shutdown | Preserve charged/native ownership and one-reply semantics before and after decoder transfer. |
+
+Mutate each identity/roster coordinate independently, including byte-identical
+foreign storage and late output mismatch. After packet transfer, use immutable
+`RuntimeGfx942GeneratedSourceV1` validation: `source_mut().validate()` requires
+control to remain present and is not the completion path. Scripted outcomes are
+not native receipts. ISSUE remains gated on complete native adoption.
+
+### Resources: VER-1A
+
+Introduce the isolated `context/versions.rs` journal, focused tests and matching
+bounded model/proof work. Use `Context::next_id` for synchronous writer identity
+and the exact `RuntimeSubmissionIdV1` for asynchronous writes. Preallocate scratch
+and preflight the complete deduplicated destination set before any state change;
+finish also validates the full writer roster before committing any member.
+Unknown stays unavailable until allocation retirement. Available records describe
+mutation lineage, not proof of initialized or correct contents.
+
+| Existing boundary | Required inventory/hook contract |
+| --- | --- |
+| Allocation, generated shell registration and disposal | Transactional exact-identity membership; failed disposal retains entries. |
+| `write_allocation` | Begin after range validation, before backend effects; settle error/panic conservatively. |
+| Prepared ordinary/graph copy and `peer_copy` | Preserve logical destination/device before backend translation; reuse the actual submission identity. |
+| Prepared ordinary/snapshot/graph/atomic/collective launch | Retain a complete logical mutation roster. Caller-declared access alone cannot justify a precise kernel write set. |
+| `transition_submission_status`, quiescence, cancel and cleanup | Settle before callbacks; Pending is not another mutation and quiescence is not successful content production. |
+| Terminal/protocol/panic/currentness loss and future generated issue/completion | Invalidate pending/reusable state; host preparation/decoding does not supply a native mutation hook. |
+
+Test competing writers, overlapping destinations, foreign/retired identities,
+capacity and first/middle/last epoch exhaustion, stale/wrong-writer completion,
+late roster mismatch, backend error/panic, cancellation and allocation reuse.
+Pure admission rejection must leave all entries unchanged and call no backend.
+VER-1B must cover every inventory hook before VER-2 enables cross-run leases.
+R65 graph-local proofs do not establish this whole-set transaction.
 
 ## DATA-SHELL Acceptance Checklist
 

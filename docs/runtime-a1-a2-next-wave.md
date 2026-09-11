@@ -1,8 +1,8 @@
 # A1/A2 Next-Wave Dispatch
 
-Dispatch refreshed 2026-09-11 after the three-agent review and local acceptance
-of R86's NATIVE-1 data-conversion portion on signed R85
-`9f8779faab169271d716f4a241f849fef0af3567`.
+Dispatch refreshed 2026-09-11 after the three-agent review and signed publication
+of R86's NATIVE-1 data-conversion portion as
+`1fa69f17e526e2b96ba69a22047f209c261c367e` on both topic remotes.
 The [R86 evidence](evidence/local-r86-dispatch-retention-2026-09-11/README.md)
 records all seventeen final source gates, 2,401 runtime tests per GNU/musl target,
 258 GNU and 141 musl host tests, and thirteen new KFD conversion regressions.
@@ -13,6 +13,9 @@ control/build ownership above R86 followed by NATIVE-2 constructor custody, inde
 runtime COMPLETE-ORACLE above R85, and VER-1A before native
 integration. Its checklist and batches supersede older next-assignment rows
 below; local shell acceptance is not native execution or adapter refinement.
+The [source-grounded work orders](runtime-a1-a2-swarm-dispatch-r83.md#source-grounded-work-orders)
+record the first packet in each lane, concrete integration points and failure
+matrices. This dispatch-only follow-up changes no R86 source acceptance.
 The preceding signed R81 checkpoint is
 `72bec68d2968f4815f23c84d41ed6510f433ba96`, on both topic-branch remotes.
 R82 now implements [pristine dispatch abort](runtime-pristine-dispatch-abort-v1.md)
@@ -534,8 +537,8 @@ fixture drain do not require that production handoff.
 
 | Stage | Ready work | Gate before advancing |
 | --- | --- | --- |
-| 0: through R83 local substrate | Charged results, retained preparation, complete source/readback reservation, ordinary host-cache policy, pristine abort and private unpublished lifecycle | Retained packet-specific source gates and property proofs; R82/R83 add no new proof, and native/whole-executor acceptance remains separate |
-| 1: ready local packets | DATA-SHELL and native ADOPT integration; independent COMPLETE-ORACLE, VER-1A, short/long fixtures and native-budget harness | Freeze cross-lane interfaces; complete deterministic rejection, ownership, failure and oracle tests; no native adoption before composed custody |
+| 0: through signed R86 local substrate | Charged results, retained preparation, source/readback reservation, host-cache policy, pristine abort, private unpublished lifecycle, DATA-SHELL, R85 host readback and R86 whole-roster data conversion | Retained packet-specific source gates; R82-R86 add no new adapter proof. Native/whole-executor and hardware acceptance remain separate |
+| 1: ready local packets | NATIVE-1-CONTROL then NATIVE-2; independent COMPLETE-ORACLE, VER-1A, short/long fixtures and native-budget harness | Freeze cross-lane interfaces; complete deterministic ownership/failure/oracle tests. DATA-ADOPT follows complete native construction custody; DATA-SHELL is already accepted |
 | 2: compose ownership | Broader native profiles, domains, control/code budgets, versions and GEN-2B | No duplicate backing debit, unbounded child accounts, stale input authority or detached decoder; preserve progress headroom |
 | 3: qualify A1/A2 | Out-of-order native depth, repeated generated graphs, active drain, memory pressure and overlap | Admitted workloads, exact compiler evidence for production generated cells, signed full-output captures and cleanup; existing copy/overlap campaigns may run earlier |
 | 4: measure and close | Matched KFD/HSA/HIP producers, executable proof composition and exit audit | Predeclared workloads/thresholds, resource/CPU/tail metrics, separate device-timeline evidence for physical overlap; every A1/A2 acceptance cell resolved |
