@@ -1,21 +1,23 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Current locally accepted implementation: R89 CONTROL-2 preparation custody,
-on signed R88 plus planning commit `0a040ece9816335fe4ad0178df9213eb84eca108`.
+Current locally accepted implementation: signed R89 CONTROL-2 preparation custody,
+`7867f1d5fa8ac3e20e33226c8dcab54d7df31908`, on both topic remotes, above
+signed R88 plus planning commit `0a040ece9816335fe4ad0178df9213eb84eca108`.
 Its [evidence](evidence/local-r89-dispatch-preparation-2026-09-11/README.md) records
 all seventeen source gates and auxiliary checks, with 5,627 unchanged source
 identities, 2,454 runtime tests per GNU/musl target, nineteen new KFD tests
 and three rejected mutations. Historical R87/R88 evidence remains unchanged.
 The [current dispatch](runtime-a1-a2-swarm-dispatch-r83.md) assigns native
 CONTROL-3A retake,
-3B validation/attachment and 3C retry classification, followed by NATIVE-2
-constructor custody; independent
+3B early checks/installation, 3C retry classification and 3D retained-control
+replay, followed by NATIVE-2A/B/C constructor custody; independent
 CO-1/2/3 completion fixtures and VER-1A.1 through .5 journal work.
 R88 retains successful tokens across model projection. R89 now retains full
 preparation, including original data/premises, generation, code/kernarg stages
 and completed dispatch through persistent construction/retake. Full outer
-bind validation/attachment, simultaneous panic handling and constructor custody
-remain open. Neither packet adds native adoption or control budgets. The
+bind checks/installation, retained-control replay, simultaneous panic handling
+and constructor custody remain open. Neither packet adds native adoption or
+control budgets. The
 [checkpoint](runtime-a1-a2-swarm-dispatch-r83.md#checkpoint-and-ownership)
 records the exact accepted scope and remaining gates.
 R85's private host decoder is implemented; runtime COMPLETE
@@ -363,7 +365,7 @@ new permission for workers to edit the shared tree.
 
 The table in this section is the historical R82 handoff, not the current
 execution queue. The [current assignments](runtime-a1-a2-swarm-dispatch-r83.md#first-parallel-packets)
-advance from accepted R89 to CONTROL-3A/B/C and NATIVE-2 before DATA-ADOPT,
+advance from accepted R89 to CONTROL-3A/B/C/D and NATIVE-2A/B/C before DATA-ADOPT,
 and assign independent CO-1/2/3 and VER-1A work. R83 already supplies the private
 lifecycle substrate; its native integration is still pending.
 
