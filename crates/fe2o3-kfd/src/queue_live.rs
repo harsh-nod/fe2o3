@@ -45,10 +45,12 @@ use super::dispatch_binding::{
     Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1, Gfx942DispatchPollV1,
     Gfx942DispatchPollWithProgressV1, Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1,
     Gfx942FixedDispatchStorageIdentityV1, Gfx942RecycledDispatchWriteRequestV1,
-    PersistentFixedDispatchControlIdentityV1, ReturnedDispatchDataV1, TypedKernargImageV1,
+    PersistentFixedDispatchControlIdentityV1, PristineDispatchAbortV1,
+    PristineDispatchContinuationV1, ReturnedDispatchDataV1, TypedKernargImageV1,
     persistent_fixed_dispatch_control_identity_v1, prepare_dispatch_resources,
     prepare_persistent_fixed_dispatch_resources_v1, prepare_public_fixed_dispatch_resources,
     prepare_public_fixed_dispatch_resources_after_detach,
+    prepare_public_fixed_dispatch_resources_after_pristine_abort_v1,
     prepare_public_fixed_dispatch_resources_after_recycle,
     prepare_three_binding_persistent_fixed_dispatch_resources_v1,
     three_binding_persistent_fixed_dispatch_control_identity_v1, unwrap_completed,
@@ -236,6 +238,9 @@ pub use compute_sdma_coexistence::Gfx942R66NativeObservationFailureV1;
 mod dispatch;
 #[path = "queue_live/fixed_dispatch.rs"]
 mod fixed_dispatch;
+#[path = "queue_live/pristine_abort.rs"]
+mod pristine_abort;
+use pristine_abort::UnpublishedDispatchStateV1;
 #[path = "queue_live/sdma_logical_mux.rs"]
 mod sdma_logical_mux;
 #[path = "queue_live/sdma_multi_queue.rs"]
@@ -3750,6 +3755,7 @@ pub struct ComputeAqlQueueSessionV1 {
     dependency_owner: ComputeDependencySessionOwnerV1,
     terminal_dependency: Option<Box<TerminalComputeDependencyTargetUseV1>>,
     dispatch: Option<DispatchResourceOwnerV1>,
+    unpublished_dispatch: UnpublishedDispatchStateV1,
     detached_data_count: usize,
     detached_dispatch_generation: Option<u64>,
     detached_data_identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
@@ -4121,6 +4127,7 @@ struct ComputeAqlQueueLaneStateV1 {
     completion_signals: Option<CompletionSignalAuthority>,
     completion_owner: CompletionSignalArenaOwnerV1,
     dispatch: Option<DispatchResourceOwnerV1>,
+    unpublished_dispatch: UnpublishedDispatchStateV1,
     detached_data_count: usize,
     detached_dispatch_generation: Option<u64>,
     detached_data_identities: Vec<Gfx942FixedDispatchStorageIdentityV1>,
@@ -4237,6 +4244,16 @@ fn auxiliary_compute_lanes_are_quiescent_v1(
 ) -> bool {
     lanes.iter().all(|slot| {
         slot.state.as_ref().is_none_or(|state| {
+            if !state.unpublished_dispatch.is_clear() {
+                return state.unpublished_dispatch.quiescent(
+                    state.completion_owner.ensure_releasable().is_ok(),
+                    state.dispatch.is_some(),
+                    state.detached_dispatch_generation,
+                    state.detached_data_count,
+                    state.detached_data_identities.len(),
+                    state.detached_next_insertion_index,
+                );
+            }
             auxiliary_compute_lane_quiescence_from_facts_v1(
                 state.completion_owner.ensure_releasable().is_ok(),
                 state
@@ -4300,6 +4317,21 @@ fn preflight_auxiliary_compute_lane_destroy_v1(
     state: &ComputeAqlQueueLaneStateV1,
 ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
     state.completion_owner.ensure_releasable()?;
+    if !state.unpublished_dispatch.is_clear() {
+        return if state.detached_data_count == 0
+            && state.unpublished_dispatch.quiescent(
+                true,
+                state.dispatch.is_some(),
+                state.detached_dispatch_generation,
+                state.detached_data_count,
+                state.detached_data_identities.len(),
+                state.detached_next_insertion_index,
+            ) {
+            Ok(())
+        } else {
+            Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into())
+        };
+    }
     if let Some(dispatch) = state.dispatch.as_ref() {
         dispatch.ensure_releasable()?;
     }
@@ -4347,6 +4379,13 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
         &mut self,
     ) -> Result<Gfx942DetachedFixedDispatchV1, ComputeAqlQueueSessionErrorV1> {
         self.session.detach_recycled_fixed_dispatch()
+    }
+
+    /// Returns complete data from a strictly pristine recipe, without a completion receipt.
+    pub fn abort_unpublished_fixed_dispatch_v1(
+        &mut self,
+    ) -> Result<Vec<Gfx942FixedDispatchDataV1>, ComputeAqlQueueSessionErrorV1> {
+        self.session.abort_unpublished_fixed_dispatch_v1()
     }
 
     /// Releases prepare-once code and kernarg control after persistent data
@@ -5036,6 +5075,10 @@ impl ComputeAqlQueueSessionV1 {
         core::mem::swap(&mut self.completion_signals, &mut lane.completion_signals);
         core::mem::swap(&mut self.completion_owner, &mut lane.completion_owner);
         core::mem::swap(&mut self.dispatch, &mut lane.dispatch);
+        core::mem::swap(
+            &mut self.unpublished_dispatch,
+            &mut lane.unpublished_dispatch,
+        );
         core::mem::swap(&mut self.detached_data_count, &mut lane.detached_data_count);
         core::mem::swap(
             &mut self.detached_dispatch_generation,
@@ -6233,6 +6276,7 @@ impl ComputeAqlQueueSessionV1 {
                 completion_signals: Some(completion_signals),
                 completion_owner,
                 dispatch: Some(dispatch),
+                unpublished_dispatch: UnpublishedDispatchStateV1::default(),
                 detached_data_count: 0,
                 detached_dispatch_generation: None,
                 detached_data_identities: Vec::new(),
@@ -6613,6 +6657,7 @@ impl ComputeAqlQueueSessionV1 {
             })?,
             terminal_dependency: None,
             dispatch,
+            unpublished_dispatch: UnpublishedDispatchStateV1::default(),
             detached_data_count: 0,
             detached_dispatch_generation: None,
             detached_data_identities: Vec::new(),
@@ -10841,6 +10886,12 @@ impl ComputeAqlQueueSessionV1 {
         data: Gfx942FixedDispatchDataV1,
         bridge: Gfx942SdmaDispatchDataBridgeV1,
     ) -> Result<Gfx942SdmaBufferV1, Gfx942SdmaDispatchDataDemotionFailureV1> {
+        if !self.unpublished_dispatch.is_clear() {
+            return Err(Gfx942SdmaDispatchDataDemotionFailureV1 {
+                error: Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
+                recovered: Some((data, bridge)),
+            });
+        }
         if let Err(error) = self.require_sdma_enabled() {
             return Err(Gfx942SdmaDispatchDataDemotionFailureV1 {
                 error,
@@ -12468,6 +12519,7 @@ impl ComputeAqlQueueSessionV1 {
 
     fn poison_terminal(&mut self) {
         self.terminal_poisoned = true;
+        self.unpublished_dispatch.continuation = None;
         self.dependency_owner.poison();
         self.completion_owner.poison_owner();
         if let Some(dispatch) = self.dispatch.as_mut() {
@@ -12662,6 +12714,19 @@ impl ComputeAqlQueueSessionV1 {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "terminal queue session requires process teardown",
             ));
+        }
+        if !self.unpublished_dispatch.is_clear()
+            && (!matches!(mode, QueueDestroyModeV1::Release)
+                || !self.unpublished_dispatch.quiescent(
+                    true,
+                    self.dispatch.is_some(),
+                    self.detached_dispatch_generation,
+                    self.detached_data_count,
+                    self.detached_data_identities.len(),
+                    self.detached_next_insertion_index,
+                ))
+        {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
         if self.has_any_persistent_compute_attachment_v1() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
@@ -16788,7 +16853,7 @@ mod tests {
         }
     }
 
-    fn persistent_compute_cancellation_test_session(
+    pub(super) fn persistent_compute_cancellation_test_session(
         queue: QueueKeyV1,
         persistent_compute: Option<PersistentComputeAttachmentV1>,
         release: Option<(u64, Vec<Gfx942FixedDispatchDataV1>)>,
@@ -16805,6 +16870,7 @@ mod tests {
             dependency_owner: ComputeDependencySessionOwnerV1::new(queue.id.0).unwrap(),
             terminal_dependency: None,
             dispatch: None,
+            unpublished_dispatch: UnpublishedDispatchStateV1::default(),
             detached_data_count: 0,
             detached_dispatch_generation: None,
             detached_data_identities: Vec::new(),
@@ -17350,7 +17416,9 @@ mod tests {
         );
     }
 
-    fn compute_lane_state_for_multi_inflight_test(queue: QueueKeyV1) -> ComputeAqlQueueLaneStateV1 {
+    pub(super) fn compute_lane_state_for_multi_inflight_test(
+        queue: QueueKeyV1,
+    ) -> ComputeAqlQueueLaneStateV1 {
         ComputeAqlQueueLaneStateV1 {
             key: queue,
             doorbell: None,
@@ -17359,6 +17427,7 @@ mod tests {
             completion_owner:
                 CompletionSignalArenaOwnerV1::for_persistent_compute_cancellation_test(queue),
             dispatch: None,
+            unpublished_dispatch: UnpublishedDispatchStateV1::default(),
             detached_data_count: 0,
             detached_dispatch_generation: None,
             detached_data_identities: Vec::new(),

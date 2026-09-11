@@ -1,7 +1,7 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Current dispatch baseline: signed `72bec68d2968f4815f23c84d41ed6510f433ba96`
-(R81, verified on both topic-branch remotes), reviewed 2026-09-10. Historical
+Current implementation: local R82 on signed dispatch baseline
+`3c534e88843a8fdd64a5b3397ec6937ce3696b48`, reviewed 2026-09-10. Historical
 packet validation and exact source/evidence identities are retained below.
 This decomposes the remaining local
 A1/A2 work in
@@ -13,8 +13,8 @@ The checkpoint history distinguishes local
 implementation from hardware acceptance; queued tickets are not completed work
 or unattended background jobs.
 
-The [next-wave dispatch](runtime-a1-a2-next-wave.md) is the concise current
-ticket split from the three-agent read-only audit against signed R81.
+The [next-wave dispatch](runtime-a1-a2-next-wave.md#next-three-assignments) is the
+current ticket split from the three-agent read-only audit after local R82.
 It records generated-admission/result ownership, independent native fixtures,
 the missing native-budget qualification harness and completion gates. That
 planning audit adds no runtime implementation or hardware acceptance; the
@@ -35,10 +35,12 @@ MEM-2B-HOST implementation assignments below are historical; Resources next
 takes proof/qualification handoff, account domains and persistent versions.
 Native review also identified a pristine never-published dispatch abort/detach
 prerequisite for reusable bound ADOPT. Recycled detach cannot stand in for it.
-The refreshed first handoffs are Native's R82-ABORT, Admission's ADOPT-LIFE
-contract/fixtures and Resources' independent VER-1A bounded Context journal.
-All three read-only review turns completed; Primary owns implementation and
-integration. This dispatch refresh adds no runtime implementation or acceptance.
+R82 now implements [pristine abort](runtime-pristine-dispatch-abort-v1.md), with
+[local evidence](evidence/local-r82-pristine-abort-2026-09-10/README.md).
+The next handoffs are Native's DATA-ADOPT, Admission's ADOPT-LIFE contract/fixtures
+and Resources' independent VER-1A journal. The three read-only reviews completed;
+Primary owns implementation and integration. R82 has no Linux qualification or
+new authenticated Verus proof. The earlier dispatch refresh added no runtime code.
 
 The [R65 contract](runtime-async-drain-versions-v1.md) is the current baseline:
 cooperative drain, reply-count admission and graph-local version lineage are
@@ -268,7 +270,7 @@ publication/completion, executable refinement and performance remain open.
 | GEN-2B-1 | Inert Send factory transport, owner-local operation registry, shutdown/quarantine retention and independent reply disposal | Context-bound generated authority, persistent publication/readback, R73 byte-owner integration and whole-executor refinement |
 | GEN-2B-2 | Immutable full-currentness retained-device scope, exact Context/native binding and nonexecuting host invocation | Live pre/post-bootstrap scope qualification, protected production construction, operation adoption/publication and whole-adapter refinement |
 | GEN-2B-3 projection | Complete consuming fixed-host recipe, exact source/hidden-byte equivalence, native policy preflight and charged host custody | One-shot adoption, publication-time authority, timeout behavior, complete readback, unsupported fixed profiles and executable refinement |
-| GEN-2B-3 native hooks | Borrowed coherent initialization/insertion/replacement and ordinary HostVisible copy removal, with unchanged native custody paths | Pristine abort and complete-roster adoption, native qualification and executable refinement; R79/R80 supply host-only owner/source/reservations |
+| GEN-2B-3 native hooks | Borrowed coherent initialization/insertion/replacement and ordinary HostVisible copy removal, with unchanged native custody paths | Complete-roster adoption, native qualification and executable refinement; R79/R80 supply host-only owner/source/reservations and R82 supplies locally validated pristine abort |
 | B3-OWNER / R79 | Finite preparation, parked Context-bound custody, opaque tickets and owner-thread discard | R80 supplies source/readback reservations; active adoption/publication and complete charged results remain open, as do positive protected construction and adapter proof |
 | B3-DATA-REP / B4-RESERVE / R80 | Complete borrowed source roster, original-account readback staging, exact reserved ticket and bounded acknowledgement/completion cells | Native adoption, publication, decoder/completion integration, positive protected construction and whole-adapter refinement |
 | DRN-3A/B | Earlier accepted-submit/observation/cancellation regressions plus twelve DRN-3B graph, operation/waiter, capture and Stop scenarios | Active-work hardware drain and whole-executor refinement |
@@ -311,7 +313,7 @@ not proof of simultaneous GPU execution.
 
 | Lane | Assigned agent | Implementation backlog |
 | --- | --- | --- |
-| Native execution and qualification | `r66_native_coexistence` | R82 pristine abort, then GEN-2B-3 native adoption; independent SCALE-1 fixtures, MEM-QUAL-HARNESS, existing coexistence/drain hardware acceptance, SCALE-CAP/2/3 and matched performance |
+| Native execution and qualification | `r66_native_coexistence` | GEN-2B-3 native adoption on local R82; independent SCALE-1 fixtures, MEM-QUAL-HARNESS, existing coexistence/drain hardware acceptance, SCALE-CAP/2/3 and matched performance |
 | Resources and versions | `r66_coexistence_model` | R81 host-cache proof/qualification handoff, broader N1B profiles, account domains, MEM-3 through MEM-5 and VER-1/2; existing credit/backing primitives need composition and hardware acceptance, not reimplementation |
 | Admission and drain | `r66_runtime_coexistence` | GEN-2B-3 through -6 adoption/publication, charged completion, public async API and generated graph/drain; existing copy/drain qualifiers need signed acceptance |
 | Integration and proof composition | Primary | PRF-1/2: shared Context hooks, executable refinement, authenticated proof roster, cross-review, hardware scheduling and publication |
@@ -335,7 +337,7 @@ GEN-2B-1 owner-local drivers/retention. R76 implements reusable Context/device
 preparation. R77 adds checked nonexecuting projection; R78 supplies borrowed
 coherent initialization hooks. R79 supplies the locally validated nonpublishing
 owner; R80 supplies complete-roster representation and readback/reply reservations.
-R81 implements ordinary host-cache limits. Native now takes R82 pristine abort,
+R81 implements ordinary host-cache limits; R82 implements pristine abort. Native takes DATA-ADOPT,
 Admission takes active adopting-state integration, and Resources takes the
 independent bounded version journal. Fixtures and qualification harnesses remain
 independent work. The
@@ -350,10 +352,10 @@ hardware remain primary-owned.
 
 | Lane | Next bounded packet | Dependency and exit gate |
 | --- | --- | --- |
-| Native | R82-ABORT, then DATA-ADOPT; independent SCALE-1A-FIXTURE and qualification harnesses | Preserve exact unpublished continuation and complete data through control cleanup. ADOPT requires R82, active-owner integration and existing R80 reservations; no publication. Fixtures need full-output oracles |
+| Native | DATA-ADOPT; independent SCALE-1A-FIXTURE and qualification harnesses | Local R82 preserves unpublished continuation/data; ADOPT still requires active-owner integration and existing R80 reservations. No publication. Fixtures need full-output oracles |
 | Resources | VER-1A journal; review R82/COMPLETE; then account domains, N1B and host-cache proof/qualification | Whole-allocation invalidation, nonwrapping versions and bounded unknown states first; every mutation must be covered before cross-run leases. Do not duplicate R80 readback or R81 cache policy |
 | Admission | ADOPT-LIFE, then B3-ISSUE, B4-COMPLETE, B5-API and B6-GRAPH/DRAIN | Same rooted owner becomes non-discardable and joins lane/graph/drain/cleanup tracking before effects. DATA-ADOPT precedes issue; charged completion precedes public API. Production execution requires exact compiler/machine evidence |
-| Primary | R82 implementation and shared integration; incremental proof and signed OVL/DRN/MEM campaigns | Cross-review and current-source gates for each implementation packet. MEM campaigns first need the pressure harness. Hardware requires idle selected GPU, real binary/census and complete cleanup. Do not promote fixtures to production authority |
+| Primary | ADOPT-LIFE/DATA-ADOPT integration after local R82; incremental proof and signed OVL/DRN/MEM campaigns | Cross-review and current-source gates for each implementation packet. MEM campaigns first need the pressure harness. Hardware requires idle selected GPU, real binary/census and complete cleanup. Do not promote fixtures to production authority |
 
 ### R71 Implementation Ownership
 
@@ -395,7 +397,7 @@ bytes must never become a result.
 
 | Lane | Ordered follow-on packets | Gates that cannot be skipped |
 | --- | --- | --- |
-| Native | R82-ABORT then DATA-ADOPT; independent SCALE-1A, R78 rebound, MEM-QUAL-HARNESS and R76 native coverage; N1B/MEM-3/4 hooks; SCALE-CAP/2/3 | Reuse the actual retained device/queue. R81 host-cache policy needs qualification, not reimplementation; capacity needs real backing/control/slot budgets and admitted workloads; thousands queued is not thousands native-retained; device timeline required for physical overlap |
+| Native | DATA-ADOPT after local R82; independent SCALE-1A, R78 rebound, MEM-QUAL-HARNESS and R76 native coverage; N1B/MEM-3/4 hooks; SCALE-CAP/2/3 | Reuse the actual retained device/queue. R81 cache and R82 abort need qualification, not duplicate implementation; capacity needs real backing/control/slot budgets and admitted workloads; thousands queued is not thousands native-retained; device timeline required for physical overlap |
 | Resources | VER-1A/B; MEM-DOM-1; MEM-N1B; MEM-3A/B; MEM-4A/B; VER-2; MEM-5 closure; host-cache proof/qualification review alongside each packet | Independent journal/host-image cores may move earlier. Cached residency stays charged; compound native creation adopts exact MEM-TXN-1 members without double charging; parent/bootstrap/quarantine bounds precede aggregate claims |
 | Admission | ADOPT-LIFE; B3-ISSUE; B4-COMPLETE; B5-API; B6-GRAPH/DRAIN; signed DRN-2A support and fixture drain independently | Copy/fixture qualification can precede production GEN-2; positive generated construction/execution requires exact compiler/machine evidence; cross-run reuse needs VER-1/2; blocking must join the same async path |
 | Primary | OVL-QUAL-2 signed campaign; DRN-2 signed campaign; incremental PRF-1; PRF-2 exit audit and publication | Idle selected GPU and independent cleanup; complete output/identity audits; keep implementation, proof, CPU, fixture hardware, production hardware and performance statuses separate |
@@ -659,7 +661,8 @@ or fixture results exist. None of the rows establishes runtime-wide parity.
 | GEN-2B-3 projection | R77 complete nonexecuting fixed-host projection and Context carrier integration | No new theorem; native/whole-transform refinement open | Exact identity/roster/hidden bytes, pointer/capacity retention, native policy rejection and charged disposal tests | No native work; unsupported fixed profiles remain open | Open | Unmeasured |
 | B3-OWNER / R79 | Finite preparation, parked custody, opaque ticket and discard implemented with local gates | No new adapter proof | Eighteen new runtime cases and one host wiring test; focused 204-test async suite and full source gates pass; actual R73 engine-accounting integration unqualified | Nonexecuting host custody only | Positive protected construction open | Unmeasured |
 | B3-DATA-REP / B4-RESERVE / R80 | Complete borrowed source, same-account readback and finite exact-ticket reservation implemented locally | No new adapter proof | Actual charged-storage and separate runtime ticket/owner tests plus seventeen source gates pass | Nonexecuting host custody only | Positive protected construction open | Unmeasured |
-| R82-ABORT / ADOPT-LIFE | Missing; next reviewed native/owner contracts | Existing recycle/epoch proofs do not prove pristine abort or active adoption | Exact generation, full roster, cleanup/retake failure and owner/lane tests required | Signed same-queue abort/rebind and adoption cleanup open | Open | Unmeasured |
+| R82-ABORT | Pristine abort, exact continuation, failure escrow and lane/rebind guards implemented locally | No new proof; existing recycle/epoch proofs do not prove this transition | Nineteen focused tests: actual epoch state, fake-native control/data records and scripted queue/retake/settlement; no Linux construction | Signed same-queue abort/rebind and disposal open | Open | Unmeasured |
+| ADOPT-LIFE | Missing; next active-owner contract | Active adoption composition open | Before-effect lane/graph/drain custody tests required | Adoption cleanup open | Open | Unmeasured |
 | GEN-2B-3 adoption, -4..6 | Native adoption/publication, completion/results, public async API and generated graph/drain integration open | Compiler evidence and async composition open | Publication/retirement, wake/retry and composed generated shutdown matrix open | Fixtures cannot fill production cells | Open | Unmeasured |
 | DRN-1/2/3 | R65 drain, DRN-1A capture and DRN-3A/B failure composition exist | R69 range guard only; whole drain/executor refinement open | R69 tests plus twelve DRN-3B operation/waiter, graph, exhaustion and Stop scenarios | R65 idle only; DRN-2 outstanding-work open | Open | Unmeasured |
 | DRN-2A | Eight-cell copy qualifier/checker/runner | No whole-drain or native refinement proof | Eight observer tests, actual scripted async-copy/pending-poll regression and seventeen checker/runner tests | Signed outstanding-work campaign open | Generated cells require GEN-2 | Unmeasured |
@@ -1148,7 +1151,7 @@ merging to either main branch.
 | Follow-on, R76 packet | Immutable retained-device scope, full currentness and queue/VM guard review | Exact identity and payload-before-credit review | Runtime/host Context binding and nonescaping interface review | Shared scope/host implementation and local gates; native bootstrap and production compiler acceptance remain open |
 | Follow-on, R77 packet | Complete fixed-host projection, canonical hidden/layout validation and mechanics transfer review | No-copy storage, original credits and disposal-order review | Context carrier integration and source-identity review | Source gates/evidence; no native adoption, deadline or completion acceptance |
 | Follow-on, R78 packet | Borrowed coherent initialization/insertion/replacement and fault-envelope review | Exact padded debit, currentness, retained-prefix and refund review | Ordinary HostVisible copy removal and source-lifetime review | Local gates/evidence; full generated adoption and native initial/rebound qualification remain open |
-| Next dependency-ready packet after R81 | R82-ABORT then DATA-ADOPT; independent SCALE-1A-FIXTURE, R78 rebound and MEM-QUAL harnesses; R76 native acceptance | VER-1A journal; R82/COMPLETE review; host-cache proof/qualification; then MEM-DOM-1 and N1B | ADOPT-LIFE; B3-ISSUE after DATA-ADOPT; then completion/API/graph integration using existing R80 reservation | Implement R82 and integrate reviewed handoffs; own edits/shared hooks; OVL-QUAL-2 and DRN-2A signed campaigns; native-budget hardware after its new harness; compiler handoff |
+| Next dependency-ready packet after local R82 | DATA-ADOPT; independent SCALE-1A-FIXTURE, R78 rebound and MEM-QUAL harnesses; R76 native acceptance | VER-1A journal; COMPLETE review; host-cache/abort proof and qualification; then MEM-DOM-1 and N1B | ADOPT-LIFE; B3-ISSUE after DATA-ADOPT; then completion/API/graph integration using existing R80 reservation | Integrate reviewed adoption handoffs; own edits/shared hooks; OVL-QUAL-2 and DRN-2A signed campaigns; native-budget hardware after its new harness; compiler handoff |
 | 3, bounded local integration | MEM-3/4 native hooks, then SCALE-CAP | MEM-3A/B, MEM-4A/B, VER-1/2 and MEM-5 closure | Compose GEN-2B with resource/version owners; DRN-2 fixture campaign support | Incremental PRF-1; production GEN-2 requires matching compiler/machine evidence |
 | 4, acceptance campaigns | SCALE-2 depth/out-of-order, then SCALE-3 producers/measurements | Budget/version stress and independent review | Repeated generated graphs and active/failure drain | PRF-2, full A1/A2 exit audit and signed dual-remote publication |
 

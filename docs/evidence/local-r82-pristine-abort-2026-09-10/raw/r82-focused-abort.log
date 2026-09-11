@@ -1,0 +1,26 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 19 tests
+test queue::dispatch_binding::pristine_abort::tests::pristine_continuation_preserves_exact_next_generation_and_changes_occurrence ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_rejects_actual_cancelled_and_completed_epoch_histories ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_abort_releases_only_control_and_preserves_all_storage_variants ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_rejection_checks_every_slot_and_does_not_mutate ... ok
+test queue::live::pristine_abort::tests::pristine_abort_cleanup_error_terminalizes_queue_and_process ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_abort_rejects_malformed_premises_before_native_effects ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_abort_rejects_partial_and_malformed_gpu_unmap_for_each_control ... ok
+test queue::live::pristine_abort::tests::pristine_abort_cleanup_panic_survives_second_panic_and_keeps_custody ... ok
+test queue::live::pristine_abort::tests::pristine_abort_closing_failure_keeps_complete_terminal_custody ... ok
+test queue::live::pristine_abort::tests::pristine_rebind_constructor_rejection_is_terminal_without_retry_authority ... ok
+test queue::live::pristine_abort::tests::pristine_abort_auxiliary_state_restores_on_success_and_panic ... ok
+test queue::live::pristine_abort::tests::pristine_detached_quiescence_rejects_mixed_or_incomplete_state ... ok
+test queue::live::pristine_abort::tests::pristine_rebind_settlement_roots_prepared_owner_before_closing_or_validation_failure ... ok
+test queue::live::pristine_abort::tests::pristine_abort_commits_complete_ledger_only_after_closing_success ... ok
+test queue::live::pristine_abort::tests::pristine_abort_rejects_bad_ledger_and_unreleasable_completion_before_cleanup ... ok
+test queue::live::pristine_abort::tests::pristine_abort_loan_rejection_restores_attached_owner_without_effects ... ok
+test queue::live::pristine_abort::tests::pristine_consuming_rebind_preflight_failure_is_terminal_without_native_calls ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_abort_native_errors_and_panics_keep_data_and_disallow_retry ... ok
+test queue::dispatch_binding::pristine_abort::tests::pristine_abort_sweeps_currentness_and_partial_control_cleanup ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 789 filtered out; finished in 0.02s
+

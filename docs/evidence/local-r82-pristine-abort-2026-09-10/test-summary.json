@@ -1,0 +1,82 @@
+{
+  "gnu-tests": {
+    "passed": 2348,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "musl-tests": {
+    "passed": 2348,
+    "failed": 0,
+    "ignored": 5,
+    "harnesses": 48
+  },
+  "gnu-docs": {
+    "passed": 101,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 7
+  },
+  "musl-docs": {
+    "passed": 84,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 5
+  },
+  "musl-host-docs": {
+    "passed": 16,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 2
+  },
+  "gnu-host": {
+    "passed": 246,
+    "failed": 0,
+    "ignored": 4,
+    "harnesses": 1
+  },
+  "musl-host": {
+    "passed": 129,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "macro-fixtures": {
+    "passed": 7,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "base_commit": "3c534e88843a8fdd64a5b3397ec6937ce3696b48",
+  "final_gate_attempt": "r82-final",
+  "non_documentation_source_identities_checked": 5607,
+  "focused_pristine_abort": {
+    "passed": 19,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "focused_host_backing": {
+    "passed": 36,
+    "failed": 0,
+    "ignored": 0,
+    "harnesses": 1
+  },
+  "model_and_proof_sources_unchanged_from": "fb1e27e66cee27bb11f0b7c08f2d5994c5d168da",
+  "manifests_and_lockfiles_unchanged": true,
+  "verus_solver_rerun": false,
+  "new_verus_theorems": 0,
+  "negative_inventory_files": 686,
+  "new_runtime_cpu_test_functions": 0,
+  "new_kfd_cpu_test_functions": 19,
+  "pristine_generation_and_complete_roster_cpu_validated": true,
+  "fake_native_control_disposal_and_data_debits_validated": true,
+  "scripted_queue_closing_and_rebind_settlement_validated": true,
+  "initialized_device_bytes_authenticated": false,
+  "linux_abort_rebind_qualified": false,
+  "actual_model_loan_retake_qualified": false,
+  "pristine_abort_adapter_refinement_proved": false,
+  "native_generated_adoption_implemented": false,
+  "gpu_performance_measured": false,
+  "production_metadata_sha256": "6c0cac53358224a31c356d91228b602ae8545f7c156a0c695f103533238054ca"
+}

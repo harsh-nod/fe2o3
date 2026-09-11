@@ -1024,6 +1024,10 @@ where
     pub(crate) fn into_token(self) -> SharedGttAllocationV1<P, S> {
         self.token
     }
+
+    pub(crate) const fn layout(&self) -> SharedGttAllocationLayoutV1 {
+        self.token.layout()
+    }
 }
 
 /// Private identity and numeric facts retained beside one mapped C3 lease.
@@ -1088,6 +1092,10 @@ impl Gfx942DeviceMemoryDispatchAuthorityV1 {
 
     pub(crate) fn into_lease(self) -> Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1> {
         self.lease
+    }
+
+    pub(crate) const fn layout(&self) -> Gfx942DeviceMemoryLayoutV1 {
+        self.lease.layout()
     }
 }
 
@@ -6539,10 +6547,14 @@ const _: () = {
 };
 
 #[cfg(test)]
+pub(crate) use tests::pristine_abort::PristineAbortMemoryFixtureV1;
+
+#[cfg(test)]
 mod tests {
     mod device_backing;
     mod device_pool;
     mod host_backing;
+    pub(super) mod pristine_abort;
     use super::*;
     use core::cell::Cell;
     use fe2o3_kfd_uapi::KfdIoctlAllocMemoryOfGpuArgs;

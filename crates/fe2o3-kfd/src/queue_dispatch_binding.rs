@@ -7,6 +7,13 @@
 
 #![allow(dead_code)]
 
+#[path = "queue_dispatch_binding/pristine_abort.rs"]
+pub(crate) mod pristine_abort;
+pub(super) use pristine_abort::{
+    PristineDispatchAbortV1, PristineDispatchContinuationV1,
+    prepare_public_fixed_dispatch_resources_after_pristine_abort_v1,
+};
+
 use core::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 

@@ -884,7 +884,8 @@ impl ComputeAqlQueueSessionV1 {
             ));
         }
         let detached_generation = self.detached_dispatch_generation;
-        let detached_is_empty = self.detached_data_count == 0
+        let detached_is_empty = self.unpublished_dispatch.is_clear()
+            && self.detached_data_count == 0
             && self.detached_data_identities.is_empty()
             && match detached_generation {
                 None => self.detached_next_insertion_index.is_none(),
@@ -1499,7 +1500,8 @@ impl ComputeAqlQueueSessionV1 {
             ));
         }
         let detached_generation = self.detached_dispatch_generation;
-        let detached_is_empty = self.detached_data_count == 0
+        let detached_is_empty = self.unpublished_dispatch.is_clear()
+            && self.detached_data_count == 0
             && self.detached_data_identities.is_empty()
             && match detached_generation {
                 None => self.detached_next_insertion_index.is_none(),
@@ -4244,6 +4246,9 @@ impl ComputeAqlQueueSessionV1 {
         if self.terminal_poisoned {
             return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
         }
+        if !self.unpublished_dispatch.is_clear() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        }
         if self.has_any_persistent_compute_attachment_v1() {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
@@ -4325,6 +4330,9 @@ impl ComputeAqlQueueSessionV1 {
         if self.terminal_poisoned {
             return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
         }
+        if !self.unpublished_dispatch.is_clear() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        }
         if self.detached_data_count != 0
             || self.detached_dispatch_generation.is_some()
             || !self.detached_data_identities.is_empty()
@@ -4386,7 +4394,10 @@ impl ComputeAqlQueueSessionV1 {
         if self.dispatch.is_some() {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
-        if self.detached_dispatch_generation.is_none() {
+        if !(self.unpublished_dispatch.is_clear() && self.detached_dispatch_generation.is_some()
+            || self.unpublished_dispatch.is_detached()
+                && self.detached_dispatch_generation.is_none())
+        {
             self.poison_terminal();
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
@@ -4415,8 +4426,22 @@ impl ComputeAqlQueueSessionV1 {
             }
             .into());
         }
-        self.completion_owner.ensure_releasable()?;
-        validate_fixed_batch_ring::<N>(self.observation.ring_bytes)?;
+        let preflight = self
+            .completion_owner
+            .ensure_releasable()
+            .map_err(ComputeAqlQueueSessionErrorV1::from)
+            .and_then(|()| {
+                validate_fixed_batch_ring::<N>(self.observation.ring_bytes).map_err(Into::into)
+            });
+        if let Err(error) = preflight {
+            if self.unpublished_dispatch.is_detached() {
+                self.poison_terminal();
+            }
+            return Err(error);
+        }
+        if self.unpublished_dispatch.is_detached() {
+            return self.bind_after_pristine_abort_v1(programs, packets, data);
+        }
         let predecessor_generation = self
             .detached_dispatch_generation
             .expect("checked detached dispatch generation");
@@ -4806,7 +4831,10 @@ impl ComputeAqlQueueSessionV1 {
         if self.dispatch.is_some() {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
-        if self.detached_dispatch_generation.is_none() {
+        if !(self.unpublished_dispatch.is_clear() && self.detached_dispatch_generation.is_some()
+            || self.unpublished_dispatch.is_detached()
+                && self.detached_dispatch_generation.is_none())
+        {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
         }
         if self.detached_data_count > super::dispatch_binding::MAX_DISPATCH_DATA_LEASES_V1 {
