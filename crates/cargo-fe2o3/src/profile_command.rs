@@ -409,15 +409,17 @@ impl SealedImage {
             rustix::fs::Mode::from_raw_mode(if executable { 0o500 } else { 0o400 }),
         )
         .map_err(|error| format!("failed to set sealed {label} image mode: {error}"))?;
-        let data_seals = rustix::fs::SealFlags::WRITE
-            | rustix::fs::SealFlags::GROW
-            | rustix::fs::SealFlags::SHRINK;
-        rustix::fs::fcntl_add_seals(&writable, data_seals)
-            .and_then(|()| rustix::fs::fcntl_add_seals(&writable, rustix::fs::SealFlags::SEAL))
-            .map_err(|error| format!("failed to seal {label} image: {error}"))?;
+        fe2o3_process_identity::seal_immutable_memfd_v1(
+            &writable,
+            fe2o3_process_identity::ImmutableMemfdBusyPolicyV1::BoundedExternalObserverQuiescence,
+        )
+        .map_err(|error| format!("failed to seal {label} image: {error}"))?;
         let seals = rustix::fs::fcntl_get_seals(&writable)
             .map_err(|error| format!("failed to inspect sealed {label} image: {error}"))?;
-        let required = data_seals | rustix::fs::SealFlags::SEAL;
+        let required = rustix::fs::SealFlags::WRITE
+            | rustix::fs::SealFlags::GROW
+            | rustix::fs::SealFlags::SHRINK
+            | rustix::fs::SealFlags::SEAL;
         if seals != required && seals != required | rustix::fs::SealFlags::FUTURE_WRITE {
             return Err(format!("sealed {label} image has an unexpected seal set"));
         }
