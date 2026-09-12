@@ -23,11 +23,10 @@ impl CoherentInitializationV1 for Harness {
         self.engine.allocate(length)
     }
 
-    fn copy(&mut self, token: &mut HostCpu, source: &[u8]) -> Result<(), MemorySessionError> {
+    fn copy(&mut self, token: HostCpu, source: &[u8]) -> Result<HostCpu, MemorySessionError> {
         self.stages[1] = true;
         self.source = Some((source.as_ptr() as usize, source.len()));
-        self.engine
-            .with_bytes_mut(token, |mapped| mapped.copy_from_slice(source))
+        crate::shared_memory::transitions::copy_coherent_v1(&mut self.engine, token, source)
     }
 
     fn map(&mut self, token: HostCpu) -> Result<HostMapped, MemorySessionError> {
@@ -259,7 +258,7 @@ fn borrowed_initialization_all_currentness_boundaries_preserve_existing_prefix_a
 fn borrowed_initialization_live_facade_uses_model_aware_sequence_without_encoded_copy() {
     let source = include_str!("../../coherent_initialization.rs");
     assert!(source.contains("self.allocate_host_visible_coherent(length)"));
-    assert!(source.contains("self.with_bytes_mut(allocation,"));
+    assert!(source.contains("transitions::copy_coherent_v1(&mut self.engine, allocation, source)"));
     assert!(source.contains("self.map_to_gpu(allocation)"));
     for copy in ["to_vec(", "to_owned(", "Box::from(", "Vec::", "clone("] {
         assert!(!source.contains(copy), "extra encoded copy: {copy}");

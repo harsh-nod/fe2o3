@@ -1,0 +1,27 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 34.26s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_copy_panics_preserve_first_payload_without_closing_check ... FAILED
+
+failures:
+
+---- shared_memory::tests::transitions::coherent_initialization::coherent_initializer_copy_panics_preserve_first_payload_without_closing_check stdout ----
+
+thread 'shared_memory::tests::transitions::coherent_initialization::coherent_initializer_copy_panics_preserve_first_payload_without_closing_check' (1014975) panicked at crates/fe2o3-kfd/src/shared_memory.rs:6920:17:
+Box<dyn Any>
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'shared_memory::tests::transitions::coherent_initialization::coherent_initializer_copy_panics_preserve_first_payload_without_closing_check' (1014975) panicked at crates/fe2o3-kfd/src/shared_memory/tests/transitions/coherent_initialization.rs:421:17:
+assertion `left == right` failed
+  left: 14
+ right: 13
+
+
+failures:
+    shared_memory::tests::transitions::coherent_initialization::coherent_initializer_copy_panics_preserve_first_payload_without_closing_check
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 996 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

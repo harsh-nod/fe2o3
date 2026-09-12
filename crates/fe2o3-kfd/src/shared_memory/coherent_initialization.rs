@@ -10,9 +10,9 @@ pub(super) trait CoherentInitializationV1 {
     fn allocate(&mut self, length: usize) -> Result<CpuAllocation, MemorySessionError>;
     fn copy(
         &mut self,
-        allocation: &mut CpuAllocation,
+        allocation: CpuAllocation,
         source: &[u8],
-    ) -> Result<(), MemorySessionError>;
+    ) -> Result<CpuAllocation, MemorySessionError>;
     fn map(&mut self, allocation: CpuAllocation) -> Result<MappedAllocation, MemorySessionError>;
 }
 
@@ -23,8 +23,8 @@ pub(super) fn initialize_v1(
     if source.is_empty() {
         return Err(MemorySessionError::InvalidRequestedSize);
     }
-    let mut allocation = memory.allocate(source.len())?;
-    memory.copy(&mut allocation, source)?;
+    let allocation = memory.allocate(source.len())?;
+    let allocation = memory.copy(allocation, source)?;
     let token = memory.map(allocation)?;
     Ok(Gfx942InitializedHostVisibleMemoryV1 { token })
 }
@@ -36,12 +36,10 @@ impl CoherentInitializationV1 for SharedGttMemorySessionV1 {
 
     fn copy(
         &mut self,
-        allocation: &mut CpuAllocation,
+        allocation: CpuAllocation,
         source: &[u8],
-    ) -> Result<(), MemorySessionError> {
-        self.with_bytes_mut(allocation, |destination| {
-            destination.copy_from_slice(source)
-        })
+    ) -> Result<CpuAllocation, MemorySessionError> {
+        transitions::copy_coherent_v1(&mut self.engine, allocation, source)
     }
 
     fn map(&mut self, allocation: CpuAllocation) -> Result<MappedAllocation, MemorySessionError> {

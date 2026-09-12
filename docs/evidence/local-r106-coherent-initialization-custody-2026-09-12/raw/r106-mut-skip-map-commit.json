@@ -1,0 +1,33 @@
+{
+  "source_head": "42d614d352f39fb13b4026b6d2c2b9af94a41200",
+  "started_at": "2026-09-12T14:53:04.048Z",
+  "finished_at": "2026-09-12T14:53:38.245Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "shared_memory::tests::transitions::coherent_initialization::coherent_initializer_success_preserves_exact_storage_source_and_padded_charge",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r106-mut-skip-map-commit.log",
+  "source": "/home/harsh/.codex-tmp/r106-mut-skip-map-commit-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 35.532368652,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  }
+}

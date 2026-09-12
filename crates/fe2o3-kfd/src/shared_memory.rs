@@ -2743,7 +2743,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         ) {
             self.require_active()?;
             return match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.with_bytes_mut_inner(token, f)
+                self.with_bytes_mut_inner(token, f, false)
             })) {
                 Ok(result) => result,
                 Err(payload) => {
@@ -2753,7 +2753,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             };
         }
         self.with_host_backing_unwind_quarantine::<P, _>(|engine| {
-            engine.with_bytes_mut_inner(token, f)
+            engine.with_bytes_mut_inner(token, f, false)
         })
     }
 
@@ -2761,6 +2761,7 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
         &mut self,
         token: &mut SharedGttAllocationV1<P, GttCpuWritableV1>,
         f: impl FnOnce(&mut [u8]) -> R,
+        preserve_access_panic: bool,
     ) -> Result<R, MemorySessionError> {
         self.check_currentness()?;
         let index = self.index(token, SharedAllocationPhaseV1::CpuWritable)?;
@@ -2774,12 +2775,13 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
                 B::with_bytes_mut(mapping, requested, f)
             }))
         };
-        // Control materialization retains its borrowed token at the caller.
+        // Owning initialization and control materialization retain their tokens.
         // Do not let a second currentness panic replace the original failure.
-        let outcome = if matches!(
-            P::PROFILE,
-            SharedGttProfileV1::Executable | SharedGttProfileV1::Kernarg
-        ) {
+        let outcome = if preserve_access_panic
+            || matches!(
+                P::PROFILE,
+                SharedGttProfileV1::Executable | SharedGttProfileV1::Kernarg
+            ) {
             match outcome {
                 Ok(value) => Ok(value),
                 Err(payload) => {
@@ -5772,8 +5774,10 @@ impl SharedGttMemorySessionV1 {
     /// allocation, then maps that exact allocation to the selected GPU.
     ///
     /// The source is used synchronously and never retained. Success establishes
-    /// initialization, not dispatch authority or device completion. Errors and
-    /// panics preserve the existing native-record and backing-charge policy.
+    /// initialization, not dispatch authority or device completion. After
+    /// allocation returns, copy/map failures retain the typed owner and
+    /// quarantine the session, even without configured backing accounting.
+    /// Allocation preflight and pending-native failure policies are unchanged.
     pub fn initialize_host_visible_coherent_from_slice_v1(
         &mut self,
         bytes: &[u8],

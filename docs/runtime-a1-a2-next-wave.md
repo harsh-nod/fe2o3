@@ -1,5 +1,14 @@
 # A1/A2 Next-Wave Dispatch
 
+R106 locally accepts [N3-C coherent initialization custody](runtime-borrowed-coherent-initialization-v1.md#owning-copy-extension),
+with [retained evidence](evidence/local-r106-coherent-initialization-custody-2026-09-12/README.md).
+Seventeen source gates, ten auxiliary checks and seven compiled negatives pass;
+GNU/musl each pass 2,583 tests with five ignored. Frozen/restored coherent,
+borrowed and transition suites pass 10/10, 8/8 and 30/30; all 5,665 source
+identities match. The original collector roster rejection is preserved.
+This is CPU/shared-sequence acceptance, not native, new formal or performance
+qualification.
+
 R105 locally accepts [N2 pristine rebind custody](runtime-pristine-rebind-custody-v1.md),
 with [retained evidence](evidence/local-r105-pristine-rebind-custody-2026-09-12/README.md).
 Seventeen source gates, ten auxiliary checks and nine repeated compiled
@@ -10,13 +19,7 @@ campaign's 60 ms chronology rejection is preserved, not silently accepted.
 This adds CPU/shared-sequence acceptance only, not native, new formal or
 performance qualification.
 
-R106/N3-C coherent initialization is implemented but **unaccepted**. Ten
-same-foundation initializer tests, eight borrowed-initialization regressions
-and strict Clippy pass preliminarily. Full frozen/focused/auxiliary gates,
-compiled negatives, exact restoration, evidence review and runtime publication
-remain pending. This documentation-only refresh does not publish that candidate.
-
-The renewed assignments are **Primary R106 acceptance**, **Native N3-D device
+The renewed assignments are **Primary integration**, **Native N3-D device
 initialization and N4-R lower-cleanup review**, independent **Admission C1 Context
 identity** and **Resources V1 writer issuance** on the
 [current board](runtime-a1-a2-swarm-current.md#renewed-swarm-dispatch).
@@ -25,7 +28,7 @@ owns edits, integration, serialized gates and signed publication. C2 descriptor
 identity, C3 reply/custody tests, M1 domain design and M3 host-image ceilings are
 also independently ready. The same three worker slots rotate through them.
 
-The critical path is N3-C/D -> N3-L, alongside N4 lower/live/returning cleanup,
+With N3-C locally accepted, the critical path is N3-D -> N3-L, alongside N4 lower/live/returning cleanup,
 then N5 DATA-ADOPT -> I2 ISSUE -> C4 COMPLETE -> C5 generated API -> C6 generated
 GRAPH/DRAIN. I2 also needs C1/C2/C3 and the specified mutation hook. Cross-run
 reuse additionally needs complete V7/V8. Q2 retains the missing native

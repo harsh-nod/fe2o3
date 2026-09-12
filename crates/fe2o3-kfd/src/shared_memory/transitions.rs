@@ -11,6 +11,7 @@ pub(super) enum TransitionStageV1 {
     AllocationEvidence,
     AllocationProjection,
     AllocationCommit,
+    Copy,
     Seal,
     MappingEvidence,
     Map,
@@ -279,6 +280,37 @@ pub(super) fn allocate_v1<B: MemoryBackend, P: GttProfileV1>(
                 .foundation
                 .replace_memory_after_sealed_transition(model)
                 .map_err(MemorySessionError::Model)
+        },
+    )?;
+    Ok(token)
+}
+
+pub(super) fn copy_coherent_v1<B: MemoryBackend>(
+    engine: &mut SharedMemoryEngine<B>,
+    token: coherent_initialization::CpuAllocation,
+    source: &[u8],
+) -> Result<coherent_initialization::CpuAllocation, MemorySessionError> {
+    with_owned_coherent_bytes_v1(engine, token, |destination| {
+        destination.copy_from_slice(source)
+    })
+}
+
+pub(super) fn with_owned_coherent_bytes_v1<B: MemoryBackend>(
+    engine: &mut SharedMemoryEngine<B>,
+    token: coherent_initialization::CpuAllocation,
+    write: impl FnOnce(&mut [u8]),
+) -> Result<coherent_initialization::CpuAllocation, MemorySessionError> {
+    let (token, ()) = run_v1(
+        engine,
+        Some(token),
+        Some(SharedAllocationPhaseV1::CpuWritable),
+        |engine, owners| {
+            owners.stage = TransitionStageV1::Copy;
+            let input = owners.input.as_mut().expect("retained coherent copy input");
+            preflight_borrowed_v1(engine, input, SharedAllocationPhaseV1::CpuWritable)?;
+            engine.with_bytes_mut_inner(input, write, true)?;
+            owners.promote();
+            Ok(())
         },
     )?;
     Ok(token)

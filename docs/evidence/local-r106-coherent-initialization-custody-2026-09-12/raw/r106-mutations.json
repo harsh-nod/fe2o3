@@ -1,0 +1,115 @@
+[
+  {
+    "name": "drop-copy-owner",
+    "path": "crates/fe2o3-kfd/src/shared_memory/transitions.rs",
+    "test": "shared_memory::tests::transitions::coherent_initialization::coherent_initializer_copy_currentness_keeps_actual_cpu_owner_and_written_prefix",
+    "edits": [
+      [
+        "input: self.input.map(TerminalTokenV1::from_token),",
+        "input: if self.stage == TransitionStageV1::Copy { None } else { self.input.map(TerminalTokenV1::from_token) },"
+      ]
+    ],
+    "expected": [
+      "src/shared_memory/tests/transitions/coherent_initialization.rs:104:",
+      "called `Option::unwrap()` on a `None` value"
+    ],
+    "oracle": "Missing original CPU token in terminal Copy custody"
+  },
+  {
+    "name": "skip-copy",
+    "path": "crates/fe2o3-kfd/src/shared_memory/transitions.rs",
+    "test": "shared_memory::tests::transitions::coherent_initialization::coherent_initializer_success_preserves_exact_storage_source_and_padded_charge",
+    "edits": [
+      [
+        "destination.copy_from_slice(source)",
+        "let _ = (destination, source);"
+      ]
+    ],
+    "expected": [
+      "src/shared_memory/tests/transitions/coherent_initialization.rs:262:",
+      "assertion failed:"
+    ],
+    "oracle": "Complete initialized-byte comparison fails at the 4096-byte case"
+  },
+  {
+    "name": "ignore-owned-panic-policy",
+    "path": "crates/fe2o3-kfd/src/shared_memory/transitions.rs",
+    "test": "shared_memory::tests::transitions::coherent_initialization::coherent_initializer_copy_panics_preserve_first_payload_without_closing_check",
+    "edits": [
+      [
+        "engine.with_bytes_mut_inner(input, write, true)?;",
+        "engine.with_bytes_mut_inner(input, write, false)?;"
+      ]
+    ],
+    "expected": [
+      "src/shared_memory/tests/transitions/coherent_initialization.rs:421:",
+      "assertion `left == right` failed"
+    ],
+    "oracle": "Unexpected closing-currentness check after first access panic; this negative does not reach payload replacement"
+  },
+  {
+    "name": "skip-copy-preflight",
+    "path": "crates/fe2o3-kfd/src/shared_memory/transitions.rs",
+    "test": "shared_memory::tests::transitions::coherent_initialization::coherent_copy_invalid_private_inputs_reject_before_currentness_without_poison",
+    "edits": [
+      [
+        "            let input = owners.input.as_mut().expect(\"retained coherent copy input\");\n            preflight_borrowed_v1(engine, input, SharedAllocationPhaseV1::CpuWritable)?;",
+        "            let input = owners.input.as_mut().expect(\"retained coherent copy input\");"
+      ]
+    ],
+    "expected": [
+      "src/shared_memory/tests/transitions/coherent_initialization.rs:772:",
+      "assertion `left == right` failed"
+    ],
+    "oracle": "Invalid private input reaches backend currentness before rejection"
+  },
+  {
+    "name": "skip-map-commit",
+    "path": "crates/fe2o3-kfd/src/shared_memory/transitions.rs",
+    "test": "shared_memory::tests::transitions::coherent_initialization::coherent_initializer_success_preserves_exact_storage_source_and_padded_charge",
+    "edits": [
+      [
+        "projection.stage(&mut owners.stage, TransitionStageV1::MapCommit)?;\n        projection\n            .foundation\n            .replace_memory_after_sealed_transition(model)\n            .map_err(MemorySessionError::Model)",
+        "projection.stage(&mut owners.stage, TransitionStageV1::MapCommit)?;\n        let _ = model;\n        Ok(())"
+      ]
+    ],
+    "expected": [
+      "src/shared_memory/tests/transitions/coherent_initialization.rs:283:",
+      "assertion `left == right` failed"
+    ],
+    "oracle": "Exact foundation state differs from projected mapping success"
+  },
+  {
+    "name": "drop-mapped-successor",
+    "path": "crates/fe2o3-kfd/src/shared_memory/transitions.rs",
+    "test": "shared_memory::tests::transitions::coherent_initialization::coherent_initializer_projection_failures_keep_exact_allocation_or_mapped_successor",
+    "edits": [
+      [
+        "output: self.output.map(TerminalTokenV1::from_token),",
+        "output: if matches!(self.stage, TransitionStageV1::MapProjection | TransitionStageV1::MapCommit) { None } else { self.output.map(TerminalTokenV1::from_token) },"
+      ]
+    ],
+    "expected": [
+      "src/shared_memory/tests/transitions/coherent_initialization.rs:101:",
+      "called `Option::unwrap()` on a `None` value"
+    ],
+    "oracle": "Missing mapped successor after successful native map and failed model projection"
+  },
+  {
+    "name": "omit-copy-quarantine",
+    "path": "crates/fe2o3-kfd/src/shared_memory/transitions.rs",
+    "test": "shared_memory::tests::host_backing::borrowed_initialization::borrowed_initialization_all_currentness_boundaries_preserve_existing_prefix_and_debits",
+    "edits": [
+      [
+        "engine.phase = SharedMemorySessionPhaseV1::Quarantined;",
+        "if self.stage != TransitionStageV1::Copy { engine.phase = SharedMemorySessionPhaseV1::Quarantined; }"
+      ]
+    ],
+    "expected": [
+      "src/shared_memory/tests/host_backing.rs:51:",
+      "left: Active",
+      "right: Quarantined"
+    ],
+    "oracle": "Immediate quarantine assertion before any retry in existing borrowed regression"
+  }
+]

@@ -127,9 +127,12 @@ impl CoherentInitializationV1 for Fixture {
     fn allocate(&mut self, length: usize) -> Result<CpuAllocation, MemorySessionError> {
         self.engine.allocate(length)
     }
-    fn copy(&mut self, token: &mut CpuAllocation, source: &[u8]) -> Result<(), MemorySessionError> {
-        self.engine
-            .with_bytes_mut(token, |bytes| bytes.copy_from_slice(source))
+    fn copy(
+        &mut self,
+        token: CpuAllocation,
+        source: &[u8],
+    ) -> Result<CpuAllocation, MemorySessionError> {
+        crate::shared_memory::transitions::copy_coherent_v1(&mut self.engine, token, source)
     }
     fn map(&mut self, token: CpuAllocation) -> Result<MappedAllocation, MemorySessionError> {
         self.engine.map_mutable(token)

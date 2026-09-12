@@ -1,0 +1,33 @@
+{
+  "source_head": "42d614d352f39fb13b4026b6d2c2b9af94a41200",
+  "started_at": "2026-09-12T14:51:43.925Z",
+  "finished_at": "2026-09-12T14:52:17.169Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "shared_memory::tests::transitions::coherent_initialization::coherent_initializer_copy_panics_preserve_first_payload_without_closing_check",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r106-mut-ignore-owned-panic-policy.log",
+  "source": "/home/harsh/.codex-tmp/r106-mut-ignore-owned-panic-policy-source.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "signal": null,
+  "timed_out": false,
+  "elapsed_seconds": 34.599511863,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  }
+}

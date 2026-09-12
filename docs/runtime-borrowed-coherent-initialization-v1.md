@@ -6,21 +6,28 @@ them. Full generated adoption remains open: it needs an installed owner-local
 driver or explicitly nonpublishable owner, not an automatically publishable
 prepared state.
 
+R106's owning-copy extension is [locally accepted](evidence/local-r106-coherent-initialization-custody-2026-09-12/README.md). It
+uses the existing [session transition custody](runtime-session-transition-custody-v1.md)
+for the CPU token as well as the mapped successor. The R78 evidence below is
+historical; the R106 record separately qualifies the named CPU/shared-sequence
+matrix, not live KFD or authenticated formal refinement.
+
 ## Ownership And Copying
 
 `SharedGttMemorySessionV1::initialize_host_visible_coherent_from_slice_v1` borrows
 source bytes synchronously. One private fixed-token sequencer allocates ordinary
 coherent GTT, copies every requested byte and maps that exact allocation. Its
-production implementation calls the existing model-aware allocation, CPU-access
-and GPU-map methods. Only successful completion constructs initialized storage.
+production implementation calls the existing model-aware allocation, owning-copy
+transition and GPU-map methods. Only successful completion constructs initialized storage.
 No source borrow escapes and no caller initialization assertion is accepted.
 The boxed entry point delegates while retaining its source throughout the call.
 
 Queue insertion/replacement and lane facades have corresponding borrowed methods.
 Unbound/completion, capacity and exact-ordinal checks still precede native effects.
 The existing model-loan/retake envelope handles initialization; detached identity
-recording follows successful retake. Error/panic poisoning and uncertain native
-custody policies are unchanged. These methods do not publish packets.
+recording follows successful retake. The R78 outer insertion/retake sequence is
+unchanged; its remaining custody gaps are separate from R106's lower initializer.
+These methods do not publish packets.
 
 Both `materialize_initial_data_v1` and `materialize_rebound_data_v1` now pass
 `DataSpecV1::bytes()` directly for HostVisible data. Its Arc remains owned through
@@ -41,8 +48,45 @@ and aggregate accounting remain separate work.
 
 Opening currentness failure cancels an unissued reservation. Failure after the
 first native attempt retains its debit even without a completed allocation
-record. Later copy/map failure retains the actual record. Error or panic returns
-no initialized storage and grants no permission to retry or speculatively free it.
+record. Later copy/map failure retains the actual record and, with R106, its
+typed token. That failure returns no initialized storage and grants no permission
+to retry or speculatively free it. Pure allocation preflight and pending-native
+policies remain distinct; an unconfigured first-currentness panic before any
+native attempt still permits a fresh attempt after the fault is cleared.
+
+## Owning Copy Extension
+
+The private sequencer's copy stage now consumes and returns the CPU allocation.
+`copy_coherent_v1` uses the existing transition owner and mutable-byte engine
+body; it does not allocate another buffer or introduce a second loan engine.
+The locally admitted token is rooted before copy currentness, and exact borrowed
+preflight rejects invalid private inputs before backend currentness. Successful
+copy returns the same CPU token before the separate map transition begins.
+
+Copy error or unwind moves the actual CPU token into terminal custody and
+quarantines the session, including when backing accounting is unconfigured.
+The private owning-access policy resumes a backend/callback panic without a
+closing-currentness check replacing the first payload. Existing public borrowed
+byte-access calls retain their previous policy. Successful native mapping
+promotes the token before model projection, so projection/commit failure keeps
+the mapped successor rather than the old CPU capability.
+
+The new tests use the original foundation, device/VM, fake-native records and
+configured/unconfigured accounts across complete allocation/copy/map sequences.
+An unrelated mapped anchor, original source pointer/length, complete bytes,
+page-padded charges and exact precursor/successor identities remain observable.
+Success compares the full model with the exact `project_map` result. Pending
+allocation failures preserve their original outputs and charges, not an invented
+completed token. Test-only callbacks inject partial writes; public initialization
+always performs the fixed complete copy.
+
+This private fresh-allocation sequence does not promise custody for arbitrary
+foreign or already-terminal inputs. `Copy` identifies the stage; the native
+progress fields still describe allocation/map, not byte-copy progress. Borrowed
+source never escapes. Allocation abort and panic-abort remain outside unwind
+recovery. Device initialization, live insertion/replacement, cleanup, original
+Linux-engine composition, authenticated adapter refinement and matched HIP/HSA
+performance remain separate work.
 
 ## Evidence Boundary
 

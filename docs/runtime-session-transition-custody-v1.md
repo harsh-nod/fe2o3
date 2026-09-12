@@ -6,6 +6,12 @@ outer dispatch preparation or queue constructor owner.
 The [local evidence](evidence/local-r88-session-transitions-2026-09-11/README.md)
 records acceptance and the exact remaining proof/native boundaries.
 
+R106 extends this adapter to [owning coherent initialization](runtime-borrowed-coherent-initialization-v1.md#owning-copy-extension).
+Its CPU token now remains rooted through the copy stage before the existing map
+transition takes over. Its [R106 local evidence](evidence/local-r106-coherent-initialization-custody-2026-09-12/README.md)
+qualifies the named CPU/shared-sequence matrix; R88's historical evidence does
+not qualify that extension.
+
 ## Ownership
 
 The production session methods now use one private generic adapter over the
@@ -55,7 +61,9 @@ currentness or callback panic. An original materialization/backend-access panic
 is resumed without a later currentness check replacing it. The actual token is
 borrowed from the caller throughout this operation; the outer preparation owner
 must still keep that caller-owned token across unwind. Other unconfigured byte
-access profiles retain their existing behavior.
+access profiles retain their existing public borrowed-access behavior. R106's
+private owning coherent copy opts into first-panic preservation even without a
+configured backing account; the outer transition retains the token on failure.
 
 ## Validation Boundary
 

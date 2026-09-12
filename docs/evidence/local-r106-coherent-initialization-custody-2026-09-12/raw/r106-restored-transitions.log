@@ -1,0 +1,37 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 30 tests
+test shared_memory::tests::transitions::coherent_initialization::coherent_copy_invalid_private_inputs_reject_before_currentness_without_poison ... ok
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_copy_currentness_keeps_actual_cpu_owner_and_written_prefix ... ok
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_empty_capacity_and_revision_reject_before_native_effects ... ok
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_allocation_currentness_preserves_preflight_and_pending_policy ... ok
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_preserves_revision_headroom_and_rejects_map_exhaustion ... ok
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_copy_panics_preserve_first_payload_without_closing_check ... ok
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_native_allocation_failures_retain_original_pending_prefix ... ok
+test shared_memory::tests::transitions::session_allocation_preflight_and_pending_native_failure_are_distinct ... ok
+test shared_memory::tests::transitions::session_allocation_projection_error_and_panic_keep_returned_token ... ok
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_map_failures_retain_cpu_authority_without_duplicate_custody ... ok
+test shared_memory::tests::transitions::session_control_failure_preserves_existing_n1_n2_records_and_charges ... ok
+test shared_memory::tests::transitions::session_allocation_projection_rejection_preserves_all_returned_profiles ... ok
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_success_preserves_exact_storage_source_and_padded_charge ... ok
+test shared_memory::tests::transitions::session_control_materialization_currentness_panic_closes_with_borrowed_owner ... ok
+test shared_memory::tests::transitions::session_control_materialization_panic_preserves_original_borrowed_token ... ok
+test shared_memory::tests::transitions::session_control_success_preserves_exact_foundation_loan_and_authority ... ok
+test shared_memory::tests::transitions::session_executable_map_partial_and_errno_outputs_keep_exact_input ... ok
+test shared_memory::tests::transitions::session_late_allocation_commit_exhaustion_keeps_successful_native_token ... ok
+test shared_memory::tests::transitions::session_host_map_panic_and_currentness_keep_exact_n1_debit ... ok
+test shared_memory::tests::transitions::session_map_projection_rejection_retains_mapped_successor ... ok
+test shared_memory::tests::transitions::session_mapping_native_and_currentness_panics_keep_original_token ... ok
+test shared_memory::tests::transitions::coherent_initialization::coherent_initializer_projection_failures_keep_exact_allocation_or_mapped_successor ... ok
+test shared_memory::tests::transitions::session_native_transitions_accept_exact_revision_headroom ... ok
+test shared_memory::tests::transitions::session_map_stage_faults_preserve_precursor_or_successor_exactly ... ok
+test shared_memory::tests::transitions::session_native_transitions_preflight_the_complete_revision_budget ... ok
+test shared_memory::tests::transitions::session_mutable_map_partial_and_errno_outputs_keep_exact_input ... ok
+test shared_memory::tests::transitions::session_retention_rejects_actual_host_account_substitution_without_effects ... ok
+test shared_memory::tests::transitions::session_seal_error_panic_and_currentness_preserve_precursor_custody ... ok
+test shared_memory::tests::transitions::session_retention_validates_borrowed_input_before_consumption ... ok
+test shared_memory::tests::transitions::session_terminal_transition_cannot_be_overwritten_or_retried ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 967 filtered out; finished in 0.02s
+

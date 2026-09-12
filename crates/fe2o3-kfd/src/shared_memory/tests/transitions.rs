@@ -1,5 +1,7 @@
 //! The production session adapter over real fake-native records and foundation.
 
+mod coherent_initialization;
+
 use super::*;
 use crate::shared_memory::transitions::{
     self as adapter, ProjectionFaultV1 as Fault, TransitionStageV1 as Stage,

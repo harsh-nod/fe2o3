@@ -1,0 +1,19 @@
+{
+  "command": [
+    "node",
+    "/home/harsh/.codex-tmp/r106-retain-local.js"
+  ],
+  "returncode": 1,
+  "assertion": "borrowed.length === 8",
+  "location": "r106-retain-local.js:145",
+  "actual": 10,
+  "expected": 8,
+  "archive_created": false,
+  "original_stderr_file_retained": false,
+  "cause": "Whole-workspace R105 passing-name filter includes two runtime materializer tests in addition to eight KFD tests; focused command selects only fe2o3-kfd.",
+  "rejected_collector": {
+    "path": "r106-retain-local-before-roster-fix.js",
+    "sha256": "13014bfc576dfe6cdbaceb9ba7fe3ccd7966cec5db6d233b8247537d33ec0773"
+  },
+  "disposition": "Restrict expected borrowed roster to KFD namespaces. Preserve all source, gate, mutation and restoration records unchanged."
+}
